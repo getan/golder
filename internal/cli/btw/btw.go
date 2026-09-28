@@ -227,6 +227,7 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 			},
 		},
 		Reminders: host.Reminders(),
+		SessionID: host.HookDeps().SessionID,
 	}
 	// Wire the per-turn hook seams onto the side run's cfg; nil dispatcher is a
 	// no-op (FR-18).

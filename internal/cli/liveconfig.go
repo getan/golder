@@ -46,4 +46,4 @@ type LiveConfig struct {
 // true window is unknown. It is deliberately large so auto-compaction only fires
 // on genuinely long sessions (threshold = window - ReserveTokens), never on
 // ordinary short exchanges.
-const DefaultContextWindow = 128000
+const DefaultContextWindow = 1000000

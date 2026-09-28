@@ -81,6 +81,12 @@ func (d *responsesDriver) StreamCompletion(ctx context.Context, req CompletionRe
 	if key := strings.TrimSpace(req.Config.APIKey); key != "" {
 		opts = append(opts, option.WithAPIKey(key))
 	}
+	if sid := SessionHeaderValue(d.name, req.Config.Extra); sid != "" {
+		opts = append(opts, option.WithHeader(OpencodeSessionHeader, sid))
+	}
+	if pc := clientForURL(d.name, d.baseURL); pc != nil {
+		opts = append(opts, option.WithHTTPClient(pc))
+	}
 	opts = append(opts, d.clientOpts...)
 	client := openai.NewClient(opts...)
 

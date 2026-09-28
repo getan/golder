@@ -53,3 +53,31 @@ func TestNormalizeProtocolErrorNamesAcceptedValues(t *testing.T) {
 		}
 	}
 }
+
+func TestPreferResponses(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"grok-4", true},
+		{"x-ai/grok-2-1212", true},
+		{"muse-spark-1.3", true},
+		{"MUSE-SPARK-1.3-CONTRIBUTOR", true},
+		{"deepseek-chat", true},
+		{"deepseek/deepseek-r1", true},
+		{"gpt-4o", true},
+		{"GPT-4o-mini", true},
+		{"o3", true},
+		{"o4-mini", true},
+		{"claude-opus-4-8", false},
+		{"anthropic/claude-3.5-sonnet", false},
+		{"qwen-max", false},
+		{"meta/llama-3.3-70b-instruct", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := PreferResponses(c.id); got != c.want {
+			t.Errorf("PreferResponses(%q) = %v, want %v", c.id, got, c.want)
+		}
+	}
+}

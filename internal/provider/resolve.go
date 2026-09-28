@@ -175,8 +175,10 @@ func IsProviderName(id string) bool {
 
 // ResolveNamedProvider builds the driver for an explicit --provider selection.
 // It looks the name up in the built-in registry and constructs the wire driver
-// matching the spec's Protocol: "openai" → an OpenAI-compatible (Bearer) driver,
-// "anthropic" → an Anthropic-Messages driver. The base URL follows the override
+// for the effective protocol: "openai" → an OpenAI-compatible (Bearer) driver,
+// "anthropic" → an Anthropic-Messages driver, "openai/resp_api" → the Responses
+// driver. An explicit --protocol wins; otherwise a Responses-family model id
+// upgrades an OpenAI-wired provider (see PreferResponses). The base URL follows the override
 // precedence in ResolveBaseURL (--base-url > provider-specific env > generic
 // <PROVIDER>_BASE_URL > spec default). The returned provider-name string is the
 // spec name, so downstream API-key resolution reads the provider's own env var
@@ -191,19 +193,32 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	if !ok {
 		return nil, "", fmt.Errorf("unknown --provider %q (available: %s)", name, strings.Join(ProviderNames(), ", "))
 	}
-	// A concurrently-set --protocol must agree with the provider's own protocol;
+	// A concurrently-set --protocol must be compatible with the provider's own
+	// protocol (equal, or a resp_api upgrade on an OpenAI-wired provider);
 	// an incompatible pair is a user error naming both flags. Normalize the raw
 	// value first so aliases (e.g. "openai/chat" for an "openai" spec) don't
 	// falsely conflict, and a genuine typo surfaces as a clear "unknown --protocol"
 	// error rather than a misleading conflict message.
+	// Effective wire protocol: an explicit --protocol wins; otherwise a
+	// Responses-family model id upgrades an OpenAI-wired provider to the
+	// Responses driver (family heuristic, see PreferResponses). Anthropic-wired
+	// providers never take the heuristic path.
+	effective := spec.Protocol
 	if strings.TrimSpace(protocol) != "" {
 		canonical, err := NormalizeProtocol(protocol)
 		if err != nil {
 			return nil, "", err
 		}
-		if canonical != spec.Protocol {
+		// An OpenAI-wired provider is assumed to serve both wire variants, so
+		// an explicit resp_api selection is an upgrade, not a conflict.
+		compatible := canonical == spec.Protocol ||
+			(spec.Protocol == ProtocolOpenAI && canonical == ProtocolOpenAIResponses)
+		if !compatible {
 			return nil, "", fmt.Errorf("--provider %q speaks the %q protocol, which conflicts with --protocol %q; drop --protocol or set it to %q", name, spec.Protocol, protocol, spec.Protocol)
 		}
+		effective = canonical
+	} else if spec.Protocol == ProtocolOpenAI && PreferResponses(model) {
+		effective = ProtocolOpenAIResponses
 	}
 	// Special-auth providers (Azure / Bedrock / Vertex / Cloudflare) compose
 	// their endpoint from several env vars and/or need non-standard credential
@@ -224,7 +239,7 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	// Note: spec.ExtraHeaders would be attached here, but the exported generic
 	// constructors do not yet accept custom headers; all built-in specs currently
 	// carry no ExtraHeaders, so this is a no-op today (refined alongside #188).
-	switch spec.Protocol {
+	switch effective {
 	case ProtocolAnthropic:
 		// Auth header follows the spec's AuthScheme (x-api-key + anthropic-version
 		// for anthropic/minimax/minimax-cn; Bearer for any anthropic-protocol

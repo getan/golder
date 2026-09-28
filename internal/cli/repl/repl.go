@@ -1101,6 +1101,7 @@ func runManualRebuild(out io.Writer, deps replDeps) {
 			ContextWindow: deps.live.ContextWindow,
 			Compaction:    compaction.DefaultCompactionSettings,
 		},
+		SessionID: deps.header.ID,
 	}
 	if deps.creds != nil {
 		cfg.GetAPIKey = deps.creds.GetAPIKey

@@ -224,6 +224,7 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 			},
 		},
 		Reminders: reminders,
+		SessionID: host.HookDeps().SessionID,
 		GetFollowUpMessages: func(ctx context.Context, agentCtx *agentcore.AgentContext) []agentcore.AgentMessage {
 			// Account for the turns produced since the last settle. Auto-compaction
 			// can shrink agentCtx.Messages in place (summary + tail) between settles,

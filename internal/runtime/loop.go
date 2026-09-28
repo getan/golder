@@ -23,6 +23,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/smallnest/pigo/internal/agentcore"
@@ -34,6 +36,15 @@ import (
 // nowMillis returns the current Unix time in milliseconds, the timestamp unit
 // used for CompactionMessage checkpoints.
 func nowMillis() int64 { return time.Now().UnixMilli() }
+
+// processSessionID is the fallback session identity for runs without a real
+// session id (e.g. process-isolated sub-agents). The opencode Zen Go endpoint
+// requires x-opencode-session on every request, so a stable per-process id
+// keeps those runs working; sharing one affinity bucket with the parent run
+// is the desired sticky-routing behavior there anyway.
+var processSessionID = sync.OnceValue(func() string {
+	return fmt.Sprintf("pigo-%d-%d", os.Getpid(), time.Now().Unix())
+})
 
 // TurnUpdate is the optional result of PrepareNextTurn: any non-nil field
 // replaces the corresponding piece of loop state before the next turn. It lets
@@ -196,7 +207,13 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 				return
 			}
 
-			assistant, err := streamAssistantResponse(ctx, agentCtx, cfg.LoopConfig, emitFrom)
+			lcfg := cfg.LoopConfig
+			sid := cfg.SessionID
+			if sid == "" && strings.HasPrefix(lcfg.Provider, "opencode") {
+				sid = processSessionID()
+			}
+			lcfg.Extra = provider.WithSessionExtra(lcfg.Extra, sid)
+			assistant, err := streamAssistantResponse(ctx, agentCtx, lcfg, emitFrom)
 			if err != nil {
 				// emit was cancelled mid-stream; end the run.
 				finish()

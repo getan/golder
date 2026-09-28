@@ -186,11 +186,11 @@ func main() {
 
 	var opts cliOptions
 	flag.StringVarP(&opts.prompt, "print", "p", "", "prompt to run in headless print mode")
-	flag.StringVarP(&opts.model, "model", "m", "openrouter/free", "model id to run against (a well-known model name like claude-opus-4-8 or deepseek-chat auto-selects its provider when --provider/--protocol/--base-url are unset)")
+	flag.StringVarP(&opts.model, "model", "m", "muse-spark-1.3-contributor", "model id to run against (a well-known model name like claude-opus-4-8 or deepseek-chat auto-selects its provider when --provider/--protocol/--base-url are unset)")
 	flag.StringVarP(&opts.baseURL, "base-url", "u", "", "override provider base URL (e.g. local Ollama)")
 	flag.StringVarP(&opts.apiKey, "api-key", "k", "", "API key for the resolved provider (overrides env/config; else <PROVIDER>_API_KEY)")
 	flag.StringVarP(&opts.protocol, "protocol", "P", "", "force wire protocol for a custom endpoint: openai | anthropic (default: inferred from model id)")
-	flag.StringVar(&opts.provider, "provider", "", "select a built-in provider by name (e.g. deepseek, minimax); uses its default base URL, protocol, and API-key env var (see --help provider list)")
+	flag.StringVar(&opts.provider, "provider", "opencode-go", "select a built-in provider by name (e.g. deepseek, minimax); uses its default base URL, protocol, and API-key env var (see --help provider list)")
 	flag.BoolVar(&opts.githubReview, "github-review", false, "run the isolated GitHub ready-for-review webhook (issue #567): PR draft→ready creates a read-only review session and runs it")
 	flag.StringVar(&opts.githubWebhookSecretEnv, "github-webhook-secret-env", "PIGO_GITHUB_WEBHOOK_SECRET", "name of the env var holding the high-entropy GitHub webhook secret (credential reference; never the secret itself)")
 	flag.StringVar(&opts.githubWebhookAddr, "github-webhook-addr", "127.0.0.1:3081", "listen address for the GitHub review webhook (put a TLS reverse proxy/tunnel in front; the endpoint is plain HTTP)")
@@ -208,7 +208,7 @@ func main() {
 	flag.StringVar(&opts.systemPrompt, "system-prompt", "", "system prompt to use instead of the default coding-assistant prompt (mirrors pi --system-prompt)")
 	flag.StringArrayVar(&opts.appendSystemPrompt, "append-system-prompt", nil, "append text or file contents to the system prompt; repeatable (mirrors pi --append-system-prompt)")
 	flag.StringArrayVar(&opts.promptTemplates, "prompt-template", nil, "load a prompt template from a file or directory (non-recursive); repeatable (mirrors pi --prompt-template)")
-	flag.StringVar(&opts.thinkingLevel, "thinking-level", "", "reasoning effort: off|minimal|low|medium|high|xhigh|max (overrides PIGO_THINKING_LEVEL and config; default medium)")
+	flag.StringVar(&opts.thinkingLevel, "thinking-level", "xhigh", "reasoning effort: off|minimal|low|medium|high|xhigh|max (overrides PIGO_THINKING_LEVEL and config)")
 	flag.BoolVar(&opts.subagentRPC, "subagent-rpc", false, "internal: run as a process-isolated sub-agent JSON-RPC server over stdio (US-019)")
 	flag.BoolVar(&opts.dream, "dream", false, "internal: run a memory-consolidation pass over the global/project memory scope, emit a Report JSON on stdout, and exit (SPEC §4.1)")
 	flag.BoolVar(&opts.dreamDryRun, "dream-dry-run", false, "internal: with --dream, analyze and report without writing files or updating dream state (SPEC §5.5)")

@@ -45,6 +45,12 @@ type ProviderSpec struct {
 	// variables (e.g. AZURE_OPENAI_BASE_URL), in precedence order. May be empty;
 	// the generic <PROVIDER>_BASE_URL convention is handled by callers.
 	BaseURLEnvVars []string
+	// ForceProxy marks providers unreachable directly (opencode.ai from
+	// mainland networks; Muse models behind it require US egress). Requests
+	// for such a provider route via the proxy (PIGO_PROXY or the local
+	// default) even when --base-url overrides the endpoint, because the
+	// decision keys on the provider name, not the URL host.
+	ForceProxy bool
 }
 
 // Protocol values.
@@ -223,16 +229,18 @@ var providerRegistry = []ProviderSpec{
 	{
 		Name:           "opencode",
 		EnvVars:        []string{"OPENCODE_API_KEY"},
-		DefaultBaseURL: "https://opencode.ai/zen",
+		DefaultBaseURL: "https://opencode.ai/zen/v1",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
+		ForceProxy:     true,
 	},
 	{
 		Name:           "opencode-go",
 		EnvVars:        []string{"OPENCODE_API_KEY"},
-		DefaultBaseURL: "https://opencode.ai/zen/go",
+		DefaultBaseURL: "https://opencode.ai/zen/go/v1",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
+		ForceProxy:     true,
 	},
 	{
 		Name:           "kimi-coding",

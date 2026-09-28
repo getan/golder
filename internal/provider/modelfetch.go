@@ -78,7 +78,12 @@ func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([
 		auth(req, apiKey)
 	}
 
-	resp, err := (&http.Client{Timeout: remoteModelListTimeout}).Do(req)
+	httpClient := &http.Client{Timeout: remoteModelListTimeout}
+	if pc := clientForURL("", base); pc != nil {
+		pc.Timeout = remoteModelListTimeout
+		httpClient = pc
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("model discovery request failed: %w", err)
 	}

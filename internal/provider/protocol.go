@@ -26,6 +26,35 @@ import (
 // SDK-based Responses driver.
 const ProtocolOpenAIResponses = "openai/resp_api"
 
+// responsesFamilySubstrings are model-id substrings (matched case-insensitively)
+// whose models prefer the Responses wire protocol when the provider serves both
+// OpenAI wire variants. "muse" covers the muse-spark series (not Claude). The
+// o-series reasoning models (o1/o3/o4-mini) carry no "gpt" marker and are
+// handled by the leading-letter rule in PreferResponses.
+var responsesFamilySubstrings = []string{"grok", "muse", "deepseek", "gpt"}
+
+// PreferResponses reports whether modelID belongs to a Responses-preferred
+// family. It is a pure naming heuristic (mirroring opencode's own
+// shouldUseResponsesApi): an explicit --protocol always wins over it, and it
+// never applies to Anthropic-wired providers (ResolveNamedProvider guards
+// that), so a Claude id can never be routed to the Responses driver here.
+func PreferResponses(modelID string) bool {
+	m := strings.ToLower(strings.TrimSpace(modelID))
+	if m == "" {
+		return false
+	}
+	for _, sub := range responsesFamilySubstrings {
+		if strings.Contains(m, sub) {
+			return true
+		}
+	}
+	// o-series reasoning models: o1, o3, o4-mini, ...
+	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
+		return true
+	}
+	return false
+}
+
 // NormalizeProtocol maps a raw --protocol / protocol value to a canonical
 // internal selector. Input is trimmed and lower-cased before matching. An empty
 // value stays empty (unset → model-id heuristics). Recognized values normalize

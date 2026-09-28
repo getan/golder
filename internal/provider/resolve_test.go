@@ -427,3 +427,46 @@ func TestResolveProviderOpenAIAndNewPresets(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
+	// Family model on an OpenAI-wired provider upgrades to the Responses driver.
+	p, _, err := ResolveNamedProvider("opencode-go", "muse-spark-1.3", "", "", os.Getenv)
+	if err != nil {
+		t.Fatalf("family model error: %v", err)
+	}
+	if _, ok := p.(*responsesDriver); !ok {
+		t.Errorf("muse-spark on opencode-go = %T, want *responsesDriver", p)
+	}
+	// Non-family model stays on Chat Completions.
+	p, _, err = ResolveNamedProvider("opencode-go", "qwen-max", "", "", os.Getenv)
+	if err != nil {
+		t.Fatalf("non-family model error: %v", err)
+	}
+	if _, ok := p.(*openAICompatDriver); !ok {
+		t.Errorf("qwen-max on opencode-go = %T, want *openAICompatDriver", p)
+	}
+	// Explicit resp_api on an OpenAI-wired provider is an upgrade, not a conflict.
+	p, _, err = ResolveNamedProvider("opencode-go", "qwen-max", "", "openai/resp_api", os.Getenv)
+	if err != nil {
+		t.Fatalf("explicit resp_api error: %v", err)
+	}
+	if _, ok := p.(*responsesDriver); !ok {
+		t.Errorf("explicit resp_api = %T, want *responsesDriver", p)
+	}
+	// Explicit chat wins over the family heuristic.
+	p, _, err = ResolveNamedProvider("opencode-go", "gpt-4o", "", "openai", os.Getenv)
+	if err != nil {
+		t.Fatalf("explicit openai error: %v", err)
+	}
+	if _, ok := p.(*openAICompatDriver); !ok {
+		t.Errorf("explicit openai = %T, want *openAICompatDriver", p)
+	}
+	// Incompatible explicit protocol still errors.
+	if _, _, err = ResolveNamedProvider("opencode-go", "gpt-4o", "", "anthropic", os.Getenv); err == nil {
+		t.Error("anthropic protocol on opencode-go should error")
+	}
+	// Anthropic-wired providers never take the heuristic path.
+	if _, name, err := ResolveNamedProvider("anthropic", "claude-opus-4-8", "", "", os.Getenv); err != nil || name != "anthropic" {
+		t.Errorf("anthropic provider = (%q, %v), want (anthropic, nil)", name, err)
+	}
+}

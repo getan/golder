@@ -102,9 +102,12 @@ func (d *openAICompatDriver) StreamCompletion(ctx context.Context, req Completio
 		for k, v := range d.extraHeaders {
 			httpReq.Header.Set(k, v)
 		}
+		if sid := SessionHeaderValue(d.name, req.Config.Extra); sid != "" {
+			httpReq.Header.Set(OpencodeSessionHeader, sid)
+		}
 		return httpReq, nil
 	}
-	return StreamRequest(ctx, TransportConfig{NewRequest: newReq, Decoder: NewOpenAIDecoder()})
+	return StreamRequest(ctx, TransportConfig{Client: clientForURL(d.name, d.baseURL), NewRequest: newReq, Decoder: NewOpenAIDecoder()})
 }
 
 // encodeOpenAIRequest serializes a CompletionRequest into an OpenAI Chat
