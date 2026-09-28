@@ -32,7 +32,6 @@ import (
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/config"
 	"github.com/smallnest/pigo/internal/cli/headless"
-	"github.com/smallnest/pigo/internal/cli/pkgcmd"
 	"github.com/smallnest/pigo/internal/cli/repl"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/cli/sessioncmd"
@@ -178,20 +177,11 @@ func main() {
 		os.Exit(sessioncmd.Run(os.Args[2], os.Args[3:], os.Stdout, os.Stderr))
 	}
 
-	// Package-management subcommands (pigo install|list|uninstall|update ...) are
-	// positional and distinct from the flag-driven agent modes, so peel them off
-	// before pflag parsing — the agent flags don't apply to them.
-	if len(os.Args) > 1 && pkgcmd.Subcommands[os.Args[1]] {
-		// `pigo update` routes by whether a positional package name follows it:
-		// none — or flags-only, e.g. `pigo update --check` — is binary self-update
-		// (#466: download the latest release and replace this binary); a package
-		// name stays package-update (handled by pkgcmd). This is the US-003 dispatch
-		// split, with updateIsSelfUpdate as the pure classifier so routing is
-		// unit-testable (TestUpdateIsSelfUpdate).
-		if os.Args[1] == "update" && updateIsSelfUpdate(os.Args[2:]) {
-			os.Exit(selfupdate.Run(context.Background(), version, os.Stdout, os.Stderr))
-		}
-		os.Exit(pkgcmd.Run(os.Args[1], os.Args[2:], os.Stdout, os.Stderr))
+	// `pigo update` is binary self-update (#466: download the latest release
+	// and replace this binary). It is positional and distinct from the
+	// flag-driven agent modes, so peel it off before pflag parsing.
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		os.Exit(selfupdate.Run(context.Background(), version, os.Stdout, os.Stderr))
 	}
 
 	var opts cliOptions
@@ -652,20 +642,4 @@ func runDream(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 // before calling this, so it only decides TUI-vs-REPL for the interactive case.
 func shouldUseTUI(opts cliOptions, isTTY bool) bool {
 	return isTTY && !opts.noTUI
-}
-
-// updateIsSelfUpdate classifies the arguments that follow `pigo update` (US-003)
-// to route between binary self-update and pkgmgr package-update. It returns true
-// — self-update — when no positional package name is present: any argument that
-// does not begin with '-' is treated as a package name and routes to
-// package-update, while flags-only invocations (e.g. `pigo update --check`) stay
-// on the self-update path. Keeping the decision side-effect-free lets the routing
-// be unit-tested without spawning either update path (see TestUpdateIsSelfUpdate).
-func updateIsSelfUpdate(rest []string) bool {
-	for _, a := range rest {
-		if !strings.HasPrefix(a, "-") {
-			return false
-		}
-	}
-	return true
 }

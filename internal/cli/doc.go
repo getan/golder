@@ -14,7 +14,6 @@
 //	internal/cli/btw        — /btw side thread
 //	internal/cli/status     — /status command
 //	internal/cli/repl       — interactive REPL and line editor
-//	internal/cli/pkgcmd     — package-manager subcommands
 //	internal/cli/testutil   — cross-subpackage test helpers
 //
 // The Host interface (see host.go) is the seam that lets the /goal, /btw,
