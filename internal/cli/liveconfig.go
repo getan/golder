@@ -33,10 +33,10 @@ type LiveConfig struct {
 	ContextWindow int
 
 	// FetchedModels is the online model catalog pulled from the live provider's
-	// endpoint by an explicit "/models fetch" (issue #566), sorted and
+	// endpoint by the bare-/model list (issue #566), sorted and
 	// deduplicated. It is session-lifetime state: /model prefers it over the
 	// heuristic chain for ids it contains (so a fetched id stays on the gateway
-	// that serves it) and /models fetch refreshes it. Nil until the first
+	// that serves it) and reuses it for numeric picks. Nil until the first
 	// successful fetch; never persisted.
 	FetchedModels []string
 	FetchedAt     time.Time

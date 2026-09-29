@@ -40,7 +40,7 @@ const maxMenuRows = 8
 // built-ins, so the TUI stays usable and the failure is surfaced on stderr.
 func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry {
 	// A credentials store resolved from the same flags the run uses, so
-	// "/models fetch" (issue #566) can authenticate against the live endpoint.
+	// "/model" live catalog listing (issue #566) can authenticate against the live endpoint.
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(opts.ProviderName, opts.APIKey)
 	reg, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, opts.Plugins, prompts.PromptTemplateSources{
@@ -63,6 +63,12 @@ type slashMenu struct {
 	active   bool
 	filtered []runtime.SlashCommand
 	selected int
+	// pick, when non-nil, puts the menu in picker mode: rows are plain item
+	// strings (no "/" prefix) and Enter confirms the highlight through the
+	// pick path instead of slash resolution. Used by the /model picker.
+	pick []string
+	// pickMark annotates one row (the current model) in picker mode.
+	pickMark string
 }
 
 // newSlashMenu builds an inactive menu bound to the theme used for its rows.
@@ -89,6 +95,9 @@ func slashToken(buffer string) (token string, ok bool) {
 // otherwise it deactivates and clears its candidates. The selection is clamped
 // so it stays in range as the filtered set shrinks.
 func (mn *slashMenu) refresh(buffer string, reg *runtime.SlashRegistry) {
+	if mn.picking() {
+		return
+	}
 	token, ok := slashToken(buffer)
 	if !ok || reg == nil {
 		mn.close()
@@ -111,14 +120,33 @@ func (mn *slashMenu) refresh(buffer string, reg *runtime.SlashRegistry) {
 // model can reserve that space above the input line during relayout. It is zero
 // while inactive and otherwise the visible window height (min of the candidate
 // count and maxMenuRows).
+// row renders one candidate: a plain item in picker mode (with the mark
+// annotated), otherwise "/name  description".
+func (mn slashMenu) row(i int) string {
+	if mn.picking() {
+		line := mn.pick[i]
+		if mn.pick[i] == mn.pickMark {
+			line += "  (current)"
+		}
+		return line
+	}
+	c := mn.filtered[i]
+	line := "/" + c.Name
+	if c.Description != "" {
+		line += "  " + c.Description
+	}
+	return line
+}
+
 func (mn slashMenu) rows() int {
-	if !mn.active || len(mn.filtered) == 0 {
+	n := mn.count()
+	if !mn.active || n == 0 {
 		return 0
 	}
-	if len(mn.filtered) > maxMenuRows {
+	if n > maxMenuRows {
 		return maxMenuRows
 	}
-	return len(mn.filtered)
+	return n
 }
 
 // close deactivates the menu and drops its candidates.
@@ -126,27 +154,56 @@ func (mn *slashMenu) close() {
 	mn.active = false
 	mn.filtered = nil
 	mn.selected = 0
+	mn.pick = nil
+	mn.pickMark = ""
+}
+
+// openPicker shows the menu as an item picker (arrow keys + Enter, Esc
+// cancels). mark annotates the matching row, e.g. the current model.
+func (mn *slashMenu) openPicker(items []string, mark string) {
+	mn.pick = items
+	mn.pickMark = mark
+	mn.active = len(items) > 0
+	mn.filtered = nil
+	mn.selected = 0
+}
+
+// picking reports whether the menu is in picker mode.
+func (mn slashMenu) picking() bool { return mn.pick != nil }
+
+// pickCurrent returns the highlighted pick item.
+func (mn slashMenu) pickCurrent() (string, bool) {
+	if !mn.picking() || mn.selected < 0 || mn.selected >= len(mn.pick) {
+		return "", false
+	}
+	return mn.pick[mn.selected], true
+}
+
+// pickMove moves the picker highlight, wrapping at the ends.
+func (mn *slashMenu) pickMove(d int) {
+	if len(mn.pick) == 0 {
+		return
+	}
+	mn.selected = (mn.selected + d + len(mn.pick)) % len(mn.pick)
 }
 
 // moveUp / moveDown cycle the highlighted candidate, wrapping at the ends so
-// arrow navigation is continuous.
+// arrow navigation is continuous. Both work in picker mode via count().
 func (mn *slashMenu) moveUp() {
-	if len(mn.filtered) == 0 {
-		return
-	}
-	mn.selected--
-	if mn.selected < 0 {
-		mn.selected = len(mn.filtered) - 1
+	if n := mn.count(); n > 0 {
+		mn.selected--
+		if mn.selected < 0 {
+			mn.selected = n - 1
+		}
 	}
 }
 
 func (mn *slashMenu) moveDown() {
-	if len(mn.filtered) == 0 {
-		return
-	}
-	mn.selected++
-	if mn.selected >= len(mn.filtered) {
-		mn.selected = 0
+	if n := mn.count(); n > 0 {
+		mn.selected++
+		if mn.selected >= n {
+			mn.selected = 0
+		}
 	}
 }
 
@@ -164,7 +221,7 @@ func (mn slashMenu) current() (runtime.SlashCommand, bool) {
 // truncated to the width so it never wraps. Returns "" when inactive so the
 // model omits the overlay entirely (and its row) while idle.
 func (mn slashMenu) view(width int) string {
-	if !mn.active || len(mn.filtered) == 0 {
+	if !mn.active || mn.rows() == 0 {
 		return ""
 	}
 	start, end := mn.window()
@@ -174,12 +231,7 @@ func (mn slashMenu) view(width int) string {
 	}
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		c := mn.filtered[i]
-		line := "/" + c.Name
-		if c.Description != "" {
-			line += "  " + c.Description
-		}
-		line = TruncateToWidth(line, rowWidth)
+		line := TruncateToWidth(mn.row(i), rowWidth)
 		if i == mn.selected {
 			b.WriteString(mn.theme.Accent.Render("› " + line))
 		} else {
@@ -195,8 +247,16 @@ func (mn slashMenu) view(width int) string {
 // window returns the [start,end) slice of filtered candidates to display,
 // scrolled to keep the selection visible when the list is taller than
 // maxMenuRows.
+// count is the candidate count in either mode.
+func (mn slashMenu) count() int {
+	if mn.picking() {
+		return len(mn.pick)
+	}
+	return len(mn.filtered)
+}
+
 func (mn slashMenu) window() (int, int) {
-	n := len(mn.filtered)
+	n := mn.count()
 	if n <= maxMenuRows {
 		return 0, n
 	}

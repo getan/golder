@@ -56,15 +56,20 @@ func TestSlashMenuOpensOnSlash(t *testing.T) {
 }
 
 // TestSlashMenuFiltersByPrefix verifies the popup narrows to the typed prefix:
-// "/mo" keeps /model and /models but drops /help.
+// "/mo" keeps /model but drops /help (and the deleted /models).
 func TestSlashMenuFiltersByPrefix(t *testing.T) {
 	m := typeInto(t, NewModel(Options{}), "/mo").(Model)
 	if !m.menu.active {
 		t.Fatalf("menu should be active for '/mo'")
 	}
 	names := menuNames(m)
-	if !containsAll(names, "/model", "/models") {
-		t.Errorf("candidate set %v missing /model or /models", names)
+	if !containsAll(names, "/model") {
+		t.Errorf("candidate set %v missing /model", names)
+	}
+	for _, n := range names {
+		if n == "/models" {
+			t.Errorf("candidate set %v should not contain deleted /models", names)
+		}
 	}
 	for _, n := range names {
 		if !strings.HasPrefix(n, "/mo") {
@@ -212,5 +217,44 @@ func TestSlashExitQuits(t *testing.T) {
 		if _, isQuit := teaCmd().(tea.QuitMsg); !isQuit {
 			t.Errorf("%s: cmd should be tea.Quit", cmd)
 		}
+	}
+}
+
+// TestSlashMenuPickerMode verifies the generic picker overlay used by /model:
+// openPicker shows plain items with the mark annotated, arrows wrap, refresh
+// never clobbers picks, and close resets picker state.
+func TestSlashMenuPickerMode(t *testing.T) {
+	mn := slashMenu{theme: DefaultTheme()}
+	mn.openPicker([]string{"m-a", "m-b", "m-c"}, "m-b")
+	if !mn.picking() || !mn.active {
+		t.Fatal("picker should be active after openPicker")
+	}
+	if got, _ := mn.pickCurrent(); got != "m-a" {
+		t.Errorf("initial pick = %q, want m-a", got)
+	}
+	mn.moveUp()
+	if got, _ := mn.pickCurrent(); got != "m-c" {
+		t.Errorf("moveUp wraps to %q, want m-c", got)
+	}
+	mn.moveDown()
+	if got, _ := mn.pickCurrent(); got != "m-a" {
+		t.Errorf("moveDown wraps to %q, want m-a", got)
+	}
+	mn.refresh("/model x", nil)
+	if !mn.picking() {
+		t.Error("refresh must not clobber picker candidates")
+	}
+	view := mn.view(40)
+	for _, want := range []string{"m-a", "m-b  (current)", "m-c"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "/m-a") {
+		t.Errorf("picker rows must not carry a slash prefix:\n%s", view)
+	}
+	mn.close()
+	if mn.picking() || mn.active {
+		t.Error("close must reset picker state")
 	}
 }

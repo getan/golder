@@ -217,16 +217,20 @@ func TestREPLUnknownCommandNoRun(t *testing.T) {
 // TestREPLModelSwitchTakesEffect verifies the /model action command switches the
 // live model mid-session (via registerLiveCommands + resolveProvider) without
 // launching a run, and that the switch is reflected in live for the next turn.
+// Fork: the switch stays pinned to the current provider.
 func TestREPLModelSwitchTakesEffect(t *testing.T) {
 	p := &replProvider{reply: "hi"}
 	deps, _ := newTestDeps(t, p)
-	// Register the real live action commands (/model, /models, /help) against the
+	// Pin live to a registry provider (faux is test-only and unresolvable).
+	deps.live.ProviderName = "openai"
+	deps.live.Model = "gpt-4o"
+	// Register the real live action commands (/model, /help) against the
 	// same live config the REPL runs on, so /model mutates it.
 	prompts.RegisterLiveCommands(deps.slash, deps.live, nil)
 
 	var out bytes.Buffer
-	// /model with no arg reports the current model; /model <id> switches to an
-	// Ollama preset (no API key required); /exit ends the loop.
+	// /model with no arg reports the current model; /model <id> switches the
+	// model but stays on the openai provider; /exit ends the loop.
 	in := strings.NewReader("/model\n/model ollama/llama3.3\n/exit\n")
 	if err := runREPL(in, &out, deps); err != nil {
 		t.Fatalf("runREPL: %v", err)
@@ -234,11 +238,11 @@ func TestREPLModelSwitchTakesEffect(t *testing.T) {
 	if p.calls != 0 {
 		t.Errorf("/model actions must not launch a run, got %d calls", p.calls)
 	}
-	if deps.live.Model != "ollama/llama3.3" || deps.live.ProviderName != "ollama" {
+	if deps.live.Model != "ollama/llama3.3" || deps.live.ProviderName != "openai" {
 		t.Errorf("live not switched: model=%q provider=%q", deps.live.Model, deps.live.ProviderName)
 	}
 	s := out.String()
-	if !strings.Contains(s, "faux") {
+	if !strings.Contains(s, "gpt-4o") {
 		t.Errorf("/model (no arg) should report the current model, out=%q", s)
 	}
 	if !strings.Contains(s, "ollama/llama3.3") {

@@ -78,12 +78,31 @@ func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([
 		auth(req, apiKey)
 	}
 
-	httpClient := &http.Client{Timeout: remoteModelListTimeout}
-	if pc := clientForURL("", base); pc != nil {
-		pc.Timeout = remoteModelListTimeout
-		httpClient = pc
+	newClient := func(freshConn bool) *http.Client {
+		c := &http.Client{Timeout: remoteModelListTimeout}
+		if pc := clientForURL("", base); pc != nil {
+			pc.Timeout = remoteModelListTimeout
+			c = pc
+		}
+		if freshConn {
+			// Force a new connection: the first request through a proxy
+			// occasionally dies with EOF during setup; retrying on a
+			// fresh connection recovers without user-visible flakiness.
+			tr := &http.Transport{DisableKeepAlives: true}
+			if cur, ok := c.Transport.(*http.Transport); ok {
+				tr.Proxy = cur.Proxy
+			}
+			c.Transport = tr
+		}
+		return c
 	}
-	resp, err := httpClient.Do(req)
+	resp, err := newClient(false).Do(req)
+	if err != nil {
+		time.Sleep(500 * time.Millisecond)
+		if resp2, err2 := newClient(true).Do(req); err2 == nil {
+			resp, err = resp2, nil
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("model discovery request failed: %w", err)
 	}

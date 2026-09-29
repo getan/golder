@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/openai/openai-go/option"
@@ -154,11 +155,29 @@ func TestClientForURL(t *testing.T) {
 
 func TestProxyURL(t *testing.T) {
 	t.Setenv("PIGO_PROXY", "http://proxy.internal:8080")
-	if got := proxyURL(); got != "http://proxy.internal:8080" {
-		t.Errorf("proxyURL() = %q, want override", got)
+	if got := ProxyURL(); got != "http://proxy.internal:8080" {
+		t.Errorf("ProxyURL() = %q, want override", got)
 	}
 	t.Setenv("PIGO_PROXY", "")
-	if got := proxyURL(); got != "" {
-		t.Errorf("proxyURL() = %q, want empty (disabled)", got)
+	if got := ProxyURL(); got != "" {
+		t.Errorf("ProxyURL() = %q, want empty (disabled)", got)
+	}
+}
+
+func TestProxyURLDefaultsDirect(t *testing.T) {
+	old, had := os.LookupEnv("PIGO_PROXY")
+	if err := os.Unsetenv("PIGO_PROXY"); err != nil {
+		t.Fatalf("Unsetenv: %v", err)
+	}
+	t.Cleanup(func() {
+		if had {
+			os.Setenv("PIGO_PROXY", old)
+		}
+	})
+	if got := ProxyURL(); got != "" {
+		t.Errorf("unset ProxyURL() = %q, want empty (direct)", got)
+	}
+	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c != nil {
+		t.Errorf("unset proxy client = %v, want nil (direct)", c)
 	}
 }

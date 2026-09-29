@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,7 +89,7 @@ func LoadPromptPaths(paths []string) []runtime.SlashCommand {
 // reported on stderr. The skills slice is loaded once by setupAgentEnv (empty
 // under --no-skills), so no /skill-name commands are registered when it is
 // empty. mgr may be nil (no plugins loaded). creds may be nil, which disables
-// "/models fetch" online discovery.
+// "/model" live catalog discovery.
 func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, skills []*runtime.Skill, mgr *plugin.Manager, srcs PromptTemplateSources) (*runtime.SlashRegistry, error) {
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, live, creds)
@@ -200,17 +201,16 @@ func RegisterPluginCommands(reg *runtime.SlashRegistry, mgr *plugin.Manager) {
 // formatNotifications renders a plugin command's notifications into a single
 // block to surface to the user, one per line, prefixed by their type (when set)
 // so severity is visible. Returns "" when there are none.
-// fetchModelCatalog implements "/models fetch" (issue #566): query the live
-// provider's endpoint for its real model catalog, cache the ids on live for
-// /model switching, and summarize the result. Errors degrade gracefully — the
-// static preset listing remains the source of truth for switching.
-func fetchModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) string {
+// fetchModelCatalogIDs queries the live provider's endpoint for its real model
+// catalog (issue #566), caches the ids on live, and returns them. It backs the
+// bare-/model list and numeric selection.
+func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore) ([]string, error) {
 	if creds == nil {
-		return "models: fetch unavailable (no credential store); /models shows the static presets"
+		return nil, fmt.Errorf("no credential store")
 	}
 	spec, ok := provider.LookupProviderSpec(live.ProviderName)
 	if !ok {
-		return fmt.Sprintf("models: fetch unavailable: unknown provider %q; /models shows the static presets", live.ProviderName)
+		return nil, fmt.Errorf("unknown provider %q", live.ProviderName)
 	}
 	baseURL := live.BaseURL
 	if strings.TrimSpace(baseURL) == "" {
@@ -224,16 +224,22 @@ func fetchModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) st
 	defer cancel()
 	ids, err := provider.FetchRemoteModels(ctx, baseURL, protocol, creds.GetAPIKey(ctx, live.ProviderName))
 	if err != nil {
-		return fmt.Sprintf("models: fetch failed: %v\nrun /models for the static presets", err)
+		if provider.NeedsProxy(live.ProviderName, baseURL) && provider.ProxyURL() == "" {
+			return nil, fmt.Errorf("%w (provider %q usually needs egress: export PIGO_PROXY=http://127.0.0.1:7897 and retry)", err, live.ProviderName)
+		}
+		return nil, err
 	}
 	live.FetchedModels = ids
 	live.FetchedAt = time.Now()
-	preview := ids
-	if len(preview) > 8 {
-		preview = ids[:8]
+	return ids, nil
+}
+
+// EnsureModelCatalog returns the live catalog, using the cache when present.
+func EnsureModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) ([]string, error) {
+	if len(live.FetchedModels) > 0 {
+		return live.FetchedModels, nil
 	}
-	return fmt.Sprintf("models: fetched %d models from %s (%s):\n  %s\nswitch with /model <id>; run /models for the static presets",
-		len(ids), strings.TrimRight(baseURL, "/"), live.ProviderName, strings.Join(preview, "\n  "))
+	return fetchModelCatalogIDs(live, creds)
 }
 
 func formatNotifications(notes []plugin.CommandNotification) string {
@@ -259,56 +265,19 @@ func formatNotifications(notes []plugin.CommandNotification) string {
 // runtime state. /model views or switches the active model; /help lists the
 // available commands. These are instance built-ins (AddBuiltin) because their
 // closures must capture live and the registry — state unreachable from an
-// init()-time global registration. creds resolves the API key for "/models
-// fetch" online discovery; it may be nil, which disables fetching (the static
-// preset listing still works).
+// init()-time global registration. creds resolves the API key for "/model"
+// live catalog discovery; it may be nil, which disables fetching (bare /model
+// then reports the failure and suggests /model <id>).
+// thinkDisplay renders the live reasoning-effort level for status lines,
+// matching thinkAction's empty convention.
+func thinkDisplay(live *cli.LiveConfig) agentcore.ThinkingLevel {
+	if live.ThinkingLevel == "" {
+		return agentcore.ThinkingOff
+	}
+	return live.ThinkingLevel
+}
+
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
-	reg.AddBuiltin(runtime.SlashCommand{
-		Name:        "model",
-		Description: "view or switch the active model: /model [model-id] (see /models for presets)",
-		Action: func(args string) string {
-			id := strings.TrimSpace(args)
-			if id == "" {
-				return fmt.Sprintf("model: %s (provider: %s)\nrun /models to see presets, or /model <id> to switch", live.Model, live.ProviderName)
-			}
-			// A bare provider name ("zai") selects that provider's default
-			// model (issue #564): carry the canonical id into live.Model so
-			// the wire request and status bar show a real model id.
-			// An id from the fetched online catalog (issue #566) stays on the
-			// gateway that served it: resolve with the live provider name
-			// explicit instead of the heuristic chain, which could route a
-			// gateway-specific id to OpenRouter.
-			if providerName := live.ProviderName; len(live.FetchedModels) > 0 && slices.Contains(live.FetchedModels, id) {
-				prov, name, err := provider.ResolveProvider(id, live.BaseURL, live.Protocol, providerName, os.Getenv)
-				if err != nil {
-					return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
-				}
-				live.Model = id
-				live.ProviderName = name
-				live.Provider = prov
-				return fmt.Sprintf("model switched to %s (provider: %s, from fetched catalog)", id, name)
-			}
-			model := provider.CanonicalizeModel(id)
-			prov, providerName, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, "", os.Getenv)
-			if err != nil {
-				return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
-			}
-			live.Model = model
-			live.ProviderName = providerName
-			live.Provider = prov
-			return fmt.Sprintf("model switched to %s (provider: %s)", model, providerName)
-		},
-	})
-	reg.AddBuiltin(runtime.SlashCommand{
-		Name:        "models",
-		Description: "list preset providers and models you can switch to; /models fetch queries the live endpoint for its real catalog",
-		Action: func(args string) string {
-			if strings.TrimSpace(args) == "fetch" {
-				return fetchModelCatalog(live, creds)
-			}
-			return presetListing(strings.TrimSpace(args))
-		},
-	})
 	// thinkAction views or switches the reasoning-effort level. It backs both
 	// /think and its alias /effect, so the two commands share identical behavior.
 	thinkAction := func(args string) string {
@@ -327,6 +296,81 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.ThinkingLevel = v
 		return fmt.Sprintf("think level set to %s (applies to the next turn)", v)
 	}
+	modelSwitch := func(id string) string {
+		// An id from the fetched online catalog (issue #566) stays on the
+		// gateway that served it: resolve with the live provider name
+		// explicit instead of the heuristic chain, which could route a
+		// gateway-specific id to OpenRouter.
+		if providerName := live.ProviderName; len(live.FetchedModels) > 0 && slices.Contains(live.FetchedModels, id) {
+			prov, name, err := provider.ResolveProvider(id, live.BaseURL, live.Protocol, providerName, os.Getenv)
+			if err != nil {
+				return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
+			}
+			live.Model = id
+			live.ProviderName = name
+			live.Provider = prov
+			return fmt.Sprintf("model switched to %s (provider: %s, from fetched catalog)", id, name)
+		}
+		model := provider.CanonicalizeModel(id)
+		// Fork: stay on the current provider. A bare provider name
+		// ("zai", issue #564) keeps the old jump: its canonical id
+		// differs from the input, so the provider is left to resolve.
+		providerName := live.ProviderName
+		if model != id {
+			providerName = ""
+		}
+		prov, providerName, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, providerName, os.Getenv)
+		if err != nil {
+			return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
+		}
+		live.Model = model
+		live.ProviderName = providerName
+		live.Provider = prov
+		return fmt.Sprintf("model switched to %s (provider: %s)", model, providerName)
+	}
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "model",
+		Description:  "list and switch models on the current provider: /model [n|id] | /model think [level]",
+		ArgumentHint: "[n|id|think level]",
+		Action: func(args string) string {
+			arg := strings.TrimSpace(args)
+			// /model think [level]: show or set the reasoning effort.
+			if arg == "think" || strings.HasPrefix(arg, "think ") {
+				return thinkAction(strings.TrimSpace(strings.TrimPrefix(arg, "think")))
+			}
+			// Bare /model: live catalog as a numbered list.
+			if arg == "" {
+				ids, err := EnsureModelCatalog(live, creds)
+				if err != nil {
+					return fmt.Sprintf("model: %s (provider: %s, think: %s)\nmodel list unavailable: %v\nswitch directly with /model <id>",
+						live.Model, live.ProviderName, thinkDisplay(live), err)
+				}
+				var b strings.Builder
+				fmt.Fprintf(&b, "model: %s (provider: %s, think: %s)\nmodels on %s (/model <n|id> to switch):",
+					live.Model, live.ProviderName, thinkDisplay(live), live.ProviderName)
+				for i, id := range ids {
+					mark := ""
+					if id == live.Model {
+						mark = " (current)"
+					}
+					fmt.Fprintf(&b, "\n  %d. %s%s", i+1, id, mark)
+				}
+				return b.String()
+			}
+			// /model <n>: numeric pick from the live catalog.
+			if n, err := strconv.Atoi(arg); err == nil {
+				ids, err := EnsureModelCatalog(live, creds)
+				if err != nil {
+					return fmt.Sprintf("model: list unavailable: %v\nswitch directly with /model <id>", err)
+				}
+				if n < 1 || n > len(ids) {
+					return fmt.Sprintf("model: %d out of range (1-%d)", n, len(ids))
+				}
+				return modelSwitch(ids[n-1])
+			}
+			return modelSwitch(arg)
+		},
+	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "think",
 		ArgumentHint: "[off|minimal|low|medium|high|xhigh|max]",
@@ -405,48 +449,4 @@ func validThinkingLevel(s string) (agentcore.ThinkingLevel, bool) {
 	default:
 		return "", false
 	}
-}
-
-// presetListing renders the preset provider/model catalog for /models. With an
-// argument it filters to a single provider (e.g. "/models nvidia"). Providers
-// are grouped and shown with the env var their API key is read from (referenced
-// by name only, never a value). The output guides the user to `/model <id>`.
-func presetListing(filter string) string {
-	var b strings.Builder
-	b.WriteString("preset providers & models (switch with /model <id>):")
-	shown := 0
-	for _, pv := range provider.PresetProviders {
-		if filter != "" && !strings.EqualFold(filter, pv.Name) {
-			continue
-		}
-		models := provider.PresetsByProvider(pv.Name)
-		if len(models) == 0 {
-			continue
-		}
-		shown++
-		b.WriteString("\n\n")
-		b.WriteString(pv.Name)
-		if pv.EnvVar != "" {
-			b.WriteString(" (API key: $")
-			b.WriteString(pv.EnvVar)
-			b.WriteString(")")
-		} else {
-			b.WriteString(" (local, no API key)")
-		}
-		for _, m := range models {
-			b.WriteString("\n  ")
-			b.WriteString(m.ID)
-			if m.DisplayName != "" {
-				b.WriteString("  — ")
-				b.WriteString(m.DisplayName)
-			}
-		}
-	}
-	if shown == 0 {
-		if filter != "" {
-			return fmt.Sprintf("no preset provider named %q (try openrouter, nvidia, or ollama)", filter)
-		}
-		return "no presets configured"
-	}
-	return b.String()
 }

@@ -574,3 +574,65 @@ func TestResumeSessionGuards(t *testing.T) {
 		t.Errorf("session-less /resume should report, got %q", joined)
 	}
 }
+
+// TestModelPickerSelectSwitches drives the bare-/model picker end to end:
+// cached catalog opens the picker synchronously, arrows move, Enter switches
+// the live model through the registry path.
+func TestModelPickerSelectSwitches(t *testing.T) {
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.FetchedModels = []string{"m-a", "m-b"}
+	m.live.Model = "m-a"
+	m.live.ProviderName = "openai"
+
+	got, cmd := m.runSlash("/model")
+	if cmd != nil {
+		t.Fatalf("cached picker: expected nil cmd, got %T", cmd)
+	}
+	gm := got.(Model)
+	if !gm.menu.picking() {
+		t.Fatal("bare /model should open the picker")
+	}
+	gm.menu.moveDown()
+	got2, _ := gm.submitSlashSelected()
+	gm2 := got2.(Model)
+	if gm2.live.Model != "m-b" {
+		t.Errorf("live.Model = %q, want m-b", gm2.live.Model)
+	}
+	if gm2.menu.picking() {
+		t.Error("picker should close after confirm")
+	}
+}
+
+// TestModelPickerAsyncFetch verifies the uncached path returns a fetch Cmd
+// (no blocking) and surfaces fetch errors without opening the picker.
+func TestModelPickerAsyncFetch(t *testing.T) {
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.ProviderName = "" // unknown provider: fetch fails without network
+
+	got, cmd := m.runSlash("/model")
+	if cmd == nil {
+		t.Fatal("uncached picker: expected a fetch cmd, got nil")
+	}
+	gm := got.(Model)
+	if gm.menu.picking() {
+		t.Fatal("picker must not open before the fetch lands")
+	}
+	msg := cmd()
+	fm, ok := msg.(modelsFetchedMsg)
+	if !ok {
+		t.Fatalf("fetch cmd produced %T, want modelsFetchedMsg", msg)
+	}
+	if fm.err == nil {
+		t.Fatal("fetch against unknown provider should error")
+	}
+	got2, _ := gm.Update(fm)
+	if got2.(Model).menu.picking() {
+		t.Error("picker must not open on fetch error")
+	}
+	joined := strings.Join(blockTexts(got2.(Model).transcript), "\n")
+	if !strings.Contains(joined, "/model <id>") {
+		t.Errorf("error should hint direct switch, got %q", joined)
+	}
+}

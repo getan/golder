@@ -437,13 +437,17 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if _, ok := p.(*responsesDriver); !ok {
 		t.Errorf("muse-spark on opencode-go = %T, want *responsesDriver", p)
 	}
-	// Non-family model stays on Chat Completions.
+	// Non-family model stays on Chat Completions, carrying the spec name so
+	// per-provider request decoration (session header) applies.
 	p, _, err = ResolveNamedProvider("opencode-go", "qwen-max", "", "", os.Getenv)
 	if err != nil {
 		t.Fatalf("non-family model error: %v", err)
 	}
 	if _, ok := p.(*openAICompatDriver); !ok {
 		t.Errorf("qwen-max on opencode-go = %T, want *openAICompatDriver", p)
+	}
+	if p.Name() != "opencode-go" {
+		t.Errorf("driver name = %q, want opencode-go", p.Name())
 	}
 	// Explicit resp_api on an OpenAI-wired provider is an upgrade, not a conflict.
 	p, _, err = ResolveNamedProvider("opencode-go", "qwen-max", "", "openai/resp_api", os.Getenv)

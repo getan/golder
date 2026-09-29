@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/memstatus"
 	"github.com/smallnest/pigo/internal/cli/status"
@@ -249,6 +250,54 @@ func resumeMeta(it cli.ResumeItem) string {
 	return fmt.Sprintf("%s · %s", model, it.Header.UpdatedAt.Format("01-02 15:04"))
 }
 
+// modelsFetchedMsg carries the async live-catalog fetch for the /model
+// picker: opening the picker must not block the tea loop on the network.
+type modelsFetchedMsg struct {
+	ids []string
+	err error
+}
+
+// openModelPicker shows the interactive model picker for the live provider.
+// A cached catalog opens synchronously; otherwise the fetch runs off-loop and
+// the picker opens on modelsFetchedMsg.
+func (m Model) openModelPicker() (tea.Model, tea.Cmd) {
+	if m.session == nil || m.live == nil {
+		m.transcript.addSystem("No active session.")
+		return m, nil
+	}
+	if len(m.live.FetchedModels) > 0 {
+		m.menu.openPicker(m.live.FetchedModels, m.live.Model)
+		m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addSystem("Fetching models…")
+	return m, func() tea.Msg {
+		ids, err := prompts.EnsureModelCatalog(m.live, m.session.creds)
+		return modelsFetchedMsg{ids: ids, err: err}
+	}
+}
+
+// applyModelsFetched opens the picker once the async catalog fetch lands.
+func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.transcript.addSystem(fmt.Sprintf("model list unavailable: %v\nswitch directly with /model <id>", msg.err))
+		return m, nil
+	}
+	if len(msg.ids) == 0 {
+		m.transcript.addSystem("model list unavailable: endpoint returned no models")
+		return m, nil
+	}
+	current := ""
+	if m.live != nil {
+		current = m.live.Model
+	}
+	m.menu.openPicker(msg.ids, current)
+	m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
+	m.relayout()
+	return m, nil
+}
+
 // resumeSession implements /resume: it swaps the active session without
 // leaving the TUI, following runSession.switchTo (persist current, load target,
 // live model/provider follow the stored header). The transcript is reset and
@@ -321,6 +370,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case gitInfoMsg:
 		m.statusBar.SetGit(msg)
 		return m, nil
+
+	case modelsFetchedMsg:
+		return m.applyModelsFetched(msg)
 
 	case tea.BackgroundColorMsg:
 		// Feed the terminal's real background to the Markdown renderer so glamour
@@ -848,6 +900,9 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 // user can go on to type arguments; the trailing space ends name-completion, so
 // the refresh closes the popup. It is the Tab action while the menu is open.
 func (m Model) completeSlash() Model {
+	if m.menu.picking() {
+		return m
+	}
 	if c, ok := m.menu.current(); ok {
 		m.input.SetValue("/" + c.Name + " ")
 		m.menu.refresh(m.input.Value(), m.slash)
@@ -860,6 +915,18 @@ func (m Model) completeSlash() Model {
 // selected command even if the typed prefix is shorter; with no selection it
 // falls back to the raw buffer so a fully-typed "/name" still runs.
 func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
+	if m.menu.picking() {
+		if item, ok := m.menu.pickCurrent(); ok {
+			m.menu.close()
+			m.input.Clear()
+			m.relayout()
+			m.recordHistory("/model " + item)
+			return m.runSlash("/model " + item)
+		}
+		m.menu.close()
+		m.relayout()
+		return m, nil
+	}
 	line := strings.TrimSpace(m.input.Value())
 	if c, ok := m.menu.current(); ok {
 		line = "/" + c.Name
@@ -888,6 +955,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// in-flight run is never torn down.
 	if line == "/resume" || strings.HasPrefix(line, "/resume ") {
 		return m.resumeSession(strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
+	}
+	// Bare /model opens the interactive model picker (arrow keys + Enter)
+	// instead of printing a text list; /model <n|id|think…> still resolves
+	// through the registry below.
+	if line == "/model" {
+		return m.openModelPicker()
 	}
 	// /memory is intercepted before registry resolution (like /rebuild): it
 	// prints the persistent-memory + infinite-context report, reading the live

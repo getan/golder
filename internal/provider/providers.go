@@ -669,6 +669,20 @@ func NewOpenAICompatibleProvider(baseURL string, models []Model) Provider {
 	}, baseURL, models)
 }
 
+// NewOpenAICompatibleProviderAs builds the same generic driver carrying the
+// given provider name, so errors and per-provider request decoration (e.g. the
+// x-opencode-session header) reference the selected provider instead of the
+// neutral "openai". ResolveNamedProvider uses it for every OpenAI-wired
+// registry entry; API-key resolution still keys on the returned provider name
+// upstream and is unaffected.
+func NewOpenAICompatibleProviderAs(name, baseURL string, models []Model) Provider {
+	return newOpenAICompat(openAICompatPreset{
+		name:         name,
+		defaultURL:   "", // no default: caller must supply the endpoint
+		requiresAuth: true,
+	}, baseURL, models)
+}
+
 // newAnthropicCompat builds an Anthropic-Messages driver, falling back to
 // defaultURL when baseURL is empty. It is the shared body of the two
 // Anthropic-wire constructors, which differ only in name, default endpoint, and

@@ -1,12 +1,10 @@
 package provider
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 )
 
 // OpencodeSessionHeader carries the client session id to opencode's Zen
@@ -53,24 +51,13 @@ func WithSessionExtra(extra map[string]any, sid string) map[string]any {
 	return out
 }
 
-// defaultProxyURL is the local Clash/Mihomo proxy used for upstreams that are
-// unreachable directly (opencode.ai from mainland networks; Muse models served
-// behind it require US egress).
-const defaultProxyURL = "http://127.0.0.1:7897"
-
-// proxyURL resolves the HTTP proxy for proxied upstreams: PIGO_PROXY wins when
-// set (empty string explicitly disables proxying); otherwise the local proxy.
-func proxyURL() string {
-	if v, ok := os.LookupEnv("PIGO_PROXY"); ok {
-		return strings.TrimSpace(v)
-	}
-	return defaultProxyURL
+// ProxyURL resolves the HTTP proxy for proxied upstreams from PIGO_PROXY
+// only. Unset (or blank) means direct connection: other users work out of the
+// box, and whoever needs egress (e.g. Muse behind opencode.ai requiring US
+// exit) exports PIGO_PROXY=http://127.0.0.1:7897 in their own shell.
+func ProxyURL() string {
+	return strings.TrimSpace(os.Getenv("PIGO_PROXY"))
 }
-
-// proxyNoticeOnce keeps the routing notice to one line per process: proxying
-// is environment-level configuration (PIGO_PROXY or the local default), so it
-// must be visible at runtime without spamming every request.
-var proxyNoticeOnce sync.Once
 
 // NeedsProxy reports whether requests for the given provider / URL must go
 // through the proxy. The registry's ForceProxy flag is authoritative (it keys
@@ -94,7 +81,7 @@ func clientForURL(providerName, rawURL string) *http.Client {
 	if !NeedsProxy(providerName, rawURL) {
 		return nil
 	}
-	proxy := proxyURL()
+	proxy := ProxyURL()
 	if proxy == "" {
 		return nil
 	}
@@ -102,12 +89,5 @@ func clientForURL(providerName, rawURL string) *http.Client {
 	if err != nil {
 		return nil
 	}
-	host := providerName
-	if u, err := url.Parse(rawURL); err == nil && u.Hostname() != "" {
-		host = u.Hostname()
-	}
-	proxyNoticeOnce.Do(func() {
-		fmt.Fprintf(os.Stderr, "pigo: routing %s via proxy %s (override with PIGO_PROXY, disable with PIGO_PROXY=\"\")\n", host, proxy)
-	})
 	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
 }

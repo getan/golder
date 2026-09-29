@@ -247,7 +247,7 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 		// the spec name so errors reference the selected provider.
 		return NewAnthropicProtocolProvider(spec.Name, url, spec.AuthScheme, models), spec.Name, nil
 	case ProtocolOpenAI:
-		return NewOpenAICompatibleProvider(url, models), spec.Name, nil
+		return NewOpenAICompatibleProviderAs(spec.Name, url, models), spec.Name, nil
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponsesProvider(spec.Name, url, models), spec.Name, nil
 	default:
