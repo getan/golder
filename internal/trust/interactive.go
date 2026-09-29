@@ -31,12 +31,33 @@ import (
 )
 
 // SideEffectTools are the built-in tools with filesystem or process side
-// effects that trust gates. Read-only tools (read/grep/find), in-memory tools
-// (todo), and network-read tools (webfetch) are never gated.
+// effects that trust always gates.
 var SideEffectTools = map[string]bool{
 	"bash":  true,
 	"write": true,
 	"edit":  true,
+}
+
+// ReadTools are the data-ingestion tools (local file reads and network reads)
+// gated in untrusted directories only when Manager.StrictReads is set. Pure
+// in-memory tools (todo, schedule_*, goal_*, memory_*) are never gated.
+var ReadTools = map[string]bool{
+	"read":      true,
+	"grep":      true,
+	"find":      true,
+	"ls":        true,
+	"webfetch":  true,
+	"websearch": true,
+}
+
+// GatesTool reports whether the trust gate applies to a tool call in an
+// untrusted directory: always for side-effect tools, and for read tools only
+// under StrictReads. A nil manager gates nothing.
+func (m *Manager) GatesTool(name string) bool {
+	if SideEffectTools[name] {
+		return true
+	}
+	return m != nil && m.StrictReads && ReadTools[name]
 }
 
 // EstablishTrust decides how the launch directory's trust is established before
@@ -212,7 +233,7 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 		return nil
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if !SideEffectTools[call.Name] {
+		if !mgr.GatesTool(call.Name) {
 			return nil
 		}
 		if mu != nil {

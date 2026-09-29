@@ -90,7 +90,14 @@ type Result struct {
 type Manager struct {
 	path string
 	mu   sync.Mutex
-	data map[string]*bool
+	// StrictReads extends the trust gate to data-ingestion tools (read, grep,
+	// find, ls, webfetch, websearch) in untrusted directories. Fork default is
+	// true (security first): a rejected directory prompts for every file and
+	// network read, not just writes. Pure in-memory tools (todo, schedule_*,
+	// goal_*, memory_*) are never gated. Escapes: --approve, /trust once|on,
+	// or the prompt's "always" answer (all grant session trust).
+	StrictReads bool
+	data        map[string]*bool
 	// session marks directories trusted for the current process only ("just
 	// once"). It is never persisted and is consulted by IsTrusted before the
 	// on-disk data, so a one-shot grant takes effect immediately.
@@ -118,9 +125,10 @@ func DefaultPath() string {
 // store is surfaced rather than silently overwritten.
 func NewManager(path string) (*Manager, error) {
 	m := &Manager{
-		path:    path,
-		data:    make(map[string]*bool),
-		session: make(map[string]bool),
+		path:        path,
+		StrictReads: true,
+		data:        make(map[string]*bool),
+		session:     make(map[string]bool),
 	}
 	if path == "" {
 		return m, nil

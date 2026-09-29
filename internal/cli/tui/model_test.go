@@ -11,22 +11,56 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 )
 
-// TestModelQuitKeys verifies the root model returns tea.Quit on the standard
-// exit keys (Ctrl+C / Ctrl+D), which is how Bubble Tea tears down the program
-// and restores the terminal from the alt-screen.
+// TestModelQuitKeys verifies Ctrl+D quits idle immediately while Ctrl+C
+// needs two presses within the arm window (a single idle press only arms).
 func TestModelQuitKeys(t *testing.T) {
-	for _, key := range []string{"ctrl+c", "ctrl+d"} {
-		m := NewModel(Options{})
-		got, cmd := m.Update(keyPress(key))
-		if cmd == nil {
-			t.Fatalf("%s: expected a quit command, got nil", key)
-		}
-		if msg := cmd(); msg != (tea.QuitMsg{}) {
-			t.Errorf("%s: cmd produced %T, want tea.QuitMsg", key, msg)
-		}
-		if !got.(Model).quitting {
-			t.Errorf("%s: model should be marked quitting", key)
-		}
+	m := NewModel(Options{})
+	got, cmd := m.Update(keyPress("ctrl+d"))
+	if cmd == nil {
+		t.Fatal("ctrl+d: expected a quit command, got nil")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Errorf("ctrl+d: cmd produced %T, want tea.QuitMsg", msg)
+	}
+	if !got.(Model).quitting {
+		t.Error("ctrl+d: model should be marked quitting")
+	}
+
+	m = NewModel(Options{})
+	got, cmd = m.Update(keyPress("ctrl+c"))
+	if cmd != nil {
+		t.Errorf("first ctrl+c: expected nil cmd (arm only), got %v", cmd())
+	}
+	armed := got.(Model)
+	if armed.quitting {
+		t.Error("first ctrl+c: must not quit")
+	}
+	if armed.quitArmedAt.IsZero() {
+		t.Error("first ctrl+c: should arm the quit")
+	}
+	_, cmd = armed.Update(keyPress("ctrl+c"))
+	if cmd == nil {
+		t.Fatal("second ctrl+c: expected a quit command, got nil")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Errorf("second ctrl+c: cmd produced %T, want tea.QuitMsg", msg)
+	}
+}
+
+// TestModelCtrlCArmExpires verifies an expired arm does not quit: the next
+// press re-arms instead.
+func TestModelCtrlCArmExpires(t *testing.T) {
+	m := NewModel(Options{})
+	m.quitArmedAt = time.Now().Add(-time.Hour)
+	got, cmd := m.Update(keyPress("ctrl+c"))
+	if cmd != nil {
+		t.Errorf("expired arm + ctrl+c: expected nil cmd, got %v", cmd())
+	}
+	if got.(Model).quitting {
+		t.Error("expired arm + ctrl+c: must not quit")
+	}
+	if got.(Model).quitArmedAt.IsZero() {
+		t.Error("expired arm + ctrl+c: should re-arm")
 	}
 }
 
@@ -111,8 +145,12 @@ func TestModelSelectionCopy(t *testing.T) {
 func TestModelCtrlCFallsBackToQuit(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
 	next, cmd := m.Update(keyPress("ctrl+c"))
+	if cmd != nil {
+		t.Fatal("first ctrl+c without a selection should only arm, not quit")
+	}
+	next, cmd = next.Update(keyPress("ctrl+c"))
 	if cmd == nil || cmd() != (tea.QuitMsg{}) {
-		t.Fatal("ctrl+c without a selection should quit when idle")
+		t.Fatal("second ctrl+c without a selection should quit when idle")
 	}
 	if !next.(Model).quitting {
 		t.Error("model should be marked quitting")
@@ -515,5 +553,24 @@ func TestModelPromptHistoryDedupsAndStashesDraft(t *testing.T) {
 	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if got := m.input.Value(); got != "draft" {
 		t.Errorf("↓ should restore the stashed draft %q, got %q", "draft", got)
+	}
+}
+
+// TestResumeSessionGuards verifies /resume refuses while a run is in flight
+// and reports cleanly with no active session.
+func TestResumeSessionGuards(t *testing.T) {
+	running := NewModel(Options{})
+	running.running = true
+	got, _ := running.runSlash("/resume abc")
+	joined := strings.Join(blockTexts(got.(Model).transcript), "\n")
+	if !strings.Contains(joined, "Interrupt the current run") {
+		t.Errorf("running /resume should refuse, got %q", joined)
+	}
+
+	m := NewModel(Options{})
+	got, _ = m.runSlash("/resume abc")
+	joined = strings.Join(blockTexts(got.(Model).transcript), "\n")
+	if !strings.Contains(joined, "No active session") {
+		t.Errorf("session-less /resume should report, got %q", joined)
 	}
 }

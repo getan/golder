@@ -90,6 +90,14 @@ func newTranscript(theme Theme) transcript {
 	}
 }
 
+// reset clears every block while keeping the viewport, theme, and measured
+// widths, so a session switch replays into a clean view without losing the
+// terminal geometry. Callers re-add the banner and seed history after.
+func (t *transcript) reset() {
+	vp, theme, totalWidth, width := t.vp, t.theme, t.totalWidth, t.width
+	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, follow: true}
+}
+
 // setSize resizes the transcript's viewport and re-flows the blocks to the new
 // width. A non-positive dimension is clamped to zero so the viewport never sees
 // a negative extent. width is the total space available; reflow decides whether

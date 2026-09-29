@@ -90,6 +90,12 @@ type Model struct {
 	// terminal.
 	quitting bool
 
+	// quitArmedAt marks when the first idle Ctrl+C/Esc armed a quit: a second
+	// press within quitArmWindow quits, otherwise the arm expires and the next
+	// press re-arms. Zero = disarmed. A single idle press must never quit —
+	// too easy to fat-finger away a session.
+	quitArmedAt time.Time
+
 	// statusBar renders the persistent bottom line (#386, US-003). It is fed the
 	// terminal width, telemetry-derived context usage, and the async git probe
 	// result; View renders it just above the input line.
@@ -220,6 +226,75 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	m.transcript.addBanner(renderBanner(m.theme, m.opts, m.cwd))
 	seedTranscript(&m.transcript, history)
 	return m
+}
+
+// resumeTitle renders a session's list title: its content preview, or the
+// model when the session has no text yet.
+func resumeTitle(it cli.ResumeItem) string {
+	if it.Preview != "" {
+		return it.Preview
+	}
+	if it.Header.Model != "" {
+		return it.Header.Model
+	}
+	return "(empty session)"
+}
+
+// resumeMeta renders the second list line: model and update time.
+func resumeMeta(it cli.ResumeItem) string {
+	model := it.Header.Model
+	if model == "" {
+		model = "?"
+	}
+	return fmt.Sprintf("%s · %s", model, it.Header.UpdatedAt.Format("01-02 15:04"))
+}
+
+// resumeSession implements /resume: it swaps the active session without
+// leaving the TUI, following runSession.switchTo (persist current, load target,
+// live model/provider follow the stored header). The transcript is reset and
+// reseeded from the loaded history. Refused while a run is in flight.
+func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
+	if m.running {
+		m.transcript.addSystem("Interrupt the current run first, then /resume.")
+		return m, nil
+	}
+	if m.session == nil {
+		m.transcript.addSystem("No active session to switch from.")
+		return m, nil
+	}
+	if id == "" {
+		items, err := cli.RecentSessionsWithPreview(m.session.store, 10)
+		if err != nil {
+			m.transcript.addSystem(fmt.Sprintf("resume: list sessions: %v", err))
+			return m, nil
+		}
+		if len(items) == 0 {
+			m.transcript.addSystem("No saved sessions yet.")
+			return m, nil
+		}
+		m.transcript.addSystem("Recent sessions (/resume <n|id>):")
+		for i, it := range items {
+			m.transcript.addSystem(fmt.Sprintf("%d. %s", i+1, resumeTitle(it)))
+			m.transcript.addSystem(fmt.Sprintf("   %s · %s", it.Header.ID, resumeMeta(it)))
+		}
+		return m, nil
+	}
+	if resolved, err := cli.ResolveResumeID(m.session.store, id); err != nil {
+		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
+		return m, nil
+	} else {
+		id = resolved
+	}
+	msgs, err := m.session.switchTo(id)
+	if err != nil {
+		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
+		return m, nil
+	}
+	m.transcript.reset()
+	m.transcript.addBanner(renderBanner(m.theme, m.opts, m.cwd))
+	seedTranscript(&m.transcript, msgs)
+	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
+	return m, nil
 }
 
 // Init implements tea.Model. It kicks off the async git probe so the status bar
@@ -808,6 +883,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	}
+	// /resume switches the active session in place (see runSession.switchTo).
+	// A bare /resume lists recent sessions; switching mid-run is refused so an
+	// in-flight run is never torn down.
+	if line == "/resume" || strings.HasPrefix(line, "/resume ") {
+		return m.resumeSession(strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
+	}
 	// /memory is intercepted before registry resolution (like /rebuild): it
 	// prints the persistent-memory + infinite-context report, reading the live
 	// memory store, memory root, session id, and messages that a slash Action
@@ -1038,9 +1119,14 @@ func (m Model) tickSpinner() tea.Cmd {
 	})
 }
 
+// quitArmWindow is how long an armed quit stays live: a second idle Ctrl+C /
+// Esc within this window quits; after it the arm expires.
+const quitArmWindow = 3 * time.Second
+
 // interruptOrQuit is the shared Esc / bare-Ctrl+C action: a two-stage interrupt
 // (FR-14) that stops an in-flight run on the first press and stays in the
-// program, or quits when idle.
+// program. When idle the first press only arms a quit (with a visible hint);
+// a second press within quitArmWindow quits.
 func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 	if m.running {
 		if m.interruptFn != nil {
@@ -1049,9 +1135,14 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("(interrupting the current run…)")
 		return m, nil
 	}
-	m.shutdownRemote()
-	m.quitting = true
-	return m, tea.Quit
+	if !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitArmWindow {
+		m.shutdownRemote()
+		m.quitting = true
+		return m, tea.Quit
+	}
+	m.quitArmedAt = time.Now()
+	m.transcript.addSystem("Press Ctrl+C again to quit.")
+	return m, nil
 }
 
 // shutdownRemote stops the remote-control server on quit so the listener and

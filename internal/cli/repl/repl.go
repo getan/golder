@@ -448,6 +448,13 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			runCopy(out, &deps)
 			continue
 		}
+		if line == "/resume" || strings.HasPrefix(line, "/resume ") {
+			// /resume swaps the active session without leaving the REPL
+			// (persist current, load target, live follows the stored header).
+			// The exact-or-space-prefix guard keeps "/resumed" from matching.
+			runResume(out, &deps, strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
+			continue
+		}
 		if line == "/session" {
 			// /session prints live session stats (message count, tokens, compactions)
 			// derived from deps.header + the in-memory context — state a pure

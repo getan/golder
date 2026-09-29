@@ -32,7 +32,7 @@ func Run(cmd string, args []string, out, errOut io.Writer) int {
 	case "list":
 		return runList(out, errOut)
 	default:
-		fmt.Fprintf(errOut, "pigo session: unknown command %q (want export or list)\n", cmd)
+		fmt.Fprintf(errOut, "pigo session: unknown command %q (want export, list, or resume)\n", cmd)
 		return 2
 	}
 }

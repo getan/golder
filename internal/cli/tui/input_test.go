@@ -180,11 +180,18 @@ func TestModelTwoStageInterrupt(t *testing.T) {
 			}
 		}
 
-		// Idle: the same key quits.
+		// Idle: first press only arms, second press quits.
 		idle := NewModel(Options{})
-		got, cmd := idle.Update(key)
+		armed, cmd := idle.Update(key)
+		if cmd != nil {
+			t.Fatalf("%s while idle: first press should only arm, got %T", key.String(), cmd())
+		}
+		if armed.(Model).quitting {
+			t.Fatalf("%s while idle: first press must not quit", key.String())
+		}
+		got, cmd := armed.Update(key)
 		if cmd == nil {
-			t.Fatalf("%s while idle: expected a quit command", key.String())
+			t.Fatalf("%s while idle: second press should quit", key.String())
 		}
 		if _, isQuit := cmd().(tea.QuitMsg); !isQuit {
 			t.Errorf("%s while idle: cmd should be tea.Quit", key.String())

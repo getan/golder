@@ -320,3 +320,29 @@ func TestApplyFileConfig_MemoryOverride(t *testing.T) {
 		t.Errorf("max_context 50%% of 200000 = %d, want 100000", got)
 	}
 }
+
+func TestPeelSessionResumeID(t *testing.T) {
+	tests := []struct {
+		name     string
+		argv     []string
+		wantID   string
+		wantRest []string
+	}{
+		{"resume peels", []string{"pigo", "session", "resume", "abc123"}, "abc123", []string{"pigo"}},
+		{"resume keeps trailing flags", []string{"pigo", "session", "resume", "abc", "-p", "hi"}, "abc", []string{"pigo", "-p", "hi"}},
+		{"other session cmd untouched", []string{"pigo", "session", "list"}, "", []string{"pigo", "session", "list"}},
+		{"normal invocation untouched", []string{"pigo", "-p", "hi"}, "", []string{"pigo", "-p", "hi"}},
+		{"bare pigo untouched", []string{"pigo"}, "", []string{"pigo"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			argv := append([]string(nil), tt.argv...)
+			if got := peelSessionResumeID(&argv); got != tt.wantID {
+				t.Errorf("id = %q, want %q", got, tt.wantID)
+			}
+			if strings.Join(argv, "\x00") != strings.Join(tt.wantRest, "\x00") {
+				t.Errorf("rest = %v, want %v", argv, tt.wantRest)
+			}
+		})
+	}
+}

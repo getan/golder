@@ -250,16 +250,48 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 	}
 }
 
-// TestTrustBeforeToolCallSkipsNonSideEffect verifies read-only tools are never
-// gated, even in an untrusted directory.
-func TestTrustBeforeToolCallSkipsNonSideEffect(t *testing.T) {
+// TestTrustBeforeToolCallStrictReads verifies the fork default: in an
+// untrusted directory, data-ingestion tools (read, grep, find, ls, webfetch,
+// websearch) are gated like side-effect tools, while pure in-memory tools
+// (todo, schedule_*, goal_*, memory_*) are never gated.
+func TestTrustBeforeToolCallStrictReads(t *testing.T) {
 	cwd := t.TempDir()
-	mgr, _ := newTrustManager(t)
 	mu := &sync.Mutex{}
-	hook := BeforeToolCall(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
-	for _, name := range []string{"read", "grep", "find", "todo", "webfetch"} {
+
+	// Strict (default): reads prompt; "y" allows without granting trust.
+	mgr, _ := newTrustManager(t)
+	if !mgr.StrictReads {
+		t.Fatal("fork default StrictReads = false, want true")
+	}
+	hook := BeforeToolCall(mgr, cwd, readerOf("y\ny\ny\ny\ny\ny\n"), &bytes.Buffer{}, mu)
+	for _, name := range []string{"read", "grep", "find", "ls", "webfetch", "websearch"} {
 		if dec := hook(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
-			t.Errorf("non-side-effect tool %q was gated (%+v), want nil", name, dec)
+			t.Errorf("strict read tool %q was blocked on allow (%+v), want nil", name, dec)
+		}
+	}
+	if mgr.IsTrusted(cwd) {
+		t.Error("'y' must not grant session trust")
+	}
+	// Strict: "n" blocks a read.
+	hookDeny := BeforeToolCall(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, mu)
+	if dec := hookDeny(context.Background(), agentcore.AgentToolCall{Name: "read"}); dec == nil || !dec.Block {
+		t.Errorf("strict deny: hook returned %+v, want a Block decision", dec)
+	}
+	// Strict: in-memory tools are never gated.
+	hookMem := BeforeToolCall(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
+	for _, name := range []string{"todo", "schedule_create", "goal_complete", "memory_search"} {
+		if dec := hookMem(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
+			t.Errorf("in-memory tool %q was gated (%+v), want nil", name, dec)
+		}
+	}
+
+	// Relaxed: reads pass through untouched.
+	mgr2, _ := newTrustManager(t)
+	mgr2.StrictReads = false
+	hook2 := BeforeToolCall(mgr2, cwd, readerOf(""), &bytes.Buffer{}, mu)
+	for _, name := range []string{"read", "grep", "find", "ls", "todo", "webfetch", "websearch"} {
+		if dec := hook2(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
+			t.Errorf("relaxed tool %q was gated (%+v), want nil", name, dec)
 		}
 	}
 }

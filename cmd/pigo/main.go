@@ -167,11 +167,16 @@ type cliOptions struct {
 
 func main() {
 	// Session subcommands (pigo session export|list, issue #570) dispatch early
+	// `pigo session resume <id>` is sugar for `--resume <id>`: capture the id
+	// and drop both words from argv so flag parsing sees a normal invocation;
+	// the id feeds the resumeID resolution below. A bare `session resume`
+	// without an id is a usage error.
+	sessionResumeID := peelSessionResumeID(&os.Args)
 	// like the package-management ones: they are standalone actions that never
 	// touch the interactive/headless flag surface.
 	if len(os.Args) > 1 && os.Args[1] == "session" {
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: pigo session export <session-id> [flags] | pigo session list")
+			fmt.Fprintln(os.Stderr, "usage: pigo session export <session-id> [flags] | pigo session list | pigo session resume <session-id>")
 			os.Exit(2)
 		}
 		os.Exit(sessioncmd.Run(os.Args[2], os.Args[3:], os.Stdout, os.Stderr))
@@ -281,6 +286,11 @@ func main() {
 	// A prompt may also be supplied as positional args.
 	if opts.prompt == "" {
 		opts.prompt = strings.TrimSpace(strings.Join(flag.Args(), " "))
+	}
+
+	// `session resume <id>` (peeled above) feeds --resume unless explicitly set.
+	if opts.resumeID == "" {
+		opts.resumeID = sessionResumeID
 	}
 
 	os.Exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
@@ -642,4 +652,23 @@ func runDream(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 // before calling this, so it only decides TUI-vs-REPL for the interactive case.
 func shouldUseTUI(opts cliOptions, isTTY bool) bool {
 	return isTTY && !opts.noTUI
+}
+
+// peelSessionResumeID extracts the id from a `session resume <id>` argv,
+// rewriting *argv in place to drop both words so the rest of main sees a
+// normal invocation. It returns "" when argv is not a resume invocation (no
+// rewrite). A bare `session resume` without an id is a usage error (exit 2),
+// reported here since the session subcommand dispatcher only runs later.
+func peelSessionResumeID(argv *[]string) string {
+	a := *argv
+	if len(a) > 3 && a[1] == "session" && a[2] == "resume" {
+		id := a[3]
+		*argv = append([]string{a[0]}, a[4:]...)
+		return id
+	}
+	if len(a) == 3 && a[1] == "session" && a[2] == "resume" {
+		fmt.Fprintln(os.Stderr, "usage: pigo session resume <session-id>")
+		os.Exit(2)
+	}
+	return ""
 }

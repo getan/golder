@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -494,4 +495,60 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 			}
 		}
 	}
+}
+
+// switchTo replaces the active session with the stored session id, persisting
+// the current session first so unsaved turns are not lost. It returns the
+// loaded messages for transcript seeding. The live model/provider follow the
+// stored header: a different provider name re-resolves the driver from the
+// registry (defaults; API keys resolve from the environment via the session's
+// credential store), while the thinking level and context window stay with the
+// current live config. Hook identity follows the new session; no SessionStart
+// is re-dispatched (project hooks fired once at launch).
+func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, fmt.Errorf("usage: /resume <session-id>")
+	}
+	if id == s.header.ID {
+		return nil, fmt.Errorf("already on session %s", id)
+	}
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	h, entries, err := s.store.LoadEntries(id)
+	if err != nil {
+		return nil, err
+	}
+	msgs := make(agentcore.MessageList, len(entries))
+	for i, e := range entries {
+		msgs[i] = e.Message
+	}
+	sysPrompt := h.SystemPrompt
+	if sysPrompt == "" {
+		sysPrompt = s.agentCtx.SystemPrompt
+	}
+	if h.Provider != "" && h.Provider != s.live.ProviderName {
+		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
+		if err != nil {
+			return nil, fmt.Errorf("resolve session provider: %w", err)
+		}
+		s.live.Provider = prov
+		s.live.ProviderName = name
+		s.live.BaseURL = ""
+		s.live.Protocol = ""
+	}
+	if h.Model != "" {
+		s.live.Model = h.Model
+	}
+	s.header = h
+	s.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: s.agentCtx.Tools}
+	s.persisted = len(msgs)
+	s.compacted = false
+	s.curLeaf = ""
+	if len(entries) > 0 {
+		s.curLeaf = entries[len(entries)-1].ID
+	}
+	s.hookDeps.SessionID = h.ID
+	return msgs, nil
 }

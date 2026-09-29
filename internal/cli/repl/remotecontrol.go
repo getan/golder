@@ -187,7 +187,7 @@ func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 // browser instead of blocking on the local terminal. When no browser is
 // connected it delegates to the local prompt so behavior is unchanged.
 //
-// This mirrors trust.BeforeToolCall's gating (side-effect tools only, honoring
+// This mirrors trust.BeforeToolCall's gating (Manager.GatesTool, honoring
 // session trust) but delegates the allow/always decision to the remote client
 // via Bridge.Confirm. A ctx cancellation (e.g. SIGINT) makes Confirm return
 // remote=false, which we treat as a denial so an interrupted run does not
@@ -201,7 +201,7 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 			}
 			return nil
 		}
-		if !trust.SideEffectTools[call.Name] {
+		if !mgr.GatesTool(call.Name) {
 			return nil
 		}
 		if mu != nil {
