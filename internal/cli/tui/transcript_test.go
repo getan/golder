@@ -322,3 +322,20 @@ func TestModelScrollbarDrag(t *testing.T) {
 		t.Error("press off the scrollbar column should not start dragging")
 	}
 }
+
+// TestTranscriptUserGutter verifies user turns render with a › gutter so
+// prompts never blend into assistant replies (codex user-cell parity).
+func TestTranscriptUserGutter(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(40, 20)
+	tr.addUser("hello world")
+	content := stripANSI(tr.vp.GetContent())
+	if !strings.Contains(content, "› hello world") {
+		t.Errorf("user block should carry › gutter; got:\n%q", content)
+	}
+	tr.addUser("line one\nline two")
+	content = stripANSI(tr.vp.GetContent())
+	if !strings.Contains(content, "› line one") || !strings.Contains(content, "› line two") {
+		t.Errorf("multiline user block should gutter every line; got:\n%q", content)
+	}
+}

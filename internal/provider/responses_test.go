@@ -754,3 +754,41 @@ func TestResponsesDriverReasoning(t *testing.T) {
 		t.Errorf("thinking content = %q, want %q", thinking, "let me think")
 	}
 }
+
+// A response.failed event must surface the server's embedded error
+// (code + message + id), not a bare "response failed" that cannot be
+// diagnosed.
+func TestResponsesDriverFailedEventCarriesServerError(t *testing.T) {
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return sseResponse(
+			deltaFrame("partial"),
+			`{"type":"response.failed","sequence_number":2,"response":{"id":"resp-9","error":{"code":"server_error","message":"upstream exploded"}}}`,
+		), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion should not early-error: %v", err)
+	}
+
+	var errEvent *StreamErrorEvent
+	for ev := range stream.Events() {
+		if se, ok := ev.(StreamErrorEvent); ok {
+			e := se
+			errEvent = &e
+		}
+	}
+	if errEvent == nil {
+		t.Fatal("expected a terminal StreamErrorEvent for response.failed")
+	}
+	for _, want := range []string{"resp-9", "server_error", "upstream exploded"} {
+		if !strings.Contains(errEvent.Message.ErrorMessage, want) {
+			t.Errorf("error message = %q, want to contain %q", errEvent.Message.ErrorMessage, want)
+		}
+	}
+}

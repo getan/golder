@@ -7,7 +7,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
 )
 
 // This file implements the rich tool-call card component (US-006, SPEC 3.2,
@@ -17,7 +16,7 @@ import (
 // rendered as an indented tree, and - for tools that report a diff (edit,
 // #560) - a colored Diff section. Cards are created on toolStartMsg,
 // completed on toolEndMsg, and toggled between a capped and a full response view
-// with Ctrl+O (see model.go). All width math goes through ui.Width /
+// with Ctrl+T (see model.go). All width math goes through ui.Width /
 // WrapToWidth / TruncateToWidth so CJK and emoji (two columns) never split.
 
 // cardState is the lifecycle of a tool card: running while the tool executes,
@@ -53,116 +52,121 @@ type toolCard struct {
 	expanded bool
 }
 
-// collapsedResponseLines is how many response lines a card shows before it is
-// expanded; past this the preview is truncated and a Ctrl+O hint is appended.
-const collapsedResponseLines = 5
+// expandHint names the key that toggles a card between its one-line summary
+// and the full detail (codex parity: ctrl+t).
+const expandHint = "ctrl+t"
 
-// collapsedDiffLines is the same cap for the Diff section. It is larger than
-// the response cap because a hunk spends lines on file headers, the @@ marker
-// and context around the actual change.
-const collapsedDiffLines = 12
 
-// statusIcon returns the header status glyph for the card's state. Running is a
-// spinner-like ellipsis, success a check, warn a bang.
-func (c toolCard) statusIcon() string {
+// statusBullet renders the codex-style bullet in the state's theme color:
+// dim gray while running, bold green on success, bold red on failure. The old
+// ✓/! glyphs were retired here on purpose: codex reserves ✓ for the
+// approval affordance (goal complete, trust prompts), while execution rows use
+// only the colored bullet so success/failure reads at a glance.
+func (c toolCard) statusBullet(theme Theme) string {
 	switch c.state {
 	case cardSuccess:
-		return "✓"
+		return theme.Success.Render("•")
 	case cardWarn:
-		return "!"
+		return theme.Error.Render("•")
 	default:
-		return "…"
+		return theme.System.Render("•")
 	}
 }
 
-// styledIcon renders the status glyph with the state's theme color: gray while
-// running, green on success, yellow/red on warn.
-func (c toolCard) styledIcon(theme Theme) string {
-	icon := c.statusIcon()
-	switch c.state {
-	case cardSuccess:
-		return theme.Success.Render(icon)
-	case cardWarn:
-		return theme.Warn.Render(icon)
-	default:
-		return theme.System.Render(icon)
+// title is the one-line summary shared by the live collapsed card and the
+// resume replay: codex-style `Running <name arg>` while the tool executes and
+// `Ran <name arg>` once it finishes, so the transcript reads as a verb.
+func (c toolCard) title() string {
+	header := c.headline()
+	if c.state == cardRunning {
+		return "Running " + header
 	}
+	return "Ran " + header
 }
 
-// render draws the card at the given content width: a rounded border wrapping a
-// header (status icon + tool name), an "Input arguments" section listing the input map,
-// a "Response" section with the tree lines, and - when the tool reported a diff
-// (edit) - a colored "Diff" section. When not expanded the response is capped
-// to collapsedResponseLines (the diff to collapsedDiffLines) with a
-// "(Ctrl+O for more)" hint; when expanded every line is shown.
+// render draws the card codex-style: collapsed is a single bullet line
+// (`• Running/Ran name(args)`), optionally followed by a middle-truncation
+// hint (`… +N lines`) when output is hidden; expanded shows the input,
+// response, and diff sections as gutter-prefixed lines (` │ ` command
+// continuations, ` └ ` output start) with no border anywhere.
 func (c toolCard) render(theme Theme, width int) string {
+	title := c.title()
+	line := c.statusBullet(theme) + " " + theme.ToolHeader.Render(TruncateToWidth(title, max(1, width-4)))
+	if c.expanded {
+		return line + c.renderDetail(theme, width)
+	}
+	if hidden := c.hiddenLines(); hidden > 0 {
+		line += "\n" + theme.System.Render(
+			fmt.Sprintf("… +%d lines (%s to view transcript)", hidden, expandHint))
+	}
+	return line
+}
+
+// headline is the tool name plus its most salient argument.
+func (c toolCard) headline() string {
+	header := c.name
+	if arg := c.primaryArg(); arg != "" {
+		header = c.name + " " + oneLine(arg)
+	}
+	return header
+}
+
+// hiddenLines counts response + diff lines hidden while collapsed.
+func (c toolCard) hiddenLines() int {
+	n := len(c.response)
+	if c.diff != "" {
+		n += len(strings.Split(strings.TrimRight(c.diff, "\n"), "\n"))
+	}
+	return n
+}
+
+// renderDetail renders the expanded sections under the header line with
+// codex gutters: input args as `  │ k: v` continuations, the first output
+// line as `  └ ...` and the rest as `    ...`, diff lines with the same
+// output gutter plus per-line diff colors. An empty result renders
+// `  └ (no output)` so a silent tool does not look truncated.
+func (c toolCard) renderDetail(theme Theme, width int) string {
 	if width < 4 {
 		width = 4
 	}
-	// The rounded border consumes one column on each side; wrap everything to the
-	// inner width so nothing overflows the frame.
 	inner := width - 2
-
-	var lines []string
-
-	icon := c.styledIcon(theme)
-	nameBudget := inner - ui.Width(icon) - 1
-	if nameBudget < 1 {
-		nameBudget = 1
-	}
-	header := c.name
-	if arg := c.primaryArg(); arg != "" {
-		header = c.name + "(" + arg + ")"
-	}
-	header = TruncateToWidth(header, nameBudget)
-	lines = append(lines, icon+" "+theme.ToolHeader.Render(header))
-
+	var b strings.Builder
 	if len(c.input) > 0 {
-		lines = append(lines, theme.ToolBody.Render("Input arguments"))
 		for _, k := range sortedKeys(c.input) {
-			kv := "  " + k + ": " + fmt.Sprintf("%v", c.input[k])
-			lines = append(lines, theme.ToolBody.Render(WrapToWidth(kv, inner)))
+			kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
 		}
 	}
-
-	if len(c.response) > 0 {
-		lines = append(lines, theme.ToolBody.Render("Response"))
-		resp := c.response
-		truncated := false
-		if !c.expanded && len(resp) > collapsedResponseLines {
-			resp = resp[:collapsedResponseLines]
-			truncated = true
+	wroteOutput := false
+	for i, n := range c.response {
+		indent := strings.Repeat("  ", n.depth)
+		text := indent + n.text
+		if i == 0 {
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
+		} else {
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
 		}
-		for _, n := range resp {
-			indent := strings.Repeat("  ", n.depth)
-			lines = append(lines, theme.ToolBody.Render(WrapToWidth(indent+n.text, inner)))
-		}
-		if truncated {
-			lines = append(lines, theme.System.Render("(Ctrl+O for more)"))
-		}
+		wroteOutput = true
 	}
-
 	if c.diff != "" {
-		lines = append(lines, theme.ToolBody.Render("Diff"))
-		dl := strings.Split(strings.TrimRight(c.diff, "\n"), "\n")
-		truncated := false
-		if !c.expanded && len(dl) > collapsedDiffLines {
-			dl = dl[:collapsedDiffLines]
-			truncated = true
-		}
-		for _, ln := range dl {
-			lines = append(lines, diffLineStyle(theme, ln).Render(WrapToWidth("  "+ln, inner)))
-		}
-		if truncated {
-			lines = append(lines, theme.System.Render("(Ctrl+O for more)"))
+		for i, ln := range strings.Split(strings.TrimRight(c.diff, "\n"), "\n") {
+			prefix := "    "
+			if !wroteOutput && i == 0 {
+				prefix = "  └ "
+			}
+			b.WriteString("\n" + diffLineStyle(theme, ln).Render(WrapToWidth(prefix+ln, inner)))
+			wroteOutput = true
 		}
 	}
+	if !wroteOutput {
+		b.WriteString("\n" + theme.System.Render(WrapToWidth("  └ (no output)", inner)))
+	}
+	return b.String()
+}
 
-	border := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colorGray)).
-		Width(inner)
-	return border.Render(strings.Join(lines, "\n"))
+// oneLine collapses s to a single line for headlines.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // primaryArg returns the most salient call argument to inline in the card header

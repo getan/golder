@@ -258,3 +258,32 @@ func TestSlashMenuPickerMode(t *testing.T) {
 		t.Error("close must reset picker state")
 	}
 }
+
+// TestSlashMenuPickerDetailed verifies titled picker rows: Title renders
+// first, Detail second, and the mark annotates the matching Value.
+func TestSlashMenuPickerDetailed(t *testing.T) {
+	mn := slashMenu{theme: DefaultTheme()}
+	mn.openPickerDetailed([]pickItem{
+		{Title: "fix bug", Detail: "m1 · gpt", Value: "id-1"},
+		{Title: "write docs", Detail: "m2 · gpt", Value: "id-2"},
+	}, "id-2", "resume")
+	if !mn.picking() {
+		t.Fatal("detailed picker should be active")
+	}
+	if mn.pickKind != "resume" {
+		t.Errorf("pickKind = %q, want resume", mn.pickKind)
+	}
+	if got, _ := mn.pickCurrent(); got != "id-1" {
+		t.Errorf("initial pick = %q, want id-1", got)
+	}
+	view := mn.view(60)
+	for _, want := range []string{"fix bug", "m1 · gpt", "write docs  m2 · gpt  (current)"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	mn.close()
+	if mn.picking() || mn.pickKind != "" {
+		t.Error("close must reset detailed picker state")
+	}
+}

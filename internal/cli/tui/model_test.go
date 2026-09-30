@@ -8,7 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/smallnest/pigo/internal/session"
 )
 
 // TestModelQuitKeys verifies Ctrl+D quits idle immediately while Ctrl+C
@@ -634,5 +637,66 @@ func TestModelPickerAsyncFetch(t *testing.T) {
 	joined := strings.Join(blockTexts(got2.(Model).transcript), "\n")
 	if !strings.Contains(joined, "/model <id>") {
 		t.Errorf("error should hint direct switch, got %q", joined)
+	}
+}
+
+// TestResumePickerSelectSwitches drives the bare-/resume picker end to end:
+// the recent list opens as a picker, and confirming switches the session.
+func TestResumePickerSelectSwitches(t *testing.T) {
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	now := time.Now().UTC()
+	mkHeader := func(id, model string, at time.Time) session.SessionHeader {
+		return session.SessionHeader{ID: id, CreatedAt: at, UpdatedAt: at, Model: model, Provider: "prov"}
+	}
+	mkMsgs := func(text string) agentcore.MessageList {
+		if text == "" {
+			return nil
+		}
+		return agentcore.MessageList{agentcore.UserMessage{
+			RoleField: agentcore.RoleUser,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(text)},
+		}}
+	}
+	if err := store.Save(mkHeader("sess-a", "m", now), mkMsgs("")); err != nil {
+		t.Fatalf("Save A: %v", err)
+	}
+	if err := store.Save(mkHeader("sess-b", "m", now.Add(time.Second)), mkMsgs("hello b")); err != nil {
+		t.Fatalf("Save B: %v", err)
+	}
+
+	m := NewModel(Options{})
+	m.live = &cli.LiveConfig{Model: "m", ProviderName: "prov"}
+	m.session = &runSession{
+		store:    store,
+		header:   mkHeader("sess-a", "m", now),
+		agentCtx: &agentcore.AgentContext{},
+		live:     m.live,
+	}
+
+	got, _ := m.runSlash("/resume")
+	gm := got.(Model)
+	if !gm.menu.picking() {
+		t.Fatal("bare /resume should open the picker")
+	}
+	if gm.menu.pickKind != "resume" {
+		t.Errorf("pickKind = %q, want resume", gm.menu.pickKind)
+	}
+	item, ok := gm.menu.pickCurrent()
+	if !ok || item != "sess-b" {
+		t.Fatalf("initial pick = (%q, %v), want newest sess-b", item, ok)
+	}
+	got2, _ := gm.submitSlashSelected()
+	gm2 := got2.(Model)
+	if gm2.session.header.ID != "sess-b" {
+		t.Errorf("header.ID = %q, want sess-b", gm2.session.header.ID)
+	}
+	if gm2.menu.picking() {
+		t.Error("picker should close after confirm")
+	}
+	if len(gm2.session.agentCtx.Messages) != 1 {
+		t.Errorf("messages = %d, want 1 replayed", len(gm2.session.agentCtx.Messages))
 	}
 }

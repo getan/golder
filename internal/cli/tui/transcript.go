@@ -38,7 +38,7 @@ const (
 // (unstyled, unwrapped) message body; the role selects the theme style and any
 // prefix applied at render time. For roleTool blocks text is unused and card
 // points at the live tool card (#389); the pointer lets a later toolEndMsg /
-// Ctrl+O mutate the card in place and have it re-render on the next reflow.
+// Ctrl+T mutate the card in place and have it re-render on the next reflow.
 type transcriptBlock struct {
 	role blockRole
 	text string
@@ -145,7 +145,7 @@ func (t *transcript) addBanner(text string) {
 
 // addToolCard appends a rich tool-call card (#389) as an ordered block so it
 // renders inline in the transcript. The card is held by pointer, so a later
-// state change (toolEndMsg) or expand toggle (Ctrl+O) followed by reflow
+// state change (toolEndMsg) or expand toggle (Ctrl+T) followed by reflow
 // re-renders it in place.
 func (t *transcript) addToolCard(c *toolCard) {
 	t.blocks = append(t.blocks, transcriptBlock{role: roleTool, card: c})
@@ -400,7 +400,7 @@ func (t transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	case roleBanner:
 		return blk.text
 	case roleUser:
-		return t.theme.User.Render(WrapToWidth(blk.text, t.width))
+		return renderUserBlock(t.theme, blk.text, t.width)
 	case roleSystem:
 		return t.theme.System.Render(WrapToWidth(blk.text, t.width))
 	default:
@@ -409,4 +409,64 @@ func (t transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 		}
 		return renderMarkdown(blk.text, t.width)
 	}
+}
+
+// renderUserBlock renders a user turn as a visually distinct block: every
+// wrapped line carries a `› ` gutter in the User style (bold bright-white)
+// so prompts never blend into assistant replies or dim system notes. Wrapping
+// accounts for the 2-cell gutter so CJK/emoji never overflow the transcript
+// width. This mirrors codex's `User ›` history cell: the speaker is
+// obvious at a glance, while assistant text stays gutter-free.
+func renderUserBlock(theme Theme, text string, width int) string {
+	avail := width - 2
+	if avail < 1 {
+		avail = 1
+	}
+	wrapped := WrapToWidth(text, avail)
+	lines := splitLines(wrapped)
+	for i, ln := range lines {
+		lines[i] = theme.User.Render("› " + ln)
+	}
+	return joinLines(lines)
+}
+
+// splitLines splits on newline without trimming, keeping empty lines so
+// multi-paragraph prompts survive the gutter pass.
+func splitLines(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	out := []string{}
+	cur := ""
+	for _, r := range s {
+		if r == '\n' {
+			out = append(out, cur)
+			cur = ""
+			continue
+		}
+		cur += string(r)
+	}
+	out = append(out, cur)
+	return out
+}
+
+// joinLines is strings.Join(lines, "\n") without importing strings at the
+// call site (transcript.go already imports strings, but keep the helper
+// dependency-free for tests).
+func joinLines(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	n := 0
+	for _, l := range lines {
+		n += len(l) + 1
+	}
+	b := make([]byte, 0, n)
+	for i, l := range lines {
+		if i > 0 {
+			b = append(b, '\n')
+		}
+		b = append(b, l...)
+	}
+	return string(b)
 }

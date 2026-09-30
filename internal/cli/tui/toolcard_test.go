@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,45 +32,46 @@ func TestParseToolResult(t *testing.T) {
 	}
 }
 
-// TestToolCardRender checks the header (name + status icon), the input section,
-// and the response tree lines appear in the rendered card, and that the status
-// icon reflects the state.
 func TestToolCardRender(t *testing.T) {
 	theme := DefaultTheme()
-	cases := []struct {
-		name  string
-		state cardState
-		icon  string
-	}{
-		{"running", cardRunning, "…"},
-		{"success", cardSuccess, "✓"},
-		{"warn", cardWarn, "!"},
+	card := toolCard{
+		id:       "1",
+		name:     "read",
+		input:    map[string]any{"path": "/tmp/x"},
+		response: parseToolResult("line one\n  nested"),
+		state:    cardSuccess,
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			card := toolCard{
-				id:       "1",
-				name:     "read_file",
-				input:    map[string]any{"path": "/tmp/x"},
-				response: parseToolResult("line one\n  nested"),
-				state:    tc.state,
-			}
-			out := card.render(theme, 60)
-			for _, want := range []string{"read_file", tc.icon, "Input arguments", "path: /tmp/x", "Response", "line one", "nested"} {
-				if !strings.Contains(out, want) {
-					t.Errorf("render missing %q\n%s", want, out)
-				}
-			}
-		})
+	collapsed := card.render(theme, 60)
+	for _, want := range []string{"•", "read", "/tmp/x"} {
+		if !strings.Contains(collapsed, want) {
+			t.Errorf("collapsed render missing %q\n%s", want, collapsed)
+		}
+	}
+	for _, nope := range []string{"Input arguments", "Response", "line one", "RoundedBorder"} {
+		if strings.Contains(collapsed, nope) {
+			t.Errorf("collapsed render should not contain %q\n%s", nope, collapsed)
+		}
+	}
+	if lines := strings.Count(collapsed, "\n"); lines != 1 {
+		t.Errorf("collapsed render = %d lines, want header + hint", lines)
+	}
+	card.expanded = true
+	expanded := card.render(theme, 60)
+	for _, want := range []string{"path: /tmp/x", "line one", "nested"} {
+		if !strings.Contains(expanded, want) {
+			t.Errorf("expanded render missing %q\n%s", want, expanded)
+		}
 	}
 }
 
-// TestToolCardExpandTruncation verifies the collapsed card caps the response and
-// shows the Ctrl+O hint, while the expanded card reveals every line.
+// TestToolCardExpandTruncation verifies the collapsed card shows only the
+// header plus a "â¦ +N lines (ctrl+t to view transcript)" hint, while the expanded card
+// reveals every response line with no hint.
 func TestToolCardExpandTruncation(t *testing.T) {
 	theme := DefaultTheme()
 	var b strings.Builder
-	for i := 0; i < collapsedResponseLines+3; i++ {
+	const n = 8
+	for i := 0; i < n; i++ {
 		b.WriteString("resp-line-")
 		b.WriteByte(byte('a' + i))
 		b.WriteByte('\n')
@@ -77,21 +79,23 @@ func TestToolCardExpandTruncation(t *testing.T) {
 	card := toolCard{name: "grep", response: parseToolResult(b.String()), state: cardSuccess}
 
 	collapsed := card.render(theme, 60)
-	if !strings.Contains(collapsed, "(Ctrl+O for more)") {
-		t.Errorf("collapsed card should show Ctrl+O hint\n%s", collapsed)
+	if !strings.Contains(collapsed, fmt.Sprintf("\u2026 +%d lines (ctrl+t to view transcript)", n)) {
+		t.Errorf("collapsed card should hint %d hidden lines\n%s", n, collapsed)
 	}
-	lastLine := "resp-line-" + string(byte('a'+collapsedResponseLines+2))
-	if strings.Contains(collapsed, lastLine) {
-		t.Errorf("collapsed card should not show %q\n%s", lastLine, collapsed)
+	if strings.Contains(collapsed, "resp-line-a") {
+		t.Errorf("collapsed card should not show response lines\n%s", collapsed)
 	}
 
 	card.expanded = true
 	expanded := card.render(theme, 60)
-	if strings.Contains(expanded, "(Ctrl+O for more)") {
-		t.Errorf("expanded card should not show Ctrl+O hint\n%s", expanded)
+	if strings.Contains(expanded, "ctrl+t to view") {
+		t.Errorf("expanded card should not show the hint\n%s", expanded)
 	}
-	if !strings.Contains(expanded, lastLine) {
-		t.Errorf("expanded card should show %q\n%s", lastLine, expanded)
+	for i := 0; i < n; i++ {
+		want := "resp-line-" + string(byte('a'+i))
+		if !strings.Contains(expanded, want) {
+			t.Errorf("expanded card should show %q\n%s", want, expanded)
+		}
 	}
 }
 
@@ -141,14 +145,13 @@ func TestToolCardDiffSection(t *testing.T) {
 		response: parseToolResult("Edited f.txt (1 replacement(s))"),
 		diff:     diff,
 		state:    cardSuccess,
+		expanded: true,
 	}
 	out := card.render(theme, 60)
 
 	for _, want := range []string{
-		"edit(f.txt)",
-		"Response",
+		"edit f.txt",
 		"Edited f.txt (1 replacement(s))",
-		"Diff",
 		"--- a/f.txt",
 		"@@ -1,3 +1,3 @@",
 		"-beta",
@@ -160,11 +163,11 @@ func TestToolCardDiffSection(t *testing.T) {
 	}
 	// The diff lines are styled, not plain body text.
 	for _, styled := range []string{
-		theme.DiffDel.Render("  -beta"),
-		theme.DiffAdd.Render("  +BETA"),
-		theme.DiffHunk.Render("  @@ -1,3 +1,3 @@"),
-		theme.DiffCtx.Render("  --- a/f.txt"),
-		theme.DiffCtx.Render("   alpha"),
+		theme.DiffDel.Render("    -beta"),
+		theme.DiffAdd.Render("    +BETA"),
+		theme.DiffHunk.Render("    @@ -1,3 +1,3 @@"),
+		theme.DiffCtx.Render("    --- a/f.txt"),
+		theme.DiffCtx.Render("     alpha"),
 	} {
 		if !strings.Contains(out, styled) {
 			t.Errorf("render missing styled diff line %q\n%s", styled, out)
@@ -172,14 +175,14 @@ func TestToolCardDiffSection(t *testing.T) {
 	}
 }
 
-// TestToolCardDiffCollapseExpand verifies the Diff section obeys the same
-// collapse/expand behavior as the response: capped with a Ctrl+O hint when
-// collapsed, fully shown once expanded.
+// TestToolCardDiffCollapseExpand verifies a diff hides behind the hint when
+// collapsed and renders fully once expanded.
 func TestToolCardDiffCollapseExpand(t *testing.T) {
 	theme := DefaultTheme()
 	var b strings.Builder
 	b.WriteString("--- a/f.txt\n+++ b/f.txt\n")
-	for i := 0; i < collapsedDiffLines+3; i++ {
+	const adds = 4
+	for i := 0; i < adds; i++ {
 		b.WriteString("+line\n")
 	}
 	card := toolCard{
@@ -189,23 +192,22 @@ func TestToolCardDiffCollapseExpand(t *testing.T) {
 		state:    cardSuccess,
 	}
 
+	// 1 summary + 2 headers + 4 additions hidden behind the hint.
 	collapsed := card.render(theme, 60)
-	if !strings.Contains(collapsed, "(Ctrl+O for more)") {
-		t.Errorf("collapsed card should show Ctrl+O hint\n%s", collapsed)
+	if !strings.Contains(collapsed, "\u2026 +7 lines (ctrl+t to view transcript)") {
+		t.Errorf("collapsed card should hint 7 hidden lines\n%s", collapsed)
 	}
-	// The cap counts all diff lines, so the 2 header lines leave room for
-	// collapsedDiffLines-2 additions.
-	if got := strings.Count(collapsed, "+line"); got != collapsedDiffLines-2 {
-		t.Errorf("collapsed card shows %d additions, want %d\n%s", got, collapsedDiffLines-2, collapsed)
+	if strings.Contains(collapsed, "+line") {
+		t.Errorf("collapsed card should not show diff lines\n%s", collapsed)
 	}
 
 	card.expanded = true
 	expanded := card.render(theme, 60)
-	if strings.Contains(expanded, "(Ctrl+O for more)") {
-		t.Errorf("expanded card should not show Ctrl+O hint\n%s", expanded)
+	if strings.Contains(expanded, "ctrl+t to view") {
+		t.Errorf("expanded card should not show the hint\n%s", expanded)
 	}
-	if got := strings.Count(expanded, "+line"); got != collapsedDiffLines+3 {
-		t.Errorf("expanded card shows %d additions, want %d\n%s", got, collapsedDiffLines+3, expanded)
+	if got := strings.Count(expanded, "+line"); got != adds {
+		t.Errorf("expanded card shows %d additions, want %d\n%s", got, adds, expanded)
 	}
 }
 
@@ -274,15 +276,15 @@ func TestModelToolEndDiff(t *testing.T) {
 	}
 }
 
-// TestModelCtrlOTogglesExpanded verifies Ctrl+O flips the most-recent card's
-// expanded flag so more response lines become visible.
-func TestModelCtrlOTogglesExpanded(t *testing.T) {
+// TestModelCtrlTTogglesExpanded verifies Ctrl+T flips the most-recent card's
+// expanded flag so the full detail becomes visible (codex parity).
+func TestModelCtrlTTogglesExpanded(t *testing.T) {
 	m := NewModel(Options{})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
 	mm := next.(Model)
 
 	var b strings.Builder
-	for i := 0; i < collapsedResponseLines+3; i++ {
+	for i := 0; i < 8; i++ {
 		b.WriteString("row")
 		b.WriteByte(byte('0' + i))
 		b.WriteByte('\n')
@@ -295,15 +297,52 @@ func TestModelCtrlOTogglesExpanded(t *testing.T) {
 	if mm.lastToolCard.expanded {
 		t.Fatalf("card should start collapsed")
 	}
-	next, _ = mm.Update(ctrlKey('o'))
+	next, _ = mm.Update(ctrlKey('t'))
 	mm = next.(Model)
 	if !mm.lastToolCard.expanded {
-		t.Errorf("Ctrl+O should expand the most-recent card")
+		t.Errorf("Ctrl+T should expand the most-recent card")
 	}
 	// Toggling again collapses it.
-	next, _ = mm.Update(ctrlKey('o'))
+	next, _ = mm.Update(ctrlKey('t'))
 	mm = next.(Model)
 	if mm.lastToolCard.expanded {
-		t.Errorf("second Ctrl+O should collapse the card")
+		t.Errorf("second Ctrl+T should collapse the card")
 	}
+}
+
+// TestToolCardRunningRanTitle verifies the codex-style verb: Running while the
+// tool executes, Ran once finished, plus the empty-result note.
+func TestToolCardRunningRanTitle(t *testing.T) {
+	theme := DefaultTheme()
+	running := toolCard{name: "bash", input: map[string]any{"command": "ls"}, state: cardRunning}
+	if got := running.render(theme, 60); !strings.Contains(stripTCardANSI(got), "Running bash") {
+		t.Errorf("running card should show Running verb\n%s", got)
+	}
+	done := toolCard{name: "bash", input: map[string]any{"command": "ls"}, state: cardSuccess, expanded: true}
+	out := done.render(theme, 60)
+	if !strings.Contains(stripTCardANSI(out), "Ran bash") {
+		t.Errorf("finished card should show Ran verb\n%s", out)
+	}
+	if !strings.Contains(out, "(no output)") {
+		t.Errorf("empty result should render (no output)\n%s", out)
+	}
+}
+
+// stripTCardANSI drops SGR escapes for verb assertions independent of color.
+func stripTCardANSI(s string) string {
+	out := ""
+	i := 0
+	for i < len(s) {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && s[j] != 'm' {
+				j++
+			}
+			i = j + 1
+			continue
+		}
+		out += string(s[i])
+		i++
+	}
+	return out
 }

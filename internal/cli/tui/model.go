@@ -13,9 +13,9 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/memstatus"
+	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/status"
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/memory"
@@ -127,7 +127,7 @@ type Model struct {
 	// ordered block (by pointer), so mutating one here re-renders it inline on the
 	// next reflow.
 	toolCards map[string]*toolCard
-	// lastToolCard points at the most recently started card; Ctrl+O toggles its
+	// lastToolCard points at the most recently started card; Ctrl+T toggles its
 	// expanded state and re-flows the transcript.
 	lastToolCard *toolCard
 
@@ -321,11 +321,13 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 			m.transcript.addSystem("No saved sessions yet.")
 			return m, nil
 		}
-		m.transcript.addSystem("Recent sessions (/resume <n|id>):")
-		for i, it := range items {
-			m.transcript.addSystem(fmt.Sprintf("%d. %s", i+1, resumeTitle(it)))
-			m.transcript.addSystem(fmt.Sprintf("   %s · %s", it.Header.ID, resumeMeta(it)))
+		picks := make([]pickItem, 0, len(items))
+		for _, it := range items {
+			picks = append(picks, pickItem{Title: resumeTitle(it), Detail: resumeMeta(it), Value: it.Header.ID})
 		}
+		m.menu.openPickerDetailed(picks, m.session.header.ID, "resume")
+		m.transcript.addSystem("Select a session (↑↓ + Enter, Esc cancels):")
+		m.relayout()
 		return m, nil
 	}
 	if resolved, err := cli.ResolveResumeID(m.session.store, id); err != nil {
@@ -775,9 +777,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "esc":
 		return m.interruptOrQuit()
-	case "ctrl+o":
-		// Toggle the most-recent tool card between its capped preview and the full
-		// response tree, then re-flow so the change shows inline (#389).
+	case "ctrl+t":
+		// Toggle the most-recent tool card between its one-line summary and the
+		// full detail, then re-flow so the change shows inline (#389, codex
+		// parity: ctrl+t expands collapsed output).
 		if m.lastToolCard != nil {
 			m.lastToolCard.expanded = !m.lastToolCard.expanded
 			m.transcript.reflow()
@@ -916,12 +919,16 @@ func (m Model) completeSlash() Model {
 // falls back to the raw buffer so a fully-typed "/name" still runs.
 func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 	if m.menu.picking() {
+		kind := m.menu.pickKind
+		if kind == "" {
+			kind = "model"
+		}
 		if item, ok := m.menu.pickCurrent(); ok {
 			m.menu.close()
 			m.input.Clear()
 			m.relayout()
-			m.recordHistory("/model " + item)
-			return m.runSlash("/model " + item)
+			m.recordHistory("/" + kind + " " + item)
+			return m.runSlash("/" + kind + " " + item)
 		}
 		m.menu.close()
 		m.relayout()

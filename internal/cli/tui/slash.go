@@ -63,12 +63,24 @@ type slashMenu struct {
 	active   bool
 	filtered []runtime.SlashCommand
 	selected int
-	// pick, when non-nil, puts the menu in picker mode: rows are plain item
-	// strings (no "/" prefix) and Enter confirms the highlight through the
-	// pick path instead of slash resolution. Used by the /model picker.
-	pick []string
-	// pickMark annotates one row (the current model) in picker mode.
+	// pick, when non-nil, puts the menu in picker mode: rows are plain items
+	// (no "/" prefix) and Enter confirms the highlight through the pick path
+	// instead of slash resolution. Used by the /model and /resume pickers.
+	pick []pickItem
+	// pickMark annotates the row whose Value matches (e.g. the current model
+	// or session) in picker mode.
 	pickMark string
+	// pickKind selects the confirm action: "model" re-runs /model, "resume"
+	// re-runs /resume with the picked Value.
+	pickKind string
+}
+
+// pickItem is one picker row: Title renders first, Detail (dimmer context)
+// second, Value is handed to the confirm action.
+type pickItem struct {
+	Title  string
+	Detail string
+	Value  string
 }
 
 // newSlashMenu builds an inactive menu bound to the theme used for its rows.
@@ -124,8 +136,16 @@ func (mn *slashMenu) refresh(buffer string, reg *runtime.SlashRegistry) {
 // annotated), otherwise "/name  description".
 func (mn slashMenu) row(i int) string {
 	if mn.picking() {
-		line := mn.pick[i]
-		if mn.pick[i] == mn.pickMark {
+		it := mn.pick[i]
+		line := it.Title
+		if it.Detail != "" {
+			line += "  " + it.Detail
+		}
+		v := it.Value
+		if v == "" {
+			v = it.Title
+		}
+		if v != "" && v == mn.pickMark {
 			line += "  (current)"
 		}
 		return line
@@ -156,13 +176,26 @@ func (mn *slashMenu) close() {
 	mn.selected = 0
 	mn.pick = nil
 	mn.pickMark = ""
+	mn.pickKind = ""
 }
 
 // openPicker shows the menu as an item picker (arrow keys + Enter, Esc
-// cancels). mark annotates the matching row, e.g. the current model.
+// cancels) for plain string items confirmed as /model. mark annotates the
+// matching row, e.g. the current model.
 func (mn *slashMenu) openPicker(items []string, mark string) {
+	its := make([]pickItem, 0, len(items))
+	for _, it := range items {
+		its = append(its, pickItem{Title: it, Value: it})
+	}
+	mn.openPickerDetailed(its, mark, "model")
+}
+
+// openPickerDetailed shows the menu as an item picker with titled rows,
+// confirmed through the kind path ("model" or "resume").
+func (mn *slashMenu) openPickerDetailed(items []pickItem, mark, kind string) {
 	mn.pick = items
 	mn.pickMark = mark
+	mn.pickKind = kind
 	mn.active = len(items) > 0
 	mn.filtered = nil
 	mn.selected = 0
@@ -171,12 +204,16 @@ func (mn *slashMenu) openPicker(items []string, mark string) {
 // picking reports whether the menu is in picker mode.
 func (mn slashMenu) picking() bool { return mn.pick != nil }
 
-// pickCurrent returns the highlighted pick item.
+// pickCurrent returns the highlighted pick item's Value.
 func (mn slashMenu) pickCurrent() (string, bool) {
 	if !mn.picking() || mn.selected < 0 || mn.selected >= len(mn.pick) {
 		return "", false
 	}
-	return mn.pick[mn.selected], true
+	v := mn.pick[mn.selected].Value
+	if v == "" {
+		v = mn.pick[mn.selected].Title
+	}
+	return v, true
 }
 
 // pickMove moves the picker highlight, wrapping at the ends.

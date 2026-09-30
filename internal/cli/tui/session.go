@@ -14,6 +14,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -491,10 +492,23 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 				t.finalizeTurn(msg)
 			}
 			for _, c := range msg.ToolCalls() {
-				t.addSystem("· " + c.Name)
+				t.addSystem(compactToolCallLine(c))
 			}
 		}
 	}
+}
+
+// compactToolCallLine renders a historical tool call exactly like a collapsed
+// live card (`• Ran name(args)`), so resume replay and live runs share one
+// visual language. Arguments decode best-effort; undecodable args yield the
+// bare name. History is always finished, hence the `Ran` verb.
+func compactToolCallLine(c agentcore.ToolCallContent) string {
+	var input map[string]any
+	if len(c.Arguments) > 0 {
+		_ = json.Unmarshal(c.Arguments, &input)
+	}
+	card := toolCard{name: c.Name, input: input, state: cardSuccess}
+	return "• " + card.title()
 }
 
 // switchTo replaces the active session with the stored session id, persisting

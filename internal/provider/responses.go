@@ -158,7 +158,7 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 			r := variant.Response
 			completed = &r
 		case responses.ResponseFailedEvent:
-			d.emitError(stream, fmt.Errorf("response failed"))
+			d.emitError(stream, failedResponseError(variant.Response))
 			return
 		case responses.ResponseErrorEvent:
 			d.emitError(stream, fmt.Errorf("%s", variant.Message))
@@ -181,6 +181,20 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 		}
 	}
 	stream.Emit(ctx, StreamDoneEvent{Message: msg})
+}
+
+// failedResponseError renders a response.failed event's embedded error: the
+// server always ships a code + message (rate limits, upstream failures,
+// invalid parameters), and dropping them leaves only a bare "response failed"
+// that cannot be diagnosed. The response id is included for provider support.
+func failedResponseError(r responses.Response) error {
+	if r.Error.Message != "" {
+		if r.ID != "" {
+			return fmt.Errorf("response failed [%s]: %s: %s", r.ID, r.Error.Code, r.Error.Message)
+		}
+		return fmt.Errorf("response failed: %s: %s", r.Error.Code, r.Error.Message)
+	}
+	return fmt.Errorf("response failed")
 }
 
 // buildPartial assembles a cumulative snapshot message for a streaming partial:
