@@ -30,10 +30,18 @@ type point struct{ x, y int }
 // drag began and cursor is the latest drag point; active is set between the
 // initial press and the next fresh press. It is a plain value so the Model can
 // hold and copy it cheaply.
+//
+// Endpoints are transcript content-line indices (point.y into
+// transcript.contentLines, point.x a display column) whenever the press landed
+// inside the transcript region, so wheel/page scrolling preserves the highlight
+// instead of clearing it. below is true when the press landed under the
+// transcript (menu/input/status rows): those endpoints are plain screen rows
+// with legacy single-page behavior (cleared on scroll).
 type selection struct {
 	active bool
 	anchor point
 	cursor point
+	below  bool
 }
 
 // empty reports whether the selection covers no cells — either inactive or a

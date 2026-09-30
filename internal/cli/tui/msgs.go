@@ -15,6 +15,12 @@ import "github.com/smallnest/pigo/internal/agentcore"
 // OnText contract).
 type textDeltaMsg struct{ delta string }
 
+// selScrollTickMsg is the edge-autoscroll heartbeat while a mouse text-selection
+// drag is pinned at the transcript's top/bottom edge: each tick scrolls a few
+// lines so the selection can extend across pages. gen guards stale ticks from
+// an earlier drag (a new press bumps Model.selScrollGen and orphans them).
+type selScrollTickMsg struct{ gen int }
+
 // turnEndMsg fires once per completed turn with the final assistant message and
 // the tool results produced during it.
 type turnEndMsg struct {

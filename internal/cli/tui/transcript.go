@@ -69,6 +69,12 @@ type transcript struct {
 	blocks          []transcriptBlock
 	activeAssistant int
 
+	// lines caches the last renderAll split: the transcript's full content lines
+	// in order. Mouse selection endpoints anchor into these indices (see
+	// selection), so scrolling preserves the highlight instead of clearing it;
+	// streaming only appends, keeping earlier indices stable.
+	lines []string
+
 	// follow is the stick-to-bottom intent: while true, every reflow snaps the
 	// viewport to the newest line so streamed output stays visible. It is set
 	// when the user submits a turn and cleared when they scroll up to read
@@ -278,6 +284,24 @@ func (t transcript) view() string {
 	return b.String()
 }
 
+// scrollLines moves the viewport by n content lines (negative scrolls up)
+// without touching the selection: it is the drag-autoscroll path used while a
+// mouse selection is pinned at the transcript edge. Follow intent is re-synced
+// from the new position (reaching the bottom re-arms stick-to-bottom) so a
+// drag that ends at the bottom leaves the transcript pinned. It returns false
+// when already clamped at that end (no movement), so the caller can stop the
+// tick loop instead of spinning forever.
+func (t *transcript) scrollLines(n int) bool {
+	before := t.vp.YOffset()
+	if n > 0 {
+		t.vp.ScrollDown(n)
+	} else if n < 0 {
+		t.vp.ScrollUp(-n)
+	}
+	t.follow = t.vp.AtBottom()
+	return t.vp.YOffset() != before
+}
+
 // scrollbar renders the one-column vertical scrollbar the height of the
 // viewport. A proportional thumb marks the visible window and its position marks
 // the scroll offset, so scrolling up through history moves the thumb; the
@@ -352,7 +376,7 @@ func (t transcript) scrollbar() string {
 func (t *transcript) reflow() {
 	t.width = t.totalWidth
 	t.vp.SetWidth(t.width)
-	t.vp.SetContent(t.renderAll())
+	t.setContent(t.renderAll())
 
 	// A narrower width never reduces the line count, so if the full-width layout
 	// already overflows it still overflows at totalWidth-1: reserve the scrollbar
@@ -360,13 +384,24 @@ func (t *transcript) reflow() {
 	if t.totalWidth > 0 && t.vp.TotalLineCount() > t.vp.Height() {
 		t.width = t.totalWidth - 1
 		t.vp.SetWidth(t.width)
-		t.vp.SetContent(t.renderAll())
+		t.setContent(t.renderAll())
 	}
 
 	if t.follow {
 		t.vp.GotoBottom()
 	}
 }
+
+// setContent pushes the full render into the viewport and caches its lines for
+// content-anchored mouse selection (see lines).
+func (t *transcript) setContent(rendered string) {
+	t.vp.SetContent(rendered)
+	t.lines = strings.Split(rendered, "\n")
+}
+
+// contentLines returns the cached full-content lines the selection anchors
+// into. Empty before the first reflow.
+func (t *transcript) contentLines() []string { return t.lines }
 
 // renderAll joins every block, rendered to the current content width, into the
 // transcript body string. Consecutive turns are separated by a blank line before

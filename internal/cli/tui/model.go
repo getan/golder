@@ -141,6 +141,22 @@ type Model struct {
 	// persists after release so Ctrl+C can copy the highlighted text.
 	sel selection
 
+	// selDragging is true between a left press (plain or shift) and its release.
+	// Only motion while dragging extends the selection: after release the cursor
+	// stays put so hover movement never collapses a finished selection out from
+	// under a follow-up shift+click.
+	selDragging bool
+
+	// selScrollDir is the edge-autoscroll direction while a text-selection drag
+	// is pinned at the transcript's top (-1) or bottom (+1) edge, 0 when off.
+	// Terminals clamp drag coordinates to the window, so without this the
+	// selection could never extend past the visible page; each selScrollTickMsg
+	// scrolls a few lines under the edge-pinned cursor until release or the end.
+	selScrollDir int
+	// selScrollGen invalidates stale autoscroll ticks: every fresh press or
+	// release bumps it, and ticks carrying an older gen are dropped.
+	selScrollGen int
+
 	// spinner is the animated "working" indicator (verb + elapsed/token/effort
 	// stats) shown on the row above the input while a run is in flight.
 	spinner spinner
@@ -366,6 +382,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Re-wrapping re-indexes every content line, so a live selection would
+		// point at the wrong text: drop it (and any autoscroll loop).
+		m.sel = selection{}
+		m.selDragging = false
+		m.selScrollDir = 0
+		m.selScrollGen++
 		m.relayout()
 		return m, nil
 
@@ -392,6 +414,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The viewport (MouseWheelEnabled by default) turns the wheel event into a
 		// scroll; enabling MouseModeCellMotion in View is what makes the terminal
 		// deliver these events under the alt-screen at all.
+		//
+		// A content-anchored selection survives the scroll untouched (endpoints
+		// are content lines, so the highlight tracks the text instead of being
+		// cleared); only an explicit drag or click moves it. A below-transcript
+		// selection keeps the legacy behavior (cleared: its screen rows no longer
+		// mean anything). Cross-page extension is the edge-drag's job.
+		if m.sel.active && !m.sel.below {
+			cmd := m.transcript.update(msg)
+			return m, cmd
+		}
 		cmd := m.transcript.update(msg)
 		m.sel = selection{}
 		return m, cmd
@@ -400,14 +432,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A left press on the scrollbar column grabs the thumb (jump + drag). A left
 		// press anywhere else begins a text selection at that cell, replacing any
 		// prior one; a bare click (no drag) leaves it empty so it clears the old
-		// highlight without starting a copyable range.
+		// highlight without starting a copyable range. Shift+left-click instead
+		// extends the live selection: the anchor stays where the previous press
+		// put it and the cursor jumps here, selecting everything in between —
+		// across pages, either direction — with no edge aiming.
 		if msg.Button == tea.MouseLeft {
 			if m.onScrollbar(msg.X, msg.Y) {
 				m.draggingScrollbar = true
 				m.transcript.scrollToRow(msg.Y)
 				return m, nil
 			}
-			m.sel = selection{active: true, anchor: point{msg.X, msg.Y}, cursor: point{msg.X, msg.Y}}
+			if msg.Mod&tea.ModShift != 0 && m.sel.active {
+				click, below := m.dragToSel(msg.X, msg.Y)
+				m.sel.cursor = click
+				m.sel.below = below
+			} else {
+				click, below := m.screenToSel(msg.X, msg.Y)
+				m.sel = selection{active: true, anchor: click, cursor: click, below: below}
+			}
+			// Any press orphans autoscroll ticks from an earlier drag, and
+			// pauses stick-to-bottom so streamed lines do not yank the content
+			// out from under the selection.
+			m.selDragging = true
+			m.selScrollDir = 0
+			m.selScrollGen++
+			m.transcript.follow = false
 			return m, nil
 		}
 		return m, nil
@@ -420,17 +469,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcript.scrollToRow(msg.Y)
 			return m, nil
 		}
-		if m.sel.active {
-			m.sel.cursor = point{msg.X, msg.Y}
+		if m.sel.active && m.selDragging {
+			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
+			return m, m.updateSelAutoscroll()
 		}
 		return m, nil
 
 	case tea.MouseReleaseMsg:
 		m.draggingScrollbar = false
+		m.selDragging = false
+		// Release ends edge-autoscroll: the selection persists for Ctrl+C, but
+		// no further ticks should move the viewport under it.
+		m.selScrollDir = 0
+		m.selScrollGen++
 		if m.sel.active {
-			m.sel.cursor = point{msg.X, msg.Y}
+			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
 		}
 		return m, nil
+
+	case selScrollTickMsg:
+		// Stale tick (older drag), released button, or scrolling switched off:
+		// drop it so no orphaned loop survives.
+		if msg.gen != m.selScrollGen || !m.sel.active || m.selScrollDir == 0 {
+			return m, nil
+		}
+		if m.transcript.viewportHeight() <= 0 {
+			m.selScrollDir = 0
+			return m, nil
+		}
+		// Scroll under the content-anchored cursor: endpoints are content lines,
+		// so moving the viewport while they stay put extends the highlight
+		// across pages; Ctrl+C later copies the content lines in range.
+		if !m.transcript.scrollLines(m.selScrollDir * selScrollStep) {
+			m.selScrollDir = 0
+			return m, nil
+		}
+		return m, selScrollTick(m.selScrollGen)
 
 	case tea.PasteMsg:
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
@@ -806,10 +880,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "pgup", "pgdown":
 		// Page scrolling reaches the transcript viewport whether idle or running,
-		// so history stays readable while a run streams. Scrolling shifts the
-		// content under a screen-anchored selection, so drop the selection to avoid
-		// a stale highlight. Line-oriented keys (up / down / home / end) belong to
-		// the multi-line editor and are delegated below.
+		// so history stays readable while a run streams. A content-anchored
+		// selection survives it untouched (same rule as the wheel handler);
+		// a below-transcript one is dropped. Line-oriented keys (up / down /
+		// home / end) belong to the multi-line editor and are delegated below.
+		if m.sel.active && !m.sel.below {
+			cmd := m.transcript.update(msg)
+			return m, cmd
+		}
 		m.sel = selection{}
 		cmd := m.transcript.update(msg)
 		return m, cmd
@@ -1444,15 +1522,41 @@ func (m Model) applySelection(content string) string {
 	start, end := m.sel.ordered()
 	hi := lipgloss.NewStyle().Reverse(true)
 	rows := strings.Split(content, "\n")
-	for y := start.y; y <= end.y && y < len(rows); y++ {
-		if y < 0 {
+	if m.sel.below {
+		// Legacy screen-row highlight for below-transcript selections.
+		for y := start.y; y <= end.y && y < len(rows); y++ {
+			if y < 0 {
+				continue
+			}
+			c0, c1, ok := rowRange(start, end, y)
+			if !ok {
+				continue
+			}
+			rows[y], _ = selectRow(rows[y], c0, c1, hi)
+		}
+		return strings.Join(rows, "\n")
+	}
+	// Content-anchored highlight: map each in-range content line to its current
+	// screen row (line minus viewport offset), skipping lines scrolled out of
+	// view. Only the transcript's top vh rows are addressable this way.
+	vh := m.transcript.viewportHeight()
+	off := m.transcript.vp.YOffset()
+	for line := start.y; line <= end.y; line++ {
+		row := line - off
+		if row < 0 || row >= vh || row >= len(rows) {
 			continue
 		}
-		c0, c1, ok := rowRange(start, end, y)
-		if !ok {
-			continue
+		c0, c1 := 0, maxCol
+		if line == start.y {
+			c0 = start.x
 		}
-		rows[y], _ = selectRow(rows[y], c0, c1, hi)
+		if line == end.y {
+			c1 = end.x
+		}
+		if c1 < c0 {
+			c1 = c0
+		}
+		rows[row], _ = selectRow(rows[row], c0, c1, hi)
 	}
 	return strings.Join(rows, "\n")
 }
@@ -1466,6 +1570,41 @@ func (m Model) selectedText() string {
 		return ""
 	}
 	start, end := m.sel.ordered()
+	// Content-anchored copy reads the transcript's full content lines (not just
+	// the visible frame), so a selection spanning pages copies everything in
+	// range. Indices clamp into the live content.
+	if !m.sel.below {
+		lines := m.transcript.contentLines()
+		if len(lines) == 0 {
+			return ""
+		}
+		a, b := start.y, end.y
+		if a < 0 {
+			a = 0
+		}
+		if b >= len(lines) {
+			b = len(lines) - 1
+		}
+		var sb strings.Builder
+		for line := a; line <= b; line++ {
+			c0, c1 := 0, maxCol
+			if line == a {
+				c0 = start.x
+			}
+			if line == b {
+				c1 = end.x
+			}
+			if c1 < c0 {
+				c1 = c0
+			}
+			_, text := selectRow(lines[line], c0, c1, lipgloss.Style{})
+			if line > a {
+				sb.WriteByte('\n')
+			}
+			sb.WriteString(strings.TrimRight(text, " "))
+		}
+		return sb.String()
+	}
 	rows := strings.Split(m.renderContent(), "\n")
 	var b strings.Builder
 	wrote := false
@@ -1485,6 +1624,80 @@ func (m Model) selectedText() string {
 		wrote = true
 	}
 	return b.String()
+}
+
+// selScrollInterval is the edge-autoscroll heartbeat while a selection drag is
+// pinned at the transcript edge; selScrollStep lines per tick (~28 lines/s)
+// tracks a held drag without outrunning the user's reading speed.
+const (
+	selScrollInterval = 70 * time.Millisecond
+	selScrollStep     = 2
+)
+
+// selScrollTick schedules one edge-autoscroll heartbeat for drag generation gen.
+func selScrollTick(gen int) tea.Cmd {
+	return tea.Tick(selScrollInterval, func(time.Time) tea.Msg {
+		return selScrollTickMsg{gen: gen}
+	})
+}
+
+// screenToSel maps a screen cell to selection coordinates: inside the
+// transcript region it is the content-line index (viewport offset + row), so
+// the endpoint survives scrolling; below the transcript it is the raw screen
+// row with below=true (legacy single-page behavior).
+func (m Model) screenToSel(x, y int) (point, bool) {
+	if vh := m.transcript.viewportHeight(); vh > 0 && y >= 0 && y < vh {
+		return point{x, m.transcript.vp.YOffset() + y}, false
+	}
+	return point{x, y}, true
+}
+
+// dragToSel maps a drag/shift/release cell for a live selection: a
+// content-anchored selection dragged below the transcript — input rows, status
+// bar, all the way to the window bottom — pins to the last content line
+// (select-to-end) instead of flipping to the screen-row fallback. The whole
+// area under the last transcript row is a scroll-down zone, as generous as the
+// top edge. A selection that started below the transcript keeps legacy
+// behavior and never scrolls the transcript out from under the composer.
+func (m Model) dragToSel(x, y int) (point, bool) {
+	if !m.sel.below {
+		if vh := m.transcript.viewportHeight(); vh > 0 && y >= vh {
+			if n := len(m.transcript.contentLines()); n > 0 {
+				return point{maxCol, n - 1}, false
+			}
+		}
+	}
+	return m.screenToSel(x, y)
+}
+
+// updateSelAutoscroll (re)arms edge-autoscroll from the selection cursor: pinned
+// at the transcript's top row it scrolls up, at its bottom row down, but only
+// while the cursor is inside the transcript region (drags into the input/status
+// rows never scroll) and only when there is overflow to move through. Leaving
+// the edge — or a clamped end — stops the loop. It returns the tick command to
+// chain, or nil.
+func (m *Model) updateSelAutoscroll() tea.Cmd {
+	dir := 0
+	if vh := m.transcript.viewportHeight(); vh > 0 && m.transcript.overflowing() && !m.sel.below {
+		// The cursor is a content line; its screen row is the line minus the
+		// viewport offset. Below-transcript drags never autoscroll.
+		y := m.sel.cursor.y - m.transcript.vp.YOffset()
+		switch {
+		case y <= 0:
+			dir = -1
+		case y >= vh-1:
+			dir = +1
+		}
+	}
+	if dir == 0 {
+		m.selScrollDir = 0
+		return nil
+	}
+	if dir != m.selScrollDir {
+		m.selScrollDir = dir
+		return selScrollTick(m.selScrollGen)
+	}
+	return nil
 }
 
 // relayout re-sizes the transcript to the rows left after reserving the status
