@@ -6,6 +6,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/smallnest/pigo/internal/cli/ui"
 )
 
 // ctrlKey builds a Ctrl+<letter> key press matching String()=="ctrl+<letter>".
@@ -47,13 +50,18 @@ func TestToolCardRender(t *testing.T) {
 			t.Errorf("collapsed render missing %q\n%s", want, collapsed)
 		}
 	}
-	for _, nope := range []string{"Input arguments", "Response", "line one", "RoundedBorder"} {
+	// The collapsed card previews the response but keeps the argument section
+	// (and any old bordered layout) hidden.
+	for _, nope := range []string{"Input arguments", "Response", "│ path:", "RoundedBorder"} {
 		if strings.Contains(collapsed, nope) {
 			t.Errorf("collapsed render should not contain %q\n%s", nope, collapsed)
 		}
 	}
-	if lines := strings.Count(collapsed, "\n"); lines != 1 {
-		t.Errorf("collapsed render = %d lines, want header + hint", lines)
+	if !strings.Contains(collapsed, "line one") {
+		t.Errorf("collapsed render should preview the first response line\n%s", collapsed)
+	}
+	if lines := strings.Count(collapsed, "\n"); lines != 2 {
+		t.Errorf("collapsed render = %d newlines, want header + two preview lines", lines)
 	}
 	card.expanded = true
 	expanded := card.render(theme, 60)
@@ -110,9 +118,53 @@ func TestToolCardTodoMalformedFallsBack(t *testing.T) {
 	}
 }
 
-// TestToolCardExpandTruncation verifies the collapsed card shows only the
-// header plus a "â¦ +N lines (ctrl+t to view transcript)" hint, while the expanded card
-// reveals every response line with no hint.
+// TestToolCardTodoChecklistAlwaysVisible is the regression for "Ran todo 3
+// tasks shows no details": the checklist renders in the collapsed card (no
+// expand needed) and while the call is still running, with no hidden-line hint
+// because the rows are the payload, not a preview.
+func TestToolCardTodoChecklistAlwaysVisible(t *testing.T) {
+	for _, state := range []cardState{cardRunning, cardSuccess} {
+		card := toolCard{name: "todo", input: todoCallInput(), state: state}
+		got := card.render(DefaultTheme(), 80)
+		for _, want := range []string{"│ [x] run tests", "│ [~] commit", "│ [ ] push"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("state %v: render missing %q\n%s", state, want, got)
+			}
+		}
+		if strings.Contains(got, "click to expand") {
+			t.Errorf("state %v: checklist is not a preview, no hint expected\n%s", state, got)
+		}
+	}
+}
+
+// TestToolCardTodoEchoSuppressed verifies the tool's own result — the same
+// checklist under a "Todos:" header — is not rendered a second time beneath
+// the rows, while a non-echo response (a validation error) still shows.
+func TestToolCardTodoEchoSuppressed(t *testing.T) {
+	card := toolCard{
+		name:     "todo",
+		input:    todoCallInput(),
+		response: parseToolResult("Todos:\n  [x] run tests\n  [~] commit\n  [ ] push\n(1/3 completed)"),
+		state:    cardSuccess,
+	}
+	got := card.render(DefaultTheme(), 80)
+	if strings.Contains(got, "(1/3 completed)") {
+		t.Errorf("echo response should be suppressed\n%s", got)
+	}
+	if n := strings.Count(got, "run tests"); n != 1 {
+		t.Errorf("checklist rendered %d times, want 1\n%s", n, got)
+	}
+
+	card.response = parseToolResult("todo: item 2 has invalid status \"nope\"")
+	card.state = cardWarn
+	if got := card.render(DefaultTheme(), 80); !strings.Contains(got, "invalid status") {
+		t.Errorf("a non-echo (error) response must still render\n%s", got)
+	}
+}
+
+// TestToolCardExpandTruncation verifies the collapsed card shows the header,
+// the first few response lines, and a "… +N lines" hint for the rest, while the
+// expanded card reveals every response line with no hint.
 func TestToolCardExpandTruncation(t *testing.T) {
 	theme := DefaultTheme()
 	var b strings.Builder
@@ -125,16 +177,23 @@ func TestToolCardExpandTruncation(t *testing.T) {
 	card := toolCard{name: "grep", response: parseToolResult(b.String()), state: cardSuccess}
 
 	collapsed := card.render(theme, 60)
-	if !strings.Contains(collapsed, fmt.Sprintf("\u2026 +%d lines (ctrl+t to view transcript)", n)) {
-		t.Errorf("collapsed card should hint %d hidden lines\n%s", n, collapsed)
+	hidden := n - collapsedPreviewLines
+	if !strings.Contains(collapsed, fmt.Sprintf("\u2026 +%d lines (ctrl+t or click to expand)", hidden)) {
+		t.Errorf("collapsed card should hint %d hidden lines\n%s", hidden, collapsed)
 	}
-	if strings.Contains(collapsed, "resp-line-a") {
-		t.Errorf("collapsed card should not show response lines\n%s", collapsed)
+	for i := 0; i < collapsedPreviewLines; i++ {
+		want := "resp-line-" + string(byte('a'+i))
+		if !strings.Contains(collapsed, want) {
+			t.Errorf("collapsed card should preview %q\n%s", want, collapsed)
+		}
+	}
+	if strings.Contains(collapsed, "resp-line-d") {
+		t.Errorf("collapsed card should hide lines past the preview\n%s", collapsed)
 	}
 
 	card.expanded = true
 	expanded := card.render(theme, 60)
-	if strings.Contains(expanded, "ctrl+t to view") {
+	if strings.Contains(expanded, "click to expand") {
 		t.Errorf("expanded card should not show the hint\n%s", expanded)
 	}
 	for i := 0; i < n; i++ {
@@ -238,10 +297,11 @@ func TestToolCardDiffCollapseExpand(t *testing.T) {
 		state:    cardSuccess,
 	}
 
-	// 1 summary + 2 headers + 4 additions hidden behind the hint.
+	// The summary line is previewed; the 2 headers + 4 additions stay hidden
+	// behind the hint.
 	collapsed := card.render(theme, 60)
-	if !strings.Contains(collapsed, "\u2026 +7 lines (ctrl+t to view transcript)") {
-		t.Errorf("collapsed card should hint 7 hidden lines\n%s", collapsed)
+	if !strings.Contains(collapsed, "\u2026 +6 lines (ctrl+t or click to expand)") {
+		t.Errorf("collapsed card should hint 6 hidden lines\n%s", collapsed)
 	}
 	if strings.Contains(collapsed, "+line") {
 		t.Errorf("collapsed card should not show diff lines\n%s", collapsed)
@@ -249,7 +309,7 @@ func TestToolCardDiffCollapseExpand(t *testing.T) {
 
 	card.expanded = true
 	expanded := card.render(theme, 60)
-	if strings.Contains(expanded, "ctrl+t to view") {
+	if strings.Contains(expanded, "click to expand") {
 		t.Errorf("expanded card should not show the hint\n%s", expanded)
 	}
 	if got := strings.Count(expanded, "+line"); got != adds {
@@ -375,23 +435,7 @@ func TestToolCardRunningRanTitle(t *testing.T) {
 }
 
 // stripTCardANSI drops SGR escapes for verb assertions independent of color.
-func stripTCardANSI(s string) string {
-	out := ""
-	i := 0
-	for i < len(s) {
-		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && s[j] != 'm' {
-				j++
-			}
-			i = j + 1
-			continue
-		}
-		out += string(s[i])
-		i++
-	}
-	return out
-}
+func stripTCardANSI(s string) string { return ansi.Strip(s) }
 
 // TestToolCardWebSearchHeadline verifies a hosted search card shows what was
 // searched: the query for search actions, the page URL for open_page.
@@ -408,5 +452,79 @@ func TestToolCardWebSearchHeadline(t *testing.T) {
 	}
 	if got := stripTCardANSI(open.render(theme, 60)); !strings.Contains(got, "https://dev.meta.ai/docs/tool-calling") {
 		t.Errorf("open_page card should show the URL, got:\n%s", got)
+	}
+}
+
+// TestToolCardHeadlineWraps verifies a long command wraps onto `  │ `
+// continuation lines (codex parity) instead of being cut with an ellipsis, that
+// every rendered line fits the width, and that no piece of the command is
+// dropped by the wrap.
+func TestToolCardHeadlineWraps(t *testing.T) {
+	theme := DefaultTheme()
+	const width = 48
+	cmd := `rg -n "persist_cache|try_load_cache" codex-rs/models-manager/src/ | head; ` +
+		`rg -n "cache.*path" codex-rs/models-manager/src/cache.rs | head -n 15`
+	card := toolCard{name: "bash", input: map[string]any{"command": cmd}, state: cardSuccess}
+
+	out := card.render(theme, width)
+	plain := stripTCardANSI(out)
+	if strings.Contains(plain, "\u2026") {
+		t.Fatalf("headline must wrap, not truncate:\n%s", plain)
+	}
+	if !strings.Contains(plain, "\n  \u2502 ") {
+		t.Fatalf("wrapped headline should use the \u2502 continuation gutter:\n%s", plain)
+	}
+	flat := strings.Join(strings.Fields(plain), " ")
+	if !strings.Contains(flat, "head -n 15") {
+		t.Fatalf("wrapped headline dropped the command tail:\n%s", plain)
+	}
+	for _, ln := range strings.Split(plain, "\n") {
+		if got := ui.Width(ln); got > width {
+			t.Errorf("line width %d exceeds %d: %q", got, width, ln)
+		}
+	}
+}
+
+// TestModelClickTogglesAnyCard verifies the mouse affordance: a bare click
+// toggles the card under the cursor — including an older card that Ctrl+T no
+// longer reaches — while a drag across a card stays a text selection.
+func TestModelClickTogglesAnyCard(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 60, Height: 12})
+	for _, id := range []string{"t1", "t2"} {
+		m = apply(t, m, toolStartMsg{id: id, name: "bash", input: map[string]any{"command": "echo " + id}})
+		m = apply(t, m, toolEndMsg{id: id, ok: true, result: "out-" + id})
+	}
+	first, second := m.toolCards["t1"], m.toolCards["t2"]
+	if first.expanded || second.expanded {
+		t.Fatal("cards should start collapsed")
+	}
+
+	// A bare click on the older card's first row expands it and leaves the
+	// newer card alone.
+	m = apply(t, m, tea.MouseClickMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+	m = apply(t, m, tea.MouseReleaseMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+	if !first.expanded {
+		t.Error("clicking the older card should expand it")
+	}
+	if second.expanded {
+		t.Error("a click must not touch a different card")
+	}
+
+	// Clicking the same card again collapses it.
+	m = apply(t, m, tea.MouseClickMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+	m = apply(t, m, tea.MouseReleaseMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+	if first.expanded {
+		t.Error("a second click should collapse the card")
+	}
+
+	// A drag that starts on a card selects text instead of toggling it.
+	m = apply(t, m, tea.MouseClickMsg{X: 3, Y: 0, Button: tea.MouseLeft})
+	m = apply(t, m, tea.MouseMotionMsg{X: 6, Y: 1, Button: tea.MouseLeft})
+	m = apply(t, m, tea.MouseReleaseMsg{X: 6, Y: 1, Button: tea.MouseLeft})
+	if first.expanded {
+		t.Error("a drag across the card must not toggle it")
+	}
+	if m.sel.empty() {
+		t.Error("a drag across the card should still select text")
 	}
 }

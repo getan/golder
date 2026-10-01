@@ -14,8 +14,9 @@ import (
 // (running / success / warn), the decoded call arguments, the tool's response
 // rendered as an indented tree, and - for tools that report a diff (edit,
 // #560) - a colored Diff section. Cards are created on toolStartMsg,
-// completed on toolEndMsg, and toggled between a capped and a full response view
-// with Ctrl+T (see model.go). All width math goes through ui.Width /
+// completed on toolEndMsg, and toggled between a collapsed preview and the full
+// response view with Ctrl+T or a mouse click on the card (see model.go). All
+// width math goes through ui.Width /
 // WrapToWidth / TruncateToWidth so CJK and emoji (two columns) never split.
 
 // cardState is the lifecycle of a tool card: running while the tool executes,
@@ -51,9 +52,16 @@ type toolCard struct {
 	expanded bool
 }
 
-// expandHint names the key that toggles a card between its one-line summary
-// and the full detail (codex parity: ctrl+t).
+// expandHint names the key that toggles a card between its collapsed summary
+// and the full detail (codex parity: ctrl+t). A mouse click on the card does
+// the same thing (see Model.pendingCardClick), which is how a card further up
+// the transcript is expanded once newer calls have scrolled past it.
 const expandHint = "ctrl+t"
+
+// collapsedPreviewLines is how many response lines a collapsed card shows
+// before the "… +N lines" hint. Keeping a few rows visible means a short
+// command's output is readable without expanding, matching codex.
+const collapsedPreviewLines = 3
 
 // statusBullet renders the codex-style bullet in the state's theme color:
 // dim gray while running, bold green on success, bold red on failure. The old
@@ -82,22 +90,70 @@ func (c toolCard) title() string {
 	return "Ran " + header
 }
 
-// render draws the card codex-style: collapsed is a single bullet line
-// (`• Running/Ran name(args)`), optionally followed by a middle-truncation
-// hint (`… +N lines`) when output is hidden; expanded shows the input,
-// response, and diff sections as gutter-prefixed lines (` │ ` command
-// continuations, ` └ ` output start) with no border anywhere.
+// render draws the card codex-style: the headline wraps a long command onto
+// `  │ ` continuation lines (never a mid-line ellipsis), the collapsed card
+// previews the first few response lines and then hints `… +N lines`, and the
+// expanded card shows the input, response, and diff sections as
+// gutter-prefixed lines (` │ ` argument continuations, ` └ ` output start)
+// with no border anywhere.
+//
+// A todo card is the exception: its payload is the checklist the call
+// submitted, so every row renders in both states and the tool's echo response
+// (the same list re-rendered under a "Todos:" header) is skipped as pure
+// duplication. The user reads the actual task list, not just "N tasks".
 func (c toolCard) render(theme Theme, width int) string {
-	title := c.title()
-	line := c.statusBullet(theme) + " " + theme.ToolHeader.Render(TruncateToWidth(title, max(1, width-4)))
+	out := c.renderHeadline(theme, width)
+	if items := c.todoItems(); len(items) > 0 && c.todoResponseIsEcho() {
+		return out + c.renderChecklist(theme, width, items)
+	}
 	if c.expanded {
-		return line + c.renderDetail(theme, width)
+		return out + c.renderDetail(theme, width)
 	}
-	if hidden := c.hiddenLines(); hidden > 0 {
-		line += "\n" + theme.System.Render(
-			fmt.Sprintf("… +%d lines (%s to view transcript)", hidden, expandHint))
+	preview, hidden := c.preview(theme, width, collapsedPreviewLines)
+	out += preview
+	if hidden > 0 {
+		out += "\n" + theme.System.Render(
+			WrapToWidth(fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint), max(1, width)))
 	}
-	return line
+	return out
+}
+
+// renderHeadline renders the bullet plus `Running/Ran name arg`, wrapping the
+// text onto `  │ ` continuation lines so a long command is fully readable
+// instead of being cut with an ellipsis. It wraps at width-4 (the widest
+// gutter) so both the bullet line and the continuations fit; the two columns
+// the bullet leaves unused on the first line are harmless slack.
+func (c toolCard) renderHeadline(theme Theme, width int) string {
+	lines := strings.Split(WrapToWidth(c.title(), max(1, width-4)), "\n")
+	var b strings.Builder
+	b.WriteString(c.statusBullet(theme) + " " + theme.ToolHeader.Render(lines[0]))
+	for _, ln := range lines[1:] {
+		b.WriteString("\n" + theme.ToolHeader.Render("  │ "+ln))
+	}
+	return b.String()
+}
+
+// preview renders the first n response lines of a collapsed card, the first
+// carrying the `└ ` output gutter, and reports how many body lines remain
+// hidden (further response lines plus any diff the card carries).
+func (c toolCard) preview(theme Theme, width, n int) (string, int) {
+	inner := max(1, width-2)
+	var b strings.Builder
+	shown := 0
+	for i, node := range c.response {
+		if shown >= n {
+			break
+		}
+		indent := strings.Repeat("  ", node.depth)
+		text := indent + node.text
+		if i == 0 {
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
+		} else {
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
+		}
+		shown++
+	}
+	return b.String(), c.totalBodyLines() - shown
 }
 
 // headline is the tool name plus its most salient argument.
@@ -109,8 +165,10 @@ func (c toolCard) headline() string {
 	return header
 }
 
-// hiddenLines counts response + diff lines hidden while collapsed.
-func (c toolCard) hiddenLines() int {
+// totalBodyLines counts every body line a card can show: its response lines
+// plus the diff's lines (the edit-family tools move the diff out of the
+// response into its own section).
+func (c toolCard) totalBodyLines() int {
 	n := len(c.response)
 	if c.diff != "" {
 		n += len(strings.Split(strings.TrimRight(c.diff, "\n"), "\n"))
@@ -131,20 +189,20 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 	var b strings.Builder
 	if len(c.input) > 0 {
 		rendered := false
-		if strings.EqualFold(c.name, "todo") {
+		if items := c.todoItems(); len(items) > 0 {
 			// The todo call submits the whole checklist; render it as the
 			// same checkbox rows the tool's result uses instead of dumping
 			// the decoded array's Go map syntax (`map[content:... status:...]`).
-			if items := todoItemsFromInput(c.input["todos"]); len(items) > 0 {
-				rendered = true
-				for _, it := range items {
-					line := fmt.Sprintf("  │ [%s] %s", todoMark(it.status), oneLine(it.content))
-					b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(line, inner)))
-				}
-			}
+			rendered = true
+			b.WriteString(c.renderChecklist(theme, width, items))
 		}
 		if !rendered {
 			for _, k := range sortedKeys(c.input) {
+				if k == "command" && strings.EqualFold(c.name, "bash") {
+					// The full command already wraps across the headline;
+					// repeating it here would be pure noise.
+					continue
+				}
 				kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
 				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
 			}
@@ -285,6 +343,37 @@ func parseToolResult(result string) []respNode {
 type todoInputItem struct {
 	content string
 	status  string
+}
+
+// todoItems returns the checklist this card's call submitted, or nil when the
+// card is not a todo call or its arguments did not decode to items.
+func (c toolCard) todoItems() []todoInputItem {
+	if !strings.EqualFold(c.name, "todo") {
+		return nil
+	}
+	return todoItemsFromInput(c.input["todos"])
+}
+
+// todoResponseIsEcho reports whether the card's response carries no
+// information beyond the checklist it already renders: true while the call is
+// still running (no response yet) and when the response is the todo tool's own
+// render of the same list, which always opens with the "Todos:" header. A
+// validation error or any other text is not an echo and still renders.
+func (c toolCard) todoResponseIsEcho() bool {
+	return len(c.response) == 0 || c.response[0].text == "Todos:"
+}
+
+// renderChecklist renders the checklist as checkbox rows with the `  │ `
+// gutter, using the same marks as the tool's own RenderTodoList ([ ] pending,
+// [~] in progress, [x] completed) so the call and its result read alike.
+func (c toolCard) renderChecklist(theme Theme, width int, items []todoInputItem) string {
+	inner := max(1, width-2)
+	var b strings.Builder
+	for _, it := range items {
+		line := fmt.Sprintf("  │ [%s] %s", todoMark(it.status), oneLine(it.content))
+		b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(line, inner)))
+	}
+	return b.String()
 }
 
 // todoItemsFromInput extracts the checklist from a todo call's "todos"

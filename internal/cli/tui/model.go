@@ -130,6 +130,13 @@ type Model struct {
 	// lastToolCard points at the most recently started card; Ctrl+T toggles its
 	// expanded state and re-flows the transcript.
 	lastToolCard *toolCard
+	// pendingCardClick remembers a left press that landed on a tool card. If
+	// the button is released on the same cell without dragging, the click
+	// toggles that card's expanded state — the mouse affordance that lets any
+	// card (not just the newest, which Ctrl+T handles) be expanded. Dragging or
+	// releasing elsewhere cancels it so text selection keeps working.
+	pendingCardClick     *toolCard
+	pendingCardClickCell point
 
 	// draggingScrollbar is set while the left mouse button is held after pressing
 	// on the transcript scrollbar column, so subsequent motion events drag the
@@ -420,6 +427,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// cleared); only an explicit drag or click moves it. A below-transcript
 		// selection keeps the legacy behavior (cleared: its screen rows no longer
 		// mean anything). Cross-page extension is the edge-drag's job.
+		m.pendingCardClick = nil
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
 			return m, cmd
@@ -437,10 +445,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// put it and the cursor jumps here, selecting everything in between —
 		// across pages, either direction — with no edge aiming.
 		if msg.Button == tea.MouseLeft {
+			m.pendingCardClick = nil
 			if m.onScrollbar(msg.X, msg.Y) {
 				m.draggingScrollbar = true
 				m.transcript.scrollToRow(msg.Y)
 				return m, nil
+			}
+			// A press on a tool card arms a click-toggle (see pendingCardClick);
+			// the release handler fires it only if the cell did not move, so a
+			// drag across the card still selects its text.
+			if msg.Mod&tea.ModShift == 0 {
+				if p, below := m.screenToSel(msg.X, msg.Y); !below {
+					if card := m.transcript.toolCardAt(p.y); card != nil {
+						m.pendingCardClick = card
+						m.pendingCardClickCell = point{msg.X, msg.Y}
+					}
+				}
 			}
 			if msg.Mod&tea.ModShift != 0 && m.sel.active {
 				click, below := m.dragToSel(msg.X, msg.Y)
@@ -470,6 +490,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.sel.active && m.selDragging {
+			// Motion after the press means a drag, not a click: cancel the
+			// card toggle so the gesture becomes a text selection.
+			m.pendingCardClick = nil
 			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
 			return m, m.updateSelAutoscroll()
 		}
@@ -484,6 +507,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selScrollGen++
 		if m.sel.active {
 			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
+		}
+		// A press that landed on a card and released on the same cell — no
+		// drag in between — is a click: toggle the card's expand/collapse.
+		if card := m.pendingCardClick; card != nil {
+			cell := m.pendingCardClickCell
+			m.pendingCardClick = nil
+			if msg.X == cell.x && msg.Y == cell.y {
+				card.expanded = !card.expanded
+				m.transcript.reflow()
+				return m, nil
+			}
 		}
 		return m, nil
 

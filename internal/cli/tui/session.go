@@ -487,9 +487,11 @@ func (s *runSession) persist() error {
 // seedTranscript replays a resumed session's prior messages into the transcript
 // so the user sees the conversation so far before re-prompting (the TUI analogue
 // of repl.replayTranscript). User and assistant text become their respective
-// blocks; assistant tool calls render as system lines (tool cards land in #389).
-// Tool-result messages are omitted here — their content is echoed live during a
-// run, and replaying raw results would clutter the resumed view.
+// blocks; assistant tool calls render as system lines, except a todo call,
+// whose checklist is its payload and replays as a full card (a bare
+// "Ran todo N tasks" line would lose the task list). Tool-result messages are
+// omitted here — their content is echoed live during a run, and replaying raw
+// results would clutter the resumed view.
 func seedTranscript(t *transcript, history []agentcore.Message) {
 	for _, m := range history {
 		switch msg := m.(type) {
@@ -502,10 +504,34 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 				t.finalizeTurn(msg)
 			}
 			for _, c := range msg.ToolCalls() {
+				if card := replayToolCard(c); card != nil {
+					t.addToolCard(card)
+					continue
+				}
 				t.addSystem(compactToolCallLine(c))
 			}
 		}
 	}
+}
+
+// replayToolCard rebuilds a full tool card for a historical call whose
+// arguments are the content worth showing — todo today, where the checklist
+// would otherwise collapse into a bare "Ran todo N tasks" system line. Other
+// calls replay compactly (compactToolCallLine): their value is in the result,
+// which replay intentionally omits.
+func replayToolCard(c agentcore.ToolCallContent) *toolCard {
+	if !strings.EqualFold(c.Name, "todo") {
+		return nil
+	}
+	var input map[string]any
+	if len(c.Arguments) > 0 {
+		_ = json.Unmarshal(c.Arguments, &input)
+	}
+	card := toolCard{name: c.Name, input: input, state: cardSuccess}
+	if len(card.todoItems()) == 0 {
+		return nil
+	}
+	return &card
 }
 
 // compactToolCallLine renders a historical tool call exactly like a collapsed

@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,6 +77,57 @@ func TestResumeSeedsTranscript(t *testing.T) {
 		if tr.blocks[i].text != want {
 			t.Errorf("block[%d] = %q, want %q", i, tr.blocks[i].text, want)
 		}
+	}
+}
+
+// TestSeedTranscriptTodoCard verifies a resumed session replays a todo call as
+// a full card (checklist visible) rather than a bare "Ran todo N tasks"
+// system line, while other tool calls keep the compact replay.
+func TestSeedTranscriptTodoCard(t *testing.T) {
+	args, err := json.Marshal(map[string]any{"todos": []any{
+		map[string]any{"content": "run tests", "status": "completed"},
+		map[string]any{"content": "commit", "status": "pending"},
+	}})
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	history := agentcore.MessageList{
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content: agentcore.ContentList{
+				agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "1", Name: "todo", Arguments: args},
+				agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "2", Name: "bash", Arguments: []byte(`{"command":"ls"}`)},
+			},
+		},
+	}
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(80, 24)
+	seedTranscript(&tr, history)
+
+	wantCard := false
+	for _, blk := range tr.blocks {
+		if blk.role == roleTool && blk.card != nil {
+			wantCard = true
+			got := blk.card.render(DefaultTheme(), 80)
+			for _, want := range []string{"│ [x] run tests", "│ [ ] commit"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("replayed todo card missing %q\n%s", want, got)
+				}
+			}
+		}
+	}
+	if !wantCard {
+		t.Fatal("todo call should replay as a tool card")
+	}
+	// The bash call keeps the compact system line.
+	foundBash := false
+	for _, blk := range tr.blocks {
+		if blk.role == roleSystem && strings.Contains(blk.text, "Ran bash ls") {
+			foundBash = true
+		}
+	}
+	if !foundBash {
+		t.Error("non-todo calls should still replay as compact system lines")
 	}
 }
 

@@ -88,6 +88,12 @@ type transcript struct {
 	// streaming only appends, keeping earlier indices stable.
 	lines []string
 
+	// cardSpans maps each tool card to its [first,last] content-line range in
+	// the last renderAll, so a mouse click can be routed to the card under the
+	// cursor: clicking a card toggles its expanded state (the codex-lacking
+	// affordance that lets any card, not just the newest, be expanded).
+	cardSpans map[*toolCard][2]int
+
 	// follow is the stick-to-bottom intent: while true, every reflow snaps the
 	// viewport to the newest line so streamed output stays visible. It is set
 	// when the user submits a turn and cleared when they scroll up to read
@@ -446,34 +452,60 @@ func (t *transcript) renderAll() string {
 	if t.renderCache == nil {
 		t.renderCache = map[int]string{}
 	}
+	t.cardSpans = map[*toolCard][2]int{}
 	var b strings.Builder
+	// line tracks the content-line index the next written block starts on, so
+	// card spans can be recorded in the same pass that lays the blocks out.
+	// A single "\n" separator between blocks only terminates the previous
+	// line (no index change); the user-adjacency blank line advances it.
+	line := 0
 	for i, blk := range t.blocks {
 		if i > 0 {
 			b.WriteByte('\n')
 			if blk.role == roleUser || t.blocks[i-1].role == roleUser {
 				b.WriteByte('\n')
+				line++
 			}
 		}
+		var s string
 		// Stable blocks (everything except the live streaming assistant block
 		// and mutating tool cards) render once and are reused: without this,
 		// every streaming delta would re-run glamour over the whole history.
 		if stableBlock(blk, i == t.activeAssistant) {
 			if s, ok := t.renderCache[i]; ok {
 				b.WriteString(s)
+				line += strings.Count(s, "\n") + 1
 				continue
 			}
-			s := t.renderBlock(blk, false)
+			s = t.renderBlock(blk, false)
 			t.renderCache[i] = s
-			b.WriteString(s)
-			continue
+		} else {
+			// The live block (or a tool card) always re-renders, and never
+			// pollutes the cache: the streaming block's text is still growing,
+			// and a card's state/response mutates in place on completion.
+			delete(t.renderCache, i)
+			s = t.renderBlock(blk, i == t.activeAssistant)
 		}
-		// The live block (or a tool card) always re-renders, and never
-		// pollutes the cache: the streaming block's text is still growing,
-		// and a card's state/response mutates in place on completion.
-		delete(t.renderCache, i)
-		b.WriteString(t.renderBlock(blk, i == t.activeAssistant))
+		if blk.role == roleTool && blk.card != nil {
+			t.cardSpans[blk.card] = [2]int{line, line + strings.Count(s, "\n")}
+		}
+		b.WriteString(s)
+		line += strings.Count(s, "\n") + 1
 	}
 	return b.String()
+}
+
+// toolCardAt returns the tool card whose rendered block covers content line
+// index line, or nil when that line belongs to another block. It reads the
+// spans recorded by the last renderAll, so it is only meaningful for clicks
+// after the first reflow.
+func (t transcript) toolCardAt(line int) *toolCard {
+	for card, span := range t.cardSpans {
+		if line >= span[0] && line <= span[1] {
+			return card
+		}
+	}
+	return nil
 }
 
 // stableBlock reports whether a block's render is immutable: user/system/banner
