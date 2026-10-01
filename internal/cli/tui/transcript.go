@@ -108,6 +108,15 @@ type transcript struct {
 // starts zero-sized; the model drives setSize from the first tea.WindowSizeMsg.
 func newTranscript(theme Theme) transcript {
 	vp := viewport.New()
+	// Horizontal scrolling is disabled on purpose (codex parity): the
+	// transcript lays every block out to the exact content width itself, so
+	// there is nothing to pan to — letting the viewport track a horizontal
+	// offset only lets a stray trackpad swipe (MouseWheelLeft/Right, or
+	// Shift+wheel) slide the whole history sideways and hide the tool-card
+	// bullets at the left edge. A zero horizontal step turns every horizontal
+	// scroll path into a no-op while leaving vertical wheel/page scrolling
+	// untouched.
+	vp.SetHorizontalStep(0)
 	return transcript{
 		vp:              vp,
 		theme:           theme,

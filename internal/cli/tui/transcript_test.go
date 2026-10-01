@@ -453,3 +453,38 @@ func TestFinalizeTurnKeepsPostCardDeltas(t *testing.T) {
 		t.Fatalf("texts = %q / %q, want deltas kept on both sides of the card", tr.blocks[0].text, tr.blocks[2].text)
 	}
 }
+
+// TestTranscriptLocksHorizontalScroll is the regression for the "trackpad
+// swipe slides the transcript sideways and hides the card bullets" report:
+// the transcript lays content out to the exact width itself, so horizontal
+// scrolling must be a no-op (codex locks the axis). The banner is emitted
+// verbatim, so an over-wide banner is the realistic trigger that gives the
+// viewport a non-zero maxXOffset.
+func TestTranscriptLocksHorizontalScroll(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(40, 10)
+	tr.addBanner(strings.Repeat("=", 120)) // over-wide, unwrapped block
+	tr.addSystem("short line")
+
+	if tr.vp.XOffset() != 0 {
+		t.Fatalf("initial XOffset = %d, want 0", tr.vp.XOffset())
+	}
+	for _, msg := range []tea.Msg{
+		tea.MouseWheelMsg{Button: tea.MouseWheelLeft},
+		tea.MouseWheelMsg{Button: tea.MouseWheelRight},
+		tea.MouseWheelMsg{Button: tea.MouseWheelUp},   // plain vertical wheel
+		tea.MouseWheelMsg{Button: tea.MouseWheelDown}, // plain vertical wheel
+	} {
+		tr.update(msg)
+	}
+	if got := tr.vp.XOffset(); got != 0 {
+		t.Fatalf("XOffset = %d after wheel events, want locked at 0", got)
+	}
+
+	// Shift+wheel is the viewport's other horizontal path.
+	shift := tea.MouseWheelMsg{Button: tea.MouseWheelUp, Mod: tea.ModShift}
+	tr.update(shift)
+	if got := tr.vp.XOffset(); got != 0 {
+		t.Fatalf("XOffset = %d after shift+wheel, want locked at 0", got)
+	}
+}
