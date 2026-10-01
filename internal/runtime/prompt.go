@@ -70,6 +70,7 @@ const DefaultBaseInstruction = "You are pigo, a helpful coding agent. " +
 	"Use the available tools to inspect files and accomplish the user's request precisely and concisely.\n\n" +
 	todoGuide + "\n\n" +
 	taskGuide + "\n\n" +
+	codeSearchGuide + "\n\n" +
 	searchGuide
 
 // todoGuide instructs the model on how to drive the todo tool. It is appended to
@@ -80,6 +81,18 @@ const todoGuide = "When a task has multiple steps or is non-trivial, use the tod
 	"list); each item has a content string and a status of pending, in_progress, or completed. " +
 	"Keep exactly one item in_progress at a time, and mark an item completed as soon as it is " +
 	"done before starting the next. Skip the todo tool for trivial single-step requests."
+
+// codeSearchGuide points the model at the dedicated search tools before it
+// reaches for a shell pipeline. grep and find are backed by ripgrep and exist
+// per driver (REPL/TUI/headless), so their results are capped and path-scoped
+// the same way everywhere; a raw `rg` through bash is the escape hatch for
+// flags the tool schemas do not expose (-A/-B context, --type, …), not the
+// default. Shelling out also costs a confirmation prompt in an untrusted
+// directory, which the named tools never do.
+const codeSearchGuide = "To search code, use the grep tool (file contents) and the find tool " +
+	"(file names) first: they are ripgrep-backed, respect the workspace boundary, and return " +
+	"bounded results. Reach for `rg` through bash only when you need flags the tools do not " +
+	"expose, such as -A/-B context lines or --type filters."
 
 // taskGuide instructs the model on how to use the generic `task` tool (US-008,
 // #458). The task tool dispatches an independent sub-agent that runs its own
