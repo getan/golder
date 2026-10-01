@@ -1,20 +1,29 @@
 // This file implements the search tools (US-019): grep (search file contents by
 // regexp with optional glob filtering), find (locate files by name glob), and ls
-// (list a directory, distinguishing files from directories). All three resolve
-// paths against a Root with the same boundary guard as the other tools and skip
-// paths ignored by the workspace .gitignore. They are read-only → parallel.
+// (list a directory, distinguishing files from directories).
+//
+// grep and find delegate to ripgrep (rg) — the tool codex's prompt tells the
+// model to prefer. rg is multithreaded, skips binary/hidden/.gitignore'd paths,
+// and is several times faster than a walk-and-scan; delegating also deletes the
+// hand-rolled walker and .gitignore matcher this file used to carry. ls stays
+// pure Go (a single directory read). All three resolve paths against a Root
+// with the same boundary guard as the other tools, and the read-only search
+// tools run parallel.
 package agenttool
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/smallnest/pigo/internal/agentcore"
 )
@@ -78,117 +87,153 @@ func resolveWithinAny(roots []string, p string) (string, error) {
 	return resolveWithin("", p)
 }
 
-// gitignore is a minimal .gitignore matcher. It supports the common subset:
-// blank lines and #-comments are skipped; a leading "/" anchors to the root;
-// a trailing "/" matches directories only; "!" negation re-includes; and plain
-// patterns match by base name or path via filepath.Match. It is intentionally
-// not a full gitignore implementation (no "**" spanning, no nested .gitignore).
-type gitignore struct {
-	rules []ignoreRule
-	// hasSegmentRule is true when at least one rule matches by path segment
-	// (non-anchored, no "/"). Only then does ignored() need to split relPath into
-	// segments, so the common all-anchored case skips the split entirely.
-	hasSegmentRule bool
+// rgMaxOutputBytes bounds how much stdout ripgrep may hand back. A broad query
+// over a large repo can match far more than the model should see, so the
+// capture is capped and the result marked truncated; the cap is generous
+// enough to hold searchMaxResults match lines in the common case.
+const rgMaxOutputBytes = 4 << 20
+
+// rgLookPath resolves the ripgrep binary on PATH. It is a package var so tests
+// can simulate a machine without rg.
+var rgLookPath = exec.LookPath
+
+// cappedBuffer accepts writes up to max bytes and silently discards the rest.
+// Discarding (rather than blocking) matters: ripgrep writes into this buffer
+// from the same process, and a full pipe would deadlock both sides. dropped
+// records that the cap was hit so the result can say so.
+type cappedBuffer struct {
+	buf     bytes.Buffer
+	max     int
+	dropped bool
 }
 
-type ignoreRule struct {
-	pattern  string
-	negate   bool
-	dirOnly  bool
-	anchored bool
-	// matchFull is precomputed at load time: an anchored pattern, or one that
-	// contains a "/", matches against the full relative path; otherwise the rule
-	// matches by base name or any single path segment. Hoisting this out of the
-	// per-file loop avoids a strings.Contains scan for every file × rule.
-	matchFull bool
-}
-
-// loadGitignore reads root/.gitignore. A missing file yields an empty matcher
-// (matches nothing), never an error.
-func loadGitignore(root string) *gitignore {
-	gi := &gitignore{}
-	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
-	if err != nil {
-		return gi
-	}
-	sc := bufio.NewScanner(strings.NewReader(string(data)))
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), " ")
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		r := ignoreRule{}
-		if strings.HasPrefix(line, "!") {
-			r.negate = true
-			line = line[1:]
-		}
-		if strings.HasSuffix(line, "/") {
-			r.dirOnly = true
-			line = strings.TrimSuffix(line, "/")
-		}
-		if strings.HasPrefix(line, "/") {
-			r.anchored = true
-			line = strings.TrimPrefix(line, "/")
-		}
-		if line == "" {
-			continue
-		}
-		r.pattern = line
-		r.matchFull = r.anchored || strings.Contains(line, "/")
-		if !r.matchFull {
-			gi.hasSegmentRule = true
-		}
-		gi.rules = append(gi.rules, r)
-	}
-	return gi
-}
-
-// ignored reports whether relPath (slash-separated, relative to root) is ignored.
-// isDir refines dir-only rules. Later rules win, so a negation can re-include.
-//
-// The relPath is split into segments at most once per call (only when a
-// segment-matching rule exists), rather than re-splitting inside the rule loop:
-// this keeps the per-file cost O(rules) instead of O(rules × pathSegments),
-// which matters because ignored() is called for every entry of a WalkDir.
-func (g *gitignore) ignored(relPath string, isDir bool) bool {
-	relPath = filepath.ToSlash(relPath)
-	base := relPath
-	if i := strings.LastIndex(relPath, "/"); i >= 0 {
-		base = relPath[i+1:]
-	}
-	var segs []string
-	if g.hasSegmentRule {
-		segs = strings.Split(relPath, "/")
-	}
-	result := false
-	for _, r := range g.rules {
-		if r.dirOnly && !isDir {
-			continue
-		}
-		var match bool
-		if r.matchFull {
-			match, _ = filepath.Match(r.pattern, relPath)
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.max - c.buf.Len(); room > 0 {
+		if len(p) > room {
+			c.buf.Write(p[:room])
+			c.dropped = true
 		} else {
-			match, _ = filepath.Match(r.pattern, base)
-			if !match {
-				// A non-anchored pattern also matches any path component,
-				// so an ignored directory hides everything beneath it.
-				for _, seg := range segs {
-					if ok, _ := filepath.Match(r.pattern, seg); ok {
-						match = true
-						break
-					}
-				}
+			c.buf.Write(p)
+		}
+	} else if len(p) > 0 {
+		c.dropped = true
+	}
+	return len(p), nil
+}
+
+// rgResult is one completed ripgrep invocation: its stdout lines in rg's order
+// plus whether the byte cap cut the output short.
+type rgResult struct {
+	lines     []string
+	truncated bool
+}
+
+// runRG executes ripgrep in dir and returns its stdout lines. The second return
+// value is a user-facing failure message ("" on success): rg missing from PATH,
+// a bad regexp or unreadable path (rg exit 2), or a cancelled run. Exit 1 is
+// rg's "no matches" and is a successful empty result, not an error.
+//
+// The flags every caller shares:
+//   - --no-config: ignore RIPGREP_CONFIG_PATH so the output format the caller
+//     parses cannot be rewritten by user config;
+//   - --no-require-git: honor .gitignore even outside a git checkout (a
+//     workspace root need not be a repository);
+//   - --no-ignore-parent/--no-ignore-global: stay inside the workspace's own
+//     ignore rules instead of inheriting the machine's;
+//   - --color=never: the capture is plain text.
+func runRG(ctx context.Context, dir string, args []string) (rgResult, string) {
+	bin, err := rgLookPath("rg")
+	if err != nil {
+		return rgResult{}, "ripgrep (rg) not found on PATH; install it (macOS: brew install ripgrep, Debian/Ubuntu: apt install ripgrep)"
+	}
+	base := []string{
+		"--no-config", "--no-require-git", "--no-ignore-parent",
+		"--no-ignore-global", "--color=never",
+	}
+	cmd := exec.CommandContext(ctx, bin, append(base, args...)...)
+	cmd.Dir = dir
+	// If ripgrep ignores the cancel and keeps writing, WaitDelay tears the
+	// process down instead of hanging the tool call forever.
+	cmd.WaitDelay = 2 * time.Second
+	out := &cappedBuffer{max: rgMaxOutputBytes}
+	var errBuf bytes.Buffer
+	cmd.Stdout = out
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	if err != nil {
+		if ctx.Err() != nil {
+			return rgResult{}, "search canceled"
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			switch exitErr.ExitCode() {
+			case 1: // no matches
+				return rgResult{}, ""
+			case 2:
+				return rgResult{}, "rg: " + firstNonEmptyLine(errBuf.String())
 			}
 		}
-		if match {
-			result = !r.negate
-		}
+		return rgResult{}, fmt.Sprintf("rg failed: %v", err)
 	}
-	return result
+	return rgResult{lines: splitRGOutput(out), truncated: out.dropped}, ""
 }
 
-// GrepTool searches file contents by regexp under Root, honoring .gitignore.
+// splitRGOutput splits captured stdout into non-empty lines. When the byte cap
+// was hit the final line may be cut mid-line, so it is dropped.
+func splitRGOutput(out *cappedBuffer) []string {
+	s := out.buf.String()
+	if out.dropped {
+		if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+			s = s[:i]
+		} else {
+			s = ""
+		}
+	}
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return nil
+	}
+	raw := strings.Split(s, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, ln := range raw {
+		if ln != "" {
+			lines = append(lines, ln)
+		}
+	}
+	return lines
+}
+
+// firstNonEmptyLine returns the first non-blank line of s, for surfacing
+// ripgrep's own error text (its regex errors are multi-line).
+func firstNonEmptyLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return "unknown error"
+}
+
+// rgSearchPath renders the path argument for rg. When the search covers the
+// whole root it passes no path at all: rg then prints paths exactly as these
+// tools always have (relative to the root, no "./" prefix). `--` guards an
+// entry whose name looks like a flag.
+func rgSearchPath(rel string) []string {
+	if rel == "" || rel == "." {
+		return nil
+	}
+	return []string{"--", rel}
+}
+
+// truncationMarker renders the trailing note for a capped result set.
+func truncationMarker(unit string, shown int) string {
+	if shown >= searchMaxResults {
+		return fmt.Sprintf("[truncated at %d %s]", searchMaxResults, unit)
+	}
+	return "[output truncated]"
+}
+
+// GrepTool searches file contents by regexp under Root via ripgrep.
 type GrepTool struct {
 	// Root bounds the search; empty defaults to the current working directory.
 	Root string
@@ -205,8 +250,9 @@ type grepToolArgs struct {
 
 func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
-	return "Search file contents by regular expression under the workspace, " +
-		"optionally filtering files by glob. Skips .gitignore'd paths."
+	return "Search file contents by regular expression under the workspace " +
+		"(ripgrep), optionally filtering files by glob. Skips .gitignore'd, " +
+		"hidden, and binary files."
 }
 func (t *GrepTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -232,8 +278,9 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Pattern == "" {
 		return errorResult("grep: pattern is required"), nil
 	}
-	re, err := regexp.Compile(a.Pattern)
-	if err != nil {
+	// Validate the pattern locally first, so a malformed regexp fails with the
+	// same short message as before instead of ripgrep's multi-line regex dump.
+	if _, err := regexp.Compile(a.Pattern); err != nil {
 		return errorResult(fmt.Sprintf("grep: invalid pattern: %v", err)), nil
 	}
 	root, err := resolveWithin(t.Root, "")
@@ -246,69 +293,33 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			return errorResult("grep: " + err.Error()), nil
 		}
 	}
-	gi := loadGitignore(root)
-
-	var matches []string
-	count := 0
-	walkErr := filepath.WalkDir(start, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		rel, _ := filepath.Rel(root, path)
-		if rel == "." {
-			return nil
-		}
-		if rel == ".git" || strings.HasPrefix(rel, ".git"+string(filepath.Separator)) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if gi.ignored(rel, d.IsDir()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if a.Glob != "" {
-			if ok, _ := filepath.Match(a.Glob, d.Name()); !ok {
-				return nil
-			}
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return nil
-		}
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, scanBufInit), grepScanBufMax)
-		lineNo := 0
-		for sc.Scan() {
-			lineNo++
-			line := sc.Text()
-			if re.MatchString(line) {
-				matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, lineNo, line))
-				count++
-				if count >= searchMaxResults {
-					return filepath.SkipAll
-				}
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return errorResult(fmt.Sprintf("grep: %v", walkErr)), nil
+	rel, err := filepath.Rel(root, start)
+	if err != nil {
+		return errorResult(fmt.Sprintf("grep: %v", err)), nil
 	}
 
+	rgArgs := []string{"--line-number", "--no-heading", "--with-filename", "--regexp", a.Pattern}
+	if a.Glob != "" {
+		rgArgs = append(rgArgs, "--glob="+a.Glob)
+	}
+	rgArgs = append(rgArgs, rgSearchPath(rel)...)
+
+	res, rgMsg := runRG(ctx, root, rgArgs)
+	if rgMsg != "" {
+		return errorResult("grep: " + rgMsg), nil
+	}
+	matches := res.lines
+	truncated := res.truncated
+	if len(matches) > searchMaxResults {
+		matches = matches[:searchMaxResults]
+		truncated = true
+	}
 	msg := fmt.Sprintf("%d match(es) for %q", len(matches), a.Pattern)
 	if len(matches) > 0 {
 		msg += "\n" + strings.Join(matches, "\n")
 	}
-	if count >= searchMaxResults {
-		msg += fmt.Sprintf("\n[truncated at %d matches]", searchMaxResults)
+	if truncated {
+		msg += "\n" + truncationMarker("matches", len(matches))
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(msg)},
@@ -316,7 +327,7 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}, nil
 }
 
-// FindTool locates files by base-name glob under Root, honoring .gitignore.
+// FindTool locates files by base-name glob under Root via ripgrep.
 type FindTool struct {
 	// Root bounds the search; empty defaults to the current working directory.
 	Root string
@@ -331,7 +342,8 @@ type findToolArgs struct {
 
 func (t *FindTool) Name() string { return "find" }
 func (t *FindTool) Description() string {
-	return "Find files by base-name glob under the workspace. Skips .gitignore'd paths."
+	return "Find files by base-name glob under the workspace (ripgrep). " +
+		"Skips .gitignore'd and hidden files."
 }
 func (t *FindTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -366,48 +378,32 @@ func (t *FindTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			return errorResult("find: " + err.Error()), nil
 		}
 	}
-	gi := loadGitignore(root)
-
-	var found []string
-	walkErr := filepath.WalkDir(start, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(root, path)
-		if rel == "." {
-			return nil
-		}
-		if rel == ".git" || strings.HasPrefix(rel, ".git"+string(filepath.Separator)) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if gi.ignored(rel, d.IsDir()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if ok, _ := filepath.Match(a.Glob, d.Name()); ok {
-			found = append(found, rel)
-			if len(found) >= searchMaxResults {
-				return filepath.SkipAll
-			}
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return errorResult(fmt.Sprintf("find: %v", walkErr)), nil
+	rel, err := filepath.Rel(root, start)
+	if err != nil {
+		return errorResult(fmt.Sprintf("find: %v", err)), nil
 	}
+
+	rgArgs := []string{"--files", "--glob=" + a.Glob}
+	rgArgs = append(rgArgs, rgSearchPath(rel)...)
+
+	res, rgMsg := runRG(ctx, root, rgArgs)
+	if rgMsg != "" {
+		return errorResult("find: " + rgMsg), nil
+	}
+	found := res.lines
 	sort.Strings(found)
+	truncated := res.truncated
+	if len(found) > searchMaxResults {
+		found = found[:searchMaxResults]
+		truncated = true
+	}
 
 	msg := fmt.Sprintf("%d file(s) matching %q", len(found), a.Glob)
 	if len(found) > 0 {
 		msg += "\n" + strings.Join(found, "\n")
+	}
+	if truncated {
+		msg += "\n" + truncationMarker("files", len(found))
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(msg)},

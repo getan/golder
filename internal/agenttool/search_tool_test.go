@@ -3,7 +3,9 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,6 +24,16 @@ func runSearch(t *testing.T, tool agentcore.AgentTool, args map[string]any) agen
 		t.Fatalf("execute returned go error: %v", gerr)
 	}
 	return res
+}
+
+// requireRG skips a test when ripgrep is not on PATH. grep and find delegate to
+// rg by design (there is no in-process fallback), so their search behavior is
+// only exercisable where rg exists.
+func requireRG(t *testing.T) {
+	t.Helper()
+	if _, err := rgLookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not found on PATH")
+	}
 }
 
 // seedTree writes a small directory tree with a .gitignore for the search tests.
@@ -48,6 +60,7 @@ func seedTree(t *testing.T) string {
 }
 
 func TestGrepBasic(t *testing.T) {
+	requireRG(t)
 	dir := seedTree(t)
 	tool := &GrepTool{Root: dir}
 	res := runSearch(t, tool, map[string]any{"pattern": "hello"})
@@ -66,6 +79,7 @@ func TestGrepBasic(t *testing.T) {
 }
 
 func TestGrepGlobFilter(t *testing.T) {
+	requireRG(t)
 	dir := seedTree(t)
 	tool := &GrepTool{Root: dir}
 	res := runSearch(t, tool, map[string]any{"pattern": "hello", "glob": "*.md"})
@@ -88,6 +102,7 @@ func TestGrepInvalidPattern(t *testing.T) {
 }
 
 func TestFindGlob(t *testing.T) {
+	requireRG(t)
 	dir := seedTree(t)
 	tool := &FindTool{Root: dir}
 	res := runSearch(t, tool, map[string]any{"glob": "*.go"})
@@ -174,52 +189,92 @@ func TestSearchToolModes(t *testing.T) {
 	}
 }
 
-func TestGitignoreNegation(t *testing.T) {
+// TestGrepGitignoreNegation covers the .gitignore semantics end-to-end through
+// ripgrep (the matcher itself now lives in rg): a later "!keep.txt" re-includes
+// a file its ancestor "*.txt" rule ignored. It also pins the flag that makes
+// this work outside a git checkout — t.TempDir() is not a repository.
+func TestGrepGitignoreNegation(t *testing.T) {
+	requireRG(t)
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.txt\n!keep.txt\n"), 0o644); err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{
+		".gitignore": "*.txt\n!keep.txt\n",
+		"drop.txt":   "hello drop\n",
+		"keep.txt":   "hello keep\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	gi := loadGitignore(dir)
-	if !gi.ignored("drop.txt", false) {
-		t.Error("*.txt should be ignored")
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "hello"})
+	txt := resultText(res)
+	if !strings.Contains(txt, "keep.txt") {
+		t.Errorf("negated rule should re-include keep.txt, got %q", txt)
 	}
-	if gi.ignored("keep.txt", false) {
-		t.Error("!keep.txt should be re-included")
+	if strings.Contains(txt, "drop.txt") {
+		t.Errorf("*.txt should stay ignored, got %q", txt)
 	}
 }
 
-// TestGitignoreMatchModes locks in the three matching modes after the load-time
-// precompilation (matchFull / hasSegmentRule): a non-anchored name rule matches
-// any path segment (so an ignored dir hides everything beneath it); an anchored
-// rule matches only at the root; and a slash-bearing pattern matches the full
-// relative path.
-func TestGitignoreMatchModes(t *testing.T) {
+// TestGrepSingleFilePath keeps the file-path form covered: path may point at a
+// file, not just a directory.
+func TestGrepSingleFilePath(t *testing.T) {
+	requireRG(t)
+	dir := seedTree(t)
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "hello", "path": "main.go"})
+	txt := resultText(res)
+	if !strings.Contains(txt, "main.go:2:") {
+		t.Errorf("expected a main.go:2 match, got %q", txt)
+	}
+	if strings.Contains(txt, "util.go") {
+		t.Errorf("path-scoped search must not touch util.go: %q", txt)
+	}
+}
+
+// TestGrepTruncatesAtMaxMatches pins the result cap: a pattern matching more
+// lines than searchMaxResults yields exactly that many matches plus the
+// truncation marker.
+func TestGrepTruncatesAtMaxMatches(t *testing.T) {
+	requireRG(t)
 	dir := t.TempDir()
-	// node_modules: non-anchored → matches any segment (nested too).
-	// /root.log: anchored → only at repo root.
-	// a/b.tmp: contains "/" → full-path match.
-	rules := "node_modules\n/root.log\na/b.tmp\n"
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(rules), 0o644); err != nil {
+	var b strings.Builder
+	for i := 0; i < searchMaxResults+1; i++ {
+		b.WriteString("needle\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gi := loadGitignore(dir)
-	cases := []struct {
-		path string
-		dir  bool
-		want bool
-	}{
-		{"node_modules", true, true},             // segment rule, top level
-		{"pkg/node_modules", true, true},         // segment rule, nested
-		{"pkg/node_modules/x/y.js", false, true}, // hidden beneath ignored dir
-		{"root.log", false, true},                // anchored, at root
-		{"sub/root.log", false, false},           // anchored must not match nested
-		{"a/b.tmp", false, true},                 // full-path match
-		{"z/a/b.tmp", false, false},              // full-path rule not anchored elsewhere
-		{"keep.go", false, false},                // unrelated
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "needle"})
+	txt := resultText(res)
+	if !strings.Contains(txt, fmt.Sprintf("[truncated at %d matches]", searchMaxResults)) {
+		t.Errorf("expected truncation marker, got %q", txt)
 	}
-	for _, c := range cases {
-		if got := gi.ignored(c.path, c.dir); got != c.want {
-			t.Errorf("ignored(%q, dir=%v) = %v, want %v", c.path, c.dir, got, c.want)
-		}
+	details, _ := res.Details.(map[string]any)
+	if got := details["matches"]; got != searchMaxResults {
+		t.Errorf("matches detail = %v, want %d", got, searchMaxResults)
+	}
+}
+
+// TestSearchWithoutRG verifies the delegation is honest about its dependency:
+// with no rg on PATH the tools fail with an actionable install hint instead of
+// silently returning nothing.
+func TestSearchWithoutRG(t *testing.T) {
+	orig := rgLookPath
+	rgLookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { rgLookPath = orig })
+
+	for _, tc := range []struct {
+		name string
+		tool agentcore.AgentTool
+		args map[string]any
+	}{
+		{"grep", &GrepTool{Root: t.TempDir()}, map[string]any{"pattern": "x"}},
+		{"find", &FindTool{Root: t.TempDir()}, map[string]any{"glob": "*"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runSearch(t, tc.tool, tc.args)
+			if !strings.Contains(resultText(res), "ripgrep") {
+				t.Errorf("expected an install hint mentioning ripgrep, got %q", resultText(res))
+			}
+		})
 	}
 }
