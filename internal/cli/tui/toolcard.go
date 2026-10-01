@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/smallnest/pigo/internal/patch"
 )
 
 // This file implements the rich tool-call card component (US-006, SPEC 3.2,
@@ -262,6 +264,12 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 					// repeating it here would be pure noise.
 					continue
 				}
+				if k == "patch" && strings.EqualFold(c.name, "apply_patch") {
+					// The patch body is noise in a transcript: the response
+					// carries the per-file summary and the colored diff, and
+					// the headline names the targets.
+					continue
+				}
 				kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
 				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
 			}
@@ -320,6 +328,20 @@ func (c toolCard) primaryArg() string {
 		// The file tools emit "path"; accept "file_path" as a fallback for
 		// callers that use the Claude-style key.
 		keyPrefs = []string{"path", "file_path"}
+	case "apply_patch":
+		// The patch text itself is too bulky for a headline; summarize it as
+		// the touched paths (one file named, several counted).
+		if text, ok := c.input["patch"].(string); ok {
+			switch paths := patch.Paths(text); len(paths) {
+			case 0:
+				return ""
+			case 1:
+				return paths[0]
+			default:
+				return fmt.Sprintf("%d files", len(paths))
+			}
+		}
+		return ""
 	case "todo":
 		// The checklist has no single salient argument; a count keeps the
 		// header one line (the expanded body renders the checkbox rows).

@@ -161,7 +161,7 @@ steering 的触发/来源较薄；无标准化的运行时中断—引导 UX。
 
 ### 现有实现（已验证）
 
-- **trust 三态** —— `internal/trust/manager.go`：`Undecided` / `Trusted` / `Untrusted`，按目录持久化，控制副作用工具（bash/write/edit）是否需确认。
+- **trust 三态** —— `internal/trust/manager.go`：`Undecided` / `Trusted` / `Untrusted`，按目录持久化，控制副作用工具（bash/apply_patch）是否需确认。
 - **`--approve`** —— `cmd/pigo/run.go`：为启动目录授予 session 级信任，跳过首次信任提示与逐次确认（对标 pi 的 `--approve/-a`）。
 
 ### 缺口

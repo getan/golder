@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **apply_patch (codex-style editing)**: `write` and `edit` are replaced by a
+  single `apply_patch` tool carrying a whole patch per call — add, update,
+  move, and delete any number of files, in the `*** Begin Patch` format.
+  Update hunks match fuzzily (exact → trailing whitespace → leading/trailing
+  whitespace → Unicode punctuation normalized, ported from codex's
+  `seek_sequence`), path and context errors are decided before anything is
+  written, and every touched path is snapshotted for `/rewind`. `grep` and
+  `find` now delegate to ripgrep (with an actionable error when `rg` is not
+  installed). Breaking change: `--allowed-tools`/`--disallowed-tools` and
+  hook matchers must name `apply_patch` instead of `write`/`edit`.
 - **Risk judge + seatbelt (macOS first)**: a new `internal/judge` leaf grades
   every tool call into Allow/Confirm/Sandbox/Deny — a tiny static hard-deny
   floor (sudo, `rm -rf /`, writes into `~/.ssh`/`trust.json`) plus a Jev

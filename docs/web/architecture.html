@@ -79,8 +79,8 @@
            data-zh="<strong>设计对比：</strong>Cursor 这类 GUI Agent 把 provider 逻辑固化进应用。pigo 协议级的 Provider 接口，正是让一个全新的 OpenAI 兼容服务零代码即可工作的原因 —— 只需一个 base URL 和一把 key。"></div>
 
       <h2 data-en="Tool system" data-zh="工具系统"></h2>
-      <p data-en="Tools are the agent's hands. Each tool declares a name, a JSON schema, and an executor. AgentCore exposes the tool set to the model, validates the model's arguments against the schema, runs the executor, and returns the result as a tool message. Built-in tools (read/write/edit/grep/find/bash/todo/webfetch) share the same contract as plugin- and skill-provided tools."
-         data-zh="工具是 agent 的双手。每个工具声明名称、JSON schema 与执行器。AgentCore 把工具集暴露给模型，按 schema 校验模型给出的参数，运行执行器，并把结果作为工具消息返回。内置工具（read/write/edit/grep/find/bash/todo/webfetch）与插件、skill 提供的工具遵循同一契约。"></p>
+      <p data-en="Tools are the agent's hands. Each tool declares a name, a JSON schema, and an executor. AgentCore exposes the tool set to the model, validates the model's arguments against the schema, runs the executor, and returns the result as a tool message. Built-in tools (read/apply_patch/grep/find/bash/todo/webfetch) share the same contract as plugin- and skill-provided tools."
+         data-zh="工具是 agent 的双手。每个工具声明名称、JSON schema 与执行器。AgentCore 把工具集暴露给模型，按 schema 校验模型给出的参数，运行执行器，并把结果作为工具消息返回。内置工具（read/apply_patch/grep/find/bash/todo/webfetch）与插件、skill 提供的工具遵循同一契约。"></p>
 
       <h2 data-en="Runtime components" data-zh="运行时组件"></h2>
       <p data-en="Around the core sit the runtime services: session store (persist/resume/fork/clone), the prompt-template &amp; slash-command registry, skills and plugins, hooks at lifecycle points, persistent memory with <code>memory_search</code>, and checkpointing. The CLI layer wires these together and hands AgentCore a fully configured run."

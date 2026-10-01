@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/patch"
 	"github.com/smallnest/pigo/internal/runtime"
 )
 
@@ -38,11 +39,12 @@ import (
 var errPromptInterrupt = errors.New("prompt interrupted")
 
 // SideEffectTools are the built-in tools with filesystem or process side
-// effects that trust always gates.
+// effects that trust always gates. apply_patch is the single write-path tool
+// (it replaced write/edit), so gating it gates every file mutation the model
+// can make.
 var SideEffectTools = map[string]bool{
-	"bash":  true,
-	"write": true,
-	"edit":  true,
+	"bash":        true,
+	"apply_patch": true,
 }
 
 // ReadTools are the data-ingestion tools (local file reads and network reads)
@@ -344,8 +346,8 @@ func ToolCallSummary(call agentcore.AgentToolCall) string { return toolCallSumma
 
 // toolCallSummary renders a one-line preview of what a side-effect tool will
 // do, so the user can make an informed allow/deny choice. It best-effort
-// extracts the bash command or the write/edit path from the arguments; if the
-// arguments do not parse it falls back to a truncated raw view.
+// extracts the bash command or, for apply_patch, the paths the patch touches;
+// if the arguments do not parse it falls back to a truncated raw view.
 func toolCallSummary(call agentcore.AgentToolCall) string {
 	raw := strings.TrimSpace(string(call.Arguments))
 	if raw == "" || raw == "{}" {
@@ -360,12 +362,24 @@ func toolCallSummary(call agentcore.AgentToolCall) string {
 		if cmd, ok := args["command"].(string); ok && cmd != "" {
 			return "command: " + truncateForPrompt(cmd)
 		}
-	case "write", "edit":
-		if p, ok := args["path"].(string); ok && p != "" {
-			return "path: " + truncateForPrompt(p)
+	case "apply_patch":
+		if text, ok := args["patch"].(string); ok && text != "" {
+			paths := patch.Paths(text)
+			if len(paths) == 0 {
+				// Unparseable: the tool will reject it, but show the head so
+				// the prompt still describes what is being asked for.
+				return "patch: " + truncateForPrompt(oneLinePreview(text))
+			}
+			return "patch touching " + truncateForPrompt(strings.Join(paths, ", "))
 		}
 	}
 	return truncateForPrompt(raw)
+}
+
+// oneLinePreview collapses a patch's whitespace so the prompt preview stays on
+// one line.
+func oneLinePreview(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // truncateForPrompt caps a string at maxPromptPreview runes so a confirmation

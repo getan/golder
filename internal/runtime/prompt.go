@@ -70,6 +70,7 @@ const DefaultBaseInstruction = "You are pigo, a helpful coding agent. " +
 	"Use the available tools to inspect files and accomplish the user's request precisely and concisely.\n\n" +
 	todoGuide + "\n\n" +
 	taskGuide + "\n\n" +
+	patchGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
 	searchGuide
 
@@ -81,6 +82,30 @@ const todoGuide = "When a task has multiple steps or is non-trivial, use the tod
 	"list); each item has a content string and a status of pending, in_progress, or completed. " +
 	"Keep exactly one item in_progress at a time, and mark an item completed as soon as it is " +
 	"done before starting the next. Skip the todo tool for trivial single-step requests."
+
+// patchGuide teaches the apply_patch format: the single write-path tool, in
+// the codex patch grammar. Kept compact on purpose — the format is regular,
+// and the few rules that prevent malformed patches (hunk prefixes, context
+// lines, the all-or-nothing match behavior) are the ones the model actually
+// gets wrong.
+const patchGuide = "Edit files with the apply_patch tool: one call carries a patch that can add, " +
+	"update, move, or delete any number of files. The patch is plain text in this format:\n\n" +
+	"*** Begin Patch\n" +
+	"*** Add File: path/new.go        (then one \"+\" line per content line)\n" +
+	"*** Update File: path/old.go     (optional next line: *** Move to: path/new.go)\n" +
+	"@@ optional context marker\n" +
+	" unchanged line\n" +
+	"-removed line\n" +
+	"+added line\n" +
+	"*** Delete File: path/gone.go\n" +
+	"*** End Patch\n\n" +
+	"Every update hunk starts with @@ and carries at least one line prefixed by a space (context), " +
+	"\"-\" (remove), or \"+\" (add); include enough unchanged context lines for the hunk to locate " +
+	"uniquely, and add \"*** End of File\" to anchor a hunk at the end of a file. Paths are " +
+	"workspace-relative. Context matching is fuzzy (whitespace and typographic punctuation differences " +
+	"still match), but a hunk that cannot be located fails the whole call before anything is written — " +
+	"re-read the file and resend the complete corrected patch. Never create or edit files through " +
+	"shell redirection or heredocs; apply_patch is the only write path."
 
 // codeSearchGuide points the model at the dedicated search tools before it
 // reaches for a shell pipeline. grep and find are backed by ripgrep and exist

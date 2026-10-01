@@ -29,8 +29,7 @@ func TestActivityOf(t *testing.T) {
 		want string
 	}{
 		{agentcore.ToolExecutionStartEvent{ToolName: "read"}, "Reading"},
-		{agentcore.ToolExecutionStartEvent{ToolName: "edit"}, "Editing"},
-		{agentcore.ToolExecutionStartEvent{ToolName: "write"}, "Editing"},
+		{agentcore.ToolExecutionStartEvent{ToolName: "apply_patch"}, "Editing"},
 		{agentcore.ToolExecutionStartEvent{ToolName: "bash"}, "Running bash"},
 		{agentcore.ToolExecutionStartEvent{ToolName: "grep"}, "Searching"},
 		{agentcore.ToolExecutionStartEvent{ToolName: "find"}, "Searching"},

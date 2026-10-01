@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/patch"
 	"github.com/smallnest/pigo/internal/provider"
 )
 
@@ -118,27 +119,49 @@ func NewFileOps() FileOperations {
 }
 
 // extractFileOpsFromMessage adds file operations from an assistant message's
-// tool calls to the accumulator, keyed on the tool name (read/write/edit) and
-// the string "path" argument. Non-assistant messages are ignored, matching pi.
+// tool calls to the accumulator: read carries a "path" argument, apply_patch
+// carries every path its patch touches (adds count as writes, updates, moves,
+// and deletes as edits). Non-assistant messages are ignored, matching pi.
 func extractFileOpsFromMessage(msg agentcore.Message, ops FileOperations) {
 	a, ok := msg.(agentcore.AssistantMessage)
 	if !ok {
 		return
 	}
 	for _, call := range a.ToolCalls() {
-		path := toolCallPath(call.Arguments)
-		if path == "" {
-			continue
-		}
 		switch call.Name {
 		case "read":
-			ops.Read[path] = struct{}{}
-		case "write":
-			ops.Written[path] = struct{}{}
-		case "edit":
-			ops.Edited[path] = struct{}{}
+			if path := toolCallPath(call.Arguments); path != "" {
+				ops.Read[path] = struct{}{}
+			}
+		case "apply_patch":
+			for _, op := range toolCallPatchOps(call.Arguments) {
+				if op.Kind == patch.OpAdd {
+					ops.Written[op.Path] = struct{}{}
+				} else {
+					ops.Edited[op.Path] = struct{}{}
+				}
+				if op.MoveTo != "" {
+					ops.Edited[op.MoveTo] = struct{}{}
+				}
+			}
 		}
 	}
+}
+
+// toolCallPatchOps decodes an apply_patch call's operations; a malformed or
+// missing patch yields nil (nothing to record).
+func toolCallPatchOps(args json.RawMessage) []patch.Op {
+	var decoded struct {
+		Patch string `json:"patch"`
+	}
+	if err := json.Unmarshal(args, &decoded); err != nil || decoded.Patch == "" {
+		return nil
+	}
+	ops, err := patch.Parse(decoded.Patch)
+	if err != nil {
+		return nil
+	}
+	return ops
 }
 
 // toolCallPath extracts a string "path" argument from a tool call's raw

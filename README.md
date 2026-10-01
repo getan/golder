@@ -44,11 +44,11 @@ pigo 可以读写文件、执行命令、检索代码、抓取网页，并借助
 
 - **两种模式**：无头 `-p` 一次性执行（适合脚本 / CI），或直接进入交互式 REPL。
 - **多 Provider**：OpenRouter（默认）、本地 Ollama、NVIDIA NIM、Anthropic、任意 OpenAI 兼容端点。
-- **内置工具集**：`read` / `write` / `edit` / `grep` / `find` / `bash`（支持 `run_in_background` 后台执行，配套 `bash_output` / `kill_bash`）/ `todo` / `webfetch`。
+- **内置工具集**：`read` / `apply_patch` / `grep` / `find` / `bash`（支持 `run_in_background` 后台执行，配套 `bash_output` / `kill_bash`）/ `todo` / `webfetch`。
 - **会话续跑**：`--list-sessions` / `--resume` / `--continue`，无头与 REPL 均可续跑。
 - **stream-json 输出**：逐行 JSON 事件，首个事件携带 `session_id`，便于调用方关联。
 - **系统提示词分层组装**：base 指令 + 环境块 + `AGENTS.md`（general→specific）+ `--append-system-prompt`。
-- **项目信任**：副作用工具（bash/write/edit）在未信任目录需确认，`--approve` 一次性授权。
+- **项目信任**：副作用工具（bash/apply_patch）在未信任目录需确认，`--approve` 一次性授权。
 - **工具级准入**：`--allowed-tools` / `--disallowed-tools` 划定工具边界（黑名单优先、子 Agent 继承、`--approve` 不可绕过）。
 - **技能与插件**：`~/.agents/skills` 下的 `/slash` 命令、`~/.pigo/plugins` 下的外部插件。
 - **提示词模板**：`~/.pigo/prompts`、项目 `.pigo/prompts`（受信任时）、config `prompts`、`--prompt-template` 下的可复用 `/name` 模板，支持 `$1`/`$@`/`${1:-default}`/`${@:N}` 等参数语法。
@@ -193,7 +193,7 @@ pigo --append-system-prompt ./CONVENTIONS.md \
      --append-system-prompt "回答尽量简洁" \
      -p "为这个包补充单元测试"
 
-# 一次性授权工作目录，让 bash/write/edit 免逐次确认
+# 一次性授权工作目录，让 bash/apply_patch 免逐次确认
 pigo -a -p "运行 go test ./... 并修复失败的用例"
 ```
 
@@ -279,10 +279,9 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 | 工具 | 说明 |
 |------|------|
 | `read` | 按路径读取文本文件，支持行 offset/limit，输出带行号，超大文件截断 |
-| `write` | 创建或覆盖文件，按需创建父目录 |
-| `edit` | 精确字符串替换（`old_string` 需唯一，除非 `replace_all`），返回 diff |
-| `grep` | 正则检索文件内容，支持 glob 过滤，跳过 `.gitignore` 路径 |
-| `find` | 按文件名 glob 查找文件，跳过 `.gitignore` 路径 |
+| `apply_patch` | 用一次补丁调用增删改移任意多个文件（`*** Begin Patch` 格式，支持 `@@` 上下文与模糊匹配），返回逐文件 diff |
+| `grep` | 正则检索文件内容（ripgrep 引擎），支持 glob 过滤，跳过 `.gitignore`/隐藏/二进制文件 |
+| `find` | 按文件名 glob 查找文件（ripgrep 引擎），跳过 `.gitignore`/隐藏文件 |
 | `bash` | 执行 shell 命令，流式 stdout/stderr，支持超时与取消；`run_in_background` 可转入后台 |
 | `bash_output` | 读取后台 bash 任务的增量输出 |
 | `kill_bash` | 终止后台 bash 任务 |
@@ -292,7 +291,7 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 | `memory_search` | 检索持久化记忆（`memory.enabled = false` 或 `--no-tools` 时不注册） |
 | `task` | 派发通用子 Agent，子 Agent 继承父级工具边界且不能再次派发 |
 
-> `bash` / `write` / `edit` 属于"副作用工具"，在未信任目录下需确认（见[项目信任](#项目信任)）。
+> `bash` / `apply_patch` 属于"副作用工具"，在未信任目录下需确认（见[项目信任](#项目信任)）。
 
 ### 工具级准入
 
@@ -361,7 +360,7 @@ Opt-in 模式：GitHub webhook 收到 PR `ready_for_review` 事件后，自动�
 - webhook secret 通过**环境变量名间接引用**（`--github-webhook-secret-env`），高熵值（`openssl rand -hex 32`），与 GitHub webhook 配置中的 secret 一致；
 - 事件验签（HMAC-SHA256）、按 delivery id 去重防重放；只处理 `pull_request` 的 `ready_for_review` action，其余事件 202 忽略。
 
-REPL 中的内置斜杠命令包括 `/model`、`/models`、`/think`、`/help`、`/compact`、`/fork`、`/clone`、`/tree`、`/rewind`、`/export`、`/import`、`/copy`、`/session`、`/status`、`/exit` 等。其中 `/think [off|minimal|low|medium|high|xhigh|max]` 可在运行时查看或切换推理强度（reasoning effort），空参展示当前级别，切换后自下一轮生效。`/rewind [n]` 是编辑回滚（对标 Claude Code 的 Esc-Esc）：空参列出各轮产生的还原点，`/rewind n` 会把 write/edit 工具改动的文件恢复到该轮之前的内容，并同时把对话回退到那一轮之前（暂不含 bash 改动的文件）。`/status` 一次性展示运行时模型配置、上下文占用与压缩、项目环境（信任 / 技能 / 插件）、凭据连通性，以及遥测数据（累计与最近一次 run 的轮次、工具耗时、上下文利用率）。
+REPL 中的内置斜杠命令包括 `/model`、`/models`、`/think`、`/help`、`/compact`、`/fork`、`/clone`、`/tree`、`/rewind`、`/export`、`/import`、`/copy`、`/session`、`/status`、`/exit` 等。其中 `/think [off|minimal|low|medium|high|xhigh|max]` 可在运行时查看或切换推理强度（reasoning effort），空参展示当前级别，切换后自下一轮生效。`/rewind [n]` 是编辑回滚（对标 Claude Code 的 Esc-Esc）：空参列出各轮产生的还原点，`/rewind n` 会把 apply_patch 工具改动的文件恢复到该轮之前的内容，并同时把对话回退到那一轮之前（暂不含 bash 改动的文件）。`/status` 一次性展示运行时模型配置、上下文占用与压缩、项目环境（信任 / 技能 / 插件）、凭据连通性，以及遥测数据（累计与最近一次 run 的轮次、工具耗时、上下文利用率）。
 
 在交互终端输入时，pigo 会用灰色文字提示最近匹配的输入或斜杠命令；
 输入 `/model ` 时还会从最近使用的模型和内置模型目录中匹配。按 `Tab`
@@ -414,7 +413,7 @@ fmt.Println(reply)
 
 ## 项目信任
 
-副作用工具（`bash` / `write` / `edit`）在**未信任**或**未决定**的目录下需要逐次确认。信任状态按目录三态（Trusted / Untrusted / Undecided）持久化为 JSON。
+副作用工具（`bash` / `apply_patch`）在**未信任**或**未决定**的目录下需要逐次确认。信任状态按目录三态（Trusted / Untrusted / Undecided）持久化为 JSON。
 
 - 首次在某目录启动 REPL 时会提示是否信任。
 - `--approve` / `-a` 为本次运行一次性授予会话级信任，跳过首次提示并免逐次确认。
@@ -576,7 +575,7 @@ hook 通过**退出码**给出决定：
 
 - 空或 `"*"`：匹配所有工具。
 - 精确工具名（如 `bash`）：只匹配该工具。
-- `"|"` 分隔列表（如 `bash|write|edit`）：匹配其中任一。
+- `"|"` 分隔列表（如 `bash|apply_patch`）：匹配其中任一。
 - 其它：作为 **Go 正则**对工具名求值（如 `"Notebook.*"`）。
 
 不带工具名的事件（UserPromptSubmit、Stop、SessionStart 等）忽略 matcher，全部 hook 触发。
@@ -607,7 +606,7 @@ hook 配置写在 `config.json` 的 `hooks` 字段，按 `event → [{matcher, h
       { "matcher": "bash", "hooks": [{ "type": "command", "command": "./.pigo/hooks/block-rm-rf.sh" }] }
     ],
     "PostToolUse": [
-      { "matcher": "write|edit", "hooks": [{ "type": "command", "command": "./.pigo/hooks/gofmt.sh", "timeout": 30 }] }
+      { "matcher": "apply_patch", "hooks": [{ "type": "command", "command": "./.pigo/hooks/gofmt.sh", "timeout": 30 }] }
     ]
   }
 }
@@ -793,7 +792,7 @@ git push origin v0.2.0
 ## 安全说明
 
 - pigo 会向解析出的 Provider 端点发起外部网络请求。
-- `bash` / `write` / `edit` 会在本地产生副作用，仅由项目信任机制把关；`--approve` 会跳过逐次确认，请在受信任的目录中使用，权衡便利与安全。
+- `bash` / `apply_patch` 会在本地产生副作用，仅由项目信任机制把关；`--approve` 会跳过逐次确认，请在受信任的目录中使用，权衡便利与安全。
 - 处理来自文件、命令输出、网页等外部来源的内容时应视为不可信数据。
 - 需要操作系统级隔离时，参见 [docs/sandboxing.md](docs/sandboxing.md)：Docker 整进程、micro-VM、进程级策略沙箱三种模式与 trust/tool-policy 的组合矩阵。
 

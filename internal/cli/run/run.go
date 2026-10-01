@@ -256,8 +256,11 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	jobs := agenttool.NewBashJobStore()
 	tools := []agentcore.AgentTool{
 		&agenttool.ReadTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
-		&agenttool.WriteTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
-		&agenttool.EditTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
+		// One editing tool for the whole write path: apply_patch carries
+		// adds, updates, moves, and deletes in a single call, so the model
+		// keeps one editing tool in context instead of choosing between
+		// write and edit on every change.
+		&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
 		&agenttool.GrepTool{Root: cwd},
 		&agenttool.FindTool{Root: cwd},
 		&agenttool.BashTool{Dir: cwd, Jobs: jobs},
@@ -379,16 +382,11 @@ func MemoryStoreFromTools(tools []agentcore.AgentTool) *memory.Store {
 }
 
 // SnapshotRecorderFromTools returns the shared FileSnapshotRecorder backing the
-// run's write/edit tools, or nil when file tools are disabled (--no-tools). The
+// run's apply_patch tool, or nil when file tools are disabled (--no-tools). The
 // REPL uses it to commit a per-turn restore point and to serve /rewind.
 func SnapshotRecorderFromTools(tools []agentcore.AgentTool) *agenttool.FileSnapshotRecorder {
 	for _, t := range tools {
-		switch tool := t.(type) {
-		case *agenttool.WriteTool:
-			if tool.Snap != nil {
-				return tool.Snap
-			}
-		case *agenttool.EditTool:
+		if tool, ok := t.(*agenttool.ApplyPatchTool); ok {
 			if tool.Snap != nil {
 				return tool.Snap
 			}

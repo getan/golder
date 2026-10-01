@@ -4,7 +4,7 @@
 
 ## 默认立场（与 pi 相同）
 
-pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与进程的全部权限运行：`bash` 能做你用户能做的任何事，`write`/`edit` 能改工作区内外的文件。pigo 内置的护栏（trust 三态、`--approve`、`--allowed-tools`/`--disallowed-tools`）是**准入控制**——它们约束"模型是否被允许发起某个工具调用"，而不是操作系统层面的隔离。需要更强的边界时，把 pigo 容器化或沙箱化。
+pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与进程的全部权限运行：`bash` 能做你用户能做的任何事，`apply_patch` 能改工作区内外的文件。pigo 内置的护栏（trust 三态、`--approve`、`--allowed-tools`/`--disallowed-tools`）是**准入控制**——它们约束"模型是否被允许发起某个工具调用"，而不是操作系统层面的隔离。需要更强的边界时，把 pigo 容器化或沙箱化。
 
 ## 三层防线的分工
 
@@ -94,7 +94,7 @@ docker run --rm -i \
 
 要点：
 
-- `--read-only` + `--tmpfs /tmp`：容器根文件系统不可写，模型只能通过显式挂载点写文件；`bash`/`write`/`edit` 的副作用被限制在 `tmpfs`（会话结束即消失）。
+- `--read-only` + `--tmpfs /tmp`：容器根文件系统不可写，模型只能通过显式挂载点写文件；`bash`/`apply_patch` 的副作用被限制在 `tmpfs`（会话结束即消失）。
 - `--network none`：彻底禁止模型外联（容器内连 Provider 都不能访问——适合"离线审阅"类任务）。若任务本身需要调用 Provider，去掉 `--network none` 并改用出网白名单（见 compose 示例）。
 - `--mount ... ,readonly`：工作区只读挂载，物理上禁止改写源码。
 

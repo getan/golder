@@ -12,24 +12,26 @@ import (
 
 func TestExtractFileOpsAndLists(t *testing.T) {
 	readArgs, _ := json.Marshal(map[string]string{"path": "a.go"})
-	writeArgs, _ := json.Marshal(map[string]string{"path": "b.go"})
-	editArgs, _ := json.Marshal(map[string]string{"path": "a.go"}) // a.go also edited -> modified wins
+	// One patch adds b.go and replaces a line in a.go: a.go is also read, so
+	// the modified list must win and drop it from the read-only list.
+	patchArgs, _ := json.Marshal(map[string]string{"patch": "*** Begin Patch\n" +
+		"*** Add File: b.go\n+package b\n" +
+		"*** Update File: a.go\n@@\n-old\n+new\n" +
+		"*** End Patch\n"})
 	msgs := []agentcore.Message{
 		assistantToolCall("1", "read"),
-		assistantToolCall("2", "write"),
-		assistantToolCall("3", "edit"),
+		assistantToolCall("2", "apply_patch"),
 	}
 	// Attach args by rebuilding with arguments.
 	msgs[0] = agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewToolCallContent("1", "read", readArgs)}}
-	msgs[1] = agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewToolCallContent("2", "write", writeArgs)}}
-	msgs[2] = agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewToolCallContent("3", "edit", editArgs)}}
+	msgs[1] = agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewToolCallContent("2", "apply_patch", patchArgs)}}
 
 	ops := NewFileOps()
 	for _, m := range msgs {
 		extractFileOpsFromMessage(m, ops)
 	}
 	read, modified := computeFileLists(ops)
-	// a.go was read AND edited -> only in modified; b.go written -> modified.
+	// a.go was read AND edited -> only in modified; b.go added -> modified.
 	if len(read) != 0 {
 		t.Fatalf("readFiles: got %v, want []", read)
 	}

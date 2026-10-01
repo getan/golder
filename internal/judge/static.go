@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"path"
 	"strings"
+
+	"github.com/smallnest/pigo/internal/patch"
 )
 
 // StaticFloor is the tiny hard-deny list for unambiguously catastrophic
@@ -15,9 +17,10 @@ import (
 // bash denies: privilege escalation, bare-metal destructive commands,
 // host power control, fork bombs, and one-command environment exfiltration
 // (whole-environment dump piped into a network sink, or any reference to
-// the grading key). write/edit denies: paths into live secret directories.
-// The agenttool layer already rejects Root escapes; this is the extra
-// secret-material floor above it.
+// the grading key). apply_patch denies: any path the patch touches that lands
+// in a live secret directory — every path in the patch is checked, so a
+// multi-file patch cannot smuggle one through. The agenttool layer already
+// rejects Root escapes; this is the extra secret-material floor above it.
 func staticDeny(tool string, args json.RawMessage) (Verdict, bool) {
 	name := strings.ToLower(strings.TrimSpace(tool))
 	switch name {
@@ -31,10 +34,12 @@ func staticDeny(tool string, args json.RawMessage) (Verdict, bool) {
 			}
 		}
 		return Verdict{}, false
-	case "write", "edit":
-		if p, ok := pathArg(args); ok {
-			if reason, bad := secretPath(p); bad {
-				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason}}, true
+	case "apply_patch":
+		if text, ok := patchText(args); ok {
+			for _, p := range patch.Paths(text) {
+				if reason, bad := secretPath(p); bad {
+					return Verdict{Level: Deny, Source: "static", Reasons: []string{reason + " (in apply_patch)"}}, true
+				}
 			}
 		}
 		return Verdict{}, false
@@ -57,17 +62,21 @@ func bashCommand(args json.RawMessage) (string, bool) {
 	return cmd, true
 }
 
-func pathArg(args json.RawMessage) (string, bool) {
+// patchText extracts the apply_patch call's patch text. A patch that does not
+// parse yields false: the static floor stays silent and the tool itself will
+// reject it, so a malformed patch is never silently allowed through grading
+// with a path set the regex layer never saw.
+func patchText(args json.RawMessage) (string, bool) {
 	var a struct {
-		Path string `json:"path"`
+		Patch string `json:"patch"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", false
 	}
-	if strings.TrimSpace(a.Path) == "" {
+	if strings.TrimSpace(a.Patch) == "" {
 		return "", false
 	}
-	return a.Path, true
+	return a.Patch, true
 }
 
 // destructiveBash matches commands that are destructive beyond the working

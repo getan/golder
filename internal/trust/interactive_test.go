@@ -214,8 +214,8 @@ func TestToolCallSummary(t *testing.T) {
 		want string
 	}{
 		{"bash", `{"command":"rm -rf /tmp/x"}`, "command: rm -rf /tmp/x"},
-		{"write", `{"path":"/a/b.txt","content":"..."}`, "path: /a/b.txt"},
-		{"edit", `{"path":"/a/b.txt","old_string":"x"}`, "path: /a/b.txt"},
+		{"apply_patch", `{"patch":"*** Begin Patch\n*** Delete File: /a/b.txt\n*** End Patch\n"}`, "patch touching /a/b.txt"},
+		{"apply_patch", `{"patch":"garbage"}`, "patch: garbage"},
 		{"bash", `{}`, ""},
 		{"bash", ``, ""},
 		{"bash", `not-json`, "not-json"},
@@ -246,7 +246,8 @@ func TestToolCallSummaryTruncates(t *testing.T) {
 func TestTrustBeforeToolCallGating(t *testing.T) {
 	cwd := t.TempDir()
 	mu := &sync.Mutex{}
-	call := agentcore.AgentToolCall{Name: "write", Arguments: []byte(`{"path":"/tmp/x"}`)}
+	call := agentcore.AgentToolCall{Name: "apply_patch", Arguments: []byte(
+		`{"patch":"*** Begin Patch\n*** Delete File: /tmp/x\n*** End Patch\n"}`)}
 
 	// nil manager -> no hook.
 	if h := BeforeToolCall(nil, cwd, nil, nil, mu); h != nil {

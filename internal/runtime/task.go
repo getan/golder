@@ -111,7 +111,7 @@ func activityOf(ev agentcore.AgentEvent) string {
 		switch e.ToolName {
 		case "read":
 			return "Reading"
-		case "edit", "write":
+		case "apply_patch":
 			return "Editing"
 		case "bash":
 			return "Running bash"

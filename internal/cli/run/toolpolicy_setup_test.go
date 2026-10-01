@@ -62,7 +62,7 @@ func TestSetupEnvAppliesDenyList(t *testing.T) {
 			t.Errorf("%q survived the deny list: %q", denied, got)
 		}
 	}
-	for _, kept := range []string{"read", "write", "edit", "grep"} {
+	for _, kept := range []string{"read", "apply_patch", "grep"} {
 		if !contains(got, kept) {
 			t.Errorf("%q was removed but was not denied: %q", kept, got)
 		}
@@ -85,7 +85,7 @@ func TestSetupEnvDenyWinsOverAllow(t *testing.T) {
 // means the full built-in set, including the side-effect tools.
 func TestSetupEnvUnconstrainedIsUnchanged(t *testing.T) {
 	got := setupToolNames(t, ToolPolicy{})
-	for _, want := range []string{"read", "write", "edit", "grep", "find", "bash", "todo", "webfetch", "websearch", "task"} {
+	for _, want := range []string{"read", "apply_patch", "grep", "find", "bash", "todo", "webfetch", "websearch", "task"} {
 		if !contains(got, want) {
 			t.Errorf("unconstrained run is missing %q: %q", want, got)
 		}
