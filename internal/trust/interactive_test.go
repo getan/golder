@@ -9,14 +9,28 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/runtime"
 )
+
+// pipeReader opens an OS pipe whose read end blocks until data arrives or
+// the write end closes. Tests keep the write end open to simulate a user
+// who never answers.
+func pipeReader(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	return r, w
+}
 
 // newTrustManagerAt builds a Manager backed by path.
 func newTrustManagerAt(t *testing.T, path string) *Manager {
@@ -159,10 +173,36 @@ func TestConfirmToolCall(t *testing.T) {
 	}
 	for _, c := range cases {
 		var out bytes.Buffer
-		allow, always := ConfirmToolCall(&out, readerOf(c.in), call)
+		allow, always := ConfirmToolCall(context.Background(), &out, readerOf(c.in), call)
 		if allow != c.allow || always != c.always {
 			t.Errorf("ConfirmToolCall(%q) = (%v,%v), want (%v,%v)", c.in, allow, always, c.allow, c.always)
 		}
+	}
+}
+
+// TestConfirmToolCallInterrupt verifies a Ctrl+C during the prompt (the run
+// context canceled while the read is blocked) denies immediately instead of
+// trapping the user until they answer. The reader blocks on an open pipe so
+// no input ever arrives.
+func TestConfirmToolCallInterrupt(t *testing.T) {
+	call := agentcore.AgentToolCall{Name: "bash", Arguments: []byte(`{"command":"ls"}`)}
+	r, w := pipeReader(t)
+	defer w.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan [2]bool, 1)
+	go func() {
+		var out bytes.Buffer
+		allow, always := ConfirmToolCall(ctx, &out, bufio.NewReader(r), call)
+		done <- [2]bool{allow, always}
+	}()
+	cancel()
+	select {
+	case got := <-done:
+		if got != [2]bool{false, false} {
+			t.Fatalf("interrupted ConfirmToolCall = %v, want (false,false)", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted ConfirmToolCall did not return")
 	}
 }
 

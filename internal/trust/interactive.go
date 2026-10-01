@@ -19,8 +19,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -29,6 +32,10 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/runtime"
 )
+
+// errPromptInterrupt marks a prompt abandoned by SIGINT. It is internal: the
+// prompt translates it to its safe default (deny / def), never surfaces it.
+var errPromptInterrupt = errors.New("prompt interrupted")
 
 // SideEffectTools are the built-in tools with filesystem or process side
 // effects that trust always gates.
@@ -137,11 +144,16 @@ func chooseScope(out io.Writer, in *bufio.Reader, cwd string) string {
 
 // readMenuChoice prompts and reads a 1..max integer, re-prompting on invalid
 // input. An empty line or EOF returns def so the dialog never deadlocks on
-// missing input.
+// missing input. A SIGINT also returns def: the startup dialog runs before
+// any run context exists, so there is nothing to cancel — falling back to
+// the default (session-only, never persisted) instead of trapping the user.
 func readMenuChoice(out io.Writer, in *bufio.Reader, prompt string, max, def int) int {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
 	for {
 		fmt.Fprint(out, prompt)
-		line, err := in.ReadString('\n')
+		line, err := readLineOrSignal(in, sigCh)
 		if err != nil && line == "" {
 			return def
 		}
@@ -156,6 +168,28 @@ func readMenuChoice(out io.Writer, in *bufio.Reader, prompt string, max, def int
 		if err != nil {
 			return def
 		}
+	}
+}
+
+// readLineOrSignal reads one line, aborting to ("", errInterrupt) on SIGINT
+// so a startup prompt never traps Ctrl+C. The orphaned read may deliver
+// late input to the next prompt on the shared reader; that matches the
+// existing typed-ahead contract (input is never split between prompts).
+func readLineOrSignal(in *bufio.Reader, sigCh <-chan os.Signal) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, err := in.ReadString('\n')
+		ch <- result{line, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.line, r.err
+	case <-sigCh:
+		return "", errPromptInterrupt
 	}
 }
 
@@ -220,14 +254,6 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 // runs the main goroutine has already drained the assistant's streamed text and
 // is idle in DrainStream. Do not raise EventBuffer above 0 while trust gating
 // is wired without routing the prompt through the main goroutine.
-//
-// SIGINT caveat: a Ctrl+C that arrives while the prompt is blocked reading
-// stdin cancels the run context but does NOT unblock the read, so the
-// interrupt takes effect only after the user answers the prompt. This is safe -
-// a post-cancel "yes" still aborts: executeToolCall's emit of
-// ToolExecutionStartEvent returns ctx.Err() and the tool never runs. A fix that
-// unblocks the read on signal would require injecting input on SIGINT, which is
-// out of scope for this change.
 func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, mu *sync.Mutex) agentcore.BeforeToolCallFunc {
 	if mgr == nil {
 		return nil
@@ -247,7 +273,10 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 		if mgr.IsTrusted(cwd) {
 			return nil
 		}
-		allow, always := ConfirmToolCall(out, in, call)
+		// The prompt is interruptible: a Ctrl+C during the read cancels the
+		// run context and the read yields a denial, so the interrupt takes
+		// effect immediately instead of waiting for an answer.
+		allow, always := ConfirmToolCall(ctx, out, in, call)
 		if always {
 			mgr.SetSessionTrust(cwd)
 		}
@@ -265,14 +294,17 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 // ConfirmToolCall asks whether a side-effect tool call may run in an untrusted
 // directory. It returns (allow, always): allow runs the call this once; always
 // runs it AND grants session trust so subsequent side-effect calls skip the
-// prompt. Denial (no/empty/EOF) returns (false, false).
-func ConfirmToolCall(out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) (allow bool, always bool) {
+// prompt. Denial (no/empty/EOF/interrupt) returns (false, false).
+func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) (allow bool, always bool) {
 	fmt.Fprintf(out, "\npigo wants to run %q in an untrusted directory.\n", call.Name)
 	if summary := toolCallSummary(call); summary != "" {
 		fmt.Fprintf(out, "  %s\n", summary)
 	}
 	fmt.Fprint(out, "Allow? [y]es / [n]o / [a]lways (trust for this session) [y/N/a]: ")
-	line, _ := in.ReadString('\n')
+	line, ok := readLineOrCancel(ctx, in)
+	if !ok {
+		return false, false
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true, false
@@ -280,6 +312,28 @@ func ConfirmToolCall(out io.Writer, in *bufio.Reader, call agentcore.AgentToolCa
 		return true, true
 	default:
 		return false, false
+	}
+}
+
+// readLineOrCancel reads one line, returning ok=false when ctx fires first so
+// a Ctrl+C during a confirmation prompt denies immediately instead of
+// trapping the user until they answer. The orphaned read may deliver late
+// input to the next prompt on the shared reader; that matches the existing
+// typed-ahead contract (input is never split between prompts).
+func readLineOrCancel(ctx context.Context, in *bufio.Reader) (line string, ok bool) {
+	type result struct {
+		line string
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, _ := in.ReadString('\n')
+		ch <- result{line}
+	}()
+	select {
+	case r := <-ch:
+		return r.line, true
+	case <-ctx.Done():
+		return "", false
 	}
 }
 

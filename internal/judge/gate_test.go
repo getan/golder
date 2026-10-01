@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/smallnest/pigo/internal/agentcore"
 )
@@ -62,6 +64,34 @@ func TestChainGatesTrustFirst(t *testing.T) {
 	}
 	if second.calls != 0 {
 		t.Fatal("second gate must not run after a block")
+	}
+}
+
+// TestInteractiveGateInterrupt verifies a Ctrl+C during the risk prompt (the
+// run context canceled while the read is blocked) blocks immediately instead
+// of trapping the user until they answer. The reader blocks on an open pipe
+// so no input ever arrives.
+func TestInteractiveGateInterrupt(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer w.Close()
+	stub := &stubClassifier{v: Verdict{Level: Confirm, Reasons: []string{"test"}}}
+	var out bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	gate := GateFunc(GateOpts{In: bufio.NewReader(r), Out: &out, Interactive: true}, stub)
+	done := make(chan *agentcore.BeforeToolCallDecision, 1)
+	go func() { done <- gate(ctx, toolCall("bash", `{"command":"ls"}`)) }()
+	cancel()
+	select {
+	case dec := <-done:
+		if dec == nil || !dec.Block {
+			t.Fatal("interrupted risk prompt should block")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupted risk prompt did not return")
 	}
 }
 

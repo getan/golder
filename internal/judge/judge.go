@@ -213,7 +213,7 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 			if !opts.Interactive || opts.In == nil {
 				return blockCall(call, v, "sandbox runner not wired; failing closed")
 			}
-			if promptRisk(opts, call, v, true) {
+			if promptRisk(ctx, opts, call, v, true) {
 				return nil
 			}
 			return blockCall(call, v, "denied at prompt")
@@ -221,7 +221,7 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 			if !opts.Interactive || opts.In == nil {
 				return blockCall(call, v, "needs confirmation; failing closed without a prompt")
 			}
-			if promptRisk(opts, call, v, false) {
+			if promptRisk(ctx, opts, call, v, false) {
 				return nil
 			}
 			return blockCall(call, v, "denied at prompt")
@@ -249,7 +249,7 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 	return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
 }
 
-func promptRisk(opts GateOpts, call agentcore.AgentToolCall, v Verdict, sandbox bool) bool {
+func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, sandbox bool) bool {
 	if opts.Mu != nil {
 		opts.Mu.Lock()
 		defer opts.Mu.Unlock()
@@ -274,12 +274,40 @@ func promptRisk(opts GateOpts, call agentcore.AgentToolCall, v Verdict, sandbox 
 		fmt.Fprintf(out, "  %s\n", summary)
 	}
 	fmt.Fprint(out, "Allow? [y/N]: ")
-	line, _ := opts.In.ReadString('\n')
+	// The read is interruptible: a Ctrl+C during the prompt cancels the run
+	// context and yields a denial immediately instead of trapping the user
+	// until they answer (same contract as the trust gate).
+	line, ok := readLineOrCancel(ctx, opts.In)
+	if !ok {
+		return false
+	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return true
 	default:
 		return false
+	}
+}
+
+// readLineOrCancel reads one line, returning ok=false when ctx fires first.
+// The orphaned read may deliver late input to the next prompt on the shared
+// reader; that matches the existing typed-ahead contract (input is never
+// split between prompts). Duplicated from internal/trust on purpose: the
+// leaf packages stay independent and the function is twelve lines.
+func readLineOrCancel(ctx context.Context, in *bufio.Reader) (line string, ok bool) {
+	type result struct {
+		line string
+	}
+	ch := make(chan result, 1)
+	go func() {
+		line, _ := in.ReadString('\n')
+		ch <- result{line}
+	}()
+	select {
+	case r := <-ch:
+		return r.line, true
+	case <-ctx.Done():
+		return "", false
 	}
 }
 

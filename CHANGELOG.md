@@ -23,6 +23,10 @@ interactive REPL/TUI.
   writes, secret dirs denied) via `PIGO_SANDBOX=auto|enforce`; `PIGO_JUDGE=off`
   restores the previous behavior. Zero-config runs (no key) only gain the
   static floor.
+- **Interruptible confirmation prompts**: Ctrl+C during a trust or risk-judge
+  prompt now denies immediately instead of trapping the user until they
+  answer (reads race the run context); the first-run trust dialog falls back
+  to its session-only default on SIGINT.
 - **Tool-level admission control**: `--allowed-tools` / `--disallowed-tools`
   (repeatable, comma-separated, case-insensitive) narrow the tool set handed to
   the model, filling the gap between the full set and `--no-tools`. Deny wins
