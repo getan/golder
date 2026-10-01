@@ -133,6 +133,9 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	if c.state == cardRunning {
 		verb = "Running"
 	}
+	if cmd, ok := c.shellCommand(); ok {
+		return c.renderShellHeadline(theme, width, verb, cmd)
+	}
 	// The verb is prepended at render time (not part of the wrapped text), so
 	// reserve its columns in the wrap budget: bullet(2) + verb + space.
 	avail := max(1, width-len(verb)-4)
@@ -150,6 +153,41 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	b.WriteString(c.statusBullet(theme) + " " + head)
 	for _, ln := range lines[1:] {
 		b.WriteString("\n" + theme.ToolCmd.Render("  │ "+ln))
+	}
+	return b.String()
+}
+
+// shellCommand returns the command line of a bash card when there is one to
+// syntax-highlight, collapsing embedded newlines so the headline stays one
+// logical line (wrapHLSpans still honors hard breaks if one survives).
+func (c toolCard) shellCommand() (string, bool) {
+	if !strings.EqualFold(c.name, "bash") {
+		return "", false
+	}
+	raw, _ := c.input["command"].(string)
+	if cmd := oneLine(raw); cmd != "" {
+		return cmd, true
+	}
+	return "", false
+}
+
+// renderShellHeadline renders a bash headline with the command syntax-
+// highlighted (chroma + Catppuccin, matching codex): the tool name is cyan,
+// every token carries its theme color, and continuation lines hang under the
+// same `  │ ` gutter — with the gutter itself dim so only the command text
+// carries color. The command is never truncated: it wraps to as many `  │ `
+// lines as it needs (codex caps this at two and adds an ellipsis; a command is
+// the one thing the user must always be able to read in full).
+func (c toolCard) renderShellHeadline(theme Theme, width int, verb, cmd string) string {
+	spans := []hlSpan{{text: c.name + " ", color: colorToolName, bold: true}}
+	spans = append(spans, highlightShellCommand(cmd, syntaxDark())...)
+	firstLimit := max(1, width-2-len(verb)-1)
+	lines := wrapHLSpans(spans, firstLimit, max(1, width-4))
+	var b strings.Builder
+	b.WriteString(c.statusBullet(theme) + " " + theme.ToolVerb.Render(verb) + " ")
+	b.WriteString(renderHLSpans(lines[0], theme.ToolCmd))
+	for _, ln := range lines[1:] {
+		b.WriteString("\n" + theme.ToolBody.Render("  │ ") + renderHLSpans(ln, theme.ToolCmd))
 	}
 	return b.String()
 }

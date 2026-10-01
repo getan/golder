@@ -477,7 +477,9 @@ func TestToolCardHeadlineWraps(t *testing.T) {
 	if !strings.Contains(plain, "\n  \u2502 ") {
 		t.Fatalf("wrapped headline should use the \u2502 continuation gutter:\n%s", plain)
 	}
-	flat := strings.Join(strings.Fields(plain), " ")
+	// Drop the continuation gutters before flattening: a word-wrap break can
+	// land between two words of a command, putting a │ column between them.
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(plain, "\u2502", " ")), " ")
 	if !strings.Contains(flat, "head -n 15") {
 		t.Fatalf("wrapped headline dropped the command tail:\n%s", plain)
 	}
@@ -534,8 +536,8 @@ func TestModelClickTogglesAnyCard(t *testing.T) {
 
 // TestToolCardHeadlineColors verifies the codex-parity headline palette: the
 // verb is bold in the default color, the tool name is cyan, the command is
-// near-white, and nothing renders the old all-blue ToolHeader blob (blue 39 on
-// the whole line read like a hyperlink).
+// syntax-highlighted (chroma/Catppuccin), and nothing renders the old all-blue
+// ToolHeader blob (blue 39 on the whole line read like a hyperlink).
 func TestToolCardHeadlineColors(t *testing.T) {
 	theme := DefaultTheme()
 	card := toolCard{
@@ -547,11 +549,17 @@ func TestToolCardHeadlineColors(t *testing.T) {
 	if !strings.Contains(out, theme.ToolVerb.Render("Ran")) {
 		t.Errorf("headline missing bold default verb\n%q", out)
 	}
+	// The space after the name belongs to the following command token (word
+	// wrapping re-inserts separators in the next word's style), so only the
+	// name itself is asserted.
 	if !strings.Contains(out, theme.ToolName.Render("bash")) {
 		t.Errorf("headline missing cyan tool name\n%q", out)
 	}
-	if !strings.Contains(out, theme.ToolCmd.Render(" go test ./...")) {
-		t.Errorf("headline missing near-white command text\n%q", out)
+	if plain := stripTCardANSI(out); !strings.Contains(plain, "go test ./...") {
+		t.Errorf("headline lost command text\n%q", plain)
+	}
+	if n := distinctFgColors(out); n < 2 {
+		t.Errorf("command rendered with %d foreground colors, want syntax highlighting\n%q", n, out)
 	}
 	if strings.Contains(out, "38;5;39m") {
 		t.Errorf("headline still paints a segment in 256-color 39 (blue)\n%q", out)
