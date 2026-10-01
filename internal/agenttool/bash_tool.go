@@ -294,7 +294,8 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if cleanup != nil {
 		defer cleanup()
 	}
-	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	configureProcessGroup(cmd)
 	if t.Dir != "" {
 		cmd.Dir = t.Dir
 	}
@@ -305,7 +306,42 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	cmd.Stdout = sw
 	cmd.Stderr = sw
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		var execErr *exec.Error
+		if errors.As(err, &execErr) {
+			return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("")}},
+				fmt.Errorf("bash: could not start shell %q: %v. On Windows install Git Bash or WSL (or configure a shell); commands are bash syntax", shell, execErr.Err)
+		}
+		return errorResult(fmt.Sprintf("bash: could not start command: %v", err)), nil
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-runCtx.Done():
+		pid := 0
+		if cmd.Process != nil {
+			pid = cmd.Process.Pid
+		}
+		shouldEscalate := terminateProcessGroup(pid)
+		timer := time.NewTimer(terminationGracePeriod)
+		select {
+		case err = <-done:
+			timer.Stop()
+			if shouldEscalate {
+				killProcessGroup(pid)
+			}
+		case <-timer.C:
+			killProcessGroup(pid)
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			err = <-done
+		}
+	}
 
 	mu.Lock()
 	output := combined.String()
@@ -324,15 +360,6 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if ctx.Err() == context.Canceled {
 		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(output)}},
 			fmt.Errorf("bash: command canceled\n%s", output)
-	}
-
-	// A missing interpreter (no bash/powershell/cmd on PATH) surfaces as an
-	// *exec.Error before the command ever runs. Report it with actionable
-	// guidance instead of a bare "code -1", so the model stops retrying blindly.
-	var execErr *exec.Error
-	if errors.As(err, &execErr) {
-		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(output)}},
-			fmt.Errorf("bash: could not start shell %q: %v. On Windows install Git Bash or WSL (or configure a shell); commands are bash syntax", shell, execErr.Err)
 	}
 
 	if err != nil {
@@ -387,7 +414,8 @@ func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, e
 		}
 		return errorResult(blockMsg), nil
 	}
-	cmd := exec.CommandContext(jobCtx, argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	configureProcessGroup(cmd)
 	if t.Dir != "" {
 		cmd.Dir = t.Dir
 	}
@@ -405,6 +433,16 @@ func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, e
 		job.finish(-1, err.Error())
 		return errorResult(fmt.Sprintf("bash: could not start background command: %v", err)), nil
 	}
+
+	go func(pid int, ctx context.Context) {
+		<-ctx.Done()
+		if terminateProcessGroup(pid) {
+			time.Sleep(terminationGracePeriod)
+			killProcessGroup(pid)
+		} else {
+			killProcess(pid)
+		}
+	}(cmd.Process.Pid, jobCtx)
 
 	go func() {
 		err := cmd.Wait()
