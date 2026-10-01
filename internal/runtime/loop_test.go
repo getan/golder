@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/smallnest/pigo/internal/agentcore"
@@ -283,4 +284,109 @@ func countKind(kinds []string, want string) int {
 		}
 	}
 	return n
+}
+
+// An endless tool-call stream must force-stop after MaxToolTurns consecutive
+// tool turns (agentic loops with no natural end), closing with agent_end.
+func TestAgentLoopMaxToolTurnsForceStops(t *testing.T) {
+	turns := make([]agentcore.AssistantMessage, 0, 5)
+	for i := 0; i < 5; i++ {
+		turns = append(turns, oneToolAssistant("c1", "echo"))
+	}
+	cfg := newRunCfg(scriptedStream(turns), echoTool("echo", agentcore.ToolExecutionParallel, false))
+	cfg.MaxToolTurns = 3
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}}
+
+	kinds, _ := collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	// Turns 1-3 execute; turn 4 trips the cap (4 TurnStarts, 3 executions).
+	if got := countKind(kinds, agentcore.EventTurnStart); got != 4 {
+		t.Errorf("expected 4 turns, got kinds %v", kinds)
+	}
+	if got := countKind(kinds, agentcore.EventToolExecutionEnd); got != 3 {
+		t.Errorf("expected 3 tool executions, got kinds %v", kinds)
+	}
+	if last := kinds[len(kinds)-1]; last != agentcore.EventAgentEnd {
+		t.Errorf("run must end with agent_end, got %v", kinds)
+	}
+}
+
+// Server-only turns (hosted search with no local calls) count toward the same
+// cap: they ride the tools branch for display, so they must not loop forever.
+func TestAgentLoopMaxToolTurnsCountsServerCalls(t *testing.T) {
+	serverTurn := agentcore.AssistantMessage{
+		RoleField:  agentcore.RoleAssistant,
+		StopReason: agentcore.StopReasonEndTurn,
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent("news"),
+			agentcore.NewServerToolCallContent("ws1", "web_search", json.RawMessage(`{"query":"x"}`)),
+		},
+	}
+	turns := []agentcore.AssistantMessage{serverTurn, serverTurn, serverTurn, serverTurn}
+	cfg := newRunCfg(scriptedStream(turns))
+	cfg.MaxToolTurns = 2
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}}
+
+	kinds, _ := collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	// Turns 1-2 display; turn 3 trips the cap.
+	if got := countKind(kinds, agentcore.EventTurnStart); got != 3 {
+		t.Errorf("expected 3 turns, got kinds %v", kinds)
+	}
+	// Each server turn brackets exactly one display start/end pair.
+	if got := countKind(kinds, agentcore.EventToolExecutionStart); got != 2 {
+		t.Errorf("expected 2 server display starts, got kinds %v", kinds)
+	}
+	if last := kinds[len(kinds)-1]; last != agentcore.EventAgentEnd {
+		t.Errorf("run must end with agent_end, got %v", kinds)
+	}
+}
+
+// A pure-hosted turn that already carries a full summary must settle instead
+// of re-prompting with identical history (which makes the model repeat the
+// summary verbatim). A thin preamble still continues to await synthesis.
+func TestAgentLoopServerOnlyAnsweredSettles(t *testing.T) {
+	answered := agentcore.AssistantMessage{
+		RoleField:  agentcore.RoleAssistant,
+		StopReason: agentcore.StopReasonEndTurn,
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent(strings.Repeat("新闻摘要。", 100)),
+			agentcore.NewServerToolCallContent("ws1", "web_search", json.RawMessage(`{"query":"x"}`)),
+		},
+	}
+	// If the loop wrongly continued, this second turn would also run.
+	extra := agentcore.AssistantMessage{
+		RoleField:  agentcore.RoleAssistant,
+		StopReason: agentcore.StopReasonEndTurn,
+		Content:    agentcore.ContentList{agentcore.NewTextContent("duplicate summary")},
+	}
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{answered, extra}))
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}}
+
+	kinds, msgs := collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	if got := countKind(kinds, agentcore.EventTurnStart); got != 1 {
+		t.Errorf("answered server-only turn must settle in 1 turn, got kinds %v", kinds)
+	}
+	if last := kinds[len(kinds)-1]; last != agentcore.EventAgentEnd {
+		t.Errorf("run must end with agent_end, got %v", kinds)
+	}
+	for _, m := range msgs {
+		if am, ok := m.(agentcore.AssistantMessage); ok {
+			if strings.Contains(agentcore.ContentToText(am.Content), "duplicate summary") {
+				t.Errorf("loop must not re-prompt after an answered server-only turn")
+			}
+		}
+	}
+}
+
+func TestServerTurnAnsweredThreshold(t *testing.T) {
+	short := agentcore.AssistantMessage{Content: agentcore.ContentList{agentcore.NewTextContent("正在搜集。")}}
+	if serverTurnAnswered(short) {
+		t.Errorf("thin preamble must not count as answered")
+	}
+	long := agentcore.AssistantMessage{Content: agentcore.ContentList{agentcore.NewTextContent(strings.Repeat("摘要", 200))}}
+	if !serverTurnAnswered(long) {
+		t.Errorf("full summary must count as answered")
+	}
 }

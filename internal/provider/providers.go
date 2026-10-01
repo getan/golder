@@ -175,6 +175,11 @@ func encodeOpenAIMessage(m agentcore.Message) []map[string]any {
 		var toolCalls []map[string]any
 		for _, c := range msg.Content {
 			if tc, ok := c.(agentcore.ToolCallContent); ok {
+				// Provider-executed calls never ride the Chat Completions
+				// function wire: there is no output to pair them with.
+				if tc.IsServer() {
+					continue
+				}
 				toolCalls = append(toolCalls, map[string]any{
 					"id":   tc.ID,
 					"type": "function",
@@ -448,6 +453,11 @@ func encodeAnthropicMessage(m agentcore.Message) map[string]any {
 				}
 				blocks = append(blocks, map[string]any{"type": "text", "text": b.Text})
 			case agentcore.ToolCallContent:
+				// Provider-executed calls have no local output to pair; the
+				// Messages API would reject an unpaired tool_use.
+				if b.IsServer() {
+					continue
+				}
 				var input any
 				_ = json.Unmarshal(b.Arguments, &input)
 				blocks = append(blocks, map[string]any{

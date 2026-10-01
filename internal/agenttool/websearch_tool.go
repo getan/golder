@@ -75,7 +75,9 @@ func (t *WebSearchTool) Description() string {
 	return "Search the web and return the top results (title, URL, snippet). " +
 		"Auto-selects a backend by available credentials (Tavily, Brave, or a " +
 		"keyless DuckDuckGo fallback). Use allowed_domains/blocked_domains to " +
-		"restrict results by host. Follow up with the webfetch tool to read a result."
+		"restrict results by host. Follow up with the webfetch tool to read a result. " +
+		"Never repeat the same query — reuse the previous results or refine the query. " +
+		"Never pass a URL as the query; open pages with webfetch."
 }
 
 // Schema implements AgentTool.

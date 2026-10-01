@@ -69,7 +69,8 @@ type PromptConfig struct {
 const DefaultBaseInstruction = "You are pigo, a helpful coding agent. " +
 	"Use the available tools to inspect files and accomplish the user's request precisely and concisely.\n\n" +
 	todoGuide + "\n\n" +
-	taskGuide
+	taskGuide + "\n\n" +
+	searchGuide
 
 // todoGuide instructs the model on how to drive the todo tool. It is appended to
 // the default base instruction so multi-step work is planned and its progress is
@@ -86,6 +87,17 @@ const todoGuide = "When a task has multiple steps or is non-trivial, use the tod
 // mechanism for delegation and fan-out. The key affordance advertised here is
 // that emitting MULTIPLE task calls in a single assistant message runs those
 // sub-agents in parallel, letting skills like /graph achieve real concurrency.
+// searchGuide disciplines web research so it terminates: batch independent
+// queries in one turn without preamble narration, open pages with webfetch
+// (never pass a URL back into search), never repeat a query or URL, and
+// synthesize from cited results after two to three rounds instead of
+// searching again.
+const searchGuide = "For web research: issue searches immediately without preamble narration; " +
+	"batch independent queries in a single turn. Open result pages with the webfetch tool — " +
+	"never pass a URL as a search query. Never repeat a search query or re-open a page; " +
+	"reuse the cited results. After two to three rounds, synthesize the answer from what is " +
+	"cited instead of searching again."
+
 const taskGuide = "When work splits into independent subtasks, delegate them with the task tool: each " +
 	"task call dispatches an independent sub-agent that completes its subtask on a fresh context and " +
 	"returns its final report. To fan out, emit MULTIPLE task calls in a single message — they run in " +

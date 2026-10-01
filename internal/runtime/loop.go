@@ -21,6 +21,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -70,6 +71,11 @@ type StopDecision struct {
 // RunConfig is the full configuration for a loop run: the per-turn streaming
 // config (embedded LoopConfig), the batch tool-execution config, and the four
 // loop-level hooks. Every hook is optional (nil = default behavior).
+// defaultMaxToolTurns bounds consecutive tool-carrying turns when
+// RunConfig.MaxToolTurns is unset: generous enough for real coding sessions,
+// tight enough that a runaway search loop always terminates.
+const defaultMaxToolTurns = 40
+
 type RunConfig struct {
 	LoopConfig
 	// Batch holds the tool registry and the prepare/before/after hooks used to
@@ -89,6 +95,12 @@ type RunConfig struct {
 	// ShouldStopAfterTurn runs after each turn_end; true ends the run with an
 	// agent_end event (FR-7).
 	ShouldStopAfterTurn func(ctx context.Context, agentCtx *agentcore.AgentContext) bool
+
+	// MaxToolTurns caps consecutive assistant turns that carry tool calls
+	// (local or hosted) before the loop force-stops with a stderr warning.
+	// Agentic hosted search can otherwise self-direct new rounds forever with
+	// no natural end. 0 selects defaultMaxToolTurns; negative disables the cap.
+	MaxToolTurns int
 
 	// OnStop, when set, is consulted right before the run would end naturally (no
 	// tool calls and no follow-up messages). Returning a decision with Block=true
@@ -201,6 +213,7 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	}
 
 	for { // outer loop: pending / follow-up messages
+		toolTurns := 0
 		for { // inner loop: turns until no tool calls
 			if err := emit(agentcore.TurnStartEvent{}); err != nil {
 				finish()
@@ -242,7 +255,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			}
 
 			calls := toAgentToolCalls(assistant.ToolCalls())
-			if len(calls) == 0 {
+			server := serverToolCalls(assistant.ToolCalls())
+			if len(calls) == 0 && len(server) == 0 {
+				toolTurns = 0
 				// Natural turn end: no tools to run.
 				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
 					finish()
@@ -261,7 +276,68 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// emitFrom feeds the parent stream and is run-scoped, so a child's
 			// SubAgentProgressEvent lands on the right run's stream.
 			toolCtx := agentcore.WithProgressEmitter(ctx, emitFrom)
-			toolResults, allTerminate := agenttool.ExecuteToolCalls(toolCtx, cfg.Batch, calls, emitFrom)
+			toolTurns++
+			if max := maxToolTurns(cfg); max >= 0 && toolTurns > max {
+				// Runaway guard (agentic search loops have no natural end):
+				// close the turn visibly and stop, mirroring the Stop
+				// decorator's stderr warn-and-force-stop pattern (FR-12).
+				fmt.Fprintf(os.Stderr, "pigo: stopping after %d consecutive tool turns (MaxToolTurns=%d)\n", toolTurns, max)
+				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
+					finish()
+					return
+				}
+				finish()
+				return
+			}
+			// Hosted calls already ran provider-side: bracket them with
+			// display-only start/end events (tool cards without execution,
+			// approval, or registry lookup) around the local batch.
+			if len(server) > 0 {
+				for _, sc := range server {
+					if err := emitFrom(ctx, agentcore.ToolExecutionStartEvent{
+						ToolCallID: sc.ID, ToolName: sc.Name, Args: sc.Arguments,
+					}); err != nil {
+						finish()
+						return
+					}
+					if err := emitFrom(ctx, agentcore.ToolExecutionEndEvent{
+						ToolCallID: sc.ID, ToolName: sc.Name,
+						Result: agentcore.AgentToolResult{
+							Content: agentcore.ContentList{
+								agentcore.NewTextContent("hosted: " + serverCallSummary(sc)),
+							},
+						},
+					}); err != nil {
+						finish()
+						return
+					}
+				}
+			}
+			// A pure-hosted turn already carries the model's synthesis for the
+			// searches it just ran: the Responses call iterates search rounds
+			// server-side and returns the concluding text in the same payload.
+			// Re-prompting with identical history (no tool results pair with
+			// hosted calls) makes the model repeat that summary verbatim, so
+			// settle once the text is substantive and only continue for thin
+			// preambles still awaiting synthesis.
+			if len(calls) == 0 && len(server) > 0 && serverTurnAnswered(assistant) {
+				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
+					finish()
+					return
+				}
+				if afterTurn(ctx, agentCtx, &cfg, true, emit, tel) {
+					finish()
+					return
+				}
+				break // exit inner loop → follow-ups / natural end
+			}
+			// An empty local batch reports vacuous allTerminate=true; guard it
+			// so a server-only turn continues the loop instead of finishing.
+			var toolResults []agentcore.ToolResultMessage
+			allTerminate := false
+			if len(calls) > 0 {
+				toolResults, allTerminate = agenttool.ExecuteToolCalls(toolCtx, cfg.Batch, calls, emitFrom)
+			}
 			for _, tr := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, tr)
 			}
@@ -507,14 +583,66 @@ func failToolCallsFromTruncatedMessage(agentCtx *agentcore.AgentContext, assista
 }
 
 // toAgentToolCalls converts the assistant message's ToolCallContent blocks into
-// the loop-level AgentToolCall view executeToolCalls consumes.
+// the loop-level AgentToolCall view executeToolCalls consumes. Server-executed
+// calls are filtered out: the provider already ran them, so sending them to the
+// local registry would only produce "unknown tool" failures.
 func toAgentToolCalls(blocks []agentcore.ToolCallContent) []agentcore.AgentToolCall {
-	if len(blocks) == 0 {
-		return nil
-	}
-	calls := make([]agentcore.AgentToolCall, len(blocks))
-	for i, b := range blocks {
-		calls[i] = agentcore.AgentToolCall{ID: b.ID, Name: b.Name, Arguments: b.Arguments}
+	calls := make([]agentcore.AgentToolCall, 0, len(blocks))
+	for _, b := range blocks {
+		if b.IsServer() {
+			continue
+		}
+		calls = append(calls, agentcore.AgentToolCall{ID: b.ID, Name: b.Name, Arguments: b.Arguments})
 	}
 	return calls
+}
+
+// serverToolCalls returns the provider-executed calls of a message for
+// display-only eventing (tool cards without execution).
+func serverToolCalls(blocks []agentcore.ToolCallContent) []agentcore.ToolCallContent {
+	var out []agentcore.ToolCallContent
+	for _, b := range blocks {
+		if b.IsServer() {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// maxToolTurns resolves the consecutive tool-turn cap: an explicit
+// RunConfig.MaxToolTurns wins, 0 selects the default, negative disables.
+func maxToolTurns(cfg RunConfig) int {
+	if cfg.MaxToolTurns < 0 {
+		return -1
+	}
+	if cfg.MaxToolTurns == 0 {
+		return defaultMaxToolTurns
+	}
+	return cfg.MaxToolTurns
+}
+
+// serverAnsweredRunes is the text size above which a pure-hosted turn counts
+// as already synthesized: a thin preamble (tens of runes) still needs the
+// follow-up turn to produce the answer, while a full summary (hundreds of
+// runes) repeated next turn would read as a duplicate.
+const serverAnsweredRunes = 200
+
+// serverTurnAnswered reports whether a pure-hosted assistant turn already
+// carries substantive text. Rune-counted so CJK summaries are measured fairly.
+func serverTurnAnswered(msg agentcore.AssistantMessage) bool {
+	return len([]rune(agentcore.ContentToText(msg.Content))) >= serverAnsweredRunes
+}
+
+// serverCallSummary renders one line describing a hosted call for its display
+// card (e.g. the web_search query). Arguments decode best-effort; undecodable
+// args fall back to the bare tool name.
+func serverCallSummary(c agentcore.ToolCallContent) string {
+	var args map[string]any
+	if len(c.Arguments) > 0 {
+		_ = json.Unmarshal(c.Arguments, &args)
+	}
+	if q, _ := args["query"].(string); strings.TrimSpace(q) != "" {
+		return c.Name + "(" + strings.TrimSpace(q) + ")"
+	}
+	return c.Name
 }

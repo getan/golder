@@ -584,7 +584,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.pumpNext()
 
+	case toolAnnounceMsg:
+		// A call seen live in a streaming partial opens its card immediately
+		// (codex Running order: call row above the text it produces). The
+		// transcript seals the in-progress text so later deltas render after
+		// the card. The executor's later start for the same id only completes
+		// setup; a repeated announce is a no-op.
+		if card, ok := m.toolCards[msg.id]; ok {
+			if card.input == nil && msg.input != nil {
+				card.input = msg.input
+				m.transcript.reflow()
+			}
+			return m, nil
+		}
+		card := &toolCard{id: msg.id, name: msg.name, input: msg.input, state: cardRunning}
+		m.toolCards[msg.id] = card
+		m.lastToolCard = card
+		m.transcript.announceToolCard(card)
+		return m, m.pumpNext()
+
 	case toolStartMsg:
+		// The executor phase completes what the live announce skipped (full
+		// args, echo, sub-agent row) without adding a second transcript block;
+		// a call never announced takes the full legacy create path (#389).
+		if card, ok := m.toolCards[msg.id]; ok {
+			if msg.input != nil {
+				card.input = msg.input
+			}
+			m.lastToolCard = card
+			m.transcript.reflow()
+			m.remoteEcho("\n· " + msg.name + "\n")
+			if msg.name == "task" {
+				m.subagents.add(msg.id, taskDescription(msg.input), time.Now())
+				m.relayout()
+			}
+			return m, m.pumpNext()
+		}
 		// Create a rich tool-call card, index it by id for the later end event, and
 		// append it as an ordered transcript block so it renders inline (#389).
 		card := &toolCard{id: msg.id, name: msg.name, input: msg.input, state: cardRunning}

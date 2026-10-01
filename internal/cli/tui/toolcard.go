@@ -182,6 +182,10 @@ func (c toolCard) primaryArg() string {
 	switch strings.ToLower(c.name) {
 	case "bash":
 		keyPrefs = []string{"command"}
+	case "web_search":
+		// Hosted search args carry query (search) or url (open_page): show
+		// what was searched, never the bare action tag.
+		keyPrefs = []string{"query", "url"}
 	case "read", "write", "edit", "multiedit":
 		// The file tools emit "path"; accept "file_path" as a fallback for
 		// callers that use the Claude-style key.

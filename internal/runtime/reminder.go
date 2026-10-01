@@ -24,6 +24,8 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -158,6 +160,247 @@ func (r *ReminderRegistry) wrapTransform(
 // without the list having to be re-sent as a durable message. It reads the same
 // TodoStore the todo tool writes, so the reminder always reflects the latest
 // plan. When the list is empty or every item is completed it stays silent.
+// SearchRepeatReminderProvider is the loop guard for web research. Hosted
+// web_search calls execute server-side inside the provider call, so there is
+// no pre-execution hook to block a repeat; the lever left is a just-in-time
+// reminder on the next turn's request (ephemeral: never persisted, never
+// compacted). It covers three stop conditions in priority order:
+//
+//  1. exact query repeat (hosted web_search search actions plus local
+//     websearch calls, normalized lower-case/whitespace-collapsed),
+//  2. exact page repeat (hosted web_search open_page URLs plus local webfetch
+//     calls, normalized), including the common misuse of passing an
+//     already-opened URL back into a search query — open it with webfetch or
+//     reuse the fetched content instead,
+//  3. search budget: 6+ searches without an exact repeat still get a
+//     synthesize-now nudge (stern at 10+), so open-ended "one more query"
+//     loops terminate.
+//
+// Near-dupes still run; exact loops and runaway budgets do not.
+type SearchRepeatReminderProvider struct{}
+
+// searchBudgetWarnAt nudges the model to synthesize once this many web
+// searches have accumulated; searchBudgetStopAt reads sterner.
+const (
+	searchBudgetWarnAt = 6
+	searchBudgetStopAt = 10
+)
+
+// Name implements ReminderProvider.
+func (p *SearchRepeatReminderProvider) Name() string { return "search-repeat" }
+
+// Reminder implements ReminderProvider.
+func (p *SearchRepeatReminderProvider) Reminder(_ context.Context, msgs agentcore.MessageList) (string, bool) {
+	var queries []string
+	var pages []string
+	for _, m := range msgs {
+		am, ok := m.(agentcore.AssistantMessage)
+		if !ok {
+			continue
+		}
+		for _, c := range am.ToolCalls() {
+			switch searchCallKind(c) {
+			case searchKindQuery:
+				queries = append(queries, normalizeSearchQuery(searchCallQuery(c)))
+			case searchKindPage:
+				if u := normalizeSearchURL(searchCallURL(c)); u != "" {
+					pages = append(pages, u)
+				}
+			}
+		}
+	}
+	// 1. Exact query repeat: the latest query already ran before.
+	if len(queries) >= 2 {
+		last := queries[len(queries)-1]
+		if last != "" {
+			n := 0
+			for _, q := range queries[:len(queries)-1] {
+				if q == last {
+					n++
+				}
+			}
+			if n > 0 {
+				// A query that is really an already-opened URL is a tool
+				// misuse, not just a repeat: steer to webfetch/reuse.
+				if isSearchURL(last) && seenSearchURL(last, pages) {
+					return "Page " + last + " was already opened above. Do not search it again; " +
+						"reuse the fetched content or open it with the webfetch tool.", true
+				}
+				// Progressive wording: the Nth repeat reads sterner,
+				// mirroring the community loop-detector convention.
+				body := "Search " + strconv.Quote(last) + " was already performed above with cited results. " +
+					"Do not issue it again; use the existing results or refine the query."
+				if n >= 2 {
+					body = "Stop: search " + strconv.Quote(last) + " has now been issued " +
+						strconv.Itoa(n+1) + " times with the same results. Issuing it again wastes " +
+						"the turn: synthesize from the cited results or refine the query."
+				}
+				return body, true
+			}
+			// Latest query is an already-opened URL even on first issue.
+			if isSearchURL(last) && seenSearchURL(last, pages) {
+				return "Page " + last + " was already opened above. Do not pass opened pages back into " +
+					"search; reuse the fetched content or open it with the webfetch tool.", true
+			}
+		}
+	}
+	// 1b. URL-as-query on first issue: the latest query is a page that was
+	// already opened (no query repeat needed to call out the misuse).
+	if n := len(queries); n >= 1 {
+		if last := queries[n-1]; last != "" && isSearchURL(last) && seenSearchURL(last, pages) {
+			// A repeat was already reported above; this is the first-issue path.
+			return "Page " + last + " was already opened above. Do not pass opened pages back into " +
+				"search; reuse the fetched content or open it with the webfetch tool.", true
+		}
+	}
+	// 2. Exact page repeat: the latest opened URL was already opened.
+	if len(pages) >= 2 {
+		last := pages[len(pages)-1]
+		if last != "" {
+			n := 0
+			for _, u := range pages[:len(pages)-1] {
+				if u == last {
+					n++
+				}
+			}
+			if n > 0 {
+				body := "Page " + last + " was already opened above. Do not open it again; " +
+					"reuse the fetched content instead of re-fetching."
+				if n >= 2 {
+					body = "Stop: page " + last + " has now been opened " +
+						strconv.Itoa(n+1) + " times. Re-opening it wastes the turn: " +
+						"synthesize from the content already fetched."
+				}
+				return body, true
+			}
+		}
+	}
+	// 3. Budget: many searches, no exact repeat — still time to answer.
+	if n := len(queries); n >= searchBudgetStopAt {
+		return "Stop: " + strconv.Itoa(n) + " web searches have run this session with cited results. " +
+			"Do not issue more queries: synthesize the answer from what is already cited, " +
+			"or ask the user which thread to deepen.", true
+	}
+	if n := len(queries); n >= searchBudgetWarnAt {
+		return "Budget: " + strconv.Itoa(n) + " web searches have run this session. " +
+			"Prefer synthesizing the answer from the cited results over issuing more queries; " +
+			"one refined query at most, then answer.", true
+	}
+	return "", false
+}
+
+// searchKind distinguishes a web-search query from a page open.
+type searchKind int
+
+const (
+	searchKindNone searchKind = iota
+	searchKindQuery
+	searchKindPage
+)
+
+// searchCallKind classifies one assistant tool call: hosted web_search search
+// vs open_page/find actions, plus the local websearch (query) and webfetch
+// (page) function tools. Anything else is not search.
+func searchCallKind(c agentcore.ToolCallContent) searchKind {
+	if c.IsServer() && c.Name == "web_search" {
+		var args struct {
+			Query  string `json:"query"`
+			Action string `json:"action"`
+			URL    string `json:"url"`
+		}
+		if err := json.Unmarshal(c.Arguments, &args); err != nil {
+			return searchKindNone
+		}
+		switch strings.ToLower(strings.TrimSpace(args.Action)) {
+		case "", "search":
+			if strings.TrimSpace(args.Query) != "" {
+				return searchKindQuery
+			}
+			return searchKindNone
+		default:
+			if strings.TrimSpace(args.URL) != "" {
+				return searchKindPage
+			}
+			return searchKindNone
+		}
+	}
+	// Local function tools replay through the same history shape.
+	switch c.Name {
+	case "websearch":
+		if strings.TrimSpace(searchCallQuery(c)) != "" {
+			return searchKindQuery
+		}
+	case "webfetch":
+		if strings.TrimSpace(searchCallURL(c)) != "" {
+			return searchKindPage
+		}
+	}
+	return searchKindNone
+}
+
+// searchCallQuery extracts the query from a hosted or local web_search call's
+// Arguments. It supersedes serverCallQuery (kept for compatibility).
+func searchCallQuery(c agentcore.ToolCallContent) string {
+	return serverCallQuery(c)
+}
+
+// serverCallQuery extracts the query from a hosted web_search call's Arguments.
+func serverCallQuery(c agentcore.ToolCallContent) string {
+	var args struct {
+		Query string `json:"query"`
+	}
+	if err := json.Unmarshal(c.Arguments, &args); err != nil {
+		return ""
+	}
+	return args.Query
+}
+
+// searchCallURL extracts the page URL from a hosted open_page call or a local
+// webfetch call's Arguments.
+func searchCallURL(c agentcore.ToolCallContent) string {
+	var args struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(c.Arguments, &args); err != nil {
+		return ""
+	}
+	return args.URL
+}
+
+// normalizeSearchURL lower-cases, trims space and a trailing slash so the same
+// page with trivial spelling differences still matches.
+func normalizeSearchURL(u string) string {
+	u = strings.TrimSpace(strings.ToLower(u))
+	return strings.TrimSuffix(u, "/")
+}
+
+// isSearchURL reports whether a search query is really a page URL.
+func isSearchURL(q string) bool {
+	l := strings.ToLower(strings.TrimSpace(q))
+	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
+}
+
+// seenSearchURL reports whether query URL q was already opened (pages holds
+// normalized URLs).
+func seenSearchURL(q string, pages []string) bool {
+	n := normalizeSearchURL(q)
+	if n == "" {
+		return false
+	}
+	for _, u := range pages {
+		if u == n {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeSearchQuery lower-cases and collapses whitespace so trivially
+// rephrased repeats still match.
+func normalizeSearchQuery(q string) string {
+	return strings.Join(strings.Fields(strings.ToLower(q)), " ")
+}
+
 type TodoReminderProvider struct {
 	// Store is the session todo list. When nil the provider never fires.
 	Store *agenttool.TodoStore

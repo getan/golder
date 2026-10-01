@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -190,5 +191,151 @@ func TestGoalReminderOnlyWhenActive(t *testing.T) {
 	st.MarkComplete("done")
 	if _, ok := p.Reminder(context.Background(), nil); ok {
 		t.Fatal("completed goal should not inject a reminder")
+	}
+}
+
+// A repeated hosted web_search query must fire the reminder once the duplicate
+// lands in history; distinct queries, local-only calls, or no calls stay silent.
+func TestSearchRepeatReminderFiresOnDuplicate(t *testing.T) {
+	serverCall := func(id, query string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"query": query})
+		return agentcore.NewServerToolCallContent(id, "web_search", args)
+	}
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{serverCall("ws-1", "muse docs")},
+		},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{serverCall("ws-2", "Muse  DOCS")},
+		},
+	}
+	p := &SearchRepeatReminderProvider{}
+	body, ok := p.Reminder(context.Background(), msgs)
+	if !ok {
+		t.Fatal("duplicate query should fire the reminder")
+	}
+	if !strings.Contains(body, "muse docs") {
+		t.Errorf("reminder body = %q, want the repeated query", body)
+	}
+
+	// Distinct second query: silent.
+	msgs[2] = agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content:   agentcore.ContentList{serverCall("ws-2", "other topic")},
+	}
+	if _, ok := p.Reminder(context.Background(), msgs); ok {
+		t.Error("distinct queries should not fire the reminder")
+	}
+
+	// Local non-search calls: silent.
+	local := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{agentcore.NewToolCallContent("c1", "read", json.RawMessage(`{}`))},
+		},
+	}
+	if _, ok := p.Reminder(context.Background(), local); ok {
+		t.Error("local-only calls should not fire the reminder")
+	}
+
+	// Local websearch duplicates fire too (same runaway shape, local path).
+	localDup := func(id, query string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"query": query})
+		return agentcore.NewToolCallContent(id, "websearch", args)
+	}
+	localMsgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{localDup("c1", "muse docs")},
+		},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{localDup("c2", "muse docs")},
+		},
+	}
+	if _, ok := p.Reminder(context.Background(), localMsgs); !ok {
+		t.Error("duplicate local websearch should fire the reminder")
+	}
+}
+
+func TestSearchRepeatReminderFiresOnPageRepeat(t *testing.T) {
+	openPage := func(id, url string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"action": "open_page", "url": url})
+		return agentcore.NewServerToolCallContent(id, "web_search", args)
+	}
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{openPage("ws-1", "https://example.com/a")},
+		},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{openPage("ws-2", "https://example.com/a/")},
+		},
+	}
+	body, ok := (&SearchRepeatReminderProvider{}).Reminder(context.Background(), msgs)
+	if !ok {
+		t.Fatal("duplicate page open should fire the reminder")
+	}
+	if !strings.Contains(body, "example.com") {
+		t.Errorf("reminder body = %q, want the repeated URL", body)
+	}
+}
+
+func TestSearchRepeatReminderFiresOnURLAsQuery(t *testing.T) {
+	openPage := func(id, url string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"action": "open_page", "url": url})
+		return agentcore.NewServerToolCallContent(id, "web_search", args)
+	}
+	search := func(id, query string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"query": query})
+		return agentcore.NewServerToolCallContent(id, "web_search", args)
+	}
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{openPage("ws-1", "https://example.com/a")},
+		},
+		agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{search("ws-2", "https://example.com/a")},
+		},
+	}
+	body, ok := (&SearchRepeatReminderProvider{}).Reminder(context.Background(), msgs)
+	if !ok {
+		t.Fatal("URL-as-query after open should fire the reminder")
+	}
+	if !strings.Contains(body, "webfetch") {
+		t.Errorf("reminder body = %q, want webfetch steering", body)
+	}
+}
+
+func TestSearchRepeatReminderFiresOnBudget(t *testing.T) {
+	search := func(id string, query string) agentcore.ToolCallContent {
+		args, _ := json.Marshal(map[string]any{"query": query})
+		return agentcore.NewServerToolCallContent(id, "web_search", args)
+	}
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+	}
+	for i := 0; i < searchBudgetWarnAt; i++ {
+		msgs = append(msgs, agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{search("ws-"+strings.Repeat("x", 0)+string(rune('a'+i)), "distinct topic "+strings.Repeat("y", i+1))},
+		})
+	}
+	body, ok := (&SearchRepeatReminderProvider{}).Reminder(context.Background(), msgs)
+	if !ok {
+		t.Fatal("search budget should fire the reminder")
+	}
+	if !strings.Contains(body, "synthesi") {
+		t.Errorf("reminder body = %q, want synthesize steering", body)
 	}
 }

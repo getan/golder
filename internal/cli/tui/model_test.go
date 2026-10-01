@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -698,5 +699,53 @@ func TestResumePickerSelectSwitches(t *testing.T) {
 	}
 	if len(gm2.session.agentCtx.Messages) != 1 {
 		t.Errorf("messages = %d, want 1 replayed", len(gm2.session.agentCtx.Messages))
+	}
+}
+
+// TestModelAnnounceInterleavesCard verifies codex ordering: a live-announced
+// call opens its card between the text streamed before and after it, the later
+// executor start completes setup without a second block, and finalize does not
+// duplicate the pre-card text.
+func TestModelAnnounceInterleavesCard(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 60, Height: 24})
+
+	m = apply(t, m, textDeltaMsg{delta: "checking "})
+	m = apply(t, m, toolAnnounceMsg{id: "ws-1", name: "web_search", input: map[string]any{"query": "muse docs"}})
+	m = apply(t, m, textDeltaMsg{delta: "found it"})
+	m = apply(t, m, toolStartMsg{id: "ws-1", name: "web_search", input: map[string]any{"query": "muse docs"}})
+	m = apply(t, m, toolEndMsg{id: "ws-1", ok: true, result: "hosted: web_search(muse docs)"})
+	m = apply(t, m, turnEndMsg{msg: agentcore.AssistantMessage{
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent("checking found it"),
+			agentcore.NewServerToolCallContent("ws-1", "web_search", json.RawMessage(`{"query":"muse docs"}`)),
+		},
+	}})
+
+	// Exactly one tool block for ws-1 despite announce + start.
+	cards := 0
+	for _, b := range m.transcript.blocks {
+		if b.role == roleTool && b.card != nil && b.card.id == "ws-1" {
+			cards++
+		}
+	}
+	if cards != 1 {
+		t.Errorf("tool blocks for ws-1 = %d, want 1", cards)
+	}
+	// Block order: pre-card text, card, post-card text (no duplication).
+	var order []string
+	for _, b := range m.transcript.blocks {
+		switch b.role {
+		case roleAssistant:
+			order = append(order, "text:"+b.text)
+		case roleTool:
+			order = append(order, "card")
+		}
+	}
+	want := []string{"text:checking ", "card", "text:found it"}
+	if fmt.Sprintf("%v", order) != fmt.Sprintf("%v", want) {
+		t.Errorf("block order = %v, want %v", order, want)
+	}
+	if card := m.toolCards["ws-1"]; card == nil || card.state != cardSuccess {
+		t.Errorf("card state = %+v, want success", card)
 	}
 }

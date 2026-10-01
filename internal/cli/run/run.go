@@ -325,6 +325,9 @@ func ToolRegistry(tools []agentcore.AgentTool) *agenttool.ToolRegistry {
 // when neither provider applies (e.g. --no-tools), leaving injection disabled.
 func TodoReminders(tools []agentcore.AgentTool) *runtime.ReminderRegistry {
 	var providers []runtime.ReminderProvider
+	if len(tools) > 0 {
+		providers = append(providers, &runtime.SearchRepeatReminderProvider{})
+	}
 	for _, t := range tools {
 		switch tool := t.(type) {
 		case *agenttool.TodoTool:

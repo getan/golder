@@ -184,3 +184,39 @@ func TestWaitForEvent(t *testing.T) {
 		t.Errorf("cmd() = %#v, want runEndMsg{err:stop}", got)
 	}
 }
+
+// A MessageUpdateEvent carrying a tool call must announce it exactly once no
+// matter how many partials repeat it; text-only partials announce nothing.
+func TestStreamHandlerAnnouncesPartialToolCallsOnce(t *testing.T) {
+	ch := newEventChan()
+	h := newStreamHandler(ch, nil)
+
+	call := agentcore.NewToolCallContent("ws-1", "web_search", json.RawMessage(`{"query":"muse docs"}`))
+	partial := agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content:   agentcore.ContentList{agentcore.NewTextContent("let me check"), call},
+	}
+	h.OnEvent(agentcore.MessageUpdateEvent{Message: partial})
+	h.OnEvent(agentcore.MessageUpdateEvent{Message: partial})
+	h.OnEvent(agentcore.MessageUpdateEvent{Message: agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content:   agentcore.ContentList{agentcore.NewTextContent("let me check more")},
+	}})
+
+	got := drain(ch)
+	var announces []toolAnnounceMsg
+	for _, m := range got {
+		if a, ok := m.(toolAnnounceMsg); ok {
+			announces = append(announces, a)
+		}
+	}
+	if len(announces) != 1 {
+		t.Fatalf("expected 1 announce, got %d: %#v", len(announces), got)
+	}
+	if announces[0].id != "ws-1" || announces[0].name != "web_search" {
+		t.Errorf("announce = %+v, want ws-1/web_search", announces[0])
+	}
+	if q, _ := announces[0].input["query"].(string); q != "muse docs" {
+		t.Errorf("announce input query = %q, want the partial args", announces[0].input["query"])
+	}
+}

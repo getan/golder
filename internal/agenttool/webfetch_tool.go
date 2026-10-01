@@ -64,7 +64,8 @@ func (t *WebFetchTool) Description() string {
 	return "Fetch a URL and return its main text content as simplified Markdown. " +
 		"HTTP URLs are upgraded to HTTPS. Cross-origin redirects are not followed; " +
 		"the redirect target is returned so you can fetch it explicitly. Use the " +
-		"optional prompt to note what you are looking for on the page."
+		"optional prompt to note what you are looking for on the page. " +
+		"Never fetch the same URL twice — reuse the previously fetched content."
 }
 
 // Schema implements AgentTool.

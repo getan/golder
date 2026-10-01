@@ -47,6 +47,15 @@ type ThinkingContent struct {
 	Redacted          bool   `json:"redacted,omitempty"`
 }
 
+// Tool-call kinds: local calls run in pigo's tool registry; server calls were
+// already executed by the provider (hosted tools such as web_search) and exist
+// for display + history replay only. Empty means local, so sessions persisted
+// before the marker decode unchanged.
+const (
+	ToolCallKindLocal  = "local"
+	ToolCallKindServer = "server"
+)
+
 // ToolCallContent is a request from the model to invoke a tool. Arguments are
 // kept as raw JSON so validation (JSON Schema) and shaping happen downstream.
 type ToolCallContent struct {
@@ -55,7 +64,13 @@ type ToolCallContent struct {
 	Name             string          `json:"name"`
 	Arguments        json.RawMessage `json:"arguments"`
 	ThoughtSignature string          `json:"thoughtSignature,omitempty"`
+	Kind             string          `json:"kind,omitempty"`
 }
+
+// IsServer reports whether the call was executed provider-side and must never
+// reach the local registry (no "unknown tool" failure, no approval prompt, no
+// function_call_output pairing on replay).
+func (c ToolCallContent) IsServer() bool { return c.Kind == ToolCallKindServer }
 
 // ImageContent is an image block (base64 data + mime type).
 type ImageContent struct {
@@ -121,6 +136,13 @@ func NewThinkingContent(thinking string) ThinkingContent {
 // NewToolCallContent returns a ToolCallContent with the type discriminant set.
 func NewToolCallContent(id, name string, arguments json.RawMessage) ToolCallContent {
 	return ToolCallContent{Type: ContentTypeToolCall, ID: id, Name: name, Arguments: arguments}
+}
+
+// NewServerToolCallContent returns a provider-executed call (hosted tool): the
+// executor skips it, history replay renders it natively, and the UI shows it
+// display-only.
+func NewServerToolCallContent(id, name string, arguments json.RawMessage) ToolCallContent {
+	return ToolCallContent{Type: ContentTypeToolCall, ID: id, Name: name, Arguments: arguments, Kind: ToolCallKindServer}
 }
 
 // NewImageContent returns an ImageContent with the type discriminant set.

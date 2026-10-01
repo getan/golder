@@ -346,3 +346,21 @@ func stripTCardANSI(s string) string {
 	}
 	return out
 }
+
+// TestToolCardWebSearchHeadline verifies a hosted search card shows what was
+// searched: the query for search actions, the page URL for open_page.
+func TestToolCardWebSearchHeadline(t *testing.T) {
+	theme := DefaultTheme()
+	search := toolCard{name: "web_search", input: map[string]any{"query": "muse docs"}, state: cardSuccess}
+	if got := stripTCardANSI(search.render(theme, 60)); !strings.Contains(got, "muse docs") {
+		t.Errorf("search card should show the query, got:\n%s", got)
+	}
+	open := toolCard{
+		name:  "web_search",
+		input: map[string]any{"action": "open_page", "url": "https://dev.meta.ai/docs/tool-calling"},
+		state: cardSuccess,
+	}
+	if got := stripTCardANSI(open.render(theme, 60)); !strings.Contains(got, "https://dev.meta.ai/docs/tool-calling") {
+		t.Errorf("open_page card should show the URL, got:\n%s", got)
+	}
+}

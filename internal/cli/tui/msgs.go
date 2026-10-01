@@ -28,6 +28,16 @@ type turnEndMsg struct {
 	results []agentcore.ToolResultMessage
 }
 
+// toolAnnounceMsg is emitted when a tool call first appears in a streaming
+// partial, before it executes: the TUI opens its card live (codex Running
+// order) instead of waiting for the execution phase. The later toolStartMsg
+// for the same id completes setup without adding a second block.
+type toolAnnounceMsg struct {
+	id    string
+	name  string
+	input map[string]any
+}
+
 // toolStartMsg is emitted before a tool runs. input holds the decoded call
 // arguments when they are a JSON object; it is nil otherwise (the raw Args are
 // an untyped any at the event layer).

@@ -90,10 +90,8 @@ func (d *responsesDriver) StreamCompletion(ctx context.Context, req CompletionRe
 	opts = append(opts, d.clientOpts...)
 	client := openai.NewClient(opts...)
 
-	params := buildResponsesParams(req)
-
 	stream := NewAssistantMessageEventStream(0)
-	go d.pump(ctx, stream, &client, params)
+	go d.pump(ctx, stream, &client, req)
 	return stream, nil
 }
 
@@ -108,13 +106,41 @@ func (d *responsesDriver) StreamCompletion(ctx context.Context, req CompletionRe
 // the final aggregation matches the non-streamed result exactly. If no completed
 // event arrives (a truncated stream that still ended cleanly), the accumulated
 // delta text is used as a fallback.
-func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEventStream, client *openai.Client, params responses.ResponseNewParams) {
+func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEventStream, client *openai.Client, req CompletionRequest) {
 	defer stream.Close()
 
 	if err := stream.Emit(ctx, StreamStartEvent{Partial: d.newPartial()}); err != nil {
 		return
 	}
 
+	// Probe-and-fallback: declare the hosted web_search tool unless a previous
+	// turn cached a negative for this (provider, model). A capability-shaped
+	// 400 retries once with the local websearch function tool instead.
+	useHosted := len(req.Context.Tools) > 0 && !hostedSearchKnownUnsupported(d.name, req.Model)
+	seen := citedURLs(req.Context.Messages)
+	for attempt := 0; ; attempt++ {
+		params := buildResponsesParams(req, useHosted)
+		msg, empty, err := d.runOnce(ctx, stream, client, params, seen)
+		if err == nil {
+			stream.Emit(ctx, StreamDoneEvent{Message: msg})
+			return
+		}
+		// Retry only a pristine first attempt: any accumulated content means
+		// the failure came mid-stream, where resending would duplicate output.
+		if attempt == 0 && useHosted && empty && isHostedSearchUnsupportedErr(err) {
+			markHostedSearchUnsupported(d.name, req.Model)
+			useHosted = false
+			continue
+		}
+		d.emitError(stream, err)
+		return
+	}
+}
+
+// runOnce consumes one Responses SSE stream, emitting text/thinking/tool-call
+// partials as they arrive, and returns the terminal message (from the
+// authoritative response.completed payload) or the failure.
+func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageEventStream, client *openai.Client, params responses.ResponseNewParams, seen map[string]bool) (agentcore.AssistantMessage, bool, error) {
 	sse := client.Responses.NewStreaming(ctx, params)
 	defer sse.Close()
 
@@ -122,17 +148,26 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 	var thinking strings.Builder
 	var toolCalls []agentcore.ToolCallContent
 	var completed *responses.Response
+	empty := func() bool {
+		return text.Len() == 0 && thinking.Len() == 0 && len(toolCalls) == 0 && completed == nil
+	}
+	emitPartial := func() error {
+		partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
+		if err := stream.Emit(ctx, StreamToolCallEvent{Partial: partial}); err != nil {
+			return err
+		}
+		return nil
+	}
 	for sse.Next() {
 		if ctx.Err() != nil {
-			d.emitError(stream, ctx.Err())
-			return
+			return agentcore.AssistantMessage{}, empty(), ctx.Err()
 		}
 		switch variant := sse.Current().AsAny().(type) {
 		case responses.ResponseTextDeltaEvent:
 			text.WriteString(variant.Delta)
 			partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
 			if err := stream.Emit(ctx, StreamTextEvent{Partial: partial}); err != nil {
-				return
+				return agentcore.AssistantMessage{}, empty(), err
 			}
 		case responses.ResponseReasoningSummaryTextDeltaEvent:
 			// The model's reasoning summary streams as its own text deltas, distinct
@@ -141,38 +176,45 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 			thinking.WriteString(variant.Delta)
 			partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
 			if err := stream.Emit(ctx, StreamThinkingEvent{Partial: partial}); err != nil {
-				return
+				return agentcore.AssistantMessage{}, empty(), err
 			}
 		case responses.ResponseOutputItemDoneEvent:
 			// A finalized function_call item carries the model's tool request
-			// (name + arguments + call_id). Accumulate it and surface a tool-call
-			// partial so the TUI can show the pending call before the run ends.
+			// (name + arguments + call_id); a web_search_call item records a
+			// hosted search as a server-executed call (display + native replay,
+			// never local execution). Either way surface a tool-call partial so
+			// the TUI can show the pending call before the run ends.
+			appended := false
 			if fc := variant.Item.AsFunctionCall(); fc.Type == "function_call" {
 				toolCalls = append(toolCalls, toolCallContent(fc))
-				partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
-				if err := stream.Emit(ctx, StreamToolCallEvent{Partial: partial}); err != nil {
-					return
+				appended = true
+			} else if ws := variant.Item.AsWebSearchCall(); ws.Type == "web_search_call" {
+				if sc, ok := webSearchServerCall(ws); ok {
+					toolCalls = append(toolCalls, sc)
+					appended = true
+				}
+			}
+			if appended {
+				if err := emitPartial(); err != nil {
+					return agentcore.AssistantMessage{}, empty(), err
 				}
 			}
 		case responses.ResponseCompletedEvent:
 			r := variant.Response
 			completed = &r
 		case responses.ResponseFailedEvent:
-			d.emitError(stream, failedResponseError(variant.Response))
-			return
+			return agentcore.AssistantMessage{}, empty(), failedResponseError(variant.Response)
 		case responses.ResponseErrorEvent:
-			d.emitError(stream, fmt.Errorf("%s", variant.Message))
-			return
+			return agentcore.AssistantMessage{}, empty(), fmt.Errorf("%s", variant.Message)
 		}
 	}
 	if err := sse.Err(); err != nil {
-		d.emitError(stream, err)
-		return
+		return agentcore.AssistantMessage{}, empty(), err
 	}
 
 	var msg agentcore.AssistantMessage
 	if completed != nil {
-		msg = d.mapResponse(completed)
+		msg = d.mapResponse(completed, seen)
 	} else {
 		msg = d.buildPartial(thinking.String(), text.String(), toolCalls)
 		msg.StopReason = agentcore.StopReasonEndTurn
@@ -180,7 +222,7 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 			msg.StopReason = agentcore.StopReasonToolUse
 		}
 	}
-	stream.Emit(ctx, StreamDoneEvent{Message: msg})
+	return msg, empty(), nil
 }
 
 // failedResponseError renders a response.failed event's embedded error: the
@@ -243,7 +285,7 @@ func (d *responsesDriver) newPartial() agentcore.AssistantMessage {
 // AssistantMessage: a reasoning summary (as a thinking block, when present),
 // text content, tool calls, usage (when present), diagnostics, and a stop reason
 // (tool_use when the model requested a tool, otherwise end_turn).
-func (d *responsesDriver) mapResponse(resp *responses.Response) agentcore.AssistantMessage {
+func (d *responsesDriver) mapResponse(resp *responses.Response, seen map[string]bool) agentcore.AssistantMessage {
 	msg := d.newPartial()
 	msg.StopReason = agentcore.StopReasonEndTurn
 	msg.ResponseID = resp.ID
@@ -259,8 +301,13 @@ func (d *responsesDriver) mapResponse(resp *responses.Response) agentcore.Assist
 		if fc := item.AsFunctionCall(); fc.Type == "function_call" {
 			msg.Content = append(msg.Content, toolCallContent(fc))
 			sawToolCall = true
+		} else if ws := item.AsWebSearchCall(); ws.Type == "web_search_call" {
+			if sc, ok := webSearchServerCall(ws); ok {
+				msg.Content = append(msg.Content, sc)
+			}
 		}
 	}
+	msg.Content = appendSearchCitations(msg.Content, resp.Output, seen)
 	if sawToolCall {
 		msg.StopReason = agentcore.StopReasonToolUse
 	}
@@ -314,7 +361,7 @@ func appendToolCalls(content agentcore.ContentList, calls []agentcore.ToolCallCo
 // item(s): assistant tool calls as function_call items, tool results as
 // function_call_output items, and text (plus any images) as a role-tagged
 // message.
-func buildResponsesParams(req CompletionRequest) responses.ResponseNewParams {
+func buildResponsesParams(req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 	}
@@ -326,7 +373,7 @@ func buildResponsesParams(req CompletionRequest) responses.ResponseNewParams {
 		// can render it as a thinking block, matching the chat driver.
 		params.Reasoning = shared.ReasoningParam{Effort: effort, Summary: shared.ReasoningSummaryAuto}
 	}
-	if tools := buildResponsesTools(req.Context.Tools); len(tools) > 0 {
+	if tools := buildResponsesTools(req.Context.Tools, useHostedSearch); len(tools) > 0 {
 		params.Tools = tools
 	}
 
@@ -343,12 +390,22 @@ func buildResponsesParams(req CompletionRequest) responses.ResponseNewParams {
 // not a JSON object falls back to an empty object schema so the wire stays
 // valid. Strict mode is off: pigo schemas are not authored against the Responses
 // strict-function contract (which requires additionalProperties:false etc.).
-func buildResponsesTools(tools []agentcore.AgentTool) []responses.ToolUnionParam {
-	if len(tools) == 0 {
+//
+// When includeHosted is set the hosted web_search tool leads the list and the
+// local websearch function tool is hidden, so the model faces exactly one
+// search path; the probe-and-fallback loop swaps them back on a capability 400.
+func buildResponsesTools(tools []agentcore.AgentTool, includeHosted bool) []responses.ToolUnionParam {
+	if len(tools) == 0 && !includeHosted {
 		return nil
 	}
-	out := make([]responses.ToolUnionParam, 0, len(tools))
+	out := make([]responses.ToolUnionParam, 0, len(tools)+1)
+	if includeHosted {
+		out = append(out, hostedSearchToolParam())
+	}
 	for _, t := range tools {
+		if includeHosted && t.Name() == localWebSearchToolName {
+			continue
+		}
 		params := map[string]any{}
 		if raw := t.Schema(); len(raw) > 0 {
 			if err := json.Unmarshal(raw, &params); err != nil {
@@ -378,6 +435,15 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message) r
 				text, responses.EasyInputMessageRoleAssistant))
 		}
 		for _, call := range msg.ToolCalls() {
+			if call.IsServer() {
+				// Hosted calls replay as their native items (no output to
+				// pair); unreplayable shapes are dropped while the answer
+				// text keeps its citations.
+				if param, ok := webSearchCallReplayParam(call); ok {
+					items = append(items, param)
+				}
+				continue
+			}
 			items = append(items, responses.ResponseInputItemParamOfFunctionCall(
 				string(call.Arguments), call.ID, call.Name))
 		}

@@ -449,10 +449,13 @@ func TestResponsesDriverSendsToolSchema(t *testing.T) {
 		t.Fatalf("request body not valid JSON: %v", err)
 	}
 	tools, ok := payload["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %v, want a single-element array", payload["tools"])
+	if !ok || len(tools) != 2 {
+		t.Fatalf("tools = %v, want [hosted web_search, function]", payload["tools"])
 	}
-	tool0 := tools[0].(map[string]any)
+	if tools[0].(map[string]any)["type"] != "web_search_preview" {
+		t.Errorf("tools[0].type = %v, want web_search_preview (hosted leads)", tools[0])
+	}
+	tool0 := tools[1].(map[string]any)
 	if tool0["type"] != "function" {
 		t.Errorf("tool type = %v, want function", tool0["type"])
 	}

@@ -69,6 +69,13 @@ type transcript struct {
 	blocks          []transcriptBlock
 	activeAssistant int
 
+	// sealedThisTurn records that a live tool-call announcement split the
+	// streaming assistant text this turn (codex ordering: call row above its
+	// result). finalizeTurn then keeps the streamed deltas instead of
+	// overwriting the post-card block with the full message text (which would
+	// duplicate the pre-card text). Reset on every new user turn.
+	sealedThisTurn bool
+
 	// lines caches the last renderAll split: the transcript's full content lines
 	// in order. Mouse selection endpoints anchor into these indices (see
 	// selection), so scrolling preserves the highlight instead of clearing it;
@@ -130,6 +137,7 @@ func (t *transcript) setSize(width, height int) {
 func (t *transcript) addUser(text string) {
 	t.blocks = append(t.blocks, transcriptBlock{role: roleUser, text: text})
 	t.activeAssistant = -1
+	t.sealedThisTurn = false
 	t.follow = true
 	t.reflow()
 }
@@ -158,6 +166,20 @@ func (t *transcript) addToolCard(c *toolCard) {
 	t.reflow()
 }
 
+// announceToolCard inserts a live tool-call card at the current transcript end
+// while a turn is still streaming: the in-progress assistant text block is
+// sealed (later deltas open a fresh block after the card), so the call row
+// renders above the text it produces — the codex call/result order — instead
+// of all cards landing after the finished answer.
+func (t *transcript) announceToolCard(c *toolCard) {
+	if t.activeAssistant >= 0 && t.blocks[t.activeAssistant].text != "" {
+		t.sealedThisTurn = true
+		t.activeAssistant = -1
+	}
+	t.blocks = append(t.blocks, transcriptBlock{role: roleTool, card: c})
+	t.reflow()
+}
+
 // appendDelta grows the current assistant block by delta, creating the block on
 // the first delta of a turn. The re-flow auto-sticks to the bottom when the user
 // has not scrolled up.
@@ -176,13 +198,16 @@ func (t *transcript) appendDelta(delta string) {
 func (t *transcript) finalizeTurn(msg agentcore.AssistantMessage) {
 	text := agentcore.ContentToText(msg.Content)
 	if t.activeAssistant >= 0 {
-		if text != "" {
+		// A split turn keeps its streamed deltas: overwriting the post-card
+		// block with the full text would duplicate the sealed pre-card text.
+		if text != "" && !t.sealedThisTurn {
 			t.blocks[t.activeAssistant].text = text
 		}
 	} else if text != "" {
 		t.blocks = append(t.blocks, transcriptBlock{role: roleAssistant, text: text})
 	}
 	t.activeAssistant = -1
+	t.sealedThisTurn = false
 	t.reflow()
 }
 

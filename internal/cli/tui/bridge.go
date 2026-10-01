@@ -42,6 +42,10 @@ func newEventChan() chan tea.Msg {
 // out of pump so the callback→msg conversion can be unit-tested without a real
 // provider run (see bridge_test.go).
 func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime.StreamHandler {
+	// announced tracks tool-call ids already surfaced as live cards this run,
+	// so every streaming partial re-listing them stays a no-op. The handler is
+	// built per run, so the set never leaks across runs.
+	announced := map[string]bool{}
 	return runtime.StreamHandler{
 		OnText: func(delta string) {
 			ch <- textDeltaMsg{delta: delta}
@@ -56,6 +60,21 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 				extra(ev)
 			}
 			switch e := ev.(type) {
+			case agentcore.MessageUpdateEvent:
+				// Live tool-call announcements (codex Running order): the first
+				// partial carrying a call opens its card via toolAnnounceMsg;
+				// the executor's later toolStartMsg for the same id only
+				// completes setup. Text-only partials need no message (deltas
+				// already flow through OnText).
+				if am, ok := e.Message.(agentcore.AssistantMessage); ok {
+					for _, c := range am.ToolCalls() {
+						if c.ID == "" || announced[c.ID] {
+							continue
+						}
+						announced[c.ID] = true
+						ch <- toolAnnounceMsg{id: c.ID, name: c.Name, input: argsToMap(c.Arguments)}
+					}
+				}
 			case agentcore.ToolExecutionStartEvent:
 				ch <- toolStartMsg{id: e.ToolCallID, name: e.ToolName, input: argsToMap(e.Args)}
 			case agentcore.ToolExecutionUpdateEvent:

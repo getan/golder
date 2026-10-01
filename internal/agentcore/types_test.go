@@ -180,3 +180,24 @@ func TestAgentEventCoverage(t *testing.T) {
 		t.Fatalf("want 10 distinct event types, got %d", len(seen))
 	}
 }
+
+// Server-executed calls must be distinguishable from local ones, and sessions
+// persisted before the Kind marker must decode as local (zero value).
+func TestToolCallServerKind(t *testing.T) {
+	local := NewToolCallContent("c1", "read", json.RawMessage(`{}`))
+	if local.IsServer() {
+		t.Error("fresh call should not be server")
+	}
+	srv := NewServerToolCallContent("ws1", "web_search", json.RawMessage(`{"query":"x"}`))
+	if !srv.IsServer() {
+		t.Error("server ctor should mark server")
+	}
+	raw, _ := json.Marshal(ToolCallContent{Type: ContentTypeToolCall, ID: "c2", Name: "edit"})
+	dec, err := decodeContent(raw)
+	if err != nil {
+		t.Fatalf("decodeContent error: %v", err)
+	}
+	if tc, ok := dec.(ToolCallContent); !ok || tc.IsServer() {
+		t.Errorf("legacy persisted call should decode as local, got %+v", dec)
+	}
+}
