@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/judge"
 )
 
 // bashDefaultTimeout bounds a command that does not specify one.
@@ -78,6 +79,86 @@ type BashTool struct {
 	// Jobs holds background jobs launched with run_in_background. When nil,
 	// run_in_background is rejected (the front-end did not wire a store).
 	Jobs *BashJobStore
+	// Judge grades each command before it runs. When nil the command runs
+	// directly (today's behavior). When set, a sandbox-tier verdict routes
+	// the command through Sandbox and a deny-tier verdict blocks it, so the
+	// execution layer honors the same grade the BeforeToolCall gate saw
+	// (the shared verdict cache makes the second grade free).
+	Judge judge.Classifier
+	// Sandbox builds the sandboxed argv for a command. Nil means no
+	// isolation is available: sandbox-tier commands run directly (the gate
+	// already prompted for them).
+	Sandbox SandboxRunner
+	// ForceSandbox routes every foreground command through Sandbox
+	// (PIGO_SANDBOX=enforce) and fails closed when Sandbox is nil.
+	ForceSandbox bool
+}
+
+// SandboxRunner builds a sandboxed argv for one shell invocation: argv[0] is
+// the executable, argv[1:] its args. dir is advisory (the caller keeps
+// cmd.Dir); cleanup removes any generated profile and runs after the command
+// finishes. It is a local interface so agenttool stays free of platform
+// imports: internal/seatbelt satisfies it structurally and the cli layer
+// injects it.
+type SandboxRunner interface {
+	SandboxArgv(shell, flag, command, dir string) (argv []string, cleanup func(), err error)
+}
+
+// sandboxRoute grades one command for sandbox routing. It returns sandbox=true
+// when the command must run isolated, or a non-empty block message when the
+// grade denies the command outright (defense in depth for paths where the
+// BeforeToolCall gate is unset; wiring keeps Judge nil then, so this is
+// normally unreachable).
+func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bool, block string) {
+	if t.ForceSandbox {
+		return true, ""
+	}
+	if t.Judge == nil {
+		return false, ""
+	}
+	raw, _ := json.Marshal(map[string]string{"command": command})
+	v := t.Judge.Classify(ctx, "bash", raw)
+	switch v.Level {
+	case judge.Deny:
+		msg := "bash: blocked by risk judge (deny"
+		if len(v.Reasons) > 0 {
+			msg += ": " + v.Reasons[0]
+		}
+		return false, msg + ")"
+	case judge.Sandbox:
+		return true, ""
+	default:
+		return false, ""
+	}
+}
+
+// sandboxArgv resolves the executable argv for a command: the direct
+// interpreter by default, or the sandboxed argv when routing says so. ok=false
+// with a message means the call must not run; ok=false with an empty message
+// means run directly (auto mode without a runner: the gate already prompted).
+func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command string) (argv []string, cleanup func(), msg string, ok bool) {
+	argv = []string{shell, flag, command}
+	sandbox, block := t.sandboxRoute(ctx, command)
+	if block != "" {
+		return nil, nil, block, false
+	}
+	if !sandbox {
+		return argv, nil, "", true
+	}
+	if t.Sandbox == nil {
+		if t.ForceSandbox {
+			return nil, nil, "bash: PIGO_SANDBOX=enforce but no sandbox runner is available (macOS sandbox-exec required); failing closed", false
+		}
+		return argv, nil, "", true
+	}
+	sa, cl, err := t.Sandbox.SandboxArgv(shell, flag, command, t.Dir)
+	if err != nil {
+		if t.ForceSandbox {
+			return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false
+		}
+		return argv, nil, "", true
+	}
+	return sa, cl, "", true
 }
 
 // bashToolArgs is the decoded argument shape for BashTool.
@@ -203,7 +284,17 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	defer cancel()
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	cmd := exec.CommandContext(runCtx, shell, flag, a.Command)
+	argv, cleanup, msg, ok := t.sandboxArgv(ctx, shell, flag, a.Command)
+	if !ok {
+		if msg == "" {
+			return errorResult("bash: command blocked"), nil
+		}
+		return errorResult(msg), nil
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	if t.Dir != "" {
 		cmd.Dir = t.Dir
 	}
@@ -288,7 +379,15 @@ func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, e
 	}
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	cmd := exec.CommandContext(jobCtx, shell, flag, a.Command)
+	argv, cleanup, blockMsg, ok := t.sandboxArgv(context.Background(), shell, flag, a.Command)
+	if !ok {
+		cancel()
+		if blockMsg == "" {
+			return errorResult("bash: command blocked"), nil
+		}
+		return errorResult(blockMsg), nil
+	}
+	cmd := exec.CommandContext(jobCtx, argv[0], argv[1:]...)
 	if t.Dir != "" {
 		cmd.Dir = t.Dir
 	}
@@ -300,6 +399,9 @@ func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, e
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		if cleanup != nil {
+			cleanup()
+		}
 		job.finish(-1, err.Error())
 		return errorResult(fmt.Sprintf("bash: could not start background command: %v", err)), nil
 	}
@@ -307,6 +409,9 @@ func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, e
 	go func() {
 		err := cmd.Wait()
 		cancel()
+		if cleanup != nil {
+			cleanup()
+		}
 		exitCode := 0
 		errMsg := ""
 		if err != nil {

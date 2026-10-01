@@ -12,6 +12,17 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Risk judge + seatbelt (macOS first)**: a new `internal/judge` leaf grades
+  every tool call into Allow/Confirm/Sandbox/Deny — a tiny static hard-deny
+  floor (sudo, `rm -rf /`, writes into `~/.ssh`/`trust.json`) plus a Jev
+  high-speed classifier (`TYPESAFE_API_KEY`, one choice call, high-confidence
+  bar for Allow, fail-closed to Confirm) — chained as trust → judge → hooks in
+  the REPL/btw/goal drivers, and enforced at the sandbox floor in the
+  TUI/headless/sub-agent drivers. Sandbox-tier bash commands run under a
+  per-command `sandbox-exec` profile (`internal/seatbelt`, project-scoped
+  writes, secret dirs denied) via `PIGO_SANDBOX=auto|enforce`; `PIGO_JUDGE=off`
+  restores the previous behavior. Zero-config runs (no key) only gain the
+  static floor.
 - **Tool-level admission control**: `--allowed-tools` / `--disallowed-tools`
   (repeatable, comma-separated, case-insensitive) narrow the tool set handed to
   the model, filling the gap between the full set and `--no-tools`. Deny wins
@@ -299,4 +310,3 @@ coding agent.
 [0.1.2]: https://github.com/smallnest/pigo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/smallnest/pigo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/smallnest/pigo/releases/tag/v0.1.0
-

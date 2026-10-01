@@ -16,6 +16,36 @@ pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与
 
 三层是**叠加**关系，不是替代：容器内仍应配合 `--disallowed-tools bash`（如果该会话不需要 shell），`--approve` 只应授予容器内进程。
 
+## 进程内第四层：risk judge + seatbelt（macOS 先行）
+
+> 这是 Codex 没有的东西：Codex 把“这条命令有多危险”留给人肉弹窗，pigo 用 Jev 高速分类器先定档，人只看升级件。
+
+调用链是 `trust → judge → hooks`：trust 只认目录（信了不代表全放行），judge 给每次调用定 `Allow/Confirm/Sandbox/Deny` 四档，hooks 维持用户自定义。deny 赢，judge 只做升级不降级（trust 的 block 会短路掉后面的 grading）。
+
+| 档位 | 含义 | REPL（可交互） | TUI/headless（无 stdin） |
+|------|------|----------------|--------------------------|
+| Allow | 低风险，直放 | 直接跑 | 直接跑 |
+| Confirm | 中风险，需确认 | 弹窗 `[y/N]` | 在启动信任下放行 |
+| Sandbox | 高风险，强制隔离 | 弹窗确认后进 `sandbox-exec` | 无 runner 则直接拒绝 |
+| Deny | 极危，直接拒 | 直接拒 | 直接拒 |
+
+分级逻辑（`internal/judge`，纯标准库叶包）：
+
+1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、引用 grading key 本身），只拒不放，剩下全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）一律放行给 Jev；
+2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注；`Allow` 需高置信（≥0.75），低置信就地升级，阈值按误放成本定；
+3. **兜底**：无 key（零配置）退化为纯静态地板、行为与今天一致；超时/坏响应一律升档到 `Confirm`，永不故障放行。同 `(tool, args)` 进程内缓存，门和执行层共用。
+
+执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`。
+
+```bash
+export TYPESAFE_API_KEY=...   # Jev 分类 key，只经环境变量透传，不打印不落盘
+export PIGO_SANDBOX=auto      # off | auto（默认，仅 sandbox 档隔离）| enforce（全部 bash 进沙箱，无 runner 则 fail-closed）
+export PIGO_JUDGE=off         # 逃生舱：完全关闭 judge（只剩 trust+hooks）
+# 可选：PIGO_JEV_ENDPOINT / PIGO_JEV_MODEL / PIGO_JEV_TIMEOUT_MS（默认 8s）
+```
+
+灰度建议：先零配置跑一周（只有静态硬拒生效，行为不变），再配 key 开 `auto`，最后按需 `enforce`。
+
 ---
 
 ## 模式一：Plain Docker（整进程隔离）

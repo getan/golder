@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/remotecontrol"
 	"github.com/smallnest/pigo/internal/trust"
 )
@@ -176,6 +177,7 @@ func remoteControlStatus(out io.Writer, deps *replDeps) {
 // non-remote path is byte-identical to before (#443).
 func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 	local := trust.BeforeToolCall(deps.trust, deps.cwd, deps.in, out, deps.confirmMu)
+	local = judge.ChainGates(local, judge.InteractiveGate(deps.in, out, deps.confirmMu))
 	if deps.remote == nil {
 		return local
 	}
@@ -212,6 +214,21 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 			return nil
 		}
 		summary := trust.ToolCallSummary(call)
+		if judge.GateEnabled() {
+			v := judge.ClassifierForCwd(cwd, false).Classify(ctx, call.Name, call.Arguments)
+			switch v.Level {
+			case judge.Deny:
+				reason := "risk judge"
+				if len(v.Reasons) > 0 {
+					reason = v.Reasons[0]
+				}
+				msg := fmt.Sprintf("tool %q blocked by %s", call.Name, reason)
+				content := agentcore.ContentList{agentcore.NewTextContent(msg)}
+				return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
+			case judge.Sandbox, judge.Confirm:
+				summary = fmt.Sprintf("[risk: %s] %s", v.Level, summary)
+			}
+		}
 		fmt.Fprintf(out, "\npigo wants to run %q — approve on the paired device…\n", call.Name)
 		d, remote := rs.bridge.Confirm(ctx, call.Name, summary)
 		if !remote {

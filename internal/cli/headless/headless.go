@@ -16,6 +16,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -88,6 +89,10 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// Route auto-compaction checkpoints to the shared memory root so a rebuild can
 	// recover the pre-watermark prefix (no-op when memory is disabled → empty root).
 	runCfg.MemoryRoot = run.MemoryRootFromTools(env.Tools)
+	// Headless has no stdin prompt, so the risk judge enforces at the sandbox
+	// floor: Allow/Confirm verdicts flow (headless is an explicit invocation)
+	// while Sandbox/Deny verdicts fail closed. Nil-safe when PIGO_JUDGE=off.
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateFrom(judge.Sandbox)
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, install the tool-execution + Stop seams, dispatch SessionStart, and

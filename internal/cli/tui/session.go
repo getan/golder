@@ -30,6 +30,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
@@ -330,10 +331,19 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	// the paired browser (no-op when no client is connected or the cwd is trusted,
 	// so the non-remote path is unchanged). The trust manager is read from the
 	// shared store; a nil manager disables the seam.
+	//
+	// The risk judge runs underneath at the sandbox floor: without a stdin
+	// prompt the TUI cannot confirm, so Allow/Confirm verdicts flow under the
+	// up-front trust while Sandbox/Deny verdicts fail closed. The judge gate
+	// leads so its block short-circuits before the browser is asked.
+	judgeGate := judge.EnforcingGateFrom(judge.Sandbox)
 	if s.remote != nil {
 		if mgr, err := trust.NewManager(trust.DefaultPath()); err == nil {
-			cfg.Batch.ToolExecutorConfig.BeforeToolCall = remoteConfirmSeam(s.remote, mgr, s.hookDeps.ProjectDir)
+			cfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(judgeGate, remoteConfirmSeam(s.remote, mgr, s.hookDeps.ProjectDir))
 		}
+	}
+	if cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil && judgeGate != nil {
+		cfg.Batch.ToolExecutorConfig.BeforeToolCall = judgeGate
 	}
 	return cfg
 }

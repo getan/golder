@@ -254,7 +254,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	// A single job store is shared by bash, bash_output and kill_bash so a
 	// background command launched by bash is visible to the drain/kill tools.
 	jobs := agenttool.NewBashJobStore()
-	return []agentcore.AgentTool{
+	tools := []agentcore.AgentTool{
 		&agenttool.ReadTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
 		&agenttool.WriteTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
 		&agenttool.EditTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
@@ -267,6 +267,10 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		&agenttool.WebFetchTool{},
 		&agenttool.WebSearchTool{},
 	}
+	// Grade bash at the execution layer (sandbox-tier verdicts run under
+	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.
+	WireBashSandbox(tools, cwd)
+	return tools
 }
 
 // BuiltinToolsExcept returns the default builtin tool set (BuiltinTools) with

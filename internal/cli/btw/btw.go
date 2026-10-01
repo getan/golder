@@ -37,6 +37,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
 	"github.com/smallnest/pigo/internal/trust"
@@ -222,8 +223,11 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
-				Registry:       host.Registry(),
-				BeforeToolCall: trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
+				Registry: host.Registry(),
+				BeforeToolCall: judge.ChainGates(
+					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
+					judge.InteractiveGate(host.Input(), out, host.ConfirmMu()),
+				),
 			},
 		},
 		Reminders: host.Reminders(),

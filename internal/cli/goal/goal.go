@@ -32,6 +32,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
 	"github.com/smallnest/pigo/internal/trust"
@@ -219,8 +220,11 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
-				Registry:       goalReg,
-				BeforeToolCall: trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
+				Registry: goalReg,
+				BeforeToolCall: judge.ChainGates(
+					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
+					judge.InteractiveGate(host.Input(), out, host.ConfirmMu()),
+				),
 			},
 		},
 		Reminders: reminders,

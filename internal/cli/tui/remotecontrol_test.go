@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -70,13 +71,24 @@ func TestStartStopRemote(t *testing.T) {
 }
 
 // TestBuildConfigInstallsRemoteSeam asserts buildConfig only installs the
-// BeforeToolCall confirm seam while a remote session is present: off by default
-// (up-front trust unchanged), wired once /remote-control is running.
+// BeforeToolCall confirm seam while a remote session is present, layered over
+// the risk-judge baseline: the judge gate (sandbox floor) is always installed
+// so static hard-denies hold even under up-front trust, and the remote seam is
+// chained on top once /remote-control is running.
 func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	s := newRemoteTestSession(t)
 
-	if cfg := s.buildConfig(); cfg.Batch.ToolExecutorConfig.BeforeToolCall != nil {
-		t.Error("BeforeToolCall should be nil when remote control is off")
+	cfg := s.buildConfig()
+	seam := cfg.Batch.ToolExecutorConfig.BeforeToolCall
+	if seam == nil {
+		t.Fatal("BeforeToolCall should hold the judge gate when remote control is off")
+	}
+	// The baseline gate allows benign calls and blocks static hard-denies.
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec != nil {
+		t.Errorf("judge baseline should allow benign bash, got %+v", dec)
+	}
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"sudo rm -rf /"}`)}); dec == nil || !dec.Block {
+		t.Error("judge baseline should block static hard-denies")
 	}
 
 	if _, err := s.startRemote(); err != nil {
@@ -86,6 +98,16 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 
 	if cfg := s.buildConfig(); cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil {
 		t.Error("BeforeToolCall should be installed when remote control is on")
+	}
+}
+
+// TestBuildConfigNoGateWhenJudgeOff asserts PIGO_JUDGE=off restores the
+// pre-judge contract: no BeforeToolCall seam without remote control.
+func TestBuildConfigNoGateWhenJudgeOff(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "off")
+	s := newRemoteTestSession(t)
+	if cfg := s.buildConfig(); cfg.Batch.ToolExecutorConfig.BeforeToolCall != nil {
+		t.Error("BeforeToolCall should be nil when remote control is off and PIGO_JUDGE=off")
 	}
 }
 
