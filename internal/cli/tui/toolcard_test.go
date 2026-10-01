@@ -64,6 +64,52 @@ func TestToolCardRender(t *testing.T) {
 	}
 }
 
+// todoCallInput is the decoded shape argsToMap produces for a todo call:
+// {"todos": []any of {"content","status"}}.
+func todoCallInput() map[string]any {
+	return map[string]any{"todos": []any{
+		map[string]any{"content": "run tests", "status": "completed"},
+		map[string]any{"content": "commit", "status": "in_progress"},
+		map[string]any{"content": "push", "status": "pending"},
+	}}
+}
+
+// TestToolCardTodoHeadline verifies the header summarizes the checklist as a
+// count instead of dumping the decoded array as Go map syntax.
+func TestToolCardTodoHeadline(t *testing.T) {
+	card := toolCard{name: "todo", input: todoCallInput(), state: cardSuccess}
+	if got := card.title(); got != "Ran todo 3 tasks" {
+		t.Fatalf("title = %q, want Ran todo 3 tasks", got)
+	}
+}
+
+// TestToolCardTodoDetail verifies the expanded card renders one checkbox row
+// per item (mirroring the result block's marks) and never leaks `map[...]`.
+func TestToolCardTodoDetail(t *testing.T) {
+	card := toolCard{name: "todo", input: todoCallInput(), state: cardSuccess, expanded: true}
+	got := card.render(DefaultTheme(), 80)
+	for _, want := range []string{"│ [x] run tests", "│ [~] commit", "│ [ ] push"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("render missing %q\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "map[") {
+		t.Fatalf("render leaked raw map syntax\n%s", got)
+	}
+}
+
+// TestToolCardTodoMalformedFallsBack verifies a todos value that is not a
+// checklist keeps the generic argument rendering and the bare header.
+func TestToolCardTodoMalformedFallsBack(t *testing.T) {
+	card := toolCard{name: "todo", input: map[string]any{"todos": "oops"}, state: cardSuccess}
+	if got := card.title(); got != "Ran todo" {
+		t.Fatalf("title = %q, want bare Ran todo", got)
+	}
+	if got := card.renderDetail(DefaultTheme(), 80); !strings.Contains(got, "todos: oops") {
+		t.Fatalf("renderDetail = %q, want the generic argument line", got)
+	}
+}
+
 // TestToolCardExpandTruncation verifies the collapsed card shows only the
 // header plus a "â¦ +N lines (ctrl+t to view transcript)" hint, while the expanded card
 // reveals every response line with no hint.

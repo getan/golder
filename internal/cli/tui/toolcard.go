@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-
 )
 
 // This file implements the rich tool-call card component (US-006, SPEC 3.2,
@@ -55,7 +54,6 @@ type toolCard struct {
 // expandHint names the key that toggles a card between its one-line summary
 // and the full detail (codex parity: ctrl+t).
 const expandHint = "ctrl+t"
-
 
 // statusBullet renders the codex-style bullet in the state's theme color:
 // dim gray while running, bold green on success, bold red on failure. The old
@@ -132,9 +130,24 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 	inner := width - 2
 	var b strings.Builder
 	if len(c.input) > 0 {
-		for _, k := range sortedKeys(c.input) {
-			kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
+		rendered := false
+		if strings.EqualFold(c.name, "todo") {
+			// The todo call submits the whole checklist; render it as the
+			// same checkbox rows the tool's result uses instead of dumping
+			// the decoded array's Go map syntax (`map[content:... status:...]`).
+			if items := todoItemsFromInput(c.input["todos"]); len(items) > 0 {
+				rendered = true
+				for _, it := range items {
+					line := fmt.Sprintf("  │ [%s] %s", todoMark(it.status), oneLine(it.content))
+					b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(line, inner)))
+				}
+			}
+		}
+		if !rendered {
+			for _, k := range sortedKeys(c.input) {
+				kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
+				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
+			}
 		}
 	}
 	wroteOutput := false
@@ -190,6 +203,13 @@ func (c toolCard) primaryArg() string {
 		// The file tools emit "path"; accept "file_path" as a fallback for
 		// callers that use the Claude-style key.
 		keyPrefs = []string{"path", "file_path"}
+	case "todo":
+		// The checklist has no single salient argument; a count keeps the
+		// header one line (the expanded body renders the checkbox rows).
+		if items := todoItemsFromInput(c.input["todos"]); len(items) > 0 {
+			return fmt.Sprintf("%d tasks", len(items))
+		}
+		return ""
 	}
 	for _, key := range keyPrefs {
 		if v, ok := c.input[key]; ok {
@@ -257,4 +277,48 @@ func parseToolResult(result string) []respNode {
 		nodes = append(nodes, respNode{text: ln[leading:], depth: leading / 2})
 	}
 	return nodes
+}
+
+// todoInputItem is one checklist entry decoded from a todo tool call's
+// untyped arguments (the shape argsToMap produces for a JSON array:
+// []any of map[string]any).
+type todoInputItem struct {
+	content string
+	status  string
+}
+
+// todoItemsFromInput extracts the checklist from a todo call's "todos"
+// argument. It returns nil when the value is not a JSON array of
+// {content,status} objects, so callers fall back to the generic renderer
+// rather than losing the argument.
+func todoItemsFromInput(v any) []todoInputItem {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	items := make([]todoInputItem, 0, len(arr))
+	for _, e := range arr {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return nil
+		}
+		content, _ := m["content"].(string)
+		status, _ := m["status"].(string)
+		items = append(items, todoInputItem{content: content, status: status})
+	}
+	return items
+}
+
+// todoMark mirrors agenttool.RenderTodoList's checkbox marks so the call's
+// arguments read exactly like the tool's result block: [ ] pending,
+// [~] in progress, [x] completed.
+func todoMark(status string) string {
+	switch status {
+	case "completed":
+		return "x"
+	case "in_progress":
+		return "~"
+	default:
+		return " "
+	}
 }
