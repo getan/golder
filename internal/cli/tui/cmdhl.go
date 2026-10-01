@@ -119,12 +119,14 @@ func tokeniseShell(cmd string, dark bool) []hlSpan {
 		if entry.Colour.IsSet() {
 			next.color = entry.Colour.String()
 		}
+		// chroma's bash lexer leaves command options as plain text; the
+		// positional pass below paints them (see recolorCommandWords).
 		spans = appendHLSpan(spans, next)
 	}
 	if len(spans) == 0 {
 		return []hlSpan{{text: cmd}}
 	}
-	return recolorCommandWords(spans, commandWordColor(dark))
+	return recolorCommandWords(spans, commandWordColor(dark), dark)
 }
 
 func sameHLStyle(a, b hlSpan) bool {
@@ -155,6 +157,38 @@ func commandWordColor(dark bool) string {
 	return "#1e66f5"
 }
 
+// optionColor is the palette slot for command options: Catppuccin gives
+// variable.parameter mauve-ish maroon (mocha #eba0ac, latte #e64553) with an
+// italic style, which is what codex renders for `-n`, `--flag`, `-15`.
+func optionColor(dark bool) string {
+	if dark {
+		return "#eba0ac"
+	}
+	return "#e64553"
+}
+
+// isOptionToken reports whether a whitespace-delimited shell word is an option:
+// `-n`, `--no-preserve-root`, `-15`, or a bundled short form like `-la`.
+// Bare punctuation (`-` alone, `--`) and negative-looking non-flags are left
+// alone.
+func isOptionToken(word string) bool {
+	if len(word) < 2 || word[0] != '-' {
+		return false
+	}
+	if word[1] == '-' {
+		// `--long`, but not a bare `--` separator.
+		return len(word) > 2 && isWordRune(rune(word[2]))
+	}
+	// `-x`, `-15`, `-la`: the character after the dash must look like a flag
+	// body (letter or digit), never another dash or an operator.
+	return isWordRune(rune(word[1]))
+}
+
+// isWordRune reports whether r can appear in a shell option body.
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
 // recolorCommandWords walks the token spans and paints the first word of each
 // command position blue, matching codex's rendering of `grep`/`head`/`sed`.
 // chroma's bash lexer leaves external commands as plain text (only builtins
@@ -165,7 +199,7 @@ func commandWordColor(dark bool) string {
 //   - quoted strings are opaque (a `|` inside a grep pattern is data),
 //   - only genuinely plain tokens are recolored, so builtins, variables,
 //     keywords and operators keep their theme colors.
-func recolorCommandWords(spans []hlSpan, color string) []hlSpan {
+func recolorCommandWords(spans []hlSpan, color string, dark bool) []hlSpan {
 	out := make([]hlSpan, 0, len(spans))
 	expect := true
 	for _, s := range spans {
@@ -198,6 +232,19 @@ func recolorCommandWords(spans []hlSpan, color string) []hlSpan {
 				}
 				word := text[i:j]
 				switch {
+				case isOptionToken(word):
+					// chroma leaves options as plain text; Sublime scopes them
+					// variable.parameter.option.shell and Catppuccin paints
+					// that maroon italic — the color codex shows for `-n`,
+					// `--no-preserve-root`, `-15`. Options never end the
+					// command position (`grep -n foo` still paints grep, and
+					// `FOO=1 cmd -x` keeps scanning).
+					styled := withText(s, word)
+					if s.plain {
+						styled.color = optionColor(dark)
+						styled.italic = true
+					}
+					out = appendHLSpan(out, styled)
 				case !expect:
 					out = appendHLSpan(out, withText(s, word))
 				case isAssignmentWord(word):

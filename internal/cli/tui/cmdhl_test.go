@@ -103,3 +103,27 @@ func TestShellHighlightPlainFallbackRenders(t *testing.T) {
 		t.Fatalf("fallback render = %q", got)
 	}
 }
+
+// TestShellHighlightOptions verifies options carry Catppuccin's
+// variable.parameter style (maroon italic), the color codex gives `-n`,
+// `--flag`, `-15`, while a bare `-`/`--` and quoted text are untouched.
+func TestShellHighlightOptions(t *testing.T) {
+	dark := optionColor(true)
+	spans := highlightShellCommand(`head -n 15 --verbose -la`, true)
+	got := map[string]hlSpan{}
+	for _, s := range spans {
+		got[strings.TrimSpace(s.text)] = s
+	}
+	for _, opt := range []string{"-n", "--verbose", "-la"} {
+		s, ok := got[opt]
+		if !ok {
+			t.Fatalf("no span for %q in %+v", opt, spans)
+		}
+		if s.color != dark || !s.italic {
+			t.Errorf("%q style = color %s italic=%v, want %s italic", opt, s.color, s.italic, dark)
+		}
+	}
+	if s, ok := got["15"]; ok && s.color == dark {
+		t.Errorf("the option value 15 must not be painted as an option: %+v", s)
+	}
+}
