@@ -21,8 +21,17 @@ type Theme struct {
 	Assistant lipgloss.Style
 	// System styles system / meta notices (secondary gray).
 	System lipgloss.Style
-	// ToolHeader styles the title line of a tool invocation card.
-	ToolHeader lipgloss.Style
+	// ToolVerb styles the "Running"/"Ran" verb of a tool invocation headline
+	// (bold, terminal default color — codex renders its exec verb the same way;
+	// the old all-blue headline read like a link).
+	ToolVerb lipgloss.Style
+	// ToolName styles the tool's name in the headline (cyan, codex's accent for
+	// tool verbs like Read/Search).
+	ToolName lipgloss.Style
+	// ToolCmd styles the command/argument text of a headline and its `│ `
+	// continuation lines (near-white, so a command reads as code, not as a
+	// colored label).
+	ToolCmd lipgloss.Style
 	// ToolBody styles the body/output region of a tool card.
 	ToolBody lipgloss.Style
 	// StatusBar styles the persistent bottom status bar.
@@ -68,6 +77,15 @@ const (
 	colorStatus   = "62"  // status bar background (violet)
 	colorSpinner  = "173" // spinner glyph/verb (warm coral, matches Claude Code)
 	colorDiffMeta = "37"  // diff @@ hunk markers (cyan, git convention)
+
+	colorToolName = "37" // tool name in a card headline (cyan, codex parity)
+
+	// Inline-code colors for rendered Markdown. The stock glamour dark palette
+	// paints inline code coral (256-color 203) on a chip, so prose dense with
+	// `identifiers` — exactly what a coding assistant writes — becomes a wall of
+	// red. Codex renders inline code and links in plain cyan; mirror that.
+	colorInlineCodeDark  = "37" // light cyan, legible on dark terminals
+	colorInlineCodeLight = "30" // dark cyan, legible on light terminals
 )
 
 // DefaultTheme returns the built-in palette described in the SPEC: success
@@ -85,9 +103,13 @@ func DefaultTheme() Theme {
 		System: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorGray)).
 			Italic(true),
-		ToolHeader: lipgloss.NewStyle().
-			Foreground(lipgloss.Color(colorAccent)).
+		ToolVerb: lipgloss.NewStyle().
 			Bold(true),
+		ToolName: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorToolName)).
+			Bold(true),
+		ToolCmd: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorAssist)),
 		ToolBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorGray)),
 		StatusBar: lipgloss.NewStyle().

@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/glamour/styles"
+
 	"github.com/smallnest/pigo/internal/cli/ui"
 )
 
@@ -11,16 +13,18 @@ func TestDefaultThemeRenders(t *testing.T) {
 	th := DefaultTheme()
 
 	cases := map[string]string{
-		"user":       th.User.Render("hi"),
-		"assistant":  th.Assistant.Render("ok"),
-		"system":     th.System.Render("note"),
-		"toolHeader": th.ToolHeader.Render("Bash"),
-		"toolBody":   th.ToolBody.Render("output"),
-		"statusBar":  th.StatusBar.Render("status"),
-		"accent":     th.Accent.Render("file.go"),
-		"error":      th.Error.Render("boom"),
-		"warn":       th.Warn.Render("careful"),
-		"success":    th.Success.Render("done"),
+		"user":      th.User.Render("hi"),
+		"assistant": th.Assistant.Render("ok"),
+		"system":    th.System.Render("note"),
+		"toolVerb":  th.ToolVerb.Render("Ran"),
+		"toolName":  th.ToolName.Render("bash"),
+		"toolCmd":   th.ToolCmd.Render("go test ./..."),
+		"toolBody":  th.ToolBody.Render("output"),
+		"statusBar": th.StatusBar.Render("status"),
+		"accent":    th.Accent.Render("file.go"),
+		"error":     th.Error.Render("boom"),
+		"warn":      th.Warn.Render("careful"),
+		"success":   th.Success.Render("done"),
 	}
 	for name, got := range cases {
 		if got == "" {
@@ -113,4 +117,30 @@ func TestTruncateToWidthNonPositive(t *testing.T) {
 // the tell-tale of a cut inside a multibyte rune.
 func isValidBoundary(s string) bool {
 	return strings.ToValidUTF8(s, "�") == s
+}
+
+// TestMarkdownStyleInlineCodeNotRed is the palette regression: the stock
+// glamour dark style paints inline code 203 (coral red) on a chip, which turned
+// identifier-dense replies into a wall of red. pigo overrides it to cyan with
+// no chip, matching codex.
+func TestMarkdownStyleInlineCodeNotRed(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		cfg := markdownStyle(dark)
+		if cfg.Code.Color == nil {
+			t.Fatalf("dark=%v: inline code color unset", dark)
+		}
+		if got := *cfg.Code.Color; got == "203" {
+			t.Errorf("dark=%v: inline code still coral red (203)", dark)
+		}
+		if cfg.Code.BackgroundColor != nil {
+			t.Errorf("dark=%v: inline code still carries a chip background", dark)
+		}
+		if cfg.LinkText.Color == nil || *cfg.LinkText.Color != *cfg.Code.Color {
+			t.Errorf("dark=%v: link text should share the code color", dark)
+		}
+	}
+	// The tweak must not mutate the shared package style.
+	if styles.DarkStyleConfig.Code.Color == nil || *styles.DarkStyleConfig.Code.Color != "203" {
+		t.Fatal("shared glamour dark style was mutated")
+	}
 }

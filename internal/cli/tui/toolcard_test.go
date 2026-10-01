@@ -254,6 +254,9 @@ func TestToolCardDiffSection(t *testing.T) {
 	}
 	out := card.render(theme, 60)
 
+	// The headline styles the name and command separately, so assert on the
+	// color-stripped text for the plain-content checks.
+	plain := stripTCardANSI(out)
 	for _, want := range []string{
 		"edit f.txt",
 		"Edited f.txt (1 replacement(s))",
@@ -262,8 +265,8 @@ func TestToolCardDiffSection(t *testing.T) {
 		"-beta",
 		"+BETA",
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("render missing %q\n%s", want, out)
+		if !strings.Contains(plain, want) {
+			t.Errorf("render missing %q\n%s", want, plain)
 		}
 	}
 	// The diff lines are styled, not plain body text.
@@ -526,5 +529,31 @@ func TestModelClickTogglesAnyCard(t *testing.T) {
 	}
 	if m.sel.empty() {
 		t.Error("a drag across the card should still select text")
+	}
+}
+
+// TestToolCardHeadlineColors verifies the codex-parity headline palette: the
+// verb is bold in the default color, the tool name is cyan, the command is
+// near-white, and nothing renders the old all-blue ToolHeader blob (blue 39 on
+// the whole line read like a hyperlink).
+func TestToolCardHeadlineColors(t *testing.T) {
+	theme := DefaultTheme()
+	card := toolCard{
+		name:  "bash",
+		input: map[string]any{"command": "go test ./..."},
+		state: cardSuccess,
+	}
+	out := card.render(theme, 60)
+	if !strings.Contains(out, theme.ToolVerb.Render("Ran")) {
+		t.Errorf("headline missing bold default verb\n%q", out)
+	}
+	if !strings.Contains(out, theme.ToolName.Render("bash")) {
+		t.Errorf("headline missing cyan tool name\n%q", out)
+	}
+	if !strings.Contains(out, theme.ToolCmd.Render(" go test ./...")) {
+		t.Errorf("headline missing near-white command text\n%q", out)
+	}
+	if strings.Contains(out, "38;5;39m") {
+		t.Errorf("headline still paints a segment in 256-color 39 (blue)\n%q", out)
 	}
 }

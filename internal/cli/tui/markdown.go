@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	gansi "github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/smallnest/pigo/internal/cli/ui"
@@ -71,12 +73,8 @@ func rendererFor(width int) *glamour.TermRenderer {
 	if wrap < 0 {
 		wrap = 0
 	}
-	style := "dark"
-	if !mdDark {
-		style = "light"
-	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(style),
+		glamour.WithStyles(markdownStyle(mdDark)),
 		glamour.WithWordWrap(wrap),
 	)
 	if err != nil {
@@ -85,6 +83,35 @@ func rendererFor(width int) *glamour.TermRenderer {
 	mdCache[width] = r
 	return r
 }
+
+// markdownStyle returns the base glamour style for the terminal background
+// with pigo's palette tweaks applied. Two stock choices fight codex parity:
+//
+//   - dark inline code is coral (256-color 203) on a dark chip, so a reply full
+//     of `identifiers` — the normal shape of a coding answer — reads as a wall
+//     of red. Codex renders inline code as plain cyan, no chip.
+//   - link text/labels are bold magenta there; codex uses cyan.
+//
+// Only pointer fields are replaced on a copy of the base config, so the shared
+// package-level style is never mutated.
+func markdownStyle(dark bool) gansi.StyleConfig {
+	cfg := styles.DarkStyleConfig
+	codeColor := colorInlineCodeDark
+	if !dark {
+		cfg = styles.LightStyleConfig
+		codeColor = colorInlineCodeLight
+	}
+	cfg.Code.Color = mdStrPtr(codeColor)
+	cfg.Code.BackgroundColor = nil
+	cfg.LinkText.Color = mdStrPtr(codeColor)
+	cfg.Link.Color = mdStrPtr(codeColor)
+	cfg.Image.Color = mdStrPtr(codeColor)
+	return cfg
+}
+
+// mdStrPtr returns a pointer to s for the glamour style fields that use
+// optional pointers (the library keeps its own helpers unexported).
+func mdStrPtr(s string) *string { return &s }
 
 // renderMarkdown returns src rendered as styled terminal Markdown wrapped to
 // width columns. It is gated exactly like the REPL's renderer: when output is

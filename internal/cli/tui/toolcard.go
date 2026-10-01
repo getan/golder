@@ -123,12 +123,33 @@ func (c toolCard) render(theme Theme, width int) string {
 // instead of being cut with an ellipsis. It wraps at width-4 (the widest
 // gutter) so both the bullet line and the continuations fit; the two columns
 // the bullet leaves unused on the first line are harmless slack.
+//
+// Coloring follows codex's exec cell: the bullet carries the state color, the
+// verb is bold in the terminal's default color, the tool name is cyan, and the
+// command text is near-white. The old all-blue bold headline made every command
+// read like a hyperlink.
 func (c toolCard) renderHeadline(theme Theme, width int) string {
-	lines := strings.Split(WrapToWidth(c.title(), max(1, width-4)), "\n")
+	verb := "Ran"
+	if c.state == cardRunning {
+		verb = "Running"
+	}
+	// The verb is prepended at render time (not part of the wrapped text), so
+	// reserve its columns in the wrap budget: bullet(2) + verb + space.
+	avail := max(1, width-len(verb)-4)
+	lines := strings.Split(WrapToWidth(c.headline(), avail), "\n")
+	first := lines[0]
+	head := theme.ToolVerb.Render(verb) + " "
+	if rest, ok := strings.CutPrefix(first, c.name); ok {
+		head += theme.ToolName.Render(c.name) + theme.ToolCmd.Render(rest)
+	} else {
+		// The name itself was wrapped (a very long tool name); style the whole
+		// segment as the name so nothing is dropped.
+		head += theme.ToolName.Render(first)
+	}
 	var b strings.Builder
-	b.WriteString(c.statusBullet(theme) + " " + theme.ToolHeader.Render(lines[0]))
+	b.WriteString(c.statusBullet(theme) + " " + head)
 	for _, ln := range lines[1:] {
-		b.WriteString("\n" + theme.ToolHeader.Render("  │ "+ln))
+		b.WriteString("\n" + theme.ToolCmd.Render("  │ "+ln))
 	}
 	return b.String()
 }
