@@ -91,8 +91,13 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	runCfg.MemoryRoot = run.MemoryRootFromTools(env.Tools)
 	// Headless has no stdin prompt, so the risk judge enforces at the sandbox
 	// floor: Allow/Confirm verdicts flow (headless is an explicit invocation)
-	// while Sandbox/Deny verdicts fail closed. Nil-safe when PIGO_JUDGE=off.
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateFrom(judge.Sandbox)
+	// while Sandbox/Deny verdicts fail closed unless the execution layer can
+	// actually isolate the call (Sandboxed), in which case it runs sandboxed.
+	// Nil-safe when PIGO_JUDGE=off.
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateOpts(judge.GateOpts{
+		Floor:     judge.Sandbox,
+		Sandboxed: run.SandboxGate(),
+	})
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, install the tool-execution + Stop seams, dispatch SessionStart, and

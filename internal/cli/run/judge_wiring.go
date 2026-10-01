@@ -1,6 +1,8 @@
 package run
 
 import (
+	"strings"
+
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/judge"
@@ -52,4 +54,28 @@ func WireBashSandbox(tools []agentcore.AgentTool, cwd string) {
 			}
 		}
 	}
+}
+
+// SandboxGate is the predicate the judge gate asks before failing a
+// Sandbox-tier verdict closed: which tool calls this process can actually run
+// isolated. It mirrors WireBashSandbox's decision exactly — bash runs under
+// sandbox-exec when the mode allows it, the platform provides the binary
+// (macOS today), and (in auto mode) a grader is configured — so the gate never
+// passes a call through to an execution layer that would run it unsandboxed.
+// Nil means nothing can be sandboxed and the gate keeps its prompt/fail-closed
+// behavior.
+func SandboxGate() func(toolName string) bool {
+	if !judge.GateEnabled() {
+		return nil
+	}
+	mode := seatbelt.ModeFromEnv()
+	if mode == seatbelt.ModeOff || !seatbelt.Available() {
+		return nil
+	}
+	if mode == seatbelt.ModeAuto && !judge.GraderConfigured() {
+		// Auto attaches the runner only next to a configured grader; without
+		// one no Sandbox verdict can occur, but keep the predicate honest.
+		return nil
+	}
+	return func(toolName string) bool { return strings.EqualFold(strings.TrimSpace(toolName), "bash") }
 }

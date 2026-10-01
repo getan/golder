@@ -153,11 +153,25 @@ type GateOpts struct {
 	// without a prompt that already run under up-front trust (TUI/headless)
 	// set Floor=Sandbox so only sandbox/deny verdicts block.
 	Floor Level
+	// Sandboxed reports whether a tool call at the Sandbox tier will actually
+	// run isolated by the execution layer (the bash tool's seatbelt runner).
+	// When it returns true the gate lets the call through — isolation is the
+	// enforcement, not a prompt or a block. Nil, or false for this tool,
+	// keeps the previous behavior: prompt when interactive, fail closed when
+	// not. The predicate comes from the wiring layer (cli/run), so this leaf
+	// package stays unaware of platforms and runners.
+	Sandboxed func(toolName string) bool
 }
 
 // InteractiveGate prompts on Confirm/Sandbox and blocks on Deny.
 func InteractiveGate(in *bufio.Reader, out io.Writer, mu *sync.Mutex) agentcore.BeforeToolCallFunc {
 	return GateFunc(GateOpts{In: in, Out: out, Mu: mu, Interactive: true}, DefaultClassifier())
+}
+
+// InteractiveGateOpts is InteractiveGate with the full option set, so a driver
+// can also pass Floor and Sandboxed.
+func InteractiveGateOpts(opts GateOpts) agentcore.BeforeToolCallFunc {
+	return GateFunc(opts, DefaultClassifier())
 }
 
 // EnforcingGate never prompts: anything above Allow blocks. For drivers
@@ -171,6 +185,12 @@ func EnforcingGate() agentcore.BeforeToolCallFunc {
 // Confirm-level calls keep flowing while sandbox/deny verdicts fail closed.
 func EnforcingGateFrom(min Level) agentcore.BeforeToolCallFunc {
 	return GateFunc(GateOpts{Floor: min}, DefaultClassifier())
+}
+
+// EnforcingGateOpts is EnforcingGateFrom with the full option set, so a driver
+// can also pass Sandboxed.
+func EnforcingGateOpts(opts GateOpts) agentcore.BeforeToolCallFunc {
+	return GateFunc(opts, DefaultClassifier())
 }
 
 // ChainGates composes two BeforeToolCall gates so the run gets trust first,
@@ -217,8 +237,14 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 		case Deny:
 			return blockCall(call, v, "")
 		case Sandbox:
+			// The execution layer can isolate this call (bash under
+			// sandbox-exec): isolation is stronger than a prompt, so let it
+			// through and let the runner add the sandbox.
+			if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {
+				return nil
+			}
 			if !opts.Interactive || opts.In == nil {
-				return blockCall(call, v, "sandbox runner not wired; failing closed")
+				return blockCall(call, v, "no sandbox runner for this call (PIGO_SANDBOX=off or sandbox-exec unavailable); failing closed")
 			}
 			if promptRisk(ctx, opts, call, v, true) {
 				return nil
@@ -256,16 +282,10 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 	msg := fmt.Sprintf("tool %q blocked by risk judge (%s", call.Name, v.Level)
 	if len(v.Reasons) > 0 {
 		msg += ": " + strings.Join(v.Reasons, "; ")
-	} else {
-		msg += ")"
 	}
+	msg += ")"
 	if tail != "" {
-		if !strings.Contains(msg, ":") {
-			msg += " "
-		} else {
-			msg += " "
-		}
-		msg += tail
+		msg += "; " + tail
 	}
 	msg += " (PIGO_JUDGE=off disables the gate)"
 	content := agentcore.ContentList{agentcore.NewTextContent(msg)}
@@ -282,7 +302,10 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 		return false
 	}
 	if sandbox {
-		fmt.Fprintf(out, "\npigo judges %q as risk %s [sandbox: runs under sandbox-exec on macOS when available].\n", call.Name, v.Level)
+		// Reached only when the execution layer cannot isolate this call
+		// (no runner for the tool, PIGO_SANDBOX=off, or no sandbox-exec):
+		// approving runs it unisolated, so say so plainly.
+		fmt.Fprintf(out, "\npigo judges %q as risk %s [sandbox unavailable: approves run unisolated].\n", call.Name, v.Level)
 	} else {
 		fmt.Fprintf(out, "\npigo judges %q as risk %s.\n", call.Name, v.Level)
 	}

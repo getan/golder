@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -36,6 +37,68 @@ func TestEnforcingGateFromSandboxFloor(t *testing.T) {
 	sandbox := &stubClassifier{v: Verdict{Level: Sandbox}}
 	if dec := GateFunc(GateOpts{Floor: Sandbox}, sandbox)(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec == nil || !dec.Block {
 		t.Fatal("sandbox at floor should block")
+	}
+}
+
+// TestSandboxedVerdictPassesThrough is the regression for "sandbox-tier calls
+// are blocked even though the execution layer has a runner": when the gate is
+// told the call will actually be isolated (Sandboxed), a Sandbox verdict flows
+// through instead of failing closed, in every driver.
+func TestSandboxedVerdictPassesThrough(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "")
+	sandbox := &stubClassifier{v: Verdict{Level: Sandbox}}
+
+	// Non-interactive (TUI/headless shape): isolation replaces the block.
+	gate := GateFunc(GateOpts{
+		Floor:     Sandbox,
+		Sandboxed: func(name string) bool { return name == "bash" },
+	}, sandbox)
+	if dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec != nil {
+		t.Fatalf("sandboxed bash should pass through, got %+v", dec)
+	}
+	// A tool the runner cannot isolate still fails closed.
+	if dec := gate(context.Background(), toolCall("apply_patch", `{"patch":"x"}`)); dec == nil || !dec.Block {
+		t.Fatal("a non-sandboxable tool must still block at the sandbox tier")
+	}
+
+	// Interactive (REPL shape): no prompt either — it runs isolated.
+	interactive := GateFunc(GateOpts{
+		In:          bufio.NewReader(strings.NewReader("")),
+		Out:         io.Discard,
+		Interactive: true,
+		Sandboxed:   func(string) bool { return true },
+	}, sandbox)
+	if dec := interactive(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec != nil {
+		t.Fatalf("sandboxed interactive call should pass without a prompt, got %+v", dec)
+	}
+}
+
+// TestSandboxedDoesNotRescueDeny verifies isolation never overrides a deny
+// verdict: only the Sandbox tier is eligible for the pass-through.
+func TestSandboxedDoesNotRescueDeny(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "")
+	deny := &stubClassifier{v: Verdict{Level: Deny, Reasons: []string{"static"}}}
+	gate := GateFunc(GateOpts{
+		Floor:     Sandbox,
+		Sandboxed: func(string) bool { return true },
+	}, deny)
+	dec := gate(context.Background(), toolCall("bash", `{"command":"sudo x"}`))
+	if dec == nil || !dec.Block {
+		t.Fatalf("deny must block even when a sandbox exists, got %+v", dec)
+	}
+	if got := agentcore.ContentToText(*dec.Content); !strings.Contains(got, "deny") {
+		t.Errorf("block message = %q, want the deny verdict", got)
+	}
+}
+
+// TestBlockCallMessageShape pins the message format: verdict reasons in
+// parentheses, the trailing note separated by "; ", and the escape hatch last.
+func TestBlockCallMessageShape(t *testing.T) {
+	dec := blockCall(toolCall("bash", `{}`), Verdict{Level: Sandbox, Reasons: []string{"r1", "r2"}}, "no runner")
+	got := agentcore.ContentToText(*dec.Content)
+	want := `tool "bash" blocked by risk judge (sandbox: r1; r2); no runner (PIGO_JUDGE=off disables the gate)`
+	if got != want {
+		t.Errorf("message = %q\nwant     %q", got, want)
 	}
 }
 

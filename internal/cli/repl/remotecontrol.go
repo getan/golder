@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/remotecontrol"
 	"github.com/smallnest/pigo/internal/trust"
@@ -177,7 +178,13 @@ func remoteControlStatus(out io.Writer, deps *replDeps) {
 // non-remote path is byte-identical to before (#443).
 func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 	local := trust.BeforeToolCall(deps.trust, deps.cwd, deps.in, out, deps.confirmMu)
-	local = judge.ChainGates(local, judge.InteractiveGate(deps.in, out, deps.confirmMu))
+	local = judge.ChainGates(local, judge.InteractiveGateOpts(judge.GateOpts{
+		In:          deps.in,
+		Out:         out,
+		Mu:          deps.confirmMu,
+		Interactive: true,
+		Sandboxed:   run.SandboxGate(),
+	}))
 	if deps.remote == nil {
 		return local
 	}

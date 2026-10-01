@@ -226,7 +226,13 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 				Registry: host.Registry(),
 				BeforeToolCall: judge.ChainGates(
 					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
-					judge.InteractiveGate(host.Input(), out, host.ConfirmMu()),
+					judge.InteractiveGateOpts(judge.GateOpts{
+						In:          host.Input(),
+						Out:         out,
+						Mu:          host.ConfirmMu(),
+						Interactive: true,
+						Sandboxed:   run.SandboxGate(),
+					}),
 				),
 			},
 		},

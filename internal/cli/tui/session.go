@@ -336,7 +336,7 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	// prompt the TUI cannot confirm, so Allow/Confirm verdicts flow under the
 	// up-front trust while Sandbox/Deny verdicts fail closed. The judge gate
 	// leads so its block short-circuits before the browser is asked.
-	judgeGate := judge.EnforcingGateFrom(judge.Sandbox)
+	judgeGate := judge.EnforcingGateOpts(judge.GateOpts{Floor: judge.Sandbox, Sandboxed: run.SandboxGate()})
 	if s.remote != nil {
 		if mgr, err := trust.NewManager(trust.DefaultPath()); err == nil {
 			cfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(judgeGate, remoteConfirmSeam(s.remote, mgr, s.hookDeps.ProjectDir))

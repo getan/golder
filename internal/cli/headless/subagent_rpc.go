@@ -111,8 +111,12 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 		Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg}},
 	}
 	// Like headless: no prompt available, so enforce the risk judge at the
-	// sandbox floor (nil-safe when PIGO_JUDGE=off).
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateFrom(judge.Sandbox)
+	// sandbox floor, letting the execution layer isolate what it can
+	// (nil-safe when PIGO_JUDGE=off).
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateOpts(judge.GateOpts{
+		Floor:     judge.Sandbox,
+		Sandboxed: run.SandboxGate(),
+	})
 	// Wire hooks uniformly with every other driver (#425): the child sub-agent runs
 	// its own PreToolUse/PostToolUse (and Stop) hooks from the trust-gated hook set
 	// rooted at its working directory. It has no backing session, so SessionID is

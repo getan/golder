@@ -63,6 +63,18 @@ interactive REPL/TUI.
 - Documented self-update and the revised `update` semantics in the README and
   the docs site.
 
+### Fixed
+- **Sandbox-tier calls now actually run sandboxed**: the judge gate used to
+  fail every Sandbox verdict closed in drivers without a stdin prompt
+  (TUI/headless), and to show a misleading "[sandbox]" note in the REPL, even
+  though the bash tool had a seatbelt runner attached — so a sandboxed call
+  could never proceed. The gate now asks the wiring layer
+  (`run.SandboxGate`) whether the execution layer will isolate this call and
+  lets those through (isolation replaces both the block and the prompt); tools
+  with no runner and platforms without `sandbox-exec` keep failing closed. A
+  consistency test pins the predicate to `WireBashSandbox`'s runner
+  attachment, and the block message format was corrected.
+
 ## [0.4.3] - 2026-07-31
 
 ### Added

@@ -26,8 +26,10 @@ pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与
 |------|------|----------------|--------------------------|
 | Allow | 低风险，直放 | 直接跑 | 直接跑 |
 | Confirm | 中风险，需确认 | 弹窗 `[y/N]` | 在启动信任下放行 |
-| Sandbox | 高风险，强制隔离 | 弹窗确认后进 `sandbox-exec` | 无 runner 则直接拒绝 |
+| Sandbox | 高风险，强制隔离 | 有 runner 直接进 `sandbox-exec`；无 runner 弹窗确认后无隔离运行 | 有 runner 直接进 `sandbox-exec`；无 runner 拒绝 |
 | Deny | 极危，直接拒 | 直接拒 | 直接拒 |
+
+Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`PIGO_SANDBOX` 非 off、平台有 `sandbox-exec`、auto 档需要已配置 grader、且只有 `bash` 有 runner）。条件一致保证两个方向都不会出错——不会把调用放给一个裸跑的执行层，也不会把本可隔离的调用拒掉；`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
 
 分级逻辑（`internal/judge`，纯标准库叶包）：
 
