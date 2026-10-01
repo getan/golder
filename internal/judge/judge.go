@@ -204,6 +204,13 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 		if v.Level < opts.Floor {
 			return nil
 		}
+		// Silent Allows stay silent only for read-only tools. Side-effect
+		// tools announce their grade on one line so the automated verdict
+		// is always visible; Confirm/Sandbox/Deny announce themselves via
+		// the prompt/block below.
+		if v.Level == Allow && opts.Out != nil && opts.Interactive && !readOnlyTools[strings.ToLower(call.Name)] {
+			printVerdict(opts, call, v)
+		}
 		switch v.Level {
 		case Allow:
 			return nil
@@ -227,6 +234,22 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 			return blockCall(call, v, "denied at prompt")
 		}
 	}
+}
+
+// printVerdict announces one automated grade on a single line, codex-style:
+// a small badge plus the tool and a truncated preview, e.g.
+// "  [judge: allow] bash: go test ./...". It holds the prompt mutex so
+// parallel batches cannot interleave verdict lines.
+func printVerdict(opts GateOpts, call agentcore.AgentToolCall, v Verdict) {
+	if opts.Mu != nil {
+		opts.Mu.Lock()
+		defer opts.Mu.Unlock()
+	}
+	fmt.Fprintf(opts.Out, "  [judge: %s] %s", v.Level, call.Name)
+	if summary := riskSummary(call); summary != "" {
+		fmt.Fprintf(opts.Out, ": %s", summary)
+	}
+	fmt.Fprintln(opts.Out)
 }
 
 func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.BeforeToolCallDecision {

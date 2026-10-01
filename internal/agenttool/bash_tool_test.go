@@ -1,6 +1,7 @@
 package agenttool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -84,9 +85,29 @@ func TestBashToolStreaming(t *testing.T) {
 	if len(updates) == 0 {
 		t.Fatalf("expected streaming updates, got none")
 	}
-	// The final partial should be the full accumulated output.
-	if last := updates[len(updates)-1]; !strings.Contains(last, "ab") {
-		t.Errorf("final update = %q, want to contain ab", last)
+	// Updates are incremental deltas: concatenating them in order must
+	// reproduce the full accumulated output.
+	if got := strings.Join(updates, ""); !strings.Contains(got, "ab") {
+		t.Errorf("joined updates = %q, want to contain ab", got)
+	}
+}
+
+func TestStreamWriterSendsDeltas(t *testing.T) {
+	var updates []string
+	w := streamWriter{mu: &sync.Mutex{}, buf: &bytes.Buffer{}, onUpdate: func(r agentcore.AgentToolResult) {
+		updates = append(updates, resultText(r))
+	}}
+	if _, err := w.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := w.Write([]byte(" world")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(updates) != 2 || updates[0] != "hello" || updates[1] != " world" {
+		t.Fatalf("updates = %q, want [hello \" world\"] (deltas, not snapshots)", updates)
+	}
+	if got := w.buf.String(); got != "hello world" {
+		t.Fatalf("accumulated buffer = %q, want full output", got)
 	}
 }
 
@@ -269,4 +290,3 @@ func TestResolveShell(t *testing.T) {
 		})
 	}
 }
-

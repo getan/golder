@@ -111,3 +111,26 @@ func TestGateDisabledIsNil(t *testing.T) {
 		t.Fatal("PIGO_JUDGE=off must yield nil gate")
 	}
 }
+
+// TestAllowVerdictLine verifies the automated grade is visible: an Allow on
+// a side-effect tool prints one verdict line, while read-only Allows stay
+// silent.
+func TestAllowVerdictLine(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "")
+	stub := &stubClassifier{v: Verdict{Level: Allow}}
+	var out bytes.Buffer
+	gate := GateFunc(GateOpts{In: bufio.NewReader(strings.NewReader("")), Out: &out, Interactive: true}, stub)
+	if dec := gate(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); dec != nil {
+		t.Fatal("allow should pass")
+	}
+	if got := out.String(); !strings.Contains(got, "[judge: allow] bash") {
+		t.Fatalf("verdict line = %q, want [judge: allow] bash", got)
+	}
+	out.Reset()
+	if dec := gate(context.Background(), toolCall("read", `{"path":"x"}`)); dec != nil {
+		t.Fatal("allow should pass")
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("read-only allow printed %q, want silence", got)
+	}
+}

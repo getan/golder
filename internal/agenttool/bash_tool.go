@@ -236,9 +236,13 @@ func resolveShell(explicit, goos string, lookPath func(string) (string, error)) 
 	return "bash", "-c"
 }
 
-// streamWriter forwards each written chunk to onUpdate as a growing partial
-// result while accumulating the full output. It is safe for concurrent use so
-// stdout and stderr can share the same combined buffer.
+// streamWriter forwards each written chunk to onUpdate as an incremental
+// delta while accumulating the full output. Deltas are the update contract:
+// consumers append partials (tui subagentPanel.appendOutput, stream-json),
+// so resending the whole snapshot per chunk would duplicate output
+// quadratically. The full text still lands in the final ToolResult. It is
+// safe for concurrent use so stdout and stderr can share the same combined
+// buffer.
 type streamWriter struct {
 	mu       *sync.Mutex
 	buf      *bytes.Buffer
@@ -248,10 +252,9 @@ type streamWriter struct {
 func (w streamWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	w.buf.Write(p)
-	snapshot := w.buf.String()
 	w.mu.Unlock()
 	if w.onUpdate != nil {
-		w.onUpdate(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(snapshot)}})
+		w.onUpdate(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(string(p))}})
 	}
 	return len(p), nil
 }

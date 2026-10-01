@@ -37,6 +37,8 @@ pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与
 
 执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`。
 
+可观测性：交互式门给每个副作用工具打一行 verdict（`[judge: allow] bash: go test ./...`），只读工具的 Allow 保持静默；`bash` 的流式 partial 是增量 delta（消费者直接 append），与 codex 的 `ExecCommandOutputDelta` 同契约。
+
 ```bash
 export TYPESAFE_API_KEY=...   # Jev 分类 key，只经环境变量透传，不打印不落盘
 export PIGO_SANDBOX=auto      # off | auto（默认，仅 sandbox 档隔离）| enforce（全部 bash 进沙箱，无 runner 则 fail-closed）
