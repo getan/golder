@@ -219,7 +219,13 @@ func (t *transcript) finalizeTurn(msg agentcore.AssistantMessage) {
 		if text != "" && !t.sealedThisTurn {
 			t.blocks[t.activeAssistant].text = text
 		}
-	} else if text != "" {
+	} else if text != "" && !t.sealedThisTurn {
+		// No block is streaming and no deltas arrived for this turn: the text
+		// has not been rendered yet, so add it. A sealed turn is the
+		// exception — a live tool announcement already put this turn's
+		// narration above its card, and the full message carries that same
+		// text again; appending it here would print every command's narration
+		// twice (once above the card, once below).
 		t.blocks = append(t.blocks, transcriptBlock{role: roleAssistant, text: text})
 	}
 	t.activeAssistant = -1

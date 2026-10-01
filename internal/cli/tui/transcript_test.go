@@ -398,3 +398,58 @@ func TestStableBlockCacheReuse(t *testing.T) {
 		t.Fatal("resize must rebuild the cache entry at the new width")
 	}
 }
+
+// TestFinalizeTurnDoesNotDuplicateSealedNarration is the regression for the
+// "same narration above and below every command" bug: when a live tool
+// announcement seals the streamed narration before its card and nothing
+// streams after the card, the turn-end finalize must not re-append the full
+// message text below the card.
+func TestFinalizeTurnDoesNotDuplicateSealedNarration(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	const narration = "正在检查仓库状态，准备提交推送。"
+	tr.appendDelta(narration)
+	tr.announceToolCard(&toolCard{name: "bash", state: cardSuccess})
+	tr.finalizeTurn(agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent(narration),
+			agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "1", Name: "bash"},
+		},
+	})
+
+	assistantBlocks := 0
+	for _, blk := range tr.blocks {
+		if blk.role == roleAssistant && strings.Contains(blk.text, narration) {
+			assistantBlocks++
+		}
+	}
+	if assistantBlocks != 1 {
+		t.Fatalf("narration appears in %d assistant blocks, want 1\n%+v", assistantBlocks, tr.blocks)
+	}
+	if len(tr.blocks) != 2 || tr.blocks[0].role != roleAssistant || tr.blocks[1].role != roleTool {
+		t.Fatalf("block order = %+v, want [assistant tool]", tr.blocks)
+	}
+}
+
+// TestFinalizeTurnKeepsPostCardDeltas guards the neighboring case: deltas
+// after the sealed card form their own block, and the full message text must
+// not overwrite that block with the pre-card narration.
+func TestFinalizeTurnKeepsPostCardDeltas(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.appendDelta("before. ")
+	tr.announceToolCard(&toolCard{name: "bash", state: cardSuccess})
+	tr.appendDelta("after.")
+	tr.finalizeTurn(agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent("before. after."),
+			agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "1", Name: "bash"},
+		},
+	})
+	if len(tr.blocks) != 3 {
+		t.Fatalf("blocks = %d, want 3 (before, card, after)\n%+v", len(tr.blocks), tr.blocks)
+	}
+	if tr.blocks[0].text != "before. " || tr.blocks[2].text != "after." {
+		t.Fatalf("texts = %q / %q, want deltas kept on both sides of the card", tr.blocks[0].text, tr.blocks[2].text)
+	}
+}
