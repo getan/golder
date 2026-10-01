@@ -74,6 +74,7 @@ func TestSpinnerPinOverridesVerb(t *testing.T) {
 		t.Errorf("after unpin, view %q should not show the pinned label", got)
 	}
 }
+
 // tokens stream and the effort stat is hidden with no thinking level.
 func TestSpinnerViewOmitsEmptyStats(t *testing.T) {
 	s := newSpinner(DefaultTheme())
@@ -113,7 +114,7 @@ func TestModelRunningShowsSpinnerRow(t *testing.T) {
 	m.spinner.begin(time.Now(), "medium")
 	m.relayout()
 
-	view := m.renderContent()
+	view, _ := m.renderContent()
 	if got := strings.Count(view, "\n"); got != 9 {
 		t.Errorf("running newline count = %d, want 9 (10 rows)", got)
 	}

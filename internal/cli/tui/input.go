@@ -82,9 +82,12 @@ func newInput() input {
 		key.WithKeys("shift+enter", "ctrl+j", "alt+enter"),
 		key.WithHelp("shift+enter", "insert newline"),
 	)
-	// Draw the cursor into the rendered string: the model composes View as a
-	// plain string rather than driving textarea's real cursor reporting.
-	ta.SetVirtualCursor(true)
+	// Use the REAL cursor (reported via tea.View.Cursor by the model): the
+	// virtual cursor only draws a fake block into the string while the real
+	// terminal cursor stays parked, leaving the IME candidate window with no
+	// anchor — it pops up at the wrong place. A real cursor at the caret is
+	// what the IME follows.
+	ta.SetVirtualCursor(false)
 	// Drop the default cursor-line background highlight so the composer is framed
 	// only by the top/bottom rules (see View), matching Claude Code — no fill.
 	styles := ta.Styles()
@@ -150,6 +153,20 @@ func (in *input) SetWidth(w int) {
 	}
 	in.width = w
 	in.ta.SetWidth(w)
+}
+
+// Cursor reports the caret in textarea-local coordinates (nil when blurred).
+// The model offsets it past the rows above the editor and attaches it to the
+// frame View so the terminal parks the real cursor on the caret — the anchor
+// the IME candidate window follows. The wrapper adds one top rule row, hence
+// the +1; it has no side borders/padding, so X is already frame-correct.
+func (in input) Cursor() *tea.Cursor {
+	c := in.ta.Cursor()
+	if c == nil {
+		return nil
+	}
+	c.Position.Y++
+	return c
 }
 
 // View renders the editor to a string for embedding in the model's View. The

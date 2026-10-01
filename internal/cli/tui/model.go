@@ -1472,20 +1472,34 @@ func (m Model) View() tea.View {
 		return tea.View{AltScreen: true}
 	}
 
-	content := m.applySelection(m.renderContent())
+	content, inputRow := m.renderContent()
+	content = m.applySelection(content)
 
 	// MouseModeCellMotion enables click/release/wheel events. Without it the
 	// alt-screen swallows the wheel (no native scrollback), so history could only
 	// be reached via PgUp/PgDn; enabling it lets the wheel scroll the transcript
 	// and drives both scrollbar drag and mouse text selection.
-	return tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	v := tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	// Park the REAL terminal cursor on the input caret: this is the anchor the
+	// IME candidate window follows (the old virtual cursor hid the real one, so
+	// the candidate popup landed in the wrong place). inputRow counts the frame
+	// rows above the editor; Cursor() already includes the wrapper's top rule.
+	if cur := m.input.Cursor(); cur != nil {
+		cur.Position.Y += inputRow
+		if cur.Position.Y >= 0 && (m.height <= 0 || cur.Position.Y < m.height) {
+			v.Cursor = cur
+		}
+	}
+	return v
 }
 
 // renderContent builds the full-screen shell string (transcript, autocomplete
 // popup, input editor, status bar) without any selection overlay. View wraps it
 // with applySelection for display, and selectedText reuses it to extract the
-// copied text from the exact rows the user sees.
-func (m Model) renderContent() string {
+// copied text from the exact rows the user sees. It also returns inputRow, the
+// zero-based frame row where the input editor starts, so View can offset the
+// real cursor onto the caret (the IME anchor).
+func (m Model) renderContent() (string, int) {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -1507,14 +1521,24 @@ func (m Model) renderContent() string {
 	sized := m.width > 0 && m.height > 0
 
 	var b strings.Builder
+	inputRow := 0
+	countRows := func(s string) int {
+		if s == "" {
+			return 0
+		}
+		return strings.Count(s, "\n") + 1
+	}
 	if sized {
 		// The viewport pads its content to exactly the rows relayout reserved.
-		b.WriteString(m.transcript.view())
+		tv := m.transcript.view()
+		b.WriteString(tv)
 		b.WriteByte('\n')
+		inputRow += countRows(tv)
 	} else {
 		for i := 0; i < rows; i++ {
 			b.WriteByte('\n')
 		}
+		inputRow += rows
 	}
 	// The working spinner sits on its own row just above the input while a run is
 	// in flight (relayout reserves the row so the transcript shrinks to fit). The
@@ -1524,10 +1548,12 @@ func (m Model) renderContent() string {
 		if panel := m.subagents.view(m.theme, width, time.Now()); panel != "" {
 			b.WriteString(panel)
 			b.WriteByte('\n')
+			inputRow += countRows(panel)
 		}
 		if line := m.spinner.view(width); line != "" {
 			b.WriteString(line)
 			b.WriteByte('\n')
+			inputRow += countRows(line)
 		}
 	}
 	// The autocomplete popup, when open, renders just above the input line as an
@@ -1536,13 +1562,14 @@ func (m Model) renderContent() string {
 	if menu := m.menu.view(width); menu != "" {
 		b.WriteString(menu)
 		b.WriteByte('\n')
+		inputRow += countRows(menu)
 	}
 	b.WriteString(input)
 	b.WriteByte('\n')
 	// The status bar is the final line, pinned to the very bottom of the shell
 	// below the input editor.
 	b.WriteString(status)
-	return b.String()
+	return b.String(), inputRow
 }
 
 // applySelection overlays the mouse selection highlight onto the rendered
@@ -1640,7 +1667,8 @@ func (m Model) selectedText() string {
 		}
 		return sb.String()
 	}
-	rows := strings.Split(m.renderContent(), "\n")
+	content, _ := m.renderContent()
+	rows := strings.Split(content, "\n")
 	var b strings.Builder
 	wrote := false
 	for y := start.y; y <= end.y && y < len(rows); y++ {

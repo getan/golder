@@ -210,3 +210,34 @@ func blockTexts(t transcript) []string {
 	}
 	return out
 }
+
+// TestInputRealCursorAnchorsIME verifies the editor reports a real cursor (not
+// the virtual fake block): empty buffer parks after the "> " prompt on the
+// first text row (past the wrapper's top rule), CJK advances by display width,
+// and a blurred editor reports nil so no stale cursor is shown mid-run.
+func TestInputRealCursorAnchorsIME(t *testing.T) {
+	in := newInput()
+	in.SetWidth(40)
+
+	cur := in.Cursor()
+	if cur == nil {
+		t.Fatal("focused editor must report a cursor for IME anchoring")
+	}
+	if cur.Position.X != 2 || cur.Position.Y != 1 {
+		t.Errorf("empty cursor = %+v, want (2,1): after prompt, past top rule", cur.Position)
+	}
+
+	in, _ = in.Update(runeKey('你'))
+	cur = in.Cursor()
+	if cur == nil {
+		t.Fatal("cursor missing after CJK input")
+	}
+	if cur.Position.X != 4 {
+		t.Errorf("cursor X after 你 = %d, want 4 (prompt 2 + CJK width 2)", cur.Position.X)
+	}
+
+	in.Blur()
+	if c := in.Cursor(); c != nil {
+		t.Errorf("blurred editor Cursor() = %+v, want nil", c)
+	}
+}

@@ -116,7 +116,8 @@ func TestModelSelectionCopy(t *testing.T) {
 
 	// Locate the rendered screen cell where the text begins so the test does not
 	// hard-code the transcript's bottom-stick row.
-	rows := strings.Split(m.renderContent(), "\n")
+	content, _ := m.renderContent()
+	rows := strings.Split(content, "\n")
 	y, x := -1, -1
 	for i, r := range rows {
 		plain := stripANSI(r)
@@ -431,8 +432,8 @@ func TestModelSubagentPanelNavigation(t *testing.T) {
 	if got := m.subagents.expandedID(); got != "b" {
 		t.Fatalf("expandedID after enter = %q, want b", got)
 	}
-	if !strings.Contains(m.renderContent(), "output of B") {
-		t.Errorf("expanded render missing sub-agent output:\n%s", m.renderContent())
+	if !strings.Contains(renderContentStr(m), "output of B") {
+		t.Errorf("expanded render missing sub-agent output:\n%s", renderContentStr(m))
 	}
 
 	// Esc collapses/clears the selection and does NOT quit (no quit command).
@@ -747,5 +748,42 @@ func TestModelAnnounceInterleavesCard(t *testing.T) {
 	}
 	if card := m.toolCards["ws-1"]; card == nil || card.state != cardSuccess {
 		t.Errorf("card state = %+v, want success", card)
+	}
+}
+
+// renderContentStr unwraps renderContent's text for assertions that only need
+// the string (the input-row offset is covered by dedicated cursor tests).
+func renderContentStr(m Model) string {
+	s, _ := m.renderContent()
+	return s
+}
+
+// TestModelViewCursorAnchorsIME verifies the frame View parks the real cursor
+// on the input caret row (the anchor the IME candidate window follows), not at
+// the end of the render where the old virtual cursor left it.
+func TestModelViewCursorAnchorsIME(t *testing.T) {
+	m := NewModel(Options{Model: "test-model"})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 10})
+	mm := next.(Model)
+	view := mm.View()
+	if view.Cursor == nil {
+		t.Fatal("View must attach a real cursor while the composer is focused")
+	}
+	// The caret row is the editor's first text row: find the placeholder line.
+	caretRow := -1
+	for i, r := range strings.Split(view.Content, "\n") {
+		if strings.Contains(stripANSI(r), "Type a message") {
+			caretRow = i
+			break
+		}
+	}
+	if caretRow < 0 {
+		t.Fatalf("placeholder line missing from view:\n%s", view.Content)
+	}
+	if view.Cursor.Position.Y != caretRow {
+		t.Errorf("cursor Y = %d, want caret row %d", view.Cursor.Position.Y, caretRow)
+	}
+	if view.Cursor.Position.X != 2 {
+		t.Errorf("cursor X = %d, want 2 (after prompt)", view.Cursor.Position.X)
 	}
 }
