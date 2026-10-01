@@ -10,11 +10,12 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 )
 
-// This file renders finalized assistant turns as Markdown inside the TUI
-// transcript (fix #3, mirroring the REPL's ui.RenderMarkdown). The REPL renders
-// once at turn-end because Markdown can only be laid out when the whole block is
-// known; the transcript does the same — only a finalized assistant block is
-// passed through here, never the still-streaming one.
+// This file renders assistant turns as Markdown inside the TUI transcript
+// (fix #3, mirroring the REPL's ui.RenderMarkdown). The REPL renders once at
+// turn-end; the transcript renders incrementally — the still-streaming block
+// goes through the same renderer, so styling appears as text arrives and the
+// turn-end render is a no-op instead of a flash. Partial Markdown converges as
+// more text streams in.
 //
 // Unlike the REPL's shared renderer (WithWordWrap(0), which relies on the raw
 // terminal to soft-wrap), the transcript lives inside a fixed-width viewport

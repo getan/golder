@@ -76,6 +76,12 @@ type transcript struct {
 	// duplicate the pre-card text). Reset on every new user turn.
 	sealedThisTurn bool
 
+	// renderCache memoizes per-block renders for stable (sealed) blocks so a
+	// streaming delta only pays for the live block, not a full-history glamour
+	// pass. Keyed by block index (blocks are append-only; reset clears it).
+	// Tool cards and the streaming assistant block are never cached.
+	renderCache map[int]string
+
 	// lines caches the last renderAll split: the transcript's full content lines
 	// in order. Mouse selection endpoints anchor into these indices (see
 	// selection), so scrolling preserves the highlight instead of clearing it;
@@ -121,6 +127,10 @@ func (t *transcript) setSize(width, height int) {
 	}
 	if height < 0 {
 		height = 0
+	}
+	if width != t.totalWidth {
+		// Cached block renders were wrapped to the old width.
+		t.renderCache = nil
 	}
 	t.totalWidth = width
 	t.vp.SetHeight(height)
@@ -432,6 +442,9 @@ func (t *transcript) contentLines() []string { return t.lines }
 // transcript body string. Consecutive turns are separated by a blank line before
 // a new user turn so requests read as visually distinct.
 func (t *transcript) renderAll() string {
+	if t.renderCache == nil {
+		t.renderCache = map[int]string{}
+	}
 	var b strings.Builder
 	for i, blk := range t.blocks {
 		if i > 0 {
@@ -440,19 +453,56 @@ func (t *transcript) renderAll() string {
 				b.WriteByte('\n')
 			}
 		}
+		// Stable blocks (everything except the live streaming assistant block
+		// and mutating tool cards) render once and are reused: without this,
+		// every streaming delta would re-run glamour over the whole history.
+		if stableBlock(blk, i == t.activeAssistant) {
+			if s, ok := t.renderCache[i]; ok {
+				b.WriteString(s)
+				continue
+			}
+			s := t.renderBlock(blk, false)
+			t.renderCache[i] = s
+			b.WriteString(s)
+			continue
+		}
+		// The live block (or a tool card) always re-renders, and never
+		// pollutes the cache: the streaming block's text is still growing,
+		// and a card's state/response mutates in place on completion.
+		delete(t.renderCache, i)
 		b.WriteString(t.renderBlock(blk, i == t.activeAssistant))
 	}
 	return b.String()
 }
 
+// stableBlock reports whether a block's render is immutable: user/system/banner
+// turns and finalized assistant turns never change after they are sealed, while
+// the streaming assistant block and tool cards (completed in place on tool end)
+// must re-render every pass.
+func stableBlock(blk transcriptBlock, streaming bool) bool {
+	if streaming {
+		return false
+	}
+	switch blk.role {
+	case roleUser, roleSystem, roleBanner:
+		return true
+	case roleAssistant:
+		return true
+	default:
+		return false
+	}
+}
+
 // renderBlock wraps a block's text to the content width and applies the role's
 // theme style. Wrapping happens on the raw text (measured in display columns via
 // WrapToWidth) before styling so ANSI escapes never confuse the width math and
-// no double-width rune is split. A finalized assistant block is rendered as
-// Markdown (fix #3, mirroring the REPL's turn-end render); the still-streaming
-// block (streaming==true) stays plain text because Markdown can only be laid out
-// once the whole block is known.
-func (t transcript) renderBlock(blk transcriptBlock, streaming bool) string {
+// no double-width rune is split. Assistant blocks render as Markdown in BOTH
+// phases (codex parity): the still-streaming block goes through the same
+// renderMarkdown as the finalized one, so colors appear incrementally and the
+// turn-end render is a no-op instead of a plain→styled flash. Partial Markdown
+// (an unclosed fence or emphasis run) renders transiently and converges as more
+// text arrives; glamour tolerates the prefix without error.
+func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	if blk.role == roleTool && blk.card != nil {
 		return blk.card.render(t.theme, t.width)
 	}
@@ -464,19 +514,16 @@ func (t transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	case roleSystem:
 		return t.theme.System.Render(WrapToWidth(blk.text, t.width))
 	default:
-		if streaming {
-			return t.theme.Assistant.Render(WrapToWidth(blk.text, t.width))
-		}
 		return renderMarkdown(blk.text, t.width)
 	}
 }
 
-// renderUserBlock renders a user turn as a visually distinct block: every
-// wrapped line carries a `› ` gutter in the User style (bold bright-white)
-// so prompts never blend into assistant replies or dim system notes. Wrapping
-// accounts for the 2-cell gutter so CJK/emoji never overflow the transcript
-// width. This mirrors codex's `User ›` history cell: the speaker is
-// obvious at a glance, while assistant text stays gutter-free.
+// renderUserBlock renders a user turn as a full-width bar: every wrapped line
+// carries a `› ` gutter painted on the User background (bold bright-white on
+// dark gray) and is padded to the transcript width so the background spans
+// edge to edge like codex's `User ›` history cell. Wrapping accounts for the
+// 2-cell gutter so CJK/emoji never overflow the transcript width, while the
+// bar itself makes prompts obvious at a glance and assistant text stays bar-free.
 func renderUserBlock(theme Theme, text string, width int) string {
 	avail := width - 2
 	if avail < 1 {
@@ -484,8 +531,15 @@ func renderUserBlock(theme Theme, text string, width int) string {
 	}
 	wrapped := WrapToWidth(text, avail)
 	lines := splitLines(wrapped)
+	if width <= 0 {
+		for i, ln := range lines {
+			lines[i] = theme.User.Render("› " + ln)
+		}
+		return joinLines(lines)
+	}
+	bar := theme.User.Width(width).MaxWidth(width)
 	for i, ln := range lines {
-		lines[i] = theme.User.Render("› " + ln)
+		lines[i] = bar.Render("› " + ln)
 	}
 	return joinLines(lines)
 }

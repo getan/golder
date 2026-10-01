@@ -63,6 +63,7 @@ const (
 	colorScroll   = "250" // scrollbar thumb (bright gray pill, clearly visible)
 	colorTrack    = "240" // scrollbar groove (dim gray, visible but recessive)
 	colorUser     = "15"  // bright white
+	colorUserBg   = "237" // user turn bar background (dark gray, codex history-cell parity)
 	colorAssist   = "252" // near-white
 	colorStatus   = "62"  // status bar background (violet)
 	colorSpinner  = "173" // spinner glyph/verb (warm coral, matches Claude Code)
@@ -77,6 +78,7 @@ func DefaultTheme() Theme {
 	return Theme{
 		User: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorUser)).
+			Background(lipgloss.Color(colorUserBg)).
 			Bold(true),
 		Assistant: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorAssist)),

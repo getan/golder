@@ -339,3 +339,55 @@ func TestTranscriptUserGutter(t *testing.T) {
 		t.Errorf("multiline user block should gutter every line; got:\n%q", content)
 	}
 }
+
+// TestStreamingMarkdownNoFlash streams an answer in pieces and asserts the last
+// streaming render is byte-identical to the finalized render: both phases run
+// the same renderMarkdown, so turn-end is a no-op instead of a plain→styled
+// flash (codex parity: style incrementally, never restyle at the end).
+func TestStreamingMarkdownNoFlash(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 12)
+	full := "Go 的 `select` 专门等多个 channel：\n\n- 多路复用\n- 随机选一个\n"
+	// Split mid-construct on purpose: partial Markdown must still render.
+	tr.appendDelta(full[:20])
+	_ = tr.renderAll()
+	tr.appendDelta(full[20:])
+	streaming := tr.renderAll()
+
+	tr.finalizeTurn(agentcore.AssistantMessage{
+		Content: agentcore.ContentList{agentcore.NewTextContent(full)},
+	})
+	if got := tr.renderAll(); got != streaming {
+		t.Errorf("finalized render differs from streaming render (flash):\nstreaming: %q\nfinalized: %q", streaming, got)
+	}
+}
+
+// TestStableBlockCacheReuse finalizes one assistant turn, streams the next, and
+// asserts the sealed block's render is memoized (not re-run per delta) and
+// survives width-preserving reflows but drops on resize.
+func TestStableBlockCacheReuse(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 12)
+	tr.appendDelta("first turn")
+	tr.finalizeTurn(agentcore.AssistantMessage{
+		Content: agentcore.ContentList{agentcore.NewTextContent("first turn")},
+	})
+	first := tr.renderAll()
+	sealed, ok := tr.renderCache[0]
+	if !ok {
+		t.Fatal("sealed assistant block must be cached after render")
+	}
+	tr.appendDelta("second")
+	second := tr.renderAll()
+	if tr.renderCache[0] != sealed {
+		t.Error("streaming the next turn must not evict the sealed block's cache")
+	}
+	if !strings.HasPrefix(second, first) {
+		t.Errorf("second render must extend the first render:\nfirst: %q\nsecond: %q", first, second)
+	}
+	tr.setSize(50, 12)
+	_ = tr.renderAll()
+	if _, ok := tr.renderCache[0]; !ok {
+		t.Fatal("resize must rebuild the cache entry at the new width")
+	}
+}
