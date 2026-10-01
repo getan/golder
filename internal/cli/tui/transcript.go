@@ -439,8 +439,9 @@ func (t *transcript) setContent(rendered string) {
 func (t *transcript) contentLines() []string { return t.lines }
 
 // renderAll joins every block, rendered to the current content width, into the
-// transcript body string. Consecutive turns are separated by a blank line before
-// a new user turn so requests read as visually distinct.
+// transcript body string. User turns are separated by a blank line on both sides
+// so the bar breathes like codex's history cell: a blank line before the bar
+// and another blank line after it before the reply starts.
 func (t *transcript) renderAll() string {
 	if t.renderCache == nil {
 		t.renderCache = map[int]string{}
@@ -449,7 +450,7 @@ func (t *transcript) renderAll() string {
 	for i, blk := range t.blocks {
 		if i > 0 {
 			b.WriteByte('\n')
-			if blk.role == roleUser {
+			if blk.role == roleUser || t.blocks[i-1].role == roleUser {
 				b.WriteByte('\n')
 			}
 		}
@@ -518,12 +519,12 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	}
 }
 
-// renderUserBlock renders a user turn as a full-width bar: every wrapped line
-// carries a `› ` gutter painted on the User background (bold bright-white on
-// dark gray) and is padded to the transcript width so the background spans
-// edge to edge like codex's `User ›` history cell. Wrapping accounts for the
-// 2-cell gutter so CJK/emoji never overflow the transcript width, while the
-// bar itself makes prompts obvious at a glance and assistant text stays bar-free.
+// renderUserBlock renders a user turn as a full-width bar like codex's history
+// cell: only the first wrapped line carries the `› ` gutter, continuation lines
+// are indented two cells to align, all painted on the User background and padded
+// to the transcript width so the background spans edge to edge. A one-line
+// vertical padding above and below makes the bar breathe instead of hugging the
+// text, while assistant text stays bar-free.
 func renderUserBlock(theme Theme, text string, width int) string {
 	avail := width - 2
 	if avail < 1 {
@@ -533,15 +534,24 @@ func renderUserBlock(theme Theme, text string, width int) string {
 	lines := splitLines(wrapped)
 	if width <= 0 {
 		for i, ln := range lines {
-			lines[i] = theme.User.Render("› " + ln)
+			if i == 0 {
+				lines[i] = theme.User.Render("› " + ln)
+			} else {
+				lines[i] = theme.User.Render("  " + ln)
+			}
 		}
 		return joinLines(lines)
 	}
-	bar := theme.User.Width(width).MaxWidth(width)
+	content := make([]string, len(lines))
 	for i, ln := range lines {
-		lines[i] = bar.Render("› " + ln)
+		if i == 0 {
+			content[i] = "› " + ln
+		} else {
+			content[i] = "  " + ln
+		}
 	}
-	return joinLines(lines)
+	bar := theme.User.Width(width).MaxWidth(width).Padding(1, 0, 1, 0)
+	return bar.Render(joinLines(content))
 }
 
 // splitLines splits on newline without trimming, keeping empty lines so

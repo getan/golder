@@ -218,9 +218,9 @@ func TestTranscriptCJKWrap(t *testing.T) {
 // caps "▄"/"▀") sits alongside the thin groove "│".
 func TestTranscriptScrollbar(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
-	tr.setSize(20, 4) // 4 visible rows
+	tr.setSize(20, 8) // user bars carry 1-line vertical padding, so fit needs room
 
-	// Two short lines fit in 4 rows: no scrollbar at all — no thumb, no groove.
+	// Two short bars fit in 8 rows: no scrollbar at all — no thumb, no groove.
 	tr.addUser("one")
 	tr.addUser("two")
 	if tr.overflowing() {
@@ -231,7 +231,7 @@ func TestTranscriptScrollbar(t *testing.T) {
 		t.Errorf("expected no scrollbar glyphs while content fits; got:\n%q", fit)
 	}
 
-	// Enough lines to exceed 4 rows: now it overflows, thumb shrinks and the
+	// Enough lines to exceed 8 rows: now it overflows, thumb shrinks and the
 	// groove appears.
 	for i := 0; i < 10; i++ {
 		tr.addUser("line")
@@ -323,8 +323,9 @@ func TestModelScrollbarDrag(t *testing.T) {
 	}
 }
 
-// TestTranscriptUserGutter verifies user turns render with a › gutter so
-// prompts never blend into assistant replies (codex user-cell parity).
+// TestTranscriptUserGutter verifies user turns render as a codex-style bar: a
+// single leading › gutter plus full-width background so prompts never blend
+// into assistant replies. Continuation lines indent instead of repeating ›.
 func TestTranscriptUserGutter(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(40, 20)
@@ -335,8 +336,14 @@ func TestTranscriptUserGutter(t *testing.T) {
 	}
 	tr.addUser("line one\nline two")
 	content = stripANSI(tr.vp.GetContent())
-	if !strings.Contains(content, "› line one") || !strings.Contains(content, "› line two") {
-		t.Errorf("multiline user block should gutter every line; got:\n%q", content)
+	if !strings.Contains(content, "› line one") {
+		t.Errorf("multiline user block should gutter first line; got:\n%q", content)
+	}
+	if strings.Contains(content, "› line two") {
+		t.Errorf("continuation lines should indent, not repeat ›; got:\n%q", content)
+	}
+	if !strings.Contains(content, "  line two") {
+		t.Errorf("continuation line should indent two cells; got:\n%q", content)
 	}
 }
 
