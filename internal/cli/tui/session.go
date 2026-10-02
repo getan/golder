@@ -487,12 +487,13 @@ func (s *runSession) persist() error {
 // seedTranscript replays a resumed session's prior messages into the transcript
 // so the user sees the conversation so far before re-prompting (the TUI analogue
 // of repl.replayTranscript). User and assistant text become their respective
-// blocks; assistant tool calls render as system lines, except a todo call,
-// whose checklist is its payload and replays as a full card (a bare
-// "Ran todo N tasks" line would lose the task list). Tool-result messages are
-// omitted here — their content is echoed live during a run, and replaying raw
-// results would clutter the resumed view.
+// blocks, and every tool call replays as the same card the live run showed —
+// paired with its recorded result, so the response body, the colored diff, and
+// the warn state survive a restart. Cards replay folded exactly as they were
+// (apply_patch expanded, reads folded), so a resumed transcript reads like the
+// session it continues.
 func seedTranscript(t *transcript, history []agentcore.Message) {
+	results := toolResultsByCallID(history)
 	for _, m := range history {
 		switch msg := m.(type) {
 		case agentcore.UserMessage:
@@ -504,47 +505,50 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 				t.finalizeTurn(msg)
 			}
 			for _, c := range msg.ToolCalls() {
-				if card := replayToolCard(c); card != nil {
-					t.addToolCard(card)
-					continue
+				var res *agentcore.ToolResultMessage
+				if r, ok := results[c.ID]; ok {
+					res = &r
 				}
-				t.addSystem(compactToolCallLine(c))
+				t.addToolCard(replayToolCard(c, res))
 			}
 		}
 	}
 }
 
-// replayToolCard rebuilds a full tool card for a historical call whose
-// arguments are the content worth showing — todo today, where the checklist
-// would otherwise collapse into a bare "Ran todo N tasks" system line. Other
-// calls replay compactly (compactToolCallLine): their value is in the result,
-// which replay intentionally omits.
-func replayToolCard(c agentcore.ToolCallContent) *toolCard {
-	if !strings.EqualFold(c.Name, "todo") {
-		return nil
+// toolResultsByCallID indexes a session's tool results by the call they answer,
+// so a replayed call can find its own result.
+func toolResultsByCallID(history []agentcore.Message) map[string]agentcore.ToolResultMessage {
+	results := make(map[string]agentcore.ToolResultMessage)
+	for _, m := range history {
+		if tr, ok := m.(agentcore.ToolResultMessage); ok && tr.ToolCallID != "" {
+			results[tr.ToolCallID] = tr
+		}
 	}
-	var input map[string]any
-	if len(c.Arguments) > 0 {
-		_ = json.Unmarshal(c.Arguments, &input)
-	}
-	card := toolCard{name: c.Name, input: input, state: cardSuccess}
-	if len(card.todoItems()) == 0 {
-		return nil
-	}
-	return &card
+	return results
 }
 
-// compactToolCallLine renders a historical tool call exactly like a collapsed
-// live card (`• Ran name(args)`), so resume replay and live runs share one
-// visual language. Arguments decode best-effort; undecodable args yield the
-// bare name. History is always finished, hence the `Ran` verb.
-func compactToolCallLine(c agentcore.ToolCallContent) string {
+// replayToolCard rebuilds the finished card a historical tool call produced.
+// res is the call's recorded result, or nil when the call never ran (the run
+// was interrupted before it); that case mirrors the live closeout and lands on
+// cardWarn so the transcript does not promise output that never arrived.
+func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessage) *toolCard {
 	var input map[string]any
 	if len(c.Arguments) > 0 {
 		_ = json.Unmarshal(c.Arguments, &input)
 	}
-	card := toolCard{name: c.Name, input: input, state: cardSuccess}
-	return "• " + card.title()
+	card := &toolCard{
+		id:       c.ID,
+		name:     c.Name,
+		input:    input,
+		state:    cardSuccess,
+		expanded: defaultCardExpanded(c.Name),
+	}
+	if res == nil {
+		card.state = cardWarn
+		return card
+	}
+	card.complete(!res.IsError, agentcore.ContentToText(res.Content), res.Details)
+	return card
 }
 
 // switchTo replaces the active session with the stored session id, persisting

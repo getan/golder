@@ -80,10 +80,12 @@ func TestResumeSeedsTranscript(t *testing.T) {
 	}
 }
 
-// TestSeedTranscriptTodoCard verifies a resumed session replays a todo call as
-// a full card (checklist visible) rather than a bare "Ran todo N tasks"
-// system line, while other tool calls keep the compact replay.
-func TestSeedTranscriptTodoCard(t *testing.T) {
+// TestSeedTranscriptReplaysToolCards verifies a resumed session reconstructs
+// the same cards the live run showed: each call is paired with its recorded
+// result (so the response body survives), the todo card keeps its checklist,
+// and a call that never ran (interrupted) closes as a warn like the live
+// closeout rather than replaying as a compact system line.
+func TestSeedTranscriptReplaysToolCards(t *testing.T) {
 	args, err := json.Marshal(map[string]any{"todos": []any{
 		map[string]any{"content": "run tests", "status": "completed"},
 		map[string]any{"content": "commit", "status": "pending"},
@@ -97,37 +99,49 @@ func TestSeedTranscriptTodoCard(t *testing.T) {
 			Content: agentcore.ContentList{
 				agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "1", Name: "todo", Arguments: args},
 				agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "2", Name: "bash", Arguments: []byte(`{"command":"ls"}`)},
+				agentcore.ToolCallContent{Type: agentcore.ContentTypeToolCall, ID: "3", Name: "read", Arguments: []byte(`{"path":"never.go"}`)},
 			},
+		},
+		agentcore.ToolResultMessage{
+			RoleField: agentcore.RoleToolResult, ToolCallID: "1", ToolName: "todo",
+			Content: agentcore.ContentList{agentcore.NewTextContent("Todos:\n  [x] run tests\n  [ ] commit\n(1/2 completed)")},
+		},
+		agentcore.ToolResultMessage{
+			RoleField: agentcore.RoleToolResult, ToolCallID: "2", ToolName: "bash",
+			Content: agentcore.ContentList{agentcore.NewTextContent("a.go\nb.go")},
 		},
 	}
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(80, 24)
 	seedTranscript(&tr, history)
 
-	wantCard := false
+	cards := map[string]*toolCard{}
 	for _, blk := range tr.blocks {
 		if blk.role == roleTool && blk.card != nil {
-			wantCard = true
-			got := blk.card.render(DefaultTheme(), 80)
-			for _, want := range []string{"│ [x] run tests", "│ [ ] commit"} {
-				if !strings.Contains(got, want) {
-					t.Errorf("replayed todo card missing %q\n%s", want, got)
-				}
-			}
+			cards[blk.card.id] = blk.card
 		}
 	}
-	if !wantCard {
-		t.Fatal("todo call should replay as a tool card")
+	if len(cards) != 3 {
+		t.Fatalf("replayed cards = %d, want 3 (every call becomes a card)", len(cards))
 	}
-	// The bash call keeps the compact system line.
-	foundBash := false
-	for _, blk := range tr.blocks {
-		if blk.role == roleSystem && strings.Contains(blk.text, "Ran bash ls") {
-			foundBash = true
+	// The todo card keeps its checklist from the call's own arguments.
+	todo := cards["1"].render(DefaultTheme(), 80)
+	for _, want := range []string{"│ [x] run tests", "│ [ ] commit"} {
+		if !strings.Contains(todo, want) {
+			t.Errorf("replayed todo card missing %q\n%s", want, todo)
 		}
 	}
-	if !foundBash {
-		t.Error("non-todo calls should still replay as compact system lines")
+	// The bash card carries its recorded output.
+	bash := cards["2"].render(DefaultTheme(), 80)
+	if !strings.Contains(bash, "a.go") {
+		t.Errorf("replayed bash card missing its result\n%s", bash)
+	}
+	if cards["2"].state != cardSuccess {
+		t.Errorf("bash card state = %v, want success", cards["2"].state)
+	}
+	// The call with no recorded result never ran: warn, not success.
+	if cards["3"].state != cardWarn {
+		t.Errorf("unexecuted call state = %v, want warn", cards["3"].state)
 	}
 }
 

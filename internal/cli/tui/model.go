@@ -17,7 +17,6 @@ import (
 	"github.com/smallnest/pigo/internal/cli/memstatus"
 	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/status"
-	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/memory"
 	"github.com/smallnest/pigo/internal/runtime"
 )
@@ -631,7 +630,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		card := &toolCard{id: msg.id, name: msg.name, input: msg.input, state: cardRunning}
+		card := &toolCard{
+			id:       msg.id,
+			name:     msg.name,
+			input:    msg.input,
+			state:    cardRunning,
+			expanded: defaultCardExpanded(msg.name),
+		}
 		m.toolCards[msg.id] = card
 		m.lastToolCard = card
 		m.transcript.announceToolCard(card)
@@ -656,7 +661,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Create a rich tool-call card, index it by id for the later end event, and
 		// append it as an ordered transcript block so it renders inline (#389).
-		card := &toolCard{id: msg.id, name: msg.name, input: msg.input, state: cardRunning}
+		card := &toolCard{
+			id:       msg.id,
+			name:     msg.name,
+			input:    msg.input,
+			state:    cardRunning,
+			expanded: defaultCardExpanded(msg.name),
+		}
 		m.toolCards[msg.id] = card
 		m.lastToolCard = card
 		m.transcript.addToolCard(card)
@@ -695,20 +706,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flip the card's state and attach the parsed response tree. The card is
 		// held by pointer in the transcript, so a reflow re-renders it in place.
 		if card, ok := m.toolCards[msg.id]; ok {
-			if msg.ok {
-				card.state = cardSuccess
-			} else {
-				card.state = cardWarn
-			}
-			// A tool that reported a diff (edit) gets a colored Diff section; the
-			// diff is also embedded in the result text, so strip it there to keep
-			// the card from showing the change twice (#560).
-			result := msg.result
-			if diff, ok := ui.DiffFromDetails(msg.details); ok {
-				card.diff = diff
-				result = stripDiffTail(result)
-			}
-			card.response = parseToolResult(result)
+			card.complete(msg.ok, msg.result, msg.details)
 			m.transcript.reflow()
 		}
 		// Retire the sub-agent's status-panel row (a no-op for non-task tools whose id

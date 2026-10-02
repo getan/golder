@@ -9,6 +9,7 @@ package tui
 // Windows, and the bash lexer tokenizes the common subset those all accept.
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
@@ -60,11 +61,35 @@ func syntaxDark() bool {
 // A single plain span is returned when the lexer or theme is unavailable, so
 // the command always renders.
 func highlightShellCommand(cmd string, dark bool) []hlSpan {
-	key := "light\x00"
-	if dark {
-		key = "dark\x00"
+	// The bash lexer leaves external command names as plain text; the
+	// positional pass paints them the way codex's syntax theme does.
+	return recolorCommandWords(highlightCached("bash", cmd, dark), commandWordColor(dark), dark)
+}
+
+// highlightCodeLine tokenizes one line of file content with the lexer for
+// path's file type, using the same Catppuccin palette as command highlighting
+// (and as the Markdown code blocks). Line-at-a-time tokenization cannot see
+// multi-line state (a block comment, a raw string), which can miscolor a few
+// tokens; diff rows are short, and this keeps a reflow from running a
+// stateful lexer over the whole file. Unknown file types fall back to a
+// single uncolored span, so the line still renders.
+func highlightCodeLine(path, line string, dark bool) []hlSpan {
+	lexer := lexers.Match(filepath.Base(path))
+	if lexer == nil {
+		return []hlSpan{{text: line}}
 	}
-	key += cmd
+	return highlightCached(lexer.Config().Name, line, dark)
+}
+
+// highlightCached is the shared cache/fallback path for the two public
+// highlighters: results are memoized per (lexer, text, palette) because tool
+// cards re-render on every reflow, and a streaming turn reflows often.
+func highlightCached(lexerName, text string, dark bool) []hlSpan {
+	key := "light\x00" + lexerName + "\x00"
+	if dark {
+		key = "dark\x00" + lexerName + "\x00"
+	}
+	key += text
 	cmdHLMu.Lock()
 	if spans, ok := cmdHLCache[key]; ok {
 		cmdHLMu.Unlock()
@@ -72,7 +97,7 @@ func highlightShellCommand(cmd string, dark bool) []hlSpan {
 	}
 	cmdHLMu.Unlock()
 
-	spans := tokeniseShell(cmd, dark)
+	spans := tokenise(lexers.Get(lexerName), text, dark)
 
 	cmdHLMu.Lock()
 	if len(cmdHLCache) >= cmdHLCacheMax {
@@ -83,17 +108,16 @@ func highlightShellCommand(cmd string, dark bool) []hlSpan {
 	return spans
 }
 
-// tokeniseShell runs the bash lexer over cmd and resolves each token's color
-// from the Catppuccin theme. Adjacent tokens sharing a style are merged so a
-// wrapped line renders as few SGR runs as possible.
-func tokeniseShell(cmd string, dark bool) []hlSpan {
-	lexer := lexers.Get("bash")
+// tokenise runs one lexer over text and resolves each token's color from the
+// Catppuccin theme. Adjacent tokens sharing a style are merged so a wrapped
+// line renders as few SGR runs as possible. A nil lexer yields one plain span.
+func tokenise(lexer chroma.Lexer, text string, dark bool) []hlSpan {
 	if lexer == nil {
-		return []hlSpan{{text: cmd}}
+		return []hlSpan{{text: text}}
 	}
-	tokens, err := chroma.Tokenise(lexer, nil, cmd)
+	tokens, err := chroma.Tokenise(lexer, nil, text)
 	if err != nil || len(tokens) == 0 {
-		return []hlSpan{{text: cmd}}
+		return []hlSpan{{text: text}}
 	}
 	name := "catppuccin-mocha"
 	if !dark {
@@ -119,14 +143,12 @@ func tokeniseShell(cmd string, dark bool) []hlSpan {
 		if entry.Colour.IsSet() {
 			next.color = entry.Colour.String()
 		}
-		// chroma's bash lexer leaves command options as plain text; the
-		// positional pass below paints them (see recolorCommandWords).
 		spans = appendHLSpan(spans, next)
 	}
 	if len(spans) == 0 {
-		return []hlSpan{{text: cmd}}
+		return []hlSpan{{text: text}}
 	}
-	return recolorCommandWords(spans, commandWordColor(dark), dark)
+	return spans
 }
 
 func sameHLStyle(a, b hlSpan) bool {
@@ -398,9 +420,12 @@ func renderHLSpans(spans []hlSpan, fallback lipgloss.Style) string {
 		if s.text == "" {
 			continue
 		}
+		// Layer the token's attributes onto the fallback rather than
+		// replacing it: the fallback carries the row's context (the diff
+		// row's background, for one), which must survive the token color.
 		st := fallback
 		if s.color != "" {
-			st = lipgloss.NewStyle().Foreground(lipgloss.Color(s.color))
+			st = st.Foreground(lipgloss.Color(s.color))
 		}
 		if s.bold {
 			st = st.Bold(true)

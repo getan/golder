@@ -55,6 +55,20 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **Diff cards render like codex, and resume rebuilds real cards**: an
+  patch card carries the change counts in its headline
+  (`apply_patch path (+137 -0)`, additions green, removals red), suppresses the
+  tool's own "Applied N change(s)" summary as a duplicate, lists multi-file
+  diffs under `└ path (+N -M)` headers, and paints added/removed rows with
+  codex's diff washes (dark `#213A2B`/`#4A221D`, light
+  `#dafbe1`/`#ffebe9`) while the code itself stays syntax-highlighted (tabs
+  expand to four columns so the code keeps its indentation — diff rows no
+  longer run through the command wrapper, which folds whitespace); the
+  `---/+++` pair folds into the counts header. Patch cards default to
+  expanded, so the change is readable without a keypress. Resuming a session
+  now replays every tool call as the card the live run showed — paired with
+  its recorded result, diff included — instead of compact one-line summaries;
+  a call that never ran replays as a warn card, matching the live closeout.
 - **No more tool-turn cap**: the loop no longer force-stops a run after a fixed
   number of tool-calling turns (previously 40, inherited from pi). Like codex,
   a run ends when the model stops calling tools or the user interrupts, so

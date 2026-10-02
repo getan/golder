@@ -258,9 +258,9 @@ func TestToolCardDiffSection(t *testing.T) {
 	// color-stripped text for the plain-content checks.
 	plain := stripTCardANSI(out)
 	for _, want := range []string{
-		"edit f.txt",
-		"Edited f.txt (1 replacement(s))",
-		"--- a/f.txt",
+		// The headline carries the path and the counts, codex-style; the
+		// tool's own "Edited …" summary is suppressed as a duplicate.
+		"edit f.txt (+1 -1)",
 		"@@ -1,3 +1,3 @@",
 		"-beta",
 		"+BETA",
@@ -269,17 +269,24 @@ func TestToolCardDiffSection(t *testing.T) {
 			t.Errorf("render missing %q\n%s", want, plain)
 		}
 	}
-	// The diff lines are styled, not plain body text.
-	for _, styled := range []string{
-		theme.DiffDel.Render("    -beta"),
-		theme.DiffAdd.Render("    +BETA"),
-		theme.DiffHunk.Render("    @@ -1,3 +1,3 @@"),
-		theme.DiffCtx.Render("    --- a/f.txt"),
-		theme.DiffCtx.Render("     alpha"),
-	} {
-		if !strings.Contains(out, styled) {
-			t.Errorf("render missing styled diff line %q\n%s", styled, out)
-		}
+	if strings.Contains(plain, "--- a/f.txt") {
+		t.Errorf("the raw ---/+++ header should be folded into the counts line\n%s", plain)
+	}
+	if strings.Contains(plain, "Edited f.txt") {
+		t.Errorf("the response summary duplicates the headline and must be suppressed\n%s", plain)
+	}
+	// Changed rows carry the codex background wash (dark palette here) and
+	// keep the body text readable.
+	// The wash is emitted as a truecolor background SGR; the values are
+	// codex's DARK_TC_ADD/DEL constants for the dark palette.
+	if !strings.Contains(out, "48;2;33;58;43") {
+		t.Errorf("added row missing its background wash\n%q", out)
+	}
+	if !strings.Contains(out, "48;2;74;34;29") {
+		t.Errorf("removed row missing its background wash\n%q", out)
+	}
+	if !strings.Contains(out, theme.DiffHunk.Render("    @@ -1,3 +1,3 @@")) {
+		t.Errorf("hunk marker should stay cyan\n%q", out)
 	}
 }
 
@@ -295,16 +302,17 @@ func TestToolCardDiffCollapseExpand(t *testing.T) {
 	}
 	card := toolCard{
 		name:     "edit",
+		input:    map[string]any{"path": "f.txt"},
 		response: parseToolResult("Edited f.txt (1 replacement(s))"),
 		diff:     b.String(),
 		state:    cardSuccess,
 	}
 
-	// The summary line is previewed; the 2 headers + 4 additions stay hidden
+	// A diff card's body is the diff itself: collapsed, its 4 rows hide
 	// behind the hint.
 	collapsed := card.render(theme, 60)
-	if !strings.Contains(collapsed, "\u2026 +6 lines (ctrl+t or click to expand)") {
-		t.Errorf("collapsed card should hint 6 hidden lines\n%s", collapsed)
+	if !strings.Contains(collapsed, "\u2026 +4 lines (ctrl+t or click to expand)") {
+		t.Errorf("collapsed card should hint 4 hidden lines\n%s", collapsed)
 	}
 	if strings.Contains(collapsed, "+line") {
 		t.Errorf("collapsed card should not show diff lines\n%s", collapsed)
@@ -315,8 +323,13 @@ func TestToolCardDiffCollapseExpand(t *testing.T) {
 	if strings.Contains(expanded, "click to expand") {
 		t.Errorf("expanded card should not show the hint\n%s", expanded)
 	}
-	if got := strings.Count(expanded, "+line"); got != adds {
-		t.Errorf("expanded card shows %d additions, want %d\n%s", got, adds, expanded)
+	// The sign and the content are styled separately, so count the signs.
+	plain := stripTCardANSI(expanded)
+	if got := strings.Count(plain, "+line"); got != adds {
+		t.Errorf("expanded card shows %d additions, want %d\n%s", got, adds, plain)
+	}
+	if !strings.Contains(plain, "f.txt (+4 -0)") {
+		t.Errorf("expanded card should carry the change counts\n%s", plain)
 	}
 }
 
@@ -582,5 +595,35 @@ func TestModelRunEndClosesRunningCards(t *testing.T) {
 	}
 	if got := m.toolCards["t1"].state; got != cardWarn {
 		t.Fatalf("closed card state = %v, want cardWarn (interrupted)", got)
+	}
+}
+
+// TestDefaultCardExpanded pins the fold defaults: patch cards start expanded
+// (the diff is the card's whole point), reading tools stay folded so a long
+// read cannot bury the transcript.
+func TestDefaultCardExpanded(t *testing.T) {
+	for _, name := range []string{"apply_patch", "edit", "Apply_Patch"} {
+		if !defaultCardExpanded(name) {
+			t.Errorf("%q should default to expanded", name)
+		}
+	}
+	for _, name := range []string{"read", "bash", "grep", "todo"} {
+		if defaultCardExpanded(name) {
+			t.Errorf("%q should default to folded", name)
+		}
+	}
+}
+
+// TestModelApplyPatchCardStartsExpanded drives the live creation path: a tool
+// start for apply_patch opens its card expanded, unlike a read.
+func TestModelApplyPatchCardStartsExpanded(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = apply(t, m, toolStartMsg{id: "p1", name: "apply_patch", input: map[string]any{"patch": "x"}})
+	if !m.toolCards["p1"].expanded {
+		t.Error("apply_patch card should start expanded")
+	}
+	m = apply(t, m, toolStartMsg{id: "r1", name: "read", input: map[string]any{"path": "a.go"}})
+	if m.toolCards["r1"].expanded {
+		t.Error("read card should start folded")
 	}
 }

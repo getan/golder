@@ -5,8 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"charm.land/lipgloss/v2"
-
+	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/patch"
 )
 
@@ -198,6 +197,12 @@ func (c toolCard) renderShellHeadline(theme Theme, width int, verb, cmd string) 
 // carrying the `└ ` output gutter, and reports how many body lines remain
 // hidden (further response lines plus any diff the card carries).
 func (c toolCard) preview(theme Theme, width, n int) (string, int) {
+	if c.diff != "" {
+		// A diff card's body is the diff: collapsed, it previews nothing and
+		// reports the whole thing as hidden, so the hint's count matches what
+		// expanding reveals. (Patch cards open expanded by default.)
+		return "", c.totalBodyLines()
+	}
 	inner := max(1, width-2)
 	var b strings.Builder
 	shown := 0
@@ -217,24 +222,77 @@ func (c toolCard) preview(theme Theme, width, n int) (string, int) {
 	return b.String(), c.totalBodyLines() - shown
 }
 
-// headline is the tool name plus its most salient argument.
+// headline is the tool name plus its most salient argument. A card carrying a
+// diff appends the change counts, codex-style (`apply_patch src/x.go (+37 -0)`),
+// so the headline summarises the edit the way codex's "Edited path" line does
+// and the diff body needs no separate header for the single-file case.
 func (c toolCard) headline() string {
 	header := c.name
 	if arg := c.primaryArg(); arg != "" {
 		header = c.name + " " + oneLine(arg)
 	}
+	if c.diff != "" {
+		added, removed := diffTotals(c.diff)
+		header += fmt.Sprintf(" (+%d -%d)", added, removed)
+	}
 	return header
 }
 
 // totalBodyLines counts every body line a card can show: its response lines
-// plus the diff's lines (the edit-family tools move the diff out of the
-// response into its own section).
+// plus the diff's rendered lines (the edit-family tools move the diff out of
+// the response into its own section). Per file the renderer folds the raw
+// ---/+++ header pair into one counts line, so count that instead of two.
+// A card with a diff suppresses its response: the tool's text summary said the
+// same thing the headline and the diff headers say.
 func (c toolCard) totalBodyLines() int {
-	n := len(c.response)
-	if c.diff != "" {
-		n += len(strings.Split(strings.TrimRight(c.diff, "\n"), "\n"))
+	if c.diff == "" {
+		return len(c.response)
+	}
+	sections := parseUnifiedDiff(c.diff)
+	n := 0
+	for i, sec := range sections {
+		n += len(sec.lines)
+		if len(sections) > 1 {
+			n++
+			if i > 0 {
+				n++ // the blank line between file chunks
+			}
+		}
 	}
 	return n
+}
+
+// complete attaches a finished tool call's outcome to its card: the terminal
+// state, the response tree, and — when the tool reported one — the diff. It is
+// the single definition of what a finished card looks like, shared by the live
+// tool-end path and session replay so the two cannot drift.
+func (c *toolCard) complete(ok bool, result string, details any) {
+	if ok {
+		c.state = cardSuccess
+	} else {
+		c.state = cardWarn
+	}
+	// A tool that reported a diff gets the dedicated colored Diff section; the
+	// diff is also embedded in the result text, so strip it there to keep the
+	// card from showing the change twice (#560).
+	if diff, ok := ui.DiffFromDetails(details); ok {
+		c.diff = diff
+		result = stripDiffTail(result)
+	}
+	c.response = parseToolResult(result)
+}
+
+// defaultCardExpanded reports whether a tool's cards start expanded. Patch and
+// edit cards do: the diff is the whole point of the card, and folding it hides
+// the change behind a keypress — reading tools stay folded so a long read
+// cannot bury the transcript.
+func defaultCardExpanded(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "apply_patch", "edit", "write":
+		return true
+	default:
+		return false
+	}
 }
 
 // renderDetail renders the expanded sections under the header line with
@@ -276,23 +334,21 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		}
 	}
 	wroteOutput := false
-	for i, n := range c.response {
-		indent := strings.Repeat("  ", n.depth)
-		text := indent + n.text
-		if i == 0 {
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
-		} else {
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
-		}
-		wroteOutput = true
-	}
 	if c.diff != "" {
-		for i, ln := range strings.Split(strings.TrimRight(c.diff, "\n"), "\n") {
-			prefix := "    "
-			if !wroteOutput && i == 0 {
-				prefix = "  └ "
+		// The diff replaces the response body: the tool's own text was the
+		// per-file summary, which the headline and the diff headers already
+		// carry (codex does the same — its header line IS the summary).
+		b.WriteString(renderDiff(theme, c.diff, inner))
+		wroteOutput = true
+	} else {
+		for i, n := range c.response {
+			indent := strings.Repeat("  ", n.depth)
+			text := indent + n.text
+			if i == 0 {
+				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
+			} else {
+				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
 			}
-			b.WriteString("\n" + diffLineStyle(theme, ln).Render(WrapToWidth(prefix+ln, inner)))
 			wroteOutput = true
 		}
 	}
@@ -368,24 +424,6 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// diffLineStyle picks the theme style for one unified-diff line, mirroring
-// ui.RenderDiffLine's compact-REPL coloring: dim file headers and context,
-// cyan @@ hunk markers, red removals, green additions.
-func diffLineStyle(theme Theme, line string) lipgloss.Style {
-	switch {
-	case strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ "):
-		return theme.DiffCtx
-	case strings.HasPrefix(line, "@@"):
-		return theme.DiffHunk
-	case strings.HasPrefix(line, "-"):
-		return theme.DiffDel
-	case strings.HasPrefix(line, "+"):
-		return theme.DiffAdd
-	default:
-		return theme.DiffCtx
-	}
 }
 
 // stripDiffTail removes the trailing unified diff from a tool result text so
