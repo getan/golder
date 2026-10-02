@@ -71,11 +71,6 @@ type StopDecision struct {
 // RunConfig is the full configuration for a loop run: the per-turn streaming
 // config (embedded LoopConfig), the batch tool-execution config, and the four
 // loop-level hooks. Every hook is optional (nil = default behavior).
-// defaultMaxToolTurns bounds consecutive tool-carrying turns when
-// RunConfig.MaxToolTurns is unset: generous enough for real coding sessions,
-// tight enough that a runaway search loop always terminates.
-const defaultMaxToolTurns = 40
-
 type RunConfig struct {
 	LoopConfig
 	// Batch holds the tool registry and the prepare/before/after hooks used to
@@ -95,12 +90,6 @@ type RunConfig struct {
 	// ShouldStopAfterTurn runs after each turn_end; true ends the run with an
 	// agent_end event (FR-7).
 	ShouldStopAfterTurn func(ctx context.Context, agentCtx *agentcore.AgentContext) bool
-
-	// MaxToolTurns caps consecutive assistant turns that carry tool calls
-	// (local or hosted) before the loop force-stops with a stderr warning.
-	// Agentic hosted search can otherwise self-direct new rounds forever with
-	// no natural end. 0 selects defaultMaxToolTurns; negative disables the cap.
-	MaxToolTurns int
 
 	// OnStop, when set, is consulted right before the run would end naturally (no
 	// tool calls and no follow-up messages). Returning a decision with Block=true
@@ -213,7 +202,6 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	}
 
 	for { // outer loop: pending / follow-up messages
-		toolTurns := 0
 		for { // inner loop: turns until no tool calls
 			if err := emit(agentcore.TurnStartEvent{}); err != nil {
 				finish()
@@ -257,7 +245,6 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			calls := toAgentToolCalls(assistant.ToolCalls())
 			server := serverToolCalls(assistant.ToolCalls())
 			if len(calls) == 0 && len(server) == 0 {
-				toolTurns = 0
 				// Natural turn end: no tools to run.
 				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
 					finish()
@@ -276,19 +263,6 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// emitFrom feeds the parent stream and is run-scoped, so a child's
 			// SubAgentProgressEvent lands on the right run's stream.
 			toolCtx := agentcore.WithProgressEmitter(ctx, emitFrom)
-			toolTurns++
-			if max := maxToolTurns(cfg); max >= 0 && toolTurns > max {
-				// Runaway guard (agentic search loops have no natural end):
-				// close the turn visibly and stop, mirroring the Stop
-				// decorator's stderr warn-and-force-stop pattern (FR-12).
-				fmt.Fprintf(os.Stderr, "pigo: stopping after %d consecutive tool turns (MaxToolTurns=%d)\n", toolTurns, max)
-				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
-					finish()
-					return
-				}
-				finish()
-				return
-			}
 			// Hosted calls already ran provider-side: bracket them with
 			// display-only start/end events (tool cards without execution,
 			// approval, or registry lookup) around the local batch.
@@ -607,18 +581,6 @@ func serverToolCalls(blocks []agentcore.ToolCallContent) []agentcore.ToolCallCon
 		}
 	}
 	return out
-}
-
-// maxToolTurns resolves the consecutive tool-turn cap: an explicit
-// RunConfig.MaxToolTurns wins, 0 selects the default, negative disables.
-func maxToolTurns(cfg RunConfig) int {
-	if cfg.MaxToolTurns < 0 {
-		return -1
-	}
-	if cfg.MaxToolTurns == 0 {
-		return defaultMaxToolTurns
-	}
-	return cfg.MaxToolTurns
 }
 
 // serverAnsweredRunes is the text size above which a pure-hosted turn counts

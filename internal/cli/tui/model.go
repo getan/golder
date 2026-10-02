@@ -768,6 +768,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The run is over: any still-open sub-agent rows are stale (their tasks ended
 		// with the run), so clear the panel to reclaim its height.
 		m.subagents = subagentPanel{}
+		// Any card still marked running never received its end event — the run
+		// was interrupted, or it ended while a tool was pending. Leaving it as
+		// "Running" would promise output that will never arrive, so close it as
+		// a warn (the transcript keeps the call and its partial output).
+		for _, card := range m.toolCards {
+			if card.state == cardRunning {
+				card.state = cardWarn
+			}
+		}
 		m.relayout()
 		if msg.err != nil {
 			m.transcript.addSystem("Run ended: " + msg.err.Error())

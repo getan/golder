@@ -565,3 +565,22 @@ func TestToolCardHeadlineColors(t *testing.T) {
 		t.Errorf("headline still paints a segment in 256-color 39 (blue)\n%q", out)
 	}
 }
+
+// TestModelRunEndClosesRunningCards is the regression for the "stuck Running
+// card" report: when a run ends while a tool card is still open (the run was
+// interrupted, or the tool never delivered its end event), the card must be
+// closed to a terminal state instead of promising output that never arrives.
+func TestModelRunEndClosesRunningCards(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 60, Height: 12})
+	m = apply(t, m, toolStartMsg{id: "t1", name: "read", input: map[string]any{"path": "a.go"}})
+	if m.toolCards["t1"].state != cardRunning {
+		t.Fatal("card should be running after toolStartMsg")
+	}
+	m = apply(t, m, runEndMsg{})
+	if got := m.toolCards["t1"].state; got == cardRunning {
+		t.Fatal("run end must close a running card, still cardRunning")
+	}
+	if got := m.toolCards["t1"].state; got != cardWarn {
+		t.Fatalf("closed card state = %v, want cardWarn (interrupted)", got)
+	}
+}
