@@ -49,6 +49,30 @@ func (r *SeatbeltRunner) tmpDir() string {
 	return os.TempDir()
 }
 
+// canonicals returns the path plus its symlink-resolved form (deduped).
+// macOS temp dirs live under /var, which is a symlink to /private/var, while
+// the sandbox matches on the canonical vnode path — a profile carrying only
+// the symlinked form silently denies every write it meant to allow. Carrying
+// both keeps the profile correct regardless of which form the caller used.
+func canonicals(p string) []string {
+	if p == "" {
+		return nil
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || real == p {
+		return []string{p}
+	}
+	return []string{p, real}
+}
+
+func quoteAll(paths []string) string {
+	quoted := make([]string, 0, len(paths))
+	for _, p := range paths {
+		quoted = append(quoted, fmt.Sprintf("(subpath %s)", quote(p)))
+	}
+	return strings.Join(quoted, " ")
+}
+
 // writeProfile renders the seatbelt profile with absolute paths and stores
 // it under the temp dir. Reads stay broad (toolchains live all over /usr,
 // /opt, home); writes are confined to the project and temp dirs; live
@@ -75,11 +99,11 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 (allow mach-lookup)
 (allow sysctl-read)
 (allow file-read* (subpath "/"))
-(allow file-write* (subpath %q) (subpath %q) (literal "/dev/null") (literal "/dev/tty"))
+(allow file-write* %s %s (literal "/dev/null") (literal "/dev/tty"))
 (deny file-write* (subpath %q) (subpath %q) (regex #".*trust\.json$"))
 (allow network*)
 `,
-		quote(project), quote(r.tmpDir()), quote(sshDir), quote(gpgDir),
+		quoteAll(canonicals(project)), quoteAll(canonicals(r.tmpDir())), quote(sshDir), quote(gpgDir),
 	)
 	f, err := os.CreateTemp(r.tmpDir(), "pigo-sandbox-*.sb")
 	if err != nil {

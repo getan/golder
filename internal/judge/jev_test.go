@@ -24,7 +24,12 @@ func TestEscalate(t *testing.T) {
 		{Sandbox, 0.80, Sandbox},
 		{Sandbox, 0.30, Deny},
 		{Deny, 0.99, Deny},
-		{Deny, 0.0, Deny},
+		// A direct deny needs strong evidence: below denyConfidence it is
+		// held at Sandbox, where the seatbelt runner contains it, rather
+		// than hard-blocking on a guess.
+		{Deny, 0.70, Deny},
+		{Deny, 0.50, Sandbox},
+		{Deny, 0.0, Sandbox},
 	}
 	for _, c := range cases {
 		if got := escalate(c.choice, c.conf); got != c.want {

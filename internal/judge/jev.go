@@ -15,9 +15,10 @@ package judge
 //     wait on classification.
 //  2. One choice call (allow/confirm/sandbox/deny) with the tool name,
 //     truncated arguments, and the directory-trust note as state.
-//  3. Low confidence escalates one tier toward Deny. Allow additionally
-//     requires high confidence; anything ambiguous lands on Confirm or
-//     higher, never on Allow.
+//  3. Low confidence escalates one tier toward Deny, except a direct deny
+//     claim below denyConfidence is held at Sandbox where the seatbelt
+//     runner contains it. Allow additionally requires high confidence;
+//     anything ambiguous lands on Confirm or higher, never on Allow.
 //  4. Any failure (timeout, transport error, malformed answer) degrades to
 //     Confirm — fail closed, never fail open. Failures are never cached;
 //     only successful Jev verdicts are cached per (tool, args, trust-note).
@@ -51,13 +52,15 @@ const (
 // allowConfidence is the bar for a frictionless run: Jev must pick "allow"
 // with at least this confidence, otherwise the call escalates to Confirm.
 // confirmConfidence is the bar for staying at confirm/sandbox; below it the
-// verdict escalates one tier toward Deny. Deny never downgrades on
-// confidence — a confident-looking "probably fine" must not override it.
+// verdict escalates one tier toward Deny. A direct deny claim needs strong
+// evidence (denyConfidence): a shaky deny is held at Sandbox, where the
+// seatbelt runner contains it, instead of hard-blocking on a guess.
 // Thresholds are per question type and must not be copied between choice
 // and noul/score questions (their probabilities are not interchangeable).
 const (
 	allowConfidence   = 0.75
 	confirmConfidence = 0.60
+	denyConfidence    = 0.70
 )
 
 // JevJudge is the Classifier implementation over the SystemOne API. The zero
@@ -212,7 +215,11 @@ func (j *JevJudge) Classify(ctx context.Context, tool string, args json.RawMessa
 }
 
 // escalate maps a (choice, confidence) pair onto the enforced tier. Low
-// confidence moves one step toward Deny; Deny itself never moves down.
+// confidence moves one step toward Deny, except a direct deny claim below
+// denyConfidence is held at Sandbox: isolation contains a maybe-catastrophe
+// more usefully than a hard block on a guess. This is not a downgrade of a
+// confident deny — only of a shaky one — and it leaves the Sandbox-upgrade
+// rule below untouched: unsure-about-containable still fails closed to Deny.
 func escalate(choice Level, conf float64) Level {
 	switch choice {
 	case Allow:
@@ -231,6 +238,9 @@ func escalate(choice Level, conf float64) Level {
 		}
 		return Sandbox
 	default:
+		if conf < denyConfidence {
+			return Sandbox
+		}
 		return Deny
 	}
 }

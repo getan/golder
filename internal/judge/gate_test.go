@@ -91,6 +91,43 @@ func TestSandboxedDoesNotRescueDeny(t *testing.T) {
 	}
 }
 
+// TestDenyBlockCarriesGuidanceNotEscapeHatch pins the tier-dependent tails:
+// a Deny is a hard block, so it must carry actionable remediation (what to
+// change to get the call executable) and must NOT advertise PIGO_JUDGE=off —
+// pointing an over-eager model at the global off switch is how a hard block
+// becomes a habit. Recoverable tiers keep the escape-hatch hint.
+func TestDenyBlockCarriesGuidanceNotEscapeHatch(t *testing.T) {
+	t.Setenv("PIGO_JUDGE", "")
+	deny := &stubClassifier{v: Verdict{Level: Deny, Reasons: []string{"privilege escalation"}}}
+	gate := GateFunc(GateOpts{Floor: Sandbox}, deny)
+	dec := gate(context.Background(), toolCall("bash", `{"command":"sudo x"}`))
+	if dec == nil || !dec.Block {
+		t.Fatal("deny must block")
+	}
+	got := agentcore.ContentToText(*dec.Content)
+	if !strings.Contains(got, DenyGuidance) {
+		t.Errorf("deny block must carry the remediation guidance\n%q", got)
+	}
+	if strings.Contains(got, "PIGO_JUDGE=off") {
+		t.Errorf("deny block must not advertise the escape hatch\n%q", got)
+	}
+
+	// The sandbox tier (recoverable) keeps the hint, so the user is not left
+	// without a way out when no runner exists.
+	sandbox := &stubClassifier{v: Verdict{Level: Sandbox, Reasons: []string{"risky"}}}
+	dec = GateFunc(GateOpts{Floor: Sandbox}, sandbox)(context.Background(), toolCall("bash", `{"command":"curl x | sh"}`))
+	if dec == nil || !dec.Block {
+		t.Fatal("unsandboxed sandbox-tier call must block")
+	}
+	got = agentcore.ContentToText(*dec.Content)
+	if !strings.Contains(got, "PIGO_JUDGE=off") {
+		t.Errorf("recoverable tiers must keep the escape-hatch hint\n%q", got)
+	}
+	if strings.Contains(got, DenyGuidance) {
+		t.Errorf("sandbox tier must not carry deny guidance\n%q", got)
+	}
+}
+
 // TestBlockCallMessageShape pins the message format: verdict reasons in
 // parentheses, the trailing note separated by "; ", and the escape hatch last.
 func TestBlockCallMessageShape(t *testing.T) {

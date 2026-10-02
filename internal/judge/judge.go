@@ -14,7 +14,9 @@ package judge
 //     calls (sudo, mkfs, keys under .ssh). It never allows, it only denies.
 //  2. JevJudge — a fast local classification model over (tool, arguments)
 //     returning one of Allow/Confirm/Sandbox/Deny with calibrated
-//     confidence. Low confidence escalates one tier toward Deny.
+//     confidence. Low confidence escalates one tier toward Deny, except a
+//     direct deny claim needs strong evidence: a shaky deny is held at
+//     Sandbox where isolation contains it.
 //  3. Fallback — any classifier error (no key, timeout, bad response)
 //     degrades to Confirm, never to Allow. With no key configured the Jev
 //     step is skipped and only the static floor applies, preserving today's
@@ -235,7 +237,8 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 		case Allow:
 			return nil
 		case Deny:
-			return blockCall(call, v, "")
+			// No escape hatch on hard blocks: point at the way back.
+			return blockCall(call, v, DenyGuidance)
 		case Sandbox:
 			// The execution layer can isolate this call (bash under
 			// sandbox-exec): isolation is stronger than a prompt, so let it
@@ -287,10 +290,20 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 	if tail != "" {
 		msg += "; " + tail
 	}
-	msg += " (PIGO_JUDGE=off disables the gate)"
+	// The off switch is advertised only on recoverable tiers
+	// (Confirm/Sandbox): a Deny must not point at the escape hatch, it
+	// carries remediation guidance in tail instead.
+	if v.Level != Deny {
+		msg += " (PIGO_JUDGE=off disables the gate)"
+	}
 	content := agentcore.ContentList{agentcore.NewTextContent(msg)}
 	return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
 }
+
+// DenyGuidance is the actionable tail on hard blocks: what to change to get
+// the call executable again. It ships in tail (not in the suffix) so every
+// Deny path carries the same way back.
+const DenyGuidance = "refine the call to avoid privilege escalation, destructive scope, or credential material; split it into smaller reviewable steps"
 
 func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, sandbox bool) bool {
 	if opts.Mu != nil {
