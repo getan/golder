@@ -34,10 +34,17 @@ Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在
 分级逻辑（`internal/judge`，纯标准库叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、引用 grading key 本身），只拒不放，剩下全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）一律放行给 Jev；
-2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注；`Allow` 需高置信（≥0.75），低置信就地升级，阈值按误放成本定；
+2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注；阈值分三档、方向各不同——
+   - `allowConfidence = 0.75`：想放行要**高**置信，不足则升到 `Confirm`；
+   - `confirmConfidence = 0.60`：中间档要够格，不足则升到 `Sandbox`；`Sandbox` 自己不足则**升**到 `Deny`（"连该不该隔离都没把握"必须失败关闭）；
+   - `denyConfidence = 0.70`：想硬拒要**强**证据，不足则**降**到 `Sandbox`。
+
+   最后一条是"降严"的关键：它不是把门槛调低，而是把模型的不确定性从"拒绝"重定向到"隔离"——一次把握不足的 deny 主张（置信 < 0.70）交给 seatbelt 兜住，最坏情况是写不出项目、碰不到 `~/.ssh`，而任务能继续，模型不必换写法重试烧掉一轮。边界仍然守死：高置信的 deny（≥ 0.70）照旧硬拒；静态地板在 `escalate` 之前就返回 `Deny`，永远不走降级。
 3. **兜底**：无 key（零配置）退化为纯静态地板、行为与今天一致；超时/坏响应一律升档到 `Confirm`，永不故障放行。同 `(tool, args)` 进程内缓存，门和执行层共用。
 
-执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`。
+拦截文案按档位区分：可恢复档（`Confirm`/`Sandbox`）附带 `PIGO_JUDGE=off` 逃生提示；`Deny` 不给逃生开关，改为给出可执行的修复指引（`DenyGuidance`：避免提权、破坏性范围或凭据材料，拆成更小的可审步骤），免得模型把全局关闸当习惯。
+
+执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`/`~/.gnupg`/`trust.json`。项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**：macOS 的 `/var` 是 `/private/var` 的软链，而 sandbox 按规范 vnode 路径匹配，只写软链形式会导致该允许的写操作被静默拒绝（表现为命令莫名失败，而非沙箱报错）。这套规则有真实的 `sandbox-exec` 端到端测试覆盖（写项目内成功、写项目外失败、`trust.json` 被拒但 `trust.json.bak` 可写）。
 
 可观测性：交互式门给每个副作用工具打一行 verdict（`[judge: allow] bash: go test ./...`），只读工具的 Allow 保持静默；`bash` 的流式 partial 是增量 delta（消费者直接 append），与 codex 的 `ExecCommandOutputDelta` 同契约。
 

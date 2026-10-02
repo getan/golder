@@ -55,6 +55,13 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **No more tool-turn cap**: the loop no longer force-stops a run after a fixed
+  number of tool-calling turns (previously 40, inherited from pi). Like codex,
+  a run ends when the model stops calling tools or the user interrupts, so
+  long-horizon work is never cut off mid-task. The web-search repeat guard and
+  the pure-hosted-turn settle rule still bound their own loops. A TUI card that
+  is still open when a run ends (e.g. interrupted mid-batch) now closes to a
+  terminal state instead of showing "Running" forever.
 - **`pigo update` semantics**: a no-argument `pigo update` no longer updates
   every installed package; it now self-updates the binary. Update packages
   individually with `pigo update <name>`. (#468)
@@ -64,6 +71,21 @@ interactive REPL/TUI.
   the docs site.
 
 ### Fixed
+- **Sandbox profile now covers symlinked roots**: macOS temp trees live under
+  `/var`, a symlink to `/private/var`, and sandbox matches canonical vnode
+  paths — a profile carrying only the symlinked spelling silently denied the
+  writes it meant to allow (the command just failed, with no sandbox error).
+  Project and temp dirs are now emitted in both spellings, and the rules are
+  covered end to end by tests that actually run `sandbox-exec`.
+- **Deny blocks are actionable and no longer point at the kill switch**: a
+  hard `Deny` replies with what to change (avoid privilege escalation,
+  destructive scope, or credential material; split into smaller steps) instead
+  of advertising `PIGO_JUDGE=off`, which taught the model to disable the whole
+  gate; recoverable tiers keep the escape hatch. Jev's deny claim also needs
+  strong evidence now (`denyConfidence = 0.70`): a shaky deny is held at
+  Sandbox, where the seatbelt runner contains it, instead of hard-blocking on a
+  guess. Confident denies, the static floor, and the sandbox-tier
+  fail-closed upgrade are unchanged.
 - **Sandbox-tier calls now actually run sandboxed**: the judge gate used to
   fail every Sandbox verdict closed in drivers without a stdin prompt
   (TUI/headless), and to show a misleading "[sandbox]" note in the REPL, even
