@@ -158,6 +158,12 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	if !cfg.Reminders.Empty() {
 		cfg.TransformContext = cfg.Reminders.wrapTransform(cfg.TransformContext)
 	}
+	// A context loaded from a session can end with an unanswered tool call
+	// (the run that wrote it was interrupted mid-turn). The provider rejects
+	// such a request outright, which is why the first prompt after /resume
+	// used to fail; heal it before the run and before startIdx, so the
+	// synthetic results count as history and get persisted with the next save.
+	healResumedContext(agentCtx)
 	startIdx := len(agentCtx.Messages)
 	// tel accumulates structured telemetry (turn count, per-tool durations,
 	// truncation count, compaction count, latest context-utilization ratio) from

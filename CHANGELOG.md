@@ -85,6 +85,14 @@ interactive REPL/TUI.
   the docs site.
 
 ### Fixed
+- **Resuming a session heals unanswered tool calls**: a session written by a
+  run that stopped between the assistant message and its tool execution (the
+  removed tool-turn cap did exactly this, as does an interrupt) contains a
+  function call with no output, and the provider rejects the next request with
+  "No tool output found for function call …" — so the first prompt after
+  `/resume` failed. Every run now repairs such calls up front with a synthetic
+  error result placed directly after its call, so the history is valid again
+  and the repaired context is persisted with the next save.
 - **Sandbox profile now covers symlinked roots**: macOS temp trees live under
   `/var`, a symlink to `/private/var`, and sandbox matches canonical vnode
   paths — a profile carrying only the symlinked spelling silently denied the
