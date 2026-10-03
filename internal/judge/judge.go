@@ -107,7 +107,7 @@ type Classifier interface {
 // interrupt — it cannot start anything new). Grading it again would add
 // latency and could block a benign poll on a verdict with no sandbox tier.
 var ungradedTools = map[string]bool{
-	"read": true, "grep": true, "find": true, "ls": true,
+	"read": true, "view_image": true, "grep": true, "find": true, "ls": true,
 	"webfetch": true, "websearch": true, "todo": true,
 	"memory_search": true, "schedule_list": true,
 	"write_stdin": true,

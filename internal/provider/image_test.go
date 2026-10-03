@@ -8,6 +8,7 @@ package provider
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/smallnest/pigo/internal/agentcore"
@@ -124,6 +125,119 @@ func TestImageBlocksAreJSONSerializable(t *testing.T) {
 	}
 	if _, err := json.Marshal(encodeAnthropicMessage(msg)); err != nil {
 		t.Errorf("marshal anthropic image message: %v", err)
+	}
+}
+
+// imageToolResult builds a tool result carrying a text summary plus one image,
+// the shape view_image returns.
+func imageToolResult(text, data, mime string) agentcore.ToolResultMessage {
+	return agentcore.ToolResultMessage{
+		RoleField:  agentcore.RoleToolResult,
+		ToolCallID: "call_1",
+		ToolName:   "view_image",
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent(text),
+			agentcore.NewImageContent(data, mime),
+		},
+	}
+}
+
+// TestEncodeOpenAIMessageToolResultImageDegrades asserts Chat Completions (no
+// image slot on a role:"tool" message) replaces the image with a placeholder
+// instead of dropping it silently.
+func TestEncodeOpenAIMessageToolResultImageDegrades(t *testing.T) {
+	out := encodeOpenAIMessage(imageToolResult("Viewed image", "QUJD", "image/png"))
+	if len(out) != 1 || out[0]["role"] != "tool" {
+		t.Fatalf("entries = %#v, want one role:tool entry", out)
+	}
+	text, _ := out[0]["content"].(string)
+	if !strings.Contains(text, "Viewed image") || !strings.Contains(text, "image content omitted") {
+		t.Fatalf("content = %q, want text plus an omission placeholder", text)
+	}
+}
+
+// TestEncodeAnthropicToolResultImage asserts the Messages API tool_result
+// carries the image as a content block.
+func TestEncodeAnthropicToolResultImage(t *testing.T) {
+	entry := encodeAnthropicMessage(imageToolResult("Viewed image", "REVG", "image/jpeg"))
+	blocks, ok := entry["content"].([]map[string]any)
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("content = %#v, want one tool_result block", entry["content"])
+	}
+	toolResult := blocks[0]
+	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "call_1" {
+		t.Fatalf("tool_result = %#v", toolResult)
+	}
+	contentBlocks, ok := toolResult["content"].([]map[string]any)
+	if !ok || len(contentBlocks) != 2 {
+		t.Fatalf("tool_result content = %#v, want text + image blocks", toolResult["content"])
+	}
+	if contentBlocks[0]["type"] != "text" || contentBlocks[0]["text"] != "Viewed image" {
+		t.Errorf("text block = %#v", contentBlocks[0])
+	}
+	if contentBlocks[1]["type"] != "image" {
+		t.Fatalf("image block = %#v", contentBlocks[1])
+	}
+	src, _ := contentBlocks[1]["source"].(map[string]any)
+	if src["media_type"] != "image/jpeg" || src["data"] != "REVG" {
+		t.Errorf("source = %#v", src)
+	}
+}
+
+// TestAnthropicToolResultTextOnlyStaysString keeps the common case unchanged.
+func TestAnthropicToolResultTextOnlyStaysString(t *testing.T) {
+	entry := encodeAnthropicMessage(agentcore.ToolResultMessage{
+		RoleField: agentcore.RoleToolResult, ToolCallID: "call_1", ToolName: "bash",
+		Content: agentcore.ContentList{agentcore.NewTextContent("ok")},
+	})
+	blocks := entry["content"].([]map[string]any)
+	if s, ok := blocks[0]["content"].(string); !ok || s != "ok" {
+		t.Fatalf("tool_result content = %#v, want string \"ok\"", blocks[0]["content"])
+	}
+}
+
+// TestResponsesToolResultImageItem asserts the Responses function_call_output
+// carries content items (input_text + input_image data URI) for an image
+// result, and stays a plain string otherwise.
+func TestResponsesToolResultImageItem(t *testing.T) {
+	raw, err := json.Marshal(toolResultFunctionCallOutput(imageToolResult("Viewed image", "QUJD", "image/png")))
+	if err != nil {
+		t.Fatalf("marshal item: %v", err)
+	}
+	var item struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+		Output []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			ImageURL string `json:"image_url"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		t.Fatalf("unmarshal item %s: %v", raw, err)
+	}
+	if item.Type != "function_call_output" || item.CallID != "call_1" {
+		t.Fatalf("item = %s", raw)
+	}
+	if len(item.Output) != 2 {
+		t.Fatalf("output = %s, want text + image items", raw)
+	}
+	if item.Output[0].Type != "input_text" || item.Output[0].Text != "Viewed image" {
+		t.Errorf("text item = %#v", item.Output[0])
+	}
+	if item.Output[1].Type != "input_image" || item.Output[1].ImageURL != "data:image/png;base64,QUJD" {
+		t.Errorf("image item = %#v", item.Output[1])
+	}
+
+	textRaw, err := json.Marshal(toolResultFunctionCallOutput(agentcore.ToolResultMessage{
+		RoleField: agentcore.RoleToolResult, ToolCallID: "call_1", ToolName: "bash",
+		Content: agentcore.ContentList{agentcore.NewTextContent("ok")},
+	}))
+	if err != nil {
+		t.Fatalf("marshal text item: %v", err)
+	}
+	if !strings.Contains(string(textRaw), `"output":"ok"`) {
+		t.Errorf("text-only output = %s, want the plain string form", textRaw)
 	}
 }
 

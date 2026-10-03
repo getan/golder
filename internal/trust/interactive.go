@@ -51,12 +51,13 @@ var SideEffectTools = map[string]bool{
 // gated in untrusted directories only when Manager.StrictReads is set. Pure
 // in-memory tools (todo, schedule_*, goal_*, memory_*) are never gated.
 var ReadTools = map[string]bool{
-	"read":      true,
-	"grep":      true,
-	"find":      true,
-	"ls":        true,
-	"webfetch":  true,
-	"websearch": true,
+	"read":       true,
+	"view_image": true,
+	"grep":       true,
+	"find":       true,
+	"ls":         true,
+	"webfetch":   true,
+	"websearch":  true,
 }
 
 // GatesTool reports whether the trust gate applies to a tool call in an

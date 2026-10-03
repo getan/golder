@@ -279,6 +279,7 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 | 工具 | 说明 |
 |------|------|
 | `read` | 按路径读取文本文件，支持行 offset/limit，输出带行号，超大文件截断 |
+| `view_image` | 读取本地图片（PNG/JPEG/GIF/WebP，≤8MiB）并作为图片块附加给模型，用于截图/设计稿/图表等视觉检查 |
 | `apply_patch` | 用一次补丁调用增删改移任意多个文件（`*** Begin Patch` 格式，支持 `@@` 上下文与模糊匹配），返回逐文件 diff |
 | `grep` | 正则检索文件内容（ripgrep 引擎），支持 glob 过滤，跳过 `.gitignore`/隐藏/二进制文件 |
 | `find` | 按文件名 glob 查找文件（ripgrep 引擎），跳过 `.gitignore`/隐藏文件 |

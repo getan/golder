@@ -257,6 +257,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	sessions := execsess.NewManager()
 	tools := []agentcore.AgentTool{
 		&agenttool.ReadTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
+		&agenttool.ViewImageTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
 		// One editing tool for the whole write path: apply_patch carries
 		// adds, updates, moves, and deletes in a single call, so the model
 		// keeps one editing tool in context instead of choosing between

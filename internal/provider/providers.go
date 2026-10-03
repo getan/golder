@@ -205,10 +205,20 @@ func encodeOpenAIMessage(m agentcore.Message) []map[string]any {
 		}
 		return []map[string]any{entry}
 	case agentcore.ToolResultMessage:
+		// Chat Completions has no image slot on a role:"tool" message, so an
+		// image-bearing result (view_image) degrades to text with a placeholder
+		// rather than dropping the blocks silently.
+		text := agentcore.ContentToText(msg.Content)
+		if contentHasImages(msg.Content) {
+			if text != "" {
+				text += "\n"
+			}
+			text += "[image content omitted: this provider protocol cannot carry images in tool results]"
+		}
 		return []map[string]any{{
 			"role":         "tool",
 			"tool_call_id": msg.ToolCallID,
-			"content":      agentcore.ContentToText(msg.Content),
+			"content":      text,
 		}}
 	default:
 		return nil
@@ -472,14 +482,60 @@ func encodeAnthropicMessage(m agentcore.Message) map[string]any {
 		}
 		return map[string]any{"role": "assistant", "content": blocks}
 	case agentcore.ToolResultMessage:
+		// The content may carry images (view_image): the Messages API accepts
+		// a content-block array on tool_result, so text and images both ride
+		// it; a text-only result keeps the plain string form.
 		return map[string]any{"role": "user", "content": []map[string]any{{
 			"type":        "tool_result",
 			"tool_use_id": msg.ToolCallID,
-			"content":     agentcore.ContentToText(msg.Content),
+			"content":     anthropicToolResultContent(msg.Content),
 		}}}
 	default:
 		return nil
 	}
+}
+
+// anthropicToolResultContent renders a tool result's content for a tool_result
+// block: plain text when it carries no images, otherwise a block array with
+// text plus base64 image sources (the shape the Messages API expects).
+func anthropicToolResultContent(content agentcore.ContentList) any {
+	var images []agentcore.ImageContent
+	for _, c := range content {
+		if img, ok := c.(agentcore.ImageContent); ok {
+			images = append(images, img)
+		}
+	}
+	if len(images) == 0 {
+		return agentcore.ContentToText(content)
+	}
+	blocks := make([]map[string]any, 0, len(content))
+	if text := agentcore.ContentToText(content); strings.TrimSpace(text) != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": text})
+	}
+	for _, img := range images {
+		blocks = append(blocks, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": img.MimeType,
+				"data":       img.Data,
+			},
+		})
+	}
+	if len(blocks) == 0 {
+		blocks = append(blocks, map[string]any{"type": "text", "text": " "})
+	}
+	return blocks
+}
+
+// contentHasImages reports whether a content list carries an image block.
+func contentHasImages(content agentcore.ContentList) bool {
+	for _, c := range content {
+		if _, ok := c.(agentcore.ImageContent); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // anthropicUserContent shapes a user content list for the Anthropic Messages

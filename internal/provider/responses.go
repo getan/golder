@@ -29,6 +29,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/responses"
 	"github.com/openai/openai-go/shared"
 
@@ -426,9 +427,12 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message) r
 	switch msg := m.(type) {
 	case agentcore.ToolResultMessage:
 		// A tool result is backfilled against the model's call_id so the model
-		// can pair it with the request it issued the previous turn.
-		items = append(items, responses.ResponseInputItemParamOfFunctionCallOutput(
-			msg.ToolCallID, contentText(msg.Content)))
+		// can pair it with the request it issued the previous turn. A result
+		// carrying images (view_image) sends them as content items
+		// (input_text + input_image data URIs); the SDK's typed Output field is
+		// string-only, so that one item shape is overridden with raw JSON —
+		// the wire form is exactly what codex's FunctionCallOutputBody emits.
+		items = append(items, toolResultFunctionCallOutput(msg))
 	case agentcore.AssistantMessage:
 		if text := contentText(msg.Content); text != "" {
 			items = append(items, responses.ResponseInputItemParamOfMessage(
@@ -459,6 +463,45 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message) r
 		}
 	}
 	return items
+}
+
+// toolResultFunctionCallOutput builds the function_call_output item for one
+// tool result. A text-only result uses the SDK's typed helper; a result
+// carrying images sends output as a content-part array instead of the string
+// that helper supports, so it is overridden with raw JSON (the same wire shape
+// codex's FunctionCallOutputBody uses for a view_image result).
+func toolResultFunctionCallOutput(msg agentcore.ToolResultMessage) responses.ResponseInputItemUnionParam {
+	var images []agentcore.ImageContent
+	for _, c := range msg.Content {
+		if img, ok := c.(agentcore.ImageContent); ok {
+			images = append(images, img)
+		}
+	}
+	if len(images) == 0 {
+		return responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, contentText(msg.Content))
+	}
+	var output []map[string]any
+	if text := strings.TrimSpace(contentText(msg.Content)); text != "" {
+		output = append(output, map[string]any{"type": "input_text", "text": text})
+	}
+	for _, img := range images {
+		output = append(output, map[string]any{
+			"type":      "input_image",
+			"image_url": fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data),
+			"detail":    "auto",
+		})
+	}
+	raw, err := json.Marshal(map[string]any{
+		"type":    "function_call_output",
+		"call_id": msg.ToolCallID,
+		"output":  output,
+	})
+	if err != nil {
+		// Marshaling plain maps cannot fail; fall back to the typed text item
+		// rather than dropping the result.
+		return responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, contentText(msg.Content))
+	}
+	return param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(raw))
 }
 
 // imageInputParts builds a Responses content-part list for a message that

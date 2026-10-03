@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **view_image**: `view_image` reads a local image (PNG/JPEG/GIF/WebP, up to
+  8 MiB, bounded to the workspace or the skills root like `read`) and attaches
+  it to the conversation for visual inspection. Tool-result images now have a
+  wire path on every provider that supports them: Responses sends
+  `function_call_output` content items (`input_text` + `input_image` data
+  URIs, the same shape codex uses), Anthropic sends content blocks on
+  `tool_result`, and Chat Completions — which has no image slot on a tool
+  message — degrades to a text placeholder instead of dropping the block.
+  Read-only class in trust (gated only under `strict_reads`) and ungraded by
+  the judge.
 - **apply_patch (codex-style editing)**: `write` and `edit` are replaced by a
   single `apply_patch` tool carrying a whole patch per call — add, update,
   move, and delete any number of files, in the `*** Begin Patch` format.
@@ -72,8 +82,12 @@ interactive REPL/TUI.
   hard deadline that kills the process group. `bash_output` / `kill_bash` and
   the `run_in_background` flag are gone: one `write_stdin` tool polls
   incremental output or sends `\u0003` (Ctrl-C, a second interrupt force-kills).
-  Session output is retained in a bounded 1 MiB head/tail window, sessions cap
-  at 64, and REPL/TUI/headless/sub-agent teardown kills leftovers. Breaking
+  Session output is retained in a bounded 1 MiB head/tail window and sessions
+  cap at 64 with codex-style capacity eviction: the 8 most recently used
+  sessions are protected, then the least recently used exited session is
+  dropped, and only if every candidate is still running is the least recently
+  used live one terminated to make room (no more rejected spawns at the cap).
+  REPL/TUI/headless/sub-agent teardown kills leftovers. Breaking
   change: `--allowed-tools` / `--disallowed-tools` and hook matchers must name
   `write_stdin` instead of `bash_output` / `kill_bash`.
 - **PTY sessions (interactive stdin)**: `bash` accepts `tty=true`, running the
