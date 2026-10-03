@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/cli/run"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
@@ -68,4 +69,9 @@ type Options struct {
 	// The TUI routes notes into the run's event channel so they render as
 	// transcript cards.
 	ReviewNotes *run.ReviewNotes
+	// Budget is the session-scoped context-window budget (created by
+	// run.SetupEnv) shared by every run of the session, so the low-budget
+	// reminder ladder and the context tools stay consistent across prompts.
+	// A nil value falls back to a run-local state.
+	Budget *contextbudget.State
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/headless"
 	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/run"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/dream"
 	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/permissions"
@@ -92,6 +93,12 @@ type Options struct {
 	// sandbox routing, denials), shared with the gates. The REPL registers a
 	// handler that prints each note to the current output.
 	ReviewNotes *run.ReviewNotes
+
+	// Budget is the session-scoped context-window budget (created by
+	// run.SetupEnv) shared by every run of the session, so the low-budget
+	// reminder ladder and get_context_remaining stay consistent across prompts.
+	// A nil value falls back to a run-local state.
+	Budget *contextbudget.State
 }
 
 // Run starts the line-based REPL over a persisted session. It keeps
@@ -268,6 +275,7 @@ func Run(opts Options) error {
 		telemetry:  cli.NewTelemetryHolder(),
 		perms:      permState,
 		notes:      reviewNotes,
+		budget:     opts.Budget,
 	})
 }
 

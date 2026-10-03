@@ -30,6 +30,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/compaction"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/provider"
 )
 
@@ -103,6 +104,13 @@ type RunConfig struct {
 	// enter the persisted history. nil / empty = no injection.
 	Reminders *ReminderRegistry
 
+	// Budget is the live context-window budget state shared by this run's tools
+	// (get_context_remaining, new_context), its reminders, and the loop itself.
+	// When nil the loop creates a run-local one, so tools and reminders work
+	// without wiring; a driver that wants the low-budget reminder ladder to
+	// survive across runs passes the session-scoped state it created once.
+	Budget *contextbudget.State
+
 	// EventBuffer is the buffer size of the emitted EventStream. 0 gives fully
 	// synchronous back-pressure (matching pi's awaited emit).
 	EventBuffer int
@@ -161,6 +169,19 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	// used to fail; heal it before the run and before startIdx, so the
 	// synthetic results count as history and get persisted with the next save.
 	healResumedContext(agentCtx)
+	// Adopt or create the run's budget state and publish it into the run
+	// context: the tools and the budget reminder read it back, so every surface
+	// sees the same live figures. The window and rollover capability follow this
+	// run's configuration (a /model switch mid-session changes the window).
+	budget := cfg.Budget
+	if budget == nil {
+		budget = contextbudget.New()
+	}
+	cfg.Budget = budget
+	budget.SetWindow(cfg.ContextWindow)
+	budget.SetRolloverEnabled(cfg.Compaction.Enabled && cfg.ContextWindow > 0)
+	observeBudget(budget, agentCtx)
+	ctx = contextbudget.WithState(ctx, budget)
 	startIdx := len(agentCtx.Messages)
 	// tel accumulates structured telemetry (turn count, per-tool durations,
 	// truncation count, compaction count, latest context-utilization ratio) from
@@ -271,6 +292,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// recent history. The snapshot is a slice header; later appends write
 			// past the captured length, so the view stays stable.
 			toolCtx = agentcore.WithMessageSnapshot(toolCtx, agentCtx.Messages)
+			// Refresh the budget figure the tools see so get_context_remaining
+			// answers from this batch's context, not the previous turn's.
+			observeBudget(cfg.Budget, agentCtx)
 			// Hosted calls already ran provider-side: bracket them with
 			// display-only start/end events (tool cards without execution,
 			// approval, or registry lookup) around the local batch.
@@ -384,6 +408,9 @@ func afterTurn(ctx context.Context, agentCtx *agentcore.AgentContext, cfg *RunCo
 		}
 	}
 	maybeAutoCompact(ctx, agentCtx, cfg, emit, tel)
+	// Refresh the budget the next turn's reminder and tools will read; this also
+	// reflects a compaction that just shrank the context.
+	observeBudget(cfg.Budget, agentCtx)
 	// Record the latest context-utilization ratio once the turn has settled (after
 	// any compaction), so the telemetry summary reports the current used/window
 	// figure. This runs even when auto-compaction is disabled so utilization is
@@ -398,13 +425,25 @@ func afterTurn(ctx context.Context, agentCtx *agentcore.AgentContext, cfg *RunCo
 	return false
 }
 
-// maybeAutoCompact checks whether the context has outgrown its usable window and,
-// if so, compacts it in place and emits a CompactionEvent. Compaction is a no-op
-// when disabled, when the context window is unknown (<= 0), or when usage is
-// under threshold. A compaction failure is non-fatal: the original context is
-// preserved and a CompactionEvent carrying ErrorMessage is emitted so the failure
-// is observable without aborting the run (US-004).
+// observeBudget records the conversation's estimated size in the run's budget
+// state. It is a cheap O(messages) estimate, refreshed at each turn boundary and
+// before each tool batch.
+func observeBudget(budget *contextbudget.State, agentCtx *agentcore.AgentContext) {
+	if budget == nil {
+		return
+	}
+	budget.Observe(compaction.EstimateContextTokens(agentCtx.Messages).Tokens)
+}
+
+// maybeAutoCompact checks whether the context has outgrown its usable window —
+// or whether the model asked for a fresh window via new_context — and, if so,
+// compacts it in place and emits a CompactionEvent. Compaction is a no-op when
+// disabled, when the context window is unknown (<= 0), or when usage is under
+// threshold and no rollover was requested. A compaction failure is non-fatal:
+// the original context is preserved and a CompactionEvent carrying ErrorMessage
+// is emitted so the failure is observable without aborting the run (US-004).
 func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg *RunConfig, emit func(agentcore.AgentEvent) error, tel *telemetry) {
+	requested := cfg.Budget.TakeRolloverRequest()
 	if !cfg.Compaction.Enabled || cfg.ContextWindow <= 0 {
 		return
 	}
@@ -415,17 +454,21 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 	if tel != nil {
 		tel.recordContext(before, cfg.ContextWindow)
 	}
-	if !compaction.ShouldCompact(before, cfg.ContextWindow, cfg.Compaction) {
+	if !requested && !compaction.ShouldCompact(before, cfg.ContextWindow, cfg.Compaction) {
 		return
+	}
+	reason := "threshold"
+	if requested {
+		reason = "requested"
 	}
 	// Signal the start so a front-end can show an in-progress indicator while the
 	// summarization request (an LLM call that blocks the loop) is in flight.
-	_ = emit(agentcore.CompactionStartEvent{Reason: "threshold", TokensBefore: before})
+	_ = emit(agentcore.CompactionStartEvent{Reason: reason, TokensBefore: before})
 	res, err := runCompaction(ctx, agentCtx.Messages, cfg)
 	kept := len(agentCtx.Messages)
 	if err != nil {
 		_ = emit(agentcore.CompactionEvent{
-			Reason:       "threshold",
+			Reason:       reason,
 			TokensBefore: before,
 			TokensAfter:  before,
 			KeptCount:    kept,
@@ -448,7 +491,7 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 	agentCtx.Messages = rebuilt
 	after := compaction.EstimateContextTokens(rebuilt).Tokens
 	_ = emit(agentcore.CompactionEvent{
-		Reason:          "threshold",
+		Reason:          reason,
 		TokensBefore:    before,
 		TokensAfter:     after,
 		SummarizedCount: summarized,

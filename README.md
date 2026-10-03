@@ -289,6 +289,8 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 | `webfetch` | 抓取 URL 并转为精简 Markdown 正文，HTTP 自动升级 HTTPS |
 | `websearch` | 联网搜索并返回标题/URL/摘要，按凭证自动选后端（`TAVILY_API_KEY`→Tavily，`BRAVE_API_KEY`→Brave，否则回落无 key 的 DuckDuckGo），支持 `allowed_domains`/`blocked_domains` 过滤 |
 | `memory_search` | 检索持久化记忆（`memory.enabled = false` 或 `--no-tools` 时不注册） |
+| `get_context_remaining` | 读取当前上下文窗口的剩余 token（模型用它规划长任务规模；预算未知时明确返回未知） |
+| `new_context` | 模型主动开启新上下文窗口：本回合结束时把已完成工作摘要化并保留最近消息，任务在"新窗口"继续（等同模型侧的 `/compact`），不改变文件/git 等任何环境状态 |
 | `task` | 派发通用子 Agent，子 Agent 继承父级工具边界且不能再次派发 |
 
 > `bash` / `apply_patch` 属于"副作用工具"，在未信任目录下需确认（见[项目信任](#项目信任)）。

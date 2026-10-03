@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/judge"
@@ -87,7 +88,12 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// An explicit --api-key overrides env/config for the resolved provider.
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(env.ProviderName, p.APIKey)
-	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule)
+	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget)
+	// Headless has no model-catalog lookup, so it uses the same fallback window
+	// the REPL and TUI assume. This keeps auto-compaction, the context-budget
+	// tools, and the low-budget reminder live for `pigo -p` long runs instead of
+	// leaving them dormant with an unknown window.
+	runCfg.ContextWindow = cli.DefaultContextWindow
 	runCfg.SessionID = hs.header.ID
 	// Route auto-compaction checkpoints to the shared memory root so a rebuild can
 	// recover the pre-watermark prefix (no-op when memory is disabled → empty root).

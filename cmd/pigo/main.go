@@ -484,6 +484,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				NoPromptTemplates: opts.noPromptTemplates,
 				Permissions:       env.Permissions,
 				ReviewNotes:       env.ReviewNotes,
+				Budget:            env.Budget,
 			}); err != nil {
 				fmt.Fprintf(errOut, "pigo: %v\n", err)
 				return 1
@@ -510,6 +511,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			Dream:             opts.dreamCfg,
 			Permissions:       env.Permissions,
 			ReviewNotes:       env.ReviewNotes,
+			Budget:            env.Budget,
 		}); err != nil {
 			fmt.Fprintf(errOut, "pigo: %v\n", err)
 			return 1

@@ -30,6 +30,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/compaction"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/hooks"
 	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
@@ -81,6 +82,12 @@ type runSession struct {
 	// memstore is the live persistent-memory Store (nil when memory is disabled).
 	// It lets /memory inspect entry counts without re-opening the database.
 	memstore *memory.Store
+
+	// budget is the session-scoped context-window budget shared by every run of
+	// the session: the context tools read it through the run context and the
+	// low-budget reminder ladder persists across prompts. Nil falls back to a
+	// run-local state.
+	budget *contextbudget.State
 
 	// dispatcher is the session's hook dispatcher, nil when no hooks are
 	// configured (FR-18). hookDeps carries the session id / project dir stamped
@@ -244,6 +251,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		memstore:   run.MemoryStoreFromTools(opts.Tools),
 		perms:      opts.Permissions,
 		notes:      opts.ReviewNotes,
+		budget:     opts.Budget,
 		trusted:    opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
 	}
 	if s.perms == nil {
@@ -251,6 +259,9 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	}
 	if s.notes == nil {
 		s.notes = run.NewReviewNotes()
+	}
+	if s.budget == nil {
+		s.budget = contextbudget.New()
 	}
 	// /trust is a per-session command (its closure captures mgr + cwd), so it is
 	// registered here rather than in newSlashRegistry. A nil mgr is a no-op.
@@ -341,6 +352,7 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 			},
 		},
 		Reminders:  s.reminders,
+		Budget:     s.budget,
 		SessionID:  s.header.ID,
 		MemoryRoot: s.memoryRoot,
 	}

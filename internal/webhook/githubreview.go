@@ -315,7 +315,7 @@ func (s *Server) DefaultRunner() Runner {
 		for _, t := range agentCtx.Tools {
 			_ = reg.Register(t)
 		}
-		cfg := run.NewConfig(s.Model, s.ProviderName, "", s.Provider, creds, reg, nil, nil)
+		cfg := run.NewConfig(s.Model, s.ProviderName, "", s.Provider, creds, reg, nil, nil, nil)
 		cfg.SessionID = req.SessionID
 		stream := runtime.StartRun(ctx, agentCtx, cfg)
 		if _, err := runtime.DrainStream(ctx, stream, runtime.StreamHandler{}); err != nil {

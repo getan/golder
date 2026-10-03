@@ -12,6 +12,20 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Context budget tooling** (`get_context_remaining` / `new_context`): the
+  model can now see and steer its own context budget, the same affordance
+  codex exposes. `get_context_remaining` reports the live remaining tokens;
+  `new_context` asks the loop to roll the window over at the next turn
+  boundary (summarize finished work, keep recent messages — the model-side
+  counterpart of `/compact`) and refuses gracefully when compaction is
+  disabled. The loop observes usage each turn and publishes one shared
+  `contextbudget.State` into the run context (the message-snapshot pattern),
+  so prompts, task children, and every driver see consistent figures;
+  headless also adopts the same default window the REPL/TUI assume. A
+  low-budget `<system-reminder>` fires once per crossing (<=10% remaining, an
+  escalated warning at <=3%) to prompt landing the work, and the reminder
+  ladder survives across prompts in the interactive drivers. Both tools are
+  registered read-only / ungraded by the judge.
 - **view_image**: `view_image` reads a local image (PNG/JPEG/GIF/WebP, up to
   8 MiB, bounded to the workspace or the skills root like `read`) and attaches
   it to the conversation for visual inspection. Tool-result images now have a

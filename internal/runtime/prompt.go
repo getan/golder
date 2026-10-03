@@ -72,7 +72,8 @@ const DefaultBaseInstruction = "You are pigo, a helpful coding agent. " +
 	taskGuide + "\n\n" +
 	patchGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
-	searchGuide
+	searchGuide + "\n\n" +
+	contextGuide
 
 // todoGuide instructs the model on how to drive the todo tool. It is appended to
 // the default base instruction so multi-step work is planned and its progress is
@@ -141,6 +142,15 @@ const taskGuide = "When work splits into independent subtasks, delegate them wit
 	"returns its final report. To fan out, emit MULTIPLE task calls in a single message — they run in " +
 	"parallel. Give each a complete, self-contained prompt, since a sub-agent shares none of this " +
 	"conversation's context. Do the work directly for a single, sequential, or trivial task."
+
+// contextGuide points at the context-budget tools: the model should size long
+// stretches of work to the room it actually has and roll into a fresh window
+// between unrelated tasks instead of waiting for the window to fill up.
+const contextGuide = "The context window is finite. Check the remaining budget with " +
+	"get_context_remaining before committing to long stretches of work (many-file reads, " +
+	"large refactors, long test loops). When the current task is finished and an unrelated " +
+	"one is next — or the window is nearly full — call new_context to continue in a fresh " +
+	"window: the finished work is summarized and recent messages are kept, so nothing is lost."
 
 // BuildSystemPrompt assembles the full system prompt from cfg: base instruction,
 // environment block, then AGENTS.md files ordered general-to-specific from Root

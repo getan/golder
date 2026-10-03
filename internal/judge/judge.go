@@ -135,6 +135,11 @@ var ungradedTools = map[string]bool{
 	"webfetch": true, "websearch": true, "todo": true,
 	"memory_search": true, "schedule_list": true,
 	"write_stdin": true,
+	// Context-budget tools: get_context_remaining only reads the live budget,
+	// and new_context only requests a summarized window rollover at the turn
+	// boundary — neither touches the host, so an LLM review would add latency
+	// and could block a benign control call on a verdict with no sandbox tier.
+	"get_context_remaining": true, "new_context": true,
 }
 
 // Chain runs StaticFloor first (deny wins), then inner, and degrades any
@@ -322,6 +327,7 @@ var readOnlyAllowedTools = map[string]bool{
 	"webfetch": true, "websearch": true, "todo": true,
 	"memory_search": true, "schedule_list": true,
 	"goal_complete": true, "goal_blocked": true,
+	"get_context_remaining": true, "new_context": true,
 }
 
 // readOnlyAllowed reports whether tool may run under read-only mode.

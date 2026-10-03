@@ -35,6 +35,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/clipboard"
 	"github.com/smallnest/pigo/internal/compaction"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/hooks"
 	"github.com/smallnest/pigo/internal/judge"
@@ -81,6 +82,10 @@ type replDeps struct {
 	// registers a per-turn handler that prints each note.
 	perms *permissions.State
 	notes *run.ReviewNotes
+	// budget is the session-scoped context-window budget shared by every run,
+	// so the low-budget reminder and the context tools agree across prompts.
+	// Nil falls back to a run-local state created by the loop.
+	budget *contextbudget.State
 	// cwd is the directory pigo was launched in, used as the trust key and as
 	// the directory side-effect tools are gated against. It does not change
 	// during a session (pigo does not cd).
@@ -639,6 +644,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 			},
 		},
 		Reminders:  deps.reminders,
+		Budget:     deps.budget,
 		SessionID:  deps.header.ID,
 		MemoryRoot: deps.memoryRoot,
 	}

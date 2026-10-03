@@ -16,6 +16,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/builtinskills"
+	"github.com/smallnest/pigo/internal/contextbudget"
 	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/hooks"
 	"github.com/smallnest/pigo/internal/judge"
@@ -73,6 +74,12 @@ type Env struct {
 	// task-child gate publish here; the active driver registers a handler so
 	// the notes reach its transcript.
 	ReviewNotes *ReviewNotes
+
+	// Budget is the session-scoped context-window budget shared by every run of
+	// the session. Tools and the low-budget reminder read it through the run
+	// context; keeping one object per session means the reminder ladder survives
+	// across prompts instead of restarting at every run.
+	Budget *contextbudget.State
 }
 
 // SetupEnv resolves the provider for model/baseURL, builds the tool set rooted
@@ -107,6 +114,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		permState.Set(m)
 	}
 	notes := NewReviewNotes()
+	budget := contextbudget.New()
 	tools := BuiltinTools(cwd, noTools)
 	WirePermissionState(tools, permState)
 	// Open the persistent memory store once (issue #481) and expose it as the
@@ -237,6 +245,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		Schedule:     sched,
 		Permissions:  permState,
 		ReviewNotes:  notes,
+		Budget:       budget,
 	}, nil
 }
 
@@ -305,6 +314,11 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		&agenttool.BashTool{Dir: cwd, Sessions: sessions},
 		&agenttool.WriteStdinTool{Sessions: sessions},
 		&agenttool.TodoTool{Store: agenttool.NewTodoStore()},
+		// Context-budget tools: the model can read its remaining window and ask
+		// for a fresh one (summarized rollover) when a task is finished. Both
+		// read the live budget state the loop publishes into the run context.
+		&agenttool.GetContextRemainingTool{},
+		&agenttool.NewContextTool{},
 		&agenttool.WebFetchTool{},
 		&agenttool.WebSearchTool{},
 	}
@@ -366,12 +380,17 @@ func ToolRegistry(tools []agentcore.AgentTool) *agenttool.ToolRegistry {
 // over its shared store, so the model is reminded of unfinished tasks each turn.
 // It also registers a MemoryReminderProvider over the memory_search tool's store
 // (issue #481) when present, so relevant persisted memory is recalled each turn
-// (this is the recall channel used after auto-compaction/rebuild). Returns nil
-// when neither provider applies (e.g. --no-tools), leaving injection disabled.
+// (this is the recall channel used after auto-compaction/rebuild), and the
+// stateless BudgetReminderProvider, which reads the run's budget state from the
+// context and reminds once per low-budget threshold crossing. Returns nil when
+// no provider applies (e.g. --no-tools), leaving injection disabled.
 func TodoReminders(tools []agentcore.AgentTool) *runtime.ReminderRegistry {
 	var providers []runtime.ReminderProvider
 	if len(tools) > 0 {
-		providers = append(providers, &runtime.SearchRepeatReminderProvider{})
+		providers = append(providers,
+			&runtime.SearchRepeatReminderProvider{},
+			&runtime.BudgetReminderProvider{},
+		)
 	}
 	for _, t := range tools {
 		switch tool := t.(type) {
@@ -646,7 +665,7 @@ func Trusted(cwd string) bool {
 // stream, the dynamic API-key resolver, and the tool registry. It is the single
 // definition of "how a run is wired", so the REPL (streamRun) and the headless
 // driver cannot drift apart.
-func NewConfig(model, providerName string, thinking agentcore.ThinkingLevel, prov provider.Provider, creds *provider.CredentialStore, reg *agenttool.ToolRegistry, reminders *runtime.ReminderRegistry, sched *agenttool.Schedule) runtime.RunConfig {
+func NewConfig(model, providerName string, thinking agentcore.ThinkingLevel, prov provider.Provider, creds *provider.CredentialStore, reg *agenttool.ToolRegistry, reminders *runtime.ReminderRegistry, sched *agenttool.Schedule, budget *contextbudget.State) runtime.RunConfig {
 	cfg := runtime.RunConfig{
 		LoopConfig: runtime.LoopConfig{
 			Model:         model,
@@ -659,6 +678,7 @@ func NewConfig(model, providerName string, thinking agentcore.ThinkingLevel, pro
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg},
 		},
 		Reminders: reminders,
+		Budget:    budget,
 	}
 	// Due session-local reminders ride the follow-up seam (issue #565): when the
 	// run is about to settle, the loop consults the scheduler and queues each due
