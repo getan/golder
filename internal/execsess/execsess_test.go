@@ -223,18 +223,63 @@ func TestManagerPrunesExitedAtCapacity(t *testing.T) {
 	m.KillAll()
 }
 
-func TestManagerRejectsWhenAllRunning(t *testing.T) {
+// At capacity with every session still running, the manager evicts the least
+// recently used live session instead of rejecting the new command (codex's
+// LRU fallback in its unified-exec store).
+func TestManagerEvictsLRUWhenAllRunning(t *testing.T) {
 	requireShell(t)
 	old := maxSessions
-	maxSessions = 1
+	maxSessions = 2
 	defer func() { maxSessions = old }()
 
 	m := NewManager()
-	if _, err := m.Start(StartRequest{Command: "sleep 30", Argv: bashArgv("sleep 30")}); err != nil {
-		t.Fatalf("Start: %v", err)
+	s1, err := m.Start(StartRequest{Command: "sleep 30", Argv: bashArgv("sleep 30")})
+	if err != nil {
+		t.Fatalf("Start s1: %v", err)
 	}
-	if _, err := m.Start(StartRequest{Command: "echo no", Argv: bashArgv("echo no")}); err == nil {
-		t.Fatal("second Start = nil error, want capacity failure")
+	time.Sleep(20 * time.Millisecond)
+	if _, err := m.Start(StartRequest{Command: "sleep 30 | cat", Argv: bashArgv("sleep 30 | cat")}); err != nil {
+		t.Fatalf("Start s2: %v", err)
+	}
+	// Full, all running: s3 must evict the least recently used (s1) and start.
+	if _, err := m.Start(StartRequest{Command: "echo ok", Argv: bashArgv("echo ok")}); err != nil {
+		t.Fatalf("Start s3 = %v, want LRU eviction rather than a capacity failure", err)
+	}
+	if !s1.Wait(context.Background(), 3*time.Second, WaitExit) {
+		t.Fatal("evicted session s1 still running, want it terminated")
+	}
+	m.KillAll()
+}
+
+// The most recently used sessions are protected: a freshly polled session is
+// not the one evicted when a newer command arrives.
+func TestManagerProtectsRecentlyUsed(t *testing.T) {
+	requireShell(t)
+	old := maxSessions
+	maxSessions = 2
+	defer func() { maxSessions = old }()
+
+	m := NewManager()
+	s1, err := m.Start(StartRequest{Command: "sleep 30", Argv: bashArgv("sleep 30")})
+	if err != nil {
+		t.Fatalf("Start s1: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	s2, err := m.Start(StartRequest{Command: "sleep 30 | cat", Argv: bashArgv("sleep 30 | cat")})
+	if err != nil {
+		t.Fatalf("Start s2: %v", err)
+	}
+	// Poll s1 so it becomes the most recently used session, then push a third
+	// command: s2 (untouched since its spawn) is now the LRU candidate.
+	s1.Wait(context.Background(), 10*time.Millisecond, WaitExit)
+	if _, err := m.Start(StartRequest{Command: "echo ok", Argv: bashArgv("echo ok")}); err != nil {
+		t.Fatalf("Start s3 = %v, want eviction of the least recently used session", err)
+	}
+	if !s2.Wait(context.Background(), 3*time.Second, WaitExit) {
+		t.Fatal("untouched session s2 still running, want the LRU pick evicted")
+	}
+	if s1.Exited() {
+		t.Fatal("recently polled session s1 was evicted, want it protected")
 	}
 	m.KillAll()
 }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,11 @@ import (
 // maxSessions caps concurrently tracked sessions per manager. It is a var so
 // tests can lower the cap without spawning dozens of processes.
 var maxSessions = 64
+
+// sessionProtectCount is how many of the most recently used sessions are never
+// evicted under capacity pressure (codex protects the 8 newest in its unified
+// exec store). It is a var so tests can lower it alongside maxSessions.
+var sessionProtectCount = 8
 
 // OutputCapBytes bounds the output retained per session (a head and tail
 // window). Retained bytes can briefly reach 1.5x this budget because the tail
@@ -113,16 +119,21 @@ func NewManager() *Manager {
 }
 
 // Start spawns req.Argv, registers the session under a fresh id, and returns
-// it. When the manager is at capacity it first prunes the oldest exited
-// session; if every session is still running the spawn fails rather than
-// killing live work.
+// it. When the manager is at capacity it evicts one session first, mirroring
+// codex's unified-exec policy: the most recently used sessions are protected,
+// then the least recently used exited session is dropped, and only if every
+// unprotected session is still running is the least recently used live one
+// terminated to make room.
 func (m *Manager) Start(req StartRequest) (*Session, error) {
 	if len(req.Argv) == 0 {
 		cleanup(req)
 		return nil, errors.New("execsess: empty argv")
 	}
 	m.mu.Lock()
-	m.pruneLocked()
+	var victim *Session
+	if len(m.sessions) >= maxSessions {
+		victim = m.pruneLocked()
+	}
 	if len(m.sessions) >= maxSessions {
 		m.mu.Unlock()
 		cleanup(req)
@@ -137,6 +148,12 @@ func (m *Manager) Start(req StartRequest) (*Session, error) {
 	m.sessions[s.ID] = s
 	m.mu.Unlock()
 
+	if victim != nil {
+		// Terminating the evicted session blocks until its process group is
+		// reaped; do it outside the manager lock so concurrent Starts are not
+		// serialized behind a signal wait.
+		victim.Kill()
+	}
 	if err := s.start(); err != nil {
 		m.mu.Lock()
 		delete(m.sessions, s.ID)
@@ -169,23 +186,60 @@ func (m *Manager) KillAll() {
 	}
 }
 
-// pruneLocked drops the oldest exited session when at capacity. Lock held.
-func (m *Manager) pruneLocked() {
-	if len(m.sessions) < maxSessions {
-		return
+// pruneLocked picks one session to evict at capacity, removes it from the
+// store, and returns it for the caller to terminate (or nil when nothing is
+// evictable). The policy mirrors codex's process-store pruning:
+//
+//  1. The sessionProtectCount most recently used sessions are never touched:
+//     a burst of new commands must not evict the session the model is
+//     actively polling.
+//  2. Among the rest, the least recently used exited session goes first — its
+//     process is already gone, so eviction is free.
+//  3. Only when every remaining candidate is still running is the least
+//     recently used live session terminated. This is codex's LRU fallback;
+//     unlike a rejected spawn it keeps the new command running at the cost of
+//     a stale one.
+//
+// Lock held; the returned session is no longer in the store.
+func (m *Manager) pruneLocked() *Session {
+	if len(m.sessions) == 0 {
+		return nil
 	}
-	var oldest *Session
+	type meta struct {
+		sess     *Session
+		lastUsed time.Time
+		exited   bool
+	}
+	metas := make([]meta, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		if !s.Exited() {
-			continue
-		}
-		if oldest == nil || s.StartedAt.Before(oldest.StartedAt) {
-			oldest = s
+		metas = append(metas, meta{sess: s, lastUsed: s.LastUsed(), exited: s.Exited()})
+	}
+	// Most recently used first, then drop the protected prefix.
+	sort.Slice(metas, func(i, j int) bool { return metas[i].lastUsed.After(metas[j].lastUsed) })
+	protected := sessionProtectCount
+	if protected > len(metas) {
+		protected = len(metas)
+	}
+	// Keep at least the least recently used session evictable even when the
+	// cap is smaller than the protect window (tests; production has 64 > 8).
+	if protected >= len(metas) && len(metas) > 0 {
+		protected = len(metas) - 1
+	}
+	metas = metas[protected:]
+
+	// Least recently used first among the unprotected.
+	sort.Slice(metas, func(i, j int) bool { return metas[i].lastUsed.Before(metas[j].lastUsed) })
+	for _, mt := range metas {
+		if mt.exited {
+			delete(m.sessions, mt.sess.ID)
+			return mt.sess
 		}
 	}
-	if oldest != nil {
-		delete(m.sessions, oldest.ID)
+	if len(metas) > 0 {
+		delete(m.sessions, metas[0].sess.ID)
+		return metas[0].sess
 	}
+	return nil
 }
 
 func cleanup(req StartRequest) {
@@ -244,6 +298,9 @@ type Session struct {
 	timedOut bool
 	finished time.Time
 	cleanup  func()
+	// lastUsed is when the session was last interacted with (spawn, poll,
+	// write, or interrupt). It drives LRU eviction at capacity.
+	lastUsed time.Time
 	// master is the pty master file for tty sessions, nil otherwise; pumpDone
 	// closes once the master pump has drained after the process exits.
 	master   *os.File
@@ -269,6 +326,7 @@ func newSession(id string, req StartRequest) *Session {
 		buf:       newHeadTailBuffer(OutputCapBytes),
 		status:    StatusRunning,
 		cleanup:   req.Cleanup,
+		lastUsed:  time.Now(),
 		notify:    make(chan struct{}, 1),
 		exitedCh:  make(chan struct{}),
 	}
@@ -398,6 +456,7 @@ func (s *Session) IsTTY() bool { return s.tty }
 // for sessions that have already exited. The echo of the input appears in the
 // session output, exactly as it would on a terminal.
 func (s *Session) SendInput(text string) error {
+	s.touch()
 	s.mu.Lock()
 	master := s.master
 	running := s.status == StatusRunning
@@ -499,10 +558,29 @@ func (s *Session) Exited() bool {
 	}
 }
 
+// LastUsed reports when the session was last interacted with: its spawn or the
+// latest poll / write / interrupt. Capacity eviction treats the most recently
+// used sessions as the ones worth keeping.
+func (s *Session) LastUsed() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastUsed
+}
+
+// touch refreshes the session's LRU position. Called on explicit interaction
+// (a wait poll, a stdin write, or an interrupt), never on process output, so
+// an idle-but-still-relevant session is not kept hot by a chatty command.
+func (s *Session) touch() {
+	s.mu.Lock()
+	s.lastUsed = time.Now()
+	s.mu.Unlock()
+}
+
 // Wait blocks until the process exits, the deadline elapses, or ctx is done.
 // With WaitOutput it also returns once output newer than the reader's cursor
 // arrived. It reports whether the process has exited.
 func (s *Session) Wait(ctx context.Context, d time.Duration, mode WaitMode) bool {
+	s.touch()
 	if s.Exited() {
 		return true
 	}
@@ -538,6 +616,7 @@ func (s *Session) PendingOutput() bool {
 // process group; a second escalates to Kill so a process that ignores SIGINT
 // cannot pin the session forever.
 func (s *Session) Interrupt() {
+	s.touch()
 	s.mu.Lock()
 	if s.status != StatusRunning {
 		s.mu.Unlock()
