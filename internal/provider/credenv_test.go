@@ -8,7 +8,7 @@ import (
 )
 
 // TestScrubsCredentialVar exercises the name-shape rules: suffix matching,
-// substring matching, the PIGO_ prefix, and ordinary names that must survive.
+// substring matching, the GOLDER_ prefix, and ordinary names that must survive.
 func TestScrubsCredentialVar(t *testing.T) {
 	cases := []struct {
 		name string
@@ -22,8 +22,8 @@ func TestScrubsCredentialVar(t *testing.T) {
 		{"GH_TOKEN", true},
 		{"DB_PASSWORD", true},
 		{"MY_CREDENTIALS_FILE", true},
-		{"PIGO_HOME", true},
-		{"pigo_session", true},
+		{"GOLDER_HOME", true},
+		{"golder_session", true},
 		{"SERVER_PRIVATE_KEY", true},
 		{"PATH", false},
 		{"HOME", false},
@@ -39,15 +39,15 @@ func TestScrubsCredentialVar(t *testing.T) {
 }
 
 // TestScrubEnv verifies the derived child environment: credential-shaped and
-// PIGO_* entries dropped, ordinary entries kept, malformed entries dropped,
+// GOLDER_* entries dropped, ordinary entries kept, malformed entries dropped,
 // and allow entries re-injected last in deterministic order.
 func TestScrubEnv(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin:/bin",
 		"HOME=/home/user",
 		"DEEPSEEK_API_KEY=sk-secret",
-		"pigo_session=abc",
-		"PIGO_THINKING_LEVEL=high",
+		"golder_session=abc",
+		"GOLDER_THINKING_LEVEL=high",
 		"MY_DB_PASSWORD=hunter2",
 		"LANG=en_US.UTF-8",
 		"malformed-entry",
@@ -55,7 +55,7 @@ func TestScrubEnv(t *testing.T) {
 	got := ScrubEnv(parent, map[string]string{"DEEPSEEK_API_KEY": "sk-child"})
 
 	joined := strings.Join(got, "\n")
-	for _, banned := range []string{"sk-secret", "hunter2", "PIGO_", "pigo_session", "malformed"} {
+	for _, banned := range []string{"sk-secret", "hunter2", "GOLDER_", "golder_session", "malformed"} {
 		if strings.Contains(joined, banned) {
 			t.Errorf("scrubbed env leaks %q:\n%s", banned, joined)
 		}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/openai/openai-go/responses"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // Hosted web_search for the Responses driver, with probe-and-fallback.
@@ -20,7 +20,7 @@ import (
 // process-local only: support can appear at any time, and a stale negative
 // would hide it. A wasted probe costs one 400 per process start.
 
-// localWebSearchToolName is the pigo function tool hidden while the hosted
+// localWebSearchToolName is the golder function tool hidden while the hosted
 // variant is declared, so the model faces exactly one search path per attempt.
 const localWebSearchToolName = "websearch"
 
@@ -96,7 +96,7 @@ func webSearchServerCall(item responses.ResponseFunctionWebSearch) (agentcore.To
 
 // webSearchCallReplayParam rebuilds a web_search_call history item from a
 // server call's Arguments. Only search actions round-trip (the SDK constructor
-// covers search/open_page/find params, but pigo records enough to rebuild
+// covers search/open_page/find params, but golder records enough to rebuild
 // search faithfully; anything else is dropped from replay while the answer
 // text keeps its citations).
 func webSearchCallReplayParam(call agentcore.ToolCallContent) (responses.ResponseInputItemUnionParam, bool) {

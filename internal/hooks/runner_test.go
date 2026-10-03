@@ -20,7 +20,7 @@ func TestRunnerRunStdinAndEnv(t *testing.T) {
 	envFile := filepath.Join(dir, "env.txt")
 
 	r := &Runner{ProjectDir: dir}
-	h := HookConfig{Command: "cat > " + outFile + "; printf '%s\\n%s\\n%s\\n' \"$PIGO_SESSION_ID\" \"$PIGO_PROJECT_DIR\" \"$PIGO_EVENT_TYPE\" > " + envFile}
+	h := HookConfig{Command: "cat > " + outFile + "; printf '%s\\n%s\\n%s\\n' \"$GOLDER_SESSION_ID\" \"$GOLDER_PROJECT_DIR\" \"$GOLDER_EVENT_TYPE\" > " + envFile}
 	input := HookInput{EventType: "PreToolUse", SessionID: "sess-1", ProjectDir: dir, ToolName: "bash"}
 
 	if _, err := r.Run(context.Background(), h, input); err != nil {
@@ -89,7 +89,7 @@ func TestRunnerExitCodes(t *testing.T) {
 	})
 
 	t.Run("command not found is failure", func(t *testing.T) {
-		_, err := r.Run(ctx, HookConfig{Command: `this-command-does-not-exist-pigo`}, HookInput{})
+		_, err := r.Run(ctx, HookConfig{Command: `this-command-does-not-exist-golder`}, HookInput{})
 		if err == nil {
 			t.Fatal("expected error for missing command")
 		}

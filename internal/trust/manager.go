@@ -1,11 +1,11 @@
-// Package trust persists per-directory trust decisions so pigo can avoid running
+// Package trust persists per-directory trust decisions so golder can avoid running
 // side-effect tools (bash/write/edit) in directories the user has not trusted
 // (US-018, #134). Decisions are stored as a JSON map of directory path to a
 // nullable boolean: true = trusted, false = untrusted, null/absent = undecided.
 //
 // The package is intentionally free of any REPL or tool-execution concerns: it
 // only loads, queries, and persists decisions. The interactive prompt and the
-// permission-hook integration live in cmd/pigo.
+// permission-hook integration live in cmd/golder.
 package trust
 
 import (
@@ -104,19 +104,19 @@ type Manager struct {
 	session map[string]bool
 }
 
-// DefaultPath returns the trust file location: $PIGO_HOME/trust.json, or
-// ~/.pigo/trust.json when PIGO_HOME is unset. It returns "" when the home
+// DefaultPath returns the trust file location: $GOLDER_HOME/trust.json, or
+// ~/.golder/trust.json when GOLDER_HOME is unset. It returns "" when the home
 // directory cannot be resolved and no override is set, so a caller can treat
 // trust as disabled rather than guessing a path.
 func DefaultPath() string {
-	if dir := os.Getenv("PIGO_HOME"); dir != "" {
+	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
 		return filepath.Join(dir, "trust.json")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".pigo", "trust.json")
+	return filepath.Join(home, ".golder", "trust.json")
 }
 
 // NewManager loads the trust file at path. A missing file is not an error: the
@@ -223,7 +223,7 @@ func (m *Manager) SetDecision(dir string, dec Decision) error {
 }
 
 // SetSessionTrust grants trust for dir for the current process only. It is not
-// persisted: a future pigo launch re-prompts. Used by the "just once" REPL
+// persisted: a future golder launch re-prompts. Used by the "just once" REPL
 // choice and by the confirmation prompt's "always" response.
 func (m *Manager) SetSessionTrust(dir string) {
 	m.mu.Lock()
@@ -272,7 +272,7 @@ func (m *Manager) DecisionFor(dir string) (Decision, bool) {
 // cannot leave a truncated store. json.Marshal sorts map keys, so the output is
 // stable and diff-friendly; a nil *bool marshals as JSON null, preserving the
 // "path -> bool|null" schema. The temp file is created with os.CreateTemp
-// (mode 0o600, process-unique name) so two concurrent pigo processes writing
+// (mode 0o600, process-unique name) so two concurrent golder processes writing
 // the shared store cannot clobber each other's temp file before the rename.
 // The caller must hold m.mu.
 func (m *Manager) saveLocked() error {

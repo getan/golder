@@ -1,9 +1,9 @@
-// Package headless drives pigo's non-interactive run paths: the print /
+// Package headless drives golder's non-interactive run paths: the print /
 // stream-json headless run, the session listing/resume helpers, and the
 // process-isolated sub-agent JSON-RPC server (--subagent-rpc).
 //
 // This file gives headless / stream-json runs the same session persistence and
-// resume the interactive REPL has (cmd/pigo/interactive.go). Before this, a
+// resume the interactive REPL has (cmd/golder/interactive.go). Before this, a
 // headless run built an in-memory AgentContext and threw it away on exit, so
 // `--output-format stream-json` emitted no session id and `--resume`/`--continue`
 // only worked in the REPL.
@@ -23,21 +23,21 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/session"
 )
 
-// SessionStore returns the session store rooted at ~/.pigo/sessions (or under
-// PIGO_HOME when set), creating the directory on first use. It is shared by the
+// SessionStore returns the session store rooted at ~/.golder/sessions (or under
+// GOLDER_HOME when set), creating the directory on first use. It is shared by the
 // headless run path and the interactive REPL.
 func SessionStore() (*session.Store, error) {
-	dir := os.Getenv("PIGO_HOME")
+	dir := os.Getenv("GOLDER_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return nil, fmt.Errorf("resolve home dir: %w", err)
 		}
-		dir = filepath.Join(home, ".pigo")
+		dir = filepath.Join(home, ".golder")
 	}
 	return session.NewStore(filepath.Join(dir, "sessions"))
 }

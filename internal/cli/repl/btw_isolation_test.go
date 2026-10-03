@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // snapshotMessages returns the flattened text of every message so a test can

@@ -13,8 +13,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/jsonrpc"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/jsonrpc"
 )
 
 // initTimeout bounds the initialize handshake so a plugin that never replies
@@ -124,7 +124,7 @@ func (p *Plugin) CallCommand(ctx context.Context, name string, args json.RawMess
 }
 
 // Subscribes reports whether the plugin asked to receive the given event type in
-// its manifest (US-017, #133). pigo only delivers subscribed events.
+// its manifest (US-017, #133). golder only delivers subscribed events.
 func (p *Plugin) Subscribes(eventType string) bool {
 	return slices.Contains(p.Manifest.Events, eventType)
 }

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/prompts"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // runtimeHelpRegistry builds a slash registry with the live built-in commands

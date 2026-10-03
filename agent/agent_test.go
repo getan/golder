@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/agent"
+	"github.com/getan/golder/agent"
 )
 
 // hermetic points provider/skill/plugin discovery at throwaway dirs and supplies
@@ -15,7 +15,7 @@ import (
 func hermetic(t *testing.T) {
 	t.Helper()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("PIGO_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 }
 
 func contains(set []string, name string) bool {
@@ -43,7 +43,7 @@ func TestNewDefaults(t *testing.T) {
 	if got := sess.Provider(); got != "openrouter" {
 		t.Errorf("Provider() = %q, want %q", got, "openrouter")
 	}
-	for _, want := range []string{"read", "write", "edit", "grep", "find", "bash", "task"} {
+	for _, want := range []string{"read", "apply_patch", "grep", "find", "bash", "task"} {
 		if !contains(sess.ToolNames(), want) {
 			t.Errorf("default tool set missing %q: %q", want, sess.ToolNames())
 		}

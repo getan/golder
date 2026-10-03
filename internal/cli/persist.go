@@ -27,7 +27,7 @@ func PersistTurn(out io.Writer, h Host) {
 		header := h.Header()
 		header.UpdatedAt = time.Now().UTC()
 		if err := h.Store().Save(header, agentCtx.Messages); err != nil {
-			fmt.Fprintf(out, "pigo: session save failed: %v\n", err)
+			fmt.Fprintf(out, "golder: session save failed: %v\n", err)
 			return
 		}
 		h.SetPersisted(len(agentCtx.Messages))
@@ -45,7 +45,7 @@ func PersistTurn(out io.Writer, h Host) {
 	header.UpdatedAt = time.Now().UTC()
 	leaf, err := h.Store().AppendBranch(header, h.CurLeaf(), tail)
 	if err != nil {
-		fmt.Fprintf(out, "pigo: session save failed: %v\n", err)
+		fmt.Fprintf(out, "golder: session save failed: %v\n", err)
 		return
 	}
 	h.SetCurLeaf(leaf)

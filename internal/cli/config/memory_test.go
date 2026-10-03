@@ -75,7 +75,7 @@ func TestParseThresholdFraction(t *testing.T) {
 		{"0%", 0, false},   // out of range (must be >0)
 		{"120%", 0, false}, // out of range (>100%)
 		{"-10%", 0, false},
-		{"80", 0, false},  // missing %
+		{"80", 0, false}, // missing %
 		{"abc%", 0, false},
 	}
 	for _, c := range cases {

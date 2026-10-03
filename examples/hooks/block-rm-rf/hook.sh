@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook: block dangerous `rm -rf` commands before Bash runs them.
 #
-# Wiring (matcher "bash"): pigo pipes a single-line JSON payload on stdin and
+# Wiring (matcher "bash"): golder pipes a single-line JSON payload on stdin and
 # reads this hook's exit code:
 #   exit 2  -> block the tool call; stderr is shown as the reason
 #   exit 0  -> allow

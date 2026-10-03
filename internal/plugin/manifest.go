@@ -1,17 +1,17 @@
-// Package plugin implements pigo's external plugin system (US-016, #132): an
+// Package plugin implements golder's external plugin system (US-016, #132): an
 // executable written in any language registers custom tools (and, later, slash
-// commands) with pigo without touching pigo's source. pigo launches each plugin
+// commands) with golder without touching golder's source. golder launches each plugin
 // as a child process and speaks line-delimited JSON-RPC 2.0 over its stdio,
 // reusing internal/jsonrpc as the transport.
 //
-// Protocol (client = pigo, server = plugin):
+// Protocol (client = golder, server = plugin):
 //
 //   - initialize            → Manifest {name, version, tools[], commands[]}
 //     The handshake. The plugin declares everything it offers up front.
 //   - tools/call {name, arguments} → CallResult {content, isError}
-//     pigo forwards a tool invocation; the plugin runs it and returns the text.
+//     golder forwards a tool invocation; the plugin runs it and returns the text.
 //   - event {type, data} (notification)
-//     pigo pushes a subscribed agent lifecycle event (US-017, #133). One-way,
+//     golder pushes a subscribed agent lifecycle event (US-017, #133). One-way,
 //     fire-and-forget: the plugin never replies and a slow plugin is isolated.
 //   - shutdown (notification)
 //     Sent on Close so a well-behaved plugin can exit before stdin EOF.
@@ -36,7 +36,7 @@ type Manifest struct {
 	// Commands are the slash commands this plugin registers.
 	Commands []CommandSpec `json:"commands,omitempty"`
 	// Events lists the agent lifecycle event types this plugin subscribes to
-	// (US-017, #133). pigo delivers only these via one-way `event` notifications;
+	// (US-017, #133). golder delivers only these via one-way `event` notifications;
 	// an empty list means the plugin observes no events. Valid values are the
 	// agentcore.Event* discriminants (e.g. "agent_start", "tool_execution_end").
 	Events []string `json:"events,omitempty"`
@@ -86,16 +86,16 @@ type CommandCallParams struct {
 // CommandCallResult is the reply to a commands/call request. Prompt is the text
 // injected as the next agent turn (matching the declarative-command
 // convention); it may be empty if the command produces no prompt. Notifications
-// are messages the plugin asks pigo to surface to the user out of band from the
+// are messages the plugin asks golder to surface to the user out of band from the
 // prompt.
 type CommandCallResult struct {
 	Prompt        string                `json:"prompt,omitempty"`
 	Notifications []CommandNotification `json:"notifications,omitempty"`
 }
 
-// CommandNotification is a single message a command asks pigo to surface to the
+// CommandNotification is a single message a command asks golder to surface to the
 // user. Message is the human-readable text; Type is an optional severity or
-// category hint (e.g. "info", "warning", "error") that pigo may use to style
+// category hint (e.g. "info", "warning", "error") that golder may use to style
 // the message.
 type CommandNotification struct {
 	Message string `json:"message"`

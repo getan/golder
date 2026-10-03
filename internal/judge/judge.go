@@ -28,8 +28,8 @@ package judge
 // keeping the static floor. Sandbox execution routing lives in
 // internal/seatbelt and is injected into BashTool by internal/cli/run:
 // sandbox-tier verdicts run under sandbox-exec on macOS
-// (PIGO_SANDBOX=auto), every command runs sandboxed under
-// PIGO_SANDBOX=enforce, and without a runner the gate's approval runs the
+// (GOLDER_SANDBOX=auto), every command runs sandboxed under
+// GOLDER_SANDBOX=enforce, and without a runner the gate's approval runs the
 // command directly.
 import (
 	"bufio"
@@ -43,8 +43,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/permissions"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // Level is the risk tier for one tool call.
@@ -294,7 +294,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return nil
 			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
-			return blockCall(call, v, "no sandbox runner for this call (PIGO_SANDBOX=off or sandbox-exec unavailable); failing closed")
+			return blockCall(call, v, "no sandbox runner for this call (GOLDER_SANDBOX=off or sandbox-exec unavailable); failing closed")
 		default: // Confirm
 			if optsIsAuto(state) {
 				notify(noteFor(call, v, NoteApproved, lang))
@@ -443,11 +443,11 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	}
 	if sandbox {
 		// Reached only when the execution layer cannot isolate this call
-		// (no runner for the tool, PIGO_SANDBOX=off, or no sandbox-exec):
+		// (no runner for the tool, GOLDER_SANDBOX=off, or no sandbox-exec):
 		// approving runs it unisolated, so say so plainly.
-		fmt.Fprintf(out, "\npigo judges %q as risk %s [sandbox unavailable: approves run unisolated].\n", call.Name, v.Level)
+		fmt.Fprintf(out, "\ngolder judges %q as risk %s [sandbox unavailable: approves run unisolated].\n", call.Name, v.Level)
 	} else {
-		fmt.Fprintf(out, "\npigo judges %q as risk %s.\n", call.Name, v.Level)
+		fmt.Fprintf(out, "\ngolder judges %q as risk %s.\n", call.Name, v.Level)
 	}
 	n := len(v.Reasons)
 	if n > 3 {

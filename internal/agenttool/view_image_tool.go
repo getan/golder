@@ -15,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // viewImageMaxBytes caps how large a file view_image will read. A tool result

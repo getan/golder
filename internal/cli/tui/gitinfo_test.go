@@ -6,9 +6,9 @@ func TestParseGitStatusDirtyCount(t *testing.T) {
 	// Sample `git status --porcelain -b` output: header + 4 entries (staged,
 	// modified, deleted, untracked).
 	out := "## master...origin/master [ahead 4, behind 1]\n" +
-		"M  cmd/pigo/main.go\n" +
+		"M  cmd/golder/main.go\n" +
 		" M internal/foo.go\n" +
-		"D  cmd/pigo/run.go\n" +
+		"D  cmd/golder/run.go\n" +
 		"?? new_file.go\n"
 
 	info := parseGitStatus(out)

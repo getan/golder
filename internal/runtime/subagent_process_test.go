@@ -18,8 +18,8 @@ import (
 
 	goruntime "runtime"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
 )
 
 // errorTurn scripts a turn whose final message stops on StopReasonError, so a
@@ -255,7 +255,7 @@ func TestSubAgentProcessDefaultCall(t *testing.T) {
 
 // buildSubAgentHelper compiles the sub-agent helper binary into a temp dir and
 // returns its path. The helper speaks the same JSON-RPC "subagent/run" wire
-// format as pigo --subagent-rpc (decoded with plain encoding/json, no internal
+// format as golder --subagent-rpc (decoded with plain encoding/json, no internal
 // imports, so it stays a standalone main package).
 func buildSubAgentHelper(t *testing.T) string {
 	t.Helper()
@@ -276,7 +276,7 @@ func buildSubAgentHelper(t *testing.T) string {
 	return bin
 }
 
-// subAgentHelperSrc is a tiny JSON-RPC server mirroring pigo --subagent-rpc:
+// subAgentHelperSrc is a tiny JSON-RPC server mirroring golder --subagent-rpc:
 // read a "subagent/run" request per line, and either respond with
 // {text:"echo: <prompt>"} or, when the prompt is "CRASH", exit without
 // responding to simulate a subprocess crash.

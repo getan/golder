@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/memory"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/memory"
 )
 
 // defaultMemoryReminderMaxChars is the per-turn character budget for the

@@ -9,12 +9,12 @@ import (
 	"time"
 )
 
-// writeUpdateCache seeds the selfupdate cache under a temp PIGO_HOME so the
+// writeUpdateCache seeds the selfupdate cache under a temp GOLDER_HOME so the
 // banner's cached-latest lookup is deterministic.
 func writeUpdateCache(t *testing.T, latest string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("PIGO_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	data, _ := json.Marshal(map[string]any{
 		"checked_at": time.Now(),
 		"latest":     latest,
@@ -25,12 +25,12 @@ func writeUpdateCache(t *testing.T, latest string) {
 }
 
 func TestRenderBannerShowsVersion(t *testing.T) {
-	t.Setenv("PIGO_HOME", t.TempDir()) // empty cache: no upgrade hint
+	t.Setenv("GOLDER_HOME", t.TempDir()) // empty cache: no upgrade hint
 	out := renderBanner(DefaultTheme(), Options{Version: "v0.3.1"}, "/tmp/proj")
 	if !strings.Contains(out, "Version") || !strings.Contains(out, "v0.3.1") {
 		t.Errorf("banner missing Version row: %q", out)
 	}
-	if strings.Contains(out, "Run pigo update to upgrade") {
+	if strings.Contains(out, "Run golder update to upgrade") {
 		t.Error("banner should not show upgrade hint with empty cache")
 	}
 }
@@ -41,7 +41,7 @@ func TestRenderBannerDevNoHint(t *testing.T) {
 	if !strings.Contains(out, "dev") {
 		t.Errorf("banner should show dev version: %q", out)
 	}
-	if strings.Contains(out, "Run pigo update to upgrade") {
+	if strings.Contains(out, "Run golder update to upgrade") {
 		t.Error("dev build must not show an upgrade hint")
 	}
 }
@@ -52,7 +52,7 @@ func TestRenderBannerUpgradeHint(t *testing.T) {
 	if !strings.Contains(out, "v0.4.0") {
 		t.Errorf("banner should highlight newer version v0.4.0: %q", out)
 	}
-	if !strings.Contains(out, "Run pigo update to upgrade") {
+	if !strings.Contains(out, "Run golder update to upgrade") {
 		t.Errorf("banner should show upgrade hint: %q", out)
 	}
 }
@@ -60,7 +60,7 @@ func TestRenderBannerUpgradeHint(t *testing.T) {
 func TestRenderBannerUpToDate(t *testing.T) {
 	writeUpdateCache(t, "v0.3.1")
 	out := renderBanner(DefaultTheme(), Options{Version: "v0.3.1"}, "/tmp/proj")
-	if strings.Contains(out, "Run pigo update to upgrade") {
+	if strings.Contains(out, "Run golder update to upgrade") {
 		t.Error("up-to-date build must not show an upgrade hint")
 	}
 }
@@ -81,7 +81,7 @@ func TestRenderBannerProtocolLabel(t *testing.T) {
 		{"", "—"},
 	}
 	for _, c := range cases {
-		t.Setenv("PIGO_HOME", t.TempDir())
+		t.Setenv("GOLDER_HOME", t.TempDir())
 		out := renderBanner(DefaultTheme(), Options{Version: "dev", Protocol: c.protocol}, "/tmp/proj")
 		if !strings.Contains(out, c.want) {
 			t.Errorf("protocol %q: banner should show %q, got: %q", c.protocol, c.want, out)

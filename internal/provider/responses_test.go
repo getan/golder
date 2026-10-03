@@ -12,7 +12,7 @@ import (
 
 	"github.com/openai/openai-go/option"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // roundTripFunc adapts a function to http.RoundTripper so a test can stub the
@@ -413,7 +413,7 @@ func completedToolFrame(id, model, callID, name, argsJSON string) string {
 	return string(b)
 }
 
-// A pigo tool must reach the wire as a Responses function tool: type "function",
+// A golder tool must reach the wire as a Responses function tool: type "function",
 // its name, JSON-Schema parameters, and description.
 func TestResponsesDriverSendsToolSchema(t *testing.T) {
 	var gotBody string
@@ -475,7 +475,7 @@ func TestResponsesDriverSendsToolSchema(t *testing.T) {
 	}
 }
 
-// A function_call in the completed response must be parsed into a pigo
+// A function_call in the completed response must be parsed into a golder
 // ToolCallContent (id + name + raw arguments) and set StopReason=tool_use; a
 // StreamToolCallEvent must also surface the pending call mid-stream.
 func TestResponsesDriverParsesToolCall(t *testing.T) {

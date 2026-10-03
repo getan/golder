@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/contextbudget"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/contextbudget"
 )
 
 func TestBudgetReminderProviderFiresOncePerCrossing(t *testing.T) {

@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/session"
 )
 
 // RecentSessions returns up to n most-recently-updated session headers (the

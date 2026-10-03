@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // webSearchCallFrame builds a response.output_item.done SSE frame for a

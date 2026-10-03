@@ -145,7 +145,7 @@ func (duckDuckGoBackend) search(ctx context.Context, client *http.Client, query 
 		return nil, err
 	}
 	// A browser-like User-Agent avoids the endpoint serving an empty/blocked page.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; pigo-websearch/1.0)")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; golder-websearch/1.0)")
 	req.Header.Set("Accept", "text/html")
 
 	resp, err := client.Do(req)

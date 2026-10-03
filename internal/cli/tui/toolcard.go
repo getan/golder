@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/patch"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/patch"
 )
 
 // This file implements the rich tool-call card component (US-006, SPEC 3.2,

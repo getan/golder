@@ -14,8 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/patch"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/patch"
 )
 
 // ApplyPatchTool edits files under Root via an apply_patch-format patch.
@@ -35,7 +35,7 @@ type ApplyPatchTool struct {
 
 // applyPatchArgs is the decoded argument shape. The patched text is the tool
 // input, exactly as in codex; it travels as one JSON string only because
-// pigo's tool interface is JSON-typed, which is why the model escapes
+// golder's tool interface is JSON-typed, which is why the model escapes
 // newlines as \n.
 type applyPatchArgs struct {
 	Patch string `json:"patch"`

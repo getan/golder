@@ -1,12 +1,13 @@
 // Node #186: end-to-end wiring test for every OpenAI-protocol built-in provider.
 //
 // For each provider reachable via --provider (US-005) this asserts three things:
-//   (a) the registry spec reports Protocol "openai" and the PRD-mandated default
-//       base URL,
-//   (b) its primary API-key env var resolves through envAPIKey (the same path
-//       auth.go uses at request time), and
-//   (c) the generic OpenAI-compatible construction path used by main.go's
-//       resolveNamedProvider builds a non-nil driver bound to the spec's model.
+//
+//	(a) the registry spec reports Protocol "openai" and the PRD-mandated default
+//	    base URL,
+//	(b) its primary API-key env var resolves through envAPIKey (the same path
+//	    auth.go uses at request time), and
+//	(c) the generic OpenAI-compatible construction path used by main.go's
+//	    resolveNamedProvider builds a non-nil driver bound to the spec's model.
 //
 // It also pins the restored legacy key aliases (CLAUDE_API_KEY, GOOGLE_API_KEY,
 // NVIDIA_NIM_API_KEY) and the non-standard HF_TOKEN key name.

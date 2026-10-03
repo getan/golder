@@ -11,9 +11,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // errLineInterrupted aliases cli.ErrLineInterrupted so the editor's own returns

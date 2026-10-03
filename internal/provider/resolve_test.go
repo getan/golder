@@ -1,6 +1,6 @@
 package provider
 
-// Tests for provider resolution moved from cmd/pigo (US-004, #361): ResolveProvider
+// Tests for provider resolution moved from cmd/golder (US-004, #361): ResolveProvider
 // maps a model id to the right gateway (preset catalog first, then prefix rules,
 // then OpenRouter default), and ResolveBaseURL applies the base-url override
 // precedence. Environment lookups are injected via os.Getenv here.

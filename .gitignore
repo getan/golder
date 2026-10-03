@@ -27,10 +27,10 @@ go.work.sum
 # env file
 .env
 
-# pigo config files (may contain plaintext API keys)
+# golder config files (may contain plaintext API keys)
 config.toml
 **/config.toml
-.pigo/
+.golder/
 
 # Editor/IDE
 # .idea/
@@ -38,25 +38,10 @@ config.toml
 
 .loop-state.json
 
-# Compiled binary (go build ./cmd/pigo produces ./pigo)
-/pigo
+# Compiled binary (go build ./cmd/golder produces ./golder)
+/golder
 
 # goreleaser output
 /dist/
 .graph_state
 graph.html
-
-# Book build products (source in, products out — see book/README.md)
-book/*.pdf
-book/book.tex
-book/.build-bin/
-book/*.aux
-book/*.log
-book/*.toc
-book/*.out
-book/*.bcf
-book/*.bbl
-book/*.blg
-book/*.run.xml
-# Figures pre-rendered from SVG by build_pdf.sh (rsvg-convert); source is the .svg
-book/images/*.pdf

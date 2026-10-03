@@ -1,5 +1,5 @@
-// This file defines the process contract between pigo and a user hook command:
-// what pigo writes to the hook's stdin (HookInput), what pigo reads back from
+// This file defines the process contract between golder and a user hook command:
+// what golder writes to the hook's stdin (HookInput), what golder reads back from
 // its stdout (HookOutput), and the internal merged decision the dispatcher
 // produces (HookDecision). It also defines the exit-code semantics parsing.
 //
@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-// HookInput is the JSON payload pigo writes to a hook command's stdin. It
+// HookInput is the JSON payload golder writes to a hook command's stdin. It
 // carries only observable, non-secret fields (FR-17) — never API keys or
 // credentials. Per-event fields are omitempty so a payload only contains the
 // fields relevant to its event type.

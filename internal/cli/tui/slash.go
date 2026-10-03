@@ -2,7 +2,7 @@
 // full-screen TUI (US-008, FR-15). It is the TUI counterpart to the REPL's
 // slash handling (internal/cli/repl/repl.go): both front-ends consult the SAME
 // shared registry assembled by internal/cli/prompts.BuildSlashRegistry (#383),
-// so /model, /help, user-declared templates (~/.pigo/{commands,prompts}),
+// so /model, /help, user-declared templates (~/.golder/{commands,prompts}),
 // config/CLI prompt templates, plugin commands and ~/.agents/skills /skill-name
 // commands are identical across the two surfaces.
 //
@@ -21,10 +21,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/prompts"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // maxMenuRows caps how many candidate rows the popup shows at once; a longer
@@ -49,7 +49,7 @@ func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry
 		Disable:  opts.NoPromptTemplates,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pigo: slash-commands: %v\n", err)
+		fmt.Fprintf(os.Stderr, "golder: slash-commands: %v\n", err)
 	}
 	return reg
 }

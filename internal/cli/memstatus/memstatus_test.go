@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/memory"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/memory"
 )
 
 // TestRunMemoryDisabled renders the disabled state when the store is nil and

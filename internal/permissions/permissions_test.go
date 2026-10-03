@@ -28,11 +28,11 @@ func TestParseAndString(t *testing.T) {
 }
 
 func TestFromEnv(t *testing.T) {
-	env := map[string]string{"PIGO_PERMISSIONS": "read-only"}
+	env := map[string]string{"GOLDER_PERMISSIONS": "read-only"}
 	if m, ok := FromEnv(func(k string) string { return env[k] }); !ok || m != ReadOnly {
 		t.Errorf("FromEnv = %v, %v; want read-only, true", m, ok)
 	}
-	legacy := map[string]string{"PIGO_JUDGE": "off"}
+	legacy := map[string]string{"GOLDER_JUDGE": "off"}
 	if m, ok := FromEnv(func(k string) string { return legacy[k] }); !ok || m != FullAccess {
 		t.Errorf("legacy FromEnv = %v, %v; want full-access, true", m, ok)
 	}

@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // pipeReader opens an OS pipe whose read end blocks until data arrives or

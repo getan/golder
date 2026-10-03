@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PostToolUse hook: run gofmt on a Go file after write/edit touched it.
 #
-# Wiring (matcher "write|edit"): pigo pipes the tool input + response as JSON
+# Wiring (matcher "write|edit"): golder pipes the tool input + response as JSON
 # on stdin after the tool ran. This is an observing hook — it formats the file
 # as a side effect and exits 0. The written path may appear under either
 # `.tool_input.path` or `.tool_input.file_path` depending on the tool, so we

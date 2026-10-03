@@ -1,11 +1,11 @@
 # Changelog
 
-All notable changes to **pigo** are documented in this file.
+All notable changes to **golder** are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-pigo is a Go re-implementation of the [pi](https://pi.dev) AI coding agent — a
+golder is a Go re-implementation of the [pi](https://pi.dev) AI coding agent — a
 command-line coding assistant with both a headless script mode and an
 interactive REPL/TUI.
 
@@ -46,12 +46,12 @@ interactive REPL/TUI.
   `find` now delegate to ripgrep (with an actionable error when `rg` is not
   installed). Breaking change: `--allowed-tools`/`--disallowed-tools` and
   hook matchers must name `apply_patch` instead of `write`/`edit`.
-- **Permission modes + LLM review (`/permissions`)**: pigo gains codex-style
+- **Permission modes + LLM review (`/permissions`)**: golder gains codex-style
   approval presets — `read-only` (mutating tools blocked), `ask` (low risk
   runs, the rest prompts), `auto` (default), and `full-access` (no review, no
   sandbox; the static hard-deny floor remains). Switch at runtime with
   `/permissions` (an arrow-key picker in the TUI with per-mode
-  descriptions), or set `--permissions` / `PIGO_PERMISSIONS`; the live state
+  descriptions), or set `--permissions` / `GOLDER_PERMISSIONS`; the live state
   applies to the very next tool call and task children inherit it. The
   `auto`/`ask` reviewer is the session's **active model** (no separate
   classifier service, no `TYPESAFE_API_KEY`; it follows `/model` switches):
@@ -65,7 +65,7 @@ interactive REPL/TUI.
   so in-process sub-agents cannot outrun the mode either. Sandbox-tier bash
   commands still run under a per-command `sandbox-exec` profile
   (`internal/seatbelt`, project-scoped writes, secret dirs denied) via
-  `PIGO_SANDBOX=auto|enforce`. `PIGO_JUDGE=off` is kept as a legacy alias for
+  `GOLDER_SANDBOX=auto|enforce`. `GOLDER_JUDGE=off` is kept as a legacy alias for
   a `full-access` default.
 - **Interruptible confirmation prompts**: Ctrl+C during a trust or risk-judge
   prompt now denies immediately instead of trapping the user until they
@@ -80,15 +80,19 @@ interactive REPL/TUI.
   confirmation gate — `--approve` waives confirmation prompts but cannot widen
   the boundary. Also configurable as `allowed_tools` / `disallowed_tools` in
   `config.toml`.
-- **Self-update**: `pigo update` with no package name (or flags-only calls such
-  as `pigo update --check`) now upgrades the pigo binary itself to the latest
+- **Self-update**: `golder update` with no package name (or flags-only calls such
+  as `golder update --check`) now upgrades the golder binary itself to the latest
   GitHub Release, replacing the executable in place (with a `sudo` hint when the
   target path needs elevated permissions). (#465, #466, #468)
 - **Startup upgrade hint**: the TUI banner shows the version row and, when a
-  newer release is available, a `Run pigo update to upgrade` hint backed by a
+  newer release is available, a `Run golder update to upgrade` hint backed by a
   24h cached background release check. (#467)
 
 ### Changed
+- **项目更名为 golder**：模块路径 `github.com/getan/golder`、命令与二进制
+  `golder`、数据目录 `~/.golder`、项目配置 `.golder/`、全局配置
+  `~/.config/golder/config.toml`，环境变量前缀统一为 `GOLDER_*`。旧的
+  `PIGO_*`、`~/.pigo` 不再读取，升级时需手动迁移（`mv ~/.pigo ~/.golder`）。
 - **Risk grading now sees conversation context**: the reviewer state carries a
   guardian-style transcript — up to three recent user turns (intent is
   selected even when the newest entries are all tool output) plus the three
@@ -143,9 +147,9 @@ interactive REPL/TUI.
   the pure-hosted-turn settle rule still bound their own loops. A TUI card that
   is still open when a run ends (e.g. interrupted mid-batch) now closes to a
   terminal state instead of showing "Running" forever.
-- **`pigo update` semantics**: a no-argument `pigo update` no longer updates
+- **`golder update` semantics**: a no-argument `golder update` no longer updates
   every installed package; it now self-updates the binary. Update packages
-  individually with `pigo update <name>`. (#468)
+  individually with `golder update <name>`. (#468)
 - Internationalized the codebase: all user-facing strings and internal comments
   were translated from Chinese to English.
 - Documented self-update and the revised `update` semantics in the README and
@@ -208,7 +212,7 @@ interactive REPL/TUI.
   resolver (#439), terminal Unicode QR renderer (#440), HTTP + WebSocket server
   (#441), a REPL bridge seam (#442), a responsive web SPA (#444), and REPL
   wiring with server hardening. (#443, #445)
-- `--cwd`/`-C` flag to run pigo as if launched in a given working directory.
+- `--cwd`/`-C` flag to run golder as if launched in a given working directory.
 - `/think` slash command to switch reasoning effort at runtime.
 
 ### Fixed
@@ -258,21 +262,21 @@ interactive REPL/TUI.
 - **Prompt templates**: shell-style arg tokenizer (#344) and expansion engine
   (#332) with tiered slash-command priority (#335), argument-hint frontmatter
   (#334), `--prompt-template`/`--no-prompt-templates` flags (#339), settings-tier
-  `prompts` from `config.toml` (#338), project-level `.pigo/prompts` when trusted
-  (#337), `~/.pigo/prompts` alongside legacy `~/.pigo/commands` (#336), and
+  `prompts` from `config.toml` (#338), project-level `.golder/prompts` when trusted
+  (#337), `~/.golder/prompts` alongside legacy `~/.golder/commands` (#336), and
   autocomplete/`/help` listings with argument-hint and source tier. (#340, #341)
-- Install prompt packages to `~/.pigo/prompts`. (#342)
-- Honor `~/.config/pigo/config.toml` over built-in defaults.
+- Install prompt packages to `~/.golder/prompts`. (#342)
+- Honor `~/.config/golder/config.toml` over built-in defaults.
 
 ### Changed
-- Large CLI refactor: `cmd/pigo/main.go` converged to a thin entry, with the REPL,
+- Large CLI refactor: `cmd/golder/main.go` converged to a thin entry, with the REPL,
   `/status`, `/btw`, `/goal`, headless/subagent paths, pkgcmd, run-assembly,
   provider resolution, config loading, trust glue, and UI helpers each migrated
   into dedicated `internal/cli/*` packages. (#357–#369)
 
 ### Fixed
 - Include the model in the Anthropic Messages request body.
-- Gitignore pigo config files to avoid committing API keys.
+- Gitignore golder config files to avoid committing API keys.
 
 ## [0.3.6] - 2026-07-27
 
@@ -383,7 +387,7 @@ interactive REPL/TUI.
 
 ## [0.1.0] - 2026-07-20
 
-Initial public release. pigo lands as a working Go re-implementation of the pi
+Initial public release. golder lands as a working Go re-implementation of the pi
 coding agent.
 
 ### Added
@@ -402,7 +406,7 @@ coding agent.
 - **Model & auth**: a model registry and provider directory (#31), plus OAuth
   and API-key resolution. (#32)
 - **Security**: an in-process sandbox gate and secret redaction. (#44)
-- **Run modes**: a headless/stdio mode and the `pigo` CLI entry (#39),
+- **Run modes**: a headless/stdio mode and the `golder` CLI entry (#39),
   headless/stream-json runs carrying a session id with resume support (#176),
   and `--system-prompt` / `--append-system-prompt`. (#180)
 - **System prompt & config**: system-prompt assembly with `AGENTS.md` injection
@@ -420,7 +424,7 @@ coding agent.
 - **Package manager**: a lockfile and install-dir conventions (#154), `npm:<name>`
   reference parsing (#155), npm detection and content fetch (#156), pi package
   classification (#157), distribution of extensions (#158), skills (#159),
-  prompts/commands (#160), and themes (#161), plus `pigo install` (#162),
+  prompts/commands (#160), and themes (#161), plus `golder install` (#162),
   `list` + `uninstall` (#163), and `update`. (#164)
 - **Interactive TUI** (bubbletea v2) with a lipgloss theme layer, width-aware
   rendering, Markdown output, streaming spinners, tool-call cards, viewport
@@ -431,21 +435,21 @@ coding agent.
   `provider`, `agenttool`, and `runtime` leaf packages with a verified layering
   DAG. (#74–#79)
 
-[Unreleased]: https://github.com/smallnest/pigo/compare/v0.4.3...HEAD
-[0.4.3]: https://github.com/smallnest/pigo/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/smallnest/pigo/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/smallnest/pigo/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/smallnest/pigo/compare/v0.3.7...v0.4.0
-[0.3.7]: https://github.com/smallnest/pigo/compare/v0.3.6...v0.3.7
-[0.3.6]: https://github.com/smallnest/pigo/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/smallnest/pigo/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/smallnest/pigo/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/smallnest/pigo/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/smallnest/pigo/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/smallnest/pigo/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/smallnest/pigo/compare/v0.2.1...v0.3.0
-[0.2.1]: https://github.com/smallnest/pigo/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/smallnest/pigo/compare/v0.1.2...v0.2.0
-[0.1.2]: https://github.com/smallnest/pigo/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/smallnest/pigo/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/smallnest/pigo/releases/tag/v0.1.0
+[Unreleased]: https://github.com/getan/golder/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/getan/golder/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/getan/golder/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/getan/golder/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/getan/golder/compare/v0.3.7...v0.4.0
+[0.3.7]: https://github.com/getan/golder/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/getan/golder/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/getan/golder/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/getan/golder/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/getan/golder/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/getan/golder/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/getan/golder/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/getan/golder/compare/v0.2.1...v0.3.0
+[0.2.1]: https://github.com/getan/golder/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/getan/golder/compare/v0.1.2...v0.2.0
+[0.1.2]: https://github.com/getan/golder/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/getan/golder/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/getan/golder/releases/tag/v0.1.0

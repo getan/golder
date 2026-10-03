@@ -8,8 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/judge"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
 )
 
 // This file implements the scrolling transcript region of the full-screen TUI
@@ -189,6 +189,26 @@ func (t *transcript) addSystem(text string) {
 func (t *transcript) addBanner(text string) {
 	t.blocks = append(t.blocks, transcriptBlock{role: roleBanner, text: text})
 	t.reflow()
+}
+
+// setBannerText replaces the startup splash's pre-rendered text in place and
+// drops its memoized render so the next reflow repaints it. The model uses this
+// to advance the animated logo; keeping the block at the same index preserves
+// every later block's render-cache key and the scroll/selection anchors that
+// point into the rendered lines.
+func (t *transcript) setBannerText(text string) {
+	for i := len(t.blocks) - 1; i >= 0; i-- {
+		if t.blocks[i].role != roleBanner {
+			continue
+		}
+		if t.blocks[i].text == text {
+			return
+		}
+		t.blocks[i].text = text
+		delete(t.renderCache, i)
+		t.reflow()
+		return
+	}
 }
 
 // addToolCard appends a rich tool-call card (#389) as an ordered block so it

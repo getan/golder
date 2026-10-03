@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // redactPlaceholder replaces every credential-shaped match.

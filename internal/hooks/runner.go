@@ -31,7 +31,7 @@ const blockExitCode = 2
 // Runner executes hook commands. Shell defaults to "sh" with a "-c" flag; it is
 // a field so tests can substitute a shell and future platforms can override it.
 // ProjectDir is the working directory hook commands run in (the project root).
-// ExtraEnv is appended to the process environment (PIGO_* variables).
+// ExtraEnv is appended to the process environment (GOLDER_* variables).
 type Runner struct {
 	Shell      string
 	ProjectDir string
@@ -42,7 +42,7 @@ type Runner struct {
 // command's stdin. It returns the parsed HookOutput and a non-nil error only
 // for an execution *failure* (could not start, timed out, or exited non-zero
 // and non-2). A clean exit 0 or a block (exit 2) both return err == nil; the
-// caller distinguishes a block via HookOutput.blocks(). The PIGO_* environment
+// caller distinguishes a block via HookOutput.blocks(). The GOLDER_* environment
 // variables are injected on top of the current process environment.
 func (r *Runner) Run(ctx context.Context, h HookConfig, input HookInput) (HookOutput, error) {
 	payload, err := json.Marshal(input)
@@ -79,7 +79,7 @@ func (r *Runner) Run(ctx context.Context, h HookConfig, input HookInput) (HookOu
 	runErr := cmd.Run()
 
 	if stdout.truncated() || stderr.truncated() {
-		warnf(r.WarnLog, "pigo: hooks: output from command %q exceeded %d bytes and was truncated\n", h.Command, MaxOutputBytes)
+		warnf(r.WarnLog, "golder: hooks: output from command %q exceeded %d bytes and was truncated\n", h.Command, MaxOutputBytes)
 	}
 
 	// Timeout: the context deadline fired and the process was killed.
@@ -119,13 +119,13 @@ func (r *Runner) Run(ctx context.Context, h HookConfig, input HookInput) (HookOu
 }
 
 // env builds the command environment: the current process environment plus the
-// PIGO_* variables derived from the input.
+// GOLDER_* variables derived from the input.
 func (r *Runner) env(input HookInput) []string {
 	env := append([]string(nil), os.Environ()...)
 	env = append(env,
-		"PIGO_SESSION_ID="+input.SessionID,
-		"PIGO_PROJECT_DIR="+r.ProjectDir,
-		"PIGO_EVENT_TYPE="+input.EventType,
+		"GOLDER_SESSION_ID="+input.SessionID,
+		"GOLDER_PROJECT_DIR="+r.ProjectDir,
+		"GOLDER_EVENT_TYPE="+input.EventType,
 	)
 	return env
 }

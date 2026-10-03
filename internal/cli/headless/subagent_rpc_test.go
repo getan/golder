@@ -14,10 +14,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/jsonrpc"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/jsonrpc"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // TestFilterBuiltinTools verifies the subprocess tool filter: an empty name

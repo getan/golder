@@ -78,7 +78,7 @@ func NormalizeProtocol(raw string) (string, error) {
 
 // ProtocolLabel maps a raw --protocol value to the human-facing label shown in
 // the startup banner's Protocol row, so the displayed wire format matches what
-// pigo actually speaks. It differs from NormalizeProtocol in one deliberate way:
+// golder actually speaks. It differs from NormalizeProtocol in one deliberate way:
 // the bare "openai" input is surfaced as "openai/chat", making the Chat
 // Completions variant explicit rather than ambiguous. "openai/resp_api" and
 // "anthropic" pass through as themselves.

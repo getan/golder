@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/session"
 )
 
 func TestRunResume(t *testing.T) {

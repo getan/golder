@@ -39,7 +39,7 @@ func readClipboardImage() tea.Msg {
 // its path, or ok=false when the clipboard holds no image. The temp file is
 // removed on any failure so a stray empty file is never left behind.
 func saveClipboardImage() (string, bool) {
-	f, err := os.CreateTemp("", "pigo-clip-*.png")
+	f, err := os.CreateTemp("", "golder-clip-*.png")
 	if err != nil {
 		return "", false
 	}

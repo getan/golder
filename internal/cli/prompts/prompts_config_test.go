@@ -4,16 +4,16 @@ package prompts
 // loads file/dir entries (warning on missing), and BuildSlashRegistry
 // registers them at the settings tier (overridden by global same-name
 // templates). The applyFileConfig parse test stays in package main
-// (cmd/pigo/prompts_config_test.go) since it drives cliOptions.
+// (cmd/golder/prompts_config_test.go) since it drives cliOptions.
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/testutil"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/testutil"
+	"github.com/getan/golder/internal/runtime"
 )
 
 func TestLoadSettingsPromptsFileDirMissing(t *testing.T) {
@@ -54,7 +54,7 @@ func TestLoadSettingsPromptsFileDirMissing(t *testing.T) {
 
 func TestBuildSlashRegistryLoadsSettingsPrompts(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	// A settings-tier prompt dir (loaded via configPrompts).
 	settingsDir := filepath.Join(home, "settings-prompts")
 	if err := os.MkdirAll(settingsDir, 0o755); err != nil {
@@ -80,8 +80,8 @@ func TestBuildSlashRegistryLoadsSettingsPrompts(t *testing.T) {
 
 func TestBuildSlashRegistryGlobalOverridesSettings(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
-	// global prompt (TierGlobal) under ~/.pigo/prompts.
+	t.Setenv("GOLDER_HOME", home)
+	// global prompt (TierGlobal) under ~/.golder/prompts.
 	testutil.WritePrompt(t, home, "prompts", "dup.md", "FROM GLOBAL")
 	// settings-tier prompt (file) of the same name, placed at the home root
 	// (not under prompts/, so the global loop does not also load it).

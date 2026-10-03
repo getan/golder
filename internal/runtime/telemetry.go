@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // telemetry is the per-run accumulator. Most fields are folded from events on

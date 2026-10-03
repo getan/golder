@@ -1,4 +1,4 @@
-// This file implements the /rewind command (edit checkpoint / rewind): pigo's
+// This file implements the /rewind command (edit checkpoint / rewind): golder's
 // analogue of Claude Code's Esc-Esc rewind. Where /tree only moves the
 // conversation leaf, /rewind also restores the working tree — it replays the
 // file-snapshot journal (see agenttool.FileSnapshotRecorder) so a turn's write
@@ -6,7 +6,7 @@
 // to the point before that turn. The two together return the session to an
 // earlier state in code and dialogue at once.
 //
-// Scope (v1): only pigo's own write/edit tools are journaled. Files changed by
+// Scope (v1): only golder's own write/edit tools are journaled. Files changed by
 // bash commands are not captured and are left untouched by a rewind.
 package repl
 
@@ -18,10 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/session"
 )
 
 // rewindLabel derives a short one-line description of a turn from its prompt, for
@@ -68,7 +68,7 @@ func runRewind(out io.Writer, deps *replDeps, line string) {
 
 	leafID, restored, warnings, rErr := deps.snap.Restore(n - 1)
 	if rErr != nil {
-		fmt.Fprintf(out, "pigo: rewind failed: %v\n", rErr)
+		fmt.Fprintf(out, "golder: rewind failed: %v\n", rErr)
 		return
 	}
 
@@ -106,12 +106,12 @@ func rewindConversation(out io.Writer, deps *replDeps, leafID string) bool {
 	}
 	_, entries, err := deps.store.LoadEntries(deps.header.ID)
 	if err != nil {
-		fmt.Fprintf(out, "pigo: cannot read session tree: %v\n", err)
+		fmt.Fprintf(out, "golder: cannot read session tree: %v\n", err)
 		return false
 	}
 	path := session.PathToLeaf(entries, leafID)
 	if len(path) == 0 {
-		fmt.Fprintf(out, "pigo: restore point's conversation node is no longer in the tree; files were restored but the conversation was left unchanged\n")
+		fmt.Fprintf(out, "golder: restore point's conversation node is no longer in the tree; files were restored but the conversation was left unchanged\n")
 		return false
 	}
 	msgs := make(agentcore.MessageList, len(path))

@@ -1,32 +1,32 @@
-# pigo SDK examples · pigo SDK 示例
+# golder SDK examples · golder SDK 示例
 
-Runnable examples for embedding a **pigo** coding agent in your own Go program
-via the public [`github.com/smallnest/pigo/agent`](../../agent) package.
+Runnable examples for embedding a **golder** coding agent in your own Go program
+via the public [`github.com/getan/golder/agent`](../../agent) package.
 
-本目录是将 **pigo** 编码智能体嵌入到你自己的 Go 程序中的可运行示例，使用公共
-[`github.com/smallnest/pigo/agent`](../../agent) 包。
+本目录是将 **golder** 编码智能体嵌入到你自己的 Go 程序中的可运行示例，使用公共
+[`github.com/getan/golder/agent`](../../agent) 包。
 
-> Issue [#554](https://github.com/smallnest/pigo/issues/554)
+> Issue #554
 
 ---
 
 ## Why a dedicated SDK package · 为什么单独提供 SDK 包
 
-All of pigo's implementation lives under `internal/`, which Go forbids other
+All of golder's implementation lives under `internal/`, which Go forbids other
 modules from importing. The `agent` package is the supported, importable surface:
 every exported type is a Go primitive (`string`, `[]string`, `bool`, `func`), so
-your code never depends on a pigo internal type and pigo can evolve its internals
+your code never depends on a golder internal type and golder can evolve its internals
 without breaking you.
 
-pigo 的实现代码全部位于 `internal/` 下，Go 禁止其他模块导入。`agent` 包是官方支持、
+golder 的实现代码全部位于 `internal/` 下，Go 禁止其他模块导入。`agent` 包是官方支持、
 可被外部导入的接口层：所有导出类型都是 Go 基本类型（`string`、`[]string`、`bool`、
-`func`），因此你的代码不会依赖 pigo 的任何内部类型，pigo 也可以在不破坏你的前提下
+`func`），因此你的代码不会依赖 golder 的任何内部类型，golder 也可以在不破坏你的前提下
 演进其内部实现。
 
 ## Install · 安装
 
 ```go
-import "github.com/smallnest/pigo/agent"
+import "github.com/getan/golder/agent"
 ```
 
 ## Run · 运行
@@ -69,14 +69,14 @@ fmt.Println(reply)
 
 ## ⚠️ Tools run automatically · 工具会自动执行
 
-By default a session has pigo's full built-in tool set and executes tool calls
+By default a session has golder's full built-in tool set and executes tool calls
 **without any confirmation prompt** (equivalent to the CLI's `--approve`). The
 agent can read, modify, and delete files under its working directory and run
 shell commands. Only send prompts you trust, and run where you are willing to let
 the agent make changes. Constrain it with `WithTools` (allowlist),
 `WithDisallowedTools` (denylist — always wins), or `WithoutTools` (no tools).
 
-默认情况下，会话拥有 pigo 的全部内置工具，并且**不经任何确认**就执行工具调用
+默认情况下，会话拥有 golder 的全部内置工具，并且**不经任何确认**就执行工具调用
 （等价于 CLI 的 `--approve`）。智能体可以读取、修改、删除其工作目录下的文件，
 并执行 shell 命令。请只发送你信任的提示词，并在你允许智能体做出改动的目录下运行。
 可用 `WithTools`（白名单）、`WithDisallowedTools`（黑名单，始终优先生效）或
@@ -92,15 +92,15 @@ the agent make changes. Constrain it with `WithTools` (allowlist),
 | Thinking · 推理强度 | `medium` | `WithThinkingLevel` |
 
 Skills and memory are off by default so an embedded session is hermetic — it does
-not read or write the machine's shared pigo state unless you opt in.
+not read or write the machine's shared golder state unless you opt in.
 
 技能与记忆默认关闭，从而让嵌入式会话保持“隔离”——除非你显式开启，否则不会读写本机
-共享的 pigo 状态。
+共享的 golder 状态。
 
 ## API reference · API 参考
 
-Full docs: `go doc github.com/smallnest/pigo/agent`. 完整文档见
-`go doc github.com/smallnest/pigo/agent`。
+Full docs: `go doc github.com/getan/golder/agent`. 完整文档见
+`go doc github.com/getan/golder/agent`。
 
 - `New(opts ...Option) (*Session, error)` — build a session; validates provider, tools, and thinking level up front, no network call. · 构建会话；预先校验服务商、工具与推理等级，不发起网络请求。
 - `(*Session) Prompt(ctx, prompt) (string, error)` — one turn, returns final text. · 单轮对话，返回最终文本。

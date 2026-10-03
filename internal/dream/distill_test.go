@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/session"
 )
 
 // stubSessions is an in-memory SessionSource for distill tests: it lists the

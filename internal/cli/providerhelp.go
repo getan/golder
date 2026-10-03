@@ -1,4 +1,4 @@
-// This file holds ProviderHelp, the "--help" provider block moved from cmd/pigo
+// This file holds ProviderHelp, the "--help" provider block moved from cmd/golder
 // (US-004, #361). It enumerates the built-in provider registry so the values
 // accepted by --provider (and their env vars / default base URLs / protocols)
 // stay in sync with the code rather than being hand-maintained.
@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/provider"
 )
 
 // PrintProviderHelp writes the "Supported providers" block appended to `--help`

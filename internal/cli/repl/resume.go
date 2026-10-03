@@ -6,9 +6,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/provider"
 )
 
 // runResume implements /resume: it swaps the active REPL session without

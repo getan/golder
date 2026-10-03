@@ -1,5 +1,5 @@
 // Command 04-system-prompt customizes the agent's behavior with a system prompt.
-// WithSystemPrompt replaces pigo's built-in instruction entirely; use
+// WithSystemPrompt replaces golder's built-in instruction entirely; use
 // WithAppendSystemPrompt instead to keep the built-in instruction and add to it.
 //
 //	export ANTHROPIC_API_KEY=sk-...
@@ -12,7 +12,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/smallnest/pigo/agent"
+	"github.com/getan/golder/agent"
 )
 
 func main() {

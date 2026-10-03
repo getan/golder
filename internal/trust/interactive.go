@@ -29,9 +29,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/patch"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/patch"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // errPromptInterrupt marks a prompt abandoned by SIGINT. It is internal: the
@@ -89,7 +89,7 @@ func EstablishTrust(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string, a
 // EnsureTrustPrompt runs the first-run trust dialog when cwd has no saved
 // decision (NearestTrustDecision reports Found=false). When a decision already
 // exists (trusted/untrusted/null) it is a no-op: the user already answered, so
-// pigo does not re-ask on every launch. mgr==nil disables trust entirely.
+// golder does not re-ask on every launch. mgr==nil disables trust entirely.
 func EnsureTrustPrompt(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string) {
 	if mgr == nil {
 		return
@@ -98,7 +98,7 @@ func EnsureTrustPrompt(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string
 		return
 	}
 	fmt.Fprintf(out, "\nFirst time in this directory: %s\n", cwd)
-	fmt.Fprintln(out, "pigo runs side-effect tools (bash, write, edit) here. Choose a trust level:")
+	fmt.Fprintln(out, "golder runs side-effect tools (bash, write, edit) here. Choose a trust level:")
 	fmt.Fprintln(out, "  1) Trust     - remember as trusted (tools run without asking)")
 	fmt.Fprintln(out, "  2) Just once - trust only for this session (default)")
 	fmt.Fprintln(out, "  3) Reject    - do not trust (tools ask each time)")
@@ -110,14 +110,14 @@ func EnsureTrustPrompt(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string
 	case 1:
 		target := chooseScope(out, in, cwd)
 		if err := mgr.SetDecision(target, Trusted); err != nil {
-			fmt.Fprintf(out, "pigo: could not save trust decision: %v\n", err)
+			fmt.Fprintf(out, "golder: could not save trust decision: %v\n", err)
 			return
 		}
 		fmt.Fprintf(out, "Trusted %s (saved to %s).\n", cwd, target)
 	case 3:
 		target := chooseScope(out, in, cwd)
 		if err := mgr.SetDecision(target, Untrusted); err != nil {
-			fmt.Fprintf(out, "pigo: could not save trust decision: %v\n", err)
+			fmt.Fprintf(out, "golder: could not save trust decision: %v\n", err)
 			return
 		}
 		fmt.Fprintf(out, "Marked %s untrusted (saved to %s). Side-effect tools will ask.\n", cwd, target)
@@ -212,7 +212,7 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 			switch strings.TrimSpace(strings.ToLower(args)) {
 			case "", "on":
 				if err := mgr.SetDecision(cwd, Trusted); err != nil {
-					return fmt.Sprintf("pigo: could not save trust: %v", err)
+					return fmt.Sprintf("golder: could not save trust: %v", err)
 				}
 				return fmt.Sprintf("trusted %s (saved)", cwd)
 			case "off":
@@ -222,7 +222,7 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 				// trusted until restart and the message below would be a lie.
 				mgr.ClearSessionTrust(cwd)
 				if err := mgr.SetDecision(cwd, Untrusted); err != nil {
-					return fmt.Sprintf("pigo: could not save trust: %v", err)
+					return fmt.Sprintf("golder: could not save trust: %v", err)
 				}
 				return fmt.Sprintf("marked %s untrusted (saved); side-effect tools will ask", cwd)
 			case "once":
@@ -299,7 +299,7 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 // runs it AND grants session trust so subsequent side-effect calls skip the
 // prompt. Denial (no/empty/EOF/interrupt) returns (false, false).
 func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) (allow bool, always bool) {
-	fmt.Fprintf(out, "\npigo wants to run %q in an untrusted directory.\n", call.Name)
+	fmt.Fprintf(out, "\ngolder wants to run %q in an untrusted directory.\n", call.Name)
 	if summary := toolCallSummary(call); summary != "" {
 		fmt.Fprintf(out, "  %s\n", summary)
 	}

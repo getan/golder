@@ -12,7 +12,7 @@ package compaction
 import (
 	"encoding/json"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // CompactionSettings holds the thresholds and retention knobs for compaction,
@@ -98,8 +98,8 @@ func EstimateTokens(msg agentcore.Message) int {
 }
 
 // calculateContextTokens derives total context tokens from a provider usage
-// block. pigo's Usage only reports input/output, so we sum them (pi additionally
-// folds cache read/write, which pigo does not track).
+// block. golder's Usage only reports input/output, so we sum them (pi additionally
+// folds cache read/write, which golder does not track).
 func calculateContextTokens(u agentcore.Usage) int {
 	return u.InputTokens + u.OutputTokens
 }

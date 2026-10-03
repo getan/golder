@@ -5,16 +5,16 @@
 # 正式发布： 打 tag 后 `git push --tags`，CI 触发 `goreleaser release --clean`
 version: 2
 
-project_name: pigo
+project_name: golder
 
 before:
   hooks:
     - go mod tidy
 
 builds:
-  - id: pigo
-    main: ./cmd/pigo
-    binary: pigo
+  - id: golder
+    main: ./cmd/golder
+    binary: golder
     env:
       - CGO_ENABLED=0
     goos:
@@ -24,7 +24,7 @@ builds:
     goarch:
       - amd64
       - arm64
-    # version/commit/date 变量注入 main 包（见 cmd/pigo/main.go）。
+    # version/commit/date 变量注入 main 包（见 cmd/golder/main.go）。
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -32,9 +32,9 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - id: pigo
+  - id: golder
     ids:
-      - pigo
+      - golder
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- if eq .Os "darwin" }}Darwin
@@ -80,7 +80,7 @@ changelog:
 
 release:
   github:
-    owner: smallnest
-    name: pigo
+    owner: getan
+    name: golder
   draft: false
   prerelease: auto

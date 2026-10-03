@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
 )
 
 // fakeHost satisfies cli.Host by embedding the interface (so every method is
@@ -26,13 +26,13 @@ type fakeHost struct {
 
 func (f fakeHost) Live() *cli.LiveConfig { return f.live }
 
-// withBtwConfig points PIGO_HOME at a temp dir and writes btw.json with the
+// withBtwConfig points GOLDER_HOME at a temp dir and writes btw.json with the
 // given contents (or removes it when contents is ""), returning nothing — the
-// temp dir is cleaned up by t.TempDir. It restores PIGO_HOME after the test.
+// temp dir is cleaned up by t.TempDir. It restores GOLDER_HOME after the test.
 func withBtwConfig(t *testing.T, contents string) {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("PIGO_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	if contents != "" {
 		if err := os.WriteFile(filepath.Join(dir, "btw.json"), []byte(contents), 0o644); err != nil {
 			t.Fatalf("write btw.json: %v", err)

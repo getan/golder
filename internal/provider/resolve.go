@@ -1,6 +1,6 @@
 package provider
 
-// Provider resolution moved here from cmd/pigo (US-004, #361): mapping a model
+// Provider resolution moved here from cmd/golder (US-004, #361): mapping a model
 // id / --provider / --protocol selection to a concrete wire driver, plus the
 // base-url override precedence. Environment lookups are injected as an
 // env func(string) string so callers (and tests) control the environment
@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/cli/config"
+	"github.com/getan/golder/internal/cli/config"
 )
 
 // ResolveProvider maps a model id to a built-in provider. An explicit
@@ -21,7 +21,7 @@ import (
 //
 // When protocol is a non-empty explicit selection ("openai" or "anthropic") it
 // wins over the model-id heuristics: the provider is built directly for that
-// wire format against baseURL, which is how a user points pigo at a self-hosted
+// wire format against baseURL, which is how a user points golder at a self-hosted
 // or third-party endpoint and says which protocol it speaks. An "anthropic"
 // selection with no baseURL targets the public Anthropic API.
 //

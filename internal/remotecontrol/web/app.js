@@ -1,4 +1,4 @@
-// pigo remote-control SPA.
+// golder remote-control SPA.
 //
 // Connects to /ws, renders streamed session output, submits prompts, and
 // answers confirmation requests. Vanilla JS, no build step — the server embeds

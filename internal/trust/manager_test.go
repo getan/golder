@@ -257,19 +257,19 @@ func TestDecisionForExactPath(t *testing.T) {
 	}
 }
 
-// TestDefaultPath verifies DefaultPath honors PIGO_HOME and falls back to
-// ~/.pigo/trust.json.
+// TestDefaultPath verifies DefaultPath honors GOLDER_HOME and falls back to
+// ~/.golder/trust.json.
 func TestDefaultPath(t *testing.T) {
-	t.Setenv("PIGO_HOME", "/custom/pigo")
-	if got := DefaultPath(); got != "/custom/pigo/trust.json" {
-		t.Errorf("DefaultPath with PIGO_HOME = %q, want /custom/pigo/trust.json", got)
+	t.Setenv("GOLDER_HOME", "/custom/golder")
+	if got := DefaultPath(); got != "/custom/golder/trust.json" {
+		t.Errorf("DefaultPath with GOLDER_HOME = %q, want /custom/golder/trust.json", got)
 	}
-	t.Setenv("PIGO_HOME", "")
+	t.Setenv("GOLDER_HOME", "")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("home dir unavailable")
 	}
-	want := filepath.Join(home, ".pigo", "trust.json")
+	want := filepath.Join(home, ".golder", "trust.json")
 	if got := DefaultPath(); got != want {
 		t.Errorf("DefaultPath default = %q, want %q", got, want)
 	}

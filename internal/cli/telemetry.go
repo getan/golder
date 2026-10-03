@@ -1,12 +1,12 @@
 // This file implements the telemetry holder that retains per-run telemetry
 // events (US-001, #291) and folds them into a cumulative accumulator for the
-// /status command to display. It was moved verbatim from cmd/pigo
+// /status command to display. It was moved verbatim from cmd/golder
 // (telemetry_state.go, US-013) into the shared cli layer so the status and repl
 // subpackages share one holder type.
 package cli
 
 import (
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // TelemetryHolder holds the most recent run's telemetry event and a cumulative

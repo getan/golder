@@ -4,7 +4,7 @@
       {
         "matcher": "write|edit",
         "hooks": [
-          { "type": "command", "command": "$PIGO_PROJECT_DIR/examples/hooks/gofmt-after-write/hook.sh", "timeout": 30 }
+          { "type": "command", "command": "$GOLDER_PROJECT_DIR/examples/hooks/gofmt-after-write/hook.sh", "timeout": 30 }
         ]
       }
     ]

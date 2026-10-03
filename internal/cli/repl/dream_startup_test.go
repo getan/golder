@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/dream"
+	"github.com/getan/golder/internal/dream"
 )
 
 // syncWriter is a concurrency-safe writer whose first Write closes done, so a

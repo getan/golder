@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // reviewStub records the prompts it sees and returns a canned answer.

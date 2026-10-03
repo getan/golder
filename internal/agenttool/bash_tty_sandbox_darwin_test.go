@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/seatbelt"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 // A tty session must work through the sandbox runner: the PTY is opened by the

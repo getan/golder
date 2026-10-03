@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/contextbudget"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/contextbudget"
 )
 
 // toolText extracts the text of a single-content tool result.

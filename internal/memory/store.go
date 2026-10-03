@@ -1,4 +1,4 @@
-// Package memory implements the persistent memory storage layer for pigo.
+// Package memory implements the persistent memory storage layer for golder.
 //
 // It is backed by a pure-Go SQLite database (modernc.org/sqlite, no CGO) with
 // an FTS5 full-text index over Markdown memory files. This file provides the

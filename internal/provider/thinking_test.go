@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // decodeBody unmarshals an encoded request body into a generic map for asserts.

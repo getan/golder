@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/memory"
+	"github.com/getan/golder/internal/memory"
 )
 
 // Consolidator is the LLM-driven apply step, injected so the deterministic
@@ -92,12 +92,12 @@ type Runner struct {
 	// Consolidator is the injected LLM apply step; nil selects nopConsolidator.
 	Consolidator Consolidator
 	// MemoryRoot overrides the environment-resolved memory root. Empty means
-	// resolve via ResolveMemoryRoot (PIGO_HOME / ~/.pigo). Tests set it to a temp
+	// resolve via ResolveMemoryRoot (GOLDER_HOME / ~/.golder). Tests set it to a temp
 	// dir; production leaves it empty.
 	MemoryRoot string
 	// Sessions is the source of recent session transcripts for the distillation
-	// pass (SPEC §5.3). nil resolves the default store at $PIGO_HOME/sessions (or
-	// ~/.pigo/sessions); tests inject a stub. If it cannot be resolved,
+	// pass (SPEC §5.3). nil resolves the default store at $GOLDER_HOME/sessions (or
+	// ~/.golder/sessions); tests inject a stub. If it cannot be resolved,
 	// distillation degrades to a no-op rather than failing the run.
 	Sessions SessionSource
 }
@@ -285,18 +285,18 @@ func isLocked(err error) bool {
 }
 
 // ResolveMemoryRoot returns the persistent memory root directory the same way
-// the CLI does (internal/cli/run.MemoryDir): $PIGO_HOME/memory, else
-// ~/.pigo/memory. It is duplicated here rather than imported to keep the dream
+// the CLI does (internal/cli/run.MemoryDir): $GOLDER_HOME/memory, else
+// ~/.golder/memory. It is duplicated here rather than imported to keep the dream
 // package free of a dependency on the CLI assembly layer (and any import cycle
-// through it). Returns "" when neither PIGO_HOME nor the home dir is resolvable.
+// through it). Returns "" when neither GOLDER_HOME nor the home dir is resolvable.
 func ResolveMemoryRoot() string {
-	dir := os.Getenv("PIGO_HOME")
+	dir := os.Getenv("GOLDER_HOME")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return ""
 		}
-		dir = filepath.Join(home, ".pigo")
+		dir = filepath.Join(home, ".golder")
 	}
 	return filepath.Join(dir, "memory")
 }

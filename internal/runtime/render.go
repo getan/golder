@@ -10,7 +10,7 @@ package runtime
 import (
 	"context"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // StreamHandler is the set of callbacks DrainStream invokes as it consumes a

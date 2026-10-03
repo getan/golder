@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // This file renders assistant turns as Markdown inside the TUI transcript
@@ -85,7 +85,7 @@ func rendererFor(width int) *glamour.TermRenderer {
 }
 
 // markdownStyle returns the base glamour style for the terminal background
-// with pigo's palette tweaks applied. Two stock choices fight codex parity:
+// with golder's palette tweaks applied. Two stock choices fight codex parity:
 //
 //   - dark inline code is coral (256-color 203) on a dark chip, so a reply full
 //     of `identifiers` — the normal shape of a coding answer — reads as a wall

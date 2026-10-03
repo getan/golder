@@ -16,7 +16,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // diffTab is how a tab renders inside diff content: a fixed four columns,

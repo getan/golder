@@ -1,5 +1,5 @@
 // This file implements the layered configuration system (US-023, #42), the
-// pigo port of pi/zero's config resolution. A resolved Config is produced by
+// golder port of pi/zero's config resolution. A resolved Config is produced by
 // merging partial layers in precedence order:
 //
 //	default < global < project < environment/CLI
@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/hooks"
 )
 
 // Config is the fully resolved configuration a run operates under, after all
@@ -139,7 +139,7 @@ func ResolveConfig(layers ...*ConfigLayer) (Config, error) {
 // EnvConfigLayer builds a config layer from environment variables, the highest
 // file-independent layer (below only explicit CLI flags). Recognized:
 //
-//	PIGO_MODEL, PIGO_PROVIDER, PIGO_TOOL_EXECUTION_MODE, PIGO_THINKING_LEVEL
+//	GOLDER_MODEL, GOLDER_PROVIDER, GOLDER_TOOL_EXECUTION_MODE, GOLDER_THINKING_LEVEL
 //
 // Only set variables contribute; unset ones leave the field nil so lower layers
 // show through. Credential env vars are intentionally NOT captured here — keys
@@ -150,16 +150,16 @@ func EnvConfigLayer(getenv func(string) string) ConfigLayer {
 		getenv = os.Getenv
 	}
 	var layer ConfigLayer
-	if v := getenv("PIGO_MODEL"); v != "" {
+	if v := getenv("GOLDER_MODEL"); v != "" {
 		layer.Model = &v
 	}
-	if v := getenv("PIGO_PROVIDER"); v != "" {
+	if v := getenv("GOLDER_PROVIDER"); v != "" {
 		layer.Provider = &v
 	}
-	if v := getenv("PIGO_TOOL_EXECUTION_MODE"); v != "" {
+	if v := getenv("GOLDER_TOOL_EXECUTION_MODE"); v != "" {
 		layer.ToolExecutionMode = &v
 	}
-	if v := getenv("PIGO_THINKING_LEVEL"); v != "" {
+	if v := getenv("GOLDER_THINKING_LEVEL"); v != "" {
 		layer.ThinkingLevel = &v
 	}
 	return layer

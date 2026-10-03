@@ -7,7 +7,7 @@ package headless
 import (
 	"testing"
 
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // TestParseOutputMode covers the three accepted spellings and one rejection,

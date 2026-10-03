@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
 )
 
 // This file wires the llmConsolidator to a real provider (the main-session
@@ -19,7 +19,7 @@ import (
 // single StreamCompletion, draining the event stream to the final text.
 
 // NewLLMConsolidator builds the production Consolidator backed by the given
-// model configuration — the same tuple cmd/pigo resolves for the main session
+// model configuration — the same tuple cmd/golder resolves for the main session
 // (CLI flags overlaid with config.toml). It resolves the Provider once so every
 // Consolidate call reuses it. A resolution failure (bad model / missing
 // provider) is returned so the caller can decide whether to fall back to the

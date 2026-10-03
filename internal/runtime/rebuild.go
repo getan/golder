@@ -20,8 +20,8 @@ package runtime
 import (
 	"context"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/compaction"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/compaction"
 )
 
 // RebuildResult describes the outcome of a context rebuild. Messages is the

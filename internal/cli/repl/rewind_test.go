@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 )
 
 // /rewind with no argument lists the committed restore points.

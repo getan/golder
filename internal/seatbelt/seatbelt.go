@@ -31,9 +31,9 @@ const (
 	ModeEnforce
 )
 
-// ModeFromEnv resolves PIGO_SANDBOX (off|auto|enforce, default auto).
+// ModeFromEnv resolves GOLDER_SANDBOX (off|auto|enforce, default auto).
 func ModeFromEnv() Mode {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("PIGO_SANDBOX"))) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOLDER_SANDBOX"))) {
 	case "off":
 		return ModeOff
 	case "enforce":

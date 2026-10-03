@@ -288,7 +288,7 @@ func TestManagerCleanupRunsOnStartFailure(t *testing.T) {
 	m := NewManager()
 	called := false
 	_, err := m.Start(StartRequest{
-		Argv:    []string{"/nonexistent/pigo-test-binary"},
+		Argv:    []string{"/nonexistent/golder-test-binary"},
 		Cleanup: func() { called = true },
 	})
 	if err == nil {

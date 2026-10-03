@@ -1,6 +1,6 @@
 // Package testutil holds test helpers shared across the internal/cli
 // subpackages. Only helpers reused by two or more test files and free of
-// cmd/pigo-internal types belong here; helpers that build the concrete replDeps
+// cmd/golder-internal types belong here; helpers that build the concrete replDeps
 // aggregate stay with the package that owns it.
 package testutil
 

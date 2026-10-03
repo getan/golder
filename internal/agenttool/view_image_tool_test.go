@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // writeTestPNG writes a tiny valid PNG under dir and returns its path.

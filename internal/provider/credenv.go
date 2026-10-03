@@ -5,10 +5,10 @@
 //     variables removed, so a spawned process (sub-agent, plugin) does not
 //     inherit secrets it does not need. Mirrors dsh's stdio bridge, which
 //     "deliberately removes ambient variables whose names usually identify
-//     credentials and all DSH_* variables"; pigo scrubs credential-shaped
-//     names and all PIGO_* internals. Explicit allow entries are re-injected
+//     credentials and all DSH_* variables"; golder scrubs credential-shaped
+//     names and all GOLDER_* internals. Explicit allow entries are re-injected
 //     last, so a parent can still hand a child exactly the one key it needs.
-//   - CredentialFile: a named-credential store at $PIGO_HOME/.credentials.yaml
+//   - CredentialFile: a named-credential store at $GOLDER_HOME/.credentials.yaml
 //     (mode 0600). Config files reference a credential by NAME; the literal
 //     secret lives only here, mirroring dsh's write-only keys + "settings
 //     retain only its credential reference".
@@ -40,11 +40,11 @@ var credentialNameSubstrings = []string{
 
 // ScrubsCredentialVar reports whether an environment variable name is
 // credential-shaped and should be stripped from child-process environments.
-// All PIGO_* internals are scrubbed too (they are pigo's own state, not a
+// All GOLDER_* internals are scrubbed too (they are golder's own state, not a
 // child's business); PATH/HOME and other ordinary names never match.
 func ScrubsCredentialVar(name string) bool {
 	n := strings.ToUpper(name)
-	if strings.HasPrefix(n, "PIGO_") {
+	if strings.HasPrefix(n, "GOLDER_") {
 		return true
 	}
 	for _, suffix := range credentialNameSuffixes {
@@ -61,7 +61,7 @@ func ScrubsCredentialVar(name string) bool {
 }
 
 // ScrubEnv filters a parent environment for a child process: every
-// credential-shaped variable and every PIGO_* internal is dropped, then the
+// credential-shaped variable and every GOLDER_* internal is dropped, then the
 // allow entries are appended (so a parent can hand a child exactly the one
 // credential it needs, under a name that would otherwise be scrubbed).
 // Malformed parent entries (no "=") are dropped. The result is safe to assign
@@ -122,17 +122,17 @@ func CredentialFilePermissionsWarn(path string) bool {
 }
 
 // CredentialFilePath returns the named-credential file location:
-// $PIGO_HOME/.credentials.yaml when PIGO_HOME is set, else
-// ~/.pigo/.credentials.yaml. An unresolvable home returns "".
+// $GOLDER_HOME/.credentials.yaml when GOLDER_HOME is set, else
+// ~/.golder/.credentials.yaml. An unresolvable home returns "".
 func CredentialFilePath() string {
-	if dir := os.Getenv("PIGO_HOME"); dir != "" {
+	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
 		return filepath.Join(dir, ".credentials.yaml")
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".pigo", ".credentials.yaml")
+	return filepath.Join(home, ".golder", ".credentials.yaml")
 }
 
 // ResolveCredentialReference loads the named-credential file and returns the

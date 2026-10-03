@@ -3,7 +3,7 @@
 // replDeps + streamRun + cli.PersistTurn plumbing (internal/cli/repl): it
 // assembles an AgentContext + RunConfig from the model's Options, feeds them to
 // the event bridge (bridge.go's startRun → runtime.StartRun/DrainStream), and
-// persists the growing conversation to ~/.pigo/sessions after each turn.
+// persists the growing conversation to ~/.golder/sessions after each turn.
 //
 // It deliberately imports the SHARED lower-level packages the REPL also uses
 // (session, runtime, provider, cli, cli/run, cli/headless, cli/ui) rather than
@@ -22,24 +22,24 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/headless"
-	"github.com/smallnest/pigo/internal/cli/prompts"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/contextbudget"
-	"github.com/smallnest/pigo/internal/hooks"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/memory"
-	"github.com/smallnest/pigo/internal/permissions"
-	"github.com/smallnest/pigo/internal/plugin"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/session"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/headless"
+	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/memory"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/session"
+	"github.com/getan/golder/internal/trust"
 )
 
 // runSession holds the assembled per-session state for a TUI run: the persisted
@@ -58,7 +58,7 @@ type runSession struct {
 	schedule  *agenttool.Schedule
 	creds     *provider.CredentialStore
 
-	// cwd is the directory pigo was launched in, captured once at session
+	// cwd is the directory golder was launched in, captured once at session
 	// assembly. It is the trust key and the /status environment display.
 	cwd string
 	// trust persists project-trust decisions (US-018, #134). It is nil when
@@ -140,7 +140,7 @@ type runSession struct {
 }
 
 // newRunSession assembles the run session from the resolved Options, opening the
-// shared ~/.pigo/sessions store. When Options carries a ResumeID it loads that
+// shared ~/.golder/sessions store. When Options carries a ResumeID it loads that
 // session's entries and rebuilds the context (the returned history seeds the
 // replayed transcript); otherwise it starts a fresh session with a new header.
 // It is the production entry; newRunSessionWithStore holds the store-agnostic
@@ -224,11 +224,11 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// runs — the store is surfaced rather than silently overwritten.
 	mgr, mgrErr := trust.NewManager(trust.DefaultPath())
 	if mgrErr != nil {
-		fmt.Fprintf(os.Stderr, "pigo: trust store unavailable, trust disabled: %v\n", mgrErr)
+		fmt.Fprintf(os.Stderr, "golder: trust store unavailable, trust disabled: %v\n", mgrErr)
 		mgr = nil
 	}
 	if cwd == "" && mgr != nil {
-		fmt.Fprintf(os.Stderr, "pigo: cannot resolve working directory, trust disabled\n")
+		fmt.Fprintf(os.Stderr, "golder: cannot resolve working directory, trust disabled\n")
 		mgr = nil
 	}
 
@@ -286,7 +286,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		baseOnEvent = n.Handle
 	}
 	if set, err := run.ResolveHookSet(cwd, trusted); err != nil {
-		fmt.Fprintf(os.Stderr, "pigo: hooks disabled: %v\n", err)
+		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", err)
 		s.onEvent = baseOnEvent
 	} else if d := run.BuildDispatcher(set, s.hookDeps); d != nil {
 		s.dispatcher = d

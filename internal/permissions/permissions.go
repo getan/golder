@@ -1,10 +1,10 @@
-// Package permissions defines pigo's approval modes and the live, mutable
+// Package permissions defines golder's approval modes and the live, mutable
 // state that tracks the active one. It is a leaf package: standard library
 // only, no imports from judge/trust/runtime, so every layer (the risk gate,
 // the bash tool, the slash command) can read the mode without an import
 // cycle.
 //
-// The four modes mirror codex's approval presets, adapted to pigo's gate:
+// The four modes mirror codex's approval presets, adapted to golder's gate:
 //
 //   - read-only:   mutating tools (bash, apply_patch) are blocked outright.
 //   - ask:         the reviewer grades each mutating call; Allow runs, the
@@ -72,17 +72,17 @@ func Parse(s string) (Mode, bool) {
 	}
 }
 
-// FromEnv resolves the default mode from PIGO_PERMISSIONS. PIGO_JUDGE=off is
+// FromEnv resolves the default mode from GOLDER_PERMISSIONS. GOLDER_JUDGE=off is
 // honored as a legacy alias for full-access. ok is false when the variable is
 // unset or unparseable, leaving the caller's own default in place.
 func FromEnv(getenv func(string) string) (Mode, bool) {
 	if getenv == nil {
 		return Auto, false
 	}
-	if m, ok := Parse(getenv("PIGO_PERMISSIONS")); ok {
+	if m, ok := Parse(getenv("GOLDER_PERMISSIONS")); ok {
 		return m, true
 	}
-	if strings.EqualFold(strings.TrimSpace(getenv("PIGO_JUDGE")), "off") {
+	if strings.EqualFold(strings.TrimSpace(getenv("GOLDER_JUDGE")), "off") {
 		return FullAccess, true
 	}
 	return Auto, false

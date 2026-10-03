@@ -44,9 +44,9 @@ type Bridge struct {
 
 	inputs chan string
 
-	mu       sync.Mutex
-	pending  map[string]chan Decision
-	nextID   uint64
+	mu      sync.Mutex
+	pending map[string]chan Decision
+	nextID  uint64
 }
 
 // NewBridge builds a bridge over sink.

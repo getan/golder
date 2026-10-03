@@ -13,7 +13,7 @@ package dream
 // pass. It is deliberately narrow: the Go side already handles exact dedup, path
 // validation, near-dup candidate pairing, MEMORY.md rewrite, and index rebuild;
 // the model only decides the semantic merges and prunes.
-const dreamSystemPrompt = `You are the memory-consolidation agent for pigo ("dream"). You run periodically over a developer's persistent memory library and produce a compact, non-redundant, current set of memory entries.
+const dreamSystemPrompt = `You are the memory-consolidation agent for golder ("dream"). You run periodically over a developer's persistent memory library and produce a compact, non-redundant, current set of memory entries.
 
 Each memory entry is a Markdown file. You are given the current entries (with their absolute file paths and bodies), plus deterministic hints: candidate near-duplicate pairs and references to local files that no longer exist. Exact byte-duplicates and dead-path cleanup are already handled mechanically — you do NOT need to act on those.
 
@@ -55,7 +55,7 @@ Output format:
 // durable memory entries that are not already captured. The Go side then dedups
 // each proposal against the existing library and path-guards every write, so the
 // model only ever supplies type/scope/title/body — never a filesystem path.
-const dreamDistillSystemPrompt = `You are the memory-distillation agent for pigo ("dream"). You read recent session transcripts between a developer and an AI coding agent, and extract DURABLE facts worth remembering for future sessions.
+const dreamDistillSystemPrompt = `You are the memory-distillation agent for golder ("dream"). You read recent session transcripts between a developer and an AI coding agent, and extract DURABLE facts worth remembering for future sessions.
 
 You are also given a list of memories that ALREADY EXIST. Do NOT propose anything already covered by an existing memory — only genuinely new, not-yet-recorded facts.
 

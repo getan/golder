@@ -5,7 +5,7 @@
 ## 原理
 
 - 事件：`UserPromptSubmit`（工具无关，忽略 matcher，全部触发）。
-- hook `exit 0` 并在 stdout 打印 JSON；pigo 解析其中的 `additionalContext`，仅追加到**本轮**模型输入。
+- hook `exit 0` 并在 stdout 打印 JSON；golder 解析其中的 `additionalContext`，仅追加到**本轮**模型输入。
 - 非 git 目录下输出 `no-git`，不会报错。
 
 ## 使用
@@ -14,7 +14,7 @@
 chmod +x examples/hooks/inject-git-branch/hook.sh
 ```
 
-把 `config.json` 的 `hooks` 段合并进 `~/.pigo/config.json` 或受信任项目的 `./.pigo/config.json`。
+把 `config.json` 的 `hooks` 段合并进 `~/.golder/config.json` 或受信任项目的 `./.golder/config.json`。
 
 ## 依赖
 

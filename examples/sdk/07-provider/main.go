@@ -1,5 +1,5 @@
 // Command 07-provider points the SDK at a non-default provider. There are two
-// common ways to do it: select a named provider from your pigo config with
+// common ways to do it: select a named provider from your golder config with
 // WithProvider, or target any OpenAI-compatible endpoint directly with
 // WithBaseURL + WithProtocol. This example uses the latter against OpenRouter.
 //
@@ -13,7 +13,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/smallnest/pigo/agent"
+	"github.com/getan/golder/agent"
 )
 
 func main() {

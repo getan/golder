@@ -30,7 +30,7 @@ func (s HookSet) MatchHooks(eventType, toolName string, warnLog io.Writer) []Hoo
 		}
 		for _, h := range m.Hooks {
 			if err := h.Validate(); err != nil {
-				warnf(warnLog, "pigo: hooks: skipping invalid hook: %v\n", err)
+				warnf(warnLog, "golder: hooks: skipping invalid hook: %v\n", err)
 				continue
 			}
 			out = append(out, h)
@@ -70,7 +70,7 @@ func matcherApplies(pattern, toolName string, warnLog io.Writer) bool {
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
-		warnf(warnLog, "pigo: hooks: skipping matcher with invalid regexp %q: %v\n", pattern, err)
+		warnf(warnLog, "golder: hooks: skipping matcher with invalid regexp %q: %v\n", pattern, err)
 		return false
 	}
 	return re.MatchString(toolName)

@@ -1,6 +1,6 @@
-// This file caches the latest-release check so pigo's startup banner can show
+// This file caches the latest-release check so golder's startup banner can show
 // "update available" without a network call on every launch (US-004, FR-10).
-// The cache lives at $PIGO_HOME/update-check.json (or ~/.pigo/update-check.json)
+// The cache lives at $GOLDER_HOME/update-check.json (or ~/.golder/update-check.json)
 // and records the last check time plus the latest tag seen. CachedLatest reads
 // it synchronously (fast, local); StartBackgroundCheck refreshes it off the hot
 // path when older than the TTL, so a fresh result shows on the next launch. All
@@ -20,7 +20,7 @@ import (
 // checkTTL is the minimum interval between networked latest-release checks.
 const checkTTL = 24 * time.Hour
 
-// cacheFileName is the on-disk cache under the pigo home directory.
+// cacheFileName is the on-disk cache under the golder home directory.
 const cacheFileName = "update-check.json"
 
 // updateCache is the on-disk shape of the latest-release check cache.
@@ -31,14 +31,14 @@ type updateCache struct {
 
 // cachePath returns the cache file path, or "" when the home dir is unavailable.
 func cachePath() string {
-	if dir := os.Getenv("PIGO_HOME"); dir != "" {
+	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
 		return filepath.Join(dir, cacheFileName)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".pigo", cacheFileName)
+	return filepath.Join(home, ".golder", cacheFileName)
 }
 
 // CachedLatest returns the latest tag recorded in the cache and whether the cache

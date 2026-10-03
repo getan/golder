@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // jsonDecoder is a trivial Decoder: each payload is a JSON object with a "text"
@@ -150,7 +150,7 @@ func TestTransportMissingConfig(t *testing.T) {
 // TestTransportRetryOn503 verifies the connect retry path honors a retryable
 // status and eventually succeeds without replaying a consumed stream.
 func TestTransportRetryOn503(t *testing.T) {
-	t.Setenv("PIGO_STREAM_IDLE_TIMEOUT", "5s")
+	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "5s")
 	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if attempts.Add(1) == 1 {
@@ -202,7 +202,7 @@ func TestTransportRetryExhausted(t *testing.T) {
 // TestTransportIdleWatchdog verifies the idle watchdog fires a terminal error
 // when the server stalls without sending data.
 func TestTransportIdleWatchdog(t *testing.T) {
-	t.Setenv("PIGO_STREAM_IDLE_TIMEOUT", "100ms")
+	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "100ms")
 	hold := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

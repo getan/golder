@@ -1,4 +1,4 @@
-// This file implements pigo's binary self-replacement for `pigo update` (issue
+// This file implements golder's binary self-replacement for `golder update` (issue
 // #466). Given the current build version it discovers the latest release (via
 // version.go), downloads the matching goreleaser archive for the running
 // GOOS/GOARCH, verifies its SHA256 against the release's checksums.txt, and
@@ -39,20 +39,20 @@ type Updater struct {
 	HTTPClient *http.Client
 	// Repo is "owner/name"; ReleaseBaseURL overrides the download host in tests.
 	Repo           string
-	ReleaseBaseURL string // e.g. https://github.com/smallnest/pigo/releases/download
+	ReleaseBaseURL string // e.g. https://github.com/getan/golder/releases/download
 	GOOS, GOARCH   string
 	// ExecPath is the executable to replace; defaults to os.Executable().
 	ExecPath string
 }
 
-// Run performs `pigo update` (self-update pigo). It discovers the latest
+// Run performs `golder update` (self-update golder). It discovers the latest
 // release, compares it to current, and replaces the running binary when a
 // newer release exists. When current is a source build ("dev"), it cannot
 // compare and proceeds to install the latest. Returns a process exit code.
 func Run(ctx context.Context, current string, out, errOut io.Writer) int {
 	tag, err := LatestTag(ctx, nil, Repo)
 	if err != nil {
-		fmt.Fprintf(errOut, "pigo: failed to check for updates: %v\n", err)
+		fmt.Fprintf(errOut, "golder: failed to check for updates: %v\n", err)
 		return 1
 	}
 	if avail, comparable := UpdateAvailable(current, tag); comparable && !avail {
@@ -61,11 +61,11 @@ func Run(ctx context.Context, current string, out, errOut io.Writer) int {
 	}
 	u, err := NewUpdater()
 	if err != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", err)
+		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1
 	}
 	if err := u.Apply(ctx, tag, out); err != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", err)
+		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1
 	}
 	fmt.Fprintf(out, "updated to %s\n", tag)
@@ -108,15 +108,15 @@ func (u *Updater) archiveName(versionNoV string) string {
 	if u.GOOS == "windows" {
 		ext = "zip"
 	}
-	return fmt.Sprintf("pigo_%s_%s_%s.%s", versionNoV, osName, arch, ext)
+	return fmt.Sprintf("golder_%s_%s_%s.%s", versionNoV, osName, arch, ext)
 }
 
 // binaryName is the executable name inside the archive.
 func (u *Updater) binaryName() string {
 	if u.GOOS == "windows" {
-		return "pigo.exe"
+		return "golder.exe"
 	}
-	return "pigo"
+	return "golder"
 }
 
 // Apply downloads the release identified by tag, verifies its checksum, and
@@ -178,9 +178,9 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 // filesystem). A permission error on the directory yields an actionable message.
 func (u *Updater) replace(newBin []byte) error {
 	dir := filepath.Dir(u.ExecPath)
-	tmp, err := os.CreateTemp(dir, ".pigo-update-*")
+	tmp, err := os.CreateTemp(dir, ".golder-update-*")
 	if err != nil {
-		return fmt.Errorf("selfupdate: cannot write to %s: %w (try running with sudo, or install pigo to a writable directory)", dir, err)
+		return fmt.Errorf("selfupdate: cannot write to %s: %w (try running with sudo, or install golder to a writable directory)", dir, err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op after successful rename

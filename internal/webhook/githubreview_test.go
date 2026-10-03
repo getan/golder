@@ -16,12 +16,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/session"
 )
 
-const testPayload = `{"action":"ready_for_review","repository":{"full_name":"smallnest/pigo"},"pull_request":{"number":42,"title":"Add scheduler","html_url":"https://github.com/smallnest/pigo/pull/42","head":{"ref":"feat/scheduler"}}}`
+const testPayload = `{"action":"ready_for_review","repository":{"full_name":"getan/golder"},"pull_request":{"number":42,"title":"Add scheduler","html_url":"https://github.com/getan/golder/pull/42","head":{"ref":"feat/scheduler"}}}`
 
 // signedRequest builds a POST /github request with a valid HMAC signature.
 func signedRequest(t *testing.T, secret, body, delivery, event string) *http.Request {
@@ -154,7 +154,7 @@ func TestWebhookReplayProtection(t *testing.T) {
 // for the configured repo act; everything else is 202-ignored.
 func TestWebhookEventFiltering(t *testing.T) {
 	srv, runner := newTestServer(t)
-	srv.Repo = "smallnest/pigo"
+	srv.Repo = "getan/golder"
 	h := srv.Handler()
 
 	cases := []struct {
@@ -164,7 +164,7 @@ func TestWebhookEventFiltering(t *testing.T) {
 	}{
 		{"non pull_request event", "ping", testPayload},
 		{"non ready action", "pull_request", strings.Replace(testPayload, `"ready_for_review"`, `"opened"`, 1)},
-		{"repo filter mismatch", "pull_request", strings.Replace(testPayload, `"smallnest/pigo"`, `"other/repo"`, 1)},
+		{"repo filter mismatch", "pull_request", strings.Replace(testPayload, `"getan/golder"`, `"other/repo"`, 1)},
 	}
 	for _, tc := range cases {
 		resp := httptest.NewRecorder()
@@ -180,8 +180,8 @@ func TestWebhookEventFiltering(t *testing.T) {
 	if resp.Code != http.StatusOK {
 		t.Fatalf("accepted event = %d, want 200", resp.Code)
 	}
-	if calls := runner.waitCalls(t, 1); len(calls) != 1 || calls[0].Repo != "smallnest/pigo" {
-		t.Fatalf("runner calls = %+v, want one smallnest/pigo review", calls)
+	if calls := runner.waitCalls(t, 1); len(calls) != 1 || calls[0].Repo != "getan/golder" {
+		t.Fatalf("runner calls = %+v, want one getan/golder review", calls)
 	}
 }
 
@@ -298,7 +298,7 @@ func TestDefaultRunnerPersistsReply(t *testing.T) {
 	srv.ProviderName = "fake"
 	runner := srv.DefaultRunner()
 
-	req := ReviewRequest{Repo: "smallnest/pigo", PRNumber: 42, PRTitle: "Add scheduler", Prompt: ReviewPrompt(ReviewRequest{Repo: "smallnest/pigo", PRNumber: 42, PRTitle: "Add scheduler"})}
+	req := ReviewRequest{Repo: "getan/golder", PRNumber: 42, PRTitle: "Add scheduler", Prompt: ReviewPrompt(ReviewRequest{Repo: "getan/golder", PRNumber: 42, PRTitle: "Add scheduler"})}
 	if err := srv.createReviewSession(&req); err != nil {
 		t.Fatalf("createReviewSession: %v", err)
 	}

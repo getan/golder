@@ -13,12 +13,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/trust"
 )
 
 // RunStatus prints a colored multi-section status report to out using data

@@ -1,6 +1,6 @@
 // This file wires the line-based REPL (US-003) and session persistence
-// (US-024, #43) into the pigo command. When invoked without a prompt on a
-// terminal, pigo starts the REPL loop (see repl.go); each run's messages are
+// (US-024, #43) into the golder command. When invoked without a prompt on a
+// terminal, golder starts the REPL loop (see repl.go); each run's messages are
 // persisted to a local JSONL session so the conversation can be listed, resumed
 // and replayed later.
 package repl
@@ -13,26 +13,26 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/headless"
-	"github.com/smallnest/pigo/internal/cli/prompts"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/contextbudget"
-	"github.com/smallnest/pigo/internal/dream"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/permissions"
-	"github.com/smallnest/pigo/internal/plugin"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/session"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/headless"
+	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/session"
+	"github.com/getan/golder/internal/trust"
 )
 
 // sessionStore returns the session store for the interactive REPL. It is a thin
 // alias for headless.SessionStore so the REPL and headless runs share one store
-// rooted at ~/.pigo/sessions (or PIGO_HOME).
+// rooted at ~/.golder/sessions (or GOLDER_HOME).
 func sessionStore() (*session.Store, error) {
 	return headless.SessionStore()
 }
@@ -115,7 +115,7 @@ func Run(opts Options) error {
 		return err
 	}
 
-	// Resolve the launch directory once (pigo does not cd during a session). It is
+	// Resolve the launch directory once (golder does not cd during a session). It is
 	// the trust key, the directory side-effect tools are gated against, and — new
 	// for #526 — the value stamped onto a fresh SessionHeader.Cwd so the session is
 	// attributed to a project and a later /dream pass can distill it under the
@@ -183,15 +183,15 @@ func Run(opts Options) error {
 	// launch directory. A load failure (e.g. a corrupted trust.json) is
 	// non-fatal: trust is disabled (mgr stays nil) and the REPL still runs -
 	// the store is surfaced rather than silently overwritten. cwd is captured
-	// once above since pigo does not cd during a session; if it cannot be resolved
+	// once above since golder does not cd during a session; if it cannot be resolved
 	// trust is disabled too, since an empty cwd would silently never match.
 	mgr, mgrErr := trust.NewManager(trust.DefaultPath())
 	if mgrErr != nil {
-		fmt.Fprintf(os.Stderr, "pigo: trust store unavailable, trust disabled: %v\n", mgrErr)
+		fmt.Fprintf(os.Stderr, "golder: trust store unavailable, trust disabled: %v\n", mgrErr)
 		mgr = nil
 	}
 	if cwdErr != nil && mgr != nil {
-		fmt.Fprintf(os.Stderr, "pigo: cannot resolve working directory, trust disabled: %v\n", cwdErr)
+		fmt.Fprintf(os.Stderr, "golder: cannot resolve working directory, trust disabled: %v\n", cwdErr)
 		mgr = nil
 	}
 	// in is the shared input reader for the main loop and the tool-call
@@ -200,7 +200,7 @@ func Run(opts Options) error {
 	reader := bufio.NewReaderSize(os.Stdin, replScanBufInit)
 
 	// Wire slash-commands: built-ins (compile-time) plus any user templates under
-	// ~/.pigo/commands (mirrors the commands/*.md convention) plus skills under
+	// ~/.golder/commands (mirrors the commands/*.md convention) plus skills under
 	// ~/.agents/skills. A load error is non-fatal — the REPL still runs with the
 	// built-ins. Instance built-ins that need live state (/model, /help) are
 	// registered against `live`.
@@ -208,11 +208,11 @@ func Run(opts Options) error {
 		Settings:       opts.ConfigPrompts,
 		CLI:            opts.CliPrompts,
 		Disable:        opts.NoPromptTemplates,
-		ProjectDir:     filepath.Join(cwd, ".pigo", "prompts"),
+		ProjectDir:     filepath.Join(cwd, ".golder", "prompts"),
 		ProjectTrusted: mgr != nil && mgr.IsTrusted(cwd),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pigo: slash-commands: %v\n", err)
+		fmt.Fprintf(os.Stderr, "golder: slash-commands: %v\n", err)
 	}
 	trust.RegisterCommand(slash, mgr, cwd)
 	// The approval mode is live state shared with the tool set; /permissions
@@ -243,7 +243,7 @@ func Run(opts Options) error {
 	}
 
 	// Startup background consolidation (US-008, FR-4/FR-17): if dream is enabled
-	// and due, spawn `pigo --dream` in a goroutine now so it runs while the user
+	// and due, spawn `golder --dream` in a goroutine now so it runs while the user
 	// works — it never blocks the first prompt, and prints a one-line notice on
 	// completion. The dream state/lock live under dream.ResolveMemoryRoot (the
 	// same root the subprocess consolidates), independent of whether the memory

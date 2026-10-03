@@ -18,11 +18,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/remotecontrol"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/remotecontrol"
+	"github.com/getan/golder/internal/trust"
 )
 
 // teeWriter is an io.Writer that always forwards to a primary writer (the
@@ -241,7 +241,7 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 				summary = fmt.Sprintf("[risk: %s] %s", v.Level, summary)
 			}
 		}
-		fmt.Fprintf(out, "\npigo wants to run %q — approve on the paired device…\n", call.Name)
+		fmt.Fprintf(out, "\ngolder wants to run %q — approve on the paired device…\n", call.Name)
 		d, remote := rs.bridge.Confirm(ctx, call.Name, summary)
 		if !remote {
 			// Interrupted / cancelled before the browser answered: deny.

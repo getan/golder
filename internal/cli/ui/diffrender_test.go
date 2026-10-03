@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // editResult builds the tool-result message shape the edit tool produces, with

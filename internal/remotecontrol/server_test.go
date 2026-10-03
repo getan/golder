@@ -155,7 +155,7 @@ func TestRootRequiresAuth(t *testing.T) {
 	}
 }
 
-// sessionCred pairs and extracts the pigo_rc cookie value for WS dialing.
+// sessionCred pairs and extracts the golder_rc cookie value for WS dialing.
 func sessionCred(t *testing.T, pairURL string) (base, cred string) {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)

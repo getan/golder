@@ -1,5 +1,5 @@
 // This file implements the subprocess side of process-isolated sub-agents
-// (US-019, #135). Invoked as `pigo --subagent-rpc`, pigo speaks JSON-RPC 2.0
+// (US-019, #135). Invoked as `golder --subagent-rpc`, golder speaks JSON-RPC 2.0
 // over stdio: for each "subagent/run" request on stdin it runs a child agent
 // loop and writes the result (or an error) to stdout, exiting when stdin
 // closes. The parent (SubAgentTool in process mode, internal/runtime) drives it
@@ -19,17 +19,17 @@ import (
 	"io"
 	"os"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/jsonrpc"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/permissions"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/jsonrpc"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
 )
 
-// RunSubAgentRPC is the `pigo --subagent-rpc` entry point. It reads
+// RunSubAgentRPC is the `golder --subagent-rpc` entry point. It reads
 // newline-delimited JSON-RPC requests from in, runs each sub-agent request, and
 // writes one response per request to out. It returns 0 (success) when stdin
 // closes; a per-request failure is an RPC error response, not a non-zero exit,
@@ -61,7 +61,7 @@ func RunSubAgentRPC(ctx context.Context, in io.Reader, out, errOut io.Writer) in
 	// stream abnormally: surface it on stderr and exit non-zero so the parent's
 	// transport sees a diagnostic rather than a silent clean exit.
 	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(errOut, "pigo: subagent-rpc stdin: %v\n", err)
+		fmt.Fprintf(errOut, "golder: subagent-rpc stdin: %v\n", err)
 		return 1
 	}
 	return 0
@@ -101,7 +101,7 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 	cwd, _ := os.Getwd()
 	tools := filterBuiltinTools(run.BuiltinTools(cwd, false), params.Tools)
 	// The child subprocess carries the same approval mode as its parent
-	// (PIGO_PERMISSIONS is inherited through the environment), so a
+	// (GOLDER_PERMISSIONS is inherited through the environment), so a
 	// read-only parent cannot have a mutating child.
 	permState := permissions.New(permissions.Auto)
 	if m, ok := permissions.FromEnv(os.Getenv); ok {
@@ -137,7 +137,7 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 	// empty (omitted from HookInput). A malformed hook layer disables hooks with a
 	// warning rather than failing the child run.
 	if set, herr := run.ResolveHookSet(cwd, run.Trusted(cwd)); herr != nil {
-		fmt.Fprintf(os.Stderr, "pigo: hooks disabled: %v\n", herr)
+		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", herr)
 	} else {
 		run.InstallHooks(&runCfg, set, run.HookDeps{ProjectDir: cwd, WarnLog: os.Stderr})
 	}

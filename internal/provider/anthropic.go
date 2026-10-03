@@ -25,7 +25,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // anthropicBlock accumulates one content block's streaming state, keyed by its
@@ -54,7 +54,7 @@ type AnthropicDecoder struct {
 	responseModel string
 	inputTokens   int
 	outputTokens  int
-	stopReason    string // mapped pigo stop reason (empty until message_delta)
+	stopReason    string // mapped golder stop reason (empty until message_delta)
 	done          bool   // message_stop / done already emitted
 }
 
@@ -318,7 +318,7 @@ func (d *AnthropicDecoder) partial() agentcore.AssistantMessage {
 	return msg
 }
 
-// mapAnthropicStopReason maps an Anthropic stop_reason to the pigo StopReason
+// mapAnthropicStopReason maps an Anthropic stop_reason to the golder StopReason
 // set. Unknown reasons default to end_turn (a natural, non-error stop).
 func mapAnthropicStopReason(reason string) string {
 	switch reason {

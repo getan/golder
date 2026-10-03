@@ -1,8 +1,8 @@
 // This file implements model-name → provider inference (US: auto-infer provider
 // from --model alone). When a user supplies only --model, with no --provider,
-// --protocol, or --base-url, pigo tries to guess the owning provider from the
+// --protocol, or --base-url, golder tries to guess the owning provider from the
 // model id's well-known name prefix (e.g. "claude-*" → anthropic, "deepseek-*"
-// → deepseek). This lets `pigo -m claude-opus-4-8` reach the Anthropic API
+// → deepseek). This lets `golder -m claude-opus-4-8` reach the Anthropic API
 // without the user spelling out the provider or its wire protocol.
 //
 // The mapping is deliberately conservative: only names that unambiguously

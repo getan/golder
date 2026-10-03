@@ -7,7 +7,7 @@ import (
 
 // BackgroundSpawn launches one dream consolidation subprocess for projectDir and
 // returns its decoded Report. Implementations live in the CLI layer (they shell
-// out to `pigo --dream -C <projectDir>` and parse the stdout Report), so this
+// out to `golder --dream -C <projectDir>` and parse the stdout Report), so this
 // package stays free of os/exec concerns and there is no import cycle back
 // through the CLI. A non-nil error means the run failed; background failures are
 // silent to the user (the subprocess itself records last_status="failed"), so

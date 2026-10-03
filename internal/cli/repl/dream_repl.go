@@ -1,6 +1,6 @@
 // This file implements the manual `/dream` REPL command (SPEC §4.1, US-007):
 // it spawns the process-isolated memory-consolidation subprocess
-// (`pigo --dream [--dream-dry-run] -C <projectDir>`), captures the single-line
+// (`golder --dream [--dream-dry-run] -C <projectDir>`), captures the single-line
 // Report JSON the child writes to stdout (SPEC §4.2), and renders it as a
 // full-table change report. `--dry-run` runs the same analysis without writing
 // (the subprocess enforces that; the command only reflects report.DryRun).
@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/dream"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/dream"
 )
 
 // dreamSubprocessResult is the parsed outcome of one spawn: the decoded Report
@@ -44,7 +44,7 @@ type dreamSubprocessResult struct {
 // implementation is spawnDreamSubprocess.
 var spawnDream = spawnDreamSubprocess
 
-// spawnDreamSubprocess runs `pigo --dream [--dream-dry-run] -C <projectDir>` to
+// spawnDreamSubprocess runs `golder --dream [--dream-dry-run] -C <projectDir>` to
 // completion, capturing stdout (the single-line Report JSON, SPEC §4.2) and
 // stderr (progress/diagnostics). A non-zero exit or unparseable stdout is
 // returned as an error carrying the stderr tail so the caller can print a clear
@@ -52,7 +52,7 @@ var spawnDream = spawnDreamSubprocess
 func spawnDreamSubprocess(ctx context.Context, projectDir string, dryRun bool) (dreamSubprocessResult, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return dreamSubprocessResult{}, fmt.Errorf("resolve pigo executable: %w", err)
+		return dreamSubprocessResult{}, fmt.Errorf("resolve golder executable: %w", err)
 	}
 	args := []string{"--dream"}
 	if dryRun {

@@ -15,9 +15,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/hooks"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // maxConsecutiveStopBlocks is the default FR-12 ceiling on how many times a Stop

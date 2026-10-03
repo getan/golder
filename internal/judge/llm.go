@@ -5,7 +5,7 @@ package judge
 // running (the active provider + model) to grade one tool call. It is the
 // same idea as codex's guardian review — a policy prompt, the exact planned
 // action, and a compact transcript of user intent — with one difference:
-// pigo's reviewer runs inline on the conversation model instead of a cloned
+// golder's reviewer runs inline on the conversation model instead of a cloned
 // review session, so there is no extra key, endpoint, or dependency.
 //
 // Contract:
@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // ReviewFunc performs one model call for the reviewer: given a system prompt
@@ -51,13 +51,13 @@ const (
 	reviewMaxRawOutput   = 4000
 )
 
-// ReviewTimeoutFromEnv resolves PIGO_REVIEW_TIMEOUT_MS, clamped to a sane
+// ReviewTimeoutFromEnv resolves GOLDER_REVIEW_TIMEOUT_MS, clamped to a sane
 // range. Unset or unparseable yields the default.
 func ReviewTimeoutFromEnv(getenv func(string) string) time.Duration {
 	if getenv == nil {
 		return reviewDefaultTimeout
 	}
-	raw := strings.TrimSpace(getenv("PIGO_REVIEW_TIMEOUT_MS"))
+	raw := strings.TrimSpace(getenv("GOLDER_REVIEW_TIMEOUT_MS"))
 	if raw == "" {
 		return reviewDefaultTimeout
 	}
@@ -214,7 +214,7 @@ func reviewSystemPrompt(lang string) string {
 	if lang == "zh" {
 		language = "Simplified Chinese (简体中文)"
 	}
-	return `You are the permission reviewer for pigo, a coding agent. You review ONE proposed tool call before it executes and decide how it must be handled.
+	return `You are the permission reviewer for golder, a coding agent. You review ONE proposed tool call before it executes and decide how it must be handled.
 
 Grade into exactly one level:
 - allow: read-only or fully reversible, project-scoped action (listing files, reading, running tests/linters/builds, editing files inside the project).

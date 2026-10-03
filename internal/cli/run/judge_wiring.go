@@ -7,12 +7,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/permissions"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/seatbelt"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 // WireBashSandbox injects the sandbox runner into every BashTool in tools. It
@@ -23,11 +23,11 @@ import (
 //
 // The matrix is deliberately conservative:
 //
-//   - PIGO_SANDBOX=off → no runner: sandbox-tier commands never execute
+//   - GOLDER_SANDBOX=off → no runner: sandbox-tier commands never execute
 //     (the gate fails closed) unless a human approved one explicitly.
-//   - PIGO_SANDBOX=auto (default) → sandbox-tier verdicts run under
+//   - GOLDER_SANDBOX=auto (default) → sandbox-tier verdicts run under
 //     sandbox-exec when the platform provides it (macOS).
-//   - PIGO_SANDBOX=enforce → every foreground command runs sandboxed and
+//   - GOLDER_SANDBOX=enforce → every foreground command runs sandboxed and
 //     fails closed when no runner is available.
 func WireBashSandbox(tools []agentcore.AgentTool, cwd string) {
 	mode := seatbelt.ModeFromEnv()

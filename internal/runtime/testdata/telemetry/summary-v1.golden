@@ -1,5 +1,5 @@
 {
-  "schema_version": "pigo.telemetry/v1",
+  "schema_version": "golder.telemetry/v1",
   "turns": 7,
   "truncation_count": 1,
   "compaction_count": 2,

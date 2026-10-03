@@ -1,4 +1,4 @@
-// Package hooks implements pigo's user-extensible lifecycle hook system: a
+// Package hooks implements golder's user-extensible lifecycle hook system: a
 // config-driven way to run shell commands at agent lifecycle points (tool
 // calls, prompt submission, session start/end, etc.) without writing Go or
 // compiling a plugin. It is a leaf package depending only on the standard

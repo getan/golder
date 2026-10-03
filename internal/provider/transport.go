@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // StreamEvent is the transport-level alias for AssistantMessageEvent. Decoders
@@ -44,7 +44,7 @@ type Decoder interface {
 	Finish() ([]StreamEvent, error)
 }
 
-// defaultIdleTimeout is the watchdog idle window; PIGO_STREAM_IDLE_TIMEOUT
+// defaultIdleTimeout is the watchdog idle window; GOLDER_STREAM_IDLE_TIMEOUT
 // (a Go duration string, e.g. "3m") overrides it.
 const defaultIdleTimeout = 5 * time.Minute
 
@@ -66,7 +66,7 @@ const (
 
 // idleTimeout resolves the configured idle watchdog window.
 func idleTimeout() time.Duration {
-	if v := os.Getenv("PIGO_STREAM_IDLE_TIMEOUT"); v != "" {
+	if v := os.Getenv("GOLDER_STREAM_IDLE_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
 		}

@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
 )
 
 // TestReviewCheckCarriesSession verifies the reviewer's provider request

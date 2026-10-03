@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/memory"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/memory"
 )
 
 // TestOpenMemoryStoreDisabled verifies memory.enabled=false yields (nil, nil):
@@ -27,11 +27,11 @@ func TestOpenMemoryStoreDisabled(t *testing.T) {
 	}
 }
 
-// TestMemoryDirHonorsPIGOHome verifies MemoryDir roots the store at
-// $PIGO_HOME/memory when the override is set.
-func TestMemoryDirHonorsPIGOHome(t *testing.T) {
+// TestMemoryDirHonorsGOLDERHome verifies MemoryDir roots the store at
+// $GOLDER_HOME/memory when the override is set.
+func TestMemoryDirHonorsGOLDERHome(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PIGO_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	if got, want := MemoryDir(), filepath.Join(dir, "memory"); got != want {
 		t.Errorf("MemoryDir() = %q, want %q", got, want)
 	}

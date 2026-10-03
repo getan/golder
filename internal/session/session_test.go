@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // writeFile writes content to path (test helper for hand-crafted fixtures).
@@ -64,7 +64,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		UpdatedAt:    now,
 		Model:        "anthropic/claude-opus-4",
 		Provider:     "anthropic",
-		SystemPrompt: "You are pigo.",
+		SystemPrompt: "You are golder.",
 	}
 	msgs := sampleMessages()
 	if err := s.Save(header, msgs); err != nil {

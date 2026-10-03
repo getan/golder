@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/smallnest/pigo/agent"
+	"github.com/getan/golder/agent"
 )
 
 func main() {

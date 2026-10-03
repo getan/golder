@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // searchMaxResults caps the number of matches/entries any single search returns
@@ -64,7 +64,7 @@ func resolveWithin(root, p string) (string, error) {
 // resolveWithinAny resolves p against the first root that contains it, trying
 // roots in order. It exists so the file tools can additionally permit trusted
 // out-of-workspace roots (the skills directory) whose absolute SKILL.md paths
-// pigo itself advertises in the system prompt: without this, the workspace guard
+// golder itself advertises in the system prompt: without this, the workspace guard
 // would reject the very paths the model is instructed to read or author. Empty
 // roots are skipped; if none contain p, the standard workspace-escape error is
 // returned.

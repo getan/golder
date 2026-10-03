@@ -1,4 +1,4 @@
-// Tests for the `pigo session` subcommand dispatch (issue #570): the export
+// Tests for the `golder session` subcommand dispatch (issue #570): the export
 // path redacts by default against a real store, the file-format inference, and
 // the usage/validation error paths.
 package sessioncmd
@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/session"
 )
 
 func seedSession(t *testing.T) (string, string) {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	store, err := session.NewStore(filepath.Join(home, "sessions"))
 	if err != nil {
 		t.Fatal(err)

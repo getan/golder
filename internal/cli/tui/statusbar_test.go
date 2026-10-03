@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // newTestStatusBar builds a status bar with a known cwd (already ~-abbreviated
@@ -27,15 +27,15 @@ func TestStatusBarRendersAllFields(t *testing.T) {
 	out := s.Render(width)
 
 	for _, want := range []string{
-		"pigo",          // app badge
-		"claude-opus",   // model
-		"high",          // thinking level
-		"~/project",     // cwd
-		"master",        // git branch
+		"golder",         // app badge
+		"claude-opus",    // model
+		"high",           // thinking level
+		"~/project",      // cwd
+		"master",         // git branch
 		glyphDirty + "3", // dirty marker
 		glyphAhead + "4", // ahead marker
-		"42%",           // context usage
-		"running: Read", // task
+		"42%",            // context usage
+		"running: Read",  // task
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q; got %q", want, out)

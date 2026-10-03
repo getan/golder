@@ -5,7 +5,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/patch"
+	"github.com/getan/golder/internal/patch"
 )
 
 // StaticFloor is the tiny hard-deny list for unambiguously catastrophic

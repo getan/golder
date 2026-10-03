@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 func TestEventMapperEmitsTextAndThinkingSuffixes(t *testing.T) {

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // seedSession writes a small multi-turn session and returns its header.
@@ -27,7 +27,7 @@ func seedSession(t *testing.T, s *Store) SessionHeader {
 		UpdatedAt:    now,
 		Model:        "anthropic/claude-opus-4",
 		Provider:     "anthropic",
-		SystemPrompt: "You are pigo.",
+		SystemPrompt: "You are golder.",
 	}
 	if err := s.Save(header, sampleMessages()); err != nil {
 		t.Fatalf("Save: %v", err)

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // ToolPolicy is the user-declared tool boundary for a run: the --allowed-tools
@@ -33,7 +33,7 @@ func (p ToolPolicy) IsZero() bool { return len(p.Allow) == 0 && len(p.Deny) == 0
 // `--allowed-tools "read,grep"` and `--allowed-tools read --allowed-tools grep`
 // are equivalent. Entries are lowercased and trimmed, and empty entries dropped,
 // so `"read, ,grep"` yields [read grep]. Matching is case-insensitive on purpose:
-// users coming from Claude Code write `Read`/`Bash`, which must hit pigo's
+// users coming from Claude Code write `Read`/`Bash`, which must hit golder's
 // `read`/`bash`.
 func SplitToolNames(values []string) []string {
 	if len(values) == 0 {
@@ -60,7 +60,7 @@ func SplitToolNames(values []string) []string {
 // backs a skill frontmatter's allowed-tools and matches case-sensitively. The
 // two are not unified: this policy is user-facing CLI input where Claude-Code
 // habits (Read/Bash) must hit read/bash, whereas skill frontmatter is authored
-// against pigo's canonical lowercase names. Keep them separate on purpose.
+// against golder's canonical lowercase names. Keep them separate on purpose.
 func normalizeToolName(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }

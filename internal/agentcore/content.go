@@ -1,5 +1,5 @@
 // Package agentcore defines the core "leaf" data types and control flow for the
-// pigo agent harness, a Go reimplementation of the pi agent loop. It is the
+// golder agent harness, a Go reimplementation of the pi agent loop. It is the
 // foundation package that every other agent sub-package depends on and imports
 // nothing from them.
 //
@@ -47,7 +47,7 @@ type ThinkingContent struct {
 	Redacted          bool   `json:"redacted,omitempty"`
 }
 
-// Tool-call kinds: local calls run in pigo's tool registry; server calls were
+// Tool-call kinds: local calls run in golder's tool registry; server calls were
 // already executed by the provider (hosted tools such as web_search) and exist
 // for display + history replay only. Empty means local, so sessions persisted
 // before the marker decode unchanged.

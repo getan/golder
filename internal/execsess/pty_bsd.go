@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// unlockPTY is unimplemented on the BSDs: pigo only targets macOS and Linux
+// unlockPTY is unimplemented on the BSDs: golder only targets macOS and Linux
 // today, and a tty=true request must fail loudly rather than misbehave.
 func unlockPTY(_ *os.File) (string, error) {
 	return "", fmt.Errorf("pty sessions are not supported on this platform")

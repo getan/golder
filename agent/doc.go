@@ -1,7 +1,7 @@
-// Package agent is the public, embeddable SDK for driving a pigo agent from
-// your own Go program. It wraps pigo's internal run-assembly, provider, and
+// Package agent is the public, embeddable SDK for driving a golder agent from
+// your own Go program. It wraps golder's internal run-assembly, provider, and
 // agent-loop packages behind a stable public surface of SDK-owned values and
-// callbacks. No exported signature mentions a pigo internal type, so pigo can
+// callbacks. No exported signature mentions a golder internal type, so golder can
 // evolve its implementation packages without forcing consumers to depend on
 // them.
 //
@@ -21,7 +21,7 @@
 //
 // # Model, provider, credentials
 //
-// The model id selects the provider the same way the pigo CLI does:
+// The model id selects the provider the same way the golder CLI does:
 // "claude-opus-4-8" resolves to Anthropic, "openrouter/free" to OpenRouter,
 // and so on. Point at any OpenAI- or Anthropic-compatible endpoint with
 // [WithBaseURL] + [WithProtocol], or a named provider from your config with
@@ -31,7 +31,7 @@
 //
 // # Tools run automatically — read this
 //
-// By default a session is created with pigo's full built-in tool set (read,
+// By default a session is created with golder's full built-in tool set (read,
 // write, edit, bash, find, grep, and more) and those tools are executed WITHOUT
 // any per-call confirmation prompt — equivalent to running the CLI with
 // --approve. An agent can therefore read, modify, and delete files under its
@@ -66,5 +66,5 @@
 //   - Thinking: "medium" — override with [WithThinkingLevel].
 //
 // Skills and memory are off by default so an embedded session is hermetic: it
-// does not read or write the machine's shared pigo state unless you ask it to.
+// does not read or write the machine's shared golder state unless you ask it to.
 package agent

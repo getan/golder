@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 func runRead(t *testing.T, tool *ReadTool, args map[string]any) (agentcore.AgentToolResult, bool) {

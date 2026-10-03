@@ -1,5 +1,5 @@
-// Package cli is the contract and shared-type layer for pigo's command-line
-// surface. It holds the interfaces and value types that the cmd/pigo entry
+// Package cli is the contract and shared-type layer for golder's command-line
+// surface. It holds the interfaces and value types that the cmd/golder entry
 // point and the internal/cli/* subpackages share, without depending on any of
 // them, so those subpackages can be assembled and tested in isolation.
 //

@@ -13,7 +13,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // readToolMaxLines caps how many lines a single read returns before truncating
@@ -46,7 +46,7 @@ type ReadTool struct {
 	// is rejected. Empty Root defaults to the current working directory.
 	Root string
 	// ExtraRoots are additional trusted directories a read may target even though
-	// they lie outside Root. It exists for the skills directory: pigo advertises
+	// they lie outside Root. It exists for the skills directory: golder advertises
 	// each skill's absolute SKILL.md path in the system prompt and tells the model
 	// to read it, so the read tool must permit those paths (they are otherwise
 	// outside the workspace and rejected).

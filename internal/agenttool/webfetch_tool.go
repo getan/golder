@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // webFetchTimeout bounds a single fetch. webFetchMaxBytes caps how much of the
@@ -141,7 +141,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, id string, args json.RawMess
 	if err != nil {
 		return errorResult("webfetch: " + err.Error()), nil
 	}
-	req.Header.Set("User-Agent", "pigo-webfetch/1.0")
+	req.Header.Set("User-Agent", "golder-webfetch/1.0")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
 
 	resp, err := client.Do(req)

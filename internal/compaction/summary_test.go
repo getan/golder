@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
 )
 
 func TestExtractFileOpsAndLists(t *testing.T) {
@@ -201,10 +201,10 @@ func TestGenerateSummaryErrorStopReason(t *testing.T) {
 func TestCompactRebuildsContext(t *testing.T) {
 	readArgs, _ := json.Marshal(map[string]string{"path": "old.go"})
 	msgs := []agentcore.Message{
-		userMsg("turn one"),                                                                                                                                    // 0
+		userMsg("turn one"), // 0
 		agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewToolCallContent("t1", "read", readArgs)}}, // 1
-		toolResult("t1"), // 2
-		bigUser(100),     // 3
+		toolResult("t1"),                // 2
+		bigUser(100),                    // 3
 		assistantMsg("recent", nil, ""), // 4
 	}
 	stream := fakeStreamFn(assistantText("## Goal\nx"), nil)

@@ -3,7 +3,7 @@
 // and/or reasoning effort than the main session, without touching the main
 // session's settings (mirrors pi-btw's pi-btw.json).
 //
-// The config lives at $PIGO_HOME/btw.json (or ~/.pigo/btw.json). It is read
+// The config lives at $GOLDER_HOME/btw.json (or ~/.golder/btw.json). It is read
 // fresh on every /btw invocation, so editing it takes effect on the next call
 // with no restart. A missing file, an empty object, or an absent field all mean
 // "inherit the session default" silently — only a malformed file or an
@@ -19,14 +19,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/provider"
 )
 
-// btwConfig is the on-disk shape of ~/.pigo/btw.json. Both fields are optional;
+// btwConfig is the on-disk shape of ~/.golder/btw.json. Both fields are optional;
 // an absent field (nil / empty) inherits the session default. Pointers/empty
 // strings distinguish "not set" from a real value so a partial file still falls
 // back per-field.

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/hooks"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // sessionDispatcher builds a Dispatcher for a single SessionStart matcher.

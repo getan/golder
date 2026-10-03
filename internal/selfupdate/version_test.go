@@ -76,7 +76,7 @@ func TestLatestTag(t *testing.T) {
 			t.Errorf("missing Accept header")
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"tag_name":"v0.4.0","name":"pigo 0.4.0"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v0.4.0","name":"golder 0.4.0"}`))
 	}))
 	defer srv.Close()
 
@@ -85,7 +85,7 @@ func TestLatestTag(t *testing.T) {
 	client := srv.Client()
 	client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
 
-	tag, err := LatestTag(context.Background(), client, "smallnest/pigo")
+	tag, err := LatestTag(context.Background(), client, "getan/golder")
 	if err != nil {
 		t.Fatalf("LatestTag: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestLatestTagErrors(t *testing.T) {
 		defer srv.Close()
 		client := srv.Client()
 		client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
-		if _, err := LatestTag(context.Background(), client, "smallnest/pigo"); err == nil {
+		if _, err := LatestTag(context.Background(), client, "getan/golder"); err == nil {
 			t.Fatal("expected error on 403")
 		}
 	})
@@ -114,7 +114,7 @@ func TestLatestTagErrors(t *testing.T) {
 		defer srv.Close()
 		client := srv.Client()
 		client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
-		if _, err := LatestTag(context.Background(), client, "smallnest/pigo"); err == nil {
+		if _, err := LatestTag(context.Background(), client, "getan/golder"); err == nil {
 			t.Fatal("expected error on empty tag_name")
 		}
 	})

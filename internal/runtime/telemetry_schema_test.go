@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 var updateGoldens = flag.Bool("update-telemetry-goldens", false, "rewrite the telemetry golden fixtures")

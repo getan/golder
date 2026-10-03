@@ -7,12 +7,12 @@ package status
 // This lets the status tests run without the package-main REPL harness.
 
 import (
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/session"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/session"
+	"github.com/getan/golder/internal/trust"
 )
 
 type fakeHost struct {
@@ -27,14 +27,14 @@ type fakeHost struct {
 	telemetry *cli.TelemetryHolder
 }
 
-func (f *fakeHost) Live() *cli.LiveConfig            { return f.live }
-func (f *fakeHost) Header() session.SessionHeader    { return f.header }
+func (f *fakeHost) Live() *cli.LiveConfig             { return f.live }
+func (f *fakeHost) Header() session.SessionHeader     { return f.header }
 func (f *fakeHost) AgentCtx() *agentcore.AgentContext { return f.agentCtx }
-func (f *fakeHost) Cwd() string                      { return f.cwd }
-func (f *fakeHost) Trust() *trust.Manager            { return f.trust }
-func (f *fakeHost) Slash() *runtime.SlashRegistry    { return f.slash }
-func (f *fakeHost) Creds() *provider.CredentialStore { return f.creds }
-func (f *fakeHost) Telemetry() *cli.TelemetryHolder  { return f.telemetry }
+func (f *fakeHost) Cwd() string                       { return f.cwd }
+func (f *fakeHost) Trust() *trust.Manager             { return f.trust }
+func (f *fakeHost) Slash() *runtime.SlashRegistry     { return f.slash }
+func (f *fakeHost) Creds() *provider.CredentialStore  { return f.creds }
+func (f *fakeHost) Telemetry() *cli.TelemetryHolder   { return f.telemetry }
 
 // newFakeHost builds a fakeHost with empty-but-non-nil live config, agent
 // context, slash registry and credential store, mirroring a fresh session.

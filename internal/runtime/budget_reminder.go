@@ -15,8 +15,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/contextbudget"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/contextbudget"
 )
 
 // BudgetReminderProvider surfaces the remaining context budget near the end of

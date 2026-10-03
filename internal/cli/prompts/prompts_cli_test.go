@@ -10,14 +10,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/testutil"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/testutil"
+	"github.com/getan/golder/internal/runtime"
 )
 
 func TestBuildSlashRegistryLoadsCLIPrompts(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	// file entry
 	filePath := filepath.Join(home, "single.md")
 	if err := os.WriteFile(filePath, []byte("Single: $ARGUMENTS"), 0o644); err != nil {
@@ -55,7 +55,7 @@ func TestBuildSlashRegistryLoadsCLIPrompts(t *testing.T) {
 
 func TestBuildSlashRegistryNoPromptTemplatesDisables(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	// A global prompt that should NOT load under --no-prompt-templates.
 	testutil.WritePrompt(t, home, "prompts", "review.md", "Review: $ARGUMENTS")
 	// A CLI path that should also be ignored under --no-prompt-templates.
@@ -83,8 +83,8 @@ func TestBuildSlashRegistryNoPromptTemplatesDisables(t *testing.T) {
 
 func TestBuildSlashRegistryGlobalOverridesCLI(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
-	// global prompt (TierGlobal) under ~/.pigo/prompts.
+	t.Setenv("GOLDER_HOME", home)
+	// global prompt (TierGlobal) under ~/.golder/prompts.
 	testutil.WritePrompt(t, home, "prompts", "dup.md", "FROM GLOBAL")
 	// CLI-tier file of the same name at the home root (not under prompts/).
 	cliFile := filepath.Join(home, "dup.md")

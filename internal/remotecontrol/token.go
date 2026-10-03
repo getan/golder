@@ -89,7 +89,7 @@ func (s *TokenStore) ConsumePairing(value string) bool {
 }
 
 // IssueSession creates and stores a new opaque session credential (set as the
-// pigo_rc cookie after pairing) and returns its hex value.
+// golder_rc cookie after pairing) and returns its hex value.
 func (s *TokenStore) IssueSession() (string, error) {
 	cred, err := randHex(tokenBytes)
 	if err != nil {

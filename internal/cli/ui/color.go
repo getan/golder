@@ -1,7 +1,7 @@
-// Package ui holds the leaf terminal-UI helpers shared across the cmd/pigo and
+// Package ui holds the leaf terminal-UI helpers shared across the cmd/golder and
 // internal/cli subpackages: ANSI color gating (color.go), turn-end Markdown
 // rendering (markdown.go), and prompt image-reference parsing (imageref.go).
-// These were moved verbatim from cmd/pigo (US-002, #358) and exported so the
+// These were moved verbatim from cmd/golder (US-002, #358) and exported so the
 // repl, btw, status and goal layers style output through one owner.
 package ui
 

@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/contextbudget"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/contextbudget"
 )
 
 // GetContextRemainingTool reports the remaining context-window budget.

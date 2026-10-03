@@ -3,7 +3,7 @@
 // /models catalog and /model switching can follow a provider's real lineup
 // instead of only the static preset catalog.
 //
-// Both wire formats pigo speaks expose a plain GET for it:
+// Both wire formats golder speaks expose a plain GET for it:
 //
 //   - OpenAI-compatible (and Responses) gateways: GET {base}/models
 //   - Anthropic Messages: GET {base}/v1/models

@@ -82,10 +82,10 @@ func TestParsePathScopesAndTypes(t *testing.T) {
 func TestParsePathOutsideLayout(t *testing.T) {
 	root := "/mem/root"
 	bad := []string{
-		"/other/place/x.md",                         // outside root
-		filepath.Join(root, "unknownscope", "x.md"), // not a layout scope
-		filepath.Join(root, "global"),               // no file component
-		filepath.Join(root, "projects", "abc123"),   // scope id dir, no file
+		"/other/place/x.md",                            // outside root
+		filepath.Join(root, "unknownscope", "x.md"),    // not a layout scope
+		filepath.Join(root, "global"),                  // no file component
+		filepath.Join(root, "projects", "abc123"),      // scope id dir, no file
 		filepath.Join(root, "global", "user", "x.txt"), // not markdown
 	}
 	for _, p := range bad {

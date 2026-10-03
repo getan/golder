@@ -3,7 +3,7 @@
 // context §3/§4/§5.2). This file is pure config plumbing — parse, defaults, and
 // resolve helpers only. The actual memory Store, checkpoint persistence, and
 // compaction trigger live in later layers (internal/memory, internal/runtime,
-// internal/compaction) and consume the resolved values overlaid in cmd/pigo.
+// internal/compaction) and consume the resolved values overlaid in cmd/golder.
 package config
 
 import (

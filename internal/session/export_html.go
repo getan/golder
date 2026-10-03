@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // htmlHead emits the document head + opening container, embedding the session
@@ -38,7 +38,7 @@ func htmlHead(header SessionHeader) string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>pigo session — %s</title>
+<title>golder session — %s</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #FAF9F6; color: #1a1a1a; padding: 2rem 1.5rem; line-height: 1.6; }
@@ -63,14 +63,14 @@ h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.25rem; }
 </head>
 <body>
 <div class="container">
-<h1>pigo session — %s</h1>
+<h1>golder session — %s</h1>
 <p class="meta">%s</p>
 `, html.EscapeString(title), html.EscapeString(title), strings.Join(meta, " · "))
 }
 
 // htmlFoot closes the container and document.
 func htmlFoot() string {
-	return `<p class="footer">Exported by pigo /export</p>
+	return `<p class="footer">Exported by golder /export</p>
 </div>
 </body>
 </html>

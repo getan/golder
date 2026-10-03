@@ -16,7 +16,7 @@ import (
 // sticky upstream routing. The full Zen endpoint tolerates its absence.
 const OpencodeSessionHeader = "x-opencode-session"
 
-// ExtraSessionID is the StreamConfig.Extra key carrying the pigo session id
+// ExtraSessionID is the StreamConfig.Extra key carrying the golder session id
 // (see RunConfig.SessionID) from the loop to the provider drivers. It is
 // opaque to every other layer.
 const ExtraSessionID = "session_id"
@@ -60,15 +60,15 @@ func WithSessionExtra(extra map[string]any, sid string) map[string]any {
 // affinity bucket with the process's runs is the desired routing behavior
 // there anyway.
 var ProcessSessionID = sync.OnceValue(func() string {
-	return fmt.Sprintf("pigo-%d-%d", os.Getpid(), time.Now().Unix())
+	return fmt.Sprintf("golder-%d-%d", os.Getpid(), time.Now().Unix())
 })
 
-// ProxyURL resolves the HTTP proxy for proxied upstreams from PIGO_PROXY
+// ProxyURL resolves the HTTP proxy for proxied upstreams from GOLDER_PROXY
 // only. Unset (or blank) means direct connection: other users work out of the
 // box, and whoever needs egress (e.g. Muse behind opencode.ai requiring US
-// exit) exports PIGO_PROXY=http://127.0.0.1:7897 in their own shell.
+// exit) exports GOLDER_PROXY=http://127.0.0.1:7897 in their own shell.
 func ProxyURL() string {
-	return strings.TrimSpace(os.Getenv("PIGO_PROXY"))
+	return strings.TrimSpace(os.Getenv("GOLDER_PROXY"))
 }
 
 // NeedsProxy reports whether requests for the given provider / URL must go

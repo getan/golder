@@ -5,7 +5,7 @@
 // into a RestorePoint tagged with the conversation leaf that preceded the turn.
 // Restore replays a suffix of the restore points in reverse to roll the working
 // tree back to an earlier state, mirroring Claude Code's Esc-Esc rewind. The
-// journal is in-memory and scoped to the running session; only pigo's own
+// journal is in-memory and scoped to the running session; only golder's own
 // write/edit tools are captured (arbitrary bash edits are not).
 package agenttool
 

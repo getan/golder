@@ -35,7 +35,7 @@ const (
 	// SourceBuiltin is a compile-time registered command (highest priority).
 	SourceBuiltin SlashCommandSource = iota
 	// SourceUser is a declarative markdown command template loaded from disk
-	// (e.g. ~/.pigo/commands/*.md).
+	// (e.g. ~/.golder/commands/*.md).
 	SourceUser
 	// SourceSkill is a skill loaded from ~/.agents/skills and surfaced as a
 	// /skill-name command. It behaves like SourceUser for the built-in-wins
@@ -78,10 +78,10 @@ const (
 	// TierPackage is a prompt template discovered from an installed package
 	// source (distinct from one copied into the global dir).
 	TierPackage
-	// TierGlobal is a global user prompt template (e.g. ~/.pigo/prompts or the
-	// legacy ~/.pigo/commands); also the tier used for skills and plugins.
+	// TierGlobal is a global user prompt template (e.g. ~/.golder/prompts or the
+	// legacy ~/.golder/commands); also the tier used for skills and plugins.
 	TierGlobal
-	// TierProject is a project-local prompt template (e.g. .pigo/prompts).
+	// TierProject is a project-local prompt template (e.g. .golder/prompts).
 	TierProject
 	// TierBuiltin is a compile-time or instance built-in command (highest).
 	TierBuiltin
@@ -265,7 +265,7 @@ func (r *SlashRegistry) AddBuiltin(cmd SlashCommand) {
 }
 
 // AddUser installs a user command (TierGlobal), e.g. a prompt template from
-// ~/.pigo/prompts or the legacy ~/.pigo/commands. A same-named built-in or
+// ~/.golder/prompts or the legacy ~/.golder/commands. A same-named built-in or
 // project-tier command wins; same-tier (global) adds override silently.
 func (r *SlashRegistry) AddUser(cmd SlashCommand) {
 	cmd.Source = SourceUser

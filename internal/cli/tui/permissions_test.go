@@ -6,9 +6,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/permissions"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // TestPermissionsPickerOpens verifies bare /permissions opens the four-mode

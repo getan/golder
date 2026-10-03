@@ -10,7 +10,7 @@ import (
 func TestFileConfigPath_XDGOverride(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdgroot")
 	got := FileConfigPath()
-	want := filepath.Join("/tmp/xdgroot", "pigo", "config.toml")
+	want := filepath.Join("/tmp/xdgroot", "golder", "config.toml")
 	if got != want {
 		t.Fatalf("FileConfigPath() = %q, want %q", got, want)
 	}
@@ -23,7 +23,7 @@ func TestFileConfigPath_DefaultHome(t *testing.T) {
 		t.Skip("no home dir")
 	}
 	got := FileConfigPath()
-	want := filepath.Join(home, ".config", "pigo", "config.toml")
+	want := filepath.Join(home, ".config", "golder", "config.toml")
 	if got != want {
 		t.Fatalf("FileConfigPath() = %q, want %q", got, want)
 	}

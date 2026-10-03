@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // pngBytes is a minimal 1x1 PNG (valid signature + IHDR) so mime detection and

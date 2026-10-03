@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/execsess"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/execsess"
 )
 
 func runToolArgs(t *testing.T, tool agentcore.AgentTool, args map[string]any) agentcore.AgentToolResult {

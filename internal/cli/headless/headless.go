@@ -13,14 +13,14 @@ import (
 	"io"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/plugin"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // RunParams carries the resolved inputs for one headless run. Mode and Env are
@@ -56,7 +56,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	headlessPrompt := resolveHeadlessPluginCommand(p.Prompt, env.Plugins, errOut)
 	promptContent, err := ui.BuildUserContent(headlessPrompt)
 	if err != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", err)
+		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1
 	}
 
@@ -66,7 +66,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// its prior messages ahead of the new prompt.
 	priorMsgs, hs, err := openHeadlessSession(p.ResumeID, p.Model, env.ProviderName, env.SysPrompt)
 	if err != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", err)
+		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1
 	}
 	messages := append(priorMsgs, agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: promptContent})
@@ -80,7 +80,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// chain (default < global < project < env < --thinking-level flag).
 	thinking, err := run.ResolveThinkingLevel(p.ThinkingLevel)
 	if err != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", err)
+		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 2
 	}
 
@@ -91,7 +91,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget)
 	// Headless has no model-catalog lookup, so it uses the same fallback window
 	// the REPL and TUI assume. This keeps auto-compaction, the context-budget
-	// tools, and the low-budget reminder live for `pigo -p` long runs instead of
+	// tools, and the low-budget reminder live for `golder -p` long runs instead of
 	// leaving them dormant with an unknown window.
 	runCfg.ContextWindow = cli.DefaultContextWindow
 	runCfg.SessionID = hs.header.ID
@@ -120,7 +120,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	}
 	set, herr := run.ResolveHookSet(env.Cwd, run.Trusted(env.Cwd))
 	if herr != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", herr)
+		fmt.Fprintf(errOut, "golder: %v\n", herr)
 		return 2
 	}
 	hookDeps := run.HookDeps{SessionID: hs.header.ID, ProjectDir: env.Cwd, WarnLog: errOut}
@@ -136,7 +136,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// the headless run non-zero; additionalContext is injected into this run only.
 	if d != nil {
 		if block, reason := run.DispatchUserPromptSubmit(ctx, d, &runCfg, hookDeps, headlessPrompt); block {
-			fmt.Fprintf(errOut, "pigo: prompt blocked by hook: %s\n", reason)
+			fmt.Fprintf(errOut, "golder: prompt blocked by hook: %s\n", reason)
 			return 1
 		}
 	}
@@ -152,10 +152,10 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// still resumable; a persistence failure is reported but does not mask a run
 	// error.
 	if perr := hs.persist(agentCtx); perr != nil {
-		fmt.Fprintf(errOut, "pigo: warning: could not persist session %s: %v\n", hs.header.ID, perr)
+		fmt.Fprintf(errOut, "golder: warning: could not persist session %s: %v\n", hs.header.ID, perr)
 	}
 	if runErr != nil {
-		fmt.Fprintf(errOut, "pigo: %v\n", runErr)
+		fmt.Fprintf(errOut, "golder: %v\n", runErr)
 		return 1
 	}
 	return 0
@@ -194,7 +194,7 @@ func resolveHeadlessPluginCommand(prompt string, mgr *plugin.Manager, notifyOut 
 		raw, _ := json.Marshal(args)
 		res, err := pc.Plugin.CallCommand(context.Background(), name, json.RawMessage(raw))
 		if err != nil {
-			fmt.Fprintf(notifyOut, "pigo: plugin command %q failed: %v\n", name, err)
+			fmt.Fprintf(notifyOut, "golder: plugin command %q failed: %v\n", name, err)
 			return prompt
 		}
 		for _, n := range res.Notifications {

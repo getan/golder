@@ -119,7 +119,7 @@ func TestResponsesDriverOpencodeSessionHeader(t *testing.T) {
 }
 
 func TestClientForURL(t *testing.T) {
-	t.Setenv("PIGO_PROXY", "http://127.0.0.1:7897")
+	t.Setenv("GOLDER_PROXY", "http://127.0.0.1:7897")
 	// Registry flag wins regardless of URL (covers --base-url overrides).
 	if c := clientForURL("opencode-go", "https://custom.example.com/v1/responses"); c == nil {
 		t.Error("opencode-go with custom URL = nil, want proxied client")
@@ -147,31 +147,31 @@ func TestClientForURL(t *testing.T) {
 		t.Errorf("bad URL: got %v, want nil", c)
 	}
 	// Explicitly disabled proxying.
-	t.Setenv("PIGO_PROXY", "")
+	t.Setenv("GOLDER_PROXY", "")
 	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c != nil {
 		t.Errorf("disabled proxy: got %v, want nil", c)
 	}
 }
 
 func TestProxyURL(t *testing.T) {
-	t.Setenv("PIGO_PROXY", "http://proxy.internal:8080")
+	t.Setenv("GOLDER_PROXY", "http://proxy.internal:8080")
 	if got := ProxyURL(); got != "http://proxy.internal:8080" {
 		t.Errorf("ProxyURL() = %q, want override", got)
 	}
-	t.Setenv("PIGO_PROXY", "")
+	t.Setenv("GOLDER_PROXY", "")
 	if got := ProxyURL(); got != "" {
 		t.Errorf("ProxyURL() = %q, want empty (disabled)", got)
 	}
 }
 
 func TestProxyURLDefaultsDirect(t *testing.T) {
-	old, had := os.LookupEnv("PIGO_PROXY")
-	if err := os.Unsetenv("PIGO_PROXY"); err != nil {
+	old, had := os.LookupEnv("GOLDER_PROXY")
+	if err := os.Unsetenv("GOLDER_PROXY"); err != nil {
 		t.Fatalf("Unsetenv: %v", err)
 	}
 	t.Cleanup(func() {
 		if had {
-			os.Setenv("PIGO_PROXY", old)
+			os.Setenv("GOLDER_PROXY", old)
 		}
 	})
 	if got := ProxyURL(); got != "" {

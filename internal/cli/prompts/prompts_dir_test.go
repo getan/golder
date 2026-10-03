@@ -1,22 +1,22 @@
 package prompts
 
 // Tests for global prompt-template discovery (US-005, #336): BuildSlashRegistry
-// loads both the legacy ~/.pigo/commands and the pi-aligned ~/.pigo/prompts
+// loads both the legacy ~/.golder/commands and the pi-aligned ~/.golder/prompts
 // (non-recursive, global tier), and a same-named template in prompts/ overrides
 // the one in commands/ (last-write-wins within the global tier).
 
 import (
 	"testing"
 
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/testutil"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/testutil"
 )
 
 // TestBuildSlashRegistryLoadsLegacyCommandsDir verifies the legacy
-// ~/.pigo/commands directory still loads templates (regression).
+// ~/.golder/commands directory still loads templates (regression).
 func TestBuildSlashRegistryLoadsLegacyCommandsDir(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	testutil.WritePrompt(t, home, "commands", "legacy.md", "Legacy: $ARGUMENTS")
 
 	reg, err := BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, nil, nil, PromptTemplateSources{})
@@ -32,11 +32,11 @@ func TestBuildSlashRegistryLoadsLegacyCommandsDir(t *testing.T) {
 	}
 }
 
-// TestBuildSlashRegistryLoadsPromptsDir verifies the pi-aligned ~/.pigo/prompts
+// TestBuildSlashRegistryLoadsPromptsDir verifies the pi-aligned ~/.golder/prompts
 // directory loads templates.
 func TestBuildSlashRegistryLoadsPromptsDir(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	testutil.WritePrompt(t, home, "prompts", "review.md", "Review: $ARGUMENTS")
 
 	reg, err := BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, nil, nil, PromptTemplateSources{})
@@ -57,7 +57,7 @@ func TestBuildSlashRegistryLoadsPromptsDir(t *testing.T) {
 // loaded second so last-write-wins), with no shadow entry.
 func TestBuildSlashRegistryPromptsOverridesCommands(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("PIGO_HOME", home)
+	t.Setenv("GOLDER_HOME", home)
 	testutil.WritePrompt(t, home, "commands", "dup.md", "FROM COMMANDS")
 	testutil.WritePrompt(t, home, "prompts", "dup.md", "FROM PROMPTS")
 
@@ -80,7 +80,7 @@ func TestBuildSlashRegistryPromptsOverridesCommands(t *testing.T) {
 // TestBuildSlashRegistryMissingDirsNoError verifies that with neither commands/
 // nor prompts/ present, BuildSlashRegistry returns no error (built-ins only).
 func TestBuildSlashRegistryMissingDirsNoError(t *testing.T) {
-	t.Setenv("PIGO_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	reg, err := BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, nil, nil, PromptTemplateSources{})
 	if err != nil {
 		t.Fatalf("BuildSlashRegistry with no prompt dirs: %v", err)

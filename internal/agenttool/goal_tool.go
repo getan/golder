@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // GoalStatus is the lifecycle state of the active goal.

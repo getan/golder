@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // TestAgentLoopOnStopBlocksThenAllows: OnStop blocks the natural end twice

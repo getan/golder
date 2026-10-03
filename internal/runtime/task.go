@@ -13,10 +13,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
-// DefaultMaxSubagents is the concurrency cap applied when PIGO_MAX_SUBAGENTS is
+// DefaultMaxSubagents is the concurrency cap applied when GOLDER_MAX_SUBAGENTS is
 // unset or invalid. It bounds how many task sub-agents run at once so a fan-out
 // cannot overwhelm the provider rate limit.
 const DefaultMaxSubagents = 4
@@ -73,11 +73,11 @@ func NewTaskTool(factory func() RunConfig, sem chan struct{}) *SubAgentTool {
 }
 
 // MaxSubagents resolves the concurrency cap for task sub-agents from
-// PIGO_MAX_SUBAGENTS: absent or unparseable yields DefaultMaxSubagents (4), and
+// GOLDER_MAX_SUBAGENTS: absent or unparseable yields DefaultMaxSubagents (4), and
 // a parsed value below 1 is floored to 1 so the semaphore always admits at least
 // one runner.
 func MaxSubagents() int {
-	v := strings.TrimSpace(os.Getenv("PIGO_MAX_SUBAGENTS"))
+	v := strings.TrimSpace(os.Getenv("GOLDER_MAX_SUBAGENTS"))
 	if v == "" {
 		return DefaultMaxSubagents
 	}

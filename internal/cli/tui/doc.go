@@ -1,6 +1,6 @@
-// Package tui hosts the full-screen terminal UI for pigo's interactive mode
+// Package tui hosts the full-screen terminal UI for golder's interactive mode
 // (US-001). It is the alt-screen counterpart to the line-based REPL in
-// internal/cli/repl: cmd/pigo's dispatch launches it via Run when there is no
+// internal/cli/repl: cmd/golder's dispatch launches it via Run when there is no
 // prompt, stdout is a TTY, and --no-tui is not set; otherwise the REPL path is
 // used. See tasks/spec-tui-agent.md (Sections 2.1, 4.2, 5.2) for the design.
 //

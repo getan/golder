@@ -1,21 +1,21 @@
 #!/bin/sh
-# pigo 安装脚本：检测当前操作系统 / 架构，从 GitHub Releases 下载最新的
+# golder 安装脚本：检测当前操作系统 / 架构，从 GitHub Releases 下载最新的
 # 预编译二进制，并安装到常用的 PATH 目录。
 #
 # 用法：
-#   curl -fsSL https://raw.githubusercontent.com/smallnest/pigo/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 #
 # 可用环境变量覆盖默认行为：
-#   PIGO_VERSION   指定版本（形如 v0.2.0），默认取最新 release
-#   PIGO_INSTALL_DIR  安装目录，默认 /usr/local/bin（无写权限时回退到 ~/.local/bin）
+#   GOLDER_VERSION   指定版本（形如 v0.2.0），默认取最新 release
+#   GOLDER_INSTALL_DIR  安装目录，默认 /usr/local/bin（无写权限时回退到 ~/.local/bin）
 #   GITHUB_TOKEN   可选，用于提高 GitHub API 速率限制
 set -eu
 
-REPO="smallnest/pigo"
-BINARY="pigo"
+REPO="getan/golder"
+BINARY="golder"
 
-info() { printf '%s\n' "pigo-install: $*" >&2; }
-err()  { printf '%s\n' "pigo-install: error: $*" >&2; exit 1; }
+info() { printf '%s\n' "golder-install: $*" >&2; }
+err()  { printf '%s\n' "golder-install: error: $*" >&2; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1 || err "缺少依赖命令: $1"; }
 
@@ -51,17 +51,17 @@ case "$arch_raw" in
 	*) err "不支持的架构: $arch_raw" ;;
 esac
 
-# 4. 解析目标版本：优先 PIGO_VERSION，否则查询最新 release 的 tag。
-VERSION="${PIGO_VERSION:-}"
+# 4. 解析目标版本：优先 GOLDER_VERSION，否则查询最新 release 的 tag。
+VERSION="${GOLDER_VERSION:-}"
 api_auth=""
 [ -n "${GITHUB_TOKEN:-}" ] && api_auth="-H Authorization:\ Bearer\ $GITHUB_TOKEN"
 if [ -z "$VERSION" ]; then
 	info "查询最新 release ..."
 	# 从 GitHub API 的 latest 端点提取 tag_name。
 	latest_json=$($DL "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || \
-		err "无法访问 GitHub API，请检查网络或用 PIGO_VERSION 指定版本"
+		err "无法访问 GitHub API，请检查网络或用 GOLDER_VERSION 指定版本"
 	VERSION=$(printf '%s' "$latest_json" | grep -o '"tag_name"[ ]*:[ ]*"[^"]*"' | head -n1 | sed 's/.*"tag_name"[ ]*:[ ]*"\([^"]*\)".*/\1/')
-	[ -n "$VERSION" ] || err "无法解析最新版本号，请用 PIGO_VERSION 指定"
+	[ -n "$VERSION" ] || err "无法解析最新版本号，请用 GOLDER_VERSION 指定"
 fi
 
 # 归档名里的版本号不带前导 v（goreleaser 的 .Version）。
@@ -74,15 +74,15 @@ info "平台: ${OS}/${ARCH}"
 info "下载: $URL"
 
 # 5. 下载并解压到临时目录。
-TMP=$(mktemp -d 2>/dev/null || mktemp -d -t pigo-install)
+TMP=$(mktemp -d 2>/dev/null || mktemp -d -t golder-install)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 $DLO "$TMP/$ARCHIVE" "$URL" || err "下载失败: $URL"
 tar -xzf "$TMP/$ARCHIVE" -C "$TMP" || err "解压失败: $ARCHIVE"
 [ -f "$TMP/$BINARY" ] || err "归档中未找到二进制 $BINARY"
 chmod +x "$TMP/$BINARY"
 
-# 6. 选择安装目录：PIGO_INSTALL_DIR > /usr/local/bin > ~/.local/bin。
-DIR="${PIGO_INSTALL_DIR:-}"
+# 6. 选择安装目录：GOLDER_INSTALL_DIR > /usr/local/bin > ~/.local/bin。
+DIR="${GOLDER_INSTALL_DIR:-}"
 if [ -z "$DIR" ]; then
 	if [ -w /usr/local/bin ] 2>/dev/null; then
 		DIR="/usr/local/bin"
@@ -102,7 +102,7 @@ elif command -v sudo >/dev/null 2>&1; then
 	info "$DIR 需要提升权限，使用 sudo 安装 ..."
 	sudo mv "$TMP/$BINARY" "$DEST"
 else
-	err "$DIR 不可写且无 sudo，请设置 PIGO_INSTALL_DIR 指向可写目录"
+	err "$DIR 不可写且无 sudo，请设置 GOLDER_INSTALL_DIR 指向可写目录"
 fi
 
 info "已安装: $DEST"

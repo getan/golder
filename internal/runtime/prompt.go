@@ -1,4 +1,4 @@
-// This file implements system-prompt assembly (US-021, #40), the pigo port of
+// This file implements system-prompt assembly (US-021, #40), the golder port of
 // pi's prompt construction. A run's system prompt is built from three layers,
 // in order:
 //
@@ -66,7 +66,7 @@ type PromptConfig struct {
 
 // DefaultBaseInstruction is the leading system-prompt text used when
 // PromptConfig.BaseInstruction is empty.
-const DefaultBaseInstruction = "You are pigo, a helpful coding agent. " +
+const DefaultBaseInstruction = "You are golder, a helpful coding agent. " +
 	"Use the available tools to inspect files and accomplish the user's request precisely and concisely.\n\n" +
 	todoGuide + "\n\n" +
 	taskGuide + "\n\n" +

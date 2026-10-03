@@ -182,4 +182,3 @@ var spinnerVerbs = []string{
 	"Warping", "Whatchamacalliting", "Whirlpooling", "Whirring", "Whisking",
 	"Wibbling", "Working", "Wrangling", "Zesting", "Zigzagging",
 }
-

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // State budgets. The reviewer is a normal model call, so the transcript is
@@ -179,7 +179,7 @@ func renderTranscriptMessage(m agentcore.Message) (text string, isUser, ok bool)
 // ConversationLanguage reports the language the user is currently writing in,
 // as "zh" (Simplified Chinese) or "en". It scans the newest user messages for
 // a CJK ideograph — the practical signal for "answer me in Chinese" — and
-// falls back to English, the default for pigo's prompts. UI surfaces use it to
+// falls back to English, the default for golder's prompts. UI surfaces use it to
 // localize fixed template text; the reviewer uses it to instruct the model to
 // write its rationale in the user's language.
 func ConversationLanguage(msgs agentcore.MessageList) string {

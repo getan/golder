@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // buildTestPlugin compiles the given Go source into an executable under a temp

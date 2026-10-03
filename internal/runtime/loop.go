@@ -27,11 +27,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/contextbudget"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/provider"
 )
 
 // nowMillis returns the current Unix time in milliseconds, the timestamp unit
@@ -552,11 +552,11 @@ func writeCompactionCheckpoint(ctx context.Context, msgs agentcore.MessageList, 
 	}
 	cp, err := BuildCheckpoint(ctx, msgs[:watermark], watermark, time.Now(), summarize)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "pigo: checkpoint: build for session %s: %v\n", cfg.SessionID, err)
+		fmt.Fprintf(os.Stderr, "golder: checkpoint: build for session %s: %v\n", cfg.SessionID, err)
 		return
 	}
 	if err := WriteCheckpoint(cfg.SessionID, cfg.MemoryRoot, cp); err != nil {
-		fmt.Fprintf(os.Stderr, "pigo: checkpoint: write for session %s: %v\n", cfg.SessionID, err)
+		fmt.Fprintf(os.Stderr, "golder: checkpoint: write for session %s: %v\n", cfg.SessionID, err)
 	}
 }
 

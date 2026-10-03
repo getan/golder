@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
 )
 
 // TestStatusFreshSessionAllSections verifies /status renders every section on a

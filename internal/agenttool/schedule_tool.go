@@ -4,7 +4,7 @@
 // store bound to one session, plus the delivery seam that turns due reminders
 // into follow-up user turns.
 //
-// Semantics (mirroring dsh, scoped to pigo's session model):
+// Semantics (mirroring dsh, scoped to golder's session model):
 //
 //   - Session-local. The store lives in memory for one run assembly; nothing
 //     is persisted and a session's end drops every reminder.
@@ -34,7 +34,7 @@ import (
 	// parsing needs real zone rules (DST gaps/overlaps) on every platform.
 	_ "time/tzdata"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // minScheduleIntervalSeconds is the floor for a fixed-rate interval, matching

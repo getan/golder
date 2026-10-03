@@ -55,7 +55,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, eventType, toolName string, i
 	for _, h := range matched {
 		out, err := d.runner.Run(ctx, h, input)
 		if err != nil {
-			warnf(d.warnLog, "pigo: hooks: %s: %v\n", eventType, err)
+			warnf(d.warnLog, "golder: hooks: %s: %v\n", eventType, err)
 			continue // fail-open
 		}
 		if out.blocks() {

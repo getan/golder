@@ -12,14 +12,14 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/memstatus"
-	"github.com/smallnest/pigo/internal/cli/prompts"
-	"github.com/smallnest/pigo/internal/cli/status"
-	"github.com/smallnest/pigo/internal/memory"
-	"github.com/smallnest/pigo/internal/permissions"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/memstatus"
+	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/cli/status"
+	"github.com/getan/golder/internal/memory"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // Model is the root Bubble Tea model for the full-screen TUI. It composes a
@@ -75,7 +75,7 @@ type Model struct {
 
 	// session is the assembled run/persistence state (store, header, growing
 	// context, live config). It is nil for a session-less model; when set, the
-	// model persists the conversation to ~/.pigo/sessions after each turn ends.
+	// model persists the conversation to ~/.golder/sessions after each turn ends.
 	session *runSession
 
 	// interruptFn cancels the in-flight run (the first stage of the two-stage
@@ -168,6 +168,13 @@ type Model struct {
 	// stats) shown on the row above the input while a run is in flight.
 	spinner spinner
 
+	// logoRunning is true while ticks keep spinning the startup splash.
+	// Only a fresh session (no resumed history) arms it: a resumed banner sits
+	// scrolled above the fold, so animating it would reflow the whole history
+	// for frames nobody sees. The flag is released once the spin completes one
+	// revolution, after which the banner is a static history cell.
+	logoRunning bool
+
 	// subagents is the ordered set of live sub-agents dispatched by the `task`
 	// tool (SPEC 4.4, US-006). A toolStartMsg with name=="task" adds a row (and
 	// records its start time), subagentProgressMsg refreshes activity/tokens, and
@@ -196,7 +203,7 @@ type Model struct {
 // NewModel builds the root model from the assembled Options. It reads the
 // current working directory (for the status bar's path display and git probe)
 // and assembles the shared slash-command registry (#391), which reads the user
-// prompt-template dirs (~/.pigo/{commands,prompts}) and the pre-loaded skills;
+// prompt-template dirs (~/.golder/{commands,prompts}) and the pre-loaded skills;
 // missing dirs are not an error. The registry is bound here to a live config
 // derived from Options; withSession rebinds it to the session's live config so a
 // /model switch reaches the run loop.
@@ -247,7 +254,8 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// newRunSessionWithStore), and /status can list skill/plugin/user commands.
 	m.live = s.live
 	m.slash = s.slash
-	m.transcript.addBanner(renderBanner(m.theme, m.opts, m.cwd))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, 0))
+	m.logoRunning = len(history) == 0
 	seedTranscript(&m.transcript, history)
 	return m
 }
@@ -390,9 +398,10 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.transcript.reset()
-	m.transcript.addBanner(renderBanner(m.theme, m.opts, m.cwd))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, 0))
 	seedTranscript(&m.transcript, msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
+	m.logoRunning = false
 	return m, nil
 }
 
@@ -400,9 +409,15 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 // can show the branch/dirty state as soon as it resolves; the alt-screen is
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(fetchGitCmd(m.cwd), m.input.Focus(), func() tea.Msg {
+	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus(), func() tea.Msg {
 		return tea.RequestBackgroundColor()
-	})
+	}}
+	// The startup logo is armed by withSession before Init runs, so the first
+	// tick is scheduled here; the chain stops itself on the final frame.
+	if m.logoRunning {
+		cmds = append(cmds, m.tickLogo(1))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update implements tea.Model. It tracks the terminal size, drives the minimal
@@ -607,6 +622,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.spinner.advance()
 		return m, m.tickSpinner()
+
+	case logoFrameMsg:
+		// Advance the startup splash's spin one frame. The final frame lands on
+		// the front-facing resting position, the animation disarms itself, and
+		// the banner stays behind as a static history cell.
+		if !m.logoRunning {
+			return m, nil
+		}
+		if msg.frame >= logoFrames {
+			m.logoRunning = false
+			m.transcript.setBannerText(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+			return m, nil
+		}
+		m.transcript.setBannerText(renderBannerFrame(m.theme, m.opts, m.cwd, msg.frame))
+		return m, m.tickLogo(msg.frame + 1)
 
 	case textDeltaMsg:
 		m.spinner.addTokens(msg.delta)

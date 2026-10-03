@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/execsess"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/execsess"
 )
 
 const (

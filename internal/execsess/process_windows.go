@@ -11,7 +11,7 @@ import (
 // os.Process.Kill, which is immediate.
 const terminationGracePeriod = 50 * time.Millisecond
 
-// configureProcessGroup is a no-op on Windows: pigo cannot create a process
+// configureProcessGroup is a no-op on Windows: golder cannot create a process
 // group or signal one portably.
 func configureProcessGroup(_ *exec.Cmd) {}
 

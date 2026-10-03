@@ -19,7 +19,7 @@ package hooks
 import (
 	"context"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // HookNotifier forwards agent lifecycle events to observer-only hooks. Handle

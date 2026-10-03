@@ -28,7 +28,7 @@ type config struct {
 // internal types.
 type Option func(*config)
 
-// WithModel sets the model id, which also selects the provider the way the pigo
+// WithModel sets the model id, which also selects the provider the way the golder
 // CLI does (e.g. "claude-opus-4-8" → Anthropic, "openrouter/free" → OpenRouter).
 // The default is "openrouter/free".
 func WithModel(model string) Option {
@@ -48,7 +48,7 @@ func WithProtocol(protocol string) Option {
 	return func(c *config) { c.protocol = protocol }
 }
 
-// WithProvider selects a named provider from your pigo configuration instead of
+// WithProvider selects a named provider from your golder configuration instead of
 // inferring one from the model id.
 func WithProvider(name string) Option {
 	return func(c *config) { c.provider = name }
@@ -61,7 +61,7 @@ func WithAPIKey(key string) Option {
 	return func(c *config) { c.apiKey = key }
 }
 
-// WithSystemPrompt replaces pigo's built-in base instruction with prompt. Use
+// WithSystemPrompt replaces golder's built-in base instruction with prompt. Use
 // this for full control over the agent's persona and rules; use
 // [WithAppendSystemPrompt] instead to keep the built-in instruction and add to
 // it.
@@ -70,7 +70,7 @@ func WithSystemPrompt(prompt string) Option {
 }
 
 // WithAppendSystemPrompt appends one or more blocks to the system prompt,
-// leaving pigo's built-in instruction in place. Repeated calls accumulate.
+// leaving golder's built-in instruction in place. Repeated calls accumulate.
 func WithAppendSystemPrompt(blocks ...string) Option {
 	return func(c *config) {
 		c.appendSystemPrompt = append(c.appendSystemPrompt, blocks...)
@@ -128,7 +128,7 @@ func WithSkills() Option {
 	return func(c *config) { c.skills = true }
 }
 
-// WithMemory enables pigo's persistent memory store, letting the agent recall
+// WithMemory enables golder's persistent memory store, letting the agent recall
 // context saved by earlier runs and record new memories. Memory is off by
 // default so an embedded session does not read or write shared state unless
 // asked.

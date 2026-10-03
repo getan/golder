@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // repairDanglingToolCalls answers every assistant tool call in the context
@@ -66,6 +66,6 @@ func repairDanglingToolCalls(agentCtx *agentcore.AgentContext) int {
 // the provider request.
 func healResumedContext(agentCtx *agentcore.AgentContext) {
 	if n := repairDanglingToolCalls(agentCtx); n > 0 {
-		fmt.Fprintf(os.Stderr, "pigo: repaired %d unanswered tool call(s) from an earlier run\n", n)
+		fmt.Fprintf(os.Stderr, "golder: repaired %d unanswered tool call(s) from an earlier run\n", n)
 	}
 }

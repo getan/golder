@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // ctrlKey builds a Ctrl+<letter> key press matching String()=="ctrl+<letter>".

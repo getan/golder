@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // captureServer records the last request path, headers, and decoded JSON body,

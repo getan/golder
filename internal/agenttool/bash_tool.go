@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/execsess"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/permissions"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // bashMaxOutputBytes caps how many bytes of combined stdout/stderr one result
@@ -82,7 +82,7 @@ type BashTool struct {
 	// prompted for them).
 	Sandbox SandboxRunner
 	// ForceSandbox routes every foreground command through Sandbox
-	// (PIGO_SANDBOX=enforce) and fails closed when Sandbox is nil.
+	// (GOLDER_SANDBOX=enforce) and fails closed when Sandbox is nil.
 	ForceSandbox bool
 }
 
@@ -114,7 +114,7 @@ func (t *BashTool) StopSessions() {
 }
 
 // sandboxRoute decides whether one command must run isolated. Sources, in
-// order: PIGO_SANDBOX=enforce (every foreground command), a sandbox request
+// order: GOLDER_SANDBOX=enforce (every foreground command), a sandbox request
 // published by the permission gate (auto/ask routing of a sandbox-tier grade
 // or reviewer-failure containment), then the optional Judge for direct
 // callers. It returns sandbox=true to run isolated, a non-empty message to
@@ -183,7 +183,7 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command string)
 	}
 	if t.Sandbox == nil {
 		if t.ForceSandbox {
-			return nil, nil, "bash: PIGO_SANDBOX=enforce but no sandbox runner is available (macOS sandbox-exec required); failing closed", false
+			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (macOS sandbox-exec required); failing closed", false
 		}
 		return argv, nil, "", true
 	}

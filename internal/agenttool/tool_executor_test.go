@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // execTool is a configurable AgentTool for executor tests.

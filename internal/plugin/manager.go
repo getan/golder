@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // Manager owns a set of loaded plugins and their aggregated tools. It is not safe
@@ -50,7 +50,7 @@ func Discover(dir string, warnLog, pluginStderr io.Writer) (*Manager, error) {
 		p, err := Load(path, nil, pluginStderr)
 		if err != nil {
 			if warnLog != nil {
-				fmt.Fprintf(warnLog, "pigo: plugin %q failed to load: %v\n", e.Name(), err)
+				fmt.Fprintf(warnLog, "golder: plugin %q failed to load: %v\n", e.Name(), err)
 			}
 			continue
 		}
@@ -122,7 +122,7 @@ func (m *Manager) DispatchEvent(params EventParams, warnLog io.Writer) {
 			continue
 		}
 		if err := p.SendEvent(params); err != nil && warnLog != nil {
-			fmt.Fprintf(warnLog, "pigo: plugin %q event %q: %v\n", p.Manifest.Name, params.Type, err)
+			fmt.Fprintf(warnLog, "golder: plugin %q event %q: %v\n", p.Manifest.Name, params.Type, err)
 		}
 	}
 }

@@ -105,7 +105,7 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 `,
 		quoteAll(canonicals(project)), quoteAll(canonicals(r.tmpDir())), quote(sshDir), quote(gpgDir),
 	)
-	f, err := os.CreateTemp(r.tmpDir(), "pigo-sandbox-*.sb")
+	f, err := os.CreateTemp(r.tmpDir(), "golder-sandbox-*.sb")
 	if err != nil {
 		return "", fmt.Errorf("seatbelt: write profile: %w", err)
 	}

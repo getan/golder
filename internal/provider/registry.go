@@ -47,7 +47,7 @@ type ProviderSpec struct {
 	BaseURLEnvVars []string
 	// ForceProxy marks providers that must go through the proxy when one is
 	// configured (opencode.ai from mainland networks; Muse models behind it
-	// require US egress). With PIGO_PROXY unset the request goes direct, so
+	// require US egress). With GOLDER_PROXY unset the request goes direct, so
 	// users without a proxy work out of the box. The decision keys on the
 	// provider name, so --base-url overrides keep the behavior.
 	ForceProxy bool

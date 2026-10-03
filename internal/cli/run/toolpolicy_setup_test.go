@@ -25,7 +25,7 @@ func writePolicySkill(t *testing.T, dir, name, description string) {
 func setupToolNames(t *testing.T, policy ToolPolicy) []string {
 	t.Helper()
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("PIGO_HOME", t.TempDir()) // isolate plugin/skill discovery
+	t.Setenv("GOLDER_HOME", t.TempDir()) // isolate plugin/skill discovery
 	env, err := SetupEnv("openrouter/free", "", "", "", "", false /*noTools*/, true /*noSkills*/, "", nil, false /*memEnabled*/, policy)
 	if err != nil {
 		t.Fatalf("SetupEnv: %v", err)
@@ -97,7 +97,7 @@ func TestSetupEnvUnconstrainedIsUnchanged(t *testing.T) {
 // silently ignores the boundary.
 func TestSetupEnvRejectsUnknownToolName(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("PIGO_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	_, err := SetupEnv("openrouter/free", "", "", "", "", false, true, "", nil, false, NewToolPolicy([]string{"raed"}, nil))
 	if err == nil {
 		t.Fatal("SetupEnv = nil error, want a failure for the misspelled tool name")
@@ -141,9 +141,9 @@ func TestChildToolSetInheritsPolicy(t *testing.T) {
 // happen before the system prompt is built.
 func TestSetupEnvSkillsGatedOnFilteredReadTool(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("PIGO_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	skillsDir := t.TempDir()
-	t.Setenv("PIGO_SKILLS_DIR", skillsDir)
+	t.Setenv("GOLDER_SKILLS_DIR", skillsDir)
 	writePolicySkill(t, skillsDir, "weather", "get the weather")
 
 	withRead, err := SetupEnv("openrouter/free", "", "", "", "", false, false, "", nil, false, ToolPolicy{})
@@ -191,7 +191,7 @@ func captureStderr(t *testing.T, fn func()) string {
 // believe a boundary is in force when none is.
 func TestSetupEnvNoToolsWithPolicyWarns(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("PIGO_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 
 	var env Env
 	var err error

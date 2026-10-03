@@ -26,7 +26,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // openaiToolCall accumulates one streamed tool call, keyed by its delta index.
@@ -50,7 +50,7 @@ type OpenAIDecoder struct {
 	responseModel string
 	inputTokens   int
 	outputTokens  int
-	stopReason    string // mapped pigo stop reason (empty until finish_reason)
+	stopReason    string // mapped golder stop reason (empty until finish_reason)
 	done          bool
 }
 
@@ -229,7 +229,7 @@ func (d *OpenAIDecoder) partial() agentcore.AssistantMessage {
 	return msg
 }
 
-// mapOpenAIFinishReason maps an OpenAI finish_reason to the pigo StopReason set.
+// mapOpenAIFinishReason maps an OpenAI finish_reason to the golder StopReason set.
 // Unknown reasons default to end_turn (a natural, non-error stop).
 func mapOpenAIFinishReason(reason string) string {
 	switch reason {

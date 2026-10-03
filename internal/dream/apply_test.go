@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/memory"
+	"github.com/getan/golder/internal/memory"
 )
 
 func TestUpdateScopeIndexesDropsDanglingLinks(t *testing.T) {

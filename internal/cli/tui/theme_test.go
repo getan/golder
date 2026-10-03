@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/glamour/styles"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 func TestDefaultThemeRenders(t *testing.T) {
@@ -121,7 +121,7 @@ func isValidBoundary(s string) bool {
 
 // TestMarkdownStyleInlineCodeNotRed is the palette regression: the stock
 // glamour dark style paints inline code 203 (coral red) on a chip, which turned
-// identifier-dense replies into a wall of red. pigo overrides it to cyan with
+// identifier-dense replies into a wall of red. golder overrides it to cyan with
 // no chip, matching codex.
 func TestMarkdownStyleInlineCodeNotRed(t *testing.T) {
 	for _, dark := range []bool{true, false} {

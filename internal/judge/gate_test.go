@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/permissions"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 )
 
 type stubClassifier struct {
@@ -85,7 +85,7 @@ func TestPermissionGateAutoDeniesWithGuidance(t *testing.T) {
 	if !strings.Contains(got, DenyGuidance) {
 		t.Errorf("deny block must carry the remediation guidance\n%q", got)
 	}
-	if strings.Contains(got, "PIGO_JUDGE") {
+	if strings.Contains(got, "GOLDER_JUDGE") {
 		t.Errorf("block must not advertise a removed escape hatch\n%q", got)
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteDenied {

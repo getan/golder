@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/permissions"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // newRemoteTestSession builds a fresh run session over a temp-dir store for the

@@ -39,12 +39,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/session"
 )
 
 // maxWebhookBody bounds one webhook payload (GitHub caps PR payloads far
@@ -115,7 +115,7 @@ func (s *Server) clock() time.Time {
 // model can inspect the workspace but cannot write, edit, execute, or fan out.
 var readOnlyToolNames = map[string]struct{}{"read": {}, "grep": {}, "find": {}}
 
-// ReadOnlyTools returns the read-only subset of pigo's built-in tools, the tool
+// ReadOnlyTools returns the read-only subset of golder's built-in tools, the tool
 // set a review session runs with.
 func ReadOnlyTools(cwd string) []agentcore.AgentTool {
 	var out []agentcore.AgentTool

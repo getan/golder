@@ -24,7 +24,7 @@ var spaFiles embed.FS
 // Default configuration values (see tasks/spec-remote-control.md §3.2).
 const (
 	defaultPairTTL = 10 * time.Minute
-	cookieName     = "pigo_rc"
+	cookieName     = "golder_rc"
 	maxFrameBytes  = 64 * 1024
 
 	// outputFlushInterval is the coalescing tick: adjacent output writes buffered

@@ -6,7 +6,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // This file implements mouse text selection over the rendered shell. Because the

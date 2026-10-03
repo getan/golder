@@ -1,7 +1,7 @@
 // This file defines the built-in preset catalog: a curated set of ready-to-use
 // (provider, model) pairs a user can pick from without knowing each gateway's
 // wire details (mirrors pi agent's preset provider/model picker). It covers the
-// OpenAI-compatible gateways pigo ships — OpenRouter and NVIDIA NIM — plus a few
+// OpenAI-compatible gateways golder ships — OpenRouter and NVIDIA NIM — plus a few
 // local Ollama defaults.
 //
 // A preset binds a model id to the provider that serves it and that provider's

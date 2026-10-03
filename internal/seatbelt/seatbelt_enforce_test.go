@@ -117,7 +117,7 @@ func TestSeatbeltDeniesSecretsAndTrustStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UserHomeDir: %v", err)
 	}
-	suffix := fmt.Sprintf("pigo-sandbox-probe-%d-%d", os.Getpid(), time.Now().UnixNano())
+	suffix := fmt.Sprintf("golder-sandbox-probe-%d-%d", os.Getpid(), time.Now().UnixNano())
 	for _, dir := range []string{filepath.Join(home, ".ssh"), filepath.Join(home, ".gnupg")} {
 		if st, statErr := os.Stat(dir); statErr != nil || !st.IsDir() {
 			t.Logf("no %s dir, skipping its probe", dir)

@@ -1,10 +1,10 @@
-// This file freezes pigo's telemetry export contract (issue #569), aligning
+// This file freezes golder's telemetry export contract (issue #569), aligning
 // the export story with pi-telemetry's goal — a vendor-neutral, typed,
-// conformance-tested schema — scoped to pigo's run-summary model:
+// conformance-tested schema — scoped to golder's run-summary model:
 //
 //   - TelemetrySummary is the canonical run-level export document, JSON-tagged
 //     with snake_case names and a schema_version discriminator. Consumers can
-//     decode it without knowing pigo's Go types, and the golden conformance
+//     decode it without knowing golder's Go types, and the golden conformance
 //     test (telemetry_schema_test.go + testdata/telemetry) fails the build if
 //     the shape or the stream-json envelope drifts.
 //   - The stream-json "telemetry" event envelope (eventEnvelope in
@@ -20,13 +20,13 @@ package runtime
 import (
 	"encoding/json"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // TelemetrySchemaVersion is the discriminant stamped on every
 // TelemetrySummary document. A breaking shape change MUST bump it (v2) and
 // regenerate the golden fixtures.
-const TelemetrySchemaVersion = "pigo.telemetry/v1"
+const TelemetrySchemaVersion = "golder.telemetry/v1"
 
 // ToolTimingSummary is one tool's aggregated timing in the export schema.
 type ToolTimingSummary struct {

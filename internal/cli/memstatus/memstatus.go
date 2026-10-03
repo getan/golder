@@ -13,11 +13,11 @@ import (
 	"io"
 	"sort"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/memory"
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/memory"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // scopeOrder is the display order for memory scopes. Scopes not listed here are
@@ -192,4 +192,3 @@ func printCheckpointSection(out io.Writer, color bool, memoryRoot, sessionID str
 		ui.Colorize(color, ui.Dim, "path:"),
 		runtime.CheckpointPath(sessionID, memoryRoot))
 }
-

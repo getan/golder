@@ -8,17 +8,17 @@ import (
 )
 
 func TestModeFromEnv(t *testing.T) {
-	t.Setenv("PIGO_SANDBOX", "")
+	t.Setenv("GOLDER_SANDBOX", "")
 	if ModeFromEnv() != ModeAuto {
-		t.Fatal("empty PIGO_SANDBOX should default to auto")
+		t.Fatal("empty GOLDER_SANDBOX should default to auto")
 	}
-	t.Setenv("PIGO_SANDBOX", "enforce")
+	t.Setenv("GOLDER_SANDBOX", "enforce")
 	if ModeFromEnv() != ModeEnforce {
-		t.Fatal("PIGO_SANDBOX=enforce should parse")
+		t.Fatal("GOLDER_SANDBOX=enforce should parse")
 	}
-	t.Setenv("PIGO_SANDBOX", "off")
+	t.Setenv("GOLDER_SANDBOX", "off")
 	if ModeFromEnv() != ModeOff {
-		t.Fatal("PIGO_SANDBOX=off should parse")
+		t.Fatal("GOLDER_SANDBOX=off should parse")
 	}
 }
 

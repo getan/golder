@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 func TestCustomToolAdapterToleratesConcurrentUpdates(t *testing.T) {

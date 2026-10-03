@@ -7,9 +7,9 @@ package runtime
 import (
 	"context"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/provider"
 )
 
 // LoopConfig holds the pluggable behavior of the agent loop. Every hook is

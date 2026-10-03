@@ -11,7 +11,7 @@
 //
 //   - Goroutine (default): the child loop runs in-process in a goroutine sharing
 //     the parent process, matching the original "single-process goroutine" decision.
-//   - Process: the parent spawns a fresh pigo subprocess (pigo --subagent-rpc)
+//   - Process: the parent spawns a fresh golder subprocess (golder --subagent-rpc)
 //     and delegates the run over stdio JSON-RPC (reusing internal/jsonrpc). The
 //     child runs in a separate process, so a crash or resource leak in the child
 //     cannot affect the parent loop; a crash is surfaced as a tool error. The
@@ -30,9 +30,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/jsonrpc"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/jsonrpc"
+	"github.com/getan/golder/internal/provider"
 )
 
 // SubAgentIsolation selects how a sub-agent runs relative to its parent.
@@ -43,7 +43,7 @@ const (
 	// goroutine. This is the default and the original behavior; it changes
 	// nothing about how sub-agents previously ran.
 	SubAgentIsolationGoroutine SubAgentIsolation = iota
-	// SubAgentIsolationProcess runs the child in a fresh pigo subprocess,
+	// SubAgentIsolationProcess runs the child in a fresh golder subprocess,
 	// delegating the run over stdio JSON-RPC. A subprocess crash is surfaced to
 	// the parent as a tool error and never affects the parent loop.
 	SubAgentIsolationProcess
@@ -56,8 +56,8 @@ const (
 // the model (and optional base URL/protocol) and the subprocess resolves the
 // provider itself, inheriting the parent environment for API keys.
 type SubAgentProcessConfig struct {
-	// Command is the executable to spawn. When empty, os.Executable() (the pigo
-	// binary itself) is used so a pigo process spawns another pigo.
+	// Command is the executable to spawn. When empty, os.Executable() (the golder
+	// binary itself) is used so a golder process spawns another golder.
 	Command string
 	// Args are appended to the command after the subagent-rpc flag. Rarely
 	// needed; reserved for test doubles or non-standard layouts.
@@ -87,8 +87,8 @@ type SubAgentProcessConfig struct {
 
 // SubAgentRunParams is the JSON-RPC request payload for a process-isolated
 // sub-agent run (the "subagent/run" method). It is the wire contract between
-// the parent (SubAgentTool in process mode) and the pigo subprocess
-// (cmd/pigo --subagent-rpc).
+// the parent (SubAgentTool in process mode) and the golder subprocess
+// (cmd/golder --subagent-rpc).
 type SubAgentRunParams struct {
 	Prompt       string   `json:"prompt"`
 	SystemPrompt string   `json:"systemPrompt,omitempty"`
@@ -108,7 +108,7 @@ type SubAgentRunResult struct {
 // subprocess: "subagent/run".
 const SubAgentRPCMethod = "subagent/run"
 
-// SubAgentRPCFlag is the command-line flag the parent launches the pigo
+// SubAgentRPCFlag is the command-line flag the parent launches the golder
 // subprocess with so it enters the sub-agent RPC server mode: "--subagent-rpc".
 const SubAgentRPCFlag = "--subagent-rpc"
 
@@ -371,7 +371,7 @@ func stopOwnedSessions(tools []agentcore.AgentTool) {
 	}
 }
 
-// executeProcess runs the child agent loop in a fresh pigo subprocess over stdio
+// executeProcess runs the child agent loop in a fresh golder subprocess over stdio
 // JSON-RPC and returns its final text. A subprocess crash, transport error, or
 // failed child run is surfaced as a tool error; the parent loop is unaffected.
 // Streamed child text is not forwarded (the process protocol returns only the
@@ -412,7 +412,7 @@ func (t *SubAgentTool) executeProcess(ctx context.Context, prompt string) (agent
 }
 
 // defaultProcessCall is the production subprocess transport: it launches the
-// pigo binary (or cfg.Command) with the subagent-rpc flag, sends a single
+// golder binary (or cfg.Command) with the subagent-rpc flag, sends a single
 // "subagent/run" JSON-RPC request over the child's stdin, and returns the
 // child's final text from the response. The child is closed (killed if it does
 // not exit on its own) before returning. A crash, transport error, or RPC error
@@ -422,7 +422,7 @@ func defaultProcessCall(ctx context.Context, cfg SubAgentProcessConfig, params S
 	if command == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return "", fmt.Errorf("resolve pigo executable: %w", err)
+			return "", fmt.Errorf("resolve golder executable: %w", err)
 		}
 		command = exe
 	}
@@ -460,7 +460,7 @@ func defaultProcessCall(ctx context.Context, cfg SubAgentProcessConfig, params S
 
 // RunSubAgentOnce runs one sub-agent loop to completion and returns the child's
 // final assistant text. It is the execution core shared by the process-isolated
-// subprocess (cmd/pigo --subagent-rpc): given a resolved RunConfig (provider
+// subprocess (cmd/golder --subagent-rpc): given a resolved RunConfig (provider
 // stream, tool registry) and the prompt/system prompt, it builds a fresh child
 // context and drains the run. A run whose final turn stopped on error/aborted
 // is reported as an error so the subprocess surfaces failure (as an RPC error)

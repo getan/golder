@@ -1,17 +1,13 @@
-# pigo
+# golder
 
-[![CI](https://github.com/smallnest/pigo/actions/workflows/ci.yml/badge.svg)](https://github.com/smallnest/pigo/actions/workflows/ci.yml)
-[![Release](https://github.com/smallnest/pigo/actions/workflows/release.yml/badge.svg)](https://github.com/smallnest/pigo/actions/workflows/release.yml)
+[![CI](https://github.com/getan/golder/actions/workflows/ci.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/ci.yml)
+[![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
 使用 Go 复刻的 [pi](https://pi.dev) AI Agent —— 一个面向命令行的编码智能体，同时支持**无头（headless）脚本模式**与**交互式 REPL**。
 
-pigo 可以读写文件、执行命令、检索代码、抓取网页，并借助大模型完成从"读懂需求"到"改好代码"的闭环。它兼容 OpenAI / Anthropic 等多种协议网关，支持会话续跑、项目信任、技能（Skills）、插件与包管理。
+golder 可以读写文件、执行命令、检索代码、抓取网页，并借助大模型完成从"读懂需求"到"改好代码"的闭环。它兼容 OpenAI / Anthropic 等多种协议网关，支持会话续跑、项目信任、技能（Skills）、插件与包管理。
 
-> 模块路径：`github.com/smallnest/pigo` · Go 1.27+
-
-> 📖 配套电子书《用 Go 编写 pi Agent》：[write_pi_agent_in_go.pdf](https://github.com/smallnest/ebooks/blob/master/write_pi_agent_in_go.pdf)
-
-![](docs/pigo-tui.png)
+> 模块路径：`github.com/getan/golder` · Go 1.27+
 
 ---
 
@@ -50,19 +46,19 @@ pigo 可以读写文件、执行命令、检索代码、抓取网页，并借助
 - **系统提示词分层组装**：base 指令 + 环境块 + `AGENTS.md`（general→specific）+ `--append-system-prompt`。
 - **项目信任**：副作用工具（bash/apply_patch）在未信任目录需确认，`--approve` 一次性授权。
 - **工具级准入**：`--allowed-tools` / `--disallowed-tools` 划定工具边界（黑名单优先、子 Agent 继承、`--approve` 不可绕过）。
-- **技能与插件**：`~/.agents/skills` 下的 `/slash` 命令、`~/.pigo/plugins` 下的外部插件。
-- **提示词模板**：`~/.pigo/prompts`、项目 `.pigo/prompts`（受信任时）、config `prompts`、`--prompt-template` 下的可复用 `/name` 模板，支持 `$1`/`$@`/`${1:-default}`/`${@:N}` 等参数语法。
+- **技能与插件**：`~/.agents/skills` 下的 `/slash` 命令、`~/.golder/plugins` 下的外部插件。
+- **提示词模板**：`~/.golder/prompts`、项目 `.golder/prompts`（受信任时）、config `prompts`、`--prompt-template` 下的可复用 `/name` 模板，支持 `$1`/`$@`/`${1:-default}`/`${@:N}` 等参数语法。
 - **上下文自动压缩**：接近上下文窗口上限时自动摘要，亦可 `/compact` 手动触发。
-- **包管理**：`pigo install npm:<pkg>` 安装 pi 生态的 extension / skill / prompt / theme。
-- **自更新**：无参 `pigo update` 将 pigo 二进制升级到最新 GitHub Release；进入 TUI 时后台检查新版本并在横幅提示。
+- **包管理**：`golder install npm:<pkg>` 安装 pi 生态的 extension / skill / prompt / theme。
+- **自更新**：无参 `golder update` 将 golder 二进制升级到最新 GitHub Release；进入 TUI 时后台检查新版本并在横幅提示。
 
 ---
 
 ## 架构总览
 
-pigo 的运行时分层架构：请求路径从用户经 CLI、Agent 循环、Provider 层直达 LLM 网关；工具路径从循环经工具执行器与信任闸门抵达本地环境；辅以会话存储与上下文压缩，并标注信任边界与外部网络边界。
+golder 的运行时分层架构：请求路径从用户经 CLI、Agent 循环、Provider 层直达 LLM 网关；工具路径从循环经工具执行器与信任闸门抵达本地环境；辅以会话存储与上下文压缩，并标注信任边界与外部网络边界。
 
-![pigo 架构总览](book/images/fig1-1.svg)
+![golder 架构总览](book/images/fig1-1.svg)
 
 > 更多分层图解（事件骨架、统一 Provider、工具批量执行、子 Agent 委派等）见配套电子书。
 
@@ -70,7 +66,7 @@ pigo 的运行时分层架构：请求路径从用户经 CLI、Agent 循环、Pr
 
 运行时的核心是 `internal/runtime/loop.go` 的两层循环：**内层** turn 循环反复「流式回复 → 停止原因分派 → 执行工具 → 回填」，直到某次助手消息不再发起工具调用；**外层**在内层收敛后消费 `GetFollowUpMessages`，有后续消息则重跑内层，否则结束。所有终止路径（自然结束 / error / aborted / 停止钩子 / 无后续消息）都汇于唯一出口 `finish()`。
 
-![pigo Agent 两层循环](book/images/agent-loop-flowchart.svg)
+![golder Agent 两层循环](book/images/agent-loop-flowchart.svg)
 
 > 交互式版本（含摘要卡片）见 [`docs/agent-loop-flowchart.html`](docs/agent-loop-flowchart.html)。
 
@@ -82,24 +78,24 @@ pigo 的运行时分层架构：请求路径从用户经 CLI、Agent 循环、Pr
 
 ```bash
 # 克隆仓库
-git clone https://github.com/smallnest/pigo.git
-cd pigo
+git clone https://github.com/getan/golder.git
+cd golder
 
-# 构建二进制（生成 ./pigo）
-go build ./cmd/pigo
+# 构建二进制（生成 ./golder）
+go build ./cmd/golder
 
 # 或安装到 $GOPATH/bin
-go install ./cmd/pigo
+go install ./cmd/golder
 
 # 也可以不构建，直接运行
-go run ./cmd/pigo -p "1+1=?"
+go run ./cmd/golder -p "1+1=?"
 ```
 
 构建后可查看版本信息（版本号在正式发布时由 goreleaser 注入，源码构建显示 `dev`）：
 
 ```bash
-pigo --version
-# pigo dev (commit none, built unknown)
+golder --version
+# golder dev (commit none, built unknown)
 ```
 
 ### 一键安装脚本（Linux / macOS）
@@ -107,28 +103,28 @@ pigo --version
 `install.sh` 会自动检测操作系统 / 架构，从 GitHub Releases 下载最新的预编译二进制并安装到常用的 PATH 目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smallnest/pigo/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 ```
 
 可用环境变量覆盖默认行为：
 
 | 变量 | 说明 |
 |------|------|
-| `PIGO_VERSION` | 指定安装版本（形如 `v0.2.0`），默认取最新 release |
-| `PIGO_INSTALL_DIR` | 安装目录，默认 `/usr/local/bin`（无写权限时回退到 `~/.local/bin`） |
+| `GOLDER_VERSION` | 指定安装版本（形如 `v0.2.0`），默认取最新 release |
+| `GOLDER_INSTALL_DIR` | 安装目录，默认 `/usr/local/bin`（无写权限时回退到 `~/.local/bin`） |
 | `GITHUB_TOKEN` | 可选，用于提高 GitHub API 速率限制 |
 
 ```bash
 # 指定版本与安装目录
-PIGO_VERSION=v0.2.0 PIGO_INSTALL_DIR="$HOME/bin" \
-  curl -fsSL https://raw.githubusercontent.com/smallnest/pigo/master/install.sh | sh
+GOLDER_VERSION=v0.2.0 GOLDER_INSTALL_DIR="$HOME/bin" \
+  curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 ```
 
 > Windows 请从 Releases 页面下载 `.zip` 手动解压。
 
 ### 下载预编译二进制
 
-[Releases](https://github.com/smallnest/pigo/releases) 页面提供 Linux / macOS / Windows 的 amd64 与 arm64 预编译包（由 goreleaser 构建）。下载对应平台的压缩包解压即可使用。
+[Releases](https://github.com/getan/golder/releases) 页面提供 Linux / macOS / Windows 的 amd64 与 arm64 预编译包（由 goreleaser 构建）。下载对应平台的压缩包解压即可使用。
 
 ---
 
@@ -139,13 +135,13 @@ PIGO_VERSION=v0.2.0 PIGO_INSTALL_DIR="$HOME/bin" \
 export OPENROUTER_API_KEY=sk-or-...
 
 # 2. 无头模式跑一个 prompt，打印最终回答
-pigo -p "读取 README 并用三句话总结"
+golder -p "读取 README 并用三句话总结"
 
 # 3. 进入交互式 REPL（不带 -p 且 stdout 是终端时自动进入）
-pigo
+golder
 
 # 4. 用本地 Ollama 模型，无需联网
-pigo -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "解释 main.go 做了什么"
+golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "解释 main.go 做了什么"
 ```
 
 ---
@@ -168,7 +164,7 @@ pigo -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "解释 main.go 做
 | `--continue` | `-c` | `false` | 续跑最近一次的会话 |
 | `--approve` | `-a` | `false` | 为本次运行信任工作目录：跳过首次信任提示，副作用工具免逐次确认 |
 | `--no-skills` | | `false` | 禁用技能发现（不加载 `~/.agents/skills` 为 `/skill-name` 命令） |
-| `--no-prompt-templates` | | `false` | 禁用提示词模板发现（不加载 `~/.pigo/{commands,prompts}`、`.pigo/prompts`、config `prompts`、`--prompt-template`）；内置斜杠命令不受影响 |
+| `--no-prompt-templates` | | `false` | 禁用提示词模板发现（不加载 `~/.golder/{commands,prompts}`、`.golder/prompts`、config `prompts`、`--prompt-template`）；内置斜杠命令不受影响 |
 | `--prompt-template` | | `nil` | 从文件或目录（非递归）加载提示词模板；可重复（对标 pi `--prompt-template`） |
 | `--system-prompt` | | `""` | 用自定义系统提示词替换默认的 coding-assistant 提示词 |
 | `--append-system-prompt` | | `nil` | 向系统提示词末尾追加文本或文件内容；可重复 |
@@ -180,21 +176,21 @@ pigo -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "解释 main.go 做
 
 ```bash
 # 位置参数等价于 -p
-pigo "把 utils.go 里的 getUserName 重命名为 getUsername"
+golder "把 utils.go 里的 getUserName 重命名为 getUsername"
 
 # 指定模型
-pigo -m anthropic/claude-3.5-sonnet -p "审查 foo.go 的并发安全性"
+golder -m anthropic/claude-3.5-sonnet -p "审查 foo.go 的并发安全性"
 
 # 自定义系统提示词（替换默认）
-pigo --system-prompt "你是一个只用中文回答的 Go 专家" -p "什么是 goroutine 泄漏"
+golder --system-prompt "你是一个只用中文回答的 Go 专家" -p "什么是 goroutine 泄漏"
 
 # 追加系统提示词：可多次，值为文件路径则读取文件内容，否则作字面文本
-pigo --append-system-prompt ./CONVENTIONS.md \
+golder --append-system-prompt ./CONVENTIONS.md \
      --append-system-prompt "回答尽量简洁" \
      -p "为这个包补充单元测试"
 
 # 一次性授权工作目录，让 bash/apply_patch 免逐次确认
-pigo -a -p "运行 go test ./... 并修复失败的用例"
+golder -a -p "运行 go test ./... 并修复失败的用例"
 ```
 
 ---
@@ -204,7 +200,7 @@ pigo -a -p "运行 go test ./... 并修复失败的用例"
 模型 id 通过启发式规则映射到具体 Provider（`--protocol` 显式指定时优先级最高）：
 
 1. **`--protocol`** 显式选择 → `openai`（需配合 `--base-url`）或 `anthropic`（默认公有 Anthropic API）。
-2. **裸 Provider 名** → 视为该 Provider 的默认模型（取预置目录中该 Provider 的第一个预置 id，如 `zai` → `glm-4.7`、`deepseek` → `deepseek-v4-flash`）。`/model zai`、`pigo --model zai`、config.toml 的 `model = "zai"` 三种写法等价。
+2. **裸 Provider 名** → 视为该 Provider 的默认模型（取预置目录中该 Provider 的第一个预置 id，如 `zai` → `glm-4.7`、`deepseek` → `deepseek-v4-flash`）。`/model zai`、`golder --model zai`、config.toml 的 `model = "zai"` 三种写法等价。
 3. **预置目录命中** → 使用预置声明的 Provider（REPL 中可用 `/models` 查看、`/model <id>` 切换）。
 4. **`ollama/` 前缀** 或 base URL 含 `11434` → 本地 Ollama。
 5. **`nvidia/` 前缀** → NVIDIA NIM。
@@ -213,15 +209,15 @@ pigo -a -p "运行 go test ./... 并修复失败的用例"
 
 > **优先级**：显式 flag（`--provider` > `--protocol`）> 预置目录 > `ollama/`/`nvidia/` 前缀 > 模型名推断 > OpenRouter 默认。显式 `--provider` 始终胜出；给了 `--base-url` 会被视为自定义端点信号，跳过第 6 步推断。
 
-**凭证引用**：config.toml 可以只写凭据的**名字**而非明文——`credential = "deepseek-main"`，真实 key 存放在 `~/.pigo/.credentials.yaml`（权限应为 0600）：
+**凭证引用**：config.toml 可以只写凭据的**名字**而非明文——`credential = "deepseek-main"`，真实 key 存放在 `~/.golder/.credentials.yaml`（权限应为 0600）：
 
 ```yaml
 deepseek-main: sk-xxx
 ```
 
-解析优先级：`--api-key` > config `api_key` > config `credential` 引用 > 环境变量。子进程（进程隔离子 Agent）默认继承**已清洗**的环境：凭证形态的变量（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等）与 `PIGO_*` 内部变量不会传给子进程。
+解析优先级：`--api-key` > config `api_key` > config `credential` 引用 > 环境变量。子进程（进程隔离子 Agent）默认继承**已清洗**的环境：凭证形态的变量（`*_API_KEY`/`*_TOKEN`/`*_SECRET` 等）与 `GOLDER_*` 内部变量不会传给子进程。
 
-**默认模型**：在 `~/.config/pigo/config.toml` 写 `model = "zai"`（裸 Provider 名，取其默认模型）或具体 id 如 `model = "glm-4.7"`，启动即生效；命令行 `--model` 仍可临时覆盖。对应 Provider 的 API Key 环境变量需提前设好（如智谱 `ZAI_API_KEY`、DeepSeek `DEEPSEEK_API_KEY`）。缺 Key 的报错会指明应设置的环境变量名。
+**默认模型**：在 `~/.config/golder/config.toml` 写 `model = "zai"`（裸 Provider 名，取其默认模型）或具体 id 如 `model = "glm-4.7"`，启动即生效；命令行 `--model` 仍可临时覆盖。对应 Provider 的 API Key 环境变量需提前设好（如智谱 `ZAI_API_KEY`、DeepSeek `DEEPSEEK_API_KEY`）。缺 Key 的报错会指明应设置的环境变量名。
 
 **按模型名推断的前缀对照**（仅推断能唯一确定 Provider 的前缀；`llama-*`、`qwq-*`、`gemma-*`、`mixtral-*` 等被多家网关服务的家族，以及形如 `provider/model` 的 routed id，不推断，回落到 OpenRouter 默认）：
 
@@ -260,14 +256,14 @@ Key 解析顺序：OAuth token → `--api-key` → 环境变量 → 配置文件
 ```bash
 # 默认 OpenRouter
 export OPENROUTER_API_KEY=sk-or-...
-pigo -p "写一个快排"
+golder -p "写一个快排"
 
 # 任意 OpenAI 兼容端点，强制 openai 协议
-pigo -P openai -u https://my-gateway.example.com/v1 -m my-model -k $MY_KEY -p "..."
+golder -P openai -u https://my-gateway.example.com/v1 -m my-model -k $MY_KEY -p "..."
 
 # 公有 Anthropic API
 export ANTHROPIC_API_KEY=sk-ant-...
-pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
+golder -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 ```
 
 ---
@@ -301,16 +297,16 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 
 ```bash
 # 只准读：白名单
-pigo --allowed-tools read,grep -p "这个仓库的架构是什么"
+golder --allowed-tools read,grep -p "这个仓库的架构是什么"
 
 # 什么都行，就是别碰 shell：黑名单
-pigo --disallowed-tools bash,write_stdin -p "帮我改下 README"
+golder --disallowed-tools bash,write_stdin -p "帮我改下 README"
 
 # 大小写不敏感，Claude Code 的写法直接可用
-pigo --allowed-tools Read,Grep -p "..."
+golder --allowed-tools Read,Grep -p "..."
 
 # 也可重复传参
-pigo --allowed-tools read --allowed-tools grep -p "..."
+golder --allowed-tools read --allowed-tools grep -p "..."
 ```
 
 语义要点：
@@ -318,7 +314,7 @@ pigo --allowed-tools read --allowed-tools grep -p "..."
 - **黑名单优先。** 同一工具同时出现在两侧时被移除（fail-closed）。
 - **白名单是硬边界，`--approve` 不能绕过。** 过滤发生在工具注册层，早于副作用确认门，所以边界外的工具从未被宣传给模型、也无法被调用。`--approve` 只免掉逐次确认，不放行边界外工具。
 - **子 Agent 继承边界。** `task` 派发的子 Agent 同样受约束，否则"让子 Agent 去跑 bash"就是一条现成的逃逸路径。
-- **拼错立即报错。** 未知工具名会打印全部可用名并以退出码 2 终止，绝不静默忽略——静默忽略会让你以为限制住了而其实没有。（注：`--no-tools` 已禁用全部工具，此时工具策略不生效也不校验，pigo 会打印一行提示。）
+- **拼错立即报错。** 未知工具名会打印全部可用名并以退出码 2 终止，绝不静默忽略——静默忽略会让你以为限制住了而其实没有。（注：`--no-tools` 已禁用全部工具，此时工具策略不生效也不校验，golder 会打印一行提示。）
 - **暂不支持参数级匹配。** `Bash(git log:*)`、`Read(src/**)` 这类 Claude Code 语法本期不支持，写成该形式会被当作未知工具名报错。
 - 屏蔽 `read` 时系统提示不再注入 `<available_skills>`，因为模型需要 `read` 才能加载技能正文。
 
@@ -335,25 +331,25 @@ disallowed_tools = ["bash"]
 
 ```bash
 # 无头打印模式：只输出最终回答文本
-pigo -p "总结这个仓库的架构"
+golder -p "总结这个仓库的架构"
 
 # stream-json：逐行 JSON 事件，首个事件带 session_id
-pigo -p "列出所有 Go 文件" --output-format stream-json
+golder -p "列出所有 Go 文件" --output-format stream-json
 
 # 交互式 REPL：不带 -p 且 stdout 为终端时进入
-pigo
+golder
 
 # 会话管理
-pigo --list-sessions              # 列出会话
-pigo --resume 20260720-1530-abcd  # 续跑指定会话（无头/REPL 均可）
-pigo --continue                   # 续跑最近一次会话
+golder --list-sessions              # 列出会话
+golder --resume 20260720-1530-abcd  # 续跑指定会话（无头/REPL 均可）
+golder --continue                   # 续跑最近一次会话
 ```
 
 ### GitHub PR Review Webhook
 
 ```
-export PIGO_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
-pigo --github-review --github-webhook-repo smallnest/pigo
+export GOLDER_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
+golder --github-review --github-webhook-repo getan/golder
 ```
 
 Opt-in 模式：GitHub webhook 收到 PR `ready_for_review` 事件后，自动创建一个**只读 review 会话**（仅 read/grep/find 工具，不能写文件、不能执行命令）并运行 review。部署前置条件：
@@ -364,7 +360,7 @@ Opt-in 模式：GitHub webhook 收到 PR `ready_for_review` 事件后，自动�
 
 REPL 中的内置斜杠命令包括 `/model`、`/models`、`/think`、`/help`、`/compact`、`/fork`、`/clone`、`/tree`、`/rewind`、`/export`、`/import`、`/copy`、`/session`、`/status`、`/exit` 等。其中 `/think [off|minimal|low|medium|high|xhigh|max]` 可在运行时查看或切换推理强度（reasoning effort），空参展示当前级别，切换后自下一轮生效。`/rewind [n]` 是编辑回滚（对标 Claude Code 的 Esc-Esc）：空参列出各轮产生的还原点，`/rewind n` 会把 apply_patch 工具改动的文件恢复到该轮之前的内容，并同时把对话回退到那一轮之前（暂不含 bash 改动的文件）。`/status` 一次性展示运行时模型配置、上下文占用与压缩、项目环境（信任 / 技能 / 插件）、凭据连通性，以及遥测数据（累计与最近一次 run 的轮次、工具耗时、上下文利用率）。
 
-在交互终端输入时，pigo 会用灰色文字提示最近匹配的输入或斜杠命令；
+在交互终端输入时，golder 会用灰色文字提示最近匹配的输入或斜杠命令；
 输入 `/model ` 时还会从最近使用的模型和内置模型目录中匹配。按 `Tab`
 或右方向键接受当前提示；当有多个匹配时，按上/下方向键可在候选提示之间
 循环选择上一个或下一个，继续输入则会实时缩小匹配范围。
@@ -373,12 +369,12 @@ REPL 中的内置斜杠命令包括 `/model`、`/models`、`/think`、`/help`、
 
 ## 作为 SDK 嵌入
 
-除命令行外，pigo 也提供一个公共、可导入的 SDK 包，方便把编码智能体嵌入到你自己的 Go 程序中（issue [#554](https://github.com/smallnest/pigo/issues/554)）。
+除命令行外，golder 也提供一个公共、可导入的 SDK 包，方便把编码智能体嵌入到你自己的 Go 程序中（issue #554）。
 
-pigo 的实现代码全部位于 `internal/` 下，Go 禁止外部模块导入；`agent` 包是官方支持的接口层，所有导出类型都是 Go 基本类型（`string`、`[]string`、`bool`、`func`），因此你的代码不会依赖任何 pigo 内部类型。
+golder 的实现代码全部位于 `internal/` 下，Go 禁止外部模块导入；`agent` 包是官方支持的接口层，所有导出类型都是 Go 基本类型（`string`、`[]string`、`bool`、`func`），因此你的代码不会依赖任何 golder 内部类型。
 
 ```go
-import "github.com/smallnest/pigo/agent"
+import "github.com/getan/golder/agent"
 
 sess, err := agent.New(
     agent.WithModel("claude-opus-4-8"),
@@ -397,7 +393,7 @@ fmt.Println(reply)
 - **技能与记忆默认关闭**：保持嵌入式会话“隔离”，不读写本机共享状态，可用 `WithSkills` / `WithMemory` 开启。
 - **多轮对话**：同一个 `Session` 会跨调用保留历史；`Reset` 可清空历史。`Session` 非并发安全。
 
-完整的可运行示例（01~07：最小调用、流式输出、模型与推理强度、系统提示词、工具策略、多轮对话、自定义 Provider）见 [`examples/sdk/`](examples/sdk/)，API 文档见 `go doc github.com/smallnest/pigo/agent`。
+完整的可运行示例（01~07：最小调用、流式输出、模型与推理强度、系统提示词、工具策略、多轮对话、自定义 Provider）见 [`examples/sdk/`](examples/sdk/)，API 文档见 `go doc github.com/getan/golder/agent`。
 
 ---
 
@@ -425,7 +421,7 @@ fmt.Println(reply)
 
 ## 权限模式（审批档位）
 
-除目录信任外，pigo 还有一层针对**每次改动型工具调用**（`bash` / `apply_patch`）的审批档位，可用 `/permissions` 在会话中随时切换（TUI 里是 ↑↓ 选择器），或用 `--permissions <mode>` / `PIGO_PERMISSIONS` 设默认值：
+除目录信任外，golder 还有一层针对**每次改动型工具调用**（`bash` / `apply_patch`）的审批档位，可用 `/permissions` 在会话中随时切换（TUI 里是 ↑↓ 选择器），或用 `--permissions <mode>` / `GOLDER_PERMISSIONS` 设默认值：
 
 | 模式 | 行为 |
 |------|------|
@@ -444,14 +440,14 @@ fmt.Println(reply)
 
 ### 发现来源与优先级
 
-pigo 从以下来源非递归加载 `*.md` 模板（文件名去掉 `.md` 即命令名）：
+golder 从以下来源非递归加载 `*.md` 模板（文件名去掉 `.md` 即命令名）：
 
 | 来源 | 路径 / 配置 | 优先级 tier |
 |------|-------------|-------------|
-| 项目级（受信任时） | `.pigo/prompts/*.md`（仅当项目受信任） | project |
-| 全局 | `~/.pigo/prompts/*.md` 与 legacy `~/.pigo/commands/*.md` | global |
-| 包安装 | `pigo install` 安装到 `~/.pigo/prompts` | global（并入全局） |
-| 配置 | `~/.config/pigo/config.toml` 的 `prompts = ["./my-prompts", "/abs/x.md"]` | settings |
+| 项目级（受信任时） | `.golder/prompts/*.md`（仅当项目受信任） | project |
+| 全局 | `~/.golder/prompts/*.md` 与 legacy `~/.golder/commands/*.md` | global |
+| 包安装 | `golder install` 安装到 `~/.golder/prompts` | global（并入全局） |
+| 配置 | `~/.config/golder/config.toml` 的 `prompts = ["./my-prompts", "/abs/x.md"]` | settings |
 | CLI | `--prompt-template <path>`（可重复，文件或目录） | cli |
 
 同名模板按 tier 解析：**project > global > settings > cli**，败者丢弃并在启动时报告；built-in 斜杠命令始终胜出。`--no-prompt-templates` 关闭全部模板发现（内置命令与技能不受影响，与 `--no-skills` 互相独立）。
@@ -496,7 +492,7 @@ Review the PR at $1. Focus on:
 
 ## 技能 Skills
 
-技能是带 YAML frontmatter（`name`、`description`，可选 `allowed-tools`、`model`、`disable-model-invocation`）的 Markdown 文件，位于 `~/.agents/skills`（可用 `PIGO_SKILLS_DIR` 覆盖）：
+技能是带 YAML frontmatter（`name`、`description`，可选 `allowed-tools`、`model`、`disable-model-invocation`）的 Markdown 文件，位于 `~/.agents/skills`（可用 `GOLDER_SKILLS_DIR` 覆盖）：
 
 - 支持扁平的 `*.md` 与嵌套的 `<name>/SKILL.md`。
 - 每个技能在 REPL 中暴露为 `/skill-name` 斜杠命令（展开正文为 prompt，支持 `$ARGUMENTS` 替换），也可作为子 Agent 工具运行。
@@ -504,7 +500,7 @@ Review the PR at $1. Focus on:
 
 ### 模型自动调用（渐进式披露）
 
-除了手动的 `/skill-name` 调用，技能还可被模型**自动调用**。pigo 采用渐进式披露：仅将每个技能的 `name`、`description` 和文件路径（location）注入系统提示的 `<available_skills>` 块，模型在任务匹配某技能的描述时，用 `read` 工具按需加载 `SKILL.md` 正文，而非把所有技能正文常驻上下文。
+除了手动的 `/skill-name` 调用，技能还可被模型**自动调用**。golder 采用渐进式披露：仅将每个技能的 `name`、`description` 和文件路径（location）注入系统提示的 `<available_skills>` 块，模型在任务匹配某技能的描述时，用 `read` 工具按需加载 `SKILL.md` 正文，而非把所有技能正文常驻上下文。
 
 - **仅当 `read` 工具可用时**自动调用才生效（`--no-tools` 或屏蔽 `read` 时不注入 `<available_skills>`），因为模型需要 `read` 才能加载技能正文。
 - 在 frontmatter 中设置 `disable-model-invocation: true` 可将某技能排除出 `<available_skills>`（模型不会自动调用它），但它仍可通过 `/skill-name` 斜杠命令显式调用。
@@ -513,7 +509,7 @@ Review the PR at $1. Focus on:
 
 ## 插件
 
-外部插件从 `$PIGO_HOME/plugins`（默认 `~/.pigo/plugins`）发现：
+外部插件从 `$GOLDER_HOME/plugins`（默认 `~/.golder/plugins`）发现：
 
 - 容错发现——启动失败的插件会被记录并跳过。
 - 插件可提供额外工具，并订阅 Agent 生命周期事件。
@@ -541,7 +537,7 @@ Hooks 让你在 Agent 生命周期的关键节点运行**自定义 shell 命令*
 
 ### 输入 JSON（写入 hook 的 stdin）
 
-pigo 向 hook 命令的 stdin 写入**单行 JSON**。只包含可观察、非敏感字段，**绝不包含 API Key 或任何凭证**。按事件类型只携带相关字段：
+golder 向 hook 命令的 stdin 写入**单行 JSON**。只包含可观察、非敏感字段，**绝不包含 API Key 或任何凭证**。按事件类型只携带相关字段：
 
 ```json
 {
@@ -601,29 +597,29 @@ hook 通过**退出码**给出决定：
 
 hook 配置写在 `config.json` 的 `hooks` 字段，按 `event → [{matcher, hooks}]` 组织。多层配置**按事件追加合并**（默认 < 全局 < 项目 < 环境），优先级低的先执行：
 
-- **全局**：`$PIGO_HOME/config.json`（默认 `~/.pigo/config.json`），对所有项目生效。
-- **项目**：`./.pigo/config.json`，**仅当项目被信任时加载**（见下方安全须知）。
+- **全局**：`$GOLDER_HOME/config.json`（默认 `~/.golder/config.json`），对所有项目生效。
+- **项目**：`./.golder/config.json`，**仅当项目被信任时加载**（见下方安全须知）。
 
 ```jsonc
-// ~/.pigo/config.json —— 全局：所有会话都注入 git 分支
+// ~/.golder/config.json —— 全局：所有会话都注入 git 分支
 {
   "hooks": {
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "~/.pigo/hooks/inject-branch.sh" }] }
+      { "hooks": [{ "type": "command", "command": "~/.golder/hooks/inject-branch.sh" }] }
     ]
   }
 }
 ```
 
 ```jsonc
-// ./.pigo/config.json —— 项目级：仅本仓库拦截危险命令、写文件后跑格式化
+// ./.golder/config.json —— 项目级：仅本仓库拦截危险命令、写文件后跑格式化
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "bash", "hooks": [{ "type": "command", "command": "./.pigo/hooks/block-rm-rf.sh" }] }
+      { "matcher": "bash", "hooks": [{ "type": "command", "command": "./.golder/hooks/block-rm-rf.sh" }] }
     ],
     "PostToolUse": [
-      { "matcher": "apply_patch", "hooks": [{ "type": "command", "command": "./.pigo/hooks/gofmt.sh", "timeout": 30 }] }
+      { "matcher": "apply_patch", "hooks": [{ "type": "command", "command": "./.golder/hooks/gofmt.sh", "timeout": 30 }] }
     ]
   }
 }
@@ -639,7 +635,7 @@ hook 配置写在 `config.json` 的 `hooks` 字段，按 `event → [{matcher, h
 
 ```bash
 #!/usr/bin/env bash
-# ~/.pigo/hooks/block-rm-rf.sh
+# ~/.golder/hooks/block-rm-rf.sh
 payload=$(cat)
 cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // ""')
 if printf '%s' "$cmd" | grep -Eq 'rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*[[:space:]]+)*-?[a-zA-Z]*f'; then
@@ -653,7 +649,7 @@ exit 0
 
 ```bash
 #!/usr/bin/env bash
-# ~/.pigo/hooks/inject-branch.sh
+# ~/.golder/hooks/inject-branch.sh
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "no-git")
 printf '{"additionalContext": "Current git branch: %s"}\n' "$branch"
 exit 0
@@ -663,7 +659,7 @@ exit 0
 
 ```bash
 #!/usr/bin/env bash
-# ~/.pigo/hooks/gofmt.sh
+# ~/.golder/hooks/gofmt.sh
 payload=$(cat)
 path=$(printf '%s' "$payload" | jq -r '.tool_input.path // .tool_input.file_path // ""')
 case "$path" in
@@ -676,7 +672,7 @@ exit 0
 
 - **以当前用户身份执行**：hook 就是普通 shell 命令，拥有你本人的全部权限。只配置你信任的命令，谨慎对待第三方脚本。
 - **payload 不含凭证**：写入 hook stdin 的 JSON 只有可观察的非敏感字段，**绝不包含 API Key 或任何凭证**。
-- **项目级 hook 仅受信任项目启用**：`./.pigo/config.json` 里的 hook 只有当项目被信任（`--approve` 或信任存储记录）时才加载；不受信任的目录一律忽略项目级 hook，避免克隆仓库即执行任意命令（fail-closed）。
+- **项目级 hook 仅受信任项目启用**：`./.golder/config.json` 里的 hook 只有当项目被信任（`--approve` 或信任存储记录）时才加载；不受信任的目录一律忽略项目级 hook，避免克隆仓库即执行任意命令（fail-closed）。
 
 ---
 
@@ -686,20 +682,20 @@ exit 0
 
 ```bash
 # 安装（仅支持 npm: 源，支持 scoped 包与指定版本）
-pigo install npm:pi-mcp-adapter
-pigo install npm:@scope/name@1.2.3
+golder install npm:pi-mcp-adapter
+golder install npm:@scope/name@1.2.3
 
 # 列出已安装的包
-pigo list
+golder list
 
 # 更新指定包到 npm 最新版本（可多个）
-pigo update pi-mcp-adapter
+golder update pi-mcp-adapter
 
 # 卸载
-pigo uninstall pi-mcp-adapter
+golder uninstall pi-mcp-adapter
 ```
 
-> 注意：不带包名的 `pigo update`（以及 `pigo update --check` 等仅带标志的调用）**不再更新全部已装包**，而是自更新 pigo 二进制本身（见下文「自更新」）。更新全部包请逐个执行 `pigo update <包名>`。
+> 注意：不带包名的 `golder update`（以及 `golder update --check` 等仅带标志的调用）**不再更新全部已装包**，而是自更新 golder 二进制本身（见下文「自更新」）。更新全部包请逐个执行 `golder update <包名>`。
 
 包类型（`extension` / `skill` / `prompt` / `theme`）会分别分发到对应目录，安装记录写入 lockfile。
 
@@ -707,15 +703,15 @@ pigo uninstall pi-mcp-adapter
 
 ## 自更新
 
-`pigo` 可以把自身二进制升级到 GitHub Release 上的最新版本。无参数的 `pigo update`（或仅带标志的调用，如 `pigo update --check`）会走自更新路径；带包名时才是包更新。
+`golder` 可以把自身二进制升级到 GitHub Release 上的最新版本。无参数的 `golder update`（或仅带标志的调用，如 `golder update --check`）会走自更新路径；带包名时才是包更新。
 
 ```bash
-# 检查并自更新 pigo 二进制到最新 Release
-pigo update
+# 检查并自更新 golder 二进制到最新 Release
+golder update
 ```
 
 - 与包更新的路由区分完全由参数决定：任一不以 `-` 开头的参数视为包名 → 包更新；否则（无参数或仅标志）→ 自更新。
-- 进入交互式 TUI 时，pigo 会在后台异步检查最新 Release（24h 缓存于 `$PIGO_HOME/update-check.json`），有新版本时在启动横幅提示 `Run pigo update to upgrade`；`dev` 构建不检查。
+- 进入交互式 TUI 时，golder 会在后台异步检查最新 Release（24h 缓存于 `$GOLDER_HOME/update-check.json`），有新版本时在启动横幅提示 `Run golder update to upgrade`；`dev` 构建不检查。
 - 自更新会下载对应平台的最新二进制并原地替换当前可执行文件；若目标路径需要更高权限，会提示改用 `sudo` 重试。
 
 ---
@@ -736,7 +732,7 @@ git tag -a v0.2.0 -m "v0.2.0"
 git push origin v0.2.0
 ```
 
-推送 `v*` tag 会触发 `.github/workflows/release.yml`，由 goreleaser 构建 Linux/macOS/Windows × amd64/arm64 的归档包、生成 checksums 并创建 Release。版本号 / commit / 构建时间通过 `-ldflags` 注入 `main` 包，可用 `pigo --version` 查看。
+推送 `v*` tag 会触发 `.github/workflows/release.yml`，由 goreleaser 构建 Linux/macOS/Windows × amd64/arm64 的归档包、生成 checksums 并创建 Release。版本号 / commit / 构建时间通过 `-ldflags` 注入 `main` 包，可用 `golder --version` 查看。
 
 ---
 
@@ -744,20 +740,20 @@ git push origin v0.2.0
 
 | 变量 / 路径 | 用途 |
 |-------------|------|
-| `PIGO_HOME` | 覆盖 `~/.pigo` 基础目录（影响 plugins、commands、prompts） |
-| `PIGO_SKILLS_DIR` | 覆盖技能目录（默认 `~/.agents/skills`） |
-| `~/.pigo/sessions` | 会话存储（JSONL） |
-| `~/.pigo/plugins` | 外部插件 |
-| `~/.pigo/prompts` | 提示词模板（pi 对齐；`pigo install` 的安装目标） |
-| `~/.pigo/commands` | 用户自定义命令模板（legacy，仍加载） |
-| `.pigo/prompts` | 项目级提示词模板（仅当项目受信任时加载） |
-| `~/.config/pigo/config.toml` 的 `prompts` | 配置追加的模板来源（settings tier） |
+| `GOLDER_HOME` | 覆盖 `~/.golder` 基础目录（影响 plugins、commands、prompts） |
+| `GOLDER_SKILLS_DIR` | 覆盖技能目录（默认 `~/.agents/skills`） |
+| `~/.golder/sessions` | 会话存储（JSONL） |
+| `~/.golder/plugins` | 外部插件 |
+| `~/.golder/prompts` | 提示词模板（pi 对齐；`golder install` 的安装目标） |
+| `~/.golder/commands` | 用户自定义命令模板（legacy，仍加载） |
+| `.golder/prompts` | 项目级提示词模板（仅当项目受信任时加载） |
+| `~/.config/golder/config.toml` 的 `prompts` | 配置追加的模板来源（settings tier） |
 | `--prompt-template <path>` | CLI 追加的模板来源（cli tier，可重复） |
 | `<PROVIDER>_API_KEY` | 各 Provider 的 API Key（见[模型与 Provider](#模型与-provider)） |
 
 ### 内置 Provider 一览（`--provider`）
 
-`--provider <name>` 直接选中某个内置 Provider，使用其默认 base URL、协议与 API Key 环境变量（可用 `--base-url` 或 `<PROVIDER>_BASE_URL` 覆盖，`--api-key` 或对应环境变量提供 Key）。下表与注册表 `internal/provider/registry.go` 保持一致，`pigo --help` 也会列出同样的清单。
+`--provider <name>` 直接选中某个内置 Provider，使用其默认 base URL、协议与 API Key 环境变量（可用 `--base-url` 或 `<PROVIDER>_BASE_URL` 覆盖，`--api-key` 或对应环境变量提供 Key）。下表与注册表 `internal/provider/registry.go` 保持一致，`golder --help` 也会列出同样的清单。
 
 | provider | 环境变量（按优先级） | 默认 base_url | 协议 |
 |----------|----------------------|---------------|------|
@@ -808,7 +804,7 @@ git push origin v0.2.0
 
 ## 安全说明
 
-- pigo 会向解析出的 Provider 端点发起外部网络请求。
+- golder 会向解析出的 Provider 端点发起外部网络请求。
 - `bash` / `apply_patch` 会在本地产生副作用，由项目信任与[权限模式](#权限模式审批档位)两层把关；`--approve` 跳过逐次确认，`/permissions auto`（默认）由模型审查，`full-access` 则完全放行，请按需权衡便利与安全。
 - 处理来自文件、命令输出、网页等外部来源的内容时应视为不可信数据。
 - 需要操作系统级隔离时，参见 [docs/sandboxing.md](docs/sandboxing.md)：Docker 整进程、micro-VM、进程级策略沙箱三种模式与 trust/tool-policy 的组合矩阵。

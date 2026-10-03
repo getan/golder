@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/provider"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/provider"
 )
 
 // fakeClock returns a now() closure that advances by step on every call, so a

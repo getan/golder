@@ -1,7 +1,7 @@
 package agentcore
 
 // AgentEvent is the sealed interface implemented by every event the loop emits.
-// Consumers dispatch with a type switch, consistent with Content. pigo covers
+// Consumers dispatch with a type switch, consistent with Content. golder covers
 // all 10 of pi's event types (PRD FR-24).
 type AgentEvent interface {
 	isAgentEvent()

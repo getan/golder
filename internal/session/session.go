@@ -5,7 +5,7 @@
 // using the same "role"-discriminated encoding as agentcore.MessageList.
 //
 // The format is internally self-consistent and deliberately NOT wire-compatible
-// with pi's session files (spec #16, session-format decision #5): pigo owns the schema
+// with pi's session files (spec #16, session-format decision #5): golder owns the schema
 // and versions it via SessionHeader.Version so future migrations have a hook.
 //
 // A persisted session round-trips into an agentcore.AgentContext via Load, so a
@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // SchemaVersion is the current session file schema version. It is written into
@@ -155,7 +155,7 @@ func (e *Entry) UnmarshalJSON(data []byte) error {
 }
 
 // newEntryID returns a fresh 8-hex-character entry id (4 random bytes). This
-// mirrors pi's generateEntryId (uuidv7().slice(-8)) in width; pigo does not need
+// mirrors pi's generateEntryId (uuidv7().slice(-8)) in width; golder does not need
 // the time-ordering of uuidv7 because entry order is already given by the
 // ParentID chain, so a simple random id suffices and collisions within a single
 // file are astronomically unlikely.
@@ -337,7 +337,7 @@ func NewID(now time.Time) string {
 }
 
 // Store persists sessions as JSONL files under a directory (typically
-// ~/.pigo/sessions). The zero value is unusable; construct with NewStore.
+// ~/.golder/sessions). The zero value is unusable; construct with NewStore.
 type Store struct {
 	dir string
 }
@@ -610,7 +610,7 @@ func (s *Store) loadHeader(id string) (SessionHeader, error) {
 // Because the header lives on the first line and JSONL is otherwise
 // append-only, updating UpdatedAt requires rewriting the file; Append does a
 // load-modify-save under the hood, which is simple and correct for the session
-// sizes pigo produces.
+// sizes golder produces.
 func (s *Store) Append(id string, updatedAt time.Time, messages agentcore.MessageList) error {
 	header, existing, err := s.Load(id)
 	if err != nil {

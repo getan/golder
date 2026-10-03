@@ -68,16 +68,16 @@ func TestInferProviderFromModelCaseInsensitive(t *testing.T) {
 // unknown do NOT resolve — the caller must fall through to its default.
 func TestInferProviderFromModelAmbiguousOrUnknown(t *testing.T) {
 	for _, m := range []string{
-		"",                        // empty
-		"   ",                     // whitespace only
-		"llama-3.3-70b-instruct",  // ambiguous: many gateways
-		"qwq-32b",                 // ambiguous
-		"gemma-2-9b-it",           // ambiguous
-		"mixtral-8x22b",           // ambiguous
-		"openai/gpt-4o",           // routed id, leave to preset/prefix handling
-		"anthropic/claude-3.5",    // routed id
-		"ollama/llama3.3",         // routed id (ollama prefix path)
-		"totally-made-up-model",   // unknown
+		"",                       // empty
+		"   ",                    // whitespace only
+		"llama-3.3-70b-instruct", // ambiguous: many gateways
+		"qwq-32b",                // ambiguous
+		"gemma-2-9b-it",          // ambiguous
+		"mixtral-8x22b",          // ambiguous
+		"openai/gpt-4o",          // routed id, leave to preset/prefix handling
+		"anthropic/claude-3.5",   // routed id
+		"ollama/llama3.3",        // routed id (ollama prefix path)
+		"totally-made-up-model",  // unknown
 	} {
 		if got, ok := InferProviderFromModel(m); ok {
 			t.Errorf("InferProviderFromModel(%q) = (%q, true), want ok=false", m, got)

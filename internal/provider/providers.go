@@ -30,7 +30,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // providerBaseURLs holds the default endpoint per built-in provider. A base URL
@@ -158,7 +158,7 @@ func openAIReasoningEffort(level agentcore.ThinkingLevel) string {
 	}
 }
 
-// encodeOpenAIMessage maps one pigo message onto the OpenAI wire shape. An
+// encodeOpenAIMessage maps one golder message onto the OpenAI wire shape. An
 // assistant message may expand to content + tool_calls in a single entry; a
 // tool result becomes a role:"tool" entry keyed by tool_call_id.
 func encodeOpenAIMessage(m agentcore.Message) []map[string]any {
@@ -421,7 +421,7 @@ func anthropicThinkingBudget(level agentcore.ThinkingLevel) int {
 	}
 }
 
-// encodeAnthropicMessage maps one pigo message onto the Anthropic Messages
+// encodeAnthropicMessage maps one golder message onto the Anthropic Messages
 // wire shape. Assistant tool calls become tool_use blocks; tool results become
 // a user message carrying a tool_result block (Anthropic's convention).
 func encodeAnthropicMessage(m agentcore.Message) map[string]any {
@@ -693,8 +693,8 @@ func NewOpenRouterProvider(baseURL string, models []Model) Provider {
 		requiresAuth: true,
 		extraHeaders: map[string]string{
 			// OpenRouter attribution headers (optional but recommended).
-			"HTTP-Referer": "https://github.com/smallnest/pigo",
-			"X-Title":      "pigo",
+			"HTTP-Referer": "https://github.com/getan/golder",
+			"X-Title":      "golder",
 		},
 	}, baseURL, models)
 }

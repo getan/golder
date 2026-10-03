@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 var updateShareGoldens = flag.Bool("update-share-goldens", false, "rewrite the session share golden fixture")

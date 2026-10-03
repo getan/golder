@@ -14,7 +14,7 @@
 // ever appended to that copy — never to host.AgentCtx().Messages. Nothing is
 // persisted: no store.Save, no change to the persisted cursor / current leaf /
 // header timestamp. Closing the side thread, switching sessions or restarting
-// pigo discards everything.
+// golder discards everything.
 //
 // Scope: /btw is intercepted in the REPL loop and runs a side question against a
 // copy of the main context (#279); it supports multi-turn follow-ups in the same
@@ -30,17 +30,17 @@ import (
 	"io"
 	"strings"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/agenttool"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/run"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/compaction"
-	"github.com/smallnest/pigo/internal/hooks"
-	"github.com/smallnest/pigo/internal/judge"
-	"github.com/smallnest/pigo/internal/provider"
-	"github.com/smallnest/pigo/internal/runtime"
-	"github.com/smallnest/pigo/internal/trust"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/trust"
 )
 
 // btwHeader is the fixed banner shown when entering a side thread, so the user
@@ -53,7 +53,7 @@ const btwHeader = "btw · side thread"
 const BtwHeader = btwHeader
 
 // btwPrompt is the input prompt shown for follow-up questions inside a side
-// thread, distinguishing it from the main "pigo(model)>" prompt.
+// thread, distinguishing it from the main "golder(model)>" prompt.
 const btwPrompt = "btw> "
 
 // RunBtw handles a /btw invocation. With an argument it starts a fresh side
@@ -69,7 +69,7 @@ const btwPrompt = "btw> "
 // seeded with a copy of the main messages, runs every turn against that copy,
 // and returns without touching host.AgentCtx() or persisting anything. The side
 // thread is retained in-process (host.LastBtw()) so a later bare /btw can reopen
-// it, but it is never written to disk — restarting pigo discards it.
+// it, but it is never written to disk — restarting golder discards it.
 func RunBtw(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, editor cli.Editor, line string) {
 	question := strings.TrimSpace(strings.TrimPrefix(line, "/btw"))
 	// Resolve the side thread's model/thinking once per invocation from the
@@ -192,7 +192,7 @@ func printBtwHeader(out io.Writer) {
 func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, side *agentcore.AgentContext, settings BtwRunSettings, question string) {
 	content, err := ui.BuildUserContent(question)
 	if err != nil {
-		fmt.Fprintf(out, "pigo: %v\n", err)
+		fmt.Fprintf(out, "golder: %v\n", err)
 		return
 	}
 	side.Messages = append(side.Messages, agentcore.UserMessage{

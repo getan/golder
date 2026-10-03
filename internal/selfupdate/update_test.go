@@ -19,11 +19,11 @@ func TestArchiveName(t *testing.T) {
 	tests := []struct {
 		goos, goarch, want string
 	}{
-		{"darwin", "arm64", "pigo_0.4.0_Darwin_arm64.tar.gz"},
-		{"darwin", "amd64", "pigo_0.4.0_Darwin_x86_64.tar.gz"},
-		{"linux", "amd64", "pigo_0.4.0_Linux_x86_64.tar.gz"},
-		{"linux", "386", "pigo_0.4.0_Linux_i386.tar.gz"},
-		{"windows", "amd64", "pigo_0.4.0_Windows_x86_64.zip"},
+		{"darwin", "arm64", "golder_0.4.0_Darwin_arm64.tar.gz"},
+		{"darwin", "amd64", "golder_0.4.0_Darwin_x86_64.tar.gz"},
+		{"linux", "amd64", "golder_0.4.0_Linux_x86_64.tar.gz"},
+		{"linux", "386", "golder_0.4.0_Linux_i386.tar.gz"},
+		{"windows", "amd64", "golder_0.4.0_Windows_x86_64.zip"},
 	}
 	for _, tt := range tests {
 		u := &Updater{GOOS: tt.goos, GOARCH: tt.goarch}
@@ -34,8 +34,8 @@ func TestArchiveName(t *testing.T) {
 }
 
 func TestChecksumFor(t *testing.T) {
-	sums := []byte("abc123  pigo_0.4.0_Linux_x86_64.tar.gz\ndef456  pigo_0.4.0_Darwin_arm64.tar.gz\n")
-	got, err := checksumFor(sums, "pigo_0.4.0_Darwin_arm64.tar.gz")
+	sums := []byte("abc123  golder_0.4.0_Linux_x86_64.tar.gz\ndef456  golder_0.4.0_Darwin_arm64.tar.gz\n")
+	got, err := checksumFor(sums, "golder_0.4.0_Darwin_arm64.tar.gz")
 	if err != nil || got != "def456" {
 		t.Errorf("checksumFor = (%q,%v), want (def456,nil)", got, err)
 	}
@@ -45,9 +45,9 @@ func TestChecksumFor(t *testing.T) {
 }
 
 func TestExtractBinaryTarGz(t *testing.T) {
-	want := []byte("#!fake pigo binary")
-	archive := makeTarGz(t, "pigo", want)
-	got, err := extractBinary(archive, "pigo", false)
+	want := []byte("#!fake golder binary")
+	archive := makeTarGz(t, "golder", want)
+	got, err := extractBinary(archive, "golder", false)
 	if err != nil {
 		t.Fatalf("extractBinary: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestExtractBinaryTarGz(t *testing.T) {
 
 func TestReplaceAtomic(t *testing.T) {
 	dir := t.TempDir()
-	target := filepath.Join(dir, "pigo")
+	target := filepath.Join(dir, "golder")
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -82,10 +82,10 @@ func TestReplaceAtomic(t *testing.T) {
 }
 
 func TestApplyEndToEnd(t *testing.T) {
-	binary := []byte("brand new pigo v0.4.0")
-	archive := makeTarGz(t, "pigo", binary)
+	binary := []byte("brand new golder v0.4.0")
+	archive := makeTarGz(t, "golder", binary)
 	sum := sha256.Sum256(archive)
-	archiveName := "pigo_0.4.0_Linux_x86_64.tar.gz"
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
 	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -101,12 +101,12 @@ func TestApplyEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	target := filepath.Join(dir, "pigo")
+	target := filepath.Join(dir, "golder")
 	_ = os.WriteFile(target, []byte("old"), 0o755)
 
 	u := &Updater{
 		HTTPClient:     srv.Client(),
-		Repo:           "smallnest/pigo",
+		Repo:           "getan/golder",
 		ReleaseBaseURL: srv.URL,
 		GOOS:           "linux",
 		GOARCH:         "amd64",
@@ -122,8 +122,8 @@ func TestApplyEndToEnd(t *testing.T) {
 }
 
 func TestApplyChecksumMismatch(t *testing.T) {
-	archive := makeTarGz(t, "pigo", []byte("real content"))
-	archiveName := "pigo_0.4.0_Linux_x86_64.tar.gz"
+	archive := makeTarGz(t, "golder", []byte("real content"))
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
 	// Wrong checksum on purpose.
 	sums := "0000000000000000000000000000000000000000000000000000000000000000  " + archiveName + "\n"
 
@@ -138,7 +138,7 @@ func TestApplyChecksumMismatch(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	target := filepath.Join(dir, "pigo")
+	target := filepath.Join(dir, "golder")
 	_ = os.WriteFile(target, []byte("old"), 0o755)
 
 	u := &Updater{

@@ -10,7 +10,7 @@ import (
 
 func TestCachedLatest(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PIGO_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 
 	// No cache file yet → not fresh, empty latest.
 	if latest, fresh := CachedLatest(); latest != "" || fresh {
@@ -43,7 +43,7 @@ func TestCachedLatest(t *testing.T) {
 
 func TestStartBackgroundCheckDevNoWrite(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("PIGO_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	// dev is not a release version → must not touch the network or write a cache.
 	StartBackgroundCheck("dev")
 	if _, err := os.Stat(filepath.Join(dir, cacheFileName)); !os.IsNotExist(err) {

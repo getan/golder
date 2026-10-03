@@ -2,10 +2,10 @@ package tui
 
 // Shell-command syntax highlighting for tool-card headlines. Codex renders
 // each `Ran` command through syntect with the Catppuccin palette (mocha on
-// dark terminals, latte on light); pigo gets the same result from chroma,
+// dark terminals, latte on light); golder gets the same result from chroma,
 // which is already in the dependency graph (glamour renders fenced code with
 // it) and ships both Catppuccin themes. The lexer is bash for every shell
-// command: pigo's bash tool runs a POSIX shell on unix and Git Bash/WSL on
+// command: golder's bash tool runs a POSIX shell on unix and Git Bash/WSL on
 // Windows, and the bash lexer tokenizes the common subset those all accept.
 
 import (
@@ -20,7 +20,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 
-	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/getan/golder/internal/cli/ui"
 )
 
 // hlSpan is one syntax-colored run of a command line. An empty color means

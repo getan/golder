@@ -1,4 +1,4 @@
-// Command 01-minimal is the smallest possible pigo SDK program: create a
+// Command 01-minimal is the smallest possible golder SDK program: create a
 // session, send one prompt, print the reply.
 //
 //	export ANTHROPIC_API_KEY=sk-...
@@ -11,7 +11,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/smallnest/pigo/agent"
+	"github.com/getan/golder/agent"
 )
 
 func main() {

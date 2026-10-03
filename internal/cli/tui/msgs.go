@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/judge"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
 )
 
 // This file defines the tea.Msg types the event bridge (bridge.go) produces from

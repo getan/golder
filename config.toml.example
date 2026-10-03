@@ -1,6 +1,6 @@
-# Pigo global configuration (example template)
-# Copy this file to ~/.config/pigo/config.toml and fill in your own values.
-# https://github.com/smallnest/pigo
+# Golder global configuration (example template)
+# Copy this file to ~/.config/golder/config.toml and fill in your own values.
+# https://github.com/getan/golder
 
 # Provider base URL (overrides the provider's default endpoint).
 # Leave unset to use the selected provider's built-in default.

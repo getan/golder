@@ -1,7 +1,7 @@
-// Package selfupdate provides version discovery and comparison for pigo's
+// Package selfupdate provides version discovery and comparison for golder's
 // self-update feature (issue #465). It queries the GitHub Releases API for the
-// latest published tag of the pigo repository and compares it against the
-// build-time version injected into the main package, so both `pigo update` and
+// latest published tag of the golder repository and compares it against the
+// build-time version injected into the main package, so both `golder update` and
 // the interactive startup banner can decide whether a newer release exists.
 //
 // The build version ("dev" for `go build`/`go run` from source, a real
@@ -21,9 +21,9 @@ import (
 	"time"
 )
 
-// Repo is the GitHub "owner/name" whose releases back pigo's self-update. It
+// Repo is the GitHub "owner/name" whose releases back golder's self-update. It
 // matches the release target in .goreleaser.yaml and install.sh.
-const Repo = "smallnest/pigo"
+const Repo = "getan/golder"
 
 // latestReleaseURL builds the GitHub API endpoint for a repo's latest release.
 func latestReleaseURL(repo string) string {

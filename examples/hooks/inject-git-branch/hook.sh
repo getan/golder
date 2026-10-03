@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook: inject the current git branch into the model context.
 #
-# Wiring (no matcher — UserPromptSubmit is tool-agnostic): pigo pipes the
-# submitted prompt as JSON on stdin. On exit 0 pigo parses this hook's stdout
+# Wiring (no matcher — UserPromptSubmit is tool-agnostic): golder pipes the
+# submitted prompt as JSON on stdin. On exit 0 golder parses this hook's stdout
 # as JSON; the `additionalContext` field is appended to the model input for
 # this turn only.
 set -euo pipefail

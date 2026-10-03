@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/smallnest/pigo/internal/runtime"
+	"github.com/getan/golder/internal/runtime"
 )
 
 func testLineEditor(history ...string) *replLineEditor {
@@ -156,8 +156,8 @@ func editorWithOutput(input string, out io.Writer, history ...string) *replLineE
 }
 
 func TestVisibleWidthSkipsANSI(t *testing.T) {
-	if w := visibleWidth("pigo> "); w != 6 {
-		t.Fatalf("plain width = %d, want 6", w)
+	if w := visibleWidth("golder> "); w != 8 {
+		t.Fatalf("plain width = %d, want 8", w)
 	}
 	if w := visibleWidth("\033[2m·\033[0m "); w != 2 {
 		t.Fatalf("dim marker width = %d, want 2 (marker + space)", w)

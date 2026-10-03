@@ -1,5 +1,5 @@
 // Tests for plugin lifecycle event subscription and delivery (US-017, #133):
-// a plugin declares subscribed event types in its manifest, pigo delivers only
+// a plugin declares subscribed event types in its manifest, golder delivers only
 // those via one-way `event` notifications, and a slow/hung plugin is isolated by
 // the per-event timeout rather than blocking the caller.
 package plugin
@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // eventPluginSrc declares a subscription to two event types and appends every
 // received `event` notification (as one JSON line: {"type":...,"data":...}) to a
-// file whose path is passed via the PIGO_EVENT_LOG env var. It lets the test
+// file whose path is passed via the GOLDER_EVENT_LOG env var. It lets the test
 // assert exactly which events were delivered, in order.
 const eventPluginSrc = `package main
 
@@ -36,7 +36,7 @@ type req struct {
 }
 
 func main() {
-	logPath := os.Getenv("PIGO_EVENT_LOG")
+	logPath := os.Getenv("GOLDER_EVENT_LOG")
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	w := bufio.NewWriter(os.Stdout)
@@ -95,7 +95,7 @@ func TestEventNotifierDeliversSubscribedOnly(t *testing.T) {
 		t.Skip("shell/exec plugin test is unix-oriented")
 	}
 	logPath := filepath.Join(t.TempDir(), "events.log")
-	t.Setenv("PIGO_EVENT_LOG", logPath)
+	t.Setenv("GOLDER_EVENT_LOG", logPath)
 
 	bin := buildTestPlugin(t, "watcher", eventPluginSrc)
 	p, err := Load(bin, nil, os.Stderr)

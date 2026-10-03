@@ -9,10 +9,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/smallnest/pigo/internal/agentcore"
-	"github.com/smallnest/pigo/internal/cli"
-	"github.com/smallnest/pigo/internal/cli/ui"
-	"github.com/smallnest/pigo/internal/session"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/session"
 )
 
 // TestModelQuitKeys verifies Ctrl+D quits idle immediately while Ctrl+C
@@ -235,13 +235,13 @@ func TestModelCtrlCFallsBackToQuit(t *testing.T) {
 // submit so BuildUserContent attaches it as multimodal content.
 func TestModelImagePasteInsertsPlaceholder(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
-	next, _ := m.Update(clipboardImageMsg{path: "/tmp/pigo-clip-1.png", ok: true})
+	next, _ := m.Update(clipboardImageMsg{path: "/tmp/golder-clip-1.png", ok: true})
 	m = next.(Model)
 
 	if got, want := m.input.Value(), "[Image #1]"; got != want {
 		t.Errorf("composer showed %q, want placeholder %q", got, want)
 	}
-	if got := m.expandImages(m.input.Value()); got != "@image:/tmp/pigo-clip-1.png" {
+	if got := m.expandImages(m.input.Value()); got != "@image:/tmp/golder-clip-1.png" {
 		t.Errorf("expandImages = %q, want the @image reference", got)
 	}
 }
