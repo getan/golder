@@ -19,6 +19,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/judge"
+	"github.com/smallnest/pigo/internal/permissions"
 )
 
 // bashMaxOutputBytes caps how many bytes of combined stdout/stderr one result
@@ -69,6 +70,12 @@ type BashTool struct {
 	// the same grade the BeforeToolCall gate saw (the shared verdict cache
 	// makes the second grade free).
 	Judge judge.Classifier
+	// Permissions, when set, is the live approval mode. Read-only blocks every
+	// command here too (the gate normally does it first; this covers paths
+	// without a gate, e.g. in-process sub-agents), full-access skips grading,
+	// and an auto-mode reviewer failure routes the command into the sandbox
+	// instead of letting it run unisolated.
+	Permissions *permissions.State
 	// Sandbox builds the sandboxed argv for a command. Nil means no isolation
 	// is available: sandbox-tier commands run directly (the gate already
 	// prompted for them).
@@ -111,6 +118,14 @@ func (t *BashTool) StopSessions() {
 // BeforeToolCall gate is unset; wiring keeps Judge nil then, so this is
 // normally unreachable).
 func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bool, block string) {
+	if t.Permissions != nil {
+		switch t.Permissions.Mode() {
+		case permissions.ReadOnly:
+			return false, "bash: blocked by read-only permissions mode (/permissions to change)"
+		case permissions.FullAccess:
+			return false, ""
+		}
+	}
 	if t.ForceSandbox {
 		return true, ""
 	}
@@ -119,6 +134,14 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bo
 	}
 	raw, _ := json.Marshal(map[string]string{"command": command})
 	v := t.Judge.Classify(ctx, "bash", raw)
+	if v.Failed && t.Permissions != nil && t.Permissions.Mode() == permissions.Auto {
+		// The reviewer could not decide; auto mode contains the command in
+		// the sandbox rather than running it unisolated.
+		if t.Sandbox == nil {
+			return false, "bash: reviewer unavailable and no sandbox runner; failing closed"
+		}
+		return true, ""
+	}
 	switch v.Level {
 	case judge.Deny:
 		msg := "bash: blocked by risk judge (deny"

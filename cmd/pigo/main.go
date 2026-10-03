@@ -38,6 +38,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/tui"
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/dream"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/selfupdate"
 	"github.com/smallnest/pigo/internal/webhook"
@@ -163,6 +164,10 @@ type cliOptions struct {
 	// but can never widen the boundary.
 	allowedTools    []string
 	disallowedTools []string
+	// permissions is the --permissions value: the approval mode for this
+	// invocation (read-only|ask|auto|full-access). Empty leaves the mode
+	// resolved from PIGO_PERMISSIONS (default auto).
+	permissions string
 }
 
 func main() {
@@ -203,6 +208,7 @@ func main() {
 	flag.StringVarP(&opts.outputFmt, "output-format", "o", "text", "output format: text | stream-json")
 	flag.BoolVarP(&opts.noTools, "no-tools", "n", false, "disable the built-in file/shell tools")
 	flag.StringArrayVar(&opts.allowedTools, "allowed-tools", nil, "restrict the model to these tools (repeatable, comma-separated, case-insensitive); empty means no restriction and --disallowed-tools wins on conflict")
+	flag.StringVar(&opts.permissions, "permissions", "", "approval mode: read-only | ask | auto | full-access (default auto; env PIGO_PERMISSIONS; switch at runtime with /permissions)")
 	flag.StringArrayVar(&opts.disallowedTools, "disallowed-tools", nil, "remove these tools from the model's set (repeatable, comma-separated, case-insensitive); takes precedence over --allowed-tools")
 	flag.BoolVarP(&opts.listSessions, "list-sessions", "l", false, "list stored interactive sessions and exit")
 	flag.StringVarP(&opts.resumeID, "resume", "r", "", "resume the interactive session with this id")
@@ -439,6 +445,9 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "pigo: %v\n", err)
 			return setupExitCode(err)
 		}
+		if !applyPermissionsFlag(&env, opts.permissions, errOut) {
+			return 2
+		}
 		if env.Plugins != nil {
 			defer env.Plugins.Close()
 		}
@@ -473,6 +482,8 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				ConfigPrompts:     opts.configPrompts,
 				CliPrompts:        opts.promptTemplates,
 				NoPromptTemplates: opts.noPromptTemplates,
+				Permissions:       env.Permissions,
+				ReviewNotes:       env.ReviewNotes,
 			}); err != nil {
 				fmt.Fprintf(errOut, "pigo: %v\n", err)
 				return 1
@@ -497,6 +508,8 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			CliPrompts:        opts.promptTemplates,
 			NoPromptTemplates: opts.noPromptTemplates,
 			Dream:             opts.dreamCfg,
+			Permissions:       env.Permissions,
+			ReviewNotes:       env.ReviewNotes,
 		}); err != nil {
 			fmt.Fprintf(errOut, "pigo: %v\n", err)
 			return 1
@@ -514,6 +527,9 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(errOut, "pigo: %v\n", err)
 		return setupExitCode(err)
+	}
+	if !applyPermissionsFlag(&env, opts.permissions, errOut) {
+		return 2
 	}
 	if env.Plugins != nil {
 		defer env.Plugins.Close()
@@ -543,6 +559,26 @@ func setupExitCode(err error) int {
 	return 1
 }
 
+// applyPermissionsFlag overrides the approval mode resolved from the
+// environment when --permissions is set. The state object is shared with the
+// already-assembled tool set, so mutating it here reaches every gate. An
+// unknown value is a usage error (exit 2).
+func applyPermissionsFlag(env *run.Env, value string, errOut io.Writer) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	mode, ok := permissions.Parse(value)
+	if !ok {
+		fmt.Fprintf(errOut, "pigo: --permissions: unknown mode %q (read-only|ask|auto|full-access)\n", value)
+		return false
+	}
+	if env.Permissions != nil {
+		env.Permissions.Set(mode)
+	}
+	return true
+}
+
 // runDream executes the subprocess memory-consolidation pass (SPEC §4.1/§4.2).
 // It runs dream.Runner to completion, marshals the resulting Report as a single
 // line of JSON on stdout (the parent/scheduler parses this), and returns the
@@ -565,6 +601,9 @@ func runGitHubReview(ctx context.Context, opts cliOptions, errOut io.Writer) int
 	if err != nil {
 		fmt.Fprintf(errOut, "pigo: %v\n", err)
 		return setupExitCode(err)
+	}
+	if !applyPermissionsFlag(&env, opts.permissions, errOut) {
+		return 2
 	}
 	if env.Plugins != nil {
 		defer env.Plugins.Close()

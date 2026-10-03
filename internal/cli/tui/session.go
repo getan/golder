@@ -26,12 +26,14 @@ import (
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/headless"
+	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/cli/ui"
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/hooks"
 	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -118,6 +120,16 @@ type runSession struct {
 	// nil when /remote-control is off. buildConfig reads it to install the remote
 	// confirm seam so risky tool calls route to the paired browser while connected.
 	remote *remoteSession
+
+	// perms is the live approval mode shared with the tool set; notes is the
+	// announcement sink the gates publish review decisions to. startRun
+	// registers a per-run handler that forwards notes into the run's event
+	// channel (cleared when the run ends).
+	perms *permissions.State
+	notes *run.ReviewNotes
+	// trusted records the launch directory's trust decision at assembly, so
+	// the reviewer grades calls with the same context the trust gate enforces.
+	trusted bool
 }
 
 // newRunSession assembles the run session from the resolved Options, opening the
@@ -230,10 +242,25 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		persisted:  len(history),
 		memoryRoot: run.MemoryRootFromTools(opts.Tools),
 		memstore:   run.MemoryStoreFromTools(opts.Tools),
+		perms:      opts.Permissions,
+		notes:      opts.ReviewNotes,
+		trusted:    opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
+	}
+	if s.perms == nil {
+		s.perms = permissions.New(permissions.Auto)
+	}
+	if s.notes == nil {
+		s.notes = run.NewReviewNotes()
 	}
 	// /trust is a per-session command (its closure captures mgr + cwd), so it is
 	// registered here rather than in newSlashRegistry. A nil mgr is a no-op.
 	trust.RegisterCommand(s.slash, mgr, cwd)
+	// /permissions is likewise per-session: its closure captures the shared
+	// state object so a switch reaches the very gate the next run builds, and
+	// its output follows the conversation language.
+	prompts.RegisterPermissionCommand(s.slash, s.perms, func() string {
+		return judge.ConversationLanguage(s.agentCtx.Messages)
+	})
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, build the dispatcher, dispatch SessionStart once, and compose the
@@ -242,7 +269,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// only apply when trusted (FR-14). A malformed hook layer disables hooks with a
 	// warning rather than failing the TUI launch.
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
-	trusted := opts.Approve || (mgr != nil && mgr.IsTrusted(cwd))
+	trusted := s.trusted
 	var baseOnEvent func(agentcore.AgentEvent)
 	if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
 		baseOnEvent = n.Handle
@@ -332,17 +359,23 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	// so the non-remote path is unchanged). The trust manager is read from the
 	// shared store; a nil manager disables the seam.
 	//
-	// The risk judge runs underneath at the sandbox floor: without a stdin
-	// prompt the TUI cannot confirm, so Allow/Confirm verdicts flow under the
-	// up-front trust while Sandbox/Deny verdicts fail closed. The judge gate
-	// leads so its block short-circuits before the browser is asked.
-	judgeGate := judge.EnforcingGateOpts(judge.GateOpts{Floor: judge.Sandbox, Sandboxed: run.SandboxGate()})
+	// The permission gate runs underneath: its mode (read-only / ask / auto /
+	// full-access) decides how a call is handled. The TUI has no stdin
+	// prompt, so ask-mode confirmations fail closed with a note while auto
+	// mode decides via the reviewer. The gate leads so its block
+	// short-circuits before the browser is asked.
+	reviewer := run.NewReviewer(s.live.Model, s.live.ProviderName, s.live.Provider, s.creds, s.header.ID, s.hookDeps.ProjectDir, s.trusted)
+	judgeGate := judge.PermissionGate(s.perms, judge.GateOpts{
+		Classifier: reviewer,
+		Sandboxed:  run.SandboxGate(),
+		Notify:     s.notes.Emit,
+	})
 	if s.remote != nil {
 		if mgr, err := trust.NewManager(trust.DefaultPath()); err == nil {
 			cfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(judgeGate, remoteConfirmSeam(s.remote, mgr, s.hookDeps.ProjectDir))
 		}
 	}
-	if cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil && judgeGate != nil {
+	if cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil {
 		cfg.Batch.ToolExecutorConfig.BeforeToolCall = judgeGate
 	}
 	return cfg
@@ -430,7 +463,14 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	// runEndMsg and the model returns to idle.
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelRun = cancel
-	return startRun(ctx, s.agentCtx, s.buildConfig(), s.onEvent)
+	// Route review notes into this run's event channel so gate decisions
+	// (approvals, sandbox routing, denials) render as transcript cards. The
+	// pump sends runEndMsg last, so the model can clear the handler then.
+	ch := newEventChan()
+	if s.notes != nil {
+		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
+	}
+	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(), s.onEvent)
 }
 
 // interrupt cancels the in-flight run, if any. It is bound to Model.interruptFn

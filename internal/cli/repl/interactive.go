@@ -20,6 +20,8 @@ import (
 	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/dream"
+	"github.com/smallnest/pigo/internal/judge"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -81,6 +83,15 @@ type Options struct {
 	// whether to launch the startup background consolidation; a zero value
 	// (Enabled false) disables the auto-trigger entirely.
 	Dream dream.Config
+
+	// Permissions is the live approval mode shared with the tool set (created
+	// by run.SetupEnv). /permissions mutates it in place. Nil falls back to a
+	// private auto state.
+	Permissions *permissions.State
+	// ReviewNotes is the announcement sink for mode decisions (approvals,
+	// sandbox routing, denials), shared with the gates. The REPL registers a
+	// handler that prints each note to the current output.
+	ReviewNotes *run.ReviewNotes
 }
 
 // Run starts the line-based REPL over a persisted session. It keeps
@@ -197,6 +208,19 @@ func Run(opts Options) error {
 		fmt.Fprintf(os.Stderr, "pigo: slash-commands: %v\n", err)
 	}
 	trust.RegisterCommand(slash, mgr, cwd)
+	// The approval mode is live state shared with the tool set; /permissions
+	// mutates it in place and its output follows the conversation language.
+	permState := opts.Permissions
+	if permState == nil {
+		permState = permissions.New(permissions.Auto)
+	}
+	reviewNotes := opts.ReviewNotes
+	if reviewNotes == nil {
+		reviewNotes = run.NewReviewNotes()
+	}
+	prompts.RegisterPermissionCommand(slash, permState, func() string {
+		return judge.ConversationLanguage(agentCtx.Messages)
+	})
 
 	// --approve grants the launch directory session trust up front (mirrors pi's
 	// --approve/-a), so the first-launch prompt is skipped and side-effect tools
@@ -242,6 +266,8 @@ func Run(opts Options) error {
 		notifier:   plugin.NewEventNotifier(opts.Plugins, os.Stderr),
 		goal:       agenttool.NewGoalState(),
 		telemetry:  cli.NewTelemetryHolder(),
+		perms:      permState,
+		notes:      reviewNotes,
 	})
 }
 

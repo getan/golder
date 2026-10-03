@@ -1,6 +1,9 @@
 package tui
 
-import "github.com/smallnest/pigo/internal/agentcore"
+import (
+	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/judge"
+)
 
 // This file defines the tea.Msg types the event bridge (bridge.go) produces from
 // a run's AgentEvents (US-004, SPEC 5.1). Each raw runtime signal is converted to
@@ -92,6 +95,12 @@ type compactionMsg struct{}
 // runEndMsg is the final message: the run has fully drained. err is non-nil when
 // the run ended in error (or was interrupted).
 type runEndMsg struct{ err error }
+
+// judgeNoteMsg carries one permission-gate decision (approval, sandbox
+// routing, denial, read-only block) with its rationale, published by the gate
+// through the run's event channel so it renders inline, right above the tool
+// card it decided.
+type judgeNoteMsg struct{ note judge.Note }
 
 // remoteInputMsg carries a prompt submitted from the paired remote browser
 // (remote-control, #443). The listener Cmd (Model.waitRemoteInput) blocks on the

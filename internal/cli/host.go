@@ -14,6 +14,7 @@ import (
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -50,6 +51,14 @@ type Host interface {
 	// session's runs, or nil when no plugin subscribed.
 	NotifierHandle() func(agentcore.AgentEvent)
 	Trust() *trust.Manager
+	// Permissions returns the live approval mode shared by the session's gates
+	// and tools. /goal and /btw build their own runs and need it to enforce the
+	// same mode as the main conversation.
+	Permissions() *permissions.State
+	// ReviewNotes returns the announcement sink for permission decisions, so a
+	// side run's gate publishes decisions to the same transcript surface as the
+	// main run.
+	ReviewNotes() *run.ReviewNotes
 	Goal() *agenttool.GoalState
 	Telemetry() *TelemetryHolder
 

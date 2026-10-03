@@ -171,24 +171,29 @@ func remoteControlStatus(out io.Writer, deps *replDeps) {
 }
 
 // beforeToolCall builds the tool-call confirmation seam for a turn. It always
-// constructs the local stdin prompt (trust.BeforeToolCall) and, when a remote
-// session exists, wraps it with bridgeBeforeToolCall so confirmations route to a
-// paired browser while one is connected. When deps.remote is nil the wrapper is
-// skipped entirely, so the returned func is exactly the local seam — the
-// non-remote path is byte-identical to before (#443).
+// constructs the local stdin prompt (trust.BeforeToolCall) and the mode-aware
+// permission gate (which prompts on ask-mode verdicts and auto-decides in auto
+// mode), and, when a remote session exists, wraps the pair with
+// bridgeBeforeToolCall so confirmations route to a paired browser while one is
+// connected. When deps.remote is nil the wrapper is skipped entirely, so the
+// returned func is exactly the local seam — the non-remote path is
+// byte-identical to before (#443).
 func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 	local := trust.BeforeToolCall(deps.trust, deps.cwd, deps.in, out, deps.confirmMu)
-	local = judge.ChainGates(local, judge.InteractiveGateOpts(judge.GateOpts{
-		In:          deps.in,
-		Out:         out,
-		Mu:          deps.confirmMu,
-		Interactive: true,
-		Sandboxed:   run.SandboxGate(),
+	trusted := deps.trust != nil && deps.trust.IsTrusted(deps.cwd)
+	reviewer := run.NewReviewer(deps.live.Model, deps.live.ProviderName, deps.live.Provider, deps.creds, deps.header.ID, deps.cwd, trusted)
+	local = judge.ChainGates(local, judge.PermissionGate(deps.perms, judge.GateOpts{
+		In:         deps.in,
+		Out:        out,
+		Mu:         deps.confirmMu,
+		Classifier: reviewer,
+		Sandboxed:  run.SandboxGate(),
+		Notify:     deps.notes.Emit,
 	}))
 	if deps.remote == nil {
 		return local
 	}
-	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, local)
+	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, reviewer, local)
 }
 
 // bridgeBeforeToolCall wraps the local stdin confirmation seam so that while a
@@ -202,7 +207,7 @@ func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 // remote=false, which we treat as a denial so an interrupted run does not
 // silently proceed. Refinements (local-answer race, timeouts) are the hardening
 // node's job (#445).
-func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out io.Writer, mu *sync.Mutex, local agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
+func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out io.Writer, mu *sync.Mutex, classifier judge.Classifier, local agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
 		if !rs.hasClient() || mgr == nil {
 			if local != nil {
@@ -221,8 +226,8 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 			return nil
 		}
 		summary := trust.ToolCallSummary(call)
-		if judge.GateEnabled() {
-			v := judge.ClassifierForCwd(cwd, false).Classify(ctx, call.Name, call.Arguments)
+		if classifier != nil {
+			v := classifier.Classify(ctx, call.Name, call.Arguments)
 			switch v.Level {
 			case judge.Deny:
 				reason := "risk judge"

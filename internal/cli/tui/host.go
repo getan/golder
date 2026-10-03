@@ -19,6 +19,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -39,6 +40,8 @@ func (s *runSession) Creds() *provider.CredentialStore           { return s.cred
 func (s *runSession) Notifier() *plugin.EventNotifier            { return nil }
 func (s *runSession) NotifierHandle() func(agentcore.AgentEvent) { return s.onEvent }
 func (s *runSession) Trust() *trust.Manager                      { return s.trust }
+func (s *runSession) Permissions() *permissions.State            { return s.perms }
+func (s *runSession) ReviewNotes() *run.ReviewNotes              { return s.notes }
 func (s *runSession) Goal() *agenttool.GoalState                 { return nil }
 func (s *runSession) Telemetry() *cli.TelemetryHolder            { return s.telemetry }
 func (s *runSession) Dispatcher() *hooks.Dispatcher              { return s.dispatcher }

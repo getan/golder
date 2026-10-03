@@ -421,6 +421,21 @@ fmt.Println(reply)
 
 ---
 
+## 权限模式（审批档位）
+
+除目录信任外，pigo 还有一层针对**每次改动型工具调用**（`bash` / `apply_patch`）的审批档位，可用 `/permissions` 在会话中随时切换（TUI 里是 ↑↓ 选择器），或用 `--permissions <mode>` / `PIGO_PERMISSIONS` 设默认值：
+
+| 模式 | 行为 |
+|------|------|
+| `read-only` | 只读：`bash` / `apply_patch` 等改动型工具直接拒绝（只放行 read/图片/搜索/待办等只读工具） |
+| `ask` | 每次询问：低风险放行，其余弹 `[y/N]` 确认；无交互输入时（TUI/headless）拒绝 |
+| `auto` | 自动审批：由**当前会话的模型**审查每次调用——低风险放行、需隔离的进 `sandbox-exec`、高危拒绝，并附一行理由（默认） |
+| `full-access` | 完全放行：不审查、不套沙箱；仅静态硬拒名单（`sudo`、`rm -rf /`、写 `~/.ssh`/`trust.json`、环境变量外泄等）仍然生效 |
+
+`auto` 的审查器就是会话正在使用的 LLM（`/model` 切换后审查器跟着换），不引入额外服务或密钥；审查输出含风险/授权评级与一句理由，理由语言跟随对话语言（中文对话给中文理由）。审查超时或失败按保守策略处理：能隔离就隔离，否则拒绝，绝不故障放行。子 Agent 继承父会话的权限模式。
+
+---
+
 ## 提示词模板
 
 提示词模板是可复用的 Markdown 片段，在 REPL 中输入 `/name` 即可展开为完整 prompt（对标 [pi prompt templates](https://pi.dev/docs/latest/prompt-templates)）。模板可带 YAML frontmatter，支持位置参数、默认值与切片。
@@ -792,7 +807,7 @@ git push origin v0.2.0
 ## 安全说明
 
 - pigo 会向解析出的 Provider 端点发起外部网络请求。
-- `bash` / `apply_patch` 会在本地产生副作用，仅由项目信任机制把关；`--approve` 会跳过逐次确认，请在受信任的目录中使用，权衡便利与安全。
+- `bash` / `apply_patch` 会在本地产生副作用，由项目信任与[权限模式](#权限模式审批档位)两层把关；`--approve` 跳过逐次确认，`/permissions auto`（默认）由模型审查，`full-access` 则完全放行，请按需权衡便利与安全。
 - 处理来自文件、命令输出、网页等外部来源的内容时应视为不可信数据。
 - 需要操作系统级隔离时，参见 [docs/sandboxing.md](docs/sandboxing.md)：Docker 整进程、micro-VM、进程级策略沙箱三种模式与 trust/tool-policy 的组合矩阵。
 

@@ -10,14 +10,14 @@ import (
 
 // StaticFloor is the tiny hard-deny list for unambiguously catastrophic
 // calls. It never allows, it only denies; everything else returns false so
-// the chain falls through to the model grader. Keep this list short on
-// purpose: broad heuristics belong in Jev (maintainable as criteria text),
-// only irreversible damage lives here.
+// the chain falls through to the model reviewer. Keep this list short on
+// purpose: broad heuristics belong in the reviewer's policy prompt
+// (maintainable as criteria text), only irreversible damage lives here.
 //
 // bash denies: privilege escalation, bare-metal destructive commands,
 // host power control, fork bombs, and one-command environment exfiltration
-// (whole-environment dump piped into a network sink, or any reference to
-// the grading key). apply_patch denies: any path the patch touches that lands
+// (whole-environment dump piped into a network sink, or a sensitive-named
+// variable echoed into one). apply_patch denies: any path the patch touches that lands
 // in a live secret directory — every path in the patch is checked, so a
 // multi-file patch cannot smuggle one through. The agenttool layer already
 // rejects Root escapes; this is the extra secret-material floor above it.
@@ -83,7 +83,7 @@ func patchText(args json.RawMessage) (string, bool) {
 // tree regardless of cwd: privilege escalation, disk-level destruction,
 // host power control, and fork bombs. Matching is substring-based and
 // deliberately narrow; fuzzy danger (curl|sh installers, recursive deletes
-// inside the project) is Jev's job, not the floor's.
+// inside the project) is the reviewer's job, not the floor's.
 func destructiveBash(cmd string) (string, bool) {
 	lower := strings.ToLower(cmd)
 	for _, prefix := range []string{"sudo ", "sudo\t", "doas "} {
@@ -114,7 +114,7 @@ func destructiveBash(cmd string) (string, bool) {
 
 // isBareRootWipe matches rm -rf variants whose target is literally /,
 // possibly with --no-preserve-root. Project-scoped deletes (rm -rf
-// ./build, rm -rf $TMPDIR/x) intentionally do NOT match: Jev grades those.
+// ./build, rm -rf $TMPDIR/x) intentionally do NOT match: the reviewer grades those.
 func isBareRootWipe(lower string) bool {
 	idx := strings.Index(lower, "rm ")
 	if idx < 0 {
@@ -155,15 +155,8 @@ func secretPath(p string) (string, bool) {
 // (env, printenv, export -p, ...) or an echo of a sensitive-named variable
 // piped into a network sink (curl, wget, nc, ssh, /dev/tcp). Single-purpose
 // prints (echo $PATH, printenv HOME, set -e) and ordinary downloads fall
-// through to Jev, which grades the recoverable middle.
-//
-// It also denies any reference to the grading key itself: the agent has no
-// legitimate need to touch TYPESAFE_API_KEY, and printing it would land the
-// key in the tool transcript.
+// through to the reviewer, which grades the recoverable middle.
 func secretExfil(cmd string) (string, bool) {
-	if strings.Contains(cmd, "TYPESAFE_API_KEY") {
-		return "reference to the grading key (TYPESAFE_API_KEY)", true
-	}
 	segs := splitPipeline(cmd)
 	for i, seg := range segs {
 		if !isEnvDump(seg) && !isSensitiveEcho(seg) {
@@ -180,7 +173,7 @@ func secretExfil(cmd string) (string, bool) {
 
 // splitPipeline cuts a command line on single pipes. "||" is protected first
 // so fallback chains are not mistaken for data flow (printenv || curl runs
-// curl only when printenv fails — Jev's call, not the floor's).
+// curl only when printenv fails — the reviewer's call, not the floor's).
 func splitPipeline(cmd string) []string {
 	const or = "\x00"
 	protected := strings.ReplaceAll(cmd, "||", or)
@@ -194,9 +187,9 @@ func splitPipeline(cmd string) []string {
 // isEnvDump reports whether a pipeline segment dumps the whole environment:
 // bare env/printenv, export -p, declare -x, compgen -e, bare set, or
 // printenv of a sensitive-named variable. Segments with compound operators
-// (&, ;) are skipped — Jev grades those. "env FOO=bar ./cmd" is skipped too:
+// (&, ;) are skipped — the reviewer grades those. "env FOO=bar ./cmd" is skipped too:
 // assignments that launch a command are ordinary environment passing, not a
-// dump (the rare "env FOO=1" dump-without-command is Jev's).
+// dump (the rare "env FOO=1" dump-without-command is the reviewer's).
 func isEnvDump(seg string) bool {
 	s := strings.TrimSpace(seg)
 	if s == "" || strings.ContainsAny(s, "&;") {

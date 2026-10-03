@@ -17,7 +17,9 @@ import (
 	"github.com/smallnest/pigo/internal/cli/memstatus"
 	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/status"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/runtime"
 )
 
@@ -320,6 +322,35 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openPermissionsPicker shows the four approval modes with their descriptions
+// (the codex permissions-preset parity), marking the active one. Labels and
+// descriptions follow the conversation language, like every other
+// /permissions output.
+func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
+	if m.session == nil {
+		m.transcript.addSystem("No active session.")
+		return m, nil
+	}
+	lang := judge.ConversationLanguage(m.session.agentCtx.Messages)
+	current := permissions.Auto.String()
+	if m.session.perms != nil {
+		current = m.session.perms.Mode().String()
+	}
+	modes := []permissions.Mode{permissions.ReadOnly, permissions.Ask, permissions.Auto, permissions.FullAccess}
+	picks := make([]pickItem, 0, len(modes))
+	for _, mode := range modes {
+		picks = append(picks, pickItem{Title: mode.Label(lang), Detail: mode.Description(lang), Value: mode.String()})
+	}
+	m.menu.openPickerDetailed(picks, current, "permissions")
+	if lang == "zh" {
+		m.transcript.addSystem("选择权限模式（↑↓ + Enter，Esc 取消）：")
+	} else {
+		m.transcript.addSystem("Select a permission mode (↑↓ + Enter, Esc cancels):")
+	}
+	m.relayout()
+	return m, nil
+}
+
 // resumeSession implements /resume: it swaps the active session without
 // leaving the TUI, following runSession.switchTo (persist current, load target,
 // live model/provider follow the stored header). The transcript is reset and
@@ -617,6 +648,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.pumpNext()
 
+	case judgeNoteMsg:
+		// A permission-gate decision (approval, sandbox routing, denial,
+		// read-only block) with its rationale; it renders right above the
+		// tool card it decided.
+		m.transcript.addReviewNote(msg.note)
+		m.relayout()
+		return m, m.pumpNext()
+
 	case toolAnnounceMsg:
 		// A call seen live in a streaming partial opens its card immediately
 		// (codex Running order: call row above the text it produces). The
@@ -786,6 +825,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// context when persist reads it here on the tea goroutine. A save failure
 		// is surfaced but non-fatal.
 		if m.session != nil {
+			// The run is fully drained (runEndMsg is sent last), so no gate
+			// can publish another note into this run's channel: drop the
+			// handler before the next run installs its own.
+			m.session.notes.Set(nil)
 			if err := m.session.persist(); err != nil {
 				m.transcript.addSystem("Session save failed: " + err.Error())
 			}
@@ -893,9 +936,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		// Ctrl+C copies the current mouse selection when there is one (over OSC52),
-		// clearing it afterward; with no selection it keeps its interrupt-or-quit
-		// role. Copying works even mid-run, so grabbing streamed output never
-		// interrupts the run.
+		// clearing it afterward. With no selection, a non-empty composer is
+		// discarded first — like a shell — so a half-typed prompt is never lost to
+		// the quit arm and the interrupt/quit path only runs on an empty box.
+		// Copying works even mid-run, so grabbing streamed output never interrupts
+		// the run.
 		if !m.sel.empty() {
 			text := m.selectedText()
 			m.sel = selection{}
@@ -903,6 +948,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, tea.SetClipboard(text)
 			}
 			return m, nil
+		}
+		if !m.running && m.input.Value() != "" {
+			return m.clearDraft(), nil
 		}
 		return m.interruptOrQuit()
 	case "super+c":
@@ -1122,6 +1170,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// through the registry below.
 	if line == "/model" {
 		return m.openModelPicker()
+	}
+	// Bare /permissions opens the interactive mode picker (arrow keys +
+	// Enter) with the codex-style preset list and descriptions;
+	// /permissions <mode> still resolves through the registry below.
+	if line == "/permissions" {
+		return m.openPermissionsPicker()
 	}
 	// /memory is intercepted before registry resolution (like /rebuild): it
 	// prints the persistent-memory + infinite-context report, reading the live
@@ -1356,6 +1410,19 @@ func (m Model) tickSpinner() tea.Cmd {
 // quitArmWindow is how long an armed quit stays live: a second idle Ctrl+C /
 // Esc within this window quits; after it the arm expires.
 const quitArmWindow = 3 * time.Second
+
+// clearDraft discards the composer, its paste/image placeholder bodies included,
+// and closes the slash menu, reflowing for the shorter editor. It is the
+// shell-like first stage of Ctrl+C: a lone press with text in the box has no
+// other side effect, so a quit arm is never set and no run is touched.
+func (m Model) clearDraft() Model {
+	m.input.Clear()
+	m.menu.close()
+	m.pastes = make(map[int]string)
+	m.images = make(map[int]string)
+	m.relayout()
+	return m
+}
 
 // interruptOrQuit is the shared Esc / bare-Ctrl+C action: a two-stage interrupt
 // (FR-14) that stops an in-flight run on the first press and stays in the

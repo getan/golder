@@ -14,6 +14,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -34,6 +35,8 @@ func (d *replDeps) Creds() *provider.CredentialStore           { return d.creds 
 func (d *replDeps) Notifier() *plugin.EventNotifier            { return d.notifier }
 func (d *replDeps) NotifierHandle() func(agentcore.AgentEvent) { return d.notifierHandle() }
 func (d *replDeps) Trust() *trust.Manager                      { return d.trust }
+func (d *replDeps) Permissions() *permissions.State            { return d.perms }
+func (d *replDeps) ReviewNotes() *run.ReviewNotes              { return d.notes }
 func (d *replDeps) Goal() *agenttool.GoalState                 { return d.goal }
 func (d *replDeps) Telemetry() *cli.TelemetryHolder            { return d.telemetry }
 func (d *replDeps) Dispatcher() *hooks.Dispatcher              { return d.dispatcher }

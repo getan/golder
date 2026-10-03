@@ -32,17 +32,27 @@ interactive REPL/TUI.
   `find` now delegate to ripgrep (with an actionable error when `rg` is not
   installed). Breaking change: `--allowed-tools`/`--disallowed-tools` and
   hook matchers must name `apply_patch` instead of `write`/`edit`.
-- **Risk judge + seatbelt (macOS first)**: a new `internal/judge` leaf grades
-  every tool call into Allow/Confirm/Sandbox/Deny — a tiny static hard-deny
-  floor (sudo, `rm -rf /`, writes into `~/.ssh`/`trust.json`) plus a Jev
-  high-speed classifier (`TYPESAFE_API_KEY`, one choice call, high-confidence
-  bar for Allow, fail-closed to Confirm) — chained as trust → judge → hooks in
-  the REPL/btw/goal drivers, and enforced at the sandbox floor in the
-  TUI/headless/sub-agent drivers. Sandbox-tier bash commands run under a
-  per-command `sandbox-exec` profile (`internal/seatbelt`, project-scoped
-  writes, secret dirs denied) via `PIGO_SANDBOX=auto|enforce`; `PIGO_JUDGE=off`
-  restores the previous behavior. Zero-config runs (no key) only gain the
-  static floor.
+- **Permission modes + LLM review (`/permissions`)**: pigo gains codex-style
+  approval presets — `read-only` (mutating tools blocked), `ask` (low risk
+  runs, the rest prompts), `auto` (default), and `full-access` (no review, no
+  sandbox; the static hard-deny floor remains). Switch at runtime with
+  `/permissions` (an arrow-key picker in the TUI with per-mode
+  descriptions), or set `--permissions` / `PIGO_PERMISSIONS`; the live state
+  applies to the very next tool call and task children inherit it. The
+  `auto`/`ask` reviewer is the session's **active model** (no separate
+  classifier service, no `TYPESAFE_API_KEY`; it follows `/model` switches):
+  a compact guardian-style transcript plus the exact call are graded into
+  Allow/Confirm/Sandbox/Deny with risk/authorization ratings and a rationale
+  written in the user's conversation language, cached per (tool, args, trust,
+  state). Decisions render as codex-style cards above the call
+  (`⚠ 自动审批通过（bash，风险：中，授权：高）：…` / `✗ 自动审批拒绝…`). Any
+  reviewer failure fails closed (sandbox when possible, otherwise block);
+  `read-only` blocks `bash`/`apply_patch` at both the gate and the bash tool,
+  so in-process sub-agents cannot outrun the mode either. Sandbox-tier bash
+  commands still run under a per-command `sandbox-exec` profile
+  (`internal/seatbelt`, project-scoped writes, secret dirs denied) via
+  `PIGO_SANDBOX=auto|enforce`. `PIGO_JUDGE=off` is kept as a legacy alias for
+  a `full-access` default.
 - **Interruptible confirmation prompts**: Ctrl+C during a trust or risk-judge
   prompt now denies immediately instead of trapping the user until they
   answer (reads race the run context); the first-run trust dialog falls back
@@ -65,7 +75,7 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
-- **Risk judge now grades with conversation context**: the Jev state carries a
+- **Risk grading now sees conversation context**: the reviewer state carries a
   guardian-style transcript — up to three recent user turns (intent is
   selected even when the newest entries are all tool output) plus the three
   newest entries of any kind, tool output capped at 1k runes per entry and the
@@ -128,16 +138,11 @@ interactive REPL/TUI.
   the docs site.
 
 ### Fixed
-- **Risk judge no longer hard-blocks an unsure sandbox**: a low-confidence
-  "sandbox" grade used to escalate to a deny (fail-closed one tier toward the
-  harshest outcome), which bricked normal dev commands — observed on
-  `python3 -i` (graded sandbox at 0.28, escalated to deny). Sandbox is now a
-  containment floor: an unsure sandbox stays sandboxed (runs under seatbelt,
-  or prompts/fails closed when no runner exists), and a hard deny requires a
-  confident deny claim. The verdict reason also names the raw choice when
-  escalation changed the level, e.g. `jev: sandbox (confidence 0.28; chose
-  deny)`, and the grading criteria note that an interactive REPL of a dev
-  tool is no riskier than running that tool non-interactively.
+- **Ctrl+C clears the composer before quitting**: with a draft in the input
+  box, the first Ctrl+C now discards it (and any paste/image placeholder
+  bodies) — the shell-like cancel — instead of arming the quit; only presses
+  on an empty box keep the two-stage interrupt/quit role, and a run in flight
+  still owns Ctrl+C.
 - **Resuming a session heals unanswered tool calls**: a session written by a
   run that stopped between the assistant message and its tool execution (the
   removed tool-turn cap did exactly this, as does an interrupt) contains a
@@ -155,12 +160,9 @@ interactive REPL/TUI.
 - **Deny blocks are actionable and no longer point at the kill switch**: a
   hard `Deny` replies with what to change (avoid privilege escalation,
   destructive scope, or credential material; split into smaller steps) instead
-  of advertising `PIGO_JUDGE=off`, which taught the model to disable the whole
-  gate; recoverable tiers keep the escape hatch. Jev's deny claim also needs
-  strong evidence now (`denyConfidence = 0.70`): a shaky deny is held at
-  Sandbox, where the seatbelt runner contains it, instead of hard-blocking on a
-  guess. Confident denies, the static floor, and the sandbox-tier
-  fail-closed upgrade are unchanged.
+  of pointing at a global off switch, which taught the model to disable the
+  whole gate. The static floor and the sandbox-tier fail-closed path are
+  unchanged.
 - **Sandbox-tier calls now actually run sandboxed**: the judge gate used to
   fail every Sandbox verdict closed in drivers without a stdin prompt
   (TUI/headless), and to show a misleading "[sandbox]" note in the REPL, even

@@ -23,6 +23,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/cli"
 	"github.com/smallnest/pigo/internal/cli/ui"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -449,4 +450,73 @@ func validThinkingLevel(s string) (agentcore.ThinkingLevel, bool) {
 	default:
 		return "", false
 	}
+}
+
+// RegisterPermissionCommand installs the /permissions action command: with an
+// argument it switches the live approval mode (read-only / ask / auto /
+// full-access); with none it lists the modes and marks the current one. The
+// closure captures the shared state object, so the switch applies to the next
+// tool call in both the plain REPL and the TUI. lang reports the language of
+// the recent conversation ("zh"/"en") so the output matches what the user is
+// writing; a nil lang defaults to English.
+func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State, lang func() string) {
+	if reg == nil {
+		return
+	}
+	pickLang := func() string {
+		if lang != nil && lang() == "zh" {
+			return "zh"
+		}
+		return "en"
+	}
+	modes := []permissions.Mode{permissions.ReadOnly, permissions.Ask, permissions.Auto, permissions.FullAccess}
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "permissions",
+		Description:  "show or switch the approval mode: /permissions [read-only|ask|auto|full-access]",
+		ArgumentHint: "[read-only|ask|auto|full-access]",
+		Action: func(args string) string {
+			l := pickLang()
+			arg := strings.TrimSpace(args)
+			if arg == "" {
+				current := permissions.Auto
+				if st != nil {
+					current = st.Mode()
+				}
+				var b strings.Builder
+				if l == "zh" {
+					fmt.Fprintf(&b, "当前权限模式：%s（%s）\n可选模式（/permissions <模式> 切换）：",
+						current.Label(l), current.Description(l))
+				} else {
+					fmt.Fprintf(&b, "permissions: %s (%s)\nmodes (/permissions <mode> to switch):",
+						current.Label(l), current.Description(l))
+				}
+				for _, m := range modes {
+					mark := ""
+					if m == current {
+						if l == "zh" {
+							mark = "（当前）"
+						} else {
+							mark = " (current)"
+						}
+					}
+					fmt.Fprintf(&b, "\n  %-12s %s%s", m.String(), m.Label(l), mark)
+				}
+				return b.String()
+			}
+			m, ok := permissions.Parse(arg)
+			if !ok {
+				if l == "zh" {
+					return "用法：/permissions [read-only|ask|auto|full-access]"
+				}
+				return "usage: /permissions [read-only|ask|auto|full-access]"
+			}
+			if st != nil {
+				st.Set(m)
+			}
+			if l == "zh" {
+				return fmt.Sprintf("权限模式已切换为 %s：%s", m.Label(l), m.Description(l))
+			}
+			return fmt.Sprintf("permissions switched to %s: %s", m.Label(l), m.Description(l))
+		},
+	})
 }

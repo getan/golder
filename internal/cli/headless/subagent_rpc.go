@@ -24,6 +24,7 @@ import (
 	"github.com/smallnest/pigo/internal/cli/run"
 	"github.com/smallnest/pigo/internal/jsonrpc"
 	"github.com/smallnest/pigo/internal/judge"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
 )
@@ -99,6 +100,14 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 	}
 	cwd, _ := os.Getwd()
 	tools := filterBuiltinTools(run.BuiltinTools(cwd, false), params.Tools)
+	// The child subprocess carries the same approval mode as its parent
+	// (PIGO_PERMISSIONS is inherited through the environment), so a
+	// read-only parent cannot have a mutating child.
+	permState := permissions.New(permissions.Auto)
+	if m, ok := permissions.FromEnv(os.Getenv); ok {
+		permState.Set(m)
+	}
+	run.WirePermissionState(tools, permState)
 	// The child subprocess must not orphan shell sessions it spawned when it
 	// finishes serving the request.
 	defer run.KillShellSessions(tools)
@@ -113,12 +122,14 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 		},
 		Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg}},
 	}
-	// Like headless: no prompt available, so enforce the risk judge at the
-	// sandbox floor, letting the execution layer isolate what it can
-	// (nil-safe when PIGO_JUDGE=off).
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateOpts(judge.GateOpts{
-		Floor:     judge.Sandbox,
-		Sandboxed: run.SandboxGate(),
+	// Like headless: no prompt available, so the mode-aware gate runs
+	// non-interactively (auto decides via the reviewer, ask fails closed).
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.PermissionGate(permState, judge.GateOpts{
+		Classifier: run.NewReviewer(model, providerName, prov, creds, "", cwd, run.Trusted(cwd)),
+		Sandboxed:  run.SandboxGate(),
+		Notify: func(n judge.Note) {
+			fmt.Fprintln(os.Stderr, judge.FormatNote(n))
+		},
 	})
 	// Wire hooks uniformly with every other driver (#425): the child sub-agent runs
 	// its own PreToolUse/PostToolUse (and Stop) hooks from the trust-gated hook set

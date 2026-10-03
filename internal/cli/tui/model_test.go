@@ -68,6 +68,73 @@ func TestModelCtrlCArmExpires(t *testing.T) {
 	}
 }
 
+// TestModelCtrlCClearsDraft verifies the shell-like first stage: Ctrl+C with a
+// non-empty composer discards the draft (and its paste/image placeholder
+// bodies) without arming a quit or producing a command, and only the later
+// presses follow the existing two-stage interrupt/quit path.
+func TestModelCtrlCClearsDraft(t *testing.T) {
+	var mm tea.Model = apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 60, Height: 10})
+	for _, r := range "draft" {
+		mm, _ = mm.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	drafted := mm.(Model)
+	drafted.pastes = map[int]string{1: "pasted body"}
+	drafted.images = map[int]string{1: "/tmp/pasted.png"}
+
+	got, cmd := drafted.Update(keyPress("ctrl+c"))
+	cleared := got.(Model)
+	if v := cleared.input.Value(); v != "" {
+		t.Fatalf("ctrl+c with a draft should clear the composer, got %q", v)
+	}
+	if cmd != nil {
+		t.Errorf("clearing press should not produce a command, got %v", cmd())
+	}
+	if cleared.quitting {
+		t.Error("clearing press must not quit")
+	}
+	if !cleared.quitArmedAt.IsZero() {
+		t.Error("clearing press must not arm the quit")
+	}
+	if len(cleared.pastes) != 0 || len(cleared.images) != 0 {
+		t.Errorf("clearing press should drop placeholder bodies, pastes=%v images=%v", cleared.pastes, cleared.images)
+	}
+
+	// Post-clear presses run the normal idle path: first arms, second quits.
+	got, cmd = cleared.Update(keyPress("ctrl+c"))
+	armed := got.(Model)
+	if cmd != nil {
+		t.Errorf("post-clear ctrl+c: expected nil cmd (arm only), got %v", cmd())
+	}
+	if armed.quitArmedAt.IsZero() {
+		t.Fatal("post-clear ctrl+c should arm the quit")
+	}
+	_, cmd = armed.Update(keyPress("ctrl+c"))
+	if cmd == nil {
+		t.Fatal("second post-clear ctrl+c: expected a quit command, got nil")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Errorf("second post-clear ctrl+c: cmd produced %T, want tea.QuitMsg", msg)
+	}
+}
+
+// TestModelCtrlCWhileRunningInterruptsWithDraft pins the precedence: an
+// in-flight run owns Ctrl+C, so a stray buffer (typing is gated while running;
+// this is only a safety net) never absorbs the interrupt.
+func TestModelCtrlCWhileRunningInterruptsWithDraft(t *testing.T) {
+	m := NewModel(Options{})
+	interrupted := false
+	m.interruptFn = func() { interrupted = true }
+	m.running = true
+	m.input.SetValue("stray")
+	got, _ := m.Update(keyPress("ctrl+c"))
+	if !interrupted {
+		t.Fatal("ctrl+c while running must interrupt even with a non-empty composer")
+	}
+	if got.(Model).input.Value() != "stray" {
+		t.Error("interrupt must not clear the composer")
+	}
+}
+
 // TestModelViewShell verifies the empty shell renders on the alt-screen and,
 // once a size is known, occupies the full terminal height (empty transcript rows
 // + status bar + input line), with the real status bar (#386) painting its

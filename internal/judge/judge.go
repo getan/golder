@@ -4,30 +4,31 @@ package judge
 // middle tier between "directory trusted, run anything" and "ask a human
 // for everything" (trust tri-state in internal/trust, allow/deny lists in
 // internal/cli/run). It is a leaf package: standard library plus
-// internal/agentcore only, no imports from trust/runtime/hooks, so the cli
-// layer can chain it onto the existing BeforeToolCall seam without creating
-// an import cycle.
+// internal/agentcore and internal/permissions, no imports from
+// trust/runtime/hooks, so the cli layer can chain it onto the existing
+// BeforeToolCall seam without creating an import cycle.
 //
 // Chain of responsibility, cheapest first:
 //
 //  1. StaticFloor — a tiny hard-deny list for unambiguously catastrophic
 //     calls (sudo, mkfs, keys under .ssh). It never allows, it only denies.
-//  2. JevJudge — a fast local classification model over (tool, arguments)
-//     returning one of Allow/Confirm/Sandbox/Deny with calibrated
-//     confidence. Low confidence escalates one tier toward Deny, except a
-//     direct deny claim needs strong evidence: a shaky deny is held at
-//     Sandbox where isolation contains it.
-//  3. Fallback — any classifier error (no key, timeout, bad response)
-//     degrades to Confirm, never to Allow. With no key configured the Jev
-//     step is skipped and only the static floor applies, preserving today's
-//     behavior for zero-config runs.
+//  2. LLMJudge — the active conversation model reviews the call against a
+//     policy prompt and the user's recent messages, and returns one of
+//     Allow/Confirm/Sandbox/Deny plus a rationale written in the user's
+//     language. There is no separate classification service: the dependency
+//     is the model the session is already using.
+//  3. Fallback — any reviewer failure (timeout, transport error, malformed
+//     answer) marks the verdict Failed: the gate then prompts (interactive)
+//     or handles the call conservatively (sandbox or block), never allows.
 //
-// Enforcement (prompt vs block) lives in Gate and is chosen per driver:
-// interactive drivers (REPL) prompt on Confirm/Sandbox, headless drivers
-// (TUI/headless, no stdin to read) fail closed at the sandbox floor.
-// Sandbox execution routing lives in internal/seatbelt and is injected into
-// BashTool by internal/cli/run: sandbox-tier verdicts run under sandbox-exec
-// on macOS (PIGO_SANDBOX=auto), every command runs sandboxed under
+// Enforcement lives in PermissionGate and is driven by the live
+// permissions.Mode: read-only blocks mutating tools, ask prompts on anything
+// above Allow, auto decides automatically and announces each non-trivial
+// verdict with its rationale, full-access skips review and sandboxing while
+// keeping the static floor. Sandbox execution routing lives in
+// internal/seatbelt and is injected into BashTool by internal/cli/run:
+// sandbox-tier verdicts run under sandbox-exec on macOS
+// (PIGO_SANDBOX=auto), every command runs sandboxed under
 // PIGO_SANDBOX=enforce, and without a runner the gate's approval runs the
 // command directly.
 import (
@@ -39,11 +40,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"sync"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/permissions"
 )
 
 // Level is the risk tier for one tool call.
@@ -87,12 +88,35 @@ func levelFromString(s string) Level {
 	}
 }
 
+// isKnownTier reports whether s names one of the four tiers. Reviewers that
+// answer outside the vocabulary fail closed.
+func isKnownTier(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "allow", "confirm", "sandbox", "deny":
+		return true
+	default:
+		return false
+	}
+}
+
 // Verdict is one classification result.
 type Verdict struct {
 	Level      Level
 	Reasons    []string
 	Confidence float64
 	Source     string
+	// Failed marks a reviewer that could not decide (timeout, transport
+	// error, malformed answer). The gate must never treat it as an approval:
+	// it prompts, sandboxes, or blocks instead.
+	Failed bool
+	// Risk ("low"/"medium"/"high"/"critical") and Authorization
+	// ("unknown"/"low"/"medium"/"high") are the reviewer's own rating, used
+	// in the verdict card. Empty for static verdicts.
+	Risk          string
+	Authorization string
+	// Lang is the rationale's language ("zh"/"en"), so UI templates can
+	// match it.
+	Lang string
 }
 
 // Classifier grades one tool call. Implementations must be safe for
@@ -133,70 +157,218 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	return c.Inner.Classify(ctx, tool, args)
 }
 
-// DefaultClassifier wires the static floor to the Jev grader. With no key
-// configured it degrades to static-only (today's behavior plus hard denies).
-func DefaultClassifier() Classifier {
-	return Chain{Inner: NewJevJudge()}
-}
-
-// GateEnabled reports whether grading is on. PIGO_JUDGE=off disables the
-// gate entirely (callers should leave BeforeToolCall unset); anything else
-// enables it.
-func GateEnabled() bool {
-	return !strings.EqualFold(strings.TrimSpace(os.Getenv("PIGO_JUDGE")), "off")
-}
-
-// GateOpts tunes the BeforeToolCall adapter. Interactive drivers pass the
-// shared stdin reader/writer so Confirm/Sandbox prompt exactly like the
-// trust gate; headless drivers pass Interactive=false and fail closed.
+// GateOpts tunes PermissionGate. Interactive drivers pass the shared stdin
+// reader/writer so Confirm/Sandbox prompts behave exactly like the trust
+// gate; headless drivers leave In nil and get the fail-closed path.
 type GateOpts struct {
-	In          *bufio.Reader
-	Out         io.Writer
-	Mu          *sync.Mutex
-	Interactive bool
-	// Floor is the lowest verdict tier that reaches the gate; verdicts below
-	// it pass untouched. The zero value (Allow) grades everything. Drivers
-	// without a prompt that already run under up-front trust (TUI/headless)
-	// set Floor=Sandbox so only sandbox/deny verdicts block.
-	Floor Level
+	In  *bufio.Reader
+	Out io.Writer
+	Mu  *sync.Mutex
+	// Classifier grades one call. Production injects a Chain over the LLM
+	// reviewer; nil keeps the static floor but fails closed on every gated
+	// (non-read-only) tool instead of allowing it.
+	Classifier Classifier
 	// Sandboxed reports whether a tool call at the Sandbox tier will actually
 	// run isolated by the execution layer (the bash tool's seatbelt runner).
 	// When it returns true the gate lets the call through — isolation is the
 	// enforcement, not a prompt or a block. Nil, or false for this tool,
-	// keeps the previous behavior: prompt when interactive, fail closed when
-	// not. The predicate comes from the wiring layer (cli/run), so this leaf
-	// package stays unaware of platforms and runners.
+	// prompts (interactive) or fails closed.
 	Sandboxed func(toolName string) bool
+	// Notify, when set, receives one Note per non-trivial verdict (approval,
+	// sandbox routing, denial, read-only block, reviewer failure) so the
+	// driver can show the decision and its rationale. Callbacks run on the
+	// run goroutine; implementations must not block on the UI thread.
+	Notify func(Note)
 }
 
-// InteractiveGate prompts on Confirm/Sandbox and blocks on Deny.
-func InteractiveGate(in *bufio.Reader, out io.Writer, mu *sync.Mutex) agentcore.BeforeToolCallFunc {
-	return GateFunc(GateOpts{In: in, Out: out, Mu: mu, Interactive: true}, DefaultClassifier())
+// NoteKind classifies one user-facing verdict note.
+type NoteKind int
+
+const (
+	// NoteApproved: auto mode approved a Confirm-tier call (runs directly).
+	NoteApproved NoteKind = iota
+	// NoteSandboxed: a Sandbox-tier call runs isolated.
+	NoteSandboxed
+	// NoteDenied: the reviewer (or the static floor) denied the call.
+	NoteDenied
+	// NoteUnavailable: the reviewer failed and the call was handled
+	// conservatively (sandboxed when possible, otherwise blocked).
+	NoteUnavailable
+	// NoteBlockedNoPrompt: the call needed confirmation but no interactive
+	// prompt exists, so it was blocked.
+	NoteBlockedNoPrompt
+	// NoteReadOnly: read-only mode blocked a mutating tool.
+	NoteReadOnly
+)
+
+// Note is one verdict announcement for the user: the decision, the tool, and
+// the reviewer's rationale (already written in the user's language).
+type Note struct {
+	Tool string
+	// ToolCallID is the originating call id, so a transcript can file the
+	// note directly above that call's card.
+	ToolCallID string
+	Kind       NoteKind
+	Level      Level
+	// Summary is a short preview of the call (command/path), when available.
+	Summary       string
+	Risk          string
+	Authorization string
+	Rationale     string
+	Lang          string
 }
 
-// InteractiveGateOpts is InteractiveGate with the full option set, so a driver
-// can also pass Floor and Sandboxed.
-func InteractiveGateOpts(opts GateOpts) agentcore.BeforeToolCallFunc {
-	return GateFunc(opts, DefaultClassifier())
+// PermissionGate builds the mode-aware BeforeToolCall gate. The mode is read
+// per call, so a /permissions switch applies to the next tool call even
+// mid-run:
+//
+//   - read-only: mutating tools are blocked with a NoteReadOnly note.
+//   - ask:       verdicts above Allow prompt the human when In is set, and
+//     are blocked (with a note) otherwise.
+//   - auto:      verdicts above Allow are decided by the reviewer — Confirm
+//     runs, Sandbox runs isolated, Deny blocks — each announced with a note.
+//   - full-access: no review; only the static floor can deny.
+//
+// A nil state is treated as full-access (no gate).
+func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToolCallFunc {
+	interactive := opts.In != nil && opts.Out != nil
+	notify := func(n Note) {
+		if opts.Notify != nil {
+			opts.Notify(n)
+		}
+	}
+	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		mode := permissions.FullAccess
+		if state != nil {
+			mode = state.Mode()
+		}
+		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		switch mode {
+		case permissions.FullAccess:
+			if v, ok := staticDeny(call.Name, call.Arguments); ok {
+				notify(noteFor(call, v, NoteDenied, lang))
+				return blockCall(call, v, DenyGuidance)
+			}
+			return nil
+		case permissions.ReadOnly:
+			if readOnlyAllowed(call.Name) {
+				return nil
+			}
+			notify(Note{
+				Tool: call.Name, Kind: NoteReadOnly, Level: Deny, Lang: lang,
+				Summary: riskSummary(call),
+			})
+			v := Verdict{Level: Deny, Source: "static", Lang: lang, Reasons: []string{"read-only permissions mode"}}
+			return blockCall(call, v, "switch with /permissions ask|auto|full-access to allow mutating tools")
+		}
+
+		v := classifyForGate(ctx, opts, call)
+		switch {
+		case v.Failed:
+			notify(noteFor(call, v, NoteUnavailable, lang))
+			if sandboxable(opts, call.Name) {
+				return nil // runs isolated by the execution layer
+			}
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
+				return nil
+			}
+			return blockCall(call, v, "reviewer unavailable and no sandbox for this tool; failing closed")
+		case v.Level == Allow:
+			return nil
+		case v.Level == Deny:
+			notify(noteFor(call, v, NoteDenied, lang))
+			return blockCall(call, v, DenyGuidance)
+		case v.Level == Sandbox:
+			if sandboxable(opts, call.Name) {
+				notify(noteFor(call, v, NoteSandboxed, lang))
+				return nil
+			}
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
+				return nil
+			}
+			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
+			return blockCall(call, v, "no sandbox runner for this call (PIGO_SANDBOX=off or sandbox-exec unavailable); failing closed")
+		default: // Confirm
+			if optsIsAuto(state) {
+				notify(noteFor(call, v, NoteApproved, lang))
+				return nil
+			}
+			if interactive && promptRisk(ctx, opts, call, v, false) {
+				return nil
+			}
+			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
+			return blockCall(call, v, "needs confirmation; failing closed without a prompt")
+		}
+	}
 }
 
-// EnforcingGate never prompts: anything above Allow blocks. For drivers
-// without a stdin prompt (TUI/headless).
-func EnforcingGate() agentcore.BeforeToolCallFunc {
-	return GateFunc(GateOpts{}, DefaultClassifier())
+// optsIsAuto reports whether the state's mode is auto (the gate then decides
+// without prompting).
+func optsIsAuto(state *permissions.State) bool {
+	return state != nil && state.Mode() == permissions.Auto
 }
 
-// EnforcingGateFrom never prompts and blocks only verdicts at or above min.
-// Non-interactive drivers running under up-front trust pass Sandbox so
-// Confirm-level calls keep flowing while sandbox/deny verdicts fail closed.
-func EnforcingGateFrom(min Level) agentcore.BeforeToolCallFunc {
-	return GateFunc(GateOpts{Floor: min}, DefaultClassifier())
+// sandboxable reports whether the execution layer can isolate this call.
+func sandboxable(opts GateOpts, tool string) bool {
+	return opts.Sandboxed != nil && opts.Sandboxed(tool)
 }
 
-// EnforcingGateOpts is EnforcingGateFrom with the full option set, so a driver
-// can also pass Sandboxed.
-func EnforcingGateOpts(opts GateOpts) agentcore.BeforeToolCallFunc {
-	return GateFunc(opts, DefaultClassifier())
+// readOnlyAllowed lists the tools read-only mode still permits. It is an
+// allow-list on purpose: plugin and future tools are blocked by default until
+// someone classifies them, so a new mutating tool cannot silently bypass the
+// mode.
+var readOnlyAllowedTools = map[string]bool{
+	"read": true, "view_image": true, "grep": true, "find": true, "ls": true,
+	"webfetch": true, "websearch": true, "todo": true,
+	"memory_search": true, "schedule_list": true,
+	"goal_complete": true, "goal_blocked": true,
+}
+
+// readOnlyAllowed reports whether tool may run under read-only mode.
+func readOnlyAllowed(tool string) bool {
+	return readOnlyAllowedTools[strings.ToLower(strings.TrimSpace(tool))]
+}
+
+// classifyForGate grades one call. A nil classifier keeps the static floor
+// and fails closed for every gated tool, so wiring mistakes never widen
+// permissions.
+func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall) Verdict {
+	if opts.Classifier != nil {
+		return opts.Classifier.Classify(ctx, call.Name, call.Arguments)
+	}
+	if v, ok := staticDeny(call.Name, call.Arguments); ok {
+		return v
+	}
+	if ungradedTools[strings.ToLower(call.Name)] {
+		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
+	}
+	return Verdict{
+		Level:   Confirm,
+		Failed:  true,
+		Source:  "static",
+		Reasons: []string{"no reviewer configured, failing closed"},
+	}
+}
+
+// noteFor builds the user-facing note for one verdict.
+func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string) Note {
+	n := Note{
+		Tool:          call.Name,
+		ToolCallID:    call.ID,
+		Kind:          kind,
+		Level:         v.Level,
+		Summary:       riskSummary(call),
+		Risk:          v.Risk,
+		Authorization: v.Authorization,
+		Lang:          v.Lang,
+	}
+	if len(v.Reasons) > 0 {
+		n.Rationale = v.Reasons[0]
+	}
+	if n.Lang == "" {
+		n.Lang = lang
+	}
+	return n
 }
 
 // ChainGates composes two BeforeToolCall gates so the run gets trust first,
@@ -218,73 +390,6 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 	}
 }
 
-// GateFunc adapts a Classifier to the BeforeToolCall seam. A nil classifier
-// is identity. When grading is disabled via PIGO_JUDGE=off it returns nil so
-// callers can wire it unconditionally.
-func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
-	if !GateEnabled() || c == nil {
-		return nil
-	}
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		v := c.Classify(ctx, call.Name, call.Arguments)
-		if v.Level < opts.Floor {
-			return nil
-		}
-		// Silent Allows stay silent only for read-only tools. Side-effect
-		// tools announce their grade on one line so the automated verdict
-		// is always visible; Confirm/Sandbox/Deny announce themselves via
-		// the prompt/block below.
-		if v.Level == Allow && opts.Out != nil && opts.Interactive && !ungradedTools[strings.ToLower(call.Name)] {
-			printVerdict(opts, call, v)
-		}
-		switch v.Level {
-		case Allow:
-			return nil
-		case Deny:
-			// No escape hatch on hard blocks: point at the way back.
-			return blockCall(call, v, DenyGuidance)
-		case Sandbox:
-			// The execution layer can isolate this call (bash under
-			// sandbox-exec): isolation is stronger than a prompt, so let it
-			// through and let the runner add the sandbox.
-			if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {
-				return nil
-			}
-			if !opts.Interactive || opts.In == nil {
-				return blockCall(call, v, "no sandbox runner for this call (PIGO_SANDBOX=off or sandbox-exec unavailable); failing closed")
-			}
-			if promptRisk(ctx, opts, call, v, true) {
-				return nil
-			}
-			return blockCall(call, v, "denied at prompt")
-		default:
-			if !opts.Interactive || opts.In == nil {
-				return blockCall(call, v, "needs confirmation; failing closed without a prompt")
-			}
-			if promptRisk(ctx, opts, call, v, false) {
-				return nil
-			}
-			return blockCall(call, v, "denied at prompt")
-		}
-	}
-}
-
-// printVerdict announces one automated grade on a single line, codex-style:
-// a small badge plus the tool and a truncated preview, e.g.
-// "  [judge: allow] bash: go test ./...". It holds the prompt mutex so
-// parallel batches cannot interleave verdict lines.
-func printVerdict(opts GateOpts, call agentcore.AgentToolCall, v Verdict) {
-	if opts.Mu != nil {
-		opts.Mu.Lock()
-		defer opts.Mu.Unlock()
-	}
-	fmt.Fprintf(opts.Out, "  [judge: %s] %s", v.Level, call.Name)
-	if summary := riskSummary(call); summary != "" {
-		fmt.Fprintf(opts.Out, ": %s", summary)
-	}
-	fmt.Fprintln(opts.Out)
-}
-
 func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.BeforeToolCallDecision {
 	msg := fmt.Sprintf("tool %q blocked by risk judge (%s", call.Name, v.Level)
 	if len(v.Reasons) > 0 {
@@ -293,12 +398,6 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 	msg += ")"
 	if tail != "" {
 		msg += "; " + tail
-	}
-	// The off switch is advertised only on recoverable tiers
-	// (Confirm/Sandbox): a Deny must not point at the escape hatch, it
-	// carries remediation guidance in tail instead.
-	if v.Level != Deny {
-		msg += " (PIGO_JUDGE=off disables the gate)"
 	}
 	content := agentcore.ContentList{agentcore.NewTextContent(msg)}
 	return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
@@ -404,7 +503,7 @@ func truncateRunes(s string, n int) string {
 }
 
 // cacheKey hashes (tool, args) so repeated identical calls grade once per
-// process. Failures are never cached: only successful Jev verdicts.
+// process. Failures are never cached: only successful reviewer verdicts.
 func cacheKey(tool string, args json.RawMessage) string {
 	h := sha256.Sum256(append([]byte(strings.ToLower(tool)+"\x00"), bytes.TrimSpace(args)...))
 	return hex.EncodeToString(h[:])

@@ -2,6 +2,8 @@ package tui
 
 import (
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/cli/run"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -56,4 +58,14 @@ type Options struct {
 	// settings, CLI); built-in slash commands are unaffected. Independent of
 	// --no-skills.
 	NoPromptTemplates bool
+
+	// Permissions is the live approval mode shared with the tool set (created
+	// by run.SetupEnv and wired into every BashTool). The /permissions command
+	// mutates it in place; a nil value falls back to a private auto state.
+	Permissions *permissions.State
+	// ReviewNotes is the announcement sink for mode decisions (approvals,
+	// sandbox routing, denials, read-only blocks), shared with the gates.
+	// The TUI routes notes into the run's event channel so they render as
+	// transcript cards.
+	ReviewNotes *run.ReviewNotes
 }

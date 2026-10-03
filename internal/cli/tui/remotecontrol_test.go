@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/permissions"
 )
 
 // newRemoteTestSession builds a fresh run session over a temp-dir store for the
@@ -101,13 +102,21 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	}
 }
 
-// TestBuildConfigNoGateWhenJudgeOff asserts PIGO_JUDGE=off restores the
-// pre-judge contract: no BeforeToolCall seam without remote control.
-func TestBuildConfigNoGateWhenJudgeOff(t *testing.T) {
-	t.Setenv("PIGO_JUDGE", "off")
+// TestBuildConfigFullAccessKeepsStaticFloor asserts the permission mode is
+// read per call: full-access waives review and sandboxing, yet the static
+// hard-deny floor still blocks.
+func TestBuildConfigFullAccessKeepsStaticFloor(t *testing.T) {
 	s := newRemoteTestSession(t)
-	if cfg := s.buildConfig(); cfg.Batch.ToolExecutorConfig.BeforeToolCall != nil {
-		t.Error("BeforeToolCall should be nil when remote control is off and PIGO_JUDGE=off")
+	s.perms.Set(permissions.FullAccess)
+	seam := s.buildConfig().Batch.ToolExecutorConfig.BeforeToolCall
+	if seam == nil {
+		t.Fatal("the permission gate should always be installed (static floor)")
+	}
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec != nil {
+		t.Errorf("full-access should allow benign bash, got %+v", dec)
+	}
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"sudo rm -rf /"}`)}); dec == nil || !dec.Block {
+		t.Error("full-access must keep the static hard-deny floor")
 	}
 }
 

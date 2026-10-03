@@ -1,10 +1,13 @@
 package provider
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 // OpencodeSessionHeader carries the client session id to opencode's Zen
@@ -50,6 +53,15 @@ func WithSessionExtra(extra map[string]any, sid string) map[string]any {
 	out[ExtraSessionID] = sid
 	return out
 }
+
+// ProcessSessionID returns a stable per-process session identity for callers
+// that need the opencode sticky-routing header but have no real session id
+// (e.g. the risk reviewer, or a process-isolated sub-agent). Sharing one
+// affinity bucket with the process's runs is the desired routing behavior
+// there anyway.
+var ProcessSessionID = sync.OnceValue(func() string {
+	return fmt.Sprintf("pigo-%d-%d", os.Getpid(), time.Now().Unix())
+})
 
 // ProxyURL resolves the HTTP proxy for proxied upstreams from PIGO_PROXY
 // only. Unset (or blank) means direct connection: other users work out of the

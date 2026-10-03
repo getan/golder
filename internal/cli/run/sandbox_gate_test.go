@@ -12,7 +12,6 @@ import (
 // is switched off, so the judge gate keeps failing Sandbox tiers closed rather
 // than passing them to an execution layer that would run them unisolated.
 func TestSandboxGateModeOff(t *testing.T) {
-	t.Setenv("PIGO_JUDGE", "")
 	t.Setenv("PIGO_SANDBOX", "off")
 	if gate := SandboxGate(); gate != nil {
 		t.Fatal("PIGO_SANDBOX=off must yield a nil predicate")
@@ -25,7 +24,6 @@ func TestSandboxGateModeOff(t *testing.T) {
 // either direction is a security bug — the gate would wave through a call the
 // executor runs bare, or block a call it could have isolated.
 func TestSandboxGateMatchesWiring(t *testing.T) {
-	t.Setenv("PIGO_JUDGE", "")
 	t.Setenv("PIGO_SANDBOX", "enforce")
 	tools := []agentcore.AgentTool{&agenttool.BashTool{Dir: t.TempDir()}}
 	WireBashSandbox(tools, t.TempDir())

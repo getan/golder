@@ -226,12 +226,13 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 				Registry: host.Registry(),
 				BeforeToolCall: judge.ChainGates(
 					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
-					judge.InteractiveGateOpts(judge.GateOpts{
-						In:          host.Input(),
-						Out:         out,
-						Mu:          host.ConfirmMu(),
-						Interactive: true,
-						Sandboxed:   run.SandboxGate(),
+					judge.PermissionGate(host.Permissions(), judge.GateOpts{
+						In:         host.Input(),
+						Out:        out,
+						Mu:         host.ConfirmMu(),
+						Classifier: run.NewReviewer(settings.Model, settings.ProviderName, settings.Provider, host.Creds(), host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd())),
+						Sandboxed:  run.SandboxGate(),
+						Notify:     host.ReviewNotes().Emit,
 					}),
 				),
 			},

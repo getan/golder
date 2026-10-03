@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -8,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/judge"
 )
 
 // This file implements the scrolling transcript region of the full-screen TUI
@@ -28,6 +30,10 @@ const (
 	roleAssistant
 	roleSystem
 	roleTool
+	// roleReview is a permission-gate verdict card: one line announcing an
+	// automated approval, sandbox routing, denial, or read-only block, plus
+	// the reviewer's rationale. It is styled by severity (warn/error).
+	roleReview
 	// roleBanner is the startup logo + config splash. Its text is pre-rendered
 	// (already colored, already laid out) and emitted verbatim, so reflow neither
 	// wraps it nor overrides its colors with a role style.
@@ -43,6 +49,9 @@ type transcriptBlock struct {
 	role blockRole
 	text string
 	card *toolCard
+	// note is set for roleReview blocks: the verdict determines the color
+	// (denied/blocks red, approvals/containment amber).
+	note *judge.Note
 }
 
 // transcript is the scrolling message log. It wraps a viewport.Model and keeps
@@ -188,6 +197,30 @@ func (t *transcript) addBanner(text string) {
 // re-renders it in place.
 func (t *transcript) addToolCard(c *toolCard) {
 	t.blocks = append(t.blocks, transcriptBlock{role: roleTool, card: c})
+	t.reflow()
+}
+
+// addReviewNote files a permission-gate verdict card directly above the tool
+// card it decided (the codex order: review line, then the call row). The card
+// was announced while the call streamed, i.e. before the gate ran, so the note
+// arrives later and is inserted at that card's index; when no matching card
+// exists it appends.
+func (t *transcript) addReviewNote(n judge.Note) {
+	blk := transcriptBlock{role: roleReview, note: &n}
+	if n.ToolCallID != "" {
+		for i := len(t.blocks) - 1; i >= 0; i-- {
+			b := t.blocks[i]
+			if b.role == roleTool && b.card != nil && b.card.id == n.ToolCallID {
+				// Inserting shifts every later block's index, so the
+				// index-keyed render cache must be dropped.
+				t.renderCache = nil
+				t.blocks = slices.Insert(t.blocks, i, blk)
+				t.reflow()
+				return
+			}
+		}
+	}
+	t.blocks = append(t.blocks, blk)
 	t.reflow()
 }
 
@@ -534,6 +567,8 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 	switch blk.role {
 	case roleUser, roleSystem, roleBanner:
 		return true
+	case roleReview:
+		return true
 	case roleAssistant:
 		return true
 	default:
@@ -555,6 +590,8 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 		return blk.card.render(t.theme, t.width)
 	}
 	switch blk.role {
+	case roleReview:
+		return t.renderReviewBlock(blk)
 	case roleBanner:
 		return blk.text
 	case roleUser:
@@ -564,6 +601,20 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	default:
 		return renderMarkdown(blk.text, t.width)
 	}
+}
+
+// renderReviewBlock paints one verdict card: a warn color for approvals and
+// containment (the call proceeds), an error color for denials and blocks. The
+// line wraps to the transcript width; the icon leads.
+func (t *transcript) renderReviewBlock(blk transcriptBlock) string {
+	if blk.note == nil {
+		return ""
+	}
+	style := t.theme.Warn
+	if blk.note.Kind == judge.NoteDenied || blk.note.Kind == judge.NoteBlockedNoPrompt || blk.note.Kind == judge.NoteReadOnly {
+		style = t.theme.Error
+	}
+	return style.Render(WrapToWidth(judge.FormatNote(*blk.note), t.width))
 }
 
 // renderUserBlock renders a user turn as a full-width bar like codex's history

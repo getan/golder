@@ -37,7 +37,9 @@ import (
 	"github.com/smallnest/pigo/internal/compaction"
 	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -74,6 +76,11 @@ type replDeps struct {
 	// trust is disabled (e.g. the store could not be loaded); when nil the
 	// BeforeToolCall hook is not installed and the first-run prompt is skipped.
 	trust *trust.Manager
+	// perms is the live approval mode shared with the tool set; notes is the
+	// announcement sink the gates publish review decisions to. streamRun
+	// registers a per-turn handler that prints each note.
+	perms *permissions.State
+	notes *run.ReviewNotes
 	// cwd is the directory pigo was launched in, used as the trust key and as
 	// the directory side-effect tools are gated against. It does not change
 	// during a session (pigo does not cd).
@@ -578,6 +585,23 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 // the run ends. The context grows in place so the next prompt continues the
 // conversation.
 func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string) {
+	// Route permission-gate decisions (approval, sandbox routing, denial) to
+	// this turn's output. The gate publishes on the run goroutine; the prompt
+	// mutex keeps the note from interleaving with a confirmation prompt.
+	if deps.notes != nil {
+		deps.notes.Set(func(n judge.Note) {
+			if deps.confirmMu != nil {
+				deps.confirmMu.Lock()
+				defer deps.confirmMu.Unlock()
+			}
+			tone := ui.Yellow
+			if n.Kind == judge.NoteDenied || n.Kind == judge.NoteBlockedNoPrompt || n.Kind == judge.NoteReadOnly {
+				tone = ui.Red
+			}
+			fmt.Fprintln(out, ui.Colorize(ui.Enabled(), tone, judge.FormatNote(n)))
+		})
+		defer deps.notes.Set(nil)
+	}
 	content, err := ui.BuildUserContent(prompt)
 	if err != nil {
 		fmt.Fprintf(out, "pigo: %v\n", err)

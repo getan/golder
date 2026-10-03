@@ -18,7 +18,9 @@ import (
 	"github.com/smallnest/pigo/internal/builtinskills"
 	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/hooks"
+	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
+	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/plugin"
 	"github.com/smallnest/pigo/internal/provider"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -60,6 +62,17 @@ type Env struct {
 	// GetFollowUpMessages seam (see NewConfig) and front-ends can reach it via
 	// agenttool.ScheduleFromTools.
 	Schedule *agenttool.Schedule
+
+	// Permissions is the live approval mode shared by every gate and bash tool
+	// assembled here. /permissions mutates it; a switch applies to the next
+	// tool call, even mid-run.
+	Permissions *permissions.State
+
+	// ReviewNotes is the announcement sink for mode decisions (approvals,
+	// sandbox routing, denials, read-only blocks). The parent gate and every
+	// task-child gate publish here; the active driver registers a handler so
+	// the notes reach its transcript.
+	ReviewNotes *ReviewNotes
 }
 
 // SetupEnv resolves the provider for model/baseURL, builds the tool set rooted
@@ -85,7 +98,17 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	if err != nil {
 		return Env{}, err
 	}
+	// The approval mode is process-wide live state: tools and gates read it on
+	// every call, so a /permissions switch applies immediately. The default is
+	// auto; PIGO_PERMISSIONS (or the legacy PIGO_JUDGE=off) overrides, and the
+	// CLI flag is applied by main after SetupEnv.
+	permState := permissions.New(permissions.Auto)
+	if m, ok := permissions.FromEnv(os.Getenv); ok {
+		permState.Set(m)
+	}
+	notes := NewReviewNotes()
 	tools := BuiltinTools(cwd, noTools)
+	WirePermissionState(tools, permState)
 	// Open the persistent memory store once (issue #481) and expose it as the
 	// memory_search tool so the agent can recall earlier context. Memory is a
 	// tool, so it is skipped under --no-tools; memory.enabled=false disables it
@@ -113,8 +136,10 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		// or --api-key (not an env var), leaving every sub-agent unauthenticated.
 		childCreds := provider.NewCredentialStore(nil)
 		childCreds.SetOverride(resolvedName, apiKey)
+		childClassifier := NewReviewer(model, resolvedName, prov, childCreds, "", cwd, Trusted(cwd))
 		factory := func() runtime.RunConfig {
 			childTools := ChildToolSet(cwd, policy)
+			WirePermissionState(childTools, permState)
 			return runtime.RunConfig{
 				LoopConfig: runtime.LoopConfig{
 					Model:     model,
@@ -122,7 +147,17 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 					Stream:    provider.StreamFnFromProvider(prov),
 					GetAPIKey: childCreds.GetAPIKey,
 				},
-				Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: ToolRegistry(childTools)}},
+				Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{
+					Registry: ToolRegistry(childTools),
+					// Children have no stdin prompt, so the gate runs
+					// non-interactively and announcements flow through the
+					// shared sink the driver registered.
+					BeforeToolCall: judge.PermissionGate(permState, judge.GateOpts{
+						Classifier: childClassifier,
+						Sandboxed:  SandboxGate(),
+						Notify:     notes.Emit,
+					}),
+				}},
 			}
 		}
 		tools = append(tools, runtime.NewTaskTool(factory, sem))
@@ -200,6 +235,8 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		Plugins:      mgr,
 		Memory:       memStore,
 		Schedule:     sched,
+		Permissions:  permState,
+		ReviewNotes:  notes,
 	}, nil
 }
 

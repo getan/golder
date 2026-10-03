@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/smallnest/pigo/internal/agentcore"
@@ -43,9 +42,7 @@ func nowMillis() int64 { return time.Now().UnixMilli() }
 // requires x-opencode-session on every request, so a stable per-process id
 // keeps those runs working; sharing one affinity bucket with the parent run
 // is the desired sticky-routing behavior there anyway.
-var processSessionID = sync.OnceValue(func() string {
-	return fmt.Sprintf("pigo-%d-%d", os.Getpid(), time.Now().Unix())
-})
+var processSessionID = provider.ProcessSessionID
 
 // TurnUpdate is the optional result of PrepareNextTurn: any non-nil field
 // replaces the corresponding piece of loop state before the next turn. It lets

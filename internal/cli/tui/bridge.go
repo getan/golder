@@ -153,6 +153,14 @@ func waitForEvent(ch chan tea.Msg) tea.Cmd {
 // (after runEndMsg).
 func startRun(ctx context.Context, agentCtx *agentcore.AgentContext, cfg runtime.RunConfig, onEvent func(agentcore.AgentEvent)) (chan tea.Msg, tea.Cmd) {
 	ch := newEventChan()
+	return ch, startRunOn(ch, ctx, agentCtx, cfg, onEvent)
+}
+
+// startRunOn is startRun on a caller-owned channel. It exists for runs that
+// must wire something else into the same event stream before the pump starts
+// — the permission gate publishes review notes into ch so they render as
+// transcript cards.
+func startRunOn(ch chan tea.Msg, ctx context.Context, agentCtx *agentcore.AgentContext, cfg runtime.RunConfig, onEvent func(agentcore.AgentEvent)) tea.Cmd {
 	go pump(ctx, ch, agentCtx, cfg, onEvent)
-	return ch, waitForEvent(ch)
+	return waitForEvent(ch)
 }

@@ -92,14 +92,16 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// Route auto-compaction checkpoints to the shared memory root so a rebuild can
 	// recover the pre-watermark prefix (no-op when memory is disabled → empty root).
 	runCfg.MemoryRoot = run.MemoryRootFromTools(env.Tools)
-	// Headless has no stdin prompt, so the risk judge enforces at the sandbox
-	// floor: Allow/Confirm verdicts flow (headless is an explicit invocation)
-	// while Sandbox/Deny verdicts fail closed unless the execution layer can
-	// actually isolate the call (Sandboxed), in which case it runs sandboxed.
-	// Nil-safe when PIGO_JUDGE=off.
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.EnforcingGateOpts(judge.GateOpts{
-		Floor:     judge.Sandbox,
-		Sandboxed: run.SandboxGate(),
+	// Headless has no stdin prompt, so the permission gate runs
+	// non-interactively: auto mode lets the reviewer decide (Confirm runs,
+	// Sandbox is isolated, Deny blocks) and ask mode fails closed. Decisions
+	// go to stderr so stdout stays a clean answer stream.
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.PermissionGate(env.Permissions, judge.GateOpts{
+		Classifier: run.NewReviewer(p.Model, env.ProviderName, env.Provider, creds, hs.header.ID, env.Cwd, run.Trusted(env.Cwd)),
+		Sandboxed:  run.SandboxGate(),
+		Notify: func(n judge.Note) {
+			fmt.Fprintln(errOut, judge.FormatNote(n))
+		},
 	})
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated

@@ -16,46 +16,51 @@ pigo **不内置权限沙箱**。默认情况下，pigo 以启动它的用户与
 
 三层是**叠加**关系，不是替代：容器内仍应配合 `--disallowed-tools bash`（如果该会话不需要 shell），`--approve` 只应授予容器内进程。
 
-## 进程内第四层：risk judge + seatbelt（macOS 先行）
+## 进程内第四层：权限模式 + LLM 审查 + seatbelt（macOS 先行）
 
-> 这是 Codex 没有的东西：Codex 把“这条命令有多危险”留给人肉弹窗，pigo 用 Jev 高速分类器先定档，人只看升级件。
+> 对标 Codex 的 `/permissions` 预设与 guardian/auto-review：审批档位是显式的四档，`auto` 档由**当前会话的模型**审查每次调用并给出理由——不引入额外的分类服务或密钥，是"用正在用的 LLM"而不是再配一个模型。
 
-调用链是 `trust → judge → hooks`：trust 只认目录（信了不代表全放行），judge 给每次调用定 `Allow/Confirm/Sandbox/Deny` 四档，hooks 维持用户自定义。deny 赢，judge 只做升级不降级（trust 的 block 会短路掉后面的 grading）。
+调用链是 `trust → permission gate → hooks`：trust 只认目录（信了不代表全放行），权限门按当前模式处理每次改动型调用，hooks 维持用户自定义。deny 赢，前面的 block 会短路后面的环节。
 
-| 档位 | 含义 | REPL（可交互） | TUI/headless（无 stdin） |
+### 四档模式
+
+| 模式 | 行为 | REPL（可交互） | TUI/headless（无 stdin） |
 |------|------|----------------|--------------------------|
-| Allow | 低风险，直放 | 直接跑 | 直接跑 |
-| Confirm | 中风险，需确认 | 弹窗 `[y/N]` | 在启动信任下放行 |
-| Sandbox | 高风险，强制隔离 | 有 runner 直接进 `sandbox-exec`；无 runner 弹窗确认后无隔离运行 | 有 runner 直接进 `sandbox-exec`；无 runner 拒绝 |
-| Deny | 极危，直接拒 | 直接拒 | 直接拒 |
+| `read-only` | 只读；改动型工具直接拒绝 | 拒绝 `bash`/`apply_patch`，只放行 read/图片/搜索/待办等 | 同左 |
+| `ask` | 低风险放行，其余询问 | 弹 `[y/N]`；可隔离的 Sandbox 档在有 runner 时直接进沙箱 | 无输入可问 → 拒绝（带理由卡片） |
+| `auto`（默认） | 模型审查后自动决定 | Confirm 放行、Sandbox 进沙箱、Deny 拒绝，各附一行理由 | 同左 |
+| `full-access` | 不审查、不套沙箱 | 直放；仅静态硬拒名单生效 | 同左 |
 
-Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`PIGO_SANDBOX` 非 off、平台有 `sandbox-exec`、auto 档需要已配置 grader、且只有 `bash` 有 runner）。条件一致保证两个方向都不会出错——不会把调用放给一个裸跑的执行层，也不会把本可隔离的调用拒掉；`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
+切换方式：会话内 `/permissions`（TUI 是 ↑↓ + Enter 选择器，带每档说明），启动参数 `--permissions <mode>`，环境变量 `PIGO_PERMISSIONS`（`PIGO_JUDGE=off` 作为旧的逃生舱别名等价于 `full-access`）。模式是进程内实时状态：切换后**下一次工具调用**立刻生效，子 Agent 继承父会话的模式（进程隔离子 Agent 通过环境变量继承）。
 
-分级逻辑（`internal/judge`，纯标准库叶包）：
+### `auto` 的审查器（就是会话模型）
 
-1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、引用 grading key 本身），只拒不放，剩下全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）一律放行给 Jev；
-2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注，以及一段 guardian 式挑选的最近对话——最多 3 条最近的 user 消息（意图优先，不会被工具输出挤掉）加最近 3 条任意消息，工具输出每条截 1k runes，整段按最新优先装入 4k runes 预算，state 总上限 8k runes（Jev API 允许 32k state，但官方提示 state 越大判准越漂移，故主动收窄）。同 `(tool, args, trust, state)` 进程内缓存：一次调用内门与执行层共用一次判分，上下文一变就重新判。阈值分三档、方向各不同——
-   - `allowConfidence = 0.75`：想放行要**高**置信，不足则升到 `Confirm`；
-   - `confirmConfidence = 0.60`：中间档要够格，不足则升到 `Sandbox`；`Sandbox` 自己不足则**升**到 `Deny`（"连该不该隔离都没把握"必须失败关闭）；
-   - `denyConfidence = 0.70`：想硬拒要**强**证据，不足则**降**到 `Sandbox`。
+分级链（`internal/judge`，叶包）：
 
-   最后一条是"降严"的关键：它不是把门槛调低，而是把模型的不确定性从"拒绝"重定向到"隔离"——一次把握不足的 deny 主张（置信 < 0.70）交给 seatbelt 兜住，最坏情况是写不出项目、碰不到 `~/.ssh`，而任务能继续，模型不必换写法重试烧掉一轮。边界仍然守死：高置信的 deny（≥ 0.70）照旧硬拒；静态地板在 `escalate` 之前就返回 `Deny`，永远不走降级。
-3. **兜底**：无 key（零配置）退化为纯静态地板、行为与今天一致；超时/坏响应一律升档到 `Confirm`，永不故障放行。同 `(tool, args)` 进程内缓存，门和执行层共用。
+1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、敏感变量 echo 进网络等），只拒不放，其余全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）放行给审查器。
+2. **LLMJudge**：把「工具名 + 截断参数 + cwd 信任状态 + 最近对话（guardian 式挑选：最多 3 条最近 user 消息 + 最近 3 条任意消息，工具输出每条截 1k runes，整段 4k runes 预算）」作为 state，调用**当前 provider/model** 做一次严格 JSON 评审：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`。`rationale` 强制用对话语言书写（中文对话给中文理由），直接显示给用户。同 `(tool, args, trust, state)` 进程内缓存：一次调用里门与执行层共用一次判分，上下文变了就重判。
+3. **兜底**：审查超时（默认 30s，`PIGO_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理。
 
-拦截文案按档位区分：可恢复档（`Confirm`/`Sandbox`）附带 `PIGO_JUDGE=off` 逃生提示；`Deny` 不给逃生开关，改为给出可执行的修复指引（`DenyGuidance`：避免提权、破坏性范围或凭据材料，拆成更小的可审步骤），免得模型把全局关闸当习惯。
+新增依赖为零：审查用的就是会话模型，`/model` 切换后审查器随之切换，不需要 `TYPESAFE_API_KEY`。
+
+### 展示（codex 风格审批卡片）
+
+审查结果以一行卡片显示，中文/英文随对话语言：`auto` 通过 `⚠ 自动审批通过（bash，风险：中，授权：高）：<理由>`，隔离运行 `⚠ …将在沙箱内运行…`，拒绝 `✗ 自动审批拒绝（…）：<理由>`，审查失败 `⚠ 审查不可用，已按保守策略处理…`；`read-only` 阻止显示 `✗ 只读模式：已阻止 bash`。TUI 里卡片插在该调用卡片正上方（与 Codex 的 review 行 + 调用行顺序一致），REPL 直接打印。`ask` 弹窗本身已展示理由，因此不再重复卡片。
+
+### 执行隔离
+
+Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`PIGO_SANDBOX` 非 off、平台有 `sandbox-exec`、且只有 `bash` 有 runner；`full-access` 下不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
 
 执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`/`~/.gnupg`/`trust.json`。项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**：macOS 的 `/var` 是 `/private/var` 的软链，而 sandbox 按规范 vnode 路径匹配，只写软链形式会导致该允许的写操作被静默拒绝（表现为命令莫名失败，而非沙箱报错）。这套规则有真实的 `sandbox-exec` 端到端测试覆盖（写项目内成功、写项目外失败、`trust.json` 被拒但 `trust.json.bak` 可写）。
 
-可观测性：交互式门给每个副作用工具打一行 verdict（`[judge: allow] bash: go test ./...`），只读工具的 Allow 保持静默；`bash` 的流式 partial 是增量 delta（消费者直接 append），与 codex 的 `ExecCommandOutputDelta` 同契约。
-
 ```bash
-export TYPESAFE_API_KEY=...   # Jev 分类 key，只经环境变量透传，不打印不落盘
+export PIGO_PERMISSIONS=auto  # read-only | ask | auto（默认）| full-access
 export PIGO_SANDBOX=auto      # off | auto（默认，仅 sandbox 档隔离）| enforce（全部 bash 进沙箱，无 runner 则 fail-closed）
-export PIGO_JUDGE=off         # 逃生舱：完全关闭 judge（只剩 trust+hooks）
-# 可选：PIGO_JEV_ENDPOINT / PIGO_JEV_MODEL / PIGO_JEV_TIMEOUT_MS（默认 8s）
+export PIGO_REVIEW_TIMEOUT_MS=30000  # 审查超时（3s–120s）
+# PIGO_JUDGE=off 为兼容保留：等价于默认 full-access
 ```
 
-灰度建议：先零配置跑一周（只有静态硬拒生效，行为不变），再配 key 开 `auto`，最后按需 `enforce`。
+灰度建议：先用默认 `auto` 跑一周看卡片理由是否合意；太吵或太慢就 `/permissions ask`（改回人肉确认）或 `read-only`；确认模型判分可靠后再按需 `enforce` 沙箱。
 
 ---
 
