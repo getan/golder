@@ -12,13 +12,14 @@ import (
 )
 
 // TestPermissionsPickerOpens verifies bare /permissions opens the four-mode
-// picker (codex-style presets) and that confirming a row switches the live
-// state.
+// picker (codex-style presets), that the picker stays English even in a
+// Chinese conversation, and that confirming a row switches the live state.
 func TestPermissionsPickerOpens(t *testing.T) {
 	s := newRemoteTestSession(t)
 	m := NewModel(Options{})
 	m.session = s
 	m.slash = s.slash
+	s.agentCtx.Messages = append(s.agentCtx.Messages, userText("帮我看看权限"))
 
 	got, cmd := m.runSlash("/permissions")
 	if cmd != nil {
@@ -33,6 +34,15 @@ func TestPermissionsPickerOpens(t *testing.T) {
 	}
 	if gm.menu.pick[0].Value != "read-only" || gm.menu.pick[3].Value != "full-access" {
 		t.Errorf("picker values = %+v", gm.menu.pick)
+	}
+	if gm.menu.pick[0].Title != "Read Only" || gm.menu.pick[2].Title != "Auto (LLM review)" {
+		t.Errorf("picker titles must stay English: %+v", gm.menu.pick)
+	}
+	if !strings.Contains(gm.menu.pick[0].Detail, "blocked") {
+		t.Errorf("picker details must stay English: %+v", gm.menu.pick)
+	}
+	if !strings.Contains(gm.transcriptText(), "Select a permission mode") {
+		t.Errorf("picker prompt must stay English:\n%s", gm.transcriptText())
 	}
 
 	// Confirming a row runs /permissions <value> against the session state.

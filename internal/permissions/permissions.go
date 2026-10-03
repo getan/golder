@@ -132,13 +132,13 @@ func (m Mode) Description(lang string) string {
 	}
 	switch m {
 	case ReadOnly:
-		return "Read files only; mutating tools (bash, apply_patch) are blocked"
+		return "Read files only; bash and apply_patch are blocked"
 	case Ask:
-		return "Mutating calls are reviewed: low risk runs, the rest asks you (denied with no prompt)"
+		return "The model reviews changes first: low risk runs, the rest asks you"
 	case FullAccess:
-		return "No review, no sandbox; only the static hard-deny floor remains"
+		return "No review, no sandbox; only the hard blocklist applies"
 	default:
-		return "The active model reviews each mutating call: low risk runs, risky runs sandboxed, dangerous blocked, with a one-line reason"
+		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked, with a reason"
 	}
 }
 

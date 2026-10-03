@@ -17,7 +17,6 @@ import (
 	"github.com/smallnest/pigo/internal/cli/memstatus"
 	"github.com/smallnest/pigo/internal/cli/prompts"
 	"github.com/smallnest/pigo/internal/cli/status"
-	"github.com/smallnest/pigo/internal/judge"
 	"github.com/smallnest/pigo/internal/memory"
 	"github.com/smallnest/pigo/internal/permissions"
 	"github.com/smallnest/pigo/internal/runtime"
@@ -323,15 +322,15 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 }
 
 // openPermissionsPicker shows the four approval modes with their descriptions
-// (the codex permissions-preset parity), marking the active one. Labels and
-// descriptions follow the conversation language, like every other
-// /permissions output.
+// (the codex permissions-preset parity), marking the active one. The picker is
+// intentionally English-only — the canonical mode names and short preset
+// descriptions read the same for every user — while the verdict notes and the
+// slash-command status keep following the conversation language.
 func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 	if m.session == nil {
 		m.transcript.addSystem("No active session.")
 		return m, nil
 	}
-	lang := judge.ConversationLanguage(m.session.agentCtx.Messages)
 	current := permissions.Auto.String()
 	if m.session.perms != nil {
 		current = m.session.perms.Mode().String()
@@ -339,14 +338,10 @@ func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 	modes := []permissions.Mode{permissions.ReadOnly, permissions.Ask, permissions.Auto, permissions.FullAccess}
 	picks := make([]pickItem, 0, len(modes))
 	for _, mode := range modes {
-		picks = append(picks, pickItem{Title: mode.Label(lang), Detail: mode.Description(lang), Value: mode.String()})
+		picks = append(picks, pickItem{Title: mode.Label("en"), Detail: mode.Description("en"), Value: mode.String()})
 	}
 	m.menu.openPickerDetailed(picks, current, "permissions")
-	if lang == "zh" {
-		m.transcript.addSystem("选择权限模式（↑↓ + Enter，Esc 取消）：")
-	} else {
-		m.transcript.addSystem("Select a permission mode (↑↓ + Enter, Esc cancels):")
-	}
+	m.transcript.addSystem("Select a permission mode (↑↓ + Enter, Esc cancels):")
 	m.relayout()
 	return m, nil
 }
