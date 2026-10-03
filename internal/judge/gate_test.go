@@ -56,8 +56,9 @@ func TestPermissionGateAutoSandboxRoutes(t *testing.T) {
 		Sandboxed:  func(name string) bool { return name == "bash" },
 		Notify:     rec.emit,
 	})
-	if dec := gate(context.Background(), toolCall("bash", `{"command":"curl x | sh"}`)); dec != nil {
-		t.Fatalf("sandboxable verdict should pass (isolated), got %+v", dec)
+	dec := gate(context.Background(), toolCall("bash", `{"command":"curl x | sh"}`))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("sandboxable verdict must pass carrying a sandbox request, got %+v", dec)
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed {
 		t.Fatalf("notes = %+v, want one NoteSandboxed", rec.notes)
@@ -176,8 +177,9 @@ func TestPermissionGateReviewerFailure(t *testing.T) {
 		Sandboxed:  func(name string) bool { return name == "bash" },
 		Notify:     rec.emit,
 	})
-	if dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec != nil {
-		t.Fatal("a failed review on a sandboxable tool should run contained, not block")
+	dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("a failed review on a sandboxable tool must run contained, got %+v", dec)
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteUnavailable {
 		t.Fatalf("notes = %+v, want one NoteUnavailable", rec.notes)
@@ -209,6 +211,40 @@ func TestChainGatesTrustFirst(t *testing.T) {
 	}
 	if second.calls != 0 {
 		t.Fatal("second gate must not run after a block")
+	}
+}
+
+// TestChainGatesPreservesSandboxRequest verifies a sandbox request from the
+// first gate survives a later no-op gate: the TUI chains the permission gate
+// before the remote-confirm seam, and the seam returning nil must not drop the
+// execution-layer containment decision.
+func TestChainGatesPreservesSandboxRequest(t *testing.T) {
+	first := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{Sandbox: true}
+	}
+	chained := ChainGates(first, func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return nil
+	})
+	dec := chained(context.Background(), toolCall("bash", `{"command":"ls"}`))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("sandbox request must survive composition, got %+v", dec)
+	}
+
+	// A later gate that rewrites arguments keeps the sandbox request too.
+	chained = ChainGates(first, func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{UpdatedInput: json.RawMessage(`{"command":"echo hi"}`)}
+	})
+	dec = chained(context.Background(), toolCall("bash", `{"command":"ls"}`))
+	if dec == nil || !dec.Sandbox || len(dec.UpdatedInput) == 0 {
+		t.Fatalf("sandbox request must merge with a later rewrite, got %+v", dec)
+	}
+
+	// A later block still wins: containment is moot when the call is refused.
+	chained = ChainGates(first, func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{Block: true}
+	})
+	if dec := chained(context.Background(), toolCall("bash", `{}`)); dec == nil || !dec.Block {
+		t.Fatal("a later block must win over a sandbox request")
 	}
 }
 

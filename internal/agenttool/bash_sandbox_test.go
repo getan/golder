@@ -28,6 +28,17 @@ func (s *stubRunner) SandboxArgv(shell, flag, command, dir string) ([]string, fu
 	return []string{"echo", "sandboxed"}, func() {}, nil
 }
 
+// runBashCtx runs one bash call against an explicit context, for tests that
+// exercise execution-context signals (sandbox requests).
+func runBashCtx(t *testing.T, ctx context.Context, tool *BashTool, args map[string]any, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+	t.Helper()
+	raw, err := json.Marshal(args)
+	if err != nil {
+		t.Fatalf("marshal args: %v", err)
+	}
+	return tool.Execute(ctx, "call-1", raw, onUpdate)
+}
+
 func TestBashSandboxVerdictRoutesToRunner(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{
@@ -61,6 +72,51 @@ func TestBashAllowVerdictRunsDirect(t *testing.T) {
 	}
 	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "direct") {
 		t.Fatalf("output = %q, want direct output", got)
+	}
+}
+
+// TestBashSandboxRequestRoutesToRunner verifies the execution layer honors a
+// sandbox request published by the permission gate (via the executor context):
+// auto-mode sandbox-tier commands must run isolated without a per-turn
+// classifier on the tool.
+func TestBashSandboxRequestRoutesToRunner(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	res, err := runBashCtx(t, context.Background(), tool, map[string]any{"command": "echo hi"}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 0 {
+		t.Fatal("no sandbox request should route to the runner")
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "hi") {
+		t.Fatalf("output = %q, want direct output without a request", got)
+	}
+
+	// The gate's request rides agentcore.WithSandboxRequest.
+	runner.calls = 0
+	res, err = runBashCtx(t, agentcore.WithSandboxRequest(context.Background()), tool, map[string]any{"command": "echo hi"}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 for a sandbox request", runner.calls)
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want sandboxed argv output", got)
+	}
+}
+
+// TestBashSandboxRequestWithoutRunnerFailsClosed verifies a gate request that
+// cannot be honored refuses instead of running unconfined.
+func TestBashSandboxRequestWithoutRunnerFailsClosed(t *testing.T) {
+	tool := &BashTool{}
+	res, err := runBashCtx(t, agentcore.WithSandboxRequest(context.Background()), tool, map[string]any{"command": "echo hi"}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "failing closed") {
+		t.Fatalf("output = %q, want fail-closed message", got)
 	}
 }
 

@@ -54,7 +54,10 @@ type ToolExecutorConfig struct {
 // failure is encoded into the returned message with IsError=true.
 func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore.AgentToolCall, emit agentcore.EmitFunc) (agentcore.ToolResultMessage, bool) {
 	// 1. prepare: lookup, prepareArguments, validate, beforeToolCall.
-	tool, args, prep, isError := prepareToolCall(ctx, cfg, call)
+	// execCtx starts as ctx and is derived when the beforeToolCall decision
+	// asks for sandbox isolation; the tool executes against execCtx so the
+	// requirement reaches the execution layer.
+	tool, args, execCtx, prep, isError := prepareToolCall(ctx, cfg, call)
 	if prep != nil {
 		// Prepare short-circuited (unknown tool / prepare error / validation /
 		// block / abort): finalize the error result without executing.
@@ -67,7 +70,7 @@ func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			return errorToolResult(call, "aborted before execution: "+err.Error()), false
 		}
 	}
-	result, isError := runToolWithRetry(ctx, cfg, tool, call, args, emit)
+	result, isError := runToolWithRetry(execCtx, cfg, tool, call, args, emit)
 
 	// 3. finalize: afterToolCall overrides.
 	return finalizeToolCall(ctx, cfg, call, result, isError, emit)
@@ -76,17 +79,18 @@ func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 // prepareToolCall performs the prepare phase. On success it returns the tool and
 // the (possibly rewritten) arguments with a nil result. On any short-circuit it
 // returns a non-nil *AgentToolResult and the isError flag.
-func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore.AgentToolCall) (agentcore.AgentTool, json.RawMessage, *agentcore.AgentToolResult, bool) {
+func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore.AgentToolCall) (agentcore.AgentTool, json.RawMessage, context.Context, *agentcore.AgentToolResult, bool) {
+	execCtx := ctx
 	if ctx.Err() != nil {
 		r := errorResult(fmt.Sprintf("tool %q aborted before execution", call.Name))
-		return nil, nil, &r, true
+		return nil, nil, ctx, &r, true
 	}
 
 	// Registry lookup.
 	tool, ok := cfg.Registry.Get(call.Name)
 	if !ok {
 		r := errorResult(fmt.Sprintf("unknown tool %q", call.Name))
-		return nil, nil, &r, true
+		return nil, nil, ctx, &r, true
 	}
 
 	// prepareArguments (optional).
@@ -95,7 +99,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		prepared, err := cfg.PrepareArguments(ctx, call.Name, args)
 		if err != nil {
 			r := errorResult(fmt.Sprintf("prepareArguments for %q failed: %v", call.Name, err))
-			return nil, nil, &r, true
+			return nil, nil, ctx, &r, true
 		}
 		args = prepared
 	}
@@ -103,7 +107,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	// JSON Schema validation.
 	if errs := cfg.Registry.Validate(call.Name, args); len(errs) > 0 {
 		r := ValidationErrorResult(call.Name, errs)
-		return nil, nil, &r, true
+		return nil, nil, ctx, &r, true
 	}
 
 	// beforeToolCall hook (may block or rewrite arguments).
@@ -119,7 +123,13 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				if dec.Details != nil {
 					r.Details = *dec.Details
 				}
-				return nil, nil, &r, true
+				return nil, nil, ctx, &r, true
+			}
+			// Sandbox request (judge Sandbox tier / reviewer-failure containment):
+			// publish it for the executing tool. A tool that cannot isolate must
+			// refuse; the bash tool translates it into the sandbox-exec argv.
+			if dec.Sandbox {
+				execCtx = agentcore.WithSandboxRequest(ctx)
 			}
 			// Argument rewrite (PreToolUse updatedInput): replace and re-validate
 			// so a hook cannot smuggle schema-invalid args past the tool.
@@ -127,13 +137,13 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				args = dec.UpdatedInput
 				if errs := cfg.Registry.Validate(call.Name, args); len(errs) > 0 {
 					r := ValidationErrorResult(call.Name, errs)
-					return nil, nil, &r, true
+					return nil, nil, ctx, &r, true
 				}
 			}
 		}
 	}
 
-	return tool, args, nil, false
+	return tool, args, execCtx, nil, false
 }
 
 // runToolWithRetry wraps runTool with the classified, bounded retry policy at

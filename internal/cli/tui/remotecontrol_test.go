@@ -84,9 +84,11 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	if seam == nil {
 		t.Fatal("BeforeToolCall should hold the judge gate when remote control is off")
 	}
-	// The baseline gate allows benign calls and blocks static hard-denies.
-	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec != nil {
-		t.Errorf("judge baseline should allow benign bash, got %+v", dec)
+	// The baseline gate contains benign calls — this test session has no
+	// reviewer, so the failed review routes bash into the sandbox (fail-closed
+	// containment) instead of running it bare — and blocks static hard-denies.
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec == nil || dec.Block || !dec.Sandbox {
+		t.Errorf("judge baseline should contain benign bash with a sandbox request, got %+v", dec)
 	}
 	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"sudo rm -rf /"}`)}); dec == nil || !dec.Block {
 		t.Error("judge baseline should block static hard-denies")

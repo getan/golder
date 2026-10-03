@@ -118,6 +118,38 @@ func TestExecutorBlock(t *testing.T) {
 	}
 }
 
+// TestExecutorSandboxRequestReachesTool verifies the beforeToolCall Sandbox
+// decision is published into the context the tool executes with: the execution
+// layer (bash) relies on it to route a sandbox-tier grade into sandbox-exec in
+// every driver, without a per-turn classifier on the tool.
+func TestExecutorSandboxRequestReachesTool(t *testing.T) {
+	var sawRequest bool
+	tool := execTool{name: "echo", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		sawRequest = agentcore.SandboxRequestedFromContext(ctx)
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("ok")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.BeforeToolCall = func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{Sandbox: true}
+	}
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "echo"}, nil)
+	if msg.IsError {
+		t.Fatalf("sandbox-flagged call should execute: %+v", msg)
+	}
+	if !sawRequest {
+		t.Fatal("tool context must carry the sandbox request")
+	}
+
+	// A decision without the flag must not leak a request from a prior call.
+	sawRequest = true
+	cfg.BeforeToolCall = func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{}
+	}
+	if _, _ = executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "2", Name: "echo"}, nil); sawRequest {
+		t.Fatal("no sandbox request expected without the decision flag")
+	}
+}
+
 func TestExecutorToolError(t *testing.T) {
 	tool := execTool{name: "boom", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 		return agentcore.AgentToolResult{}, errors.New("kaboom")
@@ -282,8 +314,8 @@ func TestExecutorResultBudgetDisabled(t *testing.T) {
 // countingTool returns a transient error for its first failN attempts, then
 // succeeds; if failN < 0 it always fails. It records how many times Execute ran.
 type retryStub struct {
-	failN   int   // number of leading failures before success; <0 = always fail
-	err     error // error to return on a failing attempt
+	failN    int   // number of leading failures before success; <0 = always fail
+	err      error // error to return on a failing attempt
 	attempts int32
 }
 
@@ -462,4 +494,3 @@ func TestExecutorRetrySuccessResultWithIsErrorNotRetried(t *testing.T) {
 		t.Fatalf("(result,nil) must not be retried: got %d attempts", got)
 	}
 }
-

@@ -272,7 +272,9 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		case v.Failed:
 			notify(noteFor(call, v, NoteUnavailable, lang))
 			if sandboxable(opts, call.Name) {
-				return nil // runs isolated by the execution layer
+				// Contain it: the execution layer runs the call isolated (the
+				// decision rides the executor context down to the tool).
+				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
 				return nil
@@ -286,7 +288,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		case v.Level == Sandbox:
 			if sandboxable(opts, call.Name) {
 				notify(noteFor(call, v, NoteSandboxed, lang))
-				return nil
+				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
 				return nil
@@ -380,7 +382,10 @@ func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string
 // ChainGates composes two BeforeToolCall gates so the run gets trust first,
 // then the risk grade, then the user hooks: a block from first
 // short-circuits (second never runs), so an earlier gate stays authoritative
-// over a later one. A nil operand is identity.
+// over a later one. A nil operand is identity. A sandbox request from either
+// gate survives composition: the second gate's decision wins field-by-field as
+// before, but the sandbox bit is OR-ed in so a sandbox-tier grade cannot be
+// dropped by a later no-op gate.
 func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
 	if first == nil {
 		return second
@@ -389,10 +394,23 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		return first
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if dec := first(ctx, call); dec != nil && dec.Block {
+		firstDec := first(ctx, call)
+		if firstDec != nil && firstDec.Block {
+			return firstDec
+		}
+		dec := second(ctx, call)
+		if dec != nil && dec.Block {
 			return dec
 		}
-		return second(ctx, call)
+		if firstDec != nil && firstDec.Sandbox {
+			if dec == nil {
+				return firstDec
+			}
+			out := *dec
+			out.Sandbox = true
+			return &out
+		}
+		return dec
 	}
 }
 

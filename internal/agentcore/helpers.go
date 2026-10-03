@@ -41,14 +41,20 @@ type PrepareArgumentsFunc func(ctx context.Context, toolName string, args json.R
 // BeforeToolCallDecision is the optional result of the beforeToolCall hook. When
 // Block is true the tool is not executed and an error result is produced;
 // Content/Details override the default block message when set. When Block is
-// false and UpdatedInput is non-empty, it replaces the tool's raw arguments
-// before execution (PreToolUse rewrite, FR-8); the replacement is re-validated
-// against the tool schema.
+// false, UpdatedInput (when non-empty) replaces the tool's raw arguments before
+// execution (PreToolUse rewrite, FR-8; the replacement is re-validated against
+// the tool schema) and Sandbox asks for OS-level isolation of the call.
 type BeforeToolCallDecision struct {
 	Block        bool
 	Content      *ContentList
 	Details      *any
 	UpdatedInput json.RawMessage
+	// Sandbox asks the execution layer to run this call under OS-level
+	// isolation (e.g. a permission gate graded the command into a sandbox
+	// tier). The executor publishes the request into the context the tool
+	// executes with (SandboxRequestedFromContext); a tool that cannot isolate
+	// must fail closed. Ignored when Block is set.
+	Sandbox bool
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

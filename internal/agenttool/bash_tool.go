@@ -65,10 +65,11 @@ type BashTool struct {
 	// omit it and get a private manager per tool.
 	Sessions *execsess.Manager
 	// Judge grades each command before it runs. When nil the command runs
-	// directly. When set, a sandbox-tier verdict routes the command through
-	// Sandbox and a deny-tier verdict blocks it, so the execution layer honors
-	// the same grade the BeforeToolCall gate saw (the shared verdict cache
-	// makes the second grade free).
+	// directly (the production path: the BeforeToolCall gate grades — sharing
+	// its verdict cache — and publishes sandbox requirements through the
+	// executor context instead of a per-turn classifier here). When set, a
+	// sandbox-tier verdict routes the command through Sandbox and a deny-tier
+	// verdict blocks it, for direct callers that drive the tool without a gate.
 	Judge judge.Classifier
 	// Permissions, when set, is the live approval mode. Read-only blocks every
 	// command here too (the gate normally does it first; this covers paths
@@ -112,11 +113,12 @@ func (t *BashTool) StopSessions() {
 	}
 }
 
-// sandboxRoute grades one command for sandbox routing. It returns sandbox=true
-// when the command must run isolated, or a non-empty block message when the
-// grade denies the command outright (defense in depth for paths where the
-// BeforeToolCall gate is unset; wiring keeps Judge nil then, so this is
-// normally unreachable).
+// sandboxRoute decides whether one command must run isolated. Sources, in
+// order: PIGO_SANDBOX=enforce (every foreground command), a sandbox request
+// published by the permission gate (auto/ask routing of a sandbox-tier grade
+// or reviewer-failure containment), then the optional Judge for direct
+// callers. It returns sandbox=true to run isolated, a non-empty message to
+// refuse, or both zero values to run directly.
 func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bool, block string) {
 	if t.Permissions != nil {
 		switch t.Permissions.Mode() {
@@ -127,6 +129,16 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bo
 		}
 	}
 	if t.ForceSandbox {
+		return true, ""
+	}
+	// The permission gate graded this exact call into the sandbox tier (or the
+	// reviewer failed and auto mode chose containment); the decision rides the
+	// executor context so routing holds in every driver without per-turn
+	// classifier wiring. No runner cannot be honored safely → fail closed.
+	if agentcore.SandboxRequestedFromContext(ctx) {
+		if t.Sandbox == nil {
+			return false, "bash: the permission gate requires sandboxing but no sandbox runner is available; failing closed"
+		}
 		return true, ""
 	}
 	if t.Judge == nil {
