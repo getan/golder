@@ -2,6 +2,8 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/smallnest/pigo/internal/cli/run"
 )
 
 // Run starts the full-screen TUI and blocks until the user quits (Ctrl+C /
@@ -18,6 +20,9 @@ func Run(opts Options) error {
 	if err != nil {
 		return err
 	}
+	// Kill still-running shell sessions (bash_ids) on exit so long-running
+	// commands are not orphaned when the TUI quits.
+	defer run.KillShellSessions(opts.Tools)
 	p := tea.NewProgram(NewModel(opts).withSession(s, history))
 	_, err = p.Run()
 	return err

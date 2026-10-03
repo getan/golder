@@ -115,9 +115,8 @@ pigo -u http://localhost:11434/v1 -m qwen3
           <tr><td><code>edit</code></td><td data-en="Patch a file in place via exact string replace" data-zh="以精确字符串替换就地修改文件"></td></tr>
           <tr><td><code>grep</code></td><td data-en="Search file contents by regex" data-zh="按正则搜索文件内容"></td></tr>
           <tr><td><code>find</code></td><td data-en="Locate files by glob pattern" data-zh="按 glob 模式查找文件"></td></tr>
-          <tr><td><code>bash</code></td><td data-en="Run shell commands (gated by approval policy)" data-zh="执行 shell 命令（受批准策略约束）"></td></tr>
-          <tr><td><code>bash_output</code></td><td data-en="Drain incremental output from a background bash job" data-zh="读取后台 bash 任务的增量输出"></td></tr>
-          <tr><td><code>kill_bash</code></td><td data-en="Terminate a background bash job" data-zh="终止后台 bash 任务"></td></tr>
+          <tr><td><code>bash</code></td><td data-en="Run shell commands; long commands become a session with a bash_id; tty=true for interactive stdin" data-zh="执行 shell 命令；长命令转为带回 bash_id 的会话；tty=true 支持交互式输入"></td></tr>
+          <tr><td><code>write_stdin</code></td><td data-en="Poll a bash session's output, write stdin on a tty session, or interrupt with Ctrl-C" data-zh="轮询 bash 会话输出、在 tty 会话写入 stdin，或发送 Ctrl-C 中断"></td></tr>
           <tr><td><code>todo</code></td><td data-en="Track a live task list across the turn" data-zh="跨轮次跟踪实时任务清单"></td></tr>
           <tr><td><code>webfetch</code></td><td data-en="Fetch a URL and convert to text" data-zh="抓取网页并转为文本"></td></tr>
           <tr><td><code>websearch</code></td><td data-en="Search the web (backend auto-selected from available credentials)" data-zh="联网搜索（按可用凭证自动选择后端）"></td></tr>

@@ -108,6 +108,43 @@ func TestAgentLoopInnerLoopFeedsToolResults(t *testing.T) {
 	}
 }
 
+// TestAgentLoopInjectsMessageSnapshot pins the seam the risk judge reads: a
+// tool batch is dispatched with a context carrying the conversation as of that
+// batch, including the current user request.
+func TestAgentLoopInjectsMessageSnapshot(t *testing.T) {
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{
+		oneToolAssistant("c1", "echo"),
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn, Content: agentcore.ContentList{agentcore.NewTextContent("done")}},
+	}), echoTool("echo", agentcore.ToolExecutionParallel, false))
+	var sawUser bool
+	var sawToolResult bool
+	cfg.Batch.ToolExecutorConfig.BeforeToolCall = func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		for _, m := range agentcore.MessageSnapshotFromContext(ctx) {
+			switch msg := m.(type) {
+			case agentcore.UserMessage:
+				if strings.Contains(agentcore.ContentToText(msg.Content), "please run echo") {
+					sawUser = true
+				}
+			case agentcore.ToolResultMessage:
+				sawToolResult = true
+			}
+		}
+		return nil
+	}
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("please run echo")}},
+	}}
+
+	collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	if !sawUser {
+		t.Fatal("BeforeToolCall context missing the user request snapshot")
+	}
+	if sawToolResult {
+		t.Fatal("snapshot leaked a tool result produced after the batch was dispatched")
+	}
+}
+
 func TestAgentLoopFollowUpMessagesContinue(t *testing.T) {
 	served := false
 	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{

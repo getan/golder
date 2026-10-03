@@ -34,7 +34,7 @@ Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在
 分级逻辑（`internal/judge`，纯标准库叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、引用 grading key 本身），只拒不放，剩下全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）一律放行给 Jev；
-2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注；阈值分三档、方向各不同——
+2. **JevJudge**：一次 `choice` 四选项调用，state 带工具名、截断参数、目录信任备注，以及一段 guardian 式挑选的最近对话——最多 3 条最近的 user 消息（意图优先，不会被工具输出挤掉）加最近 3 条任意消息，工具输出每条截 1k runes，整段按最新优先装入 4k runes 预算，state 总上限 8k runes（Jev API 允许 32k state，但官方提示 state 越大判准越漂移，故主动收窄）。同 `(tool, args, trust, state)` 进程内缓存：一次调用内门与执行层共用一次判分，上下文一变就重新判。阈值分三档、方向各不同——
    - `allowConfidence = 0.75`：想放行要**高**置信，不足则升到 `Confirm`；
    - `confirmConfidence = 0.60`：中间档要够格，不足则升到 `Sandbox`；`Sandbox` 自己不足则**升**到 `Deny`（"连该不该隔离都没把握"必须失败关闭）；
    - `denyConfidence = 0.70`：想硬拒要**强**证据，不足则**降**到 `Sandbox`。
@@ -203,5 +203,5 @@ sandbox-exec -f /tmp/pigo.sb pigo -p "总结当前项目"
 ## 已知限制
 
 - pigo 的 `--github-review` webhook 模式自身即为"只读工具集"设计（仅 read/grep/find），可与任一沙箱模式叠加。
-- 容器/micro-VM 内运行时，`bash` 的后台任务（`run_in_background`）随容器/VM 生命周期结束，不与宿主共享。
+- 容器/micro-VM 内运行时，`bash` 转为会话的长命令（返回 `bash_id`）随容器/VM 生命周期结束，不与宿主共享。
 - 沙箱可能阻断 Provider 出网——务必先验证容器内能访问所选 Provider 的 base URL，再交给模型。

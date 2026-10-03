@@ -238,7 +238,7 @@ func Run(opts Options) error {
 		memoryRoot: run.MemoryRootFromTools(opts.Tools),
 		memstore:   run.MemoryStoreFromTools(opts.Tools),
 		snap:       run.SnapshotRecorderFromTools(opts.Tools),
-		jobs:       run.BashJobStoreFromTools(opts.Tools),
+		sessions:   run.ExecSessionsFromTools(opts.Tools),
 		notifier:   plugin.NewEventNotifier(opts.Plugins, os.Stderr),
 		goal:       agenttool.NewGoalState(),
 		telemetry:  cli.NewTelemetryHolder(),

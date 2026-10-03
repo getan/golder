@@ -16,6 +16,7 @@ import (
 	"github.com/smallnest/pigo/internal/agentcore"
 	"github.com/smallnest/pigo/internal/agenttool"
 	"github.com/smallnest/pigo/internal/builtinskills"
+	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/hooks"
 	"github.com/smallnest/pigo/internal/memory"
 	"github.com/smallnest/pigo/internal/plugin"
@@ -248,12 +249,12 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	if disabled {
 		return nil
 	}
-	// A single recorder is shared by the write and edit tools so /rewind can roll
-	// back every mutation from a turn regardless of which tool made it.
+	// A single recorder is shared by the apply_patch tool so /rewind can roll
+	// back every mutation from a turn.
 	snap := agenttool.NewFileSnapshotRecorder()
-	// A single job store is shared by bash, bash_output and kill_bash so a
-	// background command launched by bash is visible to the drain/kill tools.
-	jobs := agenttool.NewBashJobStore()
+	// A single session manager is shared by bash and write_stdin so a command
+	// launched by bash is visible to the poll/interrupt tool.
+	sessions := execsess.NewManager()
 	tools := []agentcore.AgentTool{
 		&agenttool.ReadTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
 		// One editing tool for the whole write path: apply_patch carries
@@ -263,9 +264,8 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
 		&agenttool.GrepTool{Root: cwd},
 		&agenttool.FindTool{Root: cwd},
-		&agenttool.BashTool{Dir: cwd, Jobs: jobs},
-		&agenttool.BashOutputTool{Jobs: jobs},
-		&agenttool.BashKillTool{Jobs: jobs},
+		&agenttool.BashTool{Dir: cwd, Sessions: sessions},
+		&agenttool.WriteStdinTool{Sessions: sessions},
 		&agenttool.TodoTool{Store: agenttool.NewTodoStore()},
 		&agenttool.WebFetchTool{},
 		&agenttool.WebSearchTool{},
@@ -395,17 +395,25 @@ func SnapshotRecorderFromTools(tools []agentcore.AgentTool) *agenttool.FileSnaps
 	return nil
 }
 
-// BashJobStoreFromTools returns the shared BashJobStore backing the run's bash /
-// bash_output / kill_bash tools, or nil when the shell tool is disabled. The
-// REPL uses it to kill any still-running background jobs on exit so they are not
-// orphaned.
-func BashJobStoreFromTools(tools []agentcore.AgentTool) *agenttool.BashJobStore {
+// ExecSessionsFromTools returns the shared shell-session manager backing the
+// run's bash / write_stdin tools, or nil when the shell tool is disabled.
+func ExecSessionsFromTools(tools []agentcore.AgentTool) *execsess.Manager {
 	for _, t := range tools {
-		if bt, ok := t.(*agenttool.BashTool); ok && bt.Jobs != nil {
-			return bt.Jobs
+		if bt, ok := t.(*agenttool.BashTool); ok && bt.Sessions != nil {
+			return bt.Sessions
 		}
 	}
 	return nil
+}
+
+// KillShellSessions terminates every still-running shell session in tools. It
+// is the driver-exit hook: without it a long-running command handed back as a
+// bash_id would be orphaned when the process quits. No-op when the shell tool
+// is disabled.
+func KillShellSessions(tools []agentcore.AgentTool) {
+	if m := ExecSessionsFromTools(tools); m != nil {
+		m.KillAll()
+	}
 }
 
 // MemoryDir returns the persistent memory root directory: $PIGO_HOME/memory, or

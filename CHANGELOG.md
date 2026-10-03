@@ -55,6 +55,35 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **Risk judge now grades with conversation context**: the Jev state carries a
+  guardian-style transcript — up to three recent user turns (intent is
+  selected even when the newest entries are all tool output) plus the three
+  newest entries of any kind, tool output capped at 1k runes per entry and the
+  whole state at 8k — so a command explicitly requested by the user is graded
+  differently from the same command appearing without authorization. The
+  verdict cache key now includes a state fingerprint: the gate and the
+  execution layer still share one grade per call, but a verdict is never
+  replayed across changed context. Callers outside a run loop (remote-control
+  confirm) degrade to context-free grading.
+- **bash sessions replace background jobs**: `bash` now runs under a shared
+  session manager (`internal/execsess`). A command still running after
+  `yield_time_ms` (default 10s, capped at 30s) hands back a `bash_id` instead
+  of dying at a default 2-minute timeout; an explicit `timeout_ms` remains a
+  hard deadline that kills the process group. `bash_output` / `kill_bash` and
+  the `run_in_background` flag are gone: one `write_stdin` tool polls
+  incremental output or sends `\u0003` (Ctrl-C, a second interrupt force-kills).
+  Session output is retained in a bounded 1 MiB head/tail window, sessions cap
+  at 64, and REPL/TUI/headless/sub-agent teardown kills leftovers. Breaking
+  change: `--allowed-tools` / `--disallowed-tools` and hook matchers must name
+  `write_stdin` instead of `bash_output` / `kill_bash`.
+- **PTY sessions (interactive stdin)**: `bash` accepts `tty=true`, running the
+  command on a pseudo-terminal (24x80, `TERM=dumb`/`NO_COLOR=1`/pagers
+  disabled) so `write_stdin` can feed arbitrary input — `python -i`,
+  `git add -p`, database shells and similar tools now work. `\u0003` (Ctrl-C)
+  keeps its process-group interrupt semantics on both transport kinds; pipe
+  sessions still reject ordinary input with a hint to rerun with `tty=true`.
+  PTY support is Unix-only (darwin/linux, built on `golang.org/x/sys`); a
+  `tty=true` request on Windows fails closed with a clear message.
 - **Diff cards render like codex, and resume rebuilds real cards**: an
   patch card carries the change counts in its headline
   (`apply_patch path (+137 -0)`, additions green, removals red), suppresses the
@@ -85,6 +114,16 @@ interactive REPL/TUI.
   the docs site.
 
 ### Fixed
+- **Risk judge no longer hard-blocks an unsure sandbox**: a low-confidence
+  "sandbox" grade used to escalate to a deny (fail-closed one tier toward the
+  harshest outcome), which bricked normal dev commands — observed on
+  `python3 -i` (graded sandbox at 0.28, escalated to deny). Sandbox is now a
+  containment floor: an unsure sandbox stays sandboxed (runs under seatbelt,
+  or prompts/fails closed when no runner exists), and a hard deny requires a
+  confident deny claim. The verdict reason also names the raw choice when
+  escalation changed the level, e.g. `jev: sandbox (confidence 0.28; chose
+  deny)`, and the grading criteria note that an interactive REPL of a dev
+  tool is no riskier than running that tool non-interactively.
 - **Resuming a session heals unanswered tool calls**: a session written by a
   run that stopped between the assistant message and its tool execution (the
   removed tool-turn cap did exactly this, as does an interrupt) contains a

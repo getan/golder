@@ -101,12 +101,16 @@ type Classifier interface {
 	Classify(ctx context.Context, tool string, args json.RawMessage) Verdict
 }
 
-// readOnlyTools never reaches the model: local reads and in-memory tools
-// are side-effect free, so grading them would only add latency and cost.
-var readOnlyTools = map[string]bool{
+// ungradedTools never reaches the grader: local reads and in-memory tools are
+// side-effect free, and write_stdin only controls a session whose original
+// command was already graded when bash spawned it (it can poll output or
+// interrupt — it cannot start anything new). Grading it again would add
+// latency and could block a benign poll on a verdict with no sandbox tier.
+var ungradedTools = map[string]bool{
 	"read": true, "grep": true, "find": true, "ls": true,
 	"webfetch": true, "websearch": true, "todo": true,
 	"memory_search": true, "schedule_list": true,
+	"write_stdin": true,
 }
 
 // Chain runs StaticFloor first (deny wins), then inner, and degrades any
@@ -120,7 +124,7 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	if v, ok := staticDeny(tool, args); ok {
 		return v
 	}
-	if readOnlyTools[strings.ToLower(tool)] {
+	if ungradedTools[strings.ToLower(tool)] {
 		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
 	}
 	if c.Inner == nil {
@@ -230,7 +234,7 @@ func GateFunc(opts GateOpts, c Classifier) agentcore.BeforeToolCallFunc {
 		// tools announce their grade on one line so the automated verdict
 		// is always visible; Confirm/Sandbox/Deny announce themselves via
 		// the prompt/block below.
-		if v.Level == Allow && opts.Out != nil && opts.Interactive && !readOnlyTools[strings.ToLower(call.Name)] {
+		if v.Level == Allow && opts.Out != nil && opts.Interactive && !ungradedTools[strings.ToLower(call.Name)] {
 			printVerdict(opts, call, v)
 		}
 		switch v.Level {

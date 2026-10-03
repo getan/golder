@@ -41,7 +41,7 @@ no_tools = false
 # to re-admit a tool the file denied, override --disallowed-tools on the CLI.
 # Parameter-level forms such as Bash(git log:*) are not supported yet.
 # allowed_tools = ["read", "grep"]
-# disallowed_tools = ["bash", "bash_output", "kill_bash"]
+# disallowed_tools = ["bash", "write_stdin"]
 
 # Disable skill discovery (do not load skills under ~/.agents/skills as /skill-name commands).
 no_skills = false

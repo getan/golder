@@ -44,7 +44,7 @@ pigo 可以读写文件、执行命令、检索代码、抓取网页，并借助
 
 - **两种模式**：无头 `-p` 一次性执行（适合脚本 / CI），或直接进入交互式 REPL。
 - **多 Provider**：OpenRouter（默认）、本地 Ollama、NVIDIA NIM、Anthropic、任意 OpenAI 兼容端点。
-- **内置工具集**：`read` / `apply_patch` / `grep` / `find` / `bash`（支持 `run_in_background` 后台执行，配套 `bash_output` / `kill_bash`）/ `todo` / `webfetch`。
+- **内置工具集**：`read` / `apply_patch` / `grep` / `find` / `bash`（长命令自动转为会话，配套 `write_stdin` 轮询与中断）/ `todo` / `webfetch`。
 - **会话续跑**：`--list-sessions` / `--resume` / `--continue`，无头与 REPL 均可续跑。
 - **stream-json 输出**：逐行 JSON 事件，首个事件携带 `session_id`，便于调用方关联。
 - **系统提示词分层组装**：base 指令 + 环境块 + `AGENTS.md`（general→specific）+ `--append-system-prompt`。
@@ -282,9 +282,8 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 | `apply_patch` | 用一次补丁调用增删改移任意多个文件（`*** Begin Patch` 格式，支持 `@@` 上下文与模糊匹配），返回逐文件 diff |
 | `grep` | 正则检索文件内容（ripgrep 引擎），支持 glob 过滤，跳过 `.gitignore`/隐藏/二进制文件 |
 | `find` | 按文件名 glob 查找文件（ripgrep 引擎），跳过 `.gitignore`/隐藏文件 |
-| `bash` | 执行 shell 命令，流式 stdout/stderr，支持超时与取消；`run_in_background` 可转入后台 |
-| `bash_output` | 读取后台 bash 任务的增量输出 |
-| `kill_bash` | 终止后台 bash 任务 |
+| `bash` | 执行 shell 命令，流式 stdout/stderr；默认等待 10s，未结束则返回 `bash_id` 会话；`timeout_ms` 为硬截止，取消/中断会杀掉整个进程组；`tty=true` 进伪终端以支持交互式输入 |
+| `write_stdin` | 轮询 bash 会话的增量输出与状态；`chars` 传 `\u0003` 中断（第二次强制杀）；tty 会话可写入任意输入（含 `\n` 换行） |
 | `todo` | 记录/更新结构化任务清单，每次提交整份列表（pending/in_progress/completed） |
 | `webfetch` | 抓取 URL 并转为精简 Markdown 正文，HTTP 自动升级 HTTPS |
 | `websearch` | 联网搜索并返回标题/URL/摘要，按凭证自动选后端（`TAVILY_API_KEY`→Tavily，`BRAVE_API_KEY`→Brave，否则回落无 key 的 DuckDuckGo），支持 `allowed_domains`/`blocked_domains` 过滤 |
@@ -302,7 +301,7 @@ pigo -P anthropic -m claude-3-5-sonnet-20241022 -p "..."
 pigo --allowed-tools read,grep -p "这个仓库的架构是什么"
 
 # 什么都行，就是别碰 shell：黑名单
-pigo --disallowed-tools bash,bash_output,kill_bash -p "帮我改下 README"
+pigo --disallowed-tools bash,write_stdin -p "帮我改下 README"
 
 # 大小写不敏感，Claude Code 的写法直接可用
 pigo --allowed-tools Read,Grep -p "..."

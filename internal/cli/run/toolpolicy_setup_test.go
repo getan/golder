@@ -56,8 +56,8 @@ func TestSetupEnvAppliesAllowList(t *testing.T) {
 // TestSetupEnvAppliesDenyList confirms a blacklist removes the named tools while
 // leaving everything else — including the side-effect tools not named — in place.
 func TestSetupEnvAppliesDenyList(t *testing.T) {
-	got := setupToolNames(t, NewToolPolicy(nil, []string{"bash", "bash_output", "kill_bash"}))
-	for _, denied := range []string{"bash", "bash_output", "kill_bash"} {
+	got := setupToolNames(t, NewToolPolicy(nil, []string{"bash", "write_stdin"}))
+	for _, denied := range []string{"bash", "write_stdin"} {
 		if contains(got, denied) {
 			t.Errorf("%q survived the deny list: %q", denied, got)
 		}
@@ -85,7 +85,7 @@ func TestSetupEnvDenyWinsOverAllow(t *testing.T) {
 // means the full built-in set, including the side-effect tools.
 func TestSetupEnvUnconstrainedIsUnchanged(t *testing.T) {
 	got := setupToolNames(t, ToolPolicy{})
-	for _, want := range []string{"read", "apply_patch", "grep", "find", "bash", "todo", "webfetch", "websearch", "task"} {
+	for _, want := range []string{"read", "apply_patch", "grep", "find", "bash", "write_stdin", "todo", "webfetch", "websearch", "task"} {
 		if !contains(got, want) {
 			t.Errorf("unconstrained run is missing %q: %q", want, got)
 		}

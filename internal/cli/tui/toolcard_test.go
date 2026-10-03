@@ -35,6 +35,36 @@ func TestParseToolResult(t *testing.T) {
 	}
 }
 
+// TestParseToolResultNormalizesCR pins the PTY-output fix: CRLF line endings
+// (bash with tty=true) must be normalized to LF, a trailing CR must not eat
+// the line, and a mid-line CR (a progress-bar rewrite) keeps the segment a
+// terminal would leave visible.
+func TestParseToolResultNormalizesCR(t *testing.T) {
+	nodes := parseToolResult("first\r\nsecond\r\n>>> \ntrailing\r\n50%\r100%\n")
+	var got []string
+	for _, n := range nodes {
+		got = append(got, n.text)
+	}
+	want := []string{"first", "second", ">>> ", "trailing", "100%"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("nodes = %q, want %q", got, want)
+	}
+
+	// The rendered card must not contain a raw CR: a terminal would execute it
+	// as a carriage return and overwrite the row's start.
+	theme := DefaultTheme()
+	card := toolCard{
+		id:       "1",
+		name:     "bash",
+		input:    map[string]any{"command": "python3 -i", "tty": true},
+		response: parseToolResult("Python 3.10.18 (main, Jun 15 2025) on darwin\r\nType \"help\" for more information.\r\n>>> "),
+		state:    cardSuccess,
+	}
+	if out := card.render(theme, 100); strings.ContainsRune(out, '\r') {
+		t.Fatalf("rendered card contains a raw CR:\n%q", out)
+	}
+}
+
 func TestToolCardRender(t *testing.T) {
 	theme := DefaultTheme()
 	card := toolCard{

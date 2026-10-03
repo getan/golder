@@ -1,11 +1,12 @@
-// This file implements the bash tool (US-018): run a shell command, streaming
-// stdout/stderr back as tool_execution_update partials, honoring a timeout and
-// context cancellation (which kills the child process group). A non-zero exit
-// is surfaced as an error (isError) whose message carries the captured output.
+// This file implements the bash tool: run a shell command under a managed
+// session (internal/execsess), streaming stdout/stderr back as
+// tool_execution_update partials. A command that finishes within its yield
+// window returns its output directly; one that is still running hands back a
+// bash_id the model polls with write_stdin. A non-zero exit is surfaced as an
+// error (isError) whose message carries the captured output.
 package agenttool
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,26 +15,34 @@ import (
 	"runtime"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/smallnest/pigo/internal/agentcore"
+	"github.com/smallnest/pigo/internal/execsess"
 	"github.com/smallnest/pigo/internal/judge"
 )
 
-// bashDefaultTimeout bounds a command that does not specify one.
-const bashDefaultTimeout = 2 * time.Minute
-
-// bashMaxTimeout caps any requested timeout.
-const bashMaxTimeout = 10 * time.Minute
-
-// bashMaxOutputBytes caps how many bytes of combined stdout/stderr the bash tool
+// bashMaxOutputBytes caps how many bytes of combined stdout/stderr one result
 // returns to the model. A single command can emit megabytes (build logs, a big
-// cat), which — unlike the timeout cap — would otherwise flow into context whole
-// and blow the window. Output past this size is truncated to a head + tail
-// preview (see truncateBashOutput), mirroring search's searchMaxResults/"[truncated
-// …]" convention. This is the tool's own inner cap; a later executor-layer budget
-// may impose a stricter outer limit.
+// cat), which would otherwise flow into context whole and blow the window.
+// Output past this size is truncated to a head + tail preview (see
+// truncateBashOutput), mirroring search's "[truncated …]" convention. The
+// session's own buffer is bounded separately and larger (execsess.OutputCapBytes).
 const bashMaxOutputBytes = 30_000
+
+const (
+	// bashDefaultYield is how long a bash call waits for its command to finish
+	// before returning a session id for the still-running process.
+	bashDefaultYield = 10 * time.Second
+	// bashMinYield / bashMaxYield clamp a caller-supplied yield_time_ms.
+	bashMinYield = 250 * time.Millisecond
+	bashMaxYield = 30 * time.Second
+	// bashMaxTimeout caps an explicit timeout_ms hard deadline.
+	bashMaxTimeout = 10 * time.Minute
+	// interruptChar is the Ctrl-C byte write_stdin accepts; interruptHint is
+	// its escaped, model-facing spelling.
+	interruptChar = "\u0003"
+	interruptHint = `\u0003`
+)
 
 // truncateBashOutput caps s at bashMaxOutputBytes using the shared
 // truncateToBudget idiom (head + "[truncated N bytes]" marker + tail, cut on
@@ -43,32 +52,6 @@ func truncateBashOutput(s string) string {
 	return truncateToBudget(s, bashMaxOutputBytes)
 }
 
-// trimUTF8Prefix drops trailing bytes of s that form an incomplete rune, so the
-// returned prefix ends on a rune boundary.
-func trimUTF8Prefix(s string) string {
-	for len(s) > 0 {
-		if r, size := utf8.DecodeLastRuneInString(s); r == utf8.RuneError && size <= 1 {
-			s = s[:len(s)-1]
-			continue
-		}
-		break
-	}
-	return s
-}
-
-// trimUTF8Suffix drops leading bytes of s that form an incomplete rune, so the
-// returned suffix starts on a rune boundary.
-func trimUTF8Suffix(s string) string {
-	for len(s) > 0 {
-		if r, size := utf8.DecodeRuneInString(s); r == utf8.RuneError && size <= 1 {
-			s = s[1:]
-			continue
-		}
-		break
-	}
-	return s
-}
-
 // BashTool runs shell commands. Dir bounds the working directory (empty = the
 // process CWD). Shell selects the interpreter (empty = "bash -c").
 type BashTool struct {
@@ -76,18 +59,19 @@ type BashTool struct {
 	Dir string
 	// Shell is the interpreter path. Empty defaults to "bash".
 	Shell string
-	// Jobs holds background jobs launched with run_in_background. When nil,
-	// run_in_background is rejected (the front-end did not wire a store).
-	Jobs *BashJobStore
+	// Sessions tracks running commands so they can be polled and killed.
+	// Production always wires one shared manager (BuiltinTools); tests may
+	// omit it and get a private manager per tool.
+	Sessions *execsess.Manager
 	// Judge grades each command before it runs. When nil the command runs
-	// directly (today's behavior). When set, a sandbox-tier verdict routes
-	// the command through Sandbox and a deny-tier verdict blocks it, so the
-	// execution layer honors the same grade the BeforeToolCall gate saw
-	// (the shared verdict cache makes the second grade free).
+	// directly. When set, a sandbox-tier verdict routes the command through
+	// Sandbox and a deny-tier verdict blocks it, so the execution layer honors
+	// the same grade the BeforeToolCall gate saw (the shared verdict cache
+	// makes the second grade free).
 	Judge judge.Classifier
-	// Sandbox builds the sandboxed argv for a command. Nil means no
-	// isolation is available: sandbox-tier commands run directly (the gate
-	// already prompted for them).
+	// Sandbox builds the sandboxed argv for a command. Nil means no isolation
+	// is available: sandbox-tier commands run directly (the gate already
+	// prompted for them).
 	Sandbox SandboxRunner
 	// ForceSandbox routes every foreground command through Sandbox
 	// (PIGO_SANDBOX=enforce) and fails closed when Sandbox is nil.
@@ -96,12 +80,29 @@ type BashTool struct {
 
 // SandboxRunner builds a sandboxed argv for one shell invocation: argv[0] is
 // the executable, argv[1:] its args. dir is advisory (the caller keeps
-// cmd.Dir); cleanup removes any generated profile and runs after the command
-// finishes. It is a local interface so agenttool stays free of platform
-// imports: internal/seatbelt satisfies it structurally and the cli layer
-// injects it.
+// cmd.Dir); cleanup removes any generated profile and runs once the session
+// exits. It is a local interface so agenttool stays free of platform imports:
+// internal/seatbelt satisfies it structurally and the cli layer injects it.
 type SandboxRunner interface {
 	SandboxArgv(shell, flag, command, dir string) (argv []string, cleanup func(), err error)
+}
+
+// manager returns the tool's session manager, creating a private one when the
+// tool was constructed without wiring (tests, direct callers).
+func (t *BashTool) manager() *execsess.Manager {
+	if t.Sessions == nil {
+		t.Sessions = execsess.NewManager()
+	}
+	return t.Sessions
+}
+
+// StopSessions terminates every still-running session this tool spawned. It
+// lets a driver drop a tool set (sub-agent teardown) without leaking OS
+// processes.
+func (t *BashTool) StopSessions() {
+	if t.Sessions != nil {
+		t.Sessions.KillAll()
+	}
 }
 
 // sandboxRoute grades one command for sandbox routing. It returns sandbox=true
@@ -165,13 +166,15 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command string)
 type bashToolArgs struct {
 	// Command is the shell command line to run.
 	Command string `json:"command"`
-	// TimeoutMs optionally overrides the default timeout (milliseconds).
+	// TimeoutMs is an optional hard deadline in milliseconds: the command is
+	// killed when it elapses. 0 (the default) means no deadline.
 	TimeoutMs int `json:"timeout_ms,omitempty"`
-	// RunInBackground detaches the command from the turn: it keeps running after
-	// Execute returns, and its output is drained later via bash_output. A
-	// background command has no default timeout (so dev servers/watchers run
-	// indefinitely); timeout_ms still caps it if given.
-	RunInBackground bool `json:"run_in_background,omitempty"`
+	// YieldMs overrides how long to wait for the command to finish before
+	// returning a session id. 0 uses bashDefaultYield.
+	YieldMs int `json:"yield_time_ms,omitempty"`
+	// TTY runs the command on a pseudo-terminal, making its stdin writable
+	// with arbitrary input via write_stdin (interactive programs).
+	TTY bool `json:"tty,omitempty"`
 }
 
 // Name implements AgentTool.
@@ -179,13 +182,16 @@ func (t *BashTool) Name() string { return "bash" }
 
 // Description implements AgentTool.
 func (t *BashTool) Description() string {
-	return "Run a shell command, streaming stdout/stderr. Supports a timeout " +
-		"and cancellation. A non-zero exit code is reported as an error. " +
-		"Set run_in_background=true for long-running commands (dev servers, " +
-		"watchers): it returns immediately with a bash_id you drain with " +
-		"bash_output and stop with kill_bash. " +
-		"On Windows the command runs under bash if available (Git Bash/WSL), " +
-		"else PowerShell, else cmd — prefer portable commands."
+	return "Run a shell command, streaming stdout/stderr. If it is still running " +
+		"after yield_time_ms (default 10s) it keeps running as a session and the " +
+		"result carries a bash_id: read more output with write_stdin, and send " +
+		"chars \"" + interruptHint + "\" (Ctrl-C) to interrupt it. timeout_ms is a " +
+		"hard deadline that kills the command (capped at 10 minutes). Set tty=true " +
+		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
+		"prompt). A non-zero " +
+		"exit code is reported as an error. On Windows the command runs under bash " +
+		"if available (Git Bash/WSL), else PowerShell, else cmd — prefer portable " +
+		"commands."
 }
 
 // Schema implements AgentTool.
@@ -194,8 +200,9 @@ func (t *BashTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "command":    {"type": "string", "description": "Shell command line to run."},
-    "timeout_ms": {"type": "integer", "description": "Timeout in milliseconds (capped at 10 minutes). Ignored in background unless set.", "minimum": 0},
-    "run_in_background": {"type": "boolean", "description": "Run detached and return immediately with a bash_id; drain output with bash_output, stop with kill_bash."}
+    "timeout_ms": {"type": "integer", "description": "Hard deadline in milliseconds; the command is killed when it elapses (capped at 10 minutes). Omit for no deadline.", "minimum": 0},
+    "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
+    "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."}
   },
   "required": ["command"],
   "additionalProperties": false
@@ -236,32 +243,26 @@ func resolveShell(explicit, goos string, lookPath func(string) (string, error)) 
 	return "bash", "-c"
 }
 
-// streamWriter forwards each written chunk to onUpdate as an incremental
-// delta while accumulating the full output. Deltas are the update contract:
-// consumers append partials (tui subagentPanel.appendOutput, stream-json),
-// so resending the whole snapshot per chunk would duplicate output
-// quadratically. The full text still lands in the final ToolResult. It is
-// safe for concurrent use so stdout and stderr can share the same combined
-// buffer.
-type streamWriter struct {
-	mu       *sync.Mutex
-	buf      *bytes.Buffer
-	onUpdate agentcore.ToolUpdateFunc
-}
-
-func (w streamWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	w.buf.Write(p)
-	w.mu.Unlock()
-	if w.onUpdate != nil {
-		w.onUpdate(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(string(p))}})
+// bashYield clamps the caller's yield window, defaulting to bashDefaultYield.
+func bashYield(ms int) time.Duration {
+	if ms <= 0 {
+		return bashDefaultYield
 	}
-	return len(p), nil
+	d := time.Duration(ms) * time.Millisecond
+	if d < bashMinYield {
+		return bashMinYield
+	}
+	if d > bashMaxYield {
+		return bashMaxYield
+	}
+	return d
 }
 
 // Execute implements AgentTool. It streams combined stdout/stderr via onUpdate,
-// enforces a timeout, and kills the process on context cancellation. A non-zero
-// exit returns a Go error (→ isError) carrying the exit code and output.
+// waits up to the yield window for the command to finish, and hands back a
+// bash_id when it is still running. Caller cancellation during that initial
+// wait kills the command (the behavior Ctrl+C users expect); once Execute has
+// returned a session, the process survives until write_stdin or exit.
 func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	a, bad := decodeArgs[bashToolArgs](args, "bash")
 	if bad != nil {
@@ -271,21 +272,6 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		return errorResult("bash: command is required"), nil
 	}
 
-	if a.RunInBackground {
-		return t.startBackground(a)
-	}
-
-	timeout := bashDefaultTimeout
-	if a.TimeoutMs > 0 {
-		timeout = time.Duration(a.TimeoutMs) * time.Millisecond
-	}
-	if timeout > bashMaxTimeout {
-		timeout = bashMaxTimeout
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
 	argv, cleanup, msg, ok := t.sandboxArgv(ctx, shell, flag, a.Command)
 	if !ok {
@@ -294,22 +280,42 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}
 		return errorResult(msg), nil
 	}
-	if cleanup != nil {
-		defer cleanup()
+
+	var timeout time.Duration
+	if a.TimeoutMs > 0 {
+		timeout = time.Duration(a.TimeoutMs) * time.Millisecond
+		if timeout > bashMaxTimeout {
+			timeout = bashMaxTimeout
+		}
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	configureProcessGroup(cmd)
-	if t.Dir != "" {
-		cmd.Dir = t.Dir
+	yield := bashYield(a.YieldMs)
+
+	// Stream output chunks while this call is in flight. The gate ensures a
+	// chunk racing the end of the initial wait cannot call onUpdate after
+	// Execute has returned.
+	var obsMu sync.Mutex
+	obsOpen := onUpdate != nil
+	var observer func(string)
+	if onUpdate != nil {
+		observer = func(chunk string) {
+			obsMu.Lock()
+			defer obsMu.Unlock()
+			if obsOpen {
+				onUpdate(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(chunk)}})
+			}
+		}
 	}
 
-	var mu sync.Mutex
-	var combined bytes.Buffer
-	sw := streamWriter{mu: &mu, buf: &combined, onUpdate: onUpdate}
-	cmd.Stdout = sw
-	cmd.Stderr = sw
-
-	if err := cmd.Start(); err != nil {
+	sess, err := t.manager().Start(execsess.StartRequest{
+		Command:  a.Command,
+		Argv:     argv,
+		Dir:      t.Dir,
+		Timeout:  timeout,
+		Cleanup:  cleanup,
+		Observer: observer,
+		TTY:      a.TTY,
+	})
+	if err != nil {
 		var execErr *exec.Error
 		if errors.As(err, &execErr) {
 			return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("")}},
@@ -318,157 +324,52 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		return errorResult(fmt.Sprintf("bash: could not start command: %v", err)), nil
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	var err error
-	select {
-	case err = <-done:
-	case <-runCtx.Done():
-		pid := 0
-		if cmd.Process != nil {
-			pid = cmd.Process.Pid
-		}
-		shouldEscalate := terminateProcessGroup(pid)
-		timer := time.NewTimer(terminationGracePeriod)
-		select {
-		case err = <-done:
-			timer.Stop()
-			if shouldEscalate {
-				killProcessGroup(pid)
-			}
-		case <-timer.C:
-			killProcessGroup(pid)
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			err = <-done
-		}
+	exited := sess.Wait(ctx, yield, execsess.WaitExit)
+	if onUpdate != nil {
+		obsMu.Lock()
+		obsOpen = false
+		obsMu.Unlock()
+		sess.SetObserver(nil)
 	}
 
-	mu.Lock()
-	output := combined.String()
-	mu.Unlock()
-
-	// Cap the output before it enters any ToolResult / error message, so a single
-	// command's huge output cannot blow the model's context. Truncation keeps a
-	// head + tail preview with a "[truncated N bytes]" marker in the middle.
-	output = truncateBashOutput(output)
-
-	// Context cancellation / timeout takes precedence in the message.
-	if runCtx.Err() == context.DeadlineExceeded {
-		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(output)}},
-			fmt.Errorf("bash: command timed out after %s\n%s", timeout, output)
-	}
-	if ctx.Err() == context.Canceled {
-		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(output)}},
-			fmt.Errorf("bash: command canceled\n%s", output)
+	// Caller cancellation during the initial wait stops the command, matching
+	// the old foreground behavior (Ctrl+C kills the running command).
+	if !exited && ctx.Err() != nil {
+		sess.Kill()
+		out := truncateBashOutput(sess.ReadNew())
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(out)}},
+			fmt.Errorf("bash: command canceled\n%s", out)
 	}
 
-	if err != nil {
-		exitCode := -1
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			exitCode = ee.ExitCode()
+	snap := sess.Snapshot()
+	out := truncateBashOutput(sess.ReadNew())
+
+	if !exited {
+		text := out
+		if text != "" {
+			text += "\n"
 		}
+		text += fmt.Sprintf("[%s: running]\nUse write_stdin with bash_id %q to read more output; send chars \"%s\" to interrupt.",
+			sess.ID, sess.ID, interruptHint)
 		return agentcore.AgentToolResult{
-				Content: agentcore.ContentList{agentcore.NewTextContent(output)},
-				Details: map[string]any{"exitCode": exitCode},
+			Content: agentcore.ContentList{agentcore.NewTextContent(text)},
+			Details: map[string]any{"bash_id": sess.ID, "status": string(execsess.StatusRunning)},
+		}, nil
+	}
+
+	if snap.TimedOut {
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(out)}},
+			fmt.Errorf("bash: command timed out after %s\n%s", snap.Timeout, out)
+	}
+	if snap.ExitCode != 0 {
+		return agentcore.AgentToolResult{
+				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
+				Details: map[string]any{"exitCode": snap.ExitCode},
 			},
-			fmt.Errorf("bash: command exited with code %d\n%s", exitCode, output)
+			fmt.Errorf("bash: command exited with code %d\n%s", snap.ExitCode, out)
 	}
-
 	return agentcore.AgentToolResult{
-		Content: agentcore.ContentList{agentcore.NewTextContent(output)},
+		Content: agentcore.ContentList{agentcore.NewTextContent(out)},
 		Details: map[string]any{"exitCode": 0},
-	}, nil
-}
-
-// startBackground launches the command detached from the turn context and
-// returns immediately with a bash_id. The job runs under its own cancelable
-// context (rooted at context.Background(), not the turn ctx which is canceled
-// when the turn ends), so it survives past Execute. A background command has no
-// default timeout — a dev server or watcher is expected to run indefinitely —
-// but an explicit timeout_ms still caps it. Its combined output accumulates in
-// the job's buffer for bash_output to drain; kill_bash cancels its context.
-func (t *BashTool) startBackground(a bashToolArgs) (agentcore.AgentToolResult, error) {
-	if t.Jobs == nil {
-		return errorResult("bash: run_in_background is not available in this environment"), nil
-	}
-
-	var jobCtx context.Context
-	var cancel context.CancelFunc
-	if a.TimeoutMs > 0 {
-		timeout := time.Duration(a.TimeoutMs) * time.Millisecond
-		if timeout > bashMaxTimeout {
-			timeout = bashMaxTimeout
-		}
-		jobCtx, cancel = context.WithTimeout(context.Background(), timeout)
-	} else {
-		jobCtx, cancel = context.WithCancel(context.Background())
-	}
-
-	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	argv, cleanup, blockMsg, ok := t.sandboxArgv(context.Background(), shell, flag, a.Command)
-	if !ok {
-		cancel()
-		if blockMsg == "" {
-			return errorResult("bash: command blocked"), nil
-		}
-		return errorResult(blockMsg), nil
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	configureProcessGroup(cmd)
-	if t.Dir != "" {
-		cmd.Dir = t.Dir
-	}
-
-	job := t.Jobs.create(a.Command, cancel)
-	w := job.writer()
-	cmd.Stdout = w
-	cmd.Stderr = w
-
-	if err := cmd.Start(); err != nil {
-		cancel()
-		if cleanup != nil {
-			cleanup()
-		}
-		job.finish(-1, err.Error())
-		return errorResult(fmt.Sprintf("bash: could not start background command: %v", err)), nil
-	}
-
-	go func(pid int, ctx context.Context) {
-		<-ctx.Done()
-		if terminateProcessGroup(pid) {
-			time.Sleep(terminationGracePeriod)
-			killProcessGroup(pid)
-		} else {
-			killProcess(pid)
-		}
-	}(cmd.Process.Pid, jobCtx)
-
-	go func() {
-		err := cmd.Wait()
-		cancel()
-		if cleanup != nil {
-			cleanup()
-		}
-		exitCode := 0
-		errMsg := ""
-		if err != nil {
-			exitCode = -1
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
-				exitCode = ee.ExitCode()
-			}
-			errMsg = err.Error()
-		}
-		job.finish(exitCode, errMsg)
-	}()
-
-	msg := fmt.Sprintf("started background command %s: %s\nuse bash_output %q to read its output, kill_bash %q to stop it", job.ID, a.Command, job.ID, job.ID)
-	return agentcore.AgentToolResult{
-		Content: agentcore.ContentList{agentcore.NewTextContent(msg)},
-		Details: map[string]any{"bash_id": job.ID, "background": true},
 	}, nil
 }

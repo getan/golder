@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/smallnest/pigo/internal/agentcore"
 )
 
 func TestEscalate(t *testing.T) {
@@ -22,7 +26,11 @@ func TestEscalate(t *testing.T) {
 		{Confirm, 0.80, Confirm},
 		{Confirm, 0.30, Sandbox},
 		{Sandbox, 0.80, Sandbox},
-		{Sandbox, 0.30, Deny},
+		// Sandbox is the containment floor: an unsure sandbox stays sandboxed
+		// instead of escalating to a hard deny (a normal interactive REPL must
+		// not be bricked by a low-confidence grade).
+		{Sandbox, 0.30, Sandbox},
+		{Sandbox, 0.0, Sandbox},
 		{Deny, 0.99, Deny},
 		// A direct deny needs strong evidence: below denyConfidence it is
 		// held at Sandbox, where the seatbelt runner contains it, rather
@@ -136,7 +144,70 @@ func TestFailuresAreNotCached(t *testing.T) {
 	args := json.RawMessage(`{"command":"ls"}`)
 	j.Classify(context.Background(), "bash", args)
 	j.Classify(context.Background(), "bash", args)
-	if _, ok := cachedVerdict("bash", args, "t3"); ok {
+	state := j.jevState(context.Background(), "bash", args)
+	if _, ok := cachedVerdict("bash", args, "t3", state); ok {
 		t.Fatal("failure verdict cached, want no caching of failures")
+	}
+}
+
+// TestStateTranscriptSelectsUserIntentAndRecentEntries pins the guardian-style
+// selection: recent user intent is kept even when the newest entries are all
+// tool output, and entries outside the recent window are dropped.
+func TestStateTranscriptSelectsUserIntentAndRecentEntries(t *testing.T) {
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("please clean the build dir")}},
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolName: "read", Content: agentcore.ContentList{agentcore.NewTextContent("OLD-TOOL-OUTPUT")}},
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolName: "read", Content: agentcore.ContentList{agentcore.NewTextContent("RECENT-ONE")}},
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolName: "read", Content: agentcore.ContentList{agentcore.NewTextContent("RECENT-TWO")}},
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolName: "read", Content: agentcore.ContentList{agentcore.NewTextContent("RECENT-THREE")}},
+	}
+	ctx := agentcore.WithMessageSnapshot(context.Background(), msgs)
+	state := (&JevJudge{}).jevState(ctx, "bash", json.RawMessage(`{"command":"rm -rf ./build"}`))
+	if !strings.Contains(state, "user: please clean the build dir") {
+		t.Fatalf("state missing user intent:\n%s", state)
+	}
+	for _, want := range []string{"RECENT-ONE", "RECENT-TWO", "RECENT-THREE"} {
+		if !strings.Contains(state, want) {
+			t.Fatalf("state missing recent entry %q:\n%s", want, state)
+		}
+	}
+	if strings.Contains(state, "OLD-TOOL-OUTPUT") {
+		t.Fatalf("state contains an entry outside the recent window:\n%s", state)
+	}
+}
+
+// TestStateTranscriptCapsToolOutput pins the per-entry tool cap: one chatty
+// command cannot flood the state.
+func TestStateTranscriptCapsToolOutput(t *testing.T) {
+	long := strings.Repeat("x", jevMaxToolEntryRunes*3)
+	msgs := agentcore.MessageList{
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolName: "bash", Content: agentcore.ContentList{agentcore.NewTextContent(long)}},
+	}
+	state := (&JevJudge{}).jevState(
+		agentcore.WithMessageSnapshot(context.Background(), msgs), "bash", json.RawMessage(`{"command":"ls"}`))
+	idx := strings.Index(state, "tool(bash): ")
+	if idx < 0 {
+		t.Fatalf("state missing tool entry:\n%s", state)
+	}
+	entry := state[idx:]
+	if got := utf8.RuneCountInString(entry); got > jevMaxToolEntryRunes+len("tool(bash): ")+2 {
+		t.Fatalf("tool entry = %d runes, want it capped at ~%d", got, jevMaxToolEntryRunes)
+	}
+}
+
+// TestStateRespectsTotalBudget pins the final state bound no matter how many
+// or how large the candidate entries are.
+func TestStateRespectsTotalBudget(t *testing.T) {
+	var msgs agentcore.MessageList
+	for i := 0; i < 10; i++ {
+		msgs = append(msgs, agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(strings.Repeat("y", jevMaxTextEntryRunes))},
+		})
+	}
+	state := (&JevJudge{}).jevState(
+		agentcore.WithMessageSnapshot(context.Background(), msgs), "bash", json.RawMessage(`{"command":"ls"}`))
+	if got := utf8.RuneCountInString(state); got > jevMaxStateRunes+2 {
+		t.Fatalf("state = %d runes, want <= %d", got, jevMaxStateRunes)
 	}
 }

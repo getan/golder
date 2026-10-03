@@ -145,7 +145,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 
 1. **解析 Provider**：调用 `provider.ResolveProvider`（见下一小节），把模型 id / base URL / protocol / provider 名解析成一个具体的 `provider.Provider` 与其规范名。
 2. **构建系统提示**：调用 `runtime.BuildSystemPrompt`（`internal/runtime/prompt.go`），把可选的 `--system-prompt` 作为基础指令，叠加工作目录信息与 `--append-system-prompt` 追加内容。`resolveAppendInstructions` 会把每个追加值当作"存在的文件则读其内容、否则当字面文本"处理，对齐 pi 的行为。
-3. **构建工具集**：调用 `BuiltinTools`，返回根植于 cwd 的默认文件/shell 工具集（`ReadTool`/`WriteTool`/`EditTool`/`GrepTool`/`FindTool`/`BashTool`/`BashOutputTool`/`BashKillTool`/`TodoTool`/`WebFetchTool`/`WebSearchTool`），`--no-tools` 时返回 nil。工具非空时还会追加两员：`memory_search`（持久记忆检索，memory 启用时）与通用 `task` 工具（子 Agent 编排，第 9 章）。
+3. **构建工具集**：调用 `BuiltinTools`，返回根植于 cwd 的默认文件/shell 工具集（`ReadTool`/`ApplyPatchTool`/`GrepTool`/`FindTool`/`BashTool`/`WriteStdinTool`/`TodoTool`/`WebFetchTool`/`WebSearchTool`），`--no-tools` 时返回 nil。`BashTool` 与 `WriteStdinTool` 共用一个 `execsess.Manager`：bash 负责起会话，write_stdin 负责轮询输出与中断（第 5 章）。工具非空时还会追加两员：`memory_search`（持久记忆检索，memory 启用时）与通用 `task` 工具（子 Agent 编排，第 9 章）。
 4. **发现插件**：非 `--no-tools` 时调用 `plugin.Discover` 追加外部插件工具；插件加载是容错的，启动失败只记录并跳过。
 5. **应用工具策略**：对组装完毕的工具集校验并套用 `--allowed-tools`/`--disallowed-tools` 边界（第 5 章）。校验必须发生在插件与记忆工具就位之后——这些名字只在运行期存在；而过滤发生在注册层、先于确认闸门，被移除的工具根本不会被广播，`--approve` 也无法放宽这条边界。
 6. **加载技能**：`LoadSkills` 从 `~/.agents/skills`（或 `$PIGO_SKILLS_DIR`）一次性加载技能集，供系统提示注入与 `/skill-name` 斜杠命令共用；个别技能文件解析失败只警告不中断。

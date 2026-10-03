@@ -43,6 +43,9 @@ type RunParams struct {
 // messages ahead of the new prompt.
 func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	env := p.Env
+	// Kill still-running shell sessions on exit so a long-running command handed
+	// back as a bash_id is not orphaned when the one-shot run finishes.
+	defer run.KillShellSessions(env.Tools)
 	// Best-effort plugin slash-command support in headless mode: if the prompt is
 	// a "/cmd ..." naming a plugin command, invoke it, print its notifications to
 	// errOut, and use the returned prompt for this run (appending the raw args if

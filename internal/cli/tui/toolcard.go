@@ -443,17 +443,46 @@ func stripDiffTail(text string) string {
 // inferring depth from leading whitespace (every two leading spaces is one
 // level). Trailing empty lines are trimmed so the card does not render blank
 // tail rows.
+//
+// Carriage returns are normalized away before splitting. A PTY-backed command
+// (bash with tty=true) yields the raw terminal byte stream, whose lines end in
+// CRLF, and this transcript is rendered inside a fixed-width viewport: a bare
+// CR reaching the terminal is executed as a carriage return, rewinding the
+// cursor to column 0 so the next write overwrites the row's start — the text
+// visibly shifts and loses its prefix (issue seen on `python3 -i` output).
+// A CR not paired with LF is a progress-bar rewrite, where a terminal leaves
+// only the segment after the last CR visible; a trailing CR alone leaves the
+// line before it intact.
 func parseToolResult(result string) []respNode {
+	result = strings.ReplaceAll(result, "\r\n", "\n")
 	lines := strings.Split(result, "\n")
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
 	nodes := make([]respNode, 0, len(lines))
 	for _, ln := range lines {
+		ln = normalizeCR(ln)
 		leading := len(ln) - len(strings.TrimLeft(ln, " "))
 		nodes = append(nodes, respNode{text: ln[leading:], depth: leading / 2})
 	}
 	return nodes
+}
+
+// normalizeCR resolves the carriage returns within one line the way a terminal
+// would: the segment after the last CR is what remains visible, except that a
+// CR only at the end of the line (nothing written after it) leaves the text
+// before it intact.
+func normalizeCR(line string) string {
+	if !strings.ContainsRune(line, '\r') {
+		return line
+	}
+	segs := strings.Split(line, "\r")
+	for i := len(segs) - 1; i >= 0; i-- {
+		if segs[i] != "" {
+			return segs[i]
+		}
+	}
+	return ""
 }
 
 // todoInputItem is one checklist entry decoded from a todo tool call's

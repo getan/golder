@@ -269,6 +269,11 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// emitFrom feeds the parent stream and is run-scoped, so a child's
 			// SubAgentProgressEvent lands on the right run's stream.
 			toolCtx := agentcore.WithProgressEmitter(ctx, emitFrom)
+			// Also snapshot the conversation as of this batch so context-sensitive
+			// hooks (the risk judge) can grade a call against the user intent and
+			// recent history. The snapshot is a slice header; later appends write
+			// past the captured length, so the view stays stable.
+			toolCtx = agentcore.WithMessageSnapshot(toolCtx, agentCtx.Messages)
 			// Hosted calls already ran provider-side: bracket them with
 			// display-only start/end events (tool cards without execution,
 			// approval, or registry lookup) around the local batch.

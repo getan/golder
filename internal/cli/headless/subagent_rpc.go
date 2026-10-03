@@ -99,6 +99,9 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 	}
 	cwd, _ := os.Getwd()
 	tools := filterBuiltinTools(run.BuiltinTools(cwd, false), params.Tools)
+	// The child subprocess must not orphan shell sessions it spawned when it
+	// finishes serving the request.
+	defer run.KillShellSessions(tools)
 	reg := run.ToolRegistry(tools)
 	creds := provider.NewCredentialStore(nil) // env-resolved
 	runCfg := runtime.RunConfig{

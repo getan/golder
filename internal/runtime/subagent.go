@@ -283,6 +283,11 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 	if len(tools) == 0 && runCfg.Batch.ToolExecutorConfig.Registry != nil {
 		tools = runCfg.Batch.ToolExecutorConfig.Registry.List()
 	}
+	// A child may leave shell sessions running (bash commands handed back as
+	// bash_ids). The parent cannot reach a child's session manager, so the child
+	// kills them once its loop settles; without this they would leak until
+	// process exit.
+	defer stopOwnedSessions(tools)
 	childCtx := &agentcore.AgentContext{
 		SystemPrompt: t.spec.SystemPrompt,
 		Messages: agentcore.MessageList{
@@ -351,6 +356,19 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 		return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q failed (%s): %s", t.spec.Name, final.StopReason, text)
 	}
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(text)}}, nil
+}
+
+// sessionStopper is implemented by tools that own OS processes which must not
+// outlive the run (the bash tool's shell sessions).
+type sessionStopper interface{ StopSessions() }
+
+// stopOwnedSessions terminates any sessions owned by tools.
+func stopOwnedSessions(tools []agentcore.AgentTool) {
+	for _, t := range tools {
+		if s, ok := t.(sessionStopper); ok {
+			s.StopSessions()
+		}
+	}
 }
 
 // executeProcess runs the child agent loop in a fresh pigo subprocess over stdio

@@ -656,33 +656,22 @@ walkErr := filepath.WalkDir(start, func(path string, d os.DirEntry, err error) e
 
 `.git` 目录整棵跳过，被 gitignore 命中的目录用 `filepath.SkipDir` 整棵剪掉（而不是进去再逐个丢弃，省了大量遍历）。命中结果攒到 `searchMaxResults = 1000` 就用 `filepath.SkipAll` 停手，防止一个太宽的正则把模型上下文淹没。`FindTool` 与之几乎同构，只是把"逐行正则匹配"换成"对文件名做 glob 匹配"，结果排序后返回。`LsTool` 最简单：列一个目录，把目录名加尾斜杠、和文件名分开排序后返回，并统计各自数量。
 
-## Bash 工具：流式输出、超时与取消
+## Bash 工具：流式输出、会话与中断
 
-`BashTool`（`bash_tool.go`）是副作用最大的工具——它跑任意 shell 命令，所以声明为串行执行。它要同时满足三件事：把输出**流式**吐回、受**超时**约束、能被**取消**。
+`BashTool`（`bash_tool.go`）是副作用最大的工具——它跑任意 shell 命令，所以声明为串行执行。它要同时满足五件事：把输出**流式**吐回、受**超时**约束、能被**取消**、长命令还能持续观察、交互式命令还能喂输入。
 
-超时有默认值也有上限：
-
-```go
-const bashDefaultTimeout = 2 * time.Minute
-const bashMaxTimeout = 10 * time.Minute
-```
-
-请求里的 `timeout_ms` 可以覆盖默认值，但会被夹到 10 分钟上限。执行时用 `context.WithTimeout` 派生一个子 context，再用 `exec.CommandContext` 起进程——这样超时或上层取消都能杀掉子进程。流式输出靠一个自定义的 `streamWriter`，它把 stdout 和 stderr 合并到同一个缓冲区，每写入一块就回调 `onUpdate` 吐出当前的全量快照：
+命令交给 `internal/execsess` 的会话管理器执行。一次调用最多等 `yield_time_ms`（默认 10s）：命令在此之内结束就直接返回输出与退出码；还没结束就转为一个带 `bash_id` 的会话，进程继续跑，模型用 `write_stdin` 轮询增量输出、发 `\u0003`（Ctrl-C）中断（第二次强制杀进程组）。超时由此分成两层：
 
 ```go
-func (w streamWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	w.buf.Write(p)
-	snapshot := w.buf.String()
-	w.mu.Unlock()
-	if w.onUpdate != nil {
-		w.onUpdate(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(snapshot)}})
-	}
-	return len(p), nil
-}
+const bashDefaultYield = 10 * time.Second   // 一次调用等的窗口
+const bashMaxTimeout  = 10 * time.Minute    // timeout_ms 的硬上限
 ```
 
-因为 stdout 和 stderr 两个流会并发往同一个缓冲区写，所以 `streamWriter` 用一把互斥锁护住。命令跑完后，`Execute` 按优先级判定结果：超时（`DeadlineExceeded`）最优先、其次是被取消（`Canceled`）、再次是非零退出码。非零退出会返回一个 Go error 携带退出码与输出——回到 `runTool` 那里，这个 error 会被转成 `isError=true` 的结果。注意这里 `Details` 里带了 `exitCode`，让 UI 和模型都能看到命令到底是成功还是失败、失败在第几号退出码。
+`timeout_ms` 是硬截止：到点由会话看门狗杀掉整个进程组；不设就没有默认超时（旧的 2 分钟默认值已删除，长任务不再被误杀）。会话缓冲是 head+tail 有界窗口（`execsess.OutputCapBytes`，1MiB），中间被丢掉的部分以 `[truncated N bytes]` 标记回给模型，所以再吵的命令也不会撑爆内存或上下文。`tty=true` 时改在伪终端上运行（`internal/execsess/pty_*.go`：darwin 的 `TIOCPTYGNAME/GRANT/UNLK`、linux 的 `TIOCSPTLCK/GPTN`，窗口固定 24×80），stdin 从此可写：`write_stdin` 把任意字面输入写进 master，`\u0003` 仍走进程组信号语义；终端会回显输入、输出带 `\r\n`，这是终端的本性，不做归一化。
+
+流式输出靠会话的 `Observer`：stdout 和 stderr 合并写入同一个缓冲区，每写入一块就回调 `onUpdate` 吐一个增量（不是全量快照），同时唤醒正在等待的轮询。命令跑完后，`Execute` 按优先级判定结果：超时最优先、其次是调用方取消（Ctrl+C 会杀掉首次等待中的会话）、再次是非零退出码。非零退出返回一个 Go error 携带退出码与输出——回到 `runTool` 那里，这个 error 会被转成 `isError=true` 的结果；`Details` 里带 `exitCode` / `bash_id` / `status`，让 UI 和模型都能看到命令的最终状态。
+
+进程组的 SIGTERM→SIGKILL 升级、SIGINT 中断、会话上限 64 与退出时的 `KillAll` 都在 `internal/execsess` 里，与工具层解耦；REPL/TUI/headless 各自在退出时清理本会话的残留进程。
 
 ## 网络抓取与 HTML→Markdown
 
