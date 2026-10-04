@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // This file renders the multi-line sub-agent status panel (SPEC 4.4, US-006): a
@@ -264,10 +266,21 @@ func (p subagentPanel) expandedLines(row *subagentRow, width int) []string {
 	return wrapped
 }
 
-// wrapToWidth breaks s into segments no wider than width display columns, cutting
-// on the column boundary (there is no word-aware wrapping here — sub-agent output
-// is arbitrary text/code). An empty line yields one empty segment so blank lines
-// in the output are preserved.
+// wrapToWidth breaks s into segments no wider than width display columns,
+// cutting on grapheme boundaries (there is no word-aware wrapping here —
+// sub-agent output is arbitrary text/code). An empty line yields one empty
+// segment so blank lines in the output are preserved.
+//
+// Cutting is ANSI-aware so escape sequences are never split and zero-width
+// bytes cannot skew the accounting. Truncate and TruncateLeft partition the
+// string: the first takes the graphemes that fit, the second drops exactly
+// those, so concatenating the segments reproduces the input.
+//
+// This replaces an advance of `s = s[len(TruncateToWidth(s, width)):]`, which
+// was wrong twice over: the rendered prefix gains a three-byte ellipsis that
+// is not in the source (so the slice could run past the end and panic — the
+// v1.1.0 crash), and wherever the prefix carried zero-width bytes (ANSI
+// escapes, combining marks) the same expression also skipped real content.
 func wrapToWidth(s string, width int) []string {
 	if width <= 0 {
 		return []string{s}
@@ -277,13 +290,20 @@ func wrapToWidth(s string, width int) []string {
 	}
 	var segs []string
 	for s != "" {
-		seg := TruncateToWidth(s, width)
-		if seg == "" { // guard against no forward progress on odd-width runes
+		head := ansi.Truncate(s, width, "")
+		rest := ansi.TruncateLeft(s, width, "")
+		if head == "" || rest == s {
+			// Cannot split further. Two cases: the leading grapheme is wider
+			// than the whole line (the panel is too narrow for a better
+			// answer), or the remainder is zero-width only — a trailing ANSI
+			// reset, say — which Truncate keeps because it fits while
+			// TruncateLeft has nothing to drop. Emit the remainder whole and
+			// stop; looping would never make progress.
 			segs = append(segs, s)
 			break
 		}
-		segs = append(segs, seg)
-		s = s[len(seg):]
+		segs = append(segs, head)
+		s = rest
 	}
 	return segs
 }
