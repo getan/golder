@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -84,11 +85,20 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	if seam == nil {
 		t.Fatal("BeforeToolCall should hold the judge gate when remote control is off")
 	}
-	// The baseline gate contains benign calls — this test session has no
-	// reviewer, so the failed review routes bash into the sandbox (fail-closed
-	// containment) instead of running it bare — and blocks static hard-denies.
-	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec == nil || dec.Block || !dec.Sandbox {
-		t.Errorf("judge baseline should contain benign bash with a sandbox request, got %+v", dec)
+	// The baseline gate decides benign calls: this test session has no reviewer,
+	// so the failed review routes bash into the sandbox when a runner exists
+	// (fail-closed containment) and blocks it when none does (fail-closed). The
+	// branch mirrors run.SandboxGate(), the same predicate buildConfig wires in,
+	// so this test holds on hosts with and without a platform sandbox. It also
+	// blocks static hard-denies regardless.
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec == nil {
+		t.Fatal("judge baseline should decide on benign bash, got nil")
+	} else if run.SandboxGate() != nil {
+		if dec.Block || !dec.Sandbox {
+			t.Errorf("with a sandbox runner, benign bash should be contained, got %+v", dec)
+		}
+	} else if !dec.Block {
+		t.Errorf("without a sandbox runner, benign bash should fail closed, got %+v", dec)
 	}
 	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"sudo rm -rf /"}`)}); dec == nil || !dec.Block {
 		t.Error("judge baseline should block static hard-denies")

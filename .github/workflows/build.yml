@@ -27,12 +27,12 @@ jobs:
         arch: [amd64, arm64]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: stable
 
@@ -68,7 +68,7 @@ jobs:
           ls -l release/
 
       - name: Upload ${{ matrix.os }}/${{ matrix.arch }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: golder-${{ matrix.os }}-${{ matrix.arch }}
           path: release/*.tar.gz
@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: golder-*
           path: release
@@ -94,7 +94,7 @@ jobs:
           cat checksums.txt
 
       - name: Upload release directory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: golder-release
           path: release/
