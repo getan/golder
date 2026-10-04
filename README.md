@@ -40,14 +40,21 @@ go install ./cmd/golder    # 安装到 $GOPATH/bin
 
 ### OpenCode（默认）
 
-golder 默认走 `opencode-go` 网关，模型 `muse-spark-1.3-contributor`。只需设置 API Key：
+golder 默认走 `opencode-go` 网关，模型 `deepseek-v4.1-flash`，推理档位 `max`。只需设置 API Key：
 
 ```bash
 export OPENCODE_API_KEY=...
 golder
 ```
 
-如果所在网络访问 `opencode.ai` 需要代理，额外设置：
+> `muse-spark-1.3-contributor` 也在这个网关上，但需要**美国出口 IP** 才能调用；不在美国网络时用 `GOLDER_PROXY` 指向美国节点：
+>
+> ```bash
+> export GOLDER_PROXY=http://127.0.0.1:7897    # 代理出口需在美国
+> golder -m muse-spark-1.3-contributor
+> ```
+
+如果访问 `opencode.ai` 本身就需要代理，也设置 `GOLDER_PROXY`：
 
 ```bash
 export GOLDER_PROXY=http://127.0.0.1:7897
@@ -61,8 +68,8 @@ export GOLDER_PROXY=http://127.0.0.1:7897
 
 ```toml
 provider = "opencode-go"
-model = "muse-spark-1.3-contributor"
-thinking_level = "xhigh"          # off | minimal | low | medium | high | xhigh | max
+model = "deepseek-v4.1-flash"
+thinking_level = "max"            # off | minimal | low | medium | high | xhigh | max
 # base_url = "https://..."        # 覆盖 Provider 默认端点
 # api_key = "..."                 # 建议改用环境变量或 credential 引用
 # credential = "my-key"           # 引用 ~/.golder/.credentials.yaml 中的条目

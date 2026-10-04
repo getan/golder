@@ -369,10 +369,10 @@ func buildResponsesParams(req CompletionRequest, useHostedSearch bool) responses
 	if sp := strings.TrimSpace(req.Context.SystemPrompt); sp != "" {
 		params.Instructions = openai.String(sp)
 	}
-	if effort := responsesReasoningEffort(req.Config.ThinkingLevel); effort != "" {
+	if effort := WireReasoningEffort(req.Model, req.Config.ThinkingLevel); effort != "" {
 		// Requesting a summary makes the API return the model's reasoning so golder
 		// can render it as a thinking block, matching the chat driver.
-		params.Reasoning = shared.ReasoningParam{Effort: effort, Summary: shared.ReasoningSummaryAuto}
+		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(effort), Summary: shared.ReasoningSummaryAuto}
 	}
 	if tools := buildResponsesTools(req.Context.Tools, useHostedSearch); len(tools) > 0 {
 		params.Tools = tools
@@ -535,23 +535,6 @@ func imageInputParts(m agentcore.Message) (responses.ResponseInputMessageContent
 		parts = append(parts, part)
 	}
 	return parts, true
-}
-
-// responsesReasoningEffort maps golder's thinking level to a Responses API
-// reasoning effort. The Responses reasoning field supports only low/medium/high,
-// so "minimal" collapses to "low" (unlike the chat driver, which forwards
-// "minimal" verbatim). off/unset yields "", signalling no reasoning param.
-func responsesReasoningEffort(level agentcore.ThinkingLevel) shared.ReasoningEffort {
-	switch level {
-	case agentcore.ThinkingMinimal, agentcore.ThinkingLow:
-		return shared.ReasoningEffortLow
-	case agentcore.ThinkingMedium:
-		return shared.ReasoningEffortMedium
-	case agentcore.ThinkingHigh, agentcore.ThinkingXHigh, agentcore.ThinkingMax:
-		return shared.ReasoningEffortHigh
-	default:
-		return ""
-	}
 }
 
 // responsesRole maps a golder message role to the Responses API input role. Tool

@@ -130,32 +130,13 @@ func encodeOpenAIRequest(req CompletionRequest) ([]byte, error) {
 	// OpenAI `reasoning_effort` field. Reasoning models (o-series, DeepSeek-R1,
 	// GLM-thinking, …) read this to open their reasoning channel; omitting it
 	// leaves them at their default and effectively disables extended reasoning.
-	if effort := openAIReasoningEffort(req.Config.ThinkingLevel); effort != "" {
+	if effort := WireReasoningEffort(req.Model, req.Config.ThinkingLevel); effort != "" {
 		body["reasoning_effort"] = effort
 	}
 	if tools := encodeOpenAITools(req.Context.Tools); len(tools) > 0 {
 		body["tools"] = tools
 	}
 	return json.Marshal(body)
-}
-
-// openAIReasoningEffort maps the unified ThinkingLevel onto the OpenAI
-// `reasoning_effort` wire value. "off"/"" yields "" (field omitted, default
-// behavior preserved). OpenAI accepts minimal|low|medium|high; xhigh maps to
-// high (the strongest supported value).
-func openAIReasoningEffort(level agentcore.ThinkingLevel) string {
-	switch level {
-	case agentcore.ThinkingMinimal:
-		return "minimal"
-	case agentcore.ThinkingLow:
-		return "low"
-	case agentcore.ThinkingMedium:
-		return "medium"
-	case agentcore.ThinkingHigh, agentcore.ThinkingXHigh, agentcore.ThinkingMax:
-		return "high"
-	default: // off or unset
-		return ""
-	}
 }
 
 // encodeOpenAIMessage maps one golder message onto the OpenAI wire shape. An

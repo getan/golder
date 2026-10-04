@@ -64,7 +64,7 @@ func DefaultConfigLayer() ConfigLayer {
 	model := "openrouter/free"
 	provider := "openrouter"
 	mode := string(agentcore.ToolExecutionParallel)
-	level := string(agentcore.ThinkingMedium)
+	level := string(agentcore.ThinkingMax)
 	return ConfigLayer{
 		Model:             &model,
 		Provider:          &provider,

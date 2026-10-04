@@ -41,11 +41,14 @@ func TestOpenAIReasoningEffortEncoding(t *testing.T) {
 	}
 
 	cases := map[agentcore.ThinkingLevel]string{
-		agentcore.ThinkingMinimal: "minimal",
+		// The unified table (reasoning.go) collapses minimal onto the shared
+		// low/medium/high ladder, so minimal clamps up to low.
+		agentcore.ThinkingMinimal: "low",
 		agentcore.ThinkingLow:     "low",
 		agentcore.ThinkingMedium:  "medium",
 		agentcore.ThinkingHigh:    "high",
 		agentcore.ThinkingXHigh:   "high",
+		agentcore.ThinkingMax:     "high",
 	}
 	for lvl, want := range cases {
 		base.Config.ThinkingLevel = lvl

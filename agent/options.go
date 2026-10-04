@@ -79,7 +79,7 @@ func WithAppendSystemPrompt(blocks ...string) Option {
 
 // WithThinkingLevel sets the reasoning-effort level. Valid values are "off",
 // "minimal", "low", "medium", "high", "xhigh", and "max". The default is
-// "medium". An invalid value makes New return an error.
+// "max". An invalid value makes New return an error.
 func WithThinkingLevel(level string) Option {
 	return func(c *config) { c.thinking = level }
 }

@@ -6,13 +6,17 @@
 # Leave unset to use the selected provider's built-in default.
 # base_url = "https://api.anthropic.com/v1"
 
-# Default model to use.
-model = "claude-opus-4-8"
+# Default provider (built-in name, see `golder --help`) and model to use.
+# provider = "opencode-go"
+model = "deepseek-v4.1-flash"
 
 # API key for authentication.
 # Prefer supplying this via the <PROVIDER>_API_KEY environment variable
-# (e.g. ANTHROPIC_API_KEY) instead of committing it to a config file.
+# (e.g. OPENCODE_API_KEY) instead of committing it to a config file.
 # api_key = "your-api-key-here"
+
+# Reasoning effort: off | minimal | low | medium | high | xhigh | max
+# thinking_level = "max"
 
 # Output format: text | stream-json
 output_format = "text"

@@ -89,6 +89,19 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **Reasoning-effort mapping is now one table** (`internal/provider/reasoning.go`)
+  that the Chat Completions and Responses drivers share, so a model maps to the
+  same effort on either wire. DeepSeek keeps its full ladder, `max` included;
+  Muse spark caps at `xhigh` (its `max` is advertised in the error text but
+  rejected on the wire); every other family uses the conservative
+  low/medium/high ladder with `minimal` clamping up. Adding a gateway's quirk
+  is one table entry.
+- **Thinking-level layering fixed**: `--thinking-level` now defaults to unset,
+  so `~/.config/golder/config.toml`, `.golder/config.json`, and
+  `GOLDER_THINKING_LEVEL` actually take effect; the built-in default moved to
+  `max` (was `medium`) and the default model is now `deepseek-v4.1-flash`
+  (opencode-go). README documents the defaults and that
+  `muse-spark-1.3-contributor` needs a US egress IP (`GOLDER_PROXY`).
 - **Startup wordmark**: the splash mark is now the word "golder" set in a
   rounded line face (box-drawing strokes), replacing the spinning single-stroke
   G. The entrance is a short, self-stopping animation — the letters type

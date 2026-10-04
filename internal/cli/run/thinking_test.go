@@ -47,7 +47,7 @@ func writeConfig(t *testing.T, path, level string) {
 	}
 }
 
-// TestResolveThinkingLevelDefault verifies the built-in default (medium) applies
+// TestResolveThinkingLevelDefault verifies the built-in default (max) applies
 // when no layer sets a level.
 func TestResolveThinkingLevelDefault(t *testing.T) {
 	isolateConfig(t)
@@ -55,8 +55,8 @@ func TestResolveThinkingLevelDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if got != agentcore.ThinkingMedium {
-		t.Errorf("level = %q, want medium", got)
+	if got != agentcore.ThinkingMax {
+		t.Errorf("level = %q, want max", got)
 	}
 }
 
