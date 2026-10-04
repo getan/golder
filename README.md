@@ -1,19 +1,22 @@
 # golder
 
+[English](README.en.md) | **简体中文**
+
 [![CI](https://github.com/getan/golder/actions/workflows/ci.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/ci.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。支持交互式 TUI 与无头脚本两种运行方式。
+用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认进入全屏 TUI，也支持行式 REPL 与无头脚本。
 
 ## 特性
 
-- **两种模式**：直接 `golder` 进入全屏 TUI；`golder -p "..."` 无头执行，适合脚本与 CI。
-- **内置工具集**：文件读取、补丁编辑、代码检索、Shell 会话、任务清单、网页抓取等（见[内置工具](#内置工具)）。
-- **多 Provider**：默认 OpenCode 网关，同时内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
-- **会话续跑**：`--resume` / `--continue` 续跑历史会话，`-l` 列出全部会话；TUI 恢复完整对话。
+- **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
+- **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
+- **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
+- **会话与分支**：`/resume` 切换历史会话，`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
 - **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；macOS 下沙箱档调用自动经 `sandbox-exec` 隔离执行。
-- **长任务支持**：上下文自动压缩、上下文预算工具、子 Agent 派发、持久记忆。
-- **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`；提示词模板、项目级 `AGENTS.md` 自动装载。
+- **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
+- **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
+- **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`（无内置技能，目录不存在时零命令）；提示词模板、项目级 `AGENTS.md` 自动装载。
 
 ## 安装
 
@@ -38,6 +41,18 @@ go install ./cmd/golder    # 安装到 $GOPATH/bin
 
 ## 配置
 
+### API Key 一览（重要）
+
+| 用途 | 环境变量 | 说明 |
+|------|----------|------|
+| 默认网关 OpenCode | `OPENCODE_API_KEY` | `opencode-go` 订阅网关，默认 provider |
+| Zen 网关 | `OPENCODE_ZEN_API_KEY` | `opencode-zen`，与 Go 分开计费、独立 Key |
+| 联网搜索（首选） | `TAVILY_API_KEY` | Tavily，面向 LLM 优化的结果 |
+| 联网搜索（次选） | `EXA_API_KEY` | Exa，返回 highlights 摘要 |
+| 其他网关 | `<PROVIDER>_API_KEY` | 如 `DEEPSEEK_API_KEY`、`XAI_API_KEY`；见 `golder --help` 全表 |
+
+联网搜索后端按 **Tavily > Exa > DuckDuckGo** 自动选择：两者都没配时，用无需 Key 的 DuckDuckGo 兜底（大陆网络访问 DuckDuckGo 需要代理）。
+
 ### OpenCode（默认）
 
 golder 默认走 `opencode-go` 网关，模型 `deepseek-v4.1-flash`，推理档位 `max`。只需设置 API Key：
@@ -47,18 +62,34 @@ export OPENCODE_API_KEY=...
 golder
 ```
 
-> `muse-spark-1.3-contributor` 也在这个网关上，但需要**美国出口 IP** 才能调用；不在美国网络时用 `GOLDER_PROXY` 指向美国节点：
->
-> ```bash
-> export GOLDER_PROXY=http://127.0.0.1:7897    # 代理出口需在美国
-> golder -m muse-spark-1.3-contributor
-> ```
-
-如果访问 `opencode.ai` 本身就需要代理，也设置 `GOLDER_PROXY`：
+若本机网络无法直接访问 `opencode.ai`，配置代理即可；**代理出口不要求美国**，普通线路能连通就行：
 
 ```bash
 export GOLDER_PROXY=http://127.0.0.1:7897
 ```
+
+#### Muse / Grok 的区域与开关要求（重要）
+
+- **只有 `muse-spark-*` 和 `grok-*` 需要美国出口 IP**；其他国产模型（DeepSeek、Qwen、MiniMax、GLM、Kimi 等）直连即可，不需要代理。
+- **Muse Contributor 模型必须开通"允许使用数据改进模型"的开关**，否则调用会报 `This model collects data used to improve its quality and requires explicit opt in`。开关在 OpenCode 工作台的 Go 页面：
+
+  ```text
+  https://opencode.ai/auth                                   # 登录
+  https://opencode.ai/workspace/<你的 workspace-id>/go       # 打开数据分享开关
+  https://opencode.ai/docs/go/                               # Go 订阅模型与定价
+  https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier   # Meta Contributor 条款
+  ```
+
+- golder 检测到 muse 模型会自动使用 Responses 协议，无需手动设置。
+
+用美国出口代理调用 Muse 的示例：
+
+```bash
+export GOLDER_PROXY=http://127.0.0.1:7897    # 代理节点需为美国出口
+golder -m muse-spark-1.3-contributor
+```
+
+### 代理路由（/proxy）
 
 `/proxy` 打开代理选择器：方向键选择 provider，Enter 开关并自动保存，Esc 退出。也可以直接输入：
 
@@ -78,7 +109,9 @@ url = "http://127.0.0.1:7897"
 providers = ["openai", "anthropic"]
 ```
 
-使用 OpenAI 中转站时，通过 `OPENAI_BASE_URL` 设置地址，是否走代理由 `/proxy` 单独控制：
+### OpenAI 中转站
+
+通过 `OPENAI_BASE_URL` 设置地址，是否走代理由 `/proxy` 单独控制：
 
 ```bash
 export OPENAI_BASE_URL=https://relay.example.com/v1
@@ -133,11 +166,33 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 | `bash` | 执行 shell 命令，流式输出；未在等待窗口内结束则转为会话并返回 `bash_id`；`tty=true` 支持交互式程序 |
 | `write_stdin` | 轮询 bash 会话输出、写入输入或发送中断（`\u0003`） |
 | `todo` | 结构化任务清单（pending / in_progress / completed） |
-| `webfetch` / `websearch` | 抓取网页转 Markdown / 联网搜索（按凭证自动选择后端） |
+| `webfetch` / `websearch` | 抓取网页转 Markdown / 联网搜索（按凭证自动选择后端：Tavily / Exa / DuckDuckGo） |
 | `task` | 派发子 Agent（继承父级工具边界） |
-| `memory_search` | 检索持久化记忆 |
+| `memory_search` | 检索持久化记忆（BM25 全文索引） |
 | `get_context_remaining` / `new_context` | 查看剩余上下文预算 / 主动开启新上下文窗口 |
 | `schedule_create` / `schedule_list` / `schedule_delete` | 会话内定时提醒：到点后作为新消息回到对话（不持久化） |
+
+`/goal` 运行期间还会额外挂载 `goal_complete` / `goal_blocked` 两个目标控制工具，仅在自主循环内可见。
+
+## 斜杠命令
+
+TUI 输入 `/` 会按下面的分类弹出菜单（↑↓ 选择）；`/help` 输出同一份分组列表。两类界面（TUI 与 REPL）命令完全对齐。
+
+| 分类 | 命令 |
+|------|------|
+| General | `/help` `/status` `/exit` |
+| Session | `/resume` `/compact` `/fork` `/clone` `/tree` `/rewind` `/export` `/import` |
+| Model | `/model` `/provider` `/proxy` `/think` |
+| Memory | `/memory` `/dream` |
+| Permissions | `/permissions` `/trust` |
+| Modes | `/goal` `/btw` `/remote-control` |
+| Extensions | 技能、插件、提示词模板按来源列在这里 |
+
+要点：
+
+- `/compact` 立即对上下文做一次摘要压缩；`/status` 内含会话 id、消息数、创建时间与上下文用量（原 `/session` 已并入）。
+- `/resume`、`/fork`、`/tree`、`/rewind` 在 TUI 中都是方向键选择器，REPL 中输入序号选择。
+- 技能目录 `~/.agents/skills` 里每多一个技能就多一条 `/命令`；全新用户没有该目录时，Extensions 组为空。可用 `GOLDER_SKILLS_DIR` 换目录、`--no-skills` 全关。
 
 ## 使用
 
@@ -155,6 +210,10 @@ golder -p "列出所有 Go 文件" --output-format stream-json
 golder --continue
 golder --resume <session-id>
 golder -l                     # 列出全部会话
+
+# 会话导出 / 更新二进制
+golder session export <session-id> --format md --output talk.md
+golder update
 ```
 
 ### 权限模式
@@ -192,10 +251,12 @@ golder -l                     # 列出全部会话
 | `~/.config/golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
 | `~/.golder/sessions` | 会话存储（JSONL） |
 | `~/.golder/.credentials.yaml` | 命名的 API Key 凭据（建议 0600 权限） |
-| `~/.agents/skills` | 技能目录（注册为 `/命令`） |
+| `~/.agents/skills` | 技能目录（注册为 `/命令`；不存在则无扩展命令） |
 | `GOLDER_HOME` | 覆盖 `~/.golder` 基础目录 |
+| `GOLDER_SKILLS_DIR` | 覆盖技能发现目录（默认 `~/.agents/skills`） |
 | `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
+| `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |
 | `OPENCODE_API_KEY`、`OPENCODE_ZEN_API_KEY` 等 `<PROVIDER>_API_KEY` | 各 Provider 的 API Key（`opencode-go` 用 `OPENCODE_API_KEY`，`opencode-zen` 只用 `OPENCODE_ZEN_API_KEY`） |
 

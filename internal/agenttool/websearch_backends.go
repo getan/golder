@@ -1,4 +1,4 @@
-// This file implements the websearch backends: Tavily and Brave (credentialed
+// This file implements the websearch backends: Tavily and Exa (credentialed
 // JSON APIs) plus a keyless DuckDuckGo HTML fallback. selectSearchBackend picks
 // the first backend whose credential is present, defaulting to DuckDuckGo.
 package agenttool
@@ -26,13 +26,13 @@ type searchBackend interface {
 
 // selectSearchBackend returns the first backend whose credential env var is set,
 // falling back to the keyless DuckDuckGo backend. The order encodes preference:
-// LLM-optimized Tavily first, then Brave, then the keyless fallback.
+// LLM-optimized Tavily first, then Exa, then the keyless fallback.
 func selectSearchBackend(getenv func(string) string) searchBackend {
 	if k := strings.TrimSpace(getenv("TAVILY_API_KEY")); k != "" {
 		return tavilyBackend{apiKey: k}
 	}
-	if k := strings.TrimSpace(getenv("BRAVE_API_KEY")); k != "" {
-		return braveBackend{apiKey: k}
+	if k := strings.TrimSpace(getenv("EXA_API_KEY")); k != "" {
+		return exaBackend{apiKey: k}
 	}
 	return duckDuckGoBackend{}
 }
@@ -85,20 +85,28 @@ func (b tavilyBackend) search(ctx context.Context, client *http.Client, query st
 	return out, nil
 }
 
-// --- Brave ----------------------------------------------------------------
+// --- Exa ------------------------------------------------------------------
 
-type braveBackend struct{ apiKey string }
+// exaBackend calls Exa's search API with highlights enabled — the same request
+// shape codex's web-search fallback uses (type auto, numResults, highlights).
+// Each result's highlights are joined into the normalized snippet.
+type exaBackend struct{ apiKey string }
 
-func (b braveBackend) name() string { return "brave" }
+func (b exaBackend) name() string { return "exa" }
 
-func (b braveBackend) search(ctx context.Context, client *http.Client, query string, count int) ([]searchResult, error) {
-	u := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d", url.QueryEscape(query), count)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+func (b exaBackend) search(ctx context.Context, client *http.Client, query string, count int) ([]searchResult, error) {
+	reqBody, _ := json.Marshal(map[string]any{
+		"query":      query,
+		"type":       "auto",
+		"numResults": count,
+		"contents":   map[string]any{"highlights": true},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.exa.ai/search", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Subscription-Token", b.apiKey)
+	req.Header.Set("x-api-key", b.apiKey)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -114,20 +122,22 @@ func (b braveBackend) search(ctx context.Context, client *http.Client, query str
 	}
 
 	var decoded struct {
-		Web struct {
-			Results []struct {
-				Title       string `json:"title"`
-				URL         string `json:"url"`
-				Description string `json:"description"`
-			} `json:"results"`
-		} `json:"web"`
+		Results []struct {
+			Title      string   `json:"title"`
+			URL        string   `json:"url"`
+			Highlights []string `json:"highlights"`
+		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
-	out := make([]searchResult, 0, len(decoded.Web.Results))
-	for _, r := range decoded.Web.Results {
-		out = append(out, searchResult{Title: stripHTMLTags(r.Title), URL: r.URL, Snippet: stripHTMLTags(r.Description)})
+	out := make([]searchResult, 0, len(decoded.Results))
+	for _, r := range decoded.Results {
+		out = append(out, searchResult{
+			Title:   r.Title,
+			URL:     r.URL,
+			Snippet: strings.Join(r.Highlights, " … "),
+		})
 	}
 	return out, nil
 }
@@ -259,17 +269,4 @@ func nodeText(n *html.Node) string {
 	}
 	walk(n)
 	return strings.Join(strings.Fields(b.String()), " ")
-}
-
-// stripHTMLTags removes inline markup (e.g. Brave's <strong> highlights) from a
-// snippet, leaving space-collapsed text. Malformed fragments are returned as-is.
-func stripHTMLTags(s string) string {
-	if !strings.ContainsRune(s, '<') {
-		return s
-	}
-	doc, err := html.Parse(strings.NewReader(s))
-	if err != nil {
-		return s
-	}
-	return nodeText(doc)
 }

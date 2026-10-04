@@ -50,6 +50,9 @@ type Theme struct {
 	ScrollTrack lipgloss.Style
 	// Spinner styles the animated "working" indicator glyph + verb (warm coral).
 	Spinner lipgloss.Style
+	// MenuHeader styles the category headers in the slash-command popup (bold,
+	// terminal default color, so the groups stand out above the dimmed rows).
+	MenuHeader lipgloss.Style
 	// DiffAdd styles added lines in a rendered diff (green).
 	DiffAdd lipgloss.Style
 	// DiffDel styles removed lines in a rendered diff (red).
@@ -130,6 +133,8 @@ func DefaultTheme() Theme {
 			Foreground(lipgloss.Color(colorTrack)),
 		Spinner: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSpinner)).
+			Bold(true),
+		MenuHeader: lipgloss.NewStyle().
 			Bold(true),
 		DiffAdd: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSuccess)),

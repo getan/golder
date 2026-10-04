@@ -395,7 +395,7 @@ func (mn slashMenu) view(width int) string {
 	for i := start; i < end; i++ {
 		r := rows[i]
 		if r.header != "" {
-			lines = append(lines, mn.theme.System.Render("  "+TruncateToWidth(r.header, rowWidth)))
+			lines = append(lines, mn.theme.MenuHeader.Render("  "+TruncateToWidth(r.header, rowWidth)))
 			continue
 		}
 		line := TruncateToWidth(commandRowText(r.cmd), rowWidth)

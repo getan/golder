@@ -1,5 +1,5 @@
 // Tests for the websearch tool: backend auto-selection by credential, per-backend
-// response parsing (Tavily JSON, Brave JSON with HTML highlights, DuckDuckGo HTML
+// response parsing (Tavily JSON, Exa JSON with highlights, DuckDuckGo HTML
 // with redirect-wrapped URLs), domain filtering, count clamping, and structured
 // errors. A fake RoundTripper serves canned responses so no network is touched.
 package agenttool
@@ -7,6 +7,7 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -36,8 +37,8 @@ func TestSelectSearchBackend(t *testing.T) {
 		want string
 	}{
 		{map[string]string{"TAVILY_API_KEY": "t"}, "tavily"},
-		{map[string]string{"BRAVE_API_KEY": "b"}, "brave"},
-		{map[string]string{"TAVILY_API_KEY": "t", "BRAVE_API_KEY": "b"}, "tavily"},
+		{map[string]string{"EXA_API_KEY": "e"}, "exa"},
+		{map[string]string{"TAVILY_API_KEY": "t", "EXA_API_KEY": "e"}, "tavily"},
 		{map[string]string{}, "duckduckgo"},
 	}
 	for _, c := range cases {
@@ -72,27 +73,40 @@ func TestWebSearchTavily(t *testing.T) {
 	}
 }
 
-func TestWebSearchBraveStripsHTML(t *testing.T) {
-	body := `{"web":{"results":[{"title":"Rust <strong>lang</strong>","url":"https://rust-lang.org","description":"A <strong>systems</strong> language"}]}}`
-	var gotToken string
-	res := execWebSearch(t, map[string]string{"BRAVE_API_KEY": "tok"},
+func TestWebSearchExaHighlights(t *testing.T) {
+	body := `{"requestId":"r1","resolvedSearchType":"neural","results":[` +
+		`{"title":"Rust","url":"https://rust-lang.org","highlights":["A systems language","with memory safety"]},` +
+		`{"title":"Docs","url":"https://doc.rust-lang.org","highlights":[]}]}`
+	var gotKey, gotBody string
+	res := execWebSearch(t, map[string]string{"EXA_API_KEY": "tok"},
 		func(r *http.Request) (*http.Response, error) {
-			if r.URL.Host != "api.search.brave.com" {
-				t.Errorf("unexpected host %q", r.URL.Host)
+			if r.URL.Host != "api.exa.ai" || r.URL.Path != "/search" {
+				t.Errorf("unexpected URL %q", r.URL.String())
 			}
-			gotToken = r.Header.Get("X-Subscription-Token")
+			gotKey = r.Header.Get("x-api-key")
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
 			return makeResp(200, "application/json", body), nil
 		}, `{"query":"rust"}`)
 
 	txt := resultText(res)
-	if gotToken != "tok" {
-		t.Errorf("X-Subscription-Token = %q, want tok", gotToken)
+	if gotKey != "tok" {
+		t.Errorf("x-api-key = %q, want tok", gotKey)
 	}
-	if strings.Contains(txt, "<strong>") {
-		t.Errorf("HTML tags not stripped:\n%s", txt)
+	// The request enables highlights, matching codex's Exa request shape.
+	for _, want := range []string{`"contents":{"highlights":true}`, `"type":"auto"`} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("request body missing %s: %s", want, gotBody)
+		}
 	}
-	if !strings.Contains(txt, "Rust lang") || !strings.Contains(txt, "A systems language") {
+	if !strings.Contains(txt, "via exa") || !strings.Contains(txt, "https://rust-lang.org") {
 		t.Errorf("unexpected result:\n%s", txt)
+	}
+	if !strings.Contains(txt, "A systems language") || !strings.Contains(txt, "with memory safety") {
+		t.Errorf("highlights should be joined into the snippet:\n%s", txt)
+	}
+	if bk, _ := res.Details.(map[string]any)["backend"].(string); bk != "exa" {
+		t.Errorf("Details.backend = %q, want exa", bk)
 	}
 }
 
