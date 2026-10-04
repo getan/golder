@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestBannerPanelColumnIsFixed pins the reported regression: while the logo
@@ -18,8 +19,11 @@ func TestBannerPanelColumnIsFixed(t *testing.T) {
 			renderBannerFrame(DefaultTheme(), Options{Version: "dev", Model: "m"}, "/tmp/proj", frame), "")
 		idx := -1
 		for _, line := range strings.Split(out, "\n") {
+			// The wordmark's box-drawing strokes are multi-byte runes, so the
+			// column must be counted in runes rather than bytes (the panel
+			// column is a cell position, not a byte offset).
 			if c := strings.Index(line, "Version"); c >= 0 {
-				idx = c
+				idx = utf8.RuneCountInString(line[:c])
 				break
 			}
 		}

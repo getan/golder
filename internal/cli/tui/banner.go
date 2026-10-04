@@ -11,19 +11,19 @@ import (
 )
 
 // This file builds the startup splash shown at the top of the transcript: the
-// animated single-stroke G logo (see logo.go) with the session's basic
+// animated "golder" wordmark (see logo.go) with the session's basic
 // configuration (model, provider, protocol, thinking effort, directory) laid
 // out beside it.
 // It is seeded by withSession so it scrolls up as the conversation grows, like
 // a shell's login banner.
 
 // renderBanner paints the splash in its resting frame; renderBannerFrame is the
-// animated variant the model re-renders while the startup logo spins.
+// animated variant the model re-renders while the wordmark types itself in.
 func renderBanner(theme Theme, opts Options, cwd string) string {
-	return renderBannerFrame(theme, opts, cwd, 0)
+	return renderBannerFrame(theme, opts, cwd, logoFrames)
 }
 
-// renderBannerFrame paints one logo frame beside a config panel showing the
+// renderBannerFrame paints one wordmark frame beside a config panel showing the
 // session basics. Its only I/O is a single cheap read of the local update-check
 // cache (no network — CachedLatest); it never panics, so it is safe to build
 // eagerly at startup.

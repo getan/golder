@@ -168,11 +168,12 @@ type Model struct {
 	// stats) shown on the row above the input while a run is in flight.
 	spinner spinner
 
-	// logoRunning is true while ticks keep spinning the startup splash.
+	// logoRunning is true while ticks keep advancing the startup wordmark's
+	// entrance.
 	// Only a fresh session (no resumed history) arms it: a resumed banner sits
 	// scrolled above the fold, so animating it would reflow the whole history
-	// for frames nobody sees. The flag is released once the spin completes one
-	// revolution, after which the banner is a static history cell.
+	// for frames nobody sees. The flag is released once the entrance has
+	// played, after which the banner is a static history cell.
 	logoRunning bool
 
 	// subagents is the ordered set of live sub-agents dispatched by the `task`
@@ -254,7 +255,14 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// newRunSessionWithStore), and /status can list skill/plugin/user commands.
 	m.live = s.live
 	m.slash = s.slash
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, 0))
+	// A fresh session starts with the wordmark blank so it can type itself in;
+	// a resumed one shows the settled word (its banner is history nobody is
+	// watching) by starting at the resting frame.
+	startFrame := 0
+	if len(history) > 0 {
+		startFrame = logoFrames
+	}
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, startFrame))
 	m.logoRunning = len(history) == 0
 	seedTranscript(&m.transcript, history)
 	return m
@@ -398,7 +406,7 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.transcript.reset()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, 0))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
 	m.logoRunning = false
@@ -412,8 +420,8 @@ func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus(), func() tea.Msg {
 		return tea.RequestBackgroundColor()
 	}}
-	// The startup logo is armed by withSession before Init runs, so the first
-	// tick is scheduled here; the chain stops itself on the final frame.
+	// The wordmark's entrance is armed by withSession before Init runs, so the
+	// first tick is scheduled here; the chain stops itself on the final frame.
 	if m.logoRunning {
 		cmds = append(cmds, m.tickLogo(1))
 	}
@@ -624,9 +632,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.tickSpinner()
 
 	case logoFrameMsg:
-		// Advance the startup splash's spin one frame. The final frame lands on
-		// the front-facing resting position, the animation disarms itself, and
-		// the banner stays behind as a static history cell.
+		// Advance the wordmark's entrance one frame. The final frame is the
+		// settled word, the animation disarms itself, and the banner stays
+		// behind as a static history cell.
 		if !m.logoRunning {
 			return m, nil
 		}

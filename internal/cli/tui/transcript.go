@@ -193,7 +193,7 @@ func (t *transcript) addBanner(text string) {
 
 // setBannerText replaces the startup splash's pre-rendered text in place and
 // drops its memoized render so the next reflow repaints it. The model uses this
-// to advance the animated logo; keeping the block at the same index preserves
+// to advance the animated wordmark; keeping the block at the same index preserves
 // every later block's render-cache key and the scroll/selection anchors that
 // point into the rendered lines.
 func (t *transcript) setBannerText(text string) {

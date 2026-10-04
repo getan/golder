@@ -89,6 +89,12 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
+- **Startup wordmark**: the splash mark is now the word "golder" set in a
+  rounded line face (box-drawing strokes), replacing the spinning single-stroke
+  G. The entrance is a short, self-stopping animation — the letters type
+  themselves in left to right and a highlight sweeps across the word once —
+  after which the banner rests as a static history cell. Fresh sessions play
+  the entrance; resumed sessions paint the settled word immediately.
 - **项目更名为 golder**：模块路径 `github.com/getan/golder`、命令与二进制
   `golder`、数据目录 `~/.golder`、项目配置 `.golder/`、全局配置
   `~/.config/golder/config.toml`，环境变量前缀统一为 `GOLDER_*`。旧的

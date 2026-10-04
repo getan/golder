@@ -4,207 +4,233 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
-// This file draws the startup logo: the letter G sketched in ASCII, spinning
-// around its vertical axis the way codex's welcome mark turns. The mechanics and
-// the look are both borrowed from codex:
+// This file draws the startup wordmark: "golder" set in a rounded, hollow line
+// face and animated in with a short, self-stopping entrance.
 //
-//   - codex-rs/tui/src/ascii_animation.rs and frames.rs: a fixed frame count on a
-//     wall-clock tick, one revolution per cycle, each frame a pure function of
-//     its index, and one settle on a resting frame;
-//   - codex's welcome frames are ~35x15 character drawings whose outline is
-//     scattered over the glyph cells with marks like * + ' " / \ | - ~ =, so the
-//     mark reads as a hand-sketched shape rather than a vector outline.
+// The face is drawn with box-drawing strokes — rounded corners (╭╮╰╯), straight
+// runs (─│), and junctions (┤┘╯) where a bowl meets a stem — so the word reads
+// as a light geometric sans rather than a bitmap blob. Every letter shares one
+// baseline; the l and d ascend above it and the g's tail descends below, which
+// is what fixes the block's height.
 //
-// The frames here are generated from geometry instead of shipping hand-drawn
-// art, so the bowl stays a clean ellipse and one constant re-proportions the
-// whole mark. The projection is the same one codex's frames show: the
-// silhouette narrows to edge-on twice per revolution and widens again in
-// between.
+// The entrance borrows codex's splash mechanics: a fixed frame count on a
+// wall-clock tick, each frame a pure function of its index, and one settle on a
+// resting frame that then stays behind as static history. The letters type
+// themselves in left to right, a highlight sweeps across the finished word
+// once, and the mark rests in plain base ink.
 
 const (
-	// logoFrames and logoFrameTick match codex's welcome cadence (36 frames at
-	// FRAME_TICK_DEFAULT = 80ms): one revolution in ~2.9s, after which the tick
-	// chain stops and the splash rests on the front-facing frame.
+	// logoFrames and logoFrameTick set the entrance's length: 36 frames at 80ms
+	// (~2.9s), after which the tick chain stops and the mark stays put.
 	logoFrames    = 36
 	logoFrameTick = 80 * time.Millisecond
 
-	// logoCols/logoRows size the character grid like codex's welcome frames
-	// (which run about 35 columns by 15 rows).
-	logoCols = 35
-	logoRows = 15
+	// logoRows is the block's height: one ascender row, four rows of x-height,
+	// and the row the g's tail descends into.
+	logoRows = 6
 
-	// logoRX/RY are the bowl ellipse's radii: x in columns, y in row units (a
-	// terminal cell is about twice as tall as it is wide, so one row is two
-	// units), sized so the glyph fills the grid.
-	logoRX = 16.0
-	logoRY = 13.6
+	// Reveal timing: letter k starts fading in at frame 1+k*logoRevealStagger
+	// and reaches full ink logoRevealSteps frames later, so the cascade takes
+	// about half the entrance.
+	logoRevealStagger = 3
+	logoRevealSteps   = 4
 
-	// logoGap is the bowl's aperture: it opens just above 3 o'clock, so the
-	// upper terminal rests at ~2 o'clock and the lower one meets the crossbar
-	// at the midline.
-	logoGap = 32 * math.Pi / 180
+	// The highlight sweep: frames logoShimmerFrom..logoShimmerTo walk a bright
+	// band across the word; after it the mark settles at base ink.
+	logoShimmerFrom = 20
+	logoShimmerTo   = 30
 
-	// logoBarInner is where the crossbar stops on its way toward the center, as
-	// a fraction of logoRX.
-	logoBarInner = 0.12
-
-	// logoMinScale floors the spin's horizontal projection: a flat glyph turns
-	// into a hairline at exactly 90°, so edge-on frames stay a readable stroke
-	// instead of vanishing for a few ticks.
-	logoMinScale = 0.18
-
-	// colorLogoInk is the mark's one color: a light blue that reads as a single
-	// pale sketch on both dark and light terminals.
-	colorLogoInk = "117"
+	// logoLetterGap is the number of blank columns between letters.
+	logoLetterGap = 2
 )
 
-// logoFrameMsg advances the startup logo by one frame. The model re-issues the
-// tick after each frame until the revolution completes (see Model.tickLogo).
+// The palette is one light-blue family: the faint ink a letter fades in from,
+// the base it settles at, and the halo/shine the sweep carries.
+var (
+	logoRevealRamp = [logoRevealSteps]string{"25", "33", "75", "117"}
+	logoInkBase    = "117"
+	logoInkHalo    = "153"
+	logoInkShimmer = "159"
+)
+
+// logoWordGlyphs spells "golder". Each glyph is a fixed number of rows (padded
+// to a common width at render time); rows above the x-height and below the
+// baseline are left blank, which keeps every glyph the same height.
+var logoWordGlyphs = [][]string{
+	{ // g — bowl with a tail that hooks left beneath it
+		"",
+		"╭──────╮",
+		"│      │",
+		"│      │",
+		"╰──────┤",
+		"   ╰───╯",
+	},
+	{ // o
+		"",
+		"╭──────╮",
+		"│      │",
+		"│      │",
+		"╰──────╯",
+		"",
+	},
+	{ // l — one stem, full ascender
+		"│",
+		"│",
+		"│",
+		"│",
+		"│",
+		"",
+	},
+	{ // d — stem with a bowl hung on its left
+		"       │",
+		"╭──────┤",
+		"│      │",
+		"│      │",
+		"╰──────┘",
+		"",
+	},
+	{ // e — bar meets the upper right arc; the lower right stays open
+		"",
+		"╭─────╮",
+		"│     │",
+		"├─────╯",
+		"╰────╯",
+		"",
+	},
+	{ // r — stem with a shoulder
+		"",
+		"╭───╮",
+		"│",
+		"│",
+		"│",
+		"",
+	},
+}
+
+// logoFrameMsg advances the startup wordmark by one frame. The model re-issues
+// the tick after each frame until the entrance completes (see Model.tickLogo).
 type logoFrameMsg struct{ frame int }
 
-// renderLogo paints one frame of the spinning mark. frame wraps modulo
-// logoFrames; the turn starts and ends at the front-facing frame. Every row is
-// kept at the full logoCols width: the banner joins the mark with the info
-// panel beside it, so a block that narrowed with the projection would drag the
-// panel left and right as the letter turns.
+// renderLogo paints one frame of the wordmark. frame runs from 0 (nothing yet
+// typed) to logoFrames (the settled word). Hidden letters still occupy their
+// cells, so the block keeps a constant width on every frame and the config
+// panel beside it never moves.
 func renderLogo(frame int) string {
-	frame = ((frame % logoFrames) + logoFrames) % logoFrames
-	rows := logoGrid(logoScale(frame))
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(colorLogoInk)).
-		Render(strings.Join(rows, "\n"))
-}
-
-// logoScale is the horizontal projection of a frame: |cos| compresses the
-// letter toward the turning vertical axis, with |cos| rather than cos because
-// the glyph is a two-sided sign — a full 360° turn passes edge-on at the
-// quarter marks and shows the front face again halfway through, instead of a
-// mirrored letter during the second half.
-func logoScale(frame int) float64 {
-	scale := math.Abs(math.Cos(2 * math.Pi * float64(frame) / logoFrames))
-	if scale < logoMinScale {
-		scale = logoMinScale
+	if frame < 0 {
+		frame = 0
 	}
-	return scale
-}
-
-// logoGrid rasterizes the letter at the given horizontal projection into the
-// ASCII character grid, one character per cell, so the stroke stays a hollow
-// single-cell outline.
-func logoGrid(scale float64) []string {
-	grid := make([][]rune, logoRows)
-	for y := range grid {
-		grid[y] = make([]rune, logoCols)
-		for x := range grid[y] {
-			grid[y][x] = ' '
-		}
+	if frame > logoFrames {
+		frame = logoFrames
 	}
-	cx, cy := float64(logoCols-1)/2, float64(logoRows-1)/2
+	colors := logoLetterColors(frame)
 
-	// stamp projects one point of the flat glyph onto the grid and paints the
-	// character its tangent calls for, returning the cell (-1 when outside).
-	stamp := func(x, y, tx, ty float64) (int, int) {
-		col := int(math.Round(cx + x*scale))
-		row := int(math.Round(cy + y/2))
-		if col < 0 || col >= logoCols || row < 0 || row >= logoRows {
-			return -1, -1
-		}
-		grid[row][col] = logoPen(tx*scale, ty, col, row)
-		return col, row
-	}
-
-	// Bowl: sweep the parametrised ellipse from the crossbar junction (t=0,
-	// 3 o'clock) clockwise around to the open terminal above it (t=2π-gap).
-	// Walking the curve finely keeps the painted cells a connected run.
-	const steps = 1440
-	endCol, endRow := -1, -1
-	for i := 0; i <= steps; i++ {
-		t := (2*math.Pi - logoGap) * float64(i) / steps
-		col, row := stamp(
-			logoRX*math.Cos(t), logoRY*math.Sin(t),
-			-logoRX*math.Sin(t), logoRY*math.Cos(t),
-		)
-		if col >= 0 {
-			endCol, endRow = col, row
-		}
-	}
-
-	// Crossbar: from the bowl's lower terminal toward the center; its inner end
-	// is the pen's other stop.
-	nibCol, nibRow := -1, -1
-	for x := logoRX; x >= logoBarInner*logoRX; x -= 0.25 {
-		col, row := stamp(x, 0, 1, 0)
-		if col >= 0 {
-			nibCol, nibRow = col, row
-		}
-	}
-
-	// Roughen: a deterministic sprinkle of *, + and " over the outline gives the
-	// stroke codex's hand-drawn texture instead of a clean vector line. Keyed on
-	// the cell, so a frame is still a pure function of its index.
-	for y := range grid {
-		for x := range grid[y] {
-			if grid[y][x] == ' ' {
+	rows := make([]strings.Builder, logoRows)
+	for k, glyph := range logoWordGlyphs {
+		width := logoGlyphWidth(glyph)
+		color := colors[k]
+		for r := 0; r < logoRows; r++ {
+			if k > 0 {
+				rows[r].WriteString(strings.Repeat(" ", logoLetterGap))
+			}
+			if color == "" {
+				rows[r].WriteString(strings.Repeat(" ", width))
 				continue
 			}
-			switch (x*13 + y*7) % 23 {
-			case 0:
-				grid[y][x] = '*'
-			case 7:
-				grid[y][x] = '+'
-			case 15:
-				grid[y][x] = '"'
-			}
+			rows[r].WriteString(lipgloss.NewStyle().
+				Foreground(lipgloss.Color(color)).
+				Render(logoGlyphRow(glyph, r, width)))
 		}
 	}
-	// Nibs: the aperture terminal and the crossbar's inner stop mark where the
-	// pen lifted, so they always get a star.
-	if endCol >= 0 {
-		grid[endRow][endCol] = '*'
-	}
-	if nibCol >= 0 {
-		grid[nibRow][nibCol] = '*'
-	}
 
-	rows := make([]string, len(grid))
-	for i, row := range grid {
-		rows[i] = string(row)
+	out := make([]string, logoRows)
+	for r := range rows {
+		out[r] = rows[r].String()
 	}
-	return rows
+	return strings.Join(out, "\n")
 }
 
-// logoPen maps a stroke's local tangent (x in columns, y in row units, positive
-// y down) to the character that draws it: dashes for horizontals, bars for
-// verticals, slashes for diagonals, with an occasional ~ or = so long runs stay
-// hand-drawn. The cell keys the variation, so texture does not shimmer while
-// the letter turns.
-func logoPen(tx, ty float64, col, row int) rune {
-	switch {
-	case math.Abs(tx) > 2*math.Abs(ty):
-		switch (col + row*3) % 7 {
-		case 2:
-			return '~'
-		case 5:
-			return '='
-		default:
-			return '-'
+// logoLetterColors returns each letter's ink color on a frame; "" means the
+// letter has not started to appear yet.
+func logoLetterColors(frame int) []string {
+	colors := make([]string, len(logoWordGlyphs))
+	for k := range logoWordGlyphs {
+		colors[k] = logoLetterColor(frame, k)
+	}
+	return colors
+}
+
+// logoLetterColor is the entrance's whole clock for one letter: fade in at its
+// staggered start, then take the sweep's highlight while the band passes over
+// it, and otherwise rest at base ink.
+func logoLetterColor(frame, letter int) string {
+	start := 1 + letter*logoRevealStagger
+	if frame < start {
+		return ""
+	}
+	if age := frame - start; age < logoRevealSteps {
+		return logoRevealRamp[age]
+	}
+	if frame >= logoShimmerFrom && frame <= logoShimmerTo {
+		// pos walks the letter indices from just before the first to just past
+		// the last, so the band enters and leaves cleanly.
+		span := float64(logoShimmerTo - logoShimmerFrom)
+		pos := -1 + 8*float64(frame-logoShimmerFrom)/span
+		switch d := math.Abs(float64(letter) - pos); {
+		case d < 0.6:
+			return logoInkShimmer
+		case d < 1.6:
+			return logoInkHalo
 		}
-	case math.Abs(ty) > 2*math.Abs(tx):
-		return '|'
-	case tx*ty < 0:
-		return '/'
-	default:
-		return '\\'
 	}
+	return logoInkBase
 }
 
-// tickLogo schedules the next startup-logo frame. The model re-issues it after
-// every frame until Update receives the final frame, so the animation stops
-// without a goroutine once the splash settles.
+// logoGlyphWidth is a glyph's cell width: the widest of its rows.
+func logoGlyphWidth(glyph []string) int {
+	width := 0
+	for _, row := range glyph {
+		if n := utf8.RuneCountInString(row); n > width {
+			width = n
+		}
+	}
+	return width
+}
+
+// logoGlyphRow returns one glyph row padded to the glyph's full width, so a
+// ragged row (the l and r stems, the g's tail) still fills its whole cell.
+func logoGlyphRow(glyph []string, row, width int) string {
+	text := ""
+	if row < len(glyph) {
+		text = glyph[row]
+	}
+	if n := utf8.RuneCountInString(text); n < width {
+		return text + strings.Repeat(" ", width-n)
+	}
+	return text
+}
+
+// logoWordWidth is the settled wordmark's width in cells; every frame's block
+// is padded to it.
+func logoWordWidth() int {
+	width := 0
+	for k, glyph := range logoWordGlyphs {
+		if k > 0 {
+			width += logoLetterGap
+		}
+		width += logoGlyphWidth(glyph)
+	}
+	return width
+}
+
+// tickLogo schedules the next startup-wordmark frame. The model re-issues it
+// after every frame until Update receives the final frame, so the animation
+// stops without a goroutine once the word has settled.
 func (m Model) tickLogo(frame int) tea.Cmd {
 	return tea.Tick(logoFrameTick, func(time.Time) tea.Msg { return logoFrameMsg{frame: frame} })
 }
