@@ -4,11 +4,10 @@
 // HTTP+WebSocket server mirroring the session to a paired browser on the LAN,
 // mirrors transcript output to that browser, surfaces browser-submitted prompts
 // as a tea.Msg, and routes side-effect tool-call confirmations to the browser
-// while a client is connected.
+// while a client is connected (see trustApprovalGate).
 //
 // The non-remote path is unchanged: when no session is active the mirror is a
-// no-op, waitRemoteInput returns a nil Cmd, and buildConfig installs no
-// BeforeToolCall (tools run under the up-front trust the TUI already grants).
+// no-op and waitRemoteInput returns a nil Cmd.
 package tui
 
 import (
@@ -18,9 +17,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/remotecontrol"
-	"github.com/getan/golder/internal/trust"
 )
 
 // remoteSession owns the running server + bridge for one /remote-control
@@ -75,48 +72,6 @@ func (s *runSession) stopRemote() {
 	}
 	_ = s.remote.server.Stop(context.Background())
 	s.remote = nil
-}
-
-// remoteConfirmSeam builds the BeforeToolCall seam that routes side-effect
-// tool-call confirmations to the paired browser while one is connected. When no
-// browser is connected (or the tool is not side-effecting, or the cwd is
-// trusted) it returns nil so the tool runs under the up-front trust the TUI
-// grants — the non-remote behavior is unchanged.
-//
-// A ctx cancellation (interrupt) makes Confirm return remote=false, which is
-// treated as a denial so an interrupted run does not silently proceed.
-func remoteConfirmSeam(rs *remoteSession, mgr *trust.Manager, cwd string) agentcore.BeforeToolCallFunc {
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if !rs.hasClient() || mgr == nil {
-			return nil
-		}
-		if !trust.SideEffectTools[call.Name] {
-			return nil
-		}
-		if mgr.IsTrusted(cwd) {
-			return nil
-		}
-		summary := trust.ToolCallSummary(call)
-		d, remote := rs.bridge.Confirm(ctx, call.Name, summary)
-		if !remote {
-			return blockRemoteToolCall(call, cwd)
-		}
-		if d.Always {
-			mgr.SetSessionTrust(cwd)
-		}
-		if !d.Approve {
-			return blockRemoteToolCall(call, cwd)
-		}
-		return nil
-	}
-}
-
-func blockRemoteToolCall(call agentcore.AgentToolCall, cwd string) *agentcore.BeforeToolCallDecision {
-	msg := fmt.Sprintf("tool %q blocked: %s is not trusted (use /trust to trust this project)", call.Name, cwd)
-	return &agentcore.BeforeToolCallDecision{
-		Block:   true,
-		Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
-	}
 }
 
 // runRemoteControl handles the /remote-control command and its stop/status

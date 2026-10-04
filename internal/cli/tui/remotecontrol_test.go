@@ -132,20 +132,26 @@ func TestBuildConfigFullAccessKeepsStaticFloor(t *testing.T) {
 	}
 }
 
-// TestRemoteConfirmSeamAllowsWhenNoClient verifies the confirm seam is a no-op
-// (returns nil = allow under up-front trust) when no browser is connected, so a
-// running-but-unpaired server never blocks tool calls.
-func TestRemoteConfirmSeamAllowsWhenNoClient(t *testing.T) {
+// TestTrustGateSkipsTrustedDirectory verifies the gate is a no-op (nil = allow)
+// for a trusted directory and for non-side-effect tools, so the dialog never
+// interrupts work the user already allowed.
+func TestTrustGateSkipsTrustedDirectory(t *testing.T) {
 	s := newRemoteTestSession(t)
-	if _, err := s.startRemote(); err != nil {
-		t.Fatalf("startRemote: %v", err)
-	}
-	defer s.stopRemote()
+	s.trusted = true
+	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 
-	// No client is paired, so hasClient() is false and the seam must allow.
-	seam := remoteConfirmSeam(s.remote, nil, "/tmp/project")
-	if d := seam(t.Context(), agentcore.AgentToolCall{Name: "bash"}); d != nil {
-		t.Errorf("seam should allow (nil) with no client, got %+v", d)
+	gate := s.trustApprovalGate(nil)
+	if gate == nil {
+		t.Fatal("trust gate should be installed")
+	}
+	if d := gate(t.Context(), agentcore.AgentToolCall{Name: "bash"}); d != nil {
+		t.Errorf("a trusted directory should allow (nil), got %+v", d)
+	}
+
+	// A read-only tool is never gated by trust, trusted or not.
+	s.trust.ClearSessionTrust(s.hookDeps.ProjectDir)
+	if d := gate(t.Context(), agentcore.AgentToolCall{Name: "read"}); d != nil {
+		t.Errorf("non-side-effect tools should not be gated, got %+v", d)
 	}
 }
 

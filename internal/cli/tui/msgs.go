@@ -92,6 +92,11 @@ type compactionStartMsg struct{}
 // details are not needed by the transcript, so it is a bare signal.
 type compactionMsg struct{}
 
+// trustPromptMsg asks the model to open the first-run trust picker. It is
+// emitted by Init when withSession saw an undecided launch directory, so the
+// dialog appears on the Update goroutine before the first prompt.
+type trustPromptMsg struct{}
+
 // runEndMsg is the final message: the run has fully drained. err is non-nil when
 // the run ended in error (or was interrupted).
 type runEndMsg struct{ err error }

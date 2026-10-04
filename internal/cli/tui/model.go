@@ -109,6 +109,14 @@ type Model struct {
 	// goalRun marks the in-flight run as an autonomous /goal run: on run end the
 	// goal outcome is reported and the turn is persisted like a normal turn.
 	goalRun bool
+	// pendingTrust is set by withSession when the launch directory has no saved
+	// trust decision and --approve did not grant session trust. Init turns it
+	// into the first-run trust picker (codex-style "do you trust this folder").
+	pendingTrust bool
+	// approval is the tool-call approval dialog (approval.go). While active it
+	// owns every key press, so a pending decision cannot be dismissed by
+	// typing.
+	approval approvalDialog
 
 	// statusBar renders the persistent bottom line (#386, US-003). It is fed the
 	// terminal width, telemetry-derived context usage, and the async git probe
@@ -278,6 +286,11 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, startFrame))
 	m.logoRunning = len(history) == 0
 	seedTranscript(&m.transcript, history)
+	// First-run trust dialog (parity with the REPL and codex): an undecided
+	// launch directory gets asked before the first prompt. The picker opens in
+	// Init (tests that drive Update directly stay prompt-free).
+	m.pendingTrust = s.trust != nil && !m.opts.Approve &&
+		!s.trust.NearestTrustDecision(m.cwd).Found
 	return m
 }
 
@@ -454,6 +467,18 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 	return m, nil
 }
 
+// openTrustPicker asks the first-run trust question through the approval
+// dialog, so the launch prompt and a mid-run approval are one UI (the REPL's
+// equivalent is the stdin prompt in internal/trust).
+func (m Model) openTrustPicker() (tea.Model, tea.Cmd) {
+	if m.session == nil || m.session.trust == nil {
+		return m, nil
+	}
+	m.openTrustApproval()
+	m.relayout()
+	return m, nil
+}
+
 // openPermissionsPicker shows the four approval modes with their descriptions
 // (the codex permissions-preset parity), marking the active one. The picker is
 // intentionally English-only — the canonical mode names and short preset
@@ -542,6 +567,11 @@ func (m Model) Init() tea.Cmd {
 	if m.logoRunning {
 		cmds = append(cmds, m.tickLogo(1))
 	}
+	// An undecided launch directory asks the first-run trust question before
+	// anything else: the message opens the picker on the Update goroutine.
+	if m.pendingTrust {
+		cmds = append(cmds, func() tea.Msg { return trustPromptMsg{} })
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -565,6 +595,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case gitInfoMsg:
 		m.statusBar.SetGit(msg)
+		return m, nil
+
+	case trustPromptMsg:
+		return m.openTrustPicker()
+
+	case approvalRequestMsg:
+		// A tool call is waiting on the user's decision: arm the dialog and
+		// keep pumping run events (the run goroutine is blocked on the reply
+		// channel, so no further run events arrive until it is answered).
+		m.openApproval(msg.req, msg.reply)
+		m.relayout()
 		return m, nil
 
 	case modelsFetchedMsg:
@@ -971,6 +1012,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.runCh = nil
 		m.spinner.stop()
+		// A run that ended with an approval dialog still open (interrupt, or a
+		// cancelled gate) leaves the decision moot: close it so the dialog does
+		// not outlive the call it was asking about. The run goroutine is gone,
+		// so no reply is delivered.
+		m.approval = approvalDialog{}
 		// The run is over: any still-open sub-agent rows are stale (their tasks ended
 		// with the run), so clear the panel to reclaim its height.
 		m.subagents = subagentPanel{}
@@ -1066,6 +1112,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // newline) to the input editor while idle. Keys are matched via KeyPressMsg
 // .String() so the mapping is terminal-independent.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// A pending tool-call approval owns every key: the decision must not be
+	// dismissed or answered accidentally, and typing behind it would be lost
+	// input anyway once the dialog closes.
+	if m.approval.active {
+		if m.approvalKey(msg.String()) {
+			m.relayout()
+			return m, nil
+		}
+	}
 	// While idle with the autocomplete popup open, the arrow / Tab / Esc keys
 	// drive the menu instead of the transcript or textarea (FR-15). Enter is left
 	// to the main switch below, which routes through submit → runSlash so the
@@ -2412,10 +2467,17 @@ func (m Model) renderContent() (string, int) {
 			inputRow += countRows(line)
 		}
 	}
-	// The autocomplete popup, when open, renders just above the input line as an
-	// overlay (it contributes no rows while idle, so the empty-shell layout is
-	// unchanged).
-	if menu := m.menu.view(width); menu != "" {
+	// The approval dialog takes precedence in the overlay slot: while a
+	// decision is pending the composer is unusable, so the slash menu (if it
+	// was open) is suppressed rather than stacked above it.
+	if dialog := m.approvalView(width); dialog != "" {
+		b.WriteString(dialog)
+		b.WriteByte('\n')
+		inputRow += countRows(dialog)
+	} else if menu := m.menu.view(width); menu != "" {
+		// The autocomplete popup renders just above the input line as an
+		// overlay (it contributes no rows while idle, so the empty-shell
+		// layout is unchanged).
 		b.WriteString(menu)
 		b.WriteByte('\n')
 		inputRow += countRows(menu)
@@ -2631,7 +2693,7 @@ func (m *Model) relayout() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	rows := m.height - 1 - m.input.Height() - m.menu.rows()
+	rows := m.height - 1 - m.input.Height() - m.menu.rows() - m.approvalRowsHeight()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the

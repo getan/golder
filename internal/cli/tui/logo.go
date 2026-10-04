@@ -10,14 +10,25 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// This file draws the startup wordmark: "golder" set in a rounded, hollow line
-// face and animated in with a short, self-stopping entrance.
+// This file draws the startup wordmark: "golder" set in a hollow line face and
+// animated in with a short, self-stopping entrance.
 //
-// The face is drawn with box-drawing strokes — rounded corners (╭╮╰╯), straight
-// runs (─│), and junctions (┤┘╯) where a bowl meets a stem — so the word reads
+// The face is drawn with box-drawing strokes — square corners (┌┐└┘), straight
+// runs (─│), and junctions (├┤┘) where a bowl meets a stem — so the word reads
 // as a light geometric sans rather than a bitmap blob. Every letter shares one
 // baseline; the l and d ascend above it and the g's tail descends below, which
 // is what fixes the block's height.
+//
+// Only the plain "light" box-drawing set is used, and no bold attribute is
+// applied, for portability: the rounded arcs (╭╮╰╯) and heavy lines (━┃┏┓)
+// are missing from fonts that are otherwise common (measured: Monaco, Courier
+// New and Andale Mono lack all 12), and a bold face may lack the entire block
+// (measured: Menlo Bold has none of the 20 box-drawing glyphs, so a bold
+// run falls back to another face and can change the glyph's cell width,
+// breaking alignment). The eight characters used here are present in every
+// monospace face tested, in DejaVu Sans Mono (the usual Linux default), and
+// are drawn from built-in sprites by terminals that carry them (Ghostty,
+// kitty), so the mark renders identically everywhere.
 //
 // The entrance borrows codex's splash mechanics: a fixed frame count on a
 // wall-clock tick, each frame a pure function of its index, and one settle on a
@@ -65,18 +76,18 @@ var (
 var logoWordGlyphs = [][]string{
 	{ // g — bowl with a tail that hooks left beneath it
 		"",
-		"╭──────╮",
+		"┌──────┐",
 		"│      │",
 		"│      │",
-		"╰──────┤",
-		"   ╰───╯",
+		"└──────┤",
+		"   └───┘",
 	},
 	{ // o
 		"",
-		"╭──────╮",
+		"┌──────┐",
 		"│      │",
 		"│      │",
-		"╰──────╯",
+		"└──────┘",
 		"",
 	},
 	{ // l — one stem, full ascender
@@ -89,23 +100,23 @@ var logoWordGlyphs = [][]string{
 	},
 	{ // d — stem with a bowl hung on its left
 		"       │",
-		"╭──────┤",
+		"┌──────┤",
 		"│      │",
 		"│      │",
-		"╰──────┘",
+		"└──────┘",
 		"",
 	},
 	{ // e — bar meets the upper right arc; the lower right stays open
 		"",
-		"╭─────╮",
+		"┌─────┐",
 		"│     │",
-		"├─────╯",
-		"╰────╯",
+		"├─────┘",
+		"└────┘",
 		"",
 	},
 	{ // r — stem with a shoulder
 		"",
-		"╭───╮",
+		"┌───┐",
 		"│",
 		"│",
 		"│",

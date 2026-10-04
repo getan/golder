@@ -14,7 +14,7 @@
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
 - **会话与分支**：`/resume` 切换历史会话，`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
-- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。
+- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写限项目与临时目录；网络默认关闭。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
 - **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
 - **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`（无内置技能，目录不存在时零命令）；提示词模板、项目级 `AGENTS.md` 自动装载。
@@ -257,6 +257,8 @@ golder update
 | `GOLDER_SKILLS_DIR` | 覆盖技能发现目录（默认 `~/.agents/skills`） |
 | `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
 | `GOLDER_SANDBOX` | 沙箱档执行：`off` / `auto`（默认，仅沙箱档）/ `enforce`（全部 bash 进沙箱，无 runner 则 fail-closed） |
+| `GOLDER_SANDBOX_NETWORK` | 沙箱内是否放行网络：默认关闭（出口需显式授予）；设为 `on` 恢复 |
+| `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |

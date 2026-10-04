@@ -111,6 +111,11 @@ type runSession struct {
 	// onto every HookInput and hook process environment.
 	dispatcher *hooks.Dispatcher
 	hookDeps   run.HookDeps
+	// hooksWired records that wireHooks ran. An undecided launch directory
+	// defers hook wiring until the first-run trust picker is answered, so
+	// project-layer hooks load exactly when trust is granted and SessionStart
+	// fires exactly once.
+	hooksWired bool
 	// onEvent is the observer chain delivered to every run: the plugin notifier
 	// (US-017) with the SessionEnd/PreCompact hook notifier chained after it.
 	onEvent func(agentcore.AgentEvent)
@@ -132,6 +137,16 @@ type runSession struct {
 	// two-stage interrupt (Model.interruptFn → interrupt) calls it. It is nil
 	// before the first run and after a run is cancelled.
 	cancelRun context.CancelFunc
+
+	// approvalCh routes tool-call approval dialogs to the UI while a run is in
+	// flight. startRun sets it alongside the notes handler; nil (no run, or a
+	// session driven by tests) makes confirmApproval answer "unavailable", so
+	// the gate keeps its fail-closed behavior instead of allowing by silence.
+	approvalCh chan tea.Msg
+	// approvedForSession remembers "Approve for this session" answers, keyed by
+	// tool + summary, so the same shape of call is not asked twice in one run
+	// of the TUI. Cleared when the session is rebuilt.
+	approvedForSession map[string]bool
 
 	// lastBtw is the /btw side thread's context from this process and
 	// lastBtwBase the background-message index it diverged from.
@@ -290,21 +305,42 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		return judge.ConversationLanguage(s.agentCtx.Messages)
 	})
 
-	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
-	// hook set, build the dispatcher, dispatch SessionStart once, and compose the
-	// SessionEnd/PreCompact observer with the plugin notifier. Trust is granted by
-	// --approve (Options.Approve) or the shared trust store; project-layer hooks
-	// only apply when trusted (FR-14). A malformed hook layer disables hooks with a
-	// warning rather than failing the TUI launch.
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
-	trusted := s.trusted
+	// Wire hooks now when the trust decision is already known (--approve or a
+	// saved decision). In an undecided directory the TUI asks first via the
+	// first-run trust picker (Model.withSession); wireHooks then runs when the
+	// answer lands, mirroring the REPL's ordering (dialog before hook
+	// resolution) so project-layer hooks load exactly when trust is granted and
+	// SessionStart fires exactly once. Until then only plugin events are live.
+	if s.trust == nil || s.trusted || s.trust.NearestTrustDecision(cwd).Found {
+		s.wireHooks(opts)
+	} else if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
+		s.onEvent = n.Handle
+	}
+	return s, history, nil
+}
+
+// wireHooks resolves the trust-gated hook set for the session's launch
+// directory, builds the dispatcher, dispatches SessionStart once, and composes
+// the SessionEnd/PreCompact observer with the plugin notifier. Trust is granted
+// by --approve, a saved decision, or the first-run trust picker; project-layer
+// hooks only apply when trusted (FR-14). A malformed hook layer disables hooks
+// with a warning rather than failing the TUI launch. It is idempotent: the
+// first call wins, so the picker answering after a resolved decision (or vice
+// versa) can never double-dispatch SessionStart.
+func (s *runSession) wireHooks(opts Options) {
+	if s.hooksWired {
+		return
+	}
+	s.hooksWired = true
 	var baseOnEvent func(agentcore.AgentEvent)
 	if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
 		baseOnEvent = n.Handle
 	}
-	if set, err := run.ResolveHookSet(cwd, trusted); err != nil {
+	if set, err := run.ResolveHookSet(s.hookDeps.ProjectDir, s.trusted); err != nil {
 		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", err)
 		s.onEvent = baseOnEvent
+		return
 	} else if d := run.BuildDispatcher(set, s.hookDeps); d != nil {
 		s.dispatcher = d
 		if s.reminders == nil {
@@ -315,10 +351,46 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		s.reminders = ssCfg.Reminders
 		n := hooks.NewHookNotifier(d, s.hookDeps.SessionID, s.hookDeps.ProjectDir)
 		s.onEvent = chainTUIEvent(baseOnEvent, n.Handle)
-	} else {
-		s.onEvent = baseOnEvent
+		return
 	}
-	return s, history, nil
+	s.onEvent = baseOnEvent
+}
+
+// decideTrust applies the first-run trust picker's answer (or Esc, choice "")
+// and wires the deferred hooks for the first time. It returns a one-line
+// outcome for the transcript.
+func (s *runSession) decideTrust(opts Options, choice string) string {
+	if s.trust == nil {
+		s.wireHooks(opts)
+		return "trust store unavailable; running without a trust decision"
+	}
+	switch choice {
+	case "trust":
+		if err := s.trust.SetDecision(s.cwd, trust.Trusted); err != nil {
+			s.wireHooks(opts)
+			return "could not save trust decision: " + err.Error()
+		}
+		s.trusted = true
+		s.wireHooks(opts)
+		return fmt.Sprintf("Trusted %s (saved; side-effect tools run without asking).", s.cwd)
+	case "once":
+		s.trust.SetSessionTrust(s.cwd)
+		s.trusted = true
+		s.wireHooks(opts)
+		return fmt.Sprintf("Trusted %s for this session only.", s.cwd)
+	case "reject":
+		s.trust.ClearSessionTrust(s.cwd)
+		if err := s.trust.SetDecision(s.cwd, trust.Untrusted); err != nil {
+			s.wireHooks(opts)
+			return "could not save trust decision: " + err.Error()
+		}
+		s.wireHooks(opts)
+		return fmt.Sprintf("Marked %s untrusted (saved; side-effect tools stay under review).", s.cwd)
+	default: // Esc: session-scoped no, nothing persisted
+		s.trust.ClearSessionTrust(s.cwd)
+		s.wireHooks(opts)
+		return fmt.Sprintf("Left %s untrusted for this session.", s.cwd)
+	}
 }
 
 // sessionStartSource maps the resolved run options to the SessionStart source
@@ -349,9 +421,10 @@ func chainTUIEvent(prev, next func(agentcore.AgentEvent)) func(agentcore.AgentEv
 // collaborators. It replicates repl.streamRun's assembly (same LoopConfig fields,
 // tool registry and reminders) minus the interactive trust confirmation hook: the
 // TUI has no stdin prompt to confirm side-effect tool calls on, so tools run
-// under the trust granted up front by --approve (Options.Approve) rather than a
-// per-call BeforeToolCall prompt. The stream fn is derived from the live provider
-// and the API key resolved through the credential store, exactly as the REPL does.
+// under the trust granted up front (--approve, a saved decision, or the
+// first-run trust picker) rather than a per-call BeforeToolCall prompt. The
+// stream fn is derived from the live provider and the API key resolved through
+// the credential store, exactly as the REPL does.
 func (s *runSession) buildConfig() runtime.RunConfig {
 	cfg := runtime.RunConfig{
 		LoopConfig: runtime.LoopConfig{
@@ -398,15 +471,19 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 		Classifier: reviewer,
 		Sandboxed:  run.SandboxGate(),
 		Notify:     s.notes.Emit,
+		Confirm:    s.confirmApproval,
 	})
-	if s.remote != nil {
-		if mgr, err := trust.NewManager(trust.DefaultPath()); err == nil {
-			cfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(judgeGate, remoteConfirmSeam(s.remote, mgr, s.hookDeps.ProjectDir))
-		}
+	// The trust gate leads: a side-effect tool in an untrusted directory is the
+	// first question to answer (the REPL asks it on stdin; the TUI asks
+	// through the approval dialog, or the paired browser while remote control
+	// is connected). The permission gate then grades what is left. Order
+	// matters: a blocked trust question must not be pre-empted by an approval
+	// the reviewer would have granted.
+	gate := judgeGate
+	if trustGate := s.trustApprovalGate(s.remote); trustGate != nil {
+		gate = judge.ChainGates(trustGate, judgeGate)
 	}
-	if cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil {
-		cfg.Batch.ToolExecutorConfig.BeforeToolCall = judgeGate
-	}
+	cfg.Batch.ToolExecutorConfig.BeforeToolCall = gate
 	return cfg
 }
 
@@ -535,7 +612,59 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	if s.notes != nil {
 		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
 	}
+	// Approval dialogs ride the same per-run channel: the gate's Confirm
+	// callback hands the request to the UI and blocks on its reply, so the run
+	// goroutine pauses exactly while the user decides.
+	s.approvalCh = ch
 	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(), s.onEvent)
+}
+
+// confirmApproval is the permission gate's approval dialog for the TUI. It
+// hands the request to the UI goroutine and blocks until the user answers or
+// the run is cancelled. An interrupted run (ctx done) or a session with no UI
+// channel answers "not answered", which the gate treats as fail-closed — a
+// pending dialog is never silently an approval.
+func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
+	if key := approvalKey(req); key != "" && s.approvedForSession[key] {
+		return judge.ApprovalAnswer{Approve: true, Always: true, Answered: true}
+	}
+	ch := s.approvalCh
+	if ch == nil {
+		return judge.ApprovalAnswer{}
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	select {
+	case ch <- approvalRequestMsg{req: req, reply: reply}:
+	case <-ctx.Done():
+		return judge.ApprovalAnswer{}
+	}
+	select {
+	case ans := <-reply:
+		if ans.Approve && ans.Always {
+			if s.approvedForSession == nil {
+				s.approvedForSession = map[string]bool{}
+			}
+			if key := approvalKey(req); key != "" {
+				s.approvedForSession[key] = true
+			}
+		}
+		return ans
+	case <-ctx.Done():
+		// The run was cancelled with the dialog open; the UI closes it on
+		// runEndMsg and its answer (if any) lands in the buffered reply.
+		return judge.ApprovalAnswer{}
+	}
+}
+
+// approvalKey keys the "approve for this session" memory: the tool plus its
+// summary (the command text), so approving a build does not also approve an
+// unrelated command that happens to share the tool.
+func approvalKey(req judge.ApprovalRequest) string {
+	summary := strings.TrimSpace(req.Summary)
+	if summary == "" {
+		return ""
+	}
+	return req.Tool + "\x00" + summary
 }
 
 // interrupt cancels the in-flight run, if any. It is bound to Model.interruptFn

@@ -14,7 +14,7 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Many providers**: defaults to the OpenCode gateway, with 40+ built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama, …) and any OpenAI-compatible endpoint.
 - **Sessions and branches**: `/resume` switches sessions, `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
-- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed).
+- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed). The sandbox is a whitelist: reads are limited to the workspace, the system runtime and two git config files (`~/.gitconfig`, `~/.config/git/*`), so everything else under `$HOME` (shell rc files, SSH/GPG keys, `~/.config/*`, credentials, history) is unreadable; writes are confined to the workspace and temp dir; the network is off by default. A toolchain living under `$HOME` is re-admitted with `GOLDER_SANDBOX_READABLE`. When a denial blocks a legitimate command the model can request escalation (`require_escalated`) with a justification for review or approval.
 - **Long-task support**: `/compact` context compaction, context-budget tools, autonomous `/goal` runs, `/btw` side questions, sub-agent dispatch, persistent memory and `/dream` consolidation.
 - **Per-provider proxy routing**: `/proxy` selects which providers use a proxy, independently; unselected providers connect directly and never inherit the shell's `HTTP_PROXY` / `HTTPS_PROXY`.
 - **Skills and templates**: skills under `~/.agents/skills` are registered as `/commands` (none ship built-in; an absent directory means zero extra commands); prompt templates and project `AGENTS.md` load automatically.
@@ -257,6 +257,8 @@ See `golder --help` for the complete list.
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
 | `GOLDER_SANDBOX` | Sandbox-tier execution: `off` / `auto` (default, sandbox tier only) / `enforce` (every bash command sandboxed, fail-closed without a runner) |
+| `GOLDER_SANDBOX_NETWORK` | Network inside the sandbox: off by default (egress must be granted explicitly); set to `on` to allow |
+| `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |
