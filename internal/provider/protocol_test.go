@@ -40,6 +40,37 @@ func TestNormalizeProtocol(t *testing.T) {
 	}
 }
 
+func TestEffectiveProtocol(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		protocol string
+		want     string
+	}{
+		{"gateway family model upgrades to resp_api", "opencode-go", "deepseek-v4.1-flash", "", ProtocolOpenAIResponses},
+		{"gateway non-family model stays chat", "opencode-go", "glm-4.7", "", ProtocolOpenAI},
+		{"explicit resp_api wins", "opencode-go", "glm-4.7", "openai/resp_api", ProtocolOpenAIResponses},
+		{"explicit chat wins over family upgrade", "opencode-go", "deepseek-v4.1-flash", "openai", ProtocolOpenAI},
+		{"anthropic provider never upgrades", "anthropic", "claude-fable-5-1", "", ProtocolAnthropic},
+		{"first-party deepseek upgrades", "deepseek", "deepseek-chat", "", ProtocolOpenAIResponses},
+		{"inferred provider from model", "", "deepseek-chat", "", ProtocolOpenAIResponses},
+		{"unknown provider falls back to explicit", "nope", "x", "anthropic", ProtocolAnthropic},
+		{"unknown provider no protocol", "nope", "x", "", ""},
+		{"bad protocol rejected", "opencode-go", "glm-4.7", "carrier-pigeon", ""},
+		{"conflicting pair rejected", "anthropic", "claude-fable-5-1", "openai", ""},
+		{"renamed alias resolves", "opencode", "glm-4.7", "", ProtocolOpenAI},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EffectiveProtocol(tc.provider, tc.model, tc.protocol); got != tc.want {
+				t.Errorf("EffectiveProtocol(%q, %q, %q) = %q, want %q",
+					tc.provider, tc.model, tc.protocol, got, tc.want)
+			}
+		})
+	}
+}
+
 // The rejection message must name every accepted value so a user with a typo
 // can self-correct without reading source.
 func TestNormalizeProtocolErrorNamesAcceptedValues(t *testing.T) {

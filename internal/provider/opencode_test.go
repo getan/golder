@@ -18,7 +18,7 @@ func TestSessionHeaderValue(t *testing.T) {
 		want  string
 	}{
 		{"opencode-go", extra, "sess-123"},
-		{"opencode", extra, "sess-123"},
+		{"opencode-zen", extra, "sess-123"},
 		{"openai", extra, ""},
 		{"anthropic", extra, ""},
 		{"opencode-go", nil, ""},

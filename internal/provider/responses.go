@@ -120,7 +120,7 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 	useHosted := len(req.Context.Tools) > 0 && !hostedSearchKnownUnsupported(d.name, req.Model)
 	seen := citedURLs(req.Context.Messages)
 	for attempt := 0; ; attempt++ {
-		params := buildResponsesParams(req, useHosted)
+		params := buildResponsesParams(d.name, req, useHosted)
 		msg, empty, err := d.runOnce(ctx, stream, client, params, seen)
 		if err == nil {
 			stream.Emit(ctx, StreamDoneEvent{Message: msg})
@@ -362,14 +362,14 @@ func appendToolCalls(content agentcore.ContentList, calls []agentcore.ToolCallCo
 // item(s): assistant tool calls as function_call items, tool results as
 // function_call_output items, and text (plus any images) as a role-tagged
 // message.
-func buildResponsesParams(req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
+func buildResponsesParams(providerName string, req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 	}
 	if sp := strings.TrimSpace(req.Context.SystemPrompt); sp != "" {
 		params.Instructions = openai.String(sp)
 	}
-	if effort := WireReasoningEffort(req.Model, req.Config.ThinkingLevel); effort != "" {
+	if effort := WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel); effort != "" {
 		// Requesting a summary makes the API return the model's reasoning so golder
 		// can render it as a thinking block, matching the chat driver.
 		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(effort), Summary: shared.ReasoningSummaryAuto}

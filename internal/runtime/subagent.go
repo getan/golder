@@ -62,9 +62,10 @@ type SubAgentProcessConfig struct {
 	// Args are appended to the command after the subagent-rpc flag. Rarely
 	// needed; reserved for test doubles or non-standard layouts.
 	Args []string
-	// Model is the model id the subprocess runs against. Required. A preset id
-	// (e.g. "openrouter/free", "anthropic/claude-...") or ollama/nvidia-prefixed
-	// id resolves its own provider; a custom gateway needs BaseURL/Protocol.
+	// Model is the model id the subprocess runs against. Required. A
+	// "provider/model" routed id (e.g. "openrouter/free") or an
+	// ollama/nvidia-prefixed id resolves its own provider; a custom gateway
+	// needs BaseURL/Protocol.
 	Model string
 	// BaseURL and Protocol override the provider endpoint and wire protocol for
 	// custom gateways (Protocol "anthropic"/"openai" forces that wire format).

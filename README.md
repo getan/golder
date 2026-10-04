@@ -60,7 +60,7 @@ golder
 export GOLDER_PROXY=http://127.0.0.1:7897
 ```
 
-> `GOLDER_PROXY` 用于 opencode / opencode-go 这类指定出口的网关；其余 Provider 遵循 Go 标准库的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量。
+> `GOLDER_PROXY` 用于 opencode-zen / opencode-go 这类指定出口的网关；其余 Provider 遵循 Go 标准库的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量。
 
 ### 配置文件
 
@@ -86,6 +86,14 @@ golder --provider deepseek -m deepseek-v4-flash -p "解释这段代码"
 golder -P openai -u https://my-gateway.example.com/v1 -m my-model -k "$MY_KEY" -p "..."
 golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 Ollama
 ```
+
+### 模型与推理档位
+
+交互式里 `/model` 列出当前网关的模型并标注每个模型支持的推理档位；TUI 中选中模型后会接着让你选档位（Esc 取消整次切换），也可用 `/model <序号|id> <档位>` 一步切换；`/think <档位>` 只调当前档位。
+
+`/provider` 列出全部内置网关：每个网关需要哪些环境变量、当前有没有配好（已配好的排在最前），`/provider <名称>` 直接切换网关（自动用该网关的默认模型）。TUI 里 `/provider` 是方向键选择器。
+
+档位元数据来自 models.dev（网关自身的 `/models` 只返回模型 id，不含档位）。模型列表与档位表都以 24 小时磁盘缓存存在 `~/.golder` 下，因此每个网关大约一天只请求一次，而不是每次会话都请求。
 
 ## 内置工具
 
@@ -160,8 +168,9 @@ golder -l                     # 列出全部会话
 | `~/.golder/.credentials.yaml` | 命名的 API Key 凭据（建议 0600 权限） |
 | `~/.agents/skills` | 技能目录（注册为 `/命令`） |
 | `GOLDER_HOME` | 覆盖 `~/.golder` 基础目录 |
-| `GOLDER_PROXY` | opencode / opencode-go 网关的 HTTP 代理 |
-| `OPENCODE_API_KEY` 等 `<PROVIDER>_API_KEY` | 各 Provider 的 API Key |
+| `GOLDER_PROXY` | opencode-zen / opencode-go 网关的 HTTP 代理 |
+| `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |
+| `OPENCODE_API_KEY`、`OPENCODE_ZEN_API_KEY` 等 `<PROVIDER>_API_KEY` | 各 Provider 的 API Key（`opencode-go` 用 `OPENCODE_API_KEY`，`opencode-zen` 只用 `OPENCODE_ZEN_API_KEY`） |
 
 ## 许可证
 

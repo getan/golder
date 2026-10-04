@@ -1,9 +1,10 @@
 package provider
 
 // Tests for provider resolution moved from cmd/golder (US-004, #361): ResolveProvider
-// maps a model id to the right gateway (preset catalog first, then prefix rules,
-// then OpenRouter default), and ResolveBaseURL applies the base-url override
-// precedence. Environment lookups are injected via os.Getenv here.
+// maps a model id to the right gateway (explicit selection, then prefix rules,
+// then model-name inference, then OpenRouter default), and ResolveBaseURL
+// applies the base-url override precedence. Environment lookups are injected
+// via os.Getenv here.
 
 import (
 	"os"
@@ -11,17 +12,19 @@ import (
 	"testing"
 )
 
-// TestResolveProviderPresetCatalog verifies a preset id resolves to its declared
-// provider (NVIDIA and Ollama presets do not fall through to OpenRouter).
-func TestResolveProviderPresetCatalog(t *testing.T) {
+// TestResolveProviderPrefixAndNamespacedIDs verifies prefixed ids resolve to
+// their own gateway while an unknown namespaced id falls through to the
+// OpenRouter default (pass --provider to target a specific gateway).
+func TestResolveProviderPrefixAndNamespacedIDs(t *testing.T) {
 	cases := []struct {
 		model    string
 		wantName string
 	}{
-		{"meta/llama-3.3-70b-instruct", "nvidia"},     // NVIDIA preset
-		{"ollama/llama3.3", "ollama"},                 // Ollama preset
-		{"openai/gpt-4o", "openrouter"},               // OpenRouter preset
-		{"anthropic/claude-3.5-sonnet", "openrouter"}, // OpenRouter preset
+		{"ollama/llama3.3", "ollama"},                 // ollama/ prefix
+		{"nvidia/meta/llama-3.3", "nvidia"},           // nvidia/ prefix
+		{"openai/gpt-4o", "openrouter"},               // OpenRouter-style routed id
+		{"anthropic/claude-3.5-sonnet", "openrouter"}, // OpenRouter-style routed id
+		{"meta/llama-3.3-70b-instruct", "openrouter"}, // no inference for namespaced ids
 	}
 	for _, c := range cases {
 		_, name, err := ResolveProvider(c.model, "", "", "", os.Getenv)
@@ -170,9 +173,10 @@ func TestResolveProviderExplicitProvider(t *testing.T) {
 	}
 }
 
-// TestResolveProviderCNPresets verifies the Chinese-cloud preset ids route to
-// their own provider (not the OpenRouter default) via the LookupPreset branch.
-func TestResolveProviderCNPresets(t *testing.T) {
+// TestResolveProviderChineseCloudIDs verifies the Chinese-cloud model prefixes
+// route to their own provider (not the OpenRouter default) via model-name
+// inference.
+func TestResolveProviderChineseCloudIDs(t *testing.T) {
 	cases := []struct {
 		model    string
 		wantName string
@@ -296,7 +300,7 @@ func TestResolveBaseURLProviderSpecificEnv(t *testing.T) {
 }
 
 // TestCanonicalizeModelBareProviderName verifies a bare built-in provider name
-// maps to that provider's first preset id (issue #564), while real preset ids,
+// maps to that provider's DefaultModel (issue #564), while real model ids,
 // routed "provider/model" ids, and unknown names pass through unchanged.
 func TestCanonicalizeModelBareProviderName(t *testing.T) {
 	cases := []struct {
@@ -335,19 +339,19 @@ func TestResolveProviderBareProviderNameUsesDefaultModel(t *testing.T) {
 	}
 }
 
-// TestResolveProviderBareProviderWithoutPresetsErrors verifies a bare provider
-// name whose provider has no preset models surfaces a clear mismatch error
+// TestResolveProviderBareProviderWithoutDefaultModelErrors verifies a bare
+// provider name whose spec has no DefaultModel surfaces a clear mismatch error
 // rather than the old silent OpenRouter fallback (issue #564).
-func TestResolveProviderBareProviderWithoutPresetsErrors(t *testing.T) {
+func TestResolveProviderBareProviderWithoutDefaultModelErrors(t *testing.T) {
 	var name string
 	for _, spec := range ProviderSpecs() {
-		if len(PresetsByProvider(spec.Name)) == 0 {
+		if spec.DefaultModel == "" {
 			name = spec.Name
 			break
 		}
 	}
 	if name == "" {
-		t.Skip("every built-in provider has at least one preset model")
+		t.Skip("every built-in provider has a DefaultModel")
 	}
 	_, _, err := ResolveProvider(name, "", "", "", os.Getenv)
 	if err == nil {
@@ -358,11 +362,11 @@ func TestResolveProviderBareProviderWithoutPresetsErrors(t *testing.T) {
 	}
 }
 
-// TestResolveProviderAnthropicPresets verifies the Fable presets resolve to the
-// first-party anthropic provider with the wire id passed through unchanged, and
-// that the bare provider name "anthropic" defaults to the newest Fable (the
-// anthropic section is ordered newest-first to feed CanonicalizeModel).
-func TestResolveProviderAnthropicPresets(t *testing.T) {
+// TestResolveProviderAnthropicIDs verifies Claude/Fable ids resolve to the
+// first-party anthropic provider (via model-name inference) with the wire id
+// passed through unchanged, and that the bare provider name "anthropic"
+// defaults to the newest Fable through DefaultModel.
+func TestResolveProviderAnthropicIDs(t *testing.T) {
 	for _, id := range []string{"claude-fable-5", "claude-fable-5-1"} {
 		prov, name, err := ResolveProvider(id, "", "", "", os.Getenv)
 		if err != nil {
@@ -381,10 +385,10 @@ func TestResolveProviderAnthropicPresets(t *testing.T) {
 	}
 }
 
-// TestResolveProviderOpenAIAndNewPresets verifies the OpenAI section resolves to
-// the first-party openai provider (bare "openai" defaults to the newest
-// flagship, newest-first order), and the new xiaomi/xai ids resolve unchanged.
-func TestResolveProviderOpenAIAndNewPresets(t *testing.T) {
+// TestResolveProviderOpenAIAndNewIDs verifies gpt-* ids resolve to the
+// first-party openai provider (bare "openai" defaults to the newest flagship
+// through DefaultModel), and the xiaomi/xai/zai ids resolve unchanged.
+func TestResolveProviderOpenAIAndNewIDs(t *testing.T) {
 	for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"} {
 		prov, name, err := ResolveProvider(id, "", "", "", os.Getenv)
 		if err != nil {

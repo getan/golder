@@ -202,9 +202,47 @@ func RegisterPluginCommands(reg *runtime.SlashRegistry, mgr *plugin.Manager) {
 // formatNotifications renders a plugin command's notifications into a single
 // block to surface to the user, one per line, prefixed by their type (when set)
 // so severity is visible. Returns "" when there are none.
+// modelCatalogKey resolves the cache key for the live provider's catalog
+// (provider name + effective endpoint), or ok=false when the provider is
+// unknown (nothing to key on).
+func modelCatalogKey(live *cli.LiveConfig) (string, bool) {
+	spec, ok := provider.LookupProviderSpec(live.ProviderName)
+	if !ok {
+		return "", false
+	}
+	baseURL := live.BaseURL
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = spec.DefaultBaseURL
+	}
+	return provider.ModelCatalogCacheKey(live.ProviderName, baseURL), true
+}
+
+// CachedModelCatalog returns the live model catalog without touching the
+// network: the session's already-fetched list when present, else a fresh
+// on-disk entry (younger than the shared catalog TTL). A hit is marked on live
+// so the rest of the session reuses it. Nil when neither cache has anything.
+func CachedModelCatalog(live *cli.LiveConfig) []string {
+	if len(live.FetchedModels) > 0 {
+		return live.FetchedModels
+	}
+	key, ok := modelCatalogKey(live)
+	if !ok {
+		return nil
+	}
+	ids, fresh := provider.CachedModelCatalog(key)
+	if !fresh {
+		return nil
+	}
+	live.FetchedModels = ids
+	live.FetchedAt = time.Now()
+	return ids
+}
+
 // fetchModelCatalogIDs queries the live provider's endpoint for its real model
-// catalog (issue #566), caches the ids on live, and returns them. It backs the
-// bare-/model list and numeric selection.
+// catalog (issue #566), persists it to the on-disk cache, caches the ids on
+// live, and returns them. It backs the bare-/model list and numeric selection.
+// When the endpoint fails but a stale cache entry exists, the stale list is
+// served instead of an error: a day-old model list beats a broken picker.
 func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore) ([]string, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("no credential store")
@@ -225,20 +263,31 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 	defer cancel()
 	ids, err := provider.FetchRemoteModels(ctx, baseURL, protocol, creds.GetAPIKey(ctx, live.ProviderName))
 	if err != nil {
+		if key, ok := modelCatalogKey(live); ok {
+			if stale, _ := provider.CachedModelCatalog(key); len(stale) > 0 {
+				live.FetchedModels = stale
+				live.FetchedAt = time.Now()
+				return stale, nil
+			}
+		}
 		if provider.NeedsProxy(live.ProviderName, baseURL) && provider.ProxyURL() == "" {
 			return nil, fmt.Errorf("%w (provider %q usually needs egress: export GOLDER_PROXY=http://127.0.0.1:7897 and retry)", err, live.ProviderName)
 		}
 		return nil, err
+	}
+	if key, ok := modelCatalogKey(live); ok {
+		provider.StoreModelCatalog(key, ids)
 	}
 	live.FetchedModels = ids
 	live.FetchedAt = time.Now()
 	return ids, nil
 }
 
-// EnsureModelCatalog returns the live catalog, using the cache when present.
+// EnsureModelCatalog returns the live catalog, preferring the session cache,
+// then a fresh disk cache, and only then the network.
 func EnsureModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) ([]string, error) {
-	if len(live.FetchedModels) > 0 {
-		return live.FetchedModels, nil
+	if ids := CachedModelCatalog(live); len(ids) > 0 {
+		return ids, nil
 	}
 	return fetchModelCatalogIDs(live, creds)
 }
@@ -278,6 +327,72 @@ func thinkDisplay(live *cli.LiveConfig) agentcore.ThinkingLevel {
 	return live.ThinkingLevel
 }
 
+// CredentialSummary reports a provider's credential availability as a short,
+// value-free label for listings and pickers: "set", "set via config file",
+// "set via --api-key", "set via oauth", or "not set". It is a presence probe
+// that never names which variable satisfied it — the listing already shows
+// the candidate variables in their own column, so repeating one here is noise.
+// creds may be nil, which probes the environment layer only.
+func CredentialSummary(creds *provider.CredentialStore, name string) string {
+	st := credentialStatus(creds, name)
+	if !st.Available() {
+		return "not set"
+	}
+	if st.EnvVar != "" {
+		return "set"
+	}
+	return "set via " + st.Source()
+}
+
+// credentialStatus probes a provider's credential layers. creds may be nil, in
+// which case only the environment layer is probed.
+func credentialStatus(creds *provider.CredentialStore, name string) provider.CredentialStatus {
+	if creds != nil {
+		return creds.Status(name)
+	}
+	var st provider.CredentialStatus
+	if envVar, ok := provider.EnvCredentialVar(name); ok {
+		st.EnvVar = envVar
+	}
+	return st
+}
+
+// CredentialAvailable reports whether any credential layer can supply a key
+// for a provider. It is a presence probe: no value is read or returned.
+func CredentialAvailable(creds *provider.CredentialStore, name string) bool {
+	return credentialStatus(creds, name).Available()
+}
+
+// ProvidersAvailableFirst returns the built-in provider specs ordered for
+// display: providers with a credential found first (so the ready-to-use ones
+// are quick to pick), then the rest. Both groups keep registry order.
+func ProvidersAvailableFirst(creds *provider.CredentialStore) []provider.ProviderSpec {
+	specs := provider.ProviderSpecs()
+	ready := make([]provider.ProviderSpec, 0, len(specs))
+	rest := make([]provider.ProviderSpec, 0, len(specs))
+	for _, spec := range specs {
+		if CredentialAvailable(creds, spec.Name) {
+			ready = append(ready, spec)
+		} else {
+			rest = append(rest, spec)
+		}
+	}
+	return append(ready, rest...)
+}
+
+// protocolSuffix renders ", protocol: <effective wire>" for a resolved
+// provider/model pair, or "" when it cannot be determined. Switch
+// confirmations carry it so a mid-session protocol change is visible in
+// history even though the startup banner stays a launch-time snapshot
+// (banner = snapshot, status bar = live state, changes = appended lines).
+func protocolSuffix(providerName, model, protocol string) string {
+	eff := provider.EffectiveProtocol(providerName, model, protocol)
+	if eff == "" {
+		return ""
+	}
+	return ", protocol: " + provider.ProtocolLabel(eff)
+}
+
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
 	// thinkAction views or switches the reasoning-effort level. It backs both
 	// /think and its alias /effect, so the two commands share identical behavior.
@@ -288,16 +403,28 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			if cur == "" {
 				cur = agentcore.ThinkingOff
 			}
-			return fmt.Sprintf("think: %s\nswitch with /think <off|minimal|low|medium|high|xhigh|max>", cur)
+			msg := fmt.Sprintf("think: %s\nswitch with /think <off|minimal|low|medium|high|xhigh|max>", cur)
+			if lv := provider.KnownReasoningLevels(live.ProviderName, live.Model); len(lv) > 0 {
+				msg += fmt.Sprintf("\n%s lists: %s", live.Model, joinThinkingLevels(lv))
+			}
+			return msg
 		}
 		v, ok := validThinkingLevel(lvl)
 		if !ok {
 			return fmt.Sprintf("think: invalid level %q (want off|minimal|low|medium|high|xhigh|max)", lvl)
 		}
 		live.ThinkingLevel = v
-		return fmt.Sprintf("think level set to %s (applies to the next turn)", v)
+		msg := fmt.Sprintf("think level set to %s (applies to the next turn)", v)
+		// The catalog is authoritative about what the model accepts; warn when
+		// the request will be clamped on the wire instead of silently differing.
+		if v != agentcore.ThinkingOff {
+			if lv := provider.KnownReasoningLevels(live.ProviderName, live.Model); len(lv) > 0 && !slices.Contains(lv, v) {
+				msg += fmt.Sprintf("\nnote: %s lists %s; the request clamps into that list", live.Model, joinThinkingLevels(lv))
+			}
+		}
+		return msg
 	}
-	modelSwitch := func(id string) string {
+	modelSwitch := func(id string) (string, bool) {
 		// An id from the fetched online catalog (issue #566) stays on the
 		// gateway that served it: resolve with the live provider name
 		// explicit instead of the heuristic chain, which could route a
@@ -305,12 +432,12 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		if providerName := live.ProviderName; len(live.FetchedModels) > 0 && slices.Contains(live.FetchedModels, id) {
 			prov, name, err := provider.ResolveProvider(id, live.BaseURL, live.Protocol, providerName, os.Getenv)
 			if err != nil {
-				return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
+				return fmt.Sprintf("model: cannot switch to %q: %v", id, err), false
 			}
 			live.Model = id
 			live.ProviderName = name
 			live.Provider = prov
-			return fmt.Sprintf("model switched to %s (provider: %s, from fetched catalog)", id, name)
+			return fmt.Sprintf("model switched to %s (provider: %s%s, from fetched catalog)", id, name, protocolSuffix(name, id, live.Protocol)), true
 		}
 		model := provider.CanonicalizeModel(id)
 		// Fork: stay on the current provider. A bare provider name
@@ -322,17 +449,138 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		}
 		prov, providerName, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, providerName, os.Getenv)
 		if err != nil {
-			return fmt.Sprintf("model: cannot switch to %q: %v", id, err)
+			return fmt.Sprintf("model: cannot switch to %q: %v", id, err), false
 		}
 		live.Model = model
 		live.ProviderName = providerName
 		live.Provider = prov
-		return fmt.Sprintf("model switched to %s (provider: %s)", model, providerName)
+		return fmt.Sprintf("model switched to %s (provider: %s%s)", model, providerName, protocolSuffix(providerName, model, live.Protocol)), true
+	}
+	// reasoningHint is a one-line pointer to the model's catalog reasoning
+	// levels, appended after a plain switch so the level step is discoverable.
+	// Empty when models.dev has nothing definite for the model.
+	reasoningHint := func(model string) string {
+		lv := provider.KnownReasoningLevels(live.ProviderName, model)
+		if len(lv) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("\nreasoning levels: %s (/think <level> or /model %s <level>)", joinThinkingLevels(lv), model)
+	}
+	// pickModel resolves a selector — a numeric index into the live catalog or a
+	// model id — and switches to it. Both the single-argument form and the
+	// model+level form share it, so "/model 2" and "/model 2 high" agree.
+	pickModel := func(sel string) (string, bool) {
+		if n, err := strconv.Atoi(sel); err == nil {
+			ids, err := EnsureModelCatalog(live, creds)
+			if err != nil {
+				return fmt.Sprintf("model: list unavailable: %v\nswitch directly with /model <id>", err), false
+			}
+			if n < 1 || n > len(ids) {
+				return fmt.Sprintf("model: %d out of range (1-%d)", n, len(ids)), false
+			}
+			return modelSwitch(ids[n-1])
+		}
+		return modelSwitch(sel)
+	}
+	providerAction := func(args string) string {
+		arg := strings.TrimSpace(args)
+		if arg == "" {
+			specs := provider.ProviderSpecs()
+			// Dynamic column width so a long env list (or long provider name)
+			// does not push the credential column out of alignment.
+			envWidth := len("no key needed")
+			nameWidth := len("provider")
+			for _, spec := range specs {
+				if w := len(spec.Name); w > nameWidth {
+					nameWidth = w
+				}
+				w := len("no key needed")
+				if len(spec.EnvVars) > 0 {
+					w = len(strings.Join(spec.EnvVars, " / "))
+				}
+				if w > envWidth {
+					envWidth = w
+				}
+			}
+			row := func(spec provider.ProviderSpec) string {
+				envs := "no key needed"
+				if len(spec.EnvVars) > 0 {
+					envs = strings.Join(spec.EnvVars, " / ")
+				}
+				line := fmt.Sprintf("  %-*s  %-*s  %s", nameWidth, spec.Name, envWidth, envs, CredentialSummary(creds, spec.Name))
+				if spec.Name == live.ProviderName {
+					line += "  (current)"
+				}
+				return line
+			}
+			var ready, missing []provider.ProviderSpec
+			for _, spec := range specs {
+				if CredentialAvailable(creds, spec.Name) {
+					ready = append(ready, spec)
+				} else {
+					missing = append(missing, spec)
+				}
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "provider: %s\nswitch with /provider <name>; set any one of the listed variables (earlier ones win)", live.ProviderName)
+			if len(ready) == 0 {
+				b.WriteString("\n\nno provider credentials found on this machine; set one of the variables below")
+			} else {
+				b.WriteString("\n\nready to use (credential found):")
+				for _, spec := range ready {
+					b.WriteString("\n" + row(spec))
+				}
+			}
+			if len(missing) > 0 {
+				b.WriteString("\n\nneeds a key (set one of these):")
+				for _, spec := range missing {
+					b.WriteString("\n" + row(spec))
+				}
+			}
+			b.WriteString("\n\nlocal: ollama needs no key (use /model ollama/<model>)")
+			return b.String()
+		}
+		spec, ok := provider.LookupProviderSpec(arg)
+		if !ok {
+			return fmt.Sprintf("provider: unknown provider %q\nsupported: %s", arg, strings.Join(provider.ProviderNames(), ", "))
+		}
+		model := live.Model
+		note := ""
+		if spec.DefaultModel != "" {
+			model = spec.DefaultModel
+		} else {
+			note = "\nno default model for this provider; set one with /model <id>"
+		}
+		// A provider switch targets the new provider's registry endpoint: a
+		// --base-url / --protocol override belongs to the previous provider and
+		// would otherwise leak into the new driver (mirrors session switching).
+		cleared := live.BaseURL != "" || live.Protocol != ""
+		live.BaseURL = ""
+		live.Protocol = ""
+		prov, name, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, spec.Name, os.Getenv)
+		if err != nil {
+			return fmt.Sprintf("provider: cannot switch to %q: %v", arg, err)
+		}
+		live.Model = model
+		live.ProviderName = name
+		live.Provider = prov
+		// The fetched catalog belongs to the previous gateway; drop it so the
+		// next bare /model lists (and disk-caches) the new provider's lineup.
+		live.FetchedModels = nil
+		live.FetchedAt = time.Time{}
+		msg := fmt.Sprintf("provider switched to %s (model: %s%s)", name, model, protocolSuffix(name, model, live.Protocol))
+		if cleared {
+			msg += "\n(base-url/protocol override cleared; using the provider's defaults)"
+		}
+		if !CredentialAvailable(creds, name) && len(spec.EnvVars) > 0 {
+			msg += fmt.Sprintf("\nwarning: no credential found; set any one of %s (see /provider for the full list)", strings.Join(spec.EnvVars, " / "))
+		}
+		return msg + note
 	}
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "model",
-		Description:  "list and switch models on the current provider: /model [n|id] | /model think [level]",
-		ArgumentHint: "[n|id|think level]",
+		Description:  "list and switch models on the current provider: /model [n|id] [level] | /model think [level]",
+		ArgumentHint: "[n|id [level]|think level]",
 		Action: func(args string) string {
 			arg := strings.TrimSpace(args)
 			// /model think [level]: show or set the reasoning effort.
@@ -354,22 +602,35 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 					if id == live.Model {
 						mark = " (current)"
 					}
-					fmt.Fprintf(&b, "\n  %d. %s%s", i+1, id, mark)
+					note := ""
+					if lv := provider.KnownReasoningLevels(live.ProviderName, id); len(lv) > 0 {
+						note = "  [" + joinThinkingLevels(lv) + "]"
+					}
+					fmt.Fprintf(&b, "\n  %d. %s%s%s", i+1, id, note, mark)
 				}
 				return b.String()
 			}
-			// /model <n>: numeric pick from the live catalog.
-			if n, err := strconv.Atoi(arg); err == nil {
-				ids, err := EnsureModelCatalog(live, creds)
-				if err != nil {
-					return fmt.Sprintf("model: list unavailable: %v\nswitch directly with /model <id>", err)
+			// /model <n|id> <level>: switch and set the reasoning effort in one
+			// step (the TUI picker's stage-2 confirm runs this form).
+			fields := strings.Fields(arg)
+			if len(fields) == 2 {
+				lvl, ok := validThinkingLevel(fields[1])
+				if !ok {
+					return fmt.Sprintf("model: invalid reasoning level %q (want off|minimal|low|medium|high|xhigh|max)", fields[1])
 				}
-				if n < 1 || n > len(ids) {
-					return fmt.Sprintf("model: %d out of range (1-%d)", n, len(ids))
+				msg, switched := pickModel(fields[0])
+				if !switched {
+					return msg
 				}
-				return modelSwitch(ids[n-1])
+				live.ThinkingLevel = lvl
+				return fmt.Sprintf("%s\nthink level set to %s", msg, lvl)
 			}
-			return modelSwitch(arg)
+			// /model <n|id>: switch; a catalog-known model also hints its levels.
+			msg, switched := pickModel(arg)
+			if !switched {
+				return msg
+			}
+			return msg + reasoningHint(live.Model)
 		},
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
@@ -377,6 +638,12 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		ArgumentHint: "[off|minimal|low|medium|high|xhigh|max]",
 		Description:  "view or switch the reasoning-effort level; takes effect on the next turn",
 		Action:       thinkAction,
+	})
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "provider",
+		Description:  "list providers with credential availability, or switch: /provider [name]",
+		ArgumentHint: "[name]",
+		Action:       providerAction,
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "effect",
@@ -450,6 +717,15 @@ func validThinkingLevel(s string) (agentcore.ThinkingLevel, bool) {
 	default:
 		return "", false
 	}
+}
+
+// joinThinkingLevels renders a level list as "low|medium|high" for status text.
+func joinThinkingLevels(levels []agentcore.ThinkingLevel) string {
+	parts := make([]string, len(levels))
+	for i, l := range levels {
+		parts[i] = string(l)
+	}
+	return strings.Join(parts, "|")
 }
 
 // RegisterPermissionCommand installs the /permissions action command: with an

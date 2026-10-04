@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -282,13 +281,6 @@ func newREPLLineEditor(in io.Reader, buffered *bufio.Reader, out io.Writer, slas
 	}
 	for _, h := range history {
 		e.remember(h)
-	}
-	seen := map[string]bool{}
-	for _, m := range provider.PresetCatalog {
-		if !seen[m.ID] {
-			e.models = append(e.models, m.ID)
-			seen[m.ID] = true
-		}
 	}
 	return e
 }

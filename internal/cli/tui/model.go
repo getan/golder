@@ -19,6 +19,7 @@ import (
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -304,13 +305,17 @@ func (m Model) openModelPicker() (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("No active session.")
 		return m, nil
 	}
-	if len(m.live.FetchedModels) > 0 {
-		m.menu.openPicker(m.live.FetchedModels, m.live.Model)
+	if ids := prompts.CachedModelCatalog(m.live); len(ids) > 0 {
+		m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, ids), m.live.Model, "model")
 		m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
 		m.relayout()
 		return m, nil
 	}
 	m.transcript.addSystem("Fetching models…")
+	// The reasoning catalog needs no fetch here: startup already refreshes it
+	// off the hot path, and the lookups below read the disk cache lazily, so
+	// the level stage gets real levels whenever a cache exists (from this or a
+	// previous session) and the family fallback otherwise.
 	return m, func() tea.Msg {
 		ids, err := prompts.EnsureModelCatalog(m.live, m.session.creds)
 		return modelsFetchedMsg{ids: ids, err: err}
@@ -331,8 +336,63 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 	if m.live != nil {
 		current = m.live.Model
 	}
-	m.menu.openPicker(msg.ids, current)
+	m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, msg.ids), current, "model")
 	m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
+	m.relayout()
+	return m, nil
+}
+
+// modelPickItems builds the stage-1 model rows, annotating each id with the
+// reasoning levels models.dev advertises for it (only when known, so the
+// fallback ladder never masquerades as catalog data).
+func modelPickItems(providerName string, ids []string) []pickItem {
+	items := make([]pickItem, 0, len(ids))
+	for _, id := range ids {
+		it := pickItem{Title: id, Value: id}
+		if lv := provider.KnownReasoningLevels(providerName, id); len(lv) > 0 {
+			it.Detail = "reasoning: " + joinLevels(lv)
+		}
+		items = append(items, it)
+	}
+	return items
+}
+
+// joinLevels renders reasoning levels as "low|high|max".
+func joinLevels(levels []agentcore.ThinkingLevel) string {
+	parts := make([]string, len(levels))
+	for i, l := range levels {
+		parts[i] = string(l)
+	}
+	return strings.Join(parts, "|")
+}
+
+// openProviderPicker shows the interactive provider picker: each row names the
+// provider, the environment variable(s) it reads, and whether a credential is
+// found (names only, never values). Confirming re-runs /provider <name>, so the
+// switch logic (default model, endpoint override clearing, catalog reset) stays
+// in the shared registry action.
+func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
+	if m.session == nil {
+		m.transcript.addSystem("No active session.")
+		return m, nil
+	}
+	// Providers with a credential found come first so the ready-to-use ones are
+	// quick to pick (same ordering as the /provider text listing).
+	specs := prompts.ProvidersAvailableFirst(m.session.creds)
+	picks := make([]pickItem, 0, len(specs))
+	for _, spec := range specs {
+		envs := "no key needed"
+		if len(spec.EnvVars) > 0 {
+			envs = strings.Join(spec.EnvVars, " / ")
+		}
+		picks = append(picks, pickItem{
+			Title:  spec.Name,
+			Detail: envs + " · " + prompts.CredentialSummary(m.session.creds, spec.Name),
+			Value:  spec.Name,
+		})
+	}
+	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
+	m.transcript.addSystem("Select a provider (↑↓ + Enter, Esc cancels):")
 	m.relayout()
 	return m, nil
 }
@@ -1158,6 +1218,32 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		if kind == "" {
 			kind = "model"
 		}
+		item, ok := m.menu.pickCurrent()
+		// Stage 1 of the /model flow: after the model, pick its reasoning level
+		// when the catalog (or the family fallback) says it has one — the
+		// codex-style two-step. The switch itself runs at stage 2 so Esc on the
+		// level picker leaves the live model untouched.
+		if kind == "model" && ok && m.live != nil {
+			if levels := provider.ReasoningLevels(m.live.ProviderName, item); len(levels) > 0 {
+				m.menu.openLevelPicker(item, levels, m.live.ThinkingLevel)
+				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, Esc cancels):", item))
+				m.relayout()
+				return m, nil
+			}
+		}
+		// Stage 2: run the switch and the level as one /model <id> <level>.
+		if kind == "model-level" && ok {
+			model := m.menu.pickModel
+			m.menu.close()
+			m.input.Clear()
+			m.relayout()
+			if model == "" {
+				return m, nil
+			}
+			line := "/model " + model + " " + item
+			m.recordHistory(line)
+			return m.runSlash(line)
+		}
 		if item, ok := m.menu.pickCurrent(); ok {
 			m.menu.close()
 			m.input.Clear()
@@ -1203,6 +1289,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// through the registry below.
 	if line == "/model" {
 		return m.openModelPicker()
+	}
+	// Bare /provider opens the interactive provider picker (each row shows the
+	// env vars the provider reads and whether one is set);
+	// /provider <name> still resolves through the registry below.
+	if line == "/provider" {
+		return m.openProviderPicker()
 	}
 	// Bare /permissions opens the interactive mode picker (arrow keys +
 	// Enter) with the codex-style preset list and descriptions;

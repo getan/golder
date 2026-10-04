@@ -1,12 +1,16 @@
 package provider
 
-// Tests for model-name → provider inference (InferProviderFromModel). They
-// verify each documented name prefix resolves to the expected built-in
-// provider, that ambiguous/unknown ids and routed "provider/model" ids do not
-// resolve, that matching is case-insensitive, and that every inferred provider
-// name actually exists in the provider registry (the single source of truth).
+// Tests for model-name → provider inference (InferProviderFromModel, defined
+// in resolve.go next to its only caller). They verify each documented name
+// prefix resolves to the expected built-in provider, that ambiguous/unknown
+// ids and routed "provider/model" ids do not resolve, that matching is
+// case-insensitive, and that every declared prefix belongs to exactly one
+// provider (the registry is the single source of truth).
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestInferProviderFromModelKnown verifies each documented model-name prefix
 // resolves to its expected built-in provider.
@@ -74,7 +78,7 @@ func TestInferProviderFromModelAmbiguousOrUnknown(t *testing.T) {
 		"qwq-32b",                // ambiguous
 		"gemma-2-9b-it",          // ambiguous
 		"mixtral-8x22b",          // ambiguous
-		"openai/gpt-4o",          // routed id, leave to preset/prefix handling
+		"openai/gpt-4o",          // routed id, left to the default gateway
 		"anthropic/claude-3.5",   // routed id
 		"ollama/llama3.3",        // routed id (ollama prefix path)
 		"totally-made-up-model",  // unknown
@@ -85,14 +89,26 @@ func TestInferProviderFromModelAmbiguousOrUnknown(t *testing.T) {
 	}
 }
 
-// TestInferProviderNamesExistInRegistry verifies every provider name the
-// inference table can return is a real built-in provider (registry is the
-// single source of truth), so a hit can be handed straight to registry-driven
-// resolution.
-func TestInferProviderNamesExistInRegistry(t *testing.T) {
-	for _, m := range modelPrefixProvider {
-		if _, ok := LookupProviderSpec(m.provider); !ok {
-			t.Errorf("inference maps prefix %q → %q, which is not in providerRegistry", m.prefix, m.provider)
+// TestInferProviderPrefixesAreOwnedAndUnambiguous verifies the registry's
+// ModelPrefixes invariants: each declared prefix resolves back to its own
+// provider, and no prefix is claimed by two providers (which would make
+// inference order-dependent).
+func TestInferProviderPrefixesAreOwnedAndUnambiguous(t *testing.T) {
+	for _, spec := range providerRegistry {
+		for _, prefix := range spec.ModelPrefixes {
+			if got, ok := InferProviderFromModel(prefix + "x"); !ok || got != spec.Name {
+				t.Errorf("prefix %q of %q infers (%q, %v), want (%q, true)", prefix, spec.Name, got, ok, spec.Name)
+			}
+			for _, other := range providerRegistry {
+				if other.Name == spec.Name {
+					continue
+				}
+				for _, otherPrefix := range other.ModelPrefixes {
+					if strings.HasPrefix(otherPrefix, prefix) || strings.HasPrefix(prefix, otherPrefix) {
+						t.Errorf("providers %q and %q claim overlapping model prefixes (%q, %q)", spec.Name, other.Name, prefix, otherPrefix)
+					}
+				}
+			}
 		}
 	}
 }

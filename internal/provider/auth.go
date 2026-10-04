@@ -59,16 +59,30 @@ func LoadAPIKeyConfigFile(path string) (*APIKeyConfig, error) {
 // back to a generic <PROVIDER>_API_KEY when the provider is unknown or none of
 // its registered vars are set. Returns "" when no value is present.
 func envAPIKey(provider string) string {
+	if name, ok := EnvCredentialVar(provider); ok {
+		return os.Getenv(name)
+	}
+	return ""
+}
+
+// EnvCredentialVar reports the name of the environment variable holding a
+// credential for a provider, without returning its value. Candidates come from
+// the provider registry (EnvVars, in precedence order), then the generic
+// <PROVIDER>_API_KEY fallback. A variable that is set but empty does not count.
+// The name is safe to display; the value never leaves this call.
+func EnvCredentialVar(provider string) (string, bool) {
 	if spec, ok := LookupProviderSpec(provider); ok {
 		for _, name := range spec.EnvVars {
-			if v := os.Getenv(name); v != "" {
-				return v
+			if v, ok := os.LookupEnv(name); ok && strings.TrimSpace(v) != "" {
+				return name, true
 			}
 		}
 	}
-	// Generic fallback for unknown providers or when no registered var is set.
 	generic := strings.ToUpper(provider) + "_API_KEY"
-	return os.Getenv(generic)
+	if v, ok := os.LookupEnv(generic); ok && strings.TrimSpace(v) != "" {
+		return generic, true
+	}
+	return "", false
 }
 
 // TokenSource yields an access token, refreshing it when expired. It models an
@@ -246,4 +260,62 @@ func (c *CredentialStore) GetAPIKey(ctx context.Context, provider string) string
 // for a provider, without exposing the value.
 func (c *CredentialStore) HasCredential(ctx context.Context, provider string) bool {
 	return c.GetAPIKey(ctx, provider) != ""
+}
+
+// CredentialStatus reports which credential sources hold a value for a
+// provider, in resolution priority order. It is a presence probe: no secret
+// value is retrieved or returned, only which layer can supply one.
+type CredentialStatus struct {
+	// OAuth reports a registered OAuth token source (auto-refreshing).
+	OAuth bool
+	// Override reports an explicit key (--api-key).
+	Override bool
+	// EnvVar names the environment variable holding a value, or "" for none.
+	EnvVar string
+	// Config reports a key in the config-file layer.
+	Config bool
+}
+
+// Available reports whether any layer can supply a credential.
+func (s CredentialStatus) Available() bool {
+	return s.OAuth || s.Override || s.EnvVar != "" || s.Config
+}
+
+// Source returns a short, value-free label for the highest-priority layer that
+// holds a credential, or "" when none does. Env sources return the variable
+// name (safe to display), never the value.
+func (s CredentialStatus) Source() string {
+	switch {
+	case s.OAuth:
+		return "oauth"
+	case s.Override:
+		return "--api-key"
+	case s.EnvVar != "":
+		return s.EnvVar
+	case s.Config:
+		return "config file"
+	default:
+		return ""
+	}
+}
+
+// Status probes the credential layers for a provider without reading any
+// secret into a caller-visible value. A nil store (or empty config) reports no
+// config/override/OAuth source; the env layer is always probed.
+func (c *CredentialStore) Status(provider string) CredentialStatus {
+	var st CredentialStatus
+	if name, ok := EnvCredentialVar(provider); ok {
+		st.EnvVar = name
+	}
+	if c == nil {
+		return st
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	st.OAuth = c.sources[provider] != nil
+	st.Override = c.overrides[provider] != ""
+	if c.config != nil {
+		st.Config = c.config.Keys[provider] != ""
+	}
+	return st
 }

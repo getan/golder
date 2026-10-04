@@ -76,6 +76,48 @@ func NormalizeProtocol(raw string) (string, error) {
 	}
 }
 
+// EffectiveProtocol reports the wire protocol a run will actually speak for
+// the given provider selection, model id, and explicit --protocol flag. It
+// mirrors ResolveNamedProvider's effective-protocol computation without its
+// driver construction or errors, so the startup banner can display the real
+// wire format (a multi-protocol gateway such as opencode-go shows
+// openai/resp_api for a deepseek model and openai/chat for anything else).
+// An explicit protocol wins when it is valid and compatible with the
+// provider; otherwise the provider's registry default applies, upgraded to
+// Responses for Responses-family models on OpenAI-wired providers. Unknown
+// providers, unknown protocols, and incompatible pairs yield "" so the caller
+// falls back to its placeholder instead of displaying a misleading value.
+func EffectiveProtocol(providerName, model, protocol string) string {
+	spec, ok := LookupProviderSpec(strings.TrimSpace(providerName))
+	if !ok {
+		if name, inferred := InferProviderFromModel(model); inferred {
+			spec, ok = LookupProviderSpec(name)
+		}
+		if !ok {
+			if canonical, err := NormalizeProtocol(protocol); err == nil {
+				return canonical
+			}
+			return ""
+		}
+	}
+	if strings.TrimSpace(protocol) != "" {
+		canonical, err := NormalizeProtocol(protocol)
+		if err != nil {
+			return ""
+		}
+		compatible := canonical == spec.Protocol ||
+			(spec.Protocol == ProtocolOpenAI && canonical == ProtocolOpenAIResponses)
+		if !compatible {
+			return ""
+		}
+		return canonical
+	}
+	if spec.Protocol == ProtocolOpenAI && PreferResponses(model) {
+		return ProtocolOpenAIResponses
+	}
+	return spec.Protocol
+}
+
 // ProtocolLabel maps a raw --protocol value to the human-facing label shown in
 // the startup banner's Protocol row, so the displayed wire format matches what
 // golder actually speaks. It differs from NormalizeProtocol in one deliberate way:

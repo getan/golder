@@ -461,6 +461,11 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
 			return 2
 		}
+		// Refresh the models.dev reasoning catalog off the hot path when it is
+		// stale or missing, so the /model picker's level stage and /think have
+		// real per-model levels without any session blocking on the network.
+		// Interactive sessions only: a one-shot -p run never opens the picker.
+		provider.StartBackgroundReasoningCatalogRefresh()
 		if shouldUseTUI(opts, isTTY) {
 			// Refresh the cached latest-release check off the hot path so the banner
 			// can show an upgrade hint on this or the next launch without blocking

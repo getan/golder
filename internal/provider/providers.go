@@ -85,7 +85,7 @@ func (d *openAICompatDriver) StreamCompletion(ctx context.Context, req Completio
 	if err := checkImageSupport(d.name, req.Model, d.models, req.Context.Messages); err != nil {
 		return nil, err
 	}
-	body, err := encodeOpenAIRequest(req)
+	body, err := encodeOpenAIRequest(d.name, req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build request body: %w", d.name, err)
 	}
@@ -112,7 +112,7 @@ func (d *openAICompatDriver) StreamCompletion(ctx context.Context, req Completio
 
 // encodeOpenAIRequest serializes a CompletionRequest into an OpenAI Chat
 // Completions JSON body with streaming enabled and usage requested.
-func encodeOpenAIRequest(req CompletionRequest) ([]byte, error) {
+func encodeOpenAIRequest(providerName string, req CompletionRequest) ([]byte, error) {
 	msgs := make([]map[string]any, 0, len(req.Context.Messages)+1)
 	if sp := req.Context.SystemPrompt; sp != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": sp})
@@ -130,7 +130,7 @@ func encodeOpenAIRequest(req CompletionRequest) ([]byte, error) {
 	// OpenAI `reasoning_effort` field. Reasoning models (o-series, DeepSeek-R1,
 	// GLM-thinking, …) read this to open their reasoning channel; omitting it
 	// leaves them at their default and effectively disables extended reasoning.
-	if effort := WireReasoningEffort(req.Model, req.Config.ThinkingLevel); effort != "" {
+	if effort := WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel); effort != "" {
 		body["reasoning_effort"] = effort
 	}
 	if tools := encodeOpenAITools(req.Context.Tools); len(tools) > 0 {

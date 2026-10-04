@@ -12,6 +12,24 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`/provider` command**: lists every built-in provider with the environment
+  variable(s) it reads (in precedence order) and whether a credential is
+  configured — no README lookup needed. Providers with a credential found are
+  sorted first, so the ready-to-use ones are quick to pick; `/provider <name>`
+  switches the live provider to its `DefaultModel` (clearing a previous
+  `--base-url`/`--protocol` override and the previous gateway's cached model
+  list). The TUI opens the same list as an arrow-key picker that mirrors the
+  text ordering. Credential detection is a presence probe: variable names may
+  be shown, values never are.
+- **Two-step model + reasoning picker**: choosing a model now leads to its
+  reasoning-level picker (TUI) instead of leaving `/think` to be discovered
+  separately — Esc on the level stage cancels both. The bare `/model` list
+  annotates every model with the levels it advertises, and
+  `/model <n|id> <level>` switches model and level in one step. Levels come
+  from models.dev's per-model metadata (the gateways' own `/models` answers
+  carry no effort information), so opencode-go, first-party APIs, and future
+  providers all get their real ladders; unknown models fall back to the
+  hand-maintained family table.
 - **Context budget tooling** (`get_context_remaining` / `new_context`): the
   model can now see and steer its own context budget, the same affordance
   codex exposes. `get_context_remaining` reports the live remaining tokens;
@@ -89,13 +107,32 @@ interactive REPL/TUI.
   24h cached background release check. (#467)
 
 ### Changed
-- **Reasoning-effort mapping is now one table** (`internal/provider/reasoning.go`)
-  that the Chat Completions and Responses drivers share, so a model maps to the
-  same effort on either wire. DeepSeek keeps its full ladder, `max` included;
-  Muse spark caps at `xhigh` (its `max` is advertised in the error text but
-  rejected on the wire); every other family uses the conservative
-  low/medium/high ladder with `minimal` clamping up. Adding a gateway's quirk
-  is one table entry.
+- **Provider config lives in one registry**: `ProviderSpec`
+  (`internal/provider/registry.go`) now carries everything about a provider —
+  transport/auth metadata plus `ModelPrefixes` (model-name → provider
+  inference), `ModelsDevID` (models.dev catalog key), `ReasoningLadders`
+  (gateway-specific effort quirks), and `DefaultModel` (the model a bare
+  provider name resolves to). The former prefix table (`infer.go`) and the
+  curated preset catalog (`presets.go`) are gone — inference and defaults read
+  the registry, so adding a provider is a single entry. Consequence: curated
+  namespaced ids that used to route implicitly (e.g. NVIDIA's
+  `meta/llama-3.3-70b-instruct`) now need `--provider nvidia` or an
+  `nvidia/`-prefixed id; `claude-*`/`gpt-*`/`gemini-*`/CN-cloud ids are
+  unaffected (name inference covers them).
+- **Reasoning ladders resolve in layers, shared by both wires**: the models.dev
+  catalog first (authoritative, per provider), then the provider's
+  `ReasoningLadders`, then the shared model-family table, then the conservative
+  low/medium/high default. DeepSeek keeps its full ladder, `max` included; Muse
+  spark caps at `xhigh` on opencode-go (its `max` is advertised in the error
+  text but rejected on the wire). Chat Completions and Responses agree by
+  construction. The effort engine and the models.dev catalog now live in one
+  file (`internal/provider/reasoning.go`, was split across two).
+- **Catalogs are cached 24h on disk, one mechanism**: the provider model list
+  fetched by `/model` now persists to `~/.golder/model-catalog.json` with the
+  same TTL and file plumbing as the models.dev reasoning catalog, keyed by
+  provider + endpoint. A provider is queried about once a day instead of once
+  per session, and a stale list is served when the endpoint fails rather than
+  breaking the picker.
 - **Thinking-level layering fixed**: `--thinking-level` now defaults to unset,
   so `~/.config/golder/config.toml`, `.golder/config.json`, and
   `GOLDER_THINKING_LEVEL` actually take effect; the built-in default moved to

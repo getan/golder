@@ -1,48 +1,75 @@
+// This file owns everything about reasoning effort: the mapping from golder's
+// unified ThinkingLevel onto each gateway's wire effort value, and the
+// models.dev catalog that says which levels a model actually advertises.
+//
+// The mapping half is pure: no IO, no global state. The catalog half fetches
+// and caches models.dev's metadata, because the gateways golder talks to do
+// not expose it themselves (opencode-go's /models returns only
+// id/object/created/owned_by). They live together because they are one
+// decision: WireReasoningEffort reads the catalog and falls back to the
+// hand-maintained ladders in this same file.
+//
+// golder's unified ladder (off < minimal < low < medium < high < xhigh < max)
+// is wider than any single gateway's. Every wire driver — Chat Completions
+// (`reasoning_effort`) and Responses (`reasoning.effort`) — calls
+// WireReasoningEffort, so a model is mapped identically no matter which
+// protocol carries its request.
+//
+// A model's accepted ladder resolves in layers:
+//
+//  1. the models.dev catalog entry for (provider, model), when it has one,
+//  2. the provider's own ReasoningLadders (registry.go), for gateway quirks,
+//  3. sharedReasoningLadders, for model families that behave the same on every
+//     gateway,
+//  4. defaultReasoningLadder, the conservative common denominator.
+//
+// A requested level above the ladder's top clamps down to its top rung (a
+// model with a real max keeps it); a level below its bottom clamps up to the
+// bottom rung. off/empty omits the field so the gateway keeps its own default,
+// and a catalog model marked as non-reasoning gets no effort field at all.
+//
+// The catalog is one JSON document keyed by provider. golder extracts only the
+// providers it can route to (the built-in registry, using each spec's
+// ModelsDevID) and keeps just each model's reasoning flag plus its effort-type
+// values, so a full fetch is a few tens of KB on disk. It is cached at
+// $GOLDER_HOME/reasoning-catalog.json (or ~/.golder/reasoning-catalog.json)
+// with the shared catalogTTL: a session never blocks on the network for it,
+// and the fetch happens at most once per TTL instead of once per session.
+// Missing, stale, or corrupt caches degrade silently to the hand-maintained
+// ladders.
 package provider
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 )
 
-// This file owns the one place where model ids meet wire reasoning-effort
-// values.
-//
-// golder's unified ThinkingLevel ladder (off < minimal < low < medium < high <
-// xhigh < max) is wider than any single gateway's. Every wire driver — Chat
-// Completions (`reasoning_effort`) and Responses (`reasoning.effort`) — calls
-// WireReasoningEffort, so a model is mapped identically no matter which
-// protocol carries its request: the two OpenAI wires accept the same effort
-// names, and a model that speaks Responses never needs a chat-specific rule.
-//
-// A family declares the rungs it accepts, lowest to highest. A requested level
-// above the family's top clamps down to its top rung (a model with a real max
-// keeps it); a level below its bottom clamps up to the bottom rung. Unknown
-// families get the conservative ladder both wires document, and off/empty
-// omits the field so the gateway keeps its own default.
-
-// reasoningLadders pins the families whose ladder differs from the default.
-// Matching is a case-insensitive substring of the model id; the first match
-// wins, so keep more specific families above more generic ones. Adding a
-// gateway's quirk is one table entry, nothing else.
-var reasoningLadders = []struct {
-	match  string
-	ladder []agentcore.ThinkingLevel
-}{
-	// DeepSeek (first-party and the opencode-go gateway) accepts the full
-	// ladder. Measured on opencode-go via reasoning-token counts: low < medium
-	// ≈ high < xhigh < max, so max stays max.
+// sharedReasoningLadders is the offline fallback for model families whose
+// ladder differs from the default on every gateway. Matching is a
+// case-insensitive substring of the model id; the first match wins, so keep
+// more specific families above more generic ones. Provider-specific quirks
+// belong in the provider's registry entry instead. The catalog supersedes the
+// table whenever it has an entry; the table stays for models the catalog is
+// missing (and for a first run with no cache).
+var sharedReasoningLadders = []ReasoningLadder{
+	// DeepSeek's offline fallback is deliberately the full ladder: with no
+	// catalog entry (cold cache, unknown model) the requested rung is passed
+	// through rather than clamped to a guess. Once models.dev is fetched its
+	// advertised set supersedes this table — currently low|high|max for the
+	// deepseek models on both the first-party API and opencode-go.
 	{"deepseek", []agentcore.ThinkingLevel{
 		agentcore.ThinkingMinimal, agentcore.ThinkingLow, agentcore.ThinkingMedium,
 		agentcore.ThinkingHigh, agentcore.ThinkingXHigh, agentcore.ThinkingMax,
-	}},
-	// Muse spark accepts minimal|low|medium|high|xhigh. "max" is advertised in
-	// its error message's supported list but rejected on the wire, so xhigh is
-	// the highest usable rung.
-	{"muse", []agentcore.ThinkingLevel{
-		agentcore.ThinkingMinimal, agentcore.ThinkingLow, agentcore.ThinkingMedium,
-		agentcore.ThinkingHigh, agentcore.ThinkingXHigh,
 	}},
 }
 
@@ -66,9 +93,12 @@ var reasoningRank = map[agentcore.ThinkingLevel]int{
 
 // WireReasoningEffort maps the unified level onto the effort value to send for
 // model. Both the Chat Completions and the Responses driver call it, so they
-// agree by construction. An empty return means "omit the field": off/unset
-// (or an unknown level) leaves the gateway's default behavior untouched.
-func WireReasoningEffort(model string, level agentcore.ThinkingLevel) string {
+// agree by construction. providerName keys the models.dev catalog; an empty
+// providerName simply skips the catalog lookup. An empty return means "omit
+// the field": off/unset (or an unknown level) leaves the gateway's default
+// behavior untouched, and a catalog model marked non-reasoning is never sent
+// an effort at all.
+func WireReasoningEffort(providerName, model string, level agentcore.ThinkingLevel) string {
 	if level == "" || level == agentcore.ThinkingOff {
 		return ""
 	}
@@ -77,12 +107,13 @@ func WireReasoningEffort(model string, level agentcore.ThinkingLevel) string {
 		return ""
 	}
 
-	ladder := defaultReasoningLadder
-	id := strings.ToLower(model)
-	for _, family := range reasoningLadders {
-		if strings.Contains(id, family.match) {
-			ladder = family.ladder
-			break
+	ladder := familyLadder(providerName, model)
+	if e, known := catalogEntry(providerName, model); known {
+		if !e.Reasoning {
+			return ""
+		}
+		if lv := parseReasoningLevels(e.Levels); len(lv) > 0 {
+			ladder = lv
 		}
 	}
 
@@ -97,4 +128,296 @@ func WireReasoningEffort(model string, level agentcore.ThinkingLevel) string {
 		pick = rung
 	}
 	return string(pick)
+}
+
+// modelsDevURL is the models.dev catalog endpoint. It is a var so tests can
+// point it at an httptest server.
+var modelsDevURL = "https://models.dev/api.json"
+
+const (
+	// reasoningCatalogFileName is the on-disk cache under the golder home dir.
+	reasoningCatalogFileName = "reasoning-catalog.json"
+	// reasoningCatalogTimeout bounds one catalog fetch.
+	reasoningCatalogTimeout = 20 * time.Second
+)
+
+// reasoningEntry is one model's reasoning metadata: whether the model reasons
+// at all, and the effort-type levels it advertises (empty when it reasons but
+// exposes no effort control). "none" is dropped: golder's off is expressed by
+// omitting the wire field, not by an effort value.
+type reasoningEntry struct {
+	Reasoning bool     `json:"reasoning"`
+	Levels    []string `json:"levels,omitempty"`
+}
+
+// reasoningCatalogFile is the on-disk shape of the cached catalog.
+type reasoningCatalogFile struct {
+	CheckedAt time.Time                            `json:"checked_at"`
+	Providers map[string]map[string]reasoningEntry `json:"providers"`
+}
+
+var (
+	reasoningMu sync.Mutex
+	// reasoningCache is the in-memory catalog, nil until a disk read or fetch
+	// succeeds. Maps are replaced whole, never mutated in place, so readers may
+	// use a snapshot after releasing the lock.
+	reasoningCache map[string]map[string]reasoningEntry
+	// reasoningChecked is when reasoningCache was read or fetched, for TTL.
+	reasoningChecked time.Time
+	// reasoningSource / reasoningMod / reasoningSize memoize the disk cache
+	// version already loaded, so an unchanged file is not re-read on every
+	// lookup while an external rewrite (or a test fixture) is picked up.
+	reasoningSource string
+	reasoningMod    time.Time
+	reasoningSize   int64
+)
+
+// loadReasoningCacheLocked refreshes reasoningCache from the disk cache when a
+// version not yet loaded is present (memoized by path, mtime, and size). A
+// missing or corrupt file leaves the current cache untouched; callers then
+// fall back to the family ladder. Callers must hold reasoningMu.
+func loadReasoningCacheLocked() {
+	p := catalogFilePath(reasoningCatalogFileName)
+	if p == "" {
+		return
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		return
+	}
+	if p == reasoningSource && info.ModTime().Equal(reasoningMod) && info.Size() == reasoningSize {
+		return
+	}
+	var f reasoningCatalogFile
+	if !readCatalogFile(reasoningCatalogFileName, &f) || f.Providers == nil {
+		return
+	}
+	reasoningCache = f.Providers
+	reasoningChecked = f.CheckedAt
+	reasoningSource, reasoningMod, reasoningSize = p, info.ModTime(), info.Size()
+}
+
+// reasoningCatalogSnapshot returns the current in-memory catalog (loading it
+// from disk on first use), or nil when none is available.
+func reasoningCatalogSnapshot() map[string]map[string]reasoningEntry {
+	reasoningMu.Lock()
+	defer reasoningMu.Unlock()
+	loadReasoningCacheLocked()
+	return reasoningCache
+}
+
+// catalogEntry returns the catalog entry for (providerName, model).
+func catalogEntry(providerName, model string) (reasoningEntry, bool) {
+	data := reasoningCatalogSnapshot()
+	if data == nil {
+		return reasoningEntry{}, false
+	}
+	models, ok := data[providerName]
+	if !ok {
+		return reasoningEntry{}, false
+	}
+	e, ok := models[model]
+	return e, ok
+}
+
+// parseReasoningLevels converts catalog level names to the unified ladder,
+// dropping unknown tokens ("none" among them), deduplicating, and ordering low
+// to high so display and clamping are deterministic.
+func parseReasoningLevels(levels []string) []agentcore.ThinkingLevel {
+	out := make([]agentcore.ThinkingLevel, 0, len(levels))
+	seen := make(map[agentcore.ThinkingLevel]struct{}, len(levels))
+	for _, s := range levels {
+		lvl := agentcore.ThinkingLevel(s)
+		if _, ok := reasoningRank[lvl]; !ok {
+			continue
+		}
+		if _, dup := seen[lvl]; dup {
+			continue
+		}
+		seen[lvl] = struct{}{}
+		out = append(out, lvl)
+	}
+	sort.Slice(out, func(i, j int) bool { return reasoningRank[out[i]] < reasoningRank[out[j]] })
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// familyLadder returns the hand-maintained ladder for a model: the provider's
+// own registry overrides first, then the shared model-family table, then the
+// conservative default.
+func familyLadder(providerName, model string) []agentcore.ThinkingLevel {
+	id := strings.ToLower(model)
+	if spec, ok := LookupProviderSpec(providerName); ok {
+		for _, rule := range spec.ReasoningLadders {
+			if strings.Contains(id, rule.Match) {
+				return rule.Ladder
+			}
+		}
+	}
+	for _, rule := range sharedReasoningLadders {
+		if strings.Contains(id, rule.Match) {
+			return rule.Ladder
+		}
+	}
+	return defaultReasoningLadder
+}
+
+// ReasoningLevels returns the selectable reasoning levels for a model: the
+// models.dev catalog's effort list when it has one, else the family ladder.
+// An empty (nil) return means the catalog says the model does not reason, so
+// there is nothing to select and the wire sends no effort field. The result is
+// never mutated; callers must not modify it.
+func ReasoningLevels(providerName, model string) []agentcore.ThinkingLevel {
+	if e, ok := catalogEntry(providerName, model); ok {
+		if !e.Reasoning {
+			return nil
+		}
+		if lv := parseReasoningLevels(e.Levels); len(lv) > 0 {
+			return lv
+		}
+	}
+	return familyLadder(providerName, model)
+}
+
+// KnownReasoningLevels returns the catalog's explicit effort list for a model,
+// or nil when the catalog has nothing definitive (unknown model, no effort
+// option, or no reasoning). Unlike ReasoningLevels it never falls back to the
+// family table, so callers can tell "models.dev says so" apart from "unknown"
+// when annotating UI.
+func KnownReasoningLevels(providerName, model string) []agentcore.ThinkingLevel {
+	e, ok := catalogEntry(providerName, model)
+	if !ok || !e.Reasoning {
+		return nil
+	}
+	return parseReasoningLevels(e.Levels)
+}
+
+// EnsureReasoningCatalog refreshes the catalog when the in-memory or on-disk
+// copy is missing or older than the TTL, and loads it into memory. Concurrent
+// callers serialize; the loser of the race re-checks freshness and returns
+// without a second fetch. Network errors leave the existing cache untouched.
+func EnsureReasoningCatalog(ctx context.Context) error {
+	reasoningMu.Lock()
+	defer reasoningMu.Unlock()
+	loadReasoningCacheLocked()
+	if reasoningCache != nil && cacheFresh(reasoningChecked) {
+		return nil
+	}
+	providers, err := fetchModelsDevCatalog(ctx)
+	if err != nil {
+		return err
+	}
+	reasoningCache = providers
+	reasoningChecked = time.Now()
+	writeReasoningCache(reasoningCatalogFile{CheckedAt: reasoningChecked, Providers: providers})
+	return nil
+}
+
+// StartBackgroundReasoningCatalogRefresh refreshes a stale or missing catalog
+// in a goroutine so startup never blocks on models.dev. It returns immediately
+// and swallows errors: a failed refresh leaves the previous cache in place.
+func StartBackgroundReasoningCatalogRefresh() {
+	reasoningMu.Lock()
+	loadReasoningCacheLocked()
+	fresh := reasoningCache != nil && cacheFresh(reasoningChecked)
+	reasoningMu.Unlock()
+	if fresh {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), reasoningCatalogTimeout+10*time.Second)
+		defer cancel()
+		_ = EnsureReasoningCatalog(ctx)
+	}()
+}
+
+// writeReasoningCache persists the catalog and records the file version so the
+// next load skips re-reading it. Failures are silent.
+func writeReasoningCache(f reasoningCatalogFile) {
+	if !writeCatalogFile(reasoningCatalogFileName, f) {
+		return
+	}
+	p := catalogFilePath(reasoningCatalogFileName)
+	if p == "" {
+		return
+	}
+	if info, err := os.Stat(p); err == nil {
+		reasoningSource, reasoningMod, reasoningSize = p, info.ModTime(), info.Size()
+	}
+}
+
+// modelsDevProvider is the subset of a models.dev provider entry golder reads.
+type modelsDevProvider struct {
+	Models map[string]struct {
+		Reasoning        bool `json:"reasoning"`
+		ReasoningOptions []struct {
+			Type   string   `json:"type"`
+			Values []string `json:"values"`
+		} `json:"reasoning_options"`
+	} `json:"models"`
+}
+
+// fetchModelsDevCatalog downloads models.dev's api.json and extracts the
+// reasoning metadata of the built-in providers' models. Providers outside the
+// registry are not decoded at all, keeping a full fetch cheap.
+func fetchModelsDevCatalog(ctx context.Context) (map[string]map[string]reasoningEntry, error) {
+	ctx, cancel := context.WithTimeout(ctx, reasoningCatalogTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsDevURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("reasoning catalog: build request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := (&http.Client{Timeout: reasoningCatalogTimeout}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("reasoning catalog request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, fmt.Errorf("reasoning catalog read failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("reasoning catalog: GET %s returned %d", modelsDevURL, resp.StatusCode)
+	}
+	// Decode the top level as raw messages so only registry providers are
+	// fully parsed (api.json is several MB; most of it is irrelevant).
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil, fmt.Errorf("reasoning catalog: unexpected response shape: %w", err)
+	}
+	out := make(map[string]map[string]reasoningEntry, len(providerRegistry))
+	for _, spec := range providerRegistry {
+		key := spec.ModelsDevID
+		if key == "" {
+			key = spec.Name
+		}
+		raw, ok := top[key]
+		if !ok {
+			continue
+		}
+		var prov modelsDevProvider
+		if err := json.Unmarshal(raw, &prov); err != nil {
+			continue
+		}
+		models := make(map[string]reasoningEntry, len(prov.Models))
+		for id, m := range prov.Models {
+			e := reasoningEntry{Reasoning: m.Reasoning}
+			for _, opt := range m.ReasoningOptions {
+				if opt.Type != "effort" {
+					continue
+				}
+				for _, v := range opt.Values {
+					e.Levels = append(e.Levels, v)
+				}
+			}
+			models[id] = e
+		}
+		if len(models) > 0 {
+			out[spec.Name] = models
+		}
+	}
+	return out, nil
 }

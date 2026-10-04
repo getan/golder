@@ -34,10 +34,12 @@ type LiveConfig struct {
 
 	// FetchedModels is the online model catalog pulled from the live provider's
 	// endpoint by the bare-/model list (issue #566), sorted and
-	// deduplicated. It is session-lifetime state: /model prefers it over the
-	// heuristic chain for ids it contains (so a fetched id stays on the gateway
-	// that serves it) and reuses it for numeric picks. Nil until the first
-	// successful fetch; never persisted.
+	// deduplicated. /model prefers it over the heuristic chain for ids it
+	// contains (so a fetched id stays on the gateway that serves it) and reuses
+	// it for numeric picks. The list is also persisted to a shared 24h disk
+	// cache, so the network is consulted about once a day per provider rather
+	// than once per session; this field is the session-lifetime copy, seeded
+	// either from that cache or from a fresh fetch.
 	FetchedModels []string
 	FetchedAt     time.Time
 }

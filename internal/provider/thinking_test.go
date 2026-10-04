@@ -31,7 +31,7 @@ func TestOpenAIReasoningEffortEncoding(t *testing.T) {
 	// off / unset → no reasoning_effort.
 	for _, lvl := range []agentcore.ThinkingLevel{"", agentcore.ThinkingOff} {
 		base.Config.ThinkingLevel = lvl
-		b, err := encodeOpenAIRequest(base)
+		b, err := encodeOpenAIRequest("", base)
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}
@@ -52,7 +52,7 @@ func TestOpenAIReasoningEffortEncoding(t *testing.T) {
 	}
 	for lvl, want := range cases {
 		base.Config.ThinkingLevel = lvl
-		b, err := encodeOpenAIRequest(base)
+		b, err := encodeOpenAIRequest("", base)
 		if err != nil {
 			t.Fatalf("encode: %v", err)
 		}

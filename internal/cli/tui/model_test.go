@@ -648,9 +648,11 @@ func TestResumeSessionGuards(t *testing.T) {
 }
 
 // TestModelPickerSelectSwitches drives the bare-/model picker end to end:
-// cached catalog opens the picker synchronously, arrows move, Enter switches
-// the live model through the registry path.
+// cached catalog opens the picker synchronously, arrows move, and Enter moves
+// to the reasoning-level stage (the codex-style second step) instead of
+// switching immediately.
 func TestModelPickerSelectSwitches(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	m := NewModel(Options{})
 	m.session = &runSession{}
 	m.live.FetchedModels = []string{"m-a", "m-b"}
@@ -668,11 +670,63 @@ func TestModelPickerSelectSwitches(t *testing.T) {
 	gm.menu.moveDown()
 	got2, _ := gm.submitSlashSelected()
 	gm2 := got2.(Model)
-	if gm2.live.Model != "m-b" {
-		t.Errorf("live.Model = %q, want m-b", gm2.live.Model)
+	if !gm2.menu.picking() || gm2.menu.pickKind != "model-level" {
+		t.Fatalf("stage 1 confirm should open the level picker, picking=%v kind=%q", gm2.menu.picking(), gm2.menu.pickKind)
 	}
-	if gm2.menu.picking() {
-		t.Error("picker should close after confirm")
+	if gm2.menu.pickModel != "m-b" {
+		t.Errorf("pending model = %q, want m-b", gm2.menu.pickModel)
+	}
+	if gm2.live.Model != "m-a" {
+		t.Errorf("stage 1 must not switch before the level confirm, live.Model = %q", gm2.live.Model)
+	}
+}
+
+// TestModelPickerTwoStageConfirm drives both stages: choosing a model opens
+// the levels (with the current one marked), confirming a level switches the
+// model and applies the level in one step, and Esc on stage 2 cancels the
+// whole flow.
+func TestModelPickerTwoStageConfirm(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.FetchedModels = []string{"m-a", "m-b"}
+	m.live.Model = "m-a"
+	m.live.ProviderName = "openai"
+	m.live.ThinkingLevel = agentcore.ThinkingHigh
+
+	got, _ := m.runSlash("/model")
+	gm := got.(Model)
+	gm.menu.moveDown() // m-b
+	got2, _ := gm.submitSlashSelected()
+	gm2 := got2.(Model)
+	if gm2.menu.pickMark != "high" {
+		t.Errorf("level picker mark = %q, want the current level high", gm2.menu.pickMark)
+	}
+
+	// Esc cancels stage 2 and leaves the model untouched.
+	canceled := gm2
+	canceled.menu.close()
+	if canceled.menu.picking() || canceled.live.Model != "m-a" || canceled.live.ThinkingLevel != agentcore.ThinkingHigh {
+		t.Errorf("Esc cancel changed state: picking=%v model=%q level=%q",
+			canceled.menu.picking(), canceled.live.Model, canceled.live.ThinkingLevel)
+	}
+
+	// Confirm the highlighted level (the fallback ladder starts at low ...).
+	gm2.menu.moveDown()
+	gm2.menu.moveDown() // high
+	got3, cmd := gm2.submitSlashSelected()
+	gm3 := got3.(Model)
+	if cmd != nil {
+		t.Fatalf("stage 2 confirm returned cmd %T, want nil", cmd)
+	}
+	if gm3.live.Model != "m-b" {
+		t.Errorf("live.Model = %q, want m-b", gm3.live.Model)
+	}
+	if gm3.live.ThinkingLevel != agentcore.ThinkingHigh {
+		t.Errorf("live.ThinkingLevel = %q, want high", gm3.live.ThinkingLevel)
+	}
+	if gm3.menu.picking() {
+		t.Error("picker should close after the level confirm")
 	}
 }
 
@@ -706,6 +760,58 @@ func TestModelPickerAsyncFetch(t *testing.T) {
 	joined := strings.Join(blockTexts(got2.(Model).transcript), "\n")
 	if !strings.Contains(joined, "/model <id>") {
 		t.Errorf("error should hint direct switch, got %q", joined)
+	}
+}
+
+// TestProviderPickerSelectSwitches drives the bare-/provider picker end to
+// end: it opens synchronously from the registry (no network), rows carry the
+// env var names and a credential marker, arrows move, and Enter switches the
+// live provider through the shared /provider action (default model applied).
+func TestProviderPickerSelectSwitches(t *testing.T) {
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.Model = "muse-spark-1.3-contributor"
+	m.live.ProviderName = "opencode-go"
+
+	got, cmd := m.runSlash("/provider")
+	if cmd != nil {
+		t.Fatalf("provider picker: expected nil cmd, got %T", cmd)
+	}
+	gm := got.(Model)
+	if !gm.menu.picking() || gm.menu.pickKind != "provider" {
+		t.Fatalf("picker not open: picking=%v kind=%q", gm.menu.picking(), gm.menu.pickKind)
+	}
+	if gm.menu.pickMark != "opencode-go" {
+		t.Errorf("pickMark = %q, want the current provider", gm.menu.pickMark)
+	}
+	// Rows expose the env var names (value-free) so the picker is self-explanatory.
+	found := ""
+	for _, it := range gm.menu.pick {
+		if it.Value == "deepseek" {
+			found = it.Detail
+		}
+	}
+	if !strings.Contains(found, "DEEPSEEK_API_KEY") {
+		t.Errorf("deepseek row detail = %q, want the env var name", found)
+	}
+
+	// Move from the first row to deepseek (registry order), then confirm.
+	for i := 0; i < len(gm.menu.pick); i++ {
+		if gm.menu.pick[gm.menu.selected].Value == "deepseek" {
+			break
+		}
+		gm.menu.moveDown()
+	}
+	got2, _ := gm.submitSlashSelected()
+	gm2 := got2.(Model)
+	if gm2.live.ProviderName != "deepseek" {
+		t.Errorf("live.ProviderName = %q, want deepseek", gm2.live.ProviderName)
+	}
+	if gm2.live.Model != "deepseek-v4-flash" {
+		t.Errorf("live.Model = %q, want the deepseek default model", gm2.live.Model)
+	}
+	if gm2.menu.picking() {
+		t.Error("picker should close after confirm")
 	}
 }
 

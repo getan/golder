@@ -30,6 +30,19 @@ func TestLookupProviderSpec_Miss(t *testing.T) {
 	}
 }
 
+func TestProviderAliasOpencodeZen(t *testing.T) {
+	spec, ok := LookupProviderSpec("opencode")
+	if !ok {
+		t.Fatalf("LookupProviderSpec(opencode): expected alias hit, got miss")
+	}
+	if spec.Name != "opencode-zen" {
+		t.Errorf("Name = %q, want opencode-zen", spec.Name)
+	}
+	if !IsProviderName("opencode") {
+		t.Errorf("IsProviderName(opencode): expected true via alias")
+	}
+}
+
 func TestAnthropicEnvVarOrder(t *testing.T) {
 	spec, ok := LookupProviderSpec("anthropic")
 	if !ok {
@@ -121,7 +134,7 @@ func TestRegistryContainsAllExpectedProviders(t *testing.T) {
 		"anthropic", "openai", "ant-ling", "deepseek", "nvidia", "google",
 		"groq", "cerebras", "xai", "openrouter", "vercel-ai-gateway", "zai",
 		"zai-coding-cn", "mistral", "minimax", "minimax-cn", "moonshotai",
-		"moonshotai-cn", "huggingface", "fireworks", "together", "novita", "opencode",
+		"moonshotai-cn", "huggingface", "fireworks", "together", "novita", "opencode-zen",
 		"opencode-go", "kimi-coding", "xiaomi", "xiaomi-token-plan-cn",
 		"xiaomi-token-plan-ams", "xiaomi-token-plan-sgp",
 		"qianfan", "volcengine", "dashscope", "hunyuan",

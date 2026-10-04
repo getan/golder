@@ -28,18 +28,16 @@ import (
 // When protocol is empty, resolution falls back to model-id heuristics:
 //
 //  1. A bare provider name (e.g. "zai") is canonicalized to that provider's
-//     first preset model id (see CanonicalizeModel, issue #564).
-//  2. If the id is in the preset catalog, use its declared provider (this is how
-//     OpenRouter/NVIDIA/Ollama presets pick the right gateway).
-//  3. An "ollama/" prefix (or a base URL on the Ollama port) → local Ollama.
-//  4. An "nvidia/" prefix → NVIDIA NIM (strips the prefix for the wire id).
-//  5. Model-name inference: with no --base-url, a well-known model-name prefix
+//     DefaultModel (see CanonicalizeModel, issue #564).
+//  2. An "ollama/" prefix (or a base URL on the Ollama port) → local Ollama.
+//  3. An "nvidia/" prefix → NVIDIA NIM (strips the prefix for the wire id).
+//  4. Model-name inference: with no --base-url, a well-known model-name prefix
 //     (e.g. "claude-*", "deepseek-*") selects its first-party built-in provider
 //     via ResolveNamedProvider (see InferProviderFromModel).
-//  6. A bare provider name with no preset models is an error naming the
+//  5. A bare provider name with no DefaultModel is an error naming the
 //     mismatch, rather than a silent OpenRouter fallback that fails later with
 //     a misleading missing-API-key error.
-//  7. Everything else → OpenRouter, the reference OpenAI-compatible gateway.
+//  6. Everything else → OpenRouter, the reference OpenAI-compatible gateway.
 //
 // An unknown protocol value is an error, surfaced to the caller for exit-code
 // mapping rather than silently falling back.
@@ -82,67 +80,84 @@ func ResolveProvider(model, baseURL, protocol, providerName string, env func(str
 	//     "that provider's default model" (issue #564): /model zai and --model zai
 	//     previously fell through to OpenRouter with the literal id "zai", failing
 	//     there with a misleading "openrouter: missing API key". Substitute the
-	//     provider's first preset id so both the driver and the wire request carry
-	//     a real model id. Any other id is returned unchanged.
+	//     provider's DefaultModel (registry.go) so both the driver and the wire
+	//     request carry a real model id. Any other id is returned unchanged.
 	if canon := CanonicalizeModel(model); canon != model {
 		model = canon
 	}
 
-	// 1. Preset catalog wins: a curated id knows its own provider.
-	if p, ok := LookupPreset(model); ok {
-		switch p.Provider {
-		case "nvidia":
-			return NewNvidiaProvider(baseURL, []Model{{Provider: "nvidia", ID: model, SupportsImages: true}}), "nvidia", nil
-		case "ollama":
-			id := strings.TrimPrefix(model, "ollama/")
-			return NewOllamaProvider(baseURL, []Model{{Provider: "ollama", ID: id, SupportsImages: true}}), "ollama", nil
-		case "", "openrouter":
-			return NewOpenRouterProvider(baseURL, []Model{{Provider: "openrouter", ID: model, SupportsImages: true}}), "openrouter", nil
-		default:
-			// Any other preset provider is a named built-in (e.g. deepseek,
-			// qianfan, dashscope): build it from the registry so the correct
-			// base URL, protocol, and API-key env var are used — not OpenRouter's.
-			return ResolveNamedProvider(p.Provider, model, baseURL, protocol, env)
-		}
-	}
-
-	// 2. Local Ollama by prefix or port.
+	// 1. Local Ollama by prefix or port.
 	if strings.HasPrefix(model, "ollama/") || strings.Contains(baseURL, "11434") {
 		id := strings.TrimPrefix(model, "ollama/")
 		return NewOllamaProvider(baseURL, []Model{{Provider: "ollama", ID: id, SupportsImages: true}}), "ollama", nil
 	}
-	// 3. NVIDIA NIM by prefix.
+	// 2. NVIDIA NIM by prefix.
 	if strings.HasPrefix(model, "nvidia/") {
 		id := strings.TrimPrefix(model, "nvidia/")
 		return NewNvidiaProvider(baseURL, []Model{{Provider: "nvidia", ID: id, SupportsImages: true}}), "nvidia", nil
 	}
-	// 4. Model-name inference: with no --provider/--protocol (both empty here) and
+	// 3. Model-name inference: with no --provider/--protocol (both empty here) and
 	//    no --base-url, guess the provider from the model name's well-known prefix
 	//    (e.g. "claude-*" → anthropic, "deepseek-*" → deepseek). A confident hit is
 	//    routed through ResolveNamedProvider so the provider's registry protocol,
 	//    default base URL, and API-key env var are used. A --base-url is treated as
 	//    a custom-endpoint signal that should not be second-guessed, so inference is
-	//    skipped when one is given. Ambiguous/unknown names fall through to (5).
+	//    skipped when one is given. Ambiguous/unknown names fall through to (4).
 	if strings.TrimSpace(baseURL) == "" {
 		if name, ok := InferProviderFromModel(model); ok {
 			return ResolveNamedProvider(name, model, baseURL, protocol, env)
 		}
 	}
-	// 5. Default: OpenRouter — but a bare built-in provider name that reached this
-	//    point names a provider with no preset models (e.g. a special-auth
+	// 4. Default: OpenRouter — but a bare built-in provider name that reached this
+	//    point names a provider with no DefaultModel (e.g. a special-auth
 	//    gateway). Silently routing it to OpenRouter would fail later with a
 	//    confusing missing-API-key error, so surface the mismatch instead.
 	if name := strings.ToLower(strings.TrimSpace(model)); IsProviderName(name) {
-		return nil, "", fmt.Errorf("%q names a provider, not a model id; pass a model id (see /models) or select it with --provider %s", model, name)
+		return nil, "", fmt.Errorf("%q names a provider, not a model id; pass a model id (see /model) or select it with --provider %s", model, name)
 	}
 	return NewOpenRouterProvider(baseURL, []Model{{Provider: "openrouter", ID: model, SupportsImages: true}}), "openrouter", nil
 }
 
+// InferProviderFromModel guesses the built-in provider name that serves a given
+// model id, based on the id's well-known name prefix (e.g. "claude-*" →
+// anthropic, "deepseek-*" → deepseek). This is what lets `golder -m
+// claude-opus-4-8` reach the Anthropic API without the user spelling out the
+// provider or its wire protocol (ResolveProvider step 3).
+//
+// The mapping is deliberately conservative: only names that unambiguously
+// identify a single built-in provider are inferred. Ambiguous families served
+// by many gateways (notably "llama-*", "qwq-*", "gemma-*", "mixtral-*") are
+// NOT inferred — they return ok=false so the caller falls through to its
+// existing default (OpenRouter). The prefixes live in the registry
+// (ProviderSpec.ModelPrefixes), in registry order; a test pins that no two
+// providers claim overlapping prefixes, so the order only matters for
+// determinism. Matching is case-insensitive.
+func InferProviderFromModel(model string) (string, bool) {
+	id := strings.ToLower(strings.TrimSpace(model))
+	if id == "" {
+		return "", false
+	}
+	// A "provider/model" style id (e.g. "openai/gpt-4o") is an OpenRouter-style
+	// routed id, not a bare model name — leave those to the caller's default
+	// handling rather than inferring from the leading segment.
+	if strings.Contains(id, "/") {
+		return "", false
+	}
+	for _, spec := range providerRegistry {
+		for _, prefix := range spec.ModelPrefixes {
+			if strings.HasPrefix(id, prefix) {
+				return spec.Name, true
+			}
+		}
+	}
+	return "", false
+}
+
 // CanonicalizeModel maps a bare built-in provider name (e.g. "zai", "DEEPSEEK")
-// to that provider's first preset model id (e.g. "glm-4.7"), so a user who
-// types the provider alone gets its default model instead of the literal id
-// being sent to OpenRouter (issue #564). Any other id — a real preset id, an
-// unknown name, a "provider/model" routed id — is returned unchanged.
+// to that provider's DefaultModel (e.g. "glm-4.7"), so a user who types the
+// provider alone gets its default model instead of the literal id being sent to
+// OpenRouter (issue #564). Any other id — a real model id, an unknown name, a
+// "provider/model" routed id — is returned unchanged.
 //
 // The mapping is exact-match on the trimmed, lowercased id against the built-in
 // provider registry; a model id that happens to equal a provider name is not a
@@ -156,8 +171,8 @@ func CanonicalizeModel(model string) string {
 	if !ok {
 		return model
 	}
-	if presets := PresetsByProvider(spec.Name); len(presets) > 0 {
-		return presets[0].ID
+	if spec.DefaultModel != "" {
+		return spec.DefaultModel
 	}
 	return model
 }

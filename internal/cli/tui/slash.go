@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/provider"
@@ -71,8 +72,12 @@ type slashMenu struct {
 	// or session) in picker mode.
 	pickMark string
 	// pickKind selects the confirm action: "model" re-runs /model, "resume"
-	// re-runs /resume with the picked Value.
+	// re-runs /resume with the picked Value, "model-level" is stage 2 of the
+	// /model flow and runs /model <model> <level> with the pending model.
 	pickKind string
+	// pickModel is the stage-1 model kept pending while the stage-2 reasoning
+	// level picker is open (pickKind "model-level"); "" otherwise.
+	pickModel string
 }
 
 // pickItem is one picker row: Title renders first, Detail (dimmer context)
@@ -177,6 +182,7 @@ func (mn *slashMenu) close() {
 	mn.pick = nil
 	mn.pickMark = ""
 	mn.pickKind = ""
+	mn.pickModel = ""
 }
 
 // openPicker shows the menu as an item picker (arrow keys + Enter, Esc
@@ -196,9 +202,24 @@ func (mn *slashMenu) openPickerDetailed(items []pickItem, mark, kind string) {
 	mn.pick = items
 	mn.pickMark = mark
 	mn.pickKind = kind
+	mn.pickModel = ""
 	mn.active = len(items) > 0
 	mn.filtered = nil
 	mn.selected = 0
+}
+
+// openLevelPicker shows the second stage of the /model flow: the reasoning
+// levels model advertises, with the current level marked. model stays pending
+// until the level is confirmed, so the confirm can run both steps as a single
+// /model <id> <level>. Esc closes the menu (close clears the pending model)
+// and cancels the switch entirely.
+func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLevel, mark agentcore.ThinkingLevel) {
+	items := make([]pickItem, 0, len(levels))
+	for _, lvl := range levels {
+		items = append(items, pickItem{Title: string(lvl), Value: string(lvl)})
+	}
+	mn.openPickerDetailed(items, string(mark), "model-level")
+	mn.pickModel = model
 }
 
 // picking reports whether the menu is in picker mode.

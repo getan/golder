@@ -219,6 +219,9 @@ func TestREPLUnknownCommandNoRun(t *testing.T) {
 // launching a run, and that the switch is reflected in live for the next turn.
 // Fork: the switch stays pinned to the current provider.
 func TestREPLModelSwitchTakesEffect(t *testing.T) {
+	// Hermetic catalogs: keep /model away from the developer's real
+	// ~/.golder model and reasoning caches.
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	p := &replProvider{reply: "hi"}
 	deps, _ := newTestDeps(t, p)
 	// Pin live to a registry provider (faux is test-only and unresolvable).

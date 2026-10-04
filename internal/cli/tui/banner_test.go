@@ -88,3 +88,26 @@ func TestRenderBannerProtocolLabel(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderBannerProtocolEffective verifies the Protocol row reflects the
+// resolved wire format for the selected provider and model: an unset flag on
+// opencode-go shows openai/resp_api for a Responses-family model and
+// openai/chat otherwise, so multi-protocol gateways display correctly.
+func TestRenderBannerProtocolEffective(t *testing.T) {
+	cases := []struct {
+		provider string
+		model    string
+		want     string
+	}{
+		{"opencode-go", "deepseek-v4.1-flash", "openai/resp_api"},
+		{"opencode-go", "glm-4.7", "openai/chat"},
+		{"anthropic", "claude-fable-5-1", "anthropic"},
+	}
+	for _, c := range cases {
+		t.Setenv("GOLDER_HOME", t.TempDir())
+		out := renderBanner(DefaultTheme(), Options{Version: "dev", ProviderName: c.provider, Model: c.model}, "/tmp/proj")
+		if !strings.Contains(out, c.want) {
+			t.Errorf("provider %q model %q: banner should show %q, got: %q", c.provider, c.model, c.want, out)
+		}
+	}
+}

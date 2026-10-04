@@ -38,7 +38,7 @@ func renderBannerFrame(theme Theme, opts Options, cwd string, frame int) string 
 		{"Version", firstNonEmpty(opts.Version, "dev")},
 		{"Model", firstNonEmpty(opts.Model, "—")},
 		{"Provider", firstNonEmpty(opts.ProviderName, "—")},
-		{"Protocol", firstNonEmpty(provider.ProtocolLabel(opts.Protocol), "—")},
+		{"Protocol", firstNonEmpty(provider.ProtocolLabel(provider.EffectiveProtocol(opts.ProviderName, opts.Model, opts.Protocol)), "—")},
 		{"Thinking", firstNonEmpty(string(opts.ThinkingLevel), "off")},
 		{"Directory", firstNonEmpty(cwd, "—")},
 	}

@@ -40,10 +40,13 @@ func TestLineEditorCompletesModelsByRecentUseAndBasename(t *testing.T) {
 	if got := e.suggestion("/model gpt"); got != "/model openai/gpt-4o" {
 		t.Fatalf("recent model suggestion = %q", got)
 	}
+	// Extra model ids seeded on the editor (e.g. the live model) complete by
+	// basename: "deepseek" matches "deepseek-v4.1-flash" after the slash.
 	e = testLineEditor()
+	e.models = []string{"deepseek-v4.1-flash"}
 	got := e.suggestion("/model deepseek")
-	if got == "" || !strings.HasPrefix(got, "/model ") {
-		t.Fatalf("catalog model suggestion = %q", got)
+	if got != "/model deepseek-v4.1-flash" {
+		t.Fatalf("seeded model suggestion = %q, want /model deepseek-v4.1-flash", got)
 	}
 }
 

@@ -1,7 +1,6 @@
 // This file implements online model discovery (issue #566, ported from dsh's
 // "Fetch available models"): asking an endpoint which models it serves, so the
-// /models catalog and /model switching can follow a provider's real lineup
-// instead of only the static preset catalog.
+// /model catalog and switching can follow a provider's real lineup.
 //
 // Both wire formats golder speaks expose a plain GET for it:
 //
