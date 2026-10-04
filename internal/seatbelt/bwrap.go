@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -58,37 +60,14 @@ func (r *BwrapRunner) tmpDir() string {
 	return os.TempDir()
 }
 
-// secretPaths returns the live secret material the sandbox must keep
-// read-only even when it falls inside a writable bind (a project rooted at
-// $HOME, or at $GOLDER_HOME). It re-derives the locations instead of importing
-// internal/trust or internal/provider so this package stays a stdlib-only
-// leaf; the paths are stable, documented conventions (see the README table).
-func secretPaths() []string {
-	var out []string
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		out = append(out, filepath.Join(home, ".ssh"), filepath.Join(home, ".gnupg"))
-	}
-	golderHome := os.Getenv("GOLDER_HOME")
-	if golderHome == "" && home != "" {
-		golderHome = filepath.Join(home, ".golder")
-	}
-	if golderHome != "" {
-		out = append(out,
-			filepath.Join(golderHome, "trust.json"),
-			filepath.Join(golderHome, ".credentials.yaml"),
-			filepath.Join(golderHome, "sessions"),
-		)
-	}
-	return out
-}
-
-// SandboxArgv implements Runner. The resulting argv mounts a read-only view of
-// the host root, fresh /dev (bubblewrap's devtmpfs also mounts devpts, so TTY
-// sessions keep working) and /proc in a new pid namespace, then overrides the
-// project and temp directories as writable. Secret paths are re-asserted
-// read-only AFTER those binds, because later mounts win: without the ordering
-// a project rooted at $HOME would expose ~/.ssh and the trust store to writes.
+// SandboxArgv implements Runner. Both directions are whitelists: a read-only
+// bind is created only for the project, the system runtime and ReadableRoots,
+// so the rest of $HOME (shell rc files, ~/.ssh, ~/.config/*, ~/.golder/*) is
+// simply absent from the mount table and cannot be read. The project and temp
+// directories are then re-bound writable, and fresh /dev (bubblewrap's
+// devtmpfs also mounts devpts, so TTY sessions keep working) and /proc are
+// mounted in a new pid namespace. The network is unshared (no egress) unless
+// GOLDER_SANDBOX_NETWORK opts back in.
 func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, func(), error) {
 	project := r.ProjectDir
 	if project == "" {
@@ -102,21 +81,91 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 		"bwrap",
 		"--die-with-parent",
 		"--unshare-pid", "--unshare-uts", "--unshare-ipc",
-		"--ro-bind", "/", "/",
-		"--dev", "/dev",
-		"--proc", "/proc",
 	}
+	// Network is unshared by default (codex parity); --share-net restores it.
+	if NetworkEnabled() {
+		argv = append(argv, "--share-net")
+	} else {
+		argv = append(argv, "--unshare-net")
+	}
+	// Read-only whitelist. Directories that do not exist on this host are
+	// skipped: unlike --ro-bind-try, a nonexistent source would fail the whole
+	// sandbox. Home is deliberately absent unless the user added it via
+	// ReadableRoots' environment/config extension.
+	readRoots := append([]string{project}, ReadableRoots()...)
+	roots := dedupePaths(canonicalsAll(readRoots))
+	// Shorter paths first so an ancestor root (e.g. an env-provided $HOME
+	// entry) is mounted before a descendant file that needs its parent.
+	slices.SortStableFunc(roots, func(a, b string) int { return len(a) - len(b) })
+	madeDirs := map[string]bool{}
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		// bwrap creates the final mount point but not its parents. File-level
+		// whitelist entries (the git configs under $HOME) therefore need their
+		// missing ancestor directories created first; --dir yields an empty
+		// directory in the sandbox, so nothing is exposed by doing so.
+		for _, dir := range missingAncestors(root, roots) {
+			if madeDirs[dir] {
+				continue
+			}
+			madeDirs[dir] = true
+			argv = append(argv, "--dir", dir)
+		}
+		argv = append(argv, "--ro-bind", root, root)
+	}
+	argv = append(argv, "--dev", "/dev", "--proc", "/proc")
 	for _, p := range canonicals(project) {
 		argv = append(argv, "--bind", p, p)
 	}
 	for _, p := range canonicals(r.tmpDir()) {
 		argv = append(argv, "--bind-try", p, p)
 	}
-	for _, p := range secretPaths() {
-		if p != "" {
-			argv = append(argv, "--ro-bind-try", p, p)
+	// Re-assert golder's own state as read-write denied after the writable
+	// binds (later mounts win), so a project rooted inside $GOLDER_HOME cannot
+	// reach the trust store, credential file, or session transcripts.
+	for _, p := range ProtectedGolderPaths() {
+		for _, spelling := range canonicals(p) {
+			info, err := os.Stat(spelling)
+			if err != nil {
+				continue
+			}
+			if info.IsDir() {
+				argv = append(argv, "--tmpfs", spelling)
+			} else {
+				argv = append(argv, "--ro-bind", "/dev/null", spelling)
+			}
 		}
 	}
 	argv = append(argv, shell, flag, command)
 	return argv, nil, nil
+}
+
+// missingAncestors returns the parent directories of root that no other root
+// already provides, root-most first. They are emitted as --dir so a file-level
+// whitelist entry has somewhere to be mounted; a directory covered by another
+// root is skipped because that bind is what creates it.
+func missingAncestors(root string, roots []string) []string {
+	covered := func(p string) bool {
+		for _, r := range roots {
+			if p == r || strings.HasPrefix(p, r+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	var chain []string
+	for dir := filepath.Dir(root); dir != "/" && dir != "." && dir != ""; dir = filepath.Dir(dir) {
+		if covered(dir) {
+			break
+		}
+		chain = append(chain, dir)
+	}
+	// root-most first
+	out := make([]string, 0, len(chain))
+	for i := len(chain) - 1; i >= 0; i-- {
+		out = append(out, chain[i])
+	}
+	return out
 }

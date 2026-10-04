@@ -51,10 +51,60 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 
 Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner、且只有 `bash` 有 runner；`full-access` 下不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
 
-执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成平台沙箱。两个平台同一条策略——**读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`/`~/.gnupg`/`trust.json`，网络保持开放**（外联由审查层负责，不是文件 profile 的职责）：
+执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成平台沙箱。两个平台同一条策略——**读白名单、写白名单、网络默认关闭**：
 
 - **macOS**：`sandbox-exec -f <现场生成的 profile> bash -c …`。profile 按规范 vnode 路径匹配，而 `/var` 是 `/private/var` 的软链，因此项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**（只写软链形式会导致该允许的写操作被静默拒绝）。
-- **Linux**：`bwrap --die-with-parent --unshare-pid --unshare-uts --unshare-ipc --ro-bind / / --dev /dev --proc /proc --bind <项目> <项目> --bind-try <TMPDIR> <TMPDIR> … bash -c …`。只读根 + 可写绑定就是写白名单；`--dev` 会挂载新的 devtmpfs（含 devpts），所以 `tty=true` 的交互式会话照常工作。secret 路径的只读重挂（`--ro-bind-try`）排在可写绑定**之后**——后挂载生效，即使项目根就是 `$HOME` 或 `$GOLDER_HOME`，`~/.ssh`、trust 存储、凭据文件与会话目录也不会变成可写。bwrap 是否可用在执行前**实探**一次（能否真的创建 userns/挂载；被 AppArmor 或内核开关挡掉时视为不可用，回退为询问/fail-closed，而不是命令跑到一半才报错）。
+- **Linux**：`bwrap --die-with-parent --unshare-pid --unshare-uts --unshare-ipc --unshare-net --ro-bind <各白名单路径> --dev /dev --proc /proc --bind <项目> <项目> --bind-try <TMPDIR> <TMPDIR> … bash -c …`。`--dev` 会挂载新的 devtmpfs（含 devpts），所以 `tty=true` 的交互式会话照常工作。bwrap 是否可用在执行前**实探**一次（能否真的创建 userns/挂载；被 AppArmor 或内核开关挡掉时视为不可用，回退为询问/fail-closed，而不是命令跑到一半才报错）。
+
+### 读白名单（home 默认不可读）
+
+`ReadableRoots()` 给出沙箱内**可读**的路径，正是这些：系统运行时（`/usr`、`/bin`、`/sbin`、`/lib`、`/lib64`、`/etc`、`/opt`，macOS 另加 `/System`、`/Library`、`/Applications`、`/private/var/db`、`/private/etc`、`/private/tmp`、`/private/var/tmp`）加上项目目录、沙箱临时目录，以及**两个 git 配置文件**（`~/.gitconfig`、`~/.config/git/{ignore,attributes}`）。
+
+**其余一切不可读**——`~/.zshrc`、`~/.ssh`、`~/.gnupg`、`~/.aws`、`~/.netrc`、`~/.git-credentials`、`~/.config/*`、`~/.golder/*`、命令历史、macOS `~/Library/Keychains` 全部在内。这是"宁可错杀"的取舍：新冒出来的凭据位置自动被挡，不需要维护黑名单。实测（macOS 真实 `sandbox-exec`）：项目内读写、`git status`、`git commit`（需要身份）、读 `/etc/hosts` 全部正常；`cat ~/.zshrc`、`ls ~/.config`、读写 home、联网全部被拒。
+
+两个容易踩的细节：**根目录 `/` 本身必须可读**（只给 `subpath` 规则不够，dyld 解析绝对路径时会因根目录不可读而 abort，进程在 `main` 之前就死掉）；**`/.gitconfig` 里可能藏 token**（`url.*.insteadOf`、`http.extraheader`、credential helper）——如果你把密钥写在那儿，就把 git 文件从白名单拿掉，改用 `GIT_AUTHOR_*` 环境变量或提权执行提交。
+
+工具链不在上述路径时（conda / pyenv / sdkman / nvm 都在 `$HOME`，或你的缓存盘如 `/Volumes/XXX`），用 `GOLDER_SANDBOX_READABLE` 追加（冒号或逗号分隔的绝对路径）：
+
+```bash
+export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
+```
+
+注意它只放宽**读**；写仍然只限项目与 `TMPDIR`，编译产物写到别处（如 `CARGO_TARGET_DIR=/Volumes/…`）依旧会失败——那类操作应当提权执行。
+
+### 网络与 golder 自身状态
+
+**网络默认关闭**：沙箱内 `network*` 默认 deny / `--unshare-net`，联网命令会失败。`GOLDER_SANDBOX_NETWORK=on`（或 `1`/`true`/`allow`/`yes`）重新放开，适用于确实需要在沙箱内联网的工具链。
+
+**golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 列出 `trust.json`、`.credentials.yaml`、`sessions/`。它们平时就不在白名单里，但若项目根恰好在 `$GOLDER_HOME` 内，项目绑定会连它们一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs / `--ro-bind /dev/null` 覆盖，后挂载生效）。
+
+**沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
+
+### TUI 审批对话框
+
+TUI 没有 stdin，REPL 的 `[y/N]` 提示无法使用，因此需要用户拍板的调用在 TUI 里统一走一个**审批对话框**（`internal/cli/tui/approval.go`），形态对齐 codex：渲染在输入框正上方（与斜杠菜单同槽位，不遮上下文），单键作答。
+
+```
+bash needs approval
+  $ npm install
+  Reason: needs the network for package installs
+  Reviewer: installs dependencies (medium, auth: high)
+› Approve once                      (y)
+  Approve for this session          (p)
+  Deny                              (esc)
+```
+
+覆盖的场景：
+
+| 场景 | 触发 | 说明 |
+|---|---|---|
+| 权限门 Confirm 档 | `ask` 模式下的中等风险调用 | auto 模式不弹（模型自行批准） |
+| Sandbox 档但无法隔离 | 无 runner / 非 bash 工具 | 对话框明确标注"批准将以非沙箱方式运行" |
+| 审查失败且无处隔离 | LLM 审查超时/报错 | 对话框标注"自动审查不可用" |
+| **未信任目录的副作用工具** | 每次 bash/apply_patch | 此前 TUI 完全没装这道门；现在是"批准一次 / 本会话信任此目录 / 拒绝" |
+| **首启信任** | 目录未决时启动 | 同一个对话框的 trust 形态：`p` 记住、`y` 仅本会话、`n` 记住不信任、Esc 取消（不落盘） |
+
+行为约定：对话框是**模态**的（打开期间所有按键归它，输入框收不到字符）；同一时刻只允许一个待审批（第二个请求 fail-closed）；run 被中断时对话框随之关闭，未作答一律按 fail-closed 处理（沉默不等于批准）。远程控制连接时，信任确认优先路由到浏览器（原有行为）。
 
 这套规则有真实的端到端测试覆盖：macOS 用 `sandbox-exec`、Linux 用 `bwrap`（写项目内成功、写项目外失败、可写树内的 `trust.json` 仍被拒、devpts 存在）。Linux 上运行需要安装 bubblewrap（Debian/Ubuntu：`apt install bubblewrap`；Fedora：`dnf install bubblewrap`；Arch：`pacman -S bubblewrap`），且允许非特权 user namespace；未安装时 `GOLDER_SANDBOX=auto` 走回退路径（确认/拒绝），`enforce` 则 fail-closed。
 

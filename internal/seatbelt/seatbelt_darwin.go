@@ -57,12 +57,45 @@ func quoteAll(paths []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// writeProfile renders the seatbelt profile with absolute paths and stores
-// it under the temp dir. Reads stay broad (toolchains live all over /usr,
-// /opt, home); writes are confined to the project and temp dirs; live
-// secret material and the trust store are denied even inside otherwise
-// writable trees. Network stays open: exfiltration is the judge's job
-// (confirm/sandbox tiers), not the filesystem profile's.
+// ancestorChain returns the parent directories of p, from "/" down to p's
+// direct parent, canonical. The profile grants them metadata-only reads: a
+// process cannot resolve a path (or even learn its own cwd) if stat on the
+// ancestors is denied, and metadata carries no file content — so this keeps
+// path traversal working without exposing anything. "/" is included because
+// looking up any absolute path starts there.
+func ancestorChain(p string) []string {
+	if p == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return nil
+	}
+	var chain []string
+	for dir := filepath.Dir(abs); ; dir = filepath.Dir(dir) {
+		if dir == "." || dir == "" {
+			break
+		}
+		chain = append(chain, dir)
+		if dir == "/" {
+			break
+		}
+	}
+	// Root-most first, each in both symlink spellings.
+	var out []string
+	for i := len(chain) - 1; i >= 0; i-- {
+		out = append(out, canonicals(chain[i])...)
+	}
+	return out
+}
+
+// writeProfile renders the seatbelt profile with absolute paths and stores it
+// under the temp dir. Both directions are whitelists: reads are allowed only
+// for the project, the system runtime and ReadableRoots (so the rest of $HOME,
+// including shell rc files and credential stores, is unreadable by
+// construction); writes are confined to the project and temp dirs. Network is
+// denied unless GOLDER_SANDBOX_NETWORK opts in (egress must be granted, so a
+// sandboxed command cannot exfiltrate what it read).
 func (r *SeatbeltRunner) writeProfile() (string, error) {
 	project := r.ProjectDir
 	if project == "" {
@@ -72,23 +105,68 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 			return "", fmt.Errorf("seatbelt: resolve project dir: %w", err)
 		}
 	}
-	home, _ := os.UserHomeDir()
-	sshDir := filepath.Join(home, ".ssh")
-	gpgDir := filepath.Join(home, ".gnupg")
-	profile := fmt.Sprintf(`(version 1)
-(deny default)
-(allow process-exec process-fork)
-(allow job-creation)
-(allow signal (target self))
-(allow mach-lookup)
-(allow sysctl-read)
-(allow file-read* (subpath "/"))
-(allow file-write* %s %s (literal "/dev/null") (literal "/dev/tty"))
-(deny file-write* (subpath %q) (subpath %q) (regex #".*trust\.json$"))
-(allow network*)
-`,
-		quoteAll(canonicals(project)), quoteAll(canonicals(r.tmpDir())), quote(sshDir), quote(gpgDir),
-	)
+	// Read whitelist: the project plus the system runtime and extra roots. Every
+	// entry carries its canonical spelling (see canonicals): the profile matches
+	// by vnode path, and macOS temp trees live under the /var → /private/var
+	// symlink.
+	//
+	// "/" itself is added literally: subpath rules cover a directory and its
+	// descendants, so without it the root directory is unreadable and every
+	// absolute-path lookup fails — the process aborts before main (dyld cannot
+	// resolve its own image). The root listing carries no user data.
+	// The sandbox temp dir is readable and writable: toolchains spill there and
+	// read their own spill back, so a write-only entry would fail confusingly.
+	readRoots := append([]string{project, r.tmpDir()}, ReadableRoots()...)
+	readRule := fmt.Sprintf("(allow file-read* (literal \"/\") %s)", quoteAll(canonicalsAll(readRoots)))
+	// Parent chains need metadata traversal so path resolution (and getcwd)
+	// work: an allow on /a/b/c does not by itself permit stat on /a/b, and the
+	// sandbox denies the whole lookup without it. This covers every read root,
+	// including the git files under $HOME.
+	metaRule := ""
+	var metaDirs []string
+	for _, root := range readRoots {
+		metaDirs = append(metaDirs, ancestorChain(root)...)
+	}
+	if metaDirs = dedupePaths(metaDirs); len(metaDirs) > 0 {
+		// literal, not subpath: only the ancestor directories themselves need
+		// stat for path traversal, and a subpath rule would additionally expose
+		// the existence of every name below them.
+		quoted := make([]string, 0, len(metaDirs))
+		for _, dir := range metaDirs {
+			quoted = append(quoted, fmt.Sprintf("(literal %s)", quote(dir)))
+		}
+		metaRule = fmt.Sprintf("(allow file-read-metadata %s)\n", strings.Join(quoted, " "))
+	}
+	network := "(deny network*)"
+	if NetworkEnabled() {
+		network = "(allow network*)"
+	}
+	// Golder's own state: denied read AND write after the allow rules, so a
+	// project rooted inside $GOLDER_HOME cannot reach the trust store or
+	// credential file. The basename regex also covers a trust.json sitting
+	// anywhere else in an otherwise writable tree.
+	denyGolder := ""
+	if protected := ProtectedGolderPaths(); len(protected) > 0 {
+		denyGolder = fmt.Sprintf("(deny file-read* file-write* %s)\n", quoteAll(canonicalsAll(protected)))
+	}
+	var b strings.Builder
+	b.WriteString("(version 1)\n")
+	// Default deny first: every allow below is explicit, and the write/deny
+	// rules come last so they override the broader allows (later rules win).
+	b.WriteString("(deny default)\n")
+	b.WriteString("(allow process-exec process-fork)\n")
+	b.WriteString("(allow job-creation)\n")
+	b.WriteString("(allow signal (target self))\n")
+	b.WriteString("(allow mach-lookup)\n")
+	b.WriteString("(allow sysctl-read)\n")
+	b.WriteString(readRule + "\n")
+	b.WriteString(metaRule)
+	fmt.Fprintf(&b, "(allow file-write* %s %s (literal \"/dev/null\") (literal \"/dev/tty\"))\n",
+		quoteAll(canonicals(project)), quoteAll(canonicals(r.tmpDir())))
+	b.WriteString(denyGolder)
+	b.WriteString("(deny file-write* (regex #\".*trust\\.json$\"))\n")
+	b.WriteString(network + "\n")
+	profile := b.String()
 	f, err := os.CreateTemp(r.tmpDir(), "golder-sandbox-*.sb")
 	if err != nil {
 		return "", fmt.Errorf("seatbelt: write profile: %w", err)

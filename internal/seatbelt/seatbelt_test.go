@@ -58,9 +58,23 @@ func TestSeatbeltDarwinProfile(t *testing.T) {
 		t.Fatalf("read profile: %v", err)
 	}
 	text := string(data)
-	for _, want := range []string{`(deny default)`, project, ".ssh", ".gnupg", `trust\.json`} {
+	// The profile is a whitelist: the project, the system runtime and the git
+	// files are readable; credential material under $HOME is excluded by
+	// construction rather than by name, so it must NOT appear as an allow.
+	for _, want := range []string{`(deny default)`, project, "/usr", "(deny file-write* (regex #\".*trust\\.json$\"))"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("profile missing %q:\n%s", want, text)
+		}
+	}
+	// No blanket read allow, and no allow naming $HOME.
+	if strings.Contains(text, `(allow file-read* (subpath "/"))`) {
+		t.Errorf("profile must not grant blanket reads:\n%s", text)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, banned := range []string{".ssh", ".gnupg"} {
+			if strings.Contains(text, "(subpath \""+home+"/"+banned+"\")") {
+				t.Errorf("profile must not allow %s:\n%s", banned, text)
+			}
 		}
 	}
 	cleanup()

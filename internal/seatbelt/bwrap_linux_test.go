@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,9 +63,78 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 	if out, err := run("echo hacked > " + trust); err == nil {
 		t.Errorf("the trust store must stay read-only inside a writable tree:\n%s", out)
 	}
+	// Reading secret material is denied too (codex parity): a masked tmpfs
+	// hides the file entirely, so `cat` fails and the content never appears.
+	if out, err := run("cat " + trust); err == nil {
+		t.Errorf("reading the trust store must be denied inside the sandbox:\n%s", out)
+	} else if strings.Contains(out, "{}") {
+		t.Errorf("secret content leaked out of the sandbox:\n%s", out)
+	}
 	if _, err := run("echo hi"); err != nil {
 		t.Errorf("plain commands must work: %v", err)
 	}
+
+	// The read model is a whitelist: credential material under $HOME is not
+	// mounted at all, so it is unreachable; the git config files are mounted so
+	// that `git commit` can find an identity.
+	secret := filepath.Join(home, ".zshrc")
+	if err := os.WriteFile(secret, []byte("export API_KEY=leaked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("cat " + secret); err == nil {
+		t.Errorf("reading $HOME/.zshrc must be denied inside the sandbox:\n%s", out)
+	} else if strings.Contains(out, "leaked") {
+		t.Errorf("shell rc content leaked out of the sandbox:\n%s", out)
+	}
+	gitconfig := filepath.Join(home, ".gitconfig")
+	if err := os.WriteFile(gitconfig, []byte("[user]\n\temail = probe@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("cat " + gitconfig); err != nil {
+		t.Errorf("the git config must stay readable (git commit needs it): %v\n%s", err, out)
+	} else if !strings.Contains(out, "probe@example.com") {
+		t.Errorf("git config read returned unexpected content:\n%s", out)
+	}
+}
+
+// TestBwrapRunnerNetworkOff proves the default sandbox has no egress: an
+// outbound connection attempt fails. (GOLDER_SANDBOX_NETWORK=on is exercised
+// by the argv-level test, which checks --share-net appears.)
+func TestBwrapRunnerNetworkOff(t *testing.T) {
+	// The table above is driven by NetworkEnabled(), which reads the ambient
+	// environment; force the default here so the test is deterministic.
+	t.Setenv("GOLDER_SANDBOX_NETWORK", "")
+	if !Available() {
+		t.Skip("bubblewrap not available or unusable on this machine")
+	}
+	project := t.TempDir()
+	t.Setenv("GOLDER_HOME", filepath.Join(t.TempDir(), "ghome"))
+	r := &BwrapRunner{ProjectDir: project}
+	// bash's /dev/tcp needs no external binary; a refused/unreachable connect
+	// fails fast. If name resolution or connect succeeds the sandbox leaked.
+	out, err := runBwrap(t, r, project, "exec 3<>/dev/tcp/1.1.1.1/80 && echo CONNECTED || echo BLOCKED")
+	if err != nil {
+		t.Fatalf("probe command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "BLOCKED") {
+		t.Errorf("network should be off inside the sandbox, got:\n%s", out)
+	}
+}
+
+// runBwrap executes a command under the runner and returns combined output.
+func runBwrap(t *testing.T, r Runner, dir, command string) (string, error) {
+	t.Helper()
+	argv, cleanup, err := r.SandboxArgv("/bin/bash", "-c", command, dir)
+	if err != nil {
+		t.Fatalf("SandboxArgv: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func TestBwrapRunnerEndToEndTTYShape(t *testing.T) {

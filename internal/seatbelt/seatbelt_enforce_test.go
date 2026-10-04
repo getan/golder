@@ -123,6 +123,18 @@ func TestSeatbeltDeniesSecretsAndTrustStore(t *testing.T) {
 			t.Logf("no %s dir, skipping its probe", dir)
 			continue
 		}
+		// Reading is denied too: a probe file created on the host must not be
+		// readable inside the sandbox.
+		hostProbe := filepath.Join(dir, suffix+".read")
+		if writeErr := os.WriteFile(hostProbe, []byte("secret-material"), 0o600); writeErr == nil {
+			out, runErr := runSandboxed(t, r, project, fmt.Sprintf("cat %q", hostProbe))
+			_ = os.Remove(hostProbe)
+			if runErr == nil && strings.Contains(out, "secret-material") {
+				t.Fatalf("reading %s succeeded, read-deny did not fire (output %q)", dir, out)
+			}
+		} else {
+			t.Logf("could not create read probe in %s: %v", dir, writeErr)
+		}
 		probe := filepath.Join(dir, suffix)
 		out, runErr := runSandboxed(t, r, project, fmt.Sprintf("touch %q", probe))
 		if runErr == nil {
@@ -133,6 +145,24 @@ func TestSeatbeltDeniesSecretsAndTrustStore(t *testing.T) {
 			_ = os.Remove(probe)
 			t.Fatalf("probe %q exists after a denied write", probe)
 		}
+	}
+}
+
+// TestSeatbeltAllowsWritesThroughSymlinkedRoot is the regression for the
+// TestSeatbeltNetworkOff proves the default profile has no egress: an
+// outbound connection fails inside the sandbox. GOLDER_SANDBOX_NETWORK=on is
+// covered by the profile-text test (it must emit "(allow network*)").
+func TestSeatbeltNetworkOff(t *testing.T) {
+	requireSandboxExec(t)
+	t.Setenv("GOLDER_SANDBOX_NETWORK", "")
+	project := t.TempDir()
+	r := &SeatbeltRunner{ProjectDir: project, TmpDir: t.TempDir()}
+	out, err := runSandboxed(t, r, project, "exec 3<>/dev/tcp/1.1.1.1/80 && echo CONNECTED || echo BLOCKED")
+	if err != nil {
+		t.Fatalf("probe command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "BLOCKED") {
+		t.Errorf("network should be off inside the sandbox, got:\n%s", out)
 	}
 }
 

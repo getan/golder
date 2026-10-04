@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,7 +120,7 @@ func (t *BashTool) StopSessions() {
 // or reviewer-failure containment), then the optional Judge for direct
 // callers. It returns sandbox=true to run isolated, a non-empty message to
 // refuse, or both zero values to run directly.
-func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bool, block string) {
+func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (sandbox bool, block string) {
 	if t.Permissions != nil {
 		switch t.Permissions.Mode() {
 		case permissions.ReadOnly:
@@ -128,6 +129,13 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bo
 			return false, ""
 		}
 	}
+	// require_escalated (codex parity) asks to run OUTSIDE the sandbox. It is a
+	// request, not a grant: the permission gate ran before execution and its
+	// containment decisions stay authoritative, so the two sources below beat
+	// the request. What the request changes is the *local* judge path at the
+	// end — and, more importantly, it is visible to the gate's reviewer in the
+	// call arguments, which is what actually grants it (grade allow → direct).
+	escalationRequested := strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated)
 	if t.ForceSandbox {
 		return true, ""
 	}
@@ -140,6 +148,11 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bo
 			return false, "bash: the permission gate requires sandboxing but no sandbox runner is available; failing closed"
 		}
 		return true, ""
+	}
+	// Gate or enforce did not require isolation: honor the escalation request
+	// by keeping this call out of the local judge's sandbox routing too.
+	if escalationRequested {
+		return false, ""
 	}
 	if t.Judge == nil {
 		return false, ""
@@ -172,29 +185,31 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command string) (sandbox bo
 // interpreter by default, or the sandboxed argv when routing says so. ok=false
 // with a message means the call must not run; ok=false with an empty message
 // means run directly (auto mode without a runner: the gate already prompted).
-func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command string) (argv []string, cleanup func(), msg string, ok bool) {
+// sandboxed reports whether the returned argv goes through the OS sandbox, so
+// the result builder can label sandbox-shaped failures for the model.
+func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms string) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
 	argv = []string{shell, flag, command}
-	sandbox, block := t.sandboxRoute(ctx, command)
+	sandbox, block := t.sandboxRoute(ctx, command, perms)
 	if block != "" {
-		return nil, nil, block, false
+		return nil, nil, block, false, false
 	}
 	if !sandbox {
-		return argv, nil, "", true
+		return argv, nil, "", true, false
 	}
 	if t.Sandbox == nil {
 		if t.ForceSandbox {
-			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (requires sandbox-exec on macOS or bubblewrap on Linux); failing closed", false
+			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (requires sandbox-exec on macOS or bubblewrap on Linux); failing closed", false, false
 		}
-		return argv, nil, "", true
+		return argv, nil, "", true, false
 	}
 	sa, cl, err := t.Sandbox.SandboxArgv(shell, flag, command, t.Dir)
 	if err != nil {
 		if t.ForceSandbox {
-			return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false
+			return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false, false
 		}
-		return argv, nil, "", true
+		return argv, nil, "", true, false
 	}
-	return sa, cl, "", true
+	return sa, cl, "", true, true
 }
 
 // bashToolArgs is the decoded argument shape for BashTool.
@@ -210,6 +225,14 @@ type bashToolArgs struct {
 	// TTY runs the command on a pseudo-terminal, making its stdin writable
 	// with arbitrary input via write_stdin (interactive programs).
 	TTY bool `json:"tty,omitempty"`
+	// SandboxPermissions is the per-command sandbox override (codex parity):
+	// "use_default" runs under the turn's routing; "require_escalated" asks to
+	// run OUTSIDE the sandbox, which the permission gate must approve — the
+	// model asks, the user (or the auto reviewer) decides. Justification is
+	// surfaced in that approval prompt.
+	SandboxPermissions string `json:"sandbox_permissions,omitempty"`
+	// Justification is the user-facing reason for a require_escalated request.
+	Justification string `json:"justification,omitempty"`
 }
 
 // Name implements AgentTool.
@@ -221,7 +244,12 @@ func (t *BashTool) Description() string {
 		"after yield_time_ms (default 10s) it keeps running as a session and the " +
 		"result carries a bash_id: read more output with write_stdin, and send " +
 		"chars \"" + interruptHint + "\" (Ctrl-C) to interrupt it. timeout_ms is a " +
-		"hard deadline that kills the command (capped at 10 minutes). Set tty=true " +
+		"hard deadline that kills the command (capped at 10 minutes). Commands may " +
+		"run inside an OS sandbox (writes confined to the workspace and temp dir, " +
+		"network off); a sandbox denial is labelled in the output — when a command " +
+		"legitimately needs what the sandbox denies, retry it with " +
+		"sandbox_permissions=\"require_escalated\" plus a short justification, which " +
+		"asks the user to run it unsandboxed. Set tty=true " +
 		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
 		"prompt). A non-zero " +
 		"exit code is reported as an error. On Windows the command runs under bash " +
@@ -237,7 +265,9 @@ func (t *BashTool) Schema() json.RawMessage {
     "command":    {"type": "string", "description": "Shell command line to run."},
     "timeout_ms": {"type": "integer", "description": "Hard deadline in milliseconds; the command is killed when it elapses (capped at 10 minutes). Omit for no deadline.", "minimum": 0},
     "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
-    "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."}
+    "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."},
+    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command sandbox override. Defaults to use_default. Set require_escalated to ask to run OUTSIDE the sandbox when the sandbox denies access the command genuinely needs (e.g. build caches outside the project, or network). The user approves it; include justification."},
+    "justification": {"type": "string", "description": "User-facing reason for a require_escalated request; omit otherwise."}
   },
   "required": ["command"],
   "additionalProperties": false
@@ -252,6 +282,44 @@ func (t *BashTool) ExecutionMode() agentcore.ToolExecutionMode {
 // shellLookPath resolves a program on PATH. It is a package var so tests can
 // simulate a Windows box with or without bash installed.
 var shellLookPath = exec.LookPath
+
+// sandboxPermissionEscalated is the bash-tool argument value that asks to run
+// the command outside the sandbox (codex's "require_escalated"). The model sets
+// it; the permission gate decides, so this is a request, not a grant.
+const sandboxPermissionEscalated = "require_escalated"
+
+// sandboxDeniedMarkers are the failure signatures that indicate the OS sandbox
+// refused an operation, as opposed to the command itself failing. They mirror
+// codex's detection list (sandboxing/src/denial.rs) so the model can tell the
+// difference and, when appropriate, retry with sandbox_permissions:
+// require_escalated.
+var sandboxDeniedMarkers = []string{
+	"operation not permitted",
+	"permission denied",
+	"read-only file system",
+	"sandbox",
+	"landlock",
+	"seccomp",
+}
+
+// looksSandboxDenied reports whether a sandboxed command's output looks like a
+// sandbox denial rather than an ordinary command failure. exitCode must be
+// non-zero; the caller only consults this for failed sandboxed runs.
+func looksSandboxDenied(output string) bool {
+	lower := strings.ToLower(output)
+	for _, marker := range sandboxDeniedMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// sandboxEscalationHint is appended to a sandboxed failure that looks like a
+// denial. It tells the model exactly what the situation is and how to proceed,
+// mirroring codex's guidance to retry with escalation when the sandbox (not the
+// command) is the blocker.
+const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox policy (writes are confined to the project and TMPDIR; the network is off). If the command is legitimate and needs access the sandbox denies, retry it with sandbox_permissions=\"require_escalated\" and a short justification, which asks the user to approve running it outside the sandbox.]"
 
 // resolveShell picks the interpreter and the flag that makes it read the command
 // from the next argument. An explicit shell (BashTool.Shell) is always honored as
@@ -308,7 +376,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	argv, cleanup, msg, ok := t.sandboxArgv(ctx, shell, flag, a.Command)
+	argv, cleanup, msg, ok, sandboxed := t.sandboxArgv(ctx, shell, flag, a.Command, a.SandboxPermissions)
 	if !ok {
 		if msg == "" {
 			return errorResult("bash: command blocked"), nil
@@ -378,6 +446,14 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 
 	snap := sess.Snapshot()
 	out := truncateBashOutput(sess.ReadNew())
+	// A failed sandboxed command is labelled so the model can tell sandbox
+	// policy from an ordinary failure and, when warranted, ask for escalation.
+	// The hint is appended to the output the model sees (the error line and the
+	// result content), not to the user's view.
+	hint := ""
+	if sandboxed && snap.ExitCode != 0 && looksSandboxDenied(out) {
+		hint = sandboxEscalationHint
+	}
 
 	if !exited {
 		text := out
@@ -401,7 +477,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
 				Details: map[string]any{"exitCode": snap.ExitCode},
 			},
-			fmt.Errorf("bash: command exited with code %d\n%s", snap.ExitCode, out)
+			fmt.Errorf("bash: command exited with code %d\n%s%s", snap.ExitCode, out, hint)
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(out)},

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
 )
 
 // readToolMaxLines caps how many lines a single read returns before truncating
@@ -115,6 +116,13 @@ func (t *ReadTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	full, err := t.resolvePath(a.Path)
 	if err != nil {
 		return errorResult("read: " + err.Error()), nil
+	}
+	// Credential material is refused even when the resolved path is inside the
+	// workspace (a project rooted in $HOME, or a relative path that lands in a
+	// credential directory there). The static floor already grades the raw
+	// argument; this catches resolution-dependent spellings.
+	if reason, bad := judge.CredentialPathReason(full); bad {
+		return errorResult("read: " + reason + " is not readable here"), nil
 	}
 	info, err := os.Stat(full)
 	if err != nil {

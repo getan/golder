@@ -32,6 +32,9 @@ func staticDeny(tool string, args json.RawMessage) (Verdict, bool) {
 			if reason, bad := secretExfil(cmd); bad {
 				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason}}, true
 			}
+			if reason, bad := credentialRead(cmd); bad {
+				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason}}, true
+			}
 		}
 		return Verdict{}, false
 	case "apply_patch":
@@ -43,9 +46,40 @@ func staticDeny(tool string, args json.RawMessage) (Verdict, bool) {
 			}
 		}
 		return Verdict{}, false
+	case "read":
+		if p, ok := pathArg(args); ok {
+			if reason, bad := credentialPathRead(p); bad {
+				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason}}, true
+			}
+		}
+		return Verdict{}, false
+	case "grep":
+		// grep's path argument scopes the search; a search rooted at a
+		// credential directory is a bulk credential read.
+		if p, ok := pathArg(args); ok {
+			if reason, bad := credentialPathRead(p); bad {
+				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason + " (grep)"}}, true
+			}
+		}
+		return Verdict{}, false
 	default:
 		return Verdict{}, false
 	}
+}
+
+// pathArg extracts a tool call's "path" argument (read/grep) when present.
+func pathArg(args json.RawMessage) (string, bool) {
+	var a struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", false
+	}
+	p := strings.TrimSpace(a.Path)
+	if p == "" {
+		return "", false
+	}
+	return p, true
 }
 
 func bashCommand(args json.RawMessage) (string, bool) {

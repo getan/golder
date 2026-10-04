@@ -184,6 +184,62 @@ type GateOpts struct {
 	// driver can show the decision and its rationale. Callbacks run on the
 	// run goroutine; implementations must not block on the UI thread.
 	Notify func(Note)
+	// Confirm, when set, is the driver's approval dialog for a call the gate
+	// cannot settle on its own: a Confirm tier outside auto mode, a Sandbox
+	// tier the execution layer cannot isolate, or a failed review with no
+	// containment. The interactive terminal drivers use In/Out instead; the
+	// TUI has no stdin and supplies a callback that renders a dialog and
+	// blocks on the user's answer. It runs on the run goroutine and must
+	// itself be safe to block (the TUI implementation hands the request to
+	// the UI goroutine and waits on a channel). nil keeps the fail-closed
+	// behavior.
+	Confirm func(ctx context.Context, req ApprovalRequest) ApprovalAnswer
+}
+
+// ApprovalKind says why a call needs the user's answer.
+type ApprovalKind string
+
+const (
+	// ApprovalConfirm: the reviewer graded the call Confirm and the mode is
+	// not auto.
+	ApprovalConfirm ApprovalKind = "confirm"
+	// ApprovalNoSandbox: the reviewer asked for isolation but the execution
+	// layer has no runner for this call, so approving runs it bare.
+	ApprovalNoSandbox ApprovalKind = "no-sandbox"
+	// ApprovalReviewFailed: the reviewer could not decide and the call cannot
+	// be contained.
+	ApprovalReviewFailed ApprovalKind = "review-failed"
+	// ApprovalTrust: a side-effect tool in a directory the user has not
+	// trusted. The gate is the trust manager, not the reviewer; the dialog
+	// asks the same question the REPL's first-run prompt does.
+	ApprovalTrust ApprovalKind = "trust"
+)
+
+// ApprovalRequest is what the gate shows the user: the call itself plus the
+// reviewer's verdict, so the decision is informed rather than a bare yes/no.
+type ApprovalRequest struct {
+	Kind    ApprovalKind
+	Tool    string
+	Summary string
+	// Justification carries the model's reason when the call is an escalation
+	// request (bash sandbox_permissions=require_escalated); empty otherwise.
+	Justification string
+	Risk          string
+	Authorization string
+	Rationale     string
+}
+
+// ApprovalAnswer is the user's decision.
+type ApprovalAnswer struct {
+	// Approve runs the call. False blocks it (the model is told it was
+	// denied and can propose something else).
+	Approve bool
+	// Always remembers the decision for this session, keyed by the request's
+	// tool and summary prefix, so the same shape of call is not asked again.
+	Always bool
+	// Answered is false when the dialog could not run (ctx cancelled, no UI);
+	// the gate then falls back to its fail-closed behavior.
+	Answered bool
 }
 
 // NoteKind classifies one user-facing verdict note.
@@ -279,6 +335,9 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
 				return nil
 			}
+			if dec, ok := askApproval(ctx, opts, call, v, ApprovalReviewFailed, lang); ok {
+				return dec
+			}
 			return blockCall(call, v, "reviewer unavailable and no sandbox for this tool; failing closed")
 		case v.Level == Allow:
 			return nil
@@ -293,6 +352,9 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
 				return nil
 			}
+			if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
+				return dec
+			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
 			return blockCall(call, v, "no sandbox runner for this call (GOLDER_SANDBOX=off or no platform sandbox available); failing closed")
 		default: // Confirm
@@ -303,10 +365,74 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if interactive && promptRisk(ctx, opts, call, v, false) {
 				return nil
 			}
+			if dec, ok := askApproval(ctx, opts, call, v, ApprovalConfirm, lang); ok {
+				return dec
+			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
 			return blockCall(call, v, "needs confirmation; failing closed without a prompt")
 		}
 	}
+}
+
+// askApproval routes a call that needs the user's answer through the driver's
+// Confirm callback. ok=false means no callback is wired (or it could not
+// answer): the caller keeps its fail-closed behavior, so a driver that never
+// wired approval can not be tricked into allowing by silence.
+func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, kind ApprovalKind, lang string) (*agentcore.BeforeToolCallDecision, bool) {
+	if opts.Confirm == nil {
+		return nil, false
+	}
+	req := ApprovalRequest{
+		Kind:          kind,
+		Tool:          call.Name,
+		Summary:       riskSummary(call),
+		Justification: escalationJustification(call),
+		Risk:          riskWord(v.Risk, lang),
+		Authorization: authWord(v.Authorization, lang),
+		Rationale:     firstReason(v),
+	}
+	ans := opts.Confirm(ctx, req)
+	if !ans.Answered {
+		return nil, false
+	}
+	if !ans.Approve {
+		if opts.Notify != nil {
+			opts.Notify(Note{
+				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+				Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
+				Rationale: "denied by the user",
+			})
+		}
+		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
+	}
+	if opts.Notify != nil {
+		opts.Notify(Note{
+			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+			Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
+			Rationale: "approved by the user",
+		})
+	}
+	return nil, true
+}
+
+// escalationJustification extracts the model's reason from a bash escalation
+// request, so the dialog can show it. Other tools have none.
+func escalationJustification(call agentcore.AgentToolCall) string {
+	var a struct {
+		Justification string `json:"justification"`
+	}
+	if err := json.Unmarshal(call.Arguments, &a); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Justification)
+}
+
+// firstReason returns the verdict's leading reason, for the dialog body.
+func firstReason(v Verdict) string {
+	if len(v.Reasons) == 0 {
+		return ""
+	}
+	return v.Reasons[0]
 }
 
 // optsIsAuto reports whether the state's mode is auto (the gate then decides
