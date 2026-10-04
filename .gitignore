@@ -43,5 +43,7 @@ config.toml
 
 # goreleaser output
 /dist/
+# build workflow output (macOS/Linux archives + checksums)
+/release/
 .graph_state
 graph.html

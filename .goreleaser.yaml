@@ -50,6 +50,7 @@ archives:
           - zip
     files:
       - README.md
+      - README.en.md
       - LICENSE
 
 checksum:

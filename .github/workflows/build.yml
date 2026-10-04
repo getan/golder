@@ -1,0 +1,101 @@
+# 每次 push 到 master、PR 或手动触发时，构建 macOS 与 Linux 的二进制
+# （amd64 + arm64），打包进 release/ 目录并作为 workflow artifact 上传。
+# 打 tag 的正式发布仍由 release.yml 的 goreleaser 流程负责（含 GitHub Release）。
+name: build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [darwin, linux]
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Build ${{ matrix.os }}/${{ matrix.arch }}
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --always --dirty | sed 's/^v//')"
+          commit="$(git rev-parse --short HEAD)"
+          date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          case "$GOOS" in
+            darwin) osname=Darwin ;;
+            linux)  osname=Linux ;;
+            *) echo "unexpected GOOS $GOOS" >&2; exit 1 ;;
+          esac
+          case "$GOARCH" in
+            amd64) archname=x86_64 ;;
+            arm64) archname=arm64 ;;
+            *) echo "unexpected GOARCH $GOARCH" >&2; exit 1 ;;
+          esac
+          mkdir -p release/staging
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}" \
+            -o release/staging/golder ./cmd/golder
+          cp README.md README.en.md LICENSE release/staging/
+          tar -czf "release/golder_${version}_${osname}_${archname}.tar.gz" \
+            -C release/staging golder README.md README.en.md LICENSE
+          rm -rf release/staging
+          ls -l release/
+
+      - name: Upload ${{ matrix.os }}/${{ matrix.arch }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: golder-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+
+  checksums:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: golder-*
+          path: release
+          merge-multiple: true
+
+      - name: Generate checksums.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release
+          sha256sum golder_*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Upload release directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: golder-release
+          path: release/
+          if-no-files-found: error
