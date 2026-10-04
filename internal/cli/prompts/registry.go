@@ -210,10 +210,7 @@ func modelCatalogKey(live *cli.LiveConfig) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	baseURL := live.BaseURL
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = spec.DefaultBaseURL
-	}
+	baseURL := provider.ResolveBaseURL(spec, live.BaseURL, os.Getenv)
 	return provider.ModelCatalogCacheKey(live.ProviderName, baseURL), true
 }
 
@@ -222,13 +219,17 @@ func modelCatalogKey(live *cli.LiveConfig) (string, bool) {
 // on-disk entry (younger than the shared catalog TTL). A hit is marked on live
 // so the rest of the session reuses it. Nil when neither cache has anything.
 func CachedModelCatalog(live *cli.LiveConfig) []string {
-	if len(live.FetchedModels) > 0 {
-		return live.FetchedModels
-	}
 	key, ok := modelCatalogKey(live)
 	if !ok {
 		return nil
 	}
+	if len(live.FetchedModels) > 0 && (live.FetchedKey == "" || live.FetchedKey == key) {
+		live.FetchedKey = key
+		return live.FetchedModels
+	}
+	live.FetchedModels = nil
+	live.FetchedAt = time.Time{}
+	live.FetchedKey = key
 	ids, fresh := provider.CachedModelCatalog(key)
 	if !fresh {
 		return nil
@@ -251,22 +252,20 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 	if !ok {
 		return nil, fmt.Errorf("unknown provider %q", live.ProviderName)
 	}
-	baseURL := live.BaseURL
-	if strings.TrimSpace(baseURL) == "" {
-		baseURL = spec.DefaultBaseURL
-	}
+	baseURL := provider.ResolveBaseURL(spec, live.BaseURL, os.Getenv)
 	protocol := live.Protocol
 	if strings.TrimSpace(protocol) == "" {
 		protocol = spec.Protocol
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ids, err := provider.FetchRemoteModels(ctx, baseURL, protocol, creds.GetAPIKey(ctx, live.ProviderName))
+	ids, err := provider.FetchProviderModels(ctx, live.ProviderName, baseURL, protocol, creds.GetAPIKey(ctx, live.ProviderName))
 	if err != nil {
 		if key, ok := modelCatalogKey(live); ok {
 			if stale, _ := provider.CachedModelCatalog(key); len(stale) > 0 {
 				live.FetchedModels = stale
 				live.FetchedAt = time.Now()
+				live.FetchedKey = key
 				return stale, nil
 			}
 		}
@@ -277,6 +276,7 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 	}
 	if key, ok := modelCatalogKey(live); ok {
 		provider.StoreModelCatalog(key, ids)
+		live.FetchedKey = key
 	}
 	live.FetchedModels = ids
 	live.FetchedAt = time.Now()
@@ -394,6 +394,7 @@ func protocolSuffix(providerName, model, protocol string) string {
 }
 
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
+	registerProxyCommand(reg)
 	// thinkAction views or switches the reasoning-effort level. It backs both
 	// /think and its alias /effect, so the two commands share identical behavior.
 	thinkAction := func(args string) string {
@@ -511,6 +512,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 				if spec.Name == live.ProviderName {
 					line += "  (current)"
 				}
+				line += "\n    " + ProviderEndpointSummary(live, spec)
 				return line
 			}
 			var ready, missing []provider.ProviderSpec
@@ -537,7 +539,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 					b.WriteString("\n" + row(spec))
 				}
 			}
-			b.WriteString("\n\nlocal: ollama needs no key (use /model ollama/<model>)")
+			b.WriteString("\n\nBASE_URL is optional and applies to both chat and /models. Configure routing with /proxy.")
+			b.WriteString("\nlocal: ollama needs no key (use /model ollama/<model>)")
 			return b.String()
 		}
 		spec, ok := provider.LookupProviderSpec(arg)
@@ -568,10 +571,12 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		// next bare /model lists (and disk-caches) the new provider's lineup.
 		live.FetchedModels = nil
 		live.FetchedAt = time.Time{}
+		live.FetchedKey = ""
 		msg := fmt.Sprintf("provider switched to %s (model: %s%s)", name, model, protocolSuffix(name, model, live.Protocol))
 		if cleared {
-			msg += "\n(base-url/protocol override cleared; using the provider's defaults)"
+			msg += "\n(base-url/protocol override cleared; using the provider's environment/default endpoint)"
 		}
+		msg += "\n" + ProviderEndpointSummary(live, spec)
 		if !CredentialAvailable(creds, name) && len(spec.EnvVars) > 0 {
 			msg += fmt.Sprintf("\nwarning: no credential found; set any one of %s (see /provider for the full list)", strings.Join(spec.EnvVars, " / "))
 		}

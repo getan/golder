@@ -2,8 +2,6 @@ package provider
 
 import (
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -62,44 +60,3 @@ func WithSessionExtra(extra map[string]any, sid string) map[string]any {
 var ProcessSessionID = sync.OnceValue(func() string {
 	return fmt.Sprintf("golder-%d-%d", os.Getpid(), time.Now().Unix())
 })
-
-// ProxyURL resolves the HTTP proxy for proxied upstreams from GOLDER_PROXY
-// only. Unset (or blank) means direct connection: other users work out of the
-// box, and whoever needs egress (e.g. Muse behind opencode.ai requiring US
-// exit) exports GOLDER_PROXY=http://127.0.0.1:7897 in their own shell.
-func ProxyURL() string {
-	return strings.TrimSpace(os.Getenv("GOLDER_PROXY"))
-}
-
-// NeedsProxy reports whether requests for the given provider / URL must go
-// through the proxy. The registry's ForceProxy flag is authoritative (it keys
-// on the provider name, so --base-url overrides keep the behavior); the
-// opencode.ai hostname match is a fallback for callers that only know the URL
-// (e.g. model discovery).
-func NeedsProxy(providerName, rawURL string) bool {
-	if spec, ok := LookupProviderSpec(providerName); ok && spec.ForceProxy {
-		return true
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(u.Hostname()), "opencode.ai")
-}
-
-// clientForURL returns an *http.Client routing via the proxy when NeedsProxy
-// holds, else nil meaning "use the caller's default client".
-func clientForURL(providerName, rawURL string) *http.Client {
-	if !NeedsProxy(providerName, rawURL) {
-		return nil
-	}
-	proxy := ProxyURL()
-	if proxy == "" {
-		return nil
-	}
-	pu, err := url.Parse(proxy)
-	if err != nil {
-		return nil
-	}
-	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(pu)}}
-}

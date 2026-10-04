@@ -60,7 +60,32 @@ golder
 export GOLDER_PROXY=http://127.0.0.1:7897
 ```
 
-> `GOLDER_PROXY` 用于 opencode-zen / opencode-go 这类指定出口的网关；其余 Provider 遵循 Go 标准库的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量。
+`/proxy` 打开代理选择器：方向键选择 provider，Enter 开关并自动保存，Esc 退出。也可以直接输入：
+
+```text
+/proxy url http://127.0.0.1:7897
+/proxy openai on
+/proxy anthropic on
+/proxy deepseek off
+```
+
+代理地址与 provider 选择相互独立。`GOLDER_PROXY` 优先于保存的地址，但不会让所有 provider 走代理；未选中的 provider 直接连接，不继承 `HTTP_PROXY` / `HTTPS_PROXY`。显式启用代理却未设置地址时，会提示配置地址。尚未保存选择时保留 OpenCode 的历史默认行为：设置地址才走代理。
+
+选择保存在 `~/.config/golder/proxy.toml`（支持 `XDG_CONFIG_HOME`），立即用于后续聊天和模型列表请求，重启后继续有效。例如：
+
+```toml
+url = "http://127.0.0.1:7897"
+providers = ["openai", "anthropic"]
+```
+
+使用 OpenAI 中转站时，通过 `OPENAI_BASE_URL` 设置地址，是否走代理由 `/proxy` 单独控制：
+
+```bash
+export OPENAI_BASE_URL=https://relay.example.com/v1
+golder --provider openai
+```
+
+聊天使用该地址，模型列表请求同一个地址下的 `/models`，缓存也按实际地址区分。`/provider` 列表及 `--help` 显示各 provider 的 API Key 和 `*_BASE_URL` 变量名；选择器的详情区显示实际地址、配置来源和代理状态。`BASE_URL` 是可选项，不设置时使用官方默认地址。
 
 ### 配置文件
 
@@ -164,11 +189,13 @@ golder -l                     # 列出全部会话
 | 路径 / 变量 | 用途 |
 |-------------|------|
 | `~/.config/golder/config.toml` | 全局配置 |
+| `~/.config/golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
 | `~/.golder/sessions` | 会话存储（JSONL） |
 | `~/.golder/.credentials.yaml` | 命名的 API Key 凭据（建议 0600 权限） |
 | `~/.agents/skills` | 技能目录（注册为 `/命令`） |
 | `GOLDER_HOME` | 覆盖 `~/.golder` 基础目录 |
-| `GOLDER_PROXY` | opencode-zen / opencode-go 网关的 HTTP 代理 |
+| `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
+| `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |
 | `OPENCODE_API_KEY`、`OPENCODE_ZEN_API_KEY` 等 `<PROVIDER>_API_KEY` | 各 Provider 的 API Key（`opencode-go` 用 `OPENCODE_API_KEY`，`opencode-zen` 只用 `OPENCODE_ZEN_API_KEY`） |
 

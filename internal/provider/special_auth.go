@@ -46,21 +46,39 @@ func ResolveSpecialProvider(spec ProviderSpec, model, flagBaseURL string, env fu
 	if env == nil {
 		env = func(string) string { return "" }
 	}
+	// Honor the same *_BASE_URL variables advertised in /provider. Leave the
+	// default empty here: special endpoints are composed below.
+	overrideSpec := spec
+	overrideSpec.DefaultBaseURL = ""
+	flagBaseURL = ResolveBaseURL(overrideSpec, flagBaseURL, env)
 	models := []Model{{Provider: spec.Name, ID: model, SupportsImages: true}}
+	var p Provider
+	var err error
 	switch spec.Name {
 	case "azure-openai-responses":
-		return resolveAzureOpenAI(spec, model, flagBaseURL, env, models)
+		p, err = resolveAzureOpenAI(spec, model, flagBaseURL, env, models)
 	case "amazon-bedrock":
-		return resolveBedrock(spec, flagBaseURL, env, models)
+		p, err = resolveBedrock(spec, flagBaseURL, env, models)
 	case "google-vertex":
-		return resolveGoogleVertex(spec, flagBaseURL, env, models)
+		p, err = resolveGoogleVertex(spec, flagBaseURL, env, models)
 	case "cloudflare-workers-ai":
-		return resolveCloudflareWorkersAI(spec, flagBaseURL, env, models)
+		p, err = resolveCloudflareWorkersAI(spec, flagBaseURL, env, models)
 	case "cloudflare-ai-gateway":
-		return resolveCloudflareAIGateway(spec, flagBaseURL, env, models)
+		p, err = resolveCloudflareAIGateway(spec, flagBaseURL, env, models)
 	default:
 		return nil, fmt.Errorf("provider %q is not a special-auth provider", spec.Name)
 	}
+	if err != nil {
+		return nil, err
+	}
+	// Routing belongs to the selected provider, not its underlying protocol.
+	switch d := p.(type) {
+	case *openAICompatDriver:
+		d.name = spec.Name
+	case *anthropicCompatDriver:
+		d.name = spec.Name
+	}
+	return p, nil
 }
 
 // resolveAzureOpenAI composes the Azure OpenAI endpoint. The endpoint origin is

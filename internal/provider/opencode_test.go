@@ -119,9 +119,10 @@ func TestResponsesDriverOpencodeSessionHeader(t *testing.T) {
 }
 
 func TestClientForURL(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "http://127.0.0.1:7897")
 	// Registry flag wins regardless of URL (covers --base-url overrides).
-	if c := clientForURL("opencode-go", "https://custom.example.com/v1/responses"); c == nil {
+	if c := clientForURL("opencode-go", "https://custom.example.com/v1/responses"); c.Transport.(*http.Transport).Proxy == nil {
 		t.Error("opencode-go with custom URL = nil, want proxied client")
 	}
 	// Hostname fallback for callers without a provider name.
@@ -130,7 +131,7 @@ func TestClientForURL(t *testing.T) {
 		"https://opencode.ai/zen/v1/chat/completions",
 		"https://opencode.ai/zen/go/v1/models",
 	} {
-		if c := clientForURL("", u); c == nil {
+		if c := clientForURL("", u); c.Transport.(*http.Transport).Proxy == nil {
 			t.Errorf("clientForURL(%q) = nil, want proxied client", u)
 		}
 	}
@@ -139,21 +140,22 @@ func TestClientForURL(t *testing.T) {
 		"https://api.anthropic.com/v1/messages",
 		"http://localhost:11434/v1/chat/completions",
 	} {
-		if c := clientForURL("openai", u); c != nil {
-			t.Errorf("clientForURL(%q) = %v, want nil", u, c)
+		if c := clientForURL("openai", u); c.Transport.(*http.Transport).Proxy != nil {
+			t.Errorf("clientForURL(%q) should connect directly", u)
 		}
 	}
-	if c := clientForURL("openai", "::not-a-url::://"); c != nil {
-		t.Errorf("bad URL: got %v, want nil", c)
+	if c := clientForURL("openai", "::not-a-url::://"); c.Transport.(*http.Transport).Proxy != nil {
+		t.Error("bad URL should not enable proxy")
 	}
 	// Explicitly disabled proxying.
 	t.Setenv("GOLDER_PROXY", "")
-	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c != nil {
-		t.Errorf("disabled proxy: got %v, want nil", c)
+	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c.Transport.(*http.Transport).Proxy != nil {
+		t.Error("disabled proxy should connect directly")
 	}
 }
 
 func TestProxyURL(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "http://proxy.internal:8080")
 	if got := ProxyURL(); got != "http://proxy.internal:8080" {
 		t.Errorf("ProxyURL() = %q, want override", got)
@@ -165,6 +167,7 @@ func TestProxyURL(t *testing.T) {
 }
 
 func TestProxyURLDefaultsDirect(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	old, had := os.LookupEnv("GOLDER_PROXY")
 	if err := os.Unsetenv("GOLDER_PROXY"); err != nil {
 		t.Fatalf("Unsetenv: %v", err)
@@ -177,7 +180,7 @@ func TestProxyURLDefaultsDirect(t *testing.T) {
 	if got := ProxyURL(); got != "" {
 		t.Errorf("unset ProxyURL() = %q, want empty (direct)", got)
 	}
-	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c != nil {
-		t.Errorf("unset proxy client = %v, want nil (direct)", c)
+	if c := clientForURL("opencode-go", "https://opencode.ai/zen/go/v1/responses"); c.Transport.(*http.Transport).Proxy != nil {
+		t.Error("unset proxy should connect directly")
 	}
 }

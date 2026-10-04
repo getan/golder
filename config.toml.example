@@ -5,6 +5,11 @@
 # Provider base URL (overrides the provider's default endpoint).
 # Leave unset to use the selected provider's built-in default.
 # base_url = "https://api.anthropic.com/v1"
+# For per-provider relay endpoints, use e.g. OPENAI_BASE_URL=https://relay.example/v1.
+# The effective base URL is shared by chat and model discovery.
+# /provider lists each provider's KEY and BASE_URL variable names.
+# Configure selective proxy routing with /proxy; it saves proxy.toml beside
+# this file. GOLDER_PROXY overrides its address, not its provider selection.
 
 # Default provider (built-in name, see `golder --help`) and model to use.
 # provider = "opencode-go"

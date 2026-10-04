@@ -23,9 +23,10 @@ func PrintProviderHelp(w io.Writer) {
 		if strings.TrimSpace(base) == "" {
 			base = "(composed from env)"
 		}
-		fmt.Fprintf(w, "  %s: %s -> %s [%s]\n",
-			spec.Name, strings.Join(spec.EnvVars, ", "), base, spec.Protocol)
+		fmt.Fprintf(w, "  %s: %s; %s (optional) -> %s [%s]\n",
+			spec.Name, strings.Join(spec.EnvVars, ", "), strings.Join(provider.BaseURLEnvVars(spec), ", "), base, spec.Protocol)
 	}
 	fmt.Fprintf(w, "\nBase URL override precedence: --base-url > <provider>-specific *_BASE_URL env > generic <PROVIDER>_BASE_URL env > registry default.\n")
 	fmt.Fprintf(w, "API key env fallback: any provider also accepts the generic <PROVIDER>_API_KEY convention.\n")
+	fmt.Fprintf(w, "BASE_URL applies to chat and model discovery. Select proxied providers with /proxy.\n")
 }

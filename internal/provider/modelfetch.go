@@ -46,6 +46,12 @@ type remoteModelList struct {
 // the Responses protocol shares the Chat Completions /models path. An empty
 // apiKey sends no auth header (local gateways like Ollama need none).
 func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([]string, error) {
+	return FetchProviderModels(ctx, "", baseURL, protocol, apiKey)
+}
+
+// FetchProviderModels uses the same provider identity for routing as chat
+// requests, even when baseURL points at a user-configured relay.
+func FetchProviderModels(ctx context.Context, providerName, baseURL, protocol, apiKey string) ([]string, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return nil, fmt.Errorf("no base URL configured for model discovery")
 	}
@@ -53,13 +59,16 @@ func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([
 	if err != nil {
 		return nil, err
 	}
-	base := strings.TrimRight(baseURL, "/")
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	path, auth := "/models", func(req *http.Request, key string) {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	switch canonical {
 	case ProtocolAnthropic:
 		path = "/v1/models"
+		if strings.HasSuffix(base, "/v1") {
+			path = "/models"
+		}
 		auth = func(req *http.Request, key string) {
 			req.Header.Set("x-api-key", key)
 			req.Header.Set("anthropic-version", anthropicAPIVersion)
@@ -79,7 +88,7 @@ func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([
 
 	newClient := func(freshConn bool) *http.Client {
 		c := &http.Client{Timeout: remoteModelListTimeout}
-		if pc := clientForURL("", base); pc != nil {
+		if pc := clientForURL(providerName, base); pc != nil {
 			pc.Timeout = remoteModelListTimeout
 			c = pc
 		}
@@ -87,11 +96,11 @@ func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([
 			// Force a new connection: the first request through a proxy
 			// occasionally dies with EOF during setup; retrying on a
 			// fresh connection recovers without user-visible flakiness.
-			tr := &http.Transport{DisableKeepAlives: true}
 			if cur, ok := c.Transport.(*http.Transport); ok {
-				tr.Proxy = cur.Proxy
+				tr := cur.Clone()
+				tr.DisableKeepAlives = true
+				c.Transport = tr
 			}
-			c.Transport = tr
 		}
 		return c
 	}

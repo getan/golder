@@ -86,6 +86,8 @@ type pickItem struct {
 	Title  string
 	Detail string
 	Value  string
+	// Info gives the selected row a readable detail area below the list.
+	Info []string
 }
 
 // newSlashMenu builds an inactive menu bound to the theme used for its rows.
@@ -169,7 +171,10 @@ func (mn slashMenu) rows() int {
 		return 0
 	}
 	if n > maxMenuRows {
-		return maxMenuRows
+		n = maxMenuRows
+	}
+	if mn.picking() && mn.selected >= 0 && mn.selected < len(mn.pick) {
+		n += len(mn.pick[mn.selected].Info)
 	}
 	return n
 }
@@ -297,6 +302,12 @@ func (mn slashMenu) view(width int) string {
 		}
 		if i < end-1 {
 			b.WriteByte('\n')
+		}
+	}
+	if mn.picking() && mn.selected >= 0 && mn.selected < len(mn.pick) {
+		for _, info := range mn.pick[mn.selected].Info {
+			b.WriteByte('\n')
+			b.WriteString(mn.theme.System.Render("  " + TruncateToWidth(info, rowWidth)))
 		}
 	}
 	return b.String()

@@ -315,7 +315,7 @@ func (d *anthropicCompatDriver) StreamCompletion(ctx context.Context, req Comple
 		}
 		return httpReq, nil
 	}
-	return StreamRequest(ctx, TransportConfig{NewRequest: newReq, Decoder: NewAnthropicDecoder()})
+	return StreamRequest(ctx, TransportConfig{Client: clientForURL(d.name, d.baseURL), NewRequest: newReq, Decoder: NewAnthropicDecoder()})
 }
 
 // encodeAnthropicRequest serializes a CompletionRequest into an Anthropic

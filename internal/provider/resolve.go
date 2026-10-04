@@ -307,3 +307,18 @@ func ResolveBaseURL(spec ProviderSpec, flagBaseURL string, env func(string) stri
 	// 4. Registry default.
 	return spec.DefaultBaseURL
 }
+
+// BaseURLEnvVars lists endpoint override variables in resolution order.
+func BaseURLEnvVars(spec ProviderSpec) []string {
+	names := append([]string(nil), spec.BaseURLEnvVars...)
+	generic := config.GenericBaseURLEnvVar(spec.Name)
+	for _, name := range names {
+		if name == generic {
+			return names
+		}
+	}
+	if generic != "" {
+		names = append(names, generic)
+	}
+	return names
+}

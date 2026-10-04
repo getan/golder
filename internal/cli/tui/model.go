@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -385,14 +386,59 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 		if len(spec.EnvVars) > 0 {
 			envs = strings.Join(spec.EnvVars, " / ")
 		}
+		summary := prompts.ProviderEndpointSummary(m.live, spec)
 		picks = append(picks, pickItem{
 			Title:  spec.Name,
-			Detail: envs + " · " + prompts.CredentialSummary(m.session.creds, spec.Name),
+			Detail: envs + " · " + prompts.CredentialSummary(m.session.creds, spec.Name) + " · " + strings.Join(provider.BaseURLEnvVars(spec), " / "),
 			Value:  spec.Name,
+			Info:   strings.Split(summary, " · "),
 		})
 	}
 	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
 	m.transcript.addSystem("Select a provider (↑↓ + Enter, Esc cancels):")
+	m.relayout()
+	return m, nil
+}
+
+// openProxyPicker persists each toggle immediately. Staying in the picker lets
+// users select several providers without retyping the command.
+func (m Model) openProxyPicker(focus string) (tea.Model, tea.Cmd) {
+	return m.reopenProxyPicker(focus, true)
+}
+
+// reopenProxyPicker rebuilds the proxy picker after a toggle. The usage hint
+// is transcript history, so it is announced only on the initial open;
+// re-announcing on every toggle would stack a duplicate hint per Enter.
+func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cmd) {
+	cfg, err := provider.ProxySettings()
+	if err != nil {
+		m.transcript.addSystem("proxy: " + err.Error())
+		return m, nil
+	}
+	address := provider.DisplayURL(provider.ProxyURL())
+	if address == "" {
+		address = "not configured"
+	}
+	picks := []pickItem{{Title: "Proxy address", Detail: address + " · Enter to edit", Value: "url"}}
+	selected := 0
+	for _, spec := range prompts.ProxyProvidersSelectedFirst(cfg.Providers) {
+		mark, action := "[ ] ", " on"
+		if slices.Contains(cfg.Providers, spec.Name) {
+			mark, action = "[x] ", " off"
+		}
+		if spec.Name == focus {
+			selected = len(picks)
+		}
+		picks = append(picks, pickItem{
+			Title: mark + spec.Name, Value: spec.Name + action,
+			Detail: provider.ProxyStatus(spec.Name, spec.DefaultBaseURL),
+		})
+	}
+	m.menu.openPickerDetailed(picks, "", "proxy")
+	m.menu.selected = selected
+	if announce {
+		m.transcript.addSystem("Proxy: ↑↓ + Enter toggles and saves; Esc closes. Unchecked providers connect directly.")
+	}
 	m.relayout()
 	return m, nil
 }
@@ -1219,6 +1265,22 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			kind = "model"
 		}
 		item, ok := m.menu.pickCurrent()
+		if kind == "proxy" && ok {
+			m.menu.close()
+			m.input.Clear()
+			if item == "url" {
+				m.input.SetValue("/proxy url ")
+				m.relayout()
+				return m, nil
+			}
+			out, err := m.slash.ResolveOutcome("/proxy " + item)
+			if err != nil {
+				m.transcript.addSystem("proxy: " + err.Error())
+			} else {
+				m.transcript.addSystem(out.Message)
+			}
+			return m.reopenProxyPicker(strings.Fields(item)[0], false)
+		}
 		// Stage 1 of the /model flow: after the model, pick its reasoning level
 		// when the catalog (or the family fallback) says it has one — the
 		// codex-style two-step. The switch itself runs at stage 2 so Esc on the
@@ -1295,6 +1357,9 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// /provider <name> still resolves through the registry below.
 	if line == "/provider" {
 		return m.openProviderPicker()
+	}
+	if line == "/proxy" {
+		return m.openProxyPicker("")
 	}
 	// Bare /permissions opens the interactive mode picker (arrow keys +
 	// Enter) with the codex-style preset list and descriptions;

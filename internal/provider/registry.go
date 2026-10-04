@@ -59,11 +59,8 @@ type ProviderSpec struct {
 	// variables (e.g. AZURE_OPENAI_BASE_URL), in precedence order. May be empty;
 	// the generic <PROVIDER>_BASE_URL convention is handled by callers.
 	BaseURLEnvVars []string
-	// ForceProxy marks providers that must go through the proxy when one is
-	// configured (opencode.ai from mainland networks; Muse models behind it
-	// require US egress). With GOLDER_PROXY unset the request goes direct, so
-	// users without a proxy work out of the box. The decision keys on the
-	// provider name, so --base-url overrides keep the behavior.
+	// ForceProxy is the legacy default selection before the user saves /proxy
+	// settings. An explicit provider list replaces these defaults completely.
 	ForceProxy bool
 
 	// ModelsDevID is this provider's key in models.dev's api.json (used by the

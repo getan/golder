@@ -42,6 +42,7 @@ type LiveConfig struct {
 	// either from that cache or from a fresh fetch.
 	FetchedModels []string
 	FetchedAt     time.Time
+	FetchedKey    string
 }
 
 // DefaultContextWindow is the fallback context-token budget used when a model's
