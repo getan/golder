@@ -10,6 +10,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -229,5 +230,98 @@ func TestTaskAdvertisesRegistryTools(t *testing.T) {
 	names := map[string]bool{gotTools[0].Name(): true, gotTools[1].Name(): true}
 	if !names["read"] || !names["bash"] {
 		t.Errorf("child tools = %v, want read+bash from the registry", names)
+	}
+}
+
+// multiToolCallTurn scripts one assistant turn carrying several tool calls at
+// once — the shape a model emits when it dispatches multiple sub-agents in a
+// single message, i.e. one parallel batch.
+func multiToolCallTurn(calls ...agentcore.ToolCallContent) fauxTurn {
+	partial := agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant}
+	withCalls := partial
+	for _, c := range calls {
+		withCalls.Content = append(withCalls.Content, c)
+	}
+	final := withCalls
+	final.StopReason = agentcore.StopReasonToolUse
+	return fauxTurn{
+		provider.StreamStartEvent{Partial: partial},
+		provider.StreamToolCallEvent{Partial: withCalls},
+		provider.StreamDoneEvent{Message: final},
+	}
+}
+
+// TestTaskCallsInOneBatchRunInParallel drives the whole loop with a single
+// assistant message that carries two task calls and proves the children
+// overlap: each child's stream parks on a barrier until the other arrives, so
+// a serial executor times the first child out (surfacing a task error result).
+// This guards the reported "tasks run one after another" regression at the
+// loop→batch→subagent seam, not just in the batch executor unit test.
+func TestTaskCallsInOneBatchRunInParallel(t *testing.T) {
+	var arrived int64
+	bothStarted := make(chan struct{})
+	var once sync.Once
+
+	barrierStream := func(ctx context.Context, model string, llm provider.LlmContext, cfg provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+		n := atomic.AddInt64(&arrived, 1)
+		if n == 2 {
+			once.Do(func() { close(bothStarted) })
+		}
+		select {
+		case <-bothStarted:
+		case <-time.After(5 * time.Second):
+			return nil, fmt.Errorf("barrier timed out at %d/2 children: task calls ran serially", n)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		child := &fauxProvider{
+			name:   "faux-child",
+			models: []provider.Model{{Provider: "faux-child", ID: "child"}},
+			turns:  []fauxTurn{textTurn("child report")},
+		}
+		return provider.StreamFnFromProvider(child)(ctx, model, llm, cfg)
+	}
+	factory := func() RunConfig {
+		return RunConfig{
+			LoopConfig: LoopConfig{Model: "child", Stream: provider.StreamFn(barrierStream)},
+			Batch:      agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: agenttool.NewToolRegistry()}},
+		}
+	}
+	taskTool := NewTaskTool(factory, make(chan struct{}, 4))
+
+	parent := &fauxProvider{
+		name:   "faux",
+		models: []provider.Model{{Provider: "faux", ID: "faux"}},
+		turns: []fauxTurn{
+			multiToolCallTurn(
+				agentcore.NewToolCallContent("t1", "task", json.RawMessage(`{"description":"a","prompt":"research a"}`)),
+				agentcore.NewToolCallContent("t2", "task", json.RawMessage(`{"description":"b","prompt":"research b"}`)),
+			),
+			textTurn("parent done"),
+		},
+	}
+	cfg := newFauxRunCfg(parent, taskTool)
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("start")}},
+	}}
+
+	_, msgs := collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	if got := atomic.LoadInt64(&arrived); got != 2 {
+		t.Fatalf("children that reached the barrier = %d, want 2 (one was still queued behind the other)", got)
+	}
+	results := 0
+	for _, m := range msgs {
+		tr, ok := m.(agentcore.ToolResultMessage)
+		if !ok {
+			continue
+		}
+		results++
+		if tr.IsError {
+			t.Errorf("task %s returned an error result: %s", tr.ToolCallID, agentcore.ContentToText(tr.Content))
+		}
+	}
+	if results != 2 {
+		t.Errorf("tool results = %d, want 2 (one per task call)", results)
 	}
 }
