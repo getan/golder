@@ -16,7 +16,7 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 
 三层是**叠加**关系，不是替代：容器内仍应配合 `--disallowed-tools bash`（如果该会话不需要 shell），`--approve` 只应授予容器内进程。
 
-## 进程内第四层：权限模式 + LLM 审查 + seatbelt（macOS 先行）
+## 进程内第四层：权限模式 + LLM 审查 + 平台沙箱（sandbox-exec / bubblewrap）
 
 > 对标 Codex 的 `/permissions` 预设与 guardian/auto-review：审批档位是显式的四档，`auto` 档由**当前会话的模型**审查每次调用并给出理由——不引入额外的分类服务或密钥，是"用正在用的 LLM"而不是再配一个模型。
 
@@ -49,9 +49,36 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 
 ### 执行隔离
 
-Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`GOLDER_SANDBOX` 非 off、平台有 `sandbox-exec`、且只有 `bash` 有 runner；`full-access` 下不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
+Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner、且只有 `bash` 有 runner；`full-access` 下不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
 
-执行隔离（`internal/seatbelt`，macOS 生效、他处空实现）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成 `sandbox-exec -f <现场生成的 profile> bash -c`。profile 读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`/`~/.gnupg`/`trust.json`。项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**：macOS 的 `/var` 是 `/private/var` 的软链，而 sandbox 按规范 vnode 路径匹配，只写软链形式会导致该允许的写操作被静默拒绝（表现为命令莫名失败，而非沙箱报错）。这套规则有真实的 `sandbox-exec` 端到端测试覆盖（写项目内成功、写项目外失败、`trust.json` 被拒但 `trust.json.bak` 可写）。
+执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成平台沙箱。两个平台同一条策略——**读放宽、写只限项目目录与 `TMPDIR`、默认拒写 `~/.ssh`/`~/.gnupg`/`trust.json`，网络保持开放**（外联由审查层负责，不是文件 profile 的职责）：
+
+- **macOS**：`sandbox-exec -f <现场生成的 profile> bash -c …`。profile 按规范 vnode 路径匹配，而 `/var` 是 `/private/var` 的软链，因此项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**（只写软链形式会导致该允许的写操作被静默拒绝）。
+- **Linux**：`bwrap --die-with-parent --unshare-pid --unshare-uts --unshare-ipc --ro-bind / / --dev /dev --proc /proc --bind <项目> <项目> --bind-try <TMPDIR> <TMPDIR> … bash -c …`。只读根 + 可写绑定就是写白名单；`--dev` 会挂载新的 devtmpfs（含 devpts），所以 `tty=true` 的交互式会话照常工作。secret 路径的只读重挂（`--ro-bind-try`）排在可写绑定**之后**——后挂载生效，即使项目根就是 `$HOME` 或 `$GOLDER_HOME`，`~/.ssh`、trust 存储、凭据文件与会话目录也不会变成可写。bwrap 是否可用在执行前**实探**一次（能否真的创建 userns/挂载；被 AppArmor 或内核开关挡掉时视为不可用，回退为询问/fail-closed，而不是命令跑到一半才报错）。
+
+这套规则有真实的端到端测试覆盖：macOS 用 `sandbox-exec`、Linux 用 `bwrap`（写项目内成功、写项目外失败、可写树内的 `trust.json` 仍被拒、devpts 存在）。Linux 上运行需要安装 bubblewrap（Debian/Ubuntu：`apt install bubblewrap`；Fedora：`dnf install bubblewrap`；Arch：`pacman -S bubblewrap`），且允许非特权 user namespace；未安装时 `GOLDER_SANDBOX=auto` 走回退路径（确认/拒绝），`enforce` 则 fail-closed。
+
+### 在 macOS 上验证 Linux 沙箱（Apple container）
+
+用 Apple 官方 `container` 跑 arm64 Linux 即可本地验证 bwrap 路径。一次性构建内置 bubblewrap 的镜像（国内网络可把 `golang` 换成本地镜像源）：
+
+```bash
+mkdir -p /tmp/golder-linuxtest && cat > /tmp/golder-linuxtest/Dockerfile <<'EOF'
+FROM golang:1.27-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap \
+ && rm -rf /var/lib/apt/lists/*
+EOF
+container build -t golder-linuxtest:1.27 -f /tmp/golder-linuxtest/Dockerfile /tmp/golder-linuxtest
+```
+
+之后每次验证（镜像已内置 bubblewrap，无需再装）：
+
+```bash
+container run --rm --cap-add ALL -m 6G -v "$PWD":/src -w /src golder-linuxtest:1.27 \
+  bash -c 'export PATH=$PATH:/usr/local/go/bin; go test -count=1 -v -run Bwrap ./internal/seatbelt/'
+```
+
+> `--cap-add ALL` 是必须的：Apple 容器默认给 root 的 capability 不含 `CAP_SYS_ADMIN`，bwrap 建不了 mount namespace（报 `Creating new namespace failed`）；默认权限下探测会把沙箱判为不可用并优雅跳过，这是预期行为，不是 bug。
 
 ```bash
 export GOLDER_PERMISSIONS=auto  # read-only | ask | auto（默认）| full-access

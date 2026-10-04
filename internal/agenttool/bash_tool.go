@@ -183,7 +183,7 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command string)
 	}
 	if t.Sandbox == nil {
 		if t.ForceSandbox {
-			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (macOS sandbox-exec required); failing closed", false
+			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (requires sandbox-exec on macOS or bubblewrap on Linux); failing closed", false
 		}
 		return argv, nil, "", true
 	}

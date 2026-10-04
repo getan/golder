@@ -24,11 +24,15 @@ func TestModeFromEnv(t *testing.T) {
 
 func TestSeatbeltDarwinProfile(t *testing.T) {
 	if runtime.GOOS != "darwin" {
-		if Available() {
-			t.Fatal("Available must be false off macOS")
-		}
-		if New(t.TempDir()) != nil {
-			t.Fatal("New must return nil off macOS")
+		// Linux has its own runner (bubblewrap); availability is machine-
+		// dependent there. Only the stub platforms must report unavailable.
+		if runtime.GOOS != "linux" {
+			if Available() {
+				t.Fatal("Available must be false on platforms without a sandbox runner")
+			}
+			if New(t.TempDir()) != nil {
+				t.Fatal("New must return nil on platforms without a sandbox runner")
+			}
 		}
 		t.Skip("profile assertions are darwin-only")
 	}

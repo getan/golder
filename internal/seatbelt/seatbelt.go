@@ -1,20 +1,21 @@
-// Package seatbelt confines bash execution with the OS sandbox (macOS
-// sandbox-exec; other platforms compile to an unavailable stub). It is a
-// leaf package: standard library only, no imports from agenttool/judge, so
-// the cli layer can inject it into the bash tool without creating an import
-// cycle (agenttool defines its own SandboxRunner interface; SeatbeltRunner
-// satisfies it structurally).
+// Package seatbelt confines bash execution with the OS sandbox: macOS
+// sandbox-exec, Linux bubblewrap (bwrap); platforms without a runner compile
+// to an unavailable stub. It is a leaf package: standard library only, no
+// imports from agenttool/judge, so the cli layer can inject it into the bash
+// tool without creating an import cycle (agenttool defines its own
+// SandboxRunner interface; the platform runners satisfy it structurally).
 //
 // The runner only changes the execution layer: the tool name, arguments,
-// and CLI surface are untouched. A sandboxed command runs as
-// "sandbox-exec -f <generated profile> <shell> -c <command>" with the same
-// working directory. The generated profile allows reads broadly, confines
-// writes to the project directory and TMPDIR, and denies writes to live
+// and CLI surface are untouched. On macOS a sandboxed command runs as
+// "sandbox-exec -f <generated profile> <shell> -c <command>"; on Linux as
+// "bwrap <policy flags> <shell> -c <command>". Both allow reads broadly,
+// confine writes to the project directory and TMPDIR, and deny writes to live
 // secret material (~/.ssh, ~/.gnupg) and the trust store.
 package seatbelt
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -48,4 +49,20 @@ func ModeFromEnv() Mode {
 // runs after the command finishes.
 type Runner interface {
 	SandboxArgv(shell, flag, command, dir string) (argv []string, cleanup func(), err error)
+}
+
+// canonicals returns the path plus its symlink-resolved form (deduped). Both
+// runners carry both forms: macOS sandbox profiles match on the canonical
+// vnode path (/var is a symlink to /private/var there), and bubblewrap mounts
+// bind by path, so enumerating both keeps the allowed-write set correct
+// regardless of which form the caller used.
+func canonicals(p string) []string {
+	if p == "" {
+		return nil
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || real == p {
+		return []string{p}
+	}
+	return []string{p, real}
 }

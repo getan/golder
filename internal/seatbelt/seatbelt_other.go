@@ -1,11 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package seatbelt
 
-// Available is always false off macOS: process-level sandboxing needs a
-// platform runner (Linux: bubblewrap/namespaces; Windows: restricted tokens)
-// that this node does not ship.
+// Available is always false on platforms without a sandbox runner (Windows:
+// restricted tokens, and anything else: no implementation). macOS and Linux
+// have their own files.
 func Available() bool { return false }
 
-// New returns nil off macOS.
+// New returns nil on platforms without a sandbox runner.
 func New(projectDir string) Runner { return nil }

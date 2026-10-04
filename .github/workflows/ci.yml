@@ -22,6 +22,9 @@ jobs:
         with:
           go-version: stable
 
+      - name: Install sandbox tools
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
 

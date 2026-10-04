@@ -13,7 +13,7 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Many providers**: defaults to the OpenCode gateway, with 40+ built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama, …) and any OpenAI-compatible endpoint.
 - **Sessions and branches**: `/resume` switches sessions, `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
-- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); on macOS sandbox-tier calls run under `sandbox-exec`.
+- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed).
 - **Long-task support**: `/compact` context compaction, context-budget tools, autonomous `/goal` runs, `/btw` side questions, sub-agent dispatch, persistent memory and `/dream` consolidation.
 - **Per-provider proxy routing**: `/proxy` selects which providers use a proxy, independently; unselected providers connect directly and never inherit the shell's `HTTP_PROXY` / `HTTPS_PROXY`.
 - **Skills and templates**: skills under `~/.agents/skills` are registered as `/commands` (none ship built-in; an absent directory means zero extra commands); prompt templates and project `AGENTS.md` load automatically.
@@ -255,6 +255,7 @@ See `golder --help` for the complete list.
 | `GOLDER_HOME` | Override the `~/.golder` base directory |
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
+| `GOLDER_SANDBOX` | Sandbox-tier execution: `off` / `auto` (default, sandbox tier only) / `enforce` (every bash command sandboxed, fail-closed without a runner) |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |

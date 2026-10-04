@@ -27,10 +27,10 @@ package judge
 // verdict with its rationale, full-access skips review and sandboxing while
 // keeping the static floor. Sandbox execution routing lives in
 // internal/seatbelt and is injected into BashTool by internal/cli/run:
-// sandbox-tier verdicts run under sandbox-exec on macOS
-// (GOLDER_SANDBOX=auto), every command runs sandboxed under
-// GOLDER_SANDBOX=enforce, and without a runner the gate's approval runs the
-// command directly.
+// sandbox-tier verdicts run under the platform sandbox (sandbox-exec on
+// macOS, bubblewrap on Linux) with GOLDER_SANDBOX=auto, every command runs
+// sandboxed under GOLDER_SANDBOX=enforce, and without a runner the gate's
+// approval runs the command directly.
 import (
 	"bufio"
 	"bytes"
@@ -294,7 +294,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return nil
 			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
-			return blockCall(call, v, "no sandbox runner for this call (GOLDER_SANDBOX=off or sandbox-exec unavailable); failing closed")
+			return blockCall(call, v, "no sandbox runner for this call (GOLDER_SANDBOX=off or no platform sandbox available); failing closed")
 		default: // Confirm
 			if optsIsAuto(state) {
 				notify(noteFor(call, v, NoteApproved, lang))
@@ -443,7 +443,7 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	}
 	if sandbox {
 		// Reached only when the execution layer cannot isolate this call
-		// (no runner for the tool, GOLDER_SANDBOX=off, or no sandbox-exec):
+		// (no runner for the tool, GOLDER_SANDBOX=off, or no platform sandbox):
 		// approving runs it unisolated, so say so plainly.
 		fmt.Fprintf(out, "\ngolder judges %q as risk %s [sandbox unavailable: approves run unisolated].\n", call.Name, v.Level)
 	} else {

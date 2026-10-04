@@ -49,22 +49,6 @@ func (r *SeatbeltRunner) tmpDir() string {
 	return os.TempDir()
 }
 
-// canonicals returns the path plus its symlink-resolved form (deduped).
-// macOS temp dirs live under /var, which is a symlink to /private/var, while
-// the sandbox matches on the canonical vnode path — a profile carrying only
-// the symlinked form silently denies every write it meant to allow. Carrying
-// both keeps the profile correct regardless of which form the caller used.
-func canonicals(p string) []string {
-	if p == "" {
-		return nil
-	}
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil || real == p {
-		return []string{p}
-	}
-	return []string{p, real}
-}
-
 func quoteAll(paths []string) string {
 	quoted := make([]string, 0, len(paths))
 	for _, p := range paths {

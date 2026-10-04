@@ -25,8 +25,9 @@ import (
 //
 //   - GOLDER_SANDBOX=off → no runner: sandbox-tier commands never execute
 //     (the gate fails closed) unless a human approved one explicitly.
-//   - GOLDER_SANDBOX=auto (default) → sandbox-tier verdicts run under
-//     sandbox-exec when the platform provides it (macOS).
+//   - GOLDER_SANDBOX=auto (default) → sandbox-tier verdicts run under the
+//     platform sandbox when it provides one (sandbox-exec on macOS,
+//     bubblewrap on Linux).
 //   - GOLDER_SANDBOX=enforce → every foreground command runs sandboxed and
 //     fails closed when no runner is available.
 func WireBashSandbox(tools []agentcore.AgentTool, cwd string) {
@@ -175,10 +176,11 @@ func (r *ReviewNotes) Emit(n judge.Note) {
 // SandboxGate is the predicate the judge gate asks before failing a
 // Sandbox-tier verdict closed: which tool calls this process can actually run
 // isolated. It mirrors WireBashSandbox's decision exactly — bash runs under
-// sandbox-exec when the mode allows it, the platform provides the binary
-// (macOS today), and (in auto mode) a grader is configured — so the gate never
-// passes a call through to an execution layer that would run it unsandboxed.
-// Nil means nothing can be sandboxed and the gate keeps its prompt/fail-closed
+// the platform sandbox (sandbox-exec on macOS, bubblewrap on Linux) when the
+// mode allows it and the platform provides it, and (in auto mode) a grader is
+// configured — so the gate never passes a call through to an execution layer
+// that would run it unsandboxed. Nil means nothing can be sandboxed and the
+// gate keeps its prompt/fail-closed
 // behavior.
 func SandboxGate() func(toolName string) bool {
 	mode := seatbelt.ModeFromEnv()
