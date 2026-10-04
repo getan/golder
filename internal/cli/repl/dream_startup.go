@@ -5,8 +5,8 @@
 // response, and a non-intrusive one-line summary is printed on completion.
 //
 // The decision + goroutine live in dream.Scheduler; this file only supplies the
-// CLI-side spawn seam (reusing spawnDream from dream_repl.go) and the one-line
-// notice renderer (RenderReportLine). The subprocess's O_EXCL lock enforces
+// CLI-side spawn seam (reusing dreamcmd.Spawn) and the one-line notice renderer
+// (dreamcmd.RenderReportLine). The subprocess's O_EXCL lock enforces
 // single-instance, so a second trigger just yields a skipped child (silent).
 package repl
 
@@ -15,20 +15,21 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/getan/golder/internal/cli/dreamcmd"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/dream"
 )
 
 // dreamStartupScheduler owns the startup auto-trigger decision. It is stateless
 // (dream.Scheduler is a zero-size type), so a package value is enough; tests
-// exercise this path through the spawnDream seam rather than replacing it.
+// exercise this path through the dreamcmd.Spawn seam rather than replacing it.
 var dreamStartupScheduler dream.Scheduler
 
 // maybeStartBackgroundDream launches an auto-consolidation in the background at
 // interactive session startup when dream is enabled and due. It never blocks:
 // the due check is a single state.json read and any spawn runs in a goroutine,
 // so the first prompt is served immediately (SPEC FR-4 / §8.2). The completion
-// notice is a single dim line via RenderReportLine; a skipped, no-op, or failed
+// notice is a single dim line via dreamcmd.RenderReportLine; a skipped, no-op, or failed
 // run prints nothing (SPEC §6.1).
 //
 // out is written to from the background goroutine, so callers must pass a writer
@@ -46,13 +47,13 @@ func maybeStartBackgroundDream(out io.Writer, memoryRoot, projectDir string, cfg
 		Spawn: func(ctx context.Context, dir string) (dream.Report, error) {
 			// Bound the background run like a manual /dream (SPEC §6.3): a hung
 			// LLM-backed pass is killed rather than leaking a goroutine forever.
-			ctx, cancel := context.WithTimeout(ctx, dreamRunTimeout)
+			ctx, cancel := context.WithTimeout(ctx, dreamcmd.RunTimeout)
 			defer cancel()
-			res, err := spawnDream(ctx, dir, false)
-			return res.report, err
+			res, err := dreamcmd.Spawn(ctx, dir, false)
+			return res.Report, err
 		},
 		OnReport: func(r dream.Report) {
-			fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, RenderReportLine(r)))
+			fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, dreamcmd.RenderReportLine(r)))
 		},
 	})
 }

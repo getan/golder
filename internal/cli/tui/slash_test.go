@@ -201,22 +201,20 @@ func TestSlashPromptCommandStartsRun(t *testing.T) {
 	}
 }
 
-// TestSlashExitQuits verifies that /exit and /quit typed in the TUI input box
-// terminate the program (tea.Quit + quitting flag), mirroring the REPL loop
-// which intercepts them before slash resolution.
+// TestSlashExitQuits verifies that /exit typed in the TUI input box terminates
+// the program (tea.Quit + quitting flag), mirroring the REPL loop which
+// intercepts it before slash resolution.
 func TestSlashExitQuits(t *testing.T) {
-	for _, cmd := range []string{"/exit", "/quit"} {
-		got, teaCmd := NewModel(Options{}).runSlash(cmd)
-		gm := got.(Model)
-		if !gm.quitting {
-			t.Errorf("%s: model should be marked quitting", cmd)
-		}
-		if teaCmd == nil {
-			t.Fatalf("%s: expected a tea.Quit command, got nil", cmd)
-		}
-		if _, isQuit := teaCmd().(tea.QuitMsg); !isQuit {
-			t.Errorf("%s: cmd should be tea.Quit", cmd)
-		}
+	got, teaCmd := NewModel(Options{}).runSlash("/exit")
+	gm := got.(Model)
+	if !gm.quitting {
+		t.Error("/exit: model should be marked quitting")
+	}
+	if teaCmd == nil {
+		t.Fatal("/exit: expected a tea.Quit command, got nil")
+	}
+	if _, isQuit := teaCmd().(tea.QuitMsg); !isQuit {
+		t.Error("/exit: cmd should be tea.Quit")
 	}
 }
 

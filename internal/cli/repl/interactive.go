@@ -278,19 +278,3 @@ func Run(opts Options) error {
 		budget:     opts.Budget,
 	})
 }
-
-// formatHelpLine renders one slash-command line for /help as
-// "/name <argument-hint> - description (source: <tier>)", omitting the hint
-// segment when absent. It is the plain, testable form of the /help line; the
-// /help Action applies color on top of the same structure.
-func formatHelpLine(c runtime.SlashCommand) string {
-	s := "/" + c.Name
-	if c.ArgumentHint != "" {
-		s += " " + c.ArgumentHint
-	}
-	if c.Description != "" {
-		s += " - " + c.Description
-	}
-	s += " (source: " + c.Tier.String() + ")"
-	return s
-}

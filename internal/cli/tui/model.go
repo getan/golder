@@ -14,10 +14,14 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/dreamcmd"
+	goalpkg "github.com/getan/golder/internal/cli/goal"
 	"github.com/getan/golder/internal/cli/memstatus"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/status"
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -98,6 +102,13 @@ type Model struct {
 	// press re-arms. Zero = disarmed. A single idle press must never quit —
 	// too easy to fat-finger away a session.
 	quitArmedAt time.Time
+
+	// sideRun marks the in-flight run as a /btw side question: on run end the
+	// transcript says the side thread closed and nothing is persisted.
+	sideRun bool
+	// goalRun marks the in-flight run as an autonomous /goal run: on run end the
+	// goal outcome is reported and the turn is persisted like a normal turn.
+	goalRun bool
 
 	// statusBar renders the persistent bottom line (#386, US-003). It is fed the
 	// terminal width, telemetry-derived context usage, and the async git probe
@@ -922,17 +933,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.pumpNext()
 
 	case rebuildDoneMsg:
-		// A manual /rebuild finished: clear the pinned "Preparing conversation
-		// context…" spinner (no run is pumping, so stop it and drop out of the
-		// running state) and report the outcome. rebuild() already applied the
-		// rebuilt messages and set session.compacted on success.
+		// A manual /compact finished: clear the pinned spinner (no run is
+		// pumping, so stop it and drop out of the running state) and report the
+		// outcome. The op already applied its context change and set
+		// session.compacted on success.
 		m.spinner.unpin()
 		m.spinner.stop()
 		m.running = false
 		if msg.err != nil {
-			m.transcript.addSystem("rebuild failed: " + msg.err.Error() + " (context left unchanged)")
+			m.transcript.addSystem(msg.label + " failed: " + msg.err.Error() + " (context left unchanged)")
 		} else {
 			m.transcript.addSystem(msg.summary)
+		}
+		m.relayout()
+		return m, nil
+
+	case dreamDoneMsg:
+		// A manual /dream finished: clear the pinned spinner and render either
+		// the notice (already-running), the failure, or the full report table.
+		m.spinner.unpin()
+		m.spinner.stop()
+		m.running = false
+		switch {
+		case msg.err != nil:
+			m.transcript.addSystem("dream failed: " + msg.err.Error())
+		case msg.summary != "":
+			m.transcript.addSystem(msg.summary)
+		default:
+			var buf bytes.Buffer
+			dreamcmd.RenderReportTable(&buf, msg.report)
+			m.transcript.addSystem(strings.TrimRight(buf.String(), "\n"))
 		}
 		m.relayout()
 		return m, nil
@@ -968,10 +998,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// can publish another note into this run's channel: drop the
 			// handler before the next run installs its own.
 			m.session.notes.Set(nil)
-			if err := m.session.persist(); err != nil {
-				m.transcript.addSystem("Session save failed: " + err.Error())
+			if m.sideRun {
+				// A /btw side run never touches the main conversation or disk.
+				m.transcript.addSystem("(end of side thread — the main conversation is unchanged)")
+			} else {
+				if err := m.session.persist(); err != nil {
+					m.transcript.addSystem("Session save failed: " + err.Error())
+				}
+				// Group this turn's file mutations into a rewind restore point.
+				m.session.commitRewindPoint()
+				if m.goalRun {
+					// An interrupted goal stays resumable: mark it paused before
+					// reporting, mirroring the REPL's interrupt handling.
+					if msg.err != nil {
+						if m.session.Goal().Snapshot().Status == agenttool.GoalActive {
+							m.session.Goal().SetStatus(agenttool.GoalPaused)
+						}
+					}
+					var buf bytes.Buffer
+					goalpkg.RenderOutcome(&buf, m.session.Goal().Snapshot())
+					if s := strings.TrimRight(buf.String(), "\n"); s != "" {
+						m.transcript.addSystem(s)
+					}
+				}
 			}
 		}
+		m.sideRun = false
+		m.goalRun = false
 		// The editor was blurred at submit; re-enable it so the next prompt can be
 		// typed, and re-probe git since a run may have changed the working tree.
 		focus := m.input.Focus()
@@ -1332,10 +1385,10 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 // run; a hybrid (plugin) command shows its notifications then runs its prompt.
 // An unknown command surfaces the resolver error as a system block.
 func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
-	// /exit and /quit terminate the TUI, mirroring the REPL loop which intercepts
-	// them before slash resolution. They register only as no-op /help builtins, so
-	// without this the registry would resolve them to an empty action.
-	if line == "/exit" || line == "/quit" {
+	// /exit terminates the TUI, mirroring the REPL loop which intercepts it
+	// before slash resolution. It registers only as a no-op /help builtin, so
+	// without this the registry would resolve it to an empty action.
+	if line == "/exit" {
 		m.shutdownRemote()
 		m.quitting = true
 		return m, tea.Quit
@@ -1367,7 +1420,7 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if line == "/permissions" {
 		return m.openPermissionsPicker()
 	}
-	// /memory is intercepted before registry resolution (like /rebuild): it
+	// /memory is intercepted before registry resolution (like /compact): it
 	// prints the persistent-memory + infinite-context report, reading the live
 	// memory store, memory root, session id, and messages that a slash Action
 	// closure (string→string) cannot reach.
@@ -1412,47 +1465,60 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	// /session is intercepted before registry resolution (like /memory): it prints
-	// the conversation summary (session id, message count, estimated tokens, model/
-	// provider, created time, compaction count) from the live context — state a
-	// slash Action closure cannot reach. The rendering is shared with the REPL.
-	if line == "/session" {
-		m.transcript.addUser(line)
-		m.input.Clear()
-		m.menu.close()
-		if m.session == nil {
-			m.transcript.addSystem("(session unavailable: no active session)")
-			m.relayout()
-			return m, nil
-		}
-		var buf bytes.Buffer
-		m.session.renderSession(&buf)
-		m.transcript.addSystem(strings.TrimRight(buf.String(), "\n"))
-		m.relayout()
-		return m, nil
+	// /compact and /dream do their work off the tea loop (a summarization call or
+	// the dream subprocess can take a while), so they arm the spinner and report
+	// through a done message. Each replaces context or consolidates memory in
+	// place — work a string→string Action closure cannot do.
+	if line == "/compact" {
+		return m.startSessionOp(line, "Compacting conversation", func() tea.Cmd { return m.session.compactCmd() })
 	}
-	// /rebuild is intercepted before registry resolution (like /exit): it
-	// reconstructs the shared context from a persisted checkpoint (or falls back
-	// to compaction) and replaces the message list in place — work a slash Action
-	// closure cannot do. It reuses the compacting-indicator: the spinner is armed
-	// and pinned to "Preparing conversation context…" while the rebuild runs off
-	// the tea loop, and rebuildDoneMsg clears it and reports the result.
-	if line == "/rebuild" {
-		m.transcript.addUser(line)
-		m.input.Clear()
-		m.menu.close()
-		if m.session == nil {
-			m.transcript.addSystem("(rebuild unavailable: no active session)")
-			m.relayout()
-			return m, nil
-		}
-		m.spinner.begin(time.Now(), m.thinkingLabel())
-		m.spinner.pin("Preparing conversation context")
-		m.running = true
-		m.relayout()
-		return m, tea.Batch(m.session.rebuildCmd(), m.tickSpinner())
+	if line == "/dream" || strings.HasPrefix(line, "/dream ") {
+		dryRun := dreamcmd.HasDryRun(line)
+		return m.startSessionOp(line, "Dreaming (consolidating memory)", func() tea.Cmd { return m.session.dreamCmd(dryRun) })
 	}
-	// /remote-control is intercepted before registry resolution (like /rebuild):
+	// /export writes the live session to a file; it must persist the current turn
+	// first so unsaved messages are included.
+	if line == "/export" || strings.HasPrefix(line, "/export ") {
+		return m.runExport(line)
+	}
+	// /import materializes a JSONL export as a fresh session and switches to it,
+	// swapping the header and context in place — work a slash Action cannot do.
+	if line == "/import" || strings.HasPrefix(line, "/import ") {
+		return m.runImport(line)
+	}
+	// /clone duplicates the current conversation into a new independent session
+	// and switches to it (the same branch swap /resume performs).
+	if line == "/clone" {
+		return m.runClone(line)
+	}
+	// /fork branches from before a chosen historical message: bare /fork opens a
+	// picker, /fork <n> performs the branch and switches to it.
+	if line == "/fork" || strings.HasPrefix(line, "/fork ") {
+		return m.runFork(line)
+	}
+	// /tree shows the session branch tree as a picker; /tree <n> switches the
+	// active branch to the n-th node and rebuilds the context from its path.
+	if line == "/tree" || strings.HasPrefix(line, "/tree ") {
+		return m.runTree(line)
+	}
+	// /rewind rolls files and the conversation back to before an earlier turn:
+	// bare /rewind opens the restore-point picker, /rewind <n> performs it.
+	if line == "/rewind" || strings.HasPrefix(line, "/rewind ") {
+		return m.runRewind(line)
+	}
+	// /btw asks a side question against a copy of the conversation: the answer
+	// streams into the transcript but nothing is saved or sent to the model as
+	// part of the main conversation.
+	if line == "/btw" || strings.HasPrefix(line, "/btw ") {
+		return m.runBtw(line)
+	}
+	// /goal drives the autonomous goal loop: bare /goal shows status, pause and
+	// clear act on the state, and an objective (or resume) starts the run
+	// through the same goal package the REPL uses.
+	if line == "/goal" || strings.HasPrefix(line, "/goal ") {
+		return m.runGoal(line)
+	}
+	// /remote-control is intercepted before registry resolution (like /compact):
 	// it starts/stops the LAN mirror server, which owns state (server, bridge,
 	// listener Cmd) a string→string slash Action cannot hold.
 	if line == "/remote-control" || strings.HasPrefix(line, "/remote-control ") {
@@ -1486,6 +1552,498 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.startPrompt(outcome.Prompt)
+}
+
+// startSessionOp echoes a session operation that does its work off the tea loop
+// (rebuild, compact, dream): the invocation is recorded, the spinner is armed
+// and pinned to label, and the op's done message reports the outcome into the
+// transcript when it lands.
+func (m Model) startSessionOp(line, label string, cmd func() tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.menu.close()
+		m.transcript.addSystem("Interrupt the current run first, then " + commandToken(line) + ".")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	if m.session == nil {
+		m.transcript.addSystem("(" + strings.TrimPrefix(commandToken(line), "/") + " unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	m.spinner.begin(time.Now(), m.thinkingLabel())
+	m.spinner.pin(label)
+	m.running = true
+	m.relayout()
+	return m, tea.Batch(cmd(), m.tickSpinner())
+}
+
+// commandToken returns the leading "/name" token of a slash line.
+func commandToken(line string) string {
+	name := strings.TrimPrefix(strings.TrimSpace(line), "/")
+	if i := strings.IndexAny(name, " \t"); i >= 0 {
+		name = name[:i]
+	}
+	return "/" + name
+}
+
+// runExport handles /export [path]: persist the live turn so unsaved messages
+// are included, then write the session to path (default <session-id>.jsonl in
+// the working directory; a .html extension writes a self-contained transcript).
+func (m Model) runExport(line string) (tea.Model, tea.Cmd) {
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	if m.running {
+		m.transcript.addSystem("Interrupt the current run first, then /export.")
+		m.relayout()
+		return m, nil
+	}
+	if m.session == nil {
+		m.transcript.addSystem("(export unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	path := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "/export")), `"`)
+	if path == "" {
+		path = m.session.header.ID + ".jsonl"
+	}
+	if err := m.session.persist(); err != nil {
+		m.transcript.addSystem("export: save current session: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	n, err := m.session.store.Export(m.session.header.ID, path)
+	if err != nil {
+		m.transcript.addSystem("export failed: " + err.Error())
+	} else {
+		m.transcript.addSystem(fmt.Sprintf("exported %d entries to %s", n, path))
+	}
+	m.relayout()
+	return m, nil
+}
+
+// runImport handles /import <path>: materialize a JSONL export as a fresh
+// independent session and switch the transcript to it.
+func (m Model) runImport(line string) (tea.Model, tea.Cmd) {
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	if m.session == nil {
+		m.transcript.addSystem("(import unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addSystem("Interrupt the current run first, then /import.")
+		m.relayout()
+		return m, nil
+	}
+	path := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "/import")), `"`)
+	if path == "" {
+		m.transcript.addSystem("usage: /import <path.jsonl>")
+		m.relayout()
+		return m, nil
+	}
+	msgs, err := m.session.importSession(path)
+	if err != nil {
+		m.transcript.addSystem("import failed: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	m.reseedTranscript(fmt.Sprintf("Imported session %s from %s (%d messages).", m.session.header.ID, path, len(msgs)))
+	return m, nil
+}
+
+// runClone handles /clone: duplicate the current conversation at its active leaf
+// into a new independent session and switch to it.
+func (m Model) runClone(line string) (tea.Model, tea.Cmd) {
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	if m.session == nil {
+		m.transcript.addSystem("(clone unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addSystem("Interrupt the current run first, then /clone.")
+		m.relayout()
+		return m, nil
+	}
+	prev := m.session.header.ID
+	msgs, err := m.session.cloneSession()
+	if err != nil {
+		m.transcript.addSystem("clone: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	m.reseedTranscript(fmt.Sprintf("Cloned session %s → %s (%d messages).", prev, m.session.header.ID, len(msgs)))
+	return m, nil
+}
+
+// runFork handles /fork [n]: bare /fork opens the picker of historical user
+// messages; /fork <n> branches from before the n-th message and switches to the
+// new branch.
+func (m Model) runFork(line string) (tea.Model, tea.Cmd) {
+	arg := strings.TrimSpace(strings.TrimPrefix(line, "/fork"))
+	if m.session == nil {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("(fork unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("Interrupt the current run first, then /fork.")
+		m.relayout()
+		return m, nil
+	}
+	if arg == "" {
+		m.input.Clear()
+		m.menu.close()
+		users, err := m.session.forkCandidates()
+		if err != nil {
+			m.transcript.addSystem("fork: " + err.Error())
+			m.relayout()
+			return m, nil
+		}
+		if len(users) == 0 {
+			m.transcript.addSystem("no user messages to fork from")
+			m.relayout()
+			return m, nil
+		}
+		picks := make([]pickItem, 0, len(users))
+		for n, text := range users {
+			picks = append(picks, pickItem{
+				Title: fmt.Sprintf("%d. %s", n+1, text),
+				Value: strconv.Itoa(n + 1),
+			})
+		}
+		m.menu.openPickerDetailed(picks, "", "fork")
+		m.transcript.addSystem("Fork from which message? (↑↓ + Enter, Esc cancels)")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		m.transcript.addSystem(fmt.Sprintf("fork: invalid selection %q — run /fork to list messages", arg))
+		m.relayout()
+		return m, nil
+	}
+	prev := m.session.header.ID
+	msgs, err := m.session.forkAt(n)
+	if err != nil {
+		m.transcript.addSystem("fork: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	m.reseedTranscript(fmt.Sprintf("Forked session %s → %s (%d messages).", prev, m.session.header.ID, len(msgs)))
+	return m, nil
+}
+
+// runTree handles /tree [n]: bare /tree opens the branch picker; /tree <n>
+// switches the active branch to the n-th node and rebuilds the context from it.
+func (m Model) runTree(line string) (tea.Model, tea.Cmd) {
+	arg := strings.TrimSpace(strings.TrimPrefix(line, "/tree"))
+	if m.session == nil {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("(tree unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("Interrupt the current run first, then /tree.")
+		m.relayout()
+		return m, nil
+	}
+	if arg == "" {
+		m.input.Clear()
+		m.menu.close()
+		lines, err := m.session.treeLines()
+		if err != nil {
+			m.transcript.addSystem("tree: " + err.Error())
+			m.relayout()
+			return m, nil
+		}
+		if len(lines) == 0 {
+			m.transcript.addSystem("session tree is empty — send a message first")
+			m.relayout()
+			return m, nil
+		}
+		picks := make([]pickItem, 0, len(lines))
+		mark := ""
+		for i, l := range lines {
+			value := strconv.Itoa(i + 1)
+			if l.Entry.ID == m.session.curLeaf {
+				mark = value
+			}
+			picks = append(picks, pickItem{Title: l.Text, Value: value})
+		}
+		m.menu.openPickerDetailed(picks, mark, "tree")
+		m.transcript.addSystem("Session tree — pick a branch to switch to (↑↓ + Enter, Esc cancels)")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		m.transcript.addSystem(fmt.Sprintf("tree: invalid selection %q — run /tree to list nodes", arg))
+		m.relayout()
+		return m, nil
+	}
+	msgs, err := m.session.switchBranchIndex(n)
+	if err != nil {
+		m.transcript.addSystem("tree: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	m.reseedTranscript(fmt.Sprintf("Switched to branch at node %d (%d messages).", n, len(msgs)))
+	return m, nil
+}
+
+// runRewind handles /rewind [n]: bare /rewind opens the restore-point picker;
+// /rewind <n> restores the files and conversation to before the n-th point.
+func (m Model) runRewind(line string) (tea.Model, tea.Cmd) {
+	arg := strings.TrimSpace(strings.TrimPrefix(line, "/rewind"))
+	if m.session == nil {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("(rewind unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("Interrupt the current run first, then /rewind.")
+		m.relayout()
+		return m, nil
+	}
+	if arg == "" {
+		m.input.Clear()
+		m.menu.close()
+		points := m.session.rewindPoints()
+		if len(points) == 0 {
+			m.transcript.addUser(line)
+			m.transcript.addSystem("no restore points yet — file edits create them")
+			m.relayout()
+			return m, nil
+		}
+		picks := make([]pickItem, 0, len(points))
+		for i, p := range points {
+			files := fmt.Sprintf("%d files", len(p.Snapshots))
+			if len(p.Snapshots) == 1 {
+				files = "1 file"
+			}
+			label := p.Label
+			if label == "" {
+				label = "(no prompt)"
+			}
+			picks = append(picks, pickItem{
+				Title: fmt.Sprintf("%d. %s  %s  %s", i+1, p.Time.Local().Format(time.Kitchen), files, label),
+				Value: strconv.Itoa(i + 1),
+			})
+		}
+		m.menu.openPickerDetailed(picks, "", "rewind")
+		m.transcript.addSystem("Restore points — pick one to roll files + conversation back to before it (↑↓ + Enter, Esc cancels)")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	n, err := strconv.Atoi(arg)
+	if err != nil {
+		m.transcript.addSystem(fmt.Sprintf("rewind: invalid selection %q — run /rewind to list points", arg))
+		m.relayout()
+		return m, nil
+	}
+	if n < 1 || n > len(m.session.rewindPoints()) {
+		m.transcript.addSystem(fmt.Sprintf("rewind: selection %d out of range (1..%d)", n, len(m.session.rewindPoints())))
+		m.relayout()
+		return m, nil
+	}
+	restored, warnings, msgs, err := m.session.rewindTo(n)
+	if err != nil {
+		m.transcript.addSystem("rewind failed: " + err.Error())
+		m.relayout()
+		return m, nil
+	}
+	notice := fmt.Sprintf("Rewound to before point %d — next prompt continues from here.", n)
+	if len(restored) > 0 {
+		notice += fmt.Sprintf("\nRestored %d file(s):", len(restored))
+		for _, p := range restored {
+			notice += "\n  " + p
+		}
+	} else {
+		notice += "\nNo files to restore for this point."
+	}
+	for _, w := range warnings {
+		notice += "\n  warning: " + w
+	}
+	m.transcript.reset()
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+	seedTranscript(&m.transcript, msgs)
+	m.transcript.addSystem(notice)
+	m.logoRunning = false
+	m.relayout()
+	return m, nil
+}
+
+// runBtw handles /btw [question]: a question starts a side run against a copy of
+// the conversation (streamed into the transcript, never persisted); a bare /btw
+// replays the most recent side thread.
+func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
+	arg := strings.TrimSpace(strings.TrimPrefix(line, "/btw"))
+	if m.session == nil {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("(btw unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("Interrupt the current run first, then /btw.")
+		m.relayout()
+		return m, nil
+	}
+	if arg == "" {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.menu.close()
+		if m.session.lastBtw == nil {
+			m.transcript.addSystem("usage: /btw <question> — ask a quick side question without touching the main conversation")
+			m.relayout()
+			return m, nil
+		}
+		m.transcript.addSystem("Side thread (not part of the conversation):")
+		seedTranscript(&m.transcript, m.session.lastBtw.Messages[m.session.lastBtwBase:])
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	m.transcript.addSystem("Side thread — this exchange is not saved to the conversation.")
+	m.input.Blur()
+	ch, cmd := m.session.startBtwRun(arg)
+	m.runCh = ch
+	m.running = true
+	m.sideRun = true
+	m.spinner.begin(time.Now(), m.thinkingLabel())
+	m.relayout()
+	return m, tea.Batch(cmd, m.tickSpinner())
+}
+
+// runGoal handles /goal [--tokens N] <objective> | pause | resume | clear: the
+// state actions render immediately, while an objective (or resume) starts the
+// autonomous run through the shared goal package.
+func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
+	args := strings.TrimSpace(strings.TrimPrefix(line, "/goal"))
+	if m.session == nil {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("(goal unavailable: no active session)")
+		m.relayout()
+		return m, nil
+	}
+	if m.running {
+		m.transcript.addUser(line)
+		m.input.Clear()
+		m.transcript.addSystem("Interrupt the current run first, then /goal.")
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addUser(line)
+	m.input.Clear()
+	m.menu.close()
+	var buf bytes.Buffer
+	startRun := false
+	runLabel := ""
+	switch {
+	case args == "":
+		goalpkg.RenderStatus(&buf, m.session.Goal())
+	case args == "clear":
+		m.session.Goal().Clear()
+		buf.WriteString("goal cleared")
+	case args == "pause":
+		snap := m.session.Goal().Snapshot()
+		if snap.Status != agenttool.GoalActive && snap.Status != agenttool.GoalPaused {
+			buf.WriteString("no active goal to pause")
+		} else {
+			m.session.Goal().SetStatus(agenttool.GoalPaused)
+			buf.WriteString("goal paused — run /goal resume to continue")
+		}
+	case args == "resume":
+		snap := m.session.Goal().Snapshot()
+		if snap.Status != agenttool.GoalPaused && snap.Status != agenttool.GoalBudgetLimited {
+			buf.WriteString("no paused goal to resume")
+		} else {
+			m.session.Goal().Resume()
+			fmt.Fprintf(&buf, "resuming goal: %s", ui.OneLine(snap.Objective))
+			startRun = true
+			runLabel = "goal resume"
+		}
+	default:
+		objective, budget, err := goalpkg.ParseObjective(args)
+		if err != nil {
+			buf.WriteString("golder: " + err.Error())
+		} else if strings.TrimSpace(objective) == "" {
+			buf.WriteString("usage: /goal [--tokens N] <objective>")
+		} else {
+			goalpkg.Start(m.session.Goal(), objective, budget)
+			if budget > 0 {
+				fmt.Fprintf(&buf, "goal set (token budget %d): %s", budget, ui.OneLine(objective))
+			} else {
+				fmt.Fprintf(&buf, "goal set: %s", ui.OneLine(objective))
+			}
+			startRun = true
+			runLabel = "goal: " + ui.OneLine(objective)
+		}
+	}
+	if s := strings.TrimRight(buf.String(), "\n"); s != "" {
+		m.transcript.addSystem(s)
+	}
+	if !startRun {
+		m.relayout()
+		return m, nil
+	}
+	m.input.Blur()
+	ch, cmd := m.session.startGoalRun(runLabel)
+	m.runCh = ch
+	m.running = true
+	m.goalRun = true
+	m.spinner.begin(time.Now(), m.thinkingLabel())
+	m.relayout()
+	return m, tea.Batch(cmd, m.tickSpinner())
+}
+
+// reseedTranscript rebuilds the transcript from the freshly adopted session
+// context: the launch banner, the historical turns, and a one-line notice.
+func (m *Model) reseedTranscript(notice string) {
+	m.transcript.reset()
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+	seedTranscript(&m.transcript, m.session.agentCtx.Messages)
+	m.transcript.addSystem(notice)
+	m.logoRunning = false
+	m.relayout()
 }
 
 // recordHistory appends an submitted input to the browse history (skipping a

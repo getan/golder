@@ -138,6 +138,10 @@ func (e ShadowedEntry) String() string { return fmt.Sprintf("%s (%s)", e.Name, e
 type SlashCommand struct {
 	Name        string
 	Description string
+	// Category groups the command in /help and the TUI menu. Empty means
+	// CategoryGeneral for a built-in; non-builtin sources (skills, plugins,
+	// prompt templates) are always grouped under CategoryExtensions.
+	Category string
 	// ArgumentHint is an optional frontmatter hint shown before the description
 	// in autocomplete (e.g. "<PR-URL>"). Convention: <angle> for required args,
 	// [square] for optional. Empty when not set; display-only, not enforced.
@@ -169,6 +173,43 @@ type SlashCommand struct {
 	// instead of Expand/Action for such a command; nil otherwise. When Run is set
 	// it takes precedence over Expand (but Action still wins over Run).
 	Run func(args string) (message, prompt string)
+}
+
+// Command categories group slash commands in /help and the TUI menu. They are
+// display-only labels; the order below is the order the groups are rendered.
+const (
+	CategoryGeneral     = "General"
+	CategorySession     = "Session"
+	CategoryModel       = "Model"
+	CategoryMemory      = "Memory"
+	CategoryPermissions = "Permissions"
+	CategoryModes       = "Modes"
+	CategoryExtensions  = "Extensions"
+)
+
+// CategoryOrder is the render order of the built-in command categories.
+// CategoryExtensions is last: it collects user commands, skills and plugins.
+var CategoryOrder = []string{
+	CategoryGeneral,
+	CategorySession,
+	CategoryModel,
+	CategoryMemory,
+	CategoryPermissions,
+	CategoryModes,
+	CategoryExtensions,
+}
+
+// CategoryOf returns the display category of a command: its own Category for a
+// built-in (defaulting to General), or Extensions for anything loaded from
+// disk (prompt templates, skills, plugins).
+func CategoryOf(c SlashCommand) string {
+	if c.Source != SourceBuiltin {
+		return CategoryExtensions
+	}
+	if c.Category == "" {
+		return CategoryGeneral
+	}
+	return c.Category
 }
 
 // SlashKind classifies how a resolved invocation should be handled by the

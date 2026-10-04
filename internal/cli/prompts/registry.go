@@ -395,8 +395,8 @@ func protocolSuffix(providerName, model, protocol string) string {
 
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
 	registerProxyCommand(reg)
-	// thinkAction views or switches the reasoning-effort level. It backs both
-	// /think and its alias /effect, so the two commands share identical behavior.
+	// thinkAction views or switches the reasoning-effort level. It backs /think
+	// and the /model think <level> form, so both share identical behavior.
 	thinkAction := func(args string) string {
 		lvl := strings.TrimSpace(args)
 		if lvl == "" {
@@ -584,6 +584,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	}
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "model",
+		Category:     runtime.CategoryModel,
 		Description:  "list and switch models on the current provider: /model [n|id] [level] | /model think [level]",
 		ArgumentHint: "[n|id [level]|think level]",
 		Action: func(args string) string {
@@ -640,74 +641,103 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "think",
+		Category:     runtime.CategoryModel,
 		ArgumentHint: "[off|minimal|low|medium|high|xhigh|max]",
 		Description:  "view or switch the reasoning-effort level; takes effect on the next turn",
 		Action:       thinkAction,
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "provider",
+		Category:     runtime.CategoryModel,
 		Description:  "list providers with credential availability, or switch: /provider [name]",
 		ArgumentHint: "[name]",
 		Action:       providerAction,
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
-		Name:         "effect",
-		ArgumentHint: "[off|minimal|low|medium|high|xhigh|max]",
-		Description:  "alias of /think: view or switch the reasoning-effort level",
-		Action:       thinkAction,
-	})
-	reg.AddBuiltin(runtime.SlashCommand{
 		Name:        "help",
-		Description: "list available slash commands",
-		Action: func(string) string {
-			color := ui.Enabled()
-			var b strings.Builder
-			b.WriteString(ui.Colorize(color, ui.Bold, "available commands:"))
-			for _, c := range reg.List() {
-				b.WriteString("\n  ")
-				b.WriteString(ui.Colorize(color, ui.Cyan, "/"+c.Name))
-				rest := ""
-				if c.ArgumentHint != "" {
-					rest += " " + c.ArgumentHint
-				}
-				if c.Description != "" {
-					rest += " - " + c.Description
-				}
-				rest += " (source: " + c.Tier.String() + ")"
-				b.WriteString(ui.Colorize(color, ui.Dim, rest))
-			}
-			return b.String()
-		},
+		Category:    runtime.CategoryGeneral,
+		Description: "list commands by category",
+		Action:      func(string) string { return renderHelp(reg, runtime.CategoryOrder) },
 	})
-	// /exit, /quit, /compact, /fork, /clone, /tree, /export, /import, /copy,
-	// /session and /status are intercepted by the REPL loop before slash resolution
-	// (they must return from the loop, run an agent stream, or read/swap the active
-	// session/leaf — none of which an Action closure can do). They are registered
-	// here only so /help lists them; their Action is never actually reached.
-	for _, c := range []struct{ name, desc string }{
-		{"exit", "exit the REPL"},
-		{"quit", "exit the REPL"},
-		{"compact", "summarize and compact the conversation context now"},
-		{"fork", "branch from a historical message into a new session: /fork [n]"},
-		{"clone", "duplicate the current session into an independent branch"},
-		{"tree", "show the session branch tree; switch active branch: /tree [n]"},
-		{"rewind", "roll files and the conversation back to before an earlier turn: /rewind [n]"},
-		{"export", "export the session to a file: /export [path.jsonl|path.html]"},
-		{"import", "import a JSONL export as a new session: /import <path.jsonl>"},
-		{"copy", "copy the most recent assistant reply to the clipboard"},
-		{"session", "show session stats: messages, tokens, model, compactions"},
-		{"resume", "switch session: /resume [n|id] (bare lists recent sessions)"},
-		{"status", "show session status: runtime config, context, telemetry, credentials, environment"},
-		{"goal", "run autonomously toward a goal: /goal [--tokens N] <objective> | pause | resume | clear"},
-		{"btw", "ask a quick side question without touching the main conversation: /btw <question> (bare /btw reopens the last one)"},
-		{"dream", "consolidate memory now (dedupe, merge, prune, distill); /dream --dry-run previews without writing"},
-		{"remote-control", "mirror this session to a phone/browser on your LAN: /remote-control [stop|status]"},
+	// These commands are intercepted by the REPL loop and the TUI before slash
+	// resolution (they must return from the loop, run an agent stream, or
+	// read/swap the active session/leaf — none of which a string→string Action
+	// closure can do). They are registered here only so /help lists them; the
+	// empty Action is a placeholder and both front-ends intercept them first.
+	for _, c := range []struct{ name, desc, category string }{
+		{"exit", "exit golder", runtime.CategoryGeneral},
+		{"compact", "compact the conversation context now", runtime.CategorySession},
+		{"fork", "branch from a historical message into a new session: /fork [n]", runtime.CategorySession},
+		{"clone", "duplicate the current session into an independent branch", runtime.CategorySession},
+		{"tree", "show the session branch tree; switch the active branch: /tree [n]", runtime.CategorySession},
+		{"rewind", "roll files and the conversation back to before an earlier turn: /rewind [n]", runtime.CategorySession},
+		{"export", "export the session to a file: /export [path.jsonl|path.html]", runtime.CategorySession},
+		{"import", "import a JSONL export as a new session: /import <path.jsonl>", runtime.CategorySession},
+		{"resume", "switch session: /resume [n|id] (bare lists recent sessions)", runtime.CategorySession},
+		{"status", "show session status: session, runtime config, context, credentials, environment", runtime.CategoryGeneral},
+		{"memory", "show the persistent-memory report", runtime.CategoryMemory},
+		{"dream", "consolidate memory now (dedupe, merge, prune, distill); /dream --dry-run previews without writing", runtime.CategoryMemory},
+		{"goal", "run autonomously toward a goal: /goal [--tokens N] <objective> | pause | resume | clear", runtime.CategoryModes},
+		{"btw", "ask a quick side question without touching the main conversation: /btw <question> (bare /btw reopens the last one)", runtime.CategoryModes},
+		{"remote-control", "mirror this session to a phone/browser on your LAN: /remote-control [stop|status]", runtime.CategoryModes},
 	} {
 		reg.AddBuiltin(runtime.SlashCommand{
 			Name:        c.name,
 			Description: c.desc,
+			Category:    c.category,
 			Action:      func(string) string { return "" },
 		})
+	}
+}
+
+// renderHelp renders the /help listing grouped by category: built-ins under
+// their own category, skills/plugins/prompt templates collected under
+// Extensions with their source tag. order is the category render order.
+func renderHelp(reg *runtime.SlashRegistry, order []string) string {
+	color := ui.Enabled()
+	groups := make(map[string][]runtime.SlashCommand)
+	for _, c := range reg.List() {
+		cat := runtime.CategoryOf(c)
+		groups[cat] = append(groups[cat], c)
+	}
+	var b strings.Builder
+	b.WriteString(ui.Colorize(color, ui.Bold, "available commands:"))
+	for _, cat := range order {
+		cmds := groups[cat]
+		if len(cmds) == 0 {
+			continue
+		}
+		b.WriteString("\n\n")
+		b.WriteString(ui.Colorize(color, ui.Bold, cat))
+		for _, c := range cmds {
+			rest := ""
+			if c.ArgumentHint != "" {
+				rest += " " + c.ArgumentHint
+			}
+			if c.Description != "" {
+				rest += "  " + c.Description
+			}
+			if cat == runtime.CategoryExtensions {
+				rest += " (source: " + extensionSource(c) + ")"
+			}
+			b.WriteString("\n")
+			b.WriteString(ui.Colorize(color, ui.Cyan, "  /"+c.Name))
+			b.WriteString(ui.Colorize(color, ui.Dim, rest))
+		}
+	}
+	return b.String()
+}
+
+// extensionSource labels an extension command: skills and plugins by their
+// kind, prompt templates by their discovery tier (global/project/settings/cli).
+func extensionSource(c runtime.SlashCommand) string {
+	switch c.Source {
+	case runtime.SourceSkill:
+		return "skill"
+	case runtime.SourcePlugin:
+		return "plugin"
+	default:
+		return c.Tier.String()
 	}
 }
 
@@ -753,6 +783,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 	modes := []permissions.Mode{permissions.ReadOnly, permissions.Ask, permissions.Auto, permissions.FullAccess}
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "permissions",
+		Category:     runtime.CategoryPermissions,
 		Description:  "show or switch the approval mode: /permissions [read-only|ask|auto|full-access]",
 		ArgumentHint: "[read-only|ask|auto|full-access]",
 		Action: func(args string) string {

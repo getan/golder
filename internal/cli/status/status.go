@@ -12,6 +12,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
@@ -28,6 +29,8 @@ func RunStatus(out io.Writer, host cli.Host) {
 	color := ui.Enabled()
 
 	fmt.Fprintln(out)
+	printSessionStatus(out, color, host)
+	fmt.Fprintln(out)
 	printRuntimeConfig(out, color, host)
 	fmt.Fprintln(out)
 	printContextStatus(out, color, host)
@@ -37,6 +40,22 @@ func RunStatus(out io.Writer, host cli.Host) {
 	printCredentialsStatus(out, color, host)
 	fmt.Fprintln(out)
 	printTelemetryStatus(out, color, host)
+}
+
+// printSessionStatus prints the session identity section: id, message count and
+// creation time — the live facts formerly shown by the retired /session command.
+func printSessionStatus(out io.Writer, color bool, host cli.Host) {
+	header := host.Header()
+	fmt.Fprintf(out, "%s\n", ui.Colorize(color, ui.Bold, "session:"))
+	if header.ID == "" {
+		fmt.Fprintf(out, "  %s\n", ui.Colorize(color, ui.Dim, "no active session"))
+		return
+	}
+	fmt.Fprintf(out, "  %s %s\n", ui.Colorize(color, ui.Dim, "id:"), header.ID)
+	fmt.Fprintf(out, "  %s %d\n", ui.Colorize(color, ui.Dim, "messages:"), len(host.AgentCtx().Messages))
+	if !header.CreatedAt.IsZero() {
+		fmt.Fprintf(out, "  %s %s\n", ui.Colorize(color, ui.Dim, "created:"), header.CreatedAt.Format(time.RFC3339))
+	}
 }
 
 // printRuntimeConfig prints the runtime model configuration section.

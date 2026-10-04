@@ -89,10 +89,11 @@ func TestStatusWithoutSessionNotice(t *testing.T) {
 	}
 }
 
-// TestSessionCommandRendersSummary drives /session on a session-bound model and
-// asserts the summary lines (session id, message count, tokens, model/provider,
-// compactions) match the REPL's /session format.
-func TestSessionCommandRendersSummary(t *testing.T) {
+// TestStatusIncludesSessionSummary drives /status on a session-bound model and
+// asserts the session section (id, message count, creation time) — the facts
+// absorbed from the retired /session command — appears alongside the other
+// sections.
+func TestStatusIncludesSessionSummary(t *testing.T) {
 	store := newTestStore(t)
 	s, _, err := newRunSessionWithStore(store, Options{
 		Model:        "session-model",
@@ -111,34 +112,20 @@ func TestSessionCommandRendersSummary(t *testing.T) {
 	}
 
 	m := NewModel(Options{}).withSession(s, nil)
-	m = typeCommand(t, m, "/session")
+	m = typeCommand(t, m, "/status")
 
 	if m.running {
-		t.Error("/session is an action command; model should stay idle")
+		t.Error("/status is an action command; model should stay idle")
 	}
 	joined := strings.Join(blockTexts(m.transcript), "\n")
 	for _, want := range []string{
-		"session:      " + s.header.ID,
-		"messages:     4",
-		"tokens (est):",
-		"model:        session-model (provider: session-provider)",
-		"compactions:  0",
+		"session:",
+		"id: " + s.header.ID,
+		"messages: 4",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Errorf("/session output missing %q; transcript:\n%s", want, joined)
+			t.Errorf("/status output missing %q; transcript:\n%s", want, joined)
 		}
-	}
-}
-
-// TestSessionWithoutSessionNotice verifies a session-less model reports the
-// unavailable notice for /session.
-func TestSessionWithoutSessionNotice(t *testing.T) {
-	m := NewModel(Options{})
-	m = typeCommand(t, m, "/session")
-
-	joined := strings.Join(blockTexts(m.transcript), "\n")
-	if !strings.Contains(joined, "session unavailable: no active session") {
-		t.Errorf("expected an unavailable notice in transcript, got:\n%s", joined)
 	}
 }
 

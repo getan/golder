@@ -58,30 +58,3 @@ func TestThinkCommandRejectsInvalid(t *testing.T) {
 		t.Errorf("message = %q, want an invalid-level notice", out.Message)
 	}
 }
-
-// TestEffectAliasesThink verifies /effect behaves identically to /think: it
-// switches the live thinking level and a bare /effect reports the current level.
-func TestEffectAliasesThink(t *testing.T) {
-	live := &cli.LiveConfig{Model: "test", ProviderName: "test", ThinkingLevel: agentcore.ThinkingMedium}
-	reg := runtime.NewSlashRegistry()
-	RegisterLiveCommands(reg, live, nil)
-
-	out, err := reg.ResolveOutcome("/effect high")
-	if err != nil {
-		t.Fatalf("ResolveOutcome /effect high: %v", err)
-	}
-	if live.ThinkingLevel != agentcore.ThinkingHigh {
-		t.Errorf("ThinkingLevel = %q, want high", live.ThinkingLevel)
-	}
-	if !strings.Contains(out.Message, "high") {
-		t.Errorf("message = %q, want it to mention high", out.Message)
-	}
-
-	out, err = reg.ResolveOutcome("/effect")
-	if err != nil {
-		t.Fatalf("ResolveOutcome /effect: %v", err)
-	}
-	if !strings.Contains(out.Message, "high") {
-		t.Errorf("bare /effect message = %q, want current level high", out.Message)
-	}
-}

@@ -15,6 +15,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,12 +26,16 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/btw"
+	"github.com/getan/golder/internal/cli/dreamcmd"
+	goalpkg "github.com/getan/golder/internal/cli/goal"
 	"github.com/getan/golder/internal/cli/headless"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
@@ -57,6 +62,17 @@ type runSession struct {
 	reminders *runtime.ReminderRegistry
 	schedule  *agenttool.Schedule
 	creds     *provider.CredentialStore
+	// snap is the shared file-snapshot recorder backing /rewind (nil when the
+	// file tools are disabled). Each completed turn commits a restore point so
+	// /rewind can roll files and the conversation back together.
+	snap *agenttool.FileSnapshotRecorder
+	// goal is the session's autonomous-goal state (in-memory only, like the
+	// REPL's). /goal drives it through the same package the REPL uses.
+	goal *agenttool.GoalState
+	// preTurnLeaf / preTurnLabel capture the branch cursor and prompt before the
+	// current run advances them, so run end can commit this turn's rewind point.
+	preTurnLeaf  string
+	preTurnLabel string
 
 	// cwd is the directory golder was launched in, captured once at session
 	// assembly. It is the trust key and the /status environment display.
@@ -76,8 +92,9 @@ type runSession struct {
 	telemetry *cli.TelemetryHolder
 
 	// memoryRoot is the persistent-memory Store root (empty when memory is
-	// disabled). It routes auto-compaction checkpoints and /rebuild recovery to
-	// <memoryRoot>/sessions/<id>/, the canonical checkpoint location.
+	// disabled). It routes auto-compaction checkpoints to
+	// <memoryRoot>/sessions/<id>/, the canonical checkpoint location, and backs
+	// the /dream lock check.
 	memoryRoot string
 	// memstore is the live persistent-memory Store (nil when memory is disabled).
 	// It lets /memory inspect entry counts without re-opening the database.
@@ -117,9 +134,7 @@ type runSession struct {
 	cancelRun context.CancelFunc
 
 	// lastBtw is the /btw side thread's context from this process and
-	// lastBtwBase the background-message index it diverged from. Both are
-	// carried on the Host contract for parity with the REPL; the TUI does not
-	// run /btw today, so they stay nil/0.
+	// lastBtwBase the background-message index it diverged from.
 	lastBtw     *agentcore.AgentContext
 	lastBtwBase int
 
@@ -240,6 +255,8 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		reg:        run.ToolRegistry(opts.Tools),
 		reminders:  run.TodoReminders(opts.Tools),
 		schedule:   agenttool.ScheduleFromTools(opts.Tools),
+		snap:       run.SnapshotRecorderFromTools(opts.Tools),
+		goal:       agenttool.NewGoalState(),
 		creds:      creds,
 		cwd:        cwd,
 		trust:      mgr,
@@ -393,53 +410,85 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	return cfg
 }
 
-// rebuildDoneMsg reports the outcome of a manual /rebuild to the model: summary
-// is the status line to show in the transcript, err is set when the rebuild
-// failed (the context is then left unchanged).
+// rebuildDoneMsg reports the outcome of a manual context operation (/compact)
+// to the model: label names the operation, summary is the status line to show
+// in the transcript, err is set when it failed (the context is then left
+// unchanged).
 type rebuildDoneMsg struct {
+	label   string
 	summary string
 	err     error
 }
 
-// rebuildCmd runs a context rebuild off the tea loop (the no-checkpoint fallback
-// makes a summarization LLM call, so it must not block the UI goroutine) and
-// yields a rebuildDoneMsg the model folds into the transcript. It mirrors the
-// REPL's runManualRebuild.
-func (s *runSession) rebuildCmd() tea.Cmd {
+// dreamDoneMsg reports the outcome of a manual /dream: report is the parsed
+// consolidation report on success, summary a plain notice (e.g. a dream is
+// already running), err a spawn or parse failure.
+type dreamDoneMsg struct {
+	report  dream.Report
+	summary string
+	err     error
+}
+
+// compactCmd runs a manual context compaction off the tea loop and yields a
+// rebuildDoneMsg the model folds into the transcript. It mirrors the REPL's
+// runManualCompact.
+func (s *runSession) compactCmd() tea.Cmd {
 	return func() tea.Msg {
-		summary, err := s.rebuild()
-		return rebuildDoneMsg{summary: summary, err: err}
+		summary, err := s.compact()
+		return rebuildDoneMsg{label: "compact", summary: summary, err: err}
 	}
 }
 
-// rebuild reconstructs the shared context from the session's persisted checkpoint
-// (collapsing the pre-watermark prefix to the checkpoint summary and preserving
-// the recent tail verbatim), falling back to lossy compaction when no checkpoint
-// exists. It replaces agentCtx.Messages in place on success and flags compacted
-// so persist() re-saves the flattened context linearly (as after a /compact).
-func (s *runSession) rebuild() (string, error) {
+// compact replaces the context with a fresh summarization checkpoint plus the
+// recent tail (the same force-a-new-summary flow as Codex's /compact). It
+// replaces agentCtx.Messages in place on success and flags compacted so persist()
+// re-saves the flattened context linearly. A failure leaves the context unchanged.
+func (s *runSession) compact() (string, error) {
 	msgs := s.agentCtx.Messages
+	settings := compaction.DefaultCompactionSettings
 	before := compaction.EstimateContextTokens(msgs).Tokens
-	// Checkpoints live under <memoryRoot>/sessions/<id>/; recover from the same
-	// root the loop writes to. Empty when memory is disabled — RebuildFromCheckpoint
-	// then falls back to lossy compaction.
-	memoryRoot := s.memoryRoot
-	cfg := s.buildConfig()
-	res, err := runtime.RebuildFromCheckpoint(context.Background(), msgs, s.header.ID, memoryRoot, &cfg, nil)
+
+	stream := provider.StreamFnFromProvider(s.live.Provider)
+	model := provider.Model{Provider: s.live.ProviderName, ID: s.live.Model, ContextWindow: s.live.ContextWindow}
+	// Resolve the API key like a normal turn so summarization authenticates
+	// against auth-requiring providers.
+	scfg := provider.StreamConfig{}
+	if s.creds != nil {
+		scfg.APIKey = s.creds.GetAPIKey(context.Background(), s.live.ProviderName)
+	}
+	res, err := compaction.Compact(context.Background(), stream, model, msgs, settings, -1, nil, "", scfg)
 	if err != nil {
 		return "", err
 	}
-	if res.NoOp {
-		return fmt.Sprintf("nothing to rebuild (%d tokens, %d messages)", before, len(msgs)), nil
+	if res == nil {
+		return fmt.Sprintf("nothing to compact (%d tokens, %d messages)", before, len(msgs)), nil
 	}
-	s.agentCtx.Messages = res.Messages
+	rebuilt := res.RebuildContext(msgs, time.Now().UnixMilli())
+	s.agentCtx.Messages = rebuilt
 	s.compacted = true
-	source := "checkpoint"
-	if !res.FromCheckpoint {
-		source = "compaction (no checkpoint)"
+	after := compaction.EstimateContextTokens(rebuilt).Tokens
+	summarized := len(msgs) - (len(rebuilt) - 1)
+	return fmt.Sprintf("compacted: %d → %d tokens, summarized %d messages, kept %d",
+		before, after, summarized, len(rebuilt)-1), nil
+}
+
+// dreamCmd runs the manual /dream consolidation subprocess off the tea loop
+// (the child is LLM-backed and bounded by dreamcmd.RunTimeout) and yields the
+// parsed report. A live lock from a background run is reported instead of
+// spawning a second child.
+func (s *runSession) dreamCmd(dryRun bool) tea.Cmd {
+	return func() tea.Msg {
+		if dreamcmd.LockHeld(s.memoryRoot) {
+			return dreamDoneMsg{summary: "a dream consolidation is already running"}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dreamcmd.RunTimeout)
+		defer cancel()
+		res, err := dreamcmd.Spawn(ctx, s.hookDeps.ProjectDir, dryRun)
+		if err != nil {
+			return dreamDoneMsg{err: err}
+		}
+		return dreamDoneMsg{report: res.Report}
 	}
-	return fmt.Sprintf("context rebuilt from %s: %d → %d tokens, collapsed %d messages, kept %d",
-		source, res.TokensBefore, res.TokensAfter, res.SummarizedCount, res.KeptCount), nil
 }
 
 // prompt to the growing context as a user message, then hands the context and a
@@ -475,6 +524,10 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	// runEndMsg and the model returns to idle.
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelRun = cancel
+	// Remember the branch cursor and prompt before the turn advances them, so
+	// run end can commit a rewind restore point for exactly this turn.
+	s.preTurnLeaf = s.curLeaf
+	s.preTurnLabel = prompt
 	// Route review notes into this run's event channel so gate decisions
 	// (approvals, sandbox routing, denials) render as transcript cards. The
 	// pump sends runEndMsg last, so the model can clear the handler then.
@@ -492,6 +545,48 @@ func (s *runSession) interrupt() {
 	if s.cancelRun != nil {
 		s.cancelRun()
 	}
+}
+
+// startBtwRun starts a one-shot /btw side run: the question is appended to a
+// fresh copy of the main context and streamed back, and nothing is written to
+// the main conversation or to disk. The side context is remembered so a bare
+// /btw can replay it.
+func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
+	side := btw.NewSideContext(s.agentCtx)
+	side.Messages = append(side.Messages, agentcore.UserMessage{
+		RoleField: agentcore.RoleUser,
+		Content:   agentcore.ContentList{agentcore.NewTextContent(question)},
+	})
+	s.lastBtw = side
+	s.lastBtwBase = len(side.Messages) - 1
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelRun = cancel
+	ch := newEventChan()
+	if s.notes != nil {
+		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
+	}
+	return ch, startRunOn(ch, ctx, side, s.buildConfig(), s.onEvent)
+}
+
+// startGoalRun starts an autonomous goal run on the shared conversation: the
+// run gets the goal-control tools, the goal reminder, and the follow-up hook
+// that keeps re-prompting until the model completes/blocks the goal or a guard
+// trips (all from the goal package, so the REPL and TUI share one loop). label
+// tags the rewind restore point the run commits on completion.
+func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
+	s.preTurnLeaf = s.curLeaf
+	s.preTurnLabel = label
+	cfg := s.buildConfig()
+	cfg.Batch.ToolExecutorConfig.Registry = goalpkg.ToolRegistry(s.reg, s.goal)
+	cfg.Reminders = goalpkg.Reminders(s.reg, s.goal)
+	cfg.GetFollowUpMessages = goalpkg.FollowUp(s)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancelRun = cancel
+	ch := newEventChan()
+	if s.notes != nil {
+		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
+	}
+	return ch, startRunOn(ch, ctx, s.agentCtx, cfg, s.onEvent)
 }
 
 // persist writes the messages produced since the last persist as a new branch
@@ -626,6 +721,15 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.adopt(h, entries, true)
+}
+
+// adopt replaces the active session with header h and its entry path: it
+// rebuilds the flat message list and resets the branch cursor. With followHeader
+// the stored model/provider win (re-resolving the driver when the provider
+// differs), as /resume needs; without it the live config stays untouched (branch
+// switches and imports keep serving with the provider already in use).
+func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry, followHeader bool) ([]agentcore.Message, error) {
 	msgs := make(agentcore.MessageList, len(entries))
 	for i, e := range entries {
 		msgs[i] = e.Message
@@ -634,7 +738,7 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	if sysPrompt == "" {
 		sysPrompt = s.agentCtx.SystemPrompt
 	}
-	if h.Provider != "" && h.Provider != s.live.ProviderName {
+	if followHeader && h.Provider != "" && h.Provider != s.live.ProviderName {
 		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
 		if err != nil {
 			return nil, fmt.Errorf("resolve session provider: %w", err)
@@ -644,7 +748,7 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 		s.live.BaseURL = ""
 		s.live.Protocol = ""
 	}
-	if h.Model != "" {
+	if followHeader && h.Model != "" {
 		s.live.Model = h.Model
 	}
 	s.header = h
@@ -655,6 +759,125 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	if len(entries) > 0 {
 		s.curLeaf = entries[len(entries)-1].ID
 	}
+	// A side thread branched from another conversation is meaningless now.
+	s.lastBtw = nil
+	s.lastBtwBase = 0
 	s.hookDeps.SessionID = h.ID
 	return msgs, nil
+}
+
+// importSession loads a JSONL export as a fresh session and adopts it, so the
+// next prompt continues the imported conversation.
+func (s *runSession) importSession(path string) ([]agentcore.Message, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	h, entries, err := s.store.Import(path, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return s.adopt(h, entries, false)
+}
+
+// cloneSession duplicates the current conversation at its active leaf into a
+// fresh independent session and adopts it.
+func (s *runSession) cloneSession() ([]agentcore.Message, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	_, entries, err := s.store.LoadEntries(s.header.ID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("nothing to clone yet — send a message first")
+	}
+	leafID := s.curLeaf
+	if leafID == "" {
+		leafID = entries[len(entries)-1].ID
+	}
+	h, path, err := s.store.Fork(s.header.ID, leafID, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return s.adopt(h, path, false)
+}
+
+// forkCandidates lists the historical user messages (entry order), one line
+// each, for the /fork picker. Index n in the listing maps to the n-th user
+// message in forkAt.
+func (s *runSession) forkCandidates() ([]string, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	_, entries, err := s.store.LoadEntries(s.header.ID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if u, ok := e.Message.(agentcore.UserMessage); ok {
+			out = append(out, ui.OneLine(agentcore.ContentToText(u.Content)))
+		}
+	}
+	return out, nil
+}
+
+// forkAt branches from BEFORE the n-th historical user message (1-based, as
+// listed by forkCandidates) and adopts the new branch: it holds everything up to
+// but excluding that message, so the user re-prompts from there on.
+func (s *runSession) forkAt(n int) ([]agentcore.Message, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	_, entries, err := s.store.LoadEntries(s.header.ID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	var targets []session.Entry
+	for _, e := range entries {
+		if _, ok := e.Message.(agentcore.UserMessage); ok {
+			targets = append(targets, e)
+		}
+	}
+	if n < 1 || n > len(targets) {
+		return nil, fmt.Errorf("invalid selection %d (want 1..%d)", n, len(targets))
+	}
+	h, path, err := s.store.Fork(s.header.ID, targets[n-1].ParentID, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return s.adopt(h, path, false)
+}
+
+// treeLines returns the session's branch tree (render order) after persisting
+// the live turn, so the tree reflects unsaved messages.
+func (s *runSession) treeLines() ([]session.TreeLine, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	_, entries, err := s.store.LoadEntries(s.header.ID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return session.RenderTreeLines(entries, s.curLeaf), nil
+}
+
+// switchBranchIndex switches the active branch to the n-th tree node (1-based,
+// as listed by treeLines) and rebuilds the context from its root→leaf path.
+func (s *runSession) switchBranchIndex(n int) ([]agentcore.Message, error) {
+	if err := s.persist(); err != nil {
+		return nil, fmt.Errorf("save current session: %w", err)
+	}
+	_, entries, err := s.store.LoadEntries(s.header.ID)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	lines := session.RenderTreeLines(entries, s.curLeaf)
+	if n < 1 || n > len(lines) {
+		return nil, fmt.Errorf("invalid selection %d (want 1..%d)", n, len(lines))
+	}
+	target := lines[n-1].Entry
+	path := session.PathToLeaf(entries, target.ID)
+	return s.adopt(s.header, path, false)
 }

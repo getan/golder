@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/getan/golder/internal/cli/dreamcmd"
 	"github.com/getan/golder/internal/dream"
 )
 
@@ -56,16 +57,16 @@ func TestMaybeStartBackgroundDream_NoticeOnChanges(t *testing.T) {
 	root := t.TempDir()
 	seedDueDreamState(t, root)
 
-	orig := spawnDream
-	t.Cleanup(func() { spawnDream = orig })
-	spawnDream = func(_ context.Context, dir string, dryRun bool) (dreamSubprocessResult, error) {
+	orig := dreamcmd.Spawn
+	t.Cleanup(func() { dreamcmd.Spawn = orig })
+	dreamcmd.Spawn = func(_ context.Context, dir string, dryRun bool) (dreamcmd.Result, error) {
 		if dryRun {
 			t.Errorf("background trigger must not run in dry-run mode")
 		}
 		if dir != "/proj/y" {
 			t.Errorf("spawn got dir %q, want /proj/y", dir)
 		}
-		return dreamSubprocessResult{report: dream.Report{Merged: 3}}, nil
+		return dreamcmd.Result{Report: dream.Report{Merged: 3}}, nil
 	}
 
 	w := newSyncWriter()
@@ -86,11 +87,11 @@ func TestMaybeStartBackgroundDream_DisabledNoSpawn(t *testing.T) {
 	root := t.TempDir()
 	seedDueDreamState(t, root)
 
-	orig := spawnDream
-	t.Cleanup(func() { spawnDream = orig })
-	spawnDream = func(context.Context, string, bool) (dreamSubprocessResult, error) {
+	orig := dreamcmd.Spawn
+	t.Cleanup(func() { dreamcmd.Spawn = orig })
+	dreamcmd.Spawn = func(context.Context, string, bool) (dreamcmd.Result, error) {
 		t.Fatal("disabled dream must not spawn a subprocess")
-		return dreamSubprocessResult{}, nil
+		return dreamcmd.Result{}, nil
 	}
 
 	enabledFalse := false
@@ -101,11 +102,11 @@ func TestMaybeStartBackgroundDream_DisabledNoSpawn(t *testing.T) {
 }
 
 func TestMaybeStartBackgroundDream_EmptyRootNoSpawn(t *testing.T) {
-	orig := spawnDream
-	t.Cleanup(func() { spawnDream = orig })
-	spawnDream = func(context.Context, string, bool) (dreamSubprocessResult, error) {
+	orig := dreamcmd.Spawn
+	t.Cleanup(func() { dreamcmd.Spawn = orig })
+	dreamcmd.Spawn = func(context.Context, string, bool) (dreamcmd.Result, error) {
 		t.Fatal("empty memory root must not spawn")
-		return dreamSubprocessResult{}, nil
+		return dreamcmd.Result{}, nil
 	}
 	var buf bytes.Buffer
 	if maybeStartBackgroundDream(&buf, "", "/proj/y", dream.NewConfig(nil, 7, 20)) {
@@ -119,11 +120,11 @@ func TestMaybeStartBackgroundDream_NeverRunNoSpawn(t *testing.T) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	orig := spawnDream
-	t.Cleanup(func() { spawnDream = orig })
-	spawnDream = func(context.Context, string, bool) (dreamSubprocessResult, error) {
+	orig := dreamcmd.Spawn
+	t.Cleanup(func() { dreamcmd.Spawn = orig })
+	dreamcmd.Spawn = func(context.Context, string, bool) (dreamcmd.Result, error) {
 		t.Fatal("never-run state must not spawn (first run is manual)")
-		return dreamSubprocessResult{}, nil
+		return dreamcmd.Result{}, nil
 	}
 	var buf bytes.Buffer
 	if maybeStartBackgroundDream(&buf, root, "/proj/y", dream.NewConfig(nil, 7, 20)) {

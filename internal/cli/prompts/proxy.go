@@ -55,7 +55,9 @@ func ProxyProvidersSelectedFirst(selected []string) []provider.ProviderSpec {
 
 func registerProxyCommand(reg *runtime.SlashRegistry) {
 	reg.AddBuiltin(runtime.SlashCommand{
-		Name: "proxy", Description: "select proxied providers: /proxy [<provider> on|off | url <url>]",
+		Name:        "proxy",
+		Category:    runtime.CategoryModel,
+		Description: "choose which providers use the proxy: /proxy [<provider> on|off | url <url>]",
 		Action: func(args string) string {
 			cfg, err := provider.ProxySettings()
 			if err != nil {

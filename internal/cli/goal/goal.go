@@ -203,11 +203,6 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 		setCancel(nil)
 	}()
 
-	// lastSeen tracks how many messages we have already accounted for, so each
-	// settle folds in only the assistant turns produced since the previous one:
-	// their output tokens (budget) and whether any tool ran (no-progress guard).
-	lastSeen := len(host.AgentCtx().Messages)
-
 	cfg := runtime.RunConfig{
 		LoopConfig: runtime.LoopConfig{
 			Model:         host.Live().Model,
@@ -234,33 +229,9 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 				),
 			},
 		},
-		Reminders: reminders,
-		SessionID: host.HookDeps().SessionID,
-		GetFollowUpMessages: func(ctx context.Context, agentCtx *agentcore.AgentContext) []agentcore.AgentMessage {
-			// Account for the turns produced since the last settle. Auto-compaction
-			// can shrink agentCtx.Messages in place (summary + tail) between settles,
-			// dropping its length below lastSeen; clamp so the slice never goes out
-			// of bounds. The compacted turn's tokens are then under-counted, which is
-			// acceptable for a soft budget guard (a crash is not).
-			if lastSeen > len(agentCtx.Messages) {
-				lastSeen = len(agentCtx.Messages)
-			}
-			outputTokens, hadTool := goalTurnActivity(agentCtx.Messages[lastSeen:])
-			lastSeen = len(agentCtx.Messages)
-			host.Goal().RecordIteration(outputTokens, hadTool)
-
-			cont, terminal := goalFollowUpDecision(host.Goal().Snapshot())
-			if !cont {
-				if terminal != agenttool.GoalIdle {
-					host.Goal().SetStatus(terminal)
-				}
-				return nil
-			}
-			return []agentcore.AgentMessage{agentcore.UserMessage{
-				RoleField: agentcore.RoleUser,
-				Content:   agentcore.ContentList{agentcore.NewTextContent(goalContinuationPrompt)},
-			}}
-		},
+		Reminders:           reminders,
+		SessionID:           host.HookDeps().SessionID,
+		GetFollowUpMessages: FollowUp(host),
 	}
 
 	// Wire the per-turn hook seams (PreToolUse/PostToolUse/Stop) onto this goal
@@ -277,6 +248,77 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 
 	printGoalOutcome(out, host.Goal().Snapshot())
 	cli.PersistTurn(out, host)
+}
+
+// FollowUp returns the loop's GetFollowUpMessages hook for a goal run: on each
+// settle it accounts for the turns produced since the previous one (their output
+// tokens and whether any tool ran), records the iteration on the goal state, and
+// re-prompts the model to continue until a guard trips. It is exported so the
+// TUI can drive the same autonomous loop with its own run seam.
+//
+// Auto-compaction can shrink agentCtx.Messages in place between settles,
+// dropping its length below the tracked mark; the mark is clamped so the slice
+// never goes out of bounds (the compacted turn's tokens are then under-counted,
+// which is acceptable for a soft budget guard).
+func FollowUp(host cli.Host) func(context.Context, *agentcore.AgentContext) []agentcore.AgentMessage {
+	lastSeen := len(host.AgentCtx().Messages)
+	return func(_ context.Context, agentCtx *agentcore.AgentContext) []agentcore.AgentMessage {
+		if lastSeen > len(agentCtx.Messages) {
+			lastSeen = len(agentCtx.Messages)
+		}
+		outputTokens, hadTool := goalTurnActivity(agentCtx.Messages[lastSeen:])
+		lastSeen = len(agentCtx.Messages)
+		host.Goal().RecordIteration(outputTokens, hadTool)
+
+		cont, terminal := goalFollowUpDecision(host.Goal().Snapshot())
+		if !cont {
+			if terminal != agenttool.GoalIdle {
+				host.Goal().SetStatus(terminal)
+			}
+			return nil
+		}
+		return []agentcore.AgentMessage{agentcore.UserMessage{
+			RoleField: agentcore.RoleUser,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(goalContinuationPrompt)},
+		}}
+	}
+}
+
+// ToolRegistry returns a registry holding every tool from base plus the two
+// goal-control tools (goal_complete / goal_blocked), so an autonomous run can
+// end itself. Exported for the TUI's goal run.
+func ToolRegistry(base *agenttool.ToolRegistry, state *agenttool.GoalState) *agenttool.ToolRegistry {
+	return goalToolRegistry(base, state)
+}
+
+// Reminders returns the reminder registry for a goal run: the goal reminder
+// plus the todo reminder when a todo tool is present. Exported for the TUI.
+func Reminders(base *agenttool.ToolRegistry, state *agenttool.GoalState) *runtime.ReminderRegistry {
+	return goalReminders(base, state)
+}
+
+// ParseObjective splits an optional leading "--tokens N" flag from the objective
+// text (see parseGoalObjective). Exported for the TUI.
+func ParseObjective(args string) (objective string, budget int, err error) {
+	return parseGoalObjective(args)
+}
+
+// Start records a new objective on the goal state. Exported for the TUI, which
+// starts the run through its own async seam.
+func Start(state *agenttool.GoalState, objective string, budget int) {
+	state.Start(newGoalID(), objective, budget)
+}
+
+// RenderStatus writes a summary of the current goal state (the bare /goal
+// output). Exported for the TUI.
+func RenderStatus(out io.Writer, state *agenttool.GoalState) {
+	printGoalStatus(out, state)
+}
+
+// RenderOutcome writes the one-line result banner for a settled goal run.
+// Exported for the TUI.
+func RenderOutcome(out io.Writer, snap agenttool.GoalSnapshot) {
+	printGoalOutcome(out, snap)
 }
 
 // goalToolRegistry returns a registry holding every tool from base plus the two

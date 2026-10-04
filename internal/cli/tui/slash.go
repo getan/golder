@@ -19,6 +19,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -128,11 +129,31 @@ func (mn *slashMenu) refresh(buffer string, reg *runtime.SlashRegistry) {
 			out = append(out, c)
 		}
 	}
+	// Group order: category first (CategoryOrder), then name. The popup renders
+	// one header per contiguous category block, so the sort is what makes the
+	// grouping contiguous.
+	slices.SortStableFunc(out, func(a, b runtime.SlashCommand) int {
+		if ra, rb := categoryRank(runtime.CategoryOf(a)), categoryRank(runtime.CategoryOf(b)); ra != rb {
+			return ra - rb
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
 	mn.filtered = out
 	mn.active = len(out) > 0
 	if mn.selected >= len(out) || mn.selected < 0 {
 		mn.selected = 0
 	}
+}
+
+// categoryRank returns the position of a category in runtime.CategoryOrder;
+// unknown categories sort after the known ones.
+func categoryRank(cat string) int {
+	for i, c := range runtime.CategoryOrder {
+		if c == cat {
+			return i
+		}
+	}
+	return len(runtime.CategoryOrder)
 }
 
 // rows reports how many terminal rows the popup occupies when rendered, so the
@@ -157,7 +178,11 @@ func (mn slashMenu) row(i int) string {
 		}
 		return line
 	}
-	c := mn.filtered[i]
+	return commandRowText(mn.filtered[i])
+}
+
+// commandRowText renders one command candidate as "/name  description".
+func commandRowText(c runtime.SlashCommand) string {
 	line := "/" + c.Name
 	if c.Description != "" {
 		line += "  " + c.Description
@@ -165,18 +190,73 @@ func (mn slashMenu) row(i int) string {
 	return line
 }
 
+// menuRow is one display row of the command popup: either a category header or
+// a candidate command. cmdIdx indexes into mn.filtered; -1 for a header.
+type menuRow struct {
+	header string
+	cmd    runtime.SlashCommand
+	cmdIdx int
+}
+
+// commandLayout expands the filtered candidates into display rows, inserting
+// one category header before each group. The candidates are pre-sorted by
+// category (see refresh), so each category appears as one contiguous block.
+func (mn slashMenu) commandLayout() []menuRow {
+	rows := make([]menuRow, 0, len(mn.filtered)+len(runtime.CategoryOrder))
+	last := ""
+	for i, c := range mn.filtered {
+		cat := runtime.CategoryOf(c)
+		if cat != last {
+			rows = append(rows, menuRow{header: cat, cmdIdx: -1})
+			last = cat
+		}
+		rows = append(rows, menuRow{cmd: c, cmdIdx: i})
+	}
+	return rows
+}
+
+// commandWindow returns the [start,end) slice of layout rows to render,
+// scrolled so the selected command stays visible. Header rows count toward the
+// maxMenuRows height but are not selectable.
+func (mn slashMenu) commandWindow() (int, int) {
+	rows := mn.commandLayout()
+	n := len(rows)
+	if n <= maxMenuRows {
+		return 0, n
+	}
+	sel := 0
+	for i, r := range rows {
+		if r.cmdIdx == mn.selected {
+			sel = i
+			break
+		}
+	}
+	start := sel - maxMenuRows + 1
+	if start < 0 {
+		start = 0
+	}
+	if start > n-maxMenuRows {
+		start = n - maxMenuRows
+	}
+	return start, start + maxMenuRows
+}
+
 func (mn slashMenu) rows() int {
-	n := mn.count()
-	if !mn.active || n == 0 {
+	if !mn.active || mn.count() == 0 {
 		return 0
 	}
-	if n > maxMenuRows {
-		n = maxMenuRows
+	if mn.picking() {
+		n := len(mn.pick)
+		if n > maxMenuRows {
+			n = maxMenuRows
+		}
+		if mn.selected >= 0 && mn.selected < len(mn.pick) {
+			n += len(mn.pick[mn.selected].Info)
+		}
+		return n
 	}
-	if mn.picking() && mn.selected >= 0 && mn.selected < len(mn.pick) {
-		n += len(mn.pick[mn.selected].Info)
-	}
-	return n
+	start, end := mn.commandWindow()
+	return end - start
 }
 
 // close deactivates the menu and drops its candidates.
@@ -280,37 +360,52 @@ func (mn slashMenu) current() (runtime.SlashCommand, bool) {
 }
 
 // view renders the popup as a block of up to maxMenuRows lines, the highlighted
-// row marked with a "›" caret and accented. Each row is "/name  description",
-// truncated to the width so it never wraps. Returns "" when inactive so the
+// row marked with a "›" caret and accented. Command rows carry a category
+// header (Session, Model, …); picker rows render as plain items. Rows are
+// truncated to the width so they never wrap. Returns "" when inactive so the
 // model omits the overlay entirely (and its row) while idle.
 func (mn slashMenu) view(width int) string {
 	if !mn.active || mn.rows() == 0 {
 		return ""
 	}
-	start, end := mn.window()
 	rowWidth := width - 2 // reserve the caret / indent column
 	if rowWidth < 1 {
 		rowWidth = width
 	}
-	var b strings.Builder
+	var lines []string
+	if mn.picking() {
+		start, end := mn.window()
+		for i := start; i < end; i++ {
+			line := TruncateToWidth(mn.row(i), rowWidth)
+			if i == mn.selected {
+				lines = append(lines, mn.theme.Accent.Render("› "+line))
+			} else {
+				lines = append(lines, mn.theme.System.Render("  "+line))
+			}
+		}
+		if mn.selected >= 0 && mn.selected < len(mn.pick) {
+			for _, info := range mn.pick[mn.selected].Info {
+				lines = append(lines, mn.theme.System.Render("  "+TruncateToWidth(info, rowWidth)))
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
+	rows := mn.commandLayout()
+	start, end := mn.commandWindow()
 	for i := start; i < end; i++ {
-		line := TruncateToWidth(mn.row(i), rowWidth)
-		if i == mn.selected {
-			b.WriteString(mn.theme.Accent.Render("› " + line))
+		r := rows[i]
+		if r.header != "" {
+			lines = append(lines, mn.theme.System.Render("  "+TruncateToWidth(r.header, rowWidth)))
+			continue
+		}
+		line := TruncateToWidth(commandRowText(r.cmd), rowWidth)
+		if r.cmdIdx == mn.selected {
+			lines = append(lines, mn.theme.Accent.Render("› "+line))
 		} else {
-			b.WriteString(mn.theme.System.Render("  " + line))
-		}
-		if i < end-1 {
-			b.WriteByte('\n')
+			lines = append(lines, mn.theme.System.Render("  "+line))
 		}
 	}
-	if mn.picking() && mn.selected >= 0 && mn.selected < len(mn.pick) {
-		for _, info := range mn.pick[mn.selected].Info {
-			b.WriteByte('\n')
-			b.WriteString(mn.theme.System.Render("  " + TruncateToWidth(info, rowWidth)))
-		}
-	}
-	return b.String()
+	return strings.Join(lines, "\n")
 }
 
 // window returns the [start,end) slice of filtered candidates to display,

@@ -5,7 +5,8 @@
 //	golder                                          # interactive REPL (on a TTY)
 //	golder -p "read README and summarize"           # print mode: final text
 //	golder -p "..." --output-format stream-json      # line-delimited JSON events
-//	golder install <pkg> | list | uninstall | update # package management
+//	golder session export|list|resume <id>           # session sharing
+//	golder update                                    # binary self-update
 //
 // The provider is resolved from --model against the built-in OpenAI-compatible
 // gateways (OpenRouter by default, Ollama for local models), with the API key

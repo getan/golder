@@ -33,7 +33,7 @@ func TestHelpListingColorized(t *testing.T) {
 	if strings.Contains(out.Message, "\033[") {
 		t.Errorf("NO_COLOR listing should carry no escape codes, got %q", out.Message)
 	}
-	for _, want := range []string{"/help", "/exit", "/quit"} {
+	for _, want := range []string{"/help", "/exit"} {
 		if !strings.Contains(out.Message, want) {
 			t.Errorf("/help listing missing %q, out=%q", want, out.Message)
 		}

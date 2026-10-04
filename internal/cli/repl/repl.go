@@ -33,7 +33,6 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/cli/ui"
-	"github.com/getan/golder/internal/clipboard"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
@@ -161,8 +160,8 @@ type replDeps struct {
 	tee *teeWriter
 
 	// memoryRoot is the persistent-memory Store root (empty when memory is
-	// disabled). streamRun routes auto-compaction checkpoints here and /rebuild
-	// recovers from <memoryRoot>/sessions/<id>/, the canonical checkpoint location.
+	// disabled). streamRun routes auto-compaction checkpoints here
+	// (<memoryRoot>/sessions/<id>/checkpoint.md) and /memory reports their state.
 	memoryRoot string
 	// memstore is the live persistent-memory Store (nil when memory is disabled).
 	// It lets /memory inspect entry counts without re-opening the database.
@@ -373,7 +372,7 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			}
 			continue
 		}
-		if line == "/exit" || line == "/quit" {
+		if line == "/exit" {
 			return nil
 		}
 		if line == "/compact" {
@@ -384,25 +383,6 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			// is rewritten linearly (Save) and the branch-tracking state is reset to
 			// the new flattened leaf.
 			runManualCompact(out, deps)
-			deps.header.UpdatedAt = time.Now().UTC()
-			if err := deps.store.Save(deps.header, deps.agentCtx.Messages); err != nil {
-				fmt.Fprintf(out, "golder: session save failed: %v\n", err)
-			}
-			deps.persisted = len(deps.agentCtx.Messages)
-			deps.curLeaf = ""
-			if _, entries, err := deps.store.LoadEntries(deps.header.ID); err == nil && len(entries) > 0 {
-				deps.curLeaf = entries[len(entries)-1].ID
-			}
-			continue
-		}
-		if line == "/rebuild" {
-			// /rebuild is intercepted here for the same reason as /compact: it
-			// reconstructs the whole message list (checkpoint summary + retained
-			// tail) and mutates the shared context, which a slash Action closure
-			// cannot do. It reloads a persisted checkpoint when present, else falls
-			// back to lossy compaction. Like /compact, the session is rewritten
-			// linearly (Save) and the branch cursor reset to the new flattened leaf.
-			runManualRebuild(out, deps)
 			deps.header.UpdatedAt = time.Now().UTC()
 			if err := deps.store.Save(deps.header, deps.agentCtx.Messages); err != nil {
 				fmt.Fprintf(out, "golder: session save failed: %v\n", err)
@@ -454,25 +434,11 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			runImport(out, &deps, line)
 			continue
 		}
-		if line == "/copy" {
-			// /copy writes the most recent assistant text to the clipboard. It is
-			// intercepted here (not a slash Action) because it must read the live
-			// message list, which an Action closure cannot reach.
-			runCopy(out, &deps)
-			continue
-		}
 		if line == "/resume" || strings.HasPrefix(line, "/resume ") {
 			// /resume swaps the active session without leaving the REPL
 			// (persist current, load target, live follows the stored header).
 			// The exact-or-space-prefix guard keeps "/resumed" from matching.
 			runResume(out, &deps, strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
-			continue
-		}
-		if line == "/session" {
-			// /session prints live session stats (message count, tokens, compactions)
-			// derived from deps.header + the in-memory context — state a pure
-			// string→string Action closure cannot see.
-			runSession(out, &deps)
 			continue
 		}
 		if line == "/status" || strings.HasPrefix(line, "/status ") {
@@ -1013,70 +979,6 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 	fmt.Fprintf(out, "imported %d entries from %s → session %s\n", len(entries), path, newHeader.ID)
 }
 
-// runCopy handles the /copy command (US-009, #125): it copies the most recent
-// assistant text message to the system clipboard. When no clipboard utility is
-// available it degrades to printing the text with a notice, so the content is
-// never lost. An empty conversation (no assistant reply yet) is reported.
-func runCopy(out io.Writer, deps *replDeps) {
-	text := ""
-	for i := len(deps.agentCtx.Messages) - 1; i >= 0; i-- {
-		if a, ok := deps.agentCtx.Messages[i].(agentcore.AssistantMessage); ok {
-			if t := strings.TrimSpace(agentcore.ContentToText(a.Content)); t != "" {
-				text = t
-				break
-			}
-		}
-	}
-	if text == "" {
-		fmt.Fprintln(out, "nothing to copy — no assistant reply yet")
-		return
-	}
-	if err := clipboard.Copy(text); err != nil {
-		if errors.Is(err, clipboard.ErrUnavailable) {
-			// Degrade gracefully: print the text and tell the user why it was not
-			// copied, so the content is still recoverable.
-			fmt.Fprintln(out, "no clipboard utility found (install pbcopy/wl-copy/xclip/xsel); printing instead:")
-			fmt.Fprintln(out, text)
-			return
-		}
-		fmt.Fprintf(out, "golder: copy failed: %v\n", err)
-		return
-	}
-	fmt.Fprintf(out, "copied last reply to clipboard (%d chars)\n", len(text))
-}
-
-// runSession handles the /session command (US-009, #125): it prints a summary of
-// the live session — id, message count, estimated token usage, model/provider,
-// creation time, and how many compaction checkpoints it contains. Counts are
-// derived from the in-memory context (the source of truth for the live turn) so
-// the numbers reflect unsaved messages too.
-func runSession(out io.Writer, deps *replDeps) {
-	msgs := deps.agentCtx.Messages
-	tokens := compaction.EstimateContextTokens(msgs).Tokens
-	compactions := 0
-	for _, m := range msgs {
-		if _, ok := m.(agentcore.CompactionMessage); ok {
-			compactions++
-		}
-	}
-	fmt.Fprintf(out, "session:      %s\n", deps.header.ID)
-	fmt.Fprintf(out, "messages:     %d\n", len(msgs))
-	fmt.Fprintf(out, "tokens (est): %d\n", tokens)
-	model := deps.live.Model
-	providerName := deps.live.ProviderName
-	if model == "" {
-		model = deps.header.Model
-	}
-	if providerName == "" {
-		providerName = deps.header.Provider
-	}
-	fmt.Fprintf(out, "model:        %s (provider: %s)\n", model, providerName)
-	if !deps.header.CreatedAt.IsZero() {
-		fmt.Fprintf(out, "created:      %s\n", deps.header.CreatedAt.Format(time.RFC3339))
-	}
-	fmt.Fprintf(out, "compactions:  %d\n", compactions)
-}
-
 // runManualCompact compacts the shared context on an explicit /compact request:
 // it runs the summarization stream, replaces the context with the checkpoint +
 // retained tail, and prints the before/after token counts and retained message
@@ -1114,59 +1016,6 @@ func runManualCompact(out io.Writer, deps replDeps) {
 	summarized := len(msgs) - (len(rebuilt) - 1)
 	fmt.Fprintf(out, "compacted: %d → %d tokens, summarized %d messages, kept %d\n",
 		before, after, summarized, len(rebuilt)-1)
-}
-
-// runManualRebuild reconstructs the shared context on an explicit /rebuild
-// request. It reloads the session's persisted checkpoint (from #480) and inserts
-// the compression boundary at its watermark — collapsing the pre-watermark
-// prefix into the checkpoint summary and preserving the recent tail verbatim. If
-// no checkpoint exists it falls back to the same lossy compaction /compact runs.
-// It prints the before/after token counts; a failure is reported but non-fatal
-// (the original context is kept unchanged).
-func runManualRebuild(out io.Writer, deps replDeps) {
-	msgs := deps.agentCtx.Messages
-	before := compaction.EstimateContextTokens(msgs).Tokens
-
-	// Build a RunConfig matching a normal turn so the no-checkpoint fallback can
-	// summarize against the live provider/model (RebuildFromCheckpoint reuses the
-	// loop's compaction path). The checkpoint path itself is pure/local.
-	cfg := runtime.RunConfig{
-		LoopConfig: runtime.LoopConfig{
-			Model:         deps.live.Model,
-			Provider:      deps.live.ProviderName,
-			ThinkingLevel: deps.live.ThinkingLevel,
-			Stream:        provider.StreamFnFromProvider(deps.live.Provider),
-			ContextWindow: deps.live.ContextWindow,
-			Compaction:    compaction.DefaultCompactionSettings,
-		},
-		SessionID: deps.header.ID,
-	}
-	if deps.creds != nil {
-		cfg.GetAPIKey = deps.creds.GetAPIKey
-	}
-
-	// Checkpoints live at <memoryRoot>/sessions/<id>/checkpoint.md; recover from
-	// the same root streamRun writes to. Empty when memory is disabled — then
-	// RebuildFromCheckpoint falls back to lossy compaction.
-	memoryRoot := deps.memoryRoot
-
-	fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, "Preparing conversation context…"))
-	res, err := runtime.RebuildFromCheckpoint(context.Background(), msgs, deps.header.ID, memoryRoot, &cfg, nil)
-	if err != nil {
-		fmt.Fprintf(out, "rebuild failed: %v (context left unchanged)\n", err)
-		return
-	}
-	if res.NoOp {
-		fmt.Fprintf(out, "nothing to rebuild (%d tokens, %d messages)\n", before, len(msgs))
-		return
-	}
-	deps.agentCtx.Messages = res.Messages
-	source := "checkpoint"
-	if !res.FromCheckpoint {
-		source = "compaction (no checkpoint)"
-	}
-	fmt.Fprintf(out, "rebuilt from %s: %d → %d tokens, collapsed %d messages, kept %d\n",
-		source, res.TokensBefore, res.TokensAfter, res.SummarizedCount, res.KeptCount)
 }
 
 // replayTranscript prints a resumed session's prior messages to out so the user

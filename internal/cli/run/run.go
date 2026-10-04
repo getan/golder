@@ -378,7 +378,7 @@ func ToolRegistry(tools []agentcore.AgentTool) *agenttool.ToolRegistry {
 // over its shared store, so the model is reminded of unfinished tasks each turn.
 // It also registers a MemoryReminderProvider over the memory_search tool's store
 // (issue #481) when present, so relevant persisted memory is recalled each turn
-// (this is the recall channel used after auto-compaction/rebuild), and the
+// (this is the recall channel used after auto-compaction), and the
 // stateless BudgetReminderProvider, which reads the run's budget state from the
 // context and reminds once per low-budget threshold crossing. Returns nil when
 // no provider applies (e.g. --no-tools), leaving injection disabled.
