@@ -79,6 +79,11 @@ func TestStartStopRemote(t *testing.T) {
 // chained on top once /remote-control is running.
 func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	s := newRemoteTestSession(t)
+	// Trust the launch directory so the trust gate is a no-op here: this test
+	// asserts what the permission gate does underneath it (an untrusted
+	// checkout would stop at the trust gate first — that path has its own
+	// tests in trust_test.go).
+	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 
 	cfg := s.buildConfig()
 	seam := cfg.Batch.ToolExecutorConfig.BeforeToolCall
@@ -119,6 +124,11 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 // hard-deny floor still blocks.
 func TestBuildConfigFullAccessKeepsStaticFloor(t *testing.T) {
 	s := newRemoteTestSession(t)
+	// This test is about the permission gate, so take the trust gate out of
+	// the picture: grant session trust for the launch directory (otherwise an
+	// untrusted CI checkout answers first — the trust gate leads the chain,
+	// exactly as in the REPL).
+	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 	s.perms.Set(permissions.FullAccess)
 	seam := s.buildConfig().Batch.ToolExecutorConfig.BeforeToolCall
 	if seam == nil {
