@@ -69,6 +69,9 @@ type Model struct {
 	// so a session that never browses never touches it. Entries recorded before
 	// the load are kept — the disk window is merged in front of them.
 	histLoaded bool
+	// histSearch is the active Ctrl+R reverse-search session (nil = inactive).
+	// While set it owns every key press (see handleHistorySearchKey).
+	histSearch *histSearch
 
 	// running is true while an agent run is draining through runCh. Input submit
 	// is gated on it so a new run cannot start mid-run.
@@ -1127,6 +1130,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	// An active Ctrl+R search owns every key until accepted or cancelled:
+	// printable keys edit the query, Ctrl+R/↑ and Ctrl+S/↓ walk matches, Enter
+	// accepts the preview, Esc/Ctrl+C restores the pre-search draft. Routing
+	// here — before the quit keys and the composer — keeps the search from
+	// leaking characters into the buffer or firing other bindings.
+	if m.histSearch != nil {
+		return m.handleHistorySearchKey(msg)
+	}
 	// While idle with the autocomplete popup open, the arrow / Tab / Esc keys
 	// drive the menu instead of the transcript or textarea (FR-15). Enter is left
 	// to the main switch below, which routes through submit → runSlash so the
@@ -1235,6 +1246,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.lastToolCard != nil {
 			m.lastToolCard.expanded = !m.lastToolCard.expanded
 			m.transcript.reflow()
+		}
+		return m, nil
+	case "ctrl+r":
+		// Open shell-style reverse history search over this and earlier
+		// sessions' prompts (the global history file). Idle only: the composer
+		// is disabled mid-run, so there is no draft to search from.
+		if !m.running {
+			return m.beginHistorySearch()
 		}
 		return m, nil
 	case "ctrl+d":
@@ -2559,6 +2578,13 @@ func (m Model) renderContent() (string, int) {
 		b.WriteByte('\n')
 		inputRow += countRows(menu)
 	}
+	// The reverse-search line replaces the popup slot while Ctrl+R is active:
+	// one row showing the query, the match position, and the key hints.
+	if line := m.histSearchView(width); line != "" {
+		b.WriteString(line)
+		b.WriteByte('\n')
+		inputRow += countRows(line)
+	}
 	b.WriteString(input)
 	b.WriteByte('\n')
 	// The status bar is the final line, pinned to the very bottom of the shell
@@ -2770,7 +2796,7 @@ func (m *Model) relayout() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	rows := m.height - 1 - m.input.Height() - m.menu.rows() - m.approvalRowsHeight()
+	rows := m.height - 1 - m.input.Height() - m.menu.rows() - m.approvalRowsHeight() - m.histSearchRows()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the
