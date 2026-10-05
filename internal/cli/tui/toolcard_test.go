@@ -65,6 +65,91 @@ func TestParseToolResultNormalizesCR(t *testing.T) {
 	}
 }
 
+// TestWebSearchCardTitles locks the codex-style search rendering: the card
+// reads as a verb sentence carrying the query, never "Ran websearch <count>"
+// nor a raw query glued to the tool name.
+func TestWebSearchCardTitles(t *testing.T) {
+	running := toolCard{
+		name:  "websearch",
+		input: map[string]any{"query": "今日新闻 2026年10月5日", "count": 8.0},
+		state: cardRunning,
+	}
+	if got := running.title(); got != "Searching the web for 今日新闻 2026年10月5日" {
+		t.Errorf("running local title = %q", got)
+	}
+	done := running
+	done.state = cardSuccess
+	if got := done.title(); got != "Searched the web for 今日新闻 2026年10月5日" {
+		t.Errorf("finished local title = %q", got)
+	}
+	// The count field must never stand in for the query (the old fallback
+	// picked the alphabetically first argument, "count").
+	if got := done.primaryArg(); got != "今日新闻 2026年10月5日" {
+		t.Errorf("primaryArg = %q, want the query", got)
+	}
+
+	hosted := toolCard{
+		name:  "web_search",
+		input: map[string]any{"query": "today top news"},
+		state: cardSuccess,
+	}
+	if got := hosted.title(); got != "Searched the web for today top news" {
+		t.Errorf("hosted title = %q", got)
+	}
+
+	// open_page is an extraction, not a search.
+	open := toolCard{
+		name:  "web_search",
+		input: map[string]any{"action": "open_page", "url": "https://example.com/a"},
+		state: cardRunning,
+	}
+	if got := open.title(); got != "Extracting https://example.com/a" {
+		t.Errorf("open_page running title = %q", got)
+	}
+	open.state = cardSuccess
+	if got := open.title(); got != "Extracted https://example.com/a" {
+		t.Errorf("open_page finished title = %q", got)
+	}
+}
+
+// TestHostedSearchCardRendersSingleLine verifies the hosted search card shows
+// no body: its recorded "response" is the driver's display-only placeholder
+// ("hosted: web_search(query)"), which would only repeat the headline.
+func TestHostedSearchCardRendersSingleLine(t *testing.T) {
+	card := toolCard{
+		name:     "web_search",
+		input:    map[string]any{"query": "news"},
+		state:    cardSuccess,
+		response: parseToolResult("hosted: web_search(news)"),
+	}
+	out := card.render(DefaultTheme(), 80)
+	stripped := ansi.Strip(out)
+	if !strings.Contains(stripped, "Searched the web for news") {
+		t.Errorf("missing the verb headline:\n%s", stripped)
+	}
+	if strings.Contains(stripped, "hosted:") {
+		t.Errorf("hosted placeholder body must be suppressed:\n%s", stripped)
+	}
+	if strings.Contains(stripped, "└") || strings.Contains(stripped, "expand") {
+		t.Errorf("single-line card must not carry a body or expand hint:\n%s", stripped)
+	}
+	card.expanded = true
+	if expanded := card.render(DefaultTheme(), 80); expanded != out {
+		t.Errorf("expanding a hosted search must not reveal a body:\n%s", expanded)
+	}
+
+	// The local tool keeps its result body (that is where the hits are).
+	local := toolCard{
+		name:     "websearch",
+		input:    map[string]any{"query": "news"},
+		state:    cardSuccess,
+		response: parseToolResult("Search results for \"news\" (via exa):\n1. Example"),
+	}
+	if body := ansi.Strip(local.render(DefaultTheme(), 80)); !strings.Contains(body, "Search results for") {
+		t.Errorf("local search body must survive:\n%s", body)
+	}
+}
+
 func TestToolCardRender(t *testing.T) {
 	theme := DefaultTheme()
 	card := toolCard{

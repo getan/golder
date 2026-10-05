@@ -83,7 +83,12 @@ func (c toolCard) statusBullet(theme Theme) string {
 // title is the one-line summary shared by the live collapsed card and the
 // resume replay: codex-style `Running <name arg>` while the tool executes and
 // `Ran <name arg>` once it finishes, so the transcript reads as a verb.
+// Search-family cards are the exception and render as a sentence of their own
+// (see webSearchLead).
 func (c toolCard) title() string {
+	if prefix, detail, ok := c.webSearchLead(); ok {
+		return prefix + " " + detail
+	}
 	header := c.headline()
 	if c.state == cardRunning {
 		return "Running " + header
@@ -106,6 +111,13 @@ func (c toolCard) render(theme Theme, width int) string {
 	out := c.renderHeadline(theme, width)
 	if items := c.todoItems(); len(items) > 0 && c.todoResponseIsEcho() {
 		return out + c.renderChecklist(theme, width, items)
+	}
+	// A hosted search's "response" is the driver's display-only placeholder
+	// ("hosted: web_search(query)"): the headline already carries the query, so
+	// a body would only repeat it. Codex renders search activity as a single
+	// line; match that.
+	if c.isHostedSearch() {
+		return out
 	}
 	if c.expanded {
 		return out + c.renderDetail(theme, width)
@@ -130,6 +142,11 @@ func (c toolCard) render(theme Theme, width int) string {
 // command text is near-white. The old all-blue bold headline made every command
 // read like a hyperlink.
 func (c toolCard) renderHeadline(theme Theme, width int) string {
+	// The search sentence is its own headline (no separate "Ran <name>" verb),
+	// so render it before the generic path splits verb / name / argument.
+	if prefix, detail, ok := c.webSearchLead(); ok {
+		return c.renderSearchHeadline(theme, width, prefix, detail)
+	}
 	verb := "Ran"
 	if c.state == cardRunning {
 		verb = "Running"
@@ -152,6 +169,30 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	}
 	var b strings.Builder
 	b.WriteString(c.statusBullet(theme) + " " + head)
+	for _, ln := range lines[1:] {
+		b.WriteString("\n" + theme.ToolCmd.Render("  │ "+ln))
+	}
+	return b.String()
+}
+
+// renderSearchHeadline renders "Searching the web for <query>" style search
+// sentences: the leading phrase takes the verb style and the detail the
+// command style, with long text wrapping onto the same `  │ ` gutter the
+// generic headline uses.
+func (c toolCard) renderSearchHeadline(theme Theme, width int, prefix, detail string) string {
+	avail := max(1, width-4)
+	lines := strings.Split(WrapToWidth(prefix+" "+detail, avail), "\n")
+	var b strings.Builder
+	b.WriteString(c.statusBullet(theme) + " ")
+	first := lines[0]
+	if rest, ok := strings.CutPrefix(first, prefix); ok {
+		b.WriteString(theme.ToolVerb.Render(prefix))
+		if rest != "" {
+			b.WriteString(theme.ToolCmd.Render(rest))
+		}
+	} else {
+		b.WriteString(theme.ToolVerb.Render(first))
+	}
 	for _, ln := range lines[1:] {
 		b.WriteString("\n" + theme.ToolCmd.Render("  │ "+ln))
 	}
@@ -363,6 +404,60 @@ func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// argString renders a decoded argument value as trimmed text ("" for anything
+// that is not a non-empty string), so callers can test an argument without a
+// type assertion dance.
+func argString(v any) string {
+	s, _ := v.(string)
+	return strings.TrimSpace(s)
+}
+
+// isHostedSearch reports whether the card is a provider-executed web search
+// (name web_search; the local tool is websearch). Its recorded response is a
+// synthetic "hosted: …" placeholder, so the card renders as the headline
+// alone.
+func (c toolCard) isHostedSearch() bool {
+	return strings.EqualFold(strings.TrimSpace(c.name), "web_search")
+}
+
+// webSearchLead builds the lead phrase and detail for the search-family cards —
+// the local `websearch` tool and the provider-executed `web_search` call — so
+// they render as a codex-style verb sentence ("Searched the web for <query>")
+// instead of "Ran <name> <arg>". The generic form glued the raw query onto the
+// tool name, and the local tool's argument fallback could even surface its
+// count field instead of the query.
+//
+// ok=false lets the generic headline take over when the call carries no
+// renderable detail (an action shape without a query/url/pattern).
+func (c toolCard) webSearchLead() (prefix, detail string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(c.name)) {
+	case "websearch", "web_search":
+	default:
+		return "", "", false
+	}
+	running := c.state == cardRunning
+	// open_page is an extraction, not a search (codex reads the same).
+	if strings.EqualFold(argString(c.input["action"]), "open_page") {
+		if url := oneLine(argString(c.input["url"])); url != "" {
+			if running {
+				return "Extracting", url, true
+			}
+			return "Extracted", url, true
+		}
+	}
+	detail = oneLine(argString(c.input["query"]))
+	if detail == "" {
+		detail = oneLine(argString(c.input["pattern"]))
+	}
+	if detail == "" {
+		return "", "", false
+	}
+	if running {
+		return "Searching the web for", detail, true
+	}
+	return "Searched the web for", detail, true
+}
+
 // primaryArg returns the most salient call argument to inline in the card header
 // so the user can see what the tool is operating on at a glance (FR-6), e.g.
 // Bash(cd /x && git add -A). It picks the command for bash and the file path for
@@ -376,9 +471,9 @@ func (c toolCard) primaryArg() string {
 	switch strings.ToLower(c.name) {
 	case "bash":
 		keyPrefs = []string{"command"}
-	case "web_search":
-		// Hosted search args carry query (search) or url (open_page): show
-		// what was searched, never the bare action tag.
+	case "websearch", "web_search":
+		// Search args carry query (search) or url (open_page): show what was
+		// searched, never the bare action tag or the count field.
 		keyPrefs = []string{"query", "url"}
 	case "read", "write", "edit", "multiedit":
 		// The file tools emit "path"; accept "file_path" as a fallback for
