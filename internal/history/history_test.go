@@ -136,3 +136,35 @@ func TestAppendCreatesPrivateFile(t *testing.T) {
 		t.Errorf("file mode = %o, want 0600", perm)
 	}
 }
+
+// TestWriteAllRoundTrip locks the bulk-write path used by the session-store
+// backfill: the file is replaced with exactly the given entries (oldest first)
+// and is readable back through Load.
+func TestWriteAllRoundTrip(t *testing.T) {
+	path := tempPath(t)
+	want := []Entry{
+		{TS: 1, SessionID: "a", Text: "one"},
+		{TS: 2, SessionID: "b", Text: "two\nwith newline"},
+	}
+	if err := WriteAll(path, want); err != nil {
+		t.Fatalf("WriteAll: %v", err)
+	}
+	got, err := Load(path, 0)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Load = %+v, want %+v", got, want)
+	}
+	// A second WriteAll replaces, not appends.
+	if err := WriteAll(path, want[:1]); err != nil {
+		t.Fatalf("WriteAll (replace): %v", err)
+	}
+	got, err = Load(path, 0)
+	if err != nil {
+		t.Fatalf("Load after replace: %v", err)
+	}
+	if len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("Load after replace = %+v, want just the first entry", got)
+	}
+}

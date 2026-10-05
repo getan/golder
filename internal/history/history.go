@@ -110,6 +110,35 @@ func Load(path string, max int) ([]Entry, error) {
 	return entries, nil
 }
 
+// WriteAll replaces the history file with entries (oldest first), creating the
+// parent directory as needed. It writes through a temp file and an atomic
+// rename at mode 0600, so a concurrent reader never sees a half-written file.
+// It is the bulk-write counterpart to Append, used by the one-time backfill
+// that seeds the file from existing sessions.
+func WriteAll(path string, entries []Entry) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	for _, e := range entries {
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
 // trim rewrites path keeping the newest whole lines whose total size fits
 // trimRatio of maxBytes. The rewrite goes through a temp file and an atomic
 // rename so a reader never sees a half-written history.

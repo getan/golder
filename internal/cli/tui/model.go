@@ -2157,6 +2157,11 @@ func (m *Model) ensureHistoryLoaded() {
 	if m.opts.HistoryPath == "" {
 		return
 	}
+	// Backfill from the session store the first time the history is used, so
+	// prompts from sessions that predate the history file are recallable too.
+	if m.session != nil {
+		seedPromptHistoryFromSessions(m.session.store, m.opts.HistoryPath)
+	}
 	entries, err := history.Load(m.opts.HistoryPath, history.MaxEntries)
 	if err != nil {
 		return
