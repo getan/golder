@@ -118,8 +118,8 @@ func TestModelCtrlCClearsDraft(t *testing.T) {
 }
 
 // TestModelCtrlCWhileRunningInterruptsWithDraft pins the precedence: an
-// in-flight run owns Ctrl+C, so a stray buffer (typing is gated while running;
-// this is only a safety net) never absorbs the interrupt.
+// in-flight run owns Ctrl+C, so a draft typed mid-run (the composer stays
+// editable for steering) never absorbs the interrupt and is preserved.
 func TestModelCtrlCWhileRunningInterruptsWithDraft(t *testing.T) {
 	m := NewModel(Options{})
 	interrupted := false
@@ -279,6 +279,8 @@ func keyPress(s string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 	case "ctrl+d":
 		return tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
+	case "ctrl+e":
+		return tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}
 	case "ctrl+y":
 		return tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}
 	case "super+c":
@@ -297,6 +299,71 @@ func TestModelPasteSingleLineInsertsVerbatim(t *testing.T) {
 	m = apply(t, m, tea.PasteMsg{Content: "hello world"})
 	if got := m.input.Value(); got != "hello world" {
 		t.Errorf("input after paste = %q, want %q", got, "hello world")
+	}
+}
+
+// TestModelEnterKeepsTranscriptPosition pins the single-responsibility split:
+// Enter submits and nothing else — even with an empty composer it must not move
+// the reader's scroll position (Ctrl+E is the jump key).
+func TestModelEnterKeepsTranscriptPosition(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 10})
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(fmt.Sprintf("line %d", i))
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.transcript.vp.AtBottom() {
+		t.Fatal("precondition: PgUp should move the transcript off the bottom")
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.transcript.vp.AtBottom() {
+		t.Fatal("Enter must keep its submit-only meaning and not jump the transcript")
+	}
+}
+
+// TestModelCtrlEJumpsTranscript pins the jump key's contract: it works with or
+// without a draft while the reader is scrolled up (a half-typed prompt is never
+// lost to the jump), and at the bottom it delegates to the editor's line-end
+// binding instead of being swallowed.
+func TestModelCtrlEJumpsTranscript(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 10})
+	for i := 0; i < 40; i++ {
+		m.transcript.addUser(fmt.Sprintf("line %d", i))
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.transcript.vp.AtBottom() {
+		t.Fatal("precondition: PgUp should move the transcript off the bottom")
+	}
+	m = apply(t, m, keyPress("ctrl+e"))
+	if !m.transcript.vp.AtBottom() {
+		t.Fatal("Ctrl+E with an empty composer should jump the transcript to the bottom")
+	}
+
+	// A draft does not block the jump: scrolled up mid-typing is exactly when the
+	// key is needed, and the buffer must survive it untouched.
+	m = apply(t, m, tea.PasteMsg{Content: "draft"})
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.transcript.vp.AtBottom() {
+		t.Fatal("precondition: PgUp should move the transcript off the bottom")
+	}
+	m = apply(t, m, keyPress("ctrl+e"))
+	if !m.transcript.vp.AtBottom() {
+		t.Fatal("Ctrl+E with a draft should still jump the transcript to the bottom")
+	}
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("the draft must survive the jump, got %q", got)
+	}
+
+	// At the bottom the key is not consumed: it reaches the editor and keeps its
+	// readline meaning (move the caret to the end of the line).
+	m.input.SetValue("hello\nworld")
+	m.input.ta.CursorUp()
+	m.input.ta.SetCursorColumn(0)
+	if got := m.input.ta.Column(); got != 0 {
+		t.Fatalf("precondition: caret column = %d, want 0", got)
+	}
+	m = apply(t, m, keyPress("ctrl+e"))
+	if got := m.input.ta.Column(); got != 5 {
+		t.Fatalf("at the bottom Ctrl+E should move to the line end (column 5), got %d", got)
 	}
 }
 
@@ -516,28 +583,28 @@ func TestModelSubagentPanelNavigation(t *testing.T) {
 	}
 }
 
-// TestModelSubagentEscReturnsToInput verifies the one-key escape ("escape hatch: one key back to the input box"):
-// while a sub-agent runs the composer is blurred (no typing), and after arrowing
-// into the panel a single Esc both clears the selection and re-focuses the input
-// box — so returning to the composer never requires more than one press and never
-// interrupts the run.
+// TestModelSubagentEscReturnsToInput verifies the one-key escape ("escape hatch:
+// one key back to the input box"): the composer stays focused while a sub-agent
+// run streams (mid-run typing is allowed), arrowing into the panel selects a row
+// without stealing focus, and a single Esc clears the selection — so returning
+// to the composer never requires more than one press and never interrupts the
+// run.
 func TestModelSubagentEscReturnsToInput(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.running = true
 	m.spinner.begin(time.Now(), "")
-	m.input.Blur() // the composer is blurred for the duration of a run (startPrompt)
 	m = apply(t, m, toolStartMsg{id: "a", name: "task", input: map[string]any{"description": "task A"}})
 
-	// Arrow into the panel: a selection is now active while the input stays blurred.
+	// Arrow into the panel: a selection is active while the composer keeps focus.
 	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
 	if !m.subagents.hasSelection() {
 		t.Fatal("down should select a sub-agent row")
 	}
-	if m.input.Focused() {
-		t.Fatal("the composer should be blurred while a sub-agent run streams")
+	if !m.input.Focused() {
+		t.Fatal("the composer stays focused while a sub-agent run streams (mid-run typing)")
 	}
 
-	// One Esc escapes: selection cleared AND the input box re-focused, in a single
+	// One Esc escapes: selection cleared, composer still focused, in a single
 	// press, without interrupting the run.
 	next, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	m = next.(Model)

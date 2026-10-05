@@ -101,6 +101,13 @@ type trustPromptMsg struct{}
 // the run ended in error (or was interrupted).
 type runEndMsg struct{ err error }
 
+// steerInjectedMsg reports that the run loop drained mid-run user input from
+// the steer queue and injected it into the conversation (as the next turn's
+// input). The TUI echoes each text as a user block at exactly this moment, so
+// the transcript shows the message when it actually reaches the model — until
+// then it waits in the queued-messages preview above the composer.
+type steerInjectedMsg struct{ texts []string }
+
 // judgeNoteMsg carries one permission-gate decision (approval, sandbox
 // routing, denial, read-only block) with its rationale, published by the gate
 // through the run's event channel so it renders inline, right above the tool

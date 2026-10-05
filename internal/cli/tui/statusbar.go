@@ -44,6 +44,12 @@ type statusBar struct {
 
 	// task is the current activity text (e.g. the running tool or turn state).
 	task string
+
+	// hint is a transient, actionable notice (e.g. "3 new lines · Ctrl+E to
+	// jump") rendered as the highest-priority segment while set. It is not part
+	// of the persistent activity readout: the UI sets it only while transcript
+	// content is waiting below the fold, and the zero value keeps it hidden.
+	hint string
 }
 
 // newStatusBar builds a status bar from the theme, resolved Options, and the
@@ -93,6 +99,11 @@ func (s *statusBar) SetTelemetry(ev telemetryEventView) {
 // priority slot of the bar.
 func (s *statusBar) SetTask(task string) { s.task = task }
 
+// SetHint records a transient hint rendered at the highest truncation priority
+// (e.g. transcript content waiting below the fold after the user scrolls up).
+// Pass "" to clear it; a zero-value bar renders no hint segment.
+func (s *statusBar) SetHint(hint string) { s.hint = hint }
+
 // telemetryEventView is the minimal projection of agentcore.TelemetryEvent the
 // status bar needs, so the caller (model.go) adapts the event rather than this
 // file depending on agentcore directly for a two-field read.
@@ -119,6 +130,7 @@ const (
 	glyphCwd   = "▸" // working directory
 	glyphCtx   = "◔" // context-window usage
 	glyphTask  = "⏵" // current activity
+	glyphHint  = "↓" // content waiting below (Ctrl+E jumps)
 
 	sepArrow = "" // filled right arrow — used at a background transition
 )
@@ -289,6 +301,11 @@ func (s statusBar) segments() []segment {
 	}
 	if s.task != "" {
 		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, priority: prioTask})
+	}
+	if s.hint != "" {
+		// The hint borrows the task slot's styling and priority: transient but
+		// actionable, so it should survive narrow-width truncation.
+		segs = append(segs, segment{text: glyphHint + " " + s.hint, fg: sbTaskFg, bg: sbTaskBg, priority: prioTask})
 	}
 	return segs
 }

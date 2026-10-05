@@ -85,7 +85,7 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	// tests in trust_test.go).
 	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 
-	cfg := s.buildConfig()
+	cfg := s.buildConfig(nil)
 	seam := cfg.Batch.ToolExecutorConfig.BeforeToolCall
 	if seam == nil {
 		t.Fatal("BeforeToolCall should hold the judge gate when remote control is off")
@@ -114,7 +114,7 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	}
 	defer s.stopRemote()
 
-	if cfg := s.buildConfig(); cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil {
+	if cfg := s.buildConfig(nil); cfg.Batch.ToolExecutorConfig.BeforeToolCall == nil {
 		t.Error("BeforeToolCall should be installed when remote control is on")
 	}
 }
@@ -130,7 +130,7 @@ func TestBuildConfigFullAccessKeepsStaticFloor(t *testing.T) {
 	// exactly as in the REPL).
 	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 	s.perms.Set(permissions.FullAccess)
-	seam := s.buildConfig().Batch.ToolExecutorConfig.BeforeToolCall
+	seam := s.buildConfig(nil).Batch.ToolExecutorConfig.BeforeToolCall
 	if seam == nil {
 		t.Fatal("the permission gate should always be installed (static floor)")
 	}

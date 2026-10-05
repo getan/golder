@@ -177,11 +177,55 @@ func TestTranscriptAutoStick(t *testing.T) {
 		t.Error("auto-stick should stay paused after the user scrolls up")
 	}
 
+	if tr.unseen == 0 {
+		t.Error("content arriving while paused should accumulate the unseen counter")
+	}
+
+	// End (jumpToBottom) is the explicit way back: it pins the viewport to the
+	// newest content and clears the "N new lines" hint in one step.
+	tr.jumpToBottom()
+	if !tr.vp.AtBottom() {
+		t.Error("jumpToBottom should pin the viewport to the newest content")
+	}
+	if tr.unseen != 0 {
+		t.Errorf("jumpToBottom should clear the unseen counter, got %d", tr.unseen)
+	}
+
 	// Submitting a new turn is an explicit action: it re-arms follow and snaps
 	// back to the newest output so the reply is never left off-screen.
+	tr.update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if tr.vp.AtBottom() {
+		t.Fatal("scrolling up again should move off the bottom")
+	}
 	tr.addUser("a brand new prompt")
 	if !tr.vp.AtBottom() {
 		t.Error("submitting a new turn should re-arm auto-scroll to the bottom")
+	}
+}
+
+// TestTranscriptUnseenClearsOnScrollBack verifies the other half of the
+// contract: the unseen counter is not End-only — manually scrolling back to the
+// bottom re-arms follow and drops the hint, so no stale "new lines" notice is
+// left behind.
+func TestTranscriptUnseenClearsOnScrollBack(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(20, 3)
+	for i := 0; i < 6; i++ {
+		tr.addUser("line")
+	}
+	tr.update(tea.KeyPressMsg{Code: tea.KeyUp})
+	tr.appendDelta("one\ntwo")
+	if tr.unseen == 0 {
+		t.Fatal("streamed lines should count as unseen while scrolled up")
+	}
+	for i := 0; i < 50 && !tr.vp.AtBottom(); i++ {
+		tr.update(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if !tr.vp.AtBottom() {
+		t.Fatal("scrolling back down should reach the bottom")
+	}
+	if tr.unseen != 0 {
+		t.Errorf("reaching the bottom should clear unseen, got %d", tr.unseen)
 	}
 }
 

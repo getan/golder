@@ -52,7 +52,8 @@ type Model struct {
 
 	// input is the multi-line prompt editor (#390). It wraps a bubbles textarea
 	// so CJK / emoji are edited by rune (no dropped-byte bug), Enter submits and
-	// Shift+Enter inserts a newline. It is blurred while a run is in flight.
+	// Shift+Enter inserts a newline. It stays editable while a run is in flight:
+	// Enter then queues the message for mid-run steering (see steerQ).
 	input input
 
 	// history holds previously submitted inputs (prompts and slash commands, in
@@ -73,8 +74,8 @@ type Model struct {
 	// While set it owns every key press (see handleHistorySearchKey).
 	histSearch *histSearch
 
-	// running is true while an agent run is draining through runCh. Input submit
-	// is gated on it so a new run cannot start mid-run.
+	// running is true while an agent run is draining through runCh. A submit
+	// while it is set queues the message instead of starting a second run.
 	running bool
 	// runCh is the bridge channel for the in-flight run, or nil when idle. Update
 	// re-issues waitForEvent(runCh) after every bridged msg except runEndMsg.
@@ -100,6 +101,14 @@ type Model struct {
 	// func. Until then it may be nil, in which case an interrupt while running is
 	// a safe no-op (the pump keeps draining until it ends on its own).
 	interruptFn func()
+
+	// steerQ is the mid-run input queue: messages submitted while a run is in
+	// flight wait here and the run loop's steering seams deliver them (after
+	// the next tool execution, or when the turn settles). withSession binds it
+	// to the very queue those seams drain; a session-less model lazily allocates
+	// its own on first queue, so queueing is testable without a session. nil is
+	// a valid empty queue.
+	steerQ *steerQueue
 
 	// quitting is set when a quit key (Ctrl+C / Ctrl+D) is seen, so View can be a
 	// no-op on the final frame while the program tears down and restores the
@@ -267,6 +276,10 @@ func NewModel(opts Options) Model {
 		spinner:    newSpinner(theme),
 		pastes:     make(map[int]string),
 		images:     make(map[int]string),
+		// A model built without a session (tests, pure construction) still gets
+		// a live queue so mid-run input can be typed and previewed; withSession
+		// rebinds this to the session's queue, which the loop seams drain.
+		steerQ: &steerQueue{},
 	}
 }
 
@@ -279,6 +292,7 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	m.session = s
 	m.startRunFn = s.startRun
 	m.interruptFn = s.interrupt
+	m.steerQ = s.steerQ
 	// Rebind the registry to the session's own one (assembled against s.live, the
 	// very config the run loop reads via buildConfig) so /model mutates the live
 	// config, /trust reaches the session's trust manager (registered in
@@ -808,31 +822,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
 		// the whole clipboard payload as one message. A multi-line paste is
 		// collapsed to a compact placeholder (expanded at submit); a single-line
-		// paste is inserted verbatim. See handlePaste.
-		if !m.running {
-			return m.handlePaste(msg.Content)
-		}
-		return m, nil
+		// paste is inserted verbatim. See handlePaste. Works mid-run too: the
+		// composer stays editable while a run streams.
+		return m.handlePaste(msg.Content)
 
 	case tea.ClipboardMsg:
 		// OSC52 clipboard read reply (from tea.ReadClipboard on Ctrl+V / Cmd+V).
 		// Route through the same collapse-or-insert path as bracketed paste.
-		if !m.running {
-			return m.handlePaste(msg.Content)
-		}
-		return m, nil
+		return m.handlePaste(msg.Content)
 
 	case clipboardImageMsg:
 		// Reply to a Ctrl+V / Cmd+V image-read attempt. With an image, drop an
 		// "[Image #N]" placeholder (expanded to an @image reference at submit); with
 		// none, fall back to a normal OSC52 text read so plain-text paste still works.
-		if !m.running {
-			if msg.ok {
-				return m.handleImagePaste(msg.path)
-			}
-			return m, tea.ReadClipboard
+		if msg.ok {
+			return m.handleImagePaste(msg.path)
 		}
-		return m, nil
+		return m, tea.ReadClipboard
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -1129,10 +1135,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sideRun = false
 		m.goalRun = false
-		// The editor was blurred at submit; re-enable it so the next prompt can be
-		// typed, and re-probe git since a run may have changed the working tree.
+		// A message submitted mid-run that the loop never drained — typed after
+		// its last steering pull, or queued when the run was interrupted before
+		// another tool call — must not be lost. Start exactly one as the next
+		// turn (codex's "interrupt & send now" / next-queued-input behavior);
+		// the rest stay queued and ride the new run's steering seams.
+		if text, ok := m.steerQ.pop(); ok {
+			m.transcript.addUser(text)
+			m.remoteEcho("\n> " + text + "\n")
+			next, cmd := m.startPrompt(text)
+			m = next.(Model)
+			return m, tea.Batch(cmd, fetchGitCmd(m.cwd))
+		}
+		// Keep the composer ready for the next prompt (it stays focused across
+		// runs now, so this is normally a no-op) and re-probe git since a run may
+		// have changed the working tree.
 		focus := m.input.Focus()
 		return m, tea.Batch(focus, fetchGitCmd(m.cwd))
+
+	case steerInjectedMsg:
+		// The loop drained mid-run input from the steer queue and injected it
+		// into the conversation: it is a real user turn now, so render the user
+		// block(s) and drop them from the queued preview.
+		for _, text := range msg.texts {
+			m.transcript.addUser(text)
+			m.remoteEcho("\n> " + text + "\n")
+		}
+		m.relayout()
+		return m, m.pumpNext()
 
 	case remoteInputMsg:
 		// A prompt arrived from the paired browser (remote-control). Always re-issue
@@ -1315,14 +1345,26 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
-		// Enter submits the composed buffer (FR-13). Shift+Enter inserts a newline
-		// (rebound in newInput) so the editor is a true multi-line composer; when
-		// the slash menu is open, Enter runs the highlighted command (handled
-		// above), so this branch is only reached with the menu closed.
-		if !m.running {
-			return m.submit()
+		// Enter submits the composed buffer (FR-13); while a run is in flight it
+		// queues the message for mid-run delivery instead (see submit). Shift+Enter
+		// inserts a newline (rebound in newInput) so the editor is a true multi-line
+		// composer; when the slash menu is open, Enter runs the highlighted command
+		// (handled above), so this branch is only reached with the menu closed.
+		// Submit is Enter's only job: the jump key is Ctrl+E (see below).
+		return m.submit()
+	case "ctrl+e":
+		// Ctrl+E is the jump-to-live-tail key, and it deliberately works with a
+		// draft in the composer too: having scrolled up mid-typing is exactly when
+		// the jump is needed, and a half-written prompt must not stand in its way
+		// (pressing it clears nothing). "Scrolled away from the bottom" is the
+		// condition, not "new lines arrived", so the key works even in the moment
+		// before fresh output lands. While already at the bottom there is nothing
+		// to jump to, so the key falls through to the textarea, where it keeps its
+		// readline meaning (move the caret to the end of the line).
+		if !m.transcript.follow {
+			m.transcript.jumpToBottom()
+			return m, nil
 		}
-		return m, nil
 	case "pgup", "pgdown":
 		// Page scrolling reaches the transcript viewport whether idle or running,
 		// so history stays readable while a run streams. A content-anchored
@@ -1342,40 +1384,34 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// no image is present, falls back to an OSC52 text read (tea.ClipboardMsg).
 		// This is intercepted before textarea so its own Ctrl+V binding — which reads
 		// via an external process and returns an unexported message the model can't
-		// route — is bypassed. The common Cmd+V path does not reach here; it arrives
-		// as a bracketed tea.PasteMsg handled in Update.
-		if !m.running {
-			return m, readClipboardImage
-		}
-		return m, nil
+		// route — is bypassed. Works mid-run like typing does. The common Cmd+V path
+		// does not reach here; it arrives as a bracketed tea.PasteMsg handled in Update.
+		return m, readClipboardImage
 	case "super+v":
 		// Cmd+V on macOS is the platform-standard paste. Most terminals turn it
 		// into a bracketed paste (tea.PasteMsg, handled in Update); this branch
 		// covers terminals that instead forward the Super modifier as a key. Try an
 		// image read first, falling back to an OSC52 text read when none is present.
-		if !m.running {
-			return m, readClipboardImage
-		}
-		return m, nil
+		return m, readClipboardImage
 	case "ctrl+y":
 		// Copy: the editor has no text selection, so this copies the whole buffer
 		// to the system clipboard over OSC52. A no-op on an empty buffer.
-		if !m.running {
-			if v := m.input.Value(); v != "" {
-				return m, tea.SetClipboard(v)
-			}
+		if v := m.input.Value(); v != "" {
+			return m, tea.SetClipboard(v)
 		}
 		return m, nil
 	}
 
-	// Everything else is editing input; gated on idle so keystrokes never corrupt
-	// an in-flight prompt. textarea handles CJK / emoji by rune and Shift+Enter as
-	// a newline. After the buffer changes, refresh the autocomplete popup so it
-	// opens/filters/closes as the user types a "/name" prefix.
+	// Everything else edits the composer, idle or mid-run: typing stays enabled
+	// while a run streams so a steering message can be composed and queued
+	// (submit handles the running case). textarea handles CJK / emoji by rune and
+	// Shift+Enter as a newline.
 	if !m.running {
 		// ↑/↓ walk the submitted-prompt history when the caret is at the top / bottom
-		// edge of the composer; otherwise they move the caret within a multi-line
-		// draft (handled by the textarea below).
+		// edge of the composer, and Tab completes a slash command — idle-only
+		// affordances. Mid-run ↑/↓ move the caret instead (or drive the sub-agent
+		// panel, above) and the slash popup stays closed, since submit refuses
+		// slash commands while running.
 		switch msg.String() {
 		case "up":
 			return m.historyPrev(msg)
@@ -1394,13 +1430,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		m.menu.refresh(m.input.Value(), m.slash)
-		m.relayout()
-		return m, cmd
 	}
-	return m, nil
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	// The autocomplete popup is an idle affordance (see above): refresh it only
+	// when idle, and close it if a run started while it was open — otherwise its
+	// rows would count against the layout while its keys are not routed.
+	if !m.running {
+		m.menu.refresh(m.input.Value(), m.slash)
+	} else if m.menu.active {
+		m.menu.close()
+	}
+	m.relayout()
+	return m, cmd
 }
 
 // submit starts a run for the current buffer: it appends the user block, clears
@@ -1412,6 +1454,12 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.expandImages(m.expandPastes(m.input.Value())))
 	if prompt == "" {
 		return m, nil
+	}
+	// Mid-run Enter queues the message instead of starting a run: the loop's
+	// steering seams deliver it after the next tool execution (or when the turn
+	// settles), so a streaming run can be steered without interrupting it.
+	if m.running {
+		return m.queueMidRun(prompt)
 	}
 	// Record the input into the browse history, then exit browse mode. The
 	// EXPANDED prompt is stored (not the raw text with "[Pasted text #N]"
@@ -1435,6 +1483,34 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.menu.close()
 	m.relayout()
 	return m.startPrompt(prompt)
+}
+
+// queueMidRun appends a message typed while a run is in flight to the steer
+// queue. The message shows up in the queued-messages preview above the composer
+// (not in the transcript yet — the user block is added when the loop actually
+// injects it, via steerInjectedMsg), is recorded for ↑ recall, and the composer
+// is cleared so the next message can be typed. Slash commands are refused: they
+// are idle-oriented (session switches, pickers) and would otherwise be sent to
+// the model as literal text, so the buffer is left intact with a note.
+func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
+	if strings.HasPrefix(prompt, "/") {
+		m.transcript.addSystem("(slash commands are not available while a run is in progress — press Esc to interrupt first)")
+		m.relayout()
+		return m, nil
+	}
+	m.recordHistory(prompt)
+	// The placeholders have been expanded into the queued prompt, so the stored
+	// paste bodies and image paths are consumed; drop them (ids keep climbing).
+	m.pastes = make(map[int]string)
+	m.images = make(map[int]string)
+	if m.steerQ == nil {
+		m.steerQ = &steerQueue{}
+	}
+	m.steerQ.push(prompt)
+	m.input.Clear()
+	m.menu.close()
+	m.relayout()
+	return m, nil
 }
 
 // completeSlash fills the buffer with the highlighted candidate's "/name " so the
@@ -2086,7 +2162,6 @@ func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
 	m.input.Clear()
 	m.menu.close()
 	m.transcript.addSystem("Side thread — this exchange is not saved to the conversation.")
-	m.input.Blur()
 	ch, cmd := m.session.startBtwRun(arg)
 	m.runCh = ch
 	m.running = true
@@ -2169,7 +2244,6 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
-	m.input.Blur()
 	ch, cmd := m.session.startGoalRun(runLabel)
 	m.runCh = ch
 	m.running = true
@@ -2325,16 +2399,16 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// startPrompt launches an agent run for prompt, blurring the editor and flipping
-// to running when a run starter is wired. With no starter (pre-session model /
-// tests) it records the pre-#392 system note and stays idle. It is shared by a
-// plain submit and by a slash prompt/skill command.
+// startPrompt launches an agent run for prompt and flips to running when a run
+// starter is wired; the composer stays focused so typing can continue into the
+// steer queue. With no starter (pre-session model / tests) it records the
+// pre-#392 system note and stays idle. It is shared by a plain submit and by a
+// slash prompt/skill command.
 func (m Model) startPrompt(prompt string) (tea.Model, tea.Cmd) {
 	if m.startRunFn == nil {
 		m.transcript.addSystem("(run not wired up: see session assembly in #392)")
 		return m, nil
 	}
-	m.input.Blur()
 	ch, cmd := m.startRunFn(prompt)
 	m.runCh = ch
 	m.running = true
@@ -2400,7 +2474,14 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		if m.interruptFn != nil {
 			m.interruptFn()
 		}
-		m.transcript.addSystem("(interrupting the current run…)")
+		// With messages queued, interrupting doubles as "send them now": the
+		// cancelled run ends and runEndMsg starts the oldest queued message as
+		// the next turn, instead of waiting for a tool call that will never come.
+		if len(m.steerQ.snapshot()) > 0 {
+			m.transcript.addSystem("(interrupting — queued input will be sent next)")
+		} else {
+			m.transcript.addSystem("(interrupting the current run…)")
+		}
 		return m, nil
 	}
 	if !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitArmWindow {
@@ -2584,6 +2665,18 @@ func (m Model) renderContent() (string, int) {
 		height = 24
 	}
 
+	// While the transcript is scrolled up and new output is landing out of
+	// sight, surface a transient "N new lines · Ctrl+E to jump" hint in the
+	// status bar (highest priority, so narrow widths keep it). The statusBar
+	// copy is local to this render: once the user is back at the bottom the
+	// condition clears and the normal bar returns.
+	if n := m.transcript.unseen; n > 0 {
+		word := "lines"
+		if n == 1 {
+			word = "line"
+		}
+		m.statusBar.SetHint(fmt.Sprintf("%d new %s · Ctrl+E to jump", n, word))
+	}
 	status := m.statusBar.Render(width)
 
 	// The input editor renders its own prompt column and cursor across as many
@@ -2630,6 +2723,16 @@ func (m Model) renderContent() (string, int) {
 			b.WriteByte('\n')
 			inputRow += countRows(line)
 		}
+		// Mid-run messages waiting in the steer queue render just above the
+		// composer (codex's pending-input preview): one dim line per message,
+		// capped. The header names the delivery point so "queued" is never
+		// ambiguous.
+		if lines := m.queuedPreviewLines(width); len(lines) > 0 {
+			preview := strings.Join(lines, "\n")
+			b.WriteString(preview)
+			b.WriteByte('\n')
+			inputRow += len(lines)
+		}
 	}
 	// The approval dialog takes precedence in the overlay slot: while a
 	// decision is pending the composer is unusable, so the slash menu (if it
@@ -2659,6 +2762,48 @@ func (m Model) renderContent() (string, int) {
 	// below the input editor.
 	b.WriteString(status)
 	return b.String(), inputRow
+}
+
+// queuedPreviewMaxLines caps how many message rows the mid-run queue preview
+// paints; anything longer ends with an ellipsis row.
+const queuedPreviewMaxLines = 3
+
+// queuedPreviewLines renders the mid-run steer queue as the dim preview shown
+// just above the composer while a run is in flight (codex's pending-input
+// preview). The header names the delivery point; each queued message follows
+// with a "↳ " prefix, wrapped to the terminal width, capped at
+// queuedPreviewMaxLines rows. It returns nil when nothing is queued, so an
+// empty queue reserves no rows.
+func (m Model) queuedPreviewLines(width int) []string {
+	texts := m.steerQ.snapshot()
+	if len(texts) == 0 || width <= 0 {
+		return nil
+	}
+	const indent = "  "
+	header := fmt.Sprintf("%sMessages to be submitted after the next tool call (%d):", indent, len(texts))
+	lines := []string{m.theme.System.Render(header)}
+	for _, text := range texts {
+		segments := wrapToWidth("↳ "+ui.OneLine(text), width-len(indent))
+		for i, segment := range segments {
+			if i > 0 {
+				segment = "  " + segment
+			}
+			lines = append(lines, m.theme.ToolBody.Render(indent+segment))
+		}
+		if len(lines) > queuedPreviewMaxLines {
+			break
+		}
+	}
+	if len(lines) > queuedPreviewMaxLines {
+		lines = append(lines[:queuedPreviewMaxLines-1], m.theme.ToolBody.Render(indent+"↳ …"))
+	}
+	return lines
+}
+
+// queuedPreviewRows counts the rows queuedPreviewLines will paint, so relayout
+// reserves exactly that height above the composer.
+func (m Model) queuedPreviewRows(width int) int {
+	return len(m.queuedPreviewLines(width))
 }
 
 // applySelection overlays the mouse selection highlight onto the rendered
@@ -2871,6 +3016,9 @@ func (m *Model) relayout() {
 		// wrapped output lines of the expanded row (if any); an empty panel reserves
 		// nothing so the single-run layout is unchanged.
 		rows -= m.subagents.lineCount(m.width)
+		// Queued mid-run messages render a capped preview above the composer; the
+		// transcript shrinks by its rows so the total frame height is unchanged.
+		rows -= m.queuedPreviewRows(m.width)
 	}
 	if rows < 0 {
 		rows = 0

@@ -171,9 +171,76 @@ type runSession struct {
 	// channel (cleared when the run ends).
 	perms *permissions.State
 	notes *run.ReviewNotes
+	// steerQ is the shared mid-run input queue: messages the user submits while
+	// a run is in flight wait here and are delivered by the loop's steering
+	// seam (after the next tool execution) or follow-up seam (when the turn
+	// settles without another tool call). It is the same instance the TUI model
+	// renders (bound by withSession); nil is a valid no-op queue.
+	steerQ *steerQueue
 	// trusted records the launch directory's trust decision at assembly, so
 	// the reviewer grades calls with the same context the trust gate enforces.
 	trusted bool
+}
+
+// steerQueue is the mutex-guarded FIFO behind mid-run input. The TUI goroutine
+// pushes typed messages and renders the pending list; the run loop's steering /
+// follow-up seams drain it on the run goroutine, so both sides go through the
+// lock. A nil *steerQueue is a valid empty queue, so a session assembled
+// outside the TUI never has to initialize it.
+type steerQueue struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+// push appends a message to the queue (empty text is ignored, matching submit).
+func (q *steerQueue) push(text string) {
+	if q == nil || text == "" {
+		return
+	}
+	q.mu.Lock()
+	q.texts = append(q.texts, text)
+	q.mu.Unlock()
+}
+
+// drain removes and returns every queued message in order. It is the loop-side
+// operation: the run loop owns the messages from here on.
+func (q *steerQueue) drain() []string {
+	if q == nil {
+		return nil
+	}
+	q.mu.Lock()
+	texts := q.texts
+	q.texts = nil
+	q.mu.Unlock()
+	return texts
+}
+
+// pop removes and returns the oldest queued message. The model uses it when a
+// run ends with messages still queued (typed after the loop's last drain, or
+// left behind by an interrupt): exactly one is started as the next turn, so
+// queued input is never silently dropped and runs do not nest.
+func (q *steerQueue) pop() (string, bool) {
+	if q == nil {
+		return "", false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.texts) == 0 {
+		return "", false
+	}
+	text := q.texts[0]
+	q.texts = q.texts[1:]
+	return text, true
+}
+
+// snapshot returns a copy of the pending messages for rendering.
+func (q *steerQueue) snapshot() []string {
+	if q == nil {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]string(nil), q.texts...)
 }
 
 // newRunSession assembles the run session from the resolved Options, opening the
@@ -292,6 +359,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		notes:      opts.ReviewNotes,
 		budget:     opts.Budget,
 		trusted:    opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
+		steerQ:     &steerQueue{},
 	}
 	if s.perms == nil {
 		s.perms = permissions.New(permissions.Auto)
@@ -432,7 +500,11 @@ func chainTUIEvent(prev, next func(agentcore.AgentEvent)) func(agentcore.AgentEv
 // first-run trust picker) rather than a per-call BeforeToolCall prompt. The
 // stream fn is derived from the live provider and the API key resolved through
 // the credential store, exactly as the REPL does.
-func (s *runSession) buildConfig() runtime.RunConfig {
+//
+// ch, when non-nil, is the run's event channel: the steering seams echo each
+// delivered mid-run message into it so the transcript can show the message at
+// the moment it enters the conversation (see installSteerSeams).
+func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 	cfg := runtime.RunConfig{
 		LoopConfig: runtime.LoopConfig{
 			Model:         s.live.Model,
@@ -463,6 +535,11 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	if s.schedule != nil {
 		cfg.GetFollowUpMessages = s.schedule.FollowUpMessages
 	}
+	// Mid-run user messages ride the same two seams: steering delivers them
+	// after the next tool execution; the follow-up wrapper delivers any that
+	// are still queued when a tool-free turn settles, so a message typed while
+	// the model streams its final answer is never left behind.
+	s.installSteerSeams(&cfg, ch)
 	// When remote control is active, route side-effect tool-call confirmations to
 	// the paired browser (no-op when no client is connected or the cwd is trusted,
 	// so the non-remote path is unchanged). The trust manager is read from the
@@ -497,6 +574,64 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 	// the main conversation or disk).
 	cfg.Checkpoint = s.checkpointMidRun
 	return cfg
+}
+
+// installSteerSeams wires the session's mid-run input queue into cfg. The
+// steering seam delivers everything queued after the current turn's tool
+// execution (pi's per-turn semantics); the follow-up seam is wrapped so
+// anything still queued when the inner loop settles — a message typed while
+// the model was streaming a tool-free final answer — becomes the next input
+// instead of ending the run with the message stranded. User input wins over
+// scheduled reminders and goal re-prompts because the wrapper drains steers
+// before delegating to the follow-up source that was already installed.
+func (s *runSession) installSteerSeams(cfg *runtime.RunConfig, ch chan tea.Msg) {
+	pull := s.steerPull(ch)
+	cfg.GetSteeringMessages = func(context.Context) []agentcore.AgentMessage { return pull() }
+	cfg.GetFollowUpMessages = steeredFollowUp(cfg.GetFollowUpMessages, pull)
+}
+
+// steerPull returns the drain-and-convert closure shared by the steering and
+// follow-up seams. Draining is atomic (one lock), so a message is delivered by
+// exactly one seam; each drain is echoed to ch as steerInjectedMsg so the
+// transcript can render the user block right as the loop commits the message
+// to the conversation. The send is on the loop goroutine — the same goroutine
+// the event pump runs on — so it cannot race the pump's own sends.
+func (s *runSession) steerPull(ch chan tea.Msg) func() []agentcore.AgentMessage {
+	return func() []agentcore.AgentMessage {
+		texts := s.steerQ.drain()
+		if len(texts) == 0 {
+			return nil
+		}
+		if ch != nil {
+			ch <- steerInjectedMsg{texts: texts}
+		}
+		msgs := make([]agentcore.AgentMessage, 0, len(texts))
+		for _, text := range texts {
+			content, err := ui.BuildUserContent(text)
+			if err != nil {
+				// A malformed image reference must not swallow the message;
+				// fall back to plain text, exactly like startRun.
+				content = agentcore.ContentList{agentcore.NewTextContent(text)}
+			}
+			msgs = append(msgs, agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: content})
+		}
+		return msgs
+	}
+}
+
+// steeredFollowUp wraps a follow-up source with the steer drain: queued user
+// input is consulted first, and the wrapped source (scheduled reminders, goal
+// re-prompts, or nil) only runs when the queue is empty.
+func steeredFollowUp(orig func(context.Context, *agentcore.AgentContext) []agentcore.AgentMessage, pull func() []agentcore.AgentMessage) func(context.Context, *agentcore.AgentContext) []agentcore.AgentMessage {
+	return func(ctx context.Context, agentCtx *agentcore.AgentContext) []agentcore.AgentMessage {
+		if msgs := pull(); len(msgs) > 0 {
+			return msgs
+		}
+		if orig != nil {
+			return orig(ctx, agentCtx)
+		}
+		return nil
+	}
 }
 
 // rebuildDoneMsg reports the outcome of a manual context operation (/compact)
@@ -634,7 +769,7 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	// callback hands the request to the UI and blocks on its reply, so the run
 	// goroutine pauses exactly while the user decides.
 	s.approvalCh = ch
-	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(), s.onEvent)
+	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(ch), s.onEvent)
 }
 
 // confirmApproval is the permission gate's approval dialog for the TUI. It
@@ -712,14 +847,14 @@ func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
 	if s.notes != nil {
 		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
 	}
-	return ch, startRunOn(ch, ctx, side, s.sideRunConfig(), s.onEvent)
+	return ch, startRunOn(ch, ctx, side, s.sideRunConfig(ch), s.onEvent)
 }
 
 // sideRunConfig is buildConfig for a /btw side thread: the run reads the main
 // conversation but never writes it, so mid-run checkpoints are disabled (the
 // run-end persist is skipped for side runs too).
-func (s *runSession) sideRunConfig() runtime.RunConfig {
-	cfg := s.buildConfig()
+func (s *runSession) sideRunConfig(ch chan tea.Msg) runtime.RunConfig {
+	cfg := s.buildConfig(ch)
 	cfg.Checkpoint = nil
 	return cfg
 }
@@ -732,13 +867,15 @@ func (s *runSession) sideRunConfig() runtime.RunConfig {
 func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
 	s.preTurnLeaf = s.curLeaf
 	s.preTurnLabel = label
-	cfg := s.buildConfig()
+	ch := newEventChan()
+	cfg := s.buildConfig(ch)
 	cfg.Batch.ToolExecutorConfig.Registry = goalpkg.ToolRegistry(s.reg, s.goal)
 	cfg.Reminders = goalpkg.Reminders(s.reg, s.goal)
-	cfg.GetFollowUpMessages = goalpkg.FollowUp(s)
+	// Wrap the goal re-prompt with the steer drain: a user message typed
+	// mid-run is delivered before the goal is nudged again.
+	cfg.GetFollowUpMessages = steeredFollowUp(goalpkg.FollowUp(s), s.steerPull(ch))
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelRun = cancel
-	ch := newEventChan()
 	if s.notes != nil {
 		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
 	}

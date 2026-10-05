@@ -111,6 +111,12 @@ type transcript struct {
 	// auto-scroll correct across height changes (setSize resizes the viewport
 	// before reflow runs, which would make an AtBottom() sample read false).
 	follow bool
+
+	// unseen counts content lines that arrived while follow was paused (the user
+	// scrolled up). It drives the "N new lines · Ctrl+E" hint and resets
+	// whenever the viewport is pinned back to the bottom (scroll-down,
+	// jumpToBottom, or a new submitted turn re-arming follow).
+	unseen int
 }
 
 // newTranscript builds an empty transcript with the given theme. The viewport
@@ -301,8 +307,29 @@ func (t *transcript) finalizeTurn(msg agentcore.AssistantMessage) {
 func (t *transcript) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	t.vp, cmd = t.vp.Update(msg)
-	t.follow = t.vp.AtBottom()
+	t.syncFollow()
 	return cmd
+}
+
+// syncFollow re-reads the viewport position into the follow intent and clears
+// the unseen counter when the viewport is (back) at the bottom. Every scroll
+// path funnels through here so "reached the bottom" always re-arms stick-to-
+// bottom without leaving a stale "new lines" hint behind.
+func (t *transcript) syncFollow() {
+	t.follow = t.vp.AtBottom()
+	if t.follow {
+		t.unseen = 0
+	}
+}
+
+// jumpToBottom re-arms stick-to-bottom and snaps the viewport to the newest
+// line. It backs the Ctrl+E key after the user scrolled up: they return to the
+// live tail immediately instead of hunting for the bottom. It is a no-op when
+// the transcript is already pinned, apart from clearing the hint.
+func (t *transcript) jumpToBottom() {
+	t.follow = true
+	t.unseen = 0
+	t.vp.GotoBottom()
 }
 
 // scrollToRow positions the viewport so the scrollbar thumb aligns with the
@@ -341,7 +368,7 @@ func (t *transcript) scrollToRow(y int) {
 	}
 	maxOff := total - h
 	t.vp.SetYOffset(top * maxOff / span)
-	t.follow = t.vp.AtBottom()
+	t.syncFollow()
 }
 
 // viewportHeight reports the number of visible transcript rows, so the model can
@@ -407,7 +434,7 @@ func (t *transcript) scrollLines(n int) bool {
 	} else if n < 0 {
 		t.vp.ScrollUp(-n)
 	}
-	t.follow = t.vp.AtBottom()
+	t.syncFollow()
 	return t.vp.YOffset() != before
 }
 
@@ -504,8 +531,20 @@ func (t *transcript) reflow() {
 // setContent pushes the full render into the viewport and caches its lines for
 // content-anchored mouse selection (see lines).
 func (t *transcript) setContent(rendered string) {
+	before := t.vp.TotalLineCount()
 	t.vp.SetContent(rendered)
 	t.lines = strings.Split(rendered, "\n")
+	if t.follow {
+		// Pinned: nothing can be waiting below the fold.
+		t.unseen = 0
+		return
+	}
+	if after := t.vp.TotalLineCount(); after > before {
+		// Approximate, but that is all the hint needs: line-count growth is a
+		// faithful signal that new output landed while the user was reading
+		// history (width re-wraps may over-count slightly; harmless).
+		t.unseen += after - before
+	}
 }
 
 // contentLines returns the cached full-content lines the selection anchors

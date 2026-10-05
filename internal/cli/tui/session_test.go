@@ -160,7 +160,7 @@ func TestBuildConfigAssembly(t *testing.T) {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}
 
-	cfg := s.buildConfig()
+	cfg := s.buildConfig(nil)
 	if cfg.Model != "opus-test" {
 		t.Errorf("cfg.Model = %q, want opus-test", cfg.Model)
 	}
@@ -347,10 +347,10 @@ func TestSideRunConfigDisablesCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}
-	if s.buildConfig().Checkpoint == nil {
+	if s.buildConfig(nil).Checkpoint == nil {
 		t.Error("normal runs must carry the mid-run checkpoint hook")
 	}
-	if s.sideRunConfig().Checkpoint != nil {
+	if s.sideRunConfig(nil).Checkpoint != nil {
 		t.Error("/btw side runs must not checkpoint to disk")
 	}
 }
