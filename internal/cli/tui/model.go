@@ -22,6 +22,7 @@ import (
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -63,6 +64,11 @@ type Model struct {
 	history   []string
 	histIdx   int
 	histDraft string
+	// histLoaded marks the one-time lazy merge of the global prompt history
+	// (opts.HistoryPath) into history: the first browse/search reads the file,
+	// so a session that never browses never touches it. Entries recorded before
+	// the load are kept — the disk window is merged in front of them.
+	histLoaded bool
 
 	// running is true while an agent run is draining through runCh. Input submit
 	// is gated on it so a new run cannot start mid-run.
@@ -1323,13 +1329,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // and a system note without launching anything, and leaves the editor ready for
 // the next line.
 func (m Model) submit() (tea.Model, tea.Cmd) {
-	raw := strings.TrimSpace(m.input.Value())
 	prompt := strings.TrimSpace(m.expandImages(m.expandPastes(m.input.Value())))
 	if prompt == "" {
 		return m, nil
 	}
-	// Record the input (as typed) into the browse history, then exit browse mode.
-	m.recordHistory(raw)
+	// Record the input into the browse history, then exit browse mode. The
+	// EXPANDED prompt is stored (not the raw text with "[Pasted text #N]"
+	// placeholders): the paste bodies and image paths are dropped right after
+	// submit, so a recalled placeholder could never be re-expanded and would be
+	// sent literally.
+	m.recordHistory(prompt)
 	// The placeholders have been expanded into the prompt, so the stored paste
 	// bodies and image paths are consumed; drop them (the id counters keep climbing).
 	m.pastes = make(map[int]string)
@@ -2104,7 +2113,8 @@ func (m *Model) reseedTranscript(notice string) {
 // recordHistory appends an submitted input to the browse history (skipping a
 // consecutive duplicate, like a shell) and resets the browse cursor to the live
 // draft, so the next ↑ starts from the most recent entry and any stashed draft is
-// dropped. A blank entry is never stored.
+// dropped. A blank entry is never stored. The entry is also appended to the
+// global history file (best-effort) so the next session can browse it.
 func (m *Model) recordHistory(entry string) {
 	entry = strings.TrimSpace(entry)
 	if entry != "" && (len(m.history) == 0 || m.history[len(m.history)-1] != entry) {
@@ -2112,6 +2122,65 @@ func (m *Model) recordHistory(entry string) {
 	}
 	m.histIdx = len(m.history)
 	m.histDraft = ""
+	m.appendHistoryFile(entry)
+}
+
+// ensureHistoryLoaded lazily merges the global prompt history into the browse
+// list, once: the first ↑ / Ctrl+R reads the file so a session that never
+// browses never touches it. The disk window (newest first N) lands in front of
+// anything recorded in this session, and consecutive duplicates are collapsed
+// so resubmitting a just-recalled entry does not show twice.
+func (m *Model) ensureHistoryLoaded() {
+	if m.histLoaded {
+		return
+	}
+	m.histLoaded = true
+	if m.opts.HistoryPath == "" {
+		return
+	}
+	entries, err := history.Load(m.opts.HistoryPath, history.MaxEntries)
+	if err != nil {
+		return
+	}
+	texts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if t := strings.TrimSpace(e.Text); t != "" {
+			texts = append(texts, t)
+		}
+	}
+	m.history = dedupConsecutive(append(texts, m.history...))
+	m.histIdx = len(m.history)
+}
+
+// appendHistoryFile persists one submitted input to the global history file.
+// Failures are deliberately silent: history is a convenience, and a prompt
+// must never fail to submit because its history write did.
+func (m *Model) appendHistoryFile(entry string) {
+	if entry == "" || m.opts.HistoryPath == "" {
+		return
+	}
+	sessionID := ""
+	if m.session != nil {
+		sessionID = m.session.header.ID
+	}
+	_ = history.Append(m.opts.HistoryPath, history.Entry{
+		TS:        time.Now().Unix(),
+		SessionID: sessionID,
+		Cwd:       m.cwd,
+		Text:      entry,
+	})
+}
+
+// dedupConsecutive collapses runs of identical entries (like a shell's
+// ignore-dups), keeping the first occurrence of each run.
+func dedupConsecutive(entries []string) []string {
+	out := entries[:0]
+	for _, e := range entries {
+		if len(out) == 0 || out[len(out)-1] != e {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // historyPrev recalls the previous submitted input into the composer, but only
@@ -2119,7 +2188,15 @@ func (m *Model) recordHistory(entry string) {
 // multi-line draft. The first recall stashes the live draft so historyNext can
 // restore it, and the cursor lands past the newest entry (len(history)) initially.
 func (m Model) historyPrev(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if len(m.history) == 0 || m.input.Line() != 0 {
+	if m.input.Line() != 0 {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.menu.refresh(m.input.Value(), m.slash)
+		m.relayout()
+		return m, cmd
+	}
+	m.ensureHistoryLoaded()
+	if len(m.history) == 0 {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		m.menu.refresh(m.input.Value(), m.slash)

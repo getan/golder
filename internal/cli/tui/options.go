@@ -74,4 +74,10 @@ type Options struct {
 	// reminder ladder and the context tools stay consistent across prompts.
 	// A nil value falls back to a run-local state.
 	Budget *contextbudget.State
+
+	// HistoryPath is the global prompt-history file (history.jsonl) the model
+	// lazily reads for cross-session ↑/↓ browsing and appends every submission
+	// to. Empty disables the feature entirely (tests construct models without
+	// touching disk); cmd/golder resolves it under the golder home directory.
+	HistoryPath string
 }

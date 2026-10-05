@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ import (
 	"github.com/getan/golder/internal/cli/sessioncmd"
 	"github.com/getan/golder/internal/cli/tui"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -493,6 +495,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Permissions:       env.Permissions,
 				ReviewNotes:       env.ReviewNotes,
 				Budget:            env.Budget,
+				HistoryPath:       promptHistoryPath(),
 			}); err != nil {
 				fmt.Fprintf(errOut, "golder: %v\n", err)
 				return 1
@@ -701,6 +704,18 @@ func runDream(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 // before calling this, so it only decides TUI-vs-REPL for the interactive case.
 func shouldUseTUI(opts cliOptions, isTTY bool) bool {
 	return isTTY && !opts.noTUI
+}
+
+// promptHistoryPath resolves the global prompt-history file for the TUI:
+// $GOLDER_HOME/history.jsonl (or ~/.golder/history.jsonl). It returns "" when
+// the home directory cannot be resolved, which disables prompt history rather
+// than writing somewhere unexpected.
+func promptHistoryPath() string {
+	dir := run.ConfigDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, history.FileName)
 }
 
 // peelSessionResumeID extracts the id from a `session resume <id>` argv,
