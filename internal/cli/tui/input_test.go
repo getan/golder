@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // runeKey builds a printable-character key press carrying r, mirroring what a
@@ -106,6 +107,42 @@ func TestInputNewlineRendersBothLines(t *testing.T) {
 	view := in.View()
 	if !strings.Contains(view, "你") || !strings.Contains(view, "好") {
 		t.Fatalf("rendered view missing content, want both 你 and 好:\n%s", view)
+	}
+}
+
+// TestInputPromptOnlyOnFirstLine locks the composer's gutter: the "> " prompt
+// marks the first line only, and continuation lines are indented two spaces so
+// their text aligns under the first line's text. Rendering the prompt on every
+// line (the static Prompt field's behavior) made multi-line input read like
+// several separate prompts.
+func TestInputPromptOnlyOnFirstLine(t *testing.T) {
+	in := newInput()
+	in.SetWidth(40)
+	in.SetValue("test\nhell")
+
+	// Strip ANSI so the assertions compare visible text (the gutter is colored).
+	view := ansi.Strip(in.View())
+	if got := strings.Count(view, ">"); got != 1 {
+		t.Fatalf("rendered view has %d \">\" prompts, want exactly 1:\n%s", got, view)
+	}
+	lines := strings.Split(view, "\n")
+	firstPrompt, secondPrompt := -1, -1
+	for i, line := range lines {
+		if strings.Contains(line, "test") {
+			firstPrompt = i
+		}
+		if strings.Contains(line, "hell") {
+			secondPrompt = i
+		}
+	}
+	if firstPrompt < 0 || secondPrompt < 0 {
+		t.Fatalf("rendered view missing test/hell lines:\n%s", view)
+	}
+	if !strings.Contains(lines[firstPrompt], "> test") {
+		t.Errorf("first line should carry the \"> \" prompt, got %q", lines[firstPrompt])
+	}
+	if !strings.Contains(lines[secondPrompt], "  hell") {
+		t.Errorf("continuation line should be indented by two spaces, got %q", lines[secondPrompt])
 	}
 }
 

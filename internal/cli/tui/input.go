@@ -46,7 +46,18 @@ type input struct {
 // buffer itself is unbounded; beyond maxInputRows textarea scrolls internally.
 func newInput() input {
 	ta := textarea.New()
-	ta.Prompt = "> "
+	// The "> " prompt belongs to the first line only; continuation lines align
+	// under the text with a two-space gutter. textarea's static Prompt field is
+	// printed on every line, so use the dynamic prompt hook instead: it is
+	// consulted per display line (LineNumber is the absolute rendered line, so
+	// the prompt stays off continuation and soft-wrapped lines even while
+	// scrolling), and its width pads the gutter for an aligned left edge.
+	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "> "
+		}
+		return ""
+	})
 	ta.Placeholder = "Type a message… (Enter to send, Shift+Enter for newline)"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
