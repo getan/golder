@@ -385,7 +385,7 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 
 	items := make(responses.ResponseInputParam, 0, len(req.Context.Messages))
 	for _, m := range req.Context.Messages {
-		items = appendInputItems(items, m)
+		items = appendInputItems(items, m, useHostedSearch)
 	}
 	params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: items}
 	return params
@@ -428,7 +428,16 @@ func buildResponsesTools(tools []agentcore.AgentTool, includeHosted bool) []resp
 }
 
 // appendInputItems replays one golder message as its Responses input item(s).
-func appendInputItems(items responses.ResponseInputParam, m agentcore.Message) responses.ResponseInputParam {
+//
+// hostedSearch reports whether this request declares the hosted web_search tool
+// (buildResponsesTools). A server-executed call is replayed as its native
+// web_search_call item only then: the item references a provider-side tool the
+// current request must actually expose, and an upstream that never received
+// that tool rejects the history item outright (deepseek answers 422 "Endpoint
+// is unavailable"), which made every turn after a muse→deepseek model switch
+// fail permanently. Without hosted search the call is dropped from the replay —
+// the assistant's text (including its citations) is preserved either way.
+func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool) responses.ResponseInputParam {
 	switch msg := m.(type) {
 	case agentcore.ToolResultMessage:
 		// A tool result is backfilled against the model's call_id so the model
@@ -446,10 +455,13 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message) r
 		for _, call := range msg.ToolCalls() {
 			if call.IsServer() {
 				// Hosted calls replay as their native items (no output to
-				// pair); unreplayable shapes are dropped while the answer
-				// text keeps its citations.
-				if param, ok := webSearchCallReplayParam(call); ok {
-					items = append(items, param)
+				// pair) when the request declares hosted search; otherwise
+				// they are dropped, as are unreplayable shapes, while the
+				// answer text keeps its citations.
+				if hostedSearch {
+					if param, ok := webSearchCallReplayParam(call); ok {
+						items = append(items, param)
+					}
 				}
 				continue
 			}

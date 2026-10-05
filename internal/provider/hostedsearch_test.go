@@ -347,7 +347,8 @@ func TestHostedSearchCallParsedAsServer(t *testing.T) {
 }
 
 // A follow-up turn must replay a server web_search call as a native
-// web_search_call item (search action round-trips).
+// web_search_call item (search action round-trips) — but only for a model
+// whose request actually declares the hosted tool.
 func TestHostedSearchCallReplayedNatively(t *testing.T) {
 	var gotBody string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -368,10 +369,12 @@ func TestHostedSearchCallReplayedNatively(t *testing.T) {
 		},
 	}
 	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
-		Model: "probe-rp-model",
+		Model: "muse-rp",
 		Context: LlmContext{Messages: agentcore.MessageList{
 			userMsg("news?"),
 			asst,
+		}, Tools: []agentcore.AgentTool{
+			fakeTool{name: "read_file", schema: json.RawMessage(`{"type":"object"}`)},
 		}},
 		Config: StreamConfig{APIKey: "sk-test"},
 	})
@@ -388,6 +391,55 @@ func TestHostedSearchCallReplayedNatively(t *testing.T) {
 	}
 	if strings.Contains(gotBody, `"function_call"`) {
 		t.Errorf("server call must not replay as function_call: %s", gotBody)
+	}
+}
+
+// A server web_search call from a muse turn must NOT replay when the session
+// switches to a model that cannot receive the hosted tool: the deepseek
+// upstream rejects a web_search_call input item outright (422 "Endpoint is
+// unavailable"), so leaving the call in the replay poisoned every turn after
+// the switch. The call item is dropped while the assistant text survives.
+func TestHostedSearchCallDroppedForIncapableModel(t *testing.T) {
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+		}
+		return sseResponse(completedFrame("done", "resp_12", "deepseek-v4.1-flash", 1, 1)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	args, _ := json.Marshal(map[string]any{"query": "deepseek news"})
+	asst := agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content: agentcore.ContentList{
+			agentcore.NewTextContent("fresh news"),
+			agentcore.NewServerToolCallContent("ws_9", "web_search", args),
+		},
+	}
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model: "deepseek-v4.1-flash",
+		Context: LlmContext{Messages: agentcore.MessageList{
+			userMsg("news?"),
+			asst,
+			userMsg("再查一次"),
+		}},
+		Config: StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	drain(t, stream)
+
+	if strings.Contains(gotBody, `"web_search_call"`) {
+		t.Errorf("server call must not replay natively for an incapable model: %s", gotBody)
+	}
+	if strings.Contains(gotBody, `"function_call"`) {
+		t.Errorf("a dropped server call must not resurface as a function_call: %s", gotBody)
+	}
+	if !strings.Contains(gotBody, "fresh news") {
+		t.Errorf("assistant text must survive the drop: %s", gotBody)
 	}
 }
 
