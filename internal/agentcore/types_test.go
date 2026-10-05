@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,41 @@ func TestContentUnknownTypeRejected(t *testing.T) {
 	err := json.Unmarshal([]byte(`[{"type":"bogus"}]`), &out)
 	if err == nil {
 		t.Fatal("expected error for unknown content type")
+	}
+}
+
+// TestServerToolCallKindRoundTrips locks the persistence marker for
+// provider-executed calls: a session must remember that web_search ran
+// provider-side, or a reload turns it into an ordinary dangling local call
+// (synthetic repair results) and history replay loses the native item.
+func TestServerToolCallKindRoundTrips(t *testing.T) {
+	in := ContentList{NewServerToolCallContent("ws_1", "web_search", json.RawMessage(`{"query":"news"}`))}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"kind":"server"`) {
+		t.Fatalf("marshaled server call lost its kind marker: %s", data)
+	}
+	var out ContentList
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tc, ok := out[0].(ToolCallContent)
+	if !ok {
+		t.Fatalf("block 0: want ToolCallContent, got %T", out[0])
+	}
+	if !tc.IsServer() {
+		t.Errorf("reloaded call = %+v, want IsServer() true", tc)
+	}
+	// A local call keeps the empty marker (omitempty) so old files read the
+	// same as before.
+	local, err := json.Marshal(NewToolCallContent("c1", "read", json.RawMessage(`{}`)))
+	if err != nil {
+		t.Fatalf("marshal local: %v", err)
+	}
+	if strings.Contains(string(local), `"kind"`) {
+		t.Errorf("local call should not carry a kind field: %s", local)
 	}
 }
 

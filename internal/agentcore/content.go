@@ -111,6 +111,7 @@ func (t ToolCallContent) MarshalJSON() ([]byte, error) {
 		Name             string          `json:"name"`
 		Arguments        json.RawMessage `json:"arguments"`
 		ThoughtSignature string          `json:"thoughtSignature,omitempty"`
+		Kind             string          `json:"kind,omitempty"`
 	}
 	return json.Marshal(wire{
 		Type:             t.Type,
@@ -118,6 +119,7 @@ func (t ToolCallContent) MarshalJSON() ([]byte, error) {
 		Name:             t.Name,
 		Arguments:        args,
 		ThoughtSignature: t.ThoughtSignature,
+		Kind:             t.Kind,
 	})
 }
 
