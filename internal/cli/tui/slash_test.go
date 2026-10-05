@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/getan/golder/internal/runtime"
 )
@@ -242,7 +243,8 @@ func TestSlashMenuPickerMode(t *testing.T) {
 	if !mn.picking() {
 		t.Error("refresh must not clobber picker candidates")
 	}
-	view := mn.view(40)
+	// Rows are styled per segment, so compare on the visible text.
+	view := ansi.Strip(mn.view(40))
 	for _, want := range []string{"m-a", "m-b  (current)", "m-c"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
@@ -274,7 +276,7 @@ func TestSlashMenuPickerDetailed(t *testing.T) {
 	if got, _ := mn.pickCurrent(); got != "id-1" {
 		t.Errorf("initial pick = %q, want id-1", got)
 	}
-	view := mn.view(60)
+	view := ansi.Strip(mn.view(60))
 	for _, want := range []string{"fix bug", "m1 · gpt", "write docs  m2 · gpt  (current)"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
@@ -283,5 +285,58 @@ func TestSlashMenuPickerDetailed(t *testing.T) {
 	mn.close()
 	if mn.picking() || mn.pickKind != "" {
 		t.Error("close must reset detailed picker state")
+	}
+}
+
+// TestSlashMenuPickerRowStructure locks the provider-picker redesign: rows are
+// scannable (title + colored state badge + current tag), and the highlighted
+// row's labeled detail block renders indented under it with a "└" marker, so
+// explanations can never be mistaken for more selectable rows.
+func TestSlashMenuPickerRowStructure(t *testing.T) {
+	mn := slashMenu{theme: DefaultTheme()}
+	mn.openPickerDetailed([]pickItem{
+		{
+			Title: "openai", Status: "key set", StatusTone: pickOK, Value: "openai", Current: true,
+			Info: []pickInfoLine{
+				{Label: "key", Value: "OPENAI_API_KEY", Note: "set", Tone: pickOK},
+				{Label: "url (optional)", Value: "OPENAI_BASE_URL", Note: "https://api.openai.com/v1 · default", Tone: pickMuted},
+				{Label: "proxy", Note: "direct", Tone: pickMuted},
+			},
+		},
+		{Title: "deepseek", Status: "key needed", StatusTone: pickWarn, Value: "deepseek"},
+	}, "openai", "provider")
+
+	raw := mn.view(80)
+	plain := ansi.Strip(raw)
+
+	// The detail block must sit between the selected row and the next row.
+	selRow := strings.Index(plain, "› openai")
+	infoBlock := strings.Index(plain, "└ key")
+	nextRow := strings.Index(plain, "deepseek")
+	if selRow < 0 || infoBlock < 0 || nextRow < 0 {
+		t.Fatalf("missing row/detail pieces:\n%s", plain)
+	}
+	if !(selRow < infoBlock && infoBlock < nextRow) {
+		t.Errorf("detail block must render with its selected row, got order sel=%d info=%d next=%d:\n%s",
+			selRow, infoBlock, nextRow, plain)
+	}
+	// Labels name what can be set; notes state where it stands.
+	for _, want := range []string{"key set", "(current)", "key ", "OPENAI_API_KEY", "set",
+		"url (optional)", "OPENAI_BASE_URL", "https://api.openai.com/v1 · default", "proxy", "direct"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("view missing %q:\n%s", want, plain)
+		}
+	}
+	// Badges carry their tone: green for configured, yellow for missing.
+	if !strings.Contains(raw, DefaultTheme().Success.Render("key set")) {
+		t.Errorf("configured badge should render in the success color:\n%q", raw)
+	}
+	if !strings.Contains(raw, DefaultTheme().Warn.Render("key needed")) {
+		t.Errorf("missing-credential badge should render in the warn color:\n%q", raw)
+	}
+	// Non-selected rows render in the terminal default, not the gray System
+	// style that made the old list read as one dim blob.
+	if strings.Contains(raw, DefaultTheme().System.Render("deepseek")) {
+		t.Errorf("non-selected rows must not render in the dim system style:\n%q", raw)
 	}
 }

@@ -401,10 +401,13 @@ func joinLevels(levels []agentcore.ThinkingLevel) string {
 }
 
 // openProviderPicker shows the interactive provider picker: each row names the
-// provider, the environment variable(s) it reads, and whether a credential is
-// found (names only, never values). Confirming re-runs /provider <name>, so the
-// switch logic (default model, endpoint override clearing, catalog reset) stays
-// in the shared registry action.
+// provider with a colored credential badge (key set / key needed / keyless),
+// and the highlighted row's detail block shows what it can be configured with
+// — the key variable(s), the optional base-url variable(s) with the effective
+// endpoint and its source, and the proxy route (names only, never values).
+// Confirming re-runs /provider <name>, so the switch logic (default model,
+// endpoint override clearing, catalog reset) stays in the shared registry
+// action.
 func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 	if m.session == nil {
 		m.transcript.addSystem("No active session.")
@@ -415,22 +418,68 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 	specs := prompts.ProvidersAvailableFirst(m.session.creds)
 	picks := make([]pickItem, 0, len(specs))
 	for _, spec := range specs {
-		envs := "no key needed"
-		if len(spec.EnvVars) > 0 {
-			envs = strings.Join(spec.EnvVars, " / ")
-		}
-		summary := prompts.ProviderEndpointSummary(m.live, spec)
+		status, tone := providerBadge(m.session.creds, spec)
 		picks = append(picks, pickItem{
-			Title:  spec.Name,
-			Detail: envs + " · " + prompts.CredentialSummary(m.session.creds, spec.Name) + " · " + strings.Join(provider.BaseURLEnvVars(spec), " / "),
-			Value:  spec.Name,
-			Info:   strings.Split(summary, " · "),
+			Title:      spec.Name,
+			Status:     status,
+			StatusTone: tone,
+			Value:      spec.Name,
+			Current:    spec.Name == m.live.ProviderName,
+			Info:       providerPickInfo(m.live, spec, m.session.creds),
 		})
 	}
 	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
 	m.transcript.addSystem("Select a provider (↑↓ + Enter, Esc cancels):")
 	m.relayout()
 	return m, nil
+}
+
+// providerBadge is the picker row's short credential state: what the user
+// needs to know before picking, nothing more.
+func providerBadge(creds *provider.CredentialStore, spec provider.ProviderSpec) (string, pickTone) {
+	switch {
+	case len(spec.EnvVars) == 0:
+		return "keyless", pickMuted
+	case prompts.CredentialAvailable(creds, spec.Name):
+		return "key set", pickOK
+	default:
+		return "key needed", pickWarn
+	}
+}
+
+// providerPickInfo builds the highlighted provider's labeled detail block: the
+// key variable and whether it is configured, the optional base-url variables
+// with the effective endpoint and its source, and the proxy route. Labels name
+// what can be set; notes state what is set.
+func providerPickInfo(live *cli.LiveConfig, spec provider.ProviderSpec, creds *provider.CredentialStore) []pickInfoLine {
+	envVar, base, source, route := prompts.ProviderEndpointParts(live, spec)
+
+	keyValue := strings.Join(spec.EnvVars, " / ")
+	keyNote, keyTone := "no key needed", pickMuted
+	switch {
+	case len(spec.EnvVars) == 0:
+	case prompts.CredentialAvailable(creds, spec.Name):
+		keyNote, keyTone = "set", pickOK
+	default:
+		keyNote, keyTone = "not set", pickWarn
+	}
+	if keyValue == "" {
+		keyValue = "—"
+	}
+
+	urlTone := pickMuted
+	if source != "default" {
+		urlTone = pickOK
+	}
+	routeTone := pickMuted
+	if route != "direct" {
+		routeTone = pickOK
+	}
+	return []pickInfoLine{
+		{Label: "key", Value: keyValue, Note: keyNote, Tone: keyTone},
+		{Label: "url (optional)", Value: envVar, Note: base + " · " + source, Tone: urlTone},
+		{Label: "proxy", Note: route, Tone: routeTone},
+	}
 }
 
 // openProxyPicker persists each toggle immediately. Staying in the picker lets

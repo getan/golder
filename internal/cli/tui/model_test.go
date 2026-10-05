@@ -823,15 +823,30 @@ func TestProviderPickerSelectSwitches(t *testing.T) {
 	if gm.menu.pickMark != "opencode-go" {
 		t.Errorf("pickMark = %q, want the current provider", gm.menu.pickMark)
 	}
-	// Rows expose the env var names (value-free) so the picker is self-explanatory.
+	// Rows carry a credential badge; the highlighted row's labeled detail
+	// block names the env var it can be configured with (value-free) and the
+	// optional endpoint override, so the picker is self-explanatory.
 	found := ""
 	for _, it := range gm.menu.pick {
 		if it.Value == "deepseek" {
-			found = it.Detail
+			found = it.Status
+			for _, line := range it.Info {
+				if line.Label == "key" {
+					found += " " + line.Value + " " + line.Note
+				}
+				if strings.HasPrefix(line.Label, "url") {
+					found += " " + line.Value + " " + line.Note
+				}
+			}
 		}
 	}
-	if !strings.Contains(found, "DEEPSEEK_API_KEY") {
-		t.Errorf("deepseek row detail = %q, want the env var name", found)
+	for _, want := range []string{"DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"} {
+		if !strings.Contains(found, want) {
+			t.Errorf("deepseek row info = %q, want %q", found, want)
+		}
+	}
+	if !strings.Contains(found, "key needed") && !strings.Contains(found, "key set") {
+		t.Errorf("deepseek row = %q, want a credential badge", found)
 	}
 
 	// Move from the first row to deepseek (registry order), then confirm.

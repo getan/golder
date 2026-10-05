@@ -12,14 +12,18 @@ import (
 	"github.com/getan/golder/internal/runtime"
 )
 
-// ProviderEndpointSummary is shared by the terminal picker and text listing.
-func ProviderEndpointSummary(live *cli.LiveConfig, spec provider.ProviderSpec) string {
+// ProviderEndpointParts breaks the endpoint summary into its structured
+// pieces: the consulted base-url env var(s), the effective URL, where it came
+// from ("default", a variable name, or "base_url override"), and the proxy
+// routing. It backs both the one-line text listing (ProviderEndpointSummary)
+// and the TUI picker's labeled detail block.
+func ProviderEndpointParts(live *cli.LiveConfig, spec provider.ProviderSpec) (envVar, baseURL, source, proxy string) {
 	override := ""
 	if live != nil && live.ProviderName == spec.Name {
 		override = live.BaseURL
 	}
 	base := provider.ResolveBaseURL(spec, override, os.Getenv)
-	source := "default"
+	source = "default"
 	if override != "" {
 		source = "base_url override"
 	} else {
@@ -30,9 +34,15 @@ func ProviderEndpointSummary(live *cli.LiveConfig, spec provider.ProviderSpec) s
 			}
 		}
 	}
+	return strings.Join(provider.BaseURLEnvVars(spec), " / "),
+		provider.DisplayURL(base), source, provider.ProxyStatus(spec.Name, base)
+}
+
+// ProviderEndpointSummary is shared by the terminal picker and text listing.
+func ProviderEndpointSummary(live *cli.LiveConfig, spec provider.ProviderSpec) string {
+	envVar, base, source, proxy := ProviderEndpointParts(live, spec)
 	return fmt.Sprintf("%s (optional) · %s [%s] · %s",
-		strings.Join(provider.BaseURLEnvVars(spec), " / "),
-		provider.DisplayURL(base), source, provider.ProxyStatus(spec.Name, base))
+		envVar, base, source, proxy)
 }
 
 // ProxyProvidersSelectedFirst keeps registry order within the selected and

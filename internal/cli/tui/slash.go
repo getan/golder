@@ -22,6 +22,9 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/prompts"
@@ -33,6 +36,29 @@ import (
 // filtered list scrolls a window around the selection so the overlay stays a few
 // lines tall regardless of how many commands are registered.
 const maxMenuRows = 8
+
+// pickTone colors a picker badge or detail note by meaning: configured/ready
+// (green), needs attention (yellow), explanatory (gray), or plain.
+type pickTone int
+
+const (
+	pickPlain pickTone = iota
+	pickOK
+	pickWarn
+	pickMuted
+)
+
+// pickInfoLine is one labeled line of a picker row's detail block, rendered
+// only for the highlighted row: the label is dim, the value plain, and the
+// note carries the status color. It separates "what you can configure here"
+// (label/value) from "where it stands right now" (note) instead of cramming
+// every fact into the selectable row.
+type pickInfoLine struct {
+	Label string
+	Value string
+	Note  string
+	Tone  pickTone
+}
 
 // newSlashRegistry assembles the shared slash-command registry for the TUI the
 // same way the REPL does: built-ins seeded from runtime, the live-state /model
@@ -84,11 +110,20 @@ type slashMenu struct {
 // pickItem is one picker row: Title renders first, Detail (dimmer context)
 // second, Value is handed to the confirm action.
 type pickItem struct {
-	Title  string
+	Title string
+	// Status is a short state badge after the title ("key set", "key needed");
+	// StatusTone colors it. Keep it to a couple of words so rows stay scannable.
+	Status     string
+	StatusTone pickTone
+	// Detail is a dim context suffix (kept for pickers that do not use the
+	// labeled Info block, e.g. resume dates).
 	Detail string
 	Value  string
-	// Info gives the selected row a readable detail area below the list.
-	Info []string
+	// Current marks the row as the live selection; view renders a "current" tag.
+	Current bool
+	// Info is the highlighted row's labeled detail block, rendered indented
+	// under the list so it reads as an explanation, not more rows.
+	Info []pickInfoLine
 }
 
 // newSlashMenu builds an inactive menu bound to the theme used for its rows.
@@ -160,25 +195,87 @@ func categoryRank(cat string) int {
 // model can reserve that space above the input line during relayout. It is zero
 // while inactive and otherwise the visible window height (min of the candidate
 // count and maxMenuRows).
-// row renders one candidate: a plain item in picker mode (with the mark
-// annotated), otherwise "/name  description".
+// row renders one command candidate as "/name  description". Picker rows use
+// pickRowLine (segmented colors and badges) instead.
 func (mn slashMenu) row(i int) string {
-	if mn.picking() {
-		it := mn.pick[i]
-		line := it.Title
-		if it.Detail != "" {
-			line += "  " + it.Detail
-		}
-		v := it.Value
-		if v == "" {
-			v = it.Title
-		}
-		if v != "" && v == mn.pickMark {
-			line += "  (current)"
-		}
-		return line
-	}
 	return commandRowText(mn.filtered[i])
+}
+
+// pickRowLine renders one selectable picker row: caret + title (accent when
+// highlighted, terminal default otherwise), a colored status badge, the dim
+// detail suffix, and a "current" tag. Only selectable rows render at this
+// indent; the highlighted row's explanation is the Info block below.
+func (mn slashMenu) pickRowLine(i, rowWidth int) string {
+	it := mn.pick[i]
+	var b strings.Builder
+	if i == mn.selected {
+		b.WriteString(mn.theme.Accent.Render("› "))
+		b.WriteString(mn.theme.Accent.Render(it.Title))
+	} else {
+		b.WriteString("  " + it.Title)
+	}
+	if it.Status != "" {
+		b.WriteString("  " + mn.toneStyle(it.StatusTone).Render(it.Status))
+	}
+	if it.Detail != "" {
+		b.WriteString("  " + mn.theme.System.Render(it.Detail))
+	}
+	if it.Current || (it.Value != "" && it.Value == mn.pickMark) {
+		b.WriteString("  " + mn.theme.Accent.Render("(current)"))
+	}
+	return ansi.Truncate(b.String(), rowWidth, "…")
+}
+
+// pickInfoLines renders the highlighted row's detail block: a status/info card
+// indented under the list, its first line joined by "└" so it cannot be
+// mistaken for another selectable row. Labels are padded into one dim column,
+// values stay plain, and notes carry the status color.
+func (mn slashMenu) pickInfoLines(rowWidth int) []string {
+	if mn.selected < 0 || mn.selected >= len(mn.pick) {
+		return nil
+	}
+	info := mn.pick[mn.selected].Info
+	if len(info) == 0 {
+		return nil
+	}
+	labelW := 0
+	for _, in := range info {
+		if w := ansi.StringWidth(in.Label); w > labelW {
+			labelW = w
+		}
+	}
+	out := make([]string, 0, len(info))
+	for idx, in := range info {
+		prefix := "    "
+		if idx == 0 {
+			prefix = "  └ "
+		}
+		var b strings.Builder
+		b.WriteString(prefix)
+		b.WriteString(mn.theme.System.Render(fmt.Sprintf("%-*s", labelW, in.Label)))
+		if in.Value != "" {
+			b.WriteString("  " + in.Value)
+		}
+		if in.Note != "" {
+			b.WriteString("  " + mn.toneStyle(in.Tone).Render(in.Note))
+		}
+		out = append(out, ansi.Truncate(b.String(), rowWidth, "…"))
+	}
+	return out
+}
+
+// toneStyle maps a pick tone to its theme style.
+func (mn slashMenu) toneStyle(t pickTone) lipgloss.Style {
+	switch t {
+	case pickOK:
+		return mn.theme.Success
+	case pickWarn:
+		return mn.theme.Warn
+	case pickMuted:
+		return mn.theme.System
+	default:
+		return lipgloss.NewStyle()
+	}
 }
 
 // commandRowText renders one command candidate as "/name  description".
@@ -376,16 +473,11 @@ func (mn slashMenu) view(width int) string {
 	if mn.picking() {
 		start, end := mn.window()
 		for i := start; i < end; i++ {
-			line := TruncateToWidth(mn.row(i), rowWidth)
+			lines = append(lines, mn.pickRowLine(i, rowWidth))
+			// The detail block follows the highlighted row so the explanation
+			// stays visually attached to what it explains.
 			if i == mn.selected {
-				lines = append(lines, mn.theme.Accent.Render("› "+line))
-			} else {
-				lines = append(lines, mn.theme.System.Render("  "+line))
-			}
-		}
-		if mn.selected >= 0 && mn.selected < len(mn.pick) {
-			for _, info := range mn.pick[mn.selected].Info {
-				lines = append(lines, mn.theme.System.Render("  "+TruncateToWidth(info, rowWidth)))
+				lines = append(lines, mn.pickInfoLines(rowWidth)...)
 			}
 		}
 		return strings.Join(lines, "\n")
