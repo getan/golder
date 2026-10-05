@@ -26,7 +26,8 @@ const DefaultMaxSubagents = 4
 const taskDescription = "Dispatch a general-purpose sub-agent to autonomously complete a delegated task. " +
 	"The sub-agent runs its own agent loop with a fresh context and the standard tool set, then returns its final report. " +
 	"Provide a complete, self-contained prompt since the sub-agent shares none of this conversation's context. " +
-	"Multiple task calls in one message run in parallel."
+	"To run independent tasks concurrently, emit ALL of their task calls in the SAME assistant message: " +
+	"calls in one message execute in parallel, while a task dispatched in a later message waits for the previous batch to finish."
 
 // taskSystemPrompt seeds every generic sub-agent's context. It is intentionally
 // generic (the actual work arrives as the runtime prompt) and mirrors the

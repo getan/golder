@@ -140,8 +140,10 @@ const searchGuide = "For web research: issue searches immediately without preamb
 const taskGuide = "When work splits into independent subtasks, delegate them with the task tool: each " +
 	"task call dispatches an independent sub-agent that completes its subtask on a fresh context and " +
 	"returns its final report. To fan out, emit MULTIPLE task calls in a single message — they run in " +
-	"parallel. Give each a complete, self-contained prompt, since a sub-agent shares none of this " +
-	"conversation's context. Do the work directly for a single, sequential, or trivial task."
+	"parallel; dispatching a task only after the previous one returns serializes them, so batch every " +
+	"independent task up front instead of waiting for one report before sending the next. Give each a " +
+	"complete, self-contained prompt, since a sub-agent shares none of this conversation's context. " +
+	"Do the work directly for a single, sequential, or trivial task."
 
 // contextGuide points at the context-budget tools: the model should size long
 // stretches of work to the room it actually has and roll into a fresh window

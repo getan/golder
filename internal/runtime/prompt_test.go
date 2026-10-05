@@ -65,6 +65,9 @@ func TestBuildSystemPromptAdvertisesTaskFanout(t *testing.T) {
 	if !strings.Contains(lower, "parallel") {
 		t.Errorf("prompt should state that multiple task calls run in parallel (fan-out):\n%s", got)
 	}
+	if !strings.Contains(lower, "single message") {
+		t.Errorf("prompt should tell the model to batch independent task calls into one message:\n%s", got)
+	}
 }
 
 // TestBuildSystemPromptAGENTSOrdering is the acceptance-critical test: with an
