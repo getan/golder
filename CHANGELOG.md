@@ -210,8 +210,21 @@ interactive REPL/TUI.
   were translated from Chinese to English.
 - Documented self-update and the revised `update` semantics in the README and
   the docs site.
+- **Todo cards read at a glance**: checklist rows are styled by status — the
+  in-progress step is light-green bold, completed rows are dim struck-through
+  gray, and pending rows stay plain gray (codex's plan-cell treatment), so the
+  active step is the only row that draws color.
+- **Unseen-output notice moved to a bottom-right toast**: "N new lines ·
+  Ctrl+E to jump" no longer claims the status bar (back to the persistent
+  readout only); it floats over the transcript's bottom-right corner for a
+  few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **No phantom "new lines" notice at startup**: the banner filling the
+  not-yet-pinned viewport was counted as unseen content, so a fresh session
+  could greet the user with "↓ 8 new lines · Ctrl+E to jump". The transcript
+  now starts pinned to the bottom, and growth that the viewport can still show
+  never counts as unseen.
 - **Ctrl+C clears the composer before quitting**: with a draft in the input
   box, the first Ctrl+C now discards it (and any paste/image placeholder
   bodies) — the shell-like cancel — instead of arming the quit; only presses

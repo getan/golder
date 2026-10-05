@@ -113,7 +113,7 @@ type transcript struct {
 	follow bool
 
 	// unseen counts content lines that arrived while follow was paused (the user
-	// scrolled up). It drives the "N new lines · Ctrl+E" hint and resets
+	// scrolled up). It drives the "N new lines · Ctrl+E" toast and resets
 	// whenever the viewport is pinned back to the bottom (scroll-down,
 	// jumpToBottom, or a new submitted turn re-arming follow).
 	unseen int
@@ -136,6 +136,11 @@ func newTranscript(theme Theme) transcript {
 		vp:              vp,
 		theme:           theme,
 		activeAssistant: -1,
+		// Start pinned to the bottom: the launch banner and any replayed
+		// history fill the viewport downward, and nothing is "waiting below
+		// the fold" on a fresh screen — without this the very first reflow
+		// would count the banner as unseen output and pop a phantom notice.
+		follow: true,
 	}
 }
 
@@ -314,7 +319,7 @@ func (t *transcript) update(msg tea.Msg) tea.Cmd {
 // syncFollow re-reads the viewport position into the follow intent and clears
 // the unseen counter when the viewport is (back) at the bottom. Every scroll
 // path funnels through here so "reached the bottom" always re-arms stick-to-
-// bottom without leaving a stale "new lines" hint behind.
+// bottom without leaving a stale "new lines" notice behind.
 func (t *transcript) syncFollow() {
 	t.follow = t.vp.AtBottom()
 	if t.follow {
@@ -325,7 +330,7 @@ func (t *transcript) syncFollow() {
 // jumpToBottom re-arms stick-to-bottom and snaps the viewport to the newest
 // line. It backs the Ctrl+E key after the user scrolled up: they return to the
 // live tail immediately instead of hunting for the bottom. It is a no-op when
-// the transcript is already pinned, apart from clearing the hint.
+// the transcript is already pinned, apart from clearing the notice.
 func (t *transcript) jumpToBottom() {
 	t.follow = true
 	t.unseen = 0
@@ -539,8 +544,17 @@ func (t *transcript) setContent(rendered string) {
 		t.unseen = 0
 		return
 	}
+	// Only growth the viewport cannot show is "unseen". When everything still
+	// fits (or the offset was clamped back to the end), AtBottom is true and
+	// there is nothing below the fold to announce — counting it anyway is what
+	// raised the phantom "N new lines" notice on startup, when the banner
+	// itself briefly filled a not-yet-pinned viewport.
+	if t.vp.AtBottom() {
+		t.unseen = 0
+		return
+	}
 	if after := t.vp.TotalLineCount(); after > before {
-		// Approximate, but that is all the hint needs: line-count growth is a
+		// Approximate, but that is all the notice needs: line-count growth is a
 		// faithful signal that new output landed while the user was reading
 		// history (width re-wraps may over-count slightly; harmless).
 		t.unseen += after - before

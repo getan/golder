@@ -126,7 +126,7 @@ func TestSeedTranscriptReplaysToolCards(t *testing.T) {
 		t.Fatalf("replayed cards = %d, want 3 (every call becomes a card)", len(cards))
 	}
 	// The todo card keeps its checklist from the call's own arguments.
-	todo := cards["1"].render(DefaultTheme(), 80)
+	todo := stripANSI(cards["1"].render(DefaultTheme(), 80))
 	for _, want := range []string{"│ [x] run tests", "│ [ ] commit"} {
 		if !strings.Contains(todo, want) {
 			t.Errorf("replayed todo card missing %q\n%s", want, todo)

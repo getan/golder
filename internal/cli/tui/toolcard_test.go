@@ -210,7 +210,7 @@ func TestToolCardTodoHeadline(t *testing.T) {
 // per item (mirroring the result block's marks) and never leaks `map[...]`.
 func TestToolCardTodoDetail(t *testing.T) {
 	card := toolCard{name: "todo", input: todoCallInput(), state: cardSuccess, expanded: true}
-	got := card.render(DefaultTheme(), 80)
+	got := stripANSI(card.render(DefaultTheme(), 80))
 	for _, want := range []string{"│ [x] run tests", "│ [~] commit", "│ [ ] push"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render missing %q\n%s", want, got)
@@ -218,6 +218,25 @@ func TestToolCardTodoDetail(t *testing.T) {
 	}
 	if strings.Contains(got, "map[") {
 		t.Fatalf("render leaked raw map syntax\n%s", got)
+	}
+}
+
+// TestToolCardTodoStatusStyles verifies checklist rows are styled by status:
+// the in-progress step is highlighted (TodoActive), completed rows are dim
+// struck-through gray (TodoDone), and pending rows stay plain muted gray
+// (TodoPending), so the active step is the only one that draws color.
+func TestToolCardTodoStatusStyles(t *testing.T) {
+	theme := DefaultTheme()
+	card := toolCard{name: "todo", input: todoCallInput(), state: cardSuccess}
+	got := card.render(theme, 80)
+	for _, want := range []string{
+		theme.TodoDone.Render("  │ [x] run tests"),
+		theme.TodoActive.Render("  │ [~] commit"),
+		theme.TodoPending.Render("  │ [ ] push"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("render missing styled row %q\n%s", want, got)
+		}
 	}
 }
 
@@ -240,7 +259,7 @@ func TestToolCardTodoMalformedFallsBack(t *testing.T) {
 func TestToolCardTodoChecklistAlwaysVisible(t *testing.T) {
 	for _, state := range []cardState{cardRunning, cardSuccess} {
 		card := toolCard{name: "todo", input: todoCallInput(), state: state}
-		got := card.render(DefaultTheme(), 80)
+		got := stripANSI(card.render(DefaultTheme(), 80))
 		for _, want := range []string{"│ [x] run tests", "│ [~] commit", "│ [ ] push"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("state %v: render missing %q\n%s", state, want, got)
@@ -262,7 +281,7 @@ func TestToolCardTodoEchoSuppressed(t *testing.T) {
 		response: parseToolResult("Todos:\n  [x] run tests\n  [~] commit\n  [ ] push\n(1/3 completed)"),
 		state:    cardSuccess,
 	}
-	got := card.render(DefaultTheme(), 80)
+	got := stripANSI(card.render(DefaultTheme(), 80))
 	if strings.Contains(got, "(1/3 completed)") {
 		t.Errorf("echo response should be suppressed\n%s", got)
 	}
@@ -272,7 +291,7 @@ func TestToolCardTodoEchoSuppressed(t *testing.T) {
 
 	card.response = parseToolResult("todo: item 2 has invalid status \"nope\"")
 	card.state = cardWarn
-	if got := card.render(DefaultTheme(), 80); !strings.Contains(got, "invalid status") {
+	if got := stripANSI(card.render(DefaultTheme(), 80)); !strings.Contains(got, "invalid status") {
 		t.Errorf("a non-echo (error) response must still render\n%s", got)
 	}
 }

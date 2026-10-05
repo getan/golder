@@ -238,6 +238,24 @@ type Model struct {
 	images map[int]string
 	// imageSeq is the monotonic counter behind the image placeholder ids.
 	imageSeq int
+
+	// unseenToastUntil is the deadline of the transient bottom-right "N new
+	// lines" toast. The zero value means no toast is scheduled; once the
+	// deadline passes the unseen watch clears it. With unseenNotified it makes
+	// the notice appear at most once per scroll-away period instead of nagging
+	// on every streamed line.
+	unseenToastUntil time.Time
+	// unseenNotified records that the toast has already been shown for the
+	// current scroll-away period (the user scrolled up and has not returned to
+	// the bottom yet), so continuous output does not re-pop it.
+	unseenNotified bool
+	// unseenWatchActive is true while an unseenWatchMsg tick chain is running.
+	// The chain runs only while the transcript is scrolled away from the
+	// bottom, so an idle screen costs no wakeups.
+	unseenWatchActive bool
+	// unseenWatchGen invalidates ticks from a superseded chain (cleared watch,
+	// jump to bottom, or a fresh arm) so a stale tick cannot re-pop the toast.
+	unseenWatchGen int
 }
 
 // NewModel builds the root model from the assembled Options. It reads the
@@ -663,7 +681,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selScrollDir = 0
 		m.selScrollGen++
 		m.relayout()
-		return m, nil
+		return m, m.armUnseenWatch()
+
+	case unseenWatchMsg:
+		return m, m.stepUnseenWatch(msg)
 
 	case gitInfoMsg:
 		m.statusBar.SetGit(msg)
@@ -708,11 +729,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingCardClick = nil
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.armUnseenWatch())
 		}
 		cmd := m.transcript.update(msg)
 		m.sel = selection{}
-		return m, cmd
+		return m, tea.Batch(cmd, m.armUnseenWatch())
 
 	case tea.MouseClickMsg:
 		// A left press on the scrollbar column grabs the thumb (jump + drag). A left
@@ -727,7 +748,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.onScrollbar(msg.X, msg.Y) {
 				m.draggingScrollbar = true
 				m.transcript.scrollToRow(msg.Y)
-				return m, nil
+				return m, m.armUnseenWatch()
 			}
 			// A press on a tool card arms a click-toggle (see pendingCardClick);
 			// the release handler fires it only if the cell did not move, so a
@@ -755,7 +776,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selScrollDir = 0
 			m.selScrollGen++
 			m.transcript.follow = false
-			return m, nil
+			return m, m.armUnseenWatch()
 		}
 		return m, nil
 
@@ -765,7 +786,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// selection to the current cell.
 		if m.draggingScrollbar {
 			m.transcript.scrollToRow(msg.Y)
-			return m, nil
+			return m, m.armUnseenWatch()
 		}
 		if m.sel.active && m.selDragging {
 			// Motion after the press means a drag, not a click: cancel the
@@ -816,7 +837,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selScrollDir = 0
 			return m, nil
 		}
-		return m, selScrollTick(m.selScrollGen)
+		return m, tea.Batch(selScrollTick(m.selScrollGen), m.armUnseenWatch())
 
 	case tea.PasteMsg:
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
@@ -1363,6 +1384,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// readline meaning (move the caret to the end of the line).
 		if !m.transcript.follow {
 			m.transcript.jumpToBottom()
+			m.clearUnseenNotice()
 			return m, nil
 		}
 	case "pgup", "pgdown":
@@ -1373,11 +1395,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// home / end) belong to the multi-line editor and are delegated below.
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
-			return m, cmd
+			return m, tea.Batch(cmd, m.armUnseenWatch())
 		}
 		m.sel = selection{}
 		cmd := m.transcript.update(msg)
-		return m, cmd
+		return m, tea.Batch(cmd, m.armUnseenWatch())
 	case "ctrl+v":
 		// Explicit paste key: first try to pull an image off the clipboard (Claude
 		// Code-style image paste); the reply arrives as clipboardImageMsg and, when
@@ -2665,18 +2687,6 @@ func (m Model) renderContent() (string, int) {
 		height = 24
 	}
 
-	// While the transcript is scrolled up and new output is landing out of
-	// sight, surface a transient "N new lines · Ctrl+E to jump" hint in the
-	// status bar (highest priority, so narrow widths keep it). The statusBar
-	// copy is local to this render: once the user is back at the bottom the
-	// condition clears and the normal bar returns.
-	if n := m.transcript.unseen; n > 0 {
-		word := "lines"
-		if n == 1 {
-			word = "line"
-		}
-		m.statusBar.SetHint(fmt.Sprintf("%d new %s · Ctrl+E to jump", n, word))
-	}
 	status := m.statusBar.Render(width)
 
 	// The input editor renders its own prompt column and cursor across as many
@@ -2699,6 +2709,14 @@ func (m Model) renderContent() (string, int) {
 	if sized {
 		// The viewport pads its content to exactly the rows relayout reserved.
 		tv := m.transcript.view()
+		// The transient "N new lines" toast floats over the bottom-right of the
+		// transcript region (never the status bar, which stays reserved for the
+		// persistent readout). It is rendered only while content is actually
+		// waiting below the fold and its TTL has not expired; the watch tick
+		// clears the state, this just stops painting it.
+		if toast := m.toastBlock(); toast != "" {
+			tv = overlayToast(tv, toast, width)
+		}
 		b.WriteString(tv)
 		b.WriteByte('\n')
 		inputRow += countRows(tv)

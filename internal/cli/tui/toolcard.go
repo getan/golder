@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/patch"
 )
@@ -609,14 +611,29 @@ func (c toolCard) todoResponseIsEcho() bool {
 // renderChecklist renders the checklist as checkbox rows with the `  │ `
 // gutter, using the same marks as the tool's own RenderTodoList ([ ] pending,
 // [~] in progress, [x] completed) so the call and its result read alike.
+// Rows are styled by status: the in-progress step is light green bold, done
+// rows are dim struck-through gray, and pending rows stay plain muted gray —
+// codex's plan-cell treatment, so the active step draws the eye.
 func (c toolCard) renderChecklist(theme Theme, width int, items []todoInputItem) string {
 	inner := max(1, width-2)
 	var b strings.Builder
 	for _, it := range items {
 		line := fmt.Sprintf("  │ [%s] %s", todoMark(it.status), oneLine(it.content))
-		b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(line, inner)))
+		b.WriteString("\n" + todoStatusStyle(theme, it.status).Render(WrapToWidth(line, inner)))
 	}
 	return b.String()
+}
+
+// todoStatusStyle picks the row style for a todo status.
+func todoStatusStyle(theme Theme, status string) lipgloss.Style {
+	switch status {
+	case "completed":
+		return theme.TodoDone
+	case "in_progress":
+		return theme.TodoActive
+	default:
+		return theme.TodoPending
+	}
 }
 
 // todoItemsFromInput extracts the checklist from a todo call's "todos"

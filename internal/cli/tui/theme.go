@@ -34,6 +34,19 @@ type Theme struct {
 	ToolCmd lipgloss.Style
 	// ToolBody styles the body/output region of a tool card.
 	ToolBody lipgloss.Style
+	// TodoActive styles the row of the todo item currently in progress (light
+	// green bold, so the active step is the first thing the eye lands on).
+	TodoActive lipgloss.Style
+	// TodoDone styles completed todo rows (muted gray, struck through —
+	// codex's crossed-out dim treatment).
+	TodoDone lipgloss.Style
+	// TodoPending styles not-yet-started todo rows (muted gray, same weight as
+	// ToolBody so only the active step draws color).
+	TodoPending lipgloss.Style
+	// Toast styles the transient bottom-right notice (e.g. "↓ 8 new lines ·
+	// Ctrl+E to jump"): a filled block that floats over the transcript and
+	// fades on its own, deliberately outside the permanent status bar.
+	Toast lipgloss.Style
 	// StatusBar styles the persistent bottom status bar.
 	StatusBar lipgloss.Style
 	// Accent styles file names and other highlighted tokens (blue).
@@ -67,19 +80,22 @@ type Theme struct {
 // Palette color numbers use the ANSI 256-color cube so the theme renders
 // consistently across terminals without depending on true-color support.
 const (
-	colorSuccess  = "42"  // green
-	colorError    = "196" // red
-	colorWarn     = "214" // yellow/amber
-	colorAccent   = "39"  // blue (file names, highlights)
-	colorGray     = "245" // secondary / muted text
-	colorScroll   = "250" // scrollbar thumb (bright gray pill, clearly visible)
-	colorTrack    = "240" // scrollbar groove (dim gray, visible but recessive)
-	colorUser     = "15"  // bright white
-	colorUserBg   = "237" // user turn bar background (dark gray, codex history-cell parity)
-	colorAssist   = "252" // near-white
-	colorStatus   = "62"  // status bar background (violet)
-	colorSpinner  = "173" // spinner glyph/verb (warm coral, matches Claude Code)
-	colorDiffMeta = "37"  // diff @@ hunk markers (cyan, git convention)
+	colorSuccess    = "42"  // green
+	colorError      = "196" // red
+	colorWarn       = "214" // yellow/amber
+	colorAccent     = "39"  // blue (file names, highlights)
+	colorGray       = "245" // secondary / muted text
+	colorScroll     = "250" // scrollbar thumb (bright gray pill, clearly visible)
+	colorTrack      = "240" // scrollbar groove (dim gray, visible but recessive)
+	colorTodoActive = "120" // in-progress todo row (light green, bold)
+	colorUser       = "15"  // bright white
+	colorUserBg     = "237" // user turn bar background (dark gray, codex history-cell parity)
+	colorAssist     = "252" // near-white
+	colorToastFg    = "231" // toast text (bright white, dark-gray block)
+	colorToastBg    = "238" // toast background (neutral dark gray, readable over both themes)
+	colorStatus     = "62"  // status bar background (violet)
+	colorSpinner    = "173" // spinner glyph/verb (warm coral, matches Claude Code)
+	colorDiffMeta   = "37"  // diff @@ hunk markers (cyan, git convention)
 
 	colorToolName = "37" // tool name in a card headline (cyan, codex parity)
 
@@ -115,6 +131,19 @@ func DefaultTheme() Theme {
 			Foreground(lipgloss.Color(colorAssist)),
 		ToolBody: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorGray)),
+		TodoActive: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorTodoActive)).
+			Bold(true),
+		TodoDone: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorGray)).
+			Strikethrough(true).
+			Faint(true),
+		TodoPending: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorGray)),
+		Toast: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorToastFg)).
+			Background(lipgloss.Color(colorToastBg)).
+			Bold(true),
 		StatusBar: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorUser)).
 			Background(lipgloss.Color(colorStatus)),

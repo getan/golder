@@ -103,25 +103,6 @@ func TestStatusBarVeryNarrowNeverOverflows(t *testing.T) {
 	}
 }
 
-// TestStatusBarHintRendersAtHighestPriority verifies the transient hint segment
-// (new transcript lines waiting below the fold) survives truncation before the
-// persistent low-priority fields do.
-func TestStatusBarHintRendersAtHighestPriority(t *testing.T) {
-	s := newTestStatusBar()
-	s.SetHint("3 new lines · Ctrl+E to jump")
-	const width = 36
-	out := s.Render(width)
-	if !strings.Contains(out, "Ctrl+E to jump") {
-		t.Errorf("narrow render dropped the hint: %q", out)
-	}
-	if strings.Contains(out, "~/project") {
-		t.Errorf("narrow render should drop cwd before the hint: %q", out)
-	}
-	if w := ui.Width(out); w > width {
-		t.Errorf("render width %d exceeds terminal width %d", w, width)
-	}
-}
-
 func TestStatusBarZeroWidthEmpty(t *testing.T) {
 	s := newTestStatusBar()
 	if out := s.Render(0); out != "" {
