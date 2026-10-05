@@ -1332,6 +1332,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.historyPrev(msg)
 		case "down":
 			return m.historyNext(msg)
+		case "tab":
+			// History recall deliberately leaves the autocomplete popup closed,
+			// so Tab is the explicit "complete this /command" gesture. Opening
+			// on the current "/prefix" and completing to the highlighted
+			// candidate matches what Tab does while the popup is open; a
+			// non-slash buffer falls through to the textarea.
+			if _, ok := slashToken(m.input.Value()); ok {
+				m.menu.refresh(m.input.Value(), m.slash)
+				m = m.completeSlash()
+				m.relayout()
+				return m, nil
+			}
 		}
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
@@ -2211,11 +2223,17 @@ func dedupConsecutive(entries []string) []string {
 // when the caret is on the first line — otherwise ↑ moves the caret within a
 // multi-line draft. The first recall stashes the live draft so historyNext can
 // restore it, and the cursor lands past the newest entry (len(history)) initially.
+//
+// Recalling is navigation, not typing: it must never (re)open the slash
+// autocomplete. Doing so used to strand the user mid-history — a recalled
+// "/command" popped the popup open, and an open popup captures the next ↑/↓
+// for candidate navigation, so they had to press Esc before they could keep
+// scrolling. The popup still opens on real edits, and Tab is the deliberate
+// completion gesture (see handleKey).
 func (m Model) historyPrev(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.input.Line() != 0 {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.menu.refresh(m.input.Value(), m.slash)
 		m.relayout()
 		return m, cmd
 	}
@@ -2223,7 +2241,6 @@ func (m Model) historyPrev(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if len(m.history) == 0 {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.menu.refresh(m.input.Value(), m.slash)
 		m.relayout()
 		return m, cmd
 	}
@@ -2234,7 +2251,6 @@ func (m Model) historyPrev(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.histIdx--
 	}
 	m.input.SetValue(m.history[m.histIdx])
-	m.menu.refresh(m.input.Value(), m.slash)
 	m.relayout()
 	return m, nil
 }
@@ -2247,7 +2263,6 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.histIdx >= len(m.history) || m.input.Line() != m.input.LineCount()-1 {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
-		m.menu.refresh(m.input.Value(), m.slash)
 		m.relayout()
 		return m, cmd
 	}
@@ -2257,7 +2272,6 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.input.SetValue(m.history[m.histIdx])
 	}
-	m.menu.refresh(m.input.Value(), m.slash)
 	m.relayout()
 	return m, nil
 }

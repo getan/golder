@@ -628,6 +628,45 @@ func TestModelPromptHistoryDedupsAndStashesDraft(t *testing.T) {
 	}
 }
 
+// TestHistoryRecallKeepsPopupClosed guards the history-browsing fix: recalling
+// a "/command" entry must not reopen the slash autocomplete. The popup, once
+// open, captures the next ↑/↓ for candidate navigation, so the user could not
+// keep scrolling history until they pressed Esc. Tab stays the deliberate
+// completion gesture.
+func TestHistoryRecallKeepsPopupClosed(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 12})
+	m.history = []string{"older prompt", "/model", "newest prompt"}
+	m.histIdx = len(m.history)
+
+	up := tea.KeyPressMsg{Code: tea.KeyUp}
+	m = apply(t, m, up)
+	if got := m.input.Value(); got != "newest prompt" {
+		t.Fatalf("first ↑ recalled %q", got)
+	}
+	m = apply(t, m, up)
+	if got := m.input.Value(); got != "/model" {
+		t.Fatalf("second ↑ recalled %q, want /model", got)
+	}
+	if m.menu.active {
+		t.Fatal("recalling /model must not open the slash popup")
+	}
+
+	// Tab is the explicit completion gesture while the popup stays closed.
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.input.Value(); got != "/model " {
+		t.Fatalf("Tab after recall = %q, want the completed command", got)
+	}
+	if m.menu.active {
+		t.Error("the popup must close again once the command is completed")
+	}
+
+	// With no popup in the way, ↑ keeps walking the history.
+	m = apply(t, m, up)
+	if got := m.input.Value(); got != "older prompt" {
+		t.Fatalf("third ↑ = %q, want the oldest entry (↑ must keep scrolling)", got)
+	}
+}
+
 // TestResumeSessionGuards verifies /resume refuses while a run is in flight
 // and reports cleanly with no active session.
 func TestResumeSessionGuards(t *testing.T) {
