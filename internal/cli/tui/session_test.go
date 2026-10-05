@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -274,6 +275,83 @@ func TestPersistAfterCompaction(t *testing.T) {
 	}
 	if len(msgs) != 2 {
 		t.Fatalf("persisted messages = %d, want 2 (flattened compacted context)", len(msgs))
+	}
+}
+
+// TestCheckpointMidRunPersistsTurn covers the mid-run checkpoint hook the run
+// loop calls at turn boundaries: a save lands with the messages produced so
+// far, advances the branch cursor, no-ops when nothing new arrived, and
+// re-saves linearly when flagged for a compaction rebase. This is what keeps a
+// crash from discarding a long session that never reached run end.
+func TestCheckpointMidRunPersistsTurn(t *testing.T) {
+	store := newTestStore(t)
+	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	if err != nil {
+		t.Fatalf("newRunSessionWithStore: %v", err)
+	}
+	ctx := context.Background()
+
+	// Simulate the loop after finalizing the first assistant reply.
+	s.agentCtx.Messages = append(s.agentCtx.Messages,
+		userMsg("prompt"),
+		agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewTextContent("reply")}},
+	)
+	s.checkpointMidRun(ctx, s.agentCtx, false)
+
+	_, msgs, err := store.Load(s.header.ID)
+	if err != nil {
+		t.Fatalf("Load after checkpoint: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("persisted messages = %d, want 2 (the turn so far)", len(msgs))
+	}
+	if s.persisted != 2 || s.curLeaf == "" {
+		t.Fatalf("persisted = %d curLeaf = %q, want 2 and a leaf", s.persisted, s.curLeaf)
+	}
+	if s.compacted {
+		t.Error("compacted flag must stay clear on an incremental checkpoint")
+	}
+
+	// A checkpoint with nothing new is a no-op: the branch (and its entry ids)
+	// must not be rewritten.
+	leaf := s.curLeaf
+	s.checkpointMidRun(ctx, s.agentCtx, false)
+	if s.curLeaf != leaf {
+		t.Errorf("no-op checkpoint changed the leaf: %q -> %q", leaf, s.curLeaf)
+	}
+
+	// A compaction rebase rewrites the context and must re-save linearly.
+	s.agentCtx.Messages = agentcore.MessageList{userMsg("summary tail")}
+	s.checkpointMidRun(ctx, s.agentCtx, true)
+	if s.persisted != 1 {
+		t.Errorf("persisted = %d, want 1 after the rebase", s.persisted)
+	}
+	if s.compacted {
+		t.Error("compacted flag should be cleared by the rebase save")
+	}
+	_, msgs, err = store.Load(s.header.ID)
+	if err != nil {
+		t.Fatalf("Load after rebase: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("persisted messages = %d, want 1 (flattened rebase)", len(msgs))
+	}
+}
+
+// TestSideRunConfigDisablesCheckpoint locks the /btw contract: a side thread
+// reads the main conversation but must never write it, so its run config
+// carries no mid-run checkpoint hook while a normal run does.
+func TestSideRunConfigDisablesCheckpoint(t *testing.T) {
+	store := newTestStore(t)
+	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	if err != nil {
+		t.Fatalf("newRunSessionWithStore: %v", err)
+	}
+	if s.buildConfig().Checkpoint == nil {
+		t.Error("normal runs must carry the mid-run checkpoint hook")
+	}
+	if s.sideRunConfig().Checkpoint != nil {
+		t.Error("/btw side runs must not checkpoint to disk")
 	}
 }
 

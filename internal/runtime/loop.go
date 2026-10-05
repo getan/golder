@@ -98,6 +98,19 @@ type RunConfig struct {
 	// hook cannot loop forever. nil or a non-blocking decision lets the run end.
 	OnStop func(ctx context.Context, agentCtx *agentcore.AgentContext) *StopDecision
 
+	// Checkpoint, when set, is consulted at conversation-consistent points so a
+	// driver can persist the conversation mid-run: a crash then loses at most the
+	// round in flight instead of the whole session. It fires after each assistant
+	// message is finalized (before any tool execution, which may run for
+	// minutes), after tool results are appended, and after an in-place compaction
+	// rewrote the context. compacted marks the last case: the persister must
+	// re-save the rewritten context linearly instead of appending an incremental
+	// tail. The hook runs on the loop goroutine, which exclusively owns
+	// agentCtx.Messages, so it may read the slice directly; it sits on the turn
+	// critical path, so implementations should keep it fast and never block on
+	// user input. nil disables checkpointing.
+	Checkpoint func(ctx context.Context, agentCtx *agentcore.AgentContext, compacted bool)
+
 	// Reminders holds the per-turn system-reminder providers (US-002, FR-1/FR-2).
 	// When non-empty, ephemeral <system-reminder> messages are injected into each
 	// turn's LLM request through the existing TransformContext seam, so they never
@@ -220,6 +233,16 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		stream.Close()
 	}
 
+	// checkpoint offers the driver a mid-run persistence point. It runs on this
+	// goroutine — the only one that mutates agentCtx.Messages — at boundaries
+	// where no append is in flight, so the driver may read the slice directly.
+	// compacted marks a call that follows an in-place context rewrite.
+	checkpoint := func(compacted bool) {
+		if cfg.Checkpoint != nil {
+			cfg.Checkpoint(ctx, agentCtx, compacted)
+		}
+	}
+
 	if err := emit(agentcore.AgentStartEvent{SessionID: cfg.SessionID}); err != nil {
 		finish()
 		return
@@ -244,12 +267,19 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 				finish()
 				return
 			}
+			// The assistant message is finalized and appended (or absent on an
+			// early stream failure, where the checkpoint no-ops): persist before
+			// the stop-reason switch so the user's prompt and the model's intent
+			// — including tool calls that may now run for minutes — survive a
+			// crash mid-turn.
+			checkpoint(false)
 
 			switch assistant.StopReason {
 			case agentcore.StopReasonLength:
 				// Truncated by the token cap: fail every tool call so the model
 				// resends, then continue feeding back.
 				toolResults := failToolCallsFromTruncatedMessage(agentCtx, assistant)
+				checkpoint(false)
 				if err := emit(agentcore.TurnEndEvent{Message: assistant, ToolResults: toolResults}); err != nil {
 					finish()
 					return
@@ -347,6 +377,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			for _, tr := range toolResults {
 				agentCtx.Messages = append(agentCtx.Messages, tr)
 			}
+			// Tool results are in the context: checkpoint so a crash after a long
+			// tool batch does not discard its output.
+			checkpoint(false)
 			if err := emit(agentcore.TurnEndEvent{Message: assistant, ToolResults: toolResults}); err != nil {
 				finish()
 				return
@@ -489,6 +522,12 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 	rebuilt := res.RebuildContext(agentCtx.Messages, now)
 	summarized := len(agentCtx.Messages) - (len(rebuilt) - 1)
 	agentCtx.Messages = rebuilt
+	// The context was rewritten in place: checkpoint with compacted=true so the
+	// driver re-saves the rewritten conversation instead of appending a tail the
+	// branch cursor no longer describes.
+	if cfg.Checkpoint != nil {
+		cfg.Checkpoint(ctx, agentCtx, true)
+	}
 	after := compaction.EstimateContextTokens(rebuilt).Tokens
 	_ = emit(agentcore.CompactionEvent{
 		Reason:          reason,

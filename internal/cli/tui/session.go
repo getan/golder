@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -125,6 +126,12 @@ type runSession struct {
 	// Messages[persisted:] as a branch from curLeaf (see cli.PersistTurn).
 	curLeaf   string
 	persisted int
+
+	// persistMu serializes session saves. Mid-run checkpoints run on the loop
+	// goroutine (RunConfig.Checkpoint) while the tea goroutine may save at run
+	// end, on /export, or on a session switch; the mutex keeps those writers
+	// from interleaving on the branch cursor and header.
+	persistMu sync.Mutex
 
 	// compacted is set when the run loop compacted the context (CompactionEvent):
 	// compaction rewrites Messages into a summary + recent tail, which both shrinks
@@ -484,6 +491,11 @@ func (s *runSession) buildConfig() runtime.RunConfig {
 		gate = judge.ChainGates(trustGate, judgeGate)
 	}
 	cfg.Batch.ToolExecutorConfig.BeforeToolCall = gate
+	// Mid-run persistence: the loop checkpoints the conversation at turn
+	// boundaries so a crash loses at most the round in flight instead of the
+	// whole session. /btw runs clear this again (a side thread never touches
+	// the main conversation or disk).
+	cfg.Checkpoint = s.checkpointMidRun
 	return cfg
 }
 
@@ -542,7 +554,7 @@ func (s *runSession) compact() (string, error) {
 	}
 	rebuilt := res.RebuildContext(msgs, time.Now().UnixMilli())
 	s.agentCtx.Messages = rebuilt
-	s.compacted = true
+	s.markCompacted()
 	after := compaction.EstimateContextTokens(rebuilt).Tokens
 	summarized := len(msgs) - (len(rebuilt) - 1)
 	return fmt.Sprintf("compacted: %d → %d tokens, summarized %d messages, kept %d",
@@ -596,6 +608,12 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 		RoleField: agentcore.RoleUser,
 		Content:   content,
 	})
+	// Persist the prompt before the run starts: the first mid-run checkpoint
+	// lands only after the model's first reply, and a crash during that reply
+	// must not lose what the user typed. Best-effort — the run-end save retries
+	// and reports failures; the write here is serialized against the loop's
+	// checkpoints by persistMu, though no run is in flight yet.
+	_ = s.persist()
 	// Use a cancellable context so the two-stage interrupt (FR-14) can stop this
 	// run: cancelling propagates through StartRun/DrainStream, which then emits a
 	// runEndMsg and the model returns to idle.
@@ -694,7 +712,16 @@ func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
 	if s.notes != nil {
 		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
 	}
-	return ch, startRunOn(ch, ctx, side, s.buildConfig(), s.onEvent)
+	return ch, startRunOn(ch, ctx, side, s.sideRunConfig(), s.onEvent)
+}
+
+// sideRunConfig is buildConfig for a /btw side thread: the run reads the main
+// conversation but never writes it, so mid-run checkpoints are disabled (the
+// run-end persist is skipped for side runs too).
+func (s *runSession) sideRunConfig() runtime.RunConfig {
+	cfg := s.buildConfig()
+	cfg.Checkpoint = nil
+	return cfg
 }
 
 // startGoalRun starts an autonomous goal run on the shared conversation: the
@@ -723,7 +750,18 @@ func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
 // It mirrors cli.PersistTurn: growing the on-disk tree with AppendBranch (rather
 // than a linear rewrite) keeps history intact. A no-op when nothing new was
 // produced, so an idle turn-end never regenerates entry ids.
+//
+// It is called both from the tea goroutine (run end, /export, session
+// switches) and from the loop goroutine (mid-run checkpoints via
+// checkpointMidRun); persistMu serializes the two.
 func (s *runSession) persist() error {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	return s.persistLocked()
+}
+
+// persistLocked is persist's body. The caller must hold persistMu.
+func (s *runSession) persistLocked() error {
 	// A compaction during the run rewrote Messages into a summary + recent tail,
 	// so the append-a-tail branch model no longer holds: the prefix changed and
 	// the slice may be shorter than persisted. Re-save the flattened context
@@ -758,6 +796,29 @@ func (s *runSession) persist() error {
 	s.curLeaf = leaf
 	s.persisted = len(s.agentCtx.Messages)
 	return nil
+}
+
+// markCompacted records that the context was rewritten in place (auto-
+// compaction or a manual /compact): the next persist re-saves the flattened
+// conversation linearly instead of appending an incremental branch. Safe to
+// call from any goroutine.
+func (s *runSession) markCompacted() {
+	s.persistMu.Lock()
+	s.compacted = true
+	s.persistMu.Unlock()
+}
+
+// checkpointMidRun is the RunConfig.Checkpoint hook: the run loop hands it the
+// conversation at turn boundaries so a crash loses at most the round in flight.
+// It runs on the loop goroutine, which owns agentCtx.Messages; the write itself
+// is serialized against the tea goroutine's saves by persistMu. Failures are
+// deliberately silent — the run-end persist retries and reports them — because
+// a mid-run save must never interrupt the run.
+func (s *runSession) checkpointMidRun(_ context.Context, _ *agentcore.AgentContext, compacted bool) {
+	if compacted {
+		s.markCompacted()
+	}
+	_ = s.persist()
 }
 
 // seedTranscript replays a resumed session's prior messages into the transcript

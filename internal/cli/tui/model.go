@@ -968,7 +968,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case compactionMsg:
 		m.spinner.unpin()
 		if m.session != nil {
-			m.session.compacted = true
+			m.session.markCompacted()
 		}
 		m.transcript.addSystem("(context compacted)")
 		return m, m.pumpNext()
