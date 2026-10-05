@@ -90,7 +90,7 @@ func TestHostedSearchHidesLocalWebsearch(t *testing.T) {
 		fakeTool{name: "websearch", schema: json.RawMessage(`{"type":"object"}`)},
 	}
 	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
-		Model:   "probe-hide-model",
+		Model:   "muse-probe-hide",
 		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}, Tools: tools},
 		Config:  StreamConfig{APIKey: "sk-test"},
 	})
@@ -128,7 +128,7 @@ func TestHostedSearchCapabilityFallback(t *testing.T) {
 		return sseResponse(completedFrame("fell back", "resp_2", "probe-fb-model", 1, 1)), nil
 	})
 	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
-	const model = "probe-fb-model"
+	const model = "muse-fb"
 
 	tools := []agentcore.AgentTool{
 		fakeTool{name: "websearch", schema: json.RawMessage(`{"type":"object"}`)},
@@ -188,6 +188,80 @@ func TestHostedSearchCapabilityFallback(t *testing.T) {
 	clearHostedSearchUnsupported("openai", model)
 }
 
+// TestHostedSearchCapable locks the model-family gate: families with positive
+// evidence of server-side search (OpenAI's gpt/o-series, muse on opencode-go)
+// keep the hosted tool; everything else takes the local function tool, because
+// a gateway that accepts the hosted declaration without delivering the tool
+// (deepseek answers "no search capability") would otherwise leave the model
+// with no search path at all.
+func TestHostedSearchCapable(t *testing.T) {
+	cases := map[string]bool{
+		"gpt-5.4-codex":              true,
+		"gpt-4o":                     true,
+		"o3-mini":                    true,
+		"muse-spark-1.3-contributor": true,
+		"deepseek-v4.1-flash":        false,
+		"grok-4":                     false,
+		"mimo-v2.6-flash":            false,
+		"qwen3.8-flash":              false,
+		"":                           false,
+	}
+	for model, want := range cases {
+		if got := hostedSearchCapable(model); got != want {
+			t.Errorf("hostedSearchCapable(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+// An incapable model must never get the hosted declaration: the wire carries
+// the local websearch function tool instead, in a single request (no probe).
+func TestHostedSearchSkippedForIncapableModel(t *testing.T) {
+	var gotBody string
+	calls := 0
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+		}
+		return sseResponse(completedFrame("ok", "resp_1", "deepseek-v4.1-flash", 1, 1)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	tools := []agentcore.AgentTool{
+		fakeTool{name: "read_file", schema: json.RawMessage(`{"type":"object"}`)},
+		fakeTool{name: "websearch", schema: json.RawMessage(`{"type":"object"}`)},
+	}
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "deepseek-v4.1-flash",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("今天的新闻")}, Tools: tools},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	drain(t, stream)
+
+	if calls != 1 {
+		t.Errorf("upstream calls = %d, want 1 (no hosted probe for an incapable model)", calls)
+	}
+	for _, ty := range toolTypes(t, gotBody) {
+		if ty == "web_search_preview" {
+			t.Errorf("hosted web_search must not be declared for deepseek: %v", toolTypes(t, gotBody))
+		}
+	}
+	names := toolNames(t, gotBody)
+	found := false
+	for _, n := range names {
+		if n == "websearch" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("local websearch tool must be exposed for an incapable model (names=%v)", names)
+	}
+}
+
 // A non-capability failure (e.g. 401) must surface as-is with no retry.
 func TestHostedSearchNoRetryOnOtherErrors(t *testing.T) {
 	calls := 0
@@ -198,7 +272,7 @@ func TestHostedSearchNoRetryOnOtherErrors(t *testing.T) {
 	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
 
 	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
-		Model: "probe-401-model",
+		Model: "muse-401",
 		Context: LlmContext{
 			Messages: agentcore.MessageList{userMsg("hi")},
 			Tools:    []agentcore.AgentTool{fakeTool{name: "read_file"}},

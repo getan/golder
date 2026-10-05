@@ -28,6 +28,35 @@ const localWebSearchToolName = "websearch"
 // rejected the hosted web_search tool, keyed by provider+"\x00"+model.
 var hostedSearchUnsupported sync.Map
 
+// hostedSearchCapable reports whether the model family can actually call the
+// gateway's server-side web_search tool. The capability probe only catches an
+// endpoint that rejects the tool declaration outright; some model families
+// ride a Responses endpoint that accepts the declaration (so no 400, no
+// fallback) yet never receive the tool, leaving them with no search path at
+// all: DeepSeek answers "I have no web search capability" and the run degrades
+// to fetching pages by URL. Those families get the local websearch function
+// tool instead, which every function-calling model understands.
+//
+// The allowlist holds the families with positive evidence of hosted search
+// working through a Responses endpoint: OpenAI's own models (the tool is their
+// native web_search) and muse on opencode-go (its sessions show completed
+// web_search_call items). Everything else — deepseek, grok, mimo, qwen, and
+// future unknowns — takes the local tool: a slight downgrade in mechanism for
+// a family that would have worked, never a silent loss of search entirely.
+func hostedSearchCapable(modelID string) bool {
+	m := strings.ToLower(strings.TrimSpace(modelID))
+	if m == "" {
+		return false
+	}
+	for _, sub := range []string{"gpt", "muse"} {
+		if strings.Contains(m, sub) {
+			return true
+		}
+	}
+	// o-series reasoning models: o1, o3, o4-mini, ...
+	return len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9'
+}
+
 func hostedSearchCacheKey(provider, model string) string {
 	return provider + "\x00" + strings.TrimSpace(model)
 }

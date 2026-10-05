@@ -115,9 +115,14 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 	}
 
 	// Probe-and-fallback: declare the hosted web_search tool unless a previous
-	// turn cached a negative for this (provider, model). A capability-shaped
+	// turn cached a negative for this (provider, model), and only for model
+	// families that can actually call it (see hostedSearchCapable — a gateway
+	// that accepts the declaration without delivering the tool leaves the model
+	// with no search at all, which no 400 ever reveals). A capability-shaped
 	// 400 retries once with the local websearch function tool instead.
-	useHosted := len(req.Context.Tools) > 0 && !hostedSearchKnownUnsupported(d.name, req.Model)
+	useHosted := len(req.Context.Tools) > 0 &&
+		hostedSearchCapable(req.Model) &&
+		!hostedSearchKnownUnsupported(d.name, req.Model)
 	seen := citedURLs(req.Context.Messages)
 	for attempt := 0; ; attempt++ {
 		params := buildResponsesParams(d.name, req, useHosted)
