@@ -876,7 +876,11 @@ func runTree(out io.Writer, deps *replDeps, line string) {
 		// Print the numbered tree for selection.
 		fmt.Fprintln(out, "session tree (run /tree <n> to switch the active branch):")
 		for i, l := range lines {
-			fmt.Fprintf(out, "  %d. %s\n", i+1, l.Text)
+			marker := ""
+			if l.Current {
+				marker = "  ← current"
+			}
+			fmt.Fprintf(out, "  %d. %s%s\n", i+1, l.Text, marker)
 		}
 		return
 	}

@@ -210,15 +210,30 @@ func FileName(id string) string { return id + ".jsonl" }
 type TreeLine struct {
 	Entry Entry
 	Text  string
+	// Current is true for the entry whose id == leafID; callers render their own
+	// tag for it (the REPL appends "← current", the TUI picker marks the row).
+	Current bool
 }
+
+// treeMaxIndentCells caps how many 3-column indent cells a rendered line may
+// carry. Indent only grows at real fork points (see RenderTreeLines), so this
+// bound is only reachable with pathologically nested forks; lines deeper than
+// the cap elide their outermost cells behind a "⋯" marker instead of growing.
+const treeMaxIndentCells = 8
 
 // RenderTreeLines renders the entry forest as human-readable lines for a pure
 // line REPL — no TUI, no cursor control (US-007, #123). Each entry becomes one
-// line with ├─/└─ connectors showing structure; the entry whose id == leafID is
-// tagged "← current" so the active branch is obvious. Roots (entries with an
-// empty or dangling ParentID) anchor the forest; children are ordered by
-// timestamp then id for stable output. The returned slice is in render order, so
-// element i corresponds to the i-th printed line (and 1-based selector n → [n-1]).
+// line in render order (element i ↔ the i-th printed line, so 1-based selector
+// n → [n-1]); TreeLine.Current marks the entry behind leafID.
+//
+// Indentation is chain-compressed: a node with exactly one child continues that
+// child in the same column (no connector, no extra indent), so a linear
+// conversation — the common case — renders as a flat list and its width never
+// grows with the message count. ├─/└─ connectors appear only where the tree
+// actually forks, which keeps the indent proportional to the number of fork
+// points on the path (capped at treeMaxIndentCells), never to session length.
+// Roots (entries with an empty or dangling ParentID) anchor the forest;
+// children are ordered by timestamp then id for stable output.
 func RenderTreeLines(entries []Entry, leafID string) []TreeLine {
 	present := make(map[string]bool, len(entries))
 	for _, e := range entries {
@@ -239,39 +254,70 @@ func RenderTreeLines(entries []Entry, leafID string) []TreeLine {
 	}
 
 	var lines []TreeLine
-	var walk func(e Entry, prefix string, isRoot, isLast bool)
-	walk = func(e Entry, prefix string, isRoot, isLast bool) {
-		connector := ""
-		if !isRoot {
-			if isLast {
-				connector = "└─ "
-			} else {
-				connector = "├─ "
-			}
-		}
-		marker := ""
-		if e.ID == leafID {
-			marker = "  ← current"
-		}
-		lines = append(lines, TreeLine{Entry: e, Text: prefix + connector + entrySummary(e) + marker})
+	// cells is the stack of open 3-column indent cells on the path to the
+	// current node (one per fork level); connector is this node's own cell.
+	var walk func(e Entry, cells []string, connector string)
+	walk = func(e Entry, cells []string, connector string) {
+		lines = append(lines, TreeLine{
+			Entry:   e,
+			Text:    joinTreeCells(cells) + connector + entrySummary(e),
+			Current: e.ID == leafID,
+		})
 
-		childPrefix := prefix
-		if !isRoot {
-			if isLast {
-				childPrefix += "   "
-			} else {
-				childPrefix += "│  "
-			}
+		if cell := treeContinuationCell(connector); cell != "" {
+			cells = append(cells, cell)
 		}
 		kids := childrenOf[e.ID]
-		for i, k := range kids {
-			walk(k, childPrefix, false, i == len(kids)-1)
+		switch {
+		case len(kids) == 1:
+			// Chain: the only child continues this node's column, so a linear
+			// run of messages never indents.
+			walk(kids[0], cells, "")
+		case len(kids) > 1:
+			// Fork: each child opens a ├─/└─ cell one column in.
+			for i, k := range kids {
+				walk(k, cells, treeConnector(i == len(kids)-1))
+			}
 		}
 	}
-	for i, r := range roots {
-		walk(r, "", true, i == len(roots)-1)
+	for _, r := range roots {
+		walk(r, nil, "")
 	}
 	return lines
+}
+
+// treeConnector returns the 3-column cell drawn before a fork child's summary.
+func treeConnector(last bool) string {
+	if last {
+		return "└─ "
+	}
+	return "├─ "
+}
+
+// treeContinuationCell returns the 3-column cell appended to the indent stack
+// below a node: a vertical bar while later siblings still render (├─ row), a
+// blank once this node is the last sibling (└─ row), and nothing for roots and
+// chain nodes, which have no column of their own.
+func treeContinuationCell(connector string) string {
+	switch connector {
+	case "├─ ":
+		return "│  "
+	case "└─ ":
+		return "   "
+	default:
+		return ""
+	}
+}
+
+// joinTreeCells renders the indent stack, collapsing the outermost cells behind
+// a "⋯" marker once it exceeds treeMaxIndentCells so even pathologically nested
+// forks keep their line width bounded.
+func joinTreeCells(cells []string) string {
+	if len(cells) <= treeMaxIndentCells {
+		return strings.Join(cells, "")
+	}
+	keep := cells[len(cells)-(treeMaxIndentCells-1):]
+	return "⋯  " + strings.Join(keep, "")
 }
 
 // sortEntries orders entries by timestamp, breaking ties by id so the render is

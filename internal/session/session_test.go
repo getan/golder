@@ -6,6 +6,7 @@ package session
 // t.TempDir(), the standard Go pattern for behavior tests.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -586,7 +587,8 @@ func TestAppendBranchCreatesFileWhenMissing(t *testing.T) {
 
 // TestRenderTreeLinesMarksCurrentAndBranches verifies the pure-text tree render
 // (US-007, #123): every entry gets one numbered-able line in render order, the
-// active leaf is tagged "← current", and a branch point produces two child rows.
+// entry behind the active leaf is tagged Current, and a branch point produces
+// two child rows.
 func TestRenderTreeLinesMarksCurrentAndBranches(t *testing.T) {
 	s := newStore(t)
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
@@ -617,7 +619,7 @@ func TestRenderTreeLinesMarksCurrentAndBranches(t *testing.T) {
 	// Exactly one line is tagged as current, and it is the leaf.
 	current := 0
 	for _, l := range lines {
-		if strings.Contains(l.Text, "← current") {
+		if l.Current {
 			current++
 			if l.Entry.ID != leaf {
 				t.Errorf("current marker on %q, want leaf %q", l.Entry.ID, leaf)
@@ -625,7 +627,7 @@ func TestRenderTreeLinesMarksCurrentAndBranches(t *testing.T) {
 		}
 	}
 	if current != 1 {
-		t.Errorf("expected exactly one ← current line, got %d", current)
+		t.Errorf("expected exactly one current line, got %d", current)
 	}
 	// Connector characters must appear (readable branch structure).
 	joined := ""
@@ -638,6 +640,91 @@ func TestRenderTreeLinesMarksCurrentAndBranches(t *testing.T) {
 	// The first line is a root (no connector prefix) rendering the root user msg.
 	if !strings.HasPrefix(lines[0].Text, "user:") {
 		t.Errorf("first render line should be the root user message, got %q", lines[0].Text)
+	}
+}
+
+// treeUserEntry builds a user-message entry for hand-crafted forest tests.
+func treeUserEntry(id, parent, text string, at time.Time) Entry {
+	return Entry{
+		ID:        id,
+		ParentID:  parent,
+		Timestamp: at,
+		Message: agentcore.UserMessage{
+			RoleField: agentcore.RoleUser,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(text)},
+		},
+	}
+}
+
+// TestRenderTreeLinesChainCompressionKeepsWidthBounded is the regression test
+// for the /tree deep-leaf overflow: a linear conversation renders flat (no
+// indent growth with message count), so a deep leaf's text stays on screen.
+func TestRenderTreeLinesChainCompressionKeepsWidthBounded(t *testing.T) {
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	const n = 60
+	var entries []Entry
+	parent := ""
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("e%02d", i)
+		entries = append(entries, treeUserEntry(id, parent, fmt.Sprintf("message %d", i), now.Add(time.Duration(i)*time.Second)))
+		parent = id
+	}
+	lines := RenderTreeLines(entries, parent)
+	if len(lines) != n {
+		t.Fatalf("render produced %d lines, want %d", len(lines), n)
+	}
+	for i, l := range lines {
+		if strings.HasPrefix(l.Text, " ") || strings.HasPrefix(l.Text, "│") {
+			t.Fatalf("line %d is indented (%q): linear chains must render flat", i, l.Text)
+		}
+		if want := fmt.Sprintf("message %d", i); !strings.Contains(l.Text, want) {
+			t.Fatalf("line %d lost its text %q: %q", i, want, l.Text)
+		}
+	}
+	if !lines[n-1].Current {
+		t.Error("the last line should be the current leaf")
+	}
+}
+
+// TestRenderTreeLinesForkIndentIsBounded verifies connectors appear only at
+// real forks — chains below them keep a constant column — and that even
+// pathologically nested forks stay within the cap: a summary never starts past
+// treeMaxIndentCells cells (24 cols) plus its own connector cell (3 cols).
+func TestRenderTreeLinesForkIndentIsBounded(t *testing.T) {
+	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	var entries []Entry
+	add := func(id, parent, text string) {
+		entries = append(entries, treeUserEntry(id, parent, text, now.Add(time.Duration(len(entries))*time.Second)))
+	}
+	add("f00", "", "fork 0")
+	for i := 1; i <= 20; i++ {
+		parent := fmt.Sprintf("f%02d", i-1)
+		add(fmt.Sprintf("a%02d", i), parent, fmt.Sprintf("leaf %d", i))
+		add(fmt.Sprintf("f%02d", i), parent, fmt.Sprintf("fork %d", i))
+	}
+
+	lines := RenderTreeLines(entries, "f20")
+	if len(lines) != len(entries) {
+		t.Fatalf("render produced %d lines, want %d", len(lines), len(entries))
+	}
+	joined := ""
+	for _, l := range lines {
+		joined += l.Text + "\n"
+	}
+	if !strings.Contains(joined, "├─ ") || !strings.Contains(joined, "└─ ") {
+		t.Errorf("fork rows should carry ├─/└─ connectors:\n%s", joined)
+	}
+	if !strings.Contains(joined, "⋯") {
+		t.Errorf("deep nested forks should elide outer indent cells with ⋯:\n%s", joined)
+	}
+	for _, l := range lines {
+		col := strings.Index(l.Text, "user: ")
+		if col < 0 {
+			t.Fatalf("line lost its summary: %q", l.Text)
+		}
+		if cols := len([]rune(l.Text[:col])); cols > treeMaxIndentCells*3+3 {
+			t.Errorf("summary starts at column %d (over cap): %q", cols, l.Text)
+		}
 	}
 }
 

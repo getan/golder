@@ -2170,7 +2170,7 @@ func (m Model) runTree(line string) (tea.Model, tea.Cmd) {
 		mark := ""
 		for i, l := range lines {
 			value := strconv.Itoa(i + 1)
-			if l.Entry.ID == m.session.curLeaf {
+			if l.Current {
 				mark = value
 			}
 			picks = append(picks, pickItem{Title: l.Text, Value: value})
