@@ -645,6 +645,7 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.transcript.reset()
+	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
@@ -677,6 +678,10 @@ func (m Model) Init() tea.Cmd {
 // transcript and status bar. It quits on the standard exit keys (Ctrl+C /
 // Ctrl+D).
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// The lazy seed may have materialized older history above the viewport
+	// since the last event; keep a live content-anchored selection on the text
+	// it points at before this event reads or moves its endpoints.
+	m.syncSeedShift()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -820,7 +825,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cell := m.pendingCardClickCell
 			m.pendingCardClick = nil
 			if msg.X == cell.x && msg.Y == cell.y {
-				card.toggleExpanded()
+				m.transcript.toggleCardExpanded(card)
 				m.transcript.reflow()
 				return m, nil
 			}
@@ -1366,7 +1371,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// full detail, then re-flow so the change shows inline (#389, codex
 		// parity: ctrl+t expands collapsed output).
 		if m.lastToolCard != nil {
-			m.lastToolCard.toggleExpanded()
+			m.transcript.toggleCardExpanded(m.lastToolCard)
 			m.transcript.reflow()
 		}
 		return m, nil
@@ -2161,6 +2166,7 @@ func (m Model) runRewind(line string) (tea.Model, tea.Cmd) {
 		notice += "\n  warning: " + w
 	}
 	m.transcript.reset()
+	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
 	m.transcript.addSystem(notice)
@@ -2301,6 +2307,7 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 // context: the launch banner, the historical turns, and a one-line notice.
 func (m *Model) reseedTranscript(notice string) {
 	m.transcript.reset()
+	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, m.session.agentCtx.Messages)
 	m.transcript.addSystem(notice)
@@ -2999,6 +3006,29 @@ func (m Model) screenToSel(x, y int) (point, bool) {
 		return point{x, m.transcript.vp.YOffset() + y}, false
 	}
 	return point{x, y}, true
+}
+
+// clearSelection drops the mouse highlight and any pending edge-autoscroll
+// after the transcript view is rebuilt (session switch, resume, rewind,
+// import): content-line indices from the old view no longer mean anything.
+func (m *Model) clearSelection() {
+	m.sel = selection{}
+	m.selDragging = false
+	m.selScrollDir = 0
+	m.selScrollGen++
+}
+
+// syncSeedShift consumes the lazy seed's prepend count and moves a live
+// content-anchored selection down by it, so the highlighted text keeps its
+// identity when older history is materialized above the viewport. Endpoints
+// are content-line indices, so lines inserted above shift every one of them
+// equally. Below-transcript selections anchor in screen rows and are left
+// alone.
+func (m *Model) syncSeedShift() {
+	if n := m.transcript.takePrepend(); n > 0 && m.sel.active && !m.sel.below {
+		m.sel.anchor.y += n
+		m.sel.cursor.y += n
+	}
 }
 
 // dragToSel maps a drag/shift/release cell for a live selection: a

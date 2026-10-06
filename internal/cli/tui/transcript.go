@@ -85,13 +85,30 @@ type transcript struct {
 	// duplicate the pre-card text). Reset on every new user turn.
 	sealedThisTurn bool
 
-	// renderCache memoizes per-block renders for stable (sealed) blocks so a
-	// streaming delta only pays for the live block, not a full-history glamour
-	// pass. Keyed by block index (blocks are append-only; reset clears it).
-	// A finished tool card is stable too: its entry is invalidated by the
-	// card's revision, which every mutation bumps. The streaming assistant
-	// block and running cards are never cached.
-	renderCache map[int]cachedRender
+	// matStart and matEnd bound the materialized window [matStart, matEnd):
+	// the blocks whose renders live in prefixLines. Blocks before matStart are
+	// deferred history — a huge replay (resumed/imported session) renders only
+	// its newest window up front and leaves the rest unrendered until the user
+	// scrolls toward the top (extendSeed), so seed time and retained render
+	// memory stay proportional to what is actually looked at. matEnd advances
+	// as tail blocks become stable (commitStable); matStart is 0 whenever
+	// nothing is deferred.
+	matStart int
+	matEnd   int
+
+	// prefixLines is the materialized window rendered once and reused verbatim
+	// by every later layout: the committed prefix that replaced the old
+	// per-block render cache map (one contiguous rendered copy instead of one
+	// retained string per block). prefixCounts records how many content lines
+	// each window block contributed, so card hit-testing can address committed
+	// cards without re-rendering them. prefixValid is cleared when the stored
+	// wrap no longer matches the content (width change, in-place banner edit,
+	// mid-history insertion); prefixWidth is the content width it was laid out
+	// at.
+	prefixLines  []string
+	prefixCounts []int
+	prefixValid  bool
+	prefixWidth  int
 
 	// batchDepth suspends reflow while a replay appends many blocks
 	// (seedTranscript), so the transcript pays for one layout instead of the
@@ -101,19 +118,21 @@ type transcript struct {
 
 	// barReserved records that the last layout overflowed the viewport and one
 	// column was handed to the scrollbar. Starting the next layout at the
-	// reserved width keeps the render cache's width key stable across reflows
-	// (probing full width first would re-render every block at the other width
-	// on each pass, defeating the cache).
+	// reserved width keeps the stored prefix wrap valid across reflows
+	// (probing full width first would re-render the whole window at the other
+	// width on each pass).
 	barReserved bool
 
-	// lines caches the last renderAll split: the transcript's full content lines
-	// in order. Mouse selection endpoints anchor into these indices (see
-	// selection), so scrolling preserves the highlight instead of clearing it;
-	// streaming only appends, keeping earlier indices stable.
+	// lines caches the last full content build (committed prefix + live tail):
+	// the transcript's full content lines in order. Mouse selection endpoints
+	// anchor into these indices (see selection), so scrolling preserves the
+	// highlight instead of clearing it; streaming only appends, keeping earlier
+	// indices stable. Materializing deferred history prepends lines, and the
+	// model shifts a live selection by the count takePrepend reports.
 	lines []string
 
 	// cardSpans maps each tool card to its [first,last] content-line range in
-	// the last renderAll, so a mouse click can be routed to the card under the
+	// the last renderContent, so a mouse click can be routed to the card under the
 	// cursor: clicking a card toggles its expanded state (the codex-lacking
 	// affordance that lets any card, not just the newest, be expanded).
 	cardSpans map[*toolCard][2]int
@@ -132,16 +151,11 @@ type transcript struct {
 	// whenever the viewport is pinned back to the bottom (scroll-down,
 	// jumpToBottom, or a new submitted turn re-arming follow).
 	unseen int
-}
 
-// cachedRender is one memoized block render: the body plus the width it was
-// wrapped to and, for tool cards, the card revision it was rendered from. A
-// cache hit needs the same width and — for cards — that no mutation landed
-// since.
-type cachedRender struct {
-	text  string
-	width int
-	rev   uint64
+	// prepended accumulates content lines inserted above the previous top by
+	// the lazy seed since the last takePrepend, so the model can shift a live
+	// selection's anchors (see takePrepend).
+	prepended int
 }
 
 // newTranscript builds an empty transcript with the given theme. The viewport
@@ -161,6 +175,7 @@ func newTranscript(theme Theme) transcript {
 		vp:              vp,
 		theme:           theme,
 		activeAssistant: -1,
+		prefixValid:     true,
 		// Start pinned to the bottom: the launch banner and any replayed
 		// history fill the viewport downward, and nothing is "waiting below
 		// the fold" on a fresh screen — without this the very first reflow
@@ -174,7 +189,21 @@ func newTranscript(theme Theme) transcript {
 // terminal geometry. Callers re-add the banner and seed history after.
 func (t *transcript) reset() {
 	vp, theme, totalWidth, width := t.vp, t.theme, t.totalWidth, t.width
-	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, follow: true}
+	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, prefixValid: true, follow: true}
+}
+
+// toggleCardExpanded flips a tool card's expand state and, when the card is
+// already part of the committed prefix, drops the stored wrap so the next
+// layout repaints it. A card can be clicked open long after its block was
+// folded into the prefix, and commit tracking cannot see the mutation.
+func (t *transcript) toggleCardExpanded(c *toolCard) {
+	c.toggleExpanded()
+	for i := t.matStart; i < t.matEnd; i++ {
+		if t.blocks[i].card == c {
+			t.prefixValid = false
+			return
+		}
+	}
 }
 
 // setSize resizes the transcript's viewport and re-flows the blocks to the new
@@ -187,10 +216,6 @@ func (t *transcript) setSize(width, height int) {
 	}
 	if height < 0 {
 		height = 0
-	}
-	if width != t.totalWidth {
-		// Cached block renders were wrapped to the old width.
-		t.renderCache = nil
 	}
 	t.totalWidth = width
 	t.vp.SetHeight(height)
@@ -228,9 +253,9 @@ func (t *transcript) addBanner(text string) {
 }
 
 // setBannerText replaces the startup splash's pre-rendered text in place and
-// drops its memoized render so the next reflow repaints it. The model uses this
-// to advance the animated wordmark; keeping the block at the same index preserves
-// every later block's render-cache key and the scroll/selection anchors that
+// invalidates the stored prefix so the next reflow repaints it. The model uses
+// this to advance the animated wordmark; keeping the block at the same index
+// preserves every later block's offset and the scroll/selection anchors that
 // point into the rendered lines.
 func (t *transcript) setBannerText(text string) {
 	for i := len(t.blocks) - 1; i >= 0; i-- {
@@ -241,7 +266,12 @@ func (t *transcript) setBannerText(text string) {
 			return
 		}
 		t.blocks[i].text = text
-		delete(t.renderCache, i)
+		// The banner sits at the top of the transcript. Drop the stored wrap so
+		// the next layout repaints it — but only when it is actually inside the
+		// materialized window: a deferred banner contributes no prefix lines.
+		if i >= t.matStart && i < t.matEnd {
+			t.prefixValid = false
+		}
 		t.reflow()
 		return
 	}
@@ -267,9 +297,23 @@ func (t *transcript) addReviewNote(n judge.Note) {
 		for i := len(t.blocks) - 1; i >= 0; i-- {
 			b := t.blocks[i]
 			if b.role == roleTool && b.card != nil && b.card.id == n.ToolCallID {
-				// Inserting shifts every later block's index, so the
-				// index-keyed render cache must be dropped.
-				t.renderCache = nil
+				// Keep the materialized-window bookkeeping honest: an insert
+				// shifts every later block, and the committed prefix's wrapped
+				// lines cannot be spliced. In practice the note lands just
+				// above a still-running card at the end (outside the window);
+				// the branches below keep rarer placements correct.
+				switch {
+				case i < t.matStart:
+					// Before the window: the same blocks stay materialized, one
+					// slot later.
+					t.matStart++
+					t.matEnd++
+				case i < t.matEnd:
+					// Inside the window: re-render the committed part above the
+					// insert; the rest is re-committed by the next scan.
+					t.matEnd = i
+					t.prefixValid = false
+				}
 				t.blocks = slices.Insert(t.blocks, i, blk)
 				t.reflow()
 				return
@@ -347,6 +391,7 @@ func (t *transcript) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	t.vp, cmd = t.vp.Update(msg)
 	t.syncFollow()
+	t.extendSeed()
 	return cmd
 }
 
@@ -408,6 +453,7 @@ func (t *transcript) scrollToRow(y int) {
 	maxOff := total - h
 	t.vp.SetYOffset(top * maxOff / span)
 	t.syncFollow()
+	t.extendSeed()
 }
 
 // viewportHeight reports the number of visible transcript rows, so the model can
@@ -474,6 +520,7 @@ func (t *transcript) scrollLines(n int) bool {
 		t.vp.ScrollUp(-n)
 	}
 	t.syncFollow()
+	t.extendSeed()
 	return t.vp.YOffset() != before
 }
 
@@ -546,7 +593,7 @@ func (t transcript) scrollbar() string {
 // streams in new lines (which reach reflow via appendDelta/finalizeTurn, not
 // setSize). The last layout's overflow state is remembered in barReserved: once
 // the content overflows, the next reflow starts at totalWidth-1 directly, so
-// the render cache stays keyed to one width per reflow instead of being
+// the stored prefix wrap survives from one reflow to the next instead of being
 // invalidated by a full-width probe on every pass. The content only re-probes
 // the full width when it fits again at totalWidth-1 (session switch, cleared
 // transcript).
@@ -554,6 +601,9 @@ func (t *transcript) reflow() {
 	if t.batchDepth > 0 {
 		return
 	}
+	// Fold everything stable into the prefix first: the layout below then only
+	// re-renders the live tail on top of one reused string.
+	t.commitStable()
 	if t.totalWidth > 0 && t.barReserved {
 		t.layoutAt(t.totalWidth - 1)
 		if t.vp.TotalLineCount() <= t.vp.Height() {
@@ -578,12 +628,163 @@ func (t *transcript) reflow() {
 	}
 }
 
-// layoutAt lays every block out at width w and pushes the render into the
-// viewport.
+// Deferred-history (lazy seed) tuning. The trigger is deliberately far above
+// anything a live run produces between two commits — a turn commits a handful
+// of blocks, one card at a time — so only a replay, a resumed or imported
+// session landing its whole history in one batch, turns lazy seeding on.
+const (
+	lazySeedTrigger   = 128 // stable blocks in one commit pass before deferring
+	lazySeedWindow    = 64  // newest blocks rendered up front / per scroll chunk
+	lazySeedMaxChunks = 16  // chunks one extendSeed call materializes at most
+)
+
+// commitStable folds every newly stable block into the prefix. The scan walks
+// from the current boundary and stops at the first still-active block (the
+// streaming assistant block or a running card), so an active block also pins
+// everything after it out of the prefix.
+func (t *transcript) commitStable() {
+	k := t.matEnd
+	for k < len(t.blocks) && stableBlock(t.blocks[k], k == t.activeAssistant) {
+		k++
+	}
+	if k == t.matEnd {
+		return
+	}
+	if k-t.matEnd > lazySeedTrigger {
+		// A replay landed in one pass: keep only its newest window and defer
+		// the rest. The scan just proved [matEnd, k) stable, so deferring part
+		// of it is safe; a previously materialized window (if any) is dropped
+		// too and re-materialized from its source blocks when the user scrolls
+		// back up.
+		t.matStart = k - lazySeedWindow
+		t.matEnd = t.matStart
+		t.prefixLines = t.prefixLines[:0]
+		t.prefixCounts = t.prefixCounts[:0]
+		t.prefixValid = true
+	}
+	if !t.prefixValid || t.prefixWidth != t.width {
+		t.rebuildPrefix()
+	}
+	for i := t.matEnd; i < k; i++ {
+		before := len(t.prefixLines)
+		t.prefixLines = t.appendBlockLines(t.prefixLines, i)
+		t.prefixCounts = append(t.prefixCounts, len(t.prefixLines)-before)
+	}
+	t.matEnd = k
+}
+
+// rebuildPrefix re-renders the materialized window into prefixLines at the
+// current content width. It runs on a width change (resize, scrollbar column
+// handoff) and on in-place edits inside the committed region.
+func (t *transcript) rebuildPrefix() {
+	t.prefixLines = t.prefixLines[:0]
+	t.prefixCounts = t.prefixCounts[:0]
+	for i := t.matStart; i < t.matEnd; i++ {
+		before := len(t.prefixLines)
+		t.prefixLines = t.appendBlockLines(t.prefixLines, i)
+		t.prefixCounts = append(t.prefixCounts, len(t.prefixLines)-before)
+	}
+	t.prefixValid = true
+	t.prefixWidth = t.width
+}
+
+// extendSeed materializes deferred history when the viewport sits near the top
+// of the materialized window: the next chunk of older blocks is rendered,
+// prepended, and the offset is slid down by the same amount so the content
+// under the cursor does not move. One call materializes enough to leave a
+// screen of fresh history above the user's position (usually a single chunk),
+// so scrolling up through a long resumed session stays smooth because each
+// step is bounded work.
+func (t *transcript) extendSeed() {
+	if t.batchDepth > 0 || t.matStart == 0 || t.width <= 0 {
+		return
+	}
+	if t.vp.Height() <= 0 {
+		return
+	}
+	// Pinned to a scrollable bottom: the user is watching the live tail, not
+	// history. A pinned transcript that does not overflow is the exception —
+	// its top and bottom are the same place, and materializing is the only way
+	// to reveal that there is more above.
+	if t.follow && t.overflowing() {
+		return
+	}
+	base := t.vp.YOffset()
+	margin := t.vp.Height()
+	added := 0
+	for i := 0; i < lazySeedMaxChunks && t.matStart > 0; i++ {
+		if base+added > margin {
+			break
+		}
+		n := t.materializeChunk()
+		if n == 0 {
+			break
+		}
+		added += n
+	}
+	if added == 0 {
+		return
+	}
+	t.reflow()
+	// Everything new landed above the previous first line, so sliding the
+	// offset down by exactly that many lines keeps the view on the same text.
+	t.vp.SetYOffset(base + added)
+	// Growth above the fold is not "new output": undo the unseen count
+	// setContent just attributed to it.
+	t.unseen -= added
+	if t.unseen < 0 {
+		t.unseen = 0
+	}
+	t.prepended += added
+}
+
+// materializeChunk renders the next deferred chunk of blocks above the
+// materialized window, prepends its lines (and per-block line counts) to the
+// prefix, and returns the number of lines added.
+func (t *transcript) materializeChunk() int {
+	if t.matStart == 0 {
+		return 0
+	}
+	if !t.prefixValid || t.prefixWidth != t.width {
+		t.rebuildPrefix()
+	}
+	from := t.matStart - lazySeedWindow
+	if from < 0 {
+		from = 0
+	}
+	var lines []string
+	var counts []int
+	for i := from; i < t.matStart; i++ {
+		before := len(lines)
+		lines = t.appendBlockLines(lines, i)
+		counts = append(counts, len(lines)-before)
+	}
+	t.prefixLines = append(lines, t.prefixLines...)
+	t.prefixCounts = append(counts, t.prefixCounts...)
+	t.matStart = from
+	return len(lines)
+}
+
+// takePrepend returns and clears the number of content lines the lazy seed
+// inserted above the previous top since the last call. The model uses it to
+// shift a live selection's content-line anchors so the highlight keeps pointing
+// at the same text.
+func (t *transcript) takePrepend() int {
+	n := t.prepended
+	t.prepended = 0
+	return n
+}
+
+// layoutAt lays the prefix + live tail out at width w and pushes the render
+// into the viewport. A width change invalidates the stored prefix wrap, so the
+// window is re-rendered at the new width on the next content build.
 func (t *transcript) layoutAt(w int) {
+	if w != t.width {
+		t.prefixValid = false
+	}
 	t.width = w
 	t.vp.SetWidth(w)
-	t.setContent(t.renderAll())
+	t.setContent()
 }
 
 // beginBatch suspends reflow until endBatch so a bulk append (seedTranscript
@@ -601,11 +802,12 @@ func (t *transcript) endBatch() {
 	}
 }
 
-// setContent pushes the full render into the viewport and caches its lines for
-// content-anchored mouse selection (see lines).
-func (t *transcript) setContent(rendered string) {
+// setContent renders the full content (committed prefix + live tail) into the
+// viewport and caches its lines for content-anchored mouse selection (see
+// lines).
+func (t *transcript) setContent() {
 	before := t.vp.TotalLineCount()
-	t.lines = strings.Split(rendered, "\n")
+	t.lines = t.renderContent()
 	// Hand the viewport the slice the transcript already split instead of the
 	// raw string: SetContent would split the whole body a second time on every
 	// streaming reflow. Neither side mutates the slice.
@@ -636,86 +838,73 @@ func (t *transcript) setContent(rendered string) {
 // into. Empty before the first reflow.
 func (t *transcript) contentLines() []string { return t.lines }
 
-// renderAll joins every block, rendered to the current content width, into the
-// transcript body string. User turns are separated by a blank line on both sides
-// so the bar breathes like codex's history cell: a blank line before the bar
-// and another blank line after it before the reply starts.
-func (t *transcript) renderAll() string {
-	if t.renderCache == nil {
-		t.renderCache = map[int]cachedRender{}
+// renderContent builds the transcript's full content lines: the committed
+// prefix followed by the live tail, which alone is re-rendered every pass.
+// Committed blocks never re-render on the streaming path — a delta only pays
+// for the streaming assistant block and any running cards. cardSpans is rebuilt
+// in the same walk so a click routes to the card under the cursor, committed or
+// live.
+func (t *transcript) renderContent() []string {
+	if !t.prefixValid || t.prefixWidth != t.width {
+		t.rebuildPrefix()
 	}
-	t.cardSpans = map[*toolCard][2]int{}
-	var b strings.Builder
-	// line tracks the content-line index the next written block starts on, so
-	// card spans can be recorded in the same pass that lays the blocks out.
-	// A single "\n" separator between blocks only terminates the previous
-	// line (no index change); the user-adjacency blank line advances it.
-	line := 0
-	for i, blk := range t.blocks {
-		if i > 0 {
-			b.WriteByte('\n')
-			if blk.role == roleUser || t.blocks[i-1].role == roleUser {
-				b.WriteByte('\n')
-				line++
+	if t.cardSpans == nil {
+		t.cardSpans = map[*toolCard][2]int{}
+	} else {
+		clear(t.cardSpans)
+	}
+	lines := append(t.lines[:0], t.prefixLines...)
+	cursor := 0
+	for j, count := range t.prefixCounts {
+		i := t.matStart + j
+		if blk := t.blocks[i]; blk.role == roleTool && blk.card != nil {
+			start := cursor
+			if blockLeadBlank(t.blocks, i) {
+				start++
 			}
+			t.cardSpans[blk.card] = [2]int{start, cursor + count - 1}
 		}
-		// Stable blocks (everything except the live streaming assistant block
-		// and running cards) render once and are reused: without this, every
-		// streaming delta would re-run glamour over the whole history — and,
-		// since expanded patch cards render colored diffs, re-render every
-		// finished tool card too.
-		s, ok := t.cachedRender(i, blk)
-		if !ok {
-			s = t.renderBlock(blk, i == t.activeAssistant)
-			t.storeRender(i, blk, s)
-		}
-		if blk.role == roleTool && blk.card != nil {
-			t.cardSpans[blk.card] = [2]int{line, line + strings.Count(s, "\n")}
-		}
-		b.WriteString(s)
-		line += strings.Count(s, "\n") + 1
+		cursor += count
 	}
-	return b.String()
+	for i := t.matEnd; i < len(t.blocks); i++ {
+		start := cursor
+		if blockLeadBlank(t.blocks, i) {
+			start++
+		}
+		lines = t.appendBlockLines(lines, i)
+		cursor = len(lines)
+		if blk := t.blocks[i]; blk.role == roleTool && blk.card != nil {
+			t.cardSpans[blk.card] = [2]int{start, cursor - 1}
+		}
+	}
+	t.lines = lines
+	return lines
 }
 
-// cachedRender returns the memoized render for block i when it is still valid:
-// the block must be stable, the entry must have been laid out at the current
-// width, and — for a tool card — no mutation may have landed since it was
-// stored (the card's revision changed).
-func (t *transcript) cachedRender(i int, blk transcriptBlock) (string, bool) {
-	if !stableBlock(blk, i == t.activeAssistant) {
-		return "", false
+// appendBlockLines appends block i's rendered contribution to dst: the block's
+// own lines plus, when the user-adjacency rule calls for it, a leading blank
+// line separating it from the previous block. This reproduces exactly the lines
+// the old full-string join produced for the block, so a prefix built
+// incrementally and a tail rendered per frame concatenate into the same
+// transcript. User turns keep a blank line on both sides so the bar breathes
+// like codex's history cell.
+func (t *transcript) appendBlockLines(dst []string, i int) []string {
+	if blockLeadBlank(t.blocks, i) {
+		dst = append(dst, "")
 	}
-	e, ok := t.renderCache[i]
-	if !ok || e.width != t.width {
-		return "", false
-	}
-	if blk.role == roleTool && (blk.card == nil || e.rev != blk.card.rev) {
-		return "", false
-	}
-	return e.text, true
+	return append(dst, strings.Split(t.renderBlock(t.blocks[i], i == t.activeAssistant), "\n")...)
 }
 
-// storeRender memoizes a block's render, or drops the entry when the block is
-// not cacheable: the live streaming block's text is still growing, and a
-// running card re-renders on every pass. Cards record the revision they were
-// rendered from so a later mutation (completion, expand toggle) invalidates
-// the entry.
-func (t *transcript) storeRender(i int, blk transcriptBlock, s string) {
-	if !stableBlock(blk, i == t.activeAssistant) {
-		delete(t.renderCache, i)
-		return
-	}
-	rev := uint64(0)
-	if blk.role == roleTool && blk.card != nil {
-		rev = blk.card.rev
-	}
-	t.renderCache[i] = cachedRender{text: s, width: t.width, rev: rev}
+// blockLeadBlank reports whether block i renders with a leading blank
+// separator: the user-adjacency rule that gives a user bar room on both sides.
+// Card hit-testing skips this line so a click maps to the card's own rows.
+func blockLeadBlank(blocks []transcriptBlock, i int) bool {
+	return i > 0 && (blocks[i].role == roleUser || blocks[i-1].role == roleUser)
 }
 
 // toolCardAt returns the tool card whose rendered block covers content line
 // index line, or nil when that line belongs to another block. It reads the
-// spans recorded by the last renderAll, so it is only meaningful for clicks
+// spans recorded by the last renderContent, so it is only meaningful for clicks
 // after the first reflow.
 func (t transcript) toolCardAt(line int) *toolCard {
 	for card, span := range t.cardSpans {
@@ -728,9 +917,9 @@ func (t transcript) toolCardAt(line int) *toolCard {
 
 // stableBlock reports whether a block's render is immutable: user/system/banner
 // turns and finalized assistant turns never change after they are sealed, and a
-// finished tool card changes only when a mutation bumps its revision (the cache
-// entry is keyed by it). The streaming assistant block and running cards must
-// re-render every pass.
+// finished tool card changes only when the user expands it (toggleCardExpanded
+// invalidates the committed prefix). The streaming assistant block and running
+// cards must re-render every pass.
 func stableBlock(blk transcriptBlock, streaming bool) bool {
 	if streaming {
 		return false

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -401,45 +402,55 @@ func TestStreamingMarkdownNoFlash(t *testing.T) {
 	full := "Go 的 `select` 专门等多个 channel：\n\n- 多路复用\n- 随机选一个\n"
 	// Split mid-construct on purpose: partial Markdown must still render.
 	tr.appendDelta(full[:20])
-	_ = tr.renderAll()
+	tr.reflow()
 	tr.appendDelta(full[20:])
-	streaming := tr.renderAll()
+	streaming := strings.Join(tr.contentLines(), "\n")
 
 	tr.finalizeTurn(agentcore.AssistantMessage{
 		Content: agentcore.ContentList{agentcore.NewTextContent(full)},
 	})
-	if got := tr.renderAll(); got != streaming {
+	if got := strings.Join(tr.contentLines(), "\n"); got != streaming {
 		t.Errorf("finalized render differs from streaming render (flash):\nstreaming: %q\nfinalized: %q", streaming, got)
 	}
 }
 
-// TestStableBlockCacheReuse finalizes one assistant turn, streams the next, and
-// asserts the sealed block's render is memoized (not re-run per delta) and
-// survives width-preserving reflows but drops on resize.
-func TestStableBlockCacheReuse(t *testing.T) {
+// TestStablePrefixReuse finalizes one assistant turn, streams the next, and
+// asserts the sealed block is folded into the committed prefix and reused
+// verbatim across streaming reflows — a delta must not re-run glamour (or a
+// finished card's diff) over history. A width change re-renders the window.
+func TestStablePrefixReuse(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(60, 12)
 	tr.appendDelta("first turn")
 	tr.finalizeTurn(agentcore.AssistantMessage{
 		Content: agentcore.ContentList{agentcore.NewTextContent("first turn")},
 	})
-	first := tr.renderAll()
-	sealed, ok := tr.renderCache[0]
-	if !ok {
-		t.Fatal("sealed assistant block must be cached after render")
+	if tr.matEnd != 1 {
+		t.Fatalf("matEnd = %d, want the sealed block folded into the prefix", tr.matEnd)
 	}
+	if len(tr.prefixLines) == 0 {
+		t.Fatal("sealed block must contribute prefix lines")
+	}
+	// Poison the committed wrap: a streaming reflow that re-rendered the
+	// sealed block would wipe the sentinel; reuse keeps it.
+	tr.prefixLines[0] = "CACHED-SENTINEL"
 	tr.appendDelta("second")
-	second := tr.renderAll()
-	if tr.renderCache[0] != sealed {
-		t.Error("streaming the next turn must not evict the sealed block's cache")
+	body := strings.Join(tr.contentLines(), "\n")
+	if !strings.Contains(body, "CACHED-SENTINEL") {
+		t.Error("streaming reflow re-rendered the committed prefix instead of reusing it")
 	}
-	if !strings.HasPrefix(second, first) {
-		t.Errorf("second render must extend the first render:\nfirst: %q\nsecond: %q", first, second)
+	if !strings.Contains(body, "second") {
+		t.Errorf("streaming tail missing from render:\n%s", body)
 	}
+
+	// A width change invalidates the stored wrap and re-renders the window.
 	tr.setSize(50, 12)
-	_ = tr.renderAll()
-	if _, ok := tr.renderCache[0]; !ok {
-		t.Fatal("resize must rebuild the cache entry at the new width")
+	body = strings.Join(tr.contentLines(), "\n")
+	if strings.Contains(body, "CACHED-SENTINEL") {
+		t.Error("resize must drop the stale prefix wrap")
+	}
+	if !strings.Contains(body, "first turn") {
+		t.Errorf("rebuilt prefix lost the sealed block:\n%s", body)
 	}
 }
 
@@ -533,52 +544,55 @@ func TestTranscriptLocksHorizontalScroll(t *testing.T) {
 	}
 }
 
-// TestFinishedCardRenderCachedAndInvalidated guards the streaming freeze: a
-// finished tool card must be memoized (an expanded patch card renders a full
-// colored diff, ~80ms on a real session), and every in-place mutation must
-// invalidate the entry so the cached string cannot mask it.
-func TestFinishedCardRenderCachedAndInvalidated(t *testing.T) {
+// TestFinishedCardCommittedAndToggleInvalidates guards the streaming freeze and
+// the late expand: a finished tool card is folded into the committed prefix
+// (an expanded patch card renders a full colored diff, ~80ms on a real
+// session, and must not re-render per delta), while a running card stays in the
+// live tail. Expanding the card long after its block was folded must drop the
+// stored wrap, because commit tracking cannot see the mutation.
+func TestFinishedCardCommittedAndToggleInvalidates(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(60, 12)
 	card := &toolCard{id: "1", name: "read", input: map[string]any{"path": "internal/x.go"}, state: cardRunning}
 	tr.addToolCard(card)
-	idx := len(tr.blocks) - 1
-	if _, ok := tr.renderCache[idx]; ok {
-		t.Fatal("a running card must never be cached")
+	if tr.matEnd != 0 {
+		t.Fatal("a running card must never be folded into the prefix")
 	}
 
 	card.complete(true, "a.go\nb.go", nil)
 	tr.reflow()
-	e, ok := tr.renderCache[idx]
-	if !ok {
-		t.Fatal("a finished card must be cached after the reflow")
+	if tr.matEnd != 1 {
+		t.Fatalf("matEnd = %d, want the finished card folded into the prefix", tr.matEnd)
 	}
-	if e.rev != card.rev || e.width != tr.width {
-		t.Fatalf("cache entry = %+v, want rev=%d width=%d", e, card.rev, tr.width)
+	if len(tr.prefixLines) == 0 {
+		t.Fatal("finished card must contribute prefix lines")
 	}
-	before := e.text
 
-	card.toggleExpanded()
+	// Poison the committed wrap: a steady reflow must reuse it verbatim.
+	tr.prefixLines[0] = "CACHED-SENTINEL"
 	tr.reflow()
-	e2, ok := tr.renderCache[idx]
-	if !ok {
-		t.Fatal("a finished card must be cached again after the toggle re-render")
+	if body := strings.Join(tr.contentLines(), "\n"); !strings.Contains(body, "CACHED-SENTINEL") {
+		t.Fatal("steady-state reflow re-rendered the committed card instead of reusing the prefix")
 	}
-	if e2.rev != card.rev {
-		t.Fatalf("cache rev = %d, want %d after toggle", e2.rev, card.rev)
+
+	// Expanding a committed card must invalidate the stored wrap.
+	tr.toggleCardExpanded(card)
+	tr.reflow()
+	body := strings.Join(tr.contentLines(), "\n")
+	if strings.Contains(body, "CACHED-SENTINEL") {
+		t.Error("expand toggle must drop the stale prefix wrap")
 	}
-	if e2.text == before {
-		t.Error("expand toggle must change the rendered card")
+	if tr.matEnd != 1 {
+		t.Fatalf("matEnd = %d after toggle reflow, want 1", tr.matEnd)
 	}
 }
 
-// TestReflowReusesCacheAtReservedWidth is the regression for the width churn
-// that defeated the render cache: reflow probed the full width and, on
-// overflow, re-laid at totalWidth-1 on every pass, so cache entries never
-// matched the next probe and every streaming frame re-rendered the whole
-// history (8s per frame on a real session). A steady-state reflow must be a
-// pure cache hit.
-func TestReflowReusesCacheAtReservedWidth(t *testing.T) {
+// TestReflowReusesPrefixAtReservedWidth is the regression for the width churn
+// that defeated block reuse: reflow probed the full width and, on overflow,
+// re-laid at totalWidth-1 on every pass, so nothing ever matched the cache and
+// every streaming frame re-rendered the whole history (8s per frame on a real
+// session). A steady-state reflow must reuse the committed prefix verbatim.
+func TestReflowReusesPrefixAtReservedWidth(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(40, 8)
 	for i := 0; i < 30; i++ {
@@ -587,17 +601,128 @@ func TestReflowReusesCacheAtReservedWidth(t *testing.T) {
 	if !tr.barReserved {
 		t.Fatal("an overflowing transcript must reserve the scrollbar column")
 	}
-
-	// Poison every memoized render: if the next reflow hits the cache, the
-	// sentinel must surface; a re-render (width mismatch or missing entry)
-	// wipes it out.
-	for i, e := range tr.renderCache {
-		e.text = "CACHED-SENTINEL"
-		tr.renderCache[i] = e
+	if tr.matEnd != 30 {
+		t.Fatalf("matEnd = %d, want every stable block committed", tr.matEnd)
 	}
+
+	// Poison the committed wrap: if the next reflow reuses it (same width, no
+	// invalidation), the sentinel surfaces; a re-render wipes it out.
+	tr.prefixLines[0] = "CACHED-SENTINEL"
 	tr.reflow()
 	if body := strings.Join(tr.contentLines(), "\n"); !strings.Contains(body, "CACHED-SENTINEL") {
-		t.Fatal("steady-state reflow re-rendered stable blocks instead of reusing the cache")
+		t.Fatal("steady-state reflow re-rendered stable blocks instead of reusing the prefix")
+	}
+}
+
+// TestLazySeedDefersHugeReplay covers the resumed-session path: a replay that
+// lands more than lazySeedTrigger stable blocks in one batch renders only its
+// newest window up front, so seed time and retained render memory stay
+// proportional to what is looked at. Scrolling to the top materializes the
+// next chunk above the viewport and slides the offset so the visible text
+// does not move.
+func TestLazySeedDefersHugeReplay(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 12)
+	tr.beginBatch()
+	const total = 300
+	for i := 0; i < total; i++ {
+		tr.addSystem(fmt.Sprintf("line %d", i))
+	}
+	tr.endBatch()
+
+	if tr.matStart == 0 {
+		t.Fatal("a replay of 300 stable blocks must defer older history")
+	}
+	if got := tr.matEnd - tr.matStart; got != lazySeedWindow {
+		t.Fatalf("materialized window = %d blocks, want %d", got, lazySeedWindow)
+	}
+	body := strings.Join(tr.contentLines(), "\n")
+	if strings.Contains(body, "line 235") {
+		t.Error("deferred history must not be rendered into the seed")
+	}
+	for _, want := range []string{"line 236", "line 299"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("seed missing %q\nstart=%d end=%d", want, tr.matStart, tr.matEnd)
+		}
+	}
+
+	// Stand at the top: the next older chunk materializes and the offset is
+	// slid down by exactly the number of lines prepended.
+	tr.vp.GotoTop()
+	tr.update(nil)
+	if tr.matStart != total-lazySeedWindow*2 {
+		t.Fatalf("matStart = %d, want %d after one chunk", tr.matStart, total-lazySeedWindow*2)
+	}
+	added := tr.prepended
+	if added == 0 {
+		t.Fatal("extendSeed must report the lines it prepended")
+	}
+	if got := tr.vp.YOffset(); got != added {
+		t.Fatalf("YOffset = %d after prepending %d lines, want the view pinned", got, added)
+	}
+	if got := tr.takePrepend(); got != added {
+		t.Fatalf("takePrepend = %d, want %d", got, added)
+	}
+	if got := tr.takePrepend(); got != 0 {
+		t.Fatalf("takePrepend = %d on the second call, want cleared", got)
+	}
+	body = strings.Join(tr.contentLines(), "\n")
+	if !strings.Contains(body, "line 172") || !strings.Contains(body, "line 235") {
+		t.Errorf("materialized chunk missing from content\nstart=%d", tr.matStart)
+	}
+}
+
+// TestSeedShiftMovesLiveSelection pins the model glue around the lazy seed:
+// when older history is materialized above the viewport, a content-anchored
+// selection slides down with the text it highlights, while a below-transcript
+// selection (screen rows) is left alone.
+func TestSeedShiftMovesLiveSelection(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
+	m.sel = selection{active: true, anchor: point{2, 5}, cursor: point{2, 9}}
+	m.transcript.prepended = 37
+	m = apply(t, m, unseenWatchMsg{})
+	if m.sel.anchor.y != 42 || m.sel.cursor.y != 46 {
+		t.Fatalf("selection = %+v, want both endpoints shifted by 37", m.sel)
+	}
+	if m.transcript.prepended != 0 {
+		t.Fatalf("prepended = %d after Update, want consumed", m.transcript.prepended)
+	}
+
+	m.sel = selection{active: true, below: true, anchor: point{2, 5}, cursor: point{2, 9}}
+	m.transcript.prepended = 11
+	m = apply(t, m, unseenWatchMsg{})
+	if m.sel.anchor.y != 5 || m.sel.cursor.y != 9 {
+		t.Fatalf("below-transcript selection moved: %+v", m.sel)
+	}
+}
+
+// TestToolCardSpanSkipsUserSeparator guards card hit-testing after a user bar:
+// the user-adjacency blank line belongs to neither block, so a click on it
+// must not toggle the card below it.
+func TestToolCardSpanSkipsUserSeparator(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(40, 12)
+	tr.addUser("hi")
+	card := &toolCard{id: "1", name: "bash", state: cardSuccess}
+	tr.addToolCard(card)
+	span, ok := tr.cardSpans[card]
+	if !ok {
+		t.Fatal("card must record a hit span")
+	}
+	if span[0] <= 0 || span[1] >= len(tr.contentLines()) {
+		t.Fatalf("span = %v outside content (%d lines)", span, len(tr.contentLines()))
+	}
+	if got := stripANSI(tr.contentLines()[span[0]-1]); strings.TrimSpace(got) != "" {
+		t.Fatalf("card span starts on a non-blank line %d: %q", span[0]-1, got)
+	}
+	if got := tr.toolCardAt(span[0] - 1); got != nil {
+		t.Error("the separator line must not hit the card")
+	}
+	if got := tr.toolCardAt(span[0]); got != card {
+		t.Error("the card's first own line must hit the card")
+	}
+	if got := tr.toolCardAt(span[1]); got != card {
+		t.Error("the card's last line must hit the card")
 	}
 }
 
