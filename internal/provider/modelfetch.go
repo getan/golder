@@ -89,8 +89,13 @@ func FetchProviderModels(ctx context.Context, providerName, baseURL, protocol, a
 	newClient := func(freshConn bool) *http.Client {
 		c := &http.Client{Timeout: remoteModelListTimeout}
 		if pc := clientForURL(providerName, base); pc != nil {
-			pc.Timeout = remoteModelListTimeout
-			c = pc
+			// Shallow-copy before setting Timeout: clientForURL hands out a
+			// cached client shared by every request on this route, and mutating
+			// its Timeout would impose this 10s deadline on streaming calls too.
+			// The Transport stays shared, so the connection pool is still reused.
+			clone := *pc
+			clone.Timeout = remoteModelListTimeout
+			c = &clone
 		}
 		if freshConn {
 			// Force a new connection: the first request through a proxy

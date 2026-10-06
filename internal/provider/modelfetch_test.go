@@ -99,3 +99,24 @@ func TestFetchRemoteModelsFailures(t *testing.T) {
 		t.Errorf("malformed body error = %v, want response-shape failure", err)
 	}
 }
+
+// Discovery imposes its own 10s deadline, but must not mutate the shared
+// route client: streaming requests reuse that client and would inherit a
+// truncated deadline.
+func TestModelDiscoveryTimeoutDoesNotLeakIntoSharedClient(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"m"}]}`))
+	}))
+	defer srv.Close()
+
+	resetClientCache()
+	if _, err := FetchProviderModels(context.Background(), "openai", srv.URL, "openai", "k"); err != nil {
+		t.Fatalf("FetchProviderModels: %v", err)
+	}
+	if got := clientForURL("openai", srv.URL).Timeout; got != 0 {
+		t.Errorf("shared route client Timeout = %v, want 0 (discovery must copy, not mutate)", got)
+	}
+}

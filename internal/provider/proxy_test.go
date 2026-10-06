@@ -10,6 +10,40 @@ import (
 	"github.com/getan/golder/internal/cli/config"
 )
 
+// resetClientCache clears the per-route client cache so a test can assert on
+// cache identity without cross-test pollution.
+func resetClientCache() {
+	clientCacheMu.Lock()
+	clear(clientCache)
+	clientCacheMu.Unlock()
+}
+
+// One client is reused per resolved route so consecutive requests share a
+// transport and its connection pool; distinct routes stay isolated.
+func TestClientForURLReusesClientsPerRoute(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "")
+	if err := config.SaveProxyConfig(config.ProxyConfig{URL: "http://127.0.0.1:7897", Providers: []string{"openai"}}); err != nil {
+		t.Fatal(err)
+	}
+	resetClientCache()
+
+	proxied := clientForURL("openai", "https://relay.example/v1")
+	if again := clientForURL("openai", "https://relay.example/v1"); again != proxied {
+		t.Error("same proxy route built a second client")
+	}
+	if otherTarget := clientForURL("openai", "https://other.example/v1"); otherTarget != proxied {
+		t.Error("same proxy address should share its route client regardless of target host")
+	}
+	direct := clientForURL("anthropic", "https://relay.example/v1")
+	if direct == proxied {
+		t.Error("direct route reused the proxy client")
+	}
+	if again := clientForURL("anthropic", "https://relay.example/v1"); again != direct {
+		t.Error("direct route built a second client")
+	}
+}
+
 func TestProxySelectionRoutesDiscoveryAndAllChatProtocols(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")

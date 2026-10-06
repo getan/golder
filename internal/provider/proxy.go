@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/getan/golder/internal/cli/config"
 )
@@ -112,6 +113,38 @@ var directTransport = func() *http.Transport {
 	return tr
 }()
 
+// maxCachedClients bounds the per-route client cache. Overflow drops the map
+// (holders of an evicted client keep using it; the next request rebuilds its
+// route), mirroring codex's bounded route-aware client pool.
+const maxCachedClients = 16
+
+// clientCache memoizes one *http.Client per resolved route — "direct" or a
+// proxy URL — so consecutive requests share a transport and its connection
+// pool. Without it every request through a proxy cloned a fresh transport and
+// paid a new TCP+TLS handshake; streaming turns make that the common case
+// rather than a cold start.
+var (
+	clientCacheMu sync.Mutex
+	clientCache   = make(map[string]*http.Client)
+)
+
+// cachedClient returns the cached client for key, building and storing one on
+// first use. Callers must not mutate the returned client: every request on the
+// same route shares it (copy it first, as modelfetch does for its timeout).
+func cachedClient(key string, build func() *http.Client) *http.Client {
+	clientCacheMu.Lock()
+	defer clientCacheMu.Unlock()
+	if c, ok := clientCache[key]; ok {
+		return c
+	}
+	if len(clientCache) >= maxCachedClients {
+		clear(clientCache)
+	}
+	c := build()
+	clientCache[key] = c
+	return c
+}
+
 type proxyConfigError struct{ err error }
 
 func (e proxyConfigError) RoundTrip(*http.Request) (*http.Response, error) {
@@ -120,13 +153,17 @@ func (e proxyConfigError) RoundTrip(*http.Request) (*http.Response, error) {
 
 // Every provider request gets an explicit routing choice. In particular, an
 // unchecked provider never inherits HTTP_PROXY/HTTPS_PROXY from the shell.
+// The client handed back is shared per route (see cachedClient); treat it as
+// read-only.
 func clientForURL(name, rawURL string) *http.Client {
 	cfg, err := ProxySettings()
 	if err != nil {
 		return &http.Client{Transport: proxyConfigError{err}}
 	}
 	if !proxySelected(cfg, name, rawURL) {
-		return &http.Client{Transport: directTransport}
+		return cachedClient("direct", func() *http.Client {
+			return &http.Client{Transport: directTransport}
+		})
 	}
 	raw := effectiveProxyURL(cfg)
 	if raw == "" {
@@ -135,8 +172,10 @@ func clientForURL(name, rawURL string) *http.Client {
 	if err := ValidateProxyURL(raw); err != nil {
 		return &http.Client{Transport: proxyConfigError{err}}
 	}
-	u, _ := url.Parse(raw)
-	tr := directTransport.Clone()
-	tr.Proxy = http.ProxyURL(u)
-	return &http.Client{Transport: tr}
+	return cachedClient("proxy:"+raw, func() *http.Client {
+		u, _ := url.Parse(raw)
+		tr := directTransport.Clone()
+		tr.Proxy = http.ProxyURL(u)
+		return &http.Client{Transport: tr}
+	})
 }
