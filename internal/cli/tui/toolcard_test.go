@@ -222,21 +222,32 @@ func TestToolCardTodoDetail(t *testing.T) {
 }
 
 // TestToolCardTodoStatusStyles verifies checklist rows are styled by status:
-// the in-progress step is highlighted (TodoActive), completed rows are dim
-// struck-through gray (TodoDone), and pending rows stay plain muted gray
-// (TodoPending), so the active step is the only one that draws color.
+// the in-progress step takes the card's tool-name cyan (TodoActive), completed
+// rows are dim gray (TodoDone), and pending rows stay plain muted gray
+// (TodoPending). The `  │ ` gutter stays out of the row style, and done rows
+// carry no strikethrough.
 func TestToolCardTodoStatusStyles(t *testing.T) {
 	theme := DefaultTheme()
 	card := toolCard{name: "todo", input: todoCallInput(), state: cardSuccess}
 	got := card.render(theme, 80)
+	gutter := theme.ToolBody.Render("  │ ")
 	for _, want := range []string{
-		theme.TodoDone.Render("  │ [x] run tests"),
-		theme.TodoActive.Render("  │ [~] commit"),
-		theme.TodoPending.Render("  │ [ ] push"),
+		gutter + theme.TodoDone.Render("[x] run tests"),
+		gutter + theme.TodoActive.Render("[~] commit"),
+		gutter + theme.TodoPending.Render("[ ] push"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("render missing styled row %q\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, theme.TodoActive.Render("  │ ")) {
+		t.Errorf("row style must not cover the gutter\n%s", got)
+	}
+	if theme.TodoDone.GetStrikethrough() {
+		t.Error("done rows must not strike through the text")
+	}
+	if active, name := theme.TodoActive.GetForeground(), theme.ToolName.GetForeground(); active != name {
+		t.Errorf("active row color = %v, want the tool-name color %v", active, name)
 	}
 }
 

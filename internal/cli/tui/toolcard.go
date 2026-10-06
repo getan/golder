@@ -635,15 +635,19 @@ func (c toolCard) todoResponseIsEcho() bool {
 // renderChecklist renders the checklist as checkbox rows with the `  │ `
 // gutter, using the same marks as the tool's own RenderTodoList ([ ] pending,
 // [~] in progress, [x] completed) so the call and its result read alike.
-// Rows are styled by status: the in-progress step is light green bold, done
-// rows are dim struck-through gray, and pending rows stay plain muted gray —
-// codex's plan-cell treatment, so the active step draws the eye.
+// Rows are styled by status: the in-progress step takes the card's tool-name
+// cyan, done rows recede to dim gray, and pending rows stay plain muted gray.
+// The `  │ ` gutter stays out of the row style — only the checkbox text is
+// colored, so the gutter reads as card chrome like every other continuation
+// line.
 func (c toolCard) renderChecklist(theme Theme, width int, items []todoInputItem) string {
 	inner := max(1, width-2)
+	textWidth := max(1, inner-4)
+	gutter := theme.ToolBody.Render("  │ ")
 	var b strings.Builder
 	for _, it := range items {
-		line := fmt.Sprintf("  │ [%s] %s", todoMark(it.status), oneLine(it.content))
-		b.WriteString("\n" + todoStatusStyle(theme, it.status).Render(WrapToWidth(line, inner)))
+		row := fmt.Sprintf("[%s] %s", todoMark(it.status), oneLine(it.content))
+		b.WriteString("\n" + gutter + todoStatusStyle(theme, it.status).Render(WrapToWidth(row, textWidth)))
 	}
 	return b.String()
 }
