@@ -12,6 +12,14 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Hardened installer**: `install.sh` now verifies the downloaded archive against
+  the release's `checksums.txt` (sha256; a mismatch aborts the install, and
+  `GOLDER_SKIP_CHECKSUM=1` opts out), rejects version strings outside
+  `[A-Za-z0-9._-]`, and resolves the latest tag from
+  `https://golder-cli.pages.dev/api/latest` first, falling back to the GitHub API.
+  The canonical one-liner moves to `https://golder-cli.pages.dev/install.sh` — the
+  site mirrors the script for networks where `raw.githubusercontent.com` is
+  unreliable (the raw URL keeps working).
 - **`/provider` command**: lists every built-in provider with the environment
   variable(s) it reads (in precedence order) and whether a credential is
   configured — no README lookup needed. Providers with a credential found are

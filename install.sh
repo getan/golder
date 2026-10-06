@@ -3,7 +3,8 @@
 # 预编译二进制，校验 sha256 后安装到常用的 PATH 目录。
 #
 # 用法：
-#   curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
+#   curl -fsSL https://golder-cli.pages.dev/install.sh | sh
+#   （镜像：https://raw.githubusercontent.com/getan/golder/master/install.sh 亦可）
 #
 # 可用环境变量覆盖默认行为：
 #   GOLDER_VERSION   指定版本（形如 v0.2.0），默认取最新 release
@@ -72,7 +73,9 @@ if [ -z "$VERSION" ]; then
 	latest_json=$($DL "https://golder-cli.pages.dev/api/latest" 2>/dev/null) || \
 		latest_json=$($DL "https://api.github.com/repos/$REPO/releases/latest" $api_auth 2>/dev/null) || \
 		err "无法查询最新版本，请检查网络或用 GOLDER_VERSION 指定版本"
-	VERSION=$(printf '%s' "$latest_json" | sed -n 's/.*"tag\(_name\)\?"[ ]*:[ ]*"\([^"]*\)".*/\2/p' | head -n1)
+	# 兼容两种响应格式："tag_name"（GitHub API）与 "tag"（站点 /api/latest）。
+	# 用 grep -oE + cut 而非 sed，避开 GNU/BSD sed 的方言差异。
+	VERSION=$(printf '%s' "$latest_json" | tr -d ' \n' | grep -oE '"tag(_name)?":"[^"]*"' | head -n1 | cut -d'"' -f4)
 	[ -n "$VERSION" ] || err "无法解析最新版本号，请用 GOLDER_VERSION 指定"
 fi
 

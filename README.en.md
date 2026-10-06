@@ -26,8 +26,10 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 ### One-liner (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
+curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 ```
+
+The script is served from the site mirror (more reliable from mainland China) and verifies the archive's sha256; raw fallback: <https://raw.githubusercontent.com/getan/golder/master/install.sh>.
 
 `GOLDER_VERSION` picks a version and `GOLDER_INSTALL_DIR` sets the install directory (default `/usr/local/bin`, falling back to `~/.local/bin` when not writable). On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases).
 

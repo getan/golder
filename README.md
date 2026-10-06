@@ -26,8 +26,10 @@
 ### 一键安装（Linux / macOS）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
+curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 ```
+
+脚本由站点镜像（大陆直连更稳）并校验下载包的 sha256；备用原始地址：<https://raw.githubusercontent.com/getan/golder/master/install.sh>。
 
 可用 `GOLDER_VERSION` 指定版本、`GOLDER_INSTALL_DIR` 指定安装目录（默认 `/usr/local/bin`，无写权限时回退 `~/.local/bin`）。Windows 请从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip` 解压。
 
