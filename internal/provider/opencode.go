@@ -28,6 +28,14 @@ func SessionHeaderValue(providerName string, extra map[string]any) string {
 	if !strings.HasPrefix(providerName, "opencode") {
 		return ""
 	}
+	return requestSessionID(extra)
+}
+
+// requestSessionID returns the session id carried in a StreamConfig.Extra map,
+// trimmed, or "" when absent or blank. It is provider-agnostic: opencode
+// providers also send the value as the sticky-routing header, and the
+// Responses driver uses it as the backend's prompt_cache_key.
+func requestSessionID(extra map[string]any) string {
 	v, _ := extra[ExtraSessionID].(string)
 	return strings.TrimSpace(v)
 }

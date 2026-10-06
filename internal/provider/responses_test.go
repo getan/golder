@@ -758,6 +758,179 @@ func TestResponsesDriverReasoning(t *testing.T) {
 	}
 }
 
+// The reasoning.summary parameter only goes to backends that accept it: codex's
+// catalogs mark opencode-go and DeepSeek supports_reasoning_summary=false, and a
+// summary requested there only spends server-side work on text the reply never
+// carries. Every backend still receives the effort itself.
+// Every Responses request that carries a reasoning effort also asks for an auto
+// summary: that is the field that carries the model's reasoning back (muse
+// streams reasoning_summary_text deltas only when it is requested; without it
+// the summary comes back empty), and golder renders it as a thinking block.
+// codex's catalogs mark OpenCode Go and DeepSeek as not supporting the parameter
+// and codex omits it there, but live probes show the gateway honors it, so
+// golder deliberately diverges to keep thinking visible.
+func TestResponsesDriverAlwaysRequestsReasoningSummary(t *testing.T) {
+	for _, tc := range []struct {
+		provider string
+		model    string
+	}{
+		{"openai", "gpt-4o"},
+		{"opencode-go", "muse-spark-1.3-contributor"},
+		{"deepseek", "deepseek-chat"},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			var gotBody string
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Body != nil {
+					b, _ := io.ReadAll(r.Body)
+					gotBody = string(b)
+				}
+				return sseResponse(completedFrame("ok", "resp_1", tc.model, 5, 1)), nil
+			})
+			d := NewOpenAIResponsesProvider(tc.provider, "https://api.openai.test/v1", nil)
+			d.clientOpts = []option.RequestOption{
+				option.WithHTTPClient(&http.Client{Transport: rt}),
+			}
+
+			stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+				Model:   tc.model,
+				Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+				Config:  StreamConfig{APIKey: "sk-test", ThinkingLevel: agentcore.ThinkingMedium},
+			})
+			if err != nil {
+				t.Fatalf("StreamCompletion returned early error: %v", err)
+			}
+			drain(t, stream)
+
+			var payload struct {
+				Reasoning map[string]any `json:"reasoning"`
+			}
+			if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+				t.Fatalf("request body not valid JSON: %v", err)
+			}
+			if payload.Reasoning["effort"] != "medium" {
+				t.Errorf("reasoning.effort = %v, want medium", payload.Reasoning["effort"])
+			}
+			if payload.Reasoning["summary"] != "auto" {
+				t.Errorf("reasoning.summary = %v, want auto (body: %s)", payload.Reasoning["summary"], gotBody)
+			}
+		})
+	}
+}
+
+// The session id doubles as prompt_cache_key so the backend can bucket one
+// conversation's prefix cache; without a session id the field stays off the
+// wire entirely.
+func TestResponsesDriverPromptCacheKey(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra map[string]any
+		want  string
+	}{
+		{"session id", map[string]any{ExtraSessionID: "sid-1"}, "sid-1"},
+		{"blank session id", map[string]any{ExtraSessionID: "  "}, ""},
+		{"no extra", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotBody string
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Body != nil {
+					b, _ := io.ReadAll(r.Body)
+					gotBody = string(b)
+				}
+				return sseResponse(completedFrame("ok", "resp_1", "gpt-4o", 5, 1)), nil
+			})
+			d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+			stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+				Model:   "gpt-4o",
+				Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+				Config:  StreamConfig{APIKey: "sk-test", Extra: tc.extra},
+			})
+			if err != nil {
+				t.Fatalf("StreamCompletion returned early error: %v", err)
+			}
+			drain(t, stream)
+
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+				t.Fatalf("request body not valid JSON: %v", err)
+			}
+			got, present := payload["prompt_cache_key"]
+			if tc.want == "" {
+				if present {
+					t.Errorf("prompt_cache_key = %v, want the field omitted", got)
+				}
+				return
+			}
+			if !present || got != tc.want {
+				t.Errorf("prompt_cache_key = %v (present=%v), want %q", got, present, tc.want)
+			}
+		})
+	}
+}
+
+// Thinking content is UI state, not replayable input: a follow-up turn must
+// carry only the assistant's text. Replaying reasoning items (content, ids, or
+// encrypted payloads) would grow every request and break backends that reject
+// items they never issued.
+func TestResponsesDriverDoesNotReplayReasoning(t *testing.T) {
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+		}
+		return sseResponse(completedFrame("next", "resp_3", "gpt-4o", 9, 2)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	assistant := agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content: agentcore.ContentList{
+			agentcore.NewThinkingContent("hidden chain of thought"),
+			agentcore.NewTextContent("the answer"),
+		},
+	}
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model: "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{
+			userMsg("ask"), assistant,
+		}},
+		Config: StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	drain(t, stream)
+
+	var payload struct {
+		Input []map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+		t.Fatalf("request body not valid JSON: %v", err)
+	}
+	var sawAssistantText bool
+	for _, item := range payload.Input {
+		if item["type"] == "reasoning" {
+			t.Errorf("input replayed a reasoning item: %v", item)
+		}
+		// Easy input messages carry no "type" on the wire, only role/content.
+		if item["role"] == "assistant" {
+			if item["content"] != "the answer" {
+				t.Errorf("assistant input content = %v, want %q", item["content"], "the answer")
+			}
+			sawAssistantText = true
+		}
+	}
+	if !sawAssistantText {
+		t.Error("assistant text missing from the replayed input")
+	}
+	if strings.Contains(gotBody, "hidden chain of thought") || strings.Contains(gotBody, "encrypted_content") {
+		t.Errorf("reasoning payload leaked into the request body: %s", gotBody)
+	}
+}
+
 // A response.failed event must surface the server's embedded error
 // (code + message + id), not a bare "response failed" that cannot be
 // diagnosed.

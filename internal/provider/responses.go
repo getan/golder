@@ -363,10 +363,10 @@ func appendToolCalls(content agentcore.ContentList, calls []agentcore.ToolCallCo
 // buildResponsesParams maps a CompletionRequest onto Responses API params. The
 // system prompt becomes Instructions; the thinking level becomes a reasoning
 // effort (with an auto summary so reasoning is returned); golder tools become
-// Responses function tools; and each message is replayed as the matching input
-// item(s): assistant tool calls as function_call items, tool results as
-// function_call_output items, and text (plus any images) as a role-tagged
-// message.
+// Responses function tools; the session id becomes the prompt_cache_key;
+// and each message is replayed as the matching input item(s): assistant tool
+// calls as function_call items, tool results as function_call_output items, and
+// text (plus any images) as a role-tagged message.
 func buildResponsesParams(providerName string, req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
@@ -375,9 +375,24 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 		params.Instructions = openai.String(sp)
 	}
 	if effort := WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel); effort != "" {
-		// Requesting a summary makes the API return the model's reasoning so golder
-		// can render it as a thinking block, matching the chat driver.
-		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(effort), Summary: shared.ReasoningSummaryAuto}
+		// The auto summary is what carries the model's reasoning back to golder,
+		// which renders it as a thinking block, matching the chat driver. It goes
+		// out unconditionally — including to OpenCode Go, whose catalog entry in
+		// codex marks the parameter unsupported and where codex therefore omits it.
+		// The gateway honors it (verified live: muse streams
+		// reasoning_summary_text deltas only when it is requested, and without it
+		// the summary comes back empty), so gating it would only drop thinking.
+		params.Reasoning = shared.ReasoningParam{
+			Effort:  shared.ReasoningEffort(effort),
+			Summary: shared.ReasoningSummaryAuto,
+		}
+	}
+	// The per-session id doubles as prompt_cache_key: a stable key lets the
+	// backend bucket one conversation's shared prefix (routing + prefix cache)
+	// instead of treating every turn as unrelated. Mirrors codex, which sends
+	// prompt_cache_key = session_id on every Responses request.
+	if sid := requestSessionID(req.Config.Extra); sid != "" {
+		params.PromptCacheKey = openai.String(sid)
 	}
 	if tools := buildResponsesTools(req.Context.Tools, useHostedSearch); len(tools) > 0 {
 		params.Tools = tools
