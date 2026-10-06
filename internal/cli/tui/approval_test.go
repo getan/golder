@@ -104,6 +104,35 @@ func TestApprovalDialogIsModal(t *testing.T) {
 	}
 }
 
+// TestApprovalDialogCtrlCInterrupts locks the escape hatch: the dialog owns
+// almost every key, but Ctrl+C stays the shell's hard interrupt. With a run in
+// flight it must call interruptFn — cancelling the run, which resolves the
+// dialog fail-closed through context cancellation. Before the fix Ctrl+C was
+// silently swallowed here, leaving the UI dead with no way to stop the run.
+func TestApprovalDialogCtrlCInterrupts(t *testing.T) {
+	interrupted := false
+	m := NewModel(Options{})
+	m.running = true
+	m.interruptFn = func() { interrupted = true }
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.openApproval(testApprovalRequest(), reply)
+
+	got, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = got.(Model)
+
+	if !interrupted {
+		t.Fatal("Ctrl+C while a dialog is open did not interrupt the run")
+	}
+	if !m.approval.active {
+		t.Error("the dialog must stay open until the run actually ends")
+	}
+	select {
+	case a := <-reply:
+		t.Fatalf("Ctrl+C answered the request instead of interrupting: %+v", a)
+	default:
+	}
+}
+
 // TestApprovalDialogArrowSelection verifies ↑↓ move the highlight and wrap.
 func TestApprovalDialogArrowSelection(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)

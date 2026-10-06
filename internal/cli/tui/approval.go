@@ -300,10 +300,17 @@ func displayPath(p string) string {
 }
 
 // approvalKey handles one key press while the dialog is open and reports
-// whether it consumed the key. Every key is consumed while the dialog is
-// active (typing must not leak into the composer behind a pending decision).
+// whether it consumed the key. Every key except Ctrl+C is consumed while the
+// dialog is active (typing must not leak into the composer behind a pending
+// decision). Ctrl+C is never swallowed: it falls through to the shell's
+// interrupt/quit path, cancelling the run mid-flight — which resolves the
+// dialog fail-closed via context cancellation — or arming quit while idle.
+// A pending decision must never make the keyboard unresponsive.
 func (m *Model) approvalKey(key string) bool {
 	if !m.approval.active {
+		return false
+	}
+	if key == "ctrl+c" {
 		return false
 	}
 	switch key {

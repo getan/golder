@@ -1325,9 +1325,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // newline) to the input editor while idle. Keys are matched via KeyPressMsg
 // .String() so the mapping is terminal-independent.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// A pending tool-call approval owns every key: the decision must not be
-	// dismissed or answered accidentally, and typing behind it would be lost
-	// input anyway once the dialog closes.
+	// A pending tool-call approval owns every key except Ctrl+C: the decision
+	// must not be dismissed or answered accidentally, and typing behind it
+	// would be lost input anyway once the dialog closes. Ctrl+C stays the
+	// shell's hard interrupt so a pending dialog can never dead-lock the
+	// keyboard; cancelling the run resolves the dialog fail-closed.
 	if m.approval.active {
 		if m.approvalKey(msg.String()) {
 			m.relayout()
