@@ -44,6 +44,11 @@ const cmdHLCacheMax = 256
 var (
 	cmdHLMu    sync.Mutex
 	cmdHLCache = map[string][]hlSpan{}
+	// lexerMatchCache memoizes file basename → chroma lexer name ("" = no
+	// lexer). lexers.Match globs every registered lexer's patterns on each
+	// call, and diff rows resolve a lexer per line; the profiler showed that
+	// matching dominating cold renders. The mapping is pure and stable.
+	lexerMatchCache = map[string]string{}
 )
 
 // syntaxDark reports whether Markdown (and therefore command) syntax coloring
@@ -74,11 +79,31 @@ func highlightShellCommand(cmd string, dark bool) []hlSpan {
 // stateful lexer over the whole file. Unknown file types fall back to a
 // single uncolored span, so the line still renders.
 func highlightCodeLine(path, line string, dark bool) []hlSpan {
-	lexer := lexers.Match(filepath.Base(path))
-	if lexer == nil {
+	name := lexerNameForFile(filepath.Base(path))
+	if name == "" {
 		return []hlSpan{{text: line}}
 	}
-	return highlightCached(lexer.Config().Name, line, dark)
+	return highlightCached(name, line, dark)
+}
+
+// lexerNameForFile resolves a file's basename to its chroma lexer name,
+// memoized per basename: lexers.Match scans every registered lexer's glob
+// patterns, which is far too slow to repeat for every line of a diff.
+func lexerNameForFile(base string) string {
+	cmdHLMu.Lock()
+	name, ok := lexerMatchCache[base]
+	cmdHLMu.Unlock()
+	if ok {
+		return name
+	}
+	name = ""
+	if lexer := lexers.Match(base); lexer != nil {
+		name = lexer.Config().Name
+	}
+	cmdHLMu.Lock()
+	lexerMatchCache[base] = name
+	cmdHLMu.Unlock()
+	return name
 }
 
 // highlightCached is the shared cache/fallback path for the two public

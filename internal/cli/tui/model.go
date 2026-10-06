@@ -207,6 +207,13 @@ type Model struct {
 	// stats) shown on the row above the input while a run is in flight.
 	spinner spinner
 
+	// streamRenderArmed is true while a coalescing render tick is in flight:
+	// provider deltas keep growing the live assistant block, but no reflow runs
+	// until the tick fires. A per-token reflow of a long transcript takes
+	// seconds, and queued reflows would starve key handling — Ctrl+C among them
+	// — so completions render immediately while the stream itself is batched.
+	streamRenderArmed bool
+
 	// logoRunning is true while ticks keep advancing the startup wordmark's
 	// entrance.
 	// Only a fresh session (no resumed history) arms it: a resumed banner sits
@@ -813,7 +820,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cell := m.pendingCardClickCell
 			m.pendingCardClick = nil
 			if msg.X == cell.x && msg.Y == cell.y {
-				card.expanded = !card.expanded
+				card.toggleExpanded()
 				m.transcript.reflow()
 				return m, nil
 			}
@@ -874,6 +881,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.advance()
 		return m, m.tickSpinner()
 
+	case streamRenderTickMsg:
+		// The coalescing window elapsed: lay out every delta that arrived since
+		// the tick was armed in one pass, then allow the next tick.
+		m.streamRenderArmed = false
+		m.transcript.reflow()
+		return m, nil
+
 	case logoFrameMsg:
 		// Advance the wordmark's entrance one frame. The final frame is the
 		// settled word, the animation disarms itself, and the banner stays
@@ -891,9 +905,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case textDeltaMsg:
 		m.spinner.addTokens(msg.delta)
-		m.transcript.appendDelta(msg.delta)
+		// Append without reflow and render on a coalescing tick: a full layout
+		// of a long transcript costs far more than the delta interval, so a
+		// per-token reflow would queue seconds of work ahead of every key
+		// press (Ctrl+C included). The text is already in the block, so any
+		// interleaved event that reflows (tool end, turn end) renders it too.
+		m.transcript.appendDeltaText(msg.delta)
 		m.remoteEcho(msg.delta)
-		return m, m.pumpNext()
+		if m.streamRenderArmed {
+			return m, m.pumpNext()
+		}
+		m.streamRenderArmed = true
+		return m, tea.Batch(m.pumpNext(), streamRenderTick())
 
 	case turnEndMsg:
 		m.transcript.finalizeTurn(msg.msg)
@@ -940,7 +963,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// setup; a repeated announce is a no-op.
 		if card, ok := m.toolCards[msg.id]; ok {
 			if card.input == nil && msg.input != nil {
-				card.input = msg.input
+				card.setInput(msg.input)
 				m.transcript.reflow()
 			}
 			return m, nil
@@ -962,9 +985,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// args, echo, sub-agent row) without adding a second transcript block;
 		// a call never announced takes the full legacy create path (#389).
 		if card, ok := m.toolCards[msg.id]; ok {
-			if msg.input != nil {
-				card.input = msg.input
-			}
+			card.setInput(msg.input)
 			m.lastToolCard = card
 			m.transcript.reflow()
 			m.remoteEcho("\n· " + msg.name + "\n")
@@ -1097,6 +1118,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.running = false
 		m.runCh = nil
 		m.spinner.stop()
+		// No further deltas will arrive; a still-pending render tick just
+		// reflows once below. Clearing the arm lets the next run batch cleanly.
+		m.streamRenderArmed = false
 		// A run that ended with an approval dialog still open (interrupt, or a
 		// cancelled gate) leaves the decision moot: close it so the dialog does
 		// not outlive the call it was asking about. The run goroutine is gone,
@@ -1110,9 +1134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// "Running" would promise output that will never arrive, so close it as
 		// a warn (the transcript keeps the call and its partial output).
 		for _, card := range m.toolCards {
-			if card.state == cardRunning {
-				card.state = cardWarn
-			}
+			card.abort()
 		}
 		m.relayout()
 		if msg.err != nil {
@@ -1344,7 +1366,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// full detail, then re-flow so the change shows inline (#389, codex
 		// parity: ctrl+t expands collapsed output).
 		if m.lastToolCard != nil {
-			m.lastToolCard.expanded = !m.lastToolCard.expanded
+			m.lastToolCard.toggleExpanded()
 			m.transcript.reflow()
 		}
 		return m, nil
@@ -2468,6 +2490,18 @@ func (m Model) tickSpinner() tea.Cmd {
 	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
 	})
+}
+
+// streamRenderInterval bounds how often streamed assistant deltas are laid
+// out: deltas arrive per token, while a full reflow of a long transcript can
+// cost hundreds of milliseconds, so rendering at most ~20 fps keeps the Update
+// loop answering keys (Ctrl+C included) while the reply still streams.
+const streamRenderInterval = 50 * time.Millisecond
+
+// streamRenderTick schedules the coalescing reflow that follows a burst of
+// streamed deltas (see Model.streamRenderArmed).
+func streamRenderTick() tea.Cmd {
+	return tea.Tick(streamRenderInterval, func(time.Time) tea.Msg { return streamRenderTickMsg{} })
 }
 
 // quitArmWindow is how long an armed quit stays live: a second idle Ctrl+C /

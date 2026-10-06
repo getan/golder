@@ -532,3 +532,86 @@ func TestTranscriptLocksHorizontalScroll(t *testing.T) {
 		t.Fatalf("XOffset = %d after shift+wheel, want locked at 0", got)
 	}
 }
+
+// TestFinishedCardRenderCachedAndInvalidated guards the streaming freeze: a
+// finished tool card must be memoized (an expanded patch card renders a full
+// colored diff, ~80ms on a real session), and every in-place mutation must
+// invalidate the entry so the cached string cannot mask it.
+func TestFinishedCardRenderCachedAndInvalidated(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 12)
+	card := &toolCard{id: "1", name: "read", input: map[string]any{"path": "internal/x.go"}, state: cardRunning}
+	tr.addToolCard(card)
+	idx := len(tr.blocks) - 1
+	if _, ok := tr.renderCache[idx]; ok {
+		t.Fatal("a running card must never be cached")
+	}
+
+	card.complete(true, "a.go\nb.go", nil)
+	tr.reflow()
+	e, ok := tr.renderCache[idx]
+	if !ok {
+		t.Fatal("a finished card must be cached after the reflow")
+	}
+	if e.rev != card.rev || e.width != tr.width {
+		t.Fatalf("cache entry = %+v, want rev=%d width=%d", e, card.rev, tr.width)
+	}
+	before := e.text
+
+	card.toggleExpanded()
+	tr.reflow()
+	e2, ok := tr.renderCache[idx]
+	if !ok {
+		t.Fatal("a finished card must be cached again after the toggle re-render")
+	}
+	if e2.rev != card.rev {
+		t.Fatalf("cache rev = %d, want %d after toggle", e2.rev, card.rev)
+	}
+	if e2.text == before {
+		t.Error("expand toggle must change the rendered card")
+	}
+}
+
+// TestReflowReusesCacheAtReservedWidth is the regression for the width churn
+// that defeated the render cache: reflow probed the full width and, on
+// overflow, re-laid at totalWidth-1 on every pass, so cache entries never
+// matched the next probe and every streaming frame re-rendered the whole
+// history (8s per frame on a real session). A steady-state reflow must be a
+// pure cache hit.
+func TestReflowReusesCacheAtReservedWidth(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(40, 8)
+	for i := 0; i < 30; i++ {
+		tr.addSystem(strings.Repeat("x", 80)) // ~3 lines each: overflows 8 rows
+	}
+	if !tr.barReserved {
+		t.Fatal("an overflowing transcript must reserve the scrollbar column")
+	}
+
+	// Poison every memoized render: if the next reflow hits the cache, the
+	// sentinel must surface; a re-render (width mismatch or missing entry)
+	// wipes it out.
+	for i, e := range tr.renderCache {
+		e.text = "CACHED-SENTINEL"
+		tr.renderCache[i] = e
+	}
+	tr.reflow()
+	if body := strings.Join(tr.contentLines(), "\n"); !strings.Contains(body, "CACHED-SENTINEL") {
+		t.Fatal("steady-state reflow re-rendered stable blocks instead of reusing the cache")
+	}
+}
+
+// TestAppendDeltaTextDefersReflow locks the split the streaming path relies
+// on: deltas only grow the live block, and the coalescing tick reflows.
+func TestAppendDeltaTextDefersReflow(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(40, 8)
+	tr.appendDeltaText("hello")
+	if strings.Contains(strings.Join(tr.contentLines(), "\n"), "hello") {
+		t.Fatal("appendDeltaText must not reflow")
+	}
+	tr.reflow()
+	if !strings.Contains(strings.Join(tr.contentLines(), "\n"), "hello") {
+		t.Fatal("reflow must render deferred deltas")
+	}
+}

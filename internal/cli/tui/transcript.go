@@ -88,8 +88,23 @@ type transcript struct {
 	// renderCache memoizes per-block renders for stable (sealed) blocks so a
 	// streaming delta only pays for the live block, not a full-history glamour
 	// pass. Keyed by block index (blocks are append-only; reset clears it).
-	// Tool cards and the streaming assistant block are never cached.
-	renderCache map[int]string
+	// A finished tool card is stable too: its entry is invalidated by the
+	// card's revision, which every mutation bumps. The streaming assistant
+	// block and running cards are never cached.
+	renderCache map[int]cachedRender
+
+	// batchDepth suspends reflow while a replay appends many blocks
+	// (seedTranscript), so the transcript pays for one layout instead of the
+	// O(n^2) cost of re-rendering the growing history per block. reflow calls
+	// made while batching are dropped; endBatch lays everything out once.
+	batchDepth int
+
+	// barReserved records that the last layout overflowed the viewport and one
+	// column was handed to the scrollbar. Starting the next layout at the
+	// reserved width keeps the render cache's width key stable across reflows
+	// (probing full width first would re-render every block at the other width
+	// on each pass, defeating the cache).
+	barReserved bool
 
 	// lines caches the last renderAll split: the transcript's full content lines
 	// in order. Mouse selection endpoints anchor into these indices (see
@@ -117,6 +132,16 @@ type transcript struct {
 	// whenever the viewport is pinned back to the bottom (scroll-down,
 	// jumpToBottom, or a new submitted turn re-arming follow).
 	unseen int
+}
+
+// cachedRender is one memoized block render: the body plus the width it was
+// wrapped to and, for tool cards, the card revision it was rendered from. A
+// cache hit needs the same width and — for cards — that no mutation landed
+// since.
+type cachedRender struct {
+	text  string
+	width int
+	rev   uint64
 }
 
 // newTranscript builds an empty transcript with the given theme. The viewport
@@ -269,15 +294,24 @@ func (t *transcript) announceToolCard(c *toolCard) {
 	t.reflow()
 }
 
-// appendDelta grows the current assistant block by delta, creating the block on
-// the first delta of a turn. The re-flow auto-sticks to the bottom when the user
-// has not scrolled up.
-func (t *transcript) appendDelta(delta string) {
+// appendDeltaText grows the current assistant block by delta, creating the
+// block on the first delta of a turn, without reflowing. High-rate provider
+// deltas are coalesced by the model (see streamRenderTickMsg) so per-token
+// reflows cannot pin the UI.
+func (t *transcript) appendDeltaText(delta string) {
 	if t.activeAssistant < 0 {
 		t.blocks = append(t.blocks, transcriptBlock{role: roleAssistant})
 		t.activeAssistant = len(t.blocks) - 1
 	}
 	t.blocks[t.activeAssistant].text += delta
+}
+
+// appendDelta grows the current assistant block by delta and re-flows in the
+// same step. The re-flow auto-sticks to the bottom when the user has not
+// scrolled up. Synchronous callers (tests, scripts) use this; the live run
+// path appends with appendDeltaText and renders on its coalescing tick.
+func (t *transcript) appendDelta(delta string) {
+	t.appendDeltaText(delta)
 	t.reflow()
 }
 
@@ -510,22 +544,33 @@ func (t transcript) scrollbar() string {
 //
 // Width is decided here rather than in setSize so it stays correct as a run
 // streams in new lines (which reach reflow via appendDelta/finalizeTurn, not
-// setSize): the blocks are first laid out at the full width, and only if that
-// overflows the viewport is one column handed back to the scrollbar and the
-// blocks re-laid at totalWidth-1. When the content fits, the transcript keeps
-// the full width and view() draws no bar.
+// setSize). The last layout's overflow state is remembered in barReserved: once
+// the content overflows, the next reflow starts at totalWidth-1 directly, so
+// the render cache stays keyed to one width per reflow instead of being
+// invalidated by a full-width probe on every pass. The content only re-probes
+// the full width when it fits again at totalWidth-1 (session switch, cleared
+// transcript).
 func (t *transcript) reflow() {
-	t.width = t.totalWidth
-	t.vp.SetWidth(t.width)
-	t.setContent(t.renderAll())
-
-	// A narrower width never reduces the line count, so if the full-width layout
-	// already overflows it still overflows at totalWidth-1: reserve the scrollbar
-	// column and re-lay the blocks so the body never sits under the bar.
-	if t.totalWidth > 0 && t.vp.TotalLineCount() > t.vp.Height() {
-		t.width = t.totalWidth - 1
-		t.vp.SetWidth(t.width)
-		t.setContent(t.renderAll())
+	if t.batchDepth > 0 {
+		return
+	}
+	if t.totalWidth > 0 && t.barReserved {
+		t.layoutAt(t.totalWidth - 1)
+		if t.vp.TotalLineCount() <= t.vp.Height() {
+			// The content no longer overflows: hand the column back.
+			t.barReserved = false
+			t.layoutAt(t.totalWidth)
+		}
+	} else {
+		t.barReserved = false
+		t.layoutAt(t.totalWidth)
+		// A narrower width never reduces the line count, so an overflow at the
+		// full width is final: reserve the scrollbar column and re-lay the
+		// blocks so the body never sits under the bar.
+		if t.totalWidth > 0 && t.vp.TotalLineCount() > t.vp.Height() {
+			t.barReserved = true
+			t.layoutAt(t.totalWidth - 1)
+		}
 	}
 
 	if t.follow {
@@ -533,12 +578,38 @@ func (t *transcript) reflow() {
 	}
 }
 
+// layoutAt lays every block out at width w and pushes the render into the
+// viewport.
+func (t *transcript) layoutAt(w int) {
+	t.width = w
+	t.vp.SetWidth(w)
+	t.setContent(t.renderAll())
+}
+
+// beginBatch suspends reflow until endBatch so a bulk append (seedTranscript
+// replaying hundreds of blocks) pays for one layout pass instead of one per
+// block. Nesting is counted; only the outermost endBatch re-renders.
+func (t *transcript) beginBatch() { t.batchDepth++ }
+
+// endBatch closes the outermost batch and lays the transcript out once.
+func (t *transcript) endBatch() {
+	if t.batchDepth > 0 {
+		t.batchDepth--
+	}
+	if t.batchDepth == 0 {
+		t.reflow()
+	}
+}
+
 // setContent pushes the full render into the viewport and caches its lines for
 // content-anchored mouse selection (see lines).
 func (t *transcript) setContent(rendered string) {
 	before := t.vp.TotalLineCount()
-	t.vp.SetContent(rendered)
 	t.lines = strings.Split(rendered, "\n")
+	// Hand the viewport the slice the transcript already split instead of the
+	// raw string: SetContent would split the whole body a second time on every
+	// streaming reflow. Neither side mutates the slice.
+	t.vp.SetContentLines(t.lines)
 	if t.follow {
 		// Pinned: nothing can be waiting below the fold.
 		t.unseen = 0
@@ -571,7 +642,7 @@ func (t *transcript) contentLines() []string { return t.lines }
 // and another blank line after it before the reply starts.
 func (t *transcript) renderAll() string {
 	if t.renderCache == nil {
-		t.renderCache = map[int]string{}
+		t.renderCache = map[int]cachedRender{}
 	}
 	t.cardSpans = map[*toolCard][2]int{}
 	var b strings.Builder
@@ -588,24 +659,15 @@ func (t *transcript) renderAll() string {
 				line++
 			}
 		}
-		var s string
 		// Stable blocks (everything except the live streaming assistant block
-		// and mutating tool cards) render once and are reused: without this,
-		// every streaming delta would re-run glamour over the whole history.
-		if stableBlock(blk, i == t.activeAssistant) {
-			if s, ok := t.renderCache[i]; ok {
-				b.WriteString(s)
-				line += strings.Count(s, "\n") + 1
-				continue
-			}
-			s = t.renderBlock(blk, false)
-			t.renderCache[i] = s
-		} else {
-			// The live block (or a tool card) always re-renders, and never
-			// pollutes the cache: the streaming block's text is still growing,
-			// and a card's state/response mutates in place on completion.
-			delete(t.renderCache, i)
+		// and running cards) render once and are reused: without this, every
+		// streaming delta would re-run glamour over the whole history — and,
+		// since expanded patch cards render colored diffs, re-render every
+		// finished tool card too.
+		s, ok := t.cachedRender(i, blk)
+		if !ok {
 			s = t.renderBlock(blk, i == t.activeAssistant)
+			t.storeRender(i, blk, s)
 		}
 		if blk.role == roleTool && blk.card != nil {
 			t.cardSpans[blk.card] = [2]int{line, line + strings.Count(s, "\n")}
@@ -614,6 +676,41 @@ func (t *transcript) renderAll() string {
 		line += strings.Count(s, "\n") + 1
 	}
 	return b.String()
+}
+
+// cachedRender returns the memoized render for block i when it is still valid:
+// the block must be stable, the entry must have been laid out at the current
+// width, and — for a tool card — no mutation may have landed since it was
+// stored (the card's revision changed).
+func (t *transcript) cachedRender(i int, blk transcriptBlock) (string, bool) {
+	if !stableBlock(blk, i == t.activeAssistant) {
+		return "", false
+	}
+	e, ok := t.renderCache[i]
+	if !ok || e.width != t.width {
+		return "", false
+	}
+	if blk.role == roleTool && (blk.card == nil || e.rev != blk.card.rev) {
+		return "", false
+	}
+	return e.text, true
+}
+
+// storeRender memoizes a block's render, or drops the entry when the block is
+// not cacheable: the live streaming block's text is still growing, and a
+// running card re-renders on every pass. Cards record the revision they were
+// rendered from so a later mutation (completion, expand toggle) invalidates
+// the entry.
+func (t *transcript) storeRender(i int, blk transcriptBlock, s string) {
+	if !stableBlock(blk, i == t.activeAssistant) {
+		delete(t.renderCache, i)
+		return
+	}
+	rev := uint64(0)
+	if blk.role == roleTool && blk.card != nil {
+		rev = blk.card.rev
+	}
+	t.renderCache[i] = cachedRender{text: s, width: t.width, rev: rev}
 }
 
 // toolCardAt returns the tool card whose rendered block covers content line
@@ -630,9 +727,10 @@ func (t transcript) toolCardAt(line int) *toolCard {
 }
 
 // stableBlock reports whether a block's render is immutable: user/system/banner
-// turns and finalized assistant turns never change after they are sealed, while
-// the streaming assistant block and tool cards (completed in place on tool end)
-// must re-render every pass.
+// turns and finalized assistant turns never change after they are sealed, and a
+// finished tool card changes only when a mutation bumps its revision (the cache
+// entry is keyed by it). The streaming assistant block and running cards must
+// re-render every pass.
 func stableBlock(blk transcriptBlock, streaming bool) bool {
 	if streaming {
 		return false
@@ -644,6 +742,8 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 		return true
 	case roleAssistant:
 		return true
+	case roleTool:
+		return blk.card != nil && blk.card.state != cardRunning
 	default:
 		return false
 	}

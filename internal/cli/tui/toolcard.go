@@ -53,6 +53,41 @@ type toolCard struct {
 	diff     string
 	state    cardState
 	expanded bool
+
+	// rev bumps on every in-place mutation (input filled, completion, expand
+	// toggle, abort). The transcript's render cache keys tool-card entries by
+	// this revision, so a render made before the mutation cannot mask it.
+	rev uint64
+}
+
+// touch marks the card as changed so the cached render is invalidated.
+func (c *toolCard) touch() { c.rev++ }
+
+// setInput fills the decoded call arguments when the announce/start event
+// delivers them after the card was created. Nil never clears existing input.
+func (c *toolCard) setInput(input map[string]any) {
+	if input == nil {
+		return
+	}
+	c.input = input
+	c.touch()
+}
+
+// toggleExpanded flips the card between its collapsed summary and full detail.
+func (c *toolCard) toggleExpanded() {
+	c.expanded = !c.expanded
+	c.touch()
+}
+
+// abort closes a card that never received its end event (the run was
+// interrupted or ended with the tool pending) as a warn, so a forever
+// "Running" row does not promise output that will never arrive. A finished
+// card is left untouched.
+func (c *toolCard) abort() {
+	if c.state == cardRunning {
+		c.state = cardWarn
+		c.touch()
+	}
 }
 
 // expandHint names the key that toggles a card between its collapsed summary
@@ -310,6 +345,7 @@ func (c toolCard) totalBodyLines() int {
 // the single definition of what a finished card looks like, shared by the live
 // tool-end path and session replay so the two cannot drift.
 func (c *toolCard) complete(ok bool, result string, details any) {
+	c.touch()
 	if ok {
 		c.state = cardSuccess
 	} else {

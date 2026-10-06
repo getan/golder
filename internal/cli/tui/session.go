@@ -967,6 +967,12 @@ func (s *runSession) checkpointMidRun(_ context.Context, _ *agentcore.AgentConte
 // (apply_patch expanded, reads folded), so a resumed transcript reads like the
 // session it continues.
 func seedTranscript(t *transcript, history []agentcore.Message) {
+	// A long session replays hundreds of blocks (and thousands of rendered
+	// lines): suspend reflow while appending so the replay pays for one layout
+	// pass instead of re-laying the growing history per message, which is
+	// quadratic and froze resumed sessions for minutes.
+	t.beginBatch()
+	defer t.endBatch()
 	results := toolResultsByCallID(history)
 	for _, m := range history {
 		switch msg := m.(type) {

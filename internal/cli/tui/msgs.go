@@ -18,6 +18,11 @@ import (
 // OnText contract).
 type textDeltaMsg struct{ delta string }
 
+// streamRenderTickMsg fires when the streaming render coalescing window
+// elapses: the model lays out every delta accumulated since the tick was armed
+// in one reflow (see Model.streamRenderArmed).
+type streamRenderTickMsg struct{}
+
 // selScrollTickMsg is the edge-autoscroll heartbeat while a mouse text-selection
 // drag is pinned at the transcript's top/bottom edge: each tick scrolls a few
 // lines so the selection can extend across pages. gen guards stale ticks from
