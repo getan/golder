@@ -8,6 +8,8 @@
 
 A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. Starts in a full-screen TUI by default, with a line-based REPL and a headless mode for scripts.
 
+🌐 **Website & demo**: <https://golder-cli.pages.dev> — includes a 28-second recording of a real session (red tests → autonomous fix → all green).
+
 ## Features
 
 - **TUI first**: run `golder` for the full-screen TUI (transcript, tool cards, status bar, arrow-key pickers); `--no-tui` falls back to the line-based REPL, and both front-ends share the exact same command surface; `golder -p "..."` runs headless for scripts and CI.
