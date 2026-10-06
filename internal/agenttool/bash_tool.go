@@ -315,11 +315,25 @@ func looksSandboxDenied(output string) bool {
 	return false
 }
 
+// sandboxFalseNegativeNote warns the model that sandbox-denied file checks can
+// masquerade as ordinary results: a denied stat looks exactly like a missing
+// file (test -e / ls), and rm -f exits 0 without deleting. It rides on both
+// escalation hints so the model never reports a deletion (or a missing file)
+// as fact based on the very checks the sandbox distorts.
+const sandboxFalseNegativeNote = " Note: sandbox-denied file checks are false negatives — a denied stat looks like a missing file (test -e, ls), and rm -f can exit 0 without deleting anything. Do not report a deletion or a missing file as fact from those checks; when it matters, tell the user what to verify outside the sandbox."
+
 // sandboxEscalationHint is appended to a sandboxed failure that looks like a
 // denial. It tells the model exactly what the situation is and how to proceed,
 // mirroring codex's guidance to retry with escalation when the sandbox (not the
 // command) is the blocker.
-const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox policy (writes are confined to the project and TMPDIR; the network is off). If the command is legitimate and needs access the sandbox denies, retry it with sandbox_permissions=\"require_escalated\" and a short justification, which asks the user to approve running it outside the sandbox.]"
+const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox policy (writes are confined to the project and TMPDIR; the network is off). If the command is legitimate and needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" and a short justification, which asks the user to approve running it outside the sandbox.]" + sandboxFalseNegativeNote
+
+// sandboxEscalationDeniedHint is the loop-breaker: the command already carried
+// sandbox_permissions=require_escalated and still ran sandboxed, so the request
+// was not granted (the user denied it, nobody could approve it, or the reviewer
+// kept the call contained). Telling the model to retry again would loop
+// forever, so this hint names the dead end and points at the way out.
+const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require_escalated\" was not granted (denied by the user, or no approver available), so this command ran inside the sandbox again. Retrying the same escalation will fail the same way — stop and tell the user what access the task needs, or finish with a sandbox-compatible approach.]" + sandboxFalseNegativeNote
 
 // resolveShell picks the interpreter and the flag that makes it read the command
 // from the next argument. An explicit shell (BashTool.Shell) is always honored as
@@ -451,8 +465,13 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// The hint is appended to the output the model sees (the error line and the
 	// result content), not to the user's view.
 	hint := ""
-	if sandboxed && snap.ExitCode != 0 && looksSandboxDenied(out) {
-		hint = sandboxEscalationHint
+	sandboxDenied := sandboxed && snap.ExitCode != 0 && looksSandboxDenied(out)
+	if sandboxDenied {
+		if strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
+			hint = sandboxEscalationDeniedHint
+		} else {
+			hint = sandboxEscalationHint
+		}
 	}
 
 	if !exited {
@@ -473,9 +492,13 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			fmt.Errorf("bash: command timed out after %s\n%s", snap.Timeout, out)
 	}
 	if snap.ExitCode != 0 {
+		details := map[string]any{"exitCode": snap.ExitCode}
+		if sandboxDenied {
+			details["sandboxDenied"] = true
+		}
 		return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
-				Details: map[string]any{"exitCode": snap.ExitCode},
+				Details: details,
 			},
 			fmt.Errorf("bash: command exited with code %d\n%s%s", snap.ExitCode, out, hint)
 	}

@@ -93,6 +93,7 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 	// sandbox. Home is deliberately absent unless the user added it via
 	// ReadableRoots' environment/config extension.
 	readRoots := append([]string{project}, ReadableRoots()...)
+	readRoots = append(readRoots, WritableRoots()...)
 	roots := dedupePaths(canonicalsAll(readRoots))
 	// Shorter paths first so an ancestor root (e.g. an env-provided $HOME
 	// entry) is mounted before a descendant file that needs its parent.
@@ -118,6 +119,13 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 	argv = append(argv, "--dev", "/dev", "--proc", "/proc")
 	for _, p := range canonicals(project) {
 		argv = append(argv, "--bind", p, p)
+	}
+	// Session grants from the approval dialog / config: bound writable after
+	// the read-only pass above, so the writable bind wins for the same path.
+	for _, root := range WritableRoots() {
+		for _, p := range canonicals(root) {
+			argv = append(argv, "--bind-try", p, p)
+		}
 	}
 	for _, p := range canonicals(r.tmpDir()) {
 		argv = append(argv, "--bind-try", p, p)

@@ -105,10 +105,12 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 			return "", fmt.Errorf("seatbelt: resolve project dir: %w", err)
 		}
 	}
-	// Read whitelist: the project plus the system runtime and extra roots. Every
-	// entry carries its canonical spelling (see canonicals): the profile matches
-	// by vnode path, and macOS temp trees live under the /var → /private/var
-	// symlink.
+	// Read whitelist: the project plus the system runtime, extra roots, and the
+	// session's writable grants. Writable roots are readable too by
+	// construction: writing a file the command may not read back would only
+	// produce confusing half-failures. Every entry carries its canonical
+	// spelling (see canonicals): the profile matches by vnode path, and macOS
+	// temp trees live under the /var → /private/var symlink.
 	//
 	// "/" itself is added literally: subpath rules cover a directory and its
 	// descendants, so without it the root directory is unreadable and every
@@ -117,6 +119,7 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 	// The sandbox temp dir is readable and writable: toolchains spill there and
 	// read their own spill back, so a write-only entry would fail confusingly.
 	readRoots := append([]string{project, r.tmpDir()}, ReadableRoots()...)
+	readRoots = append(readRoots, WritableRoots()...)
 	readRule := fmt.Sprintf("(allow file-read* (literal \"/\") %s)", quoteAll(canonicalsAll(readRoots)))
 	// Parent chains need metadata traversal so path resolution (and getcwd)
 	// work: an allow on /a/b/c does not by itself permit stat on /a/b, and the
@@ -161,8 +164,12 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 	b.WriteString("(allow sysctl-read)\n")
 	b.WriteString(readRule + "\n")
 	b.WriteString(metaRule)
-	fmt.Fprintf(&b, "(allow file-write* %s %s (literal \"/dev/null\") (literal \"/dev/tty\"))\n",
-		quoteAll(canonicals(project)), quoteAll(canonicals(r.tmpDir())))
+	writeRoots := append(canonicals(project), canonicals(r.tmpDir())...)
+	for _, root := range WritableRoots() {
+		writeRoots = append(writeRoots, canonicals(root)...)
+	}
+	fmt.Fprintf(&b, "(allow file-write* %s (literal \"/dev/null\") (literal \"/dev/tty\"))\n",
+		quoteAll(dedupePaths(writeRoots)))
 	b.WriteString(denyGolder)
 	b.WriteString("(deny file-write* (regex #\".*trust\\.json$\"))\n")
 	b.WriteString(network + "\n")

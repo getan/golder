@@ -6,6 +6,7 @@ package tui
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 func testApprovalRequest() judge.ApprovalRequest {
@@ -136,6 +138,130 @@ func TestApprovalViewShowsContext(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("dialog missing %q:\n%s", want, view)
 		}
+	}
+}
+
+// TestApprovalTitleEscalation pins the escalation-conflict headline: the
+// dialog must say the call wants out of the sandbox, not just "needs
+// approval".
+func TestApprovalTitleEscalation(t *testing.T) {
+	req := testApprovalRequest()
+	req.Kind = judge.ApprovalEscalation
+	title := approvalTitle(req)
+	if !strings.Contains(title, "outside the sandbox") || !strings.Contains(title, "sandbox") {
+		t.Errorf("escalation title = %q", title)
+	}
+}
+
+// TestApprovalDialogWritableRow: an escalation whose command names an outside
+// path offers the per-path grant, and choosing it registers the path and
+// answers with the containment grant (Approve + WritableRoot).
+func TestApprovalDialogWritableRow(t *testing.T) {
+	defer seatbelt.SetWritableRoots(nil)
+	t.Setenv("HOME", t.TempDir())
+	req := judge.ApprovalRequest{
+		Kind:          judge.ApprovalEscalation,
+		Tool:          "bash",
+		Summary:       "command: rm -rf /Volumes/KIOXIA/old-build",
+		Justification: "the sandbox denies writes to /Volumes/KIOXIA/old-build",
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m := NewModel(Options{})
+	m.openApproval(req, reply)
+	if len(m.approval.rows) != 4 {
+		t.Fatalf("rows = %d, want 4 with the writable grant", len(m.approval.rows))
+	}
+	label := m.approval.rows[2].label
+	if !strings.Contains(label, "/Volumes/KIOXIA/old-build") || !strings.Contains(label, "this session") {
+		t.Fatalf("writable row label = %q", label)
+	}
+	got, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	_ = got
+	ans := awaitAnswer(t, reply)
+	if !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
+		t.Fatalf("answer = %+v", ans)
+	}
+	if roots := seatbelt.WritableRoots(); len(roots) != 1 || roots[0] != "/Volumes/KIOXIA/old-build" {
+		t.Fatalf("registry = %v", roots)
+	}
+	// The path is granted now: the row disappears for the next request (and
+	// confirmApproval settles it without a dialog).
+	m2 := NewModel(Options{})
+	m2.openApproval(req, make(chan judge.ApprovalAnswer, 1))
+	if len(m2.approval.rows) != 3 || m2.approval.writableRoot != "" {
+		t.Fatalf("already-granted path must not offer the row: %+v", m2.approval.rows)
+	}
+	s := &runSession{cwd: t.TempDir()} // no approvalCh: a dialog would fail closed
+	if ans := s.confirmApproval(context.Background(), req); !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
+		t.Fatalf("pre-granted escalation should be contained without a dialog, got %+v", ans)
+	}
+}
+
+// TestInferWritableRoot pins the candidate filter: only outside paths make the
+// row, and every ambiguous or already-writable candidate hides it.
+func TestInferWritableRoot(t *testing.T) {
+	defer seatbelt.SetWritableRoots(nil)
+	// A lexical home outside the OS temp dir: a t.TempDir() home would sit
+	// under os.TempDir() (which the filter rightly rejects) and mask the
+	// tilde expansion case.
+	home := "/golder-test-home"
+	t.Setenv("HOME", home)
+	cwd := filepath.Join(home, "work", "proj")
+	escalation := judge.ApprovalRequest{Kind: judge.ApprovalEscalation, Tool: "bash"}
+	cases := []struct {
+		name    string
+		summary string
+		just    string
+		want    string
+	}{
+		{"absolute flag path", "command: cargo build --target-dir /Volumes/KIOXIA/rust-target", "", "/Volumes/KIOXIA/rust-target"},
+		{"tilde path", "command: cp a ~/backup/dir", "", filepath.Join(home, "backup", "dir")},
+		{"justification only", "command: rm -rf build", "needs to clean /Volumes/KIOXIA/cache", "/Volumes/KIOXIA/cache"},
+		{"project path skipped", "command: ls " + cwd + "/sub", "", ""},
+		{"system path skipped", "command: cat /usr/share/foo", "", ""},
+		{"tmp skipped", "command: mkdir -p /tmp/work", "", ""},
+		{"bare home skipped", "command: rm -rf ~", "", ""},
+		{"no path", "command: git fetch origin", "needs the network", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := escalation
+			req.Summary, req.Justification = c.summary, c.just
+			if got := inferWritableRoot(req, cwd); got != c.want {
+				t.Fatalf("inferWritableRoot = %q, want %q", got, c.want)
+			}
+		})
+	}
+	// A confirm-tier request never grows the row, even with a path.
+	req := escalation
+	req.Kind = judge.ApprovalConfirm
+	req.Summary = "command: rm -rf /Volumes/KIOXIA/old-build"
+	if got := inferWritableRoot(req, cwd); got != "" {
+		t.Fatalf("confirm-tier request offered a path: %q", got)
+	}
+}
+
+// TestConfirmApprovalRemembersDenials: after the user denies a call, a retry
+// of the same call is blocked from memory instead of reopening the dialog.
+func TestConfirmApprovalRemembersDenials(t *testing.T) {
+	s := &runSession{approvalCh: make(chan tea.Msg, 1)}
+	go func() {
+		msg := (<-s.approvalCh).(approvalRequestMsg)
+		msg.reply <- judge.ApprovalAnswer{Answered: true}
+	}()
+	ans := s.confirmApproval(context.Background(), testApprovalRequest())
+	if ans.Approve || !ans.Answered {
+		t.Fatalf("first answer = %+v, want an explicit denial", ans)
+	}
+	// The retry must be answered from the denial memory without a dialog.
+	ans = s.confirmApproval(context.Background(), testApprovalRequest())
+	if ans.Approve || !ans.Answered {
+		t.Fatalf("memorized denial = %+v, want deny without a dialog", ans)
+	}
+	select {
+	case msg := <-s.approvalCh:
+		t.Fatalf("a memorized denial must not reopen the dialog: %+v", msg)
+	default:
 	}
 }
 

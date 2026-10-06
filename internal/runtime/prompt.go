@@ -71,6 +71,7 @@ const DefaultBaseInstruction = "You are golder, a helpful coding agent. " +
 	todoGuide + "\n\n" +
 	taskGuide + "\n\n" +
 	patchGuide + "\n\n" +
+	sandboxGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
 	searchGuide + "\n\n" +
 	contextGuide
@@ -153,6 +154,20 @@ const contextGuide = "The context window is finite. Check the remaining budget w
 	"large refactors, long test loops). When the current task is finished and an unrelated " +
 	"one is next — or the window is nearly full — call new_context to continue in a fresh " +
 	"window: the finished work is summarized and recent messages are kept, so nothing is lost."
+
+// sandboxGuide keeps scratch work inside the paths the OS sandbox can write
+// (the working directory and $TMPDIR), so commands do not fail on denied
+// writes to sibling or home directories — and delete operations outside those
+// roots do not turn into unverifiable half-successes. It also names the
+// escalation contract: one retry with require_escalated, then stop.
+const sandboxGuide = "Shell commands may run inside an OS sandbox that confines file writes to the " +
+	"working directory and $TMPDIR and turns the network off. Create scratch and temporary files " +
+	"inside the working directory or $TMPDIR — never in sibling or home directories, where writes " +
+	"are denied and nothing can be cleaned up from inside the sandbox. If a command legitimately " +
+	"needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" " +
+	"and a short justification; the user decides. If that escalation is not granted (the command " +
+	"runs sandboxed again), stop retrying, tell the user what access the task needs, and continue " +
+	"with a sandbox-compatible approach."
 
 // BuildSystemPrompt assembles the full system prompt from cfg: base instruction,
 // environment block, then AGENTS.md files ordered general-to-specific from Root

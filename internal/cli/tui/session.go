@@ -44,6 +44,7 @@ import (
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/session"
 	"github.com/getan/golder/internal/trust"
 )
@@ -154,6 +155,10 @@ type runSession struct {
 	// tool + summary, so the same shape of call is not asked twice in one run
 	// of the TUI. Cleared when the session is rebuilt.
 	approvedForSession map[string]bool
+	// deniedForSession remembers explicit denials, keyed the same way, so a
+	// model that retries the exact call it was just refused is blocked with a
+	// note instead of nagging the user with the same dialog again.
+	deniedForSession map[string]bool
 
 	// lastBtw is the /btw side thread's context from this process and
 	// lastBtwBase the background-message index it diverged from.
@@ -781,6 +786,20 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	if key := approvalKey(req); key != "" && s.approvedForSession[key] {
 		return judge.ApprovalAnswer{Approve: true, Always: true, Answered: true}
 	}
+	if key := approvalKey(req); key != "" && s.deniedForSession[key] {
+		return judge.ApprovalAnswer{Answered: true}
+	}
+	// A path the user already granted to the sandbox (a prior dialog, a
+	// manual /permissions writable, or config) settles an escalation without
+	// a dialog: the call is contained with the grant, which is exactly what
+	// the grant pre-decided. Without this, every retry would re-ask.
+	if root := escalationPathCandidate(req, s.cwd); root != "" {
+		for _, granted := range seatbelt.WritableRoots() {
+			if coveredBy(root, granted) {
+				return judge.ApprovalAnswer{Approve: true, WritableRoot: root, Answered: true}
+			}
+		}
+	}
 	ch := s.approvalCh
 	if ch == nil {
 		return judge.ApprovalAnswer{}
@@ -793,12 +812,21 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	}
 	select {
 	case ans := <-reply:
-		if ans.Approve && ans.Always {
-			if s.approvedForSession == nil {
-				s.approvedForSession = map[string]bool{}
-			}
-			if key := approvalKey(req); key != "" {
+		if key := approvalKey(req); key != "" {
+			switch {
+			case ans.Approve && ans.Always:
+				if s.approvedForSession == nil {
+					s.approvedForSession = map[string]bool{}
+				}
 				s.approvedForSession[key] = true
+				// An earlier denial must not keep shadowing a later explicit
+				// approval of the same call.
+				delete(s.deniedForSession, key)
+			case ans.Answered && !ans.Approve:
+				if s.deniedForSession == nil {
+					s.deniedForSession = map[string]bool{}
+				}
+				s.deniedForSession[key] = true
 			}
 		}
 		return ans

@@ -12,8 +12,9 @@ import (
 )
 
 // TestPermissionsPickerOpens verifies bare /permissions opens the four-mode
-// picker (codex-style presets), that the picker stays English even in a
-// Chinese conversation, and that confirming a row switches the live state.
+// picker (codex-style presets) plus the sandbox writable-paths row, that the
+// picker stays English even in a Chinese conversation, and that confirming a
+// mode row switches the live state.
 func TestPermissionsPickerOpens(t *testing.T) {
 	s := newRemoteTestSession(t)
 	m := NewModel(Options{})
@@ -29,11 +30,14 @@ func TestPermissionsPickerOpens(t *testing.T) {
 	if !gm.menu.picking() || gm.menu.pickKind != "permissions" {
 		t.Fatalf("picker not open: picking=%v kind=%q", gm.menu.picking(), gm.menu.pickKind)
 	}
-	if len(gm.menu.pick) != 4 {
-		t.Fatalf("picker rows = %d, want 4", len(gm.menu.pick))
+	if len(gm.menu.pick) != 5 {
+		t.Fatalf("picker rows = %d, want 4 modes + writable management", len(gm.menu.pick))
 	}
 	if gm.menu.pick[0].Value != "read-only" || gm.menu.pick[3].Value != "full-access" {
 		t.Errorf("picker values = %+v", gm.menu.pick)
+	}
+	if gm.menu.pick[4].Value != "writable" {
+		t.Errorf("last row should manage writable paths: %+v", gm.menu.pick[4])
 	}
 	if gm.menu.pick[0].Title != "Read Only" || gm.menu.pick[2].Title != "Auto (LLM review)" {
 		t.Errorf("picker titles must stay English: %+v", gm.menu.pick)

@@ -582,7 +582,8 @@ func (m Model) openTrustPicker() (tea.Model, tea.Cmd) {
 }
 
 // openPermissionsPicker shows the four approval modes with their descriptions
-// (the codex permissions-preset parity), marking the active one. The picker is
+// (the codex permissions-preset parity), marking the active one, plus a final
+// row that opens the sandbox writable-path manager. The picker is
 // intentionally English-only — the canonical mode names and short preset
 // descriptions read the same for every user — while the verdict notes and the
 // slash-command status keep following the conversation language.
@@ -600,8 +601,56 @@ func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 	for _, mode := range modes {
 		picks = append(picks, pickItem{Title: mode.Label("en"), Detail: mode.Description("en"), Value: mode.String()})
 	}
+	grants, _ := cli.ListWritablePaths()
+	picks = append(picks, pickItem{
+		Title:  "Sandbox writable paths…",
+		Detail: fmt.Sprintf("%d granted; folders readable+writable inside the sandbox", len(grants)),
+		Value:  "writable",
+	})
 	m.menu.openPickerDetailed(picks, current, "permissions")
 	m.transcript.addSystem("Select a permission mode (↑↓ + Enter, Esc cancels):")
+	m.relayout()
+	return m, nil
+}
+
+// writableAddPick is the picker row that hands the path back to the composer;
+// no granted path can equal it (they are absolute or start with "~/").
+const writableAddPick = "@add"
+
+// openWritablePathsPicker shows the sandbox writable-path grants: the
+// config.toml seed, the managed permissions.toml store, and this session's
+// approval-dialog grants, in one list. Enter on a path revokes it; Enter on
+// "Add path…" drops "/permissions writable add " into the composer so the
+// path is typed (and its existence checked) by the same registry action the
+// REPL runs.
+func (m Model) openWritablePathsPicker() (tea.Model, tea.Cmd) {
+	return m.reopenWritablePathsPicker(true)
+}
+
+// reopenWritablePathsPicker rebuilds the picker after a revoke. Like the proxy
+// picker, the usage hint is announced only on the initial open — every Enter
+// would otherwise stack a duplicate hint.
+func (m Model) reopenWritablePathsPicker(announce bool) (tea.Model, tea.Cmd) {
+	entries, warnings := cli.ListWritablePaths()
+	picks := []pickItem{{
+		Title:  "Add path…",
+		Detail: "Grant read+write inside the sandbox and persist it",
+		Value:  writableAddPick,
+	}}
+	for _, e := range entries {
+		picks = append(picks, pickItem{
+			Title:  cli.DisplayHomePath(e.Path),
+			Detail: e.Source + " · Enter removes",
+			Value:  e.Path,
+		})
+	}
+	m.menu.openPickerDetailed(picks, "", "permissions-writable")
+	if announce {
+		m.transcript.addSystem("Sandbox writable paths: ↑↓ + Enter removes one, \"Add path…\" starts /permissions writable add. Esc closes.")
+	}
+	for _, w := range warnings {
+		m.transcript.addSystem("permissions: " + w)
+	}
 	m.relayout()
 	return m, nil
 }
@@ -1656,6 +1705,32 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			m.recordHistory(line)
 			return m.runSlash(line)
 		}
+		// Sandbox writable paths: Enter on a path revokes it (and rebuilds the
+		// picker so the list reflects the removal); the Add row hands the
+		// composer "/permissions writable add " for typing the path.
+		if kind == "permissions-writable" && ok {
+			m.menu.close()
+			m.input.Clear()
+			if item == writableAddPick {
+				m.input.SetValue("/permissions writable add ")
+				m.relayout()
+				return m, nil
+			}
+			res, err := cli.RemoveWritablePath(item)
+			if err != nil {
+				m.transcript.addSystem("permissions: " + err.Error())
+				return m.reopenWritablePathsPicker(false)
+			}
+			msg := "Revoked " + cli.DisplayHomePath(res.Path) + " for this session"
+			if res.WasSaved {
+				msg += ", deleted from permissions.toml"
+			}
+			if res.WasConfig {
+				msg += "; config.toml still seeds it"
+			}
+			m.transcript.addSystem(msg + ".")
+			return m.reopenWritablePathsPicker(false)
+		}
 		if item, ok := m.menu.pickCurrent(); ok {
 			m.menu.close()
 			m.input.Clear()
@@ -1716,6 +1791,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// /permissions <mode> still resolves through the registry below.
 	if line == "/permissions" {
 		return m.openPermissionsPicker()
+	}
+	// /permissions writable opens the writable-path picker; its subcommands
+	// (/permissions writable add <path>, …) resolve through the registry
+	// below, whose text output is the same the REPL prints.
+	if line == "/permissions writable" {
+		return m.openWritablePathsPicker()
 	}
 	// /memory is intercepted before registry resolution (like /compact): it
 	// prints the persistent-memory + infinite-context report, reading the live

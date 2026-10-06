@@ -784,11 +784,14 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
-		Description:  "show or switch the approval mode: /permissions [read-only|ask|auto|full-access]",
-		ArgumentHint: "[read-only|ask|auto|full-access]",
+		Description:  "show or switch the approval mode, or manage sandbox writable paths: /permissions [read-only|ask|auto|full-access|writable …]",
+		ArgumentHint: "[read-only|ask|auto|full-access | writable [add|rm] <path>]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
+			if arg == "writable" || strings.HasPrefix(arg, "writable ") {
+				return runPermissionsWritable(arg, l)
+			}
 			if arg == "" {
 				current := permissions.Auto
 				if st != nil {
@@ -813,14 +816,19 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 					}
 					fmt.Fprintf(&b, "\n  %-12s %s%s", m.String(), m.Label(l), mark)
 				}
+				if l == "zh" {
+					fmt.Fprintf(&b, "\n沙箱可写路径：/permissions writable")
+				} else {
+					fmt.Fprintf(&b, "\nsandbox writable paths: /permissions writable")
+				}
 				return b.String()
 			}
 			m, ok := permissions.Parse(arg)
 			if !ok {
 				if l == "zh" {
-					return "用法：/permissions [read-only|ask|auto|full-access]"
+					return "用法：/permissions [read-only|ask|auto|full-access | writable [add|rm] <路径>]"
 				}
-				return "usage: /permissions [read-only|ask|auto|full-access]"
+				return "usage: /permissions [read-only|ask|auto|full-access | writable [add|rm] <path>]"
 			}
 			if st != nil {
 				st.Set(m)
@@ -831,4 +839,134 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 			return fmt.Sprintf("permissions switched to %s: %s", m.Label(l), m.Description(l))
 		},
 	})
+}
+
+// runPermissionsWritable implements `/permissions writable [list|add|rm]
+// <path>`, the text surface of the shared writable-path management (the TUI
+// opens the same data as a picker). arg is the full argument, already known to
+// start with "writable".
+func runPermissionsWritable(arg, l string) string {
+	zh := l == "zh"
+	fields := strings.Fields(arg)
+	usage := func() string {
+		if zh {
+			return "用法：/permissions writable [list | add <路径> | rm <路径>]"
+		}
+		return "usage: /permissions writable [list | add <path> | rm <path>]"
+	}
+	// restAfter returns the path argument after the verb, preserving spaces in
+	// the path itself (only the verb token is stripped).
+	restAfter := func(verb string) string {
+		s := strings.TrimSpace(strings.TrimPrefix(arg, "writable"))
+		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), verb))
+	}
+	sourceLabel := func(source string) string {
+		switch {
+		case source == cli.WritableSourceConfig && zh:
+			return "（config.toml 固定授权）"
+		case source == cli.WritableSourceConfig:
+			return "(config.toml seed)"
+		case source == cli.WritableSourceSaved && zh:
+			return "（permissions.toml，已持久化）"
+		case source == cli.WritableSourceSaved:
+			return "(permissions.toml, persisted)"
+		case zh:
+			return "（仅本会话）"
+		default:
+			return "(this session)"
+		}
+	}
+	if len(fields) == 1 || (len(fields) == 2 && fields[1] == "list") {
+		entries, warnings := cli.ListWritablePaths()
+		var b strings.Builder
+		if zh {
+			b.WriteString("沙箱可写路径（项目目录与临时目录之外额外授权）：")
+			if len(entries) == 0 {
+				b.WriteString("无")
+			}
+			for _, e := range entries {
+				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), sourceLabel(e.Source))
+			}
+			b.WriteString("\n添加：/permissions writable add <路径>　删除：/permissions writable rm <路径>")
+		} else {
+			b.WriteString("sandbox writable paths (extra grants beyond the project and temp dirs):")
+			if len(entries) == 0 {
+				b.WriteString(" none")
+			}
+			for _, e := range entries {
+				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), sourceLabel(e.Source))
+			}
+			b.WriteString("\nadd: /permissions writable add <path>  remove: /permissions writable rm <path>")
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(&b, "\nwarning: %s", w)
+		}
+		return b.String()
+	}
+	if len(fields) >= 2 {
+		switch fields[1] {
+		case "add":
+			p := restAfter("add")
+			if p == "" {
+				return usage()
+			}
+			root, seeded, err := cli.AddWritablePath(p)
+			if err != nil {
+				if zh {
+					return "无法添加：" + err.Error()
+				}
+				return "cannot add: " + err.Error()
+			}
+			display := cli.DisplayHomePath(root)
+			if seeded {
+				if zh {
+					return fmt.Sprintf("%s 已由 config.toml 固定授权；本次会话已生效", display)
+				}
+				return fmt.Sprintf("%s is already seeded by config.toml; granted for this session", display)
+			}
+			if zh {
+				return fmt.Sprintf("已授权 %s：沙箱内可读写，已保存到 permissions.toml（重启后仍生效）", display)
+			}
+			return fmt.Sprintf("granted %s: read+write inside the sandbox, saved to permissions.toml", display)
+		case "rm", "remove":
+			p := restAfter(fields[1])
+			if p == "" {
+				return usage()
+			}
+			res, err := cli.RemoveWritablePath(p)
+			if err != nil {
+				if zh {
+					return "无法删除：" + err.Error()
+				}
+				return "cannot remove: " + err.Error()
+			}
+			display := cli.DisplayHomePath(res.Path)
+			if !res.Found() {
+				if zh {
+					return fmt.Sprintf("未授权该路径：%s", display)
+				}
+				return fmt.Sprintf("not granted: %s", display)
+			}
+			var b strings.Builder
+			if zh {
+				fmt.Fprintf(&b, "已撤销 %s", display)
+				if res.WasSaved {
+					b.WriteString("，已从 permissions.toml 删除")
+				}
+				if res.WasConfig {
+					b.WriteString("；config.toml 中仍有固定授权，需手动编辑才能永久移除")
+				}
+			} else {
+				fmt.Fprintf(&b, "revoked %s", display)
+				if res.WasSaved {
+					b.WriteString(", deleted from permissions.toml")
+				}
+				if res.WasConfig {
+					b.WriteString("; config.toml still seeds it — edit that file to make this permanent")
+				}
+			}
+			return b.String()
+		}
+	}
+	return usage()
 }

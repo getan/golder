@@ -70,7 +70,17 @@ Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在
 export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 ```
 
-注意它只放宽**读**；写仍然只限项目与 `TMPDIR`，编译产物写到别处（如 `CARGO_TARGET_DIR=/Volumes/…`）依旧会失败——那类操作应当提权执行。
+注意它只放宽**读**；写默认只限项目与 `TMPDIR`，编译产物写到别处（如 `CARGO_TARGET_DIR=/Volumes/…`）用下面的 writable_roots 授权，或提权执行。
+
+### 写白名单（项目 + 临时目录 + writable_roots）
+
+沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一份进程内注册表（`internal/seatbelt/writable.go`，并发安全，下一个命令立即生效）：
+
+- **审批对话框**：沙箱拒绝的命令若提到了项目外的路径，对话框会多出一行 `Allow writes to <path> (this session)`（按 `w`）。它只对**本次会话**生效，且批准不是"无沙箱放行"——命令重新回到收容态执行，只是该路径可读写；授权后对话记录会提示持久化命令。
+- **`/permissions writable add <path>`**：写入受管文件 `~/.config/golder/permissions.toml`（目录 0700、原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/permissions writable` 列出全部条目及来源（`config.toml` / `permissions.toml` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里 `/permissions` 菜单最后一行 `Sandbox writable paths…` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
+- **`config.toml` 的 `[permissions] writable_roots = ["~/cache/build"]`**：手动编辑的固定授权（UI 从不改写这个文件，避免丢注释与凭据）。因此 `/permissions writable rm` 对它是"会话内撤销"，条目仍在，需自行编辑删除。
+
+可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
 
 ### 网络与 golder 自身状态
 
@@ -79,6 +89,8 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 列出 `trust.json`、`.credentials.yaml`、`sessions/`。它们平时就不在白名单里，但若项目根恰好在 `$GOLDER_HOME` 内，项目绑定会连它们一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs / `--ro-bind /dev/null` 覆盖，后挂载生效）。
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
+
+当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，冲突会**升级给人**：即使 auto 模式也会弹（TUI 弹审批对话框，REPL 走 stdin 提示；对话框里，沙箱拒绝提到项目外路径时还会多出 `Allow writes to <path>` 一行），而不是静默收容导致模型反复重试。没有交互界面时按最安全的默认收容，bash 提示会告诉模型停止申请。
 
 ### TUI 审批对话框
 
@@ -91,6 +103,7 @@ bash needs approval
   Reviewer: installs dependencies (medium, auth: high)
 › Approve once                      (y)
   Approve for this session          (p)
+  Allow writes to ~/cache/build     (w)   ← 仅当沙箱拒绝提到项目外路径时出现
   Deny                              (esc)
 ```
 

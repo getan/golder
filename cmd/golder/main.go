@@ -43,6 +43,7 @@ import (
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/selfupdate"
 	"github.com/getan/golder/internal/webhook"
 )
@@ -259,11 +260,13 @@ func main() {
 	// Overlay ~/.config/golder/config.toml: file values replace built-in defaults,
 	// but any flag the user set on the command line still wins (CLI > file >
 	// default). A malformed file warns but does not abort — defaults apply.
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err != nil {
-		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
+	cfg, cfgErr := config.LoadFileConfig(config.FileConfigPath())
+	if cfgErr != nil {
+		fmt.Fprintf(os.Stderr, "golder: %v\n", cfgErr)
 	} else {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
 	}
+	applyPermissionsConfig(cfg)
 
 	// A bare provider name ("zai", "deepseek") means that provider's default
 	// model (issue #564): canonicalize once here so every downstream consumer —
@@ -305,6 +308,24 @@ func main() {
 	}
 
 	os.Exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
+}
+
+// applyPermissionsConfig seeds the sandbox's writable-path grants from the
+// [permissions] table in config.toml plus the managed permissions.toml (the
+// store /permissions writable and the approval dialog write to). Invalid
+// entries warn and are skipped; applying grants only widens what sandboxed
+// commands may write, it never unsandboxes anything. A malformed config.toml
+// leaves cfg zero, so the managed store still applies.
+func applyPermissionsConfig(cfg config.FileConfig) {
+	roots := append([]string(nil), cfg.Permissions.WritableRoots...)
+	if managed, err := config.LoadPermissionsConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
+	} else {
+		roots = append(roots, managed.WritableRoots...)
+	}
+	for _, err := range seatbelt.SetWritableRoots(roots) {
+		fmt.Fprintf(os.Stderr, "golder: permissions: %v\n", err)
+	}
 }
 
 // applyFileConfig overlays config.toml values onto opts, but only for flags the

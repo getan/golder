@@ -101,7 +101,39 @@ func TestBashSandboxDenialHint(t *testing.T) {
 	if !strings.Contains(err.Error(), "require_escalated") {
 		t.Errorf("sandbox denial should carry the escalation hint, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "false negatives") {
+		t.Errorf("sandbox denial hint should warn about false-negative checks, got: %v", err)
+	}
 	_ = runner
+}
+
+// TestBashEscalationDeniedHint breaks the retry loop: a command that already
+// carried require_escalated and still ran sandboxed must be told the request
+// was not granted — not told to retry it again.
+func TestBashEscalationDeniedHint(t *testing.T) {
+	dir := t.TempDir()
+	tool := &BashTool{
+		Dir:          dir,
+		Sandbox:      failingRunner{},
+		ForceSandbox: true,
+	}
+	_, err := runBashErr(t, tool, map[string]any{
+		"command":             "true",
+		"sandbox_permissions": "require_escalated",
+		"justification":       "please",
+	})
+	if err == nil {
+		t.Fatal("expected a failure from the sandboxed probe")
+	}
+	if !strings.Contains(err.Error(), "was not granted") {
+		t.Errorf("denied escalation hint missing, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "retry it once with sandbox_permissions") {
+		t.Errorf("denied escalation must not advise retrying the same request: %v", err)
+	}
+	if !strings.Contains(err.Error(), "false negatives") {
+		t.Errorf("denied escalation hint should warn about false-negative checks, got: %v", err)
+	}
 }
 
 // failingRunner simulates a sandbox whose command fails with a denial-shaped

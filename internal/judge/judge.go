@@ -213,6 +213,11 @@ const (
 	// trusted. The gate is the trust manager, not the reviewer; the dialog
 	// asks the same question the REPL's first-run prompt does.
 	ApprovalTrust ApprovalKind = "trust"
+	// ApprovalEscalation: the model asked to run a call outside the sandbox
+	// (bash sandbox_permissions=require_escalated) while the reviewer graded
+	// it Sandbox. The two sides disagree, so the gate asks the user instead
+	// of silently recontaining the call — approving runs it unisolated.
+	ApprovalEscalation ApprovalKind = "escalation"
 )
 
 // ApprovalRequest is what the gate shows the user: the call itself plus the
@@ -240,6 +245,12 @@ type ApprovalAnswer struct {
 	// Answered is false when the dialog could not run (ctx cancelled, no UI);
 	// the gate then falls back to its fail-closed behavior.
 	Answered bool
+	// WritableRoot, when set together with Approve, means the user granted
+	// this path read+write access INSIDE the sandbox for the session instead
+	// of running the call unisolated. The driver has already registered the
+	// grant with the sandbox (internal/seatbelt); the gate then re-contains
+	// the call, so it runs under the widened sandbox rather than bare.
+	WritableRoot string
 }
 
 // NoteKind classifies one user-facing verdict note.
@@ -332,7 +343,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// decision rides the executor context down to the tool).
 				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable") {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalReviewFailed, lang); ok {
@@ -346,10 +357,24 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			return blockCall(call, v, DenyGuidance)
 		case v.Level == Sandbox:
 			if sandboxable(opts, call.Name) {
+				// The model explicitly asked to run outside the sandbox while
+				// the reviewer graded the call Sandbox. Silently recontaining
+				// it would loop (the model retries the escalation and gets the
+				// same denial forever), so the conflict goes to the user even
+				// in auto mode. Without a human the call is contained (the
+				// safe default) and the bash hint tells the model to stop.
+				if escalationRequested(call) {
+					if interactive && promptRisk(ctx, opts, call, v, "escalation request") {
+						return nil
+					}
+					if dec, ok := askApproval(ctx, opts, call, v, ApprovalEscalation, lang); ok {
+						return dec
+					}
+				}
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, true) {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable") {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
@@ -362,7 +387,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteApproved, lang))
 				return nil
 			}
-			if interactive && promptRisk(ctx, opts, call, v, false) {
+			if interactive && promptRisk(ctx, opts, call, v, "") {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalConfirm, lang); ok {
@@ -406,11 +431,21 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
 	}
 	if opts.Notify != nil {
+		rationale := "approved by the user"
+		if root := strings.TrimSpace(ans.WritableRoot); root != "" {
+			rationale = "contained in the sandbox; " + root + " is writable for this session"
+		}
 		opts.Notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 			Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-			Rationale: "approved by the user",
+			Rationale: rationale,
 		})
+	}
+	if strings.TrimSpace(ans.WritableRoot) != "" {
+		// The call ran into the sandbox (or could not be reviewed); with the
+		// path now writable, keeping it isolated is strictly safer than the
+		// unisolated approval it replaces.
+		return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
 	}
 	return nil, true
 }
@@ -425,6 +460,23 @@ func escalationJustification(call agentcore.AgentToolCall) string {
 		return ""
 	}
 	return strings.TrimSpace(a.Justification)
+}
+
+// escalationRequested reports whether the model asked to run this call
+// outside the sandbox (bash's sandbox_permissions=require_escalated). It is a
+// request, not a grant: the gate still owns the decision, this only changes
+// how a Sandbox verdict is settled — asking the user instead of silently
+// recontaining the call. The literal mirrors agenttool's
+// sandboxPermissionEscalated; the judge package cannot import it (agenttool
+// imports judge).
+func escalationRequested(call agentcore.AgentToolCall) bool {
+	var a struct {
+		SandboxPermissions string `json:"sandbox_permissions"`
+	}
+	if err := json.Unmarshal(call.Arguments, &a); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), "require_escalated")
 }
 
 // firstReason returns the verdict's leading reason, for the dialog body.
@@ -558,7 +610,10 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 // Deny path carries the same way back.
 const DenyGuidance = "refine the call to avoid privilege escalation, destructive scope, or credential material; split it into smaller reviewable steps"
 
-func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, sandbox bool) bool {
+// promptRisk asks the user on stdin (interactive drivers only) whether a call
+// may run. unisolated explains why approving runs the call WITHOUT the
+// sandbox; empty means the ordinary risk confirmation.
+func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, unisolated string) bool {
 	if opts.Mu != nil {
 		opts.Mu.Lock()
 		defer opts.Mu.Unlock()
@@ -567,11 +622,12 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	if out == nil {
 		return false
 	}
-	if sandbox {
-		// Reached only when the execution layer cannot isolate this call
-		// (no runner for the tool, GOLDER_SANDBOX=off, or no platform sandbox):
-		// approving runs it unisolated, so say so plainly.
-		fmt.Fprintf(out, "\ngolder judges %q as risk %s [sandbox unavailable: approves run unisolated].\n", call.Name, v.Level)
+	if unisolated != "" {
+		// Either the execution layer cannot isolate this call (no runner for
+		// the tool, GOLDER_SANDBOX=off, or no platform sandbox) or the model
+		// asked to run it outside the sandbox: approving runs it unisolated,
+		// so say so plainly.
+		fmt.Fprintf(out, "\ngolder judges %q as risk %s [%s: approving runs it unisolated].\n", call.Name, v.Level, unisolated)
 	} else {
 		fmt.Fprintf(out, "\ngolder judges %q as risk %s.\n", call.Name, v.Level)
 	}
@@ -584,6 +640,9 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	}
 	if summary := riskSummary(call); summary != "" {
 		fmt.Fprintf(out, "  %s\n", summary)
+	}
+	if j := escalationJustification(call); j != "" {
+		fmt.Fprintf(out, "  model's reason: %s\n", truncateRunes(j, 160))
 	}
 	fmt.Fprint(out, "Allow? [y/N]: ")
 	// The read is interruptible: a Ctrl+C during the prompt cancels the run

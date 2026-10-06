@@ -67,6 +67,19 @@ type FileConfig struct {
 	// internal/dream (Config). See tasks/spec-dream-memory-consolidation.md
 	// §3.3.
 	Dream DreamConfig `toml:"dream"`
+	// Permissions is the [permissions] TOML table: sandbox path grants applied
+	// at startup. It is the hand-edited seed; the managed store the UI writes
+	// is permissions.toml (see PermissionsConfig), kept separate so a UI save
+	// never rewrites this file's comments or credentials.
+	Permissions PermissionsConfig `toml:"permissions"`
+}
+
+// PermissionsConfig is the [permissions] table. WritableRoots widens the
+// sandbox whitepaper's write side (and, by construction, its read side) for
+// the listed absolute paths; "~/..." expands against the home directory.
+// Relative paths are ignored with a warning at startup.
+type PermissionsConfig struct {
+	WritableRoots []string `toml:"writable_roots"`
 }
 
 // DreamConfig is the [dream] TOML table for /dream memory consolidation.

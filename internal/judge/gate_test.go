@@ -322,3 +322,163 @@ func TestFormatNoteLocalized(t *testing.T) {
 		t.Errorf("en note = %q", en)
 	}
 }
+
+const escalationArgs = `{"command":"rm -rf ~/work/harness/scratch","sandbox_permissions":"require_escalated","justification":"cleanup outside the workspace"}`
+
+func escalationGateOpts(rec *noteRecorder) GateOpts {
+	return GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"recursive delete outside the workspace"}}},
+		Sandboxed:  func(name string) bool { return name == "bash" },
+		Notify:     rec.emit,
+	}
+}
+
+// TestPermissionGateEscalationConflictAsksEvenInAuto locks the conflict rule:
+// the model asked to run outside the sandbox while the reviewer graded the
+// call Sandbox, so the gate must ask the user even in auto mode — silently
+// recontaining the call would loop forever.
+func TestPermissionGateEscalationConflictAsksEvenInAuto(t *testing.T) {
+	rec := &noteRecorder{}
+	var gotReq ApprovalRequest
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+		gotReq = req
+		return ApprovalAnswer{Approve: true, Answered: true}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec != nil {
+		t.Fatalf("approved escalation must run directly without a sandbox bit, got %+v", dec)
+	}
+	if gotReq.Kind != ApprovalEscalation {
+		t.Fatalf("kind = %q, want %q", gotReq.Kind, ApprovalEscalation)
+	}
+	if gotReq.Justification != "cleanup outside the workspace" {
+		t.Errorf("justification = %q, want the model's reason", gotReq.Justification)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteApproved {
+		t.Fatalf("notes = %+v, want one NoteApproved", rec.notes)
+	}
+}
+
+// TestPermissionGateEscalationConflictDenyBlocks: refusing the escalation
+// blocks the call with the user-denied message; it must not run unisolated
+// and must not fall through to the silent sandbox either.
+func TestPermissionGateEscalationConflictDenyBlocks(t *testing.T) {
+	rec := &noteRecorder{}
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		return ApprovalAnswer{Answered: true}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || !dec.Block || dec.Sandbox {
+		t.Fatalf("denied escalation must block, got %+v", dec)
+	}
+	if got := agentcore.ContentToText(*dec.Content); !strings.Contains(got, "denied by the user") {
+		t.Errorf("block message = %q", got)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteDenied {
+		t.Fatalf("notes = %+v, want one NoteDenied", rec.notes)
+	}
+}
+
+// TestPermissionGateEscalationWritableGrantContains: when the user answers by
+// granting the path instead of unisolating, the gate re-contains the call
+// (the driver already registered the grant) and the note records the path.
+func TestPermissionGateEscalationWritableGrantContains(t *testing.T) {
+	const root = "/Volumes/KIOXIA/rust-target"
+	rec := &noteRecorder{}
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		return ApprovalAnswer{Approve: true, Answered: true, WritableRoot: root}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("a path grant must re-contain the call, got %+v", dec)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteApproved || !strings.Contains(rec.notes[0].Rationale, root) {
+		t.Fatalf("notes = %+v, want one NoteApproved naming the grant", rec.notes)
+	}
+	// A denial never carries the grant through, even if the driver sets it.
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		return ApprovalAnswer{Answered: true, WritableRoot: root}
+	}
+	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	dec = gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || !dec.Block {
+		t.Fatalf("deny with a path must still block, got %+v", dec)
+	}
+}
+
+// TestPermissionGateEscalationConflictNoHumanContains: with nobody to ask
+// (headless), the conflict falls back to containment — never to running bare.
+func TestPermissionGateEscalationConflictNoHumanContains(t *testing.T) {
+	rec := &noteRecorder{}
+	gate := PermissionGate(permissions.New(permissions.Auto), escalationGateOpts(rec))
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("no approver must fall back to the sandbox, got %+v", dec)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed {
+		t.Fatalf("notes = %+v, want one NoteSandboxed", rec.notes)
+	}
+	// An answered=false dialog (cancelled UI) counts as nobody: contain, not allow.
+	rec.notes = nil
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		return ApprovalAnswer{}
+	}
+	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	dec = gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("an unanswered dialog must fall back to the sandbox, got %+v", dec)
+	}
+}
+
+// TestPermissionGateEscalationPromptsOnStdinEvenInAuto: the REPL path asks on
+// stdin and, on yes, lets the call run unisolated.
+func TestPermissionGateEscalationPromptsOnStdinEvenInAuto(t *testing.T) {
+	var out bytes.Buffer
+	opts := escalationGateOpts(&noteRecorder{})
+	opts.In = bufio.NewReader(strings.NewReader("y\n"))
+	opts.Out = &out
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec != nil {
+		t.Fatalf("answering y must let the escalation run, got %+v", dec)
+	}
+	if !strings.Contains(out.String(), "unisolated") {
+		t.Errorf("prompt must spell out that approval runs the call unisolated:\n%s", out.String())
+	}
+	// No answer means denial, and the call is contained rather than allowed.
+	var out2 bytes.Buffer
+	opts = escalationGateOpts(&noteRecorder{})
+	opts.In = bufio.NewReader(strings.NewReader("n\n"))
+	opts.Out = &out2
+	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("answering n must fall back to the sandbox, got %+v", dec)
+	}
+}
+
+// TestEscalationRequested pins the argument parsing: only the exact
+// require_escalated value counts, and malformed arguments are never treated
+// as a request.
+func TestEscalationRequested(t *testing.T) {
+	cases := []struct {
+		args string
+		want bool
+	}{
+		{`{"command":"x","sandbox_permissions":"require_escalated"}`, true},
+		{`{"command":"x","sandbox_permissions":" Require_Escalated "}`, true},
+		{`{"command":"x","sandbox_permissions":"use_default"}`, false},
+		{`{"command":"x"}`, false},
+		{`not json`, false},
+	}
+	for _, c := range cases {
+		if got := escalationRequested(toolCall("bash", c.args)); got != c.want {
+			t.Errorf("escalationRequested(%s) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}
