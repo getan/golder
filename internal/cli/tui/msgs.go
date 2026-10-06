@@ -88,6 +88,14 @@ type subagentProgressMsg struct {
 // telemetryMsg carries the run's end-of-run telemetry summary.
 type telemetryMsg struct{ ev agentcore.TelemetryEvent }
 
+// contextUsageMsg carries a mid-run context-window usage update. Unlike the
+// run-end telemetryMsg, it arrives at every turn boundary, so the status bar
+// tracks usage while a long multi-tool run is still in flight.
+type contextUsageMsg struct {
+	tokens int
+	window int
+}
+
 // compactionStartMsg signals that the loop is about to compact the context
 // window. It pins the spinner to a "Compacting conversation…" label while the
 // summarization request is in flight; compactionMsg clears it.

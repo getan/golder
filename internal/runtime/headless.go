@@ -254,6 +254,12 @@ func eventEnvelope(ev agentcore.AgentEvent) map[string]any {
 			tools[name] = map[string]any{"count": t.Count, "totalMs": t.TotalMs}
 		}
 		env["toolDurationsMs"] = tools
+	case agentcore.ContextUsageEvent:
+		// The mid-run counterpart to the telemetry summary, emitted once per
+		// turn boundary. Field names mirror the telemetry context fields so a
+		// consumer reads both with the same code.
+		env["contextTokens"] = e.Tokens
+		env["contextWindow"] = e.Window
 	}
 	return env
 }

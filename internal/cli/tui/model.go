@@ -22,6 +22,7 @@ import (
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
@@ -334,6 +335,10 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, startFrame))
 	m.logoRunning = len(history) == 0
 	seedTranscript(&m.transcript, history)
+	// Seed the context gauge with the resumed session's inherited context so the
+	// very first frame already shows how much of the window was carried over,
+	// instead of staying blank until the first run ends.
+	m.refreshContextUsage(history)
 	// First-run trust dialog (parity with the REPL and codex): an undecided
 	// launch directory gets asked before the first prompt. The picker opens in
 	// Init (tests that drive Update directly stay prompt-free).
@@ -648,6 +653,7 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
+	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
 	m.logoRunning = false
 	return m, nil
@@ -1072,6 +1078,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.pumpNext()
 
+	case contextUsageMsg:
+		// Mid-run context-gauge refresh: the loop reports usage at every turn
+		// boundary, so a long multi-tool run no longer shows a stale percentage
+		// until the run ends (Codex refreshes per sampling step the same way).
+		// A window-less update clears the gauge, mirroring the run-end handler.
+		util := 0.0
+		if msg.window > 0 {
+			util = float64(msg.tokens) / float64(msg.window)
+		}
+		m.statusBar.SetTelemetry(telemetryEventView{
+			util:   util,
+			window: msg.window,
+			tokens: msg.tokens,
+		})
+		return m, m.pumpNext()
+
 	case compactionStartMsg:
 		m.spinner.pin("Compacting conversation")
 		return m, m.pumpNext()
@@ -1096,6 +1118,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcript.addSystem(msg.label + " failed: " + msg.err.Error() + " (context left unchanged)")
 		} else {
 			m.transcript.addSystem(msg.summary)
+			// A manual /compact rewrote the context: refresh the gauge now so it
+			// reflects the shrunken window without waiting for the next run's
+			// turn-boundary update.
+			if m.session != nil && m.session.agentCtx != nil {
+				m.refreshContextUsage(m.session.agentCtx.Messages)
+			}
 		}
 		m.relayout()
 		return m, nil
@@ -1814,6 +1842,11 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if m.live != nil {
 		m.statusBar.SetModel(m.live.Model)
 		m.statusBar.SetThinking(string(m.live.ThinkingLevel))
+		// /model can also change the context window; recompute the gauge against
+		// the new budget so a stale percentage is not shown until the next turn.
+		if m.session != nil && m.session.agentCtx != nil {
+			m.refreshContextUsage(m.session.agentCtx.Messages)
+		}
 	}
 	// An action command is complete once its status is shown; a hybrid with no
 	// prompt (notifications only) likewise starts no run.
@@ -2169,6 +2202,7 @@ func (m Model) runRewind(line string) (tea.Model, tea.Cmd) {
 	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
+	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(notice)
 	m.logoRunning = false
 	m.relayout()
@@ -2310,9 +2344,33 @@ func (m *Model) reseedTranscript(notice string) {
 	m.clearSelection()
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
 	seedTranscript(&m.transcript, m.session.agentCtx.Messages)
+	m.refreshContextUsage(m.session.agentCtx.Messages)
 	m.transcript.addSystem(notice)
 	m.logoRunning = false
 	m.relayout()
+}
+
+// refreshContextUsage seeds the status bar's context gauge from the messages
+// the session now holds: the inherited context at startup (a resumed session),
+// and the rebuilt context after /resume, /clone, /fork, /import, or /rewind.
+// It uses the same estimate the loop publishes at every turn boundary, so the
+// first frame already shows how much of the window was carried over. An
+// unknown window or an empty context hides the gauge, so a fresh session
+// starts blank rather than at a fake 0%.
+func (m *Model) refreshContextUsage(msgs []agentcore.Message) {
+	if m.live == nil || m.live.ContextWindow <= 0 {
+		return
+	}
+	tokens := compaction.EstimateContextTokens(msgs).Tokens
+	if tokens <= 0 {
+		m.statusBar.SetTelemetry(telemetryEventView{window: 0})
+		return
+	}
+	m.statusBar.SetTelemetry(telemetryEventView{
+		util:   float64(tokens) / float64(m.live.ContextWindow),
+		window: m.live.ContextWindow,
+		tokens: tokens,
+	})
 }
 
 // recordHistory appends an submitted input to the browse history (skipping a

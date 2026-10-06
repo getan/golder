@@ -24,6 +24,7 @@ const (
 	EventToolExecutionEnd    = "tool_execution_end"
 	EventCompaction          = "compaction"
 	EventCompactionStart     = "compaction_start"
+	EventContextUsage        = "context_usage"
 	EventTelemetry           = "telemetry"
 	EventSubAgentProgress    = "subagent_progress"
 )
@@ -155,6 +156,23 @@ type ToolTiming struct {
 	TotalMs int64
 }
 
+// ContextUsageEvent reports the conversation's estimated context-token usage
+// mid-run, emitted at every turn boundary (after any compaction) when the
+// context window is known. It is the incremental counterpart to the run-end
+// TelemetryEvent: a front-end refreshes its context gauge from it while a long
+// multi-tool run is still in flight, instead of showing a stale figure until
+// the run ends (parity with Codex's per-sampling-step TokenCount event).
+// Consumers that ignore it behave exactly as before, and the run-end telemetry
+// summary remains the authoritative final figure.
+type ContextUsageEvent struct {
+	// Tokens is the estimated context-token usage once the turn settled (after
+	// any compaction), computed the same way as TelemetryEvent.ContextTokens.
+	Tokens int
+	// Window is the model's total context-token budget (always > 0; the loop
+	// only emits this event when the window is known).
+	Window int
+}
+
 // TelemetryEvent is a lightweight, additive observability summary emitted once
 // at run end (just before agent_end) so scripts consuming the stream-json
 // output can read structured metrics without a new dependency (no
@@ -198,6 +216,7 @@ func (ToolExecutionUpdateEvent) isAgentEvent() {}
 func (ToolExecutionEndEvent) isAgentEvent()    {}
 func (CompactionEvent) isAgentEvent()          {}
 func (CompactionStartEvent) isAgentEvent()     {}
+func (ContextUsageEvent) isAgentEvent()        {}
 func (TelemetryEvent) isAgentEvent()           {}
 func (SubAgentProgressEvent) isAgentEvent()    {}
 
@@ -213,5 +232,6 @@ func (ToolExecutionUpdateEvent) EventType() string { return EventToolExecutionUp
 func (ToolExecutionEndEvent) EventType() string    { return EventToolExecutionEnd }
 func (CompactionEvent) EventType() string          { return EventCompaction }
 func (CompactionStartEvent) EventType() string     { return EventCompactionStart }
+func (ContextUsageEvent) EventType() string        { return EventContextUsage }
 func (TelemetryEvent) EventType() string           { return EventTelemetry }
 func (SubAgentProgressEvent) EventType() string    { return EventSubAgentProgress }

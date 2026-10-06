@@ -444,13 +444,21 @@ func afterTurn(ctx context.Context, agentCtx *agentcore.AgentContext, cfg *RunCo
 	// Refresh the budget the next turn's reminder and tools will read; this also
 	// reflects a compaction that just shrank the context.
 	observeBudget(cfg.Budget, agentCtx)
-	// Record the latest context-utilization ratio once the turn has settled (after
-	// any compaction), so the telemetry summary reports the current used/window
-	// figure. This runs even when auto-compaction is disabled so utilization is
-	// still observable whenever the context window is known.
-	if tel != nil && cfg.ContextWindow > 0 {
+	if cfg.ContextWindow > 0 {
 		tokens := compaction.EstimateContextTokens(agentCtx.Messages).Tokens
-		tel.recordContext(tokens, cfg.ContextWindow)
+		// Publish the mid-run usage figure at every turn boundary so a front-end
+		// can refresh its context gauge while a long run is still in flight,
+		// rather than waiting for the run-end telemetry summary (parity with
+		// Codex's per-sampling-step TokenCount event). Emitted after compaction
+		// so it reflects the context the next turn will actually send.
+		_ = emit(agentcore.ContextUsageEvent{Tokens: tokens, Window: cfg.ContextWindow})
+		// Record the latest context-utilization ratio once the turn has settled
+		// (after any compaction), so the telemetry summary reports the current
+		// used/window figure. This runs even when auto-compaction is disabled so
+		// utilization is still observable whenever the context window is known.
+		if tel != nil {
+			tel.recordContext(tokens, cfg.ContextWindow)
+		}
 	}
 	if cfg.ShouldStopAfterTurn != nil {
 		return cfg.ShouldStopAfterTurn(ctx, agentCtx)

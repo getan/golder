@@ -108,6 +108,65 @@ func TestAgentLoopInnerLoopFeedsToolResults(t *testing.T) {
 	}
 }
 
+// TestAgentLoopEmitsContextUsageEachTurn pins the mid-run context-gauge feed:
+// with a known window, every turn boundary publishes a context_usage event
+// immediately after that turn's end (and any compaction), so a front-end can
+// refresh while a long multi-tool run is still in flight instead of waiting
+// for the run-end telemetry summary.
+func TestAgentLoopEmitsContextUsageEachTurn(t *testing.T) {
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{
+		oneToolAssistant("c1", "echo"),
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn, Content: agentcore.ContentList{agentcore.NewTextContent("done")}},
+	}), echoTool("echo", agentcore.ToolExecutionParallel, false))
+	cfg.ContextWindow = 200_000
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+	}}
+
+	events := collectEvents(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	var usage []agentcore.ContextUsageEvent
+	for i, ev := range events {
+		u, ok := ev.(agentcore.ContextUsageEvent)
+		if !ok {
+			continue
+		}
+		usage = append(usage, u)
+		if i == 0 || events[i-1].EventType() != agentcore.EventTurnEnd {
+			t.Errorf("context_usage at index %d is not directly after a turn_end: %v", i, eventKinds(events))
+		}
+	}
+	if len(usage) != 2 {
+		t.Fatalf("got %d context_usage events, want 2 (one per turn)", len(usage))
+	}
+	for _, u := range usage {
+		if u.Window != 200_000 {
+			t.Errorf("context_usage window = %d, want 200000", u.Window)
+		}
+		if u.Tokens <= 0 {
+			t.Errorf("context_usage tokens = %d, want > 0", u.Tokens)
+		}
+	}
+}
+
+// TestAgentLoopContextUsageSilentWhenWindowUnknown verifies an unknown context
+// window disables the event entirely, so front-ends keep their gauge hidden
+// rather than rendering a meaningless ratio.
+func TestAgentLoopContextUsageSilentWhenWindowUnknown(t *testing.T) {
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{
+		oneToolAssistant("c1", "echo"),
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn, Content: agentcore.ContentList{agentcore.NewTextContent("done")}},
+	}), echoTool("echo", agentcore.ToolExecutionParallel, false))
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+	}}
+
+	kinds, _ := collectStream(t, agentLoop(context.Background(), agentCtx, cfg))
+	if countKind(kinds, agentcore.EventContextUsage) != 0 {
+		t.Errorf("context_usage emitted with unknown window; kinds=%v", kinds)
+	}
+}
+
 // TestAgentLoopInjectsMessageSnapshot pins the seam the risk judge reads: a
 // tool batch is dispatched with a context carrying the conversation as of that
 // batch, including the current user request.
