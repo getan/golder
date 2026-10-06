@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -30,9 +29,11 @@ const (
 	roleAssistant
 	roleSystem
 	roleTool
-	// roleReview is a permission-gate verdict card: one line announcing an
-	// automated approval, sandbox routing, denial, or read-only block, plus
-	// the reviewer's rationale. It is styled by severity (warn/error).
+	// roleReview is a standalone permission-gate verdict: one line announcing
+	// an automated approval, sandbox routing, denial, or read-only block, plus
+	// the reviewer's rationale, styled by severity (warn/error). Verdicts whose
+	// tool card is known render inside that card instead (see toolCard.notes);
+	// this block role covers notes without a card in the transcript.
 	roleReview
 	// roleBanner is the startup logo + config splash. Its text is pre-rendered
 	// (already colored, already laid out) and emitted verbatim, so reflow neither
@@ -286,41 +287,36 @@ func (t *transcript) addToolCard(c *toolCard) {
 	t.reflow()
 }
 
-// addReviewNote files a permission-gate verdict card directly above the tool
-// card it decided (the codex order: review line, then the call row). The card
-// was announced while the call streamed, i.e. before the gate ran, so the note
-// arrives later and is inserted at that card's index; when no matching card
-// exists it appends.
+// addReviewNote attaches a permission-gate verdict to the tool card it decided.
+// The card is announced while the call streams — before the gate runs — so the
+// note arrives later and is folded into that card, which renders it directly
+// below the command and above the output (see toolCard.renderNotes): the
+// verdict stays next to the command no matter how long the output or diff
+// grows. A note whose card is unknown (a task child's gate decision, or a
+// card-less replay edge) is filed as a standalone block at the end.
 func (t *transcript) addReviewNote(n judge.Note) {
-	blk := transcriptBlock{role: roleReview, note: &n}
 	if n.ToolCallID != "" {
-		for i := len(t.blocks) - 1; i >= 0; i-- {
+		for i := range t.blocks {
 			b := t.blocks[i]
 			if b.role == roleTool && b.card != nil && b.card.id == n.ToolCallID {
-				// Keep the materialized-window bookkeeping honest: an insert
-				// shifts every later block, and the committed prefix's wrapped
-				// lines cannot be spliced. In practice the note lands just
-				// above a still-running card at the end (outside the window);
-				// the branches below keep rarer placements correct.
-				switch {
-				case i < t.matStart:
-					// Before the window: the same blocks stay materialized, one
-					// slot later.
-					t.matStart++
-					t.matEnd++
-				case i < t.matEnd:
-					// Inside the window: re-render the committed part above the
-					// insert; the rest is re-committed by the next scan.
-					t.matEnd = i
-					t.prefixValid = false
+				b.card.addNote(n)
+				// The card may already sit inside the committed prefix, whose
+				// stored wrap predates the note; drop it so the next layout
+				// repaints the card with the verdict. Cards outside the window
+				// need no handling: deferred blocks render on first
+				// materialization, and tail blocks render fresh each layout.
+				for j := t.matStart; j < t.matEnd; j++ {
+					if t.blocks[j].card == b.card {
+						t.prefixValid = false
+						break
+					}
 				}
-				t.blocks = slices.Insert(t.blocks, i, blk)
 				t.reflow()
 				return
 			}
 		}
 	}
-	t.blocks = append(t.blocks, blk)
+	t.blocks = append(t.blocks, transcriptBlock{role: roleReview, note: &n})
 	t.reflow()
 }
 
@@ -965,18 +961,25 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	}
 }
 
-// renderReviewBlock paints one verdict card: a warn color for approvals and
-// containment (the call proceeds), an error color for denials and blocks. The
-// line wraps to the transcript width; the icon leads.
+// renderReviewBlock paints one standalone verdict block (a note whose tool
+// card could not be found). Card-attached notes render through
+// toolCard.renderNotes instead; both share renderNoteLine.
 func (t *transcript) renderReviewBlock(blk transcriptBlock) string {
 	if blk.note == nil {
 		return ""
 	}
-	style := t.theme.Warn
-	if blk.note.Kind == judge.NoteDenied || blk.note.Kind == judge.NoteBlockedNoPrompt || blk.note.Kind == judge.NoteReadOnly {
-		style = t.theme.Error
+	return renderNoteLine(t.theme, t.width, *blk.note)
+}
+
+// renderNoteLine paints one gate verdict: a warn color for approvals and
+// containment (the call proceeds), an error color for denials and blocks. The
+// line wraps to the transcript width; the icon leads.
+func renderNoteLine(theme Theme, width int, n judge.Note) string {
+	style := theme.Warn
+	if n.Kind == judge.NoteDenied || n.Kind == judge.NoteBlockedNoPrompt || n.Kind == judge.NoteReadOnly {
+		style = theme.Error
 	}
-	return style.Render(WrapToWidth(judge.FormatNote(*blk.note), t.width))
+	return style.Render(WrapToWidth(judge.FormatNote(n), width))
 }
 
 // renderUserBlock renders a user turn as a full-width bar like codex's history

@@ -8,6 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 )
 
@@ -53,6 +54,14 @@ type toolCard struct {
 	diff     string
 	state    cardState
 	expanded bool
+
+	// notes holds the permission-gate verdicts this call received. A verdict
+	// is published by the gate before the call executes, i.e. after the card
+	// was announced (the model streamed the call first), so it is attached
+	// here and rendered between the headline and the body: the note stays
+	// directly below the command no matter how long the output or diff grows,
+	// instead of being pushed away by it.
+	notes []judge.Note
 }
 
 // setInput fills the decoded call arguments when the announce/start event
@@ -67,6 +76,12 @@ func (c *toolCard) setInput(input map[string]any) {
 // toggleExpanded flips the card between its collapsed summary and full detail.
 func (c *toolCard) toggleExpanded() {
 	c.expanded = !c.expanded
+}
+
+// addNote attaches a permission-gate verdict to the card. The appended slice
+// is ordered by arrival; in practice a call receives one verdict.
+func (c *toolCard) addNote(n judge.Note) {
+	c.notes = append(c.notes, n)
 }
 
 // abort closes a card that never received its end event (the run was
@@ -135,6 +150,9 @@ func (c toolCard) title() string {
 // duplication. The user reads the actual task list, not just "N tasks".
 func (c toolCard) render(theme Theme, width int) string {
 	out := c.renderHeadline(theme, width)
+	if notes := c.renderNotes(theme, width); notes != "" {
+		out += "\n" + notes
+	}
 	if items := c.todoItems(); len(items) > 0 && c.todoResponseIsEcho() {
 		return out + c.renderChecklist(theme, width, items)
 	}
@@ -155,6 +173,20 @@ func (c toolCard) render(theme Theme, width int) string {
 			WrapToWidth(fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint), max(1, width)))
 	}
 	return out
+}
+
+// renderNotes paints the gate verdicts attached to this card, one line each,
+// directly under the headline and above the body. The note text wraps to the
+// transcript width exactly like a standalone review block would.
+func (c toolCard) renderNotes(theme Theme, width int) string {
+	if len(c.notes) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(c.notes))
+	for _, n := range c.notes {
+		lines = append(lines, renderNoteLine(theme, width, n))
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderHeadline renders the bullet plus `Running/Ran name arg`, wrapping the

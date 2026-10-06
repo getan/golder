@@ -101,25 +101,74 @@ func TestJudgeNoteMsgRenders(t *testing.T) {
 	}
 }
 
-// TestReviewNoteFilesAboveItsCard verifies the codex order: the card is
-// announced while the call streams, and the note (published later by the gate)
-// is inserted directly above that card instead of landing below it.
-func TestReviewNoteFilesAboveItsCard(t *testing.T) {
+// TestReviewNoteSitsBelowCommandAboveOutput verifies the gate verdict reads as
+// the command's outcome: the note renders directly below the command it judged
+// and above the tool's output, instead of landing above the card or below a
+// long body. That is the ordering the user asked for ("note 必须紧随命令后").
+func TestReviewNoteSitsBelowCommandAboveOutput(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(60, 20)
-	tr.addToolCard(&toolCard{id: "call_9", name: "bash", input: map[string]any{"command": "git commit -m x"}, state: cardSuccess})
+	tr.addToolCard(&toolCard{
+		id: "call_9", name: "bash", input: map[string]any{"command": "git commit -m x"},
+		state: cardSuccess, response: []respNode{{text: "output line"}},
+	})
 	tr.addReviewNote(judge.Note{
 		Tool: "bash", ToolCallID: "call_9", Kind: judge.NoteApproved,
 		Risk: "medium", Authorization: "high", Rationale: "常规提交", Lang: "zh",
 	})
 	text := strings.Join(tr.contentLines(), "\n")
+	cmdAt := strings.Index(text, "commit")
 	noteAt := strings.Index(text, "自动审批通过")
-	cardAt := strings.Index(text, "commit")
-	if noteAt < 0 || cardAt < 0 {
-		t.Fatalf("missing note or card:\n%s", text)
+	outAt := strings.Index(text, "output line")
+	if cmdAt < 0 || noteAt < 0 || outAt < 0 {
+		t.Fatalf("missing command, note or output:\n%s", text)
 	}
-	if noteAt > cardAt {
-		t.Errorf("note must render above its card (note@%d card@%d)\n%s", noteAt, cardAt, text)
+	if !(cmdAt < noteAt && noteAt < outAt) {
+		t.Errorf("note must sit between the command and its output (cmd@%d note@%d out@%d)\n%s", cmdAt, noteAt, outAt, text)
+	}
+}
+
+// TestReviewNoteStaysBelowCommandWhenOutputArrives covers the live timing: the
+// note lands while the call is still running (no output yet), and the output
+// that arrives later must render below the note rather than pushing it away
+// from the command.
+func TestReviewNoteStaysBelowCommandWhenOutputArrives(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 20)
+	card := &toolCard{id: "call_9", name: "bash", input: map[string]any{"command": "git commit -m x"}, state: cardRunning}
+	tr.addToolCard(card)
+	tr.addReviewNote(judge.Note{
+		Tool: "bash", ToolCallID: "call_9", Kind: judge.NoteApproved,
+		Risk: "medium", Authorization: "high", Rationale: "常规提交", Lang: "zh",
+	})
+	card.complete(true, "first output line\nsecond output line", nil)
+	tr.reflow()
+	text := strings.Join(tr.contentLines(), "\n")
+	cmdAt := strings.Index(text, "commit")
+	noteAt := strings.Index(text, "自动审批通过")
+	outAt := strings.Index(text, "first output line")
+	if cmdAt < 0 || noteAt < 0 || outAt < 0 {
+		t.Fatalf("missing command, note or output:\n%s", text)
+	}
+	if !(cmdAt < noteAt && noteAt < outAt) {
+		t.Errorf("later output must render below the note (cmd@%d note@%d out@%d)\n%s", cmdAt, noteAt, outAt, text)
+	}
+}
+
+// TestReviewNoteUnknownCardAppends keeps the fallback honest: a note whose
+// tool card is not in the transcript (a task child's gate decision) still
+// renders, as a standalone block at the end.
+func TestReviewNoteUnknownCardAppends(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 20)
+	tr.addToolCard(&toolCard{id: "call_other", name: "bash", input: map[string]any{"command": "echo hi"}, state: cardSuccess})
+	tr.addReviewNote(judge.Note{
+		Tool: "bash", ToolCallID: "call_child", Kind: judge.NoteDenied,
+		Risk: "high", Authorization: "low", Rationale: "子任务被拒", Lang: "zh",
+	})
+	text := strings.Join(tr.contentLines(), "\n")
+	if !strings.Contains(text, "自动审批拒绝") || !strings.Contains(text, "子任务被拒") {
+		t.Errorf("standalone note missing:\n%s", text)
 	}
 }
 
