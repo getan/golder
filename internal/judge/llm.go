@@ -16,9 +16,10 @@ package judge
 //     {"level","risk","authorization","rationale"} with level in
 //     allow/confirm/sandbox/deny. The rationale must be written in the same
 //     language the user is writing in, so the verdict card is readable.
-//  3. Any failure — timeout, transport error, malformed JSON, unknown level —
-//     returns Failed: true at Confirm. The gate turns that into a prompt
-//     (interactive) or a conservative sandbox/block (auto), never an allow.
+//  3. A malformed answer is retried once with a correction naming the defect;
+//     anything still unreadable returns Failed: true at Confirm. The gate
+//     turns that into a prompt (interactive) or a conservative
+//     sandbox/block (auto), never an allow.
 //  4. Successful verdicts are cached per (tool, args, trust, state) so the
 //     gate and the bash tool's sandbox routing share one review.
 
@@ -26,6 +27,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -135,14 +137,26 @@ func (j *LLMJudge) Classify(ctx context.Context, tool string, args json.RawMessa
 			Reasons: []string{"reviewer unavailable, failing closed: " + clampText(err.Error(), 200)},
 		}
 	}
-	parsed, ok := parseReview(raw)
-	if !ok {
+	parsed, failure := parseReview(raw)
+	if failure != nil {
+		// One corrective retry: format drift is usually a sampling accident,
+		// and naming the exact defect recovers most of it. Still fail closed —
+		// without a second retry — when the model cannot produce a verdict.
+		if retry, err := j.ask(ctx, state+"\n\n"+reviewCorrection(failure), lang); err == nil {
+			if parsed2, failure2 := parseReview(retry); failure2 == nil {
+				parsed, failure = parsed2, nil
+			} else {
+				failure = failure2
+			}
+		}
+	}
+	if failure != nil {
 		return Verdict{
 			Level:   Confirm,
 			Failed:  true,
 			Source:  "llm",
 			Lang:    lang,
-			Reasons: []string{"reviewer returned an unreadable answer, failing closed"},
+			Reasons: []string{unreadableReason(failure, lang)},
 		}
 	}
 	v := Verdict{
@@ -244,22 +258,157 @@ type reviewAnswer struct {
 	Rationale     string `json:"rationale"`
 }
 
-// parseReview extracts the JSON object from the model output. Models
-// occasionally wrap it in prose or a code fence, so the payload is located by
-// its first "{" and last "}" instead of trusting the whole output. A missing
-// or unknown level is a failure (the caller fails closed).
-func parseReview(raw string) (reviewAnswer, bool) {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start < 0 || end <= start {
-		return reviewAnswer{}, false
+// parseReview extracts a verdict from the model output. Models occasionally
+// wrap the object in prose or a code fence, or emit several objects (an
+// example followed by the real answer), so every balanced {...} candidate is
+// scanned — braces inside JSON strings do not end a candidate — and the last
+// candidate that decodes to a valid four-tier answer wins. On failure the
+// returned *reviewParseFailure classifies what went wrong (no JSON, unclosed,
+// invalid JSON, unknown level) so the caller can retry correctively and the
+// note can say more than "unreadable".
+func parseReview(raw string) (reviewAnswer, *reviewParseFailure) {
+	var (
+		lastValid reviewAnswer
+		lastFail  *reviewParseFailure
+		haveValid bool
+	)
+	for _, candidate := range jsonCandidates(raw) {
+		var ans reviewAnswer
+		if err := json.Unmarshal([]byte(candidate), &ans); err != nil {
+			lastFail = &reviewParseFailure{kind: parseInvalidJSON, detail: clampText(err.Error(), 140)}
+			continue
+		}
+		if !isKnownTier(ans.Level) {
+			lastFail = &reviewParseFailure{kind: parseUnknownTier, detail: strings.TrimSpace(ans.Level)}
+			continue
+		}
+		lastValid, haveValid = ans, true
 	}
-	var ans reviewAnswer
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &ans); err != nil {
-		return reviewAnswer{}, false
+	if haveValid {
+		return lastValid, nil
 	}
-	if !isKnownTier(ans.Level) {
-		return reviewAnswer{}, false
+	if lastFail != nil {
+		return reviewAnswer{}, lastFail
 	}
-	return ans, true
+	if strings.Contains(raw, "{") {
+		// A "{" with no balanced pair: the answer was cut off mid-object.
+		return reviewAnswer{}, &reviewParseFailure{kind: parseUnclosed}
+	}
+	return reviewAnswer{}, &reviewParseFailure{kind: parseNoJSON}
+}
+
+// jsonCandidates returns every balanced {...} block in s, in order. Braces
+// inside JSON strings (and escaped quotes) are ignored, so a rationale that
+// mentions "{" or "}" neither opens nor closes a candidate.
+func jsonCandidates(s string) []string {
+	var out []string
+	depth, start := 0, -1
+	inString, escaped := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					out = append(out, s[start:i+1])
+					start = -1
+				}
+			}
+		}
+	}
+	return out
+}
+
+// reviewParseFailure classifies why a reviewer answer could not be decoded.
+// The detail carries the concrete evidence — the offending level word or the
+// JSON error — so the failure note is diagnosable at a glance.
+type reviewParseFailure struct {
+	kind   string
+	detail string
+}
+
+const (
+	parseNoJSON      = "no_json"
+	parseUnclosed    = "unclosed"
+	parseInvalidJSON = "invalid_json"
+	parseUnknownTier = "unknown_tier"
+)
+
+// english renders the failure for an English conversation; it also feeds the
+// corrective retry prompt, which stays in the reviewer's prompt language.
+func (f *reviewParseFailure) english() string {
+	switch f.kind {
+	case parseNoJSON:
+		return "no JSON object (looks like plain prose)"
+	case parseUnclosed:
+		return "JSON unclosed (possibly truncated)"
+	case parseInvalidJSON:
+		return "invalid JSON: " + f.detail
+	case parseUnknownTier:
+		return fmt.Sprintf("unknown level %q (want allow/confirm/sandbox/deny)", f.detail)
+	default:
+		return "unreadable answer"
+	}
+}
+
+// chinese renders the failure for a Chinese conversation, matching the note
+// wrapper's language so the card reads as one sentence.
+func (f *reviewParseFailure) chinese() string {
+	switch f.kind {
+	case parseNoJSON:
+		return "没有 JSON 对象（像是纯文本回复）"
+	case parseUnclosed:
+		return "JSON 未闭合（可能被截断）"
+	case parseInvalidJSON:
+		return "JSON 非法：" + f.detail
+	case parseUnknownTier:
+		return fmt.Sprintf("档位无法识别：%q（应为 allow/confirm/sandbox/deny）", f.detail)
+	default:
+		return "答案无法解析"
+	}
+}
+
+// unreadableReason is the Verdict reason shown in the failure note.
+func unreadableReason(f *reviewParseFailure, lang string) string {
+	if lang == "zh" {
+		return "答案无法解析：" + f.chinese()
+	}
+	return "unreadable answer: " + f.english()
+}
+
+// reviewCorrection is the follow-up user message for the one retry after an
+// unparseable answer. It names the exact defect so the second sample aims at
+// the real problem instead of repeating the same drift.
+func reviewCorrection(f *reviewParseFailure) string {
+	switch f.kind {
+	case parseNoJSON:
+		return "Your previous reply contained no JSON object. Reply with ONLY the JSON object — no prose and no code fences."
+	case parseUnclosed:
+		return "Your previous reply contained an unterminated JSON object (it looks truncated). Reply with ONE complete, compact JSON object and nothing else."
+	case parseInvalidJSON:
+		return "Your previous reply was not valid JSON (" + f.detail + "). Escape quotes and newlines inside string values and reply with ONLY the JSON object."
+	case parseUnknownTier:
+		return fmt.Sprintf("Your previous reply used the level %q, which is not allowed. Set \"level\" to exactly one of allow, confirm, sandbox, deny and reply with ONLY the JSON object.", f.detail)
+	default:
+		return "Your previous reply could not be parsed. Reply with ONLY the JSON object and nothing else."
+	}
 }
