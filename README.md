@@ -8,7 +8,13 @@
 
 用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认进入全屏 TUI，也支持行式 REPL 与无头脚本。
 
-🌐 **官网与演示**：<https://golder-cli.pages.dev> —— 含一段 28 秒的真实会话录制（红测试 → 模型自主修复 → 全绿）。
+<p align="center">
+  <video src="https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9" autoplay loop muted playsinline width="900" poster="docs/assets/demo-poster.jpg"></video>
+</p>
+
+<p align="center">
+  <sub>真实录制、无剪辑造假：<code>go test</code> 红 → 模型自主修复 → 全绿（28 秒 · 2× 快放） · <a href="https://golder-cli.pages.dev">官网</a></sub>
+</p>
 
 ## 特性
 
