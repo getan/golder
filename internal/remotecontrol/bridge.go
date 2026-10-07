@@ -47,6 +47,7 @@ type Bridge struct {
 	mu      sync.Mutex
 	pending map[string]chan Decision
 	nextID  uint64
+	closed  bool
 }
 
 // NewBridge builds a bridge over sink.
@@ -89,6 +90,11 @@ func (b *Bridge) RemoteInput() <-chan string { return b.inputs }
 // read goroutine is never stalled; if the buffer is full the oldest queued
 // prompt is dropped to make room (refined in #445).
 func (b *Bridge) OnInput(text string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return
+	}
 	for {
 		select {
 		case b.inputs <- text:
@@ -101,6 +107,24 @@ func (b *Bridge) OnInput(text string) {
 			}
 		}
 	}
+}
+
+// Close closes the remote-input channel so a listener blocked in RemoteInput
+// returns, and drops subsequent input. It is called when the remote session
+// stops, so no listener goroutine outlives the session it was watching.
+// Close is idempotent; OnInput after Close is a no-op rather than a panic.
+func (b *Bridge) Close() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return
+	}
+	b.closed = true
+	b.mu.Unlock()
+	close(b.inputs)
 }
 
 // Confirm requests approval for a risky tool call from the remote client and
@@ -147,6 +171,28 @@ func (b *Bridge) ResolveConfirm(confirmID string, approve, always bool) bool {
 	default:
 		return false // already resolved
 	}
+}
+
+// DenyAllPending resolves every pending confirmation as a denial. It is the
+// client-disconnect path: the controlling browser is gone, so nobody can
+// answer, and leaving the gate parked would stall the run until the user
+// interrupts it manually. Denials are fail-closed, the same answer an
+// interrupted Confirm produces. It returns how many waiters were resolved.
+func (b *Bridge) DenyAllPending() int {
+	b.mu.Lock()
+	ids := make([]string, 0, len(b.pending))
+	for id := range b.pending {
+		ids = append(ids, id)
+	}
+	b.mu.Unlock()
+
+	resolved := 0
+	for _, id := range ids {
+		if b.ResolveConfirm(id, false, false) {
+			resolved++
+		}
+	}
+	return resolved
 }
 
 func (b *Bridge) register() string {

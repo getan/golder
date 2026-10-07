@@ -133,6 +133,117 @@ func TestApprovalDialogCtrlCInterrupts(t *testing.T) {
 	}
 }
 
+// TestApprovalRequestKeepsPumpArmed: while the dialog asks, the bridge reader
+// must stay armed. The run goroutine is blocked on the reply until the user
+// answers (or the run is cancelled), so nothing arrives meanwhile — but the
+// events emitted the moment it is answered (the gate's note, the tool result,
+// the next turn, and eventually runEndMsg) need a waiting reader, or the UI
+// freezes with the run still in flight and no way back to the prompt.
+func TestApprovalRequestKeepsPumpArmed(t *testing.T) {
+	m := NewModel(Options{})
+	m.running = true
+	m.runCh = make(chan tea.Msg, 4)
+
+	reply := make(chan judge.ApprovalAnswer, 1)
+	next, cmd := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: reply})
+	if cmd == nil {
+		t.Fatal("approvalRequestMsg must keep an event reader armed while the dialog asks")
+	}
+	m = next.(Model)
+
+	// The armed reader must actually deliver the run's next event: here the
+	// denial note the gate publishes as soon as the user answers.
+	m.runCh <- judgeNoteMsg{note: judge.Note{Kind: judge.NoteDenied}}
+	got, ok := cmd().(judgeNoteMsg)
+	if !ok || got.note.Kind != judge.NoteDenied {
+		t.Fatalf("pump cmd = %#v, want the judgeNoteMsg", got)
+	}
+}
+
+// TestSecondApprovalWhilePendingFailsClosed: a second call needing approval
+// while a dialog is already pending must fail closed — answered "not
+// answered" immediately, as the dialog contract documents — instead of
+// replacing the open dialog (which strands the first gate) or stopping the
+// pump (which freezes the run).
+func TestSecondApprovalWhilePendingFailsClosed(t *testing.T) {
+	m := NewModel(Options{})
+	m.running = true
+	m.runCh = make(chan tea.Msg, 4)
+
+	first := make(chan judge.ApprovalAnswer, 1)
+	next, _ := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: first})
+	m = next.(Model)
+	if !m.approval.active {
+		t.Fatal("the first request must open the dialog")
+	}
+
+	second := make(chan judge.ApprovalAnswer, 1)
+	next, cmd := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: second})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("a second request must not stop the event pump")
+	}
+	select {
+	case ans := <-second:
+		if ans.Answered || ans.Approve {
+			t.Fatalf("second answer = %+v, want fail-closed (unanswered)", ans)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the second request must be answered immediately, not left waiting")
+	}
+	// The pending dialog is untouched: its reply channel is still the live one.
+	if !m.approval.active || m.approval.reply != first {
+		t.Fatal("the pending dialog must not be replaced by a second request")
+	}
+}
+
+// TestApprovalCtrlCStillDeliversRunEnd: Ctrl+C during a pending decision
+// cancels the run (the dialog's documented escape hatch) and the armed reader
+// must still deliver the run's terminal event. That delivery is exactly what
+// the broken pump dropped: with runEndMsg never arriving, "running" stayed
+// true forever, further Ctrl+C presses only re-interrupted a run that was
+// already gone, and the prompt never came back.
+func TestApprovalCtrlCStillDeliversRunEnd(t *testing.T) {
+	interrupted := false
+	m := NewModel(Options{})
+	m.running = true
+	m.runCh = make(chan tea.Msg, 4)
+	m.interruptFn = func() { interrupted = true }
+
+	reply := make(chan judge.ApprovalAnswer, 1)
+	next, cmd := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: reply})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("approvalRequestMsg must keep an event reader armed")
+	}
+
+	got, _ := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	m = got.(Model)
+	if !interrupted {
+		t.Fatal("Ctrl+C must interrupt the run while the dialog is open")
+	}
+	if !m.approval.active {
+		t.Fatal("the dialog stays open until the run actually ends")
+	}
+
+	// The cancelled loop unwinds and the pump hands over runEndMsg; the UI
+	// must leave the run state and drop the dialog.
+	m.runCh <- runEndMsg{}
+	raw := cmd()
+	endMsg, ok := raw.(runEndMsg)
+	if !ok {
+		t.Fatalf("armed reader delivered %T, want runEndMsg", raw)
+	}
+	next, _ = m.Update(endMsg)
+	m = next.(Model)
+	if m.running {
+		t.Error("the UI must leave the run state once runEndMsg arrives")
+	}
+	if m.approval.active {
+		t.Error("the dialog must close when the run ends")
+	}
+}
+
 // TestApprovalDialogArrowSelection verifies ↑↓ move the highlight and wrap.
 func TestApprovalDialogArrowSelection(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)

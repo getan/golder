@@ -20,7 +20,7 @@ import (
 // subprocess with a progress indication, and renders the returned Report as a
 // full table. A failed or unparseable run prints a clear error and returns to
 // the prompt without crashing the REPL (SPEC §6.1).
-func runDream(out io.Writer, deps replDeps, line string) {
+func runDream(parent context.Context, out io.Writer, deps replDeps, line string) {
 	dryRun := dreamcmd.HasDryRun(line)
 
 	// Pre-spawn lock check: if a background (or other) dream already holds a live
@@ -41,10 +41,16 @@ func runDream(out io.Writer, deps replDeps, line string) {
 	// Bound the subprocess so a hung LLM-backed run cannot wedge the REPL
 	// indefinitely (SPEC §6.3/§11.2: parent context timeout, default 10min). On
 	// timeout CommandContext kills the child and Spawn surfaces a failed run.
-	ctx, cancel := context.WithTimeout(context.Background(), dreamcmd.RunTimeout)
+	// parent carries the REPL's SIGINT cancellation: Ctrl+C kills the child
+	// instead of being swallowed while the REPL waits.
+	ctx, cancel := context.WithTimeout(parent, dreamcmd.RunTimeout)
 	defer cancel()
 	res, err := dreamcmd.Spawn(ctx, deps.cwd, dryRun)
 	if err != nil {
+		if parent.Err() == context.Canceled {
+			fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Yellow, "dream cancelled"))
+			return
+		}
 		fmt.Fprintf(out, "%s %v\n", ui.Colorize(ui.Enabled(), ui.Red, "dream failed:"), err)
 		return
 	}

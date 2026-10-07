@@ -175,6 +175,83 @@ func TestBridgeResolveConfirmUnknown(t *testing.T) {
 	}
 }
 
+// TestBridgeDenyAllPendingOnDisconnect: when the controlling client goes away
+// while confirmations are pending, every waiter must be resolved as a denial
+// instead of parking until a manual interrupt.
+func TestBridgeDenyAllPendingOnDisconnect(t *testing.T) {
+	sink := &fakeSink{connected: true}
+	b := NewBridge(sink)
+
+	type result struct {
+		d      Decision
+		remote bool
+	}
+	done := make(chan result, 2)
+	for range 2 {
+		go func() {
+			d, remote := b.Confirm(context.Background(), "shell", "rm -rf /tmp/x")
+			done <- result{d, remote}
+		}()
+	}
+
+	// Wait until both confirms are registered (and sent), then simulate the
+	// client disconnect.
+	deadline := time.Now().Add(time.Second)
+	for {
+		b.mu.Lock()
+		n := len(b.pending)
+		b.mu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d confirms registered, want 2", n)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := b.DenyAllPending(); got != 2 {
+		t.Fatalf("DenyAllPending resolved %d, want 2", got)
+	}
+
+	for range 2 {
+		select {
+		case r := <-done:
+			if r.d.Approve || r.d.Always {
+				t.Fatalf("decision = %+v, want a denial", r.d)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Confirm did not return after DenyAllPending")
+		}
+	}
+	if got := b.DenyAllPending(); got != 0 {
+		t.Fatalf("second DenyAllPending resolved %d, want 0", got)
+	}
+}
+
+// TestBridgeCloseUnblocksRemoteInput: stopping the remote session must release
+// a listener blocked in RemoteInput instead of leaving it watching a channel
+// that can never receive again. Input after Close is dropped, and Close is
+// idempotent.
+func TestBridgeCloseUnblocksRemoteInput(t *testing.T) {
+	b := NewBridge(&fakeSink{})
+	result := make(chan bool, 1)
+	go func() {
+		_, ok := <-b.RemoteInput()
+		result <- ok
+	}()
+	b.Close()
+	select {
+	case ok := <-result:
+		if ok {
+			t.Fatal("RemoteInput reported a value after Close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock RemoteInput")
+	}
+	b.OnInput("late") // must be dropped, not panic
+	b.Close()         // idempotent
+}
+
 func TestBridgeEnabled(t *testing.T) {
 	var nilBridge *Bridge
 	if nilBridge.Enabled() {

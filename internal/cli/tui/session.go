@@ -660,10 +660,16 @@ type dreamDoneMsg struct {
 
 // compactCmd runs a manual context compaction off the tea loop and yields a
 // rebuildDoneMsg the model folds into the transcript. It mirrors the REPL's
-// runManualCompact.
-func (s *runSession) compactCmd() tea.Cmd {
+// runManualCompact. ctx is the session-op context: Ctrl+C/Esc while the
+// summarization call is in flight cancels it, so an unresponsive provider can
+// never lock the UI in the running state (the op reports the cancellation
+// through its done message).
+func (s *runSession) compactCmd(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {
-		summary, err := s.compact()
+		summary, err := s.compact(ctx)
+		if err != nil && ctx.Err() == context.Canceled {
+			return rebuildDoneMsg{label: "compact", summary: "compact cancelled (context left unchanged)"}
+		}
 		return rebuildDoneMsg{label: "compact", summary: summary, err: err}
 	}
 }
@@ -672,7 +678,7 @@ func (s *runSession) compactCmd() tea.Cmd {
 // recent tail (the same force-a-new-summary flow as Codex's /compact). It
 // replaces agentCtx.Messages in place on success and flags compacted so persist()
 // re-saves the flattened context linearly. A failure leaves the context unchanged.
-func (s *runSession) compact() (string, error) {
+func (s *runSession) compact(ctx context.Context) (string, error) {
 	msgs := s.agentCtx.Messages
 	settings := compaction.DefaultCompactionSettings
 	before := compaction.EstimateContextTokens(msgs).Tokens
@@ -685,7 +691,7 @@ func (s *runSession) compact() (string, error) {
 	if s.creds != nil {
 		scfg.APIKey = s.creds.GetAPIKey(context.Background(), s.live.ProviderName)
 	}
-	res, err := compaction.Compact(context.Background(), stream, model, msgs, settings, -1, nil, "", scfg)
+	res, err := compaction.Compact(ctx, stream, model, msgs, settings, -1, nil, "", scfg)
 	if err != nil {
 		return "", err
 	}
@@ -704,20 +710,44 @@ func (s *runSession) compact() (string, error) {
 // dreamCmd runs the manual /dream consolidation subprocess off the tea loop
 // (the child is LLM-backed and bounded by dreamcmd.RunTimeout) and yields the
 // parsed report. A live lock from a background run is reported instead of
-// spawning a second child.
-func (s *runSession) dreamCmd(dryRun bool) tea.Cmd {
+// spawning a second child. ctx is the session-op context: Ctrl+C/Esc while the
+// child runs kills it through the same cancellation.
+func (s *runSession) dreamCmd(ctx context.Context, dryRun bool) tea.Cmd {
 	return func() tea.Msg {
 		if dreamcmd.LockHeld(s.memoryRoot) {
 			return dreamDoneMsg{summary: "a dream consolidation is already running"}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), dreamcmd.RunTimeout)
+		ctx, cancel := context.WithTimeout(ctx, dreamcmd.RunTimeout)
 		defer cancel()
 		res, err := dreamcmd.Spawn(ctx, s.hookDeps.ProjectDir, dryRun)
 		if err != nil {
+			if ctx.Err() == context.Canceled {
+				return dreamDoneMsg{summary: "dream cancelled"}
+			}
 			return dreamDoneMsg{err: err}
 		}
 		return dreamDoneMsg{report: res.Report}
 	}
+}
+
+// newRunChannel creates the event channel for one run and wires the per-run
+// callbacks that must target it: review notes (gate decisions render as
+// transcript cards) and approval dialogs (confirmApproval hands requests to
+// the UI and blocks on the reply). Every run type — a prompt, /btw, /goal —
+// must build its channel through here: a run that skipped the approval wiring
+// would send its first confirmation to a previous run's dead channel, where
+// the request is never displayed and the tool call stalls until the user
+// interrupts.
+func (s *runSession) newRunChannel() chan tea.Msg {
+	ch := newEventChan()
+	if s.notes != nil {
+		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
+	}
+	// Approval dialogs ride the same per-run channel: the gate's Confirm
+	// callback hands the request to the UI and blocks on its reply, so the run
+	// goroutine pauses exactly while the user decides.
+	s.approvalCh = ch
+	return ch
 }
 
 // prompt to the growing context as a user message, then hands the context and a
@@ -763,17 +793,7 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	// run end can commit a rewind restore point for exactly this turn.
 	s.preTurnLeaf = s.curLeaf
 	s.preTurnLabel = prompt
-	// Route review notes into this run's event channel so gate decisions
-	// (approvals, sandbox routing, denials) render as transcript cards. The
-	// pump sends runEndMsg last, so the model can clear the handler then.
-	ch := newEventChan()
-	if s.notes != nil {
-		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
-	}
-	// Approval dialogs ride the same per-run channel: the gate's Confirm
-	// callback hands the request to the UI and blocks on its reply, so the run
-	// goroutine pauses exactly while the user decides.
-	s.approvalCh = ch
+	ch := s.newRunChannel()
 	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(ch), s.onEvent)
 }
 
@@ -871,10 +891,7 @@ func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
 	s.lastBtwBase = len(side.Messages) - 1
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelRun = cancel
-	ch := newEventChan()
-	if s.notes != nil {
-		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
-	}
+	ch := s.newRunChannel()
 	return ch, startRunOn(ch, ctx, side, s.sideRunConfig(ch), s.onEvent)
 }
 
@@ -895,7 +912,7 @@ func (s *runSession) sideRunConfig(ch chan tea.Msg) runtime.RunConfig {
 func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
 	s.preTurnLeaf = s.curLeaf
 	s.preTurnLabel = label
-	ch := newEventChan()
+	ch := s.newRunChannel()
 	cfg := s.buildConfig(ch)
 	cfg.Batch.ToolExecutorConfig.Registry = goalpkg.ToolRegistry(s.reg, s.goal)
 	cfg.Reminders = goalpkg.Reminders(s.reg, s.goal)
@@ -904,9 +921,6 @@ func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
 	cfg.GetFollowUpMessages = steeredFollowUp(goalpkg.FollowUp(s), s.steerPull(ch))
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancelRun = cancel
-	if s.notes != nil {
-		s.notes.Set(func(n judge.Note) { ch <- judgeNoteMsg{note: n} })
-	}
 	return ch, startRunOn(ch, ctx, s.agentCtx, cfg, s.onEvent)
 }
 

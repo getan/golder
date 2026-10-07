@@ -115,16 +115,23 @@ func startRemoteControl(out io.Writer, deps *replDeps) {
 	// sees when a browser gains or loses remote access to this session (§7.3).
 	// They run on the server's WebSocket goroutine and only write a line, so they
 	// don't block.
+	// The disconnect callback also denies any confirmation the browser left
+	// unanswered: with the client gone nobody can answer, and the gate must
+	// fail closed rather than wait for a decision that will never come.
+	var bridge *remotecontrol.Bridge
 	cfg := remotecontrol.Config{
 		OnClientConnect: func(remoteAddr string) {
 			fmt.Fprintf(out, "\n[remote-control] browser connected from %s\n", remoteAddr)
 		},
 		OnClientDisconnect: func() {
 			fmt.Fprintf(out, "\n[remote-control] browser disconnected\n")
+			if bridge != nil {
+				bridge.DenyAllPending()
+			}
 		},
 	}
 	srv := remotecontrol.NewServer(cfg, nil)
-	bridge := remotecontrol.NewBridge(srv)
+	bridge = remotecontrol.NewBridge(srv)
 	srv.SetHandler(bridge)
 
 	url, err := srv.Start()
@@ -154,6 +161,7 @@ func stopRemoteControl(out io.Writer, deps *replDeps) {
 		deps.tee.setSecondary(nil)
 	}
 	_ = deps.remote.server.Stop(context.Background())
+	deps.remote.bridge.Close()
 	deps.remote = nil
 	fmt.Fprintln(out, "remote control stopped")
 }

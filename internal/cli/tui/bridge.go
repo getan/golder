@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -132,7 +134,28 @@ func unmarshalArgsMap(b []byte) map[string]any {
 // every event to a tea.Msg on ch, and finally sends a runEndMsg carrying the
 // run's result error. It is meant to be launched as a goroutine by startRun.
 func pump(ctx context.Context, ch chan tea.Msg, agentCtx *agentcore.AgentContext, cfg runtime.RunConfig, onEvent func(agentcore.AgentEvent)) {
+	// The pump is the run's only producer of its terminal event. A panic while
+	// converting or observing an event (a plugin/hook callback, a handler bug)
+	// must still hand runEndMsg to the UI — otherwise the model waits forever
+	// in the running state for an event that will never come, and Ctrl+C has
+	// nothing left to cancel. The loop-side panic path is covered in
+	// runtime.agentLoop; this covers the driver side.
+	// Own a cancelable child so the recovery path can stop the loop and let it
+	// unwind before runEndMsg: the run-end handler persists agentCtx, and the
+	// loop must not still be appending to it (the same guarantee the normal
+	// path gets by sending runEndMsg only after DrainStream returns).
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream := runtime.StartRun(ctx, agentCtx, cfg)
+	defer func() {
+		if rec := recover(); rec != nil {
+			cancel()
+			// Drain to the loop's close so no writer outlives runEndMsg.
+			for range stream.Events() {
+			}
+			ch <- runEndMsg{err: fmt.Errorf("run panic: %v\n%s", rec, debug.Stack())}
+		}
+	}()
 	_, err := runtime.DrainStream(ctx, stream, newStreamHandler(ch, onEvent))
 	ch <- runEndMsg{err: err}
 }

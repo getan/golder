@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -154,7 +155,20 @@ type LoopEventStream = agentcore.EventStream[agentcore.AgentEvent, []agentcore.A
 // the run ends.
 func agentLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfig) *LoopEventStream {
 	stream := agentcore.NewEventStream[agentcore.AgentEvent, []agentcore.AgentMessage](cfg.EventBuffer)
-	go runLoop(ctx, agentCtx, cfg, stream)
+	go func() {
+		// A panic anywhere in the loop must still terminate the stream: the
+		// consumer blocks on Events() until Close, so an unrecovered panic
+		// would hang the run — and its UI — forever, with no terminal event
+		// and nothing for Ctrl+C to cancel. Report it as the run's error
+		// instead (DrainStream surfaces it to the driver).
+		defer func() {
+			if rec := recover(); rec != nil {
+				stream.SetError(fmt.Errorf("agent loop panic: %v\n%s", rec, debug.Stack()))
+				stream.Close()
+			}
+		}()
+		runLoop(ctx, agentCtx, cfg, stream)
+	}()
 	return stream
 }
 

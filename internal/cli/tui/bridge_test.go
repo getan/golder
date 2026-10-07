@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // drain collects every msg queued on ch without blocking, stopping at the first
@@ -119,6 +123,50 @@ func TestToolEndError(t *testing.T) {
 	m, ok := got[0].(toolEndMsg)
 	if !ok || m.ok || m.result != "boom" {
 		t.Errorf("got %#v, want toolEndMsg{ok:false, result:%q}", got[0], "boom")
+	}
+}
+
+// TestPumpPanicDeliversRunEnd: a panic in the driver side of the pump (an
+// observer callback, a conversion bug) must still deliver runEndMsg. Without
+// it the model would wait forever in the running state for a terminal event
+// that never comes, and Ctrl+C would have nothing left to cancel.
+func TestPumpPanicDeliversRunEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	streamFn := func(ctx context.Context, model string, llm provider.LlmContext, cfg provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+		s := provider.NewAssistantMessageEventStream(0)
+		msg := agentcore.AssistantMessage{
+			RoleField:  agentcore.RoleAssistant,
+			StopReason: agentcore.StopReasonEndTurn,
+			Content:    agentcore.ContentList{agentcore.NewTextContent("hi")},
+		}
+		go func() {
+			_ = s.Emit(ctx, provider.StreamDoneEvent{Message: msg})
+			s.Close()
+		}()
+		return s, nil
+	}
+	cfg := runtime.RunConfig{LoopConfig: runtime.LoopConfig{Model: "fake", Stream: streamFn}}
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser},
+	}}
+	ch := newEventChan()
+
+	pump(ctx, ch, agentCtx, cfg, func(agentcore.AgentEvent) { panic("observer boom") })
+
+	for {
+		select {
+		case msg := <-ch:
+			if end, ok := msg.(runEndMsg); ok {
+				if end.err == nil || !strings.Contains(end.err.Error(), "panic") {
+					t.Fatalf("runEndMsg err = %v, want the reported panic", end.err)
+				}
+				return
+			}
+		default:
+			t.Fatal("pump returned without a runEndMsg on the channel")
+		}
 	}
 }
 

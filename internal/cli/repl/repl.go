@@ -382,7 +382,15 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			// replaces the whole message list with a summary + tail, so the session
 			// is rewritten linearly (Save) and the branch-tracking state is reset to
 			// the new flattened leaf.
-			runManualCompact(out, deps)
+			// Run under the SIGINT plumbing: outside a run runCancel is nil, so
+			// a Ctrl+C during the summarization call would otherwise be
+			// swallowed by the signal handler and the REPL would stay stuck
+			// until the provider answered.
+			compactCtx, compactCancel := context.WithCancel(context.Background())
+			setCancel(compactCancel)
+			runManualCompact(compactCtx, out, deps)
+			compactCancel()
+			setCancel(nil)
 			deps.header.UpdatedAt = time.Now().UTC()
 			if err := deps.store.Save(deps.header, deps.agentCtx.Messages); err != nil {
 				fmt.Fprintf(out, "golder: session save failed: %v\n", err)
@@ -466,7 +474,13 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			// context, so no session re-save/leaf reset is needed. The
 			// exact-or-space-prefix guard keeps "/dreamer" from matching, and
 			// "/dream --dry-run" runs the same analysis without writing.
-			runDream(out, deps, line)
+			// Same SIGINT plumbing as /compact: Ctrl+C kills the child instead
+			// of being swallowed while the REPL waits on it.
+			dreamCtx, dreamCancel := context.WithCancel(context.Background())
+			setCancel(dreamCancel)
+			runDream(dreamCtx, out, deps, line)
+			dreamCancel()
+			setCancel(nil)
 			continue
 		}
 		if line == "/goal" || strings.HasPrefix(line, "/goal ") {
@@ -988,7 +1002,7 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 // retained tail, and prints the before/after token counts and retained message
 // count. A failure is reported but non-fatal — the original context is kept
 // unchanged (US-004). It uses the same provider/model as the live run.
-func runManualCompact(out io.Writer, deps replDeps) {
+func runManualCompact(ctx context.Context, out io.Writer, deps replDeps) {
 	msgs := deps.agentCtx.Messages
 	settings := compaction.DefaultCompactionSettings
 	before := compaction.EstimateContextTokens(msgs).Tokens
@@ -1004,8 +1018,12 @@ func runManualCompact(out io.Writer, deps replDeps) {
 		scfg.APIKey = deps.creds.GetAPIKey(context.Background(), deps.live.ProviderName)
 	}
 	fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, "Compacting conversation…"))
-	res, err := compaction.Compact(context.Background(), stream, model, msgs, settings, -1, nil, "", scfg)
+	res, err := compaction.Compact(ctx, stream, model, msgs, settings, -1, nil, "", scfg)
 	if err != nil {
+		if ctx.Err() == context.Canceled {
+			fmt.Fprintln(out, "compaction cancelled (context left unchanged)")
+			return
+		}
 		fmt.Fprintf(out, "compaction failed: %v (context left unchanged)\n", err)
 		return
 	}

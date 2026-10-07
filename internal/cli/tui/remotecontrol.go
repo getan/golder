@@ -53,8 +53,19 @@ func (s *runSession) startRemote() (string, error) {
 	}
 	// Break the server↔bridge construction cycle: build the server (Sink), then
 	// the bridge over it, then route client frames back to the bridge.
-	srv := remotecontrol.NewServer(remotecontrol.Config{}, nil)
-	bridge := remotecontrol.NewBridge(srv)
+	// The disconnect callback closes over the bridge variable (assigned before
+	// the server starts, and only invoked once a client has connected): when
+	// the browser drops while a confirmation prompt is pending, the waiter is
+	// denied fail-closed instead of parking the run until a manual interrupt.
+	var bridge *remotecontrol.Bridge
+	srv := remotecontrol.NewServer(remotecontrol.Config{
+		OnClientDisconnect: func() {
+			if bridge != nil {
+				bridge.DenyAllPending()
+			}
+		},
+	}, nil)
+	bridge = remotecontrol.NewBridge(srv)
 	srv.SetHandler(bridge)
 	url, err := srv.Start()
 	if err != nil {
@@ -71,6 +82,9 @@ func (s *runSession) stopRemote() {
 		return
 	}
 	_ = s.remote.server.Stop(context.Background())
+	// Unblock the pending waitRemoteInput listener: without this its Cmd
+	// goroutine would watch a channel that can never receive again.
+	s.remote.bridge.Close()
 	s.remote = nil
 }
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -24,6 +25,7 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/history"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -102,6 +104,13 @@ type Model struct {
 	// func. Until then it may be nil, in which case an interrupt while running is
 	// a safe no-op (the pump keeps draining until it ends on its own).
 	interruptFn func()
+
+	// sessionOpCancel cancels a blocking session operation (/compact, /dream)
+	// that runs off the tea loop without a run channel. Such an op sets running
+	// (so no second op starts and submits queue) but has no agent context;
+	// without this, Ctrl+C could not stop it and the UI stayed locked in the
+	// running state until the op finished. nil when no op is in flight.
+	sessionOpCancel context.CancelFunc
 
 	// steerQ is the mid-run input queue: messages submitted while a run is in
 	// flight wait here and the run loop's steering seams deliver them (after
@@ -762,11 +771,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case approvalRequestMsg:
 		// A tool call is waiting on the user's decision: arm the dialog and
-		// keep pumping run events (the run goroutine is blocked on the reply
-		// channel, so no further run events arrive until it is answered).
+		// keep the event reader armed. The run goroutine is blocked on the
+		// reply channel until the user answers (or the run is cancelled), so
+		// nothing arrives while the dialog asks — but the events it emits the
+		// moment the gate resumes (the decision note, the tool result, the
+		// next turn, and eventually runEndMsg) must find a waiting reader, or
+		// answering the dialog freezes the UI with the run still in flight.
+		if m.approval.active {
+			// Exactly one dialog at a time (the dialog contract): a second
+			// request while one is pending fails closed — answered "not
+			// answered" immediately — instead of replacing the open dialog
+			// (which would leave the first gate waiting forever) or queueing
+			// behind a possibly-interrupted run.
+			select {
+			case msg.reply <- judge.ApprovalAnswer{}:
+			default:
+			}
+			return m, m.pumpNext()
+		}
 		m.openApproval(msg.req, msg.reply)
 		m.relayout()
-		return m, nil
+		return m, m.pumpNext()
 
 	case modelsFetchedMsg:
 		return m.applyModelsFetched(msg)
@@ -1026,7 +1051,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				card.setInput(msg.input)
 				m.transcript.reflow()
 			}
-			return m, nil
+			// A re-announced id (a provider recycling call ids across runs,
+			// or a replayed partial) must still re-arm the pump: this message
+			// came from the run channel, and dropping the reader freezes the
+			// whole run — the same failure the approval dialog had.
+			return m, m.pumpNext()
 		}
 		card := &toolCard{
 			id:       msg.id,
@@ -1163,6 +1192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.unpin()
 		m.spinner.stop()
 		m.running = false
+		m.sessionOpCancel = nil
 		if msg.err != nil {
 			m.transcript.addSystem(msg.label + " failed: " + msg.err.Error() + " (context left unchanged)")
 		} else {
@@ -1175,6 +1205,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.relayout()
+		if next, cmd, ok := m.startQueuedSteer(); ok {
+			return next, cmd
+		}
 		return m, nil
 
 	case dreamDoneMsg:
@@ -1183,6 +1216,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.unpin()
 		m.spinner.stop()
 		m.running = false
+		m.sessionOpCancel = nil
 		switch {
 		case msg.err != nil:
 			m.transcript.addSystem("dream failed: " + msg.err.Error())
@@ -1194,6 +1228,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcript.addSystem(strings.TrimRight(buf.String(), "\n"))
 		}
 		m.relayout()
+		if next, cmd, ok := m.startQueuedSteer(); ok {
+			return next, cmd
+		}
 		return m, nil
 
 	case runEndMsg:
@@ -1231,8 +1268,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.session != nil {
 			// The run is fully drained (runEndMsg is sent last), so no gate
 			// can publish another note into this run's channel: drop the
-			// handler before the next run installs its own.
+			// handler before the next run installs its own. The approval
+			// channel goes with it: while it points at a dead run channel a
+			// gate firing outside a run would park forever waiting for a UI
+			// that is no longer pumping; nil makes confirmApproval fail closed
+			// instead.
 			m.session.notes.Set(nil)
+			m.session.approvalCh = nil
 			if m.sideRun {
 				// A /btw side run never touches the main conversation or disk.
 				m.transcript.addSystem("(end of side thread — the main conversation is unchanged)")
@@ -1265,12 +1307,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// another tool call — must not be lost. Start exactly one as the next
 		// turn (codex's "interrupt & send now" / next-queued-input behavior);
 		// the rest stay queued and ride the new run's steering seams.
-		if text, ok := m.steerQ.pop(); ok {
-			m.transcript.addUser(text)
-			m.remoteEcho("\n> " + text + "\n")
-			next, cmd := m.startPrompt(text)
-			m = next.(Model)
-			return m, tea.Batch(cmd, fetchGitCmd(m.cwd))
+		if next, cmd, ok := m.startQueuedSteer(); ok {
+			return next, cmd
 		}
 		// Keep the composer ready for the next prompt (it stays focused across
 		// runs now, so this is normally a no-op) and re-probe git since a run may
@@ -1850,11 +1888,15 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// through a done message. Each replaces context or consolidates memory in
 	// place — work a string→string Action closure cannot do.
 	if line == "/compact" {
-		return m.startSessionOp(line, "Compacting conversation", func() tea.Cmd { return m.session.compactCmd() })
+		return m.startSessionOp(line, "Compacting conversation", func(ctx context.Context) tea.Cmd {
+			return m.session.compactCmd(ctx)
+		})
 	}
 	if line == "/dream" || strings.HasPrefix(line, "/dream ") {
 		dryRun := dreamcmd.HasDryRun(line)
-		return m.startSessionOp(line, "Dreaming (consolidating memory)", func() tea.Cmd { return m.session.dreamCmd(dryRun) })
+		return m.startSessionOp(line, "Dreaming (consolidating memory)", func(ctx context.Context) tea.Cmd {
+			return m.session.dreamCmd(ctx, dryRun)
+		})
 	}
 	// /export writes the live session to a file; it must persist the current turn
 	// first so unsaved messages are included.
@@ -1942,8 +1984,10 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 // startSessionOp echoes a session operation that does its work off the tea loop
 // (rebuild, compact, dream): the invocation is recorded, the spinner is armed
 // and pinned to label, and the op's done message reports the outcome into the
-// transcript when it lands.
-func (m Model) startSessionOp(line, label string, cmd func() tea.Cmd) (tea.Model, tea.Cmd) {
+// transcript when it lands. The op gets a cancelable context the model keeps,
+// so Ctrl+C/Esc stops it exactly like an agent run — a hung summarization call
+// or dream subprocess must never leave the UI locked in the running state.
+func (m Model) startSessionOp(line, label string, cmd func(ctx context.Context) tea.Cmd) (tea.Model, tea.Cmd) {
 	if m.running {
 		m.transcript.addUser(line)
 		m.input.Clear()
@@ -1963,8 +2007,10 @@ func (m Model) startSessionOp(line, label string, cmd func() tea.Cmd) (tea.Model
 	m.spinner.begin(time.Now(), m.thinkingLabel())
 	m.spinner.pin(label)
 	m.running = true
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sessionOpCancel = cancel
 	m.relayout()
-	return m, tea.Batch(cmd(), m.tickSpinner())
+	return m, tea.Batch(cmd(ctx), m.tickSpinner())
 }
 
 // commandToken returns the leading "/name" token of a slash line.
@@ -2330,8 +2376,7 @@ func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
 	m.menu.close()
 	m.transcript.addSystem("Side thread — this exchange is not saved to the conversation.")
 	ch, cmd := m.session.startBtwRun(arg)
-	m.runCh = ch
-	m.running = true
+	m.beginRun(ch)
 	m.sideRun = true
 	m.spinner.begin(time.Now(), m.thinkingLabel())
 	m.relayout()
@@ -2412,8 +2457,7 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ch, cmd := m.session.startGoalRun(runLabel)
-	m.runCh = ch
-	m.running = true
+	m.beginRun(ch)
 	m.goalRun = true
 	m.spinner.begin(time.Now(), m.thinkingLabel())
 	m.relayout()
@@ -2591,6 +2635,20 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// beginRun arms the shared state for an agent run about to start: the event
+// channel the pump will drain and a fresh tool-card index. Resetting the index
+// is what keeps a provider that recycles tool-call ids across runs (or a
+// replayed partial) from resolving a new call against a finished card — which
+// would silently swallow the new call's transcript block and leave the old
+// card's aborted state on screen. The finished cards stay in the transcript
+// (blocks hold the card pointers); only the lookup index is rebuilt.
+func (m *Model) beginRun(ch chan tea.Msg) {
+	m.runCh = ch
+	m.running = true
+	m.toolCards = make(map[string]*toolCard)
+	m.lastToolCard = nil
+}
+
 // startPrompt launches an agent run for prompt and flips to running when a run
 // starter is wired; the composer stays focused so typing can continue into the
 // steer queue. With no starter (pre-session model / tests) it records the
@@ -2602,11 +2660,28 @@ func (m Model) startPrompt(prompt string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ch, cmd := m.startRunFn(prompt)
-	m.runCh = ch
-	m.running = true
+	m.beginRun(ch)
 	m.spinner.begin(time.Now(), m.thinkingLabel())
 	m.relayout()
 	return m, tea.Batch(cmd, m.tickSpinner())
+}
+
+// startQueuedSteer starts the oldest message typed while an operation was in
+// flight as the next turn — codex's "interrupt & send now" / queued-input
+// handoff. It is shared by run end and by the done paths of the session ops
+// (/compact, /dream): those ops also accept mid-flight input into the same
+// steer queue, and without this handoff a message typed during a compaction
+// would sit in the queue until the user sent another prompt. Reports false
+// when nothing is queued.
+func (m Model) startQueuedSteer() (tea.Model, tea.Cmd, bool) {
+	text, ok := m.steerQ.pop()
+	if !ok {
+		return m, nil, false
+	}
+	m.transcript.addUser(text)
+	m.remoteEcho("\n> " + text + "\n")
+	next, cmd := m.startPrompt(text)
+	return next.(Model), tea.Batch(cmd, fetchGitCmd(m.cwd)), true
 }
 
 // thinkingLabel returns the current thinking-effort label for the spinner stats
@@ -2675,6 +2750,11 @@ func (m Model) clearDraft() Model {
 // a second press within quitArmWindow quits.
 func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 	if m.running {
+		// A session op (/compact, /dream) has no run ctx of its own; cancel it
+		// first so the interrupt reaches whatever is actually in flight.
+		if m.sessionOpCancel != nil {
+			m.sessionOpCancel()
+		}
 		if m.interruptFn != nil {
 			m.interruptFn()
 		}
