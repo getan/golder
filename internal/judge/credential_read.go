@@ -102,24 +102,97 @@ func credentialPathRead(p string) (string, bool) {
 // and want to refuse it with the same wording the static floor uses.
 func CredentialPathReason(p string) (string, bool) { return credentialPathRead(p) }
 
+// contentReaders are commands whose arguments are file content: reading,
+// copying, archiving, or hashing. Only for these does a quoted path argument
+// count too (`cat "~/.zshrc"`); every other command is graded on its bare
+// (unquoted) path tokens, so a quoted piece of prose — an echo label, a
+// commit message, a search pattern — falls through to the reviewer. The list
+// is the common coreutils/editor core on purpose; anything else is the
+// reviewer's call, and the sandbox still denies the path in every mode that
+// runs commands isolated.
+var contentReaders = map[string]bool{
+	"cat": true, "tac": true, "head": true, "tail": true, "less": true,
+	"more": true, "most": true, "bat": true, "nl": true, "od": true,
+	"xxd": true, "hexdump": true, "strings": true, "base64": true,
+	"base32": true, "grep": true, "egrep": true, "fgrep": true, "rg": true,
+	"ag": true, "ack": true, "sed": true, "awk": true, "gawk": true,
+	"sort": true, "uniq": true, "cut": true, "wc": true, "file": true,
+	"stat": true, "diff": true, "cmp": true, "shasum": true,
+	"sha1sum": true, "sha256sum": true, "md5": true, "openssl": true,
+	"cp": true, "mv": true, "install": true, "rsync": true, "scp": true,
+	"sftp": true, "tar": true, "zip": true, "unzip": true, "gzip": true,
+	"gunzip": true, "source": true, ".": true, "open": true, "code": true,
+	"vim": true, "vi": true, "nano": true, "emacs": true, "gpg": true,
+}
+
+// patternCommands take a pattern or script as their first non-flag argument,
+// so that position is not a path: `grep -rn "~/.zshrc" docs/` searches the
+// docs, it does not read the shell rc.
+var patternCommands = map[string]bool{
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true,
+	"ack": true, "sed": true, "awk": true, "gawk": true,
+}
+
 // credentialRead reports whether a shell command reads credential material.
-// It scans the command's tokens for absolute or ~-anchored path spellings,
-// which catches the common shapes (cat ~/.zshrc, grep KEY ~/.aws/credentials)
-// without interpreting shell semantics — variables, globs, and pipelines are
-// the reviewer's job. Relative tokens are skipped for the same reason as in
-// credentialPathRead: they resolve against the workspace.
+// Each shell segment is read at command position (transparent prefixes and
+// shell one-liners are unwrapped), and only path-shaped words are graded:
+// absolute or ~-anchored spellings, matched by credentialPathRead. Quoted
+// words count only for file-reading commands, so prose that happens to
+// mention ~/.zshrc — a commit message, an echo label, a search pattern — is
+// the reviewer's call rather than a hard deny. Variables, globs, and
+// pipelines stay the reviewer's job; relative paths resolve against the
+// workspace and are skipped for the same reason as in credentialPathRead.
 func credentialRead(cmd string) (string, bool) {
-	for _, raw := range strings.Fields(cmd) {
-		tok := strings.Trim(raw, `"'`+"`;|&()<>,=")
-		if tok == "" {
+	for _, seg := range splitShellSegments(cmd) {
+		words := shellWords(seg)
+		i := 0
+		for i < len(words) && isTransparentPrefix(words[i].text) {
+			i++
+		}
+		if i >= len(words) {
 			continue
 		}
-		if !strings.HasPrefix(tok, "/") && !strings.HasPrefix(tok, "~") {
+		base := path.Base(words[i].text)
+		rest := words[i+1:]
+		if inner, ok := shellDashC(base, plainWords(rest)); ok {
+			if reason, bad := credentialRead(inner); bad {
+				return reason, true
+			}
 			continue
 		}
-		if reason, bad := credentialPathRead(tok); bad {
-			return "command reads " + reason, true
+		reader := contentReaders[base]
+		patternPending := patternCommands[base]
+		for _, w := range rest {
+			if strings.HasPrefix(w.text, "-") {
+				continue
+			}
+			if patternPending {
+				patternPending = false
+				continue
+			}
+			// A quoted word is only a path when the command reads files; for
+			// everything else it is text (a message, a label, a pattern).
+			if w.quoted && !reader {
+				continue
+			}
+			tok := strings.Trim(w.text, "`;|&()<>,=")
+			if tok == "" || (!strings.HasPrefix(tok, "/") && !strings.HasPrefix(tok, "~")) {
+				continue
+			}
+			if reason, bad := credentialPathRead(tok); bad {
+				return "command reads " + reason, true
+			}
 		}
 	}
 	return "", false
+}
+
+// plainWords flattens shell words back to strings for callers that need only
+// the text (shell unwrapping).
+func plainWords(words []shellWord) []string {
+	out := make([]string, 0, len(words))
+	for _, w := range words {
+		out = append(out, w.text)
+	}
+	return out
 }

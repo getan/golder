@@ -73,6 +73,17 @@ func TestCredentialReadCommand(t *testing.T) {
 		"grep -i api_key ~/.aws/credentials",
 		"tar czf - ~/.ssh",
 		"head -5 ~/.bash_history",
+		// Quoting a path does not make the read disappear for a file-reading
+		// command, and a shell one-liner is unwrapped before grading.
+		`cat "~/.zshrc"`,
+		`sh -c "cat ~/.zshrc"`,
+		`bash -lc "grep KEY ~/.ssh/config"`,
+		`cp ~/.ssh/id_rsa /tmp/x`,
+		`source ~/.zshrc`,
+		`grep "api_key" "~/.aws/credentials"`,
+		`sed -n '1,5p' ~/.zshrc`,
+		`openssl rsa -in ~/.ssh/id_rsa -noout`,
+		`cd ~/.ssh && cat id_rsa`,
 	}
 	for _, cmd := range denied {
 		if reason, bad := credentialRead(cmd); !bad {
@@ -86,6 +97,15 @@ func TestCredentialReadCommand(t *testing.T) {
 		"go test ./...",
 		"cat ~/work/project/notes.txt",
 		"grep -rn TODO .",
+		// Prose that mentions a credential path is not a read: an echo label,
+		// a commit message, a search pattern, a quoted append target.
+		`echo "~/.ssh/" >> .gitignore`,
+		`git commit -m "docs: 说明 ~/.zshrc 配置"`,
+		`grep -rn "~/.zshrc" docs/`,
+		`rg -n "~/.ssh" internal/`,
+		`printf '%s\n' "~/.netrc" > /tmp/ignore.txt`,
+		`echo "~/.zshrc"`,
+		`git commit -m "fix: stop reading ~/.netrc"`,
 	}
 	for _, cmd := range allowed {
 		if reason, bad := credentialRead(cmd); bad {
