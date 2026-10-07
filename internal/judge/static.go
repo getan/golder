@@ -18,7 +18,9 @@ import (
 // bash denies: privilege escalation, bare-metal destructive commands,
 // host power control, fork bombs, and one-command environment exfiltration
 // (whole-environment dump piped into a network sink, or a sensitive-named
-// variable echoed into one). apply_patch denies: any path the patch touches that lands
+// variable echoed into one), plus reads of credential material — secret
+// files, keychain paths, and the security CLI's password-printing forms.
+// apply_patch denies: any path the patch touches that lands
 // in a live secret directory — every path in the patch is checked, so a
 // multi-file patch cannot smuggle one through. The agenttool layer already
 // rejects Root escapes; this is the extra secret-material floor above it.

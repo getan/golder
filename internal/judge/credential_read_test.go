@@ -84,6 +84,15 @@ func TestCredentialReadCommand(t *testing.T) {
 		`sed -n '1,5p' ~/.zshrc`,
 		`openssl rsa -in ~/.ssh/id_rsa -noout`,
 		`cd ~/.ssh && cat id_rsa`,
+		// The macOS keychain: the security CLI is denied only in the shapes
+		// that hand out the secret (print the password, dump, export).
+		`security find-generic-password -s my-service -w`,
+		`security find-generic-password -s my-service -gw`,
+		`security find-internet-password -a user -w`,
+		`security dump-keychain`,
+		`security export -k login.keychain-db`,
+		`sh -c "security find-generic-password -s x -w"`,
+		`cat ~/Library/Keychains/login.keychain-db`,
 	}
 	for _, cmd := range denied {
 		if reason, bad := credentialRead(cmd); !bad {
@@ -106,6 +115,14 @@ func TestCredentialReadCommand(t *testing.T) {
 		`printf '%s\n' "~/.netrc" > /tmp/ignore.txt`,
 		`echo "~/.zshrc"`,
 		`git commit -m "fix: stop reading ~/.netrc"`,
+		// Keychain lookups that reveal no secret, and prose about them.
+		`security list-keychains`,
+		`security default-keychain`,
+		`security find-generic-password -s my-service`,
+		`security find-certificate -c "Apple Development" -p`,
+		`security find-generic-password -s x -a "-webuser"`,
+		`echo "security find-generic-password -w"`,
+		`rg -n "security find-generic-password" docs/`,
 	}
 	for _, cmd := range allowed {
 		if reason, bad := credentialRead(cmd); bad {

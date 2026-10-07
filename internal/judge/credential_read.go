@@ -142,6 +142,10 @@ var patternCommands = map[string]bool{
 // the reviewer's call rather than a hard deny. Variables, globs, and
 // pipelines stay the reviewer's job; relative paths resolve against the
 // workspace and are skipped for the same reason as in credentialPathRead.
+// The macOS keychain is covered on both axes: a keychain file path is graded
+// like any other credential path, and the security CLI's secret-printing
+// forms (find-*-password -w/-g, dump-keychain, export) are denied by
+// keychainSecret.
 func credentialRead(cmd string) (string, bool) {
 	for _, seg := range splitShellSegments(cmd) {
 		words := shellWords(seg)
@@ -159,6 +163,9 @@ func credentialRead(cmd string) (string, bool) {
 				return reason, true
 			}
 			continue
+		}
+		if reason, bad := keychainSecret(base, plainWords(rest)); bad {
+			return reason, true
 		}
 		reader := contentReaders[base]
 		patternPending := patternCommands[base]
@@ -183,6 +190,41 @@ func credentialRead(cmd string) (string, bool) {
 				return "command reads " + reason, true
 			}
 		}
+	}
+	return "", false
+}
+
+// keychainSecret reports whether a command extracts a secret from the macOS
+// keychain through the `security` CLI: find-generic-password /
+// find-internet-password asked to print the password (-w, or -g which prints
+// it to stderr), dump-keychain, or export. Those are the shapes that hand the
+// secret to the calling process, so they are denied exactly like reading
+// ~/.zshrc. Attribute-only lookups (list-keychains, find-certificate -p,
+// find-*-password without -w/-g) and everything else the CLI offers stay with
+// the reviewer.
+func keychainSecret(base string, args []string) (string, bool) {
+	if base != "security" {
+		return "", false
+	}
+	sub := ""
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			sub = a
+			break
+		}
+	}
+	switch sub {
+	case "find-generic-password", "find-internet-password":
+		for _, a := range args {
+			// A print flag is a short cluster made only of w (print the
+			// password) and g (print it to stderr), so a value like
+			// "-webuser" after -a is not mistaken for one.
+			if len(a) >= 2 && a[0] == '-' && a[1] != '-' && strings.Trim(a[1:], "wg") == "" {
+				return "command extracts a password from the macOS keychain (security " + sub + ")", true
+			}
+		}
+	case "dump-keychain", "export":
+		return "command dumps the macOS keychain (security " + sub + ")", true
 	}
 	return "", false
 }
