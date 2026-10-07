@@ -8,9 +8,7 @@
 
 A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. Starts in a full-screen TUI by default, with a line-based REPL and a headless mode for scripts.
 
-<p align="center">
-  <video src="https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9" autoplay loop muted playsinline width="900" poster="docs/assets/demo-poster.jpg"></video>
-</p>
+https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 
 <p align="center">
   <sub>Recorded for real, nothing staged: red <code>go test</code> → autonomous fix → all green (28s, 2× speed) · <a href="https://golder-cli.pages.dev/en/">Website</a></sub>
