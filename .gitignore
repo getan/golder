@@ -36,6 +36,9 @@ config.toml
 # .idea/
 # .vscode/
 
+# macOS Finder metadata
+.DS_Store
+
 .loop-state.json
 
 # Compiled binary (go build ./cmd/golder produces ./golder)
