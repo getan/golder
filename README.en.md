@@ -30,12 +30,16 @@ https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 ### One-liner (Linux / macOS)
 
 ```bash
+# 1) Site mirror (more reliable on many mainland-China networks)
 curl -fsSL https://golder-cli.pages.dev/install.sh | sh
+
+# 2) Raw GitHub URL (use when pages.dev is unreachable — e.g. Alibaba Cloud ECS)
+curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 ```
 
-The script is served from the site mirror (more reliable from mainland China) and verifies the archive's sha256; raw fallback: <https://raw.githubusercontent.com/getan/golder/master/install.sh>.
+Both fetch the same script (the site mirrors it from the main repo at deploy time); pick whichever your network reaches. If neither works, prefix the raw URL with a mirror, e.g. `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/getan/golder/master/install.sh | sh`.
 
-Downloads try GitHub directly first and then fall back to community mirrors (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that connects but delivers no data for 15s is abandoned for the next source. `GOLDER_MIRROR` overrides the list (whitespace-separated URL prefixes, prepended to the original URL) or disables mirroring with `off`.
+The script verifies the archive's sha256; downloads try GitHub directly first and then fall back to community mirrors (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that connects but delivers no data for 15s is abandoned for the next source. `GOLDER_MIRROR` overrides the list (whitespace-separated URL prefixes, prepended to the original URL) or disables mirroring with `off`.
 
 `GOLDER_VERSION` picks a version and `GOLDER_INSTALL_DIR` sets the install directory (default `/usr/local/bin`, falling back to `~/.local/bin` when not writable). On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases).
 

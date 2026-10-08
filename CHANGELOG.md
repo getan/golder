@@ -19,7 +19,8 @@ interactive REPL/TUI.
   `https://golder-cli.pages.dev/api/latest` first, falling back to the GitHub API.
   The canonical one-liner moves to `https://golder-cli.pages.dev/install.sh` — the
   site mirrors the script for networks where `raw.githubusercontent.com` is
-  unreliable (the raw URL keeps working).
+  unreliable; the raw URL keeps working, and the README documents both because
+  reachability varies by network (e.g. Alibaba Cloud ECS cannot reach pages.dev).
 - **Mainland-China download fallback** (`golder update` + `install.sh`):
   downloads try the direct GitHub URL first and then community mirrors
   (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that

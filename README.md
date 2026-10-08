@@ -30,12 +30,16 @@ https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 ### 一键安装（Linux / macOS）
 
 ```bash
+# 一、站点镜像（对多数大陆网络更稳）
 curl -fsSL https://golder-cli.pages.dev/install.sh | sh
+
+# 二、GitHub 原始地址（pages.dev 不通时改用，如阿里云 ECS 等大陆云主机）
+curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 ```
 
-脚本由站点镜像（大陆直连更稳）并校验下载包的 sha256；备用原始地址：<https://raw.githubusercontent.com/getan/golder/master/install.sh>。
+两条取到的是同一份脚本（站点部署时从主仓库镜像），按自己的网络二选一；若两条都不通，可给 raw 地址套镜像前缀，例如 `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/getan/golder/master/install.sh | sh`。
 
-下载归档时先直连 GitHub，失败后自动回退到公益镜像（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`gh.zwy.one`）；连上后 15 秒无数据也会判死换源。`GOLDER_MIRROR` 可覆盖镜像列表（空格分隔的 URL 前缀，前缀拼在原 URL 前），设为 `off` 只用直连。
+脚本会校验下载包的 sha256；下载归档时先直连 GitHub，失败后自动回退到公益镜像（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`gh.zwy.one`），连上后 15 秒无数据也会判死换源。`GOLDER_MIRROR` 可覆盖镜像列表（空格分隔的 URL 前缀，前缀拼在原 URL 前），设为 `off` 只用直连。
 
 可用 `GOLDER_VERSION` 指定版本、`GOLDER_INSTALL_DIR` 指定安装目录（默认 `/usr/local/bin`，无写权限时回退 `~/.local/bin`）。Windows 请从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip` 解压。
 
