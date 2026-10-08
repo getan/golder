@@ -35,6 +35,8 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 脚本由站点镜像（大陆直连更稳）并校验下载包的 sha256；备用原始地址：<https://raw.githubusercontent.com/getan/golder/master/install.sh>。
 
+下载归档时先直连 GitHub，失败后自动回退到公益镜像（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`gh.zwy.one`）；连上后 15 秒无数据也会判死换源。`GOLDER_MIRROR` 可覆盖镜像列表（空格分隔的 URL 前缀，前缀拼在原 URL 前），设为 `off` 只用直连。
+
 可用 `GOLDER_VERSION` 指定版本、`GOLDER_INSTALL_DIR` 指定安装目录（默认 `/usr/local/bin`，无写权限时回退 `~/.local/bin`）。Windows 请从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip` 解压。
 
 ### 从源码构建
@@ -227,6 +229,8 @@ golder session export <session-id> --format md --output talk.md
 golder update
 ```
 
+`golder update` 的版本检查走站点接口（大陆可达、无速率限制），失败回退 GitHub API；下载 release 时与安装脚本同一条「直连 → 公益镜像」回退链，镜像只会影响传输，归档仍按 release 的 `checksums.txt` 校验（坏包自动换下一个源）；`GOLDER_MIRROR=off` 可禁用镜像。
+
 ### 权限模式
 
 改动型工具（`bash` / `apply_patch`）的审批由四档模式控制，启动时默认 `auto`，运行中用 `/permissions` 切换，也可用 `--permissions <mode>` 或 `GOLDER_PERMISSIONS` 指定：
@@ -269,6 +273,7 @@ golder update
 | `GOLDER_SANDBOX` | 沙箱档执行：`off` / `auto`（默认，仅沙箱档）/ `enforce`（全部 bash 进沙箱，无 runner 则 fail-closed） |
 | `GOLDER_SANDBOX_NETWORK` | 沙箱内是否放行网络：默认关闭（出口需显式授予）；设为 `on` 恢复 |
 | `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |
+| `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |

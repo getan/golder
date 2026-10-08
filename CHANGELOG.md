@@ -20,6 +20,14 @@ interactive REPL/TUI.
   The canonical one-liner moves to `https://golder-cli.pages.dev/install.sh` — the
   site mirrors the script for networks where `raw.githubusercontent.com` is
   unreliable (the raw URL keeps working).
+- **Mainland-China download fallback** (`golder update` + `install.sh`):
+  downloads try the direct GitHub URL first and then community mirrors
+  (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that
+  connects but delivers no data for 15s is aborted and the next source is tried.
+  The archive is still verified against the release's `checksums.txt` — a mirror
+  serving a corrupt or stale copy fails over to the next source. `GOLDER_MIRROR`
+  overrides the list (whitespace-separated URL prefixes) or disables mirroring
+  with `off`/`none`.
 - **`/provider` command**: lists every built-in provider with the environment
   variable(s) it reads (in precedence order) and whether a credential is
   configured — no README lookup needed. Providers with a credential found are

@@ -25,14 +25,22 @@ import (
 // matches the release target in .goreleaser.yaml and install.sh.
 const Repo = "getan/golder"
 
+// SiteLatestURL is the golder site's latest-release endpoint (golder-site
+// repo). It resolves the tag server-side and caches it on Cloudflare's edge:
+// no token, no anonymous rate limit, and reachable from mainland China where
+// api.github.com often is not. install.sh resolves the version the same way.
+const SiteLatestURL = "https://golder-cli.pages.dev/api/latest"
+
 // latestReleaseURL builds the GitHub API endpoint for a repo's latest release.
 func latestReleaseURL(repo string) string {
 	return fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 }
 
-// release is the subset of the GitHub release JSON we consume.
+// release is the subset of the latest-release JSON we consume: the GitHub API
+// returns "tag_name", the site endpoint returns "tag".
 type release struct {
 	TagName string `json:"tag_name"`
+	Tag     string `json:"tag"`
 }
 
 // IsReleaseVersion reports whether v is a real release version that can be
@@ -47,14 +55,56 @@ func IsReleaseVersion(v string) bool {
 	}
 }
 
-// LatestTag queries the GitHub Releases API for repo's latest release tag
-// (e.g. "v0.4.0"). If client is nil a client with a short timeout is used. When
-// the GITHUB_TOKEN environment variable is set it is sent as a bearer token to
-// raise the API rate limit, mirroring install.sh.
+// LatestTag resolves repo's latest release tag (e.g. "v0.4.0"). The golder
+// site endpoint is tried first (reachable from mainland China, no anonymous
+// rate limit, cached on the edge); the GitHub API is the fallback and is the
+// path that honors GITHUB_TOKEN. If client is nil a client with a short
+// timeout is used.
 func LatestTag(ctx context.Context, client *http.Client, repo string) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	if repo == Repo {
+		if tag, err := latestTagFromSite(ctx, client); err == nil {
+			return tag, nil
+		}
+	}
+	return latestTagFromGitHub(ctx, client, repo)
+}
+
+// latestTagFromSite queries the golder site's /api/latest endpoint, which
+// returns {"tag": "vX.Y.Z"} (or "tag_name", for forward compatibility).
+func latestTagFromSite(ctx context.Context, client *http.Client) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, SiteLatestURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("selfupdate: build request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("selfupdate: query latest release via site: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("selfupdate: site latest endpoint returned %s", resp.Status)
+	}
+	var rel release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("selfupdate: decode site latest JSON: %w", err)
+	}
+	tag := strings.TrimSpace(rel.Tag)
+	if tag == "" {
+		tag = strings.TrimSpace(rel.TagName)
+	}
+	if tag == "" {
+		return "", fmt.Errorf("selfupdate: site latest endpoint returned empty tag")
+	}
+	return tag, nil
+}
+
+// latestTagFromGitHub queries the GitHub Releases API directly. Anonymous
+// callers share a low per-IP rate limit; when the GITHUB_TOKEN environment
+// variable is set it is sent as a bearer token to raise that limit.
+func latestTagFromGitHub(ctx context.Context, client *http.Client, repo string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL(repo), nil)
 	if err != nil {
 		return "", fmt.Errorf("selfupdate: build request: %w", err)

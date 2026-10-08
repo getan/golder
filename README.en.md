@@ -35,6 +35,8 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 The script is served from the site mirror (more reliable from mainland China) and verifies the archive's sha256; raw fallback: <https://raw.githubusercontent.com/getan/golder/master/install.sh>.
 
+Downloads try GitHub directly first and then fall back to community mirrors (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that connects but delivers no data for 15s is abandoned for the next source. `GOLDER_MIRROR` overrides the list (whitespace-separated URL prefixes, prepended to the original URL) or disables mirroring with `off`.
+
 `GOLDER_VERSION` picks a version and `GOLDER_INSTALL_DIR` sets the install directory (default `/usr/local/bin`, falling back to `~/.local/bin` when not writable). On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases).
 
 ### Build from source
@@ -227,6 +229,8 @@ golder session export <session-id> --format md --output talk.md
 golder update
 ```
 
+`golder update` resolves the latest tag via the site endpoint (reachable from mainland China, no rate limit), falling back to the GitHub API. Release downloads use the same direct → mirror chain as the installer: mirrors only carry bytes, the archive is still verified against the release's `checksums.txt` (a corrupt copy fails over to the next source), and `GOLDER_MIRROR=off` disables mirroring.
+
 ### Permission modes
 
 Approval for mutating tools (`bash` / `apply_patch`) is governed by four modes, starting at `auto`; switch at runtime with `/permissions`, or set `--permissions <mode>` / `GOLDER_PERMISSIONS`:
@@ -269,6 +273,7 @@ See `golder --help` for the complete list.
 | `GOLDER_SANDBOX` | Sandbox-tier execution: `off` / `auto` (default, sandbox tier only) / `enforce` (every bash command sandboxed, fail-closed without a runner) |
 | `GOLDER_SANDBOX_NETWORK` | Network inside the sandbox: off by default (egress must be granted explicitly); set to `on` to allow |
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
+| `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |

@@ -70,18 +70,25 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
-func TestLatestTag(t *testing.T) {
+func TestLatestTagSiteFirst(t *testing.T) {
+	var githubHits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"tag":"v0.4.0","url":"https://github.com/getan/golder/releases/tag/v0.4.0"}`))
+			return
+		}
+		githubHits++
 		if r.Header.Get("Accept") != "application/vnd.github+json" {
-			t.Errorf("missing Accept header")
+			t.Errorf("missing Accept header on GitHub fallback")
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"tag_name":"v0.4.0","name":"golder 0.4.0"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9"}`))
 	}))
 	defer srv.Close()
 
-	// LatestTag builds the URL from repo; use a transport that redirects to the
-	// test server regardless of host.
+	// LatestTag builds the URLs from constants; use a transport that redirects
+	// to the test server regardless of host.
 	client := srv.Client()
 	client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
 
@@ -90,12 +97,41 @@ func TestLatestTag(t *testing.T) {
 		t.Fatalf("LatestTag: %v", err)
 	}
 	if tag != "v0.4.0" {
-		t.Errorf("tag = %q, want v0.4.0", tag)
+		t.Errorf("tag = %q, want v0.4.0 (from site endpoint)", tag)
+	}
+	if githubHits != 0 {
+		t.Errorf("site endpoint succeeded but GitHub API was called %d times", githubHits)
+	}
+}
+
+func TestLatestTagGitHubFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/latest" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if r.Header.Get("Accept") != "application/vnd.github+json" {
+			t.Errorf("missing Accept header")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"tag_name":"v0.4.1","name":"golder 0.4.1"}`))
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	client.Transport = rewriteHost{base: srv.URL, rt: client.Transport}
+
+	tag, err := LatestTag(context.Background(), client, "getan/golder")
+	if err != nil {
+		t.Fatalf("LatestTag: %v", err)
+	}
+	if tag != "v0.4.1" {
+		t.Errorf("tag = %q, want v0.4.1 (from GitHub API fallback)", tag)
 	}
 }
 
 func TestLatestTagErrors(t *testing.T) {
-	t.Run("non-200", func(t *testing.T) {
+	t.Run("non-200 from both", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
@@ -107,8 +143,12 @@ func TestLatestTagErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("empty tag", func(t *testing.T) {
+	t.Run("empty tag from both", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/latest" {
+				_, _ = w.Write([]byte(`{"tag":""}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"tag_name":""}`))
 		}))
 		defer srv.Close()
