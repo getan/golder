@@ -2,6 +2,7 @@ package remotecontrol
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -319,6 +320,61 @@ func TestOutputCoalesced(t *testing.T) {
 	}
 	if frames >= n {
 		t.Fatalf("got %d frames for %d writes, expected coalescing", frames, n)
+	}
+}
+
+// TestOutputExactOnceAcrossConnect is the regression for a connect/write race:
+// the client is registered before the connect handler arms its replay, so a
+// producer writing in that window had its bytes sent live AND again inside the
+// replay snapshot (CI saw a 50-byte burst arrive as 87 bytes). Every chunk here
+// carries its index, so a duplicate or a reorder is visible no matter how the
+// pump and the connect interleave; the producer runs while the client dials so
+// the window is actually hit.
+func TestOutputExactOnceAcrossConnect(t *testing.T) {
+	const chunks = 120
+	for attempt := 0; attempt < 12; attempt++ {
+		s, pairURL := startTestServer(t, &fakeHandler{})
+		base, cred := sessionCred(t, pairURL)
+
+		// Emit indexed chunks concurrently with the dial: some land before the
+		// client is registered (they belong in the replay), some in the window
+		// between registration and the replay, some after.
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for i := 0; i < chunks; i++ {
+				s.SendOutput(fmt.Sprintf("%d;", i))
+				time.Sleep(time.Millisecond)
+			}
+		}()
+
+		conn, _, err := dialWS(t, base, cred)
+		if err != nil {
+			t.Fatalf("dial ws: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+
+		got := ""
+		for !strings.Contains(got, fmt.Sprintf("%d;", chunks-1)) {
+			got += readOutput(t, ctx, conn)
+		}
+		cancel()
+		conn.Close(websocket.StatusNormalClosure, "")
+		<-done
+
+		// Every chunk exactly once, in order: duplication would repeat an index,
+		// and a lost chunk would break the sequence.
+		parts := strings.Split(strings.TrimSuffix(got, ";"), ";")
+		if len(parts) != chunks {
+			t.Fatalf("attempt %d: delivered %d chunks, want %d (payload %q)",
+				attempt, len(parts), chunks, got)
+		}
+		for i, p := range parts {
+			if p != fmt.Sprint(i) {
+				t.Fatalf("attempt %d: chunk %d = %q, want %d (payload %q)",
+					attempt, i, p, i, got)
+			}
+		}
 	}
 }
 

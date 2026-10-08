@@ -96,17 +96,23 @@ type Server struct {
 	clientCtx    context.Context
 	clientCancel context.CancelFunc
 	writeMu      sync.Mutex // serializes writes to client
+	// connGen increments every time a client is registered; the output pump
+	// remembers the generation it last targeted and treats a change as "this
+	// connection has never been sent anything". Guarded by mu.
+	connGen   uint64
+	pumpedGen uint64
 
 	// Output coalescing + backpressure + replay (#445). outMu guards all of the
 	// fields below; outCond signals both the pump (new pending output) and any
 	// producer blocked by backpressure (pump drained pending). The pump is the
-	// sole sender of output frames, so replay and live output can never interleave
-	// or duplicate.
+	// sole sender of output frames, so replay and live output can never
+	// interleave — and it decides replay from the connection generation (see
+	// outputPump), not from when the connect handler happens to arm the flag.
 	outMu      sync.Mutex
 	outCond    *sync.Cond
 	outPending []byte     // coalesced, not-yet-sent output
 	outClosed  bool       // set on Stop; releases blocked producers
-	needReplay bool       // a fresh client connected; next flush replays the ring
+	needReplay bool       // wake-up hint: a client connected, so flush the ring
 	ring       ringBuffer // rolling last-N bytes for late-join replay
 	pumpCancel context.CancelFunc
 	pumpDone   chan struct{}
@@ -321,6 +327,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	s.client = conn
 	s.clientCtx = ctx
 	s.clientCancel = cancel
+	s.connGen++
 	s.mu.Unlock()
 
 	// Announce connection to the client, then arm a replay so the pump resends the
@@ -495,10 +502,35 @@ func (s *Server) outputPump(ctx context.Context, done chan<- struct{}) {
 		for len(s.outPending) == 0 && !s.needReplay && ctx.Err() == nil {
 			s.outCond.Wait()
 		}
-		replay := s.needReplay
+		// Capture this pass's target connection, and notice a change of
+		// generation. A connection that differs from the one the previous pass
+		// targeted has never been sent anything, so it must receive the ring
+		// snapshot before any live batch — regardless of whether the connect
+		// handler has armed the replay flag yet. Deriving it here is what makes
+		// the delivery exact-once: the old code trusted the flag, so output
+		// produced in the window between "client registered" and "flag armed"
+		// went out live AND then came back inside the replay snapshot.
+		//
+		// Lock order: outMu → mu. Nothing takes mu and then waits on outMu, so
+		// the nesting cannot deadlock (Stop and the connect handler both release
+		// mu before touching outMu).
+		s.mu.Lock()
+		conn := s.client
+		gen := s.connGen
+		fresh := gen != s.pumpedGen
+		s.pumpedGen = gen
+		s.mu.Unlock()
+		// The replay decision is the generation change alone. The flag is only a
+		// wake-up (it makes a late joiner's scrollback flush without waiting for
+		// the next write) — treating it as a second replay trigger would re-send
+		// the ring, which by then also holds bytes this connection was already
+		// sent live.
+		replay := fresh
 		s.needReplay = false
 		var snapshot []byte
-		if replay {
+		// A snapshot is only useful when there is someone to write it to; with
+		// no client the ring already holds the bytes for the next connection.
+		if replay && conn != nil {
 			snapshot = s.ring.snapshot()
 		}
 		// Coalesce: take everything buffered so far as one batch.
@@ -509,15 +541,14 @@ func (s *Server) outputPump(ctx context.Context, done chan<- struct{}) {
 		stopping := ctx.Err() != nil
 		s.outMu.Unlock()
 
-		s.mu.Lock()
-		conn := s.client
-		s.mu.Unlock()
-
 		if conn != nil {
 			// Replay first so the reconnecting browser restores context, then the
 			// live batch. The ring already contains everything appended via
 			// SendOutput, so on a fresh connection the snapshot covers pending too;
 			// avoid double-sending by preferring the snapshot when it is present.
+			// The batch is written to the connection it was computed for: if the
+			// client is replaced mid-pass, the next pass sees the generation change
+			// and replays to the newcomer.
 			if len(snapshot) > 0 {
 				s.writeFrame(conn, Frame{Type: FrameOutput, Text: string(snapshot)})
 			} else if len(pending) > 0 {
