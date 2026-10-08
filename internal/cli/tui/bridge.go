@@ -48,11 +48,43 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 	// so every streaming partial re-listing them stays a no-op. The handler is
 	// built per run, so the set never leaks across runs.
 	announced := map[string]bool{}
+	// lastThink and argsSeen are the spinner's high-water marks (in runes) for
+	// the output channels OnText cannot see: thinking text and tool-call
+	// argument JSON. Streaming partials are cumulative, so only the growth
+	// since the previous partial is new output. Both reset when a message
+	// starts, so a provider reusing tool-call ids across turns counts cleanly.
+	lastThink := 0
+	argsSeen := map[string]int{}
+	// accountOutput feeds those channels to the spinner as tokenDeltaMsg. It
+	// also runs at turn end so a provider that delivers the whole message in
+	// one shot still lands its estimate (mirrors DrainStream's text flush).
+	accountOutput := func(am agentcore.AssistantMessage) {
+		think := 0
+		for _, c := range am.Content {
+			if tc, ok := c.(agentcore.ThinkingContent); ok {
+				think += len([]rune(tc.Thinking))
+			}
+		}
+		if think > lastThink {
+			ch <- tokenDeltaMsg{chars: think - lastThink}
+			lastThink = think
+		}
+		for _, c := range am.ToolCalls() {
+			if c.ID == "" {
+				continue
+			}
+			if n := len([]rune(string(c.Arguments))); n > argsSeen[c.ID] {
+				ch <- tokenDeltaMsg{chars: n - argsSeen[c.ID]}
+				argsSeen[c.ID] = n
+			}
+		}
+	}
 	return runtime.StreamHandler{
 		OnText: func(delta string) {
 			ch <- textDeltaMsg{delta: delta}
 		},
 		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage) {
+			accountOutput(msg)
 			ch <- turnEndMsg{msg: msg, results: results}
 		},
 		OnEvent: func(ev agentcore.AgentEvent) {
@@ -62,14 +94,21 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 				extra(ev)
 			}
 			switch e := ev.(type) {
+			case agentcore.MessageStartEvent:
+				// A new assistant message begins streaming: reset the spinner's
+				// per-message high-water marks.
+				lastThink = 0
+				argsSeen = map[string]int{}
 			case agentcore.MessageUpdateEvent:
-				// Live tool-call announcements (codex Running order): the first
-				// partial carrying a call opens its card via toolAnnounceMsg;
-				// the executor's later toolStartMsg for the same id only
-				// completes setup. Text-only partials need no message (deltas
-				// already flow through OnText).
 				if am, ok := e.Message.(agentcore.AssistantMessage); ok {
-					for _, c := range am.ToolCalls() {
+					accountOutput(am)
+					// Live tool-call announcements (codex Running order): the
+					// first partial carrying a call opens its card via
+					// toolAnnounceMsg; the executor's later toolStartMsg for
+					// the same id only completes setup. Text-only partials
+					// need no message (deltas already flow through OnText).
+					calls := am.ToolCalls()
+					for _, c := range calls {
 						if c.ID == "" || announced[c.ID] {
 							continue
 						}

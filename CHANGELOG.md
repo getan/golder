@@ -268,6 +268,27 @@ interactive REPL/TUI.
   with no runner and platforms without `sandbox-exec` keep failing closed. A
   consistency test pins the predicate to `WireBashSandbox`'s runner
   attachment, and the block message format was corrected.
+- **apply_patch accepts several hunks in one file section**: a single
+  `*** Update File:` block may now carry multiple `@@` hunks the way a git
+  diff does. Previously the second `@@` was swallowed as a hunk body line and
+  the parse failed with a misleading "chunk lines must start with ..." error;
+  the message now names the offending line, the model-facing patch guide
+  documents the one-section/many-hunks form, and a test mirrors codex's
+  multi-hunk single-file case.
+- **Working-spinner token estimate covers every output channel**: the live
+  `↓ N tokens` readout only counted visible text, so reasoning-heavy or
+  patch-heavy turns showed a number far below the real output (measured 5–40×
+  low against session `usage.outputTokens`). Thinking text and tool-call
+  argument JSON are now measured against the cumulative stream partial
+  (growth-only deltas, reset per message) with a turn-end flush for providers
+  that deliver the message whole — still an activity gauge, not billing.
+- **Code blocks no longer render mis-analysed content on a red chip**: glamour
+  highlights every code block through chroma, and a block with no language tag
+  is auto-analysed — when the guess tags prose as syntax errors, the stock
+  style paints those Error tokens on a saturated red background (#F05B5B dark
+  / #FF5555 light), so a directory listing could render as a wall of red.
+  Error tokens now reuse the block's own text style in both renderers (TUI
+  transcript and REPL), with the shared glamour configs left untouched.
 
 ## [0.4.3] - 2026-07-31
 

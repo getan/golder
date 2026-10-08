@@ -1022,6 +1022,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamRenderArmed = true
 		return m, tea.Batch(m.pumpNext(), streamRenderTick())
 
+	case tokenDeltaMsg:
+		// Spinner-only accounting: reasoning text and tool-call argument JSON
+		// (visible text is accounted in textDeltaMsg). No transcript work, so
+		// no reflow is needed — the next spinner tick renders the new count.
+		m.spinner.addTokenChars(msg.chars)
+		return m, m.pumpNext()
+
 	case turnEndMsg:
 		m.transcript.finalizeTurn(msg.msg)
 		// Surface a failed or empty turn so a provider/API error is never silent.

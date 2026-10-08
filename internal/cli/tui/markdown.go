@@ -85,12 +85,17 @@ func rendererFor(width int) *glamour.TermRenderer {
 }
 
 // markdownStyle returns the base glamour style for the terminal background
-// with golder's palette tweaks applied. Two stock choices fight codex parity:
+// with golder's palette tweaks applied. Three stock choices fight codex
+// parity:
 //
 //   - dark inline code is coral (256-color 203) on a dark chip, so a reply full
 //     of `identifiers` — the normal shape of a coding answer — reads as a wall
 //     of red. Codex renders inline code as plain cyan, no chip.
 //   - link text/labels are bold magenta there; codex uses cyan.
+//   - code blocks with no language tag are auto-analysed by chroma, and the
+//     guess can mark prose (CJK annotations in a directory listing, say) as
+//     Error tokens, which the stock style paints on a red chip (#F05B5B).
+//     WithoutCodeBlockErrorChip folds them back into the block's Text style.
 //
 // Only pointer fields are replaced on a copy of the base config, so the shared
 // package-level style is never mutated.
@@ -106,7 +111,7 @@ func markdownStyle(dark bool) gansi.StyleConfig {
 	cfg.LinkText.Color = mdStrPtr(codeColor)
 	cfg.Link.Color = mdStrPtr(codeColor)
 	cfg.Image.Color = mdStrPtr(codeColor)
-	return cfg
+	return ui.WithoutCodeBlockErrorChip(cfg)
 }
 
 // mdStrPtr returns a pointer to s for the glamour style fields that use

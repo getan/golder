@@ -16,6 +16,8 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
+	"github.com/muesli/termenv"
 )
 
 // mdRenderer is the lazily-built glamour renderer. Building it parses a style
@@ -26,8 +28,11 @@ var (
 	mdRenderer *glamour.TermRenderer
 )
 
-// initMarkdown builds the shared renderer on first use. It uses glamour's
-// auto style, which follows the terminal's dark/light background.
+// initMarkdown builds the shared renderer on first use. The style selection
+// mirrors glamour's auto style (no tty → plain, else dark/light by background)
+// but runs the chosen config through WithoutCodeBlockErrorChip, which the
+// stock WithAutoStyle option offers no hook for — without it a language-less
+// code block that chroma mis-analyses renders as a wall of red.
 //
 // WithWordWrap(0) disables glamour's hard word-wrap. That matters: with a fixed
 // wrap width glamour pads every line with trailing-space background cells out to
@@ -37,8 +42,14 @@ var (
 // rendered output tight — the REPL doesn't track terminal size anyway.
 func initMarkdown() {
 	mdOnce.Do(func() {
+		style := styles.DarkStyleConfig
+		if !StdoutIsTerminal() {
+			style = styles.NoTTYStyleConfig
+		} else if !termenv.HasDarkBackground() {
+			style = styles.LightStyleConfig
+		}
 		r, err := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStyles(WithoutCodeBlockErrorChip(style)),
 			glamour.WithWordWrap(0),
 		)
 		if err != nil {

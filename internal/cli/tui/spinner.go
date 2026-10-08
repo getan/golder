@@ -10,9 +10,10 @@ import (
 // This file implements the "working" spinner shown while an agent run is in
 // flight, mirroring Claude Code's animated status line: a cycling asterisk
 // glyph, a whimsical present-progressive verb ("Whirring…"), and a live stats
-// readout — elapsed wall-clock time, an estimate of streamed output tokens, and
-// the configured thinking effort. It renders on the row just above the input
-// while running and disappears when the run ends.
+// readout — elapsed wall-clock time, an estimate of streamed output tokens
+// (visible text, reasoning, and tool-call argument JSON), and the configured
+// thinking effort. It renders on the row just above the input while running
+// and disappears when the run ends.
 
 // spinnerTickMsg advances the spinner animation. The model re-issues a tick
 // after each frame while a run is in flight and lets the tick lapse once the run
@@ -33,14 +34,15 @@ var spinnerFrames = []string{"·", "✢", "✳", "∗", "✺", "✻", "✽", "�
 
 // spinner is the animated working indicator. It is a plain value held by the
 // Model: begin() arms it at run start, advance() steps the frame on each tick,
-// addTokens() grows the streamed-token estimate, and view() renders the line.
+// addTokens()/addTokenChars() grow the streamed-token estimate, and view()
+// renders the line.
 type spinner struct {
 	theme    Theme
 	running  bool
 	frame    int
 	verb     string
 	start    time.Time
-	chars    int    // runes streamed this run (the token estimate divides this)
+	chars    int    // output runes streamed this run (the estimate divides this)
 	thinking string // thinking-effort label, e.g. "medium"; "" hides that stat
 	pinned   string // when set, overrides the random verb and stops re-rolling
 }
@@ -87,7 +89,16 @@ func (s *spinner) advance() {
 // The count is approximate (≈4 chars per token) — enough for a live spinner
 // readout, not billing.
 func (s *spinner) addTokens(delta string) {
-	s.chars += len([]rune(delta))
+	s.addTokenChars(len([]rune(delta)))
+}
+
+// addTokenChars folds n characters of model output into the running estimate.
+// Beyond visible text (addTokens), the bridge feeds reasoning text and
+// tool-call argument JSON here, so the count keeps moving while the model
+// produces anything at all. It is an activity gauge, not an accounting meter:
+// exact usage lives in the status bar's context reading.
+func (s *spinner) addTokenChars(n int) {
+	s.chars += n
 }
 
 // view renders the spinner line, e.g. "✻ Whirring… (1m 54s · ↓ 242 tokens ·

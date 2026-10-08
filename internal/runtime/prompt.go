@@ -103,7 +103,8 @@ const patchGuide = "Edit files with the apply_patch tool: one call carries a pat
 	"*** Delete File: path/gone.go\n" +
 	"*** End Patch\n\n" +
 	"Every update hunk starts with @@ and carries at least one line prefixed by a space (context), " +
-	"\"-\" (remove), or \"+\" (add); include enough unchanged context lines for the hunk to locate " +
+	"\"-\" (remove), or \"+\" (add); put every hunk for the same file in that one Update section, " +
+	"one @@ each in file order. Include enough unchanged context lines for the hunk to locate " +
 	"uniquely, and add \"*** End of File\" to anchor a hunk at the end of a file. Paths are " +
 	"workspace-relative. Context matching is fuzzy (whitespace and typographic punctuation differences " +
 	"still match), but a hunk that cannot be located fails the whole call before anything is written — " +

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -104,6 +105,63 @@ func TestStreamHandlerConversion(t *testing.T) {
 	}
 	if m, ok := got[8].(runEndMsg); !ok || m.err != nil {
 		t.Errorf("msg[8] = %#v, want runEndMsg{err:nil}", got[8])
+	}
+}
+
+// tokenDeltas extracts the spinner-count messages from a drained batch, in
+// order, so a test can assert exactly what the token estimate was fed without
+// pinning the surrounding tool-announcement traffic.
+func tokenDeltas(msgs []tea.Msg) []int {
+	var out []int
+	for _, m := range msgs {
+		if d, ok := m.(tokenDeltaMsg); ok {
+			out = append(out, d.chars)
+		}
+	}
+	return out
+}
+
+// TestSpinnerTokenDeltas: reasoning text and tool-call argument JSON reach the
+// spinner as growth-only deltas (streaming partials are cumulative), and a new
+// message start resets the marks so the next stream counts from zero.
+func TestSpinnerTokenDeltas(t *testing.T) {
+	ch := newEventChan()
+	h := newStreamHandler(ch, nil)
+	partial := func(think, args string) agentcore.MessageUpdateEvent {
+		var content agentcore.ContentList
+		if think != "" {
+			content = append(content, agentcore.NewThinkingContent(think))
+		}
+		if args != "" {
+			content = append(content, agentcore.NewToolCallContent("call-1", "bash", json.RawMessage(args)))
+		}
+		return agentcore.MessageUpdateEvent{Message: agentcore.AssistantMessage{Content: content}}
+	}
+
+	h.OnEvent(agentcore.MessageStartEvent{})
+	h.OnEvent(partial("abc", ""))            // thinking grows by 3
+	h.OnEvent(partial("abcdef", ""))         // +3
+	h.OnEvent(partial("abcdef", `{"a":1}`))  // +7 (args appear)
+	h.OnEvent(partial("abcdef", `{"a":12}`)) // +1
+	h.OnEvent(agentcore.MessageStartEvent{}) // next message: marks reset
+	h.OnEvent(partial("xy", ""))             // +2 from zero
+
+	if got, want := tokenDeltas(drain(ch)), []int{3, 3, 7, 1, 2}; !slices.Equal(got, want) {
+		t.Errorf("spinner deltas = %v, want %v", got, want)
+	}
+}
+
+// TestSpinnerTurnEndFlush: a provider that only delivers the finished message
+// at turn end still feeds the estimate, mirroring DrainStream's text flush.
+func TestSpinnerTurnEndFlush(t *testing.T) {
+	ch := newEventChan()
+	h := newStreamHandler(ch, nil)
+	h.OnTurnEnd(agentcore.AssistantMessage{Content: agentcore.ContentList{
+		agentcore.NewThinkingContent("hello"),
+		agentcore.NewToolCallContent("c1", "bash", json.RawMessage(`{"x":1}`)),
+	}}, nil)
+	if got, want := tokenDeltas(drain(ch)), []int{5, 7}; !slices.Equal(got, want) {
+		t.Errorf("spinner deltas = %v, want %v", got, want)
 	}
 }
 

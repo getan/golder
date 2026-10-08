@@ -211,7 +211,7 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			continue
 		}
 		if !strings.HasPrefix(trimmed, hunkPrefix) {
-			return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf("expected %q to start a hunk", hunkPrefix)}
+			return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf("expected %q to start a hunk, got %q", hunkPrefix, trimmed)}
 		}
 		chunk := Chunk{Header: strings.TrimSpace(strings.TrimPrefix(trimmed, hunkPrefix))}
 		i++
@@ -232,9 +232,18 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			if isSectionHeader(strings.TrimSpace(raw)) || strings.TrimSpace(raw) == endMarker {
 				break
 			}
+			if strings.HasPrefix(strings.TrimRight(raw, " \t"), hunkPrefix) {
+				// A new "@@" hunk inside the same Update File section: leave
+				// it to the outer loop. Checked on the raw line so a context
+				// line whose text begins with "@@" (" @@ ...") is not
+				// mistaken for a boundary.
+				break
+			}
 			kind, text, ok := splitChunkLine(raw)
 			if !ok {
-				return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf("chunk lines must start with \" \", %q or %q", delLinePrefix, addLinePrefix)}
+				return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf(
+					"unexpected line %q in hunk: every line must start with \" \" (context), %q (remove) or %q (add)",
+					raw, delLinePrefix, addLinePrefix)}
 			}
 			chunk.Lines = append(chunk.Lines, Line{Kind: kind, Text: text})
 			i++

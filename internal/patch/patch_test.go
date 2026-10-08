@@ -134,6 +134,69 @@ func TestParseErrors(t *testing.T) {
 	}
 }
 
+// TestParseMultipleHunksInOneUpdate pins the git-style shape models reach for
+// most: one Update File section carrying several "@@" hunks. Each "@@" opens a
+// new chunk; codex's parser accepts this, so golder must too.
+func TestParseMultipleHunksInOneUpdate(t *testing.T) {
+	ops, err := Parse(`*** Begin Patch
+*** Update File: a.txt
+@@
+-one
++ONE
+@@ func second()
+-two
++TWO
+@@
+ three
+-four
++FOUR
+*** End Patch
+`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("ops = %d, want 1", len(ops))
+	}
+	chunks := ops[0].Chunks
+	if len(chunks) != 3 {
+		t.Fatalf("chunks = %d, want 3", len(chunks))
+	}
+	if chunks[1].Header != "func second()" {
+		t.Errorf("chunks[1].Header = %q, want %q", chunks[1].Header, "func second()")
+	}
+	if got := len(chunks[0].Lines); got != 2 {
+		t.Errorf("chunks[0] lines = %d, want 2 (the second @@ must end it)", got)
+	}
+}
+
+// TestParseHunkContextLineWithAtSigns guards the ambiguity: a context line
+// whose text begins with "@@" is written with the context space (" @@ ..."),
+// so it must stay inside the chunk instead of opening a new one.
+func TestParseHunkContextLineWithAtSigns(t *testing.T) {
+	ops, err := Parse(`*** Begin Patch
+*** Update File: a.txt
+@@
+ @@ not a marker
+-old
++new
+*** End Patch
+`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(ops[0].Chunks) != 1 {
+		t.Fatalf("chunks = %d, want 1", len(ops[0].Chunks))
+	}
+	lines := ops[0].Chunks[0].Lines
+	if len(lines) != 3 {
+		t.Fatalf("lines = %d, want 3", len(lines))
+	}
+	if lines[0].Kind != LineContext || lines[0].Text != "@@ not a marker" {
+		t.Errorf("lines[0] = %+v, want context \"@@ not a marker\"", lines[0])
+	}
+}
+
 func TestComputeAddThenRead(t *testing.T) {
 	dir := t.TempDir()
 	changes := patch(t, dir, `*** Begin Patch
@@ -182,6 +245,32 @@ func TestComputeUpdateExactAndFuzzy(t *testing.T) {
 *** End Patch
 `)
 	if got, want := changes[0].NewContent, "func a() {\n\tnew()\n}\n"; got != want {
+		t.Errorf("NewContent = %q, want %q", got, want)
+	}
+}
+
+// TestComputeMultiHunkSingleFile mirrors codex's
+// test_multiple_update_chunks_apply_to_single_file: two hunks in one Update
+// section land in one change set and update both regions.
+func TestComputeMultiHunkSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "multi.txt", "foo\nbar\nbaz\nqux\n")
+	changes := patch(t, dir, `*** Begin Patch
+*** Update File: multi.txt
+@@
+ foo
+-bar
++BAR
+@@
+ baz
+-qux
++QUX
+*** End Patch
+`)
+	if len(changes) != 1 {
+		t.Fatalf("changes = %d, want 1 (one file)", len(changes))
+	}
+	if got, want := changes[0].NewContent, "foo\nBAR\nbaz\nQUX\n"; got != want {
 		t.Errorf("NewContent = %q, want %q", got, want)
 	}
 }

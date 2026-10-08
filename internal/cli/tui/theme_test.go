@@ -144,3 +144,63 @@ func TestMarkdownStyleInlineCodeNotRed(t *testing.T) {
 		t.Fatal("shared glamour dark style was mutated")
 	}
 }
+
+// TestMarkdownStyleCodeBlockErrorNoChip pins the other half of the palette
+// fix: an auto-analysed code block can carry chroma Error tokens, which the
+// stock style paints on a red chip. Both palettes must render them as plain
+// block text, and the shared glamour configs must stay untouched.
+func TestMarkdownStyleCodeBlockErrorNoChip(t *testing.T) {
+	for _, dark := range []bool{true, false} {
+		cfg := markdownStyle(dark)
+		if cfg.CodeBlock.Chroma == nil {
+			t.Fatalf("dark=%v: code block chroma missing", dark)
+		}
+		if bg := cfg.CodeBlock.Chroma.Error.BackgroundColor; bg != nil {
+			t.Errorf("dark=%v: code block Error still carries a chip background %q", dark, *bg)
+		}
+		if cfg.CodeBlock.Chroma.Error.Color == nil {
+			t.Errorf("dark=%v: code block Error should reuse the block text color", dark)
+		}
+	}
+	if styles.DarkStyleConfig.CodeBlock.Chroma == nil ||
+		styles.DarkStyleConfig.CodeBlock.Chroma.Error.BackgroundColor == nil ||
+		*styles.DarkStyleConfig.CodeBlock.Chroma.Error.BackgroundColor != "#F05B5B" {
+		t.Fatal("shared glamour dark style was mutated")
+	}
+	if styles.LightStyleConfig.CodeBlock.Chroma == nil ||
+		styles.LightStyleConfig.CodeBlock.Chroma.Error.BackgroundColor == nil ||
+		*styles.LightStyleConfig.CodeBlock.Chroma.Error.BackgroundColor != "#FF5555" {
+		t.Fatal("shared glamour light style was mutated")
+	}
+}
+
+// TestCodeBlockErrorRendersWithoutChip is the behavioral half: the Go lexer
+// emits Error tokens for a stray "@" sequence, so this input deterministically
+// exercises the Error style through the real transcript renderer. Before the
+// fix the stock style painted it with a 48;5;203 background.
+func TestCodeBlockErrorRendersWithoutChip(t *testing.T) {
+	r := rendererFor(80)
+	if r == nil {
+		t.Fatal("nil markdown renderer")
+	}
+	out, err := r.Render("```go\n@@@\n```\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "@@@") {
+		t.Fatalf("code block content missing from render: %q", out)
+	}
+	for _, bg := range []string{"48;5;", "48;2;"} {
+		if i := strings.Index(out, bg); i >= 0 {
+			lo := i - 40
+			if lo < 0 {
+				lo = 0
+			}
+			hi := i + 40
+			if hi > len(out) {
+				hi = len(out)
+			}
+			t.Fatalf("Error token painted a background chip (%s): %q", bg, out[lo:hi])
+		}
+	}
+}

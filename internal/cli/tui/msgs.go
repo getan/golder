@@ -18,6 +18,12 @@ import (
 // OnText contract).
 type textDeltaMsg struct{ delta string }
 
+// tokenDeltaMsg carries n characters of model output that feed the spinner's
+// token estimate but never the transcript: reasoning text and tool-call
+// argument JSON. The bridge measures them against the cumulative stream partial
+// (growth only); visible text flows through textDeltaMsg instead.
+type tokenDeltaMsg struct{ chars int }
+
 // streamRenderTickMsg fires when the streaming render coalescing window
 // elapses: the model lays out every delta accumulated since the tick was armed
 // in one reflow (see Model.streamRenderArmed).
