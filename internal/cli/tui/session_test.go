@@ -121,6 +121,13 @@ func TestSeedTranscriptReplaysToolCards(t *testing.T) {
 		if blk.role == roleTool && blk.card != nil {
 			cards[blk.card.id] = blk.card
 		}
+		// Exploration calls (read/ls/grep/find) coalesce into one cell, so the
+		// replayed cards live inside the group rather than on the block.
+		if blk.group != nil {
+			for _, c := range blk.group.cards {
+				cards[c.id] = c
+			}
+		}
 	}
 	if len(cards) != 3 {
 		t.Fatalf("replayed cards = %d, want 3 (every call becomes a card)", len(cards))

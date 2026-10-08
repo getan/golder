@@ -10,9 +10,11 @@ package tui
 //
 // The dialog is modal: while it is open the model routes every key to it, so
 // typing can not accidentally dismiss a decision. Exactly one dialog is open
-// at a time; a second call needing approval while one is pending fails closed
-// (the gate sees an unanswered request) rather than queueing behind a
-// possibly-interrupted run.
+// at a time, and a second call needing approval while one is pending waits in
+// a queue (Model.approvalQueue) that opens the next dialog the moment the
+// current one is answered — needed now that one assistant message can run
+// several calls in parallel, each of which may ask. A queued request whose run
+// ends unanswered is released fail-closed, so a gate never waits forever.
 
 import (
 	"os"
@@ -139,7 +141,9 @@ func (m *Model) openTrustApproval() {
 
 // answerApproval applies a chosen value and closes the dialog. A decision is
 // delivered at most once: a second key press after the dialog closed is
-// ignored by the active check.
+// ignored by the active check. Answering a tool request also opens the next
+// queued request (parallel calls can each need a decision), so the user works
+// through them without the batch stalling.
 func (m *Model) answerApproval(value string) {
 	if !m.approval.active {
 		return
@@ -185,7 +189,44 @@ func (m *Model) answerApproval(value string) {
 			// The run was cancelled and nobody is listening; the dialog is
 			// already closed, so the gate falls back to failing closed.
 		}
+		m.openNextQueuedApproval()
 	}
+}
+
+// openNextQueuedApproval opens the oldest queued approval request, if any. It
+// is called after a decision is delivered so a batch of calls that each need
+// approval is worked through one dialog at a time (the alternative — answering
+// the later ones fail-closed — silently denied calls the user never saw).
+func (m *Model) openNextQueuedApproval() {
+	for len(m.approvalQueue) > 0 {
+		next := m.approvalQueue[0]
+		m.approvalQueue = m.approvalQueue[1:]
+		// A request whose run already ended — cancelled while it waited, or
+		// interrupted with the dialog open — must not open a dialog for a
+		// decision nobody is waiting on: answer it fail-closed and move on.
+		if !m.running {
+			select {
+			case next.reply <- judge.ApprovalAnswer{}:
+			default:
+			}
+			continue
+		}
+		m.openApproval(next.req, next.reply)
+		return
+	}
+}
+
+// dismissApprovalQueue releases every queued request fail-closed and clears
+// the queue. The run has ended: its gates are gone, so a queued dialog would
+// ask about calls that can no longer run.
+func (m *Model) dismissApprovalQueue() {
+	for _, req := range m.approvalQueue {
+		select {
+		case req.reply <- judge.ApprovalAnswer{}:
+		default:
+		}
+	}
+	m.approvalQueue = nil
 }
 
 // inferWritableRoot picks the path an escalation is trying to reach, or ""

@@ -25,7 +25,6 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/history"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -145,6 +144,12 @@ type Model struct {
 	// owns every key press, so a pending decision cannot be dismissed by
 	// typing.
 	approval approvalDialog
+	// approvalQueue holds requests that arrived while the dialog was busy. One
+	// assistant message can run several calls in parallel (or a sequential call
+	// can follow them), so more than one call may need a decision at once; the
+	// queue opens the next dialog as soon as the current one is answered instead
+	// of failing the later calls closed without ever showing them.
+	approvalQueue []approvalRequestMsg
 
 	// statusBar renders the persistent bottom line (#386, US-003). It is fed the
 	// terminal width, telemetry-derived context usage, and the async git probe
@@ -186,6 +191,9 @@ type Model struct {
 	// releasing elsewhere cancels it so text selection keeps working.
 	pendingCardClick     *toolCard
 	pendingCardClickCell point
+	// pendingGroupClick is the same affordance for an exploration group: a
+	// click anywhere in an `Explored` cell expands every call it coalesced.
+	pendingGroupClick *exploreGroup
 
 	// draggingScrollbar is set while the left mouse button is held after pressing
 	// on the transcript scrollbar column, so subsequent motion events drag the
@@ -778,15 +786,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// next turn, and eventually runEndMsg) must find a waiting reader, or
 		// answering the dialog freezes the UI with the run still in flight.
 		if m.approval.active {
-			// Exactly one dialog at a time (the dialog contract): a second
-			// request while one is pending fails closed — answered "not
-			// answered" immediately — instead of replacing the open dialog
-			// (which would leave the first gate waiting forever) or queueing
-			// behind a possibly-interrupted run.
-			select {
-			case msg.reply <- judge.ApprovalAnswer{}:
-			default:
-			}
+			// Exactly one dialog at a time (the dialog contract): a request
+			// that arrives while one is pending waits in the queue and opens
+			// when the current decision is delivered. Replacing the open
+			// dialog would strand the first gate; answering the newcomer
+			// fail-closed would deny a call the user never saw.
+			m.approvalQueue = append(m.approvalQueue, msg)
 			return m, m.pumpNext()
 		}
 		m.openApproval(msg.req, msg.reply)
@@ -819,6 +824,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// selection keeps the legacy behavior (cleared: its screen rows no longer
 		// mean anything). Cross-page extension is the edge-drag's job.
 		m.pendingCardClick = nil
+		m.pendingGroupClick = nil
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
 			return m, tea.Batch(cmd, m.armUnseenWatch())
@@ -847,7 +853,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// drag across the card still selects its text.
 			if msg.Mod&tea.ModShift == 0 {
 				if p, below := m.screenToSel(msg.X, msg.Y); !below {
-					if card := m.transcript.toolCardAt(p.y); card != nil {
+					if group := m.transcript.exploreGroupAt(p.y); group != nil {
+						m.pendingGroupClick = group
+						m.pendingCardClickCell = point{msg.X, msg.Y}
+					} else if card := m.transcript.toolCardAt(p.y); card != nil {
 						m.pendingCardClick = card
 						m.pendingCardClickCell = point{msg.X, msg.Y}
 					}
@@ -884,6 +893,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Motion after the press means a drag, not a click: cancel the
 			// card toggle so the gesture becomes a text selection.
 			m.pendingCardClick = nil
+			m.pendingGroupClick = nil
 			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
 			return m, m.updateSelAutoscroll()
 		}
@@ -901,6 +911,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// A press that landed on a card and released on the same cell — no
 		// drag in between — is a click: toggle the card's expand/collapse.
+		if group := m.pendingGroupClick; group != nil {
+			cell := m.pendingCardClickCell
+			m.pendingGroupClick = nil
+			if msg.X == cell.x && msg.Y == cell.y {
+				m.transcript.toggleGroupExpanded(group)
+				m.transcript.reflow()
+				return m, nil
+			}
+		}
 		if card := m.pendingCardClick; card != nil {
 			cell := m.pendingCardClickCell
 			m.pendingCardClick = nil
@@ -1243,8 +1262,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A run that ended with an approval dialog still open (interrupt, or a
 		// cancelled gate) leaves the decision moot: close it so the dialog does
 		// not outlive the call it was asking about. The run goroutine is gone,
-		// so no reply is delivered.
+		// so no reply is delivered. Queued requests go with it, released
+		// fail-closed: their gates were cancelled too.
 		m.approval = approvalDialog{}
+		m.dismissApprovalQueue()
 		// The run is over: any still-open sub-agent rows are stale (their tasks ended
 		// with the run), so clear the panel to reclaim its height.
 		m.subagents = subagentPanel{}
@@ -1486,9 +1507,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+t":
 		// Toggle the most-recent tool card between its one-line summary and the
 		// full detail, then re-flow so the change shows inline (#389, codex
-		// parity: ctrl+t expands collapsed output).
+		// parity: ctrl+t expands collapsed output). When that card was coalesced
+		// into an exploration group, the group is what toggles: it owns the
+		// rendered cell, so expanding the card alone would change nothing.
 		if m.lastToolCard != nil {
-			m.transcript.toggleCardExpanded(m.lastToolCard)
+			if g := m.transcript.groupOf(m.lastToolCard); g != nil {
+				m.transcript.toggleGroupExpanded(g)
+			} else {
+				m.transcript.toggleCardExpanded(m.lastToolCard)
+			}
 			m.transcript.reflow()
 		}
 		return m, nil

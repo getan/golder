@@ -73,6 +73,7 @@ const DefaultBaseInstruction = "You are golder, a helpful coding agent. " +
 	patchGuide + "\n\n" +
 	sandboxGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
+	batchGuide + "\n\n" +
 	searchGuide + "\n\n" +
 	contextGuide
 
@@ -120,6 +121,20 @@ const codeSearchGuide = "To search code, use the grep tool (file contents) and t
 	"(file names) first: they are ripgrep-backed, respect the workspace boundary, and return " +
 	"bounded results. Reach for `rg` through bash only when you need flags the tools do not " +
 	"expose, such as -A/-B context lines or --type filters."
+
+// batchGuide teaches the parallelism contract of the tool loop: independent
+// calls issued in ONE assistant message run concurrently (read/grep/find/ls and
+// the rest of the read-only tools), while the same calls split across messages
+// run one round after another. This is the codex "parallelize tool calls
+// whenever possible" rule adapted to golder's bridge — there is no
+// multi_tool_use namespace here, the message's own tool-call list IS the batch.
+// The second half is the codex shell rule: a chained command renders as one
+// transcript card, so unrelated steps belong in separate calls.
+const batchGuide = "Batch independent tool calls in a single message: read, grep, find and ls " +
+	"calls issued together run in parallel, while the same calls split across messages run one " +
+	"round after another. Sequence calls only when a later call consumes an earlier result. Keep " +
+	"each shell call to one step — do not chain unrelated commands with `;`, `&&`, or banner " +
+	"echoes like `echo \"===\"`, which render as a single card and hide which step failed."
 
 // taskGuide instructs the model on how to use the generic `task` tool (US-008,
 // #458). The task tool dispatches an independent sub-agent that runs its own

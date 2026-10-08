@@ -116,8 +116,10 @@ func TestBatchParallelRunsConcurrently(t *testing.T) {
 	}
 }
 
-// TestBatchSequentialWhenAnyToolSequential forces serial execution and records
-// the order tools actually ran in.
+// TestBatchSequentialWhenAnyToolSequential: a sequential call splits the batch
+// into groups, and the calls still run in source order. The sequential tool
+// sits alone between the two parallel ones, which no longer drags them into the
+// same serial pass.
 func TestBatchSequentialWhenAnyToolSequential(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
@@ -133,7 +135,7 @@ func TestBatchSequentialWhenAnyToolSequential(t *testing.T) {
 			},
 		}
 	}
-	// "b" is sequential → whole batch runs serially in source order.
+	// "b" is sequential → groups are [a], [b], [c]; the order stays exact.
 	reg := registerAll(t, mk("a", agentcore.ToolExecutionParallel), mk("b", agentcore.ToolExecutionSequential), mk("c", agentcore.ToolExecutionParallel))
 	cfg := BatchConfig{ToolExecutorConfig: ToolExecutorConfig{Registry: reg}}
 
@@ -143,6 +145,70 @@ func TestBatchSequentialWhenAnyToolSequential(t *testing.T) {
 		if order[i] != w {
 			t.Fatalf("sequential order = %v, want %v", order, want)
 		}
+	}
+}
+
+// TestBatchMixedGroupsOverlapReads: reads on both sides of a sequential call
+// overlap inside their own group instead of being flattened into the sequential
+// pass — the behavior change this grouping exists for. Before, one sequential
+// call forced the WHOLE batch through the serial loop.
+func TestBatchMixedGroupsOverlapReads(t *testing.T) {
+	var mu sync.Mutex
+	concurrent := 0
+	maxConcurrent := 0
+	release := make(chan struct{})
+	var readsStarted sync.WaitGroup
+	readsStarted.Add(2)
+
+	mk := func(name string, mode agentcore.ToolExecutionMode) execTool {
+		return execTool{
+			name: name,
+			mode: mode,
+			run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+				if mode == agentcore.ToolExecutionParallel {
+					mu.Lock()
+					concurrent++
+					if concurrent > maxConcurrent {
+						maxConcurrent = concurrent
+					}
+					mu.Unlock()
+					readsStarted.Done()
+					// Hold the read until the second read has started, proving
+					// they overlap; the sequential call must not have run yet.
+					<-release
+					mu.Lock()
+					concurrent--
+					mu.Unlock()
+				}
+				return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(name)}}, nil
+			},
+		}
+	}
+	reg := registerAll(t,
+		mk("read1", agentcore.ToolExecutionParallel),
+		mk("read2", agentcore.ToolExecutionParallel),
+		mk("bash", agentcore.ToolExecutionSequential),
+	)
+	cfg := BatchConfig{ToolExecutorConfig: ToolExecutorConfig{Registry: reg}}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// The sequential call runs after the reads: its group is a barrier.
+		go func() {
+			readsStarted.Wait()
+			close(release)
+		}()
+		ExecuteToolCalls(context.Background(), cfg, callsFor("read1", "read2", "bash"), nil)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("batch did not finish; the sequential call deadlocked the reads")
+	}
+	if maxConcurrent < 2 {
+		t.Errorf("reads around a sequential call must overlap, saw max %d concurrent", maxConcurrent)
 	}
 }
 

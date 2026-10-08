@@ -252,7 +252,8 @@ func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
 	return "Search file contents by regular expression under the workspace " +
 		"(ripgrep), optionally filtering files by glob. Skips .gitignore'd, " +
-		"hidden, and binary files."
+		"hidden, and binary files. Independent searches run faster batched in " +
+		"one message (one call per pattern or directory)."
 }
 func (t *GrepTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -343,7 +344,8 @@ type findToolArgs struct {
 func (t *FindTool) Name() string { return "find" }
 func (t *FindTool) Description() string {
 	return "Find files by base-name glob under the workspace (ripgrep). " +
-		"Skips .gitignore'd and hidden files."
+		"Skips .gitignore'd and hidden files. Batch independent lookups in the " +
+		"same message — they run in parallel."
 }
 func (t *FindTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -424,7 +426,8 @@ type lsToolArgs struct {
 
 func (t *LsTool) Name() string { return "ls" }
 func (t *LsTool) Description() string {
-	return "List a directory's entries, marking directories with a trailing slash."
+	return "List a directory's entries, marking directories with a trailing slash. " +
+		"Batch several directories in one message — they run in parallel."
 }
 func (t *LsTool) ExecutionMode() agentcore.ToolExecutionMode { return agentcore.ToolExecutionParallel }
 func (t *LsTool) Schema() json.RawMessage {

@@ -371,6 +371,12 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 	}
+	// The model may answer with several tool calls in one turn; golder runs
+	// that batch in parallel (see agenttool.ExecuteToolCalls), so the request
+	// explicitly permits it. OpenAI defaults this on when tools are present,
+	// but compatible Responses gateways do not always — codex sends the field
+	// on every request for models that support it, and this is the same bet.
+	params.ParallelToolCalls = openai.Bool(true)
 	if sp := strings.TrimSpace(req.Context.SystemPrompt); sp != "" {
 		params.Instructions = openai.String(sp)
 	}

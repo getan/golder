@@ -70,6 +70,31 @@ func TestBuildSystemPromptAdvertisesTaskFanout(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptAdvertisesBatchedToolCalls: the base instruction must
+// teach the batch contract — independent calls in ONE message run in parallel
+// (the codex "parallelize tool calls" rule, adapted to golder's batch
+// executor), and a chained shell command renders as one card.
+func TestBuildSystemPromptAdvertisesBatchedToolCalls(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	lower := strings.ToLower(got)
+	if !strings.Contains(lower, "single message") || !strings.Contains(lower, "in parallel") {
+		t.Errorf("prompt should tell the model that batched calls in one message run in parallel:\n%s", got)
+	}
+	if !strings.Contains(lower, "read") || !strings.Contains(lower, "grep") {
+		t.Errorf("prompt should name the read-only tools that benefit from batching:\n%s", got)
+	}
+	if !strings.Contains(lower, "chain") {
+		t.Errorf("prompt should discourage chaining unrelated shell commands:\n%s", got)
+	}
+}
+
 // TestBuildSystemPromptAGENTSOrdering is the acceptance-critical test: with an
 // AGENTS.md at the root and at a nested working directory, the root's content
 // must appear BEFORE the nested one (general → specific).

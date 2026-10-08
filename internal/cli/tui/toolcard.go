@@ -78,6 +78,15 @@ func (c *toolCard) toggleExpanded() {
 	c.expanded = !c.expanded
 }
 
+// renderForced draws the card as if its expand flag were expanded, without
+// mutating it. The explore group uses this to render every member in full when
+// the group is expanded while each card keeps its own (collapsed) state for a
+// later group collapse.
+func (c toolCard) renderForced(theme Theme, width int, expanded bool) string {
+	c.expanded = expanded
+	return c.render(theme, width)
+}
+
 // addNote attaches a permission-gate verdict to the card. The appended slice
 // is ordered by arrival; in practice a call receives one verdict.
 func (c *toolCard) addNote(n judge.Note) {

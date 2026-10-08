@@ -475,6 +475,40 @@ func TestResponsesDriverSendsToolSchema(t *testing.T) {
 	}
 }
 
+// TestResponsesDriverAllowsParallelToolCalls: the request must explicitly
+// permit several tool calls in one answer (golder runs that batch in
+// parallel). OpenAI defaults the field on; compatible Responses gateways do
+// not always, so golder sends it like codex does.
+func TestResponsesDriverAllowsParallelToolCalls(t *testing.T) {
+	var gotBody string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Body != nil {
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+		}
+		return sseResponse(completedFrame("ok", "resp_1", "gpt-4o", 1, 1)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	drain(t, stream)
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(gotBody), &payload); err != nil {
+		t.Fatalf("request body not valid JSON: %v", err)
+	}
+	if got, ok := payload["parallel_tool_calls"].(bool); !ok || !got {
+		t.Fatalf("parallel_tool_calls = %v, want true", payload["parallel_tool_calls"])
+	}
+}
+
 // A function_call in the completed response must be parsed into a golder
 // ToolCallContent (id + name + raw arguments) and set StopReason=tool_use; a
 // StreamToolCallEvent must also surface the pending call mid-stream.

@@ -160,12 +160,13 @@ func TestApprovalRequestKeepsPumpArmed(t *testing.T) {
 	}
 }
 
-// TestSecondApprovalWhilePendingFailsClosed: a second call needing approval
-// while a dialog is already pending must fail closed — answered "not
-// answered" immediately, as the dialog contract documents — instead of
-// replacing the open dialog (which strands the first gate) or stopping the
-// pump (which freezes the run).
-func TestSecondApprovalWhilePendingFailsClosed(t *testing.T) {
+// TestSecondApprovalWhilePendingQueues: a second call needing approval while a
+// dialog is already pending must WAIT (queued) — not replace the open dialog
+// (which would strand the first gate), not fail closed (which would deny a call
+// the user never saw), and not stop the pump. One assistant message can run
+// several calls in parallel, each of which may ask. Answering the first opens
+// the second.
+func TestSecondApprovalWhilePendingQueues(t *testing.T) {
 	m := NewModel(Options{})
 	m.running = true
 	m.runCh = make(chan tea.Msg, 4)
@@ -185,15 +186,69 @@ func TestSecondApprovalWhilePendingFailsClosed(t *testing.T) {
 	}
 	select {
 	case ans := <-second:
-		if ans.Answered || ans.Approve {
-			t.Fatalf("second answer = %+v, want fail-closed (unanswered)", ans)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("the second request must be answered immediately, not left waiting")
+		t.Fatalf("the second request must wait for its turn, got %+v", ans)
+	default:
 	}
 	// The pending dialog is untouched: its reply channel is still the live one.
 	if !m.approval.active || m.approval.reply != first {
 		t.Fatal("the pending dialog must not be replaced by a second request")
+	}
+	if len(m.approvalQueue) != 1 {
+		t.Fatalf("queued requests = %d, want 1", len(m.approvalQueue))
+	}
+
+	// Answering the first approves that call and opens the second dialog.
+	got, _ := m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	m = got.(Model)
+	if ans := awaitAnswer(t, first); !ans.Approve || ans.Always {
+		t.Fatalf("first answer = %+v, want approve once", ans)
+	}
+	if !m.approval.active || m.approval.reply != second {
+		t.Fatal("answering the first request must open the queued one")
+	}
+	got, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = got.(Model)
+	if ans := awaitAnswer(t, second); ans.Approve {
+		t.Fatalf("second answer = %+v, want the denial from Esc", ans)
+	}
+	if m.approval.active {
+		t.Error("no dialog should remain open after the queue drains")
+	}
+}
+
+// TestQueuedApprovalReleasedWhenRunEnds: a request still waiting when the run
+// ends (interrupt, or a cancelled gate) must be released fail-closed instead of
+// popping a dialog for a call that can no longer run.
+func TestQueuedApprovalReleasedWhenRunEnds(t *testing.T) {
+	m := NewModel(Options{})
+	m.running = true
+	m.runCh = make(chan tea.Msg, 4)
+
+	first := make(chan judge.ApprovalAnswer, 1)
+	next, _ := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: first})
+	m = next.(Model)
+	second := make(chan judge.ApprovalAnswer, 1)
+	next, cmd := m.Update(approvalRequestMsg{req: testApprovalRequest(), reply: second})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("a second request must not stop the event pump")
+	}
+
+	got, _ := m.Update(runEndMsg{})
+	m = got.(Model)
+	if m.approval.active {
+		t.Error("the dialog must close when the run ends")
+	}
+	select {
+	case ans := <-second:
+		if ans.Answered || ans.Approve {
+			t.Fatalf("queued answer = %+v, want fail-closed (unanswered)", ans)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a queued request must be released when the run ends")
+	}
+	if len(m.approvalQueue) != 0 {
+		t.Errorf("queue must be drained, has %d", len(m.approvalQueue))
 	}
 }
 

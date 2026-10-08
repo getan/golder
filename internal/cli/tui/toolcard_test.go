@@ -544,7 +544,10 @@ func TestModelToolEndDiff(t *testing.T) {
 }
 
 // TestModelCtrlTTogglesExpanded verifies Ctrl+T flips the most-recent card's
-// expanded flag so the full detail becomes visible (codex parity).
+// expanded flag so the full detail becomes visible (codex parity). The card
+// here is a bash call, which keeps its own block; a read/list/search call is
+// coalesced into an exploration group, and Ctrl+T expands that group instead
+// (see TestExploreGroupCtrlTTogglesGroup).
 func TestModelCtrlTTogglesExpanded(t *testing.T) {
 	m := NewModel(Options{})
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
@@ -556,7 +559,7 @@ func TestModelCtrlTTogglesExpanded(t *testing.T) {
 		b.WriteByte(byte('0' + i))
 		b.WriteByte('\n')
 	}
-	next, _ = mm.Update(toolStartMsg{id: "t1", name: "grep"})
+	next, _ = mm.Update(toolStartMsg{id: "t1", name: "bash", input: map[string]any{"command": "ls"}})
 	mm = next.(Model)
 	next, _ = mm.Update(toolEndMsg{id: "t1", ok: true, result: b.String()})
 	mm = next.(Model)

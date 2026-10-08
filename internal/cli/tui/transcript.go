@@ -50,6 +50,10 @@ type transcriptBlock struct {
 	role blockRole
 	text string
 	card *toolCard
+	// group is set for roleTool blocks that hold a run of coalesced
+	// exploration calls (explore.go): card is nil then, and the group renders
+	// one `Explored` cell whose members are reachable by expanding it.
+	group *exploreGroup
 	// note is set for roleReview blocks: the verdict determines the color
 	// (denied/blocks red, approvals/containment amber).
 	note *judge.Note
@@ -137,6 +141,10 @@ type transcript struct {
 	// cursor: clicking a card toggles its expanded state (the codex-lacking
 	// affordance that lets any card, not just the newest, be expanded).
 	cardSpans map[*toolCard][2]int
+	// groupSpans does the same for exploration groups (explore.go): a click
+	// anywhere in an `Explored` cell re-renders it expanded, showing every call
+	// it coalesced.
+	groupSpans map[*exploreGroup][2]int
 
 	// follow is the stick-to-bottom intent: while true, every reflow snaps the
 	// viewport to the newest line so streamed output stays visible. It is set
@@ -196,11 +204,29 @@ func (t *transcript) reset() {
 // toggleCardExpanded flips a tool card's expand state and, when the card is
 // already part of the committed prefix, drops the stored wrap so the next
 // layout repaints it. A card can be clicked open long after its block was
-// folded into the prefix, and commit tracking cannot see the mutation.
+// folded into the prefix, and commit tracking cannot see the mutation. A card
+// inside an exploration group is toggled through the group instead: the group
+// renders the detail, so opening one member alone would do nothing visible.
 func (t *transcript) toggleCardExpanded(c *toolCard) {
 	c.toggleExpanded()
 	for i := t.matStart; i < t.matEnd; i++ {
-		if t.blocks[i].card == c {
+		// holds, not card == c: a card coalesced into an exploration group is
+		// rendered through its block too, and the committed wrap must be
+		// dropped when the group is (or later becomes) expanded.
+		if t.blocks[i].holds(c) {
+			t.prefixValid = false
+			return
+		}
+	}
+}
+
+// toggleGroupExpanded flips an exploration group between its summary and the
+// full detail of every call it coalesced, dropping the committed wrap when the
+// group already sits inside the prefix.
+func (t *transcript) toggleGroupExpanded(g *exploreGroup) {
+	g.toggleExpanded()
+	for i := t.matStart; i < t.matEnd; i++ {
+		if t.blocks[i].group == g {
 			t.prefixValid = false
 			return
 		}
@@ -281,10 +307,11 @@ func (t *transcript) setBannerText(text string) {
 // addToolCard appends a rich tool-call card (#389) as an ordered block so it
 // renders inline in the transcript. The card is held by pointer, so a later
 // state change (toolEndMsg) or expand toggle (Ctrl+T) followed by reflow
-// re-renders it in place.
+// re-renders it in place. A read/list/search call joins the previous block when
+// that block is already an exploration group (explore.go), so a burst of
+// exploration renders as one cell instead of a card per file.
 func (t *transcript) addToolCard(c *toolCard) {
-	t.blocks = append(t.blocks, transcriptBlock{role: roleTool, card: c})
-	t.reflow()
+	t.appendToolBlock(c)
 }
 
 // addReviewNote attaches a permission-gate verdict to the tool card it decided.
@@ -298,15 +325,16 @@ func (t *transcript) addReviewNote(n judge.Note) {
 	if n.ToolCallID != "" {
 		for i := range t.blocks {
 			b := t.blocks[i]
-			if b.role == roleTool && b.card != nil && b.card.id == n.ToolCallID {
-				b.card.addNote(n)
+			card := b.toolCardByID(n.ToolCallID)
+			if card != nil {
+				card.addNote(n)
 				// The card may already sit inside the committed prefix, whose
 				// stored wrap predates the note; drop it so the next layout
 				// repaints the card with the verdict. Cards outside the window
 				// need no handling: deferred blocks render on first
 				// materialization, and tail blocks render fresh each layout.
 				for j := t.matStart; j < t.matEnd; j++ {
-					if t.blocks[j].card == b.card {
+					if t.blocks[j].holds(card) {
 						t.prefixValid = false
 						break
 					}
@@ -320,6 +348,38 @@ func (t *transcript) addReviewNote(n judge.Note) {
 	t.reflow()
 }
 
+// toolCardByID returns the card this block holds with the given call id: the
+// block's own card, or a member of its exploration group.
+func (b transcriptBlock) toolCardByID(id string) *toolCard {
+	if b.card != nil && b.card.id == id {
+		return b.card
+	}
+	if b.group != nil {
+		for _, c := range b.group.cards {
+			if c.id == id {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// holds reports whether the block renders the given card (its own, or as a
+// group member).
+func (b transcriptBlock) holds(c *toolCard) bool {
+	if b.card == c {
+		return true
+	}
+	if b.group != nil {
+		for _, m := range b.group.cards {
+			if m == c {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // announceToolCard inserts a live tool-call card at the current transcript end
 // while a turn is still streaming: the in-progress assistant text block is
 // sealed (later deltas open a fresh block after the card), so the call row
@@ -329,6 +389,28 @@ func (t *transcript) announceToolCard(c *toolCard) {
 	if t.activeAssistant >= 0 && t.blocks[t.activeAssistant].text != "" {
 		t.sealedThisTurn = true
 		t.activeAssistant = -1
+	}
+	t.appendToolBlock(c)
+}
+
+// appendToolBlock appends a tool card as a block, or folds it into the trailing
+// exploration group. Folding mutates a block that may already sit inside the
+// committed prefix, so the stored wrap is dropped for the next layout to
+// rebuild.
+func (t *transcript) appendToolBlock(c *toolCard) {
+	if isExploreTool(c.name) {
+		if n := len(t.blocks); n > 0 && t.blocks[n-1].group != nil {
+			g := t.blocks[n-1].group
+			g.cards = append(g.cards, c)
+			if n-1 >= t.matStart && n-1 < t.matEnd {
+				t.prefixValid = false
+			}
+			t.reflow()
+			return
+		}
+		t.blocks = append(t.blocks, transcriptBlock{role: roleTool, group: &exploreGroup{cards: []*toolCard{c}}})
+		t.reflow()
+		return
 	}
 	t.blocks = append(t.blocks, transcriptBlock{role: roleTool, card: c})
 	t.reflow()
@@ -849,32 +931,49 @@ func (t *transcript) renderContent() []string {
 	} else {
 		clear(t.cardSpans)
 	}
+	if t.groupSpans == nil {
+		t.groupSpans = map[*exploreGroup][2]int{}
+	} else {
+		clear(t.groupSpans)
+	}
 	lines := append(t.lines[:0], t.prefixLines...)
 	cursor := 0
 	for j, count := range t.prefixCounts {
 		i := t.matStart + j
-		if blk := t.blocks[i]; blk.role == roleTool && blk.card != nil {
-			start := cursor
-			if blockLeadBlank(t.blocks, i) {
-				start++
-			}
-			t.cardSpans[blk.card] = [2]int{start, cursor + count - 1}
-		}
+		t.recordSpan(i, cursor, cursor+count-1)
 		cursor += count
 	}
 	for i := t.matEnd; i < len(t.blocks); i++ {
-		start := cursor
-		if blockLeadBlank(t.blocks, i) {
-			start++
-		}
 		lines = t.appendBlockLines(lines, i)
+		t.recordSpan(i, cursor, len(lines)-1)
 		cursor = len(lines)
-		if blk := t.blocks[i]; blk.role == roleTool && blk.card != nil {
-			t.cardSpans[blk.card] = [2]int{start, cursor - 1}
-		}
 	}
 	t.lines = lines
 	return lines
+}
+
+// recordSpan records the content-line range block i rendered into, so a click
+// can be routed to the card or exploration group under the cursor. The range
+// starts after a leading blank separator, which belongs to the layout, not the
+// block.
+func (t *transcript) recordSpan(i, first, last int) {
+	blk := t.blocks[i]
+	if blk.role != roleTool {
+		return
+	}
+	if blockLeadBlank(t.blocks, i) {
+		first++
+	}
+	if first > last {
+		return
+	}
+	if blk.group != nil {
+		t.groupSpans[blk.group] = [2]int{first, last}
+		return
+	}
+	if blk.card != nil {
+		t.cardSpans[blk.card] = [2]int{first, last}
+	}
 }
 
 // appendBlockLines appends block i's rendered contribution to dst: the block's
@@ -911,6 +1010,33 @@ func (t transcript) toolCardAt(line int) *toolCard {
 	return nil
 }
 
+// exploreGroupAt returns the exploration group whose rendered cell covers
+// content line index line, or nil. Like toolCardAt it reads the spans recorded
+// by the last renderContent.
+func (t transcript) exploreGroupAt(line int) *exploreGroup {
+	for g, span := range t.groupSpans {
+		if line >= span[0] && line <= span[1] {
+			return g
+		}
+	}
+	return nil
+}
+
+// groupOf returns the exploration group a card was coalesced into, or nil when
+// the card renders as its own block.
+func (t transcript) groupOf(c *toolCard) *exploreGroup {
+	for i := range t.blocks {
+		if g := t.blocks[i].group; g != nil {
+			for _, m := range g.cards {
+				if m == c {
+					return g
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // stableBlock reports whether a block's render is immutable: user/system/banner
 // turns and finalized assistant turns never change after they are sealed, and a
 // finished tool card changes only when the user expands it (toggleCardExpanded
@@ -928,6 +1054,9 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 	case roleAssistant:
 		return true
 	case roleTool:
+		if blk.group != nil {
+			return blk.group.stable()
+		}
 		return blk.card != nil && blk.card.state != cardRunning
 	default:
 		return false
@@ -944,6 +1073,9 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 // (an unclosed fence or emphasis run) renders transiently and converges as more
 // text arrives; glamour tolerates the prefix without error.
 func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
+	if blk.group != nil {
+		return blk.group.render(t.theme, t.width)
+	}
 	if blk.role == roleTool && blk.card != nil {
 		return blk.card.render(t.theme, t.width)
 	}

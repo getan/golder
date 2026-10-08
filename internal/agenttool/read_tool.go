@@ -70,7 +70,8 @@ func (t *ReadTool) Name() string { return "read" }
 // Description implements AgentTool.
 func (t *ReadTool) Description() string {
 	return "Read a text file's contents by path, with optional line offset/limit. " +
-		"Output is line-numbered; very large files are truncated."
+		"Output is line-numbered; very large files are truncated. To read several " +
+		"files, issue one read call per file in the same message — they run in parallel."
 }
 
 // Schema implements AgentTool.
