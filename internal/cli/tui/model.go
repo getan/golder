@@ -83,6 +83,14 @@ type Model struct {
 	// re-issues waitForEvent(runCh) after every bridged msg except runEndMsg.
 	runCh chan tea.Msg
 
+	// userShells tracks in-flight `!` passthrough commands (see usershell.go):
+	// each has its own process, card, and cancel hook, so several can run
+	// alongside an agent run and each repaints independently. userShellGen is
+	// the ever-climbing id that routes tick / done messages to the right entry;
+	// a message for a gen no longer tracked is stale and ignored.
+	userShells   []*userShellState
+	userShellGen int
+
 	// startRunFn launches an agent run for the submitted prompt, returning the
 	// bridge channel and the first waitForEvent Cmd (see bridge.startRun). It is
 	// bound to runSession.startRun by withSession (#392): the real binding
@@ -767,6 +775,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, m.armUnseenWatch()
 
+	case tea.ResumeMsg:
+		// The program just came back from a Ctrl+Z suspension: the terminal may
+		// have been resized while the process was stopped (bubbletea re-syncs
+		// the size on resume), so re-lay out before the first repainted frame.
+		m.relayout()
+		return m, nil
+
 	case unseenWatchMsg:
 		return m, m.stepUnseenWatch(msg)
 
@@ -984,6 +999,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.spinner.advance()
 		return m, m.tickSpinner()
+
+	case userShellTickMsg:
+		// A streaming `!` command repaints its card from its buffered output;
+		// the tick only keeps coming while the command is still tracked.
+		return m.refreshUserShell(msg.gen)
+
+	case userShellDoneMsg:
+		// A `!` command settled: close its card and record the result in the
+		// conversation (parked until the run drains, if one is active).
+		return m.finishUserShell(msg)
 
 	case streamRenderTickMsg:
 		// The coalescing window elapsed: lay out every delta that arrived since
@@ -1303,6 +1328,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// instead.
 			m.session.notes.Set(nil)
 			m.session.approvalCh = nil
+			// Any `!` command that settled mid-run belongs to the main
+			// conversation: merge its record before persist so this turn's
+			// branch carries it (and the run goroutine, which owned the
+			// context during the run, is done writing).
+			m.session.mergePendingUserShell()
 			if m.sideRun {
 				// A /btw side run never touches the main conversation or disk.
 				m.transcript.addSystem("(end of side thread — the main conversation is unchanged)")
@@ -1391,6 +1421,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // newline) to the input editor while idle. Keys are matched via KeyPressMsg
 // .String() so the mapping is terminal-independent.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+Z suspends the whole program into the shell's job control (fg brings
+	// it back), exactly like codex and every other terminal UI: bubbletea
+	// releases the terminal, raises SIGTSTP, and repaints on resume. It works in
+	// every state — mid-run, mid-dialog — because suspension is the user's
+	// emergency brake, not an app-level action.
+	if msg.String() == "ctrl+z" {
+		return m, tea.Suspend
+	}
 	// A pending tool-call approval owns every key except Ctrl+C: the decision
 	// must not be dismissed or answered accidentally, and typing behind it
 	// would be lost input anyway once the dialog closes. Ctrl+C stays the
@@ -1654,6 +1692,14 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.expandImages(m.expandPastes(m.input.Value())))
 	if prompt == "" {
 		return m, nil
+	}
+	// A "!command" line is the passthrough escape hatch (codex parity): it runs
+	// locally — no model call, no approval, no sandbox — and is never sent to the
+	// agent. It is placed before the mid-run queue on purpose: unlike a prompt,
+	// it does not steer the run, it runs side by side with it (its settled
+	// record joins the conversation when the run drains).
+	if strings.HasPrefix(prompt, "!") {
+		return m.submitUserShell(prompt)
 	}
 	// Mid-run Enter queues the message instead of starting a run: the loop's
 	// steering seams deliver it after the next tool execution (or when the turn
@@ -2789,6 +2835,10 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		if m.sessionOpCancel != nil {
 			m.sessionOpCancel()
 		}
+		// A passthrough `!` command is its own process: one Ctrl+C stops it too,
+		// so a single press interrupts everything this session has in flight.
+		// Its card settles as aborted when the kill propagates.
+		m.cancelUserShells()
 		if m.interruptFn != nil {
 			m.interruptFn()
 		}
@@ -2800,6 +2850,15 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		} else {
 			m.transcript.addSystem("(interrupting the current run…)")
 		}
+		return m, nil
+	}
+	// No agent run, but a passthrough command is in flight: the press was for
+	// the command, so kill it and never arm the quit. Once it settles (a moment
+	// later) Ctrl+C is the ordinary idle quit again.
+	if len(m.userShells) > 0 {
+		m.cancelUserShells()
+		m.transcript.addSystem("(interrupting the shell command…)")
+		m.relayout()
 		return m, nil
 	}
 	if !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitArmWindow {

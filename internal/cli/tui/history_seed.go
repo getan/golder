@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/session"
 )
@@ -70,6 +71,11 @@ func seedPromptHistoryFromSessions(store *session.Store, path string) {
 				text := strings.TrimSpace(agentcore.ContentToText(um.Content))
 				if text == "" {
 					continue
+				}
+				// A `!` passthrough record seeds as the original "!cmd" line, so
+				// recalling it (and re-running it) works verbatim.
+				if d, ok := cli.ParseUserShellRecord(text); ok {
+					text = "!" + d.Command
 				}
 				candidate := history.Entry{
 					TS:        e.Timestamp.Unix(),

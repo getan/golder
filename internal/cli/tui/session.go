@@ -128,6 +128,12 @@ type runSession struct {
 	curLeaf   string
 	persisted int
 
+	// pendingUserShell buffers `!` passthrough records that settled while a run
+	// was in flight: the run goroutine owns agentCtx.Messages until the run
+	// drains, so the tea goroutine parks them here and runEndMsg merges them in
+	// just before persist. Only the tea goroutine touches this slice.
+	pendingUserShell []agentcore.UserMessage
+
 	// persistMu serializes session saves. Mid-run checkpoints run on the loop
 	// goroutine (RunConfig.Checkpoint) while the tea goroutine may save at run
 	// end, on /export, or on a session switch; the mutex keeps those writers
@@ -939,6 +945,21 @@ func (s *runSession) persist() error {
 	return s.persistLocked()
 }
 
+// mergePendingUserShell appends the passthrough records buffered while a run
+// was in flight to the shared context. The caller is the tea goroutine, and
+// only after the run has fully drained (runEndMsg), so the agentCtx write does
+// not race the loop: runEndMsg clears running and then calls this before
+// persist, which also writes the merged records as part of this turn's branch.
+func (s *runSession) mergePendingUserShell() {
+	if len(s.pendingUserShell) == 0 {
+		return
+	}
+	for _, m := range s.pendingUserShell {
+		s.agentCtx.Messages = append(s.agentCtx.Messages, m)
+	}
+	s.pendingUserShell = nil
+}
+
 // persistLocked is persist's body. The caller must hold persistMu.
 func (s *runSession) persistLocked() error {
 	// A compaction during the run rewrote Messages into a summary + recent tail,
@@ -1020,6 +1041,13 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 		switch msg := m.(type) {
 		case agentcore.UserMessage:
 			if text := agentcore.ContentToText(msg.Content); text != "" {
+				// A `!` passthrough record replays as the shell card it rendered
+				// live, not as raw <user_shell_command> XML dumped into the
+				// transcript.
+				if d, ok := cli.ParseUserShellRecord(text); ok {
+					t.addToolCard(replayUserShellCard(d))
+					continue
+				}
 				t.addUser(text)
 			}
 		case agentcore.AssistantMessage:

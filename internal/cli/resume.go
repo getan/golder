@@ -80,7 +80,13 @@ func SessionPreview(store *session.Store, id string) string {
 	for _, e := range entries {
 		switch msg := e.Message.(type) {
 		case agentcore.UserMessage:
-			if t := previewText(agentcore.ContentToText(msg.Content)); t != "" {
+			text := agentcore.ContentToText(msg.Content)
+			// A `!` passthrough record previews as the original "!cmd" line,
+			// not as the raw <user_shell_command> XML.
+			if d, ok := ParseUserShellRecord(text); ok {
+				text = "!" + d.Command
+			}
+			if t := previewText(text); t != "" {
 				return t
 			}
 		case agentcore.AssistantMessage:

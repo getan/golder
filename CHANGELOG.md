@@ -122,6 +122,19 @@ interactive REPL/TUI.
 - **Startup upgrade hint**: the TUI banner shows the version row and, when a
   newer release is available, a `Run golder update to upgrade` hint backed by a
   24h cached background release check. (#467)
+- **`!command` passthrough**: a composer line starting with `!` runs the
+  command locally — no model call, no approval, no sandbox — and joins the
+  conversation as codex's user-role `<user_shell_command>` record (command,
+  exit code, duration, and head+tail bounded output), so the model sees exactly
+  what the user ran and what came back. The TUI announces a live `• Running …`
+  card that streams the command's output and settles as `• You ran …`; a
+  record that lands mid-run is parked and merged when the run drains, so it
+  never races the loop that owns the context. Works in the REPL and the TUI,
+  the raw `!` line is what ↑ recalls, and a bare `!` prints the usage hint.
+- **Ctrl+Z suspend**: pressing Ctrl+Z in any state hands golder back to the
+  terminal's job control (bubbletea releases the terminal and raises SIGTSTP;
+  `fg` resumes with the layout re-laid out), matching codex and every other
+  terminal UI.
 
 ### Changed
 - **Provider config lives in one registry**: `ProviderSpec`

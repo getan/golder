@@ -139,6 +139,12 @@ func (c toolCard) title() string {
 	if prefix, detail, ok := c.webSearchLead(); ok {
 		return prefix + " " + detail
 	}
+	if cmd, ok := c.userShellCommand(); ok {
+		if c.state == cardRunning {
+			return "Running " + cmd
+		}
+		return "You ran " + cmd
+	}
 	header := c.headline()
 	if c.state == cardRunning {
 		return "Running " + header
@@ -219,6 +225,14 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 		verb = "Running"
 	}
 	if cmd, ok := c.shellCommand(); ok {
+		if c.isUserShell() {
+			// codex renders a user passthrough as `• You ran ls`: the command is
+			// the subject, with no tool name in between.
+			if verb == "Ran" {
+				verb = "You ran"
+			}
+			return c.renderUserShellHeadline(theme, width, verb, cmd)
+		}
 		return c.renderShellHeadline(theme, width, verb, cmd)
 	}
 	// The verb is prepended at render time (not part of the wrapped text), so
@@ -266,11 +280,19 @@ func (c toolCard) renderSearchHeadline(theme Theme, width int, prefix, detail st
 	return b.String()
 }
 
-// shellCommand returns the command line of a bash card when there is one to
-// syntax-highlight, collapsing embedded newlines so the headline stays one
-// logical line (wrapHLSpans still honors hard breaks if one survives).
+// isUserShell reports whether the card renders a user `!` passthrough command.
+// Such a card is created by the TUI itself (never announced by a tool), named
+// "shell", and rendered codex-style as `You ran <command>` — no tool name.
+func (c toolCard) isUserShell() bool {
+	return strings.EqualFold(c.name, "shell")
+}
+
+// shellCommand returns the command line of a shell-family card (the agent's
+// bash tool, or a user `!` passthrough) when there is one to syntax-highlight,
+// collapsing embedded newlines so the headline stays one logical line
+// (wrapHLSpans still honors hard breaks if one survives).
 func (c toolCard) shellCommand() (string, bool) {
-	if !strings.EqualFold(c.name, "bash") {
+	if !strings.EqualFold(c.name, "bash") && !c.isUserShell() {
 		return "", false
 	}
 	raw, _ := c.input["command"].(string)
@@ -278,6 +300,15 @@ func (c toolCard) shellCommand() (string, bool) {
 		return cmd, true
 	}
 	return "", false
+}
+
+// userShellCommand returns the command of a `!` passthrough card, or ok=false
+// for every other card.
+func (c toolCard) userShellCommand() (string, bool) {
+	if !c.isUserShell() {
+		return "", false
+	}
+	return c.shellCommand()
 }
 
 // renderShellHeadline renders a bash headline with the command syntax-
@@ -290,6 +321,22 @@ func (c toolCard) shellCommand() (string, bool) {
 func (c toolCard) renderShellHeadline(theme Theme, width int, verb, cmd string) string {
 	spans := []hlSpan{{text: c.name + " ", color: colorToolName, bold: true}}
 	spans = append(spans, highlightShellCommand(cmd, syntaxDark())...)
+	firstLimit := max(1, width-2-len(verb)-1)
+	lines := wrapHLSpans(spans, firstLimit, max(1, width-4))
+	var b strings.Builder
+	b.WriteString(c.statusBullet(theme) + " " + theme.ToolVerb.Render(verb) + " ")
+	b.WriteString(renderHLSpans(lines[0], theme.ToolCmd))
+	for _, ln := range lines[1:] {
+		b.WriteString("\n" + theme.ToolBody.Render("  │ ") + renderHLSpans(ln, theme.ToolCmd))
+	}
+	return b.String()
+}
+
+// renderUserShellHeadline renders a `!` passthrough headline: the same
+// syntax-highlighted command and `  │ ` continuation gutter as a bash card,
+// but without the tool-name token — codex's `• You ran ls` shape.
+func (c toolCard) renderUserShellHeadline(theme Theme, width int, verb, cmd string) string {
+	spans := highlightShellCommand(cmd, syntaxDark())
 	firstLimit := max(1, width-2-len(verb)-1)
 	lines := wrapHLSpans(spans, firstLimit, max(1, width-4))
 	var b strings.Builder
@@ -425,7 +472,7 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		}
 		if !rendered {
 			for _, k := range sortedKeys(c.input) {
-				if k == "command" && strings.EqualFold(c.name, "bash") {
+				if k == "command" && (strings.EqualFold(c.name, "bash") || c.isUserShell()) {
 					// The full command already wraps across the headline;
 					// repeating it here would be pure noise.
 					continue
@@ -536,7 +583,9 @@ func (c toolCard) primaryArg() string {
 	}
 	var keyPrefs []string
 	switch strings.ToLower(c.name) {
-	case "bash":
+	case "bash", "shell":
+		// "shell" is the user `!` passthrough card; like bash, its command is
+		// the salient argument (and already rendered in the headline).
 		keyPrefs = []string{"command"}
 	case "websearch", "web_search":
 		// Search args carry query (search) or url (open_page): show what was

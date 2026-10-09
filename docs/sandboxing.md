@@ -92,6 +92,10 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，冲突会**升级给人**：即使 auto 模式也会弹（TUI 弹审批对话框，REPL 走 stdin 提示；对话框里，沙箱拒绝提到项目外路径时还会多出 `Allow writes to <path>` 一行），而不是静默收容导致模型反复重试。没有交互界面时按最安全的默认收容，bash 提示会告诉模型停止申请。
 
+### 用户直通命令（`!command`）
+
+输入框里以 `!` 开头的一行是**用户自己的** shell 直通，对齐 codex 的 `user_shell_command`：不走模型、不看权限档位、不进沙箱，用登录 shell（`$SHELL -lc`）在项目目录执行。它在 TUI 与 REPL 都可用，且运行中也能随时输入——TUI 开一张 `• Running …` 卡片流式显示输出，结束后变 `• You ran …`；截断到约 30 KB 的结果以 user 角色的 `<user_shell_command>` 记录（命令、退出码、耗时、输出）进入上下文，模型因此知道用户跑过什么。这是用户显式操作而不是模型发起的调用，所以权限门与审查器都不经过它；↑ 呼回的是原始 `!cmd` 行，可回车重跑，单独的 `!` 只显示用法提示。Ctrl+C 中断正在跑的直通命令；Ctrl+Z 则在任何状态把 golder 挂起交还给终端作业控制（`fg` 回前台）。
+
 ### TUI 审批对话框
 
 TUI 没有 stdin，REPL 的 `[y/N]` 提示无法使用，因此需要用户拍板的调用在 TUI 里统一走一个**审批对话框**（`internal/cli/tui/approval.go`），形态对齐 codex：渲染在输入框正上方（与斜杠菜单同槽位，不遮上下文），单键作答。

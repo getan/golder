@@ -268,7 +268,13 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 	var priorInputs []string
 	for _, msg := range deps.agentCtx.Messages {
 		if user, ok := msg.(agentcore.UserMessage); ok {
-			priorInputs = append(priorInputs, agentcore.ContentToText(user.Content))
+			text := agentcore.ContentToText(user.Content)
+			// A `!` passthrough record recalls as the line the user typed ("!cmd"),
+			// not as the raw <user_shell_command> XML.
+			if d, ok := cli.ParseUserShellRecord(text); ok {
+				text = "!" + d.Command
+			}
+			priorInputs = append(priorInputs, text)
 		}
 	}
 	editor := newREPLLineEditor(in, deps.in, out, deps.slash, priorInputs)
@@ -374,6 +380,15 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 		}
 		if line == "/exit" {
 			return nil
+		}
+		if strings.HasPrefix(line, "!") {
+			// A "!command" line is the passthrough escape hatch (codex parity):
+			// it runs locally — no model call, no approval, no sandbox — and its
+			// settled record joins the shared context as a user-role message.
+			// Intercepted here (like the slash commands below) because it needs
+			// the live shell-session manager and the shared context.
+			runUserShell(out, &deps, line, setCancel)
+			continue
 		}
 		if line == "/compact" {
 			// /compact is intercepted here (like /exit) because compaction must run
@@ -796,7 +811,12 @@ func runForkClone(out io.Writer, deps *replDeps, line string) {
 		var users []userMsg
 		for i, e := range entries {
 			if u, ok := e.Message.(agentcore.UserMessage); ok {
-				users = append(users, userMsg{idx: i, text: agentcore.ContentToText(u.Content)})
+				text := agentcore.ContentToText(u.Content)
+				// A `!` passthrough record lists as the original "!cmd" line.
+				if d, ok := cli.ParseUserShellRecord(text); ok {
+					text = "!" + d.Command
+				}
+				users = append(users, userMsg{idx: i, text: text})
 			}
 		}
 		if len(users) == 0 {
@@ -1048,6 +1068,12 @@ func replayTranscript(out io.Writer, messages []agentcore.AgentMessage) {
 		switch msg := m.(type) {
 		case agentcore.UserMessage:
 			if t := agentcore.ContentToText(msg.Content); t != "" {
+				// A `!` passthrough record replays as the command line the user
+				// typed, not as the raw <user_shell_command> XML.
+				if d, ok := cli.ParseUserShellRecord(t); ok {
+					fmt.Fprintf(out, "> !%s\n", d.Command)
+					continue
+				}
 				fmt.Fprintf(out, "> %s\n", t)
 			}
 		case agentcore.AssistantMessage:
