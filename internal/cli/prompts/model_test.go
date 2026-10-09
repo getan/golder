@@ -226,15 +226,18 @@ func TestModelCommandSetsLevel(t *testing.T) {
 
 // TestModelListAnnotatesCatalogLevels verifies the bare /model list annotates
 // the models the models.dev cache knows with their advertised reasoning levels
-// (the file shape matches provider's on-disk cache).
+// and context window (the file shape matches provider's on-disk cache), marks
+// the current model with the same window in the header, and carries the window
+// into the switch confirmation.
 func TestModelListAnnotatesCatalogLevels(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GOLDER_HOME", dir)
 	fixture, err := json.Marshal(map[string]any{
+		"version":    2,
 		"checked_at": time.Now(),
 		"providers": map[string]any{
 			"openai": map[string]any{
-				"m-a": map[string]any{"reasoning": true, "levels": []string{"low", "high", "max"}},
+				"m-a": map[string]any{"reasoning": true, "levels": []string{"low", "high", "max"}, "context": 200000},
 			},
 		},
 	})
@@ -256,11 +259,31 @@ func TestModelListAnnotatesCatalogLevels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveOutcome /model: %v", err)
 	}
-	if !strings.Contains(out.Message, "m-a  [low|high|max]") {
-		t.Errorf("message missing catalog levels:\n%s", out.Message)
+	if !strings.Contains(out.Message, "m-a  200K  [low|high|max]") {
+		t.Errorf("message missing the catalog levels/window:\n%s", out.Message)
+	}
+	if !strings.Contains(out.Message, "(provider: openai, think: off, context: 200K)") {
+		t.Errorf("header missing the current model's window:\n%s", out.Message)
 	}
 	if strings.Contains(out.Message, "m-b  [") {
 		t.Errorf("m-b is not in the catalog and must not be annotated:\n%s", out.Message)
+	}
+
+	// The switch confirmation carries the window too, so the number behind the
+	// status-bar percentage is visible at the moment the model changes.
+	out, err = reg.ResolveOutcome("/model m-b")
+	if err != nil {
+		t.Fatalf("ResolveOutcome /model m-b: %v", err)
+	}
+	if strings.Contains(out.Message, "context:") {
+		t.Errorf("m-b is not in the catalog; no window must be claimed:\n%s", out.Message)
+	}
+	out, err = reg.ResolveOutcome("/model m-a")
+	if err != nil {
+		t.Fatalf("ResolveOutcome /model m-a: %v", err)
+	}
+	if !strings.Contains(out.Message, "context: 200K") {
+		t.Errorf("switch confirmation missing the window:\n%s", out.Message)
 	}
 }
 

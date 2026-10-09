@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Context windows in the model lists**: `/model` now shows the catalog's
+  context window wherever it knows one — leading each row in the numbered list
+  (`1. claude-sonnet-4-5  200K  [low|medium|high]`), in the list header for the
+  current model, in the TUI picker rows (`200K context · reasoning: …`), and in
+  `/model` / `/provider` switch confirmations. The number behind the status
+  bar's percentage is visible where the model changes; unknown models simply
+  omit it.
 - **Hardened installer**: `install.sh` now verifies the downloaded archive against
   the release's `checksums.txt` (sha256; a mismatch aborts the install, and
   `GOLDER_SKIP_CHECKSUM=1` opts out), rejects version strings outside

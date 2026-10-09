@@ -9,6 +9,8 @@
 package cli
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -70,4 +72,33 @@ func ResolveContextWindow(providerName, model string) int {
 // threshold track the model actually in use instead of the launch model.
 func (l *LiveConfig) RefreshContextWindow() {
 	l.ContextWindow = ResolveContextWindow(l.ProviderName, l.Model)
+}
+
+// FormatContextWindow renders a context-token budget compactly for model
+// lists and switch confirmations: 200000 → "200K", 1048576 → "1.05M",
+// 1000000 → "1M". A non-positive budget (the catalog does not know the model)
+// returns "", so callers can omit the field rather than print a fake zero.
+func FormatContextWindow(tokens int) string {
+	if tokens <= 0 {
+		return ""
+	}
+	switch {
+	case tokens < 1_000:
+		return strconv.Itoa(tokens)
+	case tokens < 999_950: // rounds below 1000.0K; 999950+ prints as 1M
+		return decimal(float64(tokens)/1_000, 1) + "K"
+	default:
+		return decimal(float64(tokens)/1_000_000, 2) + "M"
+	}
+}
+
+// decimal formats v with at most places decimals, trailing zeros trimmed:
+// 204.8 → "204.8", 200.0 → "200", 1.05 → "1.05", 1.00 → "1".
+func decimal(v float64, places int) string {
+	s := strconv.FormatFloat(v, 'f', places, 64)
+	if strings.Contains(s, ".") {
+		s = strings.TrimRight(s, "0")
+		s = strings.TrimSuffix(s, ".")
+	}
+	return s
 }

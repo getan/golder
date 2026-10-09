@@ -7,6 +7,34 @@ import (
 	"time"
 )
 
+// TestFormatContextWindow pins the compact rendering used by /model lists and
+// switch confirmations: round catalog values stay readable ("200K", "1M"),
+// odd ones keep up to one decimal of precision, and an unknown budget is the
+// empty string so callers omit the field instead of printing a fake zero.
+func TestFormatContextWindow(t *testing.T) {
+	cases := map[int]string{
+		0:       "",
+		-1:      "",
+		512:     "512",
+		8_192:   "8.2K",
+		16_384:  "16.4K",
+		128_000: "128K",
+		200_000: "200K",
+		204_800: "204.8K",
+		// 999950 rounds to 1000.0K and must promote to M instead of "1000K".
+		999_950:   "1M",
+		1_000_000: "1M",
+		1_048_576: "1.05M",
+		1_050_000: "1.05M",
+		2_000_000: "2M",
+	}
+	for in, want := range cases {
+		if got := FormatContextWindow(in); got != want {
+			t.Errorf("FormatContextWindow(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestResolveContextWindow pins the cli-level resolution: the models.dev value
 // wins when the cached catalog knows the model, and the historical 1M default
 // is kept for anything the catalog does not cover.

@@ -393,6 +393,16 @@ func protocolSuffix(providerName, model, protocol string) string {
 	return ", protocol: " + provider.ProtocolLabel(eff)
 }
 
+// contextSuffix names the model's catalog context window in switch
+// confirmations, so the status bar's percentage has a visible denominator
+// right where the model changes. Empty when the catalog does not know it.
+func contextSuffix(providerName, model string) string {
+	if w := provider.ContextWindowFor(providerName, model); w > 0 {
+		return ", context: " + cli.FormatContextWindow(w)
+	}
+	return ""
+}
+
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
 	registerProxyCommand(reg)
 	// thinkAction views or switches the reasoning-effort level. It backs /think
@@ -441,7 +451,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			// Re-resolve the budget for the new model: the status bar and the
 			// auto-compaction threshold read it from the live config.
 			live.RefreshContextWindow()
-			return fmt.Sprintf("model switched to %s (provider: %s%s, from fetched catalog)", id, name, protocolSuffix(name, id, live.Protocol)), true
+			return fmt.Sprintf("model switched to %s (provider: %s%s%s, from fetched catalog)",
+				id, name, protocolSuffix(name, id, live.Protocol), contextSuffix(name, id)), true
 		}
 		model := provider.CanonicalizeModel(id)
 		// Fork: stay on the current provider. A bare provider name
@@ -459,7 +470,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.ProviderName = providerName
 		live.Provider = prov
 		live.RefreshContextWindow()
-		return fmt.Sprintf("model switched to %s (provider: %s%s)", model, providerName, protocolSuffix(providerName, model, live.Protocol)), true
+		return fmt.Sprintf("model switched to %s (provider: %s%s%s)",
+			model, providerName, protocolSuffix(providerName, model, live.Protocol), contextSuffix(providerName, model)), true
 	}
 	// reasoningHint is a one-line pointer to the model's catalog reasoning
 	// levels, appended after a plain switch so the level step is discoverable.
@@ -577,7 +589,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.FetchedModels = nil
 		live.FetchedAt = time.Time{}
 		live.FetchedKey = ""
-		msg := fmt.Sprintf("provider switched to %s (model: %s%s)", name, model, protocolSuffix(name, model, live.Protocol))
+		msg := fmt.Sprintf("provider switched to %s (model: %s%s%s)",
+			name, model, protocolSuffix(name, model, live.Protocol), contextSuffix(name, model))
 		if cleared {
 			msg += "\n(base-url/protocol override cleared; using the provider's environment/default endpoint)"
 		}
@@ -606,16 +619,23 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 						live.Model, live.ProviderName, thinkDisplay(live), err)
 				}
 				var b strings.Builder
-				fmt.Fprintf(&b, "model: %s (provider: %s, think: %s)\nmodels on %s (/model <n|id> to switch):",
-					live.Model, live.ProviderName, thinkDisplay(live), live.ProviderName)
+				fmt.Fprintf(&b, "model: %s (provider: %s, think: %s%s)\nmodels on %s (/model <n|id> to switch):",
+					live.Model, live.ProviderName, thinkDisplay(live),
+					contextSuffix(live.ProviderName, live.Model), live.ProviderName)
 				for i, id := range ids {
 					mark := ""
 					if id == live.Model {
 						mark = " (current)"
 					}
 					note := ""
+					// The catalog window leads each row it knows, before the
+					// reasoning bracket: the number is the scan target (how
+					// much room does this model have?), the levels are detail.
+					if w := provider.ContextWindowFor(live.ProviderName, id); w > 0 {
+						note = "  " + cli.FormatContextWindow(w)
+					}
 					if lv := provider.KnownReasoningLevels(live.ProviderName, id); len(lv) > 0 {
-						note = "  [" + joinThinkingLevels(lv) + "]"
+						note += "  [" + joinThinkingLevels(lv) + "]"
 					}
 					fmt.Fprintf(&b, "\n  %d. %s%s%s", i+1, id, note, mark)
 				}

@@ -452,9 +452,17 @@ func modelPickItems(providerName string, ids []string) []pickItem {
 	items := make([]pickItem, 0, len(ids))
 	for _, id := range ids {
 		it := pickItem{Title: id, Value: id}
-		if lv := provider.KnownReasoningLevels(providerName, id); len(lv) > 0 {
-			it.Detail = "reasoning: " + joinLevels(lv)
+		var detail []string
+		// The catalog's context window, when it knows the model: the same
+		// number the status-bar percentage and auto-compaction are measured
+		// against, so it belongs next to the model it constrains.
+		if w := provider.ContextWindowFor(providerName, id); w > 0 {
+			detail = append(detail, cli.FormatContextWindow(w)+" context")
 		}
+		if lv := provider.KnownReasoningLevels(providerName, id); len(lv) > 0 {
+			detail = append(detail, "reasoning: "+joinLevels(lv))
+		}
+		it.Detail = strings.Join(detail, " · ")
 		items = append(items, it)
 	}
 	return items
