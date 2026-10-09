@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -230,7 +231,7 @@ func TestApplyFallsBackToMirror(t *testing.T) {
 		GOOS:           "linux",
 		GOARCH:         "amd64",
 		ExecPath:       target,
-		StallTimeout:   150 * time.Millisecond,
+		RateWindow:     150 * time.Millisecond,
 	}
 	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
 		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
@@ -241,6 +242,164 @@ func TestApplyFallsBackToMirror(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "trying") {
 		t.Errorf("expected a fallback notice, got:\n%s", out.String())
+	}
+}
+
+// TestApplyFallsBackOnSlowTrickle covers the "connected but crawls" case the
+// silence rule alone would let through: the direct source delivers a few
+// hundred bytes and keeps trickling far below the floor, so the attempt must
+// be aborted within a window and the mirror must serve the archive.
+func TestApplyFallsBackOnSlowTrickle(t *testing.T) {
+	binary := []byte("new binary via mirror after trickle")
+	archive := makeTarGz(t, "golder", binary)
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if filepath.Base(r.URL.Path) == checksumsFile {
+			_, _ = w.Write([]byte(sums))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		flush := func() {
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+		flush()
+		small := make([]byte, 32)
+		deadline := time.After(2 * time.Second)
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-deadline:
+				// Safety valve: if the rate watchdog failed to abort us, stop
+				// trickling so the test fails on the notice instead of hanging
+				// (the truncated body then fails its checksum).
+				return
+			case <-time.After(50 * time.Millisecond):
+				if _, err := w.Write(small); err != nil {
+					return
+				}
+				flush()
+			}
+		}
+	}))
+	defer direct.Close()
+
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch filepath.Base(r.URL.Path) {
+		case archiveName:
+			_, _ = w.Write(archive)
+		case checksumsFile:
+			_, _ = w.Write([]byte(sums))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mirror.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:         direct.Client(),
+		ReleaseBaseURL:     direct.URL,
+		Mirrors:            []string{mirror.URL + "/"},
+		GOOS:               "linux",
+		GOARCH:             "amd64",
+		ExecPath:           target,
+		MinRateBytesPerSec: 64 * 1024,
+		RateWindow:         200 * time.Millisecond,
+	}
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
+		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
+	}
+	got, _ := os.ReadFile(target)
+	if !bytes.Equal(got, binary) {
+		t.Errorf("target = %q, want %q", got, binary)
+	}
+	if !strings.Contains(out.String(), "too slow") {
+		t.Errorf("expected a rate-floor notice, got:\n%s", out.String())
+	}
+}
+
+// TestApplyKeepsSourceAboveRateFloor: a source that delivers slowly but stays
+// above the floor (here ~20 KB/s against an 8 KB/s floor) must not be aborted,
+// and the mirror must never be touched.
+func TestApplyKeepsSourceAboveRateFloor(t *testing.T) {
+	// Incompressible payload: a repetitive one would gzip down to a few
+	// hundred bytes and complete before the rate window ever closes.
+	payload := make([]byte, 16*1024)
+	rand.New(rand.NewSource(42)).Read(payload)
+	archive := makeTarGz(t, "golder", payload)
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if filepath.Base(r.URL.Path) == checksumsFile {
+			_, _ = w.Write([]byte(sums))
+			return
+		}
+		// Announce the length so the watchdog's completion guard is exercised:
+		// the final window holds only the tail of a finished transfer.
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(archive)))
+		w.WriteHeader(http.StatusOK)
+		// 2 KB every 100ms ≈ 20 KB/s, slow but well above the 8 KB/s floor.
+		for off := 0; off < len(archive); off += 2048 {
+			end := off + 2048
+			if end > len(archive) {
+				end = len(archive)
+			}
+			if _, err := w.Write(archive[off:end]); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}))
+	defer direct.Close()
+
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("mirror must not be used when the source holds the floor")
+	}))
+	defer mirror.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:         direct.Client(),
+		ReleaseBaseURL:     direct.URL,
+		Mirrors:            []string{mirror.URL + "/"},
+		GOOS:               "linux",
+		GOARCH:             "amd64",
+		ExecPath:           target,
+		MinRateBytesPerSec: 8 * 1024,
+		RateWindow:         150 * time.Millisecond,
+	}
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
+		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
+	}
+	got, _ := os.ReadFile(target)
+	if !bytes.Equal(got, payload) {
+		t.Errorf("target length = %d, want %d", len(got), len(payload))
+	}
+	if strings.Contains(out.String(), "trying") {
+		t.Errorf("source above the floor triggered a fallback:\n%s", out.String())
 	}
 }
 
@@ -296,6 +455,212 @@ func TestApplyFallsBackOnChecksumMismatch(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "sha256 mismatch") {
 		t.Errorf("expected a mismatch notice, got:\n%s", out.String())
+	}
+}
+
+// ladderMirror is one mirror's answer in the checksums trust-ladder tests:
+// an empty sums body or nil archive means "this path 404s".
+type ladderMirror struct {
+	sums    string
+	archive []byte
+}
+
+// startLadderServers returns a direct base URL that fails everything and one
+// httptest mirror per entry, so the checksums ladder is the only way through.
+func startLadderServers(t *testing.T, mirrors []ladderMirror) (string, []string) {
+	t.Helper()
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unreachable", http.StatusBadGateway)
+	}))
+	t.Cleanup(direct.Close)
+	urls := make([]string, 0, len(mirrors))
+	for _, m := range mirrors {
+		m := m
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if filepath.Base(r.URL.Path) == checksumsFile {
+				if m.sums == "" {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = w.Write([]byte(m.sums))
+				return
+			}
+			if m.archive == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(m.archive)
+		}))
+		t.Cleanup(srv.Close)
+		urls = append(urls, srv.URL+"/")
+	}
+	return direct.URL, urls
+}
+
+// TestChecksumsMirrorAgreement: GitHub direct is unreachable for checksums.txt;
+// two independent mirrors serve the same digest for the archive, so the update
+// proceeds and the corroboration is reported.
+func TestChecksumsMirrorAgreement(t *testing.T) {
+	binary := []byte("agreed binary")
+	archive := makeTarGz(t, "golder", binary)
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	direct, mirrors := startLadderServers(t, []ladderMirror{
+		{sums: sums, archive: archive},
+		{sums: sums, archive: archive},
+	})
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:     http.DefaultClient,
+		ReleaseBaseURL: direct,
+		Mirrors:        mirrors,
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		ExecPath:       target,
+	}
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
+		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
+	}
+	got, _ := os.ReadFile(target)
+	if !bytes.Equal(got, binary) {
+		t.Errorf("target = %q, want %q", got, binary)
+	}
+	if !strings.Contains(out.String(), "2 independent sources agree") {
+		t.Errorf("expected a corroboration notice, got:\n%s", out.String())
+	}
+}
+
+// TestChecksumsMirrorDisagreementAborts: one mirror serves the real digest and
+// another a forged one, so the update must abort as possible tampering and
+// leave the target untouched.
+func TestChecksumsMirrorDisagreementAborts(t *testing.T) {
+	archive := makeTarGz(t, "golder", []byte("real binary"))
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	realSums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+	forged := makeTarGz(t, "golder", []byte("forged binary"))
+	forgedSum := sha256.Sum256(forged)
+	forgedSums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(forgedSum[:]), archiveName)
+
+	direct, mirrors := startLadderServers(t, []ladderMirror{
+		{sums: realSums, archive: archive},
+		{sums: forgedSums, archive: forged},
+	})
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:     http.DefaultClient,
+		ReleaseBaseURL: direct,
+		Mirrors:        mirrors,
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		ExecPath:       target,
+	}
+	err := u.Apply(context.Background(), "v0.4.0", &out)
+	if err == nil {
+		t.Fatalf("Apply succeeded despite mirror disagreement\noutput:\n%s", out.String())
+	}
+	if !strings.Contains(err.Error(), "disagree") {
+		t.Errorf("error = %v, want a disagreement message", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "old" {
+		t.Errorf("target modified despite disagreement: %q", got)
+	}
+}
+
+// TestChecksumsSingleMirrorWarns: a blocked network where only one mirror
+// answers still installs, but the missing cross-check is called out.
+func TestChecksumsSingleMirrorWarns(t *testing.T) {
+	binary := []byte("lone mirror binary")
+	archive := makeTarGz(t, "golder", binary)
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	direct, mirrors := startLadderServers(t, []ladderMirror{
+		{sums: sums, archive: archive},
+	})
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:     http.DefaultClient,
+		ReleaseBaseURL: direct,
+		Mirrors:        mirrors,
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		ExecPath:       target,
+	}
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
+		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
+	}
+	if got, _ := os.ReadFile(target); !bytes.Equal(got, binary) {
+		t.Errorf("target = %q, want %q", got, binary)
+	}
+	if !strings.Contains(out.String(), "warning: checksums.txt served only by") {
+		t.Errorf("expected a lone-source warning, got:\n%s", out.String())
+	}
+}
+
+// TestChecksumsDirectIsPreferred: when GitHub direct serves checksums.txt and
+// the archive, mirrors are never consulted.
+func TestChecksumsDirectIsPreferred(t *testing.T) {
+	binary := []byte("direct binary")
+	archive := makeTarGz(t, "golder", binary)
+	sum := sha256.Sum256(archive)
+	archiveName := "golder_0.4.0_Linux_x86_64.tar.gz"
+	sums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), archiveName)
+
+	direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if filepath.Base(r.URL.Path) == checksumsFile {
+			_, _ = w.Write([]byte(sums))
+			return
+		}
+		_, _ = w.Write(archive)
+	}))
+	defer direct.Close()
+	mirrorHits := 0
+	mirror := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mirrorHits++
+		http.Error(w, "must not be used", http.StatusInternalServerError)
+	}))
+	defer mirror.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "golder")
+	_ = os.WriteFile(target, []byte("old"), 0o755)
+
+	var out bytes.Buffer
+	u := &Updater{
+		HTTPClient:     http.DefaultClient,
+		ReleaseBaseURL: direct.URL,
+		Mirrors:        []string{mirror.URL + "/"},
+		GOOS:           "linux",
+		GOARCH:         "amd64",
+		ExecPath:       target,
+	}
+	if err := u.Apply(context.Background(), "v0.4.0", &out); err != nil {
+		t.Fatalf("Apply: %v\noutput:\n%s", err, out.String())
+	}
+	if got, _ := os.ReadFile(target); !bytes.Equal(got, binary) {
+		t.Errorf("target = %q, want %q", got, binary)
+	}
+	if mirrorHits != 0 {
+		t.Errorf("mirror consulted %d times despite a healthy direct source", mirrorHits)
+	}
+	if strings.Contains(out.String(), "agree") || strings.Contains(out.String(), "warning") {
+		t.Errorf("direct source should not produce ladder notices, got:\n%s", out.String())
 	}
 }
 

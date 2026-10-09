@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 
 Both fetch the same script (the site mirrors it from the main repo at deploy time); pick whichever your network reaches. If neither works, prefix the raw URL with a mirror, e.g. `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/getan/golder/master/install.sh | sh`.
 
-The script verifies the archive's sha256; downloads try GitHub directly first and then fall back to community mirrors (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that connects but delivers no data for 15s is abandoned for the next source. `GOLDER_MIRROR` overrides the list (whitespace-separated URL prefixes, prepended to the original URL) or disables mirroring with `off`.
+The script verifies the archive's sha256; downloads try GitHub directly first and then fall back to community mirrors (`ghfast.top`, `ghproxy.net`, `gh-proxy.com`, `gh.zwy.one`); an attempt that connects but delivers no data for 15s, or that keeps averaging below 50 KB/s across a 15s window, is abandoned for the next source. `checksums.txt` follows a trust ladder: GitHub direct first, and when only mirrors answer, every responding source must agree on the digest for this archive — a disagreement aborts as possible tampering, so a single mirror cannot vouch for an archive it poisoned (a lone reachable mirror still installs, with an explicit warning). `GOLDER_MIRROR` overrides the list (whitespace-separated URL prefixes, prepended to the original URL) or disables mirroring with `off`.
 
 `GOLDER_VERSION` picks a version and `GOLDER_INSTALL_DIR` sets the install directory (default `/usr/local/bin`, falling back to `~/.local/bin` when not writable). On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases).
 
@@ -233,7 +233,7 @@ golder session export <session-id> --format md --output talk.md
 golder update
 ```
 
-`golder update` resolves the latest tag via the site endpoint (reachable from mainland China, no rate limit), falling back to the GitHub API. Release downloads use the same direct → mirror chain as the installer: mirrors only carry bytes, the archive is still verified against the release's `checksums.txt` (a corrupt copy fails over to the next source), and `GOLDER_MIRROR=off` disables mirroring.
+`golder update` resolves the latest tag via the site endpoint (reachable from mainland China, no rate limit), falling back to the GitHub API. Release downloads use the same direct → mirror chain as the installer: the archive is still verified against the release's `checksums.txt` (a corrupt copy fails over to the next source), and `checksums.txt` itself prefers GitHub direct — mirror-served copies are accepted only when all responding sources agree on the digest (a lone reachable mirror is accepted with a warning on blocked networks). `GOLDER_MIRROR=off` disables mirroring.
 
 ### Permission modes
 

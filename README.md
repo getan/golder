@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/getan/golder/master/install.sh | sh
 
 两条取到的是同一份脚本（站点部署时从主仓库镜像），按自己的网络二选一；若两条都不通，可给 raw 地址套镜像前缀，例如 `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/getan/golder/master/install.sh | sh`。
 
-脚本会校验下载包的 sha256；下载归档时先直连 GitHub，失败后自动回退到公益镜像（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`gh.zwy.one`），连上后 15 秒无数据也会判死换源。`GOLDER_MIRROR` 可覆盖镜像列表（空格分隔的 URL 前缀，前缀拼在原 URL 前），设为 `off` 只用直连。
+脚本会校验下载包的 sha256；下载归档时先直连 GitHub，失败后自动回退到公益镜像（`ghfast.top`、`ghproxy.net`、`gh-proxy.com`、`gh.zwy.one`）。连上后 15 秒无数据、或平均速度低于 50KB/s 持续 15 秒（龟速滴流），都会判死并切换下一个源。校验文件（`checksums.txt`）走信任阶梯：优先直连 GitHub；直连不可用时改用镜像副本，但要求各应答来源对同一归档给出一致的 sha256，不一致立即中止（单个镜像无法同时伪造归档和校验文件）；受限网络下只有一个镜像可用时继续安装但会明确告警。`GOLDER_MIRROR` 可覆盖镜像列表（空格分隔的 URL 前缀，前缀拼在原 URL 前），设为 `off` 只用直连。
 
 可用 `GOLDER_VERSION` 指定版本、`GOLDER_INSTALL_DIR` 指定安装目录（默认 `/usr/local/bin`，无写权限时回退 `~/.local/bin`）。Windows 请从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip` 解压。
 
@@ -233,7 +233,7 @@ golder session export <session-id> --format md --output talk.md
 golder update
 ```
 
-`golder update` 的版本检查走站点接口（大陆可达、无速率限制），失败回退 GitHub API；下载 release 时与安装脚本同一条「直连 → 公益镜像」回退链，镜像只会影响传输，归档仍按 release 的 `checksums.txt` 校验（坏包自动换下一个源）；`GOLDER_MIRROR=off` 可禁用镜像。
+`golder update` 的版本检查走站点接口（大陆可达、无速率限制），失败回退 GitHub API；下载 release 时与安装脚本同一条「直连 → 公益镜像」回退链，归档按 release 的 `checksums.txt` 校验（坏包自动换下一个源），而 `checksums.txt` 本身优先直连 GitHub，只有镜像应答时要求各来源一致（单源可用时告警后继续）；`GOLDER_MIRROR=off` 可禁用镜像。
 
 ### 权限模式
 

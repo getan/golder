@@ -262,6 +262,31 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **Mirror-served checksums are now cross-checked**: both `golder update` and
+  `install.sh` used to accept `checksums.txt` from whichever source answered
+  first, so a malicious mirror could poison the archive and its digest
+  together and the sha256 check would "pass". GitHub direct is the trust
+  anchor and is still tried first; when only mirrors are reachable, a copy is
+  accepted only if every responding source agrees on the digest for this
+  archive, and disagreement aborts as possible tampering. A lone answering
+  mirror (a blocked network with nothing else) still installs, with an
+  explicit warning instead of silent trust. `GOLDER_MIRROR` overrides the
+  mirror list as before.
+- **Installer fallback log now names the file it is fetching**: `install.sh`
+  downloads the archive and `checksums.txt` independently, so a run where both
+  fell back to a mirror printed two unlabeled `下载失败` lines that read like
+  the same failure twice. Each line now carries its target name, and the last
+  source no longer claims to "try the next source" when none is left (mirroring
+  the Go updater's already-labeled notices).
+- **Slow release downloads now fail over instead of crawling**: the download
+  watchdog only aborted an attempt that delivered *zero* bytes for 15s, so a
+  source trickling at a few KB/s — the "connected but crawling" mirror case —
+  was accepted and could take tens of minutes (or, in `install.sh`, forever).
+  `golder update` and `install.sh` now share a real floor: an attempt whose
+  windowed average stays below 50 KB/s for 15s is aborted and the next mirror
+  is tried. The per-attempt wall-clock cap in `golder update` moves from 60s
+  to 5 minutes so a source that does hold the floor (~3.5 min for the ~10 MB
+  archive) can finish instead of being cut off mid-transfer.
 - **Context gauge and auto-compaction now use the model's real window**: the
   budget was hardcoded to 1M, so a 200K model (Claude Sonnet 4.5, MiniMax) read
   as a fifth of its real usage and never crossed the compaction threshold until

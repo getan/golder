@@ -40,11 +40,27 @@ const checksumsFile = "checksums.txt"
 // URL prefixes, or "off"/"none" to disable mirror fallback (GitHub only).
 const mirrorEnv = "GOLDER_MIRROR"
 
-// defaultStallTimeout is how long a download attempt may deliver no data at
-// all before it is aborted and the next source is tried. GitHub access from
-// mainland China often connects and then stalls; without this the client's
-// full timeout would be spent on a dead transfer before any fallback.
-const defaultStallTimeout = 15 * time.Second
+// defaultMinRate is the average throughput (bytes/sec) a download attempt
+// must keep once it has started delivering; below it the attempt is aborted
+// and the next source is tried. Release archives are ~10 MB, so 50 KB/s
+// still finishes in about 3.5 minutes, while the "connected but trickling
+// at a few KB/s" sources common on mainland networks fail over within one
+// window instead of crawling for half an hour. install.sh's curl flags
+// (--speed-limit/--speed-time) must stay in sync with this value.
+const defaultMinRate = 50 * 1024
+
+// defaultRateWindow is both the measurement window for defaultMinRate and
+// the time an attempt may deliver nothing at all (no first byte, or a silent
+// stretch) before it is dropped. GitHub access from mainland China often
+// connects and then stalls; without this the client's full timeout would be
+// spent on a dead transfer before any fallback.
+const defaultRateWindow = 15 * time.Second
+
+// defaultDownloadTimeout is the wall-clock cap for one fetch (the HTTP
+// client's total timeout). It is the backstop above the rate floor: a ~10 MB
+// archive at the floor completes in about 3.5 minutes, so 5 minutes leaves
+// headroom for a source that holds the floor without ever dropping below it.
+const defaultDownloadTimeout = 5 * time.Minute
 
 // defaultMirrorPrefixes are community-run GitHub download accelerators, tried
 // in order after the direct download fails. A mirror URL is formed by
@@ -88,9 +104,13 @@ type Updater struct {
 	// NewUpdater fills it from GOLDER_MIRROR or the built-in defaults; tests
 	// set it explicitly.
 	Mirrors []string
-	// StallTimeout aborts an attempt that delivers no data for this long;
-	// zero means defaultStallTimeout.
-	StallTimeout time.Duration
+	// MinRateBytesPerSec aborts an attempt whose windowed average throughput
+	// falls below this floor (see defaultMinRate); zero means the default.
+	MinRateBytesPerSec int64
+	// RateWindow is the measurement window for MinRateBytesPerSec, and also
+	// the time an attempt may deliver no data before it is dropped; zero
+	// means defaultRateWindow.
+	RateWindow time.Duration
 }
 
 // Run performs `golder update` (self-update golder). It discovers the latest
@@ -131,7 +151,7 @@ func NewUpdater() (*Updater, error) {
 		exe = resolved
 	}
 	return &Updater{
-		HTTPClient:     &http.Client{Timeout: 60 * time.Second},
+		HTTPClient:     &http.Client{Timeout: defaultDownloadTimeout},
 		Repo:           Repo,
 		ReleaseBaseURL: "https://github.com/" + Repo + "/releases/download",
 		GOOS:           runtime.GOOS,
@@ -171,11 +191,10 @@ func (u *Updater) binaryName() string {
 // Apply downloads the release identified by tag, verifies its checksum, and
 // atomically replaces the target executable. tag is like "v0.4.0".
 //
-// Downloads try the direct GitHub URL first and then each configured mirror
-// (see defaultMirrorPrefixes). checksums.txt is taken from the first source
-// that serves it, and the archive is accepted from the first source whose
-// bytes match that digest — a mirror serving a corrupt or stale copy simply
-// fails over to the next source.
+// The archive is accepted from the first source whose bytes match the trusted
+// digest — a mirror serving a corrupt or stale copy simply fails over to the
+// next source. The digest itself follows a trust ladder (see fetchChecksums):
+// GitHub direct first, mirrors only when corroborated.
 func (u *Updater) Apply(ctx context.Context, tag string, out io.Writer) error {
 	versionNoV := strings.TrimPrefix(strings.TrimSpace(tag), "v")
 	archive := u.archiveName(versionNoV)
@@ -184,13 +203,9 @@ func (u *Updater) Apply(ctx context.Context, tag string, out io.Writer) error {
 
 	fmt.Fprintf(out, "downloading %s ...\n", archive)
 
-	sums, _, err := u.fetch(ctx, base+"/"+checksumsFile, checksumsFile, out, nil)
+	want, err := u.fetchChecksums(ctx, base+"/"+checksumsFile, archive, out)
 	if err != nil {
 		return fmt.Errorf("selfupdate: download checksums: %w", err)
-	}
-	want, err := checksumFor(sums, archive)
-	if err != nil {
-		return err
 	}
 
 	archiveBytes, source, err := u.fetch(ctx, archiveURL, archive, out, func(body []byte) error {
@@ -248,6 +263,81 @@ func (u *Updater) fetch(ctx context.Context, original, name string, out io.Write
 	return nil, "", lastErr
 }
 
+// fetchChecksums obtains checksums.txt and returns the expected sha256 for
+// archive. GitHub direct is the trust anchor and is tried first. When it is
+// unreachable the mirrors are cross-checked: their copies are accepted only
+// when every responding source agrees on the digest for this archive, so a
+// single mirror cannot vouch for an archive it poisoned. A lone mirror (a
+// blocked network where just one answers) is accepted with an explicit
+// warning — that is the tradeoff the mirrors exist for, now made visible —
+// while any disagreement aborts as possible tampering.
+func (u *Updater) fetchChecksums(ctx context.Context, original, archive string, out io.Writer) (string, error) {
+	if body, err := u.download(ctx, original); err == nil {
+		return checksumFor(body, archive)
+	} else if out != nil {
+		fmt.Fprintf(out, "  checksums.txt via %s failed (%v), cross-checking mirrors ...\n",
+			sourceHost(original), shortErr(err))
+	}
+
+	murls := u.mirrorURLs(original)
+	if len(murls) == 0 {
+		return "", errors.New("GitHub direct fetch of checksums.txt failed and mirroring is disabled")
+	}
+
+	type candidate struct {
+		src    string
+		digest string
+	}
+	var cands []candidate
+	for _, src := range murls {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		body, err := u.download(ctx, src)
+		if err != nil {
+			if out != nil {
+				fmt.Fprintf(out, "  checksums.txt via %s failed (%v)\n", sourceHost(src), shortErr(err))
+			}
+			continue
+		}
+		want, err := checksumFor(body, archive)
+		if err != nil {
+			if out != nil {
+				fmt.Fprintf(out, "  checksums.txt via %s has no entry for %s\n", sourceHost(src), archive)
+			}
+			continue
+		}
+		cands = append(cands, candidate{src: src, digest: want})
+	}
+	if len(cands) == 0 {
+		return "", errors.New("GitHub direct fetch of checksums.txt failed and no mirror served a copy")
+	}
+	for _, c := range cands[1:] {
+		if c.digest != cands[0].digest {
+			return "", fmt.Errorf(
+				"mirrors disagree on checksums.txt for %s: %s says %s, %s says %s — possible tampering, aborting (use GOLDER_MIRROR to pin sources)",
+				archive, sourceHost(cands[0].src), shortDigest(cands[0].digest), sourceHost(c.src), shortDigest(c.digest))
+		}
+	}
+	if out != nil {
+		if len(cands) == 1 {
+			fmt.Fprintf(out, "  warning: checksums.txt served only by %s (GitHub direct unreachable, nothing to cross-check)\n",
+				sourceHost(cands[0].src))
+		} else {
+			fmt.Fprintf(out, "  checksums.txt via mirrors: %d independent sources agree\n", len(cands))
+		}
+	}
+	return cands[0].digest, nil
+}
+
+// shortDigest abbreviates a sha256 for one-line notices.
+func shortDigest(d string) string {
+	if len(d) > 12 {
+		return d[:12] + "…"
+	}
+	return d
+}
+
 // mirrorURLs applies each mirror prefix to an original GitHub URL.
 func (u *Updater) mirrorURLs(original string) []string {
 	if len(u.Mirrors) == 0 {
@@ -282,13 +372,23 @@ func shortErr(err error) error {
 }
 
 // download fetches url and returns the full body. A non-200 status is an
-// error. An attempt that stops delivering data for the stall timeout is
-// aborted (cancelling the request context also cuts the in-flight body read)
-// so the caller can move on to the next source.
+// error. An attempt that goes silent for a full window, or that has started
+// delivering but keeps averaging below the minimum rate, is aborted
+// (cancelling the request context also cuts the in-flight body read) so the
+// caller can move on to the next source. The rate clock starts at the first
+// byte, so a slow handshake is charged to the silence rule rather than to a
+// rate the source never had a chance to keep. When the response announces a
+// Content-Length and it has been received in full, the rate check stands
+// down: a short final window would otherwise charge a finished transfer's
+// tail to the floor and abort it just before EOF.
 func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
-	stall := u.StallTimeout
-	if stall <= 0 {
-		stall = defaultStallTimeout
+	window := u.RateWindow
+	if window <= 0 {
+		window = defaultRateWindow
+	}
+	minRate := u.MinRateBytesPerSec
+	if minRate <= 0 {
+		minRate = defaultMinRate
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -306,31 +406,66 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
+	contentLength := resp.ContentLength
 
-	// Watchdog: cancel the request when no bytes have arrived for `stall`. A
-	// separate goroutine plus an atomic timestamp keeps the check out of the
-	// read loop and avoids timer-reset races.
-	var last atomic.Int64
-	var stalled atomic.Bool
-	last.Store(time.Now().UnixNano())
+	// Watchdog: cancel the request on silence (no first byte, or no bytes at
+	// all, for a full window) or on sustained low throughput (the windowed
+	// average stayed under minRate). A separate goroutine plus atomics keeps
+	// the checks out of the read loop and avoids timer-reset races.
+	var firstByte, total atomic.Int64
+	var slow atomic.Pointer[string]
+	started := time.Now()
 	done := make(chan struct{})
 	go func() {
-		interval := stall / 4
+		interval := window / 4
 		if interval < 25*time.Millisecond {
 			interval = 25 * time.Millisecond
 		}
 		t := time.NewTicker(interval)
 		defer t.Stop()
+		var winStart time.Time
+		var winBase int64
+		complete := false
 		for {
 			select {
 			case <-done:
 				return
-			case <-t.C:
-				if time.Since(time.Unix(0, last.Load())) >= stall {
-					stalled.Store(true)
+			case now := <-t.C:
+				fb := firstByte.Load()
+				if fb == 0 {
+					if now.Sub(started) >= window {
+						reason := fmt.Sprintf("no data for %s", window)
+						slow.Store(&reason)
+						cancel()
+						return
+					}
+					continue
+				}
+				if complete {
+					continue
+				}
+				if contentLength >= 0 && total.Load() >= contentLength {
+					// All announced bytes are in; only EOF is pending. Do not
+					// charge the tail of a finished transfer to the rate floor.
+					complete = true
+					continue
+				}
+				if winStart.IsZero() {
+					winStart, winBase = time.Unix(0, fb), 0
+				}
+				elapsed := now.Sub(winStart)
+				if elapsed < window {
+					continue
+				}
+				got := total.Load() - winBase
+				if rate := float64(got) / elapsed.Seconds(); rate < float64(minRate) {
+					reason := fmt.Sprintf("too slow: %.1f KB/s over %s (min %d KB/s)",
+						rate/1024, window, minRate/1024)
+					slow.Store(&reason)
 					cancel()
 					return
 				}
+				winStart, winBase = now, total.Load()
 			}
 		}
 	}()
@@ -341,15 +476,16 @@ func (u *Updater) download(ctx context.Context, url string) ([]byte, error) {
 	for {
 		n, err := resp.Body.Read(chunk)
 		if n > 0 {
-			last.Store(time.Now().UnixNano())
+			total.Add(int64(n))
+			firstByte.CompareAndSwap(0, time.Now().UnixNano())
 			buf.Write(chunk[:n])
 		}
 		if err == io.EOF {
 			return buf.Bytes(), nil
 		}
 		if err != nil {
-			if stalled.Load() {
-				return nil, fmt.Errorf("no data for %s (stalled)", stall)
+			if p := slow.Load(); p != nil {
+				return nil, errors.New(*p)
 			}
 			return nil, err
 		}
