@@ -20,6 +20,43 @@ import (
 
 func timeZeroForTest() time.Time { return time.Unix(0, 0) }
 
+// TestWrapToWidthScalesWithOutputSize is the performance regression for the
+// quadratic wrapper. Truncate/TruncateLeft re-scanned the remaining text once
+// per emitted segment, so this payload (4x the crash regression's) took ~100s
+// per call in the old shape and pushed the package to 566s under -race in CI —
+// 34s short of Go's 10m per-package timeout, while staying green for days.
+// The linear decoder finishes it in a few milliseconds; the budget below is
+// deliberately loose so only a complexity regression can trip it.
+func TestWrapToWidthScalesWithOutputSize(t *testing.T) {
+	hostile := "汇报：域名价格与服务器方案 " +
+		"\x1b[38;5;245m" + strings.Repeat("colored segment ", 20) + "\x1b[0m " +
+		strings.Repeat("宽字符内容", 40) + " tail"
+	var out strings.Builder
+	for i := 0; i < 240; i++ {
+		out.WriteString(hostile)
+		out.WriteByte('\n')
+	}
+
+	var p subagentPanel
+	p.add("t1", "research", timeZeroForTest())
+	p.appendOutput("t1", out.String())
+	row := p.byID["t1"]
+	if row == nil {
+		t.Fatal("row missing")
+	}
+
+	start := time.Now()
+	for _, width := range []int{4, 20, 80, 132, 200} {
+		if lines := p.expandedLines(row, width); len(lines) == 0 {
+			t.Fatalf("width %d: expandedLines returned nothing", width)
+		}
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("wrapping %d KB across 5 widths took %s; the quadratic wrapper is back (budget 3s)",
+			out.Len()/1024, elapsed)
+	}
+}
+
 // wrapInputs cover the shapes that used to break: a short ASCII tail whose
 // bytes are fewer than the ellipsis, ANSI escapes (zero width, many bytes),
 // CJK (wide), emoji, and mixed content.

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,16 +272,18 @@ func (p subagentPanel) expandedLines(row *subagentRow, width int) []string {
 // sub-agent output is arbitrary text/code). An empty line yields one empty
 // segment so blank lines in the output are preserved.
 //
-// Cutting is ANSI-aware so escape sequences are never split and zero-width
-// bytes cannot skew the accounting. Truncate and TruncateLeft partition the
-// string: the first takes the graphemes that fit, the second drops exactly
-// those, so concatenating the segments reproduces the input.
+// The string is decoded once into graphemes and escape sequences (ANSI-aware,
+// never splitting an escape), so concatenating the segments reproduces the
+// input byte for byte. One pass matters: this runs on every render tick for
+// the whole accumulated output of an expanded sub-agent, and a
+// Truncate/TruncateLeft pair per segment re-scanned the remainder each time,
+// which is quadratic — a few tens of KB of output pinned a core for seconds
+// (minutes under -race) on every frame.
 //
-// This replaces an advance of `s = s[len(TruncateToWidth(s, width)):]`, which
-// was wrong twice over: the rendered prefix gains a three-byte ellipsis that
-// is not in the source (so the slice could run past the end and panic — the
-// v1.1.0 crash), and wherever the prefix carried zero-width bytes (ANSI
-// escapes, combining marks) the same expression also skipped real content.
+// Open SGR attributes (colors among them) carry across a line break: the next
+// segment re-opens exactly the sequences that were active at the split, so a
+// wrapped colored line stays colored on every row, the way the previous
+// implementation's escape re-injection did.
 func wrapToWidth(s string, width int) []string {
 	if width <= 0 {
 		return []string{s}
@@ -289,23 +292,91 @@ func wrapToWidth(s string, width int) []string {
 		return []string{""}
 	}
 	var segs []string
-	for s != "" {
-		head := ansi.Truncate(s, width, "")
-		rest := ansi.TruncateLeft(s, width, "")
-		if head == "" || rest == s {
-			// Cannot split further. Two cases: the leading grapheme is wider
-			// than the whole line (the panel is too narrow for a better
-			// answer), or the remainder is zero-width only — a trailing ANSI
-			// reset, say — which Truncate keeps because it fits while
-			// TruncateLeft has nothing to drop. Emit the remainder whole and
-			// stop; looping would never make progress.
-			segs = append(segs, s)
+	var b strings.Builder
+	var carried strings.Builder // SGR sequences active since the last full reset
+	curWidth := 0
+	var state byte // decoder state, zero value is NormalState
+	pendingReplay := false
+	// write appends text to the current segment, re-opening any carried SGR
+	// state first so every segment after a wrap starts from the same
+	// attributes as the source position it resumes at.
+	write := func(text string) {
+		if pendingReplay {
+			pendingReplay = false
+			if carried.Len() > 0 {
+				b.WriteString(carried.String())
+			}
+		}
+		b.WriteString(text)
+	}
+	for rest := s; rest != ""; {
+		seq, w, n, newState := ansi.DecodeSequence(rest, state, nil)
+		if n <= 0 {
+			// Defensive: the decoder must always make progress. If it ever
+			// did not, emit the remainder rather than spin.
+			b.WriteString(rest)
 			break
 		}
-		segs = append(segs, head)
-		s = rest
+		state = newState
+		if seq != "" && seq[0] == '\x1b' && len(seq) > 2 && seq[1] == '[' && seq[len(seq)-1] == 'm' {
+			sgrUpdate(&carried, seq)
+		}
+		if w > 0 && curWidth > 0 && curWidth+w > width {
+			segs = append(segs, b.String())
+			b.Reset()
+			curWidth = 0
+			pendingReplay = true
+		}
+		if w > width {
+			// A single grapheme wider than the whole line (a CJK character at
+			// width 1). Nothing that follows could fit either, so emit the
+			// rest as the final segment and stop — the cap that keeps the
+			// caller's line arithmetic finite.
+			write(rest)
+			segs = append(segs, b.String())
+			return segs
+		}
+		write(seq)
+		curWidth += w
+		rest = rest[n:]
+	}
+	if b.Len() > 0 {
+		segs = append(segs, b.String())
 	}
 	return segs
+}
+
+// sgrUpdate folds one SGR sequence into the carried style. A sequence that
+// fully resets (empty params, or any 0 among them) drops the carried state;
+// a reset that also sets attributes ("0;31") restarts from those; anything
+// else accumulates, so replaying the carried list in order reproduces the
+// exact attributes that were active at the split.
+func sgrUpdate(carried *strings.Builder, seq string) {
+	body := seq[2 : len(seq)-1]
+	if body == "" {
+		carried.Reset()
+		return
+	}
+	reset, pure := false, true
+	for _, f := range strings.Split(body, ";") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			pure = false // colon sub-parameters, private modes: keep as-is
+			continue
+		}
+		if n == 0 {
+			reset = true
+		} else {
+			pure = false
+		}
+	}
+	if reset {
+		carried.Reset()
+		if pure {
+			return
+		}
+	}
+	carried.WriteString(seq)
 }
 
 // render builds one status line for a row: "{cursor}⏺ {desc} · {activity}

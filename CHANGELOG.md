@@ -262,6 +262,26 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **Expanded sub-agent output no longer pins a CPU core**: `wrapToWidth`
+  advanced with a Truncate/TruncateLeft pair per segment, re-scanning the
+  remaining text each time — quadratic in the accumulated output, so a few
+  tens of KB made every render tick burn a core for seconds (and the test
+  suite minutes under `-race`). It now decodes the string once into graphemes
+  and escapes, keeping the open SGR attributes across a line break so wrapped
+  colored output stays colored on every row. The old implementation's phantom
+  escape-only segment (one extra blank line on colored output) is gone too.
+  A performance regression test now pins the linear cost, and CI's test step
+  runs with `-timeout 6m` (tighter than Go's 10m default) so the next such
+  slowdown fails the build instead of creeping up on the default unnoticed.
+- **Startup no longer waits for the models.dev catalog refresh**: the refresh
+  held the same mutex lookups serialize on, and the new startup seeds resolve
+  their context window right after main kicks the background fetch off — so
+  the TUI/REPL blocked until the ~5.4 MB download (or its 20s timeout)
+  finished. Every launch after the catalog schema bump had a stale cache, so
+  this hit the first start of every existing install. Fetches now serialize on
+  their own lock, separate from the state lock: a lookup arriving mid-fetch
+  reads the previous snapshot and returns immediately, and the refreshed
+  values land when the download completes.
 - **Mirror-served checksums are now cross-checked**: both `golder update` and
   `install.sh` used to accept `checksums.txt` from whichever source answered
   first, so a malicious mirror could poison the archive and its digest

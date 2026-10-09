@@ -189,6 +189,14 @@ var (
 	// lookup or the startup warm-up refreshes it instead of waiting out the TTL
 	// for fields the old schema never carried (Context among them).
 	reasoningStale bool
+	// reasoningFetchMu serializes catalog fetches so concurrent refreshes
+	// collapse into one network request. It is deliberately separate from
+	// reasoningMu: a fetch holds this lock across the network call, while
+	// lookups (startup window resolution among them) only ever take
+	// reasoningMu for the in-memory state, so a slow models.dev download can
+	// never stall a lookup — the regression that made startup wait out the
+	// full fetch (or its timeout).
+	reasoningFetchMu sync.Mutex
 )
 
 // loadReasoningCacheLocked refreshes reasoningCache from the disk cache when a
@@ -364,12 +372,22 @@ func ContextWindowFor(providerName, model string) int {
 // callers serialize; the loser of the race re-checks freshness and returns
 // without a second fetch. Network errors leave the existing cache untouched.
 func EnsureReasoningCatalog(ctx context.Context) error {
-	reasoningMu.Lock()
-	defer reasoningMu.Unlock()
-	loadReasoningCacheLocked()
-	if reasoningCache != nil && cacheFresh(reasoningChecked) && !reasoningStale {
+	if reasoningCatalogFresh() {
 		return nil
 	}
+
+	// Serialize fetchers (this holds across the network call, and only other
+	// fetchers take it). A lookup that arrives mid-fetch never waits here: it
+	// reads the previous snapshot under reasoningMu and returns.
+	reasoningFetchMu.Lock()
+	defer reasoningFetchMu.Unlock()
+
+	// Another fetcher may have refreshed while we waited for the slot.
+	if reasoningCatalogFresh() {
+		return nil
+	}
+
+	reasoningMu.Lock()
 	// Only a cache written by the current schema may answer a conditional
 	// request: a 304 on an old-schema trim would "confirm" upstream bytes
 	// whose new fields the old trim never extracted (Context among them).
@@ -377,34 +395,45 @@ func EnsureReasoningCatalog(ctx context.Context) error {
 	if reasoningCache != nil && !reasoningStale {
 		cond = readCatalogETag(reasoningCatalogFileName)
 	}
+	reasoningMu.Unlock()
+
 	providers, etag, err := fetchModelsDevCatalog(ctx, cond)
 	if errors.Is(err, errCatalogNotModified) {
 		// Upstream is unchanged: keep the trimmed data, move the freshness
 		// stamp forward so the next refresh is another TTL away.
+		reasoningMu.Lock()
 		reasoningChecked = time.Now()
 		writeReasoningCache(reasoningCatalogFile{Version: reasoningCatalogVersion, CheckedAt: reasoningChecked, Providers: reasoningCache})
+		reasoningMu.Unlock()
 		return nil
 	}
 	if err != nil {
 		return err
 	}
+	reasoningMu.Lock()
 	reasoningCache = providers
 	reasoningChecked = time.Now()
 	reasoningStale = false
 	writeReasoningCache(reasoningCatalogFile{Version: reasoningCatalogVersion, CheckedAt: reasoningChecked, Providers: providers})
+	reasoningMu.Unlock()
 	writeCatalogETag(reasoningCatalogFileName, etag)
 	return nil
+}
+
+// reasoningCatalogFresh reports whether a fetch can be skipped: the loaded
+// catalog is present, inside its TTL, and written by the current schema.
+func reasoningCatalogFresh() bool {
+	reasoningMu.Lock()
+	defer reasoningMu.Unlock()
+	loadReasoningCacheLocked()
+	return reasoningCache != nil && cacheFresh(reasoningChecked) && !reasoningStale
 }
 
 // StartBackgroundReasoningCatalogRefresh refreshes a stale or missing catalog
 // in a goroutine so startup never blocks on models.dev. It returns immediately
 // and swallows errors: a failed refresh leaves the previous cache in place.
 func StartBackgroundReasoningCatalogRefresh() {
-	reasoningMu.Lock()
-	loadReasoningCacheLocked()
-	fresh := reasoningCache != nil && cacheFresh(reasoningChecked) && !reasoningStale
-	reasoningMu.Unlock()
-	if fresh {
+	if reasoningCatalogFresh() {
 		return
 	}
 	go func() {

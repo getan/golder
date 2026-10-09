@@ -35,4 +35,8 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test -race ./...
+        # -timeout 6m is deliberately tighter than Go's 10m default: the TUI
+        # suite once crept to 566s (quadratic wrap in the expanded sub-agent
+        # view) and stayed green for days, 34s short of the default limit.
+        # A tighter ceiling turns the next such regression into a red build.
+        run: go test -race -timeout 6m ./...

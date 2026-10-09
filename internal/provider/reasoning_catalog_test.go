@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,6 +207,66 @@ func TestReasoningCatalogTTLDiskLoadAndRefresh(t *testing.T) {
 	}
 	if got := f.Providers["opencode-go"]["m1"].Levels; !reflect.DeepEqual(got, []string{"minimal", "xhigh"}) {
 		t.Errorf("cache levels = %v, want [minimal xhigh]", got)
+	}
+}
+
+// TestContextWindowForNeverBlocksOnRefresh pins the startup contract: lookups
+// read the catalog without waiting for an in-flight network refresh. main
+// kicks off the background models.dev fetch and the TUI/REPL seeds resolve
+// their window right after, so if lookups serialized on the fetch, startup
+// stalled for the whole 5.4 MB download (or its 20s timeout) — the exact
+// "takes ages to start" regression. The lookup must see the previous
+// snapshot and return promptly; the refreshed value lands afterwards. The
+// 1s budget is the startup-path guarantee: the blocking shape waited for the
+// whole fetch (unbounded here), while a healthy lookup is a map read.
+func TestContextWindowForNeverBlocksOnRefresh(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOLDER_HOME", dir)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseNow := func() { releaseOnce.Do(func() { close(release) }) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-started:
+		default:
+			close(started)
+		}
+		<-release
+		_, _ = io.WriteString(w, `{"opencode-go": {"models": {"m1": {"reasoning": true, "limit": {"context": 123}}}}}`)
+	}))
+	defer srv.Close()
+	// Deferred after srv.Close on purpose: LIFO means releaseNow runs first, so
+	// a failing assertion cannot leave the handler blocked while Close waits.
+	defer releaseNow()
+	useModelsDevURL(t, srv.URL)
+
+	// A stale cache so the refresh actually hits the network.
+	withReasoningCatalog(t, map[string]map[string]reasoningEntry{
+		"opencode-go": {"m1": {Reasoning: true, Context: 7}},
+	}, time.Now().Add(-2*catalogTTL))
+
+	done := make(chan error, 1)
+	go func() { done <- EnsureReasoningCatalog(context.Background()) }()
+	<-started // the fetch is in flight and holding whatever lock it takes
+
+	got := make(chan int, 1)
+	go func() { got <- ContextWindowFor("opencode-go", "m1") }()
+	select {
+	case v := <-got:
+		if v != 7 {
+			t.Fatalf("window during refresh = %d, want the previous snapshot's 7", v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ContextWindowFor blocked for over 1s while a catalog refresh was in flight (startup budget)")
+	}
+
+	releaseNow()
+	if err := <-done; err != nil {
+		t.Fatalf("EnsureReasoningCatalog: %v", err)
+	}
+	if v := ContextWindowFor("opencode-go", "m1"); v != 123 {
+		t.Fatalf("window after refresh = %d, want 123", v)
 	}
 }
 
