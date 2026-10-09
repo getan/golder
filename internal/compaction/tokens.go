@@ -98,10 +98,13 @@ func EstimateTokens(msg agentcore.Message) int {
 }
 
 // calculateContextTokens derives total context tokens from a provider usage
-// block. golder's Usage only reports input/output, so we sum them (pi additionally
-// folds cache read/write, which golder does not track).
+// block. Input/output are always counted; cache read/write are added for
+// providers that report them separately (Anthropic-wire, where input_tokens
+// excludes cached content). OpenAI-wire usage already includes cache hits in
+// InputTokens and leaves the cache fields zero, so this folds like pi/codex
+// without double-counting either wire format.
 func calculateContextTokens(u agentcore.Usage) int {
-	return u.InputTokens + u.OutputTokens
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
 }
 
 // assistantUsage returns a usable Usage from an assistant message, skipping

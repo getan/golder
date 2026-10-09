@@ -239,7 +239,17 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	// prior emit error), records the run result, and closes the stream exactly
 	// once. Telemetry is emitted first so a consumer sees the run's structured
 	// metrics immediately before the terminal event.
+	//
+	// The final context figure is recorded here so the summary stays accurate
+	// even when the run ended before (or between) turn boundaries — an
+	// error/abort on the first turn, or a terminating tool batch — where
+	// afterTurn never published one. A window-less summary used to make the TUI
+	// clear the context gauge it had been showing.
 	finish := func() {
+		if cfg.ContextWindow > 0 {
+			tokens := compaction.EstimateContextTokens(agentCtx.Messages).Tokens
+			tel.recordContext(tokens, cfg.ContextWindow)
+		}
 		_ = emit(tel.summary())
 		msgs := newMessages()
 		_ = emit(agentcore.AgentEndEvent{Messages: msgs})

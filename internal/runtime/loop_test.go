@@ -340,6 +340,37 @@ func TestAgentLoopErrorStopEndsRun(t *testing.T) {
 	}
 }
 
+// TestAgentLoopRecordsFinalContextOnEarlyEnd pins the run-end telemetry fix: a
+// run that never crossed a turn boundary (error on the first turn) still
+// reports the fresh context figure, so the TUI's context gauge is not cleared
+// by a window-less summary.
+func TestAgentLoopRecordsFinalContextOnEarlyEnd(t *testing.T) {
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonError, ErrorMessage: "boom"},
+	}))
+	cfg.ContextWindow = 50_000
+	agentCtx := &agentcore.AgentContext{Messages: agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+	}}
+
+	events := collectEvents(t, agentLoop(context.Background(), agentCtx, cfg))
+	var summary *agentcore.TelemetryEvent
+	for _, ev := range events {
+		if te, ok := ev.(agentcore.TelemetryEvent); ok {
+			summary = &te
+		}
+	}
+	if summary == nil {
+		t.Fatal("no telemetry summary emitted")
+	}
+	if summary.ContextWindow != 50_000 {
+		t.Errorf("summary context window = %d, want 50000", summary.ContextWindow)
+	}
+	if summary.ContextTokens <= 0 {
+		t.Errorf("summary context tokens = %d, want > 0", summary.ContextTokens)
+	}
+}
+
 func TestAgentLoopAllTerminateStopsRun(t *testing.T) {
 	term := true
 	termTool := execTool{

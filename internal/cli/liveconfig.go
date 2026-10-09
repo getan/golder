@@ -50,3 +50,24 @@ type LiveConfig struct {
 // on genuinely long sessions (threshold = window - ReserveTokens), never on
 // ordinary short exchanges.
 const DefaultContextWindow = 1000000
+
+// ResolveContextWindow resolves the context-token budget for a (provider,
+// model) pair: the value models.dev publishes when its catalog knows the model,
+// DefaultContextWindow otherwise. The catalog is read from the same 24h disk
+// cache the reasoning ladder uses, so this never blocks on the network; a model
+// the catalog does not cover (custom base URL, brand-new release) keeps the
+// historical 1M fallback.
+func ResolveContextWindow(providerName, model string) int {
+	if w := provider.ContextWindowFor(providerName, model); w > 0 {
+		return w
+	}
+	return DefaultContextWindow
+}
+
+// RefreshContextWindow re-resolves ContextWindow from the current provider and
+// model. Call it after a /model or /provider switch, and after /resume applies
+// a session header, so the status-bar percentage and the auto-compaction
+// threshold track the model actually in use instead of the launch model.
+func (l *LiveConfig) RefreshContextWindow() {
+	l.ContextWindow = ResolveContextWindow(l.ProviderName, l.Model)
+}

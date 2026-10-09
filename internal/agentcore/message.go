@@ -37,6 +37,12 @@ type AgentMessage = Message
 type Usage struct {
 	InputTokens  int `json:"inputTokens"`
 	OutputTokens int `json:"outputTokens"`
+	// CacheReadTokens / CacheWriteTokens are prompt-cache accounting from
+	// Anthropic-wire providers, whose input_tokens counts only the uncached
+	// remainder. OpenAI-wire providers fold cache hits into InputTokens, so
+	// their decoders leave these zero; context accounting adds them on top.
+	CacheReadTokens  int `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
 }
 
 // UserMessage is input from the user. Content is restricted at construction to

@@ -54,8 +54,13 @@ type AnthropicDecoder struct {
 	responseModel string
 	inputTokens   int
 	outputTokens  int
-	stopReason    string // mapped golder stop reason (empty until message_delta)
-	done          bool   // message_stop / done already emitted
+	// cacheReadTokens / cacheWriteTokens carry Anthropic's prompt-cache
+	// accounting: input_tokens excludes cached content, which arrives in
+	// cache_read_input_tokens / cache_creation_input_tokens instead.
+	cacheReadTokens  int
+	cacheWriteTokens int
+	stopReason       string // mapped golder stop reason (empty until message_delta)
+	done             bool   // message_stop / done already emitted
 }
 
 // NewAnthropicDecoder builds a fresh decoder for one streamed response.
@@ -111,6 +116,10 @@ type anthropicEvent struct {
 type anthropicUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// Prompt-cache accounting: the wire reports cached prompt content here, not
+	// inside input_tokens.
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 }
 
 // Decode turns one Anthropic SSE data payload into zero or more StreamEvents.
@@ -170,6 +179,8 @@ func (d *AnthropicDecoder) onMessageStart(ev anthropicEvent) []StreamEvent {
 		if ev.Message.Usage != nil {
 			d.inputTokens = ev.Message.Usage.InputTokens
 			d.outputTokens = ev.Message.Usage.OutputTokens
+			d.cacheReadTokens = ev.Message.Usage.CacheReadInputTokens
+			d.cacheWriteTokens = ev.Message.Usage.CacheCreationInputTokens
 		}
 	}
 	return []StreamEvent{StreamStartEvent{Partial: d.partial()}}
@@ -244,6 +255,12 @@ func (d *AnthropicDecoder) onMessageDelta(ev anthropicEvent) []StreamEvent {
 		if ev.Usage.InputTokens != 0 {
 			d.inputTokens = ev.Usage.InputTokens
 		}
+		if ev.Usage.CacheReadInputTokens != 0 {
+			d.cacheReadTokens = ev.Usage.CacheReadInputTokens
+		}
+		if ev.Usage.CacheCreationInputTokens != 0 {
+			d.cacheWriteTokens = ev.Usage.CacheCreationInputTokens
+		}
 	}
 	// No standalone event kind for usage/stop-reason accumulation; the values
 	// surface in the terminal done message.
@@ -284,8 +301,13 @@ func (d *AnthropicDecoder) partial() agentcore.AssistantMessage {
 		ResponseID:    d.responseID,
 		ResponseModel: d.responseModel,
 	}
-	if d.inputTokens != 0 || d.outputTokens != 0 {
-		msg.Usage = &agentcore.Usage{InputTokens: d.inputTokens, OutputTokens: d.outputTokens}
+	if d.inputTokens != 0 || d.outputTokens != 0 || d.cacheReadTokens != 0 || d.cacheWriteTokens != 0 {
+		msg.Usage = &agentcore.Usage{
+			InputTokens:      d.inputTokens,
+			OutputTokens:     d.outputTokens,
+			CacheReadTokens:  d.cacheReadTokens,
+			CacheWriteTokens: d.cacheWriteTokens,
+		}
 	}
 
 	idx := make([]int, len(d.order))

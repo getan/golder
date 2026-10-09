@@ -297,3 +297,40 @@ func eventKinds(events []StreamEvent) []string {
 	}
 	return out
 }
+
+// TestAnthropicDecoderCountsCacheTokens pins the prompt-cache accounting: the
+// Anthropic wire excludes cached content from input_tokens, reporting it in
+// cache_read_input_tokens / cache_creation_input_tokens instead, so the
+// decoder must carry both onto the final Usage for context accounting.
+func TestAnthropicDecoderCountsCacheTokens(t *testing.T) {
+	body := `event: message_start
+data: {"type":"message_start","message":{"id":"msg_cache","model":"claude-x","usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":900,"cache_creation_input_tokens":100}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+	_, final := feedSSE(t, NewAnthropicDecoder(), body)
+	if final.Usage == nil {
+		t.Fatal("usage missing from final message")
+	}
+	if final.Usage.CacheReadTokens != 900 || final.Usage.CacheWriteTokens != 100 {
+		t.Errorf("cache tokens = read:%d write:%d, want 900/100",
+			final.Usage.CacheReadTokens, final.Usage.CacheWriteTokens)
+	}
+	if final.Usage.InputTokens != 10 || final.Usage.OutputTokens != 3 {
+		t.Errorf("input/output = %d/%d, want 10/3", final.Usage.InputTokens, final.Usage.OutputTokens)
+	}
+}

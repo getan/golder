@@ -25,13 +25,16 @@ func withReasoningCatalog(t *testing.T, providers map[string]map[string]reasonin
 	reasoningMu.Lock()
 	oldCache, oldChecked := reasoningCache, reasoningChecked
 	oldSource, oldMod, oldSize := reasoningSource, reasoningMod, reasoningSize
+	oldStale := reasoningStale
 	reasoningCache, reasoningChecked = providers, checked
 	reasoningSource, reasoningMod, reasoningSize = "", time.Time{}, 0
+	reasoningStale = false
 	reasoningMu.Unlock()
 	t.Cleanup(func() {
 		reasoningMu.Lock()
 		reasoningCache, reasoningChecked = oldCache, oldChecked
 		reasoningSource, reasoningMod, reasoningSize = oldSource, oldMod, oldSize
+		reasoningStale = oldStale
 		reasoningMu.Unlock()
 	})
 }
@@ -65,7 +68,7 @@ func TestEnsureReasoningCatalogExtractsCachesAndRefreshes(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"opencode-go": {"models": {
-				"glm-5.3": {"reasoning": true, "reasoning_options": [
+				"glm-5.3": {"reasoning": true, "limit": {"context": 200000}, "reasoning_options": [
 					{"type": "effort", "values": ["low", "none", "max", "high"]},
 					{"type": "toggle"}
 				]},
@@ -97,6 +100,14 @@ func TestEnsureReasoningCatalogExtractsCachesAndRefreshes(t *testing.T) {
 	if got := KnownReasoningLevels("opencode-go", "mimo-v2.6-pro"); got != nil {
 		t.Errorf("mimo levels = %v, want nil (no effort option)", got)
 	}
+	// limit.context rides the same extraction: the window is served from the
+	// catalog without a second fetch.
+	if got := ContextWindowFor("opencode-go", "glm-5.3"); got != 200000 {
+		t.Errorf("glm-5.3 context window = %d, want 200000", got)
+	}
+	if got := ContextWindowFor("opencode-go", "plain-1"); got != 0 {
+		t.Errorf("model without limit.context = %d, want 0", got)
+	}
 	// Non-registry providers are not decoded into the cache.
 	if _, ok := catalogEntry("unlisted-provider", "m"); ok {
 		t.Error("unlisted provider leaked into the catalog")
@@ -112,6 +123,9 @@ func TestEnsureReasoningCatalogExtractsCachesAndRefreshes(t *testing.T) {
 	}
 	if f.CheckedAt.IsZero() || f.Providers["opencode-go"]["glm-5.3"].Levels == nil {
 		t.Errorf("cache = %+v, want timestamp + extracted levels", f)
+	}
+	if f.Version != reasoningCatalogVersion {
+		t.Errorf("cache version = %d, want %d", f.Version, reasoningCatalogVersion)
 	}
 	// A fresh catalog is served from memory: no second fetch.
 	if err := EnsureReasoningCatalog(context.Background()); err != nil {
@@ -129,6 +143,7 @@ func TestReasoningCatalogTTLDiskLoadAndRefresh(t *testing.T) {
 	writeCache := func(dir string, checkedAt time.Time, levels []string) {
 		t.Helper()
 		f := reasoningCatalogFile{
+			Version:   reasoningCatalogVersion,
 			CheckedAt: checkedAt,
 			Providers: map[string]map[string]reasoningEntry{
 				"opencode-go": {"m1": {Reasoning: true, Levels: levels}},
@@ -191,6 +206,180 @@ func TestReasoningCatalogTTLDiskLoadAndRefresh(t *testing.T) {
 	}
 	if got := f.Providers["opencode-go"]["m1"].Levels; !reflect.DeepEqual(got, []string{"minimal", "xhigh"}) {
 		t.Errorf("cache levels = %v, want [minimal xhigh]", got)
+	}
+}
+
+// TestReasoningCatalogConditionalRequest pins the ETag path: the first fetch
+// records the server's ETag, a later refresh sends it as If-None-Match, and a
+// 304 keeps the trimmed data while moving the freshness stamp forward.
+func TestReasoningCatalogConditionalRequest(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOLDER_HOME", dir)
+	full, conditional := 0, 0
+	var noneMatch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if inm := r.Header.Get("If-None-Match"); inm != "" {
+			conditional++
+			noneMatch = inm
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		full++
+		w.Header().Set("ETag", `W/"cat-1"`)
+		_, _ = io.WriteString(w, `{"opencode-go": {"models": {"m1": {"reasoning": true, "limit": {"context": 123456}}}}}`)
+	}))
+	defer srv.Close()
+	useModelsDevURL(t, srv.URL)
+	withReasoningCatalog(t, nil, time.Time{})
+
+	if err := EnsureReasoningCatalog(context.Background()); err != nil {
+		t.Fatalf("first EnsureReasoningCatalog: %v", err)
+	}
+	if got := ContextWindowFor("opencode-go", "m1"); got != 123456 {
+		t.Fatalf("window = %d, want 123456", got)
+	}
+	if got := readCatalogETag(reasoningCatalogFileName); got != `W/"cat-1"` {
+		t.Fatalf("recorded etag = %q, want W/\"cat-1\"", got)
+	}
+
+	// Age the in-memory stamp: the next Ensure must refresh, and the recorded
+	// ETag must turn that into a conditional request.
+	reasoningMu.Lock()
+	reasoningChecked = time.Now().Add(-2 * catalogTTL)
+	reasoningMu.Unlock()
+	if err := EnsureReasoningCatalog(context.Background()); err != nil {
+		t.Fatalf("conditional EnsureReasoningCatalog: %v", err)
+	}
+	if conditional != 1 || full != 1 {
+		t.Fatalf("requests: full = %d, conditional = %d; want 1 and 1", full, conditional)
+	}
+	if noneMatch != `W/"cat-1"` {
+		t.Errorf("If-None-Match = %q, want W/\"cat-1\"", noneMatch)
+	}
+	// The 304 kept the trimmed data and pushed the freshness stamp out, so the
+	// next call within the TTL does not touch the network at all.
+	if got := ContextWindowFor("opencode-go", "m1"); got != 123456 {
+		t.Errorf("window after 304 = %d, want 123456", got)
+	}
+	if err := EnsureReasoningCatalog(context.Background()); err != nil {
+		t.Fatalf("post-304 EnsureReasoningCatalog: %v", err)
+	}
+	if full+conditional != 2 {
+		t.Errorf("requests after fresh stamp = %d, want 2", full+conditional)
+	}
+}
+
+// TestReasoningCatalogSkipsConditionalOnStaleSchema pins the safety rule: a
+// cache written by an older schema must not send If-None-Match — a 304 would
+// confirm upstream bytes whose new fields that trim never extracted.
+func TestReasoningCatalogSkipsConditionalOnStaleSchema(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOLDER_HOME", dir)
+	old := `{"checked_at":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","providers":{"opencode-go":{"m1":{"reasoning":true}}}}`
+	if err := os.WriteFile(filepath.Join(dir, reasoningCatalogFileName), []byte(old), 0o644); err != nil {
+		t.Fatalf("write old-schema cache: %v", err)
+	}
+	writeCatalogETag(reasoningCatalogFileName, `W/"cat-1"`)
+
+	sentConditional := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") != "" {
+			sentConditional = true
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", `W/"cat-2"`)
+		_, _ = io.WriteString(w, `{"opencode-go": {"models": {"m1": {"reasoning": true, "limit": {"context": 777}}}}}`)
+	}))
+	defer srv.Close()
+	useModelsDevURL(t, srv.URL)
+	withReasoningCatalog(t, nil, time.Time{})
+
+	if err := EnsureReasoningCatalog(context.Background()); err != nil {
+		t.Fatalf("EnsureReasoningCatalog: %v", err)
+	}
+	if sentConditional {
+		t.Fatal("old-schema cache sent If-None-Match; a 304 would skip fields it lacks")
+	}
+	if got := ContextWindowFor("opencode-go", "m1"); got != 777 {
+		t.Errorf("window after schema refresh = %d, want 777", got)
+	}
+	if got := readCatalogETag(reasoningCatalogFileName); got != `W/"cat-2"` {
+		t.Errorf("etag after refresh = %q, want W/\"cat-2\"", got)
+	}
+}
+
+// TestContextWindowFor pins the limit.context lookup: the catalog value is
+// returned for a known model, and 0 for an unknown provider or model and for
+// entries models.dev lists without a limit.
+func TestContextWindowFor(t *testing.T) {
+	setReasoningCatalogForTest(t, map[string]map[string]reasoningEntry{
+		"anthropic": {
+			"claude-sonnet-4-5": {Reasoning: true, Context: 200000},
+			"no-limit":          {Reasoning: false},
+		},
+		"minimax": {
+			// models.dev keeps vendor casing; gateways list this lowercase.
+			"MiniMax-M2.5": {Reasoning: true, Context: 1000000},
+		},
+	})
+	if got := ContextWindowFor("anthropic", "claude-sonnet-4-5"); got != 200000 {
+		t.Errorf("known window = %d, want 200000", got)
+	}
+	if got := ContextWindowFor("minimax", "minimax-m2.5"); got != 1000000 {
+		t.Errorf("case-folded window = %d, want 1000000", got)
+	}
+	if got := ContextWindowFor("anthropic", "no-limit"); got != 0 {
+		t.Errorf("entry without limit = %d, want 0", got)
+	}
+	if got := ContextWindowFor("anthropic", "unknown"); got != 0 {
+		t.Errorf("unknown model = %d, want 0", got)
+	}
+	if got := ContextWindowFor("unknown-provider", "m"); got != 0 {
+		t.Errorf("unknown provider = %d, want 0", got)
+	}
+	if got := ContextWindowFor("", "m"); got != 0 {
+		t.Errorf("empty provider = %d, want 0", got)
+	}
+}
+
+// TestReasoningCatalogSchemaVersionGate verifies a cache written before Context
+// existed still serves its reasoning levels (so an offline user loses nothing),
+// reads as an unknown window rather than a zero-token one, and is refreshed by
+// the next Ensure instead of waiting out the TTL.
+func TestReasoningCatalogSchemaVersionGate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOLDER_HOME", dir)
+	// Version 1 shape: no "version" field, no per-model context.
+	old := `{"checked_at":"` + time.Now().UTC().Format(time.RFC3339) +
+		`","providers":{"opencode-go":{"m1":{"reasoning":true,"levels":["max"]}}}}`
+	if err := os.WriteFile(filepath.Join(dir, reasoningCatalogFileName), []byte(old), 0o644); err != nil {
+		t.Fatalf("write old-schema cache: %v", err)
+	}
+	withReasoningCatalog(t, nil, time.Time{})
+	if got := ReasoningLevels("opencode-go", "m1"); !reflect.DeepEqual(got, []agentcore.ThinkingLevel{agentcore.ThinkingMax}) {
+		t.Fatalf("old-schema cache should still serve levels, got %v", got)
+	}
+	if got := ContextWindowFor("opencode-go", "m1"); got != 0 {
+		t.Fatalf("old-schema cache served window %d, want 0", got)
+	}
+
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = io.WriteString(w, `{"opencode-go": {"models": {"m1": {"reasoning": true, "limit": {"context": 123456}}}}}`)
+	}))
+	defer srv.Close()
+	useModelsDevURL(t, srv.URL)
+	if err := EnsureReasoningCatalog(context.Background()); err != nil {
+		t.Fatalf("EnsureReasoningCatalog after version gate: %v", err)
+	}
+	if hits != 1 {
+		t.Fatalf("old-schema cache did not trigger a refetch: hits = %d, want 1", hits)
+	}
+	if got := ContextWindowFor("opencode-go", "m1"); got != 123456 {
+		t.Errorf("window after refetch = %d, want 123456", got)
 	}
 }
 

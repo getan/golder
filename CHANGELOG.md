@@ -29,6 +29,13 @@ interactive REPL/TUI.
   serving a corrupt or stale copy fails over to the next source. `GOLDER_MIRROR`
   overrides the list (whitespace-separated URL prefixes) or disables mirroring
   with `off`/`none`.
+- **Conditional models.dev catalog refresh (ETag)**: the once-per-TTL
+  `models.dev/api.json` fetch (~5.4 MB) now sends `If-None-Match` with the ETag
+  recorded by the previous fetch, so an unchanged catalog answers
+  `304 Not Modified` with an empty body and only the freshness stamp moves.
+  A cache written by an older schema still forces a full fetch — a `304` on a
+  trim that never carried the newer fields would silently "confirm" data it
+  does not have.
 - **REPL startup upgrade hint**: the cached latest-release check now refreshes
   for both interactive drivers (previously the TUI only), and the REPL prints
   the same one-line `Update available: vX.Y.Z — run "golder update" to upgrade`
@@ -255,6 +262,35 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **Context gauge and auto-compaction now use the model's real window**: the
+  budget was hardcoded to 1M, so a 200K model (Claude Sonnet 4.5, MiniMax) read
+  as a fifth of its real usage and never crossed the compaction threshold until
+  the provider rejected the request. The window now comes from models.dev's
+  `limit.context`, extracted from the same catalog fetch and 24h disk cache the
+  reasoning ladder already uses (no extra request), and `/model`, `/provider`
+  and `/resume` re-resolve it so the gauge and the threshold follow the model
+  actually in use. The catalog is a hint, not a hard dependency: unknown
+  models, custom base URLs and a cache written before this change keep the
+  1M fallback (a case-only difference from models.dev's brand casing still
+  matches — models.dev writes `MiniMax-M2.5`, gateways list it lowercase),
+  and an out-of-date cache still serves its reasoning levels while being
+  refetched on the next lookup instead of waiting out the 24h TTL (it reads
+  as an unknown window, never as a zero-token one). The Zen gateway
+  (`opencode-zen`) now maps to models.dev's `opencode` entry, which it
+  previously missed, so its models report real windows too.
+- **Anthropic context accounting now counts prompt-cache tokens**: the
+  Anthropic wire excludes cached content from `input_tokens` and reports it in
+  `cache_read_input_tokens` / `cache_creation_input_tokens`, which golder
+  dropped — a cached session read low and auto-compaction fired late on
+  anthropic-wired providers (anthropic, minimax, bedrock, Cloudflare).
+  `Usage` carries both counts now and context accounting folds them in
+  (parity with pi and codex).
+- **Early-ended runs no longer clear the context gauge**: a run that stopped
+  before its first turn boundary (error/abort mid-stream, a terminating tool
+  batch) emitted a telemetry summary with no window, and the TUI responded by
+  hiding the context segment it had been showing. The run now records the
+  final context figure at `finish`, so the summary carries a live window on
+  every exit path.
 - **The running-session note now spells out Ctrl-C**: a bash call that
   outlived its yield window ended with "send chars `\u0003` to interrupt",
   which reads as gibberish to anyone but the model; it now carries the same

@@ -314,6 +314,10 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
+		// models.dev keys the Zen gateway as "opencode"; without this the
+		// provider missed the catalog entirely (windows fell back to 1M and
+		// reasoning levels to the family ladder).
+		ModelsDevID: "opencode",
 	},
 	{
 		Name:           "opencode-go",

@@ -81,6 +81,9 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	if h.Model != "" {
 		deps.live.Model = h.Model
 	}
+	// The resumed session may run a different model than the launch one;
+	// re-resolve the context budget so the gauge and auto-compaction follow.
+	deps.live.RefreshContextWindow()
 	deps.header = h
 	deps.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: deps.agentCtx.Tools}
 	deps.persisted = len(msgs)

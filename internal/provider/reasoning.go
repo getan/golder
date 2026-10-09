@@ -35,13 +35,15 @@
 // $GOLDER_HOME/reasoning-catalog.json (or ~/.golder/reasoning-catalog.json)
 // with the shared catalogTTL: a session never blocks on the network for it,
 // and the fetch happens at most once per TTL instead of once per session.
-// Missing, stale, or corrupt caches degrade silently to the hand-maintained
-// ladders.
+// Refreshes are conditional (If-None-Match), so an unchanged upstream catalog
+// answers 304 and costs no body. Missing, stale, or corrupt caches degrade
+// silently to the hand-maintained ladders.
 package provider
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -139,19 +141,30 @@ const (
 	reasoningCatalogFileName = "reasoning-catalog.json"
 	// reasoningCatalogTimeout bounds one catalog fetch.
 	reasoningCatalogTimeout = 20 * time.Second
+	// reasoningCatalogVersion is the schema version of the cached file. A
+	// cache written by an older golder may lack fields newer code reads (for
+	// example Context), so an out-of-date version is treated as "no cache" and
+	// refreshed in the background instead of surfacing zero values.
+	reasoningCatalogVersion = 2
 )
 
-// reasoningEntry is one model's reasoning metadata: whether the model reasons
-// at all, and the effort-type levels it advertises (empty when it reasons but
-// exposes no effort control). "none" is dropped: golder's off is expressed by
-// omitting the wire field, not by an effort value.
+// reasoningEntry is one model's catalog metadata: whether the model reasons at
+// all, the effort-type levels it advertises (empty when it reasons but exposes
+// no effort control), and its context window in tokens (0 when models.dev does
+// not list one). "none" is dropped: golder's off is expressed by omitting the
+// wire field, not by an effort value.
 type reasoningEntry struct {
 	Reasoning bool     `json:"reasoning"`
 	Levels    []string `json:"levels,omitempty"`
+	// Context is models.dev's limit.context, the model's total context-token
+	// budget. It rides the same API response and 24h disk cache the reasoning
+	// metadata uses, so context-window lookups cost no extra network request.
+	Context int `json:"context,omitempty"`
 }
 
 // reasoningCatalogFile is the on-disk shape of the cached catalog.
 type reasoningCatalogFile struct {
+	Version   int                                  `json:"version"`
 	CheckedAt time.Time                            `json:"checked_at"`
 	Providers map[string]map[string]reasoningEntry `json:"providers"`
 }
@@ -170,6 +183,12 @@ var (
 	reasoningSource string
 	reasoningMod    time.Time
 	reasoningSize   int64
+	// reasoningStale marks a loaded cache written before
+	// reasoningCatalogVersion. Its data is still served best-effort (reasoning
+	// levels keep working offline), but it is not considered fresh, so the next
+	// lookup or the startup warm-up refreshes it instead of waiting out the TTL
+	// for fields the old schema never carried (Context among them).
+	reasoningStale bool
 )
 
 // loadReasoningCacheLocked refreshes reasoningCache from the disk cache when a
@@ -192,9 +211,12 @@ func loadReasoningCacheLocked() {
 	if !readCatalogFile(reasoningCatalogFileName, &f) || f.Providers == nil {
 		return
 	}
+	// Memoize the file version before the schema check so an out-of-date file
+	// is not re-read on every lookup while the background refresh replaces it.
+	reasoningSource, reasoningMod, reasoningSize = p, info.ModTime(), info.Size()
 	reasoningCache = f.Providers
 	reasoningChecked = f.CheckedAt
-	reasoningSource, reasoningMod, reasoningSize = p, info.ModTime(), info.Size()
+	reasoningStale = f.Version < reasoningCatalogVersion
 }
 
 // reasoningCatalogSnapshot returns the current in-memory catalog (loading it
@@ -218,6 +240,28 @@ func catalogEntry(providerName, model string) (reasoningEntry, bool) {
 	}
 	e, ok := models[model]
 	return e, ok
+}
+
+// catalogEntryFold is catalogEntry's case-insensitive fallback. models.dev
+// keeps vendor casing in model ids ("MiniMax-M2.5", "tencent/Hy3") while many
+// gateways list the same models lowercase, so an exact match alone misses
+// real entries. The scan is cheap (a provider's map holds a few dozen models)
+// and only runs after the exact lookup fails.
+func catalogEntryFold(providerName, model string) (reasoningEntry, bool) {
+	data := reasoningCatalogSnapshot()
+	if data == nil {
+		return reasoningEntry{}, false
+	}
+	models, ok := data[providerName]
+	if !ok {
+		return reasoningEntry{}, false
+	}
+	for id, e := range models {
+		if strings.EqualFold(id, model) {
+			return e, true
+		}
+	}
+	return reasoningEntry{}, false
 }
 
 // parseReasoningLevels converts catalog level names to the unified ladder,
@@ -294,6 +338,27 @@ func KnownReasoningLevels(providerName, model string) []agentcore.ThinkingLevel 
 	return parseReasoningLevels(e.Levels)
 }
 
+// ContextWindowFor returns the context-token budget models.dev lists for
+// (providerName, model), or 0 when it has no value. Lookups read the reasoning
+// catalog's in-memory/disk copy, so they never block on the network; callers
+// fall back to cli.DefaultContextWindow on 0 (unknown provider, custom
+// base-URL model, or a catalog that has not been fetched yet). A case-only
+// mismatch between the gateway's model id and models.dev's brand casing still
+// matches.
+func ContextWindowFor(providerName, model string) int {
+	if providerName == "" || model == "" {
+		return 0
+	}
+	e, ok := catalogEntry(providerName, model)
+	if !ok {
+		e, ok = catalogEntryFold(providerName, model)
+		if !ok {
+			return 0
+		}
+	}
+	return e.Context
+}
+
 // EnsureReasoningCatalog refreshes the catalog when the in-memory or on-disk
 // copy is missing or older than the TTL, and loads it into memory. Concurrent
 // callers serialize; the loser of the race re-checks freshness and returns
@@ -302,16 +367,32 @@ func EnsureReasoningCatalog(ctx context.Context) error {
 	reasoningMu.Lock()
 	defer reasoningMu.Unlock()
 	loadReasoningCacheLocked()
-	if reasoningCache != nil && cacheFresh(reasoningChecked) {
+	if reasoningCache != nil && cacheFresh(reasoningChecked) && !reasoningStale {
 		return nil
 	}
-	providers, err := fetchModelsDevCatalog(ctx)
+	// Only a cache written by the current schema may answer a conditional
+	// request: a 304 on an old-schema trim would "confirm" upstream bytes
+	// whose new fields the old trim never extracted (Context among them).
+	cond := ""
+	if reasoningCache != nil && !reasoningStale {
+		cond = readCatalogETag(reasoningCatalogFileName)
+	}
+	providers, etag, err := fetchModelsDevCatalog(ctx, cond)
+	if errors.Is(err, errCatalogNotModified) {
+		// Upstream is unchanged: keep the trimmed data, move the freshness
+		// stamp forward so the next refresh is another TTL away.
+		reasoningChecked = time.Now()
+		writeReasoningCache(reasoningCatalogFile{Version: reasoningCatalogVersion, CheckedAt: reasoningChecked, Providers: reasoningCache})
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	reasoningCache = providers
 	reasoningChecked = time.Now()
-	writeReasoningCache(reasoningCatalogFile{CheckedAt: reasoningChecked, Providers: providers})
+	reasoningStale = false
+	writeReasoningCache(reasoningCatalogFile{Version: reasoningCatalogVersion, CheckedAt: reasoningChecked, Providers: providers})
+	writeCatalogETag(reasoningCatalogFileName, etag)
 	return nil
 }
 
@@ -321,7 +402,7 @@ func EnsureReasoningCatalog(ctx context.Context) error {
 func StartBackgroundReasoningCatalogRefresh() {
 	reasoningMu.Lock()
 	loadReasoningCacheLocked()
-	fresh := reasoningCache != nil && cacheFresh(reasoningChecked)
+	fresh := reasoningCache != nil && cacheFresh(reasoningChecked) && !reasoningStale
 	reasoningMu.Unlock()
 	if fresh {
 		return
@@ -356,37 +437,54 @@ type modelsDevProvider struct {
 			Type   string   `json:"type"`
 			Values []string `json:"values"`
 		} `json:"reasoning_options"`
+		Limit struct {
+			Context int `json:"context"`
+		} `json:"limit"`
 	} `json:"models"`
 }
 
+// errCatalogNotModified reports a 304 to a conditional models.dev fetch: the
+// cached trim is still current upstream, so callers only need to refresh the
+// freshness stamp.
+var errCatalogNotModified = errors.New("reasoning catalog not modified")
+
 // fetchModelsDevCatalog downloads models.dev's api.json and extracts the
 // reasoning metadata of the built-in providers' models. Providers outside the
-// registry are not decoded at all, keeping a full fetch cheap.
-func fetchModelsDevCatalog(ctx context.Context) (map[string]map[string]reasoningEntry, error) {
+// registry are not decoded at all, keeping a full fetch cheap. ifNoneMatch,
+// when non-empty, makes the request conditional; a 304 answer is reported as
+// errCatalogNotModified, and the returned ETag is the one to record for the
+// next refresh (empty when the server sends none).
+func fetchModelsDevCatalog(ctx context.Context, ifNoneMatch string) (map[string]map[string]reasoningEntry, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, reasoningCatalogTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsDevURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("reasoning catalog: build request: %w", err)
+		return nil, "", fmt.Errorf("reasoning catalog: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
+	}
 	resp, err := (&http.Client{Timeout: reasoningCatalogTimeout}).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reasoning catalog request failed: %w", err)
+		return nil, "", fmt.Errorf("reasoning catalog request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-	if err != nil {
-		return nil, fmt.Errorf("reasoning catalog read failed: %w", err)
+	if resp.StatusCode == http.StatusNotModified && ifNoneMatch != "" {
+		return nil, "", errCatalogNotModified
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("reasoning catalog: GET %s returned %d", modelsDevURL, resp.StatusCode)
+		return nil, "", fmt.Errorf("reasoning catalog: GET %s returned %d", modelsDevURL, resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, "", fmt.Errorf("reasoning catalog read failed: %w", err)
 	}
 	// Decode the top level as raw messages so only registry providers are
 	// fully parsed (api.json is several MB; most of it is irrelevant).
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(body, &top); err != nil {
-		return nil, fmt.Errorf("reasoning catalog: unexpected response shape: %w", err)
+		return nil, "", fmt.Errorf("reasoning catalog: unexpected response shape: %w", err)
 	}
 	out := make(map[string]map[string]reasoningEntry, len(providerRegistry))
 	for _, spec := range providerRegistry {
@@ -404,7 +502,7 @@ func fetchModelsDevCatalog(ctx context.Context) (map[string]map[string]reasoning
 		}
 		models := make(map[string]reasoningEntry, len(prov.Models))
 		for id, m := range prov.Models {
-			e := reasoningEntry{Reasoning: m.Reasoning}
+			e := reasoningEntry{Reasoning: m.Reasoning, Context: m.Limit.Context}
 			for _, opt := range m.ReasoningOptions {
 				if opt.Type != "effort" {
 					continue
@@ -419,5 +517,5 @@ func fetchModelsDevCatalog(ctx context.Context) (map[string]map[string]reasoning
 			out[spec.Name] = models
 		}
 	}
-	return out, nil
+	return out, resp.Header.Get("ETag"), nil
 }

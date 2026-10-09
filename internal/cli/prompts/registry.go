@@ -438,6 +438,9 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			live.Model = id
 			live.ProviderName = name
 			live.Provider = prov
+			// Re-resolve the budget for the new model: the status bar and the
+			// auto-compaction threshold read it from the live config.
+			live.RefreshContextWindow()
 			return fmt.Sprintf("model switched to %s (provider: %s%s, from fetched catalog)", id, name, protocolSuffix(name, id, live.Protocol)), true
 		}
 		model := provider.CanonicalizeModel(id)
@@ -455,6 +458,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.Model = model
 		live.ProviderName = providerName
 		live.Provider = prov
+		live.RefreshContextWindow()
 		return fmt.Sprintf("model switched to %s (provider: %s%s)", model, providerName, protocolSuffix(providerName, model, live.Protocol)), true
 	}
 	// reasoningHint is a one-line pointer to the model's catalog reasoning
@@ -567,6 +571,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.Model = model
 		live.ProviderName = name
 		live.Provider = prov
+		live.RefreshContextWindow()
 		// The fetched catalog belongs to the previous gateway; drop it so the
 		// next bare /model lists (and disk-caches) the new provider's lineup.
 		live.FetchedModels = nil

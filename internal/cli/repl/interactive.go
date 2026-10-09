@@ -181,7 +181,7 @@ func Run(opts Options) error {
 		BaseURL:       opts.BaseURL,
 		Protocol:      opts.Protocol,
 		ThinkingLevel: opts.ThinkingLevel,
-		ContextWindow: cli.DefaultContextWindow,
+		ContextWindow: cli.ResolveContextWindow(opts.ProviderName, opts.Model),
 	}
 
 	// Project trust (US-018, #134): load the persisted trust store for the

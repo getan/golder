@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -72,4 +73,37 @@ func writeCatalogFile(name string, v any) bool {
 // shared TTL.
 func cacheFresh(checkedAt time.Time) bool {
 	return !checkedAt.IsZero() && time.Since(checkedAt) < catalogTTL
+}
+
+// readCatalogETag returns the ETag recorded for the named catalog (sidecar
+// file "<name>.etag"), or "" when none was stored. Best-effort like the cache
+// itself: a missing or unreadable sidecar just means "no conditional request",
+// never an error.
+func readCatalogETag(name string) string {
+	p := catalogFilePath(name + ".etag")
+	if p == "" {
+		return ""
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// writeCatalogETag records the ETag of the response the current cache was
+// built from, enabling the next refresh to ask "has this changed?" and get a
+// bodyless 304 back when it has not.
+func writeCatalogETag(name, etag string) {
+	if etag == "" {
+		return
+	}
+	p := catalogFilePath(name + ".etag")
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, []byte(etag), 0o644)
 }

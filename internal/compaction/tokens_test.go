@@ -108,6 +108,25 @@ func TestEstimateContextTokensPrefersUsage(t *testing.T) {
 	}
 }
 
+func TestEstimateContextTokensCountsCacheTokens(t *testing.T) {
+	// Anthropic-wire usage reports cached prompt content separately from
+	// input_tokens, so context accounting must fold it in (parity with pi).
+	usage := &agentcore.Usage{
+		InputTokens:      10,
+		OutputTokens:     5,
+		CacheReadTokens:  900,
+		CacheWriteTokens: 100,
+	}
+	msgs := []agentcore.Message{assistantMsg("reply", usage, "end_turn")}
+	est := EstimateContextTokens(msgs)
+	if est.UsageTokens != 1015 {
+		t.Fatalf("UsageTokens: got %d, want 1015", est.UsageTokens)
+	}
+	if est.Tokens != 1015 {
+		t.Fatalf("Tokens: got %d, want 1015", est.Tokens)
+	}
+}
+
 func TestEstimateContextTokensSkipsAbortedAndErrorUsage(t *testing.T) {
 	good := &agentcore.Usage{InputTokens: 500, OutputTokens: 0}
 	bad := &agentcore.Usage{InputTokens: 9999, OutputTokens: 0}

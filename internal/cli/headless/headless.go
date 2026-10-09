@@ -89,11 +89,11 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(env.ProviderName, p.APIKey)
 	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget)
-	// Headless has no model-catalog lookup, so it uses the same fallback window
-	// the REPL and TUI assume. This keeps auto-compaction, the context-budget
-	// tools, and the low-budget reminder live for `golder -p` long runs instead of
-	// leaving them dormant with an unknown window.
-	runCfg.ContextWindow = cli.DefaultContextWindow
+	// Resolve the window from the models.dev catalog when it knows the model,
+	// falling back to the REPL/TUI default. This keeps auto-compaction, the
+	// context-budget tools, and the low-budget reminder live for `golder -p`
+	// long runs, and sizes them to the model actually in use.
+	runCfg.ContextWindow = cli.ResolveContextWindow(env.ProviderName, p.Model)
 	runCfg.SessionID = hs.header.ID
 	// Route auto-compaction checkpoints to the shared memory root so a rebuild can
 	// recover the pre-watermark prefix (no-op when memory is disabled → empty root).
