@@ -479,7 +479,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		if text != "" {
 			text += "\n"
 		}
-		text += fmt.Sprintf("[%s: running]\nUse write_stdin with bash_id %q to read more output; send chars \"%s\" to interrupt.",
+		text += fmt.Sprintf("[%s: running]\nUse write_stdin with bash_id %q to read more output; send chars \"%s\" (Ctrl-C) to interrupt.",
 			sess.ID, sess.ID, interruptHint)
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(text)},

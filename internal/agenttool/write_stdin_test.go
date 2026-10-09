@@ -54,6 +54,11 @@ func TestBashRunningSessionThenInterrupt(t *testing.T) {
 	if text := resultText(res); !strings.Contains(text, "start") || !strings.Contains(text, "running") {
 		t.Fatalf("bash text = %q, want start + running", text)
 	}
+	// The interrupt hint is read by humans as well as the model: it must keep
+	// the literal escape the model sends and spell out what that key is.
+	if text := resultText(res); !strings.Contains(text, interruptHint) || !strings.Contains(text, "(Ctrl-C)") {
+		t.Fatalf("bash text = %q, want the interrupt hint to name Ctrl-C alongside the %q escape", text, interruptHint)
+	}
 
 	interrupted := runToolArgs(t, poll, map[string]any{"bash_id": id, "chars": interruptChar, "yield_time_ms": 2000})
 	got := resultDetails(t, interrupted)

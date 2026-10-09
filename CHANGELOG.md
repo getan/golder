@@ -237,6 +237,11 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **The running-session note now spells out Ctrl-C**: a bash call that
+  outlived its yield window ended with "send chars `\u0003` to interrupt",
+  which reads as gibberish to anyone but the model; it now carries the same
+  `(Ctrl-C)` gloss as the other interrupt hints, so the transcript stays
+  readable for humans while the model still sees the literal it must send.
 - **No phantom "new lines" notice at startup**: the banner filling the
   not-yet-pinned viewport was counted as unseen content, so a fresh session
   could greet the user with "↓ 8 new lines · Ctrl+E to jump". The transcript
