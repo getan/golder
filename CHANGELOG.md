@@ -29,6 +29,11 @@ interactive REPL/TUI.
   serving a corrupt or stale copy fails over to the next source. `GOLDER_MIRROR`
   overrides the list (whitespace-separated URL prefixes) or disables mirroring
   with `off`/`none`.
+- **REPL startup upgrade hint**: the cached latest-release check now refreshes
+  for both interactive drivers (previously the TUI only), and the REPL prints
+  the same one-line `Update available: vX.Y.Z — run "golder update" to upgrade`
+  notice the TUI banner shows. Cache-only (no network on the hot path) and
+  silent for dev or up-to-date builds.
 - **`/provider` command**: lists every built-in provider with the environment
   variable(s) it reads (in precedence order) and whether a credential is
   configured — no README lookup needed. Providers with a credential found are

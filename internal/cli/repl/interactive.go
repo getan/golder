@@ -46,6 +46,11 @@ type Options struct {
 	BaseURL      string
 	APIKey       string
 	Protocol     string
+	// Version is the build-time version string ("dev" for source builds, a real
+	// "vX.Y.Z" for released binaries). It feeds the cached latest-release check so
+	// the REPL prints the same one-line upgrade hint as the TUI banner. Mirrors
+	// tui.Options.Version; dev/unparseable values never show the hint.
+	Version string
 	// ThinkingLevel is the resolved reasoning-effort level (US-023): it seeds the
 	// live run config so every REPL turn requests it, until a control command
 	// changes it.
@@ -260,6 +265,7 @@ func Run(opts Options) error {
 		schedule:   agenttool.ScheduleFromTools(opts.Tools),
 		slash:      slash,
 		creds:      creds,
+		version:    opts.Version,
 		trust:      mgr,
 		cwd:        cwd,
 		in:         reader,

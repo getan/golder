@@ -88,6 +88,63 @@ func newTestDeps(t *testing.T, p provider.Provider) (replDeps, *session.Store) {
 	return deps, store
 }
 
+// TestREPLUpdateHint verifies the REPL startup hint mirrors the TUI banner: a
+// cached newer release prints one line before the first prompt, while dev builds
+// and up-to-date caches stay silent. The hint is cache-only — no network here.
+func TestREPLUpdateHint(t *testing.T) {
+	writeCache := func(t *testing.T, latest string) {
+		t.Helper()
+		dir := t.TempDir()
+		t.Setenv("GOLDER_HOME", dir)
+		body := `{"checked_at":"` + time.Now().UTC().Format(time.RFC3339) + `","latest":"` + latest + `"}`
+		if err := os.WriteFile(filepath.Join(dir, "update-check.json"), []byte(body), 0o644); err != nil {
+			t.Fatalf("write cache: %v", err)
+		}
+	}
+
+	t.Run("newer release prints hint", func(t *testing.T) {
+		writeCache(t, "v1.0.1")
+		deps, _ := newTestDeps(t, &replProvider{reply: "hi"})
+		deps.version = "v1.0.0"
+		var out bytes.Buffer
+		if err := runREPL(strings.NewReader("/exit\n"), &out, deps); err != nil {
+			t.Fatalf("runREPL returned error: %v", err)
+		}
+		if !strings.Contains(out.String(), "Update available: v1.0.1") {
+			t.Errorf("missing update hint, got: %q", out.String())
+		}
+		if !strings.Contains(out.String(), "golder update") {
+			t.Errorf("hint must point at golder update, got: %q", out.String())
+		}
+	})
+
+	t.Run("dev build stays silent", func(t *testing.T) {
+		writeCache(t, "v1.0.1")
+		deps, _ := newTestDeps(t, &replProvider{reply: "hi"})
+		deps.version = "dev"
+		var out bytes.Buffer
+		if err := runREPL(strings.NewReader("/exit\n"), &out, deps); err != nil {
+			t.Fatalf("runREPL returned error: %v", err)
+		}
+		if strings.Contains(out.String(), "Update available") {
+			t.Errorf("dev build must not show the hint, got: %q", out.String())
+		}
+	})
+
+	t.Run("up to date stays silent", func(t *testing.T) {
+		writeCache(t, "v1.0.0")
+		deps, _ := newTestDeps(t, &replProvider{reply: "hi"})
+		deps.version = "v1.0.0"
+		var out bytes.Buffer
+		if err := runREPL(strings.NewReader("/exit\n"), &out, deps); err != nil {
+			t.Fatalf("runREPL returned error: %v", err)
+		}
+		if strings.Contains(out.String(), "Update available") {
+			t.Errorf("up-to-date build must not show the hint, got: %q", out.String())
+		}
+	})
+}
+
 // TestREPLExitCommand verifies /exit ends the loop cleanly with no error and no
 // agent run.
 func TestREPLExitCommand(t *testing.T) {

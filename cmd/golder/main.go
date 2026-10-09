@@ -490,11 +490,12 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		// real per-model levels without any session blocking on the network.
 		// Interactive sessions only: a one-shot -p run never opens the picker.
 		provider.StartBackgroundReasoningCatalogRefresh()
+		// Refresh the cached latest-release check off the hot path so the TUI
+		// banner and the REPL's startup hint can show an upgrade notice on this or
+		// the next launch without blocking startup (US-004). No-ops for dev builds
+		// or a fresh cache.
+		selfupdate.StartBackgroundCheck(version)
 		if shouldUseTUI(opts, isTTY) {
-			// Refresh the cached latest-release check off the hot path so the banner
-			// can show an upgrade hint on this or the next launch without blocking
-			// startup (US-004). No-ops for dev builds or a fresh cache.
-			selfupdate.StartBackgroundCheck(version)
 			if err := tui.Run(tui.Options{
 				Model:             opts.model,
 				ProviderName:      env.ProviderName,
