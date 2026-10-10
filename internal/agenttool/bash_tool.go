@@ -335,6 +335,48 @@ const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox pol
 // forever, so this hint names the dead end and points at the way out.
 const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require_escalated\" was not granted (denied by the user, or no approver available), so this command ran inside the sandbox again. Retrying the same escalation will fail the same way — stop and tell the user what access the task needs, or finish with a sandbox-compatible approach.]" + sandboxFalseNegativeNote
 
+// looksRGMissing reports whether a failed command's output says ripgrep is not
+// installed. Only the failure path consults it.
+//
+// The shapes were measured on this tool's unix shells: bash prints
+// "bash: rg: command not found", zsh prints "zsh:1: command not found: rg",
+// dash — which is /bin/sh on Debian and Ubuntu, so `sh -c` and #!/bin/sh
+// scripts land here — prints "/bin/dash: 1: rg: not found", and a shell with
+// PATH unset prints "rg: No such file or directory". Each names rg explicitly,
+// which is what keeps the match from firing on some other missing program; a
+// shell with different wording simply does not get the hint (fail-quiet, never
+// a wrong claim).
+//
+// Two markers are anchored rather than searched for anywhere in the line. The
+// PATH-unset shape starts a line, so a grep that failed on a file literally
+// named `rg` ("grep: rg: No such file or directory") is not read as ripgrep
+// being missing; the dash shape ends a line, because that is where dash puts
+// it, while a program mentioning rg mid-sentence ("plugin rg: not found in
+// registry") does not end there.
+func looksRGMissing(output string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		switch {
+		case lower == "":
+			continue
+		case strings.Contains(lower, "rg: command not found"),
+			strings.Contains(lower, "command not found: rg"),
+			strings.HasSuffix(lower, "rg: not found"),
+			strings.HasPrefix(lower, "rg: no such file or directory"):
+			return true
+		}
+	}
+	return false
+}
+
+// rgMissingHint answers the machine where ripgrep is absent, which is the one
+// case the search guidance cannot help with: the grep and find tools are
+// ripgrep-backed, so they fail there too, and the only route left is the
+// shell's own grep/find. Without this the model tends to retry `rg`, then try
+// the grep tool (which fails with an install hint), and only then fall back —
+// three turns for something the environment block already knows.
+const rgMissingHint = "\n[ripgrep is not installed on this machine. The grep and find tools cannot run either (they are ripgrep-backed), so use the shell's own grep/find for this and later searches — e.g. `grep -rn \"pattern\" .` and `find . -name '*.go'`. Installing ripgrep (macOS: brew install ripgrep, Debian/Ubuntu: apt install ripgrep) restores the faster tools.]"
+
 // resolveShell picks the interpreter and the flag that makes it read the command
 // from the next argument. An explicit shell (BashTool.Shell) is always honored as
 // a POSIX-style "<shell> -c <command>".
@@ -473,6 +515,17 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			hint = sandboxEscalationHint
 		}
 	}
+	// A missing ripgrep is the one failure the search guidance cannot cover:
+	// the grep/find tools are ripgrep-backed too, so the hint has to point at
+	// the shell's own grep/find rather than at a tool that will fail next.
+	// Checked after the sandbox hint so a genuine sandbox denial keeps its
+	// escalation advice; the two markers do not overlap in practice (a missing
+	// binary prints "command not found", not "operation not permitted").
+	rgMissing := false
+	if snap.ExitCode != 0 && !sandboxDenied && looksRGMissing(out) {
+		rgMissing = true
+		hint = rgMissingHint
+	}
 
 	if !exited {
 		text := out
@@ -495,6 +548,9 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		details := map[string]any{"exitCode": snap.ExitCode}
 		if sandboxDenied {
 			details["sandboxDenied"] = true
+		}
+		if rgMissing {
+			details["rgMissing"] = true
 		}
 		return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(out)},

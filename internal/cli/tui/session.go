@@ -568,15 +568,26 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 		Notify:     s.notes.Emit,
 		Confirm:    s.confirmApproval,
 	})
+	// The read-scope gate leads everything: reading outside the workspace is a
+	// consent question, so it is settled before any risk grading — and no
+	// approval mode waives it (full-access turns off review, not consent).
+	gate := judgeGate
+	if scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
+		WorkspaceRoot: s.hookDeps.ProjectDir,
+		Roots:         run.ReadableExtraRoots(),
+		Confirm:       s.confirmApproval,
+		Notify:        s.notes.Emit,
+	}); scopeGate != nil {
+		gate = judge.ChainGates(scopeGate, gate)
+	}
 	// The trust gate leads: a side-effect tool in an untrusted directory is the
 	// first question to answer (the REPL asks it on stdin; the TUI asks
 	// through the approval dialog, or the paired browser while remote control
 	// is connected). The permission gate then grades what is left. Order
 	// matters: a blocked trust question must not be pre-empted by an approval
 	// the reviewer would have granted.
-	gate := judgeGate
 	if trustGate := s.trustApprovalGate(s.remote); trustGate != nil {
-		gate = judge.ChainGates(trustGate, judgeGate)
+		gate = judge.ChainGates(trustGate, gate)
 	}
 	cfg.Batch.ToolExecutorConfig.BeforeToolCall = gate
 	// Mid-run persistence: the loop checkpoints the conversation at turn

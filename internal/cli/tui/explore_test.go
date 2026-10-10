@@ -237,3 +237,111 @@ func TestExploreGroupNoteAttaches(t *testing.T) {
 		t.Fatalf("card notes = %d, want 1 (the verdict must find its card inside the group)", len(card.notes))
 	}
 }
+
+// TestExploreGroupIgnoresPathScope pins the membership rule the grouping
+// actually uses: a call is an exploration step when its TOOL is one of the
+// read-only explorers, regardless of where the path points. A read of a file
+// outside the workspace (allowed by the read-scope gate) folds into the same
+// cell as a workspace read, because the boundary question is about consent and
+// the transcript shape is about what the model is doing — both are "looking at
+// code", and splitting them would print one extra card per out-of-workspace
+// read for no gain.
+func TestExploreGroupIgnoresPathScope(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(120, 40)
+	tr.addToolCard(exploreCard("1", "read", map[string]any{"path": "internal/a.go"}, cardSuccess))
+	tr.addToolCard(exploreCard("2", "grep", map[string]any{"pattern": "logo", "path": "/Users/someone/elsewhere/repo"}, cardSuccess))
+	tr.addToolCard(exploreCard("3", "read", map[string]any{"path": "/Users/someone/elsewhere/repo/b.go"}, cardSuccess))
+	tr.addToolCard(exploreCard("4", "ls", map[string]any{"path": "/tmp/granted"}, cardSuccess))
+
+	groups, cards := 0, 0
+	for _, b := range tr.blocks {
+		if b.group != nil {
+			groups++
+		}
+		if b.card != nil {
+			cards++
+		}
+	}
+	if groups != 1 {
+		t.Fatalf("explore groups = %d, want 1 (path scope must not split the group)", groups)
+	}
+	if cards != 0 {
+		t.Fatalf("standalone cards = %d, want 0 (all four are read-only explorers)", cards)
+	}
+	if got := len(tr.blocks[0].group.cards); got != 4 {
+		t.Fatalf("grouped calls = %d, want 4", got)
+	}
+
+	// The out-of-workspace paths must be legible in the summary: the user sees
+	// where the read went, which is the point of asking about it in the first
+	// place.
+	view := stripANSI(strings.Join(tr.contentLines(), "\n"))
+	if !strings.Contains(view, "/Users/someone/elsewhere/repo/b.go") {
+		t.Errorf("an absolute out-of-workspace path must appear in the summary:\n%s", view)
+	}
+	if !strings.Contains(view, "Search logo in /Users/someone/elsewhere/repo") {
+		t.Errorf("a scoped search should name its scope:\n%s", view)
+	}
+}
+
+// TestExploreGroupIncludesViewImage: view_image reads one local file like read
+// does, so it folds into the same cell. The card renders the call's text
+// summary, never the image itself, so nothing is hidden by grouping it.
+func TestExploreGroupIncludesViewImage(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(120, 40)
+	tr.addToolCard(exploreCard("1", "read", map[string]any{"path": "docs/arch.md"}, cardSuccess))
+	tr.addToolCard(exploreCard("2", "view_image", map[string]any{"path": "docs/diagram.png"}, cardSuccess))
+	tr.addToolCard(exploreCard("3", "read", map[string]any{"path": "docs/api.md"}, cardSuccess))
+
+	groups, cards := 0, 0
+	for _, b := range tr.blocks {
+		if b.group != nil {
+			groups++
+		}
+		if b.card != nil {
+			cards++
+		}
+	}
+	if groups != 1 {
+		t.Fatalf("explore groups = %d, want 1 (view_image must coalesce)", groups)
+	}
+	if cards != 0 {
+		t.Fatalf("standalone cards = %d, want 0", cards)
+	}
+	if got := len(tr.blocks[0].group.cards); got != 3 {
+		t.Fatalf("grouped calls = %d, want 3", got)
+	}
+
+	view := stripANSI(strings.Join(tr.contentLines(), "\n"))
+	if !strings.Contains(view, "View docs/diagram.png") {
+		t.Errorf("view_image should contribute a View line:\n%s", view)
+	}
+	// The two reads still merge onto one line, with the view between them
+	// splitting the run — "Read a, c" around a "View b".
+	if !strings.Contains(view, "Read docs/arch.md") || !strings.Contains(view, "Read docs/api.md") {
+		t.Errorf("reads on both sides of the view should still be listed:\n%s", view)
+	}
+}
+
+// TestExploreGroupExcludesResultBearingTools pins the deliberate exclusions:
+// webfetch, websearch and memory_search are parallel reads too, but their
+// RESULT is what the user came to see, so folding them would replace fetched
+// content with a summary line. bash stays out because it has side effects.
+func TestExploreGroupExcludesResultBearingTools(t *testing.T) {
+	for _, name := range []string{"webfetch", "websearch", "memory_search", "bash"} {
+		if isExploreTool(name) {
+			t.Errorf("%s must keep its own card (its result is the thing to read)", name)
+		}
+	}
+	for _, name := range []string{"read", "ls", "grep", "find", "view_image"} {
+		if !isExploreTool(name) {
+			t.Errorf("%s is a read-only local explorer and should coalesce", name)
+		}
+	}
+	// The match is case-insensitive and trims, like every other tool-name check.
+	if !isExploreTool("  View_Image  ") {
+		t.Error("the tool-name match should trim and fold case")
+	}
+}

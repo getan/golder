@@ -94,13 +94,11 @@ func (t *ReadTool) ExecutionMode() agentcore.ToolExecutionMode {
 }
 
 // resolvePath resolves p against Root (or any ExtraRoots) via the shared
-// resolveWithin boundary policy, so every file tool enforces the same
-// workspace-escape guard while the read tool can also reach trusted extra roots.
-func (t *ReadTool) resolvePath(p string) (string, error) {
-	if len(t.ExtraRoots) == 0 {
-		return resolveWithin(t.Root, p)
-	}
-	return resolveWithinAny(append([]string{t.Root}, t.ExtraRoots...), p)
+// boundary policy, so every file tool enforces the same workspace-escape guard
+// while the read tool can also reach trusted extra roots and any read grant the
+// user gave for this session (see resolveReadable).
+func (t *ReadTool) resolvePath(ctx context.Context, p string) (string, error) {
+	return resolveReadable(ctx, append([]string{t.Root}, t.ExtraRoots...), p)
 }
 
 // Execute implements AgentTool. It never returns a Go error for a read failure
@@ -114,7 +112,7 @@ func (t *ReadTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Path == "" {
 		return errorResult("read: path is required"), nil
 	}
-	full, err := t.resolvePath(a.Path)
+	full, err := t.resolvePath(ctx, a.Path)
 	if err != nil {
 		return errorResult("read: " + err.Error()), nil
 	}

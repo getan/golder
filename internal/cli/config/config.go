@@ -76,10 +76,16 @@ type FileConfig struct {
 
 // PermissionsConfig is the [permissions] table. WritableRoots widens the
 // sandbox whitepaper's write side (and, by construction, its read side) for
-// the listed absolute paths; "~/..." expands against the home directory.
-// Relative paths are ignored with a warning at startup.
+// the listed absolute paths; ReadableRoots allows the read-only tools (read,
+// grep, find, ls, view_image) to reach the listed directories without asking
+// first, which is what a monorepo whose root sits above the opened directory
+// wants. "~/..." expands against the home directory in both lists; relative
+// paths are ignored with a warning at startup. A root too broad to be a
+// boundary (the filesystem root, $HOME itself, $HOME's parent) is refused, so
+// a typo cannot turn a grant into "read everything".
 type PermissionsConfig struct {
 	WritableRoots []string `toml:"writable_roots"`
+	ReadableRoots []string `toml:"readable_roots,omitempty"`
 }
 
 // DreamConfig is the [dream] TOML table for /dream memory consolidation.

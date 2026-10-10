@@ -72,12 +72,9 @@ func (t *ViewImageTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
 }
 
-// resolvePath mirrors ReadTool's boundary policy.
-func (t *ViewImageTool) resolvePath(p string) (string, error) {
-	if len(t.ExtraRoots) == 0 {
-		return resolveWithin(t.Root, p)
-	}
-	return resolveWithinAny(append([]string{t.Root}, t.ExtraRoots...), p)
+// resolvePath mirrors ReadTool's boundary policy, read grants included.
+func (t *ViewImageTool) resolvePath(ctx context.Context, p string) (string, error) {
+	return resolveReadable(ctx, append([]string{t.Root}, t.ExtraRoots...), p)
 }
 
 // Execute implements AgentTool. Read failures are error results, not Go
@@ -93,7 +90,7 @@ func (t *ViewImageTool) Execute(ctx context.Context, id string, args json.RawMes
 	if a.Detail != "" && a.Detail != "high" && a.Detail != "original" {
 		return errorResult(`view_image: detail must be "high" or "original"`), nil
 	}
-	full, err := t.resolvePath(a.Path)
+	full, err := t.resolvePath(ctx, a.Path)
 	if err != nil {
 		return errorResult("view_image: " + err.Error()), nil
 	}

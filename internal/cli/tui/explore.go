@@ -20,11 +20,20 @@ import (
 // Deliberately a small, closed set: bash/apply_patch/task calls — anything with
 // side effects or its own rich rendering — always keep their own card, so the
 // group never hides a call the user must see.
+//
+// Parallelism is not the criterion, and neither is the path: view_image reads
+// one local file like read does (it folds in), while webfetch, websearch and
+// memory_search are parallel reads whose RESULT is the thing the user came to
+// see — folding those would replace a page of fetched text with a summary line.
+// A read of a file outside the workspace folds in with everything else, since
+// grouping describes what the model is doing, not where the bytes came from;
+// the summary still prints the absolute path.
 var exploreTools = map[string]bool{
-	"read": true,
-	"ls":   true,
-	"grep": true,
-	"find": true,
+	"read":       true,
+	"ls":         true,
+	"grep":       true,
+	"find":       true,
+	"view_image": true,
 }
 
 // isExploreTool reports whether a tool call is an exploration call.
@@ -206,6 +215,11 @@ func (c toolCard) exploreStep() (verb, detail string) {
 			return "Find", glob + " in " + scope
 		}
 		return "Find", glob
+	case "view_image":
+		if p := arg("path"); p != "" {
+			return "View", p
+		}
+		return "View", ""
 	}
 	return "", ""
 }

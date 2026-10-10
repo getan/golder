@@ -341,3 +341,56 @@ func TestDisableModelInvocationCoexistence(t *testing.T) {
 		t.Errorf("Expand(now) = %q, want $ARGUMENTS substituted", got)
 	}
 }
+
+// TestBuildSystemPromptSearchNote pins the environment block's search line for
+// both worlds: the tools are ripgrep-backed, so the prompt has to say whether
+// this machine can run them at all — otherwise the model discovers it by
+// failing, and then still has to guess what to use instead.
+func TestBuildSystemPromptSearchNote(t *testing.T) {
+	build := func(lookPath func(string) (string, error)) string {
+		t.Helper()
+		got, err := BuildSystemPrompt(PromptConfig{
+			WorkingDir: "/work/proj",
+			Now:        fixedTime,
+			ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+			LookPath:   lookPath,
+		})
+		if err != nil {
+			t.Fatalf("BuildSystemPrompt: %v", err)
+		}
+		return got
+	}
+
+	withRG := build(func(string) (string, error) { return "/opt/homebrew/bin/rg", nil })
+	if !strings.Contains(withRG, "- Search: ripgrep (rg) is installed") {
+		t.Errorf("a machine with rg should say so, got:\n%s", withRG)
+	}
+	if strings.Contains(withRG, "NOT installed") {
+		t.Errorf("a machine with rg must not claim otherwise, got:\n%s", withRG)
+	}
+
+	withoutRG := build(func(string) (string, error) { return "", os.ErrNotExist })
+	if !strings.Contains(withoutRG, "- Search: ripgrep (rg) is NOT installed") {
+		t.Errorf("a machine without rg should say so, got:\n%s", withoutRG)
+	}
+	// The note has to name the fallback, since the tools cannot run there.
+	if !strings.Contains(withoutRG, "grep/find") {
+		t.Errorf("the missing-rg note should name the grep/find fallback, got:\n%s", withoutRG)
+	}
+}
+
+// TestCodeSearchGuideCoversMissingRipgrep locks the guide's fallback sentence:
+// on a machine without ripgrep the named tools are unavailable, so the only
+// workable advice is the shell's own grep/find — and the guide says it rather
+// than leaving the model to retry a tool that cannot start.
+func TestCodeSearchGuideCoversMissingRipgrep(t *testing.T) {
+	for _, want := range []string{
+		"When ripgrep is not installed",
+		"search from a shell with `grep` and `find`",
+		"prefer `rg` when it is installed",
+	} {
+		if !strings.Contains(codeSearchGuide, want) {
+			t.Errorf("guide missing %q:\n%s", want, codeSearchGuide)
+		}
+	}
+}

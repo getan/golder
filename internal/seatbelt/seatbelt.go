@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 // Mode selects when bash runs under the sandbox.
@@ -92,6 +94,12 @@ func ReadableRoots() []string {
 	// own /dev and /proc mounts, these are for any path-based checks.
 	roots = append(roots, "/dev", "/proc")
 	roots = append(roots, readableGitFiles()...)
+	// Session read grants: directories the user allowed the read-only tools to
+	// reach outside the workspace (internal/permissions). Including them keeps
+	// the sandbox and the tools consistent — a command reading a granted
+	// directory is not refused by the profile while the read tool happily
+	// serves the same file.
+	roots = append(roots, permissions.ReadRoots()...)
 	roots = append(roots, sandboxReadableFromEnv()...)
 	return roots
 }

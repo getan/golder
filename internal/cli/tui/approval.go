@@ -48,6 +48,7 @@ const (
 	approveOnce     = "once"
 	approveSession  = "session"
 	approveWritable = "writable"
+	approveReadDir  = "read-dir"
 	approveDeny     = "deny"
 )
 
@@ -91,6 +92,10 @@ type approvalDialog struct {
 	// writableRoot is the escalation path the "allow writes" row grants; set
 	// only when that row is present.
 	writableRoot string
+	// readRoot is the directory the "allow reading" row grants; set only when
+	// that row is present (a read-scope request whose candidate directory is
+	// not too broad to hand over).
+	readRoot string
 	// reply is non-nil for a tool approval: the waiting gate reads the answer.
 	reply chan judge.ApprovalAnswer
 	// selected highlights a row, so ↑↓ and Enter work as well as the
@@ -115,6 +120,17 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			toolApprovalRows[2],
 		}
 	}
+	readRoot := strings.TrimSpace(req.ReadScope)
+	if readRoot != "" {
+		// A read-scope question offers the directory the file lives in (which
+		// the gate already checked is not too broad to grant) beside the
+		// one-read answer, so a batch of reads in one tree is one keystroke.
+		rows = []approvalRow{
+			{"Allow this read once", "y", approveOnce},
+			{"Allow reading " + displayPath(readRoot) + " (this session)", "a", approveReadDir},
+			{"Deny", "esc", approveDeny},
+		}
+	}
 	m.approval = approvalDialog{
 		active:       true,
 		kind:         "tool",
@@ -122,6 +138,7 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		detail:       approvalDetail(req),
 		rows:         rows,
 		writableRoot: root,
+		readRoot:     readRoot,
 		reply:        reply,
 	}
 }
@@ -180,6 +197,18 @@ func (m *Model) answerApproval(value string) {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
 							" are allowed inside the sandbox for this session. Persist it with: /permissions writable add " + root)
 					}
+				}
+			}
+		case approveReadDir:
+			// The gate registers the grant (it owns the read-root registry);
+			// the answer only names the directory. A registration the registry
+			// refuses (too broad after all) leaves the answer without it, and
+			// the gate falls back to the one-read grant.
+			if dir := d.readRoot; dir != "" {
+				ans.Approve, ans.ReadRoot = true, dir
+				if m.session != nil {
+					m.transcript.addSystem("Reading " + displayPath(dir) +
+						" is allowed for this session. Persist it with: readable_roots in config.toml")
 				}
 			}
 		}
@@ -432,6 +461,8 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		return tool + " needs approval (automatic review was unavailable)"
 	case judge.ApprovalEscalation:
 		return tool + " asks to run outside the sandbox (reviewer graded it sandbox)"
+	case judge.ApprovalReadScope:
+		return tool + " wants to read outside the workspace"
 	default:
 		return tool + " needs approval"
 	}
@@ -458,7 +489,14 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 		if req.Risk != "" || req.Authorization != "" {
 			rating = " (" + req.Risk + ", auth: " + req.Authorization + ")"
 		}
-		out = append(out, "Reviewer: "+r+rating)
+		// A read-scope question is consent, not a risk verdict: there is no
+		// reviewer behind it, so labelling the line "Reviewer:" would
+		// misdescribe what the user is being asked.
+		if req.Kind == judge.ApprovalReadScope {
+			out = append(out, r+rating)
+		} else {
+			out = append(out, "Reviewer: "+r+rating)
+		}
 	}
 	return out
 }

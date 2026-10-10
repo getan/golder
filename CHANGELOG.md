@@ -12,6 +12,95 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`view_image` joins the exploration cell**: it reads one local file like
+  `read` does, so its card now coalesces into the same `• Explored` block and
+  contributes a `View <path>` summary line. The card renders the call's text
+  summary rather than the image, so grouping hides nothing. `webfetch`,
+  `websearch` and `memory_search` stay out on purpose: they are parallel reads
+  too, but their result is what the person came to see, and folding them would
+  trade a page of fetched content for a summary line.
+- **Ripgrep preference is stated, not assumed**: the environment block now says
+  whether `rg` is on PATH, and the code-search guide names the fallback for a
+  machine without it — there the `grep` and `find` tools cannot run at all
+  (they are ripgrep-backed), so the shell's own `grep`/`find` is the only route
+  left, and the guide says so instead of leaving the model to discover it by
+  failing. A `bash` command that fails because `rg` is missing now returns a
+  hint with that same fallback, detected from the shapes the shells actually
+  print (`bash: rg: command not found`, `command not found: rg`, `rg: No such
+  file or directory`) and reported in the result details as `rgMissing`. dash —
+  `/bin/sh` on Debian and Ubuntu, so `sh -c` and `#!/bin/sh` scripts — is
+  covered too with its own `rg: not found` wording. The match names `rg`
+  explicitly and anchors the two ambiguous shapes (PATH-unset at the start of a
+  line, dash's at the end), so a missing program called something else, a
+  `grep: rg: No such file or directory` from a file literally named `rg`, or a
+  message mentioning rg mid-sentence does not trigger it.
+- **Out-of-workspace reads ask the user first**: the read-only tools (`read`,
+  `view_image`, `grep`, `find`, `ls`) read the workspace and nothing else until
+  the person says otherwise. The workspace is the directory they opened, so
+  crossing it is a question of consent rather than a risk verdict — which is
+  why the gate is a sibling of the permission gate instead of a tier inside it,
+  and why **no approval mode waives it**: read-only, ask, auto and full-access
+  all ask, because full-access turns off review and sandboxing, not consent. A
+  run with nobody to ask (headless, a sub-agent thread) fails closed with a
+  message naming the path and the setting that would allow it. Two answers are
+  offered, at different sizes: **just this read** rides the call's own context
+  (`agentcore.WithReadGrant`, consumed by the call it was asked for), and
+  **this directory** registers a session grant (`permissions.ReadRoots`) that
+  the file tools consult and the OS sandbox's read whitelist includes, so the
+  two sides agree about a granted directory instead of letting a tool read what
+  a sandboxed command cannot. The directory offered is the file's own, or its
+  parent when that is too broad; granting something that would remove the
+  boundary (the filesystem root, `$HOME`, `$HOME`'s parent) is refused outright,
+  and **credential material is never put to the user at all** — the static floor
+  denies `~/.ssh`, `~/.zshrc` and the keychain, so no dialog offers a keystroke
+  that hands them over. Pre-granting skips the dialog: `[permissions]
+  readable_roots` in `config.toml`, or `GOLDER_READABLE_ROOTS` (unlike
+  `GOLDER_SANDBOX_READABLE`, which only widens the sandbox). The write path is
+  deliberately untouched: `apply_patch` still refuses an out-of-workspace target
+  even when the call carries a read grant and the session has granted the
+  directory for reading.
+- **Grep tool flags**: the `grep` tool now takes `ignore_case`, `word`,
+  `literal`, `invert`, `files_only`, `type`, `hidden` and `no_ignore` — the
+  structured form of the ripgrep options that were the remaining reason to
+  shell out. They are whitelisted fields rather than a raw flag passthrough on
+  purpose: rg's `--pre` executes a command per file, and this tool is a
+  read-only tool that runs without an LLM review, so a passthrough would be an
+  unreviewed code-execution path. The code-search guide names those arguments
+  instead of advertising the shell: it had kept pointing at `--type` as a reason
+  to reach for `rg` through bash long after the `type` argument shipped, which
+  invited a pipeline for a search the tool already does — multiline mode is the
+  one gap left in the guide. `hidden` also forces `--glob=!.git` (appended
+  after any user glob so it wins) to keep the tree search out of object blobs
+  and refs — hygiene rather than a boundary, since an explicit path into `.git`
+  is not subject to ignore rules; `files_only` takes its own output shape since
+  `-l` prints no line numbers. Pattern validation now belongs to ripgrep
+  alone: the local `regexp.Compile` pre-check graded patterns with Go's regexp
+  while ripgrep matches with the Rust regex crate, and the dialects disagree in both
+  directions — `\Qfoo(bar)\E` compiled in Go and was rejected by rg (the search
+  failed anyway, after the check passed), while rg's verbose mode `(?x)` was
+  refused as "invalid pattern" though ripgrep runs it. rg's own verdict is now
+  the only one, with its multi-line parse dump collapsed back into the short
+  message the pre-check used to produce. That collapse matches the phrase
+  "regex parse error" rather than the prefixed line, because the header is
+  version-dependent: ripgrep 13 (Debian 12, Ubuntu 22.04) prints
+  `regex parse error:` while 14+ prints `rg: regex parse error:`. Keying off the
+  prefixed line left Debian 12 builds with a bare "unrecognized escape sequence"
+  where the label belongs — found by running the suite inside a Debian 12
+  container, not by reading the code.
+- **Context lines in the grep tool**: the `grep` tool takes an optional
+  `context` argument (rg `-C`, capped at 50) and returns each match with the
+  surrounding lines, so seeing a hit in place no longer needs a shell. The
+  no-context output is unchanged, and a context result reports the number of
+  matches rather than the number of printed lines. The capture uses ripgrep's
+  `--null` form to tell a match from a context line: in the plain form the path,
+  line number and text are all separated by `:` or `-`, so `x-1-3-2-y` cannot be
+  read as either a context line in `x-1` or one in `x`; the NUL ends the path
+  unambiguously and the two forms are then rewritten back into the shape a shell
+  would print. The code-search guide no longer advertises context lines (or
+  `--type` filters) as the reason to reach for `rg` through bash — that wording
+  was an open invitation to leave the workspace boundary, the parallel batch and
+  the driver's exploration grouping behind, and context lines were an everyday
+  need rather than the exotic case it implied.
 - **Context windows in the model lists**: `/model` now shows the catalog's
   context window wherever it knows one — leading each row in the numbered list
   (`1. claude-sonnet-4-5  200K  [low|medium|high]`), in the list header for the
@@ -156,6 +245,22 @@ interactive REPL/TUI.
   terminal UI.
 
 ### Changed
+- **Startup wordmark in the block face**: the splash's `GOLDER` is now the
+  solid ANSI Shadow blocks — the face the tuios splash uses — instead of the
+  hollow box-drawing outline: six rows, 50 cells wide, with the entrance
+  unchanged (letters type themselves in left to right, one highlight sweep,
+  then the mark rests). Coverage of the face's seven glyphs was measured with
+  CoreText before the switch: SF Mono (every upright weight, Bold included),
+  Menlo Regular and Italic, and Courier New carry all of them; Monaco carries
+  `█` but none of the six double-line strokes, as do Menlo Bold, Menlo Bold
+  Italic and every SF Mono italic, so those faces fall back per glyph — what
+  the tuios splash already ships. No bold attribute is applied for the same
+  reason. The Linux side was measured against the fonts distributions actually
+  install (the Ubuntu archive packages, read with CoreText): DejaVu Sans Mono in
+  all four styles, Hack, JetBrains Mono and Liberation Mono in Regular and Bold,
+  and Ubuntu Mono in Regular, Medium and Bold carry all seven glyphs, and every
+  glyph advances the same width in each of them — Bold included. The caveat
+  above is therefore a macOS caveat.
 - **Provider config lives in one registry**: `ProviderSpec`
   (`internal/provider/registry.go`) now carries everything about a provider —
   transport/auth metadata plus `ModelPrefixes` (model-name → provider

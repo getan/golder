@@ -310,20 +310,28 @@ func main() {
 	os.Exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
 }
 
-// applyPermissionsConfig seeds the sandbox's writable-path grants from the
-// [permissions] table in config.toml plus the managed permissions.toml (the
-// store /permissions writable and the approval dialog write to). Invalid
-// entries warn and are skipped; applying grants only widens what sandboxed
-// commands may write, it never unsandboxes anything. A malformed config.toml
-// leaves cfg zero, so the managed store still applies.
+// applyPermissionsConfig seeds both path grants from the [permissions] table in
+// config.toml plus the managed permissions.toml (the store /permissions
+// writable and the approval dialog write to): writable roots for the sandbox,
+// and readable roots for the read-only tools (which also widens the sandbox's
+// read whitelist, so the two sides agree about a granted directory). Invalid
+// entries warn and are skipped; applying grants only widens what may be written
+// or read without asking, it never unsandboxes anything. A malformed
+// config.toml leaves cfg zero, so the managed store still applies.
 func applyPermissionsConfig(cfg config.FileConfig) {
 	roots := append([]string(nil), cfg.Permissions.WritableRoots...)
+	readRoots := append([]string(nil), cfg.Permissions.ReadableRoots...)
 	if managed, err := config.LoadPermissionsConfig(); err != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
 	} else {
 		roots = append(roots, managed.WritableRoots...)
+		readRoots = append(readRoots, managed.ReadableRoots...)
 	}
+	readRoots = append(readRoots, permissions.ReadableRootsFromEnv(os.Getenv)...)
 	for _, err := range seatbelt.SetWritableRoots(roots) {
+		fmt.Fprintf(os.Stderr, "golder: permissions: %v\n", err)
+	}
+	for _, err := range permissions.SetReadRoots(readRoots) {
 		fmt.Fprintf(os.Stderr, "golder: permissions: %v\n", err)
 	}
 }

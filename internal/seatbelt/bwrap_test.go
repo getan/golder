@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 // indexOfSeq returns the index of the first occurrence of the seq in argv, or
@@ -178,6 +180,10 @@ func TestReadableRootsIsAWhitelist(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("GOLDER_HOME", "")
 	t.Setenv("GOLDER_SANDBOX_READABLE", "")
+	// Read grants are process-wide and feed this list too (see the test below);
+	// clear them so this test states the baseline whitelist.
+	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	permissions.SetReadRoots(nil)
 
 	roots := ReadableRoots()
 	for _, want := range []string{"/usr", "/bin", "/opt", "/etc"} {
@@ -219,5 +225,49 @@ func TestReadableRootsFromEnv(t *testing.T) {
 		if r == "relative/path" {
 			t.Errorf("relative env entry must be dropped: %v", roots)
 		}
+	}
+}
+
+// TestSessionReadGrantWidensSandbox pins the wiring that keeps the tools and
+// the sandbox telling the same story: a directory the user allowed the
+// read-only tools to reach must also be readable inside the sandbox, or a
+// command would be denied a path the read tool serves happily. Both runners
+// build their read whitelist from ReadableRoots, so this covers macOS and Linux
+// with one assertion; the bwrap argv is checked as well because that is the
+// Linux enforcement.
+func TestSessionReadGrantWidensSandbox(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GOLDER_HOME", filepath.Join(home, "ghome"))
+	t.Setenv("GOLDER_SANDBOX_READABLE", "")
+	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	permissions.SetReadRoots(nil)
+
+	granted := t.TempDir()
+	if _, err := permissions.AddReadRoot(granted); err != nil {
+		t.Fatalf("AddReadRoot: %v", err)
+	}
+
+	if roots := ReadableRoots(); !slices.Contains(roots, granted) {
+		t.Errorf("a session read grant must widen the sandbox read whitelist: %v", roots)
+	}
+
+	// And the Linux runner must actually mount it read-only.
+	project, tmp := t.TempDir(), t.TempDir()
+	argv, _, err := (&BwrapRunner{ProjectDir: project, TmpDir: tmp}).SandboxArgv("/bin/bash", "-c", "echo hi", project)
+	if err != nil {
+		t.Fatalf("SandboxArgv: %v", err)
+	}
+	if indexOfSeq(argv, "--ro-bind", granted, granted) < 0 {
+		t.Errorf("bwrap argv must read-only bind the granted directory %s: %v", granted, argv)
+	}
+
+	// Revoking it takes it back out of both, so a grant is not permanent for
+	// the life of the process by accident.
+	if !permissions.RemoveReadRoot(granted) {
+		t.Fatal("RemoveReadRoot should report the grant was present")
+	}
+	if roots := ReadableRoots(); slices.Contains(roots, granted) {
+		t.Errorf("a revoked grant must leave the whitelist: %v", roots)
 	}
 }

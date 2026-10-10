@@ -188,6 +188,19 @@ func remoteControlStatus(out io.Writer, deps *replDeps) {
 // byte-identical to before (#443).
 func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
 	local := trust.BeforeToolCall(deps.trust, deps.cwd, deps.in, out, deps.confirmMu)
+	// Reading outside the workspace asks the user first (the read-scope gate),
+	// and no permission mode waives it. The trust gate stays first: an
+	// untrusted directory is the more basic question.
+	if scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
+		WorkspaceRoot: deps.cwd,
+		Roots:         run.ReadableExtraRoots(),
+		In:            deps.in,
+		Out:           out,
+		Mu:            deps.confirmMu,
+		Notify:        deps.notes.Emit,
+	}); scopeGate != nil {
+		local = judge.ChainGates(local, scopeGate)
+	}
 	trusted := deps.trust != nil && deps.trust.IsTrusted(deps.cwd)
 	reviewer := run.NewReviewer(deps.live.Model, deps.live.ProviderName, deps.live.Provider, deps.creds, deps.header.ID, deps.cwd, trusted)
 	local = judge.ChainGates(local, judge.PermissionGate(deps.perms, judge.GateOpts{

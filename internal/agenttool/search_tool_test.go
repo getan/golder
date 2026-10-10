@@ -278,3 +278,401 @@ func TestSearchWithoutRG(t *testing.T) {
 		})
 	}
 }
+
+// TestGrepContext covers the argument that keeps "show me the code around this
+// hit" out of a shell: a context search returns the match line with ':' and the
+// neighbouring lines with '-', and reports the number of MATCHES rather than
+// the number of printed lines.
+func TestGrepContext(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	content := "first\nsecond\nTARGET\nfourth\nfifth\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "TARGET", "context": 1})
+	txt := resultText(res)
+	for _, want := range []string{"a.txt:3:TARGET", "a.txt-2-second", "a.txt-4-fourth"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("context result missing %q: %q", want, txt)
+		}
+	}
+	if !strings.Contains(txt, `1 match(es) for "TARGET" (with 1 line(s) of context)`) {
+		t.Errorf("unexpected headline: %q", txt)
+	}
+	details, _ := res.Details.(map[string]any)
+	if got := details["matches"]; got != 1 {
+		t.Errorf("matches detail = %v, want 1 (matches, not printed lines)", got)
+	}
+	if got := details["context"]; got != 1 {
+		t.Errorf("context detail = %v, want 1", got)
+	}
+}
+
+// TestGrepContextWithoutFlagKeepsOutput pins the no-context path unchanged:
+// no rewrite, no suffix, and one match per printed line.
+func TestGrepContextWithoutFlagKeepsOutput(t *testing.T) {
+	requireRG(t)
+	dir := seedTree(t)
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "hello"})
+	txt := resultText(res)
+	if strings.Contains(txt, "line(s) of context") {
+		t.Errorf("no-context search must not mention context: %q", txt)
+	}
+	if strings.Contains(txt, "main.go-") {
+		t.Errorf("no-context search must not print context lines: %q", txt)
+	}
+	details, _ := res.Details.(map[string]any)
+	if _, ok := details["context"]; ok {
+		t.Errorf("context detail must be absent without the flag: %v", details)
+	}
+}
+
+// TestGrepContextOutOfRange pins the argument bounds: a context outside
+// [0, grepMaxContext] is refused with a clear message instead of being passed
+// to ripgrep.
+func TestGrepContextOutOfRange(t *testing.T) {
+	dir := seedTree(t)
+	for _, c := range []int{-1, grepMaxContext + 1} {
+		res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "hello", "context": c})
+		if !strings.Contains(resultText(res), "context must be between") {
+			t.Errorf("context %d: want a range error, got %q", c, resultText(res))
+		}
+	}
+}
+
+// TestGrepResultLinesNullForm is the unit test for the ambiguity the --null
+// capture exists to remove: with plain output, `x-1-3-2-y` reads as a context
+// line 1 of file `x-1` or as one of file `x`, and nothing in the line decides
+// it. With the NUL terminator the path ends where it says it does.
+func TestGrepResultLinesNullForm(t *testing.T) {
+	lines := []string{
+		"x-1\x003-2-y",     // context line 3 of x-1 whose text starts "2-y"
+		"a-b.go\x0012:hit", // match on line 12 of a-b.go
+		"--",
+		"plain\x004:match",
+	}
+	got := grepResultLines(lines, 1)
+	want := []struct {
+		text  string
+		match bool
+	}{
+		{"x-1-3-2-y", false},
+		{"a-b.go:12:hit", true},
+		{"--", false},
+		{"plain:4:match", true},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d lines, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].text != w.text || got[i].match != w.match {
+			t.Errorf("line %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}
+
+// TestCapGrepLinesCutsOnMatchBoundaries pins the cap under context: the cut
+// lands before the (max+1)-th match, the trailing context of the last kept
+// match survives, and a group separator left dangling by the cut is dropped.
+func TestCapGrepLinesCutsOnMatchBoundaries(t *testing.T) {
+	lines := grepResultLines([]string{
+		"f\x001:TARGET",
+		"f\x002-tail",
+		"--",
+		"f\x005:TARGET",
+		"f\x006-tail",
+		"--",
+		"f\x009:TARGET",
+	}, 1)
+	kept, matches, truncated := capGrepLines(lines, 2)
+	if !truncated {
+		t.Error("a third match exists, so the result must be marked truncated")
+	}
+	if matches != 2 {
+		t.Errorf("matches = %d, want 2", matches)
+	}
+	var got []string
+	for _, ln := range kept {
+		got = append(got, ln.text)
+	}
+	want := []string{"f:1:TARGET", "f-2-tail", "--", "f:5:TARGET", "f-6-tail"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("kept:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestGrepContextPassesRegistryValidation guards the seam the argument has to
+// cross before it reaches Execute: the executor validates every call against
+// the tool's schema, and the schema sets additionalProperties=false, so a
+// context argument the schema did not declare would be rejected before the
+// tool ever saw it — the feature would be dead on arrival with tests on
+// grepResultLines still passing.
+func TestGrepContextPassesRegistryValidation(t *testing.T) {
+	reg := NewToolRegistry()
+	if err := reg.Register(&GrepTool{}); err != nil {
+		t.Fatalf("register grep: %v", err)
+	}
+	valid := map[string]any{
+		"pattern": "x",
+		"context": 3,
+	}
+	raw, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", raw); errs != nil {
+		t.Errorf("context argument rejected by schema validation: %+v", errs)
+	}
+	// The declared bounds are enforced by the schema too, so an out-of-range
+	// value never has to reach the tool's own check to be refused.
+	over, err := json.Marshal(map[string]any{"pattern": "x", "context": grepMaxContext + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", over); len(errs) == 0 {
+		t.Errorf("context %d must be rejected by the schema", grepMaxContext+1)
+	}
+}
+
+// seedGrepTree writes a small tree for the flag tests: a match in two cases,
+// a word-boundary neighbour, a file with a literal-matching name, an ignored
+// build product, a hidden file, and VCS metadata.
+func seedGrepTree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	write("prose.md", "hello world\n")
+	write("shout.md", "HELLO WORLD\n")
+	write("code.go", "needle := 1\nhello_world()\n")
+	write("quirk.go", "foo(bar) baz\n")
+	write("notes.txt", "keep\n")
+	write(".env", "needle=1\n")
+	write(".git/config", "needle url\n")
+	write("build/gen.go", "needle\n")
+	write(".gitignore", "build/\n")
+	return dir
+}
+
+// grepText runs grep with args against dir and returns the model-facing text.
+func grepText(t *testing.T, dir string, args map[string]any) string {
+	t.Helper()
+	return resultText(runSearch(t, &GrepTool{Root: dir}, args))
+}
+
+// TestGrepFlags covers the eight structured flags, one behaviour each: they are
+// whitelisted spellings of the ripgrep options worth having, chosen over a raw
+// flag passthrough because rg's --pre executes commands and this tool runs
+// without an LLM review (it is a read-only tool).
+func TestGrepFlags(t *testing.T) {
+	requireRG(t)
+	dir := seedGrepTree(t)
+
+	t.Run("ignore_case", func(t *testing.T) {
+		if got := grepText(t, dir, map[string]any{"pattern": "hello", "glob": "*.md"}); strings.Contains(got, "shout.md") {
+			t.Errorf("case-sensitive search must not match HELLO: %q", got)
+		}
+		got := grepText(t, dir, map[string]any{"pattern": "hello", "glob": "*.md", "ignore_case": true})
+		if !strings.Contains(got, "prose.md") || !strings.Contains(got, "shout.md") {
+			t.Errorf("ignore_case should match both files: %q", got)
+		}
+	})
+
+	t.Run("word", func(t *testing.T) {
+		// hello_world contains hello, but not as a whole word.
+		if got := grepText(t, dir, map[string]any{"pattern": "hello", "glob": "*.go"}); !strings.Contains(got, "code.go") {
+			t.Errorf("substring search should match hello_world: %q", got)
+		}
+		if got := grepText(t, dir, map[string]any{"pattern": "hello", "glob": "*.go", "word": true}); strings.Contains(got, "code.go") {
+			t.Errorf("word search must not match hello_world: %q", got)
+		}
+	})
+
+	t.Run("literal", func(t *testing.T) {
+		// As a regexp, foo(bar) matches the text "foobar"; as a literal it
+		// matches only the parentheses as typed.
+		res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "foo(bar)", "literal": true})
+		if got := resultText(res); !strings.Contains(got, "quirk.go") {
+			t.Errorf("literal search should find foo(bar): %q", got)
+		}
+	})
+
+	t.Run("invert", func(t *testing.T) {
+		got := grepText(t, dir, map[string]any{"pattern": "hello", "path": "prose.md", "invert": true})
+		if strings.Contains(got, "hello world") {
+			t.Errorf("invert must drop matching lines: %q", got)
+		}
+	})
+
+	t.Run("files_only", func(t *testing.T) {
+		res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "hello", "files_only": true})
+		got := resultText(res)
+		// The search is case-sensitive, so shout.md (HELLO WORLD) is not a
+		// match; code.go carries hello inside hello_world.
+		if !strings.Contains(got, "prose.md") || !strings.Contains(got, "code.go") {
+			t.Errorf("files_only should name the matching files: %q", got)
+		}
+		if strings.Contains(got, "shout.md") {
+			t.Errorf("files_only must respect case sensitivity: %q", got)
+		}
+		if strings.Contains(got, "hello world") {
+			t.Errorf("files_only must not print matching lines: %q", got)
+		}
+		details, _ := res.Details.(map[string]any)
+		if details["files"] == nil {
+			t.Errorf("files_only details should carry a file count: %v", details)
+		}
+	})
+
+	t.Run("type", func(t *testing.T) {
+		got := grepText(t, dir, map[string]any{"pattern": "needle", "type": "go"})
+		if !strings.Contains(got, "code.go") {
+			t.Errorf("type go should search .go files: %q", got)
+		}
+		if strings.Contains(got, "notes.txt") {
+			t.Errorf("type go must not search .txt files: %q", got)
+		}
+		if strings.Contains(got, "gen.go") {
+			t.Errorf("type go must still respect .gitignore: %q", got)
+		}
+	})
+
+	t.Run("hidden_excludes_git", func(t *testing.T) {
+		if got := grepText(t, dir, map[string]any{"pattern": "needle"}); strings.Contains(got, ".env") {
+			t.Errorf("hidden files must be skipped by default: %q", got)
+		}
+		got := grepText(t, dir, map[string]any{"pattern": "needle", "hidden": true})
+		if !strings.Contains(got, ".env") {
+			t.Errorf("hidden=true should search .env: %q", got)
+		}
+		// The tree walk keeps .git out even when hidden files are in scope:
+		// its object blobs and refs are noise in a content search. Hygiene,
+		// not a boundary — an explicit path into .git is not subject to it.
+		if strings.Contains(got, ".git/") {
+			t.Errorf("hidden=true must still exclude .git: %q", got)
+		}
+	})
+
+	t.Run("no_ignore", func(t *testing.T) {
+		if got := grepText(t, dir, map[string]any{"pattern": "needle", "type": "go"}); strings.Contains(got, "gen.go") {
+			t.Errorf("ignored files must be skipped by default: %q", got)
+		}
+		got := grepText(t, dir, map[string]any{"pattern": "needle", "type": "go", "no_ignore": true})
+		if !strings.Contains(got, "gen.go") {
+			t.Errorf("no_ignore=true should search the ignored file: %q", got)
+		}
+	})
+}
+
+// TestGrepPatternDialect pins the seam the compile fix moved: the pattern is
+// graded by ripgrep, the engine that actually matches, instead of by Go's
+// regexp. The two dialects disagree in both directions, so a Go pre-check got
+// it wrong whichever way the pattern went.
+func TestGrepPatternDialect(t *testing.T) {
+	requireRG(t)
+	dir := seedGrepTree(t)
+
+	// Go compiles \Q...\E; the Rust regex crate rejects it. Before the fix the
+	// pre-check passed and ripgrep failed anyway, with its multi-line dump.
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": `\Qhello world\E`})
+	if got := resultText(res); !strings.Contains(got, "invalid pattern") {
+		t.Errorf("rg rejects \\Q..\\E, so the message should say invalid pattern: %q", got)
+	}
+	if got := resultText(res); strings.Contains(got, "\n  ") {
+		t.Errorf("the multi-line parse dump must be collapsed: %q", got)
+	}
+
+	// rg's verbose mode is valid there and invalid in Go, so the old pre-check
+	// refused a search ripgrep would have run.
+	// In verbose mode the pattern's own whitespace is ignored, so the space
+	// between the words has to be spelled \s to match the file's.
+	res = runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": `(?x) hello \s world`, "glob": "prose.md"})
+	if got := resultText(res); !strings.Contains(got, "prose.md") {
+		t.Errorf("(?x) is valid ripgrep syntax and should search: %q", got)
+	}
+}
+
+// TestRGErrorReason covers the two stderr shapes ripgrep uses on exit 2: the
+// multi-line parse-error block (where the reason is on its own "error:" line)
+// and the single-line "rg: <reason>" form an unknown --type or a missing path
+// produces. The parse block is asserted in BOTH spellings, because the header
+// line depends on the ripgrep version: 13 (Debian 12, Ubuntu 22.04) prints
+// "regex parse error:", 14+ prefixes it with "rg: ". Keying the label off the
+// prefixed line made a Debian 12 container report a bare "unrecognized escape
+// sequence" where this machine's ripgrep 15 reported "invalid pattern: …".
+func TestRGErrorReason(t *testing.T) {
+	cases := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "parse block, ripgrep 14+",
+			stderr: "rg: regex parse error:\n    (?:\\Qx\\E)\n       ^^\nerror: unrecognized escape sequence\n",
+			want:   "invalid pattern: unrecognized escape sequence",
+		},
+		{
+			name:   "parse block, ripgrep 13",
+			stderr: "regex parse error:\n    \\Qx\\E\n    ^^\nerror: unrecognized escape sequence\n",
+			want:   "invalid pattern: unrecognized escape sequence",
+		},
+		{
+			name:   "unclosed class, ripgrep 13",
+			stderr: "regex parse error:\n    [\n    ^\nerror: unclosed character class\n",
+			want:   "invalid pattern: unclosed character class",
+		},
+		{
+			name:   "single line",
+			stderr: "rg: unrecognized file type: nosuchtype\n",
+			want:   "unrecognized file type: nosuchtype",
+		},
+		{
+			name:   "empty",
+			stderr: "",
+			want:   "unknown error",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := rgErrorReason(c.stderr); got != c.want {
+				t.Errorf("rgErrorReason = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestGrepNewFlagsPassRegistryValidation guards the same seam the context
+// argument crosses: the schema sets additionalProperties=false, so a field it
+// does not declare is rejected before Execute runs.
+func TestGrepNewFlagsPassRegistryValidation(t *testing.T) {
+	reg := NewToolRegistry()
+	if err := reg.Register(&GrepTool{}); err != nil {
+		t.Fatalf("register grep: %v", err)
+	}
+	raw, err := json.Marshal(map[string]any{
+		"pattern":     "x",
+		"ignore_case": true,
+		"word":        true,
+		"literal":     true,
+		"invert":      true,
+		"files_only":  true,
+		"type":        "go",
+		"hidden":      true,
+		"no_ignore":   true,
+		"context":     2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", raw); errs != nil {
+		t.Errorf("a documented grep field was rejected by schema validation: %+v", errs)
+	}
+}

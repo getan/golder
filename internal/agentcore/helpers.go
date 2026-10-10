@@ -55,6 +55,15 @@ type BeforeToolCallDecision struct {
 	// executes with (SandboxRequestedFromContext); a tool that cannot isolate
 	// must fail closed. Ignored when Block is set.
 	Sandbox bool
+	// ReadGrant, when non-empty, allows this one call to read the given path
+	// outside the workspace. The executor publishes it into the context the
+	// tool executes with (ReadGrantFromContext). It carries a single path
+	// rather than a directory on purpose: the answer to the boundary question
+	// is either "just this one" (this field) or "this directory for the
+	// session" (the read-root registry in internal/permissions), which needs
+	// no plumbing because every tool reads it directly. Ignored when Block is
+	// set.
+	ReadGrant string
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

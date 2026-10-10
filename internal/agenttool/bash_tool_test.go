@@ -270,3 +270,79 @@ func TestResolveShell(t *testing.T) {
 		})
 	}
 }
+
+// TestLooksRGMissing covers the measured shell shapes and, just as important,
+// the outputs that must NOT be read as "ripgrep is missing": a bare "command
+// not found" for some other program, and a grep that failed on a file named
+// `rg`. A false positive would tell the model to stop using the tools when
+// nothing is wrong with them.
+func TestLooksRGMissing(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{"bash", "/bin/bash: rg: command not found\n", true},
+		{"zsh", "zsh:1: command not found: rg\n", true},
+		{"dash (measured)", "/bin/dash: 1: rg: not found\n", true},
+		{"debian /bin/sh is dash", "sh: 1: rg: not found\n", true},
+		{"busybox ash", "sh: rg: not found\n", true},
+		{"path unset", "rg: No such file or directory\n", true},
+		{"indented", "  /bin/bash: rg: command not found\n", true},
+		{"other program missing", "/bin/bash: nosuchcmd: command not found\n", false},
+		{"grep on a file named rg", "grep: rg: No such file or directory\n", false},
+		{"rg mentioned mid-line", "plugin rg: not found in registry\n", false},
+		{"ordinary failure", "make: *** [all] Error 1\n", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := looksRGMissing(c.output); got != c.want {
+				t.Errorf("looksRGMissing(%q) = %v, want %v", c.output, got, c.want)
+			}
+		})
+	}
+}
+
+// TestBashRGMissingHint is the integration: a command that fails because rg is
+// not on PATH comes back with the fallback hint, so the model learns to use the
+// shell's grep/find instead of trying the ripgrep-backed tools next. PATH is
+// overridden inline rather than by mutating the test process's environment, so
+// the assertion does not depend on this machine having ripgrep.
+func TestBashRGMissingHint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash not available on windows")
+	}
+	res, gerr := runBash(t, &BashTool{}, map[string]any{
+		"command": "PATH=/nonexistent-dir-for-test rg --version",
+	}, nil)
+	if gerr == nil {
+		t.Fatalf("a missing rg must fail the command, got nil error")
+	}
+	if !strings.Contains(gerr.Error(), "grep/find") {
+		t.Errorf("error should carry the fallback hint, got %q", gerr.Error())
+	}
+	if !strings.Contains(gerr.Error(), "not installed") {
+		t.Errorf("error should say ripgrep is not installed, got %q", gerr.Error())
+	}
+	details, ok := res.Details.(map[string]any)
+	if !ok || details["rgMissing"] != true {
+		t.Errorf("expected rgMissing in details, got %+v", res.Details)
+	}
+
+	// An ordinary failure must not carry the ripgrep advice.
+	res, gerr = runBash(t, &BashTool{}, map[string]any{"command": "exit 4"}, nil)
+	if gerr == nil {
+		t.Fatalf("expected a failure for exit 4")
+	}
+	if strings.Contains(gerr.Error(), "not installed") {
+		t.Errorf("an unrelated failure must not mention ripgrep, got %q", gerr.Error())
+	}
+	details, ok = res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("details missing: %+v", res.Details)
+	}
+	if _, present := details["rgMissing"]; present {
+		t.Errorf("rgMissing must be absent for an unrelated failure: %+v", details)
+	}
+}

@@ -218,14 +218,26 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 				Registry: goalReg,
 				BeforeToolCall: judge.ChainGates(
 					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
-					judge.PermissionGate(host.Permissions(), judge.GateOpts{
-						In:         host.Input(),
-						Out:        out,
-						Mu:         host.ConfirmMu(),
-						Classifier: run.NewReviewer(host.Live().Model, host.Live().ProviderName, host.Live().Provider, host.Creds(), host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd())),
-						Sandboxed:  run.SandboxGate(),
-						Notify:     host.ReviewNotes().Emit,
-					}),
+					judge.ChainGates(
+						// Consent first: reading outside the workspace is the
+						// user's call, in every approval mode.
+						judge.ReadScopeGate(judge.ReadScopeOpts{
+							WorkspaceRoot: host.Cwd(),
+							Roots:         run.ReadableExtraRoots(),
+							In:            host.Input(),
+							Out:           out,
+							Mu:            host.ConfirmMu(),
+							Notify:        host.ReviewNotes().Emit,
+						}),
+						judge.PermissionGate(host.Permissions(), judge.GateOpts{
+							In:         host.Input(),
+							Out:        out,
+							Mu:         host.ConfirmMu(),
+							Classifier: run.NewReviewer(host.Live().Model, host.Live().ProviderName, host.Live().Provider, host.Creds(), host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd())),
+							Sandboxed:  run.SandboxGate(),
+							Notify:     host.ReviewNotes().Emit,
+						}),
+					),
 				),
 			},
 		},

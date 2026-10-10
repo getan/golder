@@ -155,14 +155,25 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 				},
 				Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{
 					Registry: ToolRegistry(childTools),
-					// Children have no stdin prompt, so the gate runs
+					// Children have no stdin prompt, so both gates run
 					// non-interactively and announcements flow through the
-					// shared sink the driver registered.
-					BeforeToolCall: judge.PermissionGate(permState, judge.GateOpts{
-						Classifier: childClassifier,
-						Sandboxed:  SandboxGate(),
-						Notify:     notes.Emit,
-					}),
+					// shared sink the driver registered. The read-scope gate
+					// therefore fails closed for a path the parent session has
+					// not already been granted — a sub-agent cannot widen what
+					// the session may read, but it inherits every grant the
+					// user already gave (the read-root registry is shared).
+					BeforeToolCall: judge.ChainGates(
+						judge.ReadScopeGate(judge.ReadScopeOpts{
+							WorkspaceRoot: cwd,
+							Roots:         ReadableExtraRoots(),
+							Notify:        notes.Emit,
+						}),
+						judge.PermissionGate(permState, judge.GateOpts{
+							Classifier: childClassifier,
+							Sandboxed:  SandboxGate(),
+							Notify:     notes.Emit,
+						}),
+					),
 				}},
 			}
 		}

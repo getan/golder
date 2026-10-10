@@ -150,6 +150,43 @@ func TestExecutorSandboxRequestReachesTool(t *testing.T) {
 	}
 }
 
+// TestExecutorReadGrantReachesTool verifies the beforeToolCall ReadGrant
+// decision is published into the context the tool executes with, the same seam
+// the sandbox request uses. Without this the whole out-of-workspace read flow
+// fails silently: the gate approves, the file tools never see the grant, and
+// the read is refused as if the user had said no — with every gate-level test
+// still green.
+func TestExecutorReadGrantReachesTool(t *testing.T) {
+	const granted = "/outside/a.go"
+	var sawGrant string
+	tool := execTool{name: "echo", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		sawGrant = agentcore.ReadGrantFromContext(ctx)
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("ok")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.BeforeToolCall = func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{ReadGrant: granted}
+	}
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "echo"}, nil)
+	if msg.IsError {
+		t.Fatalf("a read-granted call should execute: %+v", msg)
+	}
+	if sawGrant != granted {
+		t.Fatalf("tool context must carry the read grant %q, got %q", granted, sawGrant)
+	}
+
+	// A decision without a grant must not leak one from a prior call: the
+	// grant answers one read, not every later read of a file the user once
+	// allowed.
+	sawGrant = granted
+	cfg.BeforeToolCall = func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{}
+	}
+	if _, _ = executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "2", Name: "echo"}, nil); sawGrant != "" {
+		t.Fatalf("no read grant expected without the decision field, got %q", sawGrant)
+	}
+}
+
 func TestExecutorToolError(t *testing.T) {
 	tool := execTool{name: "boom", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 		return agentcore.AgentToolResult{}, errors.New("kaboom")

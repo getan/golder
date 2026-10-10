@@ -72,6 +72,24 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 注意它只放宽**读**；写默认只限项目与 `TMPDIR`，编译产物写到别处（如 `CARGO_TARGET_DIR=/Volumes/…`）用下面的 writable_roots 授权，或提权执行。
 
+### 工具侧读边界（工作区外读取需确认）
+
+沙箱管的是 bash 命令；读取类工具（`read` / `grep` / `find` / `ls` / `view_image`）另有一条边界：**工作区根目录**（启动目录）。这几个工具默认只读工作区，越界不是硬拒绝，而是征求你的同意——这是范围/同意问题而非风险问题，因此**与权限模式无关**：只读、每次询问、自动审批、完全放行都会问（`full-access` 关掉的是审查与沙箱，不是知情同意）。没有可问的人时（`headless`、子 agent）失败关闭，错误消息里写明路径与可用的配置办法。
+
+两种回答粒度不同：
+
+- **只读这一次**：随该次调用生效（上下文里的单次授权），不留记录；
+- **本会话允许读该目录**：登记进进程内读权注册表（`internal/permissions/readroots.go`），此后该目录下的读取不再询问，并**同时放宽沙箱读白名单**——否则会出现"工具读得到、bash 读不到"的分裂。
+
+候选目录取「文件所在目录」；该目录本身太宽（`$HOME`、`/`、`$HOME` 的父目录）则上提一层，仍太宽就只提供"只读这一次"。**凭据路径（`~/.ssh`、`~/.zshrc`、`~/.aws`、`~/Library/Keychains` 等）不进入询问**：静态硬拒绝层直接拦下，弹窗不会给出一个按键就交出它们的机会。
+
+需要预先授权（避免反复弹窗）时有两条途径，汇入同一份注册表：
+
+- **`config.toml` 的 `[permissions] readable_roots = ["~/work/monorepo"]`**：手写固定授权，monorepo 根在启动目录之上时最常用；
+- **`GOLDER_READABLE_ROOTS`**：冒号/逗号分隔，规则与配置一致（`~/` 展开，相对路径与过宽根被丢弃）。
+
+它与 `GOLDER_SANDBOX_READABLE` 不是一回事：后者只作用于 OS 沙箱，前者是工具自己的白名单并顺带放宽沙箱。读授权也不影响写：`apply_patch` 仍只写工作区，越界要走下面的 writable_roots。
+
 ### 写白名单（项目 + 临时目录 + writable_roots）
 
 沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一份进程内注册表（`internal/seatbelt/writable.go`，并发安全，下一个命令立即生效）：

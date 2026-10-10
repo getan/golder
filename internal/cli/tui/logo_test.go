@@ -35,11 +35,11 @@ func logoFrameHasInk(frame int) bool {
 	return false
 }
 
-// logoLetterBand is letter k's column range [start, start+width) in the block,
-// including the gap columns that precede it.
+// logoLetterBand is letter k's column range [start, start+width) in the block:
+// the advances of the letters before it, then its own.
 func logoLetterBand(k int) (start, width int) {
 	for i := 0; i < k; i++ {
-		start += logoGlyphWidth(logoWordGlyphs[i]) + logoLetterGap
+		start += logoGlyphWidth(logoWordGlyphs[i])
 	}
 	return start, logoGlyphWidth(logoWordGlyphs[k])
 }

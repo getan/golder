@@ -75,6 +75,23 @@ no_skills = false
 
 # --- Persistent memory + infinite context (nested tables) ---
 
+# [permissions] holds the two path grants. Both lists take "~/..." spellings
+# (relative paths are ignored with a warning), and neither can be turned into
+# "everything": the filesystem root, $HOME itself and $HOME's parent are always
+# refused.
+#
+# readable_roots lets the read-only tools (read, grep, find, ls, view_image)
+# reach a directory outside the opened workspace without asking first — the
+# monorepo case, where the project root sits above the directory you launched
+# in. Without it the tools ask, once per directory per session (the dialog
+# offers "allow this read once" and "allow reading <dir> (this session)"), and
+# a non-interactive run refuses with the path and this setting named. A grant
+# also widens the sandbox's read whitelist, so a command and a tool agree about
+# a granted directory.
+# [permissions]
+# readable_roots = ["~/work/monorepo"]
+# writable_roots = ["~/cache/build"]
+
 # [memory] controls the persistent memory system. All keys are optional and
 # default to the values shown; set memory.enabled = false to fully disable it.
 # [memory]

@@ -11,7 +11,7 @@ import (
 )
 
 // This file builds the startup splash shown at the top of the transcript: the
-// animated "golder" wordmark (see logo.go) with the session's basic
+// animated "GOLDER" wordmark (see logo.go) with the session's basic
 // configuration (model, provider, protocol, thinking effort, directory) laid
 // out beside it.
 // It is seeded by withSession so it scrolls up as the conversation grows, like

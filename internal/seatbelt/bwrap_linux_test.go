@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 func TestBwrapRunnerEndToEnd(t *testing.T) {
@@ -94,6 +96,25 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 		t.Errorf("the git config must stay readable (git commit needs it): %v\n%s", err, out)
 	} else if !strings.Contains(out, "probe@example.com") {
 		t.Errorf("git config read returned unexpected content:\n%s", out)
+	}
+
+	// A session read grant must reach the sandbox as well: the read-only tools
+	// can read a granted directory (that is what the approval dialog promised),
+	// so a command must not be denied the same path. This is the end-to-end
+	// proof for the Linux runner that the argv-level test asserts by reading.
+	granted := t.TempDir()
+	grantedFile := filepath.Join(granted, "granted.txt")
+	if err := os.WriteFile(grantedFile, []byte("granted content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := permissions.AddReadRoot(granted); err != nil {
+		t.Fatalf("AddReadRoot: %v", err)
+	}
+	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	if out, err := run("cat " + grantedFile); err != nil {
+		t.Errorf("a granted directory must be readable inside the sandbox: %v\n%s", err, out)
+	} else if !strings.Contains(out, "granted content") {
+		t.Errorf("granted read returned unexpected content:\n%s", out)
 	}
 }
 

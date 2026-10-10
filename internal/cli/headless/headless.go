@@ -102,13 +102,26 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// non-interactively: auto mode lets the reviewer decide (Confirm runs,
 	// Sandbox is isolated, Deny blocks) and ask mode fails closed. Decisions
 	// go to stderr so stdout stays a clean answer stream.
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.PermissionGate(env.Permissions, judge.GateOpts{
+	permGate := judge.PermissionGate(env.Permissions, judge.GateOpts{
 		Classifier: run.NewReviewer(p.Model, env.ProviderName, env.Provider, creds, hs.header.ID, env.Cwd, run.Trusted(env.Cwd)),
 		Sandboxed:  run.SandboxGate(),
 		Notify: func(n judge.Note) {
 			fmt.Fprintln(errOut, judge.FormatNote(n))
 		},
 	})
+	// Reading outside the workspace needs the user's answer, and a headless run
+	// has nobody to ask: the read-scope gate blocks with guidance naming the
+	// path and the config that would allow it (a script cannot approve, and
+	// guessing on its behalf would quietly widen what data the run touches).
+	// The note goes to stderr so stdout stays a clean answer stream.
+	scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
+		WorkspaceRoot: env.Cwd,
+		Roots:         run.ReadableExtraRoots(),
+		Notify: func(n judge.Note) {
+			fmt.Fprintln(errOut, judge.FormatNote(n))
+		},
+	})
+	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(scopeGate, permGate)
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, install the tool-execution + Stop seams, dispatch SessionStart, and

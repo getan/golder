@@ -16,6 +16,7 @@ package runtime
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -62,6 +63,10 @@ type PromptConfig struct {
 	// Skills are advertised only when it is true, since the model needs the read
 	// tool to load a skill's body; otherwise the block is omitted entirely.
 	ReadToolAvailable bool
+	// LookPath resolves a program on PATH, for the environment block's note on
+	// which search program a shell should use. When nil, exec.LookPath is used;
+	// injected so the note can be asserted for both answers on any machine.
+	LookPath func(string) (string, error)
 }
 
 // DefaultBaseInstruction is the leading system-prompt text used when
@@ -111,17 +116,36 @@ const patchGuide = "Edit files with the apply_patch tool: one call carries a pat
 	"re-read the file and resend the complete corrected patch. Never create or edit files through " +
 	"shell redirection or heredocs; apply_patch is the only write path."
 
-// codeSearchGuide points the model at the dedicated search tools before it
-// reaches for a shell pipeline. grep and find are backed by ripgrep and exist
-// per driver (REPL/TUI/headless), so their results are capped and path-scoped
-// the same way everywhere; a raw `rg` through bash is the escape hatch for
-// flags the tool schemas do not expose (-A/-B context, --type, …), not the
-// default. Shelling out also costs a confirmation prompt in an untrusted
-// directory, which the named tools never do.
+// codeSearchGuide names the grep tool as THE way to search file contents — the
+// grep the model reaches for, so the reflex lands on a tool that respects the
+// workspace boundary, returns bounded results, and keeps its calls visible to
+// the driver's grouping (a shell pipeline renders as its own card and runs
+// serially, while the named tools batch in parallel).
+//
+// The guide names the arguments that used to send the model to a shell —
+// context lines, case-insensitive matching, whole words, literal patterns,
+// inverted matches, file lists, type filters, hidden and ignored files —
+// because an argument list is what makes "use bash rg" a legitimate reading:
+// the old text told the model to reach for `rg` through bash whenever it needed
+// a flag the schemas did not expose, and named context lines as the example.
+// The guide has to name the arguments now that they exist, and must not name a
+// gap that has closed: it pointed at `--type` long after `type` shipped, which
+// kept inviting the shell for a search the tool already does. What genuinely
+// remains outside the tool (multiline mode) is the one example left.
+//
+// The closing sentence covers the machine where ripgrep is absent, which is
+// also the machine where the tools cannot run at all (they are ripgrep-backed):
+// telling the model to fall back to the shell's grep/find is the only advice
+// that works there, and the environment block says which world it is in.
 const codeSearchGuide = "To search code, use the grep tool (file contents) and the find tool " +
-	"(file names) first: they are ripgrep-backed, respect the workspace boundary, and return " +
-	"bounded results. Reach for `rg` through bash only when you need flags the tools do not " +
-	"expose, such as -A/-B context lines or --type filters."
+	"(file names): grep is golder's own ripgrep-backed search, with arguments for context " +
+	"lines, ignore_case, word, literal, invert, files_only, type, hidden and no_ignore " +
+	"(paths are regexps, so (?i) also works inline). Prefer them over a shell pipeline — " +
+	"they respect the workspace boundary, return bounded results, and batch in parallel — " +
+	"and reach for `rg` through bash only for what the tool has no argument for, such as " +
+	"multiline mode. When ripgrep is not installed (the environment block says so), the " +
+	"tools cannot run: search from a shell with `grep` and `find` instead. Inside a shell, " +
+	"prefer `rg` when it is installed and fall back to `grep`/`find` when it is not."
 
 // batchGuide teaches the parallelism contract of the tool loop: independent
 // calls issued in ONE assistant message run concurrently (read/grep/find/ls and
@@ -216,6 +240,7 @@ func BuildSystemPrompt(cfg PromptConfig) (string, error) {
 	b.WriteString("\n\nEnvironment:\n")
 	fmt.Fprintf(&b, "- Working directory: %s\n", wd)
 	fmt.Fprintf(&b, "- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Fprintf(&b, "- Search: %s\n", searchTooling(cfg.LookPath))
 	fmt.Fprintf(&b, "- Date: %s", now().Format("2006-01-02"))
 
 	dirs := agentsDirChain(cfg.Root, wd)
@@ -256,6 +281,27 @@ func BuildSystemPrompt(cfg PromptConfig) (string, error) {
 	}
 
 	return b.String(), nil
+}
+
+// searchTooling renders the environment block's one-line note on which search
+// program a shell should use. The dedicated grep/find tools are ripgrep-backed,
+// so on a machine without ripgrep they cannot run at all and the model's only
+// route is the shell's own grep/find — which is exactly the fact the note
+// states, so the model does not spend a turn discovering it by failure.
+//
+// The probe is a LookPath, not a version check: presence is what the tools
+// depend on too (they run `rg` by name), and it is cheap enough to do on every
+// prompt build. lookPath is injectable so both answers are assertable on any
+// machine — the sandboxed and unsandboxed cases must read the same here as the
+// tool layer behaves.
+func searchTooling(lookPath func(string) (string, error)) string {
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	if _, err := lookPath("rg"); err == nil {
+		return "ripgrep (rg) is installed; prefer it in shell commands (grep/find tools are ripgrep-backed)."
+	}
+	return "ripgrep (rg) is NOT installed: the grep and find tools cannot run, so search from a shell with grep/find."
 }
 
 // agentsDirChain returns the directories whose AGENTS.md should be injected, in

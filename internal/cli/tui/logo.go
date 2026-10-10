@@ -10,25 +10,35 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// This file draws the startup wordmark: "golder" set in a hollow line face and
-// animated in with a short, self-stopping entrance.
+// This file draws the startup wordmark: "GOLDER" set in the block face the
+// tuios splash uses — figlet's ANSI Shadow — and animated in with a short,
+// self-stopping entrance.
 //
-// The face is drawn with box-drawing strokes — square corners (┌┐└┘), straight
-// runs (─│), and junctions (├┤┘) where a bowl meets a stem — so the word reads
-// as a light geometric sans rather than a bitmap blob. Every letter shares one
-// baseline; the l and d ascend above it and the g's tail descends below, which
-// is what fixes the block's height.
+// In that face every letter is drawn twice: the letter itself in full blocks
+// (█), and a copy offset one row down and one column left behind it in
+// double-line strokes (╔ ═ ╗ ║ ╚ ╝) that reads as a drop shadow. The shadow
+// carries the mark's weight, so the blocks need no bold of their own, and the
+// seven characters are all the mark asks a font to carry.
 //
-// Only the plain "light" box-drawing set is used, and no bold attribute is
-// applied, for portability: the rounded arcs (╭╮╰╯) and heavy lines (━┃┏┓)
-// are missing from fonts that are otherwise common (measured: Monaco, Courier
-// New and Andale Mono lack all 12), and a bold face may lack the entire block
-// (measured: Menlo Bold has none of the 20 box-drawing glyphs, so a bold
-// run falls back to another face and can change the glyph's cell width,
-// breaking alignment). The eight characters used here are present in every
-// monospace face tested, in DejaVu Sans Mono (the usual Linux default), and
-// are drawn from built-in sprites by terminals that carry them (Ghostty,
-// kitty), so the mark renders identically everywhere.
+// Coverage was measured with CoreText on macOS 27.0.1 before choosing the face:
+// SF Mono (every upright weight, Bold included), Menlo Regular and Italic, and
+// Courier New carry all seven glyphs; Monaco carries █ but none of the six
+// double-line strokes, and Menlo Bold, Menlo Bold Italic and every SF Mono
+// italic are the same. On those faces the mark falls back per glyph, which is
+// what tuios's splash ships with, and why no bold attribute is applied here: a
+// bold run asks the terminal for Menlo Bold and would send all six strokes to
+// fallback at once. A fallback face can draw a glyph a cell wider than the one
+// it replaces, and the constant-width invariant below — the thing that keeps
+// the config panel beside the mark from moving while the word types itself in —
+// holds only as long as every glyph keeps its columns.
+//
+// The Linux side was measured the same way against the fonts a distribution
+// actually installs (the .deb files from the Ubuntu archive, read with
+// CoreText): DejaVu Sans Mono in all four styles, Hack, JetBrains Mono and
+// Liberation Mono in Regular and Bold, and Ubuntu Mono in Regular, Medium and
+// Bold carry all seven glyphs, and every glyph advances the same width in every
+// one of them — Bold included. So the macOS caveat above is a macOS caveat: on
+// Linux the common terminal fonts do not fall back at all.
 //
 // The entrance borrows codex's splash mechanics: a fixed frame count on a
 // wall-clock tick, each frame a pure function of its index, and one settle on a
@@ -42,8 +52,9 @@ const (
 	logoFrames    = 36
 	logoFrameTick = 80 * time.Millisecond
 
-	// logoRows is the block's height: one ascender row, four rows of x-height,
-	// and the row the g's tail descends into.
+	// logoRows is the mark's height. The face is seven rows tall, but its last
+	// row is blank in every letter (the font's baseline padding), so the mark
+	// keeps six.
 	logoRows = 6
 
 	// Reveal timing: letter k starts fading in at frame 1+k*logoRevealStagger
@@ -56,9 +67,6 @@ const (
 	// band across the word; after it the mark settles at base ink.
 	logoShimmerFrom = 20
 	logoShimmerTo   = 30
-
-	// logoLetterGap is the number of blank columns between letters.
-	logoLetterGap = 2
 )
 
 // The palette is one light-blue family: the faint ink a letter fades in from,
@@ -70,57 +78,60 @@ var (
 	logoInkShimmer = "159"
 )
 
-// logoWordGlyphs spells "golder". Each glyph is a fixed number of rows (padded
-// to a common width at render time); rows above the x-height and below the
-// baseline are left blank, which keeps every glyph the same height.
+// logoWordGlyphs spells "GOLDER" in the face's own advances, lifted from the
+// font. Rows are ragged — the shadow's slopes and the round letters' side
+// bearings — and renderLogo pads each one to its glyph's widest row, so the
+// columns a row looks blank in are still columns the letter owns. No gap is
+// inserted between letters: the side bearings are part of the advance, and the
+// settled mark is 50 cells wide because of them.
 var logoWordGlyphs = [][]string{
-	{ // g — bowl with a tail that hooks left beneath it
-		"",
-		"┌──────┐",
-		"│      │",
-		"│      │",
-		"└──────┤",
-		"   └───┘",
+	{ // G
+		" ██████╗",
+		"██╔════╝",
+		"██║  ███╗",
+		"██║   ██║",
+		"╚██████╔╝",
+		" ╚═════╝",
 	},
-	{ // o
-		"",
-		"┌──────┐",
-		"│      │",
-		"│      │",
-		"└──────┘",
-		"",
+	{ // O
+		" ██████╗",
+		"██╔═══██╗",
+		"██║   ██║",
+		"██║   ██║",
+		"╚██████╔╝",
+		" ╚═════╝",
 	},
-	{ // l — one stem, full ascender
-		"│",
-		"│",
-		"│",
-		"│",
-		"│",
-		"",
+	{ // L
+		"██╗",
+		"██║",
+		"██║",
+		"██║",
+		"███████╗",
+		"╚══════╝",
 	},
-	{ // d — stem with a bowl hung on its left
-		"       │",
-		"┌──────┤",
-		"│      │",
-		"│      │",
-		"└──────┘",
-		"",
+	{ // D
+		"██████╗",
+		"██╔══██╗",
+		"██║  ██║",
+		"██║  ██║",
+		"██████╔╝",
+		"╚═════╝",
 	},
-	{ // e — bar meets the upper right arc; the lower right stays open
-		"",
-		"┌─────┐",
-		"│     │",
-		"├─────┘",
-		"└────┘",
-		"",
+	{ // E
+		"███████╗",
+		"██╔════╝",
+		"█████╗",
+		"██╔══╝",
+		"███████╗",
+		"╚══════╝",
 	},
-	{ // r — stem with a shoulder
-		"",
-		"┌───┐",
-		"│",
-		"│",
-		"│",
-		"",
+	{ // R
+		"██████╗",
+		"██╔══██╗",
+		"██████╔╝",
+		"██╔══██╗",
+		"██║  ██║",
+		"╚═╝  ╚═╝",
 	},
 }
 
@@ -146,9 +157,6 @@ func renderLogo(frame int) string {
 		width := logoGlyphWidth(glyph)
 		color := colors[k]
 		for r := 0; r < logoRows; r++ {
-			if k > 0 {
-				rows[r].WriteString(strings.Repeat(" ", logoLetterGap))
-			}
 			if color == "" {
 				rows[r].WriteString(strings.Repeat(" ", width))
 				continue
@@ -226,14 +234,11 @@ func logoGlyphRow(glyph []string, row, width int) string {
 	return text
 }
 
-// logoWordWidth is the settled wordmark's width in cells; every frame's block
-// is padded to it.
+// logoWordWidth is the settled wordmark's width in cells: the glyph advances
+// added up, since no gap separates them. Every frame's block is padded to it.
 func logoWordWidth() int {
 	width := 0
-	for k, glyph := range logoWordGlyphs {
-		if k > 0 {
-			width += logoLetterGap
-		}
+	for _, glyph := range logoWordGlyphs {
 		width += logoGlyphWidth(glyph)
 	}
 	return width

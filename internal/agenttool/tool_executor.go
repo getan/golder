@@ -131,6 +131,12 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			if dec.Sandbox {
 				execCtx = agentcore.WithSandboxRequest(ctx)
 			}
+			// One-call read grant (the user allowed a single read outside the
+			// workspace): publish it for the executing tool, which honours it
+			// once for this call only.
+			if dec.ReadGrant != "" {
+				execCtx = agentcore.WithReadGrant(execCtx, dec.ReadGrant)
+			}
 			// Argument rewrite (PreToolUse updatedInput): replace and re-validate
 			// so a hook cannot smuggle schema-invalid args past the tool.
 			if len(dec.UpdatedInput) > 0 {

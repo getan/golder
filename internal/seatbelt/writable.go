@@ -14,11 +14,9 @@ package seatbelt
 // driver goroutine while run goroutines are building argv.
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 var writableRoots = struct {
@@ -32,22 +30,11 @@ var writableRoots = struct {
 // relative paths are rejected outright (a relative entry would resolve
 // differently for every command). The path does not have to exist yet:
 // compiler caches such as a fresh CARGO_TARGET_DIR are a common case.
+//
+// It delegates to permissions.NormalizePath so the write side and the read
+// side (permissions.NormalizeReadRoot) agree on what a path spelling means.
 func NormalizeWritableRoot(raw string) (string, error) {
-	p := strings.TrimSpace(raw)
-	if p == "" {
-		return "", fmt.Errorf("empty path")
-	}
-	if p == "~" || strings.HasPrefix(p, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return "", fmt.Errorf("cannot resolve home directory for %q", raw)
-		}
-		p = filepath.Join(home, strings.TrimPrefix(p, "~"))
-	}
-	if !filepath.IsAbs(p) {
-		return "", fmt.Errorf("%q is not an absolute path", raw)
-	}
-	return filepath.Clean(p), nil
+	return permissions.NormalizePath(raw)
 }
 
 // AddWritableRoot grants one path read+write access inside the sandbox for

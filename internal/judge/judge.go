@@ -218,6 +218,13 @@ const (
 	// it Sandbox. The two sides disagree, so the gate asks the user instead
 	// of silently recontaining the call — approving runs it unisolated.
 	ApprovalEscalation ApprovalKind = "escalation"
+	// ApprovalReadScope: a read-only tool (read, view_image, grep, find, ls)
+	// was pointed outside the workspace. The workspace is the directory the
+	// user opened, so this asks for consent rather than a risk verdict; the
+	// answer is "just this read" (ReadGrant) or "this directory for the
+	// session" (ReadRoot). It is the one question no approval mode waives,
+	// including full-access.
+	ApprovalReadScope ApprovalKind = "read-scope"
 )
 
 // ApprovalRequest is what the gate shows the user: the call itself plus the
@@ -229,6 +236,10 @@ type ApprovalRequest struct {
 	// Justification carries the model's reason when the call is an escalation
 	// request (bash sandbox_permissions=require_escalated); empty otherwise.
 	Justification string
+	// ReadScope is the directory a read-scope request may be granted for the
+	// session, or "" when no directory is offered (the answer is then "this
+	// read" or "no"). Set only for ApprovalReadScope.
+	ReadScope     string
 	Risk          string
 	Authorization string
 	Rationale     string
@@ -251,6 +262,11 @@ type ApprovalAnswer struct {
 	// grant with the sandbox (internal/seatbelt); the gate then re-contains
 	// the call, so it runs under the widened sandbox rather than bare.
 	WritableRoot string
+	// ReadRoot, when set together with Approve, means the user granted this
+	// directory for READING for the session (a read-scope answer). The grant
+	// is registered by the gate itself as the read-root registry's single
+	// owner, so every file tool and the sandbox see it on the next call.
+	ReadRoot string
 }
 
 // NoteKind classifies one user-facing verdict note.
@@ -580,12 +596,23 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		if dec != nil && dec.Block {
 			return dec
 		}
-		if firstDec != nil && firstDec.Sandbox {
+		// Merge the first gate's requests into the second's decision. Both
+		// fields describe what the FIRST gate asked for and the second gate has
+		// no opinion about: Sandbox is the containment the permission gate
+		// demanded, and ReadGrant is the workspace-boundary answer the
+		// read-scope gate belongs to. Dropping either when the second gate
+		// returns nil (the common case: an ungraded read tool) would silently
+		// discard the user's decision — the read would be refused after they
+		// approved it.
+		if firstDec != nil && (firstDec.Sandbox || firstDec.ReadGrant != "") {
 			if dec == nil {
 				return firstDec
 			}
 			out := *dec
-			out.Sandbox = true
+			out.Sandbox = out.Sandbox || firstDec.Sandbox
+			if out.ReadGrant == "" {
+				out.ReadGrant = firstDec.ReadGrant
+			}
 			return &out
 		}
 		return dec
