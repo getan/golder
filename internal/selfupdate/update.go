@@ -118,7 +118,7 @@ type Updater struct {
 // newer release exists. When current is a source build ("dev"), it cannot
 // compare and proceeds to install the latest. Returns a process exit code.
 func Run(ctx context.Context, current string, out, errOut io.Writer) int {
-	tag, err := LatestTag(ctx, nil, Repo)
+	tag, err := LatestTag(ctx, nil, Repo, current)
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: failed to check for updates: %v\n", err)
 		return 1

@@ -31,3 +31,28 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 发布成功后立刻作废站点 /api/latest 的缓存快照，让站点角标与
+      # `golder update` 马上看到新版本。不这么做的话，端点靠
+      # stale-while-revalidate 最多让旧值多活一次访问（见 golder-site 的
+      # functions/api/latest.ts）。
+      #
+      # PURGE_TOKEN 未配置时明确跳过并打印 notice：这一步是优化，不是发布的
+      # 前置条件，缺配置不该把一次成功的发布染红。站点侧同样 fail closed——
+      # 没配 PURGE_TOKEN 的 /api/purge 一律 503，不会留下无鉴权的写接口。
+      - name: Invalidate the site's version cache
+        env:
+          PURGE_TOKEN: ${{ secrets.PURGE_TOKEN }}
+        run: |
+          if [ -z "$PURGE_TOKEN" ]; then
+            echo "::notice::PURGE_TOKEN 未配置，跳过站点缓存失效（站点端点在 SWR 窗口内自行刷新）"
+            exit 0
+          fi
+          # --fail-with-body：401/503 也算失败，好让日志留下服务端的原话；
+          # 重试 3 次覆盖边缘节点的瞬时抖动。
+          response=$(curl -fsS --fail-with-body --retry 3 --retry-all-errors \
+            -X POST "https://golder-cli.pages.dev/api/purge" \
+            -H "x-purge-token: $PURGE_TOKEN" \
+            -H "content-type: application/json") \
+            || { echo "::warning::站点缓存失效失败（角标最多滞后一次访问，不影响本次发布）"; exit 0; }
+          echo "purge: $response"

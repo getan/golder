@@ -77,7 +77,7 @@ func StartBackgroundCheck(current string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		tag, err := LatestTag(ctx, &http.Client{Timeout: 10 * time.Second}, Repo)
+		tag, err := LatestTag(ctx, &http.Client{Timeout: 10 * time.Second}, Repo, current)
 		if err != nil || tag == "" {
 			return
 		}

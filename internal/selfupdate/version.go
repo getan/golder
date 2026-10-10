@@ -60,16 +60,74 @@ func IsReleaseVersion(v string) bool {
 // rate limit, cached on the edge); the GitHub API is the fallback and is the
 // path that honors GITHUB_TOKEN. If client is nil a client with a short
 // timeout is used.
-func LatestTag(ctx context.Context, client *http.Client, repo string) (string, error) {
+//
+// current is the running build's version, or "" when the caller has none. It
+// exists because the site endpoint is edge-cached for a short while: right
+// after a release it can still answer with the previous tag, which is exactly
+// the moment someone runs `golder update`. When the site's answer is NOT newer
+// than current — the answer that would make the caller say "already up to
+// date" — the GitHub API is consulted as a cross-check and the newer of the
+// two wins. Shelling out to GitHub on that path costs one request in the rare
+// case and never happens when the site already reports an upgrade, so the
+// common case keeps its single round trip and mainland China (where
+// api.github.com is often unreachable) still gets a usable answer: a failed
+// cross-check leaves the site's tag standing.
+func LatestTag(ctx context.Context, client *http.Client, repo, current string) (string, error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
 	if repo == Repo {
-		if tag, err := latestTagFromSite(ctx, client); err == nil {
-			return tag, nil
+		siteTag, siteErr := latestTagFromSite(ctx, client)
+		if siteErr == nil {
+			if siteReportsUpgrade(siteTag, current) {
+				return siteTag, nil
+			}
+			// The site's answer is not an upgrade over what is running — which
+			// is also the answer that makes `golder update` print "already up to
+			// date", and the tag a source build would install. The site endpoint
+			// is edge-cached, so right after a release it can still carry the
+			// previous tag; GitHub is the tie-breaker and its failure is not
+			// fatal, because mainland China often cannot reach api.github.com
+			// and the site's answer is the whole point of asking it first.
+			if ghTag, ghErr := latestTagFromGitHub(ctx, client, repo); ghErr == nil {
+				return newerTag(siteTag, ghTag), nil
+			}
+			return siteTag, nil
 		}
 	}
 	return latestTagFromGitHub(ctx, client, repo)
+}
+
+// siteReportsUpgrade reports whether the site's tag is strictly newer than the
+// running build, which makes it actionable on its own and saves the cross-check
+// a request. A non-release current (a source build) can never take this path:
+// nothing is an "upgrade" over a version that cannot be compared.
+func siteReportsUpgrade(siteTag, current string) bool {
+	if !IsReleaseVersion(current) {
+		return false
+	}
+	available, comparable := UpdateAvailable(current, siteTag)
+	return comparable && available
+}
+
+// newerTag returns the higher of two tags. A tag that cannot be parsed never
+// wins: if only one side parses, that side is the answer, since a value the
+// caller can act on beats one it cannot.
+func newerTag(a, b string) string {
+	av, aok := parseVersion(a)
+	bv, bok := parseVersion(b)
+	switch {
+	case !aok && !bok:
+		return a
+	case !aok:
+		return b
+	case !bok:
+		return a
+	}
+	if compare(bv, av) > 0 {
+		return b
+	}
+	return a
 }
 
 // latestTagFromSite queries the golder site's /api/latest endpoint, which

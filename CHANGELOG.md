@@ -374,6 +374,26 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **`golder update` no longer reports "already up to date" during the release
+  window**: latest-tag discovery asks the golder site first (reachable from
+  mainland China, no anonymous rate limit) and that endpoint is edge-cached, so
+  right after a release it can still answer with the previous tag — exactly when
+  someone runs `golder update`. Observed on the v1.2.15 release: the endpoint
+  served a snapshot with `age: 3368` (v1.2.14) while GitHub already had v1.2.15,
+  and since a successful site answer was taken as final, the GitHub fallback
+  never ran. `LatestTag` now takes the running version and, when the site's
+  answer is not newer than it — the answer that makes the command say "already
+  up to date", or the tag a source build would install — cross-checks the GitHub
+  API and takes the newer of the two. The common case (the site reports an
+  upgrade) still costs a single request, and a failed cross-check keeps the
+  site's tag, so mainland China loses nothing. The site endpoint itself moved
+  from a fixed one-hour cache to stale-while-revalidate (serve the snapshot
+  immediately, refresh in the background) with `x-cache-status` /
+  `x-cache-age` / `x-cache-fetched-at` headers for the next time this is
+  diagnosed, and gained a token-guarded `POST /api/purge` that the release
+  workflow calls so a fresh release invalidates the snapshot outright; without
+  the token both sides degrade quietly (the endpoint answers 503, the workflow
+  logs a notice and continues).
 - **Expanded sub-agent output no longer pins a CPU core**: `wrapToWidth`
   advanced with a Truncate/TruncateLeft pair per segment, re-scanning the
   remaining text each time — quadratic in the accumulated output, so a few
