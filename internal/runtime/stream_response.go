@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/compaction"
@@ -95,8 +96,9 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 	})
 	if err != nil {
 		// Early "cannot build stream" failure: synthesize a terminal message so
-		// the loop has a uniform assistant message to record.
-		return newErrorAssistantMessage(cfg, err), nil
+		// the loop has a uniform assistant message to record. A cancelled ctx
+		// during the build is reported as aborted, like every other cancellation.
+		return terminalMessage(cfg, err), nil
 	}
 
 	// 6. drain the stream, back-filling the partial into the context.
@@ -150,7 +152,7 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 	// 7. stream ended without done/error: fall back to the stream result.
 	final, resErr := stream.Result(ctx)
 	if resErr != nil {
-		return newErrorAssistantMessage(cfg, resErr), nil
+		return terminalMessage(cfg, resErr), nil
 	}
 	finalizeMessage(agentCtx, final, &addedPartial)
 	if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
@@ -170,14 +172,25 @@ func finalizeMessage(agentCtx *agentcore.AgentContext, final agentcore.Assistant
 	}
 }
 
-// newErrorAssistantMessage builds a terminal assistant message for an early
-// failure that never produced a provider stream.
-func newErrorAssistantMessage(cfg LoopConfig, err error) agentcore.AssistantMessage {
-	return agentcore.AssistantMessage{
+// terminalMessage builds the terminal assistant message for a failure that
+// never produced a usable provider stream. A cancellation is filed as ABORTED
+// rather than error: interrupting is the user's own action, and calling it an
+// error is what made every front-end print "error: context canceled" for a
+// keystroke — the wording that made Ctrl+C read as a malfunction. Everything
+// else stays an error.
+func terminalMessage(cfg LoopConfig, err error) agentcore.AssistantMessage {
+	msg := agentcore.AssistantMessage{
 		RoleField:    agentcore.RoleAssistant,
 		Model:        cfg.Model,
 		Provider:     cfg.Provider,
 		StopReason:   agentcore.StopReasonError,
 		ErrorMessage: err.Error(),
 	}
+	if errors.Is(err, context.Canceled) {
+		msg.StopReason = agentcore.StopReasonAborted
+		// No message: the front-end prints its own interrupt notice for this
+		// stop reason, and "context canceled" is the machinery talking.
+		msg.ErrorMessage = ""
+	}
+	return msg
 }

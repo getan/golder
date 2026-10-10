@@ -438,7 +438,7 @@ func drainGoalStream(ctx context.Context, out io.Writer, host cli.Host, stream *
 	flushReply()
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Fprintln(out, "^C interrupted — goal paused (run /goal resume to continue)")
+			fmt.Fprintf(out, "%s goal paused (run /goal resume to continue)\n", ui.InterruptNotice)
 			host.Goal().SetStatus(agenttool.GoalPaused)
 		} else {
 			fmt.Fprintf(out, "error: %v\n", err)

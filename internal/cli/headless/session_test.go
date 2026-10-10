@@ -6,9 +6,13 @@ package headless
 // without spawning a provider.
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/session"
 )
 
 func textUser(s string) agentcore.UserMessage {
@@ -152,5 +156,63 @@ func TestHeadlessPersistCompactionShrink(t *testing.T) {
 	}
 	if hs.persisted != 2 {
 		t.Errorf("cursor after clamp = %d, want 2", hs.persisted)
+	}
+}
+
+// TestContinueTargetPrefersCurrentProject: --continue resolves the newest
+// session of its own project even when another project has a newer one, and
+// only falls back across projects with a note naming the directory it took the
+// session from.
+func TestContinueTargetPrefersCurrentProject(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store, err := SessionStore()
+	if err != nil {
+		t.Fatalf("SessionStore: %v", err)
+	}
+	proj := t.TempDir()
+	other := t.TempDir()
+	base := time.Now().UTC()
+	save := func(cwd string, at time.Time) string {
+		h := session.SessionHeader{ID: session.NewID(at), CreatedAt: at, UpdatedAt: at, Cwd: cwd}
+		if err := store.Save(h, nil); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+		return h.ID
+	}
+
+	// Another project is the globally newest; this project's own session wins.
+	foreign := save(other, base)
+	local := save(proj, base.Add(-time.Minute))
+	id, note, err := ContinueTarget(proj)
+	if err != nil {
+		t.Fatalf("ContinueTarget: %v", err)
+	}
+	if id != local {
+		t.Errorf("ContinueTarget = %q, want this project's %q", id, local)
+	}
+	if note != "" {
+		t.Errorf("note = %q, want empty when the project has its own session", note)
+	}
+
+	// A project with nothing of its own falls back to the newest session and
+	// names the directory it came from.
+	id, note, err = ContinueTarget(t.TempDir())
+	if err != nil {
+		t.Fatalf("ContinueTarget fallback: %v", err)
+	}
+	if id != foreign {
+		t.Errorf("fallback id = %q, want the newest session %q", id, foreign)
+	}
+	if !strings.Contains(note, cli.SessionDirDisplay(session.SessionHeader{Cwd: other})) {
+		t.Errorf("fallback note = %q, want it to name the source directory", note)
+	}
+
+	// An empty store resolves to "nothing to continue".
+	empty, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok, err := cli.MostRecentSession(empty, cli.AllSessionsScope()); err != nil || ok {
+		t.Errorf("empty store = (%v, %v, %v), want (zero, false, nil)", h, ok, err)
 	}
 }

@@ -698,7 +698,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		{"rewind", "roll files and the conversation back to before an earlier turn: /rewind [n]", runtime.CategorySession},
 		{"export", "export the session to a file: /export [path.jsonl|path.html]", runtime.CategorySession},
 		{"import", "import a JSONL export as a new session: /import <path.jsonl>", runtime.CategorySession},
-		{"resume", "switch session: /resume [n|id] (bare lists recent sessions)", runtime.CategorySession},
+		{"resume", "switch session: /resume [n|id] (bare lists this project's recent sessions; --all lists every project)", runtime.CategorySession},
 		{"status", "show session status: session, runtime config, context, credentials, environment", runtime.CategoryGeneral},
 		{"memory", "show the persistent-memory report", runtime.CategoryMemory},
 		{"dream", "consolidate memory now (dedupe, merge, prune, distill); /dream --dry-run previews without writing", runtime.CategoryMemory},

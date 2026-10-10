@@ -214,6 +214,20 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			Err: err,
 		})
 	}
+	// abort reports a stream its caller cancelled. The stop reason is aborted
+	// rather than error on purpose: an interrupt is the user's own action, and
+	// filing it under error made every front-end print an error line for it
+	// ("error: stream aborted" in the transcript, plus an error-flavored turn
+	// end) — the wording that made Ctrl+C feel broken rather than responsive.
+	abort := func() {
+		stream.Emit(context.Background(), StreamErrorEvent{
+			Message: agentcore.AssistantMessage{
+				RoleField:  agentcore.RoleAssistant,
+				StopReason: agentcore.StopReasonAborted,
+			},
+			Err: context.Canceled,
+		})
+	}
 
 	flush := func() bool {
 		if dataBuf.Len() == 0 {
@@ -235,7 +249,7 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 	for {
 		select {
 		case <-ctx.Done():
-			fail("stream aborted", ctx.Err())
+			abort()
 			return
 		case <-idleTimer.C:
 			fail("idle timeout: no data received", errStreamIdle)

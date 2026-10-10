@@ -99,6 +99,60 @@ func TestTodoToolRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+// TestTodoToolOmittedStatusIsPending pins the tolerance for a missing status:
+// a fresh list routinely leaves the not-yet-started entries blank, and the
+// schema + tool both read an omitted field as pending rather than rejecting the
+// call — a rejection here costs a whole round trip for a field with exactly one
+// sensible reading (measured: it was the only validation failure in the store,
+// 3 of 3, all missing `status`).
+func TestTodoToolOmittedStatusIsPending(t *testing.T) {
+	store := NewTodoStore()
+	tool := &TodoTool{Store: store}
+	res := execTodo(t, tool, `{"todos":[
+		{"content":"started","status":"in_progress"},
+		{"content":"not started yet"}
+	]}`)
+	if text := agentcore.ContentToText(res.Content); strings.Contains(text, "invalid status") || strings.Contains(text, "empty content") {
+		t.Fatalf("an omitted status must not be an error, got %q", text)
+	}
+	items := store.Snapshot()
+	if len(items) != 2 {
+		t.Fatalf("store has %d items, want 2", len(items))
+	}
+	if items[0].Status != TodoInProgress {
+		t.Errorf("item 0 status = %q, want in_progress", items[0].Status)
+	}
+	if items[1].Status != TodoPending {
+		t.Errorf("item 1 status = %q, want pending (the omitted status)", items[1].Status)
+	}
+
+	// A wrong-but-present status is still refused: inferring intent from "done"
+	// would be guessing, unlike an absent field.
+	res = execTodo(t, tool, `{"todos":[{"content":"x","status":""},{"content":"y","status":"nope"}]}`)
+	if !strings.Contains(agentcore.ContentToText(res.Content), "invalid status") {
+		t.Errorf("an unknown status must still be refused, got %q", agentcore.ContentToText(res.Content))
+	}
+}
+
+// TestTodoSchemaAcceptsOmittedStatus goes through the registry, which is what a
+// real call passes: the schema must not require `status`, or the tool's own
+// normalization would never be reached.
+func TestTodoSchemaAcceptsOmittedStatus(t *testing.T) {
+	reg := NewToolRegistry()
+	if err := reg.Register(&TodoTool{Store: NewTodoStore()}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if errs := reg.Validate("todo", json.RawMessage(`{"todos":[{"content":"a"}]}`)); errs != nil {
+		t.Errorf("an omitted status must validate, got %+v", errs)
+	}
+	if errs := reg.Validate("todo", json.RawMessage(`{"todos":[{"content":"a","status":"nope"}]}`)); len(errs) == 0 {
+		t.Error("an unknown status must fail schema validation")
+	}
+	if errs := reg.Validate("todo", json.RawMessage(`{"todos":[{"status":"pending"}]}`)); len(errs) == 0 {
+		t.Error("a missing content must still be required")
+	}
+}
+
 // TestTodoToolRejectsEmptyContent checks a blank content is rejected.
 func TestTodoToolRejectsEmptyContent(t *testing.T) {
 	tool := &TodoTool{Store: NewTodoStore()}

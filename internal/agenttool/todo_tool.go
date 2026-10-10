@@ -41,11 +41,26 @@ func validTodoStatus(s TodoStatus) bool {
 	}
 }
 
+// normalizeTodoStatus fills in an omitted status as pending. The schema does
+// not require `status` (a model submitting a fresh list routinely leaves it off
+// the not-yet-started entries, and a schema rejection for a field the tool can
+// infer costs a whole round trip), so the decoder's zero value has to mean
+// pending rather than "invalid". An explicitly wrong value is still an error:
+// inferring intent from "done" or "in-progress" would be guessing, while an
+// absent field has exactly one sensible reading.
+func normalizeTodoStatus(s TodoStatus) TodoStatus {
+	if strings.TrimSpace(string(s)) == "" {
+		return TodoPending
+	}
+	return s
+}
+
 // TodoItem is one entry in the task list.
 type TodoItem struct {
 	// Content is the human-readable task description.
 	Content string `json:"content"`
-	// Status is the item's lifecycle state.
+	// Status is the item's lifecycle state. An omitted status means pending —
+	// see normalizeTodoStatus.
 	Status TodoStatus `json:"status"`
 }
 
@@ -96,8 +111,8 @@ func (t *TodoTool) Description() string {
 	return "Record and update a structured task list to plan and track multi-step " +
 		"work. Submit the ENTIRE list every call; it replaces the previous list. " +
 		"Each item has a content string and a status of pending, in_progress, or " +
-		"completed. Keep exactly one item in_progress at a time and mark items " +
-		"completed as soon as they are done."
+		"completed; an item with no status is taken as pending. Keep exactly one " +
+		"item in_progress at a time and mark items completed as soon as they are done."
 }
 
 // Schema implements AgentTool.
@@ -112,9 +127,9 @@ func (t *TodoTool) Schema() json.RawMessage {
         "type": "object",
         "properties": {
           "content": {"type": "string", "description": "Task description."},
-          "status":  {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Task lifecycle state."}
+          "status":  {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "Task lifecycle state. Omit for pending."}
         },
-        "required": ["content", "status"],
+        "required": ["content"],
         "additionalProperties": false
       }
     }
@@ -142,9 +157,11 @@ func (t *TodoTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		if strings.TrimSpace(it.Content) == "" {
 			return errorResult(fmt.Sprintf("todo: item %d has empty content", i+1)), nil
 		}
-		if !validTodoStatus(it.Status) {
+		status := normalizeTodoStatus(it.Status)
+		if !validTodoStatus(status) {
 			return errorResult(fmt.Sprintf("todo: item %d has invalid status %q (want pending|in_progress|completed)", i+1, it.Status)), nil
 		}
+		a.Todos[i].Status = status
 	}
 
 	if t.Store == nil {

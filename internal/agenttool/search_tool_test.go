@@ -245,8 +245,11 @@ func TestGrepTruncatesAtMaxMatches(t *testing.T) {
 	}
 	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "needle"})
 	txt := resultText(res)
-	if !strings.Contains(txt, fmt.Sprintf("[truncated at %d matches]", searchMaxResults)) {
+	if !strings.Contains(txt, fmt.Sprintf("[showing the first %d matches;", searchMaxResults)) {
 		t.Errorf("expected truncation marker, got %q", txt)
+	}
+	if !strings.Contains(txt, "raise limit") {
+		t.Errorf("truncation marker should name how to see more, got %q", txt)
 	}
 	details, _ := res.Details.(map[string]any)
 	if got := details["matches"]; got != searchMaxResults {
@@ -674,5 +677,267 @@ func TestGrepNewFlagsPassRegistryValidation(t *testing.T) {
 	}
 	if errs := reg.Validate("grep", raw); errs != nil {
 		t.Errorf("a documented grep field was rejected by schema validation: %+v", errs)
+	}
+}
+
+// writeSearchTree writes rel→content pairs under dir for the argument tests.
+func writeSearchTree(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+}
+
+// TestStringListUnmarshal pins the one-string-or-many decoder: the single form
+// stays natural for one directory, the array form covers several, and neither a
+// blank entry nor a null becomes a path.
+func TestStringListUnmarshal(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"single string", `"internal/cli"`, []string{"internal/cli"}},
+		{"array", `["a","b"]`, []string{"a", "b"}},
+		{"empty string", `""`, nil},
+		{"null", `null`, nil},
+		{"blanks dropped", `["a","","  "]`, []string{"a"}},
+		{"empty array", `[]`, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got stringList
+			if err := json.Unmarshal([]byte(tc.in), &got); err != nil {
+				t.Fatalf("unmarshal %s: %v", tc.in, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("unmarshal %s = %v, want %v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("unmarshal %s = %v, want %v", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+	var bad stringList
+	if err := json.Unmarshal([]byte(`{"path":"a"}`), &bad); err == nil {
+		t.Error("an object must not decode as a path list")
+	}
+}
+
+// TestGrepMultiPath: a path list searches every named tree in one call — what a
+// "look in these three packages" query needs, and what a shell can only do with
+// one rg per directory. The single-string form keeps working unchanged.
+func TestGrepMultiPath(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	writeSearchTree(t, dir, map[string]string{
+		"a/one.go":   "needle in a\n",
+		"b/two.go":   "needle in b\n",
+		"c/three.go": "needle in c\n",
+	})
+	got := grepText(t, dir, map[string]any{"pattern": "needle", "path": []string{"a", "b"}})
+	if !strings.Contains(got, "a/one.go") || !strings.Contains(got, "b/two.go") {
+		t.Errorf("path list should search both directories: %q", got)
+	}
+	if strings.Contains(got, "c/three.go") {
+		t.Errorf("path list must not search the rest of the workspace: %q", got)
+	}
+	got = grepText(t, dir, map[string]any{"pattern": "needle", "path": "c"})
+	if !strings.Contains(got, "c/three.go") || strings.Contains(got, "a/one.go") {
+		t.Errorf("a single-string path should scope to one directory: %q", got)
+	}
+}
+
+// TestGrepNestedPathsDoNotDuplicate pins the overlap case: ripgrep walks each
+// path argument independently, so `rg needle -- a a/b` prints every match under
+// a/b twice. The tool drops a start another start already covers, and treats a
+// listed workspace root as covering everything under it.
+func TestGrepNestedPathsDoNotDuplicate(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	writeSearchTree(t, dir, map[string]string{
+		"a/one.go":   "needle\n",
+		"a/b/two.go": "needle\n",
+		"c/out.go":   "needle\n",
+	})
+	got := grepText(t, dir, map[string]any{"pattern": "needle", "path": []string{"a", "a/b"}})
+	if n := strings.Count(got, "a/b/two.go"); n != 1 {
+		t.Errorf("a nested path must not repeat matches (saw %d): %q", n, got)
+	}
+	if !strings.Contains(got, "a/one.go") {
+		t.Errorf("the covering path must still be searched: %q", got)
+	}
+	if strings.Contains(got, "c/out.go") {
+		t.Errorf("paths outside the list must not be searched: %q", got)
+	}
+	// A listed workspace root covers every other in-workspace path, and searching
+	// it that way keeps output unprefixed (no "./").
+	got = grepText(t, dir, map[string]any{"pattern": "needle", "path": []string{".", "a"}})
+	for _, want := range []string{"a/one.go", "a/b/two.go", "c/out.go"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("a listed root should search the whole workspace, missing %q: %q", want, got)
+		}
+	}
+	if strings.Contains(got, "./") {
+		t.Errorf("a covering root should keep results unprefixed: %q", got)
+	}
+}
+
+// TestGrepExclude: exclude is the negative half of glob (rg --glob=!X). It wins
+// over a matching include glob, which is what makes "*.go minus the tests" one
+// call instead of a shell pipeline.
+func TestGrepExclude(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	writeSearchTree(t, dir, map[string]string{
+		"main.go":      "needle\n",
+		"main_test.go": "needle\n",
+		"helper.go":    "needle\n",
+	})
+	got := grepText(t, dir, map[string]any{"pattern": "needle", "glob": "*.go", "exclude": "*_test.go"})
+	if !strings.Contains(got, "main.go") || strings.Contains(got, "main_test.go") {
+		t.Errorf("exclude should drop the test file: %q", got)
+	}
+	got = grepText(t, dir, map[string]any{"pattern": "needle", "glob": "*.go", "exclude": []string{"*_test.go", "helper.go"}})
+	if strings.Contains(got, "main_test.go") || strings.Contains(got, "helper.go") {
+		t.Errorf("an exclude list should drop every listed glob: %q", got)
+	}
+	if !strings.Contains(got, "main.go") {
+		t.Errorf("exclude must not drop the remaining file: %q", got)
+	}
+}
+
+// TestGrepLimit: limit caps the result without a pipeline, reports the cap in
+// the result, and is refused outside its bounds with the range spelled out.
+func TestGrepLimit(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 10; i++ {
+		b.WriteString("needle\n")
+	}
+	writeSearchTree(t, dir, map[string]string{"big.txt": b.String()})
+
+	res := runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "needle", "limit": 3})
+	txt := resultText(res)
+	if !strings.Contains(txt, "3 match(es)") {
+		t.Errorf("limit 3 should report 3 matches: %q", txt)
+	}
+	if !strings.Contains(txt, "raise limit") {
+		t.Errorf("a capped result should name the way to see more: %q", txt)
+	}
+	if details, _ := res.Details.(map[string]any); details["matches"] != 3 {
+		t.Errorf("matches detail = %v, want 3", details["matches"])
+	}
+	tooBig := resultText(runSearch(t, &GrepTool{Root: dir}, map[string]any{"pattern": "needle", "limit": searchLimitMax + 1}))
+	if !strings.Contains(tooBig, "limit must be between") {
+		t.Errorf("an oversized limit should be refused with its bounds: %q", tooBig)
+	}
+}
+
+// TestFindNewArgs covers the arguments find gained to match grep: a path list,
+// exclude, type, limit, hidden and no_ignore.
+func TestFindNewArgs(t *testing.T) {
+	requireRG(t)
+	dir := t.TempDir()
+	writeSearchTree(t, dir, map[string]string{
+		"a/one.go":      "package a\n",
+		"a/one_test.go": "package a\n",
+		"b/two.go":      "package b\n",
+		"b/notes.txt":   "plain\n",
+		".cfg/deep.go":  "package cfg\n",
+		".git/config":   "[core]\n",
+		"build/gen.go":  "package build\n",
+		".gitignore":    "build/\n",
+	})
+
+	// Several paths in one call, with type and exclude alongside.
+	got := resultText(runSearch(t, &FindTool{Root: dir}, map[string]any{
+		"glob": "*.go", "type": "go", "path": []string{"a", "b"}, "exclude": "*_test.go",
+	}))
+	if !strings.Contains(got, "a/one.go") || !strings.Contains(got, "b/two.go") {
+		t.Errorf("a multi-path find should cover both trees: %q", got)
+	}
+	if strings.Contains(got, "one_test.go") {
+		t.Errorf("exclude should drop the test file: %q", got)
+	}
+	// hidden widens the walk into hidden directories but still skips .git.
+	got = resultText(runSearch(t, &FindTool{Root: dir}, map[string]any{"glob": "*", "hidden": true}))
+	if !strings.Contains(got, ".cfg/deep.go") {
+		t.Errorf("hidden should walk into hidden directories: %q", got)
+	}
+	if strings.Contains(got, ".git/config") {
+		t.Errorf("hidden must still skip .git: %q", got)
+	}
+	// no_ignore reaches the ignored build product.
+	got = resultText(runSearch(t, &FindTool{Root: dir}, map[string]any{"glob": "*.go", "no_ignore": true}))
+	if !strings.Contains(got, "build/gen.go") {
+		t.Errorf("no_ignore should include the ignored file: %q", got)
+	}
+	// limit caps the list and says so.
+	got = resultText(runSearch(t, &FindTool{Root: dir}, map[string]any{"glob": "*.go", "limit": 1}))
+	if !strings.Contains(got, "raise limit") {
+		t.Errorf("a capped find should name the way to see more: %q", got)
+	}
+}
+
+// TestSearchListArgsPassRegistryValidation: the schema accepts both spellings
+// of the list arguments (so the tool's oneOf and its decoder agree) and still
+// refuses a value of the wrong type.
+func TestSearchListArgsPassRegistryValidation(t *testing.T) {
+	reg := NewToolRegistry()
+	if err := reg.Register(&GrepTool{}); err != nil {
+		t.Fatalf("register grep: %v", err)
+	}
+	if err := reg.Register(&FindTool{}); err != nil {
+		t.Fatalf("register find: %v", err)
+	}
+	valid := map[string]any{
+		"pattern": "x",
+		"path":    []string{"a", "b"},
+		"exclude": "*_test.go",
+		"limit":   10,
+	}
+	raw, err := json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", raw); errs != nil {
+		t.Errorf("grep list arguments rejected by schema validation: %+v", errs)
+	}
+	valid["path"] = "a"
+	valid["exclude"] = []string{"*_test.go", "vendor"}
+	raw, err = json.Marshal(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", raw); errs != nil {
+		t.Errorf("single-string path / list exclude rejected: %+v", errs)
+	}
+	raw, err = json.Marshal(map[string]any{
+		"glob": "*.go", "path": []string{"a"}, "exclude": "*_test.go",
+		"limit": 5, "type": "go", "hidden": true, "no_ignore": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("find", raw); errs != nil {
+		t.Errorf("a documented find field was rejected: %+v", errs)
+	}
+
+	bad, err := json.Marshal(map[string]any{"pattern": "x", "path": 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := reg.Validate("grep", bad); len(errs) == 0 {
+		t.Error("a non-string path must be refused by the schema")
 	}
 }

@@ -447,10 +447,15 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		return 0
 	}
 
-	// --continue resolves to the most recently updated session id.
+	// --continue resolves to the most recently updated session of the current
+	// project. When this project has no sessions the newest session overall is
+	// used instead, with a note naming its directory, so a cross-project
+	// continue is possible but never silent. --resume <id> stays global: an
+	// exact id is unambiguous.
 	resumeID := opts.resumeID
 	if opts.continueLast && resumeID == "" {
-		id, err := headless.MostRecentSessionID()
+		cwd, _ := os.Getwd()
+		id, note, err := headless.ContinueTarget(cwd)
 		if err != nil {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
 			return 1
@@ -458,6 +463,9 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		if id == "" {
 			fmt.Fprintln(errOut, "golder: no sessions to continue")
 			return 1
+		}
+		if note != "" {
+			fmt.Fprintln(errOut, "golder: "+note)
 		}
 		resumeID = id
 	}

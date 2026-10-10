@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 - **TUI first**: run `golder` for the full-screen TUI (transcript, tool cards, status bar, arrow-key pickers); `--no-tui` falls back to the line-based REPL, and both front-ends share the exact same command surface; `golder -p "..."` runs headless for scripts and CI.
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Many providers**: defaults to the OpenCode gateway, with 40+ built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama, …) and any OpenAI-compatible endpoint.
-- **Sessions and branches**: `/resume` switches sessions, `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
+- **Sessions and branches**: `/resume` switches sessions (this project by default, `--all` for every project), `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
 - **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed). The sandbox is a whitelist: reads are limited to the workspace, the system runtime and two git config files (`~/.gitconfig`, `~/.config/git/*`), so everything else under `$HOME` (shell rc files, SSH/GPG keys, `~/.config/*`, credentials, history) is unreadable; writes default to the workspace, the temp dir, and explicitly granted `writable_roots` (press `w` in the approval dialog to admit one path for the session, or `/permissions writable add <path>` to persist it to `~/.config/golder/permissions.toml`; `[permissions] writable_roots` in `config.toml` seeds the same list); the network is off by default. A toolchain living under `$HOME` is re-admitted with `GOLDER_SANDBOX_READABLE`. When a denial blocks a legitimate command the model can request escalation (`require_escalated`) with a justification for review or approval; an escalation that conflicts with a should-be-contained verdict is raised to you instead of being silently re-contained.
 - **Long-task support**: `/compact` context compaction, context-budget tools, autonomous `/goal` runs, `/btw` side questions, sub-agent dispatch, persistent memory and `/dream` consolidation.
 - **Out-of-workspace reads need your answer**: the read-only tools (`read` / `grep` / `find` / `ls` / `view_image`) read the workspace and nothing else until you say so — the dialog offers "just this read" or "allow reading this directory (this session)", and a run with nobody to ask (headless, a sub-agent thread) fails closed with the path and the setting that would allow it. No permission mode waives the question (full-access turns off review, not consent). Pre-grant a directory with `[permissions] readable_roots` in `config.toml` or `GOLDER_READABLE_ROOTS`, which also widens the sandbox read whitelist; credential paths (`~/.ssh`, `~/.zshrc`, …) can never be granted.
@@ -180,7 +180,7 @@ Tools are rooted at the working directory; `--no-tools` disables them all, and `
 | `read` | Read a text file by path, with offset/limit, line numbers in the output |
 | `view_image` | Attach a local image (PNG/JPEG/GIF/WebP, ≤8MiB) to the model as an image block |
 | `apply_patch` | Add/update/move/delete multiple files in one patch call, returning a per-file diff |
-| `grep` / `find` | ripgrep-backed content search / filename lookup, skipping `.gitignore`d and binary files |
+| `grep` / `find` | ripgrep-backed content search / filename lookup; `path` takes one directory or a list, `exclude` drops and `glob`/`type` keep files, `limit` caps results (default 1000); skips `.gitignore`d and binary files |
 | `bash` | Run shell commands with streaming output; a command that outlives the wait window becomes a session with a `bash_id`; `tty=true` for interactive programs |
 | `write_stdin` | Poll a bash session, write input, or send an interrupt (`\u0003`) |
 | `todo` | Structured task list (pending / in_progress / completed) |
@@ -209,7 +209,8 @@ Typing `/` in the TUI opens a categorised menu (arrow keys to pick); `/help` pri
 Notes:
 
 - `/compact` immediately summarizes the context once; `/status` includes the session id, message count, creation time, and context usage (the former `/session` is folded in).
-- `/resume`, `/fork`, `/tree` and `/rewind` are arrow-key pickers in the TUI and numbered selections in the REPL.
+- **Ctrl+C behaves the same everywhere**: while a run is in flight one press requests the interrupt (it prints `(interrupting…)` and settles on the single line `Interrupted.`); pressing again during the same run neither repeats the notice nor quits early. Idle, the first press discards a draft (and says so) or, on an empty composer, only arms the quit (`Press Ctrl+C again to quit.`) — matching codex, there is no "double-press to force-quit mid-run", so a stray press cannot drop an unsaved turn. Esc interrupts exactly like Ctrl+C.
+- `/resume`, `/fork`, `/tree` and `/rewind` are arrow-key pickers in the TUI and numbered selections in the REPL. A bare `/resume` lists **this project** only (a project is the repository containing the launch directory, so a repo root and its subdirectories share one history) and every row carries the directory it ran in; `/resume --all` lists every project, and a filtered or out-of-range list names `--all` instead of hiding sessions silently. `--resume <id>` and `/resume <id>` always resolve across the whole store.
 - Every skill directory under `~/.agents/skills` adds one `/command`; a fresh machine without that directory shows an empty Extensions group. Use `GOLDER_SKILLS_DIR` to relocate it or `--no-skills` to disable it entirely.
 
 ## Usage
@@ -224,10 +225,11 @@ golder -p "read the README and summarize this repo"
 # Line-delimited JSON events (the first event carries session_id) for scripts
 golder -p "list all Go files" --output-format stream-json
 
-# Resume the most recent session (or switch sessions with /resume)
+# Resume this project's most recent session (falls back to the newest of any
+# project and says which directory it came from)
 golder --continue
 golder --resume <session-id>
-golder -l                     # list all sessions
+golder -l                     # list every project's sessions, with their directories
 
 # Session export / self-update
 golder session export <session-id> --format md --output talk.md

@@ -213,10 +213,17 @@ func TestResponsesDriverStreamsIncrementalDeltas(t *testing.T) {
 	}
 }
 
-// A cancelled context must terminate the stream with an error rather than
-// yielding a normal end_turn message. The transport cancels mid-flight (after
-// the stream has started) and reports the cancellation, mirroring how an
+// A cancelled context must terminate the stream with a terminal event rather
+// than yielding a normal end_turn message. The transport cancels mid-flight
+// (after the stream has started) and reports the cancellation, mirroring how an
 // in-progress SSE read aborts when the caller cancels.
+//
+// The stop reason is aborted, not error: a cancelled context means the caller
+// interrupted (that is the only way this path is reached in practice), and
+// filing a keystroke under error is what made every front-end print an error
+// line for Ctrl+C. The terminal event is still a StreamErrorEvent — it rides
+// the same channel and ends the stream the same way — only its classification
+// differs.
 func TestResponsesDriverContextCancelStopsStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -244,8 +251,11 @@ func TestResponsesDriverContextCancelStopsStream(t *testing.T) {
 		t.Fatal("expected a terminal StreamErrorEvent after context cancel")
 	}
 	msg, _ := stream.Result(context.Background())
-	if msg.StopReason != agentcore.StopReasonError {
-		t.Errorf("stop reason = %q, want error", msg.StopReason)
+	if msg.StopReason != agentcore.StopReasonAborted {
+		t.Errorf("stop reason = %q, want aborted (a cancelled ctx is an interrupt)", msg.StopReason)
+	}
+	if msg.ErrorMessage != "" {
+		t.Errorf("error message = %q, want empty (the front-end prints its own interrupt notice)", msg.ErrorMessage)
 	}
 }
 

@@ -394,3 +394,39 @@ func TestCodeSearchGuideCoversMissingRipgrep(t *testing.T) {
 		}
 	}
 }
+
+// TestCodeSearchGuideNamesScopingArgs locks the arguments that keep a scoped
+// search inside the tool: a path list, exclude, limit and context. Each is a
+// shape a shell pipeline used to be the only answer for, so each has to be
+// visible in the guide — a guide that names only the older flags invites the
+// pipeline for the newer queries.
+func TestCodeSearchGuideNamesScopingArgs(t *testing.T) {
+	for _, want := range []string{
+		"path (one directory or a list of them)",
+		"exclude",
+		"limit caps how many matches come back",
+		"context shows the lines around each hit",
+	} {
+		if !strings.Contains(codeSearchGuide, want) {
+			t.Errorf("guide missing %q:\n%s", want, codeSearchGuide)
+		}
+	}
+}
+
+// TestCodeSearchGuideForbidsShellFileViewing pins the rule that has no
+// tool-schema equivalent: viewing a file is read's job, so `cat`/`sed -n`/
+// `head`/`tail` are named as forbidden rather than merely discouraged. The
+// shell stays explicitly allowed for the two shapes the tools genuinely lack
+// (multiline search, aggregation), so the rule does not read as "never use
+// bash".
+func TestCodeSearchGuideForbidsShellFileViewing(t *testing.T) {
+	for _, want := range []string{
+		"Never use `cat`, `sed -n`, `head` or `tail` to view a file",
+		"read it with the read tool and its offset/limit",
+		"multiline mode, and aggregating matches",
+	} {
+		if !strings.Contains(codeSearchGuide, want) {
+			t.Errorf("guide missing %q:\n%s", want, codeSearchGuide)
+		}
+	}
+}

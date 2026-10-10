@@ -315,8 +315,9 @@ func drainSideStream(ctx context.Context, out io.Writer, host cli.Host, stream *
 		if ctx.Err() != nil {
 			// A Ctrl+C during the run cancels just this answer; the follow-up loop
 			// then returns to the btw prompt so the user can ask again or exit with
-			// another Ctrl+C (FR-5).
-			fmt.Fprintln(out, "^C interrupted — answer cancelled")
+			// another Ctrl+C (FR-5). The wording matches the main loop's, since it
+			// is the same action.
+			fmt.Fprintf(out, "%s answer cancelled\n", ui.InterruptNotice)
 		} else {
 			fmt.Fprintf(out, "error: %v\n", err)
 		}

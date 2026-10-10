@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -137,6 +138,22 @@ type Model struct {
 	// press re-arms. Zero = disarmed. A single idle press must never quit —
 	// too easy to fat-finger away a session.
 	quitArmedAt time.Time
+
+	// interruptRequested records that this run's interrupt has already been
+	// requested, so repeated Ctrl+C/Esc presses during one run stay idempotent:
+	// the first press cancels and prints the notice, the rest are absorbed.
+	// Without it, a user pressing again because the run had not visibly stopped
+	// saw the notice repeat and read it as "the key did nothing". Reset when a
+	// run ends (and when one begins), so the next run interrupts normally.
+	interruptRequested bool
+
+	// interruptNoticePrinted records that this run has already reported its
+	// interrupt settlement (the aborted-turn branch did). The cancellation race
+	// decides whether that turn-end event reaches the UI at all — EventStream.Emit
+	// drops it when ctx.Done() wins — so runEndMsg prints the settlement only
+	// when nothing else has, and the transcript reads the same either way.
+	// Reset with interruptRequested.
+	interruptNoticePrinted bool
 
 	// sideRun marks the in-flight run as a /btw side question: on run end the
 	// transcript says the side thread closed and nothing is persisted.
@@ -384,13 +401,15 @@ func resumeTitle(it cli.ResumeItem) string {
 	return "(empty session)"
 }
 
-// resumeMeta renders the second list line: model and update time.
+// resumeMeta renders the second list line: model, the directory the session ran
+// in, and update time. The directory is what tells apart two rows with the same
+// preview once --all widens the list past the current project.
 func resumeMeta(it cli.ResumeItem) string {
 	model := it.Header.Model
 	if model == "" {
 		model = "?"
 	}
-	return fmt.Sprintf("%s · %s", model, it.Header.UpdatedAt.Format("01-02 15:04"))
+	return fmt.Sprintf("%s · %s · %s", model, cli.SessionDirDisplay(it.Header), it.Header.UpdatedAt.Format("01-02 15:04"))
 }
 
 // modelsFetchedMsg carries the async live-catalog fetch for the /model
@@ -692,7 +711,11 @@ func (m Model) reopenWritablePathsPicker(announce bool) (tea.Model, tea.Cmd) {
 // leaving the TUI, following runSession.switchTo (persist current, load target,
 // live model/provider follow the stored header). The transcript is reset and
 // reseeded from the loaded history. Refused while a run is in flight.
-func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
+//
+// A bare /resume lists the current project's recent sessions; --all widens the
+// list to every project, and a literal id — which is unique across the store —
+// always resolves globally.
+func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	if m.running {
 		m.transcript.addSystem("Interrupt the current run first, then /resume.")
 		return m, nil
@@ -701,14 +724,15 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("No active session to switch from.")
 		return m, nil
 	}
-	if id == "" {
-		items, err := cli.RecentSessionsWithPreview(m.session.store, 10)
+	scope, sel := cli.ParseResumeArg(arg, m.cwd)
+	if sel == "" {
+		items, err := cli.RecentSessionsWithPreview(m.session.store, scope, cli.ResumeListN)
 		if err != nil {
 			m.transcript.addSystem(fmt.Sprintf("resume: list sessions: %v", err))
 			return m, nil
 		}
 		if len(items) == 0 {
-			m.transcript.addSystem("No saved sessions yet.")
+			m.transcript.addSystem(cli.ResumeEmptyMessage(m.session.store, scope))
 			return m, nil
 		}
 		picks := make([]pickItem, 0, len(items))
@@ -716,15 +740,18 @@ func (m Model) resumeSession(id string) (tea.Model, tea.Cmd) {
 			picks = append(picks, pickItem{Title: resumeTitle(it), Detail: resumeMeta(it), Value: it.Header.ID})
 		}
 		m.menu.openPickerDetailed(picks, m.session.header.ID, "resume")
-		m.transcript.addSystem("Select a session (↑↓ + Enter, Esc cancels):")
+		header := fmt.Sprintf("Sessions in %s (↑↓ + Enter, Esc cancels):", cli.ResumeScopeLabel(scope))
+		if hint := cli.ResumeHiddenHint(m.session.store, scope, len(items)); hint != "" {
+			header = fmt.Sprintf("Sessions in %s (%s):", cli.ResumeScopeLabel(scope), hint)
+		}
+		m.transcript.addSystem(header)
 		m.relayout()
 		return m, nil
 	}
-	if resolved, err := cli.ResolveResumeID(m.session.store, id); err != nil {
+	id, err := cli.ResolveResumeID(m.session.store, arg, m.cwd)
+	if err != nil {
 		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
 		return m, nil
-	} else {
-		id = resolved
 	}
 	msgs, err := m.session.switchTo(id)
 	if err != nil {
@@ -1078,7 +1105,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.transcript.addSystem("error: " + reason)
 		case agentcore.StopReasonAborted:
-			m.transcript.addSystem("error: aborted")
+			// The same line the press eventually settles on, in both front-ends:
+			// an interrupted turn is a normal outcome, not a provider error.
+			m.transcript.addSystem(ui.InterruptNotice)
+			m.interruptNoticePrinted = true
 		default:
 			// A turn that ends cleanly (end_turn) but produced no text, no thinking,
 			// and no tool calls means the endpoint accepted the request but sent back
@@ -1293,8 +1323,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runEndMsg:
+		// Capture before the reset: the settlement below reports an interrupt
+		// differently depending on whether the press already announced it, and
+		// whether the aborted-turn event survived the cancellation race.
+		wasInterrupted := m.interruptRequested
+		noticePrinted := m.interruptNoticePrinted
 		m.running = false
 		m.runCh = nil
+		m.interruptRequested = false
+		m.interruptNoticePrinted = false
 		m.spinner.stop()
 		// No further deltas will arrive; a still-pending render tick just
 		// reflows once below. Clearing the arm lets the next run batch cleanly.
@@ -1317,7 +1354,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			card.abort()
 		}
 		m.relayout()
-		if msg.err != nil {
+		// One settlement line, decided here rather than by which events happened
+		// to survive the cancellation: an interrupt reports the same way whether
+		// the aborting turn-end reached the UI before the cancel did or not.
+		switch {
+		case wasInterrupted || errors.Is(msg.err, context.Canceled):
+			if !noticePrinted {
+				m.transcript.addSystem(ui.InterruptNotice)
+			}
+		case msg.err != nil:
 			m.transcript.addSystem("Run ended: " + msg.err.Error())
 		}
 		// Persist the turn's new messages as a branch so the conversation survives
@@ -1527,12 +1572,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			text := m.selectedText()
 			m.sel = selection{}
 			if text != "" {
+				// Acknowledge the press: the copy goes out over OSC52, which the
+				// terminal may or may not honor, and a silent branch is what made
+				// Ctrl+C feel unresponsive.
+				m.transcript.addSystem(ui.SelectionCopiedNotice)
 				return m, tea.SetClipboard(text)
 			}
 			return m, nil
 		}
 		if !m.running && m.input.Value() != "" {
-			return m.clearDraft(), nil
+			// The shell-like first stage: discard the draft and say so.
+			m = m.clearDraft()
+			m.transcript.addSystem(ui.DraftDiscardedNotice)
+			return m, nil
 		}
 		return m.interruptOrQuit()
 	case "super+c":
@@ -2733,6 +2785,8 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) beginRun(ch chan tea.Msg) {
 	m.runCh = ch
 	m.running = true
+	m.interruptRequested = false
+	m.interruptNoticePrinted = false
 	m.toolCards = make(map[string]*toolCard)
 	m.lastToolCard = nil
 }
@@ -2836,6 +2890,12 @@ func (m Model) clearDraft() Model {
 // (FR-14) that stops an in-flight run on the first press and stays in the
 // program. When idle the first press only arms a quit (with a visible hint);
 // a second press within quitArmWindow quits.
+//
+// Repeated presses during one run are idempotent: the interrupt is a request
+// and the first press already said so, so further presses neither repeat the
+// notice nor pretend something new happened. That mattered in practice — a
+// user who pressed again because the run had not visibly stopped got a second
+// "(interrupting…)" line and read the pair as "the key did nothing".
 func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 	if m.running {
 		// A session op (/compact, /dream) has no run ctx of its own; cancel it
@@ -2850,13 +2910,17 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		if m.interruptFn != nil {
 			m.interruptFn()
 		}
+		if m.interruptRequested {
+			return m, nil
+		}
+		m.interruptRequested = true
 		// With messages queued, interrupting doubles as "send them now": the
 		// cancelled run ends and runEndMsg starts the oldest queued message as
 		// the next turn, instead of waiting for a tool call that will never come.
 		if len(m.steerQ.snapshot()) > 0 {
-			m.transcript.addSystem("(interrupting — queued input will be sent next)")
+			m.transcript.addSystem(ui.InterruptingQueuedNotice)
 		} else {
-			m.transcript.addSystem("(interrupting the current run…)")
+			m.transcript.addSystem(ui.InterruptingNotice)
 		}
 		return m, nil
 	}
@@ -2865,7 +2929,7 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 	// later) Ctrl+C is the ordinary idle quit again.
 	if len(m.userShells) > 0 {
 		m.cancelUserShells()
-		m.transcript.addSystem("(interrupting the shell command…)")
+		m.transcript.addSystem(ui.ShellInterruptingNotice)
 		m.relayout()
 		return m, nil
 	}
@@ -2875,7 +2939,7 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	m.quitArmedAt = time.Now()
-	m.transcript.addSystem("Press Ctrl+C again to quit.")
+	m.transcript.addSystem(ui.QuitArmedNotice)
 	return m, nil
 }
 

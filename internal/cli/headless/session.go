@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -42,7 +43,10 @@ func SessionStore() (*session.Store, error) {
 	return session.NewStore(filepath.Join(dir, "sessions"))
 }
 
-// PrintSessions prints the stored sessions, most-recent first, to out.
+// PrintSessions prints the stored sessions, most-recent first, to out. Every
+// project's sessions are listed (this is the explicit "show me everything"
+// command, so it is not filtered) and each row carries the directory the
+// session ran in, which is what makes the rows attributable.
 func PrintSessions(out io.Writer) error {
 	store, err := SessionStore()
 	if err != nil {
@@ -57,26 +61,33 @@ func PrintSessions(out io.Writer) error {
 		return nil
 	}
 	for _, h := range headers {
-		fmt.Fprintf(out, "%s\t%s\t%s\n", h.ID, h.UpdatedAt.Local().Format("2006-01-02 15:04"), h.Model)
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", h.ID, h.UpdatedAt.Local().Format("2006-01-02 15:04"), h.Model, cli.SessionDirDisplay(h))
 	}
 	return nil
 }
 
-// MostRecentSessionID returns the id of the most recently updated session, or
-// "" if there are none.
-func MostRecentSessionID() (string, error) {
+// ContinueTarget resolves --continue for a launch directory: the most recently
+// updated session of the current project. When this project has no sessions the
+// newest session of any project is returned together with a note naming its
+// directory, so continuing across projects is possible but never silent — the
+// caller prints the note. An empty id means the store holds nothing at all.
+func ContinueTarget(cwd string) (id, note string, err error) {
 	store, err := SessionStore()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	headers, err := store.List()
-	if err != nil {
-		return "", err
+	h, ok, err := cli.MostRecentSession(store, cli.ProjectScope(cwd))
+	if err != nil || ok {
+		if err != nil {
+			return "", "", err
+		}
+		return h.ID, "", nil
 	}
-	if len(headers) == 0 {
-		return "", nil
+	h, ok, err = cli.MostRecentSession(store, cli.AllSessionsScope())
+	if err != nil || !ok {
+		return "", "", err
 	}
-	return headers[0].ID, nil
+	return h.ID, fmt.Sprintf("no sessions in %s; continuing %s from %s", cwd, h.ID, cli.SessionDirDisplay(h)), nil
 }
 
 // headlessSession is the session state backing one headless run: the store, the

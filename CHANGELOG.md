@@ -243,8 +243,56 @@ interactive REPL/TUI.
   terminal's job control (bubbletea releases the terminal and raises SIGTSTP;
   `fg` resumes with the layout re-laid out), matching codex and every other
   terminal UI.
+- **Search tools take lists, exclusions and a limit**: `grep` and `find` now
+  accept `path` as one directory or a list of them, `exclude` (rg
+  `--glob=!X`, also a list — an exclude always beats a matching `glob`), and
+  `limit` (default 1000, max 10000) so a "these three packages, minus the
+  tests, first N hits" query is one call instead of a shell pipeline.
+  `find` gains the rest of `grep`'s narrowing — `type`, `hidden`, `no_ignore`
+  — so a name search no longer has to reach for `rg --files` to filter. The
+  one-string form keeps working for the common single-directory case, and both
+  spellings are declared in the schema (`oneOf`), so validation and the
+  decoder agree. A capped result now says what to do about it ("showing the
+  first N …; narrow the search with path/glob/exclude, or raise limit") rather
+  than printing a bare `[truncated]`, which is what invited the pipeline the
+  arguments exist to replace.
+- **`/resume --all` and a directory column**: every session row now carries the
+  directory the session ran in — the REPL list, the TUI picker's second line,
+  and `golder -l` / `golder session list` — so two rows with the same preview
+  can be told apart without opening them (`~` shortens `$HOME`; a session
+  written before the `cwd` field existed shows `unknown`). `/resume --all` (or
+  `-a`) lifts the project filter and lists every project's recent sessions, and
+  it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **File viewing belongs to `read`, and the prompt says so**: the code-search
+  guide now forbids viewing a file through `cat`, `sed -n`, `head` or `tail`
+  and points at `read` with `offset/limit` instead (bounded, line-numbered, and
+  it says when it truncated) — the shell spellings fail silently in ways the
+  tool cannot: `sed -n '380,470p'` returns a plausible window of the wrong
+  lines once the file has shifted, and a truncated `cat` gives no sign that
+  anything is missing. The same guide names the two shapes that stay legitimately
+  the shell's (multiline search, and aggregating matches such as `rg -l | xargs`
+  or `wc -l`), so the rule reads as routing rather than a ban on bash. The `read`
+  tool's own description carries the same instruction, since that is the text
+  the model sees when it is deciding how to open a file.
+- **`/resume` and `--continue` are project-scoped by default**: a bare
+  `/resume` lists the sessions that ran in the current project instead of the
+  whole store, where the project is the repository containing the launch
+  directory (the nearest ancestor holding a `.git` entry) — so a monorepo keeps
+  one history whether golder was started at the root or three levels down, and
+  a directory outside any repository is its own project. Nothing is hidden
+  silently: a list that is not complete ends with the count it is keeping back
+  and names `--all`, an empty project says the project has no sessions rather
+  than that the store is empty, and an out-of-range number reports the scoped
+  size together with the full one. `--continue` now takes this project's newest
+  session and only falls back to another project's with a note naming the
+  directory it came from, instead of silently continuing whatever was globally
+  newest. Exact ids are never narrowed: `/resume <id>` and `golder --resume
+  <id>` still resolve across the whole store, and unattributed sessions (no
+  recorded `cwd`) only appear under `--all`. Storage itself is unchanged —
+  `~/.golder/sessions` stays one flat store with one `List()`; only the view
+  is filtered.
 - **Startup wordmark in the block face**: the splash's `GOLDER` is now the
   solid ANSI Shadow blocks — the face the tuios splash uses — instead of the
   hollow box-drawing outline: six rows, 50 cells wide, with the entrance
@@ -374,6 +422,42 @@ interactive REPL/TUI.
   few seconds, and only when output is actually waiting below the fold.
 
 ### Fixed
+- **Ctrl+C reads the same everywhere**: interrupting used to speak differently
+  in every branch and every front-end — the TUI said `(interrupting the current
+  run…)`, then `Run ended: context canceled` or `error: aborted` depending on
+  which termination event won a race, while the REPL said `^C interrupted`, and
+  two branches (discarding a draft, copying a selection) said nothing at all.
+  The same keystroke read as five different things, which is what made it feel
+  broken even when it worked. Now `ui.InterruptNotice`/`InterruptingNotice`
+  and friends are the single source of that wording: every branch acknowledges
+  the press, both front-ends settle on one line, and the settlement prints
+  exactly once whether or not the aborting turn-end happened to survive the
+  cancellation — the aborting event is dropped when the cancel wins the race,
+  so the transcript used to depend on timing rather than on what happened.
+  Repeated presses during one run are idempotent (the first cancels and says
+  so; the rest are absorbed), which stops the notice repeating and reading as
+  "the key did nothing". An interrupt is also no longer filed as an error
+  anywhere in the pipeline: `EventStream.Result` prefers an outcome the
+  producer already recorded over a cancelled ctx, the provider transport and
+  the runtime's terminal-message builder classify a cancelled ctx as `aborted`
+  (not `error`), and the REPL/goal/btw notices were brought in line. A real
+  failure still reports as one — only cancellations changed classification.
+  Interrupt latency was measured rather than assumed: cancelling stops a run in
+  ~20µs mid-stream, ~9µs mid-tool, ~65µs while parked on an approval — the
+  visible delay is the distance to the next cancellation point, and the only
+  case that can exceed it is a tool that ignores its context (measured at the
+  tool's own duration; the loop then aborts the rest of the batch without
+  running it). The measurement itself is a test
+  (`internal/runtime/interrupt_latency_test.go`), so a future change that stops
+  honoring cancellation fails loudly.
+- **`todo` accepts an omitted status**: a submitted item with no `status` is
+  read as `pending` instead of being rejected by schema validation. Measured
+  across 82 stored sessions, this was the only tool-argument validation failure
+  in the whole store — three occurrences, every one of them a `todo` call
+  missing `status` on a not-yet-started entry, each costing a full round trip
+  for a field with exactly one sensible reading. The schema no longer requires
+  it (`content` still is), and an explicitly wrong status is still refused:
+  inferring intent from `done` would be guessing.
 - **`golder update` no longer reports "already up to date" during the release
   window**: latest-tag discovery asks the golder site first (reachable from
   mainland China, no anonymous rate limit) and that endpoint is edge-cached, so

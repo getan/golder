@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
@@ -14,19 +13,22 @@ import (
 // runResume implements /resume: it swaps the active REPL session without
 // leaving the program, mirroring the TUI's runSession.switchTo (persist
 // current, load target, live model/provider follow the stored header). A bare
-// /resume lists recent sessions; a 1-based number selects one.
+// /resume lists the current project's recent sessions; a 1-based number selects
+// one, --all widens the list to every project, and a literal id always resolves
+// globally.
 func runResume(out io.Writer, deps *replDeps, arg string) {
-	if strings.TrimSpace(arg) == "" {
-		items, err := cli.RecentSessionsWithPreview(deps.store, 10)
+	scope, sel := cli.ParseResumeArg(arg, deps.cwd)
+	if sel == "" {
+		items, err := cli.RecentSessionsWithPreview(deps.store, scope, cli.ResumeListN)
 		if err != nil {
 			fmt.Fprintf(out, "resume: list sessions: %v\n", err)
 			return
 		}
 		if len(items) == 0 {
-			fmt.Fprintln(out, "No saved sessions yet.")
+			fmt.Fprintln(out, cli.ResumeEmptyMessage(deps.store, scope))
 			return
 		}
-		fmt.Fprintln(out, "Recent sessions (/resume <n|id>):")
+		fmt.Fprintf(out, "Recent sessions in %s (/resume <n|id>%s):\n", cli.ResumeScopeLabel(scope), resumeAllHint(scope))
 		for i, it := range items {
 			title := it.Preview
 			if title == "" {
@@ -40,11 +42,16 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 				model = "?"
 			}
 			fmt.Fprintf(out, "  %d. %s\n", i+1, title)
-			fmt.Fprintf(out, "     %s · %s · %s\n", it.Header.ID, model, it.Header.UpdatedAt.Format("01-02 15:04"))
+			fmt.Fprintf(out, "     %s · %s · %s · %s\n", it.Header.ID, model, cli.SessionDirDisplay(it.Header), it.Header.UpdatedAt.Format("01-02 15:04"))
+		}
+		// A project-scoped list can be shorter than the store; say so once, so
+		// the sessions of other projects are not silently invisible.
+		if hint := cli.ResumeHiddenHint(deps.store, scope, len(items)); hint != "" {
+			fmt.Fprintf(out, "  (%s)\n", hint)
 		}
 		return
 	}
-	id, err := cli.ResolveResumeID(deps.store, arg)
+	id, err := cli.ResolveResumeID(deps.store, arg, deps.cwd)
 	if err != nil {
 		fmt.Fprintf(out, "resume: %v\n", err)
 		return
@@ -94,4 +101,13 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	deps.hookDeps.SessionID = h.ID
 	replayTranscript(out, msgs)
 	fmt.Fprintf(out, "Resumed session %s (%s).\n", id, deps.live.Model)
+}
+
+// resumeAllHint renders the flag that would widen this list, or "" when the
+// list is already unfiltered.
+func resumeAllHint(scope cli.ResumeScope) string {
+	if scope.All {
+		return ""
+	}
+	return " or " + cli.AllSessionsFlag
 }

@@ -29,9 +29,57 @@ import (
 	"github.com/getan/golder/internal/permissions"
 )
 
-// searchMaxResults caps the number of matches/entries any single search returns
-// so a broad query cannot flood the model's context.
+// searchMaxResults caps the number of matches/entries a search returns unless
+// the call asks for something else with limit, so a broad query cannot flood
+// the model's context by default.
 const searchMaxResults = 1000
+
+// searchLimitMax bounds the limit argument. The point of limit is to ask for
+// LESS than the default (a sample, a count, the top of a list); the ceiling
+// exists so the same argument cannot be used to hand back an unbounded slice of
+// the repository, which is what the default cap is there to prevent.
+const searchLimitMax = 10000
+
+// stringList accepts either a single string or an array of strings, so a tool
+// argument that takes a list reads naturally for one item
+// ({"path": "internal/cli"}) and for several ({"path": ["a", "b"]}) through the
+// same field name. The schema declares the same oneOf, so a malformed value is
+// refused by validation before Execute ever sees it; the decoder here is what
+// keeps the tool correct when the registry is not consulted (direct tool use in
+// tests, or a caller that bypasses validation).
+type stringList []string
+
+func (s *stringList) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		*s = nil
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var one string
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return err
+		}
+		if strings.TrimSpace(one) == "" {
+			*s = nil
+			return nil
+		}
+		*s = stringList{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(trimmed, &many); err != nil {
+		return err
+	}
+	out := make([]string, 0, len(many))
+	for _, item := range many {
+		if strings.TrimSpace(item) != "" {
+			out = append(out, item)
+		}
+	}
+	*s = out
+	return nil
+}
 
 // resolveWithin resolves p against root and verifies it stays within it. It is
 // the single workspace-boundary policy shared by every file tool: the search
@@ -296,43 +344,154 @@ func firstNonEmptyLine(s string) string {
 	return "unknown error"
 }
 
-// rgSearchPath renders the path argument for rg. When the search covers the
-// whole root it passes no path at all: rg then prints paths exactly as these
-// tools always have (relative to the root, no "./" prefix). `--` guards an
-// entry whose name looks like a flag.
-func rgSearchPath(rel string) []string {
-	if rel == "" || rel == "." {
+// rgPathArgs renders the path arguments for rg. No paths means the whole
+// working directory is searched, which is how these tools have always printed
+// results (relative to the root, with no "./" prefix).
+//
+// A lone "." is dropped for that same reason: it names the workspace root, and
+// passing it explicitly would prefix every result with "./". A "." among other
+// paths is kept, because there it is what keeps the workspace itself in the
+// search — dropping it would silently narrow the union to the other paths.
+//
+// `--` is emitted once, before the whole list: it guards an entry whose name
+// looks like a flag, and a SECOND `--` would not be a second guard — clap (and
+// so ripgrep) treats everything after the first one as a value, so a repeated
+// separator would be searched for as a path literally named "--".
+func rgPathArgs(paths []string) []string {
+	kept := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	if len(kept) == 0 || (len(kept) == 1 && kept[0] == ".") {
 		return nil
 	}
-	return []string{"--", rel}
+	return append([]string{"--"}, kept...)
 }
 
-// rgScope picks the working directory and path argument for a search after the
-// start path has been resolved, which may be a user-granted read root outside
-// the workspace. A start inside the workspace keeps the historical shape: run
-// from the workspace and name the relative path, so results stay workspace-
-// relative. A granted start outside it is searched directly, so results are
-// relative to what was actually searched instead of a chain of "../..".
-func rgScope(root, start string) (dir string, pathArg []string) {
-	if !permissions.Inside(root, start) {
-		if info, err := os.Stat(start); err == nil && info.IsDir() {
-			return start, nil
+// pruneContainedStarts removes the start paths another start already covers.
+// ripgrep walks every path argument independently, so `rg needle -- a a/b`
+// prints each match under a/b twice; the union of the two paths is just `a`, so
+// the inner one adds nothing but duplicates. Identical paths are deduplicated
+// for the same reason. Surviving paths keep their order.
+func pruneContainedStarts(starts []string) []string {
+	uniq := make([]string, 0, len(starts))
+	seen := make(map[string]bool, len(starts))
+	for _, s := range starts {
+		c := filepath.Clean(s)
+		if seen[c] {
+			continue
 		}
-		return filepath.Dir(start), rgSearchPath(filepath.Base(start))
+		seen[c] = true
+		uniq = append(uniq, c)
 	}
-	rel, err := filepath.Rel(root, start)
-	if err != nil {
-		return root, nil
+	kept := make([]string, 0, len(uniq))
+	for _, s := range uniq {
+		covered := false
+		for _, other := range uniq {
+			if other != s && permissions.Inside(other, s) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			kept = append(kept, s)
+		}
 	}
-	return root, rgSearchPath(rel)
+	return kept
 }
 
-// truncationMarker renders the trailing note for a capped result set.
-func truncationMarker(unit string, shown int) string {
-	if shown >= searchMaxResults {
-		return fmt.Sprintf("[truncated at %d %s]", searchMaxResults, unit)
+// rgScope picks the working directory and path arguments for a search after the
+// start paths have been resolved, which may include user-granted read roots
+// outside the workspace.
+//
+// A single start keeps the historical shape: an in-workspace start runs from
+// the workspace and names the relative path, so results stay workspace-relative
+// (and a shell reading them sees the paths it would type); a granted start
+// outside the workspace is searched directly, so results are relative to what
+// was actually searched instead of a chain of "../..".
+//
+// Several starts search from the workspace, naming in-workspace starts
+// relatively and outside ones absolutely. Mixing the two spellings is what
+// keeps one invocation from having to pick a single base directory: rg prints
+// each result under the path argument it was reached through, so every result
+// stays attributable to the argument that produced it. A start another start
+// already covers is dropped first, so a "these two directories" request that
+// happens to nest cannot double every match.
+func rgScope(root string, starts []string) (dir string, pathArgs []string) {
+	starts = pruneContainedStarts(starts)
+	if len(starts) == 1 {
+		start := starts[0]
+		if !permissions.Inside(root, start) {
+			if info, err := os.Stat(start); err == nil && info.IsDir() {
+				return start, nil
+			}
+			return filepath.Dir(start), rgPathArgs([]string{filepath.Base(start)})
+		}
+		rel, err := filepath.Rel(root, start)
+		if err != nil || rel == "." {
+			return root, nil
+		}
+		return root, rgPathArgs([]string{rel})
 	}
-	return "[output truncated]"
+	named := make([]string, 0, len(starts))
+	for _, start := range starts {
+		if !permissions.Inside(root, start) {
+			named = append(named, start)
+			continue
+		}
+		rel, err := filepath.Rel(root, start)
+		if err != nil {
+			named = append(named, start)
+			continue
+		}
+		named = append(named, rel)
+	}
+	return root, rgPathArgs(named)
+}
+
+// resolveStarts resolves every path argument a search was given — each one
+// through the same read-boundary check a single path used to get, so a granted
+// directory and a workspace path behave identically — and returns them in the
+// order given.
+func resolveStarts(ctx context.Context, root string, paths []string) ([]string, error) {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		full, err := resolveReadable(ctx, []string{root}, p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, full)
+	}
+	return out, nil
+}
+
+// truncationMarker renders the trailing note for a capped result set. Two caps
+// can cut a result: the result limit (the common one — the search matched more
+// than the caller asked to see) and the output byte cap, which can bite with
+// long lines even under the limit. The limit case names the way to get the rest
+// instead of just saying "truncated", because a bare notice invites a shell
+// pipeline and the tool already has the arguments that pipeline would use.
+func truncationMarker(unit string, shown, limit int) string {
+	if shown >= limit {
+		return fmt.Sprintf("[showing the first %d %s; narrow the search with path/glob/exclude, or raise limit (max %d)]",
+			shown, unit, searchLimitMax)
+	}
+	return "[output truncated: the capture hit its byte cap; narrow the search with path/glob/exclude]"
+}
+
+// searchLimit resolves the limit argument: 0 means the default cap, and a
+// negative or oversized value is refused with the range spelled out.
+func searchLimit(limit int) (int, error) {
+	if limit == 0 {
+		return searchMaxResults, nil
+	}
+	if limit < 1 || limit > searchLimitMax {
+		return 0, fmt.Errorf("limit must be between 1 and %d (or omitted for the default of %d)", searchLimitMax, searchMaxResults)
+	}
+	return limit, nil
 }
 
 // GrepTool searches file contents by regexp under Root via ripgrep.
@@ -344,10 +503,19 @@ type GrepTool struct {
 type grepToolArgs struct {
 	// Pattern is the regexp to search for (Go regexp syntax).
 	Pattern string `json:"pattern"`
-	// Path optionally scopes the search to a subdirectory (relative to Root).
-	Path string `json:"path,omitempty"`
+	// Path optionally scopes the search to one or more subdirectories (relative
+	// to Root). A list is what a "search these three packages" query needs; the
+	// single-string form stays accepted so the common case reads naturally.
+	Path stringList `json:"path,omitempty"`
 	// Glob optionally filters files by base-name glob (e.g. "*.go").
 	Glob string `json:"glob,omitempty"`
+	// Exclude drops files matching a glob (rg --glob=!X), repeatable: the
+	// negative half of Glob, which a shell would spell `rg --glob '!*_test.go'`.
+	Exclude stringList `json:"exclude,omitempty"`
+	// Limit caps how many matches are returned. 0 means the default cap; a
+	// smaller value is how a caller asks for a sample or a count without a
+	// pipeline (`| head`), and the result says when it was capped.
+	Limit int `json:"limit,omitempty"`
 	// Context shows this many lines around each match (rg -C), so reading the
 	// code around a hit does not need a shell. 0 shows matches only.
 	Context int `json:"context,omitempty"`
@@ -381,11 +549,13 @@ const grepMaxContext = 50
 func (t *GrepTool) Name() string { return "grep" }
 func (t *GrepTool) Description() string {
 	return "Search file contents by regular expression under the workspace " +
-		"(ripgrep). Filters files by glob or type; also takes context lines " +
-		"around each match, ignore_case, word, literal, invert, files_only, " +
-		"hidden and no_ignore. Skips .gitignore'd, hidden, and binary files by " +
-		"default. Independent searches run faster batched in one message (one " +
-		"call per pattern or directory)."
+		"(ripgrep). Results are line-numbered and workspace-relative. Narrows " +
+		"with path (a directory or list of them), glob/type (include) and " +
+		"exclude (drop, e.g. *_test.go); takes context lines around each match, " +
+		"ignore_case, word, literal, invert, files_only, hidden, no_ignore, and " +
+		"limit (max results, default 1000). Skips .gitignore'd, hidden and " +
+		"binary files by default. Several independent searches run faster " +
+		"batched in one message (one call per pattern)."
 }
 func (t *GrepTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -395,8 +565,22 @@ func (t *GrepTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "pattern": {"type": "string", "description": "Regular expression to search for."},
-    "path":    {"type": "string", "description": "Subdirectory to scope the search to (relative to the workspace root)."},
-    "glob":    {"type": "string", "description": "Filter files by base-name glob, e.g. *.go."},
+    "path": {
+      "description": "Directory (or list of directories) to scope the search to, relative to the workspace root. Omit to search the whole workspace.",
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "glob":    {"type": "string", "description": "Keep only files matching this glob, e.g. *.go."},
+    "exclude": {
+      "description": "Drop files matching this glob (rg --glob=!X), e.g. *_test.go. A list drops several; an exclude beats a matching glob.",
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "limit":   {"type": "integer", "description": "Maximum number of matches to return (default 1000, max 10000). Use a smaller value to sample or count.", "minimum": 1, "maximum": 10000},
     "context": {"type": "integer", "description": "Lines of context to show around each match (rg -C). 0 (the default) shows matches only.", "minimum": 0, "maximum": 50},
     "ignore_case": {"type": "boolean", "description": "Match case-insensitively (rg -i)."},
     "word":        {"type": "boolean", "description": "Match whole words only (rg -w)."},
@@ -423,20 +607,27 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Context < 0 || a.Context > grepMaxContext {
 		return errorResult(fmt.Sprintf("grep: context must be between 0 and %d", grepMaxContext)), nil
 	}
+	limit, err := searchLimit(a.Limit)
+	if err != nil {
+		return errorResult("grep: " + err.Error()), nil
+	}
 	root, err := resolveWithin(t.Root, "")
 	if err != nil {
 		return errorResult("grep: " + err.Error()), nil
 	}
-	start := root
-	if a.Path != "" {
-		if start, err = resolveReadable(ctx, []string{t.Root}, a.Path); err != nil {
+	// Every path argument passes the same read-boundary check, so a granted
+	// directory and a workspace path behave identically; with no argument the
+	// search covers the workspace root.
+	starts := []string{root}
+	if len(a.Path) > 0 {
+		if starts, err = resolveStarts(ctx, t.Root, a.Path); err != nil {
 			return errorResult("grep: " + err.Error()), nil
 		}
 	}
 	// The search may start outside the workspace when the user granted that
 	// directory for reading; rgScope keeps workspace results workspace-relative
 	// and roots an outside search at the granted directory itself.
-	dir, pathArg := rgScope(root, start)
+	dir, pathArg := rgScope(root, starts)
 
 	// Pattern validation is ripgrep's alone. A local regexp.Compile pre-check
 	// used to gate this, but it graded the pattern with Go's regexp while
@@ -488,6 +679,12 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Glob != "" {
 		rgArgs = append(rgArgs, "--glob="+a.Glob)
 	}
+	// Excludes are appended after the include glob so a file matched by both is
+	// dropped: rg applies globs in order and the later one wins, which makes
+	// exclude the negative half of glob rather than a coin flip between them.
+	for _, ex := range a.Exclude {
+		rgArgs = append(rgArgs, "--glob=!"+ex)
+	}
 	if a.Hidden {
 		rgArgs = append(rgArgs, "--glob=!.git")
 	}
@@ -503,8 +700,8 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		// counts files, and there is no context to parse.
 		files := res.lines
 		truncated := res.truncated
-		if len(files) > searchMaxResults {
-			files = files[:searchMaxResults]
+		if len(files) > limit {
+			files = files[:limit]
 			truncated = true
 		}
 		msg := fmt.Sprintf("%d file(s) matching %q", len(files), a.Pattern)
@@ -512,7 +709,7 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			msg += "\n" + strings.Join(files, "\n")
 		}
 		if truncated {
-			msg += "\n" + truncationMarker("files", len(files))
+			msg += "\n" + truncationMarker("files", len(files), limit)
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(msg)},
@@ -520,7 +717,7 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}, nil
 	}
 
-	kept, matches, truncated := capGrepLines(grepResultLines(res.lines, a.Context), searchMaxResults)
+	kept, matches, truncated := capGrepLines(grepResultLines(res.lines, a.Context), limit)
 	shown := make([]string, len(kept))
 	for i, ln := range kept {
 		shown[i] = ln.text
@@ -533,7 +730,7 @@ func (t *GrepTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		msg += "\n" + strings.Join(shown, "\n")
 	}
 	if truncated || res.truncated {
-		msg += "\n" + truncationMarker("matches", matches)
+		msg += "\n" + truncationMarker("matches", matches, limit)
 	}
 	details := map[string]any{"matches": matches}
 	if a.Context > 0 {
@@ -627,15 +824,31 @@ type FindTool struct {
 type findToolArgs struct {
 	// Glob is the base-name glob to match (e.g. "*.go").
 	Glob string `json:"glob"`
-	// Path optionally scopes the search to a subdirectory (relative to Root).
-	Path string `json:"path,omitempty"`
+	// Path optionally scopes the search to one or more subdirectories (relative
+	// to Root); a list searches several trees in one invocation.
+	Path stringList `json:"path,omitempty"`
+	// Exclude drops files matching a glob (rg --glob=!X), repeatable.
+	Exclude stringList `json:"exclude,omitempty"`
+	// Limit caps how many paths are returned. 0 means the default cap.
+	Limit int `json:"limit,omitempty"`
+	// Type filters files by ripgrep's file type (rg -t), the structured
+	// alternative to a name glob for "every Go file".
+	Type string `json:"type,omitempty"`
+	// Hidden also walks hidden files and directories (rg --hidden). The tree walk
+	// still skips .git, whose object blobs and refs are noise in a name search.
+	Hidden bool `json:"hidden,omitempty"`
+	// NoIgnore also walks files excluded by .gitignore (rg --no-ignore).
+	NoIgnore bool `json:"no_ignore,omitempty"`
 }
 
 func (t *FindTool) Name() string { return "find" }
 func (t *FindTool) Description() string {
 	return "Find files by base-name glob under the workspace (ripgrep). " +
-		"Skips .gitignore'd and hidden files. Batch independent lookups in the " +
-		"same message — they run in parallel."
+		"Returns workspace-relative paths. Narrows with path (a directory or " +
+		"list of them), type (e.g. go), exclude (drop, e.g. *_test.go) and " +
+		"limit (max results, default 1000); hidden and no_ignore widen the walk, " +
+		"which otherwise skips .gitignore'd and hidden files. Batch independent " +
+		"lookups in the same message — they run in parallel."
 }
 func (t *FindTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -645,7 +858,24 @@ func (t *FindTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "glob": {"type": "string", "description": "Base-name glob to match, e.g. *.go."},
-    "path": {"type": "string", "description": "Subdirectory to scope the search to (relative to the workspace root)."}
+    "path": {
+      "description": "Directory (or list of directories) to scope the search to, relative to the workspace root. Omit to search the whole workspace.",
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "exclude": {
+      "description": "Drop files matching this glob (rg --glob=!X), e.g. *_test.go. A list drops several; an exclude beats a matching glob.",
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "limit":     {"type": "integer", "description": "Maximum number of paths to return (default 1000, max 10000).", "minimum": 1, "maximum": 10000},
+    "type":      {"type": "string", "description": "Filter files by ripgrep file type (rg -t), e.g. go, rust, py."},
+    "hidden":    {"type": "boolean", "description": "Also walk hidden files and directories (rg --hidden). The tree walk still skips .git."},
+    "no_ignore": {"type": "boolean", "description": "Also walk files excluded by .gitignore (rg --no-ignore)."}
   },
   "required": ["glob"],
   "additionalProperties": false
@@ -660,19 +890,40 @@ func (t *FindTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Glob == "" {
 		return errorResult("find: glob is required"), nil
 	}
+	limit, err := searchLimit(a.Limit)
+	if err != nil {
+		return errorResult("find: " + err.Error()), nil
+	}
 	root, err := resolveWithin(t.Root, "")
 	if err != nil {
 		return errorResult("find: " + err.Error()), nil
 	}
-	start := root
-	if a.Path != "" {
-		if start, err = resolveReadable(ctx, []string{t.Root}, a.Path); err != nil {
+	starts := []string{root}
+	if len(a.Path) > 0 {
+		if starts, err = resolveStarts(ctx, t.Root, a.Path); err != nil {
 			return errorResult("find: " + err.Error()), nil
 		}
 	}
-	dir, pathArg := rgScope(root, start)
+	dir, pathArg := rgScope(root, starts)
 
 	rgArgs := []string{"--files", "--glob=" + a.Glob}
+	if a.Type != "" {
+		rgArgs = append(rgArgs, "--type="+a.Type)
+	}
+	if a.Hidden {
+		// The exclusion is appended LAST so it overrides any user glob: ripgrep
+		// applies globs in order and the later one wins.
+		rgArgs = append(rgArgs, "--hidden")
+	}
+	if a.NoIgnore {
+		rgArgs = append(rgArgs, "--no-ignore")
+	}
+	for _, ex := range a.Exclude {
+		rgArgs = append(rgArgs, "--glob=!"+ex)
+	}
+	if a.Hidden {
+		rgArgs = append(rgArgs, "--glob=!.git")
+	}
 	rgArgs = append(rgArgs, pathArg...)
 
 	res, rgMsg := runRG(ctx, dir, rgArgs)
@@ -682,8 +933,8 @@ func (t *FindTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	found := res.lines
 	sort.Strings(found)
 	truncated := res.truncated
-	if len(found) > searchMaxResults {
-		found = found[:searchMaxResults]
+	if len(found) > limit {
+		found = found[:limit]
 		truncated = true
 	}
 
@@ -692,7 +943,7 @@ func (t *FindTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		msg += "\n" + strings.Join(found, "\n")
 	}
 	if truncated {
-		msg += "\n" + truncationMarker("files", len(found))
+		msg += "\n" + truncationMarker("files", len(found), limit)
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(msg)},

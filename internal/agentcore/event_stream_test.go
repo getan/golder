@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -117,5 +118,45 @@ func TestEventStreamSetErrorWins(t *testing.T) {
 	s.Close()
 	if _, err := s.Result(context.Background()); err != sentinel {
 		t.Fatalf("want sentinel error, got %v", err)
+	}
+}
+
+// TestEventStreamResultPrefersRecordedOutcome pins the interrupt race fix: when
+// the producer has already recorded an outcome and the caller's ctx is also
+// done — exactly what an interrupt looks like, since cancelling ctx and the
+// loop's own finish() happen together — the recorded outcome wins. Reading the
+// cancellation instead made the same user action report differently from one
+// interrupt to the next.
+func TestEventStreamResultPrefersRecordedOutcome(t *testing.T) {
+	want := []AgentMessage{UserMessage{Content: ContentList{NewTextContent("done")}}}
+
+	s := NewEventStream[AgentEvent, []AgentMessage](1)
+	s.SetResult(want)
+	s.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := s.Result(ctx)
+	if err != nil {
+		t.Fatalf("a recorded result must win over a cancelled ctx, got err %v", err)
+	}
+	if len(got) != 1 || got[0].Role() != RoleUser {
+		t.Fatalf("result payload wrong: %+v", got)
+	}
+
+	// A recorded ERROR is an outcome too: it must not be masked by the cancel.
+	s2 := NewEventStream[AgentEvent, []AgentMessage](1)
+	sentinel := errors.New("loop failed")
+	s2.SetError(sentinel)
+	s2.Close()
+	if _, err := s2.Result(ctx); !errors.Is(err, sentinel) {
+		t.Fatalf("a recorded error must win over a cancelled ctx, got %v", err)
+	}
+
+	// With no outcome recorded, a cancelled ctx still ends the wait.
+	s3 := NewEventStream[AgentEvent, []AgentMessage](1)
+	if _, err := s3.Result(ctx); err == nil {
+		t.Fatal("an unrecorded stream must still report the cancelled ctx")
 	}
 }

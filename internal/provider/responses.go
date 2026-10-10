@@ -24,6 +24,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -264,14 +265,26 @@ func (d *responsesDriver) buildPartial(thinking, text string, toolCalls []agentc
 
 // emitError emits a terminal StreamErrorEvent tagged for this provider. Uses a
 // background context so the emit isn't dropped when ctx is already cancelled.
+//
+// A cancellation is filed as ABORTED rather than error: this path is reached
+// when the caller's ctx is cancelled (an interrupt), and reporting the user's
+// own keystroke as a provider error is what made Ctrl+C read as a malfunction.
 func (d *responsesDriver) emitError(stream *AssistantMessageEventStream, err error) {
+	reason := agentcore.StopReasonError
+	text := err.Error()
+	if errors.Is(err, context.Canceled) {
+		reason = agentcore.StopReasonAborted
+		// The front-end prints its own interrupt notice for this stop reason;
+		// "context canceled" is the machinery talking.
+		text = ""
+	}
 	stream.Emit(context.Background(), StreamErrorEvent{
 		Message: agentcore.AssistantMessage{
 			RoleField:    agentcore.RoleAssistant,
 			API:          "openai",
 			Provider:     d.name,
-			StopReason:   agentcore.StopReasonError,
-			ErrorMessage: err.Error(),
+			StopReason:   reason,
+			ErrorMessage: text,
 		},
 		Err: fmt.Errorf("%s: %w", d.name, err),
 	})

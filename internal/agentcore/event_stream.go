@@ -110,7 +110,22 @@ func (s *EventStream[T, R]) Close() {
 // Result blocks until the producer sets a result/error, ctx is cancelled, or
 // the stream closes without a result. It is safe to call concurrently and
 // returns the same outcome on every call.
+//
+// An outcome the producer has ALREADY recorded wins over a cancelled ctx. The
+// two race whenever a run is cancelled and settles at the same time — the
+// interrupt cancels ctx while the loop's own finish() sets the result — and
+// the result is the more truthful of the two: it says what the run produced.
+// Preferring ctx.Err() there made an interrupted run report differently from
+// one moment to the next (the driver printed the cancellation as a failure on
+// some interrupts and nothing on others, from the same user action). The
+// non-blocking check below is what reorders that race; when no outcome exists
+// yet, the wait still ends on ctx cancellation.
 func (s *EventStream[T, R]) Result(ctx context.Context) (R, error) {
+	select {
+	case <-s.resultCh:
+		return s.result, s.resultErr
+	default:
+	}
 	select {
 	case <-s.resultCh:
 		return s.result, s.resultErr

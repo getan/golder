@@ -680,6 +680,12 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 	// source, so pipes/tests are unchanged. flushReply guarantees the rendered
 	// block ends on a fresh line so tool activity below it starts cleanly.
 	var reply strings.Builder
+	// interruptNoticePrinted records that this run's settlement has already been
+	// reported as an interrupt — by the aborted-turn branch below (the loop marks
+	// the turn aborted when its ctx was cancelled) or by the driver's own ctx
+	// check after the stream drains. Both describe the same Ctrl+C, so only the
+	// first one prints; without this the REPL said it twice.
+	interruptNoticePrinted := false
 	flushReply := func() {
 		if reply.Len() == 0 {
 			return
@@ -751,7 +757,11 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 				}
 				fmt.Fprintf(out, "%s %s\n", ui.Colorize(ui.Enabled(), ui.Red, "error:"), reason)
 			case agentcore.StopReasonAborted:
-				fmt.Fprintf(out, "%s aborted\n", ui.Colorize(ui.Enabled(), ui.Red, "error:"))
+				// Not an error: the loop marks a turn aborted when its context was
+				// cancelled, which is what a Ctrl+C interrupt does. Print the same
+				// line the TUI prints, so one action reads the same in both.
+				fmt.Fprintln(out, ui.InterruptNotice)
+				interruptNoticePrinted = true
 			default:
 				// A turn that ends cleanly (end_turn) but produced no text, no
 				// thinking, and no tool calls means the endpoint accepted the
@@ -769,12 +779,21 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 	// A run can end (error or interrupt) with buffered text from a final turn
 	// that never fired OnTurnEnd; flush it so no reply is silently dropped.
 	flushReply()
-	if err != nil {
-		if ctx.Err() != nil {
-			fmt.Fprintln(out, "^C interrupted")
-		} else {
-			fmt.Fprintf(out, "error: %v\n", err)
+	// The cancellation check is deliberately OUTSIDE the error check: an
+	// interrupted run usually ends with a nil error now (the loop records the
+	// messages it produced, and a recorded result outranks the cancelled ctx —
+	// see EventStream.Result), so keying the notice off err dropped it exactly
+	// when the interrupt worked cleanly. ctx.Err() is the reliable signal.
+	switch {
+	case ctx.Err() != nil:
+		// The aborted-turn branch above may already have printed the notice (an
+		// interrupt cancels the ctx AND aborts the in-flight turn), so print only
+		// when it did not.
+		if !interruptNoticePrinted {
+			fmt.Fprintln(out, ui.InterruptNotice)
 		}
+	case err != nil:
+		fmt.Fprintf(out, "error: %v\n", err)
 	}
 }
 

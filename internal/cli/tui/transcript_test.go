@@ -86,7 +86,9 @@ func TestTranscriptSurfacesTurnError(t *testing.T) {
 }
 
 // TestTranscriptSurfacesAbortedTurn verifies a turn that ends with stopReason
-// aborted is flagged rather than returning silently.
+// aborted is flagged rather than returning silently, using the same notice the
+// interrupt press settles on (ui.InterruptNotice) so one user action reads the
+// same in both front-ends.
 func TestTranscriptSurfacesAbortedTurn(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
 
@@ -100,8 +102,8 @@ func TestTranscriptSurfacesAbortedTurn(t *testing.T) {
 			sys = b.text
 		}
 	}
-	if !strings.Contains(sys, "aborted") {
-		t.Errorf("aborted turn not surfaced; system block = %q", sys)
+	if !strings.Contains(sys, ui.InterruptNotice) {
+		t.Errorf("aborted turn not surfaced with %q; system block = %q", ui.InterruptNotice, sys)
 	}
 }
 

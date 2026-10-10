@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 - **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
-- **会话与分支**：`/resume` 切换历史会话，`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
+- **会话与分支**：`/resume` 切换历史会话（默认只看当前项目，`--all` 看全部），`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
 - **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`（审批弹窗里按 `w` 可对某路径本会话放行；`/permissions writable add <path>` 持久化到 `~/.config/golder/permissions.toml`，也可在 `config.toml` 的 `[permissions] writable_roots` 手写）；网络默认关闭。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板；提权请求与"应当收容"冲突时升级给你拍板，而不是静默收容。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
 - **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`）默认只读工作区，越界会先问你——弹窗可选「只读这一次」或「本会话允许读该目录」；没有可问的人时（headless、子 agent）失败关闭，并在消息里给出路径与配置办法。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`config.toml` 的 `[permissions] readable_roots` 或 `GOLDER_READABLE_ROOTS`（同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
@@ -180,7 +180,7 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 | `read` | 按路径读取文本文件，支持 offset/limit，输出带行号 |
 | `view_image` | 读取本地图片（PNG/JPEG/GIF/WebP，≤8MiB）作为图片块附加给模型 |
 | `apply_patch` | 一次补丁调用增删改移多个文件，返回逐文件 diff |
-| `grep` / `find` | ripgrep 引擎的内容检索 / 文件名查找，自动跳过 `.gitignore` 与二进制文件 |
+| `grep` / `find` | ripgrep 引擎的内容检索 / 文件名查找；`path` 支持单个目录或目录列表，`exclude` 排除、`glob`/`type` 圈定，`limit` 限条数（默认 1000）；自动跳过 `.gitignore` 与二进制文件 |
 | `bash` | 执行 shell 命令，流式输出；未在等待窗口内结束则转为会话并返回 `bash_id`；`tty=true` 支持交互式程序 |
 | `write_stdin` | 轮询 bash 会话输出、写入输入或发送中断（`\u0003`） |
 | `todo` | 结构化任务清单（pending / in_progress / completed） |
@@ -209,7 +209,8 @@ TUI 输入 `/` 会按下面的分类弹出菜单（↑↓ 选择）；`/help` �
 要点：
 
 - `/compact` 立即对上下文做一次摘要压缩；`/status` 内含会话 id、消息数、创建时间与上下文用量（原 `/session` 已并入）。
-- `/resume`、`/fork`、`/tree`、`/rewind` 在 TUI 中都是方向键选择器，REPL 中输入序号选择。
+- **Ctrl+C 的一致行为**：运行中按一次即请求中断（会打印 `(interrupting…)`，随后以同一句 `Interrupted.` 结算）；同一次运行内再按不会重复提示，也不会提前退出。空闲时按一次清掉草稿（并提示已丢弃），输入框为空时第一次按下只"待命"（提示再按一次），第二次才退出——与 codex 一样，不设"运行中双击强退"，避免误触丢掉未落盘的一轮。Esc 与 Ctrl+C 的中断行为一致。
+- `/resume`、`/fork`、`/tree`、`/rewind` 在 TUI 中都是方向键选择器，REPL 中输入序号选择。`/resume` 默认只列**当前项目**的会话（项目 = 启动目录所在仓库的根，子目录与根共享一份历史），列表里每条都带运行目录；`/resume --all` 列出所有项目，被过滤掉或超出范围时列表会给出提示并指到 `--all`。`--resume <id>` 与 `/resume <id>` 始终全局精确命中，不受项目过滤影响。
 - 技能目录 `~/.agents/skills` 里每多一个技能就多一条 `/命令`；全新用户没有该目录时，Extensions 组为空。可用 `GOLDER_SKILLS_DIR` 换目录、`--no-skills` 全关。
 
 ## 使用
@@ -224,10 +225,10 @@ golder -p "读取 README 并总结这个仓库"
 # 逐行 JSON 事件（首个事件带 session_id），便于脚本消费
 golder -p "列出所有 Go 文件" --output-format stream-json
 
-# 续跑最近的会话（TUI 或 REPL 内可用 /resume 切换历史会话）
+# 续跑本项目最近的会话（本项目没有会话时退回全局最近一条，并在 stderr 说明来源目录）
 golder --continue
 golder --resume <session-id>
-golder -l                     # 列出全部会话
+golder -l                     # 列出全部项目的会话（含运行目录）
 
 # 会话导出 / 更新二进制
 golder session export <session-id> --format md --output talk.md

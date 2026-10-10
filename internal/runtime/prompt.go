@@ -124,28 +124,42 @@ const patchGuide = "Edit files with the apply_patch tool: one call carries a pat
 //
 // The guide names the arguments that used to send the model to a shell —
 // context lines, case-insensitive matching, whole words, literal patterns,
-// inverted matches, file lists, type filters, hidden and ignored files —
-// because an argument list is what makes "use bash rg" a legitimate reading:
-// the old text told the model to reach for `rg` through bash whenever it needed
-// a flag the schemas did not expose, and named context lines as the example.
-// The guide has to name the arguments now that they exist, and must not name a
-// gap that has closed: it pointed at `--type` long after `type` shipped, which
-// kept inviting the shell for a search the tool already does. What genuinely
-// remains outside the tool (multiline mode) is the one example left.
+// inverted matches, file lists, type filters, hidden and ignored files, and now
+// the path list, exclude and limit that a "several directories, minus the
+// tests, first N hits" query needs — because an argument list is what makes
+// "use bash rg" a legitimate reading: the old text told the model to reach for
+// `rg` through bash whenever it needed a flag the schemas did not expose, and
+// named context lines as the example. The guide has to name the arguments now
+// that they exist, and must not name a gap that has closed: it pointed at
+// `--type` long after `type` shipped, which kept inviting the shell for a
+// search the tool already does. What genuinely remains outside the tools is
+// named as such instead of being left to inference: multiline mode, and
+// aggregation over matches, which are the two shapes a shell does better.
+//
+// The reading half is stated as a rule because it is the other half of the same
+// reflex: `cat`, `sed -n`, `head` and `tail` over a file are how a model views
+// code by habit, and each has a tool-side answer (read with offset/limit) that
+// is bounded, line-numbered, and says when it truncated. Naming the tools
+// without forbidding the shell spelling leaves the reflex intact.
 //
 // The closing sentence covers the machine where ripgrep is absent, which is
 // also the machine where the tools cannot run at all (they are ripgrep-backed):
 // telling the model to fall back to the shell's grep/find is the only advice
 // that works there, and the environment block says which world it is in.
 const codeSearchGuide = "To search code, use the grep tool (file contents) and the find tool " +
-	"(file names): grep is golder's own ripgrep-backed search, with arguments for context " +
-	"lines, ignore_case, word, literal, invert, files_only, type, hidden and no_ignore " +
-	"(paths are regexps, so (?i) also works inline). Prefer them over a shell pipeline — " +
-	"they respect the workspace boundary, return bounded results, and batch in parallel — " +
-	"and reach for `rg` through bash only for what the tool has no argument for, such as " +
-	"multiline mode. When ripgrep is not installed (the environment block says so), the " +
-	"tools cannot run: search from a shell with `grep` and `find` instead. Inside a shell, " +
-	"prefer `rg` when it is installed and fall back to `grep`/`find` when it is not."
+	"(file names); grep is golder's own ripgrep-backed search. Scope it with path (one " +
+	"directory or a list of them), keep files with glob or type, drop them with exclude " +
+	"(e.g. exclude=\"*_test.go\"); limit caps how many matches come back (default 1000) and " +
+	"context shows the lines around each hit. It also takes ignore_case, word, literal, " +
+	"invert, files_only, hidden and no_ignore (patterns are regexps, so (?i) works inline " +
+	"too). Prefer them over a shell pipeline — they respect the workspace boundary, return " +
+	"bounded results, and batch in parallel — and reach for `rg` through bash only for what " +
+	"the tools have no argument for: multiline mode, and aggregating matches (`rg -l | " +
+	"xargs`, `sort -u`, `wc -l`). Never use `cat`, `sed -n`, `head` or `tail` to view a " +
+	"file: read it with the read tool and its offset/limit, which numbers the lines and " +
+	"says when it truncated. When ripgrep is not installed (the environment block says so), " +
+	"the tools cannot run at all: search from a shell with `grep` and `find` instead. Inside " +
+	"a shell, prefer `rg` when it is installed and fall back to `grep`/`find` when it is not."
 
 // batchGuide teaches the parallelism contract of the tool loop: independent
 // calls issued in ONE assistant message run concurrently (read/grep/find/ls and

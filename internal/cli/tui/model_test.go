@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +98,11 @@ func TestModelCtrlCClearsDraft(t *testing.T) {
 	}
 	if len(cleared.pastes) != 0 || len(cleared.images) != 0 {
 		t.Errorf("clearing press should drop placeholder bodies, pastes=%v images=%v", cleared.pastes, cleared.images)
+	}
+	// The discard is acknowledged too: a silent clear is indistinguishable from
+	// a keystroke that was never received.
+	if joined := strings.Join(blockTexts(cleared.transcript), "\n"); !strings.Contains(joined, ui.DraftDiscardedNotice) {
+		t.Errorf("clearing press should be acknowledged with %q, got %q", ui.DraftDiscardedNotice, joined)
 	}
 
 	// Post-clear presses run the normal idle path: first arms, second quits.
@@ -209,6 +215,12 @@ func TestModelSelectionCopy(t *testing.T) {
 	}
 	if !next.(Model).sel.empty() {
 		t.Error("selection should be cleared after Ctrl+C copies it")
+	}
+	// The copy is acknowledged in the transcript: the branch used to be silent,
+	// which read as "Ctrl+C did nothing" when the terminal did not surface the
+	// OSC52 clipboard write.
+	if joined := strings.Join(blockTexts(next.(Model).transcript), "\n"); !strings.Contains(joined, ui.SelectionCopiedNotice) {
+		t.Errorf("copy press should be acknowledged with %q, got %q", ui.SelectionCopiedNotice, joined)
 	}
 }
 
@@ -937,15 +949,21 @@ func TestProviderPickerSelectSwitches(t *testing.T) {
 }
 
 // TestResumePickerSelectSwitches drives the bare-/resume picker end to end:
-// the recent list opens as a picker, and confirming switches the session.
+// the recent list opens as a picker, and confirming switches the session. The
+// sessions carry the model's launch directory, since a bare /resume lists the
+// current project only.
 func TestResumePickerSelectSwitches(t *testing.T) {
 	store, err := session.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	now := time.Now().UTC()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
 	mkHeader := func(id, model string, at time.Time) session.SessionHeader {
-		return session.SessionHeader{ID: id, CreatedAt: at, UpdatedAt: at, Model: model, Provider: "prov"}
+		return session.SessionHeader{ID: id, CreatedAt: at, UpdatedAt: at, Model: model, Provider: "prov", Cwd: cwd}
 	}
 	mkMsgs := func(text string) agentcore.MessageList {
 		if text == "" {
