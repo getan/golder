@@ -70,10 +70,9 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	for i, e := range entries {
 		msgs[i] = e.Message
 	}
-	sysPrompt := h.SystemPrompt
-	if sysPrompt == "" {
-		sysPrompt = deps.agentCtx.SystemPrompt
-	}
+	// The guide and environment are rebuilt from this binary; the incoming
+	// session's own user-authored inputs are carried over.
+	sysPrompt := cli.ResumeSystemPrompt(h, deps.prompt)
 	if h.Provider != "" && h.Provider != deps.live.ProviderName {
 		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
 		if err != nil {

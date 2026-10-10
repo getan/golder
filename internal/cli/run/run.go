@@ -42,6 +42,12 @@ type Env struct {
 	// SysPrompt.
 	Skills []*runtime.Skill
 
+	// Prompt is the launch context the system prompt was built from. It is kept
+	// so a RESUMED session can rebuild its prompt through the same path: our own
+	// text (guide, environment, AGENTS.md, skills) comes from here, the session's
+	// recorded user inputs from the session header (see cli.ResumeSystemPrompt).
+	Prompt runtime.PromptInputs
+
 	// Plugins holds any loaded external plugins so the caller can Close them when
 	// the run ends. It is nil when no plugins were discovered.
 	Plugins *plugin.Manager
@@ -231,14 +237,14 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	}
 	// The model can only load a skill's body when the read tool is present, so
 	// advertise skills in the prompt only then (mirrors pi's selectedTools check).
-	sysPrompt, err := runtime.BuildSystemPrompt(runtime.PromptConfig{
-		BaseInstruction:    systemPrompt,
-		WorkingDir:         cwd,
-		Root:               cwd,
-		AppendInstructions: appends,
-		Skills:             skills,
-		ReadToolAvailable:  hasReadTool(tools),
-	})
+	prompt := runtime.PromptInputs{
+		Base:       systemPrompt,
+		Appends:    appends,
+		WorkingDir: cwd,
+		Skills:     skills,
+		Tools:      tools,
+	}
+	sysPrompt, err := prompt.Build()
 	if err != nil {
 		return Env{}, err
 	}
@@ -248,6 +254,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		Provider:     prov,
 		ProviderName: resolvedName,
 		SysPrompt:    sysPrompt,
+		Prompt:       prompt,
 		Skills:       skills,
 		Plugins:      mgr,
 		Memory:       memStore,
@@ -256,18 +263,6 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		ReviewNotes:  notes,
 		Budget:       budget,
 	}, nil
-}
-
-// hasReadTool reports whether the read tool is present in the tool set. Skills
-// are advertised in the system prompt only when it is, since the model needs the
-// read tool to load a skill's body on demand.
-func hasReadTool(tools []agentcore.AgentTool) bool {
-	for _, t := range tools {
-		if t.Name() == "read" {
-			return true
-		}
-	}
-	return false
 }
 
 // resolveAppendInstructions maps each --append-system-prompt value to the text

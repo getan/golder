@@ -64,7 +64,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// stream-json event and the run can be resumed with --resume/--continue,
 	// matching the interactive REPL and pi/Claude Code. A resumed session seeds
 	// its prior messages ahead of the new prompt.
-	priorMsgs, hs, err := openHeadlessSession(p.ResumeID, p.Model, env.ProviderName, env.SysPrompt)
+	priorMsgs, hs, err := openHeadlessSession(p.ResumeID, p.Model, env.ProviderName, env.SysPrompt, env.Prompt)
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1

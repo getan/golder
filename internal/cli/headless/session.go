@@ -25,6 +25,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -113,7 +114,11 @@ type headlessSession struct {
 // branch leaf) or creates a fresh session header otherwise. It returns the prior
 // messages to seed into the context ahead of the new prompt, plus the session
 // state used to persist the run afterward.
-func openHeadlessSession(resumeID, model, providerName, sysPrompt string) (agentcore.MessageList, headlessSession, error) {
+//
+// prompt is the launch context the system prompt was built from: a resumed run
+// rebuilds the prompt from THIS binary through it, carrying the session's own
+// user-authored inputs over (see cli.ResumeSystemPrompt).
+func openHeadlessSession(resumeID, model, providerName, sysPrompt string, prompt runtime.PromptInputs) (agentcore.MessageList, headlessSession, error) {
 	store, err := SessionStore()
 	if err != nil {
 		return nil, headlessSession{}, err
@@ -133,11 +138,11 @@ func openHeadlessSession(resumeID, model, providerName, sysPrompt string) (agent
 		if len(entries) > 0 {
 			curLeaf = entries[len(entries)-1].ID
 		}
-		// A resumed header keeps its own SystemPrompt when present so the run is
-		// faithful to the original session.
-		if h.SystemPrompt == "" {
-			h.SystemPrompt = sysPrompt
-		}
+		// The stored prompt's guide and environment are recomputed from this
+		// binary; the session's own user-authored inputs are carried over. The
+		// header keeps its original SystemPrompt (it records what the session was
+		// created with); the run uses the rebuilt one.
+		h.SystemPrompt = cli.ResumeSystemPrompt(h, prompt)
 		return msgs, headlessSession{store: store, header: h, curLeaf: curLeaf, persisted: len(msgs), model: model, provider: providerName}, nil
 	}
 
@@ -148,7 +153,11 @@ func openHeadlessSession(resumeID, model, providerName, sysPrompt string) (agent
 		Model:        model,
 		Provider:     providerName,
 		SystemPrompt: sysPrompt,
-		Cwd:          headlessCwd(),
+		// Record the user-authored inputs separately so a later resume can rebuild
+		// the rest of the prompt from the binary of the day.
+		BaseInstruction:    prompt.Base,
+		AppendInstructions: prompt.Appends,
+		Cwd:                headlessCwd(),
 	}
 	return nil, headlessSession{store: store, header: header, curLeaf: "", persisted: 0, model: model, provider: providerName}, nil
 }

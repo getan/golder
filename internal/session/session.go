@@ -71,6 +71,17 @@ type SessionHeader struct {
 	// SystemPrompt is the system prompt the session ran under. Persisted so the
 	// resumed context is faithful. Optional.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
+	// BaseInstruction and AppendInstructions are the USER-AUTHORED halves of
+	// SystemPrompt: --system-prompt's replacement text (empty when the default
+	// guide was used) and the --append-system-prompt blocks. They are recorded
+	// separately because a resumed session rebuilds its prompt: our own text
+	// (guide, environment block, AGENTS.md, skills) describes the CURRENT binary
+	// and working tree and is recomputed, while these two are the user's words
+	// and are carried over verbatim. Optional and additive: sessions written
+	// before these fields existed omit them and are rebuilt from the current
+	// defaults.
+	BaseInstruction    string   `json:"baseInstruction,omitempty"`
+	AppendInstructions []string `json:"appendInstructions,omitempty"`
 	// ParentSession is the id of the session this one was forked/cloned from
 	// (US-006, #122). Empty for a session created from scratch. It records
 	// lineage only; a fork is otherwise a fully independent session file.
@@ -731,13 +742,15 @@ func (s *Store) Fork(sourceID, leafID string, now time.Time) (SessionHeader, []E
 	}
 	path := PathToLeaf(entries, leafID)
 	newHeader := SessionHeader{
-		ID:            NewID(now),
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Model:         srcHeader.Model,
-		Provider:      srcHeader.Provider,
-		SystemPrompt:  srcHeader.SystemPrompt,
-		ParentSession: sourceID,
+		ID:                 NewID(now),
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		Model:              srcHeader.Model,
+		Provider:           srcHeader.Provider,
+		SystemPrompt:       srcHeader.SystemPrompt,
+		BaseInstruction:    srcHeader.BaseInstruction,
+		AppendInstructions: srcHeader.AppendInstructions,
+		ParentSession:      sourceID,
 	}
 	if err := s.SaveEntries(newHeader, path); err != nil {
 		return SessionHeader{}, nil, err

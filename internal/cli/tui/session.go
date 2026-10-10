@@ -79,6 +79,11 @@ type runSession struct {
 	// cwd is the directory golder was launched in, captured once at session
 	// assembly. It is the trust key and the /status environment display.
 	cwd string
+	// prompt is the launch context the system prompt was built from. A resumed
+	// session (including an in-TUI /resume) rebuilds its prompt through it, so
+	// our guide and environment come from this binary while the session's own
+	// user-authored inputs are preserved. See cli.ResumeSystemPrompt.
+	prompt runtime.PromptInputs
 	// trust persists project-trust decisions (US-018, #134). It is nil when
 	// trust is disabled (store could not be loaded / no cwd); when nil /status
 	// reports "disabled" and the trust-gated hook layer is skipped.
@@ -300,10 +305,9 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 			curLeaf = entries[len(entries)-1].ID
 		}
 		header = h
-		sysPrompt := h.SystemPrompt
-		if sysPrompt == "" {
-			sysPrompt = opts.SysPrompt
-		}
+		// The guide and environment are rebuilt from this binary; the session's
+		// own --system-prompt/--append-system-prompt inputs are carried over.
+		sysPrompt := cli.ResumeSystemPrompt(h, opts.Prompt)
 		agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: opts.Tools}
 		history = msgs
 	} else {
@@ -319,7 +323,11 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 			Model:        opts.Model,
 			Provider:     opts.ProviderName,
 			SystemPrompt: opts.SysPrompt,
-			Cwd:          cwd,
+			// Record the user-authored inputs separately so a later resume can
+			// rebuild the rest of the prompt from the binary of the day.
+			BaseInstruction:    opts.Prompt.Base,
+			AppendInstructions: opts.Prompt.Appends,
+			Cwd:                cwd,
 		}
 	}
 
@@ -359,6 +367,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		goal:       agenttool.NewGoalState(),
 		creds:      creds,
 		cwd:        cwd,
+		prompt:     opts.Prompt,
 		trust:      mgr,
 		slash:      newSlashRegistry(opts, live),
 		telemetry:  cli.NewTelemetryHolder(),
@@ -1148,10 +1157,10 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry, fol
 	for i, e := range entries {
 		msgs[i] = e.Message
 	}
-	sysPrompt := h.SystemPrompt
-	if sysPrompt == "" {
-		sysPrompt = s.agentCtx.SystemPrompt
-	}
+	// Rebuilt from this binary, with the incoming session's user-authored inputs
+	// preserved (see cli.ResumeSystemPrompt) — a session resumed mid-flight gets
+	// the same treatment as one resumed at launch.
+	sysPrompt := cli.ResumeSystemPrompt(h, s.prompt)
 	if followHeader && h.Provider != "" && h.Provider != s.live.ProviderName {
 		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
 		if err != nil {

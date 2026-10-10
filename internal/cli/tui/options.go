@@ -33,6 +33,13 @@ type Options struct {
 	Tools         []agentcore.AgentTool
 	SysPrompt     string
 
+	// Prompt is the launch context SysPrompt was built from (user-authored base
+	// and appends, working directory, skills, tools). A resumed session rebuilds
+	// its prompt through it — see cli.ResumeSystemPrompt — so the guide and
+	// environment come from THIS binary while the session's own user inputs are
+	// preserved.
+	Prompt runtime.PromptInputs
+
 	// ResumeID, when non-empty, resumes an existing session: its messages seed
 	// the context and replayed transcript. Otherwise a fresh session is created.
 	ResumeID string

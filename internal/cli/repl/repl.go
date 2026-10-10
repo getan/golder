@@ -94,6 +94,11 @@ type replDeps struct {
 	// the directory side-effect tools are gated against. It does not change
 	// during a session (golder does not cd).
 	cwd string
+	// prompt is the launch context the system prompt was built from. A resumed
+	// session (including an in-REPL /resume) rebuilds its prompt through it, so
+	// our guide and environment come from this binary while the session's own
+	// user-authored inputs are preserved. See cli.ResumeSystemPrompt.
+	prompt runtime.PromptInputs
 	// in is the shared buffered input reader. The main loop and the tool-call
 	// confirmation prompt both read from it so input typed ahead is never split
 	// between them. It is created by Run (wrapping os.Stdin) or, for

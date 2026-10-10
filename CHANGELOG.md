@@ -265,6 +265,33 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **A resumed session rebuilds its system prompt, keeping only the user's own
+  words**: the prompt was stored whole and reused verbatim on resume, which
+  froze two very different things together — our description of the running
+  binary (tool guide, environment block, AGENTS.md, installed skills) and the
+  user's own inputs (`--system-prompt`, `--append-system-prompt`). The first
+  half goes stale and the second must not. Measured on this machine's store:
+  the guide text grew from 1020 to 4959 bytes across twelve days and 11
+  distinct versions, so a session frozen a few days earlier advises the model
+  about a tool surface that has since moved (a session from 2026-10-10 still
+  tells the model to reach for a shell for scoped searches, unaware of the
+  `path`/`exclude`/`limit` arguments that shipped afterwards), carries the
+  date it was created (the stored environment block says `Date: 2026-09-28`),
+  and keeps the working directory it was created in even when resumed
+  elsewhere. AGENTS.md edits were ignored for the same reason. Now our half is
+  recomputed from the launching binary and working tree, while the user's half
+  is carried over from the header — the new `baseInstruction` /
+  `appendInstructions` fields record the raw inputs (not a second copy of the
+  assembled text), this launch's flags win where given, the session's appends
+  layer before the launch's, and a fork inherits both. Sessions written before
+  those fields existed have none recorded, so their stored prompt is replaced
+  outright by a freshly built one — which is the point, though it does mean a
+  custom base in such a session (none exist in this store: all 82 are the
+  default guide, 48 of them still opening "You are pigo") is not recoverable,
+  since the input was never kept. The header still records what the session was
+  created with, so `/export --include-system-prompt` and the session file remain
+  a faithful record of the original run. `runtime.PromptInputs.Build` is now the
+  single assembly path for fresh and resumed sessions, so the two cannot drift.
 - **File viewing belongs to `read`, and the prompt says so**: the code-search
   guide now forbids viewing a file through `cat`, `sed -n`, `head` or `tail`
   and points at `read` with `offset/limit` instead (bounded, line-numbered, and

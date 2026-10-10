@@ -12,6 +12,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -29,7 +30,7 @@ func textAssistant(s string) agentcore.AssistantMessage {
 func TestOpenHeadlessSessionFresh(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 
-	prior, hs, err := openHeadlessSession("", "faux-model", "faux", "sys prompt")
+	prior, hs, err := openHeadlessSession("", "faux-model", "faux", "sys prompt", runtime.PromptInputs{})
 	if err != nil {
 		t.Fatalf("openHeadlessSession fresh: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestOpenHeadlessSessionResume(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 
 	// First run: create and persist a session.
-	_, hs1, err := openHeadlessSession("", "faux-model", "faux", "sys")
+	_, hs1, err := openHeadlessSession("", "faux-model", "faux", "sys", runtime.PromptInputs{})
 	if err != nil {
 		t.Fatalf("first openHeadlessSession: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestOpenHeadlessSessionResume(t *testing.T) {
 	sessID := hs1.header.ID
 
 	// Second run: resume the session id.
-	prior, hs2, err := openHeadlessSession(sessID, "faux-model", "faux", "sys")
+	prior, hs2, err := openHeadlessSession(sessID, "faux-model", "faux", "sys", runtime.PromptInputs{})
 	if err != nil {
 		t.Fatalf("resume openHeadlessSession: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestOpenHeadlessSessionResume(t *testing.T) {
 // the run produced nothing new past what was already persisted.
 func TestHeadlessPersistNoop(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
-	_, hs, err := openHeadlessSession("", "m", "p", "s")
+	_, hs, err := openHeadlessSession("", "m", "p", "s", runtime.PromptInputs{})
 	if err != nil {
 		t.Fatalf("openHeadlessSession: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestHeadlessPersistNoop(t *testing.T) {
 // the tail slice stays in bounds rather than panicking.
 func TestHeadlessPersistCompactionShrink(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
-	_, hs, err := openHeadlessSession("", "m", "p", "s")
+	_, hs, err := openHeadlessSession("", "m", "p", "s", runtime.PromptInputs{})
 	if err != nil {
 		t.Fatalf("openHeadlessSession: %v", err)
 	}
@@ -214,5 +215,67 @@ func TestContinueTargetPrefersCurrentProject(t *testing.T) {
 	}
 	if h, ok, err := cli.MostRecentSession(empty, cli.AllSessionsScope()); err != nil || ok {
 		t.Errorf("empty store = (%v, %v, %v), want (zero, false, nil)", h, ok, err)
+	}
+}
+
+// TestOpenHeadlessSessionRebuildsPrompt pins the resume path end to end: a
+// session whose stored prompt carries an obsolete guide runs under the CURRENT
+// binary's prompt, so a headless --resume is not advised by stale text.
+func TestOpenHeadlessSessionRebuildsPrompt(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store, err := SessionStore()
+	if err != nil {
+		t.Fatalf("SessionStore: %v", err)
+	}
+	now := time.Now().UTC()
+	stale := "You are golder, a helpful coding agent.\n\n[obsolete guide]\n\nEnvironment:\n- Date: 2026-09-28"
+	h := session.SessionHeader{ID: session.NewID(now), CreatedAt: now, UpdatedAt: now, SystemPrompt: stale}
+	if err := store.Save(h, agentcore.MessageList{textUser("hi")}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	_, hs, err := openHeadlessSession(h.ID, "m", "p", "fresh prompt", runtime.PromptInputs{})
+	if err != nil {
+		t.Fatalf("openHeadlessSession: %v", err)
+	}
+	if hs.header.SystemPrompt == stale {
+		t.Fatal("a resumed run must not run under the stored prompt verbatim")
+	}
+	if !strings.HasPrefix(hs.header.SystemPrompt, runtime.DefaultBaseInstruction) {
+		t.Errorf("resumed prompt should open with the current guide, got:\n%.200s", hs.header.SystemPrompt)
+	}
+	if strings.Contains(hs.header.SystemPrompt, "obsolete guide") {
+		t.Errorf("resumed prompt must not carry the stored guide:\n%s", hs.header.SystemPrompt)
+	}
+}
+
+// TestOpenHeadlessSessionKeepsRecordedInputs: a session created with
+// --system-prompt / --append-system-prompt keeps those words across a resume,
+// while the rest of the prompt is still rebuilt.
+func TestOpenHeadlessSessionKeepsRecordedInputs(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store, err := SessionStore()
+	if err != nil {
+		t.Fatalf("SessionStore: %v", err)
+	}
+	now := time.Now().UTC()
+	h := session.SessionHeader{
+		ID: session.NewID(now), CreatedAt: now, UpdatedAt: now,
+		SystemPrompt:    "custom base\n\nEnvironment:\n- Date: 2026-09-28",
+		BaseInstruction: "custom base", AppendInstructions: []string{"keep me"},
+	}
+	if err := store.Save(h, nil); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	_, hs, err := openHeadlessSession(h.ID, "m", "p", "fresh prompt", runtime.PromptInputs{})
+	if err != nil {
+		t.Fatalf("openHeadlessSession: %v", err)
+	}
+	if !strings.HasPrefix(hs.header.SystemPrompt, "custom base") {
+		t.Errorf("the recorded base must survive a resume, got:\n%.200s", hs.header.SystemPrompt)
+	}
+	if !strings.Contains(hs.header.SystemPrompt, "keep me") {
+		t.Errorf("the recorded appendix must survive a resume:\n%s", hs.header.SystemPrompt)
 	}
 }

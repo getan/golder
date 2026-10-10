@@ -21,11 +21,58 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // agentsFileName is the per-directory instruction file injected into the system
 // prompt, general-to-specific from the root down to the working directory.
 const agentsFileName = "AGENTS.md"
+
+// PromptInputs is the launch-side context a system prompt is built from, kept
+// together so a fresh session and a RESUMED one assemble their prompt the same
+// way. It carries the user-authored inputs (Base replaces the default guide,
+// Appends layer after everything) plus the environment the run is in.
+type PromptInputs struct {
+	// Base replaces the default coding-assistant guide when non-empty.
+	Base string
+	// Appends are layered after the guide, environment block, AGENTS.md and
+	// skills, in order.
+	Appends []string
+	// WorkingDir anchors both the environment block and the AGENTS.md walk.
+	WorkingDir string
+	// Skills are advertised in an <available_skills> block at the end.
+	Skills []*Skill
+	// Tools decides whether skills are advertised at all (see HasReadTool).
+	Tools []agentcore.AgentTool
+}
+
+// Build assembles the system prompt for these inputs. It is the ONE assembly
+// path: SetupEnv builds a fresh session's prompt through it, and a resumed
+// session builds a fresh one with the session's own Base/Appends substituted
+// (see cli.ResumeSystemPrompt), so the two can never drift apart.
+func (in PromptInputs) Build() (string, error) {
+	return BuildSystemPrompt(PromptConfig{
+		BaseInstruction:    in.Base,
+		WorkingDir:         in.WorkingDir,
+		Root:               in.WorkingDir,
+		AppendInstructions: in.Appends,
+		Skills:             in.Skills,
+		ReadToolAvailable:  HasReadTool(in.Tools),
+	})
+}
+
+// HasReadTool reports whether the read tool is in the set. Skills are
+// advertised in the prompt only then, since the model loads a skill's body with
+// that tool.
+func HasReadTool(tools []agentcore.AgentTool) bool {
+	for _, t := range tools {
+		if t.Name() == "read" {
+			return true
+		}
+	}
+	return false
+}
 
 // PromptConfig configures system-prompt assembly. The zero value is usable: it
 // produces the base instruction plus an environment block for the process

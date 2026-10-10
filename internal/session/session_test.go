@@ -391,7 +391,12 @@ func TestAppendPreservesChain(t *testing.T) {
 func TestForkClonesFullConversation(t *testing.T) {
 	s := newStore(t)
 	now := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
-	src := SessionHeader{ID: NewID(now), CreatedAt: now, UpdatedAt: now, Model: "m", Provider: "p", SystemPrompt: "sp"}
+	src := SessionHeader{
+		ID: NewID(now), CreatedAt: now, UpdatedAt: now, Model: "m", Provider: "p", SystemPrompt: "sp",
+		// The user-authored prompt inputs ride along with the rest of the header
+		// metadata: a fork resumes the same way its source does.
+		BaseInstruction: "custom base", AppendInstructions: []string{"appendix"},
+	}
 	if err := s.Save(src, sampleMessages()); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -414,6 +419,9 @@ func TestForkClonesFullConversation(t *testing.T) {
 	// Header metadata is inherited from the source.
 	if forkHeader.Model != "m" || forkHeader.Provider != "p" || forkHeader.SystemPrompt != "sp" {
 		t.Errorf("fork header did not inherit source metadata: %+v", forkHeader)
+	}
+	if forkHeader.BaseInstruction != "custom base" || len(forkHeader.AppendInstructions) != 1 {
+		t.Errorf("fork header did not inherit the user prompt inputs: %+v", forkHeader)
 	}
 	if len(forkEntries) != len(srcEntries) {
 		t.Fatalf("fork entry count = %d, want %d (full clone)", len(forkEntries), len(srcEntries))

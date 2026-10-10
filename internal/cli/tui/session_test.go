@@ -9,6 +9,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -468,5 +469,43 @@ func TestSwitchToFollowsProvider(t *testing.T) {
 	}
 	if s.live.ThinkingLevel != "xhigh" {
 		t.Errorf("thinking level should be kept, got %q", s.live.ThinkingLevel)
+	}
+}
+
+// TestAdoptRebuildsPrompt pins the in-TUI /resume path (switchTo → adopt): the
+// session being switched to runs under the CURRENT binary's guide with its own
+// recorded user inputs, not under the prompt frozen in its file.
+func TestAdoptRebuildsPrompt(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	stale := "You are golder, a helpful coding agent.\n\n[obsolete guide]\n\nEnvironment:\n- Date: 2026-09-28"
+	if err := store.Save(session.SessionHeader{
+		ID: "stale-session", CreatedAt: now, UpdatedAt: now, SystemPrompt: stale,
+		BaseInstruction: "custom base", AppendInstructions: []string{"keep me"},
+	}, agentcore.MessageList{userMsg("hi")}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s := &runSession{
+		store:    store,
+		header:   session.SessionHeader{ID: "current", Model: "m", Provider: "prov"},
+		agentCtx: &agentcore.AgentContext{SystemPrompt: "current prompt"},
+		live:     &cli.LiveConfig{Model: "m", ProviderName: "prov"},
+		// The launch's prompt inputs, as cmd/golder wires them.
+		prompt: runtime.PromptInputs{WorkingDir: t.TempDir()},
+	}
+	if _, err := s.switchTo("stale-session"); err != nil {
+		t.Fatalf("switchTo: %v", err)
+	}
+
+	got := s.agentCtx.SystemPrompt
+	if strings.Contains(got, "obsolete guide") {
+		t.Errorf("adopted session must not keep the stored guide:\n%.200s", got)
+	}
+	if !strings.HasPrefix(got, "custom base") {
+		t.Errorf("adopted session must keep its recorded base, got:\n%.200s", got)
+	}
+	if !strings.Contains(got, "keep me") {
+		t.Errorf("adopted session must keep its recorded appendix:\n%s", got)
 	}
 }

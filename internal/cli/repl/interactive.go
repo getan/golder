@@ -58,6 +58,13 @@ type Options struct {
 	Tools         []agentcore.AgentTool
 	SysPrompt     string
 
+	// Prompt is the launch context SysPrompt was built from (user-authored base
+	// and appends, working directory, skills, tools). A resumed session rebuilds
+	// its prompt through it — see cli.ResumeSystemPrompt — so the guide and
+	// environment come from THIS binary while the session's own user inputs are
+	// preserved.
+	Prompt runtime.PromptInputs
+
 	// ResumeID, when non-empty, resumes an existing session: its messages seed
 	// the context and replayed transcript. Otherwise a fresh session is created.
 	ResumeID string
@@ -152,11 +159,10 @@ func Run(opts Options) error {
 			curLeaf = entries[len(entries)-1].ID
 		}
 		header = h
-		agentCtx = &agentcore.AgentContext{SystemPrompt: h.SystemPrompt, Messages: msgs, Tools: opts.Tools}
+		// The guide and environment are rebuilt from this binary; the session's
+		// own --system-prompt/--append-system-prompt inputs are carried over.
+		agentCtx = &agentcore.AgentContext{SystemPrompt: cli.ResumeSystemPrompt(h, opts.Prompt), Messages: msgs, Tools: opts.Tools}
 		history = msgs
-		if agentCtx.SystemPrompt == "" {
-			agentCtx.SystemPrompt = opts.SysPrompt
-		}
 	} else {
 		agentCtx = &agentcore.AgentContext{SystemPrompt: opts.SysPrompt, Tools: opts.Tools}
 		header = session.SessionHeader{
@@ -166,7 +172,11 @@ func Run(opts Options) error {
 			Model:        opts.Model,
 			Provider:     opts.ProviderName,
 			SystemPrompt: opts.SysPrompt,
-			Cwd:          cwd,
+			// Record the user-authored inputs separately so a later resume can
+			// rebuild the rest of the prompt from the binary of the day.
+			BaseInstruction:    opts.Prompt.Base,
+			AppendInstructions: opts.Prompt.Appends,
+			Cwd:                cwd,
 		}
 	}
 
@@ -268,6 +278,7 @@ func Run(opts Options) error {
 		version:    opts.Version,
 		trust:      mgr,
 		cwd:        cwd,
+		prompt:     opts.Prompt,
 		in:         reader,
 		confirmMu:  &sync.Mutex{},
 		curLeaf:    curLeaf,
