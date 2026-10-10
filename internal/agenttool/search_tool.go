@@ -554,8 +554,11 @@ func (t *GrepTool) Description() string {
 		"exclude (drop, e.g. *_test.go); takes context lines around each match, " +
 		"ignore_case, word, literal, invert, files_only, hidden, no_ignore, and " +
 		"limit (max results, default 1000). Skips .gitignore'd, hidden and " +
-		"binary files by default. Several independent searches run faster " +
-		"batched in one message (one call per pattern)."
+		"binary files by default. Use this rather than searching through bash: " +
+		"independent searches issued together in one message run in parallel " +
+		"(one call per pattern), results are line-numbered and bounded, and the " +
+		"workspace boundary applies. Reach for a shell search only for what this " +
+		"cannot express — multiline patterns, or aggregating matches."
 }
 func (t *GrepTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -847,8 +850,9 @@ func (t *FindTool) Description() string {
 		"Returns workspace-relative paths. Narrows with path (a directory or " +
 		"list of them), type (e.g. go), exclude (drop, e.g. *_test.go) and " +
 		"limit (max results, default 1000); hidden and no_ignore widen the walk, " +
-		"which otherwise skips .gitignore'd and hidden files. Batch independent " +
-		"lookups in the same message — they run in parallel."
+		"which otherwise skips .gitignore'd and hidden files. Use this rather " +
+		"than `find` in a shell, and batch independent lookups in the same " +
+		"message — they run in parallel."
 }
 func (t *FindTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel

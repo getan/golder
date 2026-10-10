@@ -941,3 +941,34 @@ func TestSearchListArgsPassRegistryValidation(t *testing.T) {
 		t.Error("a non-string path must be refused by the schema")
 	}
 }
+
+// TestSearchToolDescriptionsPointAwayFromShell locks the guidance the model
+// reads when it decides how to search. The failure this guards against was
+// measured, not hypothetical: a run of searches issued through bash renders as
+// separate non-coalescing cards (bash is excluded from the exploration cell) and
+// loses the parallel batch, so the transcript gets noisier while the search gets
+// slower. The description has to name the alternative and the two shapes that
+// remain the shell's, so "use bash" does not read as equivalent advice.
+func TestSearchToolDescriptionsPointAwayFromShell(t *testing.T) {
+	grep := (&GrepTool{}).Description()
+	for _, want := range []string{
+		"Use this rather than searching through bash",
+		"run in parallel",
+		"line-numbered and bounded",
+		"multiline patterns, or aggregating matches",
+	} {
+		if !strings.Contains(grep, want) {
+			t.Errorf("grep description missing %q:\n%s", want, grep)
+		}
+	}
+
+	find := (&FindTool{}).Description()
+	for _, want := range []string{
+		"Use this rather than `find` in a shell",
+		"they run in parallel",
+	} {
+		if !strings.Contains(find, want) {
+			t.Errorf("find description missing %q:\n%s", want, find)
+		}
+	}
+}

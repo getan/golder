@@ -1087,10 +1087,43 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	case roleUser:
 		return renderUserBlock(t.theme, blk.text, t.width)
 	case roleSystem:
-		return t.theme.System.Render(WrapToWidth(blk.text, t.width))
+		// A system notice carries no marker of its own, so it takes the same
+		// content column everything else uses: a user turn leads with "› " and a
+		// tool card with "• ", both continuing at two columns. Flush against the
+		// margin it was the one row that broke that column — most visibly for an
+		// interrupt, which lands directly under the card it stopped.
+		return t.theme.System.Render(indentBlock(WrapToWidth(blk.text, contentWidth(t.width)), contentIndent))
 	default:
 		return renderMarkdown(blk.text, t.width)
 	}
+}
+
+// contentIndent is the column the transcript's content starts at: one marker
+// cell plus its space ("› ", "• ", "  │ ", "  └ "). Blocks that carry no marker
+// indent by this much so their text lines up with the marked ones.
+const contentIndent = "  "
+
+// contentWidth is the wrap width for an indented block: the pane minus the
+// indent, so an indented line can never overflow into the pane's edge.
+func contentWidth(width int) int {
+	if width <= len(contentIndent) {
+		return width
+	}
+	return width - len(contentIndent)
+}
+
+// indentBlock prefixes every non-empty line with indent, so a multi-line block
+// (a notice, a wrapped verdict) sits in the content column as a whole. Blank
+// lines stay blank rather than becoming trailing whitespace.
+func indentBlock(text, indent string) string {
+	lines := splitLines(text)
+	for i, ln := range lines {
+		if ln == "" {
+			continue
+		}
+		lines[i] = indent + ln
+	}
+	return joinLines(lines)
 }
 
 // renderReviewBlock paints one standalone verdict block (a note whose tool
@@ -1111,7 +1144,10 @@ func renderNoteLine(theme Theme, width int, n judge.Note) string {
 	if n.Kind == judge.NoteDenied || n.Kind == judge.NoteBlockedNoPrompt || n.Kind == judge.NoteReadOnly {
 		style = theme.Error
 	}
-	return style.Render(WrapToWidth(judge.FormatNote(n), width))
+	// A verdict belongs to the call it graded, so it sits in the same content
+	// column as that call's headline, body and gutter — a note flush against the
+	// margin read as unrelated to the card it was about.
+	return style.Render(indentBlock(WrapToWidth(judge.FormatNote(n), contentWidth(width)), contentIndent))
 }
 
 // renderUserBlock renders a user turn as a full-width bar like codex's history

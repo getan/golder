@@ -405,8 +405,11 @@ func contextSuffix(providerName, model string) string {
 
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
 	registerProxyCommand(reg)
-	// thinkAction views or switches the reasoning-effort level. It backs /think
-	// and the /model think <level> form, so both share identical behavior.
+	// thinkAction views or switches the reasoning-effort level, backing the
+	// /model think [level] form. It used to also back a standalone /think; that
+	// command was retired because the level belongs to the model and /model
+	// already carries both (see runtime.retiredCommands for the redirect a
+	// lingering /think gets).
 	thinkAction := func(args string) string {
 		lvl := strings.TrimSpace(args)
 		if lvl == "" {
@@ -414,7 +417,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			if cur == "" {
 				cur = agentcore.ThinkingOff
 			}
-			msg := fmt.Sprintf("think: %s\nswitch with /think <off|minimal|low|medium|high|xhigh|max>", cur)
+			msg := fmt.Sprintf("think: %s\nswitch with /model think <off|minimal|low|medium|high|xhigh|max>", cur)
 			if lv := provider.KnownReasoningLevels(live.ProviderName, live.Model); len(lv) > 0 {
 				msg += fmt.Sprintf("\n%s lists: %s", live.Model, joinThinkingLevels(lv))
 			}
@@ -663,13 +666,6 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			}
 			return msg + reasoningHint(live.Model)
 		},
-	})
-	reg.AddBuiltin(runtime.SlashCommand{
-		Name:         "think",
-		Category:     runtime.CategoryModel,
-		ArgumentHint: "[off|minimal|low|medium|high|xhigh|max]",
-		Description:  "view or switch the reasoning-effort level; takes effect on the next turn",
-		Action:       thinkAction,
 	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "provider",

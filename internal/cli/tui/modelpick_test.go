@@ -1,8 +1,8 @@
 package tui
 
 // Tests for the model picker rows' Detail line: the catalog's context window
-// and reasoning levels ride the row so the numbers behind the status bar and
-// the /think flow are visible while choosing.
+// and reasoning levels ride the row so the numbers behind the status bar are
+// visible while choosing.
 
 import (
 	"encoding/json"

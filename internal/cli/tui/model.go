@@ -209,6 +209,11 @@ type Model struct {
 	// lastToolCard points at the most recently started card; Ctrl+T toggles its
 	// expanded state and re-flows the transcript.
 	lastToolCard *toolCard
+	// bashSessions maps a shell session id to the command that started it, so a
+	// later write_stdin card can say what it is waiting for instead of showing
+	// the session's internal id (see toolCard.writeStdinLead). Filled as bash
+	// calls report their bash_id, and pre-filled from history on resume.
+	bashSessions map[string]string
 	// pendingCardClick remembers a left press that landed on a tool card. If
 	// the button is released on the same cell without dragging, the click
 	// toggles that card's expanded state — the mouse affordance that lets any
@@ -331,19 +336,20 @@ func NewModel(opts Options) Model {
 		ContextWindow: cli.ResolveContextWindow(opts.ProviderName, opts.Model),
 	}
 	return Model{
-		opts:       opts,
-		theme:      theme,
-		transcript: newTranscript(theme),
-		input:      newInput(),
-		cwd:        cwd,
-		statusBar:  newStatusBar(theme, opts, cwd),
-		toolCards:  make(map[string]*toolCard),
-		slash:      newSlashRegistry(opts, live),
-		live:       live,
-		menu:       newSlashMenu(theme),
-		spinner:    newSpinner(theme),
-		pastes:     make(map[int]string),
-		images:     make(map[int]string),
+		opts:         opts,
+		theme:        theme,
+		transcript:   newTranscript(theme),
+		input:        newInput(),
+		cwd:          cwd,
+		statusBar:    newStatusBar(theme, opts, cwd),
+		toolCards:    make(map[string]*toolCard),
+		slash:        newSlashRegistry(opts, live),
+		live:         live,
+		menu:         newSlashMenu(theme),
+		spinner:      newSpinner(theme),
+		pastes:       make(map[int]string),
+		images:       make(map[int]string),
+		bashSessions: make(map[string]string),
 		// A model built without a session (tests, pure construction) still gets
 		// a live queue so mid-run input can be typed and previewed; withSession
 		// rebinds this to the session's queue, which the loop seams drain.
@@ -1153,6 +1159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state:    cardRunning,
 			expanded: defaultCardExpanded(msg.name),
 		}
+		labelBashSession(card, m.bashSessions)
 		m.toolCards[msg.id] = card
 		m.lastToolCard = card
 		m.transcript.announceToolCard(card)
@@ -1164,6 +1171,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// a call never announced takes the full legacy create path (#389).
 		if card, ok := m.toolCards[msg.id]; ok {
 			card.setInput(msg.input)
+			labelBashSession(card, m.bashSessions)
 			m.lastToolCard = card
 			m.transcript.reflow()
 			m.remoteEcho("\n· " + msg.name + "\n")
@@ -1182,6 +1190,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			state:    cardRunning,
 			expanded: defaultCardExpanded(msg.name),
 		}
+		labelBashSession(card, m.bashSessions)
 		m.toolCards[msg.id] = card
 		m.lastToolCard = card
 		m.transcript.addToolCard(card)
@@ -1221,6 +1230,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// held by pointer in the transcript, so a reflow re-renders it in place.
 		if card, ok := m.toolCards[msg.id]; ok {
 			card.complete(msg.ok, msg.result, msg.details)
+			// A bash call that handed back a session id names that session for
+			// every later write_stdin card (see toolCard.writeStdinLead).
+			if id, command, ok := bashSessionEntry(card, msg.details); ok {
+				if m.bashSessions == nil {
+					m.bashSessions = make(map[string]string)
+				}
+				m.bashSessions[id] = command
+			}
 			m.transcript.reflow()
 		}
 		// Retire the sub-agent's status-panel row (a no-op for non-task tools whose id
@@ -2102,7 +2119,7 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if outcome.Message != "" {
 		m.transcript.addSystem(outcome.Message)
 	}
-	// A live-state command (/model, /think) may have mutated m.live; sync the
+	// A live-state command (/model, and its `think` form) may have mutated m.live; sync the
 	// status bar so the model/thinking segments reflect the switch immediately.
 	if m.live != nil {
 		m.statusBar.SetModel(m.live.Model)
@@ -2773,6 +2790,45 @@ func (m Model) historyNext(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.relayout()
 	return m, nil
+}
+
+// bashSessionEntry reports the shell session a completed bash call started (the
+// bash_id its result reported) and the command it ran. ok=false for any other
+// call, or one that finished without handing back a session. It is the single
+// reading of that pairing, so the live path and the resume replay cannot
+// disagree about which command a session is running.
+func bashSessionEntry(card *toolCard, details any) (id, command string, ok bool) {
+	if card == nil || !strings.EqualFold(strings.TrimSpace(card.name), "bash") {
+		return "", "", false
+	}
+	d, isMap := details.(map[string]any)
+	if !isMap {
+		return "", "", false
+	}
+	id, _ = d["bash_id"].(string)
+	command = argString(card.input["command"])
+	if id == "" || command == "" {
+		return "", "", false
+	}
+	return id, command, true
+}
+
+// labelBashSession attaches the session's command to a card that interacts with
+// it (write_stdin). A card with no bash_id — or one whose session was started
+// before this model saw it — keeps an empty label, and the headline says what
+// the call did without naming the command.
+func labelBashSession(card *toolCard, sessions map[string]string) {
+	if card == nil || card.sessionLabel != "" {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(card.name), "write_stdin") {
+		return
+	}
+	id := argString(card.input["bash_id"])
+	if id == "" {
+		return
+	}
+	card.sessionLabel = sessions[id]
 }
 
 // beginRun arms the shared state for an agent run about to start: the event

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -54,6 +55,13 @@ type toolCard struct {
 	diff     string
 	state    cardState
 	expanded bool
+
+	// sessionLabel is the command of the shell session this call interacts with
+	// (write_stdin). The input's bash_id is the handle the MODEL uses to address
+	// the session — an internal number a reader of the transcript gets nothing
+	// from — so the headline names what is being waited for instead. Empty when
+	// the originating bash call is not in view (see labelBashSession).
+	sessionLabel string
 
 	// notes holds the permission-gate verdicts this call received. A verdict
 	// is published by the gate before the call executes, i.e. after the card
@@ -139,6 +147,9 @@ func (c toolCard) title() string {
 	if prefix, detail, ok := c.webSearchLead(); ok {
 		return prefix + " " + detail
 	}
+	if prefix, detail, ok := c.writeStdinLead(); ok {
+		return strings.TrimSpace(prefix + " " + detail)
+	}
 	if cmd, ok := c.userShellCommand(); ok {
 		if c.state == cardRunning {
 			return "Running " + cmd
@@ -218,7 +229,12 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	// The search sentence is its own headline (no separate "Ran <name>" verb),
 	// so render it before the generic path splits verb / name / argument.
 	if prefix, detail, ok := c.webSearchLead(); ok {
-		return c.renderSearchHeadline(theme, width, prefix, detail)
+		return c.renderSentenceHeadline(theme, width, prefix, detail)
+	}
+	// write_stdin reads the same way: the action on the session's own command is
+	// the headline, not the tool name plus a session id.
+	if prefix, detail, ok := c.writeStdinLead(); ok {
+		return c.renderSentenceHeadline(theme, width, prefix, detail)
 	}
 	verb := "Ran"
 	if c.state == cardRunning {
@@ -256,11 +272,11 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	return b.String()
 }
 
-// renderSearchHeadline renders "Searching the web for <query>" style search
-// sentences: the leading phrase takes the verb style and the detail the
-// command style, with long text wrapping onto the same `  │ ` gutter the
-// generic headline uses.
-func (c toolCard) renderSearchHeadline(theme Theme, width int, prefix, detail string) string {
+// renderSentenceHeadline renders the cards whose headline is a sentence rather
+// than "<name> <arg>" — "Searching the web for <query>", "Waited for <command>":
+// the leading phrase takes the verb style and the detail the command style, with
+// long text wrapping onto the same `  │ ` gutter the generic headline uses.
+func (c toolCard) renderSentenceHeadline(theme Theme, width int, prefix, detail string) string {
 	avail := max(1, width-4)
 	lines := strings.Split(WrapToWidth(prefix+" "+detail, avail), "\n")
 	var b strings.Builder
@@ -570,6 +586,88 @@ func (c toolCard) webSearchLead() (prefix, detail string, ok bool) {
 		return "Searching the web for", detail, true
 	}
 	return "Searched the web for", detail, true
+}
+
+// writeStdinLead renders a write_stdin card as the action it performs on the
+// session's own command — waiting for output, feeding input, interrupting —
+// rather than as the tool name plus a session id (codex reads the same way:
+// `Waited for \`cmd\“, `Interacted with \`cmd\`, sent \`…\“). A run of polls
+// repeating `bash_355` tells the reader nothing; naming the command says what
+// is actually being waited for. When the originating bash call is not in view
+// the sentence degrades to a subject-less one rather than falling back to the
+// id. ok=false only when there is nothing to say, so the generic headline can
+// take over.
+func (c toolCard) writeStdinLead() (prefix, detail string, ok bool) {
+	if !strings.EqualFold(strings.TrimSpace(c.name), "write_stdin") {
+		return "", "", false
+	}
+	running := c.state == cardRunning
+	subject := oneLine(c.sessionLabel)
+	// The raw value, not argString: a trailing newline is the Enter key, which is
+	// exactly the signal the input preview is for (see previewInput).
+	chars, _ := c.input["chars"].(string)
+	switch {
+	case strings.TrimSpace(chars) == "":
+		// A poll: read whatever the session has produced, then wait for more.
+		switch {
+		case subject == "" && running:
+			return "Waiting for the background command", "", true
+		case subject == "":
+			return "Waited for the background command", "", true
+		case running:
+			return "Waiting for", subject, true
+		default:
+			return "Waited for", subject, true
+		}
+	case interruptSent(chars):
+		if running {
+			prefix = "Interrupting"
+		} else {
+			prefix = "Interrupted"
+		}
+		if subject == "" {
+			return prefix + " the background command", "", true
+		}
+		return prefix, subject, true
+	default:
+		// Input: what was written matters as much as which session took it.
+		preview := previewInput(chars)
+		if subject == "" {
+			return "Sent", preview, true
+		}
+		return "Sent", preview + " to " + subject, true
+	}
+}
+
+// previewInput renders typed input for a headline. The quoting is strconv's, so
+// a newline or a control byte stays on one line as an escape rather than
+// breaking the card — and, deliberately, it is NOT collapsed the way prose is:
+// whether Enter was part of the input is the difference between typing and
+// submitting, which is the thing a reader of a terminal interaction wants to
+// know. Long input is capped on a rune boundary.
+func previewInput(chars string) string {
+	const maxInputPreviewRunes = 40
+	r := []rune(chars)
+	if len(r) > maxInputPreviewRunes {
+		return strconv.Quote(string(r[:maxInputPreviewRunes]) + "…")
+	}
+	return strconv.Quote(chars)
+}
+
+// interruptSent reports whether chars asks for an interrupt rather than
+// ordinary input. The model spells it as the raw C0 byte, the literal escaped
+// "\u0003", "^C", or the private-use rune this tool documents; the set mirrors
+// agenttool.isInterruptChars, which is the one that acts on it.
+func interruptSent(chars string) bool {
+	t := strings.TrimSpace(chars)
+	if strings.Contains(t, "\u0003") {
+		return true
+	}
+	switch strings.ToLower(t) {
+	case `\u0003`, `^c`, `\ue002`, "\ue002":
+		return true
+	}
+	return false
 }
 
 // primaryArg returns the most salient call argument to inline in the card header

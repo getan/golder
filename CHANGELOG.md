@@ -255,7 +255,14 @@ interactive REPL/TUI.
   decoder agree. A capped result now says what to do about it ("showing the
   first N …; narrow the search with path/glob/exclude, or raise limit") rather
   than printing a bare `[truncated]`, which is what invited the pipeline the
-  arguments exist to replace.
+  arguments exist to replace. The tool descriptions now name that routing
+  outright — "use this rather than searching through bash", with the two
+  shapes that stay the shell's (multiline patterns, aggregating matches) — and
+  `find` says the same about `find` in a shell. The measured cost of getting
+  this wrong is visible in the transcript: a search issued through bash renders
+  as its own card and is excluded from the `• Explored` cell, so a burst of
+  shell greps both loses the parallel batch and splits the exploration group
+  into single-row cells.
 - **`/resume --all` and a directory column**: every session row now carries the
   directory the session ran in — the REPL list, the TUI picker's second line,
   and `golder -l` / `golder session list` — so two rows with the same preview
@@ -447,6 +454,32 @@ interactive REPL/TUI.
   Ctrl+E to jump" no longer claims the status bar (back to the persistent
   readout only); it floats over the transcript's bottom-right corner for a
   few seconds, and only when output is actually waiting below the fold.
+- **A `write_stdin` card names the command it waits on**: the headline used to
+  be the tool plus the session's internal id (`Ran write_stdin bash_355`),
+  which told a reader nothing — a run of three polls repeating the same number
+  reads as noise. It now says what the call does to the session's command:
+  `Waited for sleep 90; echo done`, `Sent "print(1)\n" to python -i`,
+  `Interrupted python -i` (codex reads the same way, `Waited for \`cmd\``).
+  The bash_id stays in the model-facing result — it is the handle the model
+  addresses the session by — but the transcript names the command instead. The
+  input preview keeps a trailing newline visible as `\n` rather than
+  collapsing it the way prose is collapsed, because whether Enter was part of
+  the input is the difference between typing and submitting. When the
+  originating bash call is not in view the sentence degrades to a subject-less
+  `Waited for the background command` rather than falling back to the id.
+- **Notices sit in the content column**: every transcript row starts its
+  content at two columns — a user turn leads with `› `, a tool card with `• `,
+  and their continuations use `  │ `/`  └ ` — except system notices and gate
+  verdicts, which ran flush against the margin. They now indent to the same
+  column, which matters most for an interrupt: `(interrupting…)` and
+  `Interrupted.` land directly under the card they stopped, and the `⚠` verdict
+  under the command it graded. The indent is taken out of the wrap width, so a
+  long notice still cannot spill past the pane's right edge.
+- **`/think` retired**: it was a second entry point to the same
+  `thinkAction` the `/model think <level>` form already called, so the level had
+  two spellings for one behavior. The command is gone from `/help`, the TUI
+  menu and autocomplete; the surviving spelling is `/model think <level>`
+  (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
 - **Ctrl+C reads the same everywhere**: interrupting used to speak differently

@@ -1057,6 +1057,9 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 	t.beginBatch()
 	defer t.endBatch()
 	results := toolResultsByCallID(history)
+	// Session id → command, filled as the bash cards replay, so the write_stdin
+	// cards below them read as "waited for <command>" rather than a session id.
+	bashSessions := make(map[string]string)
 	for _, m := range history {
 		switch msg := m.(type) {
 		case agentcore.UserMessage:
@@ -1079,7 +1082,7 @@ func seedTranscript(t *transcript, history []agentcore.Message) {
 				if r, ok := results[c.ID]; ok {
 					res = &r
 				}
-				t.addToolCard(replayToolCard(c, res))
+				t.addToolCard(replayToolCard(c, res, bashSessions))
 			}
 		}
 	}
@@ -1101,7 +1104,7 @@ func toolResultsByCallID(history []agentcore.Message) map[string]agentcore.ToolR
 // res is the call's recorded result, or nil when the call never ran (the run
 // was interrupted before it); that case mirrors the live closeout and lands on
 // cardWarn so the transcript does not promise output that never arrived.
-func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessage) *toolCard {
+func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessage, bashSessions map[string]string) *toolCard {
 	var input map[string]any
 	if len(c.Arguments) > 0 {
 		_ = json.Unmarshal(c.Arguments, &input)
@@ -1113,11 +1116,18 @@ func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessag
 		state:    cardSuccess,
 		expanded: defaultCardExpanded(c.Name),
 	}
+	// A replayed write_stdin names the command its session is running, the same
+	// way the live card does. The map holds the sessions started by the calls
+	// replayed above this one, which is where a session always comes from.
+	labelBashSession(card, bashSessions)
 	if res == nil {
 		card.state = cardWarn
 		return card
 	}
 	card.complete(!res.IsError, agentcore.ContentToText(res.Content), res.Details)
+	if id, command, ok := bashSessionEntry(card, res.Details); ok {
+		bashSessions[id] = command
+	}
 	return card
 }
 

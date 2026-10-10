@@ -165,7 +165,7 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 
 ### 模型与推理档位
 
-交互式里 `/model` 列出当前网关的模型并标注每个模型支持的推理档位；TUI 中选中模型后会接着让你选档位（Esc 取消整次切换），也可用 `/model <序号|id> <档位>` 一步切换；`/think <档位>` 只调当前档位。
+交互式里 `/model` 列出当前网关的模型并标注每个模型支持的推理档位；TUI 中选中模型后会接着让你选档位（Esc 取消整次切换），也可用 `/model <序号|id> <档位>` 一步切换。只调当前档位用 `/model think <档位>`（不带参数则显示当前档位），因为档位属于模型，入口统一在 `/model` 下。
 
 `/provider` 列出全部内置网关：每个网关需要哪些环境变量、当前有没有配好（已配好的排在最前），`/provider <名称>` 直接切换网关（自动用该网关的默认模型）。TUI 里 `/provider` 是方向键选择器。
 
@@ -200,7 +200,7 @@ TUI 输入 `/` 会按下面的分类弹出菜单（↑↓ 选择）；`/help` �
 |------|------|
 | General | `/help` `/status` `/exit` |
 | Session | `/resume` `/compact` `/fork` `/clone` `/tree` `/rewind` `/export` `/import` |
-| Model | `/model` `/provider` `/proxy` `/think` |
+| Model | `/model` `/provider` `/proxy` |
 | Memory | `/memory` `/dream` |
 | Permissions | `/permissions` `/trust` |
 | Modes | `/goal` `/btw` `/remote-control` |

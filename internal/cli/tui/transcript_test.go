@@ -10,6 +10,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/judge"
 )
 
 // ansiRE strips SGR escape sequences so tests can inspect the raw text the
@@ -740,5 +741,75 @@ func TestAppendDeltaTextDefersReflow(t *testing.T) {
 	tr.reflow()
 	if !strings.Contains(strings.Join(tr.contentLines(), "\n"), "hello") {
 		t.Fatal("reflow must render deferred deltas")
+	}
+}
+
+// TestTranscriptNoticesAlignWithContentColumn pins the transcript's column: a
+// marker line ("• ", "› ") starts at the margin and everything belonging to it
+// continues at two columns. System notices and gate verdicts carry no marker of
+// their own, so they take that same two-column indent — flush against the
+// margin they were the only rows that broke the column, most visibly for an
+// interrupt landing directly under the card it stopped.
+func TestTranscriptNoticesAlignWithContentColumn(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 20)
+	tr.addToolCard(&toolCard{
+		id: "call_1", name: "bash", input: map[string]any{"command": "make test"},
+		state: cardSuccess, response: []respNode{{text: "output line"}},
+	})
+	tr.addReviewNote(judge.Note{
+		Tool: "bash", ToolCallID: "call_1", Kind: judge.NoteApproved,
+		Risk: "medium", Authorization: "high", Rationale: "常规提交", Lang: "zh",
+	})
+	tr.addSystem(ui.InterruptingNotice)
+	tr.addSystem(ui.InterruptNotice)
+
+	raw := tr.contentLines()
+	// Assert on the visible text: the marker and the notice text carry their own
+	// SGR runs, so the escape-free form is what a reader (and a column check)
+	// actually sees.
+	lines := make([]string, len(raw))
+	for i, ln := range raw {
+		lines[i] = stripANSI(ln)
+	}
+	t.Logf("rendered:\n%s", strings.Join(lines, "\n"))
+
+	for _, want := range []string{"• Ran bash make test", "自动审批通过", ui.InterruptingNotice, ui.InterruptNotice} {
+		found := false
+		for _, ln := range lines {
+			if !strings.Contains(ln, want) {
+				continue
+			}
+			found = true
+			if want == "• Ran bash make test" {
+				if !strings.HasPrefix(ln, "• ") {
+					t.Errorf("headline %q should start at the margin", ln)
+				}
+				continue
+			}
+			// Everything else belongs to the column: two spaces in.
+			if !strings.HasPrefix(ln, contentIndent) {
+				t.Errorf("line %q should start at the content column %q", ln, contentIndent)
+			}
+		}
+		if !found {
+			t.Fatalf("rendered transcript is missing %q:\n%s", want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// TestSystemNoticeWrapRespectsTheIndent verifies the indent is paid for out of
+// the wrap width: a long notice wraps to the pane minus the indent, so no
+// rendered line can spill past the right edge.
+func TestSystemNoticeWrapRespectsTheIndent(t *testing.T) {
+	const width = 40
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(width, 20)
+	tr.addSystem(strings.Repeat("word ", 30))
+
+	for _, ln := range tr.contentLines() {
+		if got := ui.Width(ln); got > width {
+			t.Errorf("line width %d exceeds the pane %d: %q", got, width, ln)
+		}
 	}
 }

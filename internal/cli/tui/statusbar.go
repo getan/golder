@@ -65,7 +65,8 @@ func (s *statusBar) SetGit(g gitInfoMsg) { s.git = g }
 // SetModel updates the displayed model name after a /model switch.
 func (s *statusBar) SetModel(model string) { s.model = model }
 
-// SetThinking updates the displayed reasoning-effort level after a /think switch.
+// SetThinking updates the displayed reasoning-effort level after a /model switch
+// (including its `think` form).
 func (s *statusBar) SetThinking(level string) { s.thinking = level }
 
 // SetTelemetry updates the context-usage percentage from a telemetry event.

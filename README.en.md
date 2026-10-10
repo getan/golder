@@ -165,7 +165,7 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # local O
 
 ### Models and reasoning levels
 
-`/model` lists the current gateway's models and annotates the reasoning levels each supports; in the TUI, picking a model flows into a level picker (Esc cancels the whole switch), and `/model <n|id> <level>` does both in one step; `/think <level>` changes only the current level.
+`/model` lists the current gateway's models and annotates the reasoning levels each supports; in the TUI, picking a model flows into a level picker (Esc cancels the whole switch), and `/model <n|id> <level>` does both in one step. To change only the level, use `/model think <level>` (bare, it reports the current one) — the level belongs to the model, so `/model` owns both.
 
 `/provider` lists every built-in gateway with the environment variables it needs and whether one is already configured (ready ones first); `/provider <name>` switches to it using the gateway's default model. In the TUI, `/provider` is an arrow-key picker.
 
@@ -200,7 +200,7 @@ Typing `/` in the TUI opens a categorised menu (arrow keys to pick); `/help` pri
 |----------|----------|
 | General | `/help` `/status` `/exit` |
 | Session | `/resume` `/compact` `/fork` `/clone` `/tree` `/rewind` `/export` `/import` |
-| Model | `/model` `/provider` `/proxy` `/think` |
+| Model | `/model` `/provider` `/proxy` |
 | Memory | `/memory` `/dream` |
 | Permissions | `/permissions` `/trust` |
 | Modes | `/goal` `/btw` `/remote-control` |

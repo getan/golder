@@ -502,7 +502,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			return 2
 		}
 		// Refresh the models.dev reasoning catalog off the hot path when it is
-		// stale or missing, so the /model picker's level stage and /think have
+		// stale or missing, so the /model picker's level stage has
 		// real per-model levels without any session blocking on the network.
 		// Interactive sessions only: a one-shot -p run never opens the picker.
 		provider.StartBackgroundReasoningCatalogRefresh()
