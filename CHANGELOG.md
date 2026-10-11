@@ -12,6 +12,25 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A command's file operands go through the workspace boundary too**: the
+  read-scope gate asked about a `path` argument, and `bash` has none — the
+  paths are words in the command — so `cat ~/.config/foo` read whatever it
+  liked with nobody asked. The gate now reads the file operands out of the
+  command line (`internal/judge/bashpaths.go`) and asks about the first one
+  outside the workspace, exactly as it does for `read`. The reading is
+  best-effort and says so: only commands that actually open files are scanned
+  (a path-shaped string handed to `echo`, `git commit -m` or `jq` is not a
+  file being read), `$HOME`/`${HOME}` are substituted because their value is
+  knowable while `$UNKNOWN` is left alone rather than questioned on every build
+  script, and an interpreter's inline program is scanned because
+  `python3 -c 'open("/x")'` reads `/x`. What it cannot see — an unknown
+  variable's value, a script's own reads, a path assembled at runtime — stays
+  the sandbox's business, which is the enforcement that does not depend on
+  reading the command. The always-readable whitelist the sandbox already used
+  now lives in `permissions.SystemReadRoots` so the gate and the sandbox share
+  one definition: a path the sandbox would serve is not a consent question.
+  Commands whose reads the gate cannot see still fail closed where there is
+  nobody to ask (headless, a sub-agent), the same contract the file tools have.
 - **Ctrl+O reads a collapsed paste without sending it**: the composer's
   `[Pasted text #N …]` token used to be a dead end — the body was readable only
   by submitting, and the token said nothing about what it held. `Ctrl+O` now

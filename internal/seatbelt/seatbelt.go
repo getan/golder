@@ -18,7 +18,6 @@ package seatbelt
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/getan/golder/internal/permissions"
@@ -78,21 +77,10 @@ func NetworkEnabled() bool {
 // GOLDER_SANDBOX_READABLE extends the list from the environment (colon- or
 // comma-separated absolute paths).
 func ReadableRoots() []string {
-	roots := []string{
-		// System runtime and libraries: exec, dyld, homebrew.
-		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc",
-	}
-	if runtime.GOOS == "darwin" {
-		roots = append(roots,
-			"/System", "/Library", "/Applications",
-			"/private/var/db", "/private/etc", "/private/tmp", "/private/var/tmp",
-		)
-	} else {
-		roots = append(roots, "/var/lib", "/var/cache")
-	}
-	// Device nodes and the temp roots a shell needs; the runners handle their
-	// own /dev and /proc mounts, these are for any path-based checks.
-	roots = append(roots, "/dev", "/proc")
+	// The system halves come from permissions.SystemReadRoots, so the sandbox
+	// and the gates that refuse to ask about a sandbox-admissible path share
+	// one definition of "always readable".
+	roots := permissions.SystemReadRoots()
 	roots = append(roots, readableGitFiles()...)
 	// Session read grants: directories the user allowed the read-only tools to
 	// reach outside the workspace (internal/permissions). Including them keeps

@@ -55,6 +55,48 @@ var readScopeTools = map[string]bool{
 	"ls":         true,
 }
 
+// readScopeShellTools are the command tools whose file operands are subject to
+// the same boundary. They name no path argument — the paths are words in the
+// command — so the gate reads them out of the command line (bashpaths.go). That
+// reading is best-effort: what it cannot see (a variable's value, a script's
+// own reads) stays the sandbox's business, but the common spellings are asked
+// about like any other out-of-workspace read.
+var readScopeShellTools = map[string]bool{"bash": true}
+
+// readScopeTargets returns the raw path spellings this call may read: the path
+// argument for the file tools, or the file operands a command line exposes.
+// Nil means the call carries no path the boundary applies to.
+func readScopeTargets(tool string, args json.RawMessage) []string {
+	if raw, ok := readScopePath(tool, args); ok {
+		return []string{raw}
+	}
+	if !readScopeShellTools[strings.ToLower(strings.TrimSpace(tool))] {
+		return nil
+	}
+	cmd, ok := bashCommand(args)
+	if !ok {
+		return nil
+	}
+	return bashPathCandidates(cmd)
+}
+
+// systemRoots memoizes the always-readable whitelist: it is computed once per
+// process (the list is fixed for the run) and consulted on every candidate.
+var systemRoots = sync.OnceValue(permissions.SystemReadRoots)
+
+// insideSystemRoots reports whether p lives in the always-readable system
+// whitelist. Asking about /usr/bin in every command that runs a program would
+// train people to approve without reading, and the sandbox admits these paths
+// anyway, so a path there is not a boundary question.
+func insideSystemRoots(p string) bool {
+	for _, root := range systemRoots() {
+		if permissions.Inside(root, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // ReadScopeOpts configures ReadScopeGate. Prompting follows the permission
 // gate's two shapes: interactive drivers pass In/Out (the REPL's shared stdin),
 // the TUI passes Confirm (it has no stdin), and a driver with neither gets the
@@ -103,33 +145,52 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		}
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		raw, ok := readScopePath(call.Name, call.Arguments)
-		if !ok {
-			return nil
+		// A call may name several paths (a command line lists file operands),
+		// so the first one found outside is the one to ask about: it is the
+		// most prominent, and one question covers the call.
+		raw, target := "", ""
+		for _, candidateRaw := range readScopeTargets(call.Name, call.Arguments) {
+			resolved, err := permissions.AbsAgainst(absRoot, candidateRaw)
+			if err != nil {
+				continue
+			}
+			if permissions.Inside(absRoot, resolved) || insideAnyRoot(opts.Roots, resolved) {
+				continue
+			}
+			// Credential material is the static floor's to refuse. Passing it
+			// through unchanged means the floor denies the call and no dialog
+			// offers to grant it.
+			if _, bad := credentialPathRead(candidateRaw); bad {
+				continue
+			}
+			if permissions.ReadableAt(resolved) {
+				continue
+			}
+			// The system whitelist is not a boundary question: the sandbox
+			// admits these paths, so asking would only train blind approval.
+			if insideSystemRoots(resolved) {
+				continue
+			}
+			raw, target = candidateRaw, resolved
+			break
 		}
-		target, err := permissions.AbsAgainst(absRoot, raw)
-		if err != nil {
-			return nil
-		}
-		if permissions.Inside(absRoot, target) || insideAnyRoot(opts.Roots, target) {
-			return nil
-		}
-		// Credential material is the static floor's to refuse. Passing it
-		// through unchanged means the floor denies the call and no dialog
-		// offers to grant it.
-		if _, bad := credentialPathRead(raw); bad {
-			return nil
-		}
-		if permissions.ReadableAt(target) {
+		if target == "" {
 			return nil
 		}
 
 		candidate := permissions.ReadScopeCandidate(target)
 		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		// The dialog shows the path for a file tool and the command for a
+		// shell tool: the path is what the user is deciding about, but for a
+		// command they also need to see what will run.
+		summary := raw
+		if cmd, ok := bashCommand(call.Arguments); ok && readScopeShellTools[strings.ToLower(strings.TrimSpace(call.Name))] {
+			summary = cmd
+		}
 		req := ApprovalRequest{
 			Kind:          ApprovalReadScope,
 			Tool:          call.Name,
-			Summary:       raw,
+			Summary:       summary,
 			ReadScope:     candidate,
 			Authorization: "outside the workspace",
 			Rationale:     target + " is outside the workspace",
@@ -171,6 +232,12 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 			Summary: target, Authorization: req.Authorization,
 			Rationale: "approved for this read only",
 		})
+		// The one-call grant rides the call's context, where the file tools
+		// honour it once. A command tool does not read that grant — it cannot,
+		// the path is inside a command it will hand to a shell — so for a
+		// command the approval means "run it this time", and the only standing
+		// constraint remains the sandbox. That is why the dialog offers the
+		// directory answer for commands too.
 		return &agentcore.BeforeToolCallDecision{ReadGrant: target}
 	}
 }

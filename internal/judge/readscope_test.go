@@ -21,14 +21,43 @@ func readCall(tool, path string) agentcore.AgentToolCall {
 	return agentcore.AgentToolCall{Name: tool, Arguments: raw}
 }
 
+// userHome returns the REAL home directory (HOME may have been redirected by an
+// earlier test), so a fixture can be placed under it — outside both $TMPDIR and
+// the system whitelist — rather than inside either.
+func userHome(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	return home
+}
+
 // readScopeFixture gives a test a workspace, an outside directory holding a
 // readable file, and a HOME of its own, so the broad-root policy is
 // deterministic. Grants are cleared afterwards: the registry is process-wide.
 func readScopeFixture(t *testing.T) (workspace, outside, target string) {
 	t.Helper()
-	home := t.TempDir()
+	// The fixture must NOT live under $TMPDIR: the system whitelist exempts the
+	// machine's temp root (the sandbox admits its own temp dir too), so a
+	// fixture there would be silently exempt and every "outside" case would
+	// pass for the wrong reason — or, as here, fail to ask at all. A fabricated
+	// HOME under the real one puts it outside the whitelist, because $HOME is
+	// deliberately absent from the list; that is exactly the boundary these
+	// tests are about.
+	home := filepath.Join(userHome(t), ".golder-test", t.Name())
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)
-	workspace, outside = t.TempDir(), t.TempDir()
+	workspace = filepath.Join(home, "workspace")
+	outside = filepath.Join(home, "outside")
+	for _, dir := range []string{workspace, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	target = filepath.Join(outside, "a.go")
 	if err := os.WriteFile(target, []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -233,11 +262,24 @@ func TestReadScopeGateOnlyReadTools(t *testing.T) {
 	if dec := gate(context.Background(), agentcore.AgentToolCall{Name: "apply_patch", Arguments: applyPatch}); dec != nil {
 		t.Errorf("apply_patch is not a read tool and must not be gated here, got %+v", dec)
 	}
-	if dec := gate(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"cat ` + target + `"}`)}); dec != nil {
-		t.Errorf("bash is not gated by this gate, got %+v", dec)
+	// bash IS gated: a command's file operands are the same boundary question
+	// as a path argument (this used to be exempt, which is how `cat /outside/x`
+	// read whatever it liked).
+	if dec := gate(context.Background(), bashCall("cat "+target)); dec == nil || !dec.Block {
+		t.Errorf("a command reading outside must be gated, got %+v", dec)
 	}
-	if asked != 0 {
-		t.Errorf("expected no question for non-read tools, got %d", asked)
+	// A command with no path, and the in-memory tools, stay silent.
+	for _, call := range []agentcore.AgentToolCall{
+		bashCall("go build ./..."),
+		{Name: "todo"},
+		{Name: "memory_search"},
+	} {
+		if dec := gate(context.Background(), call); dec != nil {
+			t.Errorf("%q must not be gated, got %+v", call.Name, dec)
+		}
+	}
+	if asked != 1 {
+		t.Errorf("asked %d times, want exactly the one outside read", asked)
 	}
 }
 
@@ -303,5 +345,119 @@ func TestReadScopeGateNotWaivedByMode(t *testing.T) {
 	}
 	if dec == nil || !dec.Block {
 		t.Fatalf("the denial must stand even in full-access, got %+v", dec)
+	}
+}
+
+// TestReadScopeGateAsksAboutCommandOperands covers the shell half of the gate:
+// a command that names a file outside the workspace is a consent question, and
+// the dialog shows the command (what will run) with the path as its reason.
+func TestReadScopeGateAsksAboutCommandOperands(t *testing.T) {
+	workspace, outside, _ := readScopeFixture(t)
+	target := filepath.Join(outside, "notes.md")
+	if err := os.WriteFile(target, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got ApprovalRequest
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			asked++
+			got = req
+			return ApprovalAnswer{Answered: true} // deny
+		},
+	})
+
+	cmd := "cat " + target
+	dec := gate(context.Background(), bashCall(cmd))
+	if asked != 1 {
+		t.Fatalf("asked %d times, want 1 — a command reading outside must ask", asked)
+	}
+	if dec == nil || !dec.Block {
+		t.Fatalf("denial = %+v, want a block", dec)
+	}
+	if got.Kind != ApprovalReadScope {
+		t.Errorf("kind = %q, want %q", got.Kind, ApprovalReadScope)
+	}
+	if got.Summary != cmd {
+		t.Errorf("summary = %q, want the command %q", got.Summary, cmd)
+	}
+	if !strings.Contains(got.Rationale, target) {
+		t.Errorf("rationale = %q, want it to name %q", got.Rationale, target)
+	}
+}
+
+// TestReadScopeGateSilentForCommandInsideWorkspace: a command that touches only
+// the workspace, or names no path at all, is not a boundary question.
+func TestReadScopeGateSilentForCommandInsideWorkspace(t *testing.T) {
+	workspace, _, _ := readScopeFixture(t)
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	for _, cmd := range []string{
+		"go build ./...",
+		"cat internal/main.go",
+		`git commit -m "fix /outside/thing"`,
+		"make -j8",
+	} {
+		if dec := gate(context.Background(), bashCall(cmd)); dec != nil {
+			t.Errorf("%q was gated (%+v), want silent", cmd, dec)
+		}
+	}
+	if asked != 0 {
+		t.Errorf("asked %d times, want 0", asked)
+	}
+}
+
+// TestReadScopeGateSilentForSystemPaths: the sandbox's read whitelist is not a
+// consent question — asking about /usr/bin would train blind approval.
+func TestReadScopeGateSilentForSystemPaths(t *testing.T) {
+	workspace, _, _ := readScopeFixture(t)
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gate(context.Background(), bashCall("ls /usr/bin")); dec != nil {
+		t.Errorf("a system path was gated (%+v), want silent", dec)
+	}
+	if asked != 0 {
+		t.Errorf("asked %d times, want 0", asked)
+	}
+}
+
+// TestReadScopeGateCommandHonorsSessionGrant: once the directory is granted for
+// the session, later commands reading it are silent — the same contract the file
+// tools have.
+func TestReadScopeGateCommandHonorsSessionGrant(t *testing.T) {
+	workspace, outside, _ := readScopeFixture(t)
+	target := filepath.Join(outside, "notes.md")
+	if err := os.WriteFile(target, []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := permissions.AddReadRoot(outside); err != nil {
+		t.Fatalf("AddReadRoot: %v", err)
+	}
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gate(context.Background(), bashCall("cat "+target)); dec != nil {
+		t.Errorf("a granted directory was gated (%+v), want silent", dec)
+	}
+	if asked != 0 {
+		t.Errorf("asked %d times, want 0", asked)
 	}
 }
