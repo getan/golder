@@ -3218,7 +3218,7 @@ func (m Model) renderContent() (string, int) {
 	// The input editor renders its own prompt column and cursor across as many
 	// rows as the buffer currently spans (up to maxInputRows), with the open
 	// paste preview appended inside the same frame.
-	input := m.input.ViewWith(m.pastePreviewLines(width))
+	input := m.input.ViewWith(m.composerExtraLines(width))
 
 	// Fallback transcript rows before the first size message; once sized the
 	// viewport is pre-sized by relayout and pads its own content.
@@ -3585,7 +3585,7 @@ func (m *Model) relayout() {
 	if m.pastePreview != nil && (m.running || !m.pasteInDraft(m.pastePreview.id)) {
 		m.pastePreview = nil
 	}
-	rows := m.height - 1 - m.input.Height() - len(m.pastePreviewLines(m.width)) -
+	rows := m.height - 1 - m.input.Height() - len(m.composerExtraLines(m.width)) -
 		m.menu.rows() - m.approvalRowsHeight() - m.histSearchRows()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input

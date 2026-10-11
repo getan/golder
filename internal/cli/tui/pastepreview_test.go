@@ -136,19 +136,77 @@ func TestPastePreviewTogglePageClose(t *testing.T) {
 	}
 }
 
-// TestPastePreviewReservesRows pins the layout contract: the preview's rows come
-// out of the transcript's budget, so the composer never overlaps the
-// conversation or the status bar.
+// TestPasteHintTeachesTheKey pins the discoverability contract: a draft holding
+// a collapsed paste carries a visible ctrl+o hint, so the key is learnable
+// without reading docs. The hint steps aside for the open preview's footer
+// (which already names the keys), disappears with the token, and stays out of
+// the mid-run composer, where the key does nothing.
+func TestPasteHintTeachesTheKey(t *testing.T) {
+	// No paste, no hint.
+	empty := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
+	if got := empty.pasteHintLine(empty.width); got != "" {
+		t.Errorf("an empty draft must not carry a hint, got %q", got)
+	}
+
+	m := pasteInto(t, pasteLines(5))
+	hint := stripTCardANSI(m.pasteHintLine(m.width))
+	if !strings.Contains(hint, "ctrl+o") {
+		t.Fatalf("hint = %q, want the key named", hint)
+	}
+	// The hint must be visible in the frame, inside the composer.
+	if view := stripTCardANSI(m.View().Content); !strings.Contains(view, "ctrl+o previews it here") {
+		t.Errorf("the hint is not in the rendered frame:\n%s", view)
+	}
+
+	// The open preview's footer takes over.
+	m = ctrlO(t, m)
+	if m.pasteHintLine(m.width) != "" {
+		t.Error("the hint must step aside while the preview is open")
+	}
+	m = ctrlO(t, m) // collapse again
+
+	// Two tokens: the hint says which one opens.
+	m = apply(t, m, tea.PasteMsg{Content: pasteLines(3)})
+	if got := stripTCardANSI(m.pasteHintLine(m.width)); !strings.Contains(got, "of 2 pastes") {
+		t.Errorf("two-paste hint = %q, want it to say which paste opens", got)
+	}
+
+	// Deleting the tokens takes the hint with them.
+	m.input.Clear()
+	if got := m.pasteHintLine(m.width); got != "" {
+		t.Errorf("cleared draft = %q, want no hint", got)
+	}
+}
+
+// TestPasteHintAbsentMidRun: the composer is a queue box while a run is in
+// flight and ctrl+o does nothing there, so the hint must not advertise it.
+func TestPasteHintAbsentMidRun(t *testing.T) {
+	m := pasteInto(t, pasteLines(5))
+	m.running = true
+	if got := m.pasteHintLine(m.width); got != "" {
+		t.Errorf("mid-run hint = %q, want none", got)
+	}
+}
+
+// TestPastePreviewReservesRows pins the layout contract: the composer's extra
+// rows come out of the transcript's budget, so it never overlaps the
+// conversation or the status bar. Opening the preview REPLACES the hint row
+// (the footer carries the keys once it is open), which is why the delta is the
+// preview's height minus the hint's one row.
 func TestPastePreviewReservesRows(t *testing.T) {
 	m := pasteInto(t, pasteLines(20))
+	if hint := m.pasteHintLine(m.width); hint == "" {
+		t.Fatal("a collapsed paste should carry the ctrl+o hint")
+	}
 	before := m.transcript.viewportHeight()
 	m = ctrlO(t, m)
 	want := len(m.pastePreviewLines(m.width))
 	if want == 0 {
 		t.Fatal("no preview rows rendered")
 	}
-	if got := before - m.transcript.viewportHeight(); got != want {
-		t.Errorf("transcript shrank by %d rows, want %d (the preview's height)", got, want)
+	if got := before - m.transcript.viewportHeight(); got != want-1 {
+		t.Errorf("transcript shrank by %d rows, want %d (the preview's height less the hint row it replaced)",
+			got, want-1)
 	}
 }
 

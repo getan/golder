@@ -116,6 +116,52 @@ func (m Model) pasteInDraft(id int) bool {
 	return false
 }
 
+// pasteTokenCount is how many collapsed paste tokens the draft holds.
+func (m Model) pasteTokenCount() int {
+	return len(pastePlaceholderRe.FindAllStringSubmatch(m.input.Value(), -1))
+}
+
+// pasteHintLine is the one dim row that tells the composer's reader that a
+// collapsed paste can be read in place. Without it the paste is a dead end the
+// user has no way to discover — the token names the body and the size, but
+// nothing says a key opens it. It shows only while a token is in the draft and
+// the preview is closed: the open preview's footer already carries the keys, and
+// two rows saying "ctrl+o" would contradict each other.
+func (m Model) pasteHintLine(width int) string {
+	if m.running || m.pasteTokenCount() == 0 {
+		return ""
+	}
+	if m.pastePreview != nil && m.pasteInDraft(m.pastePreview.id) {
+		return ""
+	}
+	text := "ctrl+o previews it here"
+	if n := m.pasteTokenCount(); n > 1 {
+		text = fmt.Sprintf("ctrl+o previews the newest of %d pastes", n)
+	}
+	inner := width - 2
+	if inner < 1 {
+		return ""
+	}
+	if ui.Width(text) > inner {
+		text = "ctrl+o previews it"
+	}
+	return m.theme.System.Render("  " + TruncateToWidth(text, inner))
+}
+
+// composerExtraLines returns the rows the composer frame carries below the
+// draft: the preview while one is open, otherwise the hint that the preview
+// exists. Both View and relayout call it, so the rows painted and the rows
+// reserved cannot disagree.
+func (m Model) composerExtraLines(width int) []string {
+	if lines := m.pastePreviewLines(width); len(lines) > 0 {
+		return lines
+	}
+	if hint := m.pasteHintLine(width); hint != "" {
+		return []string{hint}
+	}
+	return nil
+}
+
 // newestPasteInDraft returns the highest paste id still present in the draft,
 // or 0 when the draft has no token. It is the fallback target for Ctrl+O when
 // the caret is not inside a token.

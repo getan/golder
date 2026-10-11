@@ -44,7 +44,12 @@ interactive REPL/TUI.
   most a third of the terminal and never more than 8 rows, so reading a paste
   never eats the conversation. When several tokens are in the draft the caret
   decides: `Ctrl+O` opens the one the caret sits in, and falls back to the
-  newest token when the caret is elsewhere.
+  newest token when the caret is elsewhere. While a token sits in the draft the
+  composer carries a dim row naming the key (`ctrl+o previews it here`, or
+  which paste opens when the draft holds several), because a feature nobody can
+  discover is a feature nobody has: the open preview's footer already carries
+  its keys, so the hint steps aside for it, and it stays out of the mid-run
+  composer where the key does nothing.
 - **The paste token now says what it holds**: `[Pasted text #1 · 42 lines ·
   2.5 KB]` instead of `[Pasted text #1 +42 lines]`. The line count is what a
   person would count (a selection's terminating newline does not add a line),
