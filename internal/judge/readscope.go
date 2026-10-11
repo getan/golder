@@ -119,6 +119,13 @@ type ReadScopeOpts struct {
 	// Notify receives the decision so the driver can show it, exactly as the
 	// permission gate announces its verdicts.
 	Notify func(Note)
+	// Persist, when set, makes a read grant survive the process: the gate
+	// calls it after the user chooses the remembered option and reports the
+	// outcome in the note. It is a callback rather than a direct write because
+	// this package is a leaf (it cannot import the config layer that owns the
+	// managed store); a driver without one simply cannot offer the remembered
+	// answer, and the prompt says so.
+	Persist func(dir string) (made bool, why string)
 }
 
 // ReadScopeGate builds the beforeToolCall gate that asks before a read-only
@@ -219,10 +226,14 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		// failing the read the user just approved.
 		if granted := strings.TrimSpace(ans.ReadRoot); granted != "" {
 			if _, err := permissions.AddReadRoot(granted); err == nil {
+				rationale := "reading " + granted + " is allowed for this session"
+				if ans.Persisted {
+					rationale = "reading " + granted + " is allowed and remembered across sessions"
+				}
 				notify(Note{
 					Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 					Summary: target, Authorization: req.Authorization,
-					Rationale: "reading " + granted + " is allowed for this session",
+					Rationale: rationale,
 				})
 				return nil
 			}
@@ -286,7 +297,15 @@ func promptReadScope(ctx context.Context, opts ReadScopeOpts, target, candidate 
 	}
 	fmt.Fprintf(out, "\ngolder: %s is outside the workspace.\n", target)
 	if candidate != "" {
-		fmt.Fprintf(out, "  [y] allow this read once   [a] allow reading %s (this session)   [N] deny\n", candidate)
+		if opts.Persist != nil {
+			// The remembered rung is offered only where a driver can actually
+			// write it down: an option that silently forgets would be worse
+			// than one that is absent.
+			fmt.Fprintf(out, "  [y] allow this read once   [a] allow reading %s (this session)"+
+				"   [s] allow reading %s (remembered)   [N] deny\n", candidate, candidate)
+		} else {
+			fmt.Fprintf(out, "  [y] allow this read once   [a] allow reading %s (this session)   [N] deny\n", candidate)
+		}
 	} else {
 		fmt.Fprint(out, "  [y] allow this read once   [N] deny\n")
 	}
@@ -303,6 +322,17 @@ func promptReadScope(ctx context.Context, opts ReadScopeOpts, target, candidate 
 	case "a", "all":
 		if candidate != "" {
 			return ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
+		}
+	case "s", "save":
+		if candidate != "" && opts.Persist != nil {
+			made, why := opts.Persist(candidate)
+			ans := ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
+			if made {
+				ans.Persisted = true
+			} else if why != "" {
+				fmt.Fprintf(out, "  %s\n", why)
+			}
+			return ans
 		}
 	}
 	return ApprovalAnswer{Answered: true}

@@ -6,6 +6,8 @@ package tui
 
 import (
 	"context"
+	"github.com/getan/golder/internal/cli/config"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -539,12 +541,18 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)
 	m := NewModel(Options{})
 	m.openApproval(req, reply)
-	if len(m.approval.rows) != 4 {
-		t.Fatalf("rows = %d, want 4 with the writable grant", len(m.approval.rows))
+	// Five rows: approve once, approve for the session, the session write
+	// grant, its remembered twin, and deny.
+	if len(m.approval.rows) != 5 {
+		t.Fatalf("rows = %d, want 5 with both writable grants", len(m.approval.rows))
 	}
 	label := m.approval.rows[2].label
 	if !strings.Contains(label, "/Volumes/KIOXIA/old-build") || !strings.Contains(label, "this session") {
 		t.Fatalf("writable row label = %q", label)
+	}
+	remembered := m.approval.rows[3].label
+	if !strings.Contains(remembered, "/Volumes/KIOXIA/old-build") || !strings.Contains(remembered, "remembered") {
+		t.Fatalf("remembered row label = %q", remembered)
 	}
 	got, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
 	_ = got
@@ -813,13 +821,11 @@ func TestTrustGateDeniesWithoutAnswer(t *testing.T) {
 }
 
 // TestApprovalReadGrantNoteIsUnambiguous pins the wording of the note printed
-// after a session read grant. The first version said "… for this session.
-// Persist it with: readable_roots in config.toml", which reads as a report that
-// the grant WAS persisted while it is only an instruction for how to make it
-// so — and it named the file nowhere near precisely enough to act on (the real
-// path honors $XDG_CONFIG_HOME, and ~/.golder is a different directory). The
-// note now states the scope, then the instruction, and names the file the
-// loader actually reads.
+// after a SESSION read grant. That answer is deliberately the non-durable one,
+// so the note must say the grant dies with the process and name the two ways to
+// keep it: the remembered row next time, or the command. The first shipped
+// version said "Persist it with: readable_roots in config.toml", which read as
+// a report that the grant WAS persisted.
 func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -848,17 +854,75 @@ func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
 	if !strings.Contains(got, "for this session only") {
 		t.Errorf("note must state the scope:\n%s", got)
 	}
-	if !strings.Contains(got, "To make that permanent") {
-		t.Errorf("note must mark the persistence hint as an instruction:\n%s", got)
+	if !strings.Contains(got, "/permissions readable add") {
+		t.Errorf("note must name the command that makes it permanent:\n%s", got)
+	}
+	if !strings.Contains(got, "remembered") {
+		t.Errorf("note must point at the remembered answer:\n%s", got)
 	}
 	if strings.Contains(got, "Persist it with") {
 		t.Errorf("the old phrasing read as a statement of fact:\n%s", got)
 	}
-	wantPath := filepath.Join(home, "xdg", "golder", "config.toml")
-	if !strings.Contains(got, wantPath) {
-		t.Errorf("note must name the file the loader reads (%s):\n%s", wantPath, got)
+}
+
+// TestApprovalReadRememberedPersists drives the remembered answer end to end:
+// it must write the managed store (so the grant survives), approve the call,
+// and mark the answer Persisted so the gate's own note does not call it
+// session-only.
+func TestApprovalReadRememberedPersists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	dir := filepath.Join(home, "outside")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(got, "[permissions] readable_roots") {
-		t.Errorf("note must name the key to set:\n%s", got)
+	t.Cleanup(func() { permissions.RemoveReadRoot(dir) })
+
+	session := newRemoteTestSession(t)
+	m := NewModel(Options{}).withSession(session, nil)
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.approval = approvalDialog{
+		active:   true,
+		kind:     "tool",
+		readRoot: dir,
+		reply:    reply,
+		rows:     []approvalRow{{"Allow reading", "s", approveReadPersist}},
+	}
+	m.answerApproval(approveReadPersist)
+
+	ans := awaitAnswer(t, reply)
+	if !ans.Approve || ans.ReadRoot != dir {
+		t.Fatalf("answer = %+v, want approval of %s", ans, dir)
+	}
+	if !ans.Persisted {
+		t.Error("the remembered answer must be marked Persisted for the gate's note")
+	}
+	// The grant is live for this session AND written down.
+	if !permissions.ReadableAt(filepath.Join(dir, "a.go")) {
+		t.Error("the session registry did not take the grant")
+	}
+	saved, err := config.LoadPermissionsConfig()
+	if err != nil {
+		t.Fatalf("LoadPermissionsConfig: %v", err)
+	}
+	found := false
+	for _, r := range saved.ReadableRoots {
+		if r == dir {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("permissions.toml does not carry %s: %v", dir, saved.ReadableRoots)
+	}
+	var note strings.Builder
+	for _, b := range m.transcript.blocks {
+		if b.role == roleSystem {
+			note.WriteString(b.text)
+			note.WriteByte('\n')
+		}
+	}
+	if !strings.Contains(note.String(), "remembered across sessions") {
+		t.Errorf("note must confirm the durable grant:\n%s", note.String())
 	}
 }

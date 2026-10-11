@@ -805,13 +805,16 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
-		Description:  "show or switch the approval mode, or manage sandbox writable paths: /permissions [read-only|ask|auto|full-access|writable …]",
-		ArgumentHint: "[read-only|ask|auto|full-access | writable [add|rm] <path>]",
+		Description:  "show or switch the approval mode, or manage the remembered path grants: /permissions [read-only|ask|auto|full-access|writable|readable …]",
+		ArgumentHint: "[read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
 			if arg == "writable" || strings.HasPrefix(arg, "writable ") {
 				return runPermissionsWritable(arg, l)
+			}
+			if arg == "readable" || strings.HasPrefix(arg, "readable ") {
+				return runPermissionsReadable(arg, l)
 			}
 			if arg == "" {
 				current := permissions.Auto
@@ -955,6 +958,119 @@ func runPermissionsWritable(arg, l string) string {
 				return usage()
 			}
 			res, err := cli.RemoveWritablePath(p)
+			if err != nil {
+				if zh {
+					return "无法删除：" + err.Error()
+				}
+				return "cannot remove: " + err.Error()
+			}
+			display := cli.DisplayHomePath(res.Path)
+			if !res.Found() {
+				if zh {
+					return fmt.Sprintf("未授权该路径：%s", display)
+				}
+				return fmt.Sprintf("not granted: %s", display)
+			}
+			var b strings.Builder
+			if zh {
+				fmt.Fprintf(&b, "已撤销 %s", display)
+				if res.WasSaved {
+					b.WriteString("，已从 permissions.toml 删除")
+				}
+				if res.WasConfig {
+					b.WriteString("；config.toml 中仍有固定授权，需手动编辑才能永久移除")
+				}
+			} else {
+				fmt.Fprintf(&b, "revoked %s", display)
+				if res.WasSaved {
+					b.WriteString(", deleted from permissions.toml")
+				}
+				if res.WasConfig {
+					b.WriteString("; config.toml still seeds it — edit that file to make this permanent")
+				}
+			}
+			return b.String()
+		}
+	}
+	return usage()
+}
+
+// runPermissionsReadable is the read-side twin of runPermissionsWritable: the
+// same list/add/rm shape over the same managed store, so the two grants are
+// maintained the same way. It exists because the read grant had no persisted
+// form at all — the approval dialog's answer lived in memory — while the
+// writable grant beside it had a command.
+func runPermissionsReadable(arg, l string) string {
+	zh := l == "zh"
+	fields := strings.Fields(arg)
+	usage := func() string {
+		if zh {
+			return "用法：/permissions readable [list | add <路径> | rm <路径>]"
+		}
+		return "usage: /permissions readable [list | add <path> | rm <path>]"
+	}
+	restAfter := func(verb string) string {
+		s := strings.TrimSpace(strings.TrimPrefix(arg, "readable"))
+		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), verb))
+	}
+	if len(fields) == 1 || (len(fields) == 2 && fields[1] == "list") {
+		entries, warnings := cli.ListReadablePaths()
+		var b strings.Builder
+		if zh {
+			b.WriteString("工作区外的可读路径（读取不再询问）：")
+			if len(entries) == 0 {
+				b.WriteString("无")
+			}
+			for _, e := range entries {
+				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), cli.ReadableSourceLabel(e.Source, true))
+			}
+			b.WriteString("\n添加：/permissions readable add <路径>　删除：/permissions readable rm <路径>")
+		} else {
+			b.WriteString("readable paths outside the workspace (reads no longer ask):")
+			if len(entries) == 0 {
+				b.WriteString(" none")
+			}
+			for _, e := range entries {
+				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), cli.ReadableSourceLabel(e.Source, false))
+			}
+			b.WriteString("\nadd: /permissions readable add <path>  remove: /permissions readable rm <path>")
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(&b, "\nwarning: %s", w)
+		}
+		return b.String()
+	}
+	if len(fields) >= 2 {
+		switch fields[1] {
+		case "add":
+			p := restAfter("add")
+			if p == "" {
+				return usage()
+			}
+			root, seeded, err := cli.AddReadablePath(p)
+			if err != nil {
+				if zh {
+					return "无法添加：" + err.Error()
+				}
+				return "cannot add: " + err.Error()
+			}
+			display := cli.DisplayHomePath(root)
+			if seeded {
+				if zh {
+					return fmt.Sprintf("%s 已由 config.toml 固定授权；本次会话已生效", display)
+				}
+				return fmt.Sprintf("%s is already seeded by config.toml; granted for this session", display)
+			}
+			if zh {
+				return fmt.Sprintf("已授权读取 %s，已保存到 permissions.toml（重启后仍生效）", display)
+			}
+			return fmt.Sprintf("granted read access to %s, saved to permissions.toml", display)
+		case "rm", "remove":
+			p := restAfter(fields[1])
+			if p == "" {
+				return usage()
+			}
+			res, err := cli.RemoveReadablePath(p)
 			if err != nil {
 				if zh {
 					return "无法删除：" + err.Error()

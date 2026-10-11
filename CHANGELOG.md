@@ -12,6 +12,26 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Read and write grants can be remembered from the dialog**: both approval
+  dialogs that offer a path grant (a read outside the workspace, a sandbox write
+  the reviewer contained) now offer it at two lifetimes — *this session* and
+  *remembered* (`s`) — and the remembered answer writes the managed store
+  (`~/.config/golder/permissions.toml`) as part of answering, instead of sending
+  the user to a command. The labels never abbreviate which is which: a grant
+  that outlives the process must not be one keystroke away from being granted by
+  accident, which is also why the session answer is kept beside it. A write that
+  fails leaves the grant session-only and says so rather than reporting a
+  success that will not survive a restart.
+- **`/permissions readable list|add|rm`**: the read side of a command that only
+  the write side had. The read grant used to live in memory alone — the approval
+  dialog's answer died with the process and the only durable form was hand-
+  editing `config.toml` — even though the managed store's schema already carried
+  `readable_roots` and startup already read it back. Both grants now live in the
+  same file, are maintained by the same shape of command, and are listed with
+  the same provenance labels (`config.toml` seed / `permissions.toml` persisted /
+  this session). `config.toml` keeps working as the hand-edited seed: the
+  program never rewrites it (that would drop the user's comments), so a path
+  seeded there is reported as already remembered rather than copied.
 - **A command's file operands go through the workspace boundary too**: the
   read-scope gate asked about a `path` argument, and `bash` has none — the
   paths are words in the command — so `cat ~/.config/foo` read whatever it

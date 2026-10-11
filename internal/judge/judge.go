@@ -278,6 +278,11 @@ type ApprovalAnswer struct {
 	// manager; being a trust decision rather than a workspace-boundary one,
 	// reads outside the workspace still take the read-scope gate's consent.
 	SessionReads bool
+	// Persisted, when set together with Approve, means the driver has already
+	// made this grant permanent (it wrote the managed store). The gate itself
+	// never persists anything — it stays a decision layer — but its verdict
+	// note must not say "for this session" when the grant outlives it.
+	Persisted bool
 }
 
 // NoteKind classifies one user-facing verdict note.
@@ -461,6 +466,9 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 		rationale := "approved by the user"
 		if root := strings.TrimSpace(ans.WritableRoot); root != "" {
 			rationale = "contained in the sandbox; " + root + " is writable for this session"
+			if ans.Persisted {
+				rationale = "contained in the sandbox; " + root + " is writable and remembered"
+			}
 		}
 		opts.Notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,

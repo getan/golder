@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
@@ -187,6 +188,9 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		WorkspaceRoot: o.Cwd,
 		Roots:         o.ExtraRoots,
 		Notify:        o.Notes.Emit,
+		// The managed store lives in the config layer, which judge (a leaf
+		// package) cannot import; the assembly point is where the two meet.
+		Persist: PersistReadRoot,
 	}
 	if withPrompts {
 		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
@@ -251,4 +255,42 @@ func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
 		}
 	}
 	return refusedRoots
+}
+
+// PersistReadRoot writes a read grant to the managed store so it survives the
+// process. It lives here, in the gate assembly, because that is where the two
+// layers that need each other can meet: judge (which owns the read-scope gate
+// and takes the answer) is a leaf package that cannot import the config layer,
+// and the cli layer above this one imports run (host.go), so run cannot import
+// cli.
+//
+// alreadySeeded is not a failure: the grant is already permanent because
+// config.toml carries it, and nothing is written — that file belongs to the
+// user, and rewriting it would drop their comments.
+func PersistReadRoot(dir string) (made bool, why string) {
+	root, err := permissions.NormalizeReadRoot(dir)
+	if err != nil {
+		return false, "cannot remember this path: " + err.Error()
+	}
+	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
+		for _, r := range cfg.Permissions.ReadableRoots {
+			if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
+				return true, "already remembered (" + config.FileConfigPath() + " seeds " + root + ")"
+			}
+		}
+	}
+	saved, err := config.LoadPermissionsConfig()
+	if err != nil {
+		return false, "cannot remember this path: " + err.Error()
+	}
+	for _, r := range saved.ReadableRoots {
+		if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
+			return true, root + " is remembered across sessions"
+		}
+	}
+	saved.ReadableRoots = append(saved.ReadableRoots, root)
+	if err := config.SavePermissionsConfig(saved); err != nil {
+		return false, "cannot remember this path: " + err.Error()
+	}
+	return true, root + " is remembered across sessions"
 }

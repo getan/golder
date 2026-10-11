@@ -47,12 +47,14 @@ type approvalRow struct {
 
 // Tool-approval values.
 const (
-	approveOnce      = "once"
-	approveSession   = "session"
-	approveWritable  = "writable"
-	approveReadDir   = "read-dir"
-	approveReadsHere = "reads-here"
-	approveDeny      = "deny"
+	approveOnce            = "once"
+	approveSession         = "session"
+	approveWritable        = "writable"
+	approveWritablePersist = "writable-persist"
+	approveReadDir         = "read-dir"
+	approveReadPersist     = "read-persist"
+	approveReadsHere       = "reads-here"
+	approveDeny            = "deny"
 )
 
 // Trust-question values (the first-run dialog; the same three-way choice the
@@ -127,6 +129,7 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			toolApprovalRows[0],
 			toolApprovalRows[1],
 			{"Allow writes to " + displayPath(root) + " (this session)", "w", approveWritable},
+			{"Always allow writes to " + displayPath(root) + " (remembered)", "s", approveWritablePersist},
 			toolApprovalRows[2],
 		}
 	}
@@ -135,9 +138,18 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		// A read-scope question offers the directory the file lives in (which
 		// the gate already checked is not too broad to grant) beside the
 		// one-read answer, so a batch of reads in one tree is one keystroke.
+		// The last two rows are the same grant at two lifetimes, and the labels
+		// say which: "this session" for the one that dies with the process,
+		// "remembered" for the one written to the managed store. A user who
+		// does not want a permanent grant must be able to see that they are
+		// choosing one, so neither label is abbreviated.
+		//
+		// The key is `s` because the shortcut match is case-insensitive
+		// (EqualFold), so `a`/`A` cannot be told apart.
 		rows = []approvalRow{
 			{"Allow this read once", "y", approveOnce},
 			{"Allow reading " + displayPath(readRoot) + " (this session)", "a", approveReadDir},
+			{"Always allow reading " + displayPath(readRoot) + " (remembered)", "s", approveReadPersist},
 			{"Deny", "esc", approveDeny},
 		}
 	}
@@ -250,8 +262,38 @@ func (m *Model) answerApproval(value string) {
 					ans.Approve, ans.WritableRoot = true, root
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
-							" are allowed inside the sandbox for this session only." +
-							" To make that permanent, run /permissions writable add " + root)
+							" are allowed inside the sandbox for this session only. To make it" +
+							" permanent, choose \"remembered\" next time, or run" +
+							" /permissions writable add " + root)
+					}
+				}
+			}
+		case approveWritablePersist:
+			if root := d.writableRoot; root != "" {
+				if _, err := seatbelt.AddWritableRoot(root); err != nil {
+					if m.session != nil {
+						m.transcript.addSystem("Cannot grant write access to " + root + ": " + err.Error())
+					}
+					break
+				}
+				ans.Approve, ans.WritableRoot = true, root
+				path, alreadySeeded, err := cli.AddWritablePath(root)
+				switch {
+				case err != nil:
+					if m.session != nil {
+						m.transcript.addSystem("Writes to " + displayPath(root) +
+							" are allowed inside the sandbox for this session only; remembering it failed: " + err.Error())
+					}
+				case alreadySeeded:
+					if m.session != nil {
+						m.transcript.addSystem("Writes to " + displayPath(path) +
+							" are already remembered (" + config.FileConfigPath() + " seeds it).")
+					}
+				default:
+					ans.Persisted = true
+					if m.session != nil {
+						m.transcript.addSystem("Writes to " + displayPath(path) +
+							" are now remembered across sessions. Manage it with /permissions writable list|add|rm.")
 					}
 				}
 			}
@@ -264,9 +306,35 @@ func (m *Model) answerApproval(value string) {
 				ans.Approve, ans.ReadRoot = true, dir
 				if m.session != nil {
 					m.transcript.addSystem("Reading " + displayPath(dir) +
-						" is allowed for this session only." +
-						" To make that permanent, add it to [permissions] readable_roots in " +
-						readRootsConfigHint() + ".")
+						" is allowed for this session only. To make it permanent, choose" +
+						" \"remembered\" next time, or run /permissions readable add " + dir)
+				}
+			}
+		case approveReadPersist:
+			// Persist first, approve second: a write that fails must not leave
+			// the user believing the grant will survive. On failure the call is
+			// still approved for this session (the in-memory registry is the
+			// grant the gate already owns), and the note says what happened.
+			if dir := d.readRoot; dir != "" {
+				ans.Approve, ans.ReadRoot = true, dir
+				root, alreadySeeded, err := cli.AddReadablePath(dir)
+				switch {
+				case err != nil:
+					if m.session != nil {
+						m.transcript.addSystem("Reading " + displayPath(dir) +
+							" is allowed for this session only; remembering it failed: " + err.Error())
+					}
+				case alreadySeeded:
+					if m.session != nil {
+						m.transcript.addSystem("Reading " + displayPath(root) +
+							" is already remembered (" + config.FileConfigPath() + " seeds it).")
+					}
+				default:
+					ans.Persisted = true
+					if m.session != nil {
+						m.transcript.addSystem("Reading " + displayPath(root) +
+							" is now remembered across sessions. Manage it with /permissions readable list|add|rm.")
+					}
 				}
 			}
 		}
@@ -608,16 +676,4 @@ func (m Model) approvalRowsHeight() int {
 		return 0
 	}
 	return 1 + len(m.approval.detail) + len(m.approval.rows)
-}
-
-// readRootsConfigHint names the file that makes a session read grant
-// permanent, so the transcript line is actionable rather than a puzzle. It
-// resolves the same path the loader reads (honoring $XDG_CONFIG_HOME), and
-// falls back to the bare name when no config directory can be resolved —
-// naming a wrong absolute path would be worse than naming none.
-func readRootsConfigHint() string {
-	if path := config.FileConfigPath(); path != "" {
-		return path
-	}
-	return "config.toml"
 }
