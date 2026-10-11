@@ -122,6 +122,18 @@ const expandHint = "ctrl+t"
 // command's output is readable without expanding, matching codex.
 const collapsedPreviewLines = 3
 
+// bodyIndent is the column a card body's text starts at: the two cells of
+// content indent every transcript row shares (see contentIndent) plus the
+// `└ ` output marker's cell and space. The preview's continuation lines and
+// the diff's rows start there, and the collapsed card's "… +N lines" tally
+// sits there too, so the body reads as one block instead of the tally looking
+// like a row of its own.
+//
+// Only a line's start is indented: a wrapped continuation stays flush with the
+// margin, so copying a long line out of the transcript brings no indentation
+// the body did not write.
+const bodyIndent = "    "
+
 // statusBullet renders the codex-style bullet in the state's theme color:
 // dim gray while running, bold green on success, bold red on failure. The old
 // ✓/! glyphs were retired here on purpose: codex reserves ✓ for the
@@ -165,8 +177,9 @@ func (c toolCard) title() string {
 
 // render draws the card codex-style: the headline wraps a long command onto
 // `  │ ` continuation lines (never a mid-line ellipsis), the collapsed card
-// previews the first few response lines and then hints `… +N lines`, and the
-// expanded card shows the input, response, and diff sections as
+// previews the first few response lines and then hints `… +N lines` from the
+// body's own text column (bodyIndent), and the expanded card shows the input,
+// response, and diff sections as
 // gutter-prefixed lines (` │ ` argument continuations, ` └ ` output start)
 // with no border anywhere.
 //
@@ -195,8 +208,12 @@ func (c toolCard) render(theme Theme, width int) string {
 	preview, hidden := c.preview(theme, width, collapsedPreviewLines)
 	out += preview
 	if hidden > 0 {
-		out += "\n" + theme.System.Render(
-			WrapToWidth(fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint), max(1, width)))
+		// The tally is the body's own count, so it sits in the body's text
+		// column; flush against the margin it read as an unrelated row. Its
+		// wrap budget is the body's too, so the two can never disagree about
+		// where the pane's edge is.
+		out += "\n" + theme.System.Render(WrapToWidth(
+			bodyIndent+fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint), max(1, width-2)))
 	}
 	return out
 }
@@ -386,7 +403,7 @@ func (c toolCard) preview(theme Theme, width, n int) (string, int) {
 		if i == 0 {
 			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
 		} else {
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
+			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(bodyIndent+text, inner)))
 		}
 		shown++
 	}

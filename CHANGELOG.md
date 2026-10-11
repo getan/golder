@@ -323,6 +323,15 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The collapsed card's "… +N lines" tally sits in the body's column**: it
+  counts the body's hidden lines, and it now starts where the body's text does
+  (`bodyIndent`, the same column the preview's continuation lines and the
+  diff's rows use) instead of flush against the margin, where it read as a row
+  of its own rather than the body's own count. Its wrap budget is the body's
+  too, so the two cannot disagree about where the pane's edge is. Only a line's
+  start is indented: a wrapped continuation — the body's and the tally's alike
+  — stays flush, so copying a long line out of the transcript brings no
+  indentation the body did not write.
 - **A resumed session rebuilds its system prompt, keeping only the user's own
   words**: the prompt was stored whole and reused verbatim on resume, which
   froze two very different things together — our description of the running

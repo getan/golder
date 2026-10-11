@@ -307,6 +307,44 @@ func TestToolCardTodoEchoSuppressed(t *testing.T) {
 	}
 }
 
+// TestToolCardHintAlignsWithBody pins the collapsed tally's column: it counts
+// the body's hidden lines, so it starts in the body's text column (under the
+// lines it counts) rather than flush against the margin, where it read as a
+// row of its own. The body's own wrapped continuations stay flush — only a
+// line's start is indented, so copying a long line out brings no invented
+// indentation.
+func TestToolCardHintAlignsWithBody(t *testing.T) {
+	theme := DefaultTheme()
+	var b strings.Builder
+	for i := 0; i < collapsedPreviewLines+2; i++ {
+		fmt.Fprintf(&b, "resp-line-%d\n", i)
+	}
+	card := toolCard{name: "grep", response: parseToolResult(b.String()), state: cardSuccess}
+	plain := stripTCardANSI(card.render(theme, 60))
+
+	var hint, bodyLine string
+	for _, ln := range strings.Split(plain, "\n") {
+		switch {
+		case strings.Contains(ln, "click to expand"):
+			hint = ln
+		case bodyLine == "" && strings.HasPrefix(ln, bodyIndent):
+			bodyLine = ln
+		}
+	}
+	if hint == "" {
+		t.Fatalf("no hint line rendered:\n%s", plain)
+	}
+	if !strings.HasPrefix(hint, bodyIndent) {
+		t.Errorf("hint should start in the body's column %q, got %q\n%s", bodyIndent, hint, plain)
+	}
+	if bodyLine == "" {
+		t.Fatalf("no body continuation line to align against:\n%s", plain)
+	}
+	if !strings.HasPrefix(bodyLine, bodyIndent) {
+		t.Errorf("body continuation should share the hint's column, got %q\n%s", bodyLine, plain)
+	}
+}
+
 // TestToolCardExpandTruncation verifies the collapsed card shows the header,
 // the first few response lines, and a "… +N lines" hint for the rest, while the
 // expanded card reveals every response line with no hint.
