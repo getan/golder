@@ -120,6 +120,41 @@ func TestReadScopeGateAsksAndGrantsOnce(t *testing.T) {
 	}
 }
 
+// TestReadScopeGateOffersDirectoryItself pins the grant's granularity: a call
+// that names a directory (an `ls` operand, or a shell command's directory
+// argument) is offered that very directory, not the tree above it. The coarse
+// answer was the one that stuck for the session, so the dialog handed over
+// more than the read had asked for.
+func TestReadScopeGateOffersDirectoryItself(t *testing.T) {
+	workspace, outside, _ := readScopeFixture(t)
+	sub := filepath.Join(outside, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var got ApprovalRequest
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			got = req
+			return ApprovalAnswer{Answered: true} // deny: the question is what matters
+		},
+	})
+	if dec := gate(context.Background(), readCall("ls", sub)); dec == nil || !dec.Block {
+		t.Fatalf("a directory outside the workspace must be gated, got %+v", dec)
+	}
+	if got.ReadScope != sub {
+		t.Errorf("offered directory = %q, want the directory itself %q", got.ReadScope, sub)
+	}
+	// The shell spelling of the same read must land on the same answer, trailing
+	// separator and all.
+	if dec := gate(context.Background(), bashCall("ls "+sub+"/")); dec == nil || !dec.Block {
+		t.Fatalf("a command naming a directory outside must be gated, got %+v", dec)
+	}
+	if got.ReadScope != sub {
+		t.Errorf("offered directory = %q, want %q", got.ReadScope, sub)
+	}
+}
+
 // TestReadScopeGateSessionGrant covers the directory answer: it registers the
 // grant and returns no decision, so the call proceeds under the widened
 // boundary and the next read there is not asked about again.

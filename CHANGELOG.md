@@ -653,6 +653,17 @@ interactive REPL/TUI.
   (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
+- **A read outside the workspace offers the directory the call actually
+  reads**: the session grant in the dialog was built from the *parent* of the
+  path the call named, so `ls ~/work/harness/` offered `~/work` — one directory
+  coarser than the read, and the coarser grant is the one that sticks for the
+  session. The candidate is now the path itself when it is a directory (an
+  `ls`/`grep`/`find` operand, a shell command's directory argument, a trailing
+  separator) and the directory holding it when it is a file, so the grant
+  covers exactly the tree that was asked for and nothing above it. A path that
+  does not exist yet is still treated as a file, and a directory too broad to
+  grant (`$HOME`, `/`, `$HOME`'s parent) still falls back to the one-read
+  answer.
 - **Context readings are read at their high-water mark, and never re-read after
   a compaction**: the trigger trusted the newest assistant `usage` block, but
   the gateway alternated between two accounting levels for one growing

@@ -161,17 +161,36 @@ func TestAbsAgainst(t *testing.T) {
 }
 
 // TestReadScopeCandidate covers which directory a boundary question offers:
-// the file's own directory normally, its parent when that is too broad, and
-// nothing when both are (a file directly in $HOME).
+// the path itself when it is a directory (the finest grant that covers the
+// read), the directory holding it when it is a file, and nothing when that
+// directory is too broad — a file sitting directly in $HOME.
 func TestReadScopeCandidate(t *testing.T) {
 	home := readRootTestHome(t)
-	deep := filepath.Join(home, "work", "proj", "a.go")
-	if got := ReadScopeCandidate(deep); got != filepath.Join(home, "work", "proj") {
-		t.Errorf("candidate for %s = %q", deep, got)
+	proj := filepath.Join(home, "work", "proj")
+	sub := filepath.Join(proj, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// A file directly in $HOME: its directory is $HOME (too broad), and the
-	// parent of $HOME is too broad too, so nothing is offered.
-	if got := ReadScopeCandidate(filepath.Join(home, "notes.md")); got != "" {
-		t.Errorf("a file in $HOME should offer no directory, got %q", got)
+	file := filepath.Join(proj, "a.go")
+	if err := os.WriteFile(file, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, target, want string
+	}{
+		// The shape this rule exists for: `ls <dir>` must offer the directory
+		// itself, not its parent (a coarser grant that also sticks).
+		{"a directory is offered as itself", sub, sub},
+		{"the top of a named tree is not stepped over", proj, proj},
+		{"a file is offered as its directory", file, proj},
+		{"a path that does not exist is treated as a file", filepath.Join(proj, "gone.go"), proj},
+		{"a file in $HOME offers nothing", filepath.Join(home, "notes.md"), ""},
+		{"$HOME itself offers nothing", home, ""},
+		{"the filesystem root offers nothing", string(filepath.Separator), ""},
+	}
+	for _, c := range cases {
+		if got := ReadScopeCandidate(c.target); got != c.want {
+			t.Errorf("%s: ReadScopeCandidate(%q) = %q, want %q", c.name, c.target, got, c.want)
+		}
 	}
 }

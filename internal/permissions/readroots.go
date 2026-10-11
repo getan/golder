@@ -106,27 +106,36 @@ func AbsAgainst(base, p string) (string, error) {
 }
 
 // ReadScopeCandidate returns the directory a boundary question may offer to
-// grant for the session, given the file a call asked for: the file's own
-// directory, or that directory's parent when the directory itself is too broad
-// to hand over. "" means no directory should be offered (the answer is then
-// "this one file" or nothing), which happens when both are broad — a file
-// sitting directly in the home directory, say.
+// grant for the session, given the path a call named. The answer is as narrow
+// as the read that asked the question:
+//
+//   - a directory — an `ls`, `grep` or `find` operand, or a shell command's
+//     directory argument — is offered as itself, so `ls /outside/proj` offers
+//     /outside/proj rather than the tree above it;
+//   - a file is offered as the directory holding it, the narrowest grant that
+//     covers a read of that file;
+//   - a path that does not exist is treated as a file, because there is
+//     nothing there yet for a grant to name.
+//
+// "" means no directory should be offered (the answer is then "this one file"
+// or nothing), which happens when the directory that would be offered is too
+// broad to hand over — a file sitting directly in the home directory, say.
 func ReadScopeCandidate(target string) string {
 	if target == "" {
 		return ""
 	}
 	dir := filepath.Dir(filepath.Clean(target))
-	if _, broad := BroadReadRoot(dir); !broad {
-		return dir
+	// A path the call named that is itself a directory (ls, a search root, a
+	// shell operand) is the finest grant that covers the read: hand over the
+	// tree that was asked for, not the one above it. A stat failure leaves the
+	// file answer in place, which is the fail-narrow direction.
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		dir = filepath.Clean(target)
 	}
-	up := filepath.Dir(dir)
-	if up == dir {
+	if _, broad := BroadReadRoot(dir); broad {
 		return ""
 	}
-	if _, broad := BroadReadRoot(up); !broad {
-		return up
-	}
-	return ""
+	return dir
 }
 
 // BroadReadRoot reports whether p is too wide to grant. The filesystem root,

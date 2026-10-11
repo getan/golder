@@ -19,9 +19,11 @@ package judge
 //     file tools consult and the OS sandbox's read whitelist includes, so the
 //     next read there does not ask again.
 //
-// The directory offered for the second answer is never so broad that granting
+// The directory offered for the second answer is as narrow as the read that
+// asked for it — the path itself when the call named a directory, the
+// directory holding it when it named a file — and never so broad that granting
 // it would remove the boundary (permissions.BroadReadRoot refuses the
-// filesystem root, the home directory and its parent); when even the file's
+// filesystem root, the home directory and its parent); when even that
 // directory is too broad, only the one-call answer is offered.
 //
 // Credential material is not on the table at all: a path the static floor

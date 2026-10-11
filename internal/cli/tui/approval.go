@@ -133,9 +133,11 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 	}
 	readRoot := strings.TrimSpace(req.ReadScope)
 	if readRoot != "" {
-		// A read-scope question offers the directory the file lives in (which
-		// the gate already checked is not too broad to grant) beside the
-		// one-read answer, so a batch of reads in one tree is one keystroke.
+		// A read-scope question offers the directory the call read: the
+		// directory itself when it named one, the file's own directory
+		// otherwise — and never one the gate judged too broad to grant. It
+		// sits beside the one-read answer, so a batch of reads in one tree is
+		// one keystroke.
 		// The last two rows are the same grant at two lifetimes, and the labels
 		// say which: "this session" for the one that dies with the process,
 		// "remembered" for the one written to the managed store. A user who
