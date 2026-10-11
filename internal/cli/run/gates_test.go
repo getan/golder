@@ -18,10 +18,12 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -209,5 +211,57 @@ func TestGatesSeedAppliesParentAuthorizations(t *testing.T) {
 	// answered, so the chain is silent for the directory.
 	if dec := g.Chain()(context.Background(), gatesCall()); dec != nil {
 		t.Errorf("after Seed, a trusted directory should not ask, got %+v", dec)
+	}
+}
+
+// TestGrantWritableRoot covers the callback behind the REPL prompt's `w`/`s`:
+// the session grant always lands, persistence additionally writes the managed
+// store, a config.toml seed is reported rather than copied, and a store that
+// cannot be written degrades to session-only instead of failing the grant.
+func TestGrantWritableRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
+	seatbelt.SetWritableRoots(nil)
+
+	target := filepath.Join(dir, "build")
+
+	// Session only: registered, nothing written.
+	made, why := GrantWritableRoot(target, false)
+	if !made {
+		t.Fatalf("session grant failed: %s", why)
+	}
+	if got := seatbelt.WritableRoots(); len(got) != 1 || got[0] != target {
+		t.Fatalf("registry = %v, want the granted path", got)
+	}
+	saved, err := config.LoadPermissionsConfig()
+	if err != nil {
+		t.Fatalf("LoadPermissionsConfig: %v", err)
+	}
+	if len(saved.WritableRoots) != 0 {
+		t.Fatalf("a session grant must not be persisted, got %v", saved.WritableRoots)
+	}
+
+	// Remembered: now it is written down too.
+	made, why = GrantWritableRoot(target, true)
+	if !made {
+		t.Fatalf("remembered grant failed: %s", why)
+	}
+	if !strings.Contains(why, "remembered") {
+		t.Errorf("why = %q, want it to confirm the durable grant", why)
+	}
+	saved, _ = config.LoadPermissionsConfig()
+	if len(saved.WritableRoots) != 1 || saved.WritableRoots[0] != target {
+		t.Fatalf("managed store = %v, want the granted path", saved.WritableRoots)
+	}
+
+	// A second remembered grant does not duplicate the entry.
+	if _, _ = GrantWritableRoot(target, true); err != nil {
+		t.Fatalf("second remembered grant: %v", err)
+	}
+	saved, _ = config.LoadPermissionsConfig()
+	if len(saved.WritableRoots) != 1 {
+		t.Fatalf("second grant duplicated the entry: %v", saved.WritableRoots)
 	}
 }

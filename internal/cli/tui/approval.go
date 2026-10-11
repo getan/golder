@@ -17,8 +17,6 @@ package tui
 // ends unanswered is released fail-closed, so a gate never waits forever.
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
@@ -403,79 +401,13 @@ func inferWritableRoot(req judge.ApprovalRequest, cwd string) string {
 }
 
 // escalationPathCandidate extracts the first plausible path token from an
-// escalation request. Per-command grants feed both the dialog row and the
-// "already granted" shortcut in confirmApproval, so the parsing lives here.
+// escalation request: the parsing itself lives in judge, because the REPL's
+// prompt offers the same grant and the two must agree on what it covers.
 func escalationPathCandidate(req judge.ApprovalRequest, cwd string) string {
 	if req.Kind != judge.ApprovalEscalation {
 		return ""
 	}
-	for _, raw := range append(pathTokens(req.Summary), pathTokens(req.Justification)...) {
-		p, err := seatbelt.NormalizeWritableRoot(raw)
-		if err != nil {
-			continue
-		}
-		if plausibleWritableRoot(p, cwd) {
-			return p
-		}
-	}
-	return ""
-}
-
-// pathTokens splits s into shell-ish tokens that name an absolute or ~ path.
-// It is deliberately lexical: quotes, =, ':' and shell punctuation break
-// tokens, and a surviving token must start with "/" or "~/". Commands are
-// free-form, so a missed path only hides the row (fail closed), never grants.
-func pathTokens(s string) []string {
-	fields := strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case ' ', '\t', '\n', '\r', '\'', '"', '`', '=', ':', '(', ')', ',', ';':
-			return true
-		}
-		return false
-	})
-	var out []string
-	for _, f := range fields {
-		f = strings.TrimLeft(f, ">|<")
-		f = strings.TrimRight(f, ".,;:)]}")
-		if strings.HasPrefix(f, "~/") || (strings.HasPrefix(f, "/") && f != "/") {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
-// plausibleWritableRoot filters the candidates whose grant would be
-// meaningless or dangerous: paths the command can already write, the system
-// runtime (read-only by design), and golder's own state.
-func plausibleWritableRoot(p, cwd string) bool {
-	inside := func(dir string) bool {
-		return dir != "" && coveredBy(p, dir)
-	}
-	if inside(cwd) {
-		return false
-	}
-	for _, dir := range []string{os.TempDir(), "/tmp", "/private/tmp", "/var/tmp"} {
-		if inside(dir) {
-			return false
-		}
-	}
-	for _, dir := range []string{
-		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc",
-		"/System", "/Library", "/Applications", "/dev", "/proc", "/var",
-	} {
-		if inside(dir) {
-			return false
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if inside(filepath.Join(home, ".golder")) || p == home {
-			return false
-		}
-	}
-	if gh := strings.TrimSpace(os.Getenv("GOLDER_HOME")); gh != "" && inside(gh) {
-		return false
-	}
-	return true
+	return judge.EscalationPathFromText(req.Summary, req.Justification, cwd)
 }
 
 // coveredBy reports whether p is root itself or lives under it.

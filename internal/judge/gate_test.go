@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -479,6 +480,150 @@ func TestEscalationRequested(t *testing.T) {
 	for _, c := range cases {
 		if got := escalationRequested(toolCall("bash", c.args)); got != c.want {
 			t.Errorf("escalationRequested(%s) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}
+
+// escalationStdinOpts is the stdin-prompt shape of an escalation in ask mode:
+// the classifier grades Sandbox, the layer can isolate bash, and a grant
+// callback is wired so the `w`/`s` answers exist.
+func escalationStdinOpts(rec *noteRecorder, in string, grant func(root string, persist bool) (bool, string)) GateOpts {
+	opts := escalationGateOpts(rec)
+	opts.Cwd = "/Users/someone/project"
+	// Both are needed for the stdin prompt: interactive means In != nil AND
+	// Out != nil, so a half-wired opts silently fails closed instead.
+	opts.In = bufio.NewReader(strings.NewReader(in))
+	opts.Out = io.Discard
+	opts.GrantWritable = grant
+	return opts
+}
+
+// TestPromptRiskOffersWriteGrant pins the ladder the REPL prints for an
+// escalation: the plain y/N when no grant is possible, the four answers when a
+// plausible path can be re-admitted, and no row when the path is one the
+// command could already write.
+func TestPromptRiskOffersWriteGrant(t *testing.T) {
+	rec := &noteRecorder{}
+	const want = "\nAllow? [y]es (runs unisolated) / [n]o / [w]rites to /Volumes/KIOXIA/build/out (this session)" +
+		" / [s]ave writes to /Volumes/KIOXIA/build/out (remembered) [y/N/w/s]: "
+
+	args := `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"the cache lives there"}`
+	call := toolCall("bash", args)
+	v := Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"writes outside the workspace"}}
+
+	// No callback: the prompt stays y/N, because an option that silently
+	// forgets would be worse than an absent one.
+	var out bytes.Buffer
+	opts := escalationStdinOpts(rec, "n\n", nil)
+	opts.Out = &out
+	if ans := promptRisk(context.Background(), opts, call, v, "escalation request"); ans.allow {
+		t.Error("denied prompt returned allow")
+	}
+	if got := out.String(); strings.Contains(got, "[w]rites") || !strings.Contains(got, "[y/N]") {
+		t.Errorf("prompt without a grant callback = %q", got)
+	}
+
+	// With a callback and a plausible path: all four answers.
+	out.Reset()
+	opts = escalationStdinOpts(rec, "n\n", func(string, bool) (bool, string) { return true, "" })
+	opts.Out = &out
+	promptRisk(context.Background(), opts, call, v, "escalation request")
+	if got := out.String(); !strings.Contains(got, want) {
+		t.Errorf("prompt = %q, want it to carry %q", got, want)
+	}
+
+	// A path the command can already write offers no grant: the workspace is
+	// writable by definition.
+	out.Reset()
+	opts = escalationStdinOpts(rec, "n\n", func(string, bool) (bool, string) { return true, "" })
+	opts.Out = &out
+	inWorkspace := toolCall("bash", `{"command":"go build -o `+opts.Cwd+`/out","sandbox_permissions":"require_escalated","justification":"local"}`)
+	promptRisk(context.Background(), opts, inWorkspace, v, "escalation request")
+	if got := out.String(); strings.Contains(got, "[w]rites") {
+		t.Errorf("an already-writable path must not be offered: %q", got)
+	}
+}
+
+// TestPromptRiskWriteAnswers pins what each answer does: w grants for the
+// session, s grants and persists, y runs unisolated, anything else denies.
+func TestPromptRiskWriteAnswers(t *testing.T) {
+	const args = `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"cache"}`
+	call := toolCall("bash", args)
+	v := Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"outside"}}
+
+	for _, c := range []struct {
+		in        string
+		wantRoot  string
+		wantPers  bool
+		wantAllow bool
+	}{
+		{"y\n", "", false, true},
+		{"w\n", "/Volumes/KIOXIA/build/out", false, true},
+		{"s\n", "/Volumes/KIOXIA/build/out", true, true},
+		{"\n", "", false, false},
+	} {
+		var gotRoot string
+		var gotPersist bool
+		grant := func(root string, persist bool) (bool, string) {
+			gotRoot, gotPersist = root, persist
+			return true, ""
+		}
+		opts := escalationStdinOpts(&noteRecorder{}, c.in, grant)
+		var out bytes.Buffer
+		opts.Out = &out
+		ans := promptRisk(context.Background(), opts, call, v, "escalation request")
+		if ans.allow != c.wantAllow || ans.writableRoot != c.wantRoot || ans.persisted != c.wantPers {
+			t.Errorf("%q -> %+v, want allow=%v root=%q persisted=%v",
+				c.in, ans, c.wantAllow, c.wantRoot, c.wantPers)
+		}
+		if c.wantRoot != "" && (gotRoot != c.wantRoot || gotPersist != c.wantPers) {
+			t.Errorf("%q granted (%q, persist=%v), want (%q, %v)", c.in, gotRoot, gotPersist, c.wantRoot, c.wantPers)
+		}
+	}
+}
+
+// TestGateWriteGrantKeepsTheCallContained is the reason `w`/`s` exist: the
+// user re-admits one path, so the call runs ISOLATED with that path writable,
+// rather than unisolated as a plain `y` would approve. The note must say so,
+// and a remembered grant must not be described as session-only.
+func TestGateWriteGrantKeepsTheCallContained(t *testing.T) {
+	args := `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"cache"}`
+	for _, c := range []struct {
+		in           string
+		wantSandbox  bool
+		wantRemember bool
+	}{
+		{"w\n", true, false},
+		{"s\n", true, true},
+		{"y\n", false, false},
+	} {
+		rec := &noteRecorder{}
+		opts := escalationStdinOpts(rec, c.in, func(string, bool) (bool, string) { return true, "" })
+		gate := PermissionGate(permissions.New(permissions.Ask), opts)
+		dec := gate(context.Background(), toolCall("bash", args))
+		switch {
+		case c.wantSandbox && (dec == nil || !dec.Sandbox):
+			t.Errorf("%q: decision = %+v, want the sandbox bit (contained)", c.in, dec)
+		case !c.wantSandbox && dec != nil:
+			t.Errorf("%q: decision = %+v, want a direct approval", c.in, dec)
+		}
+		if !c.wantSandbox {
+			// A plain yes runs the call unisolated, so there is no containment
+			// note to read.
+			if len(rec.notes) != 0 {
+				t.Errorf("%q: notes = %+v, want none for an unisolated approval", c.in, rec.notes)
+			}
+			continue
+		}
+		if len(rec.notes) != 1 {
+			t.Fatalf("%q: notes = %+v, want one", c.in, rec.notes)
+		}
+		rationale := rec.notes[0].Rationale
+		if !strings.Contains(rationale, "contained in the sandbox") {
+			t.Errorf("%q: rationale = %q, want it to say the call stays contained", c.in, rationale)
+		}
+		if got := strings.Contains(rationale, "remembered"); got != c.wantRemember {
+			t.Errorf("%q: rationale = %q, remembered=%v want %v", c.in, rationale, got, c.wantRemember)
 		}
 	}
 }

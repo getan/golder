@@ -194,6 +194,18 @@ type GateOpts struct {
 	// the UI goroutine and waits on a channel). nil keeps the fail-closed
 	// behavior.
 	Confirm func(ctx context.Context, req ApprovalRequest) ApprovalAnswer
+	// Cwd is the directory the run is gated against. It is used to judge
+	// whether an escalation's path is worth offering a grant for (a path the
+	// command can already write needs none). Empty means no path grant is
+	// offered.
+	Cwd string
+	// GrantWritable, when set, registers a path as writable for the session and
+	// — when persist is true — makes that survive the process. It backs the
+	// stdin prompt's `w`/`s` answers, the twin of the TUI dialog's rows, and is
+	// a callback for the same reason the read grant's is: this package is a
+	// leaf and cannot reach the sandbox registry or the managed store. why
+	// carries the failure, or the note for a grant that was already in place.
+	GrantWritable func(root string, persist bool) (made bool, why string)
 }
 
 // ApprovalKind says why a call needs the user's answer.
@@ -375,7 +387,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// decision rides the executor context down to the tool).
 				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable") {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalReviewFailed, lang); ok {
@@ -396,8 +408,26 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// in auto mode. Without a human the call is contained (the
 				// safe default) and the bash hint tells the model to stop.
 				if escalationRequested(call) {
-					if interactive && promptRisk(ctx, opts, call, v, "escalation request") {
-						return nil
+					if interactive {
+						if ans := promptRisk(ctx, opts, call, v, "escalation request"); ans.allow {
+							if ans.writableRoot != "" {
+								// The user re-admitted just the denied path
+								// instead of letting the command out: keep it
+								// contained with that path writable, exactly as
+								// the TUI dialog's `w`/`s` rows do.
+								rationale := "contained in the sandbox; " + ans.writableRoot + " is writable for this session"
+								if ans.persisted {
+									rationale = "contained in the sandbox; " + ans.writableRoot + " is writable and remembered"
+								}
+								notify(Note{
+									Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+									Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
+									Authorization: authWord(v.Authorization, lang), Rationale: rationale,
+								})
+								return &agentcore.BeforeToolCallDecision{Sandbox: true}
+							}
+							return nil
+						}
 					}
 					if dec, ok := askApproval(ctx, opts, call, v, ApprovalEscalation, lang); ok {
 						return dec
@@ -406,7 +436,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return &agentcore.BeforeToolCallDecision{Sandbox: true}
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable") {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
@@ -419,7 +449,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteApproved, lang))
 				return nil
 			}
-			if interactive && promptRisk(ctx, opts, call, v, "") {
+			if interactive && promptRisk(ctx, opts, call, v, "").allow {
 				return nil
 			}
 			if dec, ok := askApproval(ctx, opts, call, v, ApprovalConfirm, lang); ok {
@@ -656,17 +686,34 @@ func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.
 // Deny path carries the same way back.
 const DenyGuidance = "refine the call to avoid privilege escalation, destructive scope, or credential material; split it into smaller reviewable steps"
 
+// riskAnswer is the stdin prompt's decision. It is richer than a bool because
+// an escalation can be answered with a path grant rather than an unisolated
+// approval: allow runs the call (unisolated when the prompt was an escalation),
+// writableRoot asks the gate to keep it contained with that root writable
+// instead, and persisted says the grant was written down.
+type riskAnswer struct {
+	allow        bool
+	writableRoot string
+	persisted    bool
+}
+
 // promptRisk asks the user on stdin (interactive drivers only) whether a call
 // may run. unisolated explains why approving runs the call WITHOUT the
 // sandbox; empty means the ordinary risk confirmation.
-func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, unisolated string) bool {
+//
+// An escalation additionally offers the twin of the TUI dialog's rows: `w`
+// re-admits just the path the command was denied, keeping the call contained,
+// and `s` does the same while remembering the grant across sessions. Both need
+// opts.GrantWritable and a plausible path; without them the prompt is the plain
+// y/N, which is what a driver that cannot grant should see.
+func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, unisolated string) riskAnswer {
 	if opts.Mu != nil {
 		opts.Mu.Lock()
 		defer opts.Mu.Unlock()
 	}
 	out := opts.Out
 	if out == nil {
-		return false
+		return riskAnswer{}
 	}
 	if unisolated != "" {
 		// Either the execution layer cannot isolate this call (no runner for
@@ -690,19 +737,46 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	if j := escalationJustification(call); j != "" {
 		fmt.Fprintf(out, "  model's reason: %s\n", truncateRunes(j, 160))
 	}
-	fmt.Fprint(out, "Allow? [y/N]: ")
+	grantRoot := ""
+	if unisolated == "escalation request" && opts.GrantWritable != nil {
+		grantRoot = EscalationPathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
+	}
+	if grantRoot != "" {
+		fmt.Fprintf(out, "Allow? [y]es (runs unisolated) / [n]o / [w]rites to %s (this session)"+
+			" / [s]ave writes to %s (remembered) [y/N/w/s]: ", grantRoot, grantRoot)
+	} else {
+		fmt.Fprint(out, "Allow? [y/N]: ")
+	}
 	// The read is interruptible: a Ctrl+C during the prompt cancels the run
 	// context and yields a denial immediately instead of trapping the user
 	// until they answer (same contract as the trust gate).
 	line, ok := readLineOrCancel(ctx, opts.In)
 	if !ok {
-		return false
+		return riskAnswer{}
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return true
+		return riskAnswer{allow: true}
+	case "w", "write", "writes":
+		if grantRoot != "" {
+			if made, why := opts.GrantWritable(grantRoot, false); made {
+				return riskAnswer{allow: true, writableRoot: grantRoot}
+			} else if why != "" {
+				fmt.Fprintf(out, "  %s\n", why)
+			}
+		}
+		return riskAnswer{}
+	case "s", "save":
+		if grantRoot != "" {
+			if made, why := opts.GrantWritable(grantRoot, true); made {
+				return riskAnswer{allow: true, writableRoot: grantRoot, persisted: true}
+			} else if why != "" {
+				fmt.Fprintf(out, "  %s\n", why)
+			}
+		}
+		return riskAnswer{}
 	default:
-		return false
+		return riskAnswer{}
 	}
 }
 

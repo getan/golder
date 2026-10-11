@@ -12,6 +12,17 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **The REPL's risk prompt offers the write grant too**: the TUI dialog has
+  offered "allow writes to `<path>`" for a while, but the line-based REPL asked
+  a plain `[y/N]` for the same escalation — so the same conflict had a narrower
+  answer depending on which front-end you happened to be in. The prompt now
+  carries the same ladder (`y` runs it unisolated, `w` re-admits just the denied
+  path for the session, `s` remembers it) whenever a driver can actually grant
+  one, and falls back to `[y/N]` when it cannot — an option that silently
+  forgets would be worse than an absent one. The path extraction it needs moved
+  to judge (`EscalationPathFromText`), so the two dialogs cannot disagree about
+  what the grant covers, and a `w`/`s` answer keeps the call contained (the
+  sandbox bit) rather than letting it out.
 - **Read and write grants can be remembered from the dialog**: both approval
   dialogs that offer a path grant (a read outside the workspace, a sandbox write
   the reviewer contained) now offer it at two lifetimes — *this session* and

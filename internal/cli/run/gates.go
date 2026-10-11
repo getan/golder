@@ -31,6 +31,7 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -203,6 +204,10 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		Classifier: g.classifier(),
 		Sandboxed:  o.Sandboxed,
 		Notify:     o.Notes.Emit,
+		// The stdin prompt's `w`/`s` answers need the sandbox registry and the
+		// managed store, neither of which judge (a leaf package) can reach.
+		Cwd:           o.Cwd,
+		GrantWritable: GrantWritableRoot,
 	}
 	if withPrompts {
 		permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
@@ -293,4 +298,40 @@ func PersistReadRoot(dir string) (made bool, why string) {
 		return false, "cannot remember this path: " + err.Error()
 	}
 	return true, root + " is remembered across sessions"
+}
+
+// GrantWritableRoot makes a directory writable inside the sandbox, for this
+// session and — when persist is true — for every later one. It is the callback
+// behind the REPL prompt's `w`/`s` answers, the twin of the TUI dialog's
+// rows, and it lives here for the same reason PersistReadRoot does: judge is a
+// leaf package that can reach neither the sandbox registry nor the managed
+// store, and this assembly point can.
+func GrantWritableRoot(root string, persist bool) (made bool, why string) {
+	if _, err := seatbelt.AddWritableRoot(root); err != nil {
+		return false, "cannot grant write access to " + root + ": " + err.Error()
+	}
+	if !persist {
+		return true, ""
+	}
+	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
+		for _, r := range cfg.Permissions.WritableRoots {
+			if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
+				return true, "already remembered (" + config.FileConfigPath() + " seeds " + root + ")"
+			}
+		}
+	}
+	saved, err := config.LoadPermissionsConfig()
+	if err != nil {
+		return true, root + " is writable for this session only; cannot remember it: " + err.Error()
+	}
+	for _, r := range saved.WritableRoots {
+		if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
+			return true, root + " is writable and remembered"
+		}
+	}
+	saved.WritableRoots = append(saved.WritableRoots, root)
+	if err := config.SavePermissionsConfig(saved); err != nil {
+		return true, root + " is writable for this session only; cannot remember it: " + err.Error()
+	}
+	return true, root + " is writable and remembered"
 }
