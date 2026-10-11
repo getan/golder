@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/getan/golder/internal/judge"
 )
 
@@ -343,5 +345,66 @@ func TestExploreGroupExcludesResultBearingTools(t *testing.T) {
 	// The match is case-insensitive and trims, like every other tool-name check.
 	if !isExploreTool("  View_Image  ") {
 		t.Error("the tool-name match should trim and fold case")
+	}
+}
+
+// TestExploreGroupHeaderSettlesAfterLateMember is the regression for the cell
+// that reads `Exploring` forever. A cell whose calls all finished is folded into
+// the committed prefix and renders `Explored` from the stored wrap; the next
+// turn's first search folds into that same trailing cell, so the cell re-renders
+// `Exploring` — and when that call finishes, the header has to come back to
+// `Explored`. It did not: the completion flipped the card's state but left the
+// committed wrap alone, and commitStable never rescans a block behind its
+// boundary, so the wrap kept saying `Exploring` for the rest of the session.
+func TestExploreGroupHeaderSettlesAfterLateMember(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 100, Height: 40})
+	for _, call := range []struct {
+		id, name string
+		input    map[string]any
+	}{
+		{"g1", "grep", map[string]any{"pattern": "alpha"}},
+		{"r1", "read", map[string]any{"path": "a.go"}},
+	} {
+		m = apply(t, m, toolStartMsg{id: call.id, name: call.name, input: call.input})
+		m = apply(t, m, toolEndMsg{id: call.id, ok: true, result: "a.go:1:alpha"})
+	}
+	if got := stripANSI(renderContentStr(m)); !strings.Contains(got, "Explored") {
+		t.Fatalf("a finished cell should read Explored:\n%s", got)
+	}
+
+	// Next turn: the new search joins the same cell, which is already committed.
+	m = apply(t, m, toolStartMsg{id: "g2", name: "grep", input: map[string]any{"pattern": "beta"}})
+	if got := stripANSI(renderContentStr(m)); !strings.Contains(got, "Exploring") {
+		t.Fatalf("a running member should read Exploring:\n%s", got)
+	}
+	if m.transcript.matEnd == 0 {
+		t.Fatal("the cell should still render from the committed prefix")
+	}
+
+	m = apply(t, m, toolEndMsg{id: "g2", ok: true, result: "b.go:1:beta"})
+	got := stripANSI(renderContentStr(m))
+	if strings.Contains(got, "Exploring") {
+		t.Errorf("header stuck on Exploring after the late member finished:\n%s", got)
+	}
+	if !strings.Contains(got, "Explored") {
+		t.Errorf("header should read Explored again:\n%s", got)
+	}
+}
+
+// TestExploreGroupHeaderSettlesOnRunEnd covers the same staleness on the other
+// state change: the run ends (interrupt, or a tool that never delivered its end
+// event) while the late member of an already-committed cell is still running.
+// Closing that card has to repaint the cell, or the transcript keeps promising
+// `Exploring` after the run is over.
+func TestExploreGroupHeaderSettlesOnRunEnd(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = apply(t, m, toolStartMsg{id: "r1", name: "read", input: map[string]any{"path": "a.go"}})
+	m = apply(t, m, toolEndMsg{id: "r1", ok: true, result: "contents"})
+	m = apply(t, m, toolStartMsg{id: "g2", name: "grep", input: map[string]any{"pattern": "beta"}})
+
+	m = apply(t, m, runEndMsg{})
+	got := stripANSI(renderContentStr(m))
+	if strings.Contains(got, "Exploring") {
+		t.Errorf("header stuck on Exploring after the run ended:\n%s", got)
 	}
 }

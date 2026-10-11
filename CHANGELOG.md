@@ -653,6 +653,20 @@ interactive REPL/TUI.
   (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
+- **An exploration cell settles on `Explored` again**: a `• Explored` cell whose
+  calls had all finished is folded into the committed prefix and rendered once
+  from that stored wrap. The next turn's first search folds into the same
+  trailing cell — which is right, the call *is* more exploring — so the cell
+  re-renders as `• Exploring`; when that call finished the header never came
+  back, and the cell read `Exploring` for the rest of the session. The
+  completion flipped the card's state and left the committed wrap alone, and the
+  prefix is only ever scanned *forward* (a folded block is never re-examined),
+  so nothing repainted it. Every mutation of a card that can already be
+  committed now drops the wrap — the two that were missing were a tool
+  completion and the run-end close of a card whose end event never arrived — and
+  the invalidation lives in one place (`invalidateCard`/`invalidateGroup`, which
+  the click and the gate-verdict paths already needed) instead of being spelled
+  out per caller.
 - **A read outside the workspace offers the directory the call actually
   reads**: the session grant in the dialog was built from the *parent* of the
   path the call named, so `ls ~/work/harness/` offered `~/work` — one directory

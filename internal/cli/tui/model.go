@@ -1233,9 +1233,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case toolEndMsg:
 		// Flip the card's state and attach the parsed response tree. The card is
-		// held by pointer in the transcript, so a reflow re-renders it in place.
+		// held by pointer in the transcript, so a reflow re-renders it in place —
+		// but only while the card is still in the live tail. A card inside an
+		// exploration cell can already be committed (the cell finished, then a
+		// later call folded into it and re-rendered it as `Exploring`), and that
+		// block is now behind the commit boundary, which commitStable never
+		// rescans. Dropping the stored wrap is what settles the header on
+		// `Explored` instead of leaving it stuck.
 		if card, ok := m.toolCards[msg.id]; ok {
 			card.complete(msg.ok, msg.result, msg.details)
+			m.transcript.invalidateCard(card)
 			// A bash call that handed back a session id names that session for
 			// every later write_stdin card (see toolCard.writeStdinLead).
 			if id, command, ok := bashSessionEntry(card, msg.details); ok {
@@ -1379,9 +1386,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Any card still marked running never received its end event — the run
 		// was interrupted, or it ended while a tool was pending. Leaving it as
 		// "Running" would promise output that will never arrive, so close it as
-		// a warn (the transcript keeps the call and its partial output).
+		// a warn (the transcript keeps the call and its partial output). The close
+		// is a state change like any completion, so it also has to drop a
+		// committed wrap the card renders through (invalidateCard): an
+		// exploration cell that took a late member while it was already committed
+		// would otherwise keep the header on `Exploring`.
 		for _, card := range m.toolCards {
 			card.abort()
+			m.transcript.invalidateCard(card)
 		}
 		m.relayout()
 		// One settlement line, decided here rather than by which events happened

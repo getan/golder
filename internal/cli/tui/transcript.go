@@ -201,19 +201,44 @@ func (t *transcript) reset() {
 	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, prefixValid: true, follow: true}
 }
 
-// toggleCardExpanded flips a tool card's expand state and, when the card is
-// already part of the committed prefix, drops the stored wrap so the next
-// layout repaints it. A card can be clicked open long after its block was
-// folded into the prefix, and commit tracking cannot see the mutation. A card
-// inside an exploration group is toggled through the group instead: the group
-// renders the detail, so opening one member alone would do nothing visible.
+// toggleCardExpanded flips a card's expand state and drops the stored wrap when
+// the card renders inside the committed prefix. A card inside an exploration
+// group is toggled through the group instead: the group renders the detail, so
+// opening one member alone would do nothing visible.
 func (t *transcript) toggleCardExpanded(c *toolCard) {
 	c.toggleExpanded()
+	t.invalidateCard(c)
+}
+
+// invalidateCard drops the committed wrap when c renders inside the
+// materialized window, so the next layout repaints it. Every mutation of a card
+// that can already be committed has to call this: commitStable only ever scans
+// FORWARD from matEnd, so a block behind that boundary is never re-examined and
+// the stored wrap keeps rendering the pre-mutation text. The mutations are a
+// click that expands a card long after its block was folded, a gate verdict
+// landing on it (addReviewNote), and a state change — the one that bites is an
+// exploration cell filling up again: a finished cell is committed, a later call
+// folds into it (appendToolBlock drops the wrap, so the cell re-renders as
+// `Exploring`), and this is what lets that call's completion settle the header
+// back to `Explored`.
+//
+// `holds`, not `card == c`: a card coalesced into an exploration group renders
+// through its block too. A card outside the window needs nothing — deferred
+// blocks render on first materialization, and tail blocks render every layout.
+func (t *transcript) invalidateCard(c *toolCard) {
 	for i := t.matStart; i < t.matEnd; i++ {
-		// holds, not card == c: a card coalesced into an exploration group is
-		// rendered through its block too, and the committed wrap must be
-		// dropped when the group is (or later becomes) expanded.
 		if t.blocks[i].holds(c) {
+			t.prefixValid = false
+			return
+		}
+	}
+}
+
+// invalidateGroup is invalidateCard for a whole exploration cell, whose
+// collapsed render depends on every member rather than on one card.
+func (t *transcript) invalidateGroup(g *exploreGroup) {
+	for i := t.matStart; i < t.matEnd; i++ {
+		if t.blocks[i].group == g {
 			t.prefixValid = false
 			return
 		}
@@ -225,12 +250,7 @@ func (t *transcript) toggleCardExpanded(c *toolCard) {
 // group already sits inside the prefix.
 func (t *transcript) toggleGroupExpanded(g *exploreGroup) {
 	g.toggleExpanded()
-	for i := t.matStart; i < t.matEnd; i++ {
-		if t.blocks[i].group == g {
-			t.prefixValid = false
-			return
-		}
-	}
+	t.invalidateGroup(g)
 }
 
 // setSize resizes the transcript's viewport and re-flows the blocks to the new
@@ -330,15 +350,8 @@ func (t *transcript) addReviewNote(n judge.Note) {
 				card.addNote(n)
 				// The card may already sit inside the committed prefix, whose
 				// stored wrap predates the note; drop it so the next layout
-				// repaints the card with the verdict. Cards outside the window
-				// need no handling: deferred blocks render on first
-				// materialization, and tail blocks render fresh each layout.
-				for j := t.matStart; j < t.matEnd; j++ {
-					if t.blocks[j].holds(card) {
-						t.prefixValid = false
-						break
-					}
-				}
+				// repaints the card with the verdict.
+				t.invalidateCard(card)
 				t.reflow()
 				return
 			}
