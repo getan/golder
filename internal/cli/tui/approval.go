@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
@@ -249,7 +250,8 @@ func (m *Model) answerApproval(value string) {
 					ans.Approve, ans.WritableRoot = true, root
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
-							" are allowed inside the sandbox for this session. Persist it with: /permissions writable add " + root)
+							" are allowed inside the sandbox for this session only." +
+							" To make that permanent, run /permissions writable add " + root)
 					}
 				}
 			}
@@ -262,7 +264,9 @@ func (m *Model) answerApproval(value string) {
 				ans.Approve, ans.ReadRoot = true, dir
 				if m.session != nil {
 					m.transcript.addSystem("Reading " + displayPath(dir) +
-						" is allowed for this session. Persist it with: readable_roots in config.toml")
+						" is allowed for this session only." +
+						" To make that permanent, add it to [permissions] readable_roots in " +
+						readRootsConfigHint() + ".")
 				}
 			}
 		}
@@ -604,4 +608,16 @@ func (m Model) approvalRowsHeight() int {
 		return 0
 	}
 	return 1 + len(m.approval.detail) + len(m.approval.rows)
+}
+
+// readRootsConfigHint names the file that makes a session read grant
+// permanent, so the transcript line is actionable rather than a puzzle. It
+// resolves the same path the loader reads (honoring $XDG_CONFIG_HOME), and
+// falls back to the bare name when no config directory can be resolved —
+// naming a wrong absolute path would be worse than naming none.
+func readRootsConfigHint() string {
+	if path := config.FileConfigPath(); path != "" {
+		return path
+	}
+	return "config.toml"
 }

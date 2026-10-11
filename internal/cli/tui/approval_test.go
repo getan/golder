@@ -811,3 +811,54 @@ func TestTrustGateDeniesWithoutAnswer(t *testing.T) {
 		t.Fatal("gate did not return after cancellation")
 	}
 }
+
+// TestApprovalReadGrantNoteIsUnambiguous pins the wording of the note printed
+// after a session read grant. The first version said "… for this session.
+// Persist it with: readable_roots in config.toml", which reads as a report that
+// the grant WAS persisted while it is only an instruction for how to make it
+// so — and it named the file nowhere near precisely enough to act on (the real
+// path honors $XDG_CONFIG_HOME, and ~/.golder is a different directory). The
+// note now states the scope, then the instruction, and names the file the
+// loader actually reads.
+func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+
+	session := newRemoteTestSession(t)
+	m := NewModel(Options{}).withSession(session, nil)
+	m.approval = approvalDialog{
+		active:   true,
+		kind:     "tool",
+		readRoot: filepath.Join(home, "outside"),
+		reply:    make(chan judge.ApprovalAnswer, 1),
+		rows:     []approvalRow{{"Allow reading", "a", approveReadDir}},
+	}
+	m.answerApproval(approveReadDir)
+
+	var note strings.Builder
+	for _, b := range m.transcript.blocks {
+		if b.role == roleSystem {
+			note.WriteString(b.text)
+			note.WriteByte('\n')
+		}
+	}
+	got := note.String()
+
+	if !strings.Contains(got, "for this session only") {
+		t.Errorf("note must state the scope:\n%s", got)
+	}
+	if !strings.Contains(got, "To make that permanent") {
+		t.Errorf("note must mark the persistence hint as an instruction:\n%s", got)
+	}
+	if strings.Contains(got, "Persist it with") {
+		t.Errorf("the old phrasing read as a statement of fact:\n%s", got)
+	}
+	wantPath := filepath.Join(home, "xdg", "golder", "config.toml")
+	if !strings.Contains(got, wantPath) {
+		t.Errorf("note must name the file the loader reads (%s):\n%s", wantPath, got)
+	}
+	if !strings.Contains(got, "[permissions] readable_roots") {
+		t.Errorf("note must name the key to set:\n%s", got)
+	}
+}
