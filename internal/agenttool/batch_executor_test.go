@@ -187,7 +187,7 @@ func TestBatchMixedGroupsOverlapReads(t *testing.T) {
 	reg := registerAll(t,
 		mk("read1", agentcore.ToolExecutionParallel),
 		mk("read2", agentcore.ToolExecutionParallel),
-		mk("bash", agentcore.ToolExecutionSequential),
+		mk("apply_patch", agentcore.ToolExecutionSequential),
 	)
 	cfg := BatchConfig{ToolExecutorConfig: ToolExecutorConfig{Registry: reg}}
 
@@ -199,16 +199,50 @@ func TestBatchMixedGroupsOverlapReads(t *testing.T) {
 			readsStarted.Wait()
 			close(release)
 		}()
-		ExecuteToolCalls(context.Background(), cfg, callsFor("read1", "read2", "bash"), nil)
+		ExecuteToolCalls(context.Background(), cfg, callsFor("read1", "read2", "apply_patch"), nil)
 	}()
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("batch did not finish; the sequential call deadlocked the reads")
+		t.Fatal("batch did not finish; the barrier call deadlocked the reads")
 	}
 	if maxConcurrent < 2 {
 		t.Errorf("reads around a sequential call must overlap, saw max %d concurrent", maxConcurrent)
+	}
+}
+
+// TestBatchShellCallsRunConcurrently is the codex-parity regression this
+// change exists for: two shell calls in one message overlap instead of waiting
+// for each other. Timing is the observable — 300ms twice cannot finish in under
+// 500ms unless they run together — and the assertion is deliberately loose so a
+// slow machine cannot make it flaky.
+func TestBatchShellCallsRunConcurrently(t *testing.T) {
+	dir := t.TempDir()
+	// Two sleeps, compared against their sum: the observable is timing, so the
+	// test needs nothing from the shell but a command that takes a known time.
+	// The margins are wide because CI runs this under -race on a shared runner:
+	// parallel lands near 0.4s, serial near 0.8s, and 650ms sits between them
+	// with room on both sides.
+	call := func(id string) agentcore.AgentToolCall {
+		args, _ := json.Marshal(map[string]any{"command": "sleep 0.4"})
+		return agentcore.AgentToolCall{ID: id, Name: "bash", Arguments: args}
+	}
+	tool := &BashTool{Dir: dir}
+	reg := registerAll(t, tool)
+	cfg := BatchConfig{ToolExecutorConfig: ToolExecutorConfig{Registry: reg}}
+
+	start := time.Now()
+	results, _ := ExecuteToolCalls(context.Background(), cfg, []agentcore.AgentToolCall{call("a"), call("b")}, nil)
+	elapsed := time.Since(start)
+
+	for i, r := range results {
+		if r.IsError {
+			t.Fatalf("shell call %d failed: %+v", i, r)
+		}
+	}
+	if elapsed >= 650*time.Millisecond {
+		t.Errorf("two shell calls took %v; they ran serially (want well under 650ms)", elapsed)
 	}
 }
 

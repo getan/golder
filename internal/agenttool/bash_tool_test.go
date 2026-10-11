@@ -147,8 +147,10 @@ func TestBashToolMode(t *testing.T) {
 	if tool.Name() != "bash" {
 		t.Errorf("name = %q", tool.Name())
 	}
-	if tool.ExecutionMode() != agentcore.ToolExecutionSequential {
-		t.Error("bash should be sequential")
+	// Parallel: codex's shell is a shareable tool and the exclusive lock there
+	// belongs to the editing tools, which apply_patch keeps here.
+	if tool.ExecutionMode() != agentcore.ToolExecutionParallel {
+		t.Error("bash should be parallel (apply_patch is the barrier)")
 	}
 	var schema map[string]any
 	if err := json.Unmarshal(tool.Schema(), &schema); err != nil {

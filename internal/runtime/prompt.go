@@ -166,8 +166,8 @@ const patchGuide = "Edit files with the apply_patch tool: one call carries a pat
 // codeSearchGuide names the grep tool as THE way to search file contents — the
 // grep the model reaches for, so the reflex lands on a tool that respects the
 // workspace boundary, returns bounded results, and keeps its calls visible to
-// the driver's grouping (a shell pipeline renders as its own card and runs
-// serially, while the named tools batch in parallel).
+// the driver's grouping (a shell pipeline renders as its own card, while the
+// named tools batch in parallel).
 //
 // The guide names the arguments that used to send the model to a shell —
 // context lines, case-insensitive matching, whole words, literal patterns,
@@ -216,11 +216,13 @@ const codeSearchGuide = "To search code, use the grep tool (file contents) and t
 // multi_tool_use namespace here, the message's own tool-call list IS the batch.
 // The second half is the codex shell rule: a chained command renders as one
 // transcript card, so unrelated steps belong in separate calls.
-const batchGuide = "Batch independent tool calls in a single message: read, grep, find and ls " +
-	"calls issued together run in parallel, while the same calls split across messages run one " +
-	"round after another. Sequence calls only when a later call consumes an earlier result. Keep " +
-	"each shell call to one step — do not chain unrelated commands with `;`, `&&`, or banner " +
-	"echoes like `echo \"===\"`, which render as a single card and hide which step failed."
+const batchGuide = "Batch independent tool calls in a single message: read, grep, find, ls and " +
+	"bash calls issued together run in parallel, while the same calls split across messages run " +
+	"one round after another. Sequence calls only when a later call consumes an earlier result — " +
+	"two separate shell calls run concurrently, so ordering between them means either separate " +
+	"messages or chaining inside one call. Keep each shell call to one step: put unrelated " +
+	"commands in their own calls rather than chaining them with `;` or `&&`, and skip banner " +
+	"echoes like `echo \"===\"`, which render as extra cards and hide which step failed."
 
 // taskGuide instructs the model on how to use the generic `task` tool (US-008,
 // #458). The task tool dispatches an independent sub-agent that runs its own

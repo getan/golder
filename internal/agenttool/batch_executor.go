@@ -5,9 +5,10 @@
 //   - Calls are first grouped (see batchGroups): a maximal run of parallel-safe
 //     calls becomes one group whose members run concurrently, and every
 //     sequential call stands alone. Groups run one after another in source
-//     order, so a side-effecting call still observes everything before it and
-//     is observed by everything after it — the ordering guarantee the old
-//     all-or-nothing rule gave, without stalling the reads around it.
+//     order, so a sequential (write-lock) call still observes everything before
+//     it and is observed by everything after it — apply_patch keeps that
+//     guarantee — while the parallel-capable calls, shell commands included,
+//     overlap inside their own group the way codex's read-lock tools do.
 //   - The whole batch signals termination only when every finalized result has
 //     terminate=true, matching pi.
 //   - Abort stops further groups and fills the remaining calls with aborted

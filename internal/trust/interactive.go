@@ -298,16 +298,15 @@ type GateOpts struct {
 // filed on the manager, so it applies to the next call of any driver sharing
 // that manager. A nil Manager returns nil (trust disabled, no gating).
 //
-// Concurrency: bash/write/edit are all ToolExecutionSequential, so the batch
-// runs serially and this hook fires on the run-loop producer goroutine - never
-// concurrently with itself. mu serializes prompts anyway as cheap insurance
-// should a side-effect tool ever become parallel; it is nil-safe (callers that
-// wire trust without a mutex simply get no serialization). The prompt writes to
-// out from the producer goroutine; this is safe because streamRun uses an
-// unbuffered event stream (EventBuffer=0, the default), so by the time the hook
-// runs the main goroutine has already drained the assistant's streamed text and
-// is idle in DrainStream. Do not raise EventBuffer above 0 while trust gating
-// is wired without routing the prompt through the main goroutine.
+// Concurrency: this hook runs concurrently with itself. bash is
+// ToolExecutionParallel (codex parity: the shell is shareable and the exclusive
+// lock belongs to the editing tools, which apply_patch keeps), so two commands
+// in one batch reach the gate at the same time. mu serializes the stdin prompt
+// - required now, rather than the insurance it was while every side-effect tool
+// was sequential - and it is nil-safe (a driver wiring trust without a mutex
+// gets no serialization). A driver that answers through Confirm instead (the
+// TUI) queues each request on its own dialog queue, which is where its
+// serialization lives, and the manager's own state is mutex-guarded.
 func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 	mgr := o.Manager
 	if mgr == nil {

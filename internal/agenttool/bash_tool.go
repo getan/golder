@@ -85,6 +85,12 @@ type BashTool struct {
 	// ForceSandbox routes every foreground command through Sandbox
 	// (GOLDER_SANDBOX=enforce) and fails closed when Sandbox is nil.
 	ForceSandbox bool
+	// sessionsMu guards the lazy Sessions fallback in manager(). Production
+	// wires one manager before any call runs (BuiltinTools shares it with
+	// write_stdin); the lock exists for direct callers, and because bash is
+	// ToolExecutionParallel — two commands in one batch reach manager() at the
+	// same time.
+	sessionsMu sync.Mutex
 }
 
 // SandboxRunner builds a sandboxed argv for one shell invocation: argv[0] is
@@ -99,6 +105,8 @@ type SandboxRunner interface {
 // manager returns the tool's session manager, creating a private one when the
 // tool was constructed without wiring (tests, direct callers).
 func (t *BashTool) manager() *execsess.Manager {
+	t.sessionsMu.Lock()
+	defer t.sessionsMu.Unlock()
 	if t.Sessions == nil {
 		t.Sessions = execsess.NewManager()
 	}
@@ -109,8 +117,11 @@ func (t *BashTool) manager() *execsess.Manager {
 // lets a driver drop a tool set (sub-agent teardown) without leaking OS
 // processes.
 func (t *BashTool) StopSessions() {
-	if t.Sessions != nil {
-		t.Sessions.KillAll()
+	t.sessionsMu.Lock()
+	m := t.Sessions
+	t.sessionsMu.Unlock()
+	if m != nil {
+		m.KillAll()
 	}
 }
 
@@ -274,9 +285,18 @@ func (t *BashTool) Schema() json.RawMessage {
 }`)
 }
 
-// ExecutionMode implements AgentTool. Commands can have side effects → sequential.
+// ExecutionMode implements AgentTool. Shell calls batch in parallel, matching
+// codex: there the shell is a shareable tool (supports_parallel_tool_calls =
+// true, dispatched under a read lock) and the exclusive lock belongs to the
+// editing tools, which act as barriers. Here that division is the grouping
+// rule: apply_patch is sequential and stands alone, bash shares a concurrent
+// group with its neighbours. Two shell commands ordered against each other
+// must therefore be split across messages, or chained inside one call (the
+// batching guide says so). What makes sharing safe: each call owns its process
+// and its session, the session manager and per-session buffers are
+// mutex-guarded, and a sandbox profile is written per call.
 func (t *BashTool) ExecutionMode() agentcore.ToolExecutionMode {
-	return agentcore.ToolExecutionSequential
+	return agentcore.ToolExecutionParallel
 }
 
 // shellLookPath resolves a program on PATH. It is a package var so tests can

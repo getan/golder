@@ -401,6 +401,22 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Shell calls batch in parallel**: bash was declared sequential — one line of
+  reasoning, "commands can have side effects" — which made every shell call a
+  barrier that also stalled the reads beside it, while codex treats the shell as
+  shareable (`supports_parallel_tool_calls = true`, dispatched under a shared
+  lock) and gives the exclusive lock to its editing tools. golder now makes the
+  same division: `bash` is parallel, `apply_patch` stays the barrier (and still
+  cannot race a concurrent write to the same tree). Two commands ordered against
+  each other therefore need separate messages, or one chained call — the
+  batching guide says so now, where it previously said only that read tools
+  batch. Making it safe meant closing two races the old serial assumption hid:
+  `BashTool.manager`'s lazy session-manager fallback is mutex-guarded (two
+  commands in one batch reach it together), and the TUI's remembered
+  approve/deny maps are guarded because `confirmApproval` now runs from several
+  tool goroutines at once. The trust gate's stdin prompt was already
+  mutex-serialized; its comment claimed that was "cheap insurance" for a
+  hypothetical parallel side-effect tool, and it is now load-bearing.
 - **A card body hangs its wrapped continuations**: a response line too long for
   the pane used to continue at the margin, so it stuck out to the LEFT of the
   block it belonged to — under the bullet, left of the `└ ` line it continued

@@ -162,6 +162,11 @@ type runSession struct {
 	// session driven by tests) makes confirmApproval answer "unavailable", so
 	// the gate keeps its fail-closed behavior instead of allowing by silence.
 	approvalCh chan tea.Msg
+	// approvalMu guards the two maps below. confirmApproval runs on the calling
+	// tool's goroutine, and parallel calls reach it at once (read-scope prompts
+	// could already; bash now that shell calls batch), so the maps are guarded
+	// instead of relying on one gate running at a time.
+	approvalMu sync.Mutex
 	// approvedForSession remembers "Approve for this session" answers, keyed by
 	// tool + summary, so the same shape of call is not asked twice in one run
 	// of the TUI. Cleared when the session is rebuilt.
@@ -790,11 +795,16 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 // channel answers "not answered", which the gate treats as fail-closed — a
 // pending dialog is never silently an approval.
 func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
-	if key := approvalKey(req); key != "" && s.approvedForSession[key] {
-		return judge.ApprovalAnswer{Approve: true, Always: true, Answered: true}
-	}
-	if key := approvalKey(req); key != "" && s.deniedForSession[key] {
-		return judge.ApprovalAnswer{Answered: true}
+	if key := approvalKey(req); key != "" {
+		s.approvalMu.Lock()
+		approved, denied := s.approvedForSession[key], s.deniedForSession[key]
+		s.approvalMu.Unlock()
+		if approved {
+			return judge.ApprovalAnswer{Approve: true, Always: true, Answered: true}
+		}
+		if denied {
+			return judge.ApprovalAnswer{Answered: true}
+		}
 	}
 	// A path the user already granted to the sandbox (a prior dialog, a
 	// manual /permissions writable, or config) settles an escalation without
@@ -820,6 +830,7 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	select {
 	case ans := <-reply:
 		if key := approvalKey(req); key != "" {
+			s.approvalMu.Lock()
 			switch {
 			case ans.Approve && ans.Always:
 				if s.approvedForSession == nil {
@@ -835,6 +846,7 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 				}
 				s.deniedForSession[key] = true
 			}
+			s.approvalMu.Unlock()
 		}
 		return ans
 	case <-ctx.Done():
