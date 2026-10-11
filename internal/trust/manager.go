@@ -102,6 +102,12 @@ type Manager struct {
 	// once"). It is never persisted and is consulted by IsTrusted before the
 	// on-disk data, so a one-shot grant takes effect immediately.
 	session map[string]bool
+	// sessionReads marks directories whose local read tools were allowed for
+	// the current process only ("allow reads here"): reads stop asking there,
+	// while side-effect tools and network reads keep doing so. Like session it
+	// is never persisted, and ClearSessionTrust revokes it alongside session
+	// trust so "/trust off" cannot leave half a grant standing.
+	sessionReads map[string]bool
 }
 
 // DefaultPath returns the trust file location: $GOLDER_HOME/trust.json, or
@@ -125,10 +131,11 @@ func DefaultPath() string {
 // store is surfaced rather than silently overwritten.
 func NewManager(path string) (*Manager, error) {
 	m := &Manager{
-		path:        path,
-		StrictReads: true,
-		data:        make(map[string]*bool),
-		session:     make(map[string]bool),
+		path:         path,
+		StrictReads:  true,
+		data:         make(map[string]*bool),
+		session:      make(map[string]bool),
+		sessionReads: make(map[string]bool),
 	}
 	if path == "" {
 		return m, nil
@@ -231,17 +238,49 @@ func (m *Manager) SetSessionTrust(dir string) {
 	m.session[filepath.Clean(dir)] = true
 }
 
+// SetSessionReads grants local reads for dir for the current process only: the
+// read tools that read the folder's own files (LocalReadTools) stop asking in
+// dir and its ancestors, while side-effect tools and network reads keep asking.
+// It is not persisted: a future golder launch re-prompts. Used by the trust
+// prompt's "reads here" answer.
+func (m *Manager) SetSessionReads(dir string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessionReads[filepath.Clean(dir)] = true
+}
+
+// ReadsTrusted reports whether dir (or an ancestor) was granted session reads
+// via SetSessionReads. It says nothing about side-effect trust - IsTrusted
+// answers that - and network reads are not grantable per directory at all. A
+// nil manager grants nothing.
+func (m *Manager) ReadsTrusted(cwd string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, dir := range walkUp(cwd) {
+		if m.sessionReads[dir] {
+			return true
+		}
+	}
+	return false
+}
+
 // ClearSessionTrust revokes any session trust granted for dir or an ancestor,
-// so a subsequent IsTrusted reflects only the persisted decision. It does not
-// touch the on-disk store. Used by "/trust off" so an active session grant
-// (from a prior "always") does not override a freshly-persisted Untrusted
-// entry - IsTrusted checks session before persisted, so without this clear the
-// "off" command would be ineffective until restart.
+// so a subsequent IsTrusted reflects only the persisted decision. The session
+// reads grant is revoked with it: answering "no" to a directory must not leave
+// its reads half standing. It does not touch the on-disk store. Used by
+// "/trust off" so an active session grant (from a prior "always") does not
+// override a freshly-persisted Untrusted entry - IsTrusted checks session
+// before persisted, so without this clear the "off" command would be
+// ineffective until restart.
 func (m *Manager) ClearSessionTrust(dir string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, d := range walkUp(dir) {
 		delete(m.session, d)
+		delete(m.sessionReads, d)
 	}
 }
 

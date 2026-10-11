@@ -7,6 +7,17 @@ package tui
 // question goes to the same approval dialog the permission gate uses — or to
 // the paired browser while remote control is connected (the pre-existing
 // flow, kept as the first choice so a remote user is asked where they are).
+//
+// Which tools are gated is trust.Manager.GatesTool's call, not this file's:
+// side-effect tools always, and data-ingestion tools (read, grep, find, ls,
+// webfetch, websearch) under the fork's StrictReads default. Consulting the
+// side-effect map directly here left the read half ungated in the TUI while
+// the REPL gated it, so a read plus a fetch of what it read was two questions
+// in the REPL and none here.
+//
+// The answers form a ladder the dialog spells out - once, local reads here,
+// all tools here - and the two session rungs are grants for this directory,
+// applied through the manager so they mean the same thing on both front-ends.
 
 import (
 	"context"
@@ -26,7 +37,7 @@ func (s *runSession) trustApprovalGate(rs *remoteSession) agentcore.BeforeToolCa
 	}
 	cwd := s.hookDeps.ProjectDir
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if !trust.SideEffectTools[call.Name] {
+		if !mgr.GatesTool(call.Name, cwd) {
 			return nil
 		}
 		// Re-check under the call: an earlier "approve for this session" (or a
@@ -46,17 +57,20 @@ func (s *runSession) trustApprovalGate(rs *remoteSession) agentcore.BeforeToolCa
 			return nil
 		}
 		ans := s.confirmApproval(ctx, judge.ApprovalRequest{
-			Kind:          judge.ApprovalTrust,
-			Tool:          call.Name,
-			Summary:       summary,
-			Rationale:     "this directory is not trusted",
-			Authorization: "untrusted directory",
+			Kind:      judge.ApprovalTrust,
+			Tool:      call.Name,
+			Summary:   summary,
+			TrustDir:  cwd,
+			Rationale: cwd + " is not trusted yet",
 		})
 		if !ans.Answered || !ans.Approve {
 			return blockUntrustedCall(call, cwd)
 		}
 		if ans.Always {
 			mgr.SetSessionTrust(cwd)
+		}
+		if ans.SessionReads {
+			mgr.SetSessionReads(cwd)
 		}
 		return nil
 	}

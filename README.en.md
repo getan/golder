@@ -250,7 +250,7 @@ Approval for mutating tools (`bash` / `apply_patch`) is governed by four modes, 
 | `auto` (default) | The model reviews every mutating call: low risk passes, sandbox-tier calls are isolated, high risk is denied — each with a one-line reason |
 | `full-access` | No review, no sandbox; only the static hard-deny list (`sudo`, `rm -rf /`, …) remains |
 
-The first launch in a directory asks whether to trust it; `--approve` grants one run up front. For OS-level isolation see [docs/sandboxing.md](docs/sandboxing.md).
+The first launch in a directory asks whether to trust it; `--approve` grants one run up front. An untrusted directory can also allow reads alone for the session (`read` / `grep` / `find` / `ls` / `view_image`): pick `Allow reads in this folder (this session)` in the TUI dialog, or press `r` in the REPL — commands and network reads still ask, and `/trust off` revokes the reads grant with the rest. For OS-level isolation see [docs/sandboxing.md](docs/sandboxing.md).
 
 ### Common flags
 

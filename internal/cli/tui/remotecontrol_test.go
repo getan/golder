@@ -143,9 +143,13 @@ func TestBuildConfigFullAccessKeepsStaticFloor(t *testing.T) {
 }
 
 // TestTrustGateSkipsTrustedDirectory verifies the gate is a no-op (nil = allow)
-// for a trusted directory and for non-side-effect tools, so the dialog never
-// interrupts work the user already allowed.
+// for a trusted directory and for the tools trust never gates at all, so the
+// dialog never interrupts work the user already allowed. The trust store is
+// pinned to an empty one: with no decision saved for the launch directory the
+// gate must consult the session state only, never whatever the machine running
+// the test happens to have trusted earlier.
 func TestTrustGateSkipsTrustedDirectory(t *testing.T) {
+	withEmptyTrustStore(t)
 	s := newRemoteTestSession(t)
 	s.trusted = true
 	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
@@ -158,10 +162,14 @@ func TestTrustGateSkipsTrustedDirectory(t *testing.T) {
 		t.Errorf("a trusted directory should allow (nil), got %+v", d)
 	}
 
-	// A read-only tool is never gated by trust, trusted or not.
+	// Without session trust the directory is undecided, so the read half of
+	// StrictReads applies: a read is gated. The tools trust never gates are the
+	// pure in-memory ones.
 	s.trust.ClearSessionTrust(s.hookDeps.ProjectDir)
-	if d := gate(t.Context(), agentcore.AgentToolCall{Name: "read"}); d != nil {
-		t.Errorf("non-side-effect tools should not be gated, got %+v", d)
+	for _, name := range []string{"todo", "memory_search"} {
+		if d := gate(t.Context(), agentcore.AgentToolCall{Name: name}); d != nil {
+			t.Errorf("in-memory tool %q should not be gated, got %+v", name, d)
+		}
 	}
 }
 

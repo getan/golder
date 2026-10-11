@@ -239,7 +239,12 @@ type ApprovalRequest struct {
 	// ReadScope is the directory a read-scope request may be granted for the
 	// session, or "" when no directory is offered (the answer is then "this
 	// read" or "no"). Set only for ApprovalReadScope.
-	ReadScope     string
+	ReadScope string
+	// TrustDir names the directory a trust question is about, or "" for every
+	// other kind. The trust gate's session answers - allow local reads, allow
+	// all tools - are grants for this directory, so the dialog names it rather
+	// than leaving "this folder" to be guessed. Set only for ApprovalTrust.
+	TrustDir      string
 	Risk          string
 	Authorization string
 	Rationale     string
@@ -267,6 +272,12 @@ type ApprovalAnswer struct {
 	// is registered by the gate itself as the read-root registry's single
 	// owner, so every file tool and the sandbox see it on the next call.
 	ReadRoot string
+	// SessionReads, when set together with Approve, means the user allowed
+	// local reads in the trust gate's directory for the session (the trust
+	// dialog's "reads here" answer). The gate registers it with the trust
+	// manager; being a trust decision rather than a workspace-boundary one,
+	// reads outside the workspace still take the read-scope gate's consent.
+	SessionReads bool
 }
 
 // NoteKind classifies one user-facing verdict note.

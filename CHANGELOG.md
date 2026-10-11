@@ -12,6 +12,20 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A trust question offers a reads rung**: in an untrusted directory the read
+  tools (`read`, `view_image`, `grep`, `find`, `ls`) now have a middle answer
+  between "once" and "the whole folder" — *allow reads in this folder (this
+  session)*, granted by `trust.Manager.SetSessionReads` and revoked with the
+  rest of the session state by `/trust off`. The ladder is spelled out where
+  the choice is made rather than left to labels that mean different things in
+  different dialogs: the TUI dialog names each row's scope ("Allow this read
+  only" / "Allow reads in this folder (this session)" / "Allow all tools in
+  this folder (this session)"), and the REPL asks `[r]eads` beside `[a]ll`, so
+  stopping a 20-file exploration from asking 20 times no longer requires
+  granting bash as well. The grant covers local reads only — the folder key
+  says nothing about egress, so `webfetch`/`websearch` keep asking — and
+  out-of-workspace reads are untouched: they still take the read-scope consent
+  gate, which no trust answer waives.
 - **`view_image` joins the exploration cell**: it reads one local file like
   `read` does, so its card now coalesces into the same `• Explored` block and
   contributes a `View <path>` summary line. The card renders the call's text

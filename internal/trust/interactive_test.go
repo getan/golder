@@ -155,28 +155,116 @@ func TestEstablishTrustWithoutApprove(t *testing.T) {
 	}
 }
 
-// TestConfirmToolCall verifies the y/n/a responses.
+// TestConfirmToolCall verifies the answer ladder's keys: y/n/a on every gated
+// tool, plus r for the middle rung, which exists only on the local read tools.
 func TestConfirmToolCall(t *testing.T) {
 	call := agentcore.AgentToolCall{Name: "bash", Arguments: []byte(`{"command":"ls"}`)}
 	cases := []struct {
-		in     string
-		allow  bool
-		always bool
+		in   string
+		want Answer
 	}{
-		{"y\n", true, false},
-		{"yes\n", true, false},
-		{"a\n", true, true},
-		{"always\n", true, true},
-		{"n\n", false, false},
-		{"\n", false, false},
-		{"garbage\n", false, false},
+		{"y\n", Answer{Allow: true}},
+		{"yes\n", Answer{Allow: true}},
+		{"a\n", Answer{Allow: true, Always: true}},
+		{"all\n", Answer{Allow: true, Always: true}},
+		{"always\n", Answer{Allow: true, Always: true}},
+		{"n\n", Answer{}},
+		{"\n", Answer{}},
+		{"garbage\n", Answer{}},
+		// "r" is not an answer for a command: it falls through to denial
+		// rather than granting a reads rung a command does not have.
+		{"r\n", Answer{}},
 	}
 	for _, c := range cases {
 		var out bytes.Buffer
-		allow, always := ConfirmToolCall(context.Background(), &out, readerOf(c.in), call)
-		if allow != c.allow || always != c.always {
-			t.Errorf("ConfirmToolCall(%q) = (%v,%v), want (%v,%v)", c.in, allow, always, c.allow, c.always)
+		if got := ConfirmToolCall(context.Background(), &out, readerOf(c.in), call); got != c.want {
+			t.Errorf("ConfirmToolCall(bash, %q) = %+v, want %+v", c.in, got, c.want)
 		}
+	}
+
+	read := agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}
+	for _, in := range []string{"r\n", "reads\n"} {
+		var out bytes.Buffer
+		want := Answer{Allow: true, Reads: true}
+		if got := ConfirmToolCall(context.Background(), &out, readerOf(in), read); got != want {
+			t.Errorf("ConfirmToolCall(read, %q) = %+v, want %+v", in, got, want)
+		}
+	}
+	// The prompt offers the middle rung only where the grant reaches.
+	var out bytes.Buffer
+	ConfirmToolCall(context.Background(), &out, readerOf("n\n"), read)
+	if !strings.Contains(out.String(), "[r]eads in this folder") {
+		t.Errorf("a read prompt must offer the reads rung:\n%s", out.String())
+	}
+	out.Reset()
+	ConfirmToolCall(context.Background(), &out, readerOf("n\n"), call)
+	if strings.Contains(out.String(), "[r]eads") {
+		t.Errorf("a command prompt must not offer the reads rung:\n%s", out.String())
+	}
+}
+
+// TestGatesToolReadsGrant covers the middle rung's reach: a session reads
+// grant stops the local read tools asking in that directory, while commands
+// and network reads keep asking, and clearing the session trust revokes it.
+func TestGatesToolReadsGrant(t *testing.T) {
+	mgr, _ := newTrustManager(t)
+	cwd := t.TempDir()
+	local := []string{"read", "view_image", "grep", "find", "ls"}
+
+	for _, name := range local {
+		if !mgr.GatesTool(name, cwd) {
+			t.Errorf("without a grant, %q must be gated", name)
+		}
+	}
+	mgr.SetSessionReads(cwd)
+	for _, name := range local {
+		if mgr.GatesTool(name, cwd) {
+			t.Errorf("with a reads grant, %q must not be gated", name)
+		}
+	}
+	for _, name := range []string{"bash", "apply_patch", "webfetch", "websearch"} {
+		if !mgr.GatesTool(name, cwd) {
+			t.Errorf("a reads grant must not cover %q", name)
+		}
+	}
+	// The grant walks up like session trust, so a descendant directory is
+	// covered too.
+	if mgr.GatesTool("read", filepath.Join(cwd, "sub")) {
+		t.Error("a reads grant must cover descendant directories")
+	}
+	// ClearSessionTrust revokes it: "no" to the directory cannot leave the
+	// reads half standing.
+	mgr.ClearSessionTrust(cwd)
+	if !mgr.GatesTool("read", cwd) {
+		t.Error("clearing session trust must revoke the reads grant")
+	}
+}
+
+// TestBeforeToolCallReadsAnswer covers the REPL's middle rung end to end: an
+// "r" answer on a read grants session reads only, so the next read is silent
+// while a command still prompts (and can still be denied).
+func TestBeforeToolCallReadsAnswer(t *testing.T) {
+	cwd := t.TempDir()
+	mgr, _ := newTrustManager(t)
+	hook := BeforeToolCall(mgr, cwd, readerOf("r\n"), &bytes.Buffer{}, &sync.Mutex{})
+	if dec := hook(context.Background(), agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}); dec != nil {
+		t.Fatalf("the approved read = %+v, want nil", dec)
+	}
+	if !mgr.ReadsTrusted(cwd) {
+		t.Fatal("the reads answer must register a session grant")
+	}
+	if mgr.IsTrusted(cwd) {
+		t.Error("the reads answer must not grant full session trust")
+	}
+
+	// A fresh prompt denies the command, which both proves the command still
+	// asks and that the reads rung did not widen into "all tools".
+	deny := BeforeToolCall(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, &sync.Mutex{})
+	if dec := deny(context.Background(), agentcore.AgentToolCall{Name: "read"}); dec != nil {
+		t.Errorf("after the reads grant, a read must not be gated, got %+v", dec)
+	}
+	if dec := deny(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: []byte(`{"command":"ls"}`)}); dec == nil || !dec.Block {
+		t.Errorf("after the reads grant, a command must still ask (and deny) = %+v", dec)
 	}
 }
 
@@ -189,17 +277,16 @@ func TestConfirmToolCallInterrupt(t *testing.T) {
 	r, w := pipeReader(t)
 	defer w.Close()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan [2]bool, 1)
+	done := make(chan Answer, 1)
 	go func() {
 		var out bytes.Buffer
-		allow, always := ConfirmToolCall(ctx, &out, bufio.NewReader(r), call)
-		done <- [2]bool{allow, always}
+		done <- ConfirmToolCall(ctx, &out, bufio.NewReader(r), call)
 	}()
 	cancel()
 	select {
 	case got := <-done:
-		if got != [2]bool{false, false} {
-			t.Fatalf("interrupted ConfirmToolCall = %v, want (false,false)", got)
+		if got != (Answer{}) {
+			t.Fatalf("interrupted ConfirmToolCall = %+v, want the zero Answer", got)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("interrupted ConfirmToolCall did not return")
@@ -213,9 +300,16 @@ func TestToolCallSummary(t *testing.T) {
 		args string
 		want string
 	}{
-		{"bash", `{"command":"rm -rf /tmp/x"}`, "command: rm -rf /tmp/x"},
+		{"bash", `{"command":"rm -rf /tmp/x"}`, "rm -rf /tmp/x"},
 		{"apply_patch", `{"patch":"*** Begin Patch\n*** Delete File: /a/b.txt\n*** End Patch\n"}`, "patch touching /a/b.txt"},
 		{"apply_patch", `{"patch":"garbage"}`, "patch: garbage"},
+		{"read", `{"path":"internal/cli/tui/trustgate.go"}`, "read internal/cli/tui/trustgate.go"},
+		{"view_image", `{"path":"docs/a.png"}`, "view docs/a.png"},
+		{"ls", `{"path":"internal"}`, "list internal"},
+		{"grep", `{"pattern":"StrictReads","path":"internal"}`, `grep "StrictReads" in internal`},
+		{"find", `{"glob":"*.go","path":["agent","cmd"]}`, `find "*.go" in agent, cmd`},
+		{"webfetch", `{"url":"https://example.com/x"}`, "fetch https://example.com/x"},
+		{"websearch", `{"query":"golder trust gate"}`, `search "golder trust gate"`},
 		{"bash", `{}`, ""},
 		{"bash", ``, ""},
 		{"bash", `not-json`, "not-json"},

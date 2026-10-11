@@ -60,14 +60,32 @@ var ReadTools = map[string]bool{
 	"websearch":  true,
 }
 
+// LocalReadTools are the read tools an "allow reads here" answer covers: the
+// ones that read the folder's own files. Network reads (webfetch, websearch)
+// are deliberately outside it - the folder key says nothing about egress, so
+// covering them would open the session's network path on a keystroke meant for
+// files. They stay gated and keep asking each time.
+var LocalReadTools = map[string]bool{
+	"read":       true,
+	"view_image": true,
+	"grep":       true,
+	"find":       true,
+	"ls":         true,
+}
+
 // GatesTool reports whether the trust gate applies to a tool call in an
-// untrusted directory: always for side-effect tools, and for read tools only
-// under StrictReads. A nil manager gates nothing.
-func (m *Manager) GatesTool(name string) bool {
+// untrusted directory cwd: always for side-effect tools, and for read tools
+// under StrictReads unless cwd already carries a session reads grant (the
+// gate's middle rung, which covers LocalReadTools only). A nil manager gates
+// nothing.
+func (m *Manager) GatesTool(name, cwd string) bool {
 	if SideEffectTools[name] {
 		return true
 	}
-	return m != nil && m.StrictReads && ReadTools[name]
+	if m == nil || !m.StrictReads || !ReadTools[name] {
+		return false
+	}
+	return !(LocalReadTools[name] && m.ReadsTrusted(cwd))
 }
 
 // EstablishTrust decides how the launch directory's trust is established before
@@ -98,7 +116,8 @@ func EnsureTrustPrompt(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string
 		return
 	}
 	fmt.Fprintf(out, "\nFirst time in this directory: %s\n", cwd)
-	fmt.Fprintln(out, "golder runs side-effect tools (bash, write, edit) here. Choose a trust level:")
+	fmt.Fprintln(out, "golder runs side-effect tools (bash, write, edit) and reads files (read, grep, webfetch) here.")
+	fmt.Fprintln(out, "Choose a trust level:")
 	fmt.Fprintln(out, "  1) Trust     - remember as trusted (tools run without asking)")
 	fmt.Fprintln(out, "  2) Just once - trust only for this session (default)")
 	fmt.Fprintln(out, "  3) Reject    - do not trust (tools ask each time)")
@@ -120,7 +139,7 @@ func EnsureTrustPrompt(out io.Writer, in *bufio.Reader, mgr *Manager, cwd string
 			fmt.Fprintf(out, "golder: could not save trust decision: %v\n", err)
 			return
 		}
-		fmt.Fprintf(out, "Marked %s untrusted (saved to %s). Side-effect tools will ask.\n", cwd, target)
+		fmt.Fprintf(out, "Marked %s untrusted (saved to %s). Tools will ask before they run.\n", cwd, target)
 	default: // 2 = just once
 		mgr.SetSessionTrust(cwd)
 		fmt.Fprintf(out, "Trusted %s for this session only (not saved).\n", cwd)
@@ -225,16 +244,20 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 				if err := mgr.SetDecision(cwd, Untrusted); err != nil {
 					return fmt.Sprintf("golder: could not save trust: %v", err)
 				}
-				return fmt.Sprintf("marked %s untrusted (saved); side-effect tools will ask", cwd)
+				return fmt.Sprintf("marked %s untrusted (saved); tools will ask", cwd)
 			case "once":
 				mgr.SetSessionTrust(cwd)
 				return fmt.Sprintf("trusted %s for this session only (not saved)", cwd)
 			case "status":
 				res := mgr.NearestTrustDecision(cwd)
-				if !res.Found {
-					return fmt.Sprintf("%s: undecided (no saved decision)", cwd)
+				state := fmt.Sprintf("%s: undecided (no saved decision)", cwd)
+				if res.Found {
+					state = fmt.Sprintf("%s: %s (decision saved for %s)", cwd, res.Decision, res.Path)
 				}
-				return fmt.Sprintf("%s: %s (decision saved for %s)", cwd, res.Decision, res.Path)
+				if mgr.ReadsTrusted(cwd) {
+					state += "; local reads are allowed for this session"
+				}
+				return state
 			default:
 				return "usage: /trust [on|off|once|status]  (default: on)"
 			}
@@ -242,11 +265,13 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 	})
 }
 
-// BeforeToolCall builds the permission hook that gates side-effect tools
-// (bash/write/edit) on the cwd's trust decision. In a trusted directory the
-// call is allowed (nil). Otherwise the user is prompted; "always" grants
-// session trust so subsequent side-effect calls skip the prompt. mgr==nil
-// returns nil (trust disabled, no gating).
+// BeforeToolCall builds the permission hook that gates side-effect tools and,
+// under StrictReads, the data-ingestion tools (see GatesTool) on the cwd's
+// trust decision. In a trusted directory the call is allowed (nil). Otherwise
+// the user is prompted with the answer ladder: once runs this call, "reads"
+// grants session reads for the directory (LocalReadTools only), and "always"
+// grants session trust so every tool stops asking. mgr==nil returns nil (trust
+// disabled, no gating).
 //
 // Concurrency: bash/write/edit are all ToolExecutionSequential, so the batch
 // runs serially and this hook fires on the run-loop producer goroutine - never
@@ -263,7 +288,7 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 		return nil
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if !mgr.GatesTool(call.Name) {
+		if !mgr.GatesTool(call.Name, cwd) {
 			return nil
 		}
 		if mu != nil {
@@ -280,11 +305,14 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 		// The prompt is interruptible: a Ctrl+C during the read cancels the
 		// run context and the read yields a denial, so the interrupt takes
 		// effect immediately instead of waiting for an answer.
-		allow, always := ConfirmToolCall(ctx, out, in, call)
-		if always {
+		ans := ConfirmToolCall(ctx, out, in, call)
+		if ans.Always {
 			mgr.SetSessionTrust(cwd)
 		}
-		if !allow {
+		if ans.Reads {
+			mgr.SetSessionReads(cwd)
+		}
+		if !ans.Allow {
 			msg := fmt.Sprintf("tool %q blocked: %s is not trusted (use /trust to trust this project)", call.Name, cwd)
 			return &agentcore.BeforeToolCallDecision{
 				Block:   true,
@@ -295,28 +323,56 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 	}
 }
 
-// ConfirmToolCall asks whether a side-effect tool call may run in an untrusted
-// directory. It returns (allow, always): allow runs the call this once; always
-// runs it AND grants session trust so subsequent side-effect calls skip the
-// prompt. Denial (no/empty/EOF/interrupt) returns (false, false).
-func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) (allow bool, always bool) {
-	fmt.Fprintf(out, "\ngolder wants to run %q in an untrusted directory.\n", call.Name)
+// Answer is a trust prompt's decision. The positive answers differ in what
+// they remember, which the prompt spells out: Allow runs the call once, Always
+// stops every tool asking in the directory for the session, and Reads stops
+// only the local read tools (LocalReadTools) - reads of the folder's own
+// files - while commands and network reads keep asking.
+type Answer struct {
+	// Allow runs the call; false is a denial (the model is told, and can
+	// propose something else).
+	Allow bool
+	// Always grants session trust for the directory: every tool runs without
+	// asking until golder exits. Not persisted.
+	Always bool
+	// Reads grants local reads for the directory for the session. Not
+	// persisted.
+	Reads bool
+}
+
+// ConfirmToolCall asks whether a trust-gated tool call may run in an untrusted
+// directory. Denial (no/empty/EOF/interrupt) returns the zero Answer.
+func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) Answer {
+	fmt.Fprintf(out, "\ngolder wants to use %q in an untrusted directory.\n", call.Name)
 	if summary := toolCallSummary(call); summary != "" {
 		fmt.Fprintf(out, "  %s\n", summary)
 	}
-	fmt.Fprint(out, "Allow? [y]es / [n]o / [a]lways (trust for this session) [y/N/a]: ")
+	// Each answer names its scope, because they differ in what they remember:
+	// once keeps nothing, "reads" keeps the folder's file reads, "all" keeps
+	// the whole folder. Only a local read tool has the middle rung - on a
+	// command it would just be the same answer with a narrower-sounding name.
+	reads := LocalReadTools[call.Name]
+	if reads {
+		fmt.Fprint(out, "Allow? [y]es once / [n]o / [r]eads in this folder (this session) / [a]ll tools here (this session) [y/N/r/a]: ")
+	} else {
+		fmt.Fprint(out, "Allow? [y]es once / [n]o / [a]ll tools here (this session) [y/N/a]: ")
+	}
 	line, ok := readLineOrCancel(ctx, in)
 	if !ok {
-		return false, false
+		return Answer{}
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return true, false
-	case "a", "always":
-		return true, true
-	default:
-		return false, false
+		return Answer{Allow: true}
+	case "r", "reads":
+		if reads {
+			fmt.Fprintln(out, "Reads in this folder will not ask again this session; commands and network reads still will.")
+			return Answer{Allow: true, Reads: true}
+		}
+	case "a", "all", "always":
+		return Answer{Allow: true, Always: true}
 	}
+	return Answer{}
 }
 
 // readLineOrCancel reads one line, returning ok=false when ctx fires first so
@@ -346,10 +402,11 @@ func readLineOrCancel(ctx context.Context, in *bufio.Reader) (line string, ok bo
 // same one-line preview a local confirmation prompt shows.
 func ToolCallSummary(call agentcore.AgentToolCall) string { return toolCallSummary(call) }
 
-// toolCallSummary renders a one-line preview of what a side-effect tool will
-// do, so the user can make an informed allow/deny choice. It best-effort
-// extracts the bash command or, for apply_patch, the paths the patch touches;
-// if the arguments do not parse it falls back to a truncated raw view.
+// toolCallSummary renders a one-line preview of what a gated tool will do, so
+// the user can make an informed allow/deny choice: the bash command, the paths
+// a patch touches, or the file, pattern, URL or query a data-ingestion tool
+// reaches for. It is best-effort; if the arguments do not parse, or name
+// nothing summarizable, it falls back to a truncated raw view.
 func toolCallSummary(call agentcore.AgentToolCall) string {
 	raw := strings.TrimSpace(string(call.Arguments))
 	if raw == "" || raw == "{}" {
@@ -362,7 +419,10 @@ func toolCallSummary(call agentcore.AgentToolCall) string {
 	switch call.Name {
 	case "bash":
 		if cmd, ok := args["command"].(string); ok && cmd != "" {
-			return "command: " + truncateForPrompt(cmd)
+			// The bare command: the prompt line already names the tool, and the
+			// TUI renders summaries after "$ ", where a "command:" label would
+			// read as "$ command: go test ./...".
+			return truncateForPrompt(cmd)
 		}
 	case "apply_patch":
 		if text, ok := args["patch"].(string); ok && text != "" {
@@ -374,8 +434,82 @@ func toolCallSummary(call agentcore.AgentToolCall) string {
 			}
 			return "patch touching " + truncateForPrompt(strings.Join(paths, ", "))
 		}
+	// Data-ingestion tools, gated under StrictReads: name the target instead of
+	// asking the user to judge raw JSON.
+	case "read":
+		if p := argString(args, "path"); p != "" {
+			return "read " + truncateForPrompt(p)
+		}
+	case "view_image":
+		if p := argString(args, "path"); p != "" {
+			return "view " + truncateForPrompt(p)
+		}
+	case "ls":
+		if p := argString(args, "path"); p != "" {
+			return "list " + truncateForPrompt(p)
+		}
+		return "list the workspace root"
+	case "grep":
+		if s := searchSummary("grep", "pattern", args); s != "" {
+			return s
+		}
+	case "find":
+		if s := searchSummary("find", "glob", args); s != "" {
+			return s
+		}
+	case "webfetch":
+		if u := argString(args, "url"); u != "" {
+			return "fetch " + truncateForPrompt(u)
+		}
+	case "websearch":
+		if q := argString(args, "query"); q != "" {
+			return truncateForPrompt("search \"" + q + "\"")
+		}
 	}
 	return truncateForPrompt(raw)
+}
+
+// argString returns a string argument, trimmed, or "" when the key is absent
+// or holds something else, so a malformed call falls through to the raw view
+// rather than printing a misleading summary.
+func argString(args map[string]any, key string) string {
+	s, ok := args[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+// argPaths renders the search tools' path argument, which accepts one path or
+// a list of them (the same shapes the tools' schemas declare).
+func argPaths(args map[string]any) string {
+	switch v := args["path"].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				parts = append(parts, strings.TrimSpace(s))
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	return ""
+}
+
+// searchSummary renders a grep/find preview: the pattern (or glob) looked for
+// and, when the call names a place, where.
+func searchSummary(verb, key string, args map[string]any) string {
+	pattern := argString(args, key)
+	if pattern == "" {
+		return ""
+	}
+	out := verb + " \"" + pattern + "\""
+	if where := argPaths(args); where != "" {
+		out += " in " + where
+	}
+	return truncateForPrompt(out)
 }
 
 // oneLinePreview collapses a patch's whitespace so the prompt preview stays on

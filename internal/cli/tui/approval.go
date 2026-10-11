@@ -24,6 +24,7 @@ import (
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/trust"
 )
 
 // approvalRequestMsg is sent from the run goroutine to the UI when a tool call
@@ -45,11 +46,12 @@ type approvalRow struct {
 
 // Tool-approval values.
 const (
-	approveOnce     = "once"
-	approveSession  = "session"
-	approveWritable = "writable"
-	approveReadDir  = "read-dir"
-	approveDeny     = "deny"
+	approveOnce      = "once"
+	approveSession   = "session"
+	approveWritable  = "writable"
+	approveReadDir   = "read-dir"
+	approveReadsHere = "reads-here"
+	approveDeny      = "deny"
 )
 
 // Trust-question values (the first-run dialog; the same three-way choice the
@@ -96,6 +98,10 @@ type approvalDialog struct {
 	// that row is present (a read-scope request whose candidate directory is
 	// not too broad to hand over).
 	readRoot string
+	// trustDir is the directory a trust question is about (judge.ApprovalTrust);
+	// set only for those requests, and used to name the folder in the
+	// transcript note that each session-scoped answer prints.
+	trustDir string
 	// reply is non-nil for a tool approval: the waiting gate reads the answer.
 	reply chan judge.ApprovalAnswer
 	// selected highlights a row, so ↑↓ and Enter work as well as the
@@ -108,6 +114,9 @@ type approvalDialog struct {
 func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.ApprovalAnswer) {
 	root := inferWritableRoot(req, m.cwd)
 	rows := toolApprovalRows
+	if req.Kind == judge.ApprovalTrust {
+		rows = trustGateRows(req.Tool)
+	}
 	if root != "" {
 		// The escalation's blocker is a path the sandbox denies: offer to
 		// re-admit just that path (read+write, this session) instead of
@@ -139,7 +148,32 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		rows:         rows,
 		writableRoot: root,
 		readRoot:     readRoot,
+		trustDir:     req.TrustDir,
 		reply:        reply,
+	}
+}
+
+// trustGateRows returns the rows a mid-run trust question offers, ordered by
+// what each answer remembers. The labels cannot be the tool dialog's generic
+// "Approve for this session": in a tool dialog that value relaxes one call
+// shape, while here it is a grant for the whole directory, and the middle rung
+// (local reads) exists only for the read tools - on a command it would be the
+// same answer with a narrower-sounding name.
+func trustGateRows(tool string) []approvalRow {
+	allTools := approvalRow{"Allow all tools in this folder (this session)", "p", approveSession}
+	deny := approvalRow{"Deny", "esc", approveDeny}
+	if trust.LocalReadTools[tool] {
+		return []approvalRow{
+			{"Allow this read only", "y", approveOnce},
+			{"Allow reads in this folder (this session)", "a", approveReadsHere},
+			allTools,
+			deny,
+		}
+	}
+	return []approvalRow{
+		{"Allow this once", "y", approveOnce},
+		allTools,
+		deny,
 	}
 }
 
@@ -181,6 +215,26 @@ func (m *Model) answerApproval(value string) {
 			ans.Approve = true
 		case approveSession:
 			ans.Approve, ans.Always = true, true
+			// In a trust question this answer reaches the whole directory, so
+			// say so; a tool dialog's "for this session" relaxes one call shape
+			// and carries no trustDir, so it stays silent.
+			if d.trustDir != "" && m.session != nil {
+				m.transcript.addSystem("All tools in " + displayPath(d.trustDir) +
+					" run without asking for this session.")
+			}
+		case approveReadsHere:
+			// The gate registers the grant (it owns the trust manager); the
+			// answer only names the intent. The note spells out the scope so
+			// "reads allowed" is not read as "everything allowed".
+			ans.Approve, ans.SessionReads = true, true
+			if m.session != nil {
+				where := displayPath(d.trustDir)
+				if where == "" {
+					where = "this folder"
+				}
+				m.transcript.addSystem("Reads in " + where +
+					" will not ask again this session; commands and network reads still will.")
+			}
 		case approveWritable:
 			// Register the path first; only a successful registration turns
 			// the choice into an approval. On failure the call is denied (the
@@ -463,6 +517,8 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		return tool + " asks to run outside the sandbox (reviewer graded it sandbox)"
 	case judge.ApprovalReadScope:
 		return tool + " wants to read outside the workspace"
+	case judge.ApprovalTrust:
+		return tool + " in an untrusted folder"
 	default:
 		return tool + " needs approval"
 	}
@@ -485,27 +541,33 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 		out = append(out, "Reason: "+j)
 	}
 	if r := strings.TrimSpace(req.Rationale); r != "" {
+		// The (risk, auth) suffix is part of a reviewer's verdict. A consent
+		// question (read-scope, trust) has no verdict behind it, so it renders
+		// as its own sentence instead of "Reviewer:"; and since a suffix with
+		// no risk grade reads as punctuation without content, it is built from
+		// Risk alone.
 		rating := ""
-		if req.Risk != "" || req.Authorization != "" {
+		if req.Risk != "" {
 			rating = " (" + req.Risk + ", auth: " + req.Authorization + ")"
 		}
-		// A read-scope question is consent, not a risk verdict: there is no
-		// reviewer behind it, so labelling the line "Reviewer:" would
-		// misdescribe what the user is being asked.
-		if req.Kind == judge.ApprovalReadScope {
+		switch req.Kind {
+		case judge.ApprovalReadScope, judge.ApprovalTrust:
 			out = append(out, r+rating)
-		} else {
+		default:
 			out = append(out, "Reviewer: "+r+rating)
 		}
 	}
 	return out
 }
 
-// approvalTrustDetail explains the first-run trust question.
+// approvalTrustDetail explains the first-run trust question, naming both halves
+// of what an untrusted directory costs: side-effect tools ask, and under the
+// fork's StrictReads default so do the read tools.
 func approvalTrustDetail(cwd string) []string {
 	return []string{
 		cwd,
-		"golder runs side-effect tools (bash, edit) here; project hooks load only when trusted.",
+		"golder runs side-effect tools (bash, edit) and reads files (read, grep, webfetch) here.",
+		"Without trust, all of them ask first; project hooks load only when trusted.",
 	}
 }
 

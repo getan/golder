@@ -236,7 +236,7 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 			}
 			return nil
 		}
-		if !mgr.GatesTool(call.Name) {
+		if !mgr.GatesTool(call.Name, cwd) {
 			return nil
 		}
 		if mu != nil {

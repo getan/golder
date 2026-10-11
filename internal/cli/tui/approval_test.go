@@ -336,6 +336,163 @@ func TestApprovalViewShowsContext(t *testing.T) {
 	}
 }
 
+// TestTrustDialogReadsLadder pins the answer ladder on a trust question: each
+// row names what it remembers, so "allow reads" is not mistaken for "allow
+// everything", and the middle rung appears only where it exists. The headline
+// and reason line must read as a consent question, not a reviewer's verdict.
+func TestTrustDialogReadsLadder(t *testing.T) {
+	m := NewModel(Options{})
+	m.openApproval(judge.ApprovalRequest{
+		Kind:      judge.ApprovalTrust,
+		Tool:      "read",
+		Summary:   "read a.go",
+		TrustDir:  "/tmp/project",
+		Rationale: "/tmp/project is not trusted yet",
+	}, make(chan judge.ApprovalAnswer, 1))
+
+	view := m.approvalView(120)
+	for _, want := range []string{
+		"read in an untrusted folder",
+		"read a.go",
+		"/tmp/project is not trusted yet",
+		"Allow this read only",
+		"Allow reads in this folder (this session)",
+		"Allow all tools in this folder (this session)",
+		"Deny",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("trust dialog missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Reviewer:") {
+		t.Errorf("a trust question is consent, not a verdict:\n%s", view)
+	}
+
+	// A command question has no reads rung: offering one would imply a scope
+	// the grant does not have.
+	command := NewModel(Options{})
+	command.openApproval(judge.ApprovalRequest{
+		Kind: judge.ApprovalTrust, Tool: "bash", Summary: "rm -rf /tmp/x", TrustDir: "/tmp/project",
+	}, make(chan judge.ApprovalAnswer, 1))
+	view = command.approvalView(120)
+	for _, want := range []string{"Allow this once", "Allow all tools in this folder (this session)"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("command trust dialog missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Allow reads in this folder") {
+		t.Errorf("a command must not offer the reads rung:\n%s", view)
+	}
+
+	// A network read has no reads rung either: the folder key says nothing
+	// about egress.
+	fetch := NewModel(Options{})
+	fetch.openApproval(judge.ApprovalRequest{
+		Kind: judge.ApprovalTrust, Tool: "webfetch", Summary: "fetch https://example.com", TrustDir: "/tmp/project",
+	}, make(chan judge.ApprovalAnswer, 1))
+	if view := fetch.approvalView(120); strings.Contains(view, "Allow reads in this folder") {
+		t.Errorf("a network read must not offer the reads rung:\n%s", view)
+	}
+}
+
+// TestApprovalDialogTrustAnswers drives the ladder's keys through the dialog:
+// y allows once, a grants reads only, p grants all tools, esc denies.
+func TestApprovalDialogTrustAnswers(t *testing.T) {
+	req := judge.ApprovalRequest{
+		Kind:      judge.ApprovalTrust,
+		Tool:      "grep",
+		Summary:   `grep "secret" in .`,
+		TrustDir:  "/tmp/project",
+		Rationale: "/tmp/project is not trusted yet",
+	}
+	cases := []struct {
+		name    string
+		key     tea.KeyPressMsg
+		approve bool
+		always  bool
+		reads   bool
+	}{
+		{"y allows this read", tea.KeyPressMsg{Code: 'y', Text: "y"}, true, false, false},
+		{"a allows reads here", tea.KeyPressMsg{Code: 'a', Text: "a"}, true, false, true},
+		{"p allows all tools here", tea.KeyPressMsg{Code: 'p', Text: "p"}, true, true, false},
+		{"esc denies", tea.KeyPressMsg{Code: tea.KeyEscape}, false, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			reply := make(chan judge.ApprovalAnswer, 1)
+			m := NewModel(Options{})
+			m.openApproval(req, reply)
+
+			got, _ := m.Update(c.key)
+			m = got.(Model)
+
+			ans := awaitAnswer(t, reply)
+			if !ans.Answered || ans.Approve != c.approve || ans.Always != c.always || ans.SessionReads != c.reads {
+				t.Fatalf("answer = %+v, want approve=%v always=%v reads=%v", ans, c.approve, c.always, c.reads)
+			}
+		})
+	}
+}
+
+// TestTrustGateReadsAnswerGrantsReadsOnly drives the whole TUI trust path: a
+// reads answer on a read question stops later reads from asking while a
+// command still asks, which is the distinction the dialog's rows promise.
+func TestTrustGateReadsAnswerGrantsReadsOnly(t *testing.T) {
+	withEmptyTrustStore(t)
+	session := newRemoteTestSession(t)
+	session.trusted = false
+	session.hookDeps.ProjectDir = t.TempDir()
+	ch := make(chan tea.Msg, 4)
+	session.approvalCh = ch
+	gate := session.trustApprovalGate(nil)
+	if gate == nil {
+		t.Fatal("trust gate should be installed when a trust manager exists")
+	}
+
+	readCall := agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}
+	done := make(chan *agentcore.BeforeToolCallDecision, 1)
+	go func() { done <- gate(context.Background(), readCall) }()
+	select {
+	case msg := <-ch:
+		reqMsg, ok := msg.(approvalRequestMsg)
+		if !ok {
+			t.Fatalf("unexpected message %T", msg)
+		}
+		if reqMsg.req.TrustDir != session.hookDeps.ProjectDir {
+			t.Errorf("TrustDir = %q, want the launch directory", reqMsg.req.TrustDir)
+		}
+		reqMsg.reply <- judge.ApprovalAnswer{Approve: true, SessionReads: true, Answered: true}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first read should ask")
+	}
+	if dec := <-done; dec != nil {
+		t.Fatalf("approved read = %+v, want nil", dec)
+	}
+
+	// Reads stop asking...
+	if dec := gate(context.Background(), readCall); dec != nil {
+		t.Errorf("after the reads answer, a read must not ask again, got %+v", dec)
+	}
+	// ...commands still do, and a denial still blocks.
+	bashDone := make(chan *agentcore.BeforeToolCallDecision, 1)
+	go func() {
+		bashDone <- gate(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: []byte(`{"command":"ls"}`)})
+	}()
+	select {
+	case msg := <-ch:
+		reqMsg, ok := msg.(approvalRequestMsg)
+		if !ok {
+			t.Fatalf("unexpected message %T", msg)
+		}
+		reqMsg.reply <- judge.ApprovalAnswer{Answered: true} // deny
+	case <-time.After(2 * time.Second):
+		t.Fatal("a command must still ask after a reads-only grant")
+	}
+	if dec := <-bashDone; dec == nil || !dec.Block {
+		t.Errorf("denied command = %+v, want a block", dec)
+	}
+}
+
 // TestApprovalTitleEscalation pins the escalation-conflict headline: the
 // dialog must say the call wants out of the sandbox, not just "needs
 // approval".
@@ -457,6 +614,92 @@ func TestConfirmApprovalRemembersDenials(t *testing.T) {
 	case msg := <-s.approvalCh:
 		t.Fatalf("a memorized denial must not reopen the dialog: %+v", msg)
 	default:
+	}
+}
+
+// TestTrustGateGatesReads pins TUI/REPL parity for the fork's StrictReads
+// default: in an untrusted directory the trust gate must ask about
+// data-ingestion tools too, not only side-effect ones. Consulting
+// trust.SideEffectTools directly here let a read — and a fetch of what it read
+// — run with no question in the TUI while the REPL asked for both.
+func TestTrustGateGatesReads(t *testing.T) {
+	withEmptyTrustStore(t)
+	cases := []struct {
+		name string
+		args string
+		want string // the dialog's one-line preview of what is being asked for
+	}{
+		{"read", `{"path":"a.go"}`, "read a.go"},
+		{"grep", `{"pattern":"secret","path":"."}`, `grep "secret" in .`},
+		{"find", `{"glob":"*.env"}`, `find "*.env"`},
+		{"webfetch", `{"url":"https://example.com"}`, "fetch https://example.com"},
+		{"websearch", `{"query":"a.go"}`, `search "a.go"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			session := newRemoteTestSession(t)
+			session.trusted = false
+			session.hookDeps.ProjectDir = t.TempDir()
+			ch := make(chan tea.Msg, 4)
+			session.approvalCh = ch
+			gate := session.trustApprovalGate(nil)
+			if gate == nil {
+				t.Fatal("trust gate should be installed when a trust manager exists")
+			}
+
+			done := make(chan *agentcore.BeforeToolCallDecision, 1)
+			go func() {
+				done <- gate(context.Background(), agentcore.AgentToolCall{Name: c.name, Arguments: []byte(c.args)})
+			}()
+
+			select {
+			case msg := <-ch:
+				reqMsg, ok := msg.(approvalRequestMsg)
+				if !ok {
+					t.Fatalf("unexpected message %T", msg)
+				}
+				if reqMsg.req.Kind != judge.ApprovalTrust {
+					t.Errorf("kind = %q, want trust", reqMsg.req.Kind)
+				}
+				if reqMsg.req.Summary != c.want {
+					t.Errorf("summary = %q, want %q", reqMsg.req.Summary, c.want)
+				}
+				reqMsg.reply <- judge.ApprovalAnswer{Approve: true, Answered: true}
+			case <-time.After(2 * time.Second):
+				t.Fatal("an untrusted directory must ask before a read tool runs")
+			}
+
+			select {
+			case dec := <-done:
+				if dec != nil {
+					t.Errorf("approved read should pass, got %+v", dec)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("gate did not return after approval")
+			}
+		})
+	}
+}
+
+// TestTrustGateReadsSilentWhenTrusted pins the other half: once the directory
+// is trusted, strict reads are a no-op instead of nagging on every file.
+func TestTrustGateReadsSilentWhenTrusted(t *testing.T) {
+	withEmptyTrustStore(t)
+	session := newRemoteTestSession(t)
+	dir := t.TempDir()
+	session.hookDeps.ProjectDir = dir
+	session.trust.SetSessionTrust(dir)
+	session.approvalCh = make(chan tea.Msg, 4)
+
+	gate := session.trustApprovalGate(nil)
+	if gate == nil {
+		t.Fatal("trust gate should be installed when a trust manager exists")
+	}
+	if dec := gate(context.Background(), agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}); dec != nil {
+		t.Errorf("a trusted directory must not gate reads, got %+v", dec)
+	}
+	if len(session.approvalCh) != 0 {
+		t.Error("a trusted directory must not open a dialog")
 	}
 }
 
