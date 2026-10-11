@@ -28,14 +28,11 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/hooks"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/trust"
 )
 
 // goalMaxAutomaticTurns caps how many autonomous continuations a single /goal
@@ -216,29 +213,6 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
 				Registry: goalReg,
-				BeforeToolCall: judge.ChainGates(
-					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
-					judge.ChainGates(
-						// Consent first: reading outside the workspace is the
-						// user's call, in every approval mode.
-						judge.ReadScopeGate(judge.ReadScopeOpts{
-							WorkspaceRoot: host.Cwd(),
-							Roots:         run.ReadableExtraRoots(),
-							In:            host.Input(),
-							Out:           out,
-							Mu:            host.ConfirmMu(),
-							Notify:        host.ReviewNotes().Emit,
-						}),
-						judge.PermissionGate(host.Permissions(), judge.GateOpts{
-							In:         host.Input(),
-							Out:        out,
-							Mu:         host.ConfirmMu(),
-							Classifier: run.NewReviewer(host.Live().Model, host.Live().ProviderName, host.Live().Provider, host.Creds(), host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd())),
-							Sandboxed:  run.SandboxGate(),
-							Notify:     host.ReviewNotes().Emit,
-						}),
-					),
-				),
 			},
 		},
 		Reminders:           reminders,
@@ -246,11 +220,10 @@ func runGoalLoop(setCancel func(context.CancelFunc), out io.Writer, host cli.Hos
 		GetFollowUpMessages: FollowUp(host),
 	}
 
-	// Wire the per-turn hook seams (PreToolUse/PostToolUse/Stop) onto this goal
-	// run's cfg from the session dispatcher; a nil dispatcher is a no-op (FR-18).
-	if d := host.Dispatcher(); d != nil {
-		run.InstallSeams(&cfg, d, host.HookDeps())
-	}
+	// The session's gates and hook seams, from the one assembly point: the goal
+	// run is gated exactly like the run that started it (consent before risk,
+	// and the same mode), and its own sub-agents inherit the same chain.
+	cli.HostGates(host, out).Install(&cfg, host.Dispatcher(), host.HookDeps())
 
 	// The first turn is driven by the goal reminder alone (the objective is
 	// injected as background context); no explicit user prompt is appended so the

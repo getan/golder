@@ -1,88 +1,68 @@
 package tui
 
-// The TUI's trust gate: side-effect tools in a directory the user has not
-// trusted need an explicit yes. The REPL asks on stdin (trust.BeforeToolCall);
-// the TUI has no stdin, so before this gate existed an untrusted directory
-// silently ran side-effect tools under the permission gate alone. Now the
-// question goes to the same approval dialog the permission gate uses — or to
-// the paired browser while remote control is connected (the pre-existing
-// flow, kept as the first choice so a remote user is asked where they are).
+// The TUI's gate wiring: which gates a turn runs under, and who answers their
+// questions.
 //
-// Which tools are gated is trust.Manager.GatesTool's call, not this file's:
-// side-effect tools always, and data-ingestion tools (read, grep, find, ls,
-// webfetch, websearch) under the fork's StrictReads default. Consulting the
-// side-effect map directly here left the read half ungated in the TUI while
-// the REPL gated it, so a read plus a fetch of what it read was two questions
-// in the REPL and none here.
-//
-// The answers form a ladder the dialog spells out - once, local reads here,
-// all tools here - and the two session rungs are grants for this directory,
-// applied through the manager so they mean the same thing on both front-ends.
+// The gates themselves are the session's, assembled once by run.Gates — the
+// same definition the REPL, /goal, /btw, headless and every sub-agent use, so
+// the TUI can no longer gate a tool differently from the REPL. It used to: the
+// trust gate here consulted the side-effect tool map directly, which left the
+// read half of StrictReads ungated in the TUI while the REPL asked about it,
+// so a read plus a fetch of what it read were two questions in the REPL and
+// none here. This file contributes only the TUI-specific answer channels.
 
 import (
 	"context"
 
-	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/judge"
-	"github.com/getan/golder/internal/trust"
 )
 
-// trustApprovalGate builds the trust gate for this session. rs may be nil (no
-// remote control); mgr nil disables the gate (trust unavailable, the same as
-// the REPL's nil-manager no-op).
-func (s *runSession) trustApprovalGate(rs *remoteSession) agentcore.BeforeToolCallFunc {
-	mgr := s.trust
-	if mgr == nil {
-		return nil
-	}
-	cwd := s.hookDeps.ProjectDir
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if !mgr.GatesTool(call.Name, cwd) {
-			return nil
-		}
-		// Re-check under the call: an earlier "approve for this session" (or a
-		// /trust while the run was in flight) makes later calls free.
-		if mgr.IsTrusted(cwd) {
-			return nil
-		}
-		summary := trust.ToolCallSummary(call)
-		if rs != nil && rs.hasClient() {
-			d, remote := rs.bridge.Confirm(ctx, call.Name, summary)
-			if !remote || !d.Approve {
-				return blockUntrustedCall(call, cwd)
-			}
-			if d.Always {
-				mgr.SetSessionTrust(cwd)
-			}
-			return nil
-		}
-		ans := s.confirmApproval(ctx, judge.ApprovalRequest{
-			Kind:      judge.ApprovalTrust,
-			Tool:      call.Name,
-			Summary:   summary,
-			TrustDir:  cwd,
-			Rationale: cwd + " is not trusted yet",
-		})
-		if !ans.Answered || !ans.Approve {
-			return blockUntrustedCall(call, cwd)
-		}
-		if ans.Always {
-			mgr.SetSessionTrust(cwd)
-		}
-		if ans.SessionReads {
-			mgr.SetSessionReads(cwd)
-		}
-		return nil
-	}
+// sessionGates assembles this session's gate chain around the TUI's answer
+// channels. rs is the remote-control session, or nil when none is running.
+func (s *runSession) sessionGates(rs *remoteSession) *run.Gates {
+	return run.NewGates(run.GatesOpts{
+		Trust:      s.trust,
+		Cwd:        s.hookDeps.ProjectDir,
+		Perms:      s.perms,
+		Notes:      s.notes,
+		Sandboxed:  run.SandboxGate(),
+		Classifier: s.reviewer,
+		Confirm:    s.confirmApproval,
+		// The paired browser answers trust questions while local dialogs answer
+		// the rest: the user is looking at the browser, and that was the first
+		// choice before this wiring existed.
+		TrustConfirm: s.trustConfirm(rs),
+		ExtraRoots:   run.ReadableExtraRoots(),
+	})
 }
 
-// blockUntrustedCall refuses a side-effect call in an untrusted directory with
-// guidance the model can act on (it may ask the user to trust the directory,
-// or propose a different approach).
-func blockUntrustedCall(call agentcore.AgentToolCall, cwd string) *agentcore.BeforeToolCallDecision {
-	msg := "tool " + call.Name + " blocked: " + cwd + " is not trusted (the user can run /trust to allow it, or approve this call)"
-	return &agentcore.BeforeToolCallDecision{
-		Block:   true,
-		Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
+// reviewer builds the session's classifier for one chain. It is a factory
+// rather than a value because a /model switch changes the reviewer between
+// runs. The trust it reports is the launch decision (--approve, or the saved
+// store at start-up) OR the live store: --approve grants session trust for the
+// run without writing the manager, so reading only the manager would tell the
+// reviewer this directory is untrusted on a run the user explicitly approved,
+// while reading only the launch snapshot would hide a mid-session
+// "trust this folder" from the gates' own view of the same directory.
+func (s *runSession) reviewer() judge.Classifier {
+	trusted := s.trusted || (s.trust != nil && s.trust.IsTrusted(s.hookDeps.ProjectDir))
+	return run.NewReviewer(s.live.Model, s.live.ProviderName, s.live.Provider, s.creds, s.header.ID, s.hookDeps.ProjectDir, trusted)
+}
+
+// trustConfirm answers a trust question: the paired browser when remote control
+// has a client, the local approval dialog otherwise. A browser question that
+// could not be delivered — the client vanished, or the run was interrupted —
+// is answered as a denial, so the gate fails closed instead of parking the run.
+func (s *runSession) trustConfirm(rs *remoteSession) func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+	return func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
+		if rs != nil && rs.hasClient() {
+			d, remote := rs.bridge.Confirm(ctx, req.Tool, req.Summary)
+			if remote {
+				return judge.ApprovalAnswer{Approve: d.Approve, Always: d.Always, Answered: true}
+			}
+			return judge.ApprovalAnswer{Answered: true}
+		}
+		return s.confirmApproval(ctx, req)
 	}
 }

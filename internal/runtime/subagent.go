@@ -97,6 +97,15 @@ type SubAgentRunParams struct {
 	BaseURL      string   `json:"baseUrl,omitempty"`
 	Protocol     string   `json:"protocol,omitempty"`
 	Tools        []string `json:"tools,omitempty"`
+	// Auth is the dispatching session's authorization snapshot (see
+	// agentcore.ToolAuth): the trust decision for the working directory, the
+	// session reads grant, and the read roots the user allowed. A subprocess
+	// cannot share the parent's gates - it is a different address space - so it
+	// is handed the decisions those gates would have applied and rebuilds
+	// equivalent gates around them. Omitted when the parent ran with no gate
+	// chain, in which case the child's own gates fail closed on anything they
+	// cannot settle.
+	Auth *agentcore.ToolAuth `json:"auth,omitempty"`
 }
 
 // SubAgentRunResult is the JSON-RPC response payload carrying the child's final
@@ -274,6 +283,41 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 		}
 	}
 	runCfg := t.spec.NewRunConfig()
+	// Inherit the dispatching session's gates: the tool executor published the
+	// chain this call runs under (run.Gates.Install), so the child uses the very
+	// same trust / workspace-boundary / permission gates instead of whatever its
+	// own factory assembled. This is what makes "which gates a run has" one
+	// decision: the task factory in run.go no longer needs to guess, and a
+	// nested child inherits again the same way. The chain is the channel-less
+	// variant (see run.Gates), so a child's unanswerable question fails closed
+	// rather than opening a dialog under a running batch.
+	if chain := agentcore.ToolGatesFromContext(ctx); chain != nil {
+		tec := &runCfg.Batch.ToolExecutorConfig
+		if chain.BeforeToolCall != nil {
+			tec.BeforeToolCall = chain.BeforeToolCall
+		}
+		if chain.AfterToolCall != nil {
+			tec.AfterToolCall = chain.AfterToolCall
+		}
+		tec.GateChain = chain
+		if chain.OnChildStop != nil {
+			// The SubagentStop hook family rides the loop's natural-end seam,
+			// chained onto whatever this factory installed (an earlier blocking
+			// decision wins, the same precedence every other seam uses).
+			childStop, prev := chain.OnChildStop, runCfg.OnStop
+			runCfg.OnStop = func(ctx context.Context, agentCtx *agentcore.AgentContext) *StopDecision {
+				if prev != nil {
+					if dec := prev(ctx, agentCtx); dec != nil && dec.Block {
+						return dec
+					}
+				}
+				if block, guidance := childStop(ctx, agentCtx); block {
+					return &StopDecision{Block: true, Guidance: guidance}
+				}
+				return nil
+			}
+		}
+	}
 	// Advertise the child's tools to the model. A spec may pin an explicit set
 	// (spec.Tools); otherwise fall back to the run config's registry — the tools
 	// the executor can actually run — so a factory that wires only the registry
@@ -397,6 +441,13 @@ func (t *SubAgentTool) executeProcess(ctx context.Context, prompt string) (agent
 		BaseURL:      cfg.BaseURL,
 		Protocol:     cfg.Protocol,
 		Tools:        toolNames,
+	}
+	// Carry the session's decisions across the boundary (see SubAgentRunParams.Auth):
+	// the child rebuilds its gates from them, so a process-isolated sub-agent is
+	// gated by what the user already answered instead of guessing.
+	if chain := agentcore.ToolGatesFromContext(ctx); chain != nil && chain.Snapshot != nil {
+		auth := chain.Snapshot()
+		params.Auth = &auth
 	}
 	call := t.processCall
 	if call == nil {

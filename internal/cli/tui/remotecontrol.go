@@ -3,8 +3,8 @@
 // It adds the "/remote-control" command that starts/stops an in-process
 // HTTP+WebSocket server mirroring the session to a paired browser on the LAN,
 // mirrors transcript output to that browser, surfaces browser-submitted prompts
-// as a tea.Msg, and routes side-effect tool-call confirmations to the browser
-// while a client is connected (see trustApprovalGate).
+// as a tea.Msg, and routes trust questions to the browser while a client is
+// connected (see trustConfirm).
 //
 // The non-remote path is unchanged: when no session is active the mirror is a
 // no-op and waitRemoteInput returns a nil Cmd.

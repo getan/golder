@@ -102,26 +102,27 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// non-interactively: auto mode lets the reviewer decide (Confirm runs,
 	// Sandbox is isolated, Deny blocks) and ask mode fails closed. Decisions
 	// go to stderr so stdout stays a clean answer stream.
-	permGate := judge.PermissionGate(env.Permissions, judge.GateOpts{
-		Classifier: run.NewReviewer(p.Model, env.ProviderName, env.Provider, creds, hs.header.ID, env.Cwd, run.Trusted(env.Cwd)),
-		Sandboxed:  run.SandboxGate(),
-		Notify: func(n judge.Note) {
-			fmt.Fprintln(errOut, judge.FormatNote(n))
-		},
-	})
-	// Reading outside the workspace needs the user's answer, and a headless run
-	// has nobody to ask: the read-scope gate blocks with guidance naming the
+	//
+	// The chain comes from the one assembly point (run.Gates) with no answer
+	// channels: reading outside the workspace blocks with guidance naming the
 	// path and the config that would allow it (a script cannot approve, and
-	// guessing on its behalf would quietly widen what data the run touches).
-	// The note goes to stderr so stdout stays a clean answer stream.
-	scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
-		WorkspaceRoot: env.Cwd,
-		Roots:         run.ReadableExtraRoots(),
-		Notify: func(n judge.Note) {
-			fmt.Fprintln(errOut, judge.FormatNote(n))
+	// guessing on its behalf would quietly widen what data the run touches),
+	// and the same chain is what a task child inherits. The trust manager is
+	// nil here — headless is an explicit non-interactive invocation, so the
+	// invocation itself is the authorization; its snapshot tells a
+	// process-isolated child the same.
+	notes := run.NewReviewNotes()
+	notes.Set(func(n judge.Note) { fmt.Fprintln(errOut, judge.FormatNote(n)) })
+	gates := run.NewGates(run.GatesOpts{
+		Cwd:       env.Cwd,
+		Perms:     env.Permissions,
+		Notes:     notes,
+		Sandboxed: run.SandboxGate(),
+		Classifier: func() judge.Classifier {
+			return run.NewReviewer(p.Model, env.ProviderName, env.Provider, creds, hs.header.ID, env.Cwd, run.Trusted(env.Cwd))
 		},
+		ExtraRoots: run.ReadableExtraRoots(),
 	})
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.ChainGates(scopeGate, permGate)
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, install the tool-execution + Stop seams, dispatch SessionStart, and
@@ -144,7 +145,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	if n := plugin.NewEventNotifier(env.Plugins, errOut); n != nil {
 		baseOnEvent = n.Handle
 	}
-	d, onEvent := run.InstallDriverHooks(ctx, &runCfg, set, hookDeps, source, baseOnEvent)
+	d, onEvent := gates.InstallDriver(ctx, &runCfg, set, hookDeps, source, baseOnEvent)
 	// UserPromptSubmit runs before the prompt is handed to the loop: a block aborts
 	// the headless run non-zero; additionalContext is injected into this run only.
 	if d != nil {

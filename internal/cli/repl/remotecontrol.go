@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/remotecontrol"
@@ -178,43 +179,20 @@ func remoteControlStatus(out io.Writer, deps *replDeps) {
 	fmt.Fprintf(out, "remote control: on (%s)\n  %s\n", state, deps.remote.url)
 }
 
-// beforeToolCall builds the tool-call confirmation seam for a turn. It always
-// constructs the local stdin prompt (trust.BeforeToolCall) and the mode-aware
-// permission gate (which prompts on ask-mode verdicts and auto-decides in auto
-// mode), and, when a remote session exists, wraps the pair with
-// bridgeBeforeToolCall so confirmations route to a paired browser while one is
-// connected. When deps.remote is nil the wrapper is skipped entirely, so the
-// returned func is exactly the local seam — the non-remote path is
-// byte-identical to before (#443).
-func beforeToolCall(deps replDeps, out io.Writer) agentcore.BeforeToolCallFunc {
-	local := trust.BeforeToolCall(deps.trust, deps.cwd, deps.in, out, deps.confirmMu)
-	// Reading outside the workspace asks the user first (the read-scope gate),
-	// and no permission mode waives it. The trust gate stays first: an
-	// untrusted directory is the more basic question.
-	if scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
-		WorkspaceRoot: deps.cwd,
-		Roots:         run.ReadableExtraRoots(),
-		In:            deps.in,
-		Out:           out,
-		Mu:            deps.confirmMu,
-		Notify:        deps.notes.Emit,
-	}); scopeGate != nil {
-		local = judge.ChainGates(local, scopeGate)
-	}
-	trusted := deps.trust != nil && deps.trust.IsTrusted(deps.cwd)
-	reviewer := run.NewReviewer(deps.live.Model, deps.live.ProviderName, deps.live.Provider, deps.creds, deps.header.ID, deps.cwd, trusted)
-	local = judge.ChainGates(local, judge.PermissionGate(deps.perms, judge.GateOpts{
-		In:         deps.in,
-		Out:        out,
-		Mu:         deps.confirmMu,
-		Classifier: reviewer,
-		Sandboxed:  run.SandboxGate(),
-		Notify:     deps.notes.Emit,
-	}))
+// replSeam returns the tool-call confirmation seam for a turn: the session's
+// chain from the one assembly point (cli.HostGates), wrapped in the
+// remote-control bridge while a browser session exists so confirmations route
+// to the paired browser. When deps.remote is nil the wrapper is skipped
+// entirely, so the returned func is exactly the session chain — the non-remote
+// path is byte-identical to before (#443). The chain a spawned sub-agent
+// inherits is the session's own either way (cli.HostGates + InstallWith), never
+// the browser transport.
+func replSeam(deps *replDeps, out io.Writer, gates *run.Gates) agentcore.BeforeToolCallFunc {
+	local := gates.Chain()
 	if deps.remote == nil {
 		return local
 	}
-	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, reviewer, local)
+	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, cli.HostReviewer(deps), local)
 }
 
 // bridgeBeforeToolCall wraps the local stdin confirmation seam so that while a

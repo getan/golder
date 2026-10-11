@@ -38,7 +38,7 @@ func wiredConfig(t *testing.T, tool agentcore.AgentTool, set hooks.HookSet) runt
 	}
 	var cfg runtime.RunConfig
 	cfg.Batch.ToolExecutorConfig.Registry = reg
-	if d := InstallHooks(&cfg, set, HookDeps{SessionID: "s1", ProjectDir: t.TempDir()}); d == nil {
+	if d := installHooksForTest(&cfg, set, HookDeps{SessionID: "s1", ProjectDir: t.TempDir()}); d == nil {
 		t.Fatal("expected non-nil dispatcher")
 	}
 	return cfg
@@ -134,7 +134,7 @@ func TestPreToolUseUpdatedInputRewritesArgs(t *testing.T) {
 	}
 	var cfg runtime.RunConfig
 	cfg.Batch.ToolExecutorConfig.Registry = reg
-	if d := InstallHooks(&cfg, set, HookDeps{ProjectDir: t.TempDir()}); d == nil {
+	if d := installHooksForTest(&cfg, set, HookDeps{ProjectDir: t.TempDir()}); d == nil {
 		t.Fatal("expected non-nil dispatcher")
 	}
 

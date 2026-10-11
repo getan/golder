@@ -8,12 +8,14 @@ package cli
 import (
 	"bufio"
 	"errors"
+	"io"
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
@@ -90,6 +92,34 @@ type Host interface {
 	SetLastBtw(ctx *agentcore.AgentContext)
 	LastBtwBase() int
 	SetLastBtwBase(n int)
+}
+
+// HostGates assembles a session's gate chain from the Host contract, so a
+// command that drives its own run (/goal, /btw) inherits exactly the gates of
+// the run that invoked it rather than re-listing them. It is the same
+// run.Gates the main run installs; only the output writer differs, which is why
+// the caller passes the writer its run prints to.
+func HostGates(host Host, out io.Writer) *run.Gates {
+	return run.NewGates(run.GatesOpts{
+		Trust:      host.Trust(),
+		Cwd:        host.Cwd(),
+		Perms:      host.Permissions(),
+		Notes:      host.ReviewNotes(),
+		Sandboxed:  run.SandboxGate(),
+		Classifier: func() judge.Classifier { return HostReviewer(host) },
+		In:         host.Input(),
+		Out:        out,
+		Mu:         host.ConfirmMu(),
+		ExtraRoots: run.ReadableExtraRoots(),
+	})
+}
+
+// HostReviewer builds the reviewer for the session's active model, rebuilt per
+// chain so a /model switch changes the reviewer with the conversation.
+func HostReviewer(host Host) judge.Classifier {
+	live := host.Live()
+	return run.NewReviewer(live.Model, live.ProviderName, live.Provider, host.Creds(),
+		host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd()))
 }
 
 // Editor is the line-input contract a control command uses to read a follow-up

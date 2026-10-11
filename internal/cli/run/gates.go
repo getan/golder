@@ -1,0 +1,254 @@
+// This file is the single assembly point for a session's tool gates: the trust
+// gate, the workspace-boundary gate and the permission gate, composed once and
+// installed on every run of the session — the main run, a /goal or /btw side
+// run, and any sub-agent they dispatch.
+//
+// Before this, each driver built the chain itself (seven assembly sites:
+// tui/repl/goal/btw/headless/subagent_rpc/task-factory), which is how the TUI
+// came to gate reads differently from the REPL and how a sub-agent ended up
+// with fewer gates than the run that spawned it. With the chain defined here,
+// "which gates a run has" is one decision, and a derived run inherits the
+// session's answer instead of re-deciding it.
+//
+// Two chains come out of one set of inputs. The interactive chain carries the
+// driver's answer channels (stdin prompt or dialog callback); the derived chain
+// has the same gates but NO channels, so a sub-agent thread cannot prompt — it
+// fails closed with guidance, exactly as the read-scope gate has always done
+// for children. That is deliberate: a child runs concurrently with its parent,
+// and a dialog opened from under a running batch is not a question the user can
+// answer without losing the thread of what they were reading.
+package run
+
+import (
+	"bufio"
+	"context"
+	"io"
+	"sync"
+
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/trust"
+)
+
+// GatesOpts carries the session-scoped inputs of the gate chain. Every field is
+// optional except Cwd; a zero Gates is the "no gates" run (an SDK session with
+// nothing wired), not an error.
+type GatesOpts struct {
+	// Trust is the session trust store. Nil disables the trust gate, which is
+	// the right shape for an explicit non-interactive invocation (headless,
+	// whose authorization IS the invocation) and for the SDK.
+	Trust *trust.Manager
+	// Cwd is the directory the trust decision and the workspace boundary are
+	// about: never a tool argument, always the run's workspace.
+	Cwd string
+	// Perms is the live approval mode shared with the tool set; /permissions
+	// mutates it and the next call obeys.
+	Perms *permissions.State
+	// Notes receives one announcement per non-trivial decision.
+	Notes *ReviewNotes
+	// Sandboxed reports whether a Sandbox-tier call will actually be isolated
+	// by the execution layer (see SandboxGate).
+	Sandboxed func(toolName string) bool
+	// Classifier builds the reviewer for one chain build. It is a factory
+	// rather than a value because /model switches change the reviewer's model
+	// between runs; nil keeps the static floor and fails closed on gated calls.
+	Classifier func() judge.Classifier
+
+	// In/Out/Mu are the stdin answer channel (interactive line drivers).
+	In  *bufio.Reader
+	Out io.Writer
+	Mu  *sync.Mutex
+	// Confirm is the driver's own answer channel (the TUI dialog, a browser
+	// bridge). Used in preference to stdin when both are set.
+	Confirm func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer
+	// TrustConfirm, when set, answers trust questions instead of Confirm. The
+	// TUI uses it because a paired browser answers trust questions while local
+	// dialogs answer the rest (the pre-existing routing); nil keeps Confirm for
+	// every question.
+	TrustConfirm func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer
+	// ExtraRoots are read roots the session advertised itself (the skills
+	// directory), never asked about. See ReadableExtraRoots.
+	ExtraRoots []string
+}
+
+// Gates is a session's assembled gate chain. It is immutable after
+// construction except for the trust state its Manager carries, and safe for
+// concurrent use: Install is called per run (possibly from concurrent
+// sub-agent goroutines), and it only reads shared state.
+type Gates struct {
+	opts GatesOpts
+}
+
+// NewGates assembles the session's gates. It never returns nil: a Gates with
+// no inputs still installs hooks and the authorization snapshot, and its chain
+// is nil (an ungated run), which is what the callers previously expressed with
+// a nil BeforeToolCall.
+func NewGates(opts GatesOpts) *Gates { return &Gates{opts: opts} }
+
+// Install wires the session's gates onto cfg: the interactive chain as the
+// tool-execution seam, the hook seams when a dispatcher is resolved, and the
+// derived (channel-less) chain as the chain a spawned sub-agent inherits.
+//
+// d is the session's hook dispatcher (nil when no hooks are configured, FR-18),
+// passed per call rather than held on Gates because a driver may resolve hooks
+// after assembling its gates — the TUI defers hook loading until the first-run
+// trust answer.
+func (g *Gates) Install(cfg *runtime.RunConfig, d *hooks.Dispatcher, deps HookDeps) {
+	g.InstallWith(cfg, g.Chain(), d, deps)
+}
+
+// InstallWith is Install with a driver-supplied interactive seam: the REPL's
+// remote-control bridge wraps the session's chain in its own transport (a
+// paired browser answers instead of the terminal), so the driver passes the
+// wrapped chain here rather than overwriting the seam after Install. The
+// inherited chain, the hook seams and the Stop decorator are unchanged —
+// whatever wraps the interactive chain, a sub-agent still inherits the
+// session's gates rather than the wrapper.
+func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCallFunc, d *hooks.Dispatcher, deps HookDeps) {
+	tec := &cfg.Batch.ToolExecutorConfig
+	if seam != nil {
+		tec.BeforeToolCall = seam
+	}
+	// The hook seams chain onto whatever seam the gates installed: a hook block
+	// short-circuits, so the session's gates stay authoritative over user hooks
+	// (the ordering every driver had before this file existed).
+	InstallSeams(cfg, d, deps)
+	child := &agentcore.ToolGateChain{
+		BeforeToolCall: g.chain(false),
+		Snapshot:       g.Authorization,
+	}
+	if d != nil {
+		// A derived run inherits the tool-use hooks too: a PreToolUse hook that
+		// guards the session's files has no business skipping a sub-agent's
+		// calls. The session's Stop hook is deliberately not inherited (a child's
+		// end is its own), but the SubagentStop family is — that is the event
+		// written for children, and it carries its own block budget here.
+		child.BeforeToolCall = chainBeforeToolCall(child.BeforeToolCall, preToolCallHook(d, deps))
+		child.AfterToolCall = postToolCallHook(d, deps)
+		if sub := stopHook(d, deps, "SubagentStop", 0); sub != nil {
+			child.OnChildStop = func(ctx context.Context, agentCtx *agentcore.AgentContext) (bool, string) {
+				if dec := sub(ctx, agentCtx); dec != nil && dec.Block {
+					return true, dec.Guidance
+				}
+				return false, ""
+			}
+		}
+	}
+	tec.GateChain = child
+}
+
+// Chain returns the interactive gate chain on its own, for a driver that wraps
+// it in its own transport (the REPL's remote-control bridge intercepts confirm
+// requests before they reach the terminal). Drivers that do not wrap should
+// call Install instead, which also wires hooks and the inherited chain.
+func (g *Gates) Chain() agentcore.BeforeToolCallFunc { return g.chain(true) }
+
+// InstallDriver wires the session's gates AND the resolved hook set onto cfg in
+// one call: the interactive gate chain, the PreToolUse/PostToolUse seams, the
+// Stop hook, the SessionStart dispatch, and the hook notifier chained onto
+// onEvent. It is the single entry point a driver uses, so a driver cannot wire
+// one half (gates) while forgetting the other (hooks), and the chain a spawned
+// sub-agent inherits carries the tool-use hooks with it.
+//
+// set is the already-resolved, trust-gated hook set (see ResolveHookSet). When
+// it is empty NewDispatcher returns nil and this is a no-op beyond the gates,
+// the hot path paying nothing (FR-18).
+func (g *Gates) InstallDriver(ctx context.Context, cfg *runtime.RunConfig, set hooks.HookSet, deps HookDeps, source string, onEvent func(agentcore.AgentEvent)) (*hooks.Dispatcher, func(agentcore.AgentEvent)) {
+	d := BuildDispatcher(set, deps)
+	g.Install(cfg, d, deps)
+	if d == nil {
+		return nil, onEvent
+	}
+	DispatchSessionStart(ctx, d, cfg, deps, source)
+	n := hooks.NewHookNotifier(d, deps.SessionID, deps.ProjectDir)
+	return d, chainEvent(onEvent, n.Handle)
+}
+
+// chain composes trust → workspace boundary → permission. withPrompts says
+// whether this chain carries the driver's answer channels: the interactive
+// chain does, the derived chain does not, so a child's unanswerable question
+// fails closed instead of parking a goroutine on a dialog nobody opened.
+func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
+	o := g.opts
+	trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
+	if withPrompts {
+		trustOpts.In, trustOpts.Out = o.In, o.Out
+		trustOpts.Confirm = o.Confirm
+		if o.TrustConfirm != nil {
+			trustOpts.Confirm = o.TrustConfirm
+		}
+	}
+	gate := trust.Gate(trustOpts)
+
+	scopeOpts := judge.ReadScopeOpts{
+		WorkspaceRoot: o.Cwd,
+		Roots:         o.ExtraRoots,
+		Notify:        o.Notes.Emit,
+	}
+	if withPrompts {
+		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+	}
+	if scopeGate := judge.ReadScopeGate(scopeOpts); scopeGate != nil {
+		gate = judge.ChainGates(gate, scopeGate)
+	}
+
+	permOpts := judge.GateOpts{
+		Classifier: g.classifier(),
+		Sandboxed:  o.Sandboxed,
+		Notify:     o.Notes.Emit,
+	}
+	if withPrompts {
+		permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+	}
+	return judge.ChainGates(gate, judge.PermissionGate(o.Perms, permOpts))
+}
+
+// classifier builds the reviewer for one chain, tolerating a nil factory (the
+// static floor then decides, and a gated call fails closed).
+func (g *Gates) classifier() judge.Classifier {
+	if g.opts.Classifier == nil {
+		return nil
+	}
+	return g.opts.Classifier()
+}
+
+// Authorization snapshots the session's decisions for a run that cannot share
+// this chain: a process-isolated sub-agent. It reports what the session
+// answered, not what it was asked: Trusted is true when the run has no trust
+// gate at all (an explicit non-interactive invocation) or the directory is
+// trusted, so the child proceeds exactly where the parent would have.
+func (g *Gates) Authorization() agentcore.ToolAuth {
+	auth := agentcore.ToolAuth{ReadRoots: permissions.ReadRoots()}
+	if g.opts.Trust == nil {
+		auth.SessionTrust = true
+		return auth
+	}
+	auth.SessionTrust = g.opts.Trust.IsTrusted(g.opts.Cwd)
+	auth.SessionReads = g.opts.Trust.ReadsTrusted(g.opts.Cwd)
+	return auth
+}
+
+// Seed applies a parent's authorization snapshot to this session's state,
+// before any run is installed: the process-isolated sub-agent's side of
+// Authorization. It never widens beyond what the parent held — the snapshot is
+// the parent's decision — and it reports how many read roots were refused
+// (too broad, or malformed), so the caller can note the difference.
+func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
+	if g.opts.Trust != nil {
+		if auth.SessionTrust {
+			g.opts.Trust.SetSessionTrust(g.opts.Cwd)
+		}
+		if auth.SessionReads {
+			g.opts.Trust.SetSessionReads(g.opts.Cwd)
+		}
+	}
+	for _, root := range auth.ReadRoots {
+		if _, err := permissions.AddReadRoot(root); err != nil {
+			refusedRoots++
+		}
+	}
+	return refusedRoots
+}

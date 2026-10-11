@@ -149,10 +149,25 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		childCreds := provider.NewCredentialStore(nil)
 		childCreds.SetOverride(resolvedName, apiKey)
 		childClassifier := NewReviewer(model, resolvedName, prov, childCreds, "", cwd, Trusted(cwd))
+		// Fallback gates for a child dispatched outside a session's chain. Every
+		// CLI driver publishes its session chain onto the tool call's context
+		// (Gates.Install), and the sub-agent tool replaces this fallback with it
+		// wholesale — so a task child normally runs under the session's trust,
+		// workspace and permission gates. The fallback exists for the embedder
+		// that calls SetupEnv directly (the SDK) and never assembles a session
+		// chain: without it those children would run with no gates at all, which
+		// is strictly weaker than the behavior this refactor replaced.
+		childGates := NewGates(GatesOpts{
+			Cwd:        cwd,
+			Perms:      permState,
+			Sandboxed:  SandboxGate(),
+			Classifier: func() judge.Classifier { return childClassifier },
+			ExtraRoots: ReadableExtraRoots(),
+		})
 		factory := func() runtime.RunConfig {
 			childTools := ChildToolSet(cwd, policy)
 			WirePermissionState(childTools, permState)
-			return runtime.RunConfig{
+			cfg := runtime.RunConfig{
 				LoopConfig: runtime.LoopConfig{
 					Model:     model,
 					Provider:  resolvedName,
@@ -161,27 +176,10 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 				},
 				Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{
 					Registry: ToolRegistry(childTools),
-					// Children have no stdin prompt, so both gates run
-					// non-interactively and announcements flow through the
-					// shared sink the driver registered. The read-scope gate
-					// therefore fails closed for a path the parent session has
-					// not already been granted — a sub-agent cannot widen what
-					// the session may read, but it inherits every grant the
-					// user already gave (the read-root registry is shared).
-					BeforeToolCall: judge.ChainGates(
-						judge.ReadScopeGate(judge.ReadScopeOpts{
-							WorkspaceRoot: cwd,
-							Roots:         ReadableExtraRoots(),
-							Notify:        notes.Emit,
-						}),
-						judge.PermissionGate(permState, judge.GateOpts{
-							Classifier: childClassifier,
-							Sandboxed:  SandboxGate(),
-							Notify:     notes.Emit,
-						}),
-					),
 				}},
 			}
+			childGates.Install(&cfg, nil, HookDeps{})
+			return cfg
 		}
 		tools = append(tools, runtime.NewTaskTool(factory, sem))
 	}

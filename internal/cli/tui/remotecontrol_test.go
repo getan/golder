@@ -154,7 +154,7 @@ func TestTrustGateSkipsTrustedDirectory(t *testing.T) {
 	s.trusted = true
 	s.trust.SetSessionTrust(s.hookDeps.ProjectDir)
 
-	gate := s.trustApprovalGate(nil)
+	gate := trustGateForTest(s, nil)
 	if gate == nil {
 		t.Fatal("trust gate should be installed")
 	}

@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -265,13 +266,37 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 	})
 }
 
-// BeforeToolCall builds the permission hook that gates side-effect tools and,
-// under StrictReads, the data-ingestion tools (see GatesTool) on the cwd's
-// trust decision. In a trusted directory the call is allowed (nil). Otherwise
-// the user is prompted with the answer ladder: once runs this call, "reads"
+// GateOpts configures the trust gate. Exactly one answer channel is used:
+// Confirm when set (the TUI's dialog, or a driver's own routing), otherwise the
+// stdin prompt when In and Out are set. A gate with neither fails closed: a
+// run with no one to ask refuses the call with guidance instead of guessing.
+type GateOpts struct {
+	// Manager is the trust store. A nil manager disables the gate (Gate
+	// returns nil), matching the pre-existing "trust unavailable" behavior.
+	Manager *Manager
+	// Cwd is the directory the trust decision is about; it is also the key the
+	// session grants are filed under, so every caller must pass the run's
+	// workspace rather than a tool argument.
+	Cwd string
+	// In/Out/Mu are the shared stdin prompt channel (interactive line drivers).
+	In  *bufio.Reader
+	Out io.Writer
+	Mu  *sync.Mutex
+	// Confirm is the driver's own approval channel. When set it is preferred
+	// over In/Out: it takes the same ApprovalRequest every other gate asks
+	// with, so one driver dialog answers trust, read-scope and permission
+	// questions alike.
+	Confirm func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer
+}
+
+// Gate builds the trust gate: side-effect tools and, under StrictReads, the
+// data-ingestion tools (see GatesTool) are asked about in a directory the
+// session has not trusted. In a trusted directory the call is allowed (nil).
+// Otherwise the user answers with the ladder - once runs this call, "reads"
 // grants session reads for the directory (LocalReadTools only), and "always"
-// grants session trust so every tool stops asking. mgr==nil returns nil (trust
-// disabled, no gating).
+// grants session trust so every tool stops asking - and the chosen grant is
+// filed on the manager, so it applies to the next call of any driver sharing
+// that manager. A nil Manager returns nil (trust disabled, no gating).
 //
 // Concurrency: bash/write/edit are all ToolExecutionSequential, so the batch
 // runs serially and this hook fires on the run-loop producer goroutine - never
@@ -283,17 +308,19 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 // runs the main goroutine has already drained the assistant's streamed text and
 // is idle in DrainStream. Do not raise EventBuffer above 0 while trust gating
 // is wired without routing the prompt through the main goroutine.
-func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, mu *sync.Mutex) agentcore.BeforeToolCallFunc {
+func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
+	mgr := o.Manager
 	if mgr == nil {
 		return nil
 	}
+	cwd := strings.TrimSpace(o.Cwd)
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
 		if !mgr.GatesTool(call.Name, cwd) {
 			return nil
 		}
-		if mu != nil {
-			mu.Lock()
-			defer mu.Unlock()
+		if o.Mu != nil {
+			o.Mu.Lock()
+			defer o.Mu.Unlock()
 		}
 		// Check under the lock: a prior call's "always" in the same batch may
 		// have granted session trust, in which case this call skips the prompt.
@@ -302,10 +329,31 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 		if mgr.IsTrusted(cwd) {
 			return nil
 		}
-		// The prompt is interruptible: a Ctrl+C during the read cancels the
-		// run context and the read yields a denial, so the interrupt takes
-		// effect immediately instead of waiting for an answer.
-		ans := ConfirmToolCall(ctx, out, in, call)
+		var ans Answer
+		answered := false
+		if o.Confirm != nil {
+			// The one request shape every driver dialog answers. The gate owns
+			// the request (tool, preview, directory, why) so a driver only
+			// supplies the question's transport. An unanswered request - the
+			// dialog could not run, or this driver has no client for it right
+			// now - falls through to the stdin prompt when one exists.
+			a := o.Confirm(ctx, judge.ApprovalRequest{
+				Kind:      judge.ApprovalTrust,
+				Tool:      call.Name,
+				Summary:   ToolCallSummary(call),
+				TrustDir:  cwd,
+				Rationale: cwd + " is not trusted yet",
+			})
+			if a.Answered {
+				ans, answered = Answer{Allow: a.Approve, Always: a.Always, Reads: a.SessionReads}, true
+			}
+		}
+		if !answered && o.In != nil && o.Out != nil {
+			// The prompt is interruptible: a Ctrl+C during the read cancels the
+			// run context and the read yields a denial, so the interrupt takes
+			// effect immediately instead of waiting for an answer.
+			ans, answered = ConfirmToolCall(ctx, o.Out, o.In, call), true
+		}
 		if ans.Always {
 			mgr.SetSessionTrust(cwd)
 		}
@@ -313,13 +361,25 @@ func BeforeToolCall(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, m
 			mgr.SetSessionReads(cwd)
 		}
 		if !ans.Allow {
-			msg := fmt.Sprintf("tool %q blocked: %s is not trusted (use /trust to trust this project)", call.Name, cwd)
-			return &agentcore.BeforeToolCallDecision{
-				Block:   true,
-				Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
-			}
+			return blockUntrusted(call, cwd, o.Confirm != nil || o.In != nil)
 		}
 		return nil
+	}
+}
+
+// blockUntrusted refuses a call in a directory the session has not trusted,
+// with guidance the model can act on. answered says whether the run had any way
+// to ask (a dialog or stdin); with none - a headless or process-isolated run
+// that could not settle the call from its authorization snapshot - the message
+// says so instead of advising an answer the run cannot take.
+func blockUntrusted(call agentcore.AgentToolCall, cwd string, answered bool) *agentcore.BeforeToolCallDecision {
+	msg := fmt.Sprintf("tool %q blocked: %s is not trusted (use /trust to trust this project)", call.Name, cwd)
+	if !answered {
+		msg += " — this run has no prompt, so ask the user to trust the directory in an interactive session"
+	}
+	return &agentcore.BeforeToolCallDecision{
+		Block:   true,
+		Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
 	}
 }
 

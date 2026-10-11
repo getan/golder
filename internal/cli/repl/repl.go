@@ -656,8 +656,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
-				Registry:       deps.reg,
-				BeforeToolCall: beforeToolCall(deps, out),
+				Registry: deps.reg,
 			},
 		},
 		Reminders:  deps.reminders,
@@ -665,12 +664,13 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 		SessionID:  deps.header.ID,
 		MemoryRoot: deps.memoryRoot,
 	}
-	// Per-turn wiring of the tool-execution + Stop seams (PreToolUse/PostToolUse/
-	// Stop) onto this turn's freshly-built cfg; a nil dispatcher is a no-op so the
-	// hot path pays nothing when no hooks are configured (FR-18).
-	if deps.dispatcher != nil {
-		run.InstallSeams(&cfg, deps.dispatcher, deps.hookDeps)
-	}
+	// The session's gates and the per-turn hook seams, from the one assembly
+	// point (cli.HostGates): the interactive chain (with the browser bridge
+	// wrapped around it while remote control is on), the PreToolUse/PostToolUse/
+	// Stop hook seams (a nil dispatcher is a no-op, FR-18), and the chain a
+	// spawned sub-agent inherits.
+	gates := cli.HostGates(&deps, out)
+	gates.InstallWith(&cfg, replSeam(&deps, out, gates), deps.dispatcher, deps.hookDeps)
 	// Due session-local reminders ride the follow-up seam (issue #565): when the
 	// run is about to settle, the scheduler queues each due reminder as a normal
 	// user turn. A nil scheduler (no schedule_* tools) leaves the seam unwired.

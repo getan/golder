@@ -69,8 +69,10 @@ func TestStopHookNilDispatcher(t *testing.T) {
 	}
 }
 
-// TestSubagentStopEvent: InstallSubagentStop wires a SubagentStop decorator whose
-// block keeps a sub-agent running with the hook's reason.
+// TestSubagentStopEvent: the SubagentStop decorator's block keeps a sub-agent
+// running with the hook's reason. The gate assembly installs it on the chain a
+// child inherits (see gates.go), where the sub-agent assembly picks it up; this
+// pins the decorator itself.
 func TestSubagentStopEvent(t *testing.T) {
 	d := stopDispatcher(t, "SubagentStop", `echo "sub not done" 1>&2; exit 2`)
 	seam := stopHook(d, HookDeps{SessionID: "child"}, "SubagentStop", 5)

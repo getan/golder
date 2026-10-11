@@ -1,21 +1,22 @@
 package run
 
-// Regression coverage for the #425 driver convergence (FR-16): the SAME resolved
-// hook set must fire in every driver mode. Rather than stand up a provider-backed
-// run for each of the six drivers, this pins the two DISTINCT wiring paths they
-// route through — the one-shot path (headless / subagent_rpc via InstallDriverHooks
-// / InstallHooks) and the multi-turn path (repl / tui / goal / btw via
-// BuildDispatcher once + InstallSeams per turn) — and asserts a PreToolUse hook
-// installed through either path reaches the BeforeToolCall seam and blocks. It
-// also pins FR-18: an empty hook set wires no seam in either path, so a run with
-// no hooks configured behaves exactly as before.
+// Regression coverage for driver convergence (#425, FR-16): the SAME resolved
+// hook set must fire in every driver mode. Two wiring paths survive — the
+// one-shot entry (headless / subagent_rpc / and every driver that assembles its
+// gates, via Gates.InstallDriver) and the per-turn entry (repl / tui / goal /
+// btw via BuildDispatcher once + InstallSeams per run) — and this asserts a
+// PreToolUse hook installed through either reaches the BeforeToolCall seam and
+// blocks. It also pins FR-18: an empty hook set wires no seam, so a run with no
+// hooks configured behaves exactly as before.
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -46,19 +47,26 @@ func TestHookConvergenceBothPaths(t *testing.T) {
 	deps := HookDeps{SessionID: "s1", ProjectDir: t.TempDir()}
 	set := blockingPreToolUse()
 
-	// Headless / subagent_rpc path: InstallDriverHooks wires the seams all-in-one.
-	t.Run("headless", func(t *testing.T) {
+	// The gate assembly path: InstallDriver wires gates + seams + SessionStart
+	// all-in-one. The gate chain is empty (no trust store, full access), so the
+	// only thing that can block is the hook.
+	t.Run("gates", func(t *testing.T) {
 		var cfg runtime.RunConfig
-		d, _ := InstallDriverHooks(context.Background(), &cfg, set, deps, "startup", nil)
+		g := NewGates(GatesOpts{Cwd: deps.ProjectDir, Perms: permissions.New(permissions.FullAccess)})
+		d, _ := g.InstallDriver(context.Background(), &cfg, set, deps, "startup", nil)
 		if d == nil {
 			t.Fatal("expected dispatcher for non-empty hook set")
 		}
 		if !fireBeforeToolCall(&cfg) {
-			t.Fatal("headless path: PreToolUse hook did not block")
+			t.Fatal("gates path: PreToolUse hook did not block")
+		}
+		// The same assembly also published the chain a sub-agent inherits.
+		if cfg.Batch.ToolExecutorConfig.GateChain == nil {
+			t.Fatal("gates path: the inherited chain was not published")
 		}
 	})
 
-	// REPL / TUI / goal / btw path: BuildDispatcher once, then InstallSeams per turn.
+	// The per-turn path: BuildDispatcher once, then InstallSeams per run.
 	t.Run("repl", func(t *testing.T) {
 		d := BuildDispatcher(set, deps)
 		if d == nil {
@@ -78,17 +86,38 @@ func TestHookConvergenceBothPaths(t *testing.T) {
 func TestHookConvergenceNoHooksUnchanged(t *testing.T) {
 	deps := HookDeps{ProjectDir: t.TempDir()}
 
-	t.Run("headless", func(t *testing.T) {
+	t.Run("gates", func(t *testing.T) {
 		var cfg runtime.RunConfig
-		d, ev := InstallDriverHooks(context.Background(), &cfg, nil, deps, "startup", nil)
+		g := NewGates(GatesOpts{Cwd: deps.ProjectDir, Perms: permissions.New(permissions.FullAccess)})
+		d, ev := g.InstallDriver(context.Background(), &cfg, nil, deps, "startup", nil)
 		if d != nil {
 			t.Fatalf("expected nil dispatcher for empty hook set, got %v", d)
 		}
 		if ev != nil {
 			t.Fatal("expected event handler unchanged (nil) for empty hook set")
 		}
-		if cfg.Batch.ToolExecutorConfig.BeforeToolCall != nil {
-			t.Fatal("headless path: seam wired despite no hooks")
+		// With no hooks the seam carries the gates alone — and the gates are
+		// never absent, because the static hard-deny floor lives inside the
+		// permission gate: no hook set turns it off.
+		seam := cfg.Batch.ToolExecutorConfig.BeforeToolCall
+		if seam == nil {
+			t.Fatal("gates path: the static floor must be installed even with no hooks")
+		}
+		deny := seam(context.Background(), agentcore.AgentToolCall{
+			Name: "bash", Arguments: json.RawMessage(`{"command":"sudo rm -rf /"}`),
+		})
+		if deny == nil || !deny.Block {
+			t.Fatalf("empty hook set must not disable the static floor, got %+v", deny)
+		}
+		if dec := seam(context.Background(), agentcore.AgentToolCall{
+			Name: "bash", Arguments: json.RawMessage(`{"command":"ls"}`),
+		}); dec != nil {
+			t.Fatalf("full access with no trust gate should allow a benign command, got %+v", dec)
+		}
+		// The inherited chain is published regardless, so a sub-agent inherits
+		// this session's gates rather than nothing at all.
+		if cfg.Batch.ToolExecutorConfig.GateChain == nil {
+			t.Fatal("gates path: the inherited chain should be published even without hooks")
 		}
 	})
 

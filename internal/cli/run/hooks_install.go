@@ -31,30 +31,6 @@ type HookDeps struct {
 	WarnLog    io.Writer
 }
 
-// InstallHooks builds the Dispatcher for a run from the resolved hook set and
-// wires the tool-execution hook points into cfg. It short-circuits when no hooks
-// are configured: NewDispatcher returns nil for an empty set, so the hot path
-// pays nothing (FR-18) and nothing is wrapped. The returned dispatcher is used
-// by later per-event wiring (#421–#424).
-//
-// PreToolUse is CHAINED onto the existing BeforeToolCall seam (occupied by the
-// trust gate) rather than replacing it: trust runs first and stays authoritative
-// (a trust block short-circuits before the user hook runs). PostToolUse is
-// chained onto AfterToolCall as a last-writer so it can append feedback to an
-// already-executed tool's result without undoing it.
-func InstallHooks(cfg *runtime.RunConfig, set hooks.HookSet, deps HookDeps) *hooks.Dispatcher {
-	warn := deps.WarnLog
-	if warn == nil {
-		warn = os.Stderr
-	}
-	d := hooks.NewDispatcher(set, deps.ProjectDir, warn)
-	if d == nil {
-		return nil
-	}
-	InstallSeams(cfg, d, deps)
-	return d
-}
-
 // BuildDispatcher builds the run's Dispatcher from the resolved hook set without
 // touching a RunConfig. It is the entry point for the multi-turn drivers (REPL /
 // TUI) that resolve hooks and fire SessionStart once per session, then install

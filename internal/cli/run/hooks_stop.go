@@ -64,15 +64,6 @@ func stopHook(d *hooks.Dispatcher, deps HookDeps, event string, maxBlocks int) f
 	}
 }
 
-// InstallSubagentStop wires the SubagentStop hook onto a sub-agent's RunConfig,
-// so a SubagentStop hook can block a sub-agent from ending (same semantics as
-// Stop, evaluated in the sub-agent context, with its own consecutive-block
-// budget). The sub-agent assembly calls this on the child runCfg (converged in
-// #425). A nil dispatcher is a no-op.
-func InstallSubagentStop(cfg *runtime.RunConfig, d *hooks.Dispatcher, deps HookDeps) {
-	installStopHook(cfg, d, deps, "SubagentStop")
-}
-
 // installStopHook wires a Stop-family decorator onto cfg.OnStop, chaining onto
 // any existing seam (an earlier OnStop is consulted first and its block wins,
 // mirroring the block-short-circuit combinator convention). It is called by the

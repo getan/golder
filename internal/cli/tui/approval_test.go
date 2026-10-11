@@ -14,9 +14,28 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/seatbelt"
 )
+
+// trustGateForTest builds the session's gate chain with the permission gate
+// pinned to full access, so a test can drive the trust gate's answers without a
+// reviewer or sandbox decision in the way. The chain is the production one
+// (run.Gates), so the ordering and the tool classification are exercised as
+// shipped rather than re-assembled in the test.
+func trustGateForTest(session *runSession, rs *remoteSession) agentcore.BeforeToolCallFunc {
+	return run.NewGates(run.GatesOpts{
+		Trust:        session.trust,
+		Cwd:          session.hookDeps.ProjectDir,
+		Perms:        permissions.New(permissions.FullAccess),
+		Notes:        session.notes,
+		Confirm:      session.confirmApproval,
+		TrustConfirm: session.trustConfirm(rs),
+		ExtraRoots:   run.ReadableExtraRoots(),
+	}).Chain()
+}
 
 func testApprovalRequest() judge.ApprovalRequest {
 	return judge.ApprovalRequest{
@@ -444,7 +463,7 @@ func TestTrustGateReadsAnswerGrantsReadsOnly(t *testing.T) {
 	session.hookDeps.ProjectDir = t.TempDir()
 	ch := make(chan tea.Msg, 4)
 	session.approvalCh = ch
-	gate := session.trustApprovalGate(nil)
+	gate := trustGateForTest(session, nil)
 	if gate == nil {
 		t.Fatal("trust gate should be installed when a trust manager exists")
 	}
@@ -642,7 +661,7 @@ func TestTrustGateGatesReads(t *testing.T) {
 			session.hookDeps.ProjectDir = t.TempDir()
 			ch := make(chan tea.Msg, 4)
 			session.approvalCh = ch
-			gate := session.trustApprovalGate(nil)
+			gate := trustGateForTest(session, nil)
 			if gate == nil {
 				t.Fatal("trust gate should be installed when a trust manager exists")
 			}
@@ -691,7 +710,7 @@ func TestTrustGateReadsSilentWhenTrusted(t *testing.T) {
 	session.trust.SetSessionTrust(dir)
 	session.approvalCh = make(chan tea.Msg, 4)
 
-	gate := session.trustApprovalGate(nil)
+	gate := trustGateForTest(session, nil)
 	if gate == nil {
 		t.Fatal("trust gate should be installed when a trust manager exists")
 	}
@@ -716,7 +735,7 @@ func TestTrustGateAsksLocally(t *testing.T) {
 	// request and answer "approve for the session".
 	ch := make(chan tea.Msg, 4)
 	session.approvalCh = ch
-	gate := session.trustApprovalGate(nil)
+	gate := trustGateForTest(session, nil)
 	if gate == nil {
 		t.Fatal("trust gate should be installed when a trust manager exists")
 	}
@@ -769,7 +788,7 @@ func TestTrustGateDeniesWithoutAnswer(t *testing.T) {
 	session.hookDeps.ProjectDir = t.TempDir()
 	session.approvalCh = make(chan tea.Msg, 1)
 
-	gate := session.trustApprovalGate(nil)
+	gate := trustGateForTest(session, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan *agentcore.BeforeToolCallDecision, 1)
 	go func() {

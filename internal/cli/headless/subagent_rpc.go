@@ -27,6 +27,7 @@ import (
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/trust"
 )
 
 // RunSubAgentRPC is the `golder --subagent-rpc` entry point. It reads
@@ -122,15 +123,44 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 		},
 		Batch: agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg}},
 	}
-	// Like headless: no prompt available, so the mode-aware gate runs
-	// non-interactively (auto decides via the reviewer, ask fails closed).
-	runCfg.Batch.ToolExecutorConfig.BeforeToolCall = judge.PermissionGate(permState, judge.GateOpts{
-		Classifier: run.NewReviewer(model, providerName, prov, creds, "", cwd, run.Trusted(cwd)),
-		Sandboxed:  run.SandboxGate(),
-		Notify: func(n judge.Note) {
-			fmt.Fprintln(os.Stderr, judge.FormatNote(n))
+	// The child runs the session's own gate chain, built from the snapshot the
+	// parent sent (SubAgentRunParams.Auth): a process cannot share the parent's
+	// in-memory gates, so it is handed the decisions those gates would have
+	// applied and rebuilds equivalent gates around them. This is what makes a
+	// process-isolated sub-agent as gated as an in-process one — trust first,
+	// then the workspace boundary, then the mode-aware review — instead of
+	// running under the permission gate alone.
+	//
+	// No answer channels: the child's stdin is the JSON-RPC pipe, so anything it
+	// cannot settle from the snapshot fails closed with guidance naming the
+	// reason.
+	trustMgr, terr := trust.NewManager(trust.DefaultPath())
+	if terr != nil {
+		fmt.Fprintf(os.Stderr, "golder: trust store unavailable, trust gate disabled: %v\n", terr)
+		trustMgr = nil
+	}
+	notes := run.NewReviewNotes()
+	notes.Set(func(n judge.Note) { fmt.Fprintln(os.Stderr, judge.FormatNote(n)) })
+	gates := run.NewGates(run.GatesOpts{
+		Trust:     trustMgr,
+		Cwd:       cwd,
+		Perms:     permState,
+		Notes:     notes,
+		Sandboxed: run.SandboxGate(),
+		Classifier: func() judge.Classifier {
+			return run.NewReviewer(model, providerName, prov, creds, "", cwd, run.Trusted(cwd))
 		},
+		ExtraRoots: run.ReadableExtraRoots(),
 	})
+	// Apply the parent's authorizations before installing the gates, so the
+	// first call already sees them. A snapshot the parent did not send (an
+	// older parent, or a run with no gates) leaves the child at its own
+	// defaults, which fail closed.
+	if params.Auth != nil {
+		if refused := gates.Seed(*params.Auth); refused > 0 {
+			fmt.Fprintf(os.Stderr, "golder: sub-agent: %d read root(s) in the parent's authorization were refused\n", refused)
+		}
+	}
 	// Wire hooks uniformly with every other driver (#425): the child sub-agent runs
 	// its own PreToolUse/PostToolUse (and Stop) hooks from the trust-gated hook set
 	// rooted at its working directory. It has no backing session, so SessionID is
@@ -139,7 +169,7 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 	if set, herr := run.ResolveHookSet(cwd, run.Trusted(cwd)); herr != nil {
 		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", herr)
 	} else {
-		run.InstallHooks(&runCfg, set, run.HookDeps{ProjectDir: cwd, WarnLog: os.Stderr})
+		gates.Install(&runCfg, run.BuildDispatcher(set, run.HookDeps{ProjectDir: cwd, WarnLog: os.Stderr}), run.HookDeps{ProjectDir: cwd, WarnLog: os.Stderr})
 	}
 	text, err := runtime.RunSubAgentOnce(ctx, params.SystemPrompt, params.Prompt, tools, runCfg)
 	if err != nil {

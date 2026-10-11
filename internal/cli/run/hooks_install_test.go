@@ -9,12 +9,21 @@ import (
 	"github.com/getan/golder/internal/runtime"
 )
 
+// installHooksForTest builds the run's dispatcher and wires its seams, the
+// sequence every driver performs: BuildDispatcher once per session, then
+// InstallSeams per run (or Gates.Install, which does both beside the gates).
+func installHooksForTest(cfg *runtime.RunConfig, set hooks.HookSet, deps HookDeps) *hooks.Dispatcher {
+	d := BuildDispatcher(set, deps)
+	InstallSeams(cfg, d, deps)
+	return d
+}
+
 func TestInstallHooksEmptyShortCircuits(t *testing.T) {
 	var cfg runtime.RunConfig
-	if d := InstallHooks(&cfg, nil, HookDeps{ProjectDir: t.TempDir()}); d != nil {
+	if d := installHooksForTest(&cfg, nil, HookDeps{ProjectDir: t.TempDir()}); d != nil {
 		t.Fatalf("expected nil dispatcher for empty hook set, got %v", d)
 	}
-	if d := InstallHooks(&cfg, hooks.HookSet{}, HookDeps{}); d != nil {
+	if d := installHooksForTest(&cfg, hooks.HookSet{}, HookDeps{}); d != nil {
 		t.Fatalf("expected nil dispatcher for empty map, got %v", d)
 	}
 }
@@ -24,7 +33,7 @@ func TestInstallHooksBuildsDispatcher(t *testing.T) {
 		"PreToolUse": {{Matcher: "*", Hooks: []hooks.HookConfig{{Command: "true"}}}},
 	}
 	var cfg runtime.RunConfig
-	d := InstallHooks(&cfg, set, HookDeps{ProjectDir: t.TempDir()})
+	d := installHooksForTest(&cfg, set, HookDeps{ProjectDir: t.TempDir()})
 	if d == nil {
 		t.Fatal("expected non-nil dispatcher for non-empty hook set")
 	}

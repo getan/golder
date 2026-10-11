@@ -33,14 +33,11 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/hooks"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/trust"
 )
 
 // btwHeader is the fixed banner shown when entering a side thread, so the user
@@ -224,37 +221,14 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
 				Registry: host.Registry(),
-				BeforeToolCall: judge.ChainGates(
-					trust.BeforeToolCall(host.Trust(), host.Cwd(), host.Input(), out, host.ConfirmMu()),
-					judge.ChainGates(
-						judge.ReadScopeGate(judge.ReadScopeOpts{
-							WorkspaceRoot: host.Cwd(),
-							Roots:         run.ReadableExtraRoots(),
-							In:            host.Input(),
-							Out:           out,
-							Mu:            host.ConfirmMu(),
-							Notify:        host.ReviewNotes().Emit,
-						}),
-						judge.PermissionGate(host.Permissions(), judge.GateOpts{
-							In:         host.Input(),
-							Out:        out,
-							Mu:         host.ConfirmMu(),
-							Classifier: run.NewReviewer(settings.Model, settings.ProviderName, settings.Provider, host.Creds(), host.Header().ID, host.Cwd(), host.Trust() != nil && host.Trust().IsTrusted(host.Cwd())),
-							Sandboxed:  run.SandboxGate(),
-							Notify:     host.ReviewNotes().Emit,
-						}),
-					),
-				),
 			},
 		},
 		Reminders: host.Reminders(),
 		SessionID: host.HookDeps().SessionID,
 	}
-	// Wire the per-turn hook seams onto the side run's cfg; nil dispatcher is a
-	// no-op (FR-18).
-	if d := host.Dispatcher(); d != nil {
-		run.InstallSeams(&cfg, d, host.HookDeps())
-	}
+	// The session's gates and hook seams, from the one assembly point (see
+	// cli.HostGates): a side thread is a second run, not a second rulebook.
+	cli.HostGates(host, out).Install(&cfg, host.Dispatcher(), host.HookDeps())
 	stream := runtime.StartRun(runCtx, side, cfg)
 	drainSideStream(runCtx, out, host, stream)
 }

@@ -37,6 +37,17 @@ type ToolExecutorConfig struct {
 	PrepareArguments agentcore.PrepareArgumentsFunc
 	BeforeToolCall   agentcore.BeforeToolCallFunc
 	AfterToolCall    agentcore.AfterToolCallFunc
+	// GateChain, when set, is published onto every tool call's context so a tool
+	// that spawns a derived run (the sub-agent tool) hands the child the same
+	// gates instead of building its own. It carries the gate seams plus the
+	// authorization snapshot a run across a process boundary needs; nil means
+	// the run has nothing to inherit.
+	//
+	// BeforeToolCall/AfterToolCall above remain the seams this executor runs;
+	// GateChain is the pair a CHILD runs. A driver wires both from the session's
+	// assembled gates (run.Gates.Install), so the interactive chain and the
+	// inherited chain cannot drift apart.
+	GateChain *agentcore.ToolGateChain
 	// MaxResultBytes overrides the executor-layer per-result text budget. Zero
 	// (the default) uses toolResultMaxBytes; a negative value disables the
 	// budget entirely.
@@ -84,6 +95,15 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	if ctx.Err() != nil {
 		r := errorResult(fmt.Sprintf("tool %q aborted before execution", call.Name))
 		return nil, nil, ctx, &r, true
+	}
+
+	// The gate chain rides with the call, before any decision can rewrite it:
+	// a derived run (sub-agent) reads it back through
+	// agentcore.ToolGatesFromContext and runs under the same gates the session
+	// installed for this call. Publishing here - rather than at the loop or the
+	// driver - means every dispatch inherits, including nested ones.
+	if cfg.GateChain != nil {
+		execCtx = agentcore.WithToolGates(execCtx, cfg.GateChain)
 	}
 
 	// Registry lookup.

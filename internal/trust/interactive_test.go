@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,14 @@ func newTrustManager(t *testing.T) (*Manager, string) {
 
 // readerOf wraps a string in the *bufio.Reader the trust prompts expect.
 func readerOf(s string) *bufio.Reader { return bufio.NewReader(strings.NewReader(s)) }
+
+// gateForTest builds the trust gate with a stdin answer channel: the shape the
+// interactive line drivers wire through trust.Gate (which replaced the older
+// BeforeToolCall helper so the TUI's dialog channel and the REPL's prompt share
+// one entry point).
+func gateForTest(mgr *Manager, cwd string, in *bufio.Reader, out io.Writer, mu *sync.Mutex) agentcore.BeforeToolCallFunc {
+	return Gate(GateOpts{Manager: mgr, Cwd: cwd, In: in, Out: out, Mu: mu})
+}
 
 // TestEnsureTrustPromptTrustedThisDir verifies choice 1 + scope 1 (this
 // directory) persists a Trusted decision for cwd.
@@ -246,7 +255,7 @@ func TestGatesToolReadsGrant(t *testing.T) {
 func TestBeforeToolCallReadsAnswer(t *testing.T) {
 	cwd := t.TempDir()
 	mgr, _ := newTrustManager(t)
-	hook := BeforeToolCall(mgr, cwd, readerOf("r\n"), &bytes.Buffer{}, &sync.Mutex{})
+	hook := gateForTest(mgr, cwd, readerOf("r\n"), &bytes.Buffer{}, &sync.Mutex{})
 	if dec := hook(context.Background(), agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}); dec != nil {
 		t.Fatalf("the approved read = %+v, want nil", dec)
 	}
@@ -259,7 +268,7 @@ func TestBeforeToolCallReadsAnswer(t *testing.T) {
 
 	// A fresh prompt denies the command, which both proves the command still
 	// asks and that the reads rung did not widen into "all tools".
-	deny := BeforeToolCall(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, &sync.Mutex{})
+	deny := gateForTest(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, &sync.Mutex{})
 	if dec := deny(context.Background(), agentcore.AgentToolCall{Name: "read"}); dec != nil {
 		t.Errorf("after the reads grant, a read must not be gated, got %+v", dec)
 	}
@@ -344,7 +353,7 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 		`{"patch":"*** Begin Patch\n*** Delete File: /tmp/x\n*** End Patch\n"}`)}
 
 	// nil manager -> no hook.
-	if h := BeforeToolCall(nil, cwd, nil, nil, mu); h != nil {
+	if h := gateForTest(nil, cwd, nil, nil, mu); h != nil {
 		t.Error("nil manager should yield nil hook")
 	}
 
@@ -353,7 +362,7 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 	if err := mgr.SetDecision(cwd, Trusted); err != nil {
 		t.Fatalf("SetDecision: %v", err)
 	}
-	hook := BeforeToolCall(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
+	hook := gateForTest(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
 	if dec := hook(context.Background(), call); dec != nil {
 		t.Errorf("trusted dir: hook returned %+v, want nil", dec)
 	}
@@ -361,7 +370,7 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 	// Untrusted dir, user denies: hook blocks with an error result.
 	mgr2, _ := newTrustManager(t)
 	var out bytes.Buffer
-	hook2 := BeforeToolCall(mgr2, cwd, readerOf("n\n"), &out, mu)
+	hook2 := gateForTest(mgr2, cwd, readerOf("n\n"), &out, mu)
 	dec := hook2(context.Background(), call)
 	if dec == nil || !dec.Block {
 		t.Errorf("untrusted + deny: hook returned %+v, want a Block decision", dec)
@@ -372,7 +381,7 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 	mgr3, _ := newTrustManager(t)
 	var out3 bytes.Buffer
 	// Only one line of input ("a\n"); a second prompt would block on EOF.
-	hook3 := BeforeToolCall(mgr3, cwd, readerOf("a\n"), &out3, mu)
+	hook3 := gateForTest(mgr3, cwd, readerOf("a\n"), &out3, mu)
 	if dec := hook3(context.Background(), call); dec != nil {
 		t.Errorf("untrusted + always: hook returned %+v, want nil (allow)", dec)
 	}
@@ -398,7 +407,7 @@ func TestTrustBeforeToolCallStrictReads(t *testing.T) {
 	if !mgr.StrictReads {
 		t.Fatal("fork default StrictReads = false, want true")
 	}
-	hook := BeforeToolCall(mgr, cwd, readerOf("y\ny\ny\ny\ny\ny\n"), &bytes.Buffer{}, mu)
+	hook := gateForTest(mgr, cwd, readerOf("y\ny\ny\ny\ny\ny\n"), &bytes.Buffer{}, mu)
 	for _, name := range []string{"read", "grep", "find", "ls", "webfetch", "websearch"} {
 		if dec := hook(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
 			t.Errorf("strict read tool %q was blocked on allow (%+v), want nil", name, dec)
@@ -408,12 +417,12 @@ func TestTrustBeforeToolCallStrictReads(t *testing.T) {
 		t.Error("'y' must not grant session trust")
 	}
 	// Strict: "n" blocks a read.
-	hookDeny := BeforeToolCall(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, mu)
+	hookDeny := gateForTest(mgr, cwd, readerOf("n\n"), &bytes.Buffer{}, mu)
 	if dec := hookDeny(context.Background(), agentcore.AgentToolCall{Name: "read"}); dec == nil || !dec.Block {
 		t.Errorf("strict deny: hook returned %+v, want a Block decision", dec)
 	}
 	// Strict: in-memory tools are never gated.
-	hookMem := BeforeToolCall(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
+	hookMem := gateForTest(mgr, cwd, readerOf(""), &bytes.Buffer{}, mu)
 	for _, name := range []string{"todo", "schedule_create", "goal_complete", "memory_search"} {
 		if dec := hookMem(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
 			t.Errorf("in-memory tool %q was gated (%+v), want nil", name, dec)
@@ -423,7 +432,7 @@ func TestTrustBeforeToolCallStrictReads(t *testing.T) {
 	// Relaxed: reads pass through untouched.
 	mgr2, _ := newTrustManager(t)
 	mgr2.StrictReads = false
-	hook2 := BeforeToolCall(mgr2, cwd, readerOf(""), &bytes.Buffer{}, mu)
+	hook2 := gateForTest(mgr2, cwd, readerOf(""), &bytes.Buffer{}, mu)
 	for _, name := range []string{"read", "grep", "find", "ls", "todo", "webfetch", "websearch"} {
 		if dec := hook2(context.Background(), agentcore.AgentToolCall{Name: name}); dec != nil {
 			t.Errorf("relaxed tool %q was gated (%+v), want nil", name, dec)

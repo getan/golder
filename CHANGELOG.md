@@ -12,6 +12,43 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **One assembly point for a session's tool gates**: the trust gate, the
+  workspace-boundary gate and the permission gate are now composed once
+  (`run.Gates`) and installed on every run of the session — the main run, a
+  `/goal` or `/btw` side run, and any sub-agent they dispatch. The chain used to
+  be spelled out at seven sites (tui / repl / goal / btw / headless /
+  subagent-rpc / the task factory), and every place it drifted was a bug of the
+  same shape: the TUI consulted the side-effect tool map directly, so the read
+  half of `StrictReads` was live in the REPL and dead there; the goroutine
+  sub-agent ran without the trust gate and without the tool-use hooks; the
+  process sub-agent ran with the permission gate alone. Each driver now supplies
+  only what makes it that driver — its answer channels (`Confirm`, or the shared
+  stdin prompt) and its output writer. Two chains come out of one set of inputs:
+  the interactive one carries those channels, and the derived one a sub-agent
+  inherits carries the same gates with **no** channels, so a child's
+  unanswerable question fails closed with guidance instead of blocking on a
+  dialog opened under a running batch. `InstallDriver` wires the gates, the
+  PreToolUse/PostToolUse seams, the Stop decorator, SessionStart and the hook
+  notifier in one call, so a driver cannot wire one half while forgetting the
+  other. The two older entry points (`InstallDriverHooks`, `InstallHooks`) are
+  gone rather than left beside the new one — a second entrance is how the
+  original drift happened.
+- **Sub-agents inherit their parent's gates, including across a process
+  boundary**: the tool executor publishes the session's chain onto every tool
+  call's context, and the sub-agent tool hands it to the child — so a `task`
+  child runs under the session's trust, workspace-boundary and permission gates
+  and under the session's PreToolUse/PostToolUse hooks, with no wiring at the
+  dispatch site, and a nested child inherits again the same way. The session's
+  own `Stop` hook is deliberately not inherited (a child's end is its own), while
+  the `SubagentStop` family is, with its own consecutive-block budget — that
+  wiring had been written in #422 but never called, so the event never fired for
+  a child until now. A process-isolated child cannot share the parent's
+  in-memory gates, so the RPC request carries an authorization snapshot (`auth`:
+  the session-trust decision, the session-reads rung, and the read roots the
+  user granted) and the child rebuilds equivalent gates around it; a snapshot
+  entry the read-root policy refuses is reported instead of silently widening
+  the boundary, and a parent that ran with no gates sends nothing, leaving the
+  child to fail closed on its own.
 - **A trust question offers a reads rung**: in an untrusted directory the read
   tools (`read`, `view_image`, `grep`, `find`, `ls`) now have a middle answer
   between "once" and "the whole folder" — *allow reads in this folder (this

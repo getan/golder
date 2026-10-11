@@ -545,11 +545,11 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 		SessionID:  s.header.ID,
 		MemoryRoot: s.memoryRoot,
 	}
-	// Per-turn wiring of the tool-execution + Stop seams; nil dispatcher is a
-	// no-op so the hot path pays nothing when no hooks are configured (FR-18).
-	if s.dispatcher != nil {
-		run.InstallSeams(&cfg, s.dispatcher, s.hookDeps)
-	}
+	// The session's gates and the per-turn hook seams, from the one assembly
+	// point (see trustgate.go and run.Gates): the interactive chain with the
+	// TUI's answer channels, the PreToolUse/PostToolUse/Stop hook seams (a nil
+	// dispatcher is a no-op, FR-18), and the chain a spawned sub-agent inherits.
+	s.sessionGates(s.remote).Install(&cfg, s.dispatcher, s.hookDeps)
 	// Due session-local reminders ride the follow-up seam (issue #565); a nil
 	// scheduler (no schedule_* tools) leaves the seam unwired.
 	if s.schedule != nil {
@@ -560,45 +560,6 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 	// are still queued when a tool-free turn settles, so a message typed while
 	// the model streams its final answer is never left behind.
 	s.installSteerSeams(&cfg, ch)
-	// When remote control is active, route side-effect tool-call confirmations to
-	// the paired browser (no-op when no client is connected or the cwd is trusted,
-	// so the non-remote path is unchanged). The trust manager is read from the
-	// shared store; a nil manager disables the seam.
-	//
-	// The permission gate runs underneath: its mode (read-only / ask / auto /
-	// full-access) decides how a call is handled. The TUI has no stdin
-	// prompt, so ask-mode confirmations fail closed with a note while auto
-	// mode decides via the reviewer. The gate leads so its block
-	// short-circuits before the browser is asked.
-	reviewer := run.NewReviewer(s.live.Model, s.live.ProviderName, s.live.Provider, s.creds, s.header.ID, s.hookDeps.ProjectDir, s.trusted)
-	judgeGate := judge.PermissionGate(s.perms, judge.GateOpts{
-		Classifier: reviewer,
-		Sandboxed:  run.SandboxGate(),
-		Notify:     s.notes.Emit,
-		Confirm:    s.confirmApproval,
-	})
-	// The read-scope gate leads everything: reading outside the workspace is a
-	// consent question, so it is settled before any risk grading — and no
-	// approval mode waives it (full-access turns off review, not consent).
-	gate := judgeGate
-	if scopeGate := judge.ReadScopeGate(judge.ReadScopeOpts{
-		WorkspaceRoot: s.hookDeps.ProjectDir,
-		Roots:         run.ReadableExtraRoots(),
-		Confirm:       s.confirmApproval,
-		Notify:        s.notes.Emit,
-	}); scopeGate != nil {
-		gate = judge.ChainGates(scopeGate, gate)
-	}
-	// The trust gate leads: a side-effect tool in an untrusted directory is the
-	// first question to answer (the REPL asks it on stdin; the TUI asks
-	// through the approval dialog, or the paired browser while remote control
-	// is connected). The permission gate then grades what is left. Order
-	// matters: a blocked trust question must not be pre-empted by an approval
-	// the reviewer would have granted.
-	if trustGate := s.trustApprovalGate(s.remote); trustGate != nil {
-		gate = judge.ChainGates(trustGate, gate)
-	}
-	cfg.Batch.ToolExecutorConfig.BeforeToolCall = gate
 	// Mid-run persistence: the loop checkpoints the conversation at turn
 	// boundaries so a crash loses at most the round in flight instead of the
 	// whole session. /btw runs clear this again (a side thread never touches
