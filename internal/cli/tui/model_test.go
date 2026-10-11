@@ -380,13 +380,14 @@ func TestModelCtrlEJumpsTranscript(t *testing.T) {
 }
 
 // TestModelPasteMultilineCollapses verifies a multi-line paste is collapsed to a
-// compact "[Pasted text #N +M lines]" placeholder in the composer (Claude Code
-// style) while the full body is stashed and expanded back at submit.
+// compact "[Pasted text #N · M lines · size]" placeholder in the composer
+// (Claude Code style) while the full body is stashed and expanded back at
+// submit.
 func TestModelPasteMultilineCollapses(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
 	m = apply(t, m, tea.PasteMsg{Content: "line1\nline2\nline3"})
 
-	if got, want := m.input.Value(), "[Pasted text #1 +3 lines]"; got != want {
+	if got, want := m.input.Value(), "[Pasted text #1 · 3 lines · 17 B]"; got != want {
 		t.Errorf("composer showed %q, want placeholder %q", got, want)
 	}
 	if got := m.expandPastes(m.input.Value()); got != "line1\nline2\nline3" {
@@ -401,8 +402,8 @@ func TestModelExpandPastesMultiple(t *testing.T) {
 	m = apply(t, m, tea.PasteMsg{Content: "aaa\nbbb"})
 	m = apply(t, m, tea.PasteMsg{Content: "ccc\nddd"})
 
-	got := m.expandPastes("x [Pasted text #1 +2 lines] y [Pasted text #2 +2 lines] [Pasted text #9 +9 lines]")
-	want := "x aaa\nbbb y ccc\nddd [Pasted text #9 +9 lines]"
+	got := m.expandPastes("x [Pasted text #1 · 7 B] y [Pasted text #2 · 7 B] [Pasted text #9 · 99 B]")
+	want := "x aaa\nbbb y ccc\nddd [Pasted text #9 · 99 B]"
 	if got != want {
 		t.Errorf("expandPastes = %q, want %q", got, want)
 	}

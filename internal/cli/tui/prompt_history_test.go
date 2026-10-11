@@ -74,7 +74,7 @@ func TestModelSubmitRecordsExpandedPrompt(t *testing.T) {
 	m := apply(t, NewModel(Options{HistoryPath: path}), tea.WindowSizeMsg{Width: 80, Height: 12})
 
 	m.pastes = map[int]string{1: "line one\nline two"}
-	placeholder := "[Pasted text #1 +2 lines]"
+	placeholder := pastePlaceholder(1, "line one\nline two")
 	for _, r := range placeholder {
 		m = apply(t, m, runeKey(r))
 	}

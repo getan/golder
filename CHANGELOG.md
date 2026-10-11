@@ -12,6 +12,29 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Ctrl+O reads a collapsed paste without sending it**: the composer's
+  `[Pasted text #N …]` token used to be a dead end — the body was readable only
+  by submitting, and the token said nothing about what it held. `Ctrl+O` now
+  opens the body **inside the composer's own frame**, under the draft: the rows
+  appear between the draft and the bottom rule, `PgUp`/`PgDn` page through
+  them, `Ctrl+O` or `Esc` closes. The draft, the caret and the submit path are
+  untouched — the token stays exactly what gets sent, and the body is rendered
+  from the stored paste rather than swapped into the buffer (bubbles' textarea
+  has no "move the caret to this offset" call, so a buffer swap would move the
+  user's caret every time they peeked). The window is bounded on purpose: at
+  most a third of the terminal and never more than 8 rows, so reading a paste
+  never eats the conversation. When several tokens are in the draft the caret
+  decides: `Ctrl+O` opens the one the caret sits in, and falls back to the
+  newest token when the caret is elsewhere.
+- **The paste token now says what it holds**: `[Pasted text #1 · 42 lines ·
+  2.5 KB]` instead of `[Pasted text #1 +42 lines]`. The line count is what a
+  person would count (a selection's terminating newline does not add a line),
+  and the size is there because the line count says nothing about a single-line
+  payload. A one-line paste past 1000 characters now collapses like a
+  multi-line one — a base64 blob, a minified bundle or a one-line log used to
+  sail straight into the composer — and a one-line selection that merely
+  carries its trailing newline now stays inline instead of collapsing into a
+  token with nothing to say.
 - **One assembly point for a session's tool gates**: the trust gate, the
   workspace-boundary gate and the permission gate are now composed once
   (`run.Gates`) and installed on every run of the session — the main run, a

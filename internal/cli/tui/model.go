@@ -278,13 +278,19 @@ type Model struct {
 	subagents subagentPanel
 
 	// pastes stores the full text of collapsed multi-line pastes, keyed by the id
-	// shown in the "[Pasted text #N +M lines]" placeholder left in the composer.
+	// shown in the "[Pasted text #N · M lines · size]" placeholder left in the
+	// composer.
 	// submit expands the placeholders back to their content before sending, so a
 	// large paste never floods the editor (mirroring Claude Code).
 	pastes map[int]string
 	// pasteSeq is the monotonic counter behind the paste placeholder ids. It keeps
 	// climbing across submits so ids stay unique for the session.
 	pasteSeq int
+	// pastePreview is the open Ctrl+O preview of one collapsed paste, or nil. It
+	// holds no text: the body lives in pastes, and the rows are rendered from it
+	// at view time (see pastepreview.go), so the draft, the caret and the submit
+	// path are all untouched by opening a preview.
+	pastePreview *pastePreview
 
 	// images maps the id shown in an "[Image #N]" placeholder to the temp PNG a
 	// Ctrl+V / Cmd+V image paste was saved to. submit expands the placeholder to an
@@ -1518,6 +1524,28 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.histSearch != nil {
 		return m.handleHistorySearchKey(msg)
 	}
+	// An open paste preview owns Esc and the page keys while it is up: Esc closes
+	// the preview (a second Esc reaches the interrupt/quit arm as usual) and
+	// PgUp/PgDn page the body instead of moving the caret. Everything else —
+	// typing, arrows, submit — keeps working, so the preview is a reading aid
+	// rather than a mode. The slash menu wins the slot when it is open (it is
+	// the composer's own popup and Esc belongs to it).
+	if m.pastePreview != nil && !m.menu.active {
+		switch msg.String() {
+		case "esc":
+			m.pastePreview = nil
+			m.relayout()
+			return m, nil
+		case "pgup":
+			m = m.scrollPastePreview(-1)
+			m.relayout()
+			return m, nil
+		case "pgdown":
+			m = m.scrollPastePreview(1)
+			m.relayout()
+			return m, nil
+		}
+	}
 	// While idle with the autocomplete popup open, the arrow / Tab / Esc keys
 	// drive the menu instead of the transcript or textarea (FR-15). Enter is left
 	// to the main switch below, which routes through submit → runSlash so the
@@ -1641,6 +1669,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.transcript.reflow()
 		}
 		return m, nil
+	case "ctrl+o":
+		// Read a collapsed paste without submitting it: the rows appear inside
+		// the composer's frame, under the draft (see pastepreview.go).
+		return m.togglePastePreview()
 	case "ctrl+r":
 		// Open shell-style reverse history search over this and earlier
 		// sessions' prompts (the global history file). Idle only: the composer
@@ -1794,6 +1826,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	// bodies and image paths are consumed; drop them (the id counters keep climbing).
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
+	m.pastePreview = nil
 	// A "/name ..." line is a slash-command invocation, not a prompt: resolve it
 	// against the shared registry (same as the REPL) rather than sending it to the
 	// agent verbatim.
@@ -1826,6 +1859,7 @@ func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
 	// paste bodies and image paths are consumed; drop them (ids keep climbing).
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
+	m.pastePreview = nil
 	if m.steerQ == nil {
 		m.steerQ = &steerQueue{}
 	}
@@ -2938,6 +2972,7 @@ func (m Model) clearDraft() Model {
 	m.menu.close()
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
+	m.pastePreview = nil
 	m.relayout()
 	return m
 }
@@ -3019,29 +3054,37 @@ func (m Model) feedInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// pastePlaceholderRe matches the "[Pasted text #N +M lines]" tokens handlePaste
+// pastePlaceholderRe matches the "[Pasted text #N · …]" tokens handlePaste
 // leaves in the composer, capturing the id so expandPastes can swap the stored
-// body back in at submit.
-var pastePlaceholderRe = regexp.MustCompile(`\[Pasted text #(\d+) \+\d+ lines\]`)
+// body back in at submit. The tail after the id is deliberately not matched
+// piecewise: the token has carried a line count, then a size, and a user who
+// edits it (or a build that writes a new shape) should still be recognized by
+// its id.
+var pastePlaceholderRe = regexp.MustCompile(`\[Pasted text #(\d+)[^\]]*\]`)
 
-// handlePaste inserts a pasted payload into the editor. A multi-line paste is
-// collapsed to a compact "[Pasted text #N +M lines]" placeholder (the full body
-// stashed in m.pastes for expansion at submit), so a large paste does not flood
-// the composer — mirroring Claude Code. A single-line paste is inserted verbatim.
+// handlePaste inserts a pasted payload into the editor. A multi-line paste, or
+// a single line past pasteCollapseChars, is collapsed to a compact
+// "[Pasted text #N · …]" placeholder (the full body stashed in m.pastes for
+// expansion at submit), so a large paste does not flood the composer —
+// mirroring Claude Code. Anything smaller is inserted verbatim.
 func (m Model) handlePaste(content string) (tea.Model, tea.Cmd) {
 	if content == "" {
 		return m, nil
 	}
-	if strings.Contains(content, "\n") {
+	// Two shapes flood the composer and are collapsed: a multi-line paste (any
+	// number of lines — that is the long-standing rule) and a single line past
+	// the character cutoff (a base64 blob, a minified bundle, a one-line log).
+	// The line test counts like the token and the preview do, so a one-line
+	// selection that merely carries its terminating newline stays inline instead
+	// of collapsing into a token with nothing to say.
+	if pasteLineCount(content) > 1 || len([]rune(content)) > pasteCollapseChars {
 		if m.pastes == nil {
 			m.pastes = make(map[int]string)
 		}
 		m.pasteSeq++
 		id := m.pasteSeq
 		m.pastes[id] = content
-		lines := strings.Count(content, "\n") + 1
-		placeholder := fmt.Sprintf("[Pasted text #%d +%d lines]", id, lines)
-		return m.feedInput(tea.PasteMsg{Content: placeholder})
+		return m.feedInput(tea.PasteMsg{Content: pastePlaceholder(id, content)})
 	}
 	return m.feedInput(tea.PasteMsg{Content: content})
 }
@@ -3173,8 +3216,9 @@ func (m Model) renderContent() (string, int) {
 	status := m.statusBar.Render(width)
 
 	// The input editor renders its own prompt column and cursor across as many
-	// rows as the buffer currently spans (up to maxInputRows).
-	input := m.input.View()
+	// rows as the buffer currently spans (up to maxInputRows), with the open
+	// paste preview appended inside the same frame.
+	input := m.input.ViewWith(m.pastePreviewLines(width))
 
 	// Fallback transcript rows before the first size message; once sized the
 	// viewport is pre-sized by relayout and pads its own content.
@@ -3533,7 +3577,16 @@ func (m *Model) relayout() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
-	rows := m.height - 1 - m.input.Height() - m.menu.rows() - m.approvalRowsHeight() - m.histSearchRows()
+	// A preview whose paste was dropped, whose token was edited out of the
+	// draft, or whose run has started is no longer a preview: clear the state so
+	// the keys and the row accounting agree with what is on screen. The check
+	// lives here because every path that can invalidate one (edits, submit,
+	// clearDraft, a run starting) re-lays out.
+	if m.pastePreview != nil && (m.running || !m.pasteInDraft(m.pastePreview.id)) {
+		m.pastePreview = nil
+	}
+	rows := m.height - 1 - m.input.Height() - len(m.pastePreviewLines(m.width)) -
+		m.menu.rows() - m.approvalRowsHeight() - m.histSearchRows()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the

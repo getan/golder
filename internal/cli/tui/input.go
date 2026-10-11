@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -156,6 +158,12 @@ func (in input) Focused() bool { return in.ta.Focused() }
 func (in input) Line() int      { return in.ta.Line() }
 func (in input) LineCount() int { return in.ta.LineCount() }
 
+// Column reports the caret's rune index within its logical line. It is a RUNE
+// index, not a display column (textarea clamps it to len(line's runes)), which
+// is what makes it usable for offset arithmetic: a caller can reconstruct the
+// caret's byte offset in the buffer without redoing the editor's wrapping.
+func (in input) Column() int { return in.ta.Column() }
+
 // SetWidth resizes the editor to the terminal width so wrapping and the prompt
 // column line up with the rest of the shell.
 func (in *input) SetWidth(w int) {
@@ -184,12 +192,24 @@ func (in input) Cursor() *tea.Cursor {
 // textarea is framed with a top and bottom rule (no side borders) in the muted
 // gray, mirroring Claude Code's composer — a pair of horizontal lines rather
 // than a background fill. The rules span the full editor width.
-func (in input) View() string {
+func (in input) View() string { return in.ViewWith(nil) }
+
+// ViewWith renders the editor like View, with extra rows appended INSIDE the
+// frame: the paste preview lives between the draft and the bottom rule, so it
+// reads as part of the input box rather than as a panel above it. The rows are
+// pre-formatted by the caller (the model owns the paste state and the row
+// budget), and it passes the same slice to Height accounting, so the two cannot
+// disagree.
+func (in input) ViewWith(extra []string) string {
+	content := in.ta.View()
+	if len(extra) > 0 {
+		content += "\n" + strings.Join(extra, "\n")
+	}
 	style := lipgloss.NewStyle().
 		Border(lipgloss.NormalBorder(), true, false, true, false).
 		BorderForeground(lipgloss.Color(colorGray))
 	if in.width > 0 {
 		style = style.Width(in.width)
 	}
-	return style.Render(in.ta.View())
+	return style.Render(content)
 }
