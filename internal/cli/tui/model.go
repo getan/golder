@@ -1524,24 +1524,43 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.histSearch != nil {
 		return m.handleHistorySearchKey(msg)
 	}
-	// An open paste preview owns Esc and the page keys while it is up: Esc closes
-	// the preview (a second Esc reaches the interrupt/quit arm as usual) and
-	// PgUp/PgDn page the body instead of moving the caret. Everything else —
-	// typing, arrows, submit — keeps working, so the preview is a reading aid
-	// rather than a mode. The slash menu wins the slot when it is open (it is
-	// the composer's own popup and Esc belongs to it).
+	// An open paste preview owns Esc and the scroll keys while it is up: Esc
+	// closes it (a second Esc reaches the interrupt/quit arm as usual), PgUp/PgDn
+	// page the body, and ↑/↓ move it a line at a time. Everything else — typing,
+	// submit — keeps working, so the preview is a reading aid rather than a mode.
+	//
+	// The arrows are taken on purpose. While a preview is open the user's
+	// attention is on the body, and ↑ in an idle composer means "recall the
+	// previous prompt" — which REPLACES the draft, taking the paste token with
+	// it and closing the preview. Reading a paste must not be one keystroke away
+	// from destroying it. Esc gives the arrows back to the composer.
+	//
+	// The modifier-tolerant spellings (shift+↑/↓, shift+PgUp/PgDn) are here
+	// because a terminal may report the same physical key with shift folded in
+	// (measured through a multiplexer: shift+↑ arrives as its own key), and a
+	// reader pressing PageDown should get a page, not silence. The slash menu
+	// wins the slot when it is open (it is the composer's own popup and Esc
+	// belongs to it).
 	if m.pastePreview != nil && !m.menu.active {
 		switch msg.String() {
 		case "esc":
 			m.pastePreview = nil
 			m.relayout()
 			return m, nil
-		case "pgup":
-			m = m.scrollPastePreview(-1)
+		case "pgup", "shift+pgup":
+			m = m.scrollPastePreview(-1, pastePreviewMaxRows(m.height))
 			m.relayout()
 			return m, nil
-		case "pgdown":
-			m = m.scrollPastePreview(1)
+		case "pgdown", "shift+pgdown":
+			m = m.scrollPastePreview(1, pastePreviewMaxRows(m.height))
+			m.relayout()
+			return m, nil
+		case "up", "shift+up":
+			m = m.scrollPastePreview(-1, 1)
+			m.relayout()
+			return m, nil
+		case "down", "shift+down":
+			m = m.scrollPastePreview(1, 1)
 			m.relayout()
 			return m, nil
 		}

@@ -237,8 +237,10 @@ func (m Model) togglePastePreview() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// scrollPastePreview pages the open preview by dir pages (+1 down, -1 up).
-func (m Model) scrollPastePreview(dir int) Model {
+// scrollPastePreview moves the open preview by dir * step body lines: a page
+// for PgUp/PgDn, one line for the arrow keys. A step below 1 is treated as one
+// line, so a bad caller cannot freeze the view.
+func (m Model) scrollPastePreview(dir, step int) Model {
 	p := m.pastePreview
 	if p == nil {
 		return m
@@ -248,12 +250,15 @@ func (m Model) scrollPastePreview(dir int) Model {
 		m.pastePreview = nil
 		return m
 	}
+	if step < 1 {
+		step = 1
+	}
 	rows := pastePreviewMaxRows(m.height)
 	maxTop := len(pasteBodyLines(body)) - rows
 	if maxTop < 0 {
 		maxTop = 0
 	}
-	p.top += dir * rows
+	p.top += dir * step
 	if p.top > maxTop {
 		p.top = maxTop
 	}
@@ -301,7 +306,7 @@ func (m Model) pastePreviewLines(width int) []string {
 	for _, line := range lines[top:end] {
 		out = append(out, m.theme.System.Render("  "+TruncateToWidth(line, inner)))
 	}
-	footer := fmt.Sprintf("lines %d–%d of %d · PgUp/PgDn · ctrl+o collapse", top+1, end, len(lines))
+	footer := fmt.Sprintf("lines %d–%d of %d · ↑↓ scroll · PgUp/PgDn page · ctrl+o collapse", top+1, end, len(lines))
 	if ui.Width(footer) > inner {
 		// Same information, packed for a narrow pane.
 		footer = fmt.Sprintf("%d–%d/%d · PgUp/PgDn · ctrl+o", top+1, end, len(lines))

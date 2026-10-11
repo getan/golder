@@ -136,6 +136,67 @@ func TestPastePreviewTogglePageClose(t *testing.T) {
 	}
 }
 
+// TestPastePreviewArrowsScrollWithoutRecallingHistory pins why the arrow keys
+// are captured while a preview is open: they move the body a line at a time,
+// and — the reason it matters — they must not reach the composer's history
+// recall, which REPLACES the draft and takes the paste token (and with it the
+// preview) with it. Reading a paste must not be one keystroke from destroying
+// it.
+func TestPastePreviewArrowsScrollWithoutRecallingHistory(t *testing.T) {
+	m := pasteInto(t, pasteLines(20))
+	m = ctrlO(t, m)
+	// A page down first, so ↑ has somewhere to come back from.
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	top := m.pastePreview.top
+	if top == 0 {
+		t.Fatal("setup: PgDn did not move the window")
+	}
+	// A history entry that recall would pull in, if the arrow leaked through.
+	m.history = []string{"a previously submitted prompt"}
+	m.histIdx = len(m.history)
+
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.pastePreview == nil {
+		t.Fatal("↑ closed the preview")
+	}
+	if got := m.pastePreview.top; got != top-1 {
+		t.Errorf("↑ moved the window to %d, want %d (one line up)", got, top-1)
+	}
+	if v := m.input.Value(); strings.Contains(v, "previously submitted") {
+		t.Errorf("↑ recalled history while a preview was open: %q", v)
+	}
+	if v := m.input.Value(); !strings.Contains(v, "[Pasted text #1") {
+		t.Errorf("the paste token was lost: %q", v)
+	}
+
+	// The modifier-tolerant spellings do the same: a terminal or multiplexer may
+	// report the same physical key with shift folded in.
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift})
+	if got := m.pastePreview.top; got != top {
+		t.Errorf("shift+↓ moved the window to %d, want %d (one line down)", got, top)
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown, Mod: tea.ModShift})
+	if got := m.pastePreview.top; got <= top {
+		t.Errorf("shift+PgDn left the window at %d, want a page down", got)
+	}
+	if v := m.input.Value(); !strings.Contains(v, "[Pasted text #1") {
+		t.Errorf("the paste token was lost: %q", v)
+	}
+}
+
+// TestPastePreviewFooterNamesTheArrows: the footer is the only place the keys
+// are taught while a preview is open, so it names the arrows too.
+func TestPastePreviewFooterNamesTheArrows(t *testing.T) {
+	m := pasteInto(t, pasteLines(20))
+	m = ctrlO(t, m)
+	footer := m.pastePreviewLines(m.width)[len(m.pastePreviewLines(m.width))-1]
+	for _, want := range []string{"↑↓", "PgUp/PgDn", "ctrl+o"} {
+		if !strings.Contains(stripTCardANSI(footer), want) {
+			t.Errorf("footer %q does not name %q", stripTCardANSI(footer), want)
+		}
+	}
+}
+
 // TestPasteHintTeachesTheKey pins the discoverability contract: a draft holding
 // a collapsed paste carries a visible ctrl+o hint, so the key is learnable
 // without reading docs. The hint steps aside for the open preview's footer
