@@ -346,15 +346,22 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **A card body hangs its wrapped continuations**: a response line too long for
+  the pane used to continue at the margin, so it stuck out to the LEFT of the
+  block it belonged to — under the bullet, left of the `└ ` line it continued
+  and of every line after it. Wrapped rows now hang at `bodyIndent`, the column
+  the body's text already starts at (`wrapBodyLine`), so the whole body —
+  opener, continuations, following lines, the collapsed tally, the expanded
+  card's `│ ` arguments — has one left edge. The text itself is only prefixed,
+  never rewritten, and the wrap budget is the same for every body row, so
+  nothing a tool returned is altered and nothing overflows the pane.
 - **The collapsed card's "… +N lines" tally sits in the body's column**: it
   counts the body's hidden lines, and it now starts where the body's text does
   (`bodyIndent`, the same column the preview's continuation lines and the
   diff's rows use) instead of flush against the margin, where it read as a row
-  of its own rather than the body's own count. Its wrap budget is the body's
-  too, so the two cannot disagree about where the pane's edge is. Only a line's
-  start is indented: a wrapped continuation — the body's and the tally's alike
-  — stays flush, so copying a long line out of the transcript brings no
-  indentation the body did not write.
+  of its own rather than the body's own count. It hangs its own continuation
+  like every other body row (a narrow pane can wrap it) and wraps on the body's
+  budget, so the two cannot disagree about where the pane's edge is.
 - **A resumed session rebuilds its system prompt, keeping only the user's own
   words**: the prompt was stored whole and reused verbatim on resume, which
   froze two very different things together — our description of the running

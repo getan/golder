@@ -129,10 +129,34 @@ const collapsedPreviewLines = 3
 // sits there too, so the body reads as one block instead of the tally looking
 // like a row of its own.
 //
-// Only a line's start is indented: a wrapped continuation stays flush with the
-// margin, so copying a long line out of the transcript brings no indentation
-// the body did not write.
+// A wrapped continuation is indented too (see wrapBodyLine): every body row
+// starts at bodyIndent, so the body reads as one block instead of a wrapped
+// line hanging out to the left of it.
 const bodyIndent = "    "
+
+// wrapBodyLine wraps one body line under a hanging indent: the first row
+// carries gutter (the `└ ` mark, the `│ ` argument gutter, or the plain body
+// indent) and every wrapped continuation starts at bodyIndent, where the rest
+// of the body already starts — the following logical lines, the collapsed
+// tally, the diff rows. Flush-left continuations made a wrapped line stick out
+// to the LEFT of the block it belongs to, under the bullet.
+//
+// Every body gutter is bodyIndent wide, so both rows get the same wrap budget
+// and nothing overflows the pane. The text itself is passed through untouched;
+// only the row prefixes are added, so nothing a tool returned is altered.
+func wrapBodyLine(gutter, text string, width int) string {
+	avail := width - ui.Width(bodyIndent)
+	if avail < 1 {
+		// A pane too narrow to hang anything: keep the gutter and let the
+		// wrapper do what it can with one column.
+		avail = 1
+	}
+	lines := strings.Split(WrapToWidth(text, avail), "\n")
+	for i := 1; i < len(lines); i++ {
+		lines[i] = bodyIndent + lines[i]
+	}
+	return gutter + strings.Join(lines, "\n")
+}
 
 // statusBullet renders the codex-style bullet in the state's theme color:
 // dim gray while running, bold green on success, bold red on failure. The old
@@ -209,11 +233,11 @@ func (c toolCard) render(theme Theme, width int) string {
 	out += preview
 	if hidden > 0 {
 		// The tally is the body's own count, so it sits in the body's text
-		// column; flush against the margin it read as an unrelated row. Its
-		// wrap budget is the body's too, so the two can never disagree about
-		// where the pane's edge is.
-		out += "\n" + theme.System.Render(WrapToWidth(
-			bodyIndent+fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint), max(1, width-2)))
+		// column; flush against the margin it read as an unrelated row. It
+		// hangs its own continuation like any other body row (a narrow pane can
+		// wrap it), so the body has one left edge in every shape.
+		tally := fmt.Sprintf("… +%d lines (%s or click to expand)", hidden, expandHint)
+		out += "\n" + theme.System.Render(wrapBodyLine(bodyIndent, tally, max(1, width-2)))
 	}
 	return out
 }
@@ -401,9 +425,9 @@ func (c toolCard) preview(theme Theme, width, n int) (string, int) {
 		indent := strings.Repeat("  ", node.depth)
 		text := indent + node.text
 		if i == 0 {
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
+			b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine("  └ ", text, inner)))
 		} else {
-			b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(bodyIndent+text, inner)))
+			b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine(bodyIndent, text, inner)))
 		}
 		shown++
 	}
@@ -516,8 +540,8 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 					// the headline names the targets.
 					continue
 				}
-				kv := "  │ " + k + ": " + fmt.Sprintf("%v", c.input[k])
-				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth(kv, inner)))
+				kv := k + ": " + fmt.Sprintf("%v", c.input[k])
+				b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine("  │ ", kv, inner)))
 			}
 		}
 	}
@@ -533,9 +557,9 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 			indent := strings.Repeat("  ", n.depth)
 			text := indent + n.text
 			if i == 0 {
-				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("  └ "+text, inner)))
+				b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine("  └ ", text, inner)))
 			} else {
-				b.WriteString("\n" + theme.ToolBody.Render(WrapToWidth("    "+text, inner)))
+				b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine(bodyIndent, text, inner)))
 			}
 			wroteOutput = true
 		}
@@ -852,7 +876,14 @@ func (c toolCard) renderChecklist(theme Theme, width int, items []todoInputItem)
 	var b strings.Builder
 	for _, it := range items {
 		row := fmt.Sprintf("[%s] %s", todoMark(it.status), oneLine(it.content))
-		b.WriteString("\n" + gutter + todoStatusStyle(theme, it.status).Render(WrapToWidth(row, textWidth)))
+		// A long item hangs like every other body row, so the checklist shares
+		// the body's left edge; the hanging indent stays inside the row's style
+		// (it is spaces, so it only has to sit on the right side of the gutter).
+		wrapped := strings.Split(WrapToWidth(row, textWidth), "\n")
+		for j := 1; j < len(wrapped); j++ {
+			wrapped[j] = bodyIndent + wrapped[j]
+		}
+		b.WriteString("\n" + gutter + todoStatusStyle(theme, it.status).Render(strings.Join(wrapped, "\n")))
 	}
 	return b.String()
 }

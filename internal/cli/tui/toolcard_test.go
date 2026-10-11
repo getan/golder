@@ -310,9 +310,7 @@ func TestToolCardTodoEchoSuppressed(t *testing.T) {
 // TestToolCardHintAlignsWithBody pins the collapsed tally's column: it counts
 // the body's hidden lines, so it starts in the body's text column (under the
 // lines it counts) rather than flush against the margin, where it read as a
-// row of its own. The body's own wrapped continuations stay flush — only a
-// line's start is indented, so copying a long line out brings no invented
-// indentation.
+// row of its own.
 func TestToolCardHintAlignsWithBody(t *testing.T) {
 	theme := DefaultTheme()
 	var b strings.Builder
@@ -342,6 +340,54 @@ func TestToolCardHintAlignsWithBody(t *testing.T) {
 	}
 	if !strings.HasPrefix(bodyLine, bodyIndent) {
 		t.Errorf("body continuation should share the hint's column, got %q\n%s", bodyLine, plain)
+	}
+}
+
+// TestToolCardBodyHangsItsWrappedContinuations pins the body's left edge: a
+// response line long enough to wrap continues at bodyIndent, in the same column
+// as the line it continues, the lines after it, and the collapsed tally. A
+// flush-left continuation hung out under the bullet, to the left of the block
+// it belonged to. The wrap must not alter the text itself: every fragment of
+// the original line survives, minus the row prefixes.
+func TestToolCardBodyHangsItsWrappedContinuations(t *testing.T) {
+	theme := DefaultTheme()
+	const width = 60
+	long := "FAIL src/module0.test.ts: this is a deliberately long line that has to wrap somewhere past the pane edge"
+	card := toolCard{name: "grep", response: parseToolResult(long + "\nshort second line"), state: cardSuccess}
+	plain := stripTCardANSI(card.render(theme, width))
+
+	// Every row of the body — the `└ ` opener, its wrapped continuations, and
+	// the following line — puts its text at column 4, so the block has one text
+	// edge even though the opener's first four columns are its gutter.
+	var bodyRows []string
+	for _, ln := range strings.Split(plain, "\n") {
+		if strings.HasPrefix(ln, "  └ ") || strings.HasPrefix(ln, bodyIndent) {
+			bodyRows = append(bodyRows, ln)
+		}
+	}
+	if len(bodyRows) < 3 {
+		t.Fatalf("expected the wrapped body to span at least three rows, got %d:\n%s", len(bodyRows), plain)
+	}
+	for i, row := range bodyRows {
+		text := strings.TrimPrefix(strings.TrimPrefix(row, "  └ "), bodyIndent)
+		if got := ui.Width(row) - ui.Width(text); got != ui.Width(bodyIndent) {
+			t.Errorf("body row %d has a %d-column prefix, want %d (text starts at column 4): %q\n%s",
+				i, got, ui.Width(bodyIndent), row, plain)
+		}
+	}
+
+	// The wrapped fragments reassemble into the original text: only row
+	// prefixes were added. The rows are joined as rendered — lipgloss pads
+	// each to the block's widest row, so the joins carry padding — and both
+	// sides are then normalized, which makes the comparison about the words
+	// rather than about the padding a renderer adds.
+	var joined strings.Builder
+	for _, row := range bodyRows[:len(bodyRows)-1] { // the last row is the short line
+		joined.WriteString(strings.TrimPrefix(strings.TrimPrefix(row, "  └ "), bodyIndent))
+	}
+	normalize := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if got, want := normalize(joined.String()), normalize(long); got != want {
+		t.Errorf("reassembled body = %q, want the original line %q", got, want)
 	}
 }
 
