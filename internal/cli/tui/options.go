@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/permissions"
@@ -81,6 +82,12 @@ type Options struct {
 	// reminder ladder and the context tools stay consistent across prompts.
 	// A nil value falls back to a run-local state.
 	Budget *contextbudget.State
+
+	// MaxContext is the resolved [compaction] max_context value: a token count
+	// or window fraction that lowers the auto-compaction trigger point. The
+	// zero value leaves the defaults. It is read on every run, so a "N%" form
+	// follows a /model switch that changes the window.
+	MaxContext config.MaxContext
 
 	// HistoryPath is the global prompt-history file (history.jsonl) the model
 	// lazily reads for cross-session ↑/↓ browsing and appends every submission

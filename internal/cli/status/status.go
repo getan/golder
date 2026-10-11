@@ -134,18 +134,19 @@ func printContextStatus(out io.Writer, color bool, host cli.Host) {
 
 	// Calculate remaining tokens before auto-compaction
 	if contextWindow > 0 {
-		reserve := compaction.DefaultCompactionSettings.ReserveTokens
-		threshold := contextWindow - reserve
+		settings := host.Live().CompactionSettings()
+		reserve := settings.ReserveDescription(contextWindow)
+		threshold := settings.UsableTokens(contextWindow)
 		remaining := threshold - tokens
 		if remaining < 0 {
-			fmt.Fprintf(out, "  %s %s (threshold: %d, reserve: %d)\n",
+			fmt.Fprintf(out, "  %s %s (threshold: %d, %s)\n",
 				ui.Colorize(color, ui.Dim, "before compact:"),
 				ui.Colorize(color, ui.Red, fmt.Sprintf("%d over threshold", -remaining)),
 				threshold,
 				reserve,
 			)
 		} else {
-			fmt.Fprintf(out, "  %s %s (threshold: %d, reserve: %d)\n",
+			fmt.Fprintf(out, "  %s %s (threshold: %d, %s)\n",
 				ui.Colorize(color, ui.Dim, "before compact:"),
 				ui.Colorize(color, ui.Green, fmt.Sprintf("%d tokens remaining", remaining)),
 				threshold,

@@ -113,6 +113,12 @@ type CompactionMessage struct {
 	RoleField    string `json:"role"`
 	Summary      string `json:"summary"`
 	TokensBefore int    `json:"tokensBefore,omitempty"`
+	// KeptCount is how many messages were retained verbatim after this
+	// checkpoint when it was written. Token accounting uses it to know that the
+	// usage readings carried by those messages described the pre-compaction
+	// request (the summarized prefix plus the tail) and must not be read back as
+	// the current context size. 0 (older sessions) means "unknown".
+	KeptCount int `json:"keptCount,omitempty"`
 	// Details is opaque at this layer (the compaction package owns its shape);
 	// kept as raw JSON so agentcore stays free of a compaction dependency.
 	Details   json.RawMessage `json:"details,omitempty"`

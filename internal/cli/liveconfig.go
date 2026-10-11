@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/provider"
 )
 
@@ -33,6 +35,12 @@ type LiveConfig struct {
 	// disabled; the REPL seeds it with a conservative default so long sessions
 	// still compact rather than overflow.
 	ContextWindow int
+	// MaxContext is the parsed [compaction] max_context value (the zero value
+	// is "unset"). CompactionSettings resolves it against the current
+	// ContextWindow on every read, so a "N%" form keeps working across a
+	// /model switch that changes the window. It can only lower the trigger
+	// point, never raise it past the provider limit.
+	MaxContext config.MaxContext
 
 	// FetchedModels is the online model catalog pulled from the live provider's
 	// endpoint by the bare-/model list (issue #566), sorted and
@@ -72,6 +80,30 @@ func ResolveContextWindow(providerName, model string) int {
 // threshold track the model actually in use instead of the launch model.
 func (l *LiveConfig) RefreshContextWindow() {
 	l.ContextWindow = ResolveContextWindow(l.ProviderName, l.Model)
+}
+
+// CompactionSettings returns the compaction thresholds for this session: the
+// defaults with the configured max_context lower bound applied. Every driver
+// (main run, goal loop, side thread, manual /compact) reads this instead of
+// the package defaults, so the one knob a user can set reaches all of them.
+func (l *LiveConfig) CompactionSettings() compaction.CompactionSettings {
+	if l == nil {
+		return compaction.DefaultCompactionSettings
+	}
+	return CompactionSettingsFor(l.MaxContext, l.ContextWindow)
+}
+
+// CompactionSettingsFor resolves the compaction thresholds for a window, with
+// the configured [compaction] max_context applied. Drivers that do not carry a
+// LiveConfig (headless -p, the SDK) call it directly so the knob works there
+// too. max_context only lowers the trigger point (see
+// CompactionSettings.MaxContextTokens).
+func CompactionSettingsFor(maxContext config.MaxContext, contextWindow int) compaction.CompactionSettings {
+	settings := compaction.DefaultCompactionSettings
+	if maxContext.IsSet() {
+		settings.MaxContextTokens = maxContext.Resolve(contextWindow)
+	}
+	return settings
 }
 
 // FormatContextWindow renders a context-token budget compactly for model

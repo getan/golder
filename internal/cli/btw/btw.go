@@ -34,7 +34,6 @@ import (
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/ui"
-	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
@@ -216,7 +215,7 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 			Stream:        provider.StreamFnFromProvider(settings.Provider),
 			GetAPIKey:     host.Creds().GetAPIKey,
 			ContextWindow: host.Live().ContextWindow,
-			Compaction:    compaction.DefaultCompactionSettings,
+			Compaction:    host.Live().CompactionSettings(),
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{

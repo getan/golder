@@ -1290,6 +1290,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case compactionMsg:
 		m.spinner.unpin()
+		if msg.err != "" {
+			// Compaction failure is non-fatal (the context is unchanged), but it
+			// must not look like success: without this line the transcript said
+			// "(context compacted)" for a run whose summary never landed.
+			m.transcript.addSystem("(compaction failed: " + msg.err + ")")
+			return m, m.pumpNext()
+		}
 		if m.session != nil {
 			m.session.markCompacted()
 		}
@@ -2067,7 +2074,7 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 			sessionID = m.session.header.ID
 			msgs = m.session.agentCtx.Messages
 		}
-		memstatus.RunMemory(&buf, store, memoryRoot, sessionID, msgs, window)
+		memstatus.RunMemory(&buf, store, memoryRoot, sessionID, msgs, window, m.live.CompactionSettings())
 		m.transcript.addSystem(strings.TrimRight(buf.String(), "\n"))
 		m.relayout()
 		return m, nil

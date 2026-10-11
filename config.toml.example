@@ -115,4 +115,8 @@ no_skills = false
 # max_context accepts a token count (300000), a K/M suffix ("300K", "1M"), or a
 # percentage of the provider window ("50%"). It only lowers the trigger point and
 # is always clamped by the provider limit.
+# The default trigger already keeps 10% of the window free (90% full on a large
+# model, the 16384-token reserve on a small one), so most users never need this:
+# set it only to compact earlier than that, e.g. on a metered gateway or when
+# long-context quality drops off well before the window limit.
 # max_context = "300K"

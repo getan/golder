@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/compaction"
 )
 
 // TestFormatContextWindow pins the compact rendering used by /model lists and
@@ -73,5 +76,41 @@ func TestResolveContextWindow(t *testing.T) {
 	live.RefreshContextWindow()
 	if live.ContextWindow != DefaultContextWindow {
 		t.Errorf("RefreshContextWindow fallback = %d, want %d", live.ContextWindow, DefaultContextWindow)
+	}
+}
+
+// TestLiveConfigCompactionSettings pins the [compaction] max_context wiring:
+// the knob lowers the trigger point for the session's current window, the "N%"
+// form re-resolves after a /model switch that changes the window, and an
+// unset value leaves the defaults untouched.
+func TestLiveConfigCompactionSettings(t *testing.T) {
+	defaults := compaction.DefaultCompactionSettings
+	if got := (&LiveConfig{ContextWindow: 1_000_000}).CompactionSettings(); got != defaults {
+		t.Errorf("unset max_context changed settings: %+v", got)
+	}
+
+	abs, err := config.ParseMaxContext("300K")
+	if err != nil {
+		t.Fatalf("ParseMaxContext: %v", err)
+	}
+	live := &LiveConfig{ContextWindow: 1_000_000, MaxContext: abs}
+	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 270_000; got != want {
+		t.Errorf("absolute max_context usable = %d, want %d", got, want)
+	}
+
+	// A percentage follows the window across a /model switch.
+	pct, err := config.ParseMaxContext("50%")
+	if err != nil {
+		t.Fatalf("ParseMaxContext: %v", err)
+	}
+	live = &LiveConfig{ContextWindow: 200_000, MaxContext: pct}
+	// max_context 50% => effective window 100k, and the reserve is the larger
+	// of 16k and 10% of that window, so usable = 100k - 16384.
+	if got, want := live.CompactionSettings().UsableTokens(200_000), 100_000-16_384; got != want {
+		t.Errorf("50%% of 200k usable = %d, want %d", got, want)
+	}
+	live.ContextWindow = 1_000_000
+	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 450_000; got != want {
+		t.Errorf("50%% of 1M usable = %d, want %d", got, want)
 	}
 }

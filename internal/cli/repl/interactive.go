@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getan/golder/internal/cli/config"
+
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
@@ -111,6 +113,11 @@ type Options struct {
 	// reminder ladder and get_context_remaining stay consistent across prompts.
 	// A nil value falls back to a run-local state.
 	Budget *contextbudget.State
+
+	// MaxContext is the resolved [compaction] max_context value: a token count
+	// or window fraction that lowers the auto-compaction trigger point. The
+	// zero value leaves the defaults.
+	MaxContext config.MaxContext
 }
 
 // Run starts the line-based REPL over a persisted session. It keeps
@@ -192,6 +199,7 @@ func Run(opts Options) error {
 		Protocol:      opts.Protocol,
 		ThinkingLevel: opts.ThinkingLevel,
 		ContextWindow: cli.ResolveContextWindow(opts.ProviderName, opts.Model),
+		MaxContext:    opts.MaxContext,
 	}
 
 	// Project trust (US-018, #134): load the persisted trust store for the

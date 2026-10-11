@@ -344,6 +344,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		Protocol:      opts.Protocol,
 		ThinkingLevel: opts.ThinkingLevel,
 		ContextWindow: cli.ResolveContextWindow(opts.ProviderName, opts.Model),
+		MaxContext:    opts.MaxContext,
 	}
 
 	// Project trust (US-018, #134): load the persisted trust store for the
@@ -538,7 +539,7 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 			Stream:        provider.StreamFnFromProvider(s.live.Provider),
 			GetAPIKey:     s.creds.GetAPIKey,
 			ContextWindow: s.live.ContextWindow,
-			Compaction:    compaction.DefaultCompactionSettings,
+			Compaction:    s.live.CompactionSettings(),
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
@@ -672,7 +673,7 @@ func (s *runSession) compactCmd(ctx context.Context) tea.Cmd {
 // re-saves the flattened context linearly. A failure leaves the context unchanged.
 func (s *runSession) compact(ctx context.Context) (string, error) {
 	msgs := s.agentCtx.Messages
-	settings := compaction.DefaultCompactionSettings
+	settings := s.live.CompactionSettings()
 	before := compaction.EstimateContextTokens(msgs).Tokens
 
 	stream := provider.StreamFnFromProvider(s.live.Provider)

@@ -33,13 +33,13 @@ var scopeOrder = []memory.Scope{
 // infinite context to out. store may be nil (persistent memory disabled), in
 // which case the memory-store section reports that state and the checkpoint /
 // context sections still render from msgs and the checkpoint file.
-func RunMemory(out io.Writer, store *memory.Store, memoryRoot, sessionID string, msgs agentcore.MessageList, contextWindow int) {
+func RunMemory(out io.Writer, store *memory.Store, memoryRoot, sessionID string, msgs agentcore.MessageList, contextWindow int, settings compaction.CompactionSettings) {
 	color := ui.Enabled()
 
 	fmt.Fprintln(out)
 	printStoreSection(out, color, store, memoryRoot)
 	fmt.Fprintln(out)
-	printContextSection(out, color, msgs, contextWindow)
+	printContextSection(out, color, msgs, contextWindow, settings)
 	fmt.Fprintln(out)
 	printCheckpointSection(out, color, memoryRoot, sessionID)
 }
@@ -111,7 +111,7 @@ func orderedScopes(counts map[memory.Scope]int) []memory.Scope {
 // printContextSection prints the current context usage and the auto-compaction
 // trigger point (window minus reserve), mirroring /status's context block so
 // /memory is self-contained for infinite-context inspection.
-func printContextSection(out io.Writer, color bool, msgs agentcore.MessageList, contextWindow int) {
+func printContextSection(out io.Writer, color bool, msgs agentcore.MessageList, contextWindow int, settings compaction.CompactionSettings) {
 	tokens := compaction.EstimateContextTokens(msgs).Tokens
 
 	fmt.Fprintf(out, "%s\n", ui.Colorize(color, ui.Bold, "context:"))
@@ -129,16 +129,16 @@ func printContextSection(out io.Writer, color bool, msgs agentcore.MessageList, 
 			ui.Colorize(color, ui.Dim, "utilization:"),
 			ui.Colorize(color, utilColor, fmt.Sprintf("%d%%", util)))
 
-		reserve := compaction.DefaultCompactionSettings.ReserveTokens
-		threshold := contextWindow - reserve
+		reserve := settings.ReserveDescription(contextWindow)
+		threshold := settings.UsableTokens(contextWindow)
 		remaining := threshold - tokens
 		if remaining < 0 {
-			fmt.Fprintf(out, "  %s %s (window: %d, reserve: %d)\n",
+			fmt.Fprintf(out, "  %s %s (window: %d, %s)\n",
 				ui.Colorize(color, ui.Dim, "compaction trigger:"),
 				ui.Colorize(color, ui.Red, fmt.Sprintf("%d tokens over trigger (%d)", -remaining, threshold)),
 				contextWindow, reserve)
 		} else {
-			fmt.Fprintf(out, "  %s %s (window: %d, reserve: %d)\n",
+			fmt.Fprintf(out, "  %s %s (window: %d, %s)\n",
 				ui.Colorize(color, ui.Dim, "compaction trigger:"),
 				ui.Colorize(color, ui.Green, fmt.Sprintf("%d tokens until trigger (%d)", remaining, threshold)),
 				contextWindow, reserve)

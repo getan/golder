@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/memory"
 )
 
@@ -15,7 +16,7 @@ import (
 // still prints the context and checkpoint sections.
 func TestRunMemoryDisabled(t *testing.T) {
 	var buf bytes.Buffer
-	RunMemory(&buf, nil, "", "", nil, 0)
+	RunMemory(&buf, nil, "", "", nil, 0, compaction.DefaultCompactionSettings)
 	out := buf.String()
 	for _, want := range []string{"persistent memory:", "disabled", "context:", "checkpoint:"} {
 		if !strings.Contains(out, want) {
@@ -43,7 +44,7 @@ func TestRunMemoryEnabledCounts(t *testing.T) {
 
 	var buf bytes.Buffer
 	msgs := agentcore.MessageList{agentcore.UserMessage{Content: agentcore.ContentList{agentcore.NewTextContent("hi")}}}
-	RunMemory(&buf, st, root, "sess-1", msgs, 200000)
+	RunMemory(&buf, st, root, "sess-1", msgs, 200000, compaction.DefaultCompactionSettings)
 	out := buf.String()
 	for _, want := range []string{"enabled", "entries:", "global:", "context:", "checkpoint:", "none yet"} {
 		if !strings.Contains(out, want) {

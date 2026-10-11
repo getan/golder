@@ -534,6 +534,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Permissions:       env.Permissions,
 				ReviewNotes:       env.ReviewNotes,
 				Budget:            env.Budget,
+				MaxContext:        opts.memory.MaxContext,
 				HistoryPath:       promptHistoryPath(),
 			}); err != nil {
 				fmt.Fprintf(errOut, "golder: %v\n", err)
@@ -563,6 +564,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			Permissions:       env.Permissions,
 			ReviewNotes:       env.ReviewNotes,
 			Budget:            env.Budget,
+			MaxContext:        opts.memory.MaxContext,
 		}); err != nil {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
 			return 1
@@ -598,6 +600,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		APIKey:        opts.apiKey,
 		ThinkingLevel: opts.thinkingLevel,
 		ResumeID:      resumeID,
+		MaxContext:    opts.memory.MaxContext,
 	}, out, errOut)
 }
 

@@ -34,6 +34,10 @@ type CompactionResult struct {
 	FirstKeptIndex int
 	// TokensBefore is the estimated context tokens before compaction.
 	TokensBefore int
+	// KeptCount is how many messages the cut retained verbatim
+	// (len(msgs) - FirstKeptIndex). It is stamped onto the checkpoint so token
+	// accounting knows the retained tail carries pre-compaction usage readings.
+	KeptCount int
 	// Details holds the file operations extracted from the compacted range.
 	Details CompactionDetails
 }
@@ -100,6 +104,7 @@ func Compact(
 		Summary:        summary,
 		FirstKeptIndex: cut.FirstKeptIndex,
 		TokensBefore:   EstimateContextTokens(msgs).Tokens,
+		KeptCount:      len(msgs) - cut.FirstKeptIndex,
 		Details:        CompactionDetails{ReadFiles: readFiles, ModifiedFiles: modifiedFiles},
 	}, nil
 }
@@ -115,6 +120,7 @@ func (r *CompactionResult) Message(now int64) agentcore.CompactionMessage {
 		RoleField:    agentcore.RoleCompaction,
 		Summary:      r.Summary,
 		TokensBefore: r.TokensBefore,
+		KeptCount:    r.KeptCount,
 		Details:      details,
 		Timestamp:    now,
 	}

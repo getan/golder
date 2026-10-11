@@ -531,6 +531,14 @@ func TestModelCompactionIndicator(t *testing.T) {
 	if joined := strings.Join(blockTexts(m.transcript), "\n"); !strings.Contains(joined, "(context compacted)") {
 		t.Errorf("transcript should note the compaction, got:\n%s", joined)
 	}
+
+	// A failed compaction must read as a failure, not as "(context compacted)".
+	m = apply(t, m, compactionStartMsg{})
+	m = apply(t, m, compactionMsg{err: "summarizer down"})
+	joined := strings.Join(blockTexts(m.transcript), "\n")
+	if !strings.Contains(joined, "compaction failed: summarizer down") {
+		t.Errorf("transcript should report the failure, got:\n%s", joined)
+	}
 }
 
 // TestModelSubagentPanelHeightReservation verifies the panel's rows are reserved

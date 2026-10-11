@@ -15,6 +15,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/judge"
@@ -35,6 +36,9 @@ type RunParams struct {
 	APIKey        string
 	ThinkingLevel string
 	ResumeID      string
+	// MaxContext is the resolved [compaction] max_context value, applied to
+	// the run's auto-compaction trigger. The zero value leaves the defaults.
+	MaxContext config.MaxContext
 }
 
 // Run executes one headless run over p.Prompt, writing agent output to out and
@@ -94,6 +98,9 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// context-budget tools, and the low-budget reminder live for `golder -p`
 	// long runs, and sizes them to the model actually in use.
 	runCfg.ContextWindow = cli.ResolveContextWindow(env.ProviderName, p.Model)
+	// Apply the configured max_context lower bound on top of the resolved
+	// window, so `golder -p` long runs honor the same knob as the TUI.
+	runCfg.Compaction = cli.CompactionSettingsFor(p.MaxContext, runCfg.ContextWindow)
 	runCfg.SessionID = hs.header.ID
 	// Route auto-compaction checkpoints to the shared memory root so a rebuild can
 	// recover the pre-watermark prefix (no-op when memory is disabled → empty root).

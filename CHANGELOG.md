@@ -401,6 +401,16 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Auto-compaction now keeps 10% of the window free**: the trigger was
+  `window − 16,384` tokens, which is sensible on a 128k model (~87% full) but
+  a rounding error on a 1M one — a 1M-window session only compacted at 98.4%
+  full, so a single fat turn could still overflow it. The usable window is now
+  `window − max(16,384, 10% of window)`: 90% full on large windows, unchanged
+  on small ones where the fixed reserve is the larger of the two. 10% matches
+  the low-budget reminder's first notice and the industry norm (Codex compacts
+  at 90% of its window; Claude Code around 90–95%). `/status` and `/memory`
+  print the threshold with the knob that set it (`reserve: 16,384` or
+  `10% headroom`).
 - **Shell calls batch in parallel**: bash was declared sequential — one line of
   reasoning, "commands can have side effects" — which made every shell call a
   barrier that also stalled the reads beside it, while codex treats the shell as
@@ -643,6 +653,31 @@ interactive REPL/TUI.
   (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
+- **Context readings are read at their high-water mark, and never re-read after
+  a compaction**: the trigger trusted the newest assistant `usage` block, but
+  the gateway alternated between two accounting levels for one growing
+  conversation (~87% and ~95% of a 1M window, hundreds of times in a row, plus
+  one 980k spike between two 383k readings), so the status-bar percentage and
+  the compaction decision flapped with it — and once a compaction did rewrite
+  the history, the retained tail's readings, which describe the pre-compaction
+  request, were read back as the current size and could re-trip the threshold
+  forever. The estimate now takes the largest of the last four valid readings
+  (a lone outlier more than 2× its neighbours is gateway noise, dropped) and
+  `CompactionMessage` records `KeptCount` so post-compaction accounting
+  ignores the stale tail (a checkpoint written before the field existed still
+  excludes its summarized prefix, settling in at most one extra compaction).
+- **`[compaction] max_context` finally does something**: the key was documented
+  and parsed, but no code read it — the knob was dead. It now flows through the
+  session's live config into every driver (TUI, REPL, goal loop, side thread,
+  `golder -p`), is resolved per read so a `"50%"` form follows a `/model`
+  switch, and can only lower the trigger point. Relatedly, headless and SDK
+  runs had auto-compaction silently off: the shared `run.NewConfig` never set
+  `Compaction`, so `Enabled` was false for every `golder -p` run with a known
+  window; the defaults are now set at that one assembly point.
+- **The TUI no longer reports a failed compaction as success**: any
+  `CompactionEvent` printed `(context compacted)`, including the non-fatal
+  failure case where the context is left unchanged — the REPL printed the
+  error all along. The failure text now reaches the transcript.
 - **Ctrl+C reads the same everywhere**: interrupting used to speak differently
   in every branch and every front-end — the TUI said `(interrupting the current
   run…)`, then `Run ended: context canceled` or `error: aborted` depending on

@@ -14,6 +14,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/hooks"
@@ -669,6 +670,13 @@ func NewConfig(model, providerName string, thinking agentcore.ThinkingLevel, pro
 			ThinkingLevel: thinking,
 			Stream:        provider.StreamFnFromProvider(prov),
 			GetAPIKey:     creds.GetAPIKey,
+			// Auto-compaction is on by default here so a headless/SDK run
+			// cannot silently outgrow its window: the caller still gates it by
+			// setting ContextWindow (0 = unknown = compaction disabled), which
+			// headless does from the models.dev catalog. Drivers that build
+			// their own RunConfig (REPL, TUI) set the same defaults with the
+			// session's max_context applied.
+			Compaction: compaction.DefaultCompactionSettings,
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg},

@@ -500,7 +500,7 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			// session id, and messages) that a string→string Action closure
 			// cannot reach, so it is intercepted here.
 			memstatus.RunMemory(out, deps.memstore, deps.memoryRoot, deps.header.ID,
-				deps.agentCtx.Messages, deps.live.ContextWindow)
+				deps.agentCtx.Messages, deps.live.ContextWindow, deps.live.CompactionSettings())
 			continue
 		}
 		if line == "/dream" || strings.HasPrefix(line, "/dream ") {
@@ -652,7 +652,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 			Stream:        provider.StreamFnFromProvider(deps.live.Provider),
 			GetAPIKey:     deps.creds.GetAPIKey,
 			ContextWindow: deps.live.ContextWindow,
-			Compaction:    compaction.DefaultCompactionSettings,
+			Compaction:    deps.live.CompactionSettings(),
 		},
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{
@@ -1065,7 +1065,7 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 // unchanged (US-004). It uses the same provider/model as the live run.
 func runManualCompact(ctx context.Context, out io.Writer, deps replDeps) {
 	msgs := deps.agentCtx.Messages
-	settings := compaction.DefaultCompactionSettings
+	settings := deps.live.CompactionSettings()
 	before := compaction.EstimateContextTokens(msgs).Tokens
 
 	stream := provider.StreamFnFromProvider(deps.live.Provider)
