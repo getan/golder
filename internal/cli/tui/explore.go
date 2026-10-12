@@ -12,12 +12,7 @@ package tui
 // Consecutive reads additionally merge onto one line (`Read a.go, b.go`), the
 // codex shorthand for a burst of file reads.
 
-import (
-	"encoding/json"
-	"strings"
-
-	"github.com/getan/golder/internal/judge"
-)
+import "strings"
 
 // exploreTools names the read-only exploration tools whose cards coalesce.
 // Deliberately a small, closed set: bash/apply_patch/task calls — anything with
@@ -42,49 +37,6 @@ var exploreTools = map[string]bool{
 // isExploreTool reports whether a tool call is an exploration call.
 func isExploreTool(name string) bool {
 	return exploreTools[strings.ToLower(strings.TrimSpace(name))]
-}
-
-// isExploreCall reports whether one tool call coalesces into an exploration
-// cell. A native read tool always does; a bash call does when its command is
-// provably read-only, which is the same recognizer the permission gate uses to
-// skip the reviewer (judge.ReadOnlyShellSummary, which answers the containment
-// question and the summary question from one decision). The two must agree: a
-// shell read that the gate let through untested is exactly the call whose output
-// is routine enough to summarize, and a call the gate reviewed keeps its own
-// card so the verdict note and the command stay visible.
-//
-// A bash call whose arguments have not arrived yet does not fold — the fold is
-// decided when the block is appended, and a card announced before its command
-// streamed in has nothing to summarize. It keeps its own card, which is the
-// honest rendering: the command is still unknown.
-func isExploreCall(c *toolCard) bool {
-	if c == nil {
-		return false
-	}
-	if isExploreTool(c.name) {
-		return true
-	}
-	_, _, ok := shellReadStep(c)
-	return ok
-}
-
-// shellReadStep reports a bash card's read-only summary, if it has one. The
-// whole call's arguments go to the recognizer rather than the command text
-// alone: the answer belongs to the gate, and a call carrying an escalation
-// request is not one the gate let through untested — folding it would hide a
-// call the reviewer in fact judged.
-func shellReadStep(c *toolCard) (verb, detail string, ok bool) {
-	if !strings.EqualFold(strings.TrimSpace(c.name), "bash") {
-		return "", "", false
-	}
-	if oneLine(argString(c.input["command"])) == "" {
-		return "", "", false
-	}
-	raw, err := json.Marshal(c.input)
-	if err != nil {
-		return "", "", false
-	}
-	return judge.ReadOnlyShellSummary(raw)
 }
 
 // exploreGroup is the state of one coalesced run: the cards in call order and
@@ -286,13 +238,6 @@ func (c toolCard) exploreStep() (verb, detail string) {
 			return "View", p
 		}
 		return "View", ""
-	case "bash":
-		// A shell call folds only when its command is provably read-only (the
-		// same recognizer the gate uses); the summary then names the read, and a
-		// command it declines falls through to "" so the card keeps its own line.
-		if verb, detail, ok := shellReadStep(&c); ok {
-			return verb, detail
-		}
 	}
 	return "", ""
 }

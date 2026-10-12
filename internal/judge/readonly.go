@@ -79,92 +79,6 @@ func readOnlyCommand(cmd string) bool {
 	return ok
 }
 
-// readOnlySummary names a recognized read-only command for a transcript
-// summary: the verb to lead with ("List", "Read", "Search", "Find"), or the
-// program's own name for the rest of the whitelist, plus what it acts on.
-// ok=false means the command is not recognized (or names nothing worth showing),
-// and the caller should render it as its own card.
-func readOnlySummary(cmd string) (verb, detail string, ok bool) {
-	segs, recognized := readOnlyPlan(cmd)
-	if !recognized {
-		return "", "", false
-	}
-	return summarizePlan(segs)
-}
-
-// summarizePlan names the read a recognized plan performs. `cd /x && rg -n pat
-// .` leads with the interesting half: a leading cd is the shell moving into
-// position, not the read the user is watching for.
-func summarizePlan(segs [][]string) (verb, detail string, ok bool) {
-	// `cd /x && rg -n pat .` leads with the interesting half: a leading cd is
-	// the shell moving into position, not the read the user is watching for.
-	for i, argv := range segs {
-		if i == 0 && argv[0] == "cd" {
-			continue
-		}
-		return summarizeArgv(argv)
-	}
-	return "", "", false
-}
-
-// summarizeArgv renders one recognized segment as verb + detail.
-func summarizeArgv(argv []string) (verb, detail string, ok bool) {
-	name, args := argv[0], argv[1:]
-	firstOperand := func() string {
-		for _, a := range args {
-			if strings.HasPrefix(a, "-") {
-				continue
-			}
-			return a
-		}
-		return ""
-	}
-	switch name {
-	case "ls", "tree", "du":
-		if p := firstOperand(); p != "" {
-			return "List", p, true
-		}
-		return "List", ".", true
-	case "cat", "head", "tail", "nl", "tac", "od", "strings", "wc", "file",
-		"stat", "sort", "uniq", "cut", "tr", "diff", "cmp", "shasum",
-		"sha1sum", "sha256sum", "md5", "cksum", "base64", "base32",
-		"basename", "dirname", "realpath", "readlink":
-		return "Read", firstOperand(), true
-	case "grep", "egrep", "fgrep", "rg":
-		// The pattern is the first non-flag word; the scope, if any, follows.
-		pattern, scope, seen := "", "", false
-		for _, a := range args {
-			if !seen {
-				if strings.HasPrefix(a, "-") {
-					continue
-				}
-				pattern, seen = a, true
-				continue
-			}
-			if !strings.HasPrefix(a, "-") {
-				scope = a
-				break
-			}
-		}
-		if scope != "" {
-			return "Search", pattern + " in " + scope, true
-		}
-		return "Search", pattern, true
-	case "find", "fd":
-		return "Find", firstOperand(), true
-	}
-	// The rest of the whitelist (git, cd, pwd, …) leads with its own name, which
-	// is what the user would recognize at a glance.
-	if len(args) == 0 {
-		return name, "", true
-	}
-	shown := args
-	if len(shown) > 4 {
-		shown = shown[:4]
-	}
-	return name, strings.Join(shown, " "), true
-}
-
 // readOnlyPlan parses cmd and returns its recognized argv sequence. The plan is
 // empty and ok=false for anything the scanner cannot prove.
 func readOnlyPlan(cmd string) ([][]string, bool) {
@@ -796,27 +710,6 @@ func ReadOnlyShellCommand(command string) bool {
 	}
 	_, ok := readOnlyFastPath("bash", raw)
 	return ok
-}
-
-// ReadOnlyShellSummary answers a display caller's whole question about one bash
-// call: how to summarize it in a transcript, and whether it is a fast-path read
-// at all. It is deliberately one call taking the CALL's arguments rather than a
-// command string, because the answer is the gate's answer: an escalation request
-// (or the kill switch, or the static floor) makes a command non-fast-path, and a
-// renderer that folded such a call would hide one the reviewer in fact judged.
-func ReadOnlyShellSummary(args json.RawMessage) (verb, detail string, ok bool) {
-	if _, ok := readOnlyFastPath("bash", args); !ok {
-		return "", "", false
-	}
-	cmd, ok := bashCommand(args)
-	if !ok {
-		return "", "", false
-	}
-	segs, ok := readOnlyPlan(cmd)
-	if !ok {
-		return "", "", false
-	}
-	return summarizePlan(segs)
 }
 
 // readOnlyFastPath returns the verdict that skips the reviewer for a provably

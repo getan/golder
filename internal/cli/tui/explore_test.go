@@ -416,19 +416,23 @@ func TestExploreGroupHeaderSettlesOnRunEnd(t *testing.T) {
 	}
 }
 
-// TestExploreGroupFoldsReadOnlyShellCalls is the shell half of the fold,
-// mirroring codex: a bash call whose command is provably read-only joins the
-// exploration cell (that is the same recognizer the permission gate uses to
-// skip the reviewer), while a command that writes, executes, or cannot be
-// proven keeps its own card.
-func TestExploreGroupFoldsReadOnlyShellCalls(t *testing.T) {
+// TestExploreGroupNeverFoldsShellCalls pins the deliberate exclusion of bash
+// from the fold, including commands the recognizer would allow. A folded shell
+// call needed a summary line, and a summary line has to pick one segment of a
+// compound command to name; measured over real sessions, 20% of those picks
+// landed on a banner echo (`echo "=== cacheKey ==="; rg …`) and hid the command
+// that did the work. The card shows the command itself instead, which cannot be
+// wrong about what ran. Native read tools keep folding: their arguments ARE the
+// whole call, so `Read a.go, b.go` summarizes them faithfully.
+func TestExploreGroupNeverFoldsShellCalls(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(140, 40)
 	tr.addToolCard(exploreCard("1", "bash", map[string]any{"command": "ls -la internal"}, cardSuccess))
 	tr.addToolCard(exploreCard("2", "bash", map[string]any{"command": "cd /repo && git log --oneline -3 2>&1"}, cardSuccess))
 	tr.addToolCard(exploreCard("3", "bash", map[string]any{"command": `rg -n TODO internal | head -20`}, cardSuccess))
-	tr.addToolCard(exploreCard("4", "bash", map[string]any{"command": "go test ./..."}, cardSuccess))
-	tr.addToolCard(exploreCard("5", "bash", map[string]any{"command": "rm -rf ./build"}, cardSuccess))
+	tr.addToolCard(exploreCard("4", "read", map[string]any{"path": "internal/main.go"}, cardSuccess))
+	tr.addToolCard(exploreCard("5", "bash", map[string]any{"command": "go test ./..."}, cardSuccess))
+	tr.addToolCard(exploreCard("6", "bash", map[string]any{"command": "rm -rf ./build"}, cardSuccess))
 
 	var group *exploreGroup
 	var ownCards []string
@@ -437,49 +441,64 @@ func TestExploreGroupFoldsReadOnlyShellCalls(t *testing.T) {
 			group = b.group
 		}
 		if b.card != nil {
-			ownCards = append(ownCards, argString(b.card.input["command"]))
+			ownCards = append(ownCards, b.card.name)
 		}
 	}
 	if group == nil {
-		t.Fatal("the three read-only shell calls should have coalesced into one cell")
+		t.Fatal("the native read call should have opened an exploration cell")
 	}
-	var folded []string
+	var foldedNames []string
 	for _, c := range group.cards {
-		folded = append(folded, argString(c.input["command"]))
+		foldedNames = append(foldedNames, c.name)
 	}
-	wantFolded := []string{"ls -la internal", "cd /repo && git log --oneline -3 2>&1", `rg -n TODO internal | head -20`}
-	if strings.Join(folded, "\x00") != strings.Join(wantFolded, "\x00") {
-		t.Errorf("folded commands = %q, want %q", folded, wantFolded)
+	if strings.Join(foldedNames, "\x00") != "read" {
+		t.Errorf("folded calls = %q, want only the read call", foldedNames)
 	}
-	// The two that write or cannot be proven keep their own cards, which is what
-	// makes the cell safe to read: everything in it is a read the gate let
-	// through untested.
-	wantOwn := []string{"go test ./...", "rm -rf ./build"}
+	// Every bash call keeps its own card, read-only or not.
+	wantOwn := []string{"bash", "bash", "bash", "bash", "bash"}
 	if strings.Join(ownCards, "\x00") != strings.Join(wantOwn, "\x00") {
 		t.Errorf("own cards = %q, want %q", ownCards, wantOwn)
 	}
 	view := stripANSI(strings.Join(tr.contentLines(), "\n"))
-	for _, want := range []string{"List internal", "git log --oneline -3", "Search TODO in internal"} {
+	// The commands are on the cards, verbatim.
+	for _, want := range []string{"ls -la internal", "git log --oneline -3", "TODO internal", "go test ./...", "rm -rf ./build"} {
 		if !strings.Contains(view, want) {
-			t.Errorf("shell read %q missing from the cell summary:\n%s", want, view)
+			t.Errorf("command %q missing from the transcript:\n%s", want, view)
 		}
+	}
+	// And the cell summarizes only what folded into it.
+	if strings.Contains(view, "List internal") {
+		t.Errorf("a bash call was summarized after all:\n%s", view)
 	}
 }
 
-// TestExploreFoldDeclinesBeforeArgsArrive pins the honest default: a bash card
-// announced before its command streamed in has nothing to prove, so it keeps
-// its own card rather than folding on an assumption.
-func TestExploreFoldDeclinesBeforeArgsArrive(t *testing.T) {
+// TestExploreFoldIsByNameNotByArgs pins what decides a fold. A native read folds
+// on its NAME alone, even before its path has streamed in — it has nothing to
+// summarize yet, and the cell re-renders once the arguments arrive (the card is
+// held by pointer, so the summary picks them up). A bash card folds never, with
+// or without its command, which is the difference from the native tools: the
+// shell call used to fold only when the recognizer could prove its command
+// read-only, and it no longer folds at all.
+func TestExploreFoldIsByNameNotByArgs(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(120, 40)
-	tr.addToolCard(exploreCard("1", "bash", nil, cardRunning))
-	for _, b := range tr.blocks {
-		if b.group != nil {
-			t.Errorf("a bash card with no command yet must not fold into an exploration cell")
+	tr.addToolCard(exploreCard("1", "read", nil, cardRunning))
+	if len(tr.blocks) != 1 || tr.blocks[0].group == nil {
+		t.Fatalf("a read card folds by name, args or not, got %+v", tr.blocks)
+	}
+	tr.addToolCard(exploreCard("2", "bash", map[string]any{"command": "ls -la"}, cardRunning))
+	if len(tr.blocks) != 2 || tr.blocks[1].card == nil {
+		t.Fatalf("a bash card must keep its own block even with a read-only command, got %+v", tr.blocks)
+	}
+	for _, name := range []string{"read", "ls", "grep", "find", "view_image"} {
+		if !isExploreTool(name) {
+			t.Errorf("%q should fold", name)
 		}
 	}
-	if !isExploreTool("ls") {
-		t.Error("the native read tools still fold unconditionally")
+	for _, name := range []string{"bash", "apply_patch", "task", "webfetch", "websearch", "memory_search"} {
+		if isExploreTool(name) {
+			t.Errorf("%q must keep its own card", name)
+		}
 	}
 }
 

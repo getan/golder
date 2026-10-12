@@ -263,59 +263,12 @@ func TestReadOnlyNeverAllowsARedirectThatNamesAFile(t *testing.T) {
 	}
 }
 
-// TestReadOnlySummaryNamesTheRead covers the transcript summary the TUI folds
-// into its `Explored` cell: a recognized command names the read it performs,
-// and an unrecognized one declines (the card then renders as its own).
-func TestReadOnlySummaryNamesTheRead(t *testing.T) {
-	cases := []struct {
-		cmd        string
-		verb, what string
-	}{
-		{`ls internal/judge`, "List", "internal/judge"},
-		{`ls -la`, "List", "."},
-		{`ls -lt ~/.golder/sessions | head -15`, "List", "~/.golder/sessions"},
-		{`cat internal/main.go`, "Read", "internal/main.go"},
-		{`head -40 CHANGELOG.md`, "Read", "CHANGELOG.md"},
-		{`rg -n TODO internal`, "Search", "TODO in internal"},
-		{`rg -n 'explore' -i codex-rs | head -50`, "Search", "explore in codex-rs"},
-		{`find . -name "*.go"`, "Find", "."},
-		{`cd /repo && git log --oneline -3 2>&1`, "git", "log --oneline -3"},
-		{`git status`, "git", "status"},
-	}
-	for _, c := range cases {
-		verb, what, ok := readOnlySummary(c.cmd)
-		if !ok {
-			t.Errorf("readOnlySummary(%q) not recognized, want %q %q", c.cmd, c.verb, c.what)
-			continue
-		}
-		if verb != c.verb || what != c.what {
-			t.Errorf("readOnlySummary(%q) = (%q, %q), want (%q, %q)", c.cmd, verb, what, c.verb, c.what)
-		}
-	}
-	// An unrecognized command declines rather than inventing a summary.
-	for _, cmd := range []string{`go test ./...`, `python3 x.py`, `cat a > b`, `ls && rm -rf /`} {
-		if verb, what, ok := readOnlySummary(cmd); ok {
-			t.Errorf("readOnlySummary(%q) = (%q, %q), want not recognized", cmd, verb, what)
-		}
-	}
-}
-
-// TestReadOnlySummaryNeverSummarizesSomethingItWouldNotAllow keeps the two
-// exports consistent: a summary is only produced for a command the recognizer
-// itself would allow, so the TUI can never fold a command the gate would have
-// reviewed into a quiet `Explored` cell.
-func TestReadOnlySummaryNeverSummarizesSomethingItWouldNotAllow(t *testing.T) {
-	for _, cmd := range []string{
-		`ls`, `cat x`, `rg -n a b`, `find . -name x`, `git log -1`,
-		`rg --pre curl x`, `cat x > y`, `ls $(rm -rf /)`, `find . -delete`,
-		`git -c core.pager=evil log`, `sed -i s/a/b/ f`, `ls & rm -rf /`,
-	} {
-		_, _, ok := readOnlySummary(cmd)
-		if ok && !readOnlyCommand(cmd) {
-			t.Errorf("readOnlySummary(%q) summarized a command the recognizer rejects", cmd)
-		}
-	}
-}
+// A pair of tests used to live here, covering the transcript summary the TUI
+// folded a read-only shell call into (`readOnlySummary`: "List dir", "Search
+// pattern in scope"). The summary existed only for that rendering, the rendering
+// is gone — bash cards show their command instead, which is honest about what
+// ran and cannot pick a banner echo as the headline — so the formatter went with
+// it. What survives is the recognizer itself, tested above.
 
 // TestFlagMatchesSpellings pins the one helper every per-flag check shares: a
 // flag must be recognized in the exact, =value and attached-short forms, and a

@@ -22,10 +22,10 @@ interactive REPL/TUI.
   the same way, with a closed whitelist in
   `codex-rs/shell-command/src/command_safety/is_safe_command.rs`).
   `internal/judge/readonly.go` now recognizes a read-only command line and
-  allows it directly, and the same recognizer feeds the transcript, so a
-  read-only shell call folds into the `• Explored` cell beside the native read
-  tools (the display half of codex parity). `GOLDER_READONLY_FASTPATH=off` sends
-  every command back to the reviewer without a rebuild.
+  allows it directly. `GOLDER_READONLY_FASTPATH=off` sends every command back to
+  the reviewer without a rebuild. (A first cut also fed the recognizer to the
+  transcript so shell reads folded into the `• Explored` cell; that half was
+  reverted the same day — see the entry below.)
 
   The safety argument is the whitelist, not the parser. A command is recognized
   only when the scanner can prove what will run — no redirection but
@@ -86,6 +86,28 @@ interactive REPL/TUI.
   either asked about or reviewed, never both silent — the shapes that actually
   fell through that gap (`cksum`, `cd <dir> && ls`, the flag-named second file,
   `git diff --no-index`) are its cases.
+
+- **`bash` cards no longer fold into `• Explored`**: the exploration cell keeps
+  the native read tools only (`read`/`ls`/`grep`/`find`/`view_image`), and a
+  shell call always shows its own card with the full command. Folding a shell
+  call required a one-line summary, and a summary has to pick ONE segment of a
+  compound command to name as the headline; measured over ten real sessions,
+  20% of foldable shell calls led with a banner echo, so the cell read
+  `echo "=== cacheKey ==="` (with the `rg` that did the work invisible) while
+  the noise was promoted and the signal hidden. Printing the command cannot be
+  wrong about what ran. The native tools keep folding because their arguments
+  ARE the whole call — `Read a.go, b.go` summarizes them faithfully — and they
+  are also the tools the fast path does not touch (they were already exempt from
+  review). This removes `judge.ReadOnlyShellSummary` and the whole summary
+  formatter (`readOnlySummary`/`summarizePlan`/`summarizeArgv`) with it: they
+  existed only to serve that rendering, never the gate.
+
+  Two related observations from the same measurement, recorded so the next
+  attempt starts from the data: foldable calls form runs of 1 (48%), 2 (33%) and
+  3+ (19%) — so nearly half of the cells were a lone call wrapped in an
+  `Explored` header that bought nothing — and the model's own text between tool
+  calls seals a run, which is what breaks most of them into singletons.
+
 - **Every built-in command's usage is one field, and a test holds it there**: a
   command's grammar lived in two places — an `ArgumentHint` (which `/help` and the
   REPL's completion render, and which the popup now renders too) and, for the

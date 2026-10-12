@@ -7,7 +7,6 @@ package judge
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/permissions"
@@ -286,27 +285,7 @@ func TestPermissionGateAutoSkipsReviewForReadOnlyReads(t *testing.T) {
 	}
 }
 
-// TestReadOnlySummaryDrivesTheFold checks the hook the TUI uses to fold a shell
-// read into its exploration cell: whatever it summarizes must also be a command
-// the gate lets through untested, so the transcript can never hide a reviewed
-// call inside a quiet `Explored` line.
-func TestReadOnlySummaryDrivesTheFold(t *testing.T) {
-	for _, cmd := range []string{
-		"ls -la internal",
-		"cd /repo && rg -n TODO internal",
-		"cat go.mod | head -5",
-		"git status --porcelain",
-	} {
-		verb, detail, ok := readOnlySummary(cmd)
-		if !ok {
-			t.Errorf("readOnlySummary(%q) declined; the TUI cannot fold it", cmd)
-			continue
-		}
-		if strings.TrimSpace(verb) == "" || strings.TrimSpace(detail) == "" {
-			t.Errorf("readOnlySummary(%q) = (%q, %q), want both parts non-empty", cmd, verb, detail)
-		}
-		if _, ok := readOnlyFastPath("bash", bashArgs(cmd)); !ok {
-			t.Errorf("readOnlySummary(%q) summarized a command the gate would review", cmd)
-		}
-	}
-}
+// The transcript no longer asks the judge anything: bash cards show their
+// command instead of folding into a summarized `Explored` cell, so the
+// `ReadOnlyShellSummary` hook this test used to drive is gone. The recognizer
+// itself — the half the gate depends on — is covered above.
