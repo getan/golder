@@ -125,6 +125,7 @@ const DefaultBaseInstruction = "You are golder, a helpful coding agent. " +
 	patchGuide + "\n\n" +
 	sandboxGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
+	inspectGuide + "\n\n" +
 	batchGuide + "\n\n" +
 	searchGuide + "\n\n" +
 	contextGuide
@@ -207,6 +208,41 @@ const codeSearchGuide = "To search code, use the grep tool (file contents) and t
 	"says when it truncated. When ripgrep is not installed (the environment block says so), " +
 	"the tools cannot run at all: search from a shell with `grep` and `find` instead. Inside " +
 	"a shell, prefer `rg` when it is installed and fall back to `grep`/`find` when it is not."
+
+// inspectGuide states which half of the tool set to reach for when looking at
+// code, and how to issue a multi-file read.
+//
+// The default is the native read tools, and the reason is a real asymmetry
+// rather than a preference: read/grep/find/ls/view_image run in-process (no
+// sandbox spawn), are on the judge's ungraded list so no risk reviewer ever sees
+// them, and return bounded output that names its own truncation. A read-only
+// bash command is now *contained in the sandbox* even though it skips the
+// reviewer (agenttool/bash_tool.go, the containment floor under the fast path),
+// which is a process spawn and a policy to satisfy; it also renders as its own
+// card instead of folding into the cell. So "prefer the tools" is the cheap path
+// as well as the quiet one — but only where the tools can express the read, and
+// the guide names the places they cannot (`git` has no native tool at all;
+// multiline and aggregated search were already the shell's, per
+// codeSearchGuide; a command's own output is a read no path argument describes).
+// Without that second half the rule reads as "never touch a shell", which would
+// push the model off legitimate work like `git diff` — the same failure the
+// search guide had when it pointed at `--type` long after the tool had it.
+//
+// The batching half exists because of what the transcript does with a batch:
+// consecutive native reads coalesce into one `• Explored` cell, and the model's
+// own text seals that cell (transcript.announceToolCard). Measured over ten real
+// sessions, that is why nearly half the cells wrapped a single call — the reads
+// were fine, the narration between them split them. So the rule is stated as
+// "narrate before or after a batch, not inside it" rather than "do not narrate":
+// a progress line is worth keeping, and the user still needs to follow along.
+const inspectGuide = "To inspect code, default to the tools: read, grep, find, ls and " +
+	"view_image run in-process, skip the risk reviewer, return bounded output that says when " +
+	"it truncated, and render as one cell rather than a card per command. Reach for bash only " +
+	"for a read the tools cannot express — a multiline or aggregated search, anything git " +
+	"(`git diff`, `git log`, `git status`), or a command's own output, such as a test or build " +
+	"log. When you need several files or searches, ask in ONE message: the calls run as one " +
+	"batch and land as one cell, while a line of narration between them splits the work into " +
+	"separate rounds, each with its own cell. Narrate before or after a batch, not inside it."
 
 // batchGuide teaches the parallelism contract of the tool loop: independent
 // calls issued in ONE assistant message run concurrently (read/grep/find/ls and

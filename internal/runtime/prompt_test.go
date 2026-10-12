@@ -95,6 +95,56 @@ func TestBuildSystemPromptAdvertisesBatchedToolCalls(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptAdvertisesToolFirstReads: the base instruction must state
+// which half of the tool set to reach for when inspecting code, and it must name
+// the other half's boundary at the same time. "Prefer the tools" alone reads as
+// "never touch a shell" and would push the model off `git diff` — there is no
+// native git tool — so the test pins both halves: the default (native read
+// tools, with the reason that they skip the reviewer and run in-process) and the
+// exception (what the tools cannot express).
+func TestBuildSystemPromptAdvertisesToolFirstReads(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	lower := strings.ToLower(got)
+
+	// The default, named tool by tool: a rule that names only "the tools" is not
+	// actionable.
+	for _, tool := range []string{"read", "grep", "find", "ls", "view_image"} {
+		if !strings.Contains(lower, tool) {
+			t.Errorf("prompt should name %q as a default for inspecting code:\n%s", tool, got)
+		}
+	}
+	if !strings.Contains(lower, "reviewer") {
+		t.Errorf("prompt should say why the native read tools are the cheap path (no reviewer):\n%s", got)
+	}
+
+	// The exception. `git` matters most: without it the rule is a trap.
+	if !strings.Contains(lower, "git diff") {
+		t.Errorf("prompt should name git as a read the tools cannot express:\n%s", got)
+	}
+	if !strings.Contains(lower, "cannot express") {
+		t.Errorf("prompt should state the boundary of the tools, not just their preference:\n%s", got)
+	}
+
+	// The batching half, and the reason it is phrased as "not inside a batch":
+	// narration between calls is what splits a run of reads into singletons.
+	if !strings.Contains(lower, "one message") {
+		t.Errorf("prompt should tell the model to ask for several files in one message:\n%s", got)
+	}
+	if !strings.Contains(lower, "narration") {
+		t.Errorf("prompt should tell the model not to narrate inside a batch:\n%s", got)
+	}
+	if !strings.Contains(lower, "before or after") {
+		t.Errorf("prompt should keep progress updates legal around a batch, not forbid them:\n%s", got)
+	}
+}
+
 // TestBuildSystemPromptAGENTSOrdering is the acceptance-critical test: with an
 // AGENTS.md at the root and at a nested working directory, the root's content
 // must appear BEFORE the nested one (general → specific).

@@ -12,6 +12,31 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **The base instruction names the default way to inspect code — and the
+  boundary of that default**: a new guide sits between the code-search and
+  batching ones and says to reach for `read`/`grep`/`find`/`ls`/`view_image`
+  first, because they run in-process, never reach the risk reviewer, return
+  bounded output that names its own truncation, and render as one cell; bash is
+  for a read the tools cannot express — a multiline or aggregated search,
+  anything git (`git diff`, `git log`, `git status`), or a command's own output
+  such as a test or build log. The second half is what keeps the first half
+  honest: on its own, "prefer the tools" reads as "never touch a shell" and
+  pushes the model off `git diff`, which has no native tool at all — the same
+  shape of mistake the code-search guide made when it still pointed at `--type`
+  after the tool had grown that argument. The asymmetry being taught is real
+  rather than a preference: a read-only shell command skips the reviewer (the
+  fast path) but is still contained in the sandbox, so it pays a process spawn
+  and a policy — the native tools pay neither and fold into the exploration cell.
+
+  The same guide carries the batching rule for reads: several files or searches
+  belong in ONE message, because consecutive native reads coalesce into a single
+  `• Explored` cell and the model's own text seals that cell
+  (`transcript.announceToolCard`). Measured over ten real sessions, that is why
+  nearly half the cells wrapped a lone call — the reads were fine, the narration
+  between them split them. It is phrased as "narrate before or after a batch, not
+  inside it" rather than "do not narrate": a progress line is worth keeping, and
+  the person still needs to follow along.
+
 - **A provably read-only shell command no longer waits for the reviewer**: in
   auto mode every `bash` call was graded by the model reviewer — a whole round
   trip per command, measured at a 2.65s median against 0.03s for the
