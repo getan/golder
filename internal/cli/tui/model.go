@@ -1651,9 +1651,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Ctrl+C copies the current mouse selection when there is one (over OSC52),
 		// clearing it afterward. With no selection, a non-empty composer is
 		// discarded first — like a shell — so a half-typed prompt is never lost to
-		// the quit arm and the interrupt/quit path only runs on an empty box.
-		// Copying works even mid-run, so grabbing streamed output never interrupts
-		// the run.
+		// the quit arm and the interrupt/quit path only runs on an empty box. That
+		// holds mid-run too: the box can hold a recalled history entry or a
+		// steering draft, and neither is a request to stop the run. Esc, or a
+		// second press, is the interrupt. Copying works even mid-run, so grabbing
+		// streamed output never interrupts the run.
 		if !m.sel.empty() {
 			text := m.selectedText()
 			m.sel = selection{}
@@ -1666,10 +1668,16 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if !m.running && m.input.Value() != "" {
-			// The shell-like first stage: discard the draft and say so.
+		if m.input.Value() != "" {
+			// The shell-like first stage: discard the draft and say so. Mid-run
+			// the acknowledgement also names the interrupt key, because the run
+			// is still going and the press may well have been aimed at it.
 			m = m.clearDraft()
-			m.transcript.addSystem(ui.DraftDiscardedNotice)
+			notice := ui.DraftDiscardedNotice
+			if m.running {
+				notice = ui.DraftDiscardedRunningNotice
+			}
+			m.transcript.addSystem(notice)
 			return m, nil
 		}
 		return m.interruptOrQuit()
@@ -3099,9 +3107,17 @@ const quitArmWindow = 3 * time.Second
 // and closes the slash menu, reflowing for the shorter editor. It is the
 // shell-like first stage of Ctrl+C: a lone press with text in the box has no
 // other side effect, so a quit arm is never set and no run is touched.
+//
+// Discarding also ends a history browse. The recalled entry is gone, so leaving
+// the cursor parked where that recall put it would make the next ↑ continue
+// walking up from there — skipping the entries newer than the one just thrown
+// away. An empty box means "not browsing", which is the same state a fresh
+// session is in (histIdx at the end of the list, nothing stashed).
 func (m Model) clearDraft() Model {
 	m.input.Clear()
 	m.menu.close()
+	m.histIdx = len(m.history)
+	m.histDraft = ""
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil

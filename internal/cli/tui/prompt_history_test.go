@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/history"
 )
 
@@ -133,5 +134,54 @@ func TestModelHistoryBrowsesMidRun(t *testing.T) {
 	// Recalling never starts or queues anything by itself.
 	if got := m.steerQ.snapshot(); len(got) != 0 {
 		t.Errorf("browsing must not queue anything, got %v", got)
+	}
+}
+
+// TestModelMidRunRecallDiscardedByCtrlC is the reported flow: mid-run, ↑ recalls
+// an earlier prompt into the composer, and Ctrl+C is aimed at the box rather than
+// at the run. The press discards the recalled entry and leaves the run alone; the
+// press is acknowledged with the wording that names the interrupt key, and
+// discarding ends the browse so the next ↑ starts from the newest entry again
+// instead of continuing up from wherever the recall left the cursor.
+func TestModelMidRunRecallDiscardedByCtrlC(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 12})
+	m.recordHistory("oldest prompt")
+	m.recordHistory("newest prompt")
+
+	interrupted := false
+	m.interruptFn = func() { interrupted = true }
+	m.running = true
+
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.input.Value(); got != "newest prompt" {
+		t.Fatalf("mid-run ↑ recalled %q, want the newest prompt", got)
+	}
+
+	m = apply(t, m, keyPress("ctrl+c"))
+	if interrupted {
+		t.Error("ctrl+c on a recalled entry must not interrupt the run")
+	}
+	if got := m.input.Value(); got != "" {
+		t.Errorf("ctrl+c should discard the recalled entry, got %q", got)
+	}
+	if joined := strings.Join(blockTexts(m.transcript), "\n"); !strings.Contains(joined, ui.DraftDiscardedRunningNotice) {
+		t.Errorf("the press should be acknowledged with %q, got %q", ui.DraftDiscardedRunningNotice, joined)
+	}
+
+	// The discard ended the browse: ↑ starts over from the newest entry rather
+	// than walking further up from the discarded recall.
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.input.Value(); got != "newest prompt" {
+		t.Errorf("↑ after a discard recalled %q, want the newest prompt again", got)
+	}
+
+	// And with the box empty, the run answers to the key again.
+	m = apply(t, m, keyPress("ctrl+c"))
+	if got := m.input.Value(); got != "" {
+		t.Errorf("the second press should have reached the run, box = %q", got)
+	}
+	m = apply(t, m, keyPress("ctrl+c"))
+	if !interrupted {
+		t.Error("an empty box must let Ctrl+C interrupt the run")
 	}
 }

@@ -34,6 +34,13 @@ const (
 	// composer was thrown away, and nothing else happened.
 	DraftDiscardedNotice = "(draft discarded)"
 
+	// DraftDiscardedRunningNotice is that same first stage while a run is in
+	// flight, where "nothing else happened" is the part the user needs told: a
+	// press here is at least as likely to have been aimed at the run as at the
+	// draft, so the notice says the run is untouched and names the key that
+	// does stop it (Esc, or one more press).
+	DraftDiscardedRunningNotice = "(draft discarded — Esc, or Ctrl+C again, interrupts the run)"
+
 	// SelectionCopiedNotice reports the Ctrl+C copy branch, so the press is
 	// acknowledged instead of silently doing nothing visible.
 	SelectionCopiedNotice = "(selection copied)"

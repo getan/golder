@@ -422,7 +422,16 @@ interactive REPL/TUI.
   the in-flight turn is persisted when the run settles, not before. ↑/↓, Tab
   completion and the autocomplete popup are keyed on the buffer rather than on the
   run state, with the sub-agent panel still owning ↑/↓ while it has rows and the
-  composer is empty.
+  composer is empty. One consequence of the composer being live mid-run was wrong,
+  and is fixed with it: Ctrl+C skipped its shell-like first stage while a run was
+  in flight, so it interrupted the run even with a recalled entry sitting in the
+  box. That stage is now unconditional — a non-empty composer absorbs the press,
+  mid-run included, because a draft is not a request to stop the run and the box
+  mid-run holds recalled history as often as it holds steering text. The
+  acknowledgement says which world it is in (idle: `(draft discarded)`; mid-run it
+  also names Esc and a second press as the interrupt), and discarding ends the
+  browse, so the next ↑ starts from the newest entry instead of walking up from
+  wherever the discarded recall left the cursor.
 - **Auto-compaction now keeps 10% of the window free**: the trigger was
   `window − 16,384` tokens, which is sensible on a 128k model (~87% full) but
   a rounding error on a 1M one — a 1M-window session only compacted at 98.4%

@@ -123,21 +123,39 @@ func TestModelCtrlCClearsDraft(t *testing.T) {
 	}
 }
 
-// TestModelCtrlCWhileRunningInterruptsWithDraft pins the precedence: an
-// in-flight run owns Ctrl+C, so a draft typed mid-run (the composer stays
-// editable for steering) never absorbs the interrupt and is preserved.
-func TestModelCtrlCWhileRunningInterruptsWithDraft(t *testing.T) {
+// TestModelCtrlCWhileRunningClearsDraftFirst pins the precedence mid-run: a
+// non-empty composer absorbs the first press exactly as it does when idle, and
+// the run is untouched. A draft is not a request to stop the run — since ↑/↓
+// browse the history mid-run, the box mid-run holds recalled entries as often as
+// steering text, and a recall must not cost you the turn. The press is
+// acknowledged with the running wording, which names the key that does interrupt;
+// an empty box and a second press still interrupt (the latter covered by
+// TestModelInterruptIsIdempotent).
+func TestModelCtrlCWhileRunningClearsDraftFirst(t *testing.T) {
 	m := NewModel(Options{})
 	interrupted := false
 	m.interruptFn = func() { interrupted = true }
 	m.running = true
 	m.input.SetValue("stray")
-	got, _ := m.Update(keyPress("ctrl+c"))
-	if !interrupted {
-		t.Fatal("ctrl+c while running must interrupt even with a non-empty composer")
+	got, cmd := m.Update(keyPress("ctrl+c"))
+	m = got.(Model)
+	if interrupted {
+		t.Error("ctrl+c with a draft must not interrupt the run")
 	}
-	if got.(Model).input.Value() != "stray" {
-		t.Error("interrupt must not clear the composer")
+	if v := m.input.Value(); v != "" {
+		t.Errorf("ctrl+c with a draft should clear the composer, got %q", v)
+	}
+	if cmd != nil {
+		t.Errorf("the discard press should produce no command, got %v", cmd())
+	}
+	if joined := strings.Join(blockTexts(m.transcript), "\n"); !strings.Contains(joined, ui.DraftDiscardedRunningNotice) {
+		t.Errorf("mid-run discard should be acknowledged with %q, got %q", ui.DraftDiscardedRunningNotice, joined)
+	}
+
+	// The empty box is what the run answers to.
+	m = apply(t, m, keyPress("ctrl+c"))
+	if !interrupted {
+		t.Error("a second press with an empty box must interrupt the run")
 	}
 }
 
