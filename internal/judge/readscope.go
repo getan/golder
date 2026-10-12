@@ -69,8 +69,8 @@ var readScopeShellTools = map[string]bool{"bash": true}
 // argument for the file tools, or the file operands a command line exposes.
 // Nil means the call carries no path the boundary applies to.
 func readScopeTargets(tool string, args json.RawMessage) []string {
-	if raw, ok := readScopePath(tool, args); ok {
-		return []string{raw}
+	if paths := readScopePaths(tool, args); len(paths) > 0 {
+		return paths
 	}
 	if !readScopeShellTools[strings.ToLower(strings.TrimSpace(tool))] {
 		return nil
@@ -154,10 +154,16 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		}
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		// A call may name several paths (a command line lists file operands),
-		// so the first one found outside is the one to ask about: it is the
-		// most prominent, and one question covers the call.
-		raw, target := "", ""
+		// A call may name several paths (a command line lists file operands).
+		// One question covers the call, so it offers the finest directory any
+		// of those reads would need: a command that names a directory and a
+		// subtree inside it (`ls ~/work ~/work/proj`) must ask about the
+		// subtree, not hand over the whole ~/work just because that operand
+		// came first — the coarse answer is a session grant, so it would
+		// outlive the call. A path whose offered directory holds another's is
+		// the coarser answer and loses to it; ties keep command order.
+		type question struct{ raw, target, candidate string }
+		var questions []question
 		for _, candidateRaw := range readScopeTargets(call.Name, call.Arguments) {
 			resolved, err := permissions.AbsAgainst(absRoot, candidateRaw)
 			if err != nil {
@@ -180,14 +186,29 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 			if insideSystemRoots(resolved) {
 				continue
 			}
-			raw, target = candidateRaw, resolved
-			break
+			questions = append(questions, question{
+				raw: candidateRaw, target: resolved,
+				candidate: permissions.ReadScopeCandidate(resolved),
+			})
 		}
-		if target == "" {
+		if len(questions) == 0 {
 			return nil
 		}
+		chosen := questions[0]
+		for _, q := range questions[1:] {
+			switch {
+			case q.candidate == "":
+				// Too broad to offer a directory at all: never finer than a
+				// path that can.
+			case chosen.candidate == "":
+				chosen = q
+			case chosen.candidate != q.candidate && permissions.Inside(chosen.candidate, q.candidate):
+				chosen = q
+			}
+		}
+		raw, target := chosen.raw, chosen.target
 
-		candidate := permissions.ReadScopeCandidate(target)
+		candidate := chosen.candidate
 		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 		// The dialog shows the path for a file tool and the command for a
 		// shell tool: the path is what the user is deciding about, but for a
@@ -255,21 +276,44 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 	}
 }
 
-// readScopePath returns a read tool call's path argument. Tools that read
-// nothing (or read the workspace root itself, where the argument is empty) are
-// not boundary questions.
-func readScopePath(tool string, args json.RawMessage) (string, bool) {
+// readScopePaths returns a read tool call's path argument(s). grep and find
+// accept a directory or a list of them, so both JSON shapes are read: a list
+// the gate could not see would let a search reach outside the workspace with
+// no question asked. Tools that read nothing, or read the workspace root
+// itself (where the argument is empty), are not boundary questions.
+func readScopePaths(tool string, args json.RawMessage) []string {
 	if !readScopeTools[strings.ToLower(strings.TrimSpace(tool))] {
-		return "", false
+		return nil
 	}
-	var a struct {
-		Path string `json:"path"`
+	var raw struct {
+		Path json.RawMessage `json:"path"`
 	}
-	if err := json.Unmarshal(args, &a); err != nil {
-		return "", false
+	if err := json.Unmarshal(args, &raw); err != nil || len(raw.Path) == 0 {
+		return nil
 	}
-	p := strings.TrimSpace(a.Path)
-	return p, p != ""
+	// The string form: what ls, read and view_image declare.
+	if raw.Path[0] == '"' {
+		var one string
+		if err := json.Unmarshal(raw.Path, &one); err != nil {
+			return nil
+		}
+		if p := strings.TrimSpace(one); p != "" {
+			return []string{p}
+		}
+		return nil
+	}
+	// The list form (grep/find); a JSON null decodes to no paths.
+	var many []string
+	if err := json.Unmarshal(raw.Path, &many); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(many))
+	for _, p := range many {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // insideAnyRoot reports whether target is inside one of the extra trusted roots.

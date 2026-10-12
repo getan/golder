@@ -219,10 +219,15 @@ func commandWord(seg string) (string, []string) {
 }
 
 // shellWord is one whitespace-separated word of a shell segment: its text
-// with surrounding quotes removed, and whether it was quoted at all.
+// with surrounding quotes removed, whether it was quoted at all, and whether
+// its first character came from inside quotes. The last one exists because the
+// shell expands a leading `~` only when the tilde itself is unquoted, so
+// `~/x` and `~/"x"` expand while `"~/x"` does not — a distinction the plain
+// quoted flag cannot express.
 type shellWord struct {
-	text   string
-	quoted bool
+	text       string
+	quoted     bool
+	leadQuoted bool
 }
 
 // shellWords splits a segment into words the way a shell would: quotes group
@@ -234,18 +239,28 @@ type shellWord struct {
 // the path as a word, matching the pre-existing detection.
 func shellWords(seg string) []shellWord {
 	var (
-		out   []shellWord
-		b     strings.Builder
-		quote byte
-		has   bool
-		qseen bool
+		out        []shellWord
+		b          strings.Builder
+		quote      byte
+		has        bool
+		qseen      bool
+		leadQuoted bool
 	)
 	flush := func() {
 		if has {
-			out = append(out, shellWord{text: b.String(), quoted: qseen})
+			out = append(out, shellWord{text: b.String(), quoted: qseen, leadQuoted: leadQuoted})
 		}
 		b.Reset()
-		has, qseen = false, false
+		has, qseen, leadQuoted = false, false, false
+	}
+	// write appends one character to the current word, remembering whether it
+	// was the word's first and arrived from inside quotes.
+	write := func(c byte) {
+		if b.Len() == 0 {
+			leadQuoted = quote != 0
+		}
+		has = true
+		b.WriteByte(c)
 	}
 	for i := 0; i < len(seg); i++ {
 		c := seg[i]
@@ -258,17 +273,18 @@ func shellWords(seg string) []shellWord {
 			if c == '\\' && quote == '"' && i+1 < len(seg) {
 				i++
 			}
-			has = true
-			b.WriteByte(seg[i])
+			write(seg[i])
 		case c == '\'' || c == '"':
 			quote = c
 			qseen = true
+			if b.Len() == 0 {
+				leadQuoted = true
+			}
 			has = true
 		case c == ' ' || c == '\t' || c == '\n':
 			flush()
 		default:
-			has = true
-			b.WriteByte(c)
+			write(c)
 		}
 	}
 	flush()

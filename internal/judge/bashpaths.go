@@ -33,6 +33,7 @@ package judge
 import (
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"unicode"
 )
@@ -119,9 +120,20 @@ func bashPathCandidates(cmd string) []string {
 			case j == skip:
 				continue
 			case j == progWord:
-				out = append(out, embeddedPaths(w.text)...)
+				for _, frag := range embeddedPaths(w.text) {
+					if shellProgramInterpreters[cmdName] {
+						frag = expandTilde(frag)
+					}
+					out = append(out, frag)
+				}
 			default:
-				if text := expandKnownVars(w.text); pathShapedWord(text) {
+				text := expandKnownVars(w.text)
+				// The shell expands a leading ~ only when the tilde itself was
+				// written unquoted: `~/x` and `~/"x"` expand, `"~/x"` does not.
+				if !w.leadQuoted {
+					text = expandTilde(text)
+				}
+				if pathShapedWord(text) {
 					out = append(out, text)
 				}
 			}
@@ -163,7 +175,9 @@ func pathShapedWord(w string) bool {
 // whose referent is a real place on disk. $HOME is the one that matters (rc
 // files, dotfiles, configs); an unknown variable is left as written, because a
 // value this layer cannot know must not become a question the user has to
-// answer on every build script.
+// answer on every build script. The shell's own tilde expansion is the other
+// knowable spelling; it lives in expandTilde, next to this, because it applies
+// to unquoted words only.
 func expandKnownVars(w string) string {
 	if !strings.Contains(w, "$HOME") && !strings.Contains(w, "${HOME}") {
 		return w
@@ -175,6 +189,34 @@ func expandKnownVars(w string) string {
 	// The braced form first, so "${HOME}" is not half-eaten by "$HOME".
 	w = strings.ReplaceAll(w, "${HOME}", home)
 	return strings.ReplaceAll(w, "$HOME", home)
+}
+
+// shellProgramInterpreters are the commands whose inline program (-c) is itself
+// a shell command line: the inner shell expands a leading ~ there exactly as
+// the outer one does, so a ~ fragment inside the program names the user's home.
+// Other interpreters (python3 -c 'open("~/x")') never expand it.
+var shellProgramInterpreters = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "dash": true,
+}
+
+// expandTilde substitutes the shell's own leading-tilde expansion. The shell,
+// not the tool, resolves a bare `~` or `~/…` operand, so a gate that read the
+// word literally would place it inside the workspace — and the read that
+// actually happens, of a file under $HOME, would never be asked about. Only
+// the plain form is expanded: `~someoneelse` is another user's home, whose
+// value this layer cannot know.
+func expandTilde(w string) string {
+	if w != "~" && !strings.HasPrefix(w, "~/") {
+		return w
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return w
+	}
+	if w == "~" {
+		return home
+	}
+	return filepath.Join(home, w[2:])
 }
 
 // embeddedPaths pulls absolute-path-shaped runs out of an interpreter program.

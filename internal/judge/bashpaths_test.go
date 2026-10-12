@@ -62,11 +62,25 @@ func TestBashPathCandidates(t *testing.T) {
 		{"braced HOME var", "cat ${HOME}/.zshrc", []string{filepath.Join(homeOf(t), ".zshrc")}},
 		{"unknown var stays unknown", "cat $LOG_DIR/app.log", nil},
 
+		// The shell expands a leading unquoted ~ itself. Read literally, such
+		// an operand resolved against the workspace — so a read of a file under
+		// $HOME was silently treated as an in-workspace read.
+		{"tilde operand", "ls ~/work", []string{filepath.Join(homeOf(t), "work")}},
+		{"bare tilde", "ls ~", []string{homeOf(t)}},
+		{"tilde then quoted tail", `ls ~/"work"`, []string{filepath.Join(homeOf(t), "work")}},
+		{"quoted tilde stays literal", `cat "~/notes.md"`, []string{"~/notes.md"}},
+		{"single-quoted tilde stays literal", `cat '~/notes.md'`, []string{"~/notes.md"}},
+		{"another user's tilde is not ours", "cat ~other/notes.md", nil},
+
 		// Interpreters: an inline program's embedded path is a real read.
 		{"python program", `python3 -c 'open("` + out + `/src/a.go")'`, []string{out + "/src/a.go"}},
 		{"node program", `node -e 'require("` + out + `/src/a.go")'`, []string{out + "/src/a.go"}},
 		{"shell program", "bash -c 'cat " + out + "/src/a.go'", []string{out + "/src/a.go"}},
 		{"shell flag cluster", `sh -lc "cat ` + home + `/notes.md"`, []string{home + "/notes.md"}},
+		// A shell's inline program is a shell command line, so its ~ expands
+		// exactly as the outer one would; a python program's does not.
+		{"shell program tilde", `bash -c 'ls ~/work'`, []string{filepath.Join(homeOf(t), "work")}},
+		{"python program tilde", `python3 -c 'open("~/x")'`, []string{"~/x"}},
 
 		// Must stay quiet.
 		{"relative path", "cat internal/main.go", nil},

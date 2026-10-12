@@ -124,18 +124,52 @@ func ReadScopeCandidate(target string) string {
 	if target == "" {
 		return ""
 	}
-	dir := filepath.Dir(filepath.Clean(target))
+	cleaned := filepath.Clean(target)
+	dir := filepath.Dir(cleaned)
 	// A path the call named that is itself a directory (ls, a search root, a
 	// shell operand) is the finest grant that covers the read: hand over the
 	// tree that was asked for, not the one above it. A stat failure leaves the
 	// file answer in place, which is the fail-narrow direction.
-	if info, err := os.Stat(target); err == nil && info.IsDir() {
-		dir = filepath.Clean(target)
+	if info, err := os.Stat(cleaned); err == nil && info.IsDir() {
+		dir = cleaned
+	} else if hasGlobMeta(cleaned) {
+		// A glob is not a path but a pattern over the entries of a directory:
+		// `ls ~/work/*/*.go` reads inside ~/work, and the grant that covers it
+		// is the deepest directory that actually exists above the pattern.
+		// Taking the pattern's own parent instead would offer a directory name
+		// containing `*`, which matches nothing and would leave the dialog's
+		// session answer useless. Nothing existing above the pattern means no
+		// directory to offer, so only the one-read answer remains.
+		dir = deepestExistingDir(dir)
+	}
+	if dir == "" {
+		return ""
 	}
 	if _, broad := BroadReadRoot(dir); broad {
 		return ""
 	}
 	return dir
+}
+
+// hasGlobMeta reports whether a path holds a shell glob metacharacter, so the
+// spelling names a set of entries rather than one entry.
+func hasGlobMeta(p string) bool {
+	return strings.ContainsAny(p, "*?[")
+}
+
+// deepestExistingDir returns the deepest directory at or above p that exists,
+// or "" when nothing up to the filesystem root does.
+func deepestExistingDir(p string) string {
+	for {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return ""
+		}
+		p = parent
+	}
 }
 
 // BroadReadRoot reports whether p is too wide to grant. The filesystem root,

@@ -496,3 +496,119 @@ func TestReadScopeGateCommandHonorsSessionGrant(t *testing.T) {
 		t.Errorf("asked %d times, want 0", asked)
 	}
 }
+
+// TestReadScopeGateAsksAboutTildeOperands is the regression for a silent hole:
+// the shell expands a leading `~` itself, but the scanner read the word
+// literally, so `ls ~/Desktop` resolved against the workspace, looked like an
+// in-workspace read, and reached the user's home with no question asked.
+func TestReadScopeGateAsksAboutTildeOperands(t *testing.T) {
+	workspace, outside, target := readScopeFixture(t)
+	var got ApprovalRequest
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			asked++
+			got = req
+			return ApprovalAnswer{Answered: true} // deny: the question is what matters
+		},
+	})
+	// The fixture's HOME is the directory holding workspace and outside, so
+	// `~/outside` is the very directory a literal reading places in the
+	// workspace.
+	for _, cmd := range []string{"ls ~/outside", "ls ~/outside/", "cat ~/outside/a.go"} {
+		if dec := gate(context.Background(), bashCall(cmd)); dec == nil || !dec.Block {
+			t.Fatalf("%q must be gated, got %+v", cmd, dec)
+		}
+	}
+	if asked != 3 {
+		t.Errorf("asked %d times, want 3 — every ~ operand is a question", asked)
+	}
+	if got.ReadScope != outside {
+		t.Errorf("offered = %q, want %q", got.ReadScope, outside)
+	}
+	if !strings.Contains(got.Rationale, outside) {
+		t.Errorf("rationale = %q, want the expanded path %q (not the ~ spelling)", got.Rationale, outside)
+	}
+	_ = target
+}
+
+// TestReadScopeGateOffersFinestOperandDirectory pins the granularity of the
+// single question one command gets: when the operands name a directory and a
+// subtree inside it, the dialog must offer the subtree. Offering the ancestor
+// (the first operand in command order) hands over a tree the read never asked
+// for, and the session grant outlives the call.
+func TestReadScopeGateOffersFinestOperandDirectory(t *testing.T) {
+	workspace, outside, _ := readScopeFixture(t)
+	sub := filepath.Join(outside, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var got ApprovalRequest
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			got = req
+			return ApprovalAnswer{Answered: true} // deny
+		},
+	})
+	// Both orders: the finer operand wins whether it is written first or last.
+	for _, cmd := range []string{"ls " + outside + " " + sub, "ls -la " + sub + " " + outside} {
+		got = ApprovalRequest{}
+		if dec := gate(context.Background(), bashCall(cmd)); dec == nil || !dec.Block {
+			t.Fatalf("%q must be gated, got %+v", cmd, dec)
+		}
+		if got.ReadScope != sub {
+			t.Errorf("%q offered %q, want the subtree %q", cmd, got.ReadScope, sub)
+		}
+	}
+}
+
+// TestReadScopeGateReadsThePathListForm covers grep/find's list argument: the
+// gate read only the string form, so a search scoped with an array reached
+// outside the workspace with no question asked — the array failed the string
+// unmarshal, which the gate read as "no path here".
+func TestReadScopeGateReadsThePathListForm(t *testing.T) {
+	workspace, outside, _ := readScopeFixture(t)
+	sub := filepath.Join(outside, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var got ApprovalRequest
+	asked := 0
+	gate := ReadScopeGate(ReadScopeOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			asked++
+			got = req
+			return ApprovalAnswer{Answered: true} // deny
+		},
+	})
+	listCall := func(paths ...string) agentcore.AgentToolCall {
+		raw, err := json.Marshal(map[string]any{"pattern": "x", "path": paths})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return agentcore.AgentToolCall{Name: "grep", Arguments: raw}
+	}
+	if dec := gate(context.Background(), listCall(outside)); dec == nil || !dec.Block {
+		t.Fatalf("a list-form path outside must be gated, got %+v", dec)
+	}
+	if got.ReadScope != outside {
+		t.Errorf("offered = %q, want %q", got.ReadScope, outside)
+	}
+	// Several entries resolve like several shell operands: the finest wins.
+	if dec := gate(context.Background(), listCall(outside, sub)); dec == nil || !dec.Block {
+		t.Fatalf("a list holding a subtree must be gated, got %+v", dec)
+	}
+	if got.ReadScope != sub {
+		t.Errorf("offered = %q, want the subtree %q", got.ReadScope, sub)
+	}
+	if asked != 2 {
+		t.Errorf("asked %d times, want 2", asked)
+	}
+	// A list that stays inside the workspace is not a boundary question.
+	if dec := gate(context.Background(), listCall("internal", "internal/judge")); dec != nil {
+		t.Errorf("an in-workspace list was gated (%+v), want silent", dec)
+	}
+}

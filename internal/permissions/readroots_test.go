@@ -184,6 +184,11 @@ func TestReadScopeCandidate(t *testing.T) {
 		{"the top of a named tree is not stepped over", proj, proj},
 		{"a file is offered as its directory", file, proj},
 		{"a path that does not exist is treated as a file", filepath.Join(proj, "gone.go"), proj},
+		// A glob names entries of a directory, so the grant that covers it is
+		// the deepest directory that exists above the pattern — the pattern's
+		// own parent would spell a directory named `*` that matches nothing.
+		{"a glob is offered as its live parent", filepath.Join(sub, "*", "*.go"), sub},
+		{"a glob below a missing tree walks up", filepath.Join(proj, "gone", "*"), proj},
 		{"a file in $HOME offers nothing", filepath.Join(home, "notes.md"), ""},
 		{"$HOME itself offers nothing", home, ""},
 		{"the filesystem root offers nothing", string(filepath.Separator), ""},

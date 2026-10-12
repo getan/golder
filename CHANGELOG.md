@@ -760,6 +760,28 @@ interactive REPL/TUI.
   (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
+- **`~/…` operands are asked about, and a multi-operand read is offered its
+  finest directory**: two holes in the read-scope gate, both surfaced by one
+  session. The shell expands a leading unquoted `~` itself, but the scanner read
+  the word literally, so `ls ~/Desktop` resolved against the workspace, looked
+  like an in-workspace read, and reached the user's home with no question asked
+  — while `ls /Users/<me>/Desktop` did ask. `expandTilde` now substitutes the
+  shell's own expansion for an operand whose leading tilde was written unquoted
+  (`~/x` and `~/"x"` expand, `"~/x"` does not, matching bash exactly; another
+  user's `~name` stays untouched), inside a shell's `-c` program too, where the
+  inner shell expands it the same way. Second: a call that names several paths
+  got one question built from whichever path came first, so `ls ~/work
+  ~/work/proj` offered `~/work` — and the session rung of that dialog hands over
+  the whole tree, so the coarse answer outlived the call. The gate now resolves
+  every operand and offers the finest directory among them (the first in command
+  order wins ties). The same pass found a third, silent hole: `grep` and `find`
+  accept `path` as a string **or a list**, and the gate decoded only the string
+  form, so an array argument failed that unmarshal and was read as "no path
+  here" — a list-form search outside the workspace was never asked about. Both
+  JSON shapes are read now, and their entries resolve like shell operands.
+  `permissions.ReadScopeCandidate` also covers a glob operand, which had no
+  directory of its own: `ls ~/work/*/*.go` offers the deepest existing directory
+  above the pattern instead of a name containing `*` that no grant could match.
 - **A 16-color terminal gets a readable status bar**: the bar draws a powerline
   ribbon whose fields are distinguished by their background blocks, and it assumed
   the terminal could show them. On a terminal detected as 16-color, the three
