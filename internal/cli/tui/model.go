@@ -873,6 +873,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.transcript.reflow()
 		return m, nil
 
+	case tea.ColorProfileMsg:
+		// The terminal's color capability decides how the status bar draws itself:
+		// its ribbon spends a distinct background per field, which needs 256 colors
+		// to keep the fields apart (see statusBar.SetColorProfile for what a
+		// 16-color approximation did instead). Bubble Tea detects the profile and
+		// sends this at startup, so the bar settles on the right form on the first
+		// frame it can.
+		m.statusBar.SetColorProfile(msg.Profile)
+		return m, nil
+
 	case tea.MouseWheelMsg:
 		// Mouse-wheel scrolling reaches the transcript viewport whether idle or
 		// running, so history stays scrollable with the wheel — not just PgUp/PgDn.

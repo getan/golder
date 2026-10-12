@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/getan/golder/internal/cli/ui"
 )
@@ -44,6 +45,15 @@ type statusBar struct {
 
 	// task is the current activity text (e.g. the running tool or turn state).
 	task string
+
+	// plain drops the powerline's filled blocks in favor of colored text on the
+	// terminal's own background. It is set from the terminal's color profile (see
+	// SetColorProfile): the ribbon spends one distinct background per segment, and
+	// a 16-color terminal cannot supply them — its palette maps the blocks onto a
+	// single color, which is how model, thinking level and path all came out the
+	// same shade with the separators between them invisible. Fewer colors means
+	// less to draw with, not a worse version of the same picture.
+	plain bool
 }
 
 // newStatusBar builds a status bar from the theme, resolved Options, and the
@@ -61,6 +71,17 @@ func newStatusBar(theme Theme, opts Options, cwd string) statusBar {
 
 // SetGit stores the latest git probe result.
 func (s *statusBar) SetGit(g gitInfoMsg) { s.git = g }
+
+// SetColorProfile records the terminal's color capability, choosing which of the
+// bar's two renderings to draw with. The ribbon spends one distinct background per
+// field; a 16-color terminal has sixteen colors in total and its own idea of what
+// each one looks like, so it cannot supply them. Approximating instead is what
+// painted the model, thinking level and path the same blue with the separators
+// between them invisible; below 256 the bar therefore drops the blocks and colors
+// the text.
+func (s *statusBar) SetColorProfile(p colorprofile.Profile) {
+	s.plain = p < colorprofile.ANSI256
+}
 
 // SetModel updates the displayed model name after a /model switch.
 func (s *statusBar) SetModel(model string) { s.model = model }
@@ -151,17 +172,40 @@ const (
 
 	sbTaskFg = "231" // task text
 	sbTaskBg = "131" // task block (muted terracotta)
+
+	// The plain-mode foregrounds, one per field. These are the first sixteen ANSI
+	// indexes, which every terminal defines and every profile can express, so the
+	// fields stay distinguishable by color alone when the blocks are gone. They
+	// are picked to differ in hue rather than in brightness, since the terminal's
+	// theme decides how light each one is.
+	sbPlainApp   = "15" // bright white
+	sbPlainGit   = "10" // bright green
+	sbPlainModel = "13" // bright magenta
+	sbPlainThink = "12" // bright blue
+	sbPlainCwd   = "14" // bright cyan
+	sbPlainCtx   = "11" // bright yellow
+	sbPlainTask  = "9"  // bright red
 )
+
+// sepPlain joins the fields in plain mode. A dim bullet reads as a separator
+// without competing with the labels, and — unlike the ribbon's arrow, which is
+// drawn in a block's own color — it needs no second color to be visible.
+const sepPlain = " · "
 
 // segment is one labelled field of the bar together with its colors and
 // truncation priority. bg == "" means the segment sits on the bar background;
 // a non-empty bg gives it a filled powerline block. Higher priority survives
 // longer when the terminal is too narrow.
 type segment struct {
-	text     string
-	fg       string
-	bg       string // "" => bar background
-	priority int    // larger = kept longer under truncation
+	text string
+	fg   string
+	bg   string // "" => bar background
+	// plainFg colors the segment's TEXT when the bar is in plain mode, where
+	// there are no blocks to distinguish fields by. It is one of the sixteen ANSI
+	// colors (indexes 0-15), so the terminal's own theme decides the shade and the
+	// color survives both the 16-color and the 256-color profile unchanged.
+	plainFg  string
+	priority int // larger = kept longer under truncation
 }
 
 // Priority order (SPEC: task > model/app > token > git > cwd). Higher is more
@@ -175,20 +219,26 @@ const (
 	prioTask  = 4
 )
 
-// Render lays the bar out to exactly the configured width as a colored powerline
-// ribbon. Each segment is a filled block joined to the next by an arrow drawn in
-// the left block's background color, and the tail is padded with the bar
-// background so the whole row is filled. When the ribbon would exceed the width
-// it drops whole segments from lowest to highest priority; if even the single
-// highest-priority segment still overflows it hard-truncates that segment's
-// text. The rendered row's display width (ui.Width, which ignores ANSI) is
-// always exactly width for width > 0; a non-positive width yields the empty
-// string.
+// Render lays the bar out to exactly the configured width, in one of two forms.
+// The ribbon (the default) draws each segment as a filled block joined to the next
+// by an arrow in the left block's background color, padded with the bar
+// background; the plain form (below 256 colors) draws the same fields as colored
+// text joined by a separator. Both take their fields, order and priorities from
+// segments(), so the two forms differ only in what they paint with.
+//
+// Either way a bar too wide for the terminal drops whole segments from lowest to
+// highest priority, and if even the single highest-priority segment still
+// overflows its text is truncated. The rendered row's display width (ui.Width,
+// which ignores ANSI) is always exactly width for width > 0; a non-positive width
+// yields the empty string.
 func (s statusBar) Render(width int) string {
 	if width <= 0 {
 		return ""
 	}
 
+	if s.plain {
+		return s.renderPlain(width)
+	}
 	segs := s.segments()
 	for len(segs) > 0 {
 		ribbon, w := renderRibbon(segs)
@@ -252,6 +302,48 @@ func renderRibbon(segs []segment) (string, int) {
 	return b.String(), vis
 }
 
+// renderPlain draws the bar for a terminal with fewer than 256 colors: the same
+// fields as colored text on the terminal's own background, joined by a separator.
+//
+// It reuses the ribbon's truncation policy — drop whole segments lowest-priority
+// first, then truncate the last one's text — so the two forms agree about what is
+// important, and it pads with unstyled spaces rather than the bar background,
+// because painting a background is the thing this form exists to avoid.
+func (s statusBar) renderPlain(width int) string {
+	segs := s.segments()
+	for len(segs) > 0 {
+		line, w := s.plainLine(segs)
+		if w <= width {
+			return line + strings.Repeat(" ", width-w)
+		}
+		if len(segs) == 1 {
+			break
+		}
+		segs = dropLowest(segs)
+	}
+	// Even one field overflows: truncate its text, keeping its color.
+	seg := segs[0]
+	text := TruncateToWidth(seg.text, width)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(seg.plainFg)).Render(text)
+}
+
+// plainLine renders segs and reports their display width. Each field keeps its
+// own color; the separator between them is dim, so it separates without
+// competing with the labels.
+func (s statusBar) plainLine(segs []segment) (string, int) {
+	var b strings.Builder
+	vis := 0
+	for i, seg := range segs {
+		if i > 0 {
+			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorGray)).Render(sepPlain))
+			vis += ui.Width(sepPlain)
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(seg.plainFg)).Render(seg.text))
+		vis += ui.Width(seg.text)
+	}
+	return b.String(), vis
+}
+
 // barPad returns n spaces painted with the bar background so the row fills the
 // full terminal width. n <= 0 yields the empty string.
 func barPad(n int) string {
@@ -269,27 +361,27 @@ func (s statusBar) segments() []segment {
 	var segs []segment
 
 	// App badge leads the bar as a filled block.
-	segs = append(segs, segment{text: appName, fg: sbAppFg, bg: sbAppBg, priority: prioApp})
+	segs = append(segs, segment{text: appName, fg: sbAppFg, bg: sbAppBg, plainFg: sbPlainApp, priority: prioApp})
 
 	if s.git.ok {
-		segs = append(segs, segment{text: s.gitText(), fg: sbGitFg, bg: sbGitBg, priority: prioGit})
+		segs = append(segs, segment{text: s.gitText(), fg: sbGitFg, bg: sbGitBg, plainFg: sbPlainGit, priority: prioGit})
 	}
 	if s.model != "" {
-		segs = append(segs, segment{text: glyphModel + " " + s.model, fg: sbModelFg, bg: sbModelBg, priority: prioModel})
+		segs = append(segs, segment{text: glyphModel + " " + s.model, fg: sbModelFg, bg: sbModelBg, plainFg: sbPlainModel, priority: prioModel})
 	}
 	if s.thinking != "" {
 		// Thinking rides with the model priority — it is cheap and contextual.
-		segs = append(segs, segment{text: glyphThink + " " + s.thinking, fg: sbThinkFg, bg: sbThinkBg, priority: prioModel})
+		segs = append(segs, segment{text: glyphThink + " " + s.thinking, fg: sbThinkFg, bg: sbThinkBg, plainFg: sbPlainThink, priority: prioModel})
 	}
 	if s.cwd != "" {
-		segs = append(segs, segment{text: glyphCwd + " " + s.cwd, fg: sbCwdFg, bg: sbCwdBg, priority: prioCwd})
+		segs = append(segs, segment{text: glyphCwd + " " + s.cwd, fg: sbCwdFg, bg: sbCwdBg, plainFg: sbPlainCwd, priority: prioCwd})
 	}
 	if s.contextPct >= 0 {
 		// The context readout is the highlighted amber block on the right.
-		segs = append(segs, segment{text: s.ctxText(), fg: sbCtxFg, bg: sbCtxBg, priority: prioToken})
+		segs = append(segs, segment{text: s.ctxText(), fg: sbCtxFg, bg: sbCtxBg, plainFg: sbPlainCtx, priority: prioToken})
 	}
 	if s.task != "" {
-		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, priority: prioTask})
+		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, plainFg: sbPlainTask, priority: prioTask})
 	}
 	return segs
 }

@@ -760,6 +760,20 @@ interactive REPL/TUI.
   (bare, it reports the current level), and the action's own hint now names it.
 
 ### Fixed
+- **A 16-color terminal gets a readable status bar**: the bar draws a powerline
+  ribbon whose fields are distinguished by their background blocks, and it assumed
+  the terminal could show them. On a terminal detected as 16-color, the three
+  blocks for the model, the reasoning level and the path were all approximated to
+  the same blue — bright white on a blue the terminal's own theme defines, which is
+  hard to read and makes the three fields indistinguishable — and the arrows
+  between blocks became blue-on-blue and vanished. A block palette needs 256
+  colors; below that the bar now drops the blocks entirely and colors each field's
+  text with one of the sixteen ANSI colors (hue-distinct, so they stay apart on any
+  theme), joined by a dim separator that needs no second color to be visible. The
+  form is chosen from the terminal's reported profile (`tea.ColorProfileMsg`),
+  falls back to the ribbon when nothing is reported, and both forms take their
+  fields, order and truncation priorities from one place, so a narrow bar drops
+  the same segments either way.
 - **An exploration cell settles on `Explored` again**: a `• Explored` cell whose
   calls had all finished is folded into the committed prefix and rendered once
   from that stored wrap. The next turn's first search folds into the same
