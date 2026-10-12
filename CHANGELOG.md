@@ -12,6 +12,23 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Every built-in command's usage is one field, and a test holds it there**: a
+  command's grammar lived in two places — an `ArgumentHint` (which `/help` and the
+  REPL's completion render, and which the popup now renders too) and, for the
+  commands that never declared one, as a trailing `: /name [args]` inside the
+  description. Fifteen of the twenty-one built-ins were in the second shape, so
+  the popup could only show usage for the six that had a hint, and the rest were
+  sentence-plus-usage run-ons everywhere they appeared. All of them now declare
+  their grammar as a hint and keep a sentence for a description, including
+  `/proxy`, whose usage was lost outright when its description was trimmed.
+  `usage_convention_test.go` is what keeps it: no built-in description may name
+  its own command or spell a `--flag`, every hint must be bracketed usage rather
+  than prose, the set of commands that take arguments is pinned so a new argument
+  cannot ship without a hint, and `/help` must print each of the two fields
+  exactly once. The usage line a command answers a bad argument with is composed
+  from the same hint (a shared `usageLine`), so the grammar the user is taught
+  after a typo and the grammar the popup advertises cannot be two spellings;
+  `/btw`'s message stops repeating its own description while it is at it.
 - **`/trust list` and `/permissions list` show every grant, not just the ones in
   force here**: the two halves of the permission state — per-directory trust
   (`trust.json`) and the sandbox writable/readable roots (`permissions.toml` plus

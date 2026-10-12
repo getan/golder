@@ -217,6 +217,11 @@ func readLineOrSignal(in *bufio.Reader, sigCh <-chan os.Signal) (string, error) 
 	}
 }
 
+// trustArgumentHint is /trust's grammar, named because the command's own error
+// composes its usage line from it — one list, so a new subcommand cannot appear
+// in the hint while the usage line still teaches the old one.
+const trustArgumentHint = "[on|off|once|status|list]"
+
 // RegisterCommand installs the /trust action command, which saves or
 // reports the current project's trust decision. It is an instance built-in
 // (AddBuiltin) because its closure captures the trust manager and cwd - state
@@ -227,13 +232,10 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 		return
 	}
 	reg.AddBuiltin(runtime.SlashCommand{
-		Name:        "trust",
-		Category:    runtime.CategoryPermissions,
-		Description: "view or set this project's trust",
-		// The hint is what the popup and /help print for the arguments, and what
-		// the usage line below must agree with: one list, or the two disagree the
-		// moment a case is added here.
-		ArgumentHint: "[on|off|once|status|list]",
+		Name:         "trust",
+		Category:     runtime.CategoryPermissions,
+		Description:  "view or set this project's trust",
+		ArgumentHint: trustArgumentHint,
 		Action: func(args string) string {
 			switch strings.TrimSpace(strings.ToLower(args)) {
 			case "", "on":
@@ -267,7 +269,7 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 			case "list":
 				return trustReport(mgr, cwd)
 			default:
-				return "usage: /trust [on|off|once|status|list]  (default: on)"
+				return "usage: /trust " + trustArgumentHint + "  (default: on)"
 			}
 		},
 	})

@@ -686,28 +686,36 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	// read/swap the active session/leaf — none of which a string→string Action
 	// closure can do). They are registered here only so /help lists them; the
 	// empty Action is a placeholder and both front-ends intercept them first.
-	for _, c := range []struct{ name, desc, category string }{
-		{"exit", "exit golder", runtime.CategoryGeneral},
-		{"compact", "compact the conversation context now", runtime.CategorySession},
-		{"fork", "branch from a historical message into a new session: /fork [n]", runtime.CategorySession},
-		{"clone", "duplicate the current session into an independent branch", runtime.CategorySession},
-		{"tree", "show the session branch tree; switch the active branch: /tree [n]", runtime.CategorySession},
-		{"rewind", "roll files and the conversation back to before an earlier turn: /rewind [n]", runtime.CategorySession},
-		{"export", "export the session to a file: /export [path.jsonl|path.html]", runtime.CategorySession},
-		{"import", "import a JSONL export as a new session: /import <path.jsonl>", runtime.CategorySession},
-		{"resume", "switch session: /resume [n|id] (bare lists this project's recent sessions; --all lists every project)", runtime.CategorySession},
-		{"status", "show session status: session, runtime config, context, credentials, environment", runtime.CategoryGeneral},
-		{"memory", "show the persistent-memory report", runtime.CategoryMemory},
-		{"dream", "consolidate memory now (dedupe, merge, prune, distill); /dream --dry-run previews without writing", runtime.CategoryMemory},
-		{"goal", "run autonomously toward a goal: /goal [--tokens N] <objective> | pause | resume | clear", runtime.CategoryModes},
-		{"btw", "ask a quick side question without touching the main conversation: /btw <question> (bare /btw reopens the last one)", runtime.CategoryModes},
-		{"remote-control", "mirror this session to a phone/browser on your LAN: /remote-control [stop|status]", runtime.CategoryModes},
+	//
+	// name/hint/description are three fields because they are three different
+	// things to three different readers (see the builtinUsage convention test):
+	// the hint is the signature the user types, the description is the sentence
+	// they read, and a description that had to carry usage was the shape that made
+	// /permissions print a hand-written "…" as if it were a renderer's ellipsis.
+	// An empty hint means the command takes no arguments.
+	for _, c := range []struct{ name, hint, desc, category string }{
+		{"exit", "", "exit golder", runtime.CategoryGeneral},
+		{"compact", "", "compact the conversation context now", runtime.CategorySession},
+		{"fork", "[n]", "branch from a historical message into a new session", runtime.CategorySession},
+		{"clone", "", "duplicate the current session into an independent branch", runtime.CategorySession},
+		{"tree", "[n]", "show the session branch tree, or switch the active branch", runtime.CategorySession},
+		{"rewind", "[n]", "roll files and the conversation back to before an earlier turn", runtime.CategorySession},
+		{"export", "[path.jsonl|path.html]", "export the session to a file", runtime.CategorySession},
+		{"import", "<path.jsonl>", "import a JSONL export as a new session", runtime.CategorySession},
+		{"resume", "[--all] [n|id]", "switch session (bare, it lists this project's recent sessions)", runtime.CategorySession},
+		{"status", "", "show session status (session, runtime config, context, credentials, environment)", runtime.CategoryGeneral},
+		{"memory", "", "show the persistent-memory report", runtime.CategoryMemory},
+		{"dream", "[--dry-run]", "consolidate memory now (dedupe, merge, prune, distill)", runtime.CategoryMemory},
+		{"goal", "[--tokens N] <objective> | pause | resume | clear", "run autonomously toward a goal", runtime.CategoryModes},
+		{"btw", "[question]", "ask a quick side question without touching the main conversation (bare, it reopens the last one)", runtime.CategoryModes},
+		{"remote-control", "[stop|status]", "mirror this session to a phone/browser on your LAN", runtime.CategoryModes},
 	} {
 		reg.AddBuiltin(runtime.SlashCommand{
-			Name:        c.name,
-			Description: c.desc,
-			Category:    c.category,
-			Action:      func(string) string { return "" },
+			Name:         c.name,
+			ArgumentHint: c.hint,
+			Description:  c.desc,
+			Category:     c.category,
+			Action:       func(string) string { return "" },
 		})
 	}
 }
@@ -785,6 +793,24 @@ func joinThinkingLevels(levels []agentcore.ThinkingLevel) string {
 	return strings.Join(parts, "|")
 }
 
+// permissionsArgumentHint is /permissions' grammar. It is named because two
+// things print it — the registry advertises it as the command's hint, and the
+// action's own error composes the usage line from it — and a grammar typed twice
+// is a grammar that drifts.
+const permissionsArgumentHint = "[list | read-only|ask|auto|full-access | " +
+	"writable [list|add|rm] <path> | readable [list|add|rm] <path>]"
+
+// usageLine renders the "usage: /name <grammar>" (or its Chinese spelling) line a
+// command answers a bad argument with. It exists so that line and the command's
+// advertised hint are the same bytes: a user who typed something wrong is being
+// taught the grammar, and the two spellings of it must not disagree.
+func usageLine(name, hint, lang string) string {
+	if lang == "zh" {
+		return "用法：/" + name + " " + hint
+	}
+	return "usage: /" + name + " " + hint
+}
+
 // RegisterPermissionCommand installs the /permissions action command: with an
 // argument it switches the live approval mode (read-only / ask / auto /
 // full-access); with none it lists the modes and marks the current one. The
@@ -807,7 +833,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
 		Description:  "show or switch the approval mode, or manage the remembered path grants",
-		ArgumentHint: "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
+		ArgumentHint: permissionsArgumentHint,
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
@@ -853,10 +879,11 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 			}
 			m, ok := permissions.Parse(arg)
 			if !ok {
-				if l == "zh" {
-					return "用法：/permissions [list | read-only|ask|auto|full-access | writable [add|rm] <路径>]"
-				}
-				return "usage: /permissions [list | read-only|ask|auto|full-access | writable [add|rm] <path>]"
+				// Composed from the registry's own hint, so the line the user gets
+				// after a typo is the grammar the popup and /help advertise. Typed
+				// twice, these drifted: the hint learned `list` and the error line
+				// did not.
+				return usageLine("permissions", permissionsArgumentHint, l)
 			}
 			if st != nil {
 				st.Set(m)

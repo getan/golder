@@ -2693,7 +2693,7 @@ func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
 		m.input.Clear()
 		m.menu.close()
 		if m.session.lastBtw == nil {
-			m.transcript.addSystem("usage: /btw <question> — ask a quick side question without touching the main conversation")
+			m.transcript.addSystem("usage: /btw [question]")
 			m.relayout()
 			return m, nil
 		}

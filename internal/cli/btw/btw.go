@@ -76,7 +76,12 @@ func RunBtw(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, ed
 		// Bare /btw: reopen the most recent side thread if one exists this process,
 		// replaying its history; otherwise guide the user to supply a question.
 		if host.LastBtw() == nil {
-			fmt.Fprintln(out, "usage: /btw <question> — ask a quick side question without touching the main conversation")
+			// The grammar only: what /btw does is the command's description, which
+			// the popup and /help already print, and repeating it here was how the
+			// two spellings of "what this command is" started to drift (this line
+			// said "<question>" where the hint says "[question]" — the argument is
+			// optional overall, required only when there is no thread to reopen).
+			fmt.Fprintln(out, "usage: /btw [question]")
 			return
 		}
 		printBtwHeader(out)

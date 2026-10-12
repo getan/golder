@@ -63,11 +63,16 @@ func ProxyProvidersSelectedFirst(selected []string) []provider.ProviderSpec {
 	return specs
 }
 
+// proxyArgumentHint is /proxy's grammar, named because the command's own error
+// composes its usage line from it (see usageLine).
+const proxyArgumentHint = "[<provider> on|off | url <url>]"
+
 func registerProxyCommand(reg *runtime.SlashRegistry) {
 	reg.AddBuiltin(runtime.SlashCommand{
-		Name:        "proxy",
-		Category:    runtime.CategoryModel,
-		Description: "choose which providers use the proxy",
+		Name:         "proxy",
+		Category:     runtime.CategoryModel,
+		Description:  "choose which providers use the proxy",
+		ArgumentHint: proxyArgumentHint,
 		Action: func(args string) string {
 			cfg, err := provider.ProxySettings()
 			if err != nil {
@@ -92,7 +97,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 				return b.String()
 			}
 			if len(fields) != 2 {
-				return "usage: /proxy | /proxy <provider> on|off | /proxy url <url>"
+				return usageLine("proxy", proxyArgumentHint, "en")
 			}
 			message := ""
 			if fields[0] == "url" {

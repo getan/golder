@@ -1,0 +1,192 @@
+package prompts
+
+// The built-in slash commands follow one convention for how they describe
+// themselves, and these tests are what hold it: a command's USAGE lives in
+// ArgumentHint, and its DESCRIPTION is a sentence about what it does.
+//
+// The rule exists because three surfaces render the same two fields (the popup,
+// /help, the REPL's completion label), so usage written into a description is
+// usage that can only be shown in the one place there is room for it — and once
+// it is prose, nothing keeps it true. That is how /permissions came to carry a
+// hand-written "…" abbreviation that users read as a rendering bug, and how
+// /trust came to have no discoverable arguments at all once its description was
+// trimmed back to a sentence.
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/trust"
+)
+
+// builtinRegistry assembles every built-in a session can have, in the same order
+// the front-ends do: the shared registry, then the two instance built-ins whose
+// closures need state (/permissions carries the live approval mode, /trust the
+// manager).
+func builtinRegistry(t *testing.T) *runtime.SlashRegistry {
+	t.Helper()
+	reg, err := BuildSlashRegistry(nil, nil, nil, nil, PromptTemplateSources{Disable: true})
+	if err != nil {
+		t.Fatalf("BuildSlashRegistry: %v", err)
+	}
+	RegisterPermissionCommand(reg, permissions.New(permissions.Auto), nil)
+	mgr, err := trust.NewManager("")
+	if err != nil {
+		t.Fatalf("trust.NewManager: %v", err)
+	}
+	trust.RegisterCommand(reg, mgr, "/tmp")
+	return reg
+}
+
+// TestBuiltinDescriptionsDoNotCarryUsage is the smell detector. A description
+// that names its own command, or spells a --flag, is usage that has leaked out of
+// the hint: it will read as a run-on sentence everywhere the description is
+// shown, and it cannot be kept in sync with the code that parses the arguments.
+func TestBuiltinDescriptionsDoNotCarryUsage(t *testing.T) {
+	reg := builtinRegistry(t)
+	for _, c := range reg.List() {
+		if c.Source != runtime.SourceBuiltin {
+			continue
+		}
+		if strings.Contains(c.Description, "/"+c.Name) {
+			t.Errorf("/%s description names itself (%q): usage belongs in ArgumentHint",
+				c.Name, c.Description)
+		}
+		for _, field := range strings.Fields(c.Description) {
+			if strings.HasPrefix(field, "--") {
+				t.Errorf("/%s description carries the flag %q: flags are usage and belong in ArgumentHint",
+					c.Name, field)
+			}
+		}
+	}
+}
+
+// TestBuiltinHintsAreUsageShape: a hint is the signature the user types, so it is
+// bracketed like the frontmatter convention documents (`<angle>` required,
+// `[square]` optional). Prose in the hint field is the same bug pointing the
+// other way — it would be printed where the arguments go.
+func TestBuiltinHintsAreUsageShape(t *testing.T) {
+	reg := builtinRegistry(t)
+	for _, c := range reg.List() {
+		if c.Source != runtime.SourceBuiltin || c.ArgumentHint == "" {
+			continue
+		}
+		if !strings.HasPrefix(c.ArgumentHint, "[") && !strings.HasPrefix(c.ArgumentHint, "<") {
+			t.Errorf("/%s hint %q should open with [ or <: it is the signature, not a sentence",
+				c.Name, c.ArgumentHint)
+		}
+		if strings.ContainsAny(c.ArgumentHint, "\n") {
+			t.Errorf("/%s hint spans lines: %q", c.Name, c.ArgumentHint)
+		}
+	}
+}
+
+// TestBuiltinUsageInventory pins which built-ins take arguments. It is the
+// forcing function for the convention: a command that grows an argument must
+// declare it in the hint AND appear here, so forgetting the hint fails a test
+// instead of shipping an undiscoverable command (which is exactly how /trust lost
+// its arguments). Commands absent from this map are pinned as argument-less.
+func TestBuiltinUsageInventory(t *testing.T) {
+	want := map[string]string{
+		"proxy":          "[<provider> on|off | url <url>]",
+		"model":          "[n|id [level]|think level]",
+		"provider":       "[name]",
+		"permissions":    "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
+		"trust":          "[on|off|once|status|list]",
+		"fork":           "[n]",
+		"tree":           "[n]",
+		"rewind":         "[n]",
+		"export":         "[path.jsonl|path.html]",
+		"import":         "<path.jsonl>",
+		"resume":         "[--all] [n|id]",
+		"dream":          "[--dry-run]",
+		"goal":           "[--tokens N] <objective> | pause | resume | clear",
+		"btw":            "[question]",
+		"remote-control": "[stop|status]",
+	}
+	reg := builtinRegistry(t)
+	got := map[string]string{}
+	for _, c := range reg.List() {
+		if c.Source != runtime.SourceBuiltin {
+			continue
+		}
+		if c.ArgumentHint != "" {
+			got[c.Name] = c.ArgumentHint
+		}
+	}
+	for name, hint := range want {
+		switch g, ok := got[name]; {
+		case !ok:
+			t.Errorf("/%s should declare usage %q but has no hint", name, hint)
+		case g != hint:
+			t.Errorf("/%s hint = %q, want %q", name, g, hint)
+		}
+	}
+	for name, hint := range got {
+		if _, ok := want[name]; !ok {
+			t.Errorf("/%s declares usage %q but is not in the inventory: add it here (and to the command's own docs) if it really takes arguments",
+				name, hint)
+		}
+	}
+}
+
+// TestHelpRendersHintAndDescriptionOnce each: the two fields are printed side by
+// side, so a hint that repeats the description (or a description that repeats the
+// hint) is visible as duplication in the one listing users read to learn the
+// commands. This is the assertion that would have caught usage written into both.
+func TestHelpRendersHintAndDescriptionOnce(t *testing.T) {
+	reg := builtinRegistry(t)
+	out, err := reg.ResolveOutcome("/help")
+	if err != nil {
+		t.Fatalf("ResolveOutcome /help: %v", err)
+	}
+	for _, c := range reg.List() {
+		if c.Source != runtime.SourceBuiltin || c.ArgumentHint == "" {
+			continue
+		}
+		// The line for this command must mention each field exactly once.
+		var line string
+		for _, ln := range strings.Split(out.Message, "\n") {
+			if strings.Contains(ln, "/"+c.Name+" ") {
+				line = ln
+				break
+			}
+		}
+		if line == "" {
+			t.Errorf("/help does not list /%s", c.Name)
+			continue
+		}
+		for _, field := range []string{c.ArgumentHint, c.Description} {
+			if n := strings.Count(line, field); n != 1 {
+				t.Errorf("/help line for /%s prints %q %d times, want once:\n%s", c.Name, field, n, line)
+			}
+		}
+	}
+}
+
+// TestUsageLinesAgreeWithHints: the line a command answers a bad argument with is
+// the same grammar the popup and /help advertise. These were typed twice for
+// every command that has both, and they drifted the moment a subcommand was added
+// to one and not the other — the hint learned `list` while the error line still
+// taught the old list. The commands whose usage line lives in this package are
+// asserted here; the ones whose parse lives in a front-end (which owns its own
+// error text) are covered by TestBuiltinUsageInventory.
+func TestUsageLinesAgreeWithHints(t *testing.T) {
+	reg := builtinRegistry(t)
+	for _, tc := range []struct{ name, badArg string }{
+		{"permissions", "bogus-mode"},
+		{"trust", "bogus-verb"},
+		{"proxy", "one-arg-only"},
+	} {
+		cmd, ok := reg.Lookup(tc.name)
+		if !ok {
+			t.Fatalf("/%s not registered", tc.name)
+		}
+		msg := cmd.Action(tc.badArg)
+		if !strings.Contains(msg, cmd.ArgumentHint) {
+			t.Errorf("/%s usage line should print the hint %q, got %q", tc.name, cmd.ArgumentHint, msg)
+		}
+	}
+}
