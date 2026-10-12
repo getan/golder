@@ -65,7 +65,7 @@ func TestProviderPickerShowsBaseURLAtNormalWidth(t *testing.T) {
 			t.Errorf("picker missing %q at 80 columns", want)
 		}
 	}
-	if strings.Count(view, "\n")+1 != m.menu.rows() {
+	if strings.Count(view, "\n")+1 != m.menu.rows(80) {
 		t.Fatal("picker reserved height does not match detail area")
 	}
 }

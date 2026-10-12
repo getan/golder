@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -373,5 +374,188 @@ func TestSlashMenuPickerRowStructure(t *testing.T) {
 	// style that made the old list read as one dim blob.
 	if strings.Contains(raw, DefaultTheme().System.Render("deepseek")) {
 		t.Errorf("non-selected rows must not render in the dim system style:\n%q", raw)
+	}
+}
+
+// longDescText is the kind of description the report was about: a built-in that
+// names its own subcommands and therefore runs well past one row.
+const longDescText = "show or switch the approval mode, or manage the remembered path grants: " +
+	"/permissions [read-only|ask|auto|full-access|writable|readable …]"
+
+// skillDescText is the other population: a paragraph, of the length an extension's
+// frontmatter description legitimately has.
+const skillDescText = "Use when the user asks for a diagram, a map of a system, or any visual " +
+	"explanation: renders it as standalone HTML with inline SVG, picks a dark palette, and " +
+	"writes the file next to the docs it documents."
+
+// descCommand builds a built-in candidate (the 4-line tier).
+func descCommand(name, desc string) runtime.SlashCommand {
+	return runtime.SlashCommand{Name: name, Description: desc, Action: func(string) string { return "" }}
+}
+
+// TestSlashMenuWrapsHighlightedDescription is the fix for "the comment is too
+// long and just gets an ellipsis": the highlighted candidate shows its whole
+// description, wrapped onto continuation lines that hang under its description
+// column, so the row being considered is readable where it sits.
+func TestSlashMenuWrapsHighlightedDescription(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(descCommand("permissions", longDescText))
+	m = typeInto(t, m, "/perm").(Model)
+
+	plain := stripANSI(m.menu.view(80))
+	// Reassembling the lines must give back the description word for word — the
+	// proof that nothing was cut. (An ellipsis check would prove nothing here: this
+	// description ends with one of its own, in the usage hint.)
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(plain, "\n", " ")), " ")
+	if !strings.HasSuffix(flat, strings.Join(strings.Fields(longDescText), " ")) {
+		t.Errorf("wrapped description is not the original text:\n%s", plain)
+	}
+	// Continuation lines hang under the description column (the two-column caret
+	// gutter plus the "/name  " column), keeping the "/name" column clear so the
+	// block still reads as one row.
+	hanging := "  " + strings.Repeat(" ", ui.Width("/permissions  "))
+	for i, line := range strings.Split(plain, "\n") {
+		// Line 0 is the category header; the row's own first line carries the caret.
+		if i == 0 || strings.HasPrefix(line, "› ") {
+			continue
+		}
+		if !strings.HasPrefix(line, hanging) {
+			t.Errorf("continuation line %d does not hang under the description column: %q", i, line)
+		}
+	}
+}
+
+// TestSlashMenuTruncatesUnselectedLongDescription: only the highlighted row is
+// wrapped. The others keep the single ellipsized line, which is what stops a list
+// of long descriptions from turning the popup into a wall of text.
+func TestSlashMenuTruncatesUnselectedLongDescription(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(descCommand("permissions", longDescText))
+	m.slash.AddBuiltin(descCommand("permalink", longDescText))
+	m = typeInto(t, m, "/perm").(Model)
+	if len(m.menu.filtered) < 2 {
+		t.Fatalf("need two candidates, got %d", len(m.menu.filtered))
+	}
+
+	plain := stripANSI(m.menu.view(80))
+	selected := m.menu.filtered[m.menu.selected].Name
+	for _, c := range m.menu.filtered {
+		if c.Name == selected {
+			continue
+		}
+		var line string
+		for _, ln := range strings.Split(plain, "\n") {
+			if strings.Contains(ln, "/"+c.Name) {
+				line = ln
+			}
+		}
+		if line == "" {
+			t.Fatalf("unselected row /%s missing from:\n%s", c.Name, plain)
+		}
+		if !strings.Contains(line, ellipsis) {
+			t.Errorf("unselected long row should stay one ellipsized line: %q", line)
+		}
+	}
+}
+
+// TestSlashMenuRowHeightSurvivesWrapping pins the layout contract the wrapped row
+// depends on: rows(width) counts exactly the lines view(width) draws, or the model
+// would reserve the wrong height and the popup would overlap whatever sits above
+// it (or leave a gap). Each drawn line must also fit the row width.
+func TestSlashMenuRowHeightSurvivesWrapping(t *testing.T) {
+	for _, tc := range []struct {
+		name, desc string
+		add        func(*runtime.SlashRegistry, runtime.SlashCommand)
+	}{
+		{"built-in", longDescText, (*runtime.SlashRegistry).AddBuiltin},
+		{"extension", skillDescText, (*runtime.SlashRegistry).AddSkill},
+	} {
+		for _, w := range []int{100, 80, 60, 40, 24} {
+			m := NewModel(Options{})
+			tc.add(m.slash, descCommand("permissions", tc.desc))
+			m = typeInto(t, m, "/perm").(Model)
+
+			view := m.menu.view(w)
+			if got := strings.Count(view, "\n") + 1; got != m.menu.rows(w) {
+				t.Errorf("%s width %d: drawn lines = %d, rows() = %d", tc.name, w, got, m.menu.rows(w))
+			}
+			// The drawn line includes the two-column caret / indent gutter, so the
+			// full terminal width is the budget — the popup may never exceed it.
+			for _, line := range strings.Split(stripANSI(view), "\n") {
+				if ui.Width(line) > w {
+					t.Errorf("%s width %d: line exceeds the terminal width: %q", tc.name, w, line)
+				}
+			}
+		}
+	}
+}
+
+// TestSlashMenuNarrowTerminalKeepsOneLine: below the width where a hanging column
+// holds readable text, the row stays the single ellipsized line rather than
+// becoming a narrow well of chopped words.
+func TestSlashMenuNarrowTerminalKeepsOneLine(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(descCommand("permissions", longDescText))
+	m = typeInto(t, m, "/perm").(Model)
+
+	view := stripANSI(m.menu.view(20))
+	if !strings.Contains(view, ellipsis) {
+		t.Errorf("a too-narrow terminal should keep the one-line ellipsized row:\n%s", view)
+	}
+	if got := strings.Count(view, "\n") + 1; got != m.menu.rows(20) {
+		t.Errorf("drawn lines = %d, rows() = %d", got, m.menu.rows(20))
+	}
+}
+
+// TestSlashMenuDescCapTiersBySource pins the split the two populations asked for:
+// a built-in's description may fill four lines, an extension's only two — a skill
+// or template description is frontmatter written for the system prompt, so the
+// menu previews it rather than printing a paragraph. Both are cut with an ellipsis
+// past their cap, so neither can push the composer off the screen.
+func TestSlashMenuDescCapTiersBySource(t *testing.T) {
+	// The same paragraph, registered both ways, so the only variable is the source.
+	paragraph := strings.Repeat("word ", 200)
+	read := func(add func(*runtime.SlashRegistry, runtime.SlashCommand)) string {
+		m := NewModel(Options{})
+		add(m.slash, descCommand("permissions", paragraph))
+		m = typeInto(t, m, "/perm").(Model)
+		return stripANSI(m.menu.view(80))
+	}
+
+	builtin := read((*runtime.SlashRegistry).AddBuiltin)
+	if got := strings.Count(builtin, "\n") + 1; got != 1+maxBuiltinDescLines {
+		t.Errorf("built-in description lines = %d, want %d:\n%s", got, 1+maxBuiltinDescLines, builtin)
+	}
+	if !strings.Contains(builtin, ellipsis) {
+		t.Errorf("a built-in description past its cap should end with an ellipsis:\n%s", builtin)
+	}
+
+	ext := read((*runtime.SlashRegistry).AddSkill)
+	if got := strings.Count(ext, "\n") + 1; got != 1+maxExtensionDescLines {
+		t.Errorf("extension description lines = %d, want %d:\n%s", got, 1+maxExtensionDescLines, ext)
+	}
+	if !strings.Contains(ext, ellipsis) {
+		t.Errorf("an extension description past its cap should end with an ellipsis:\n%s", ext)
+	}
+
+	// The cap follows the source, not the name: a user template is capped like a
+	// skill, and a built-in keeps its four lines even when it shares a name.
+	if got := commandDescLineCap(descCommand("permissions", longDescText)); got != maxBuiltinDescLines {
+		t.Errorf("built-in cap = %d, want %d", got, maxBuiltinDescLines)
+	}
+	for _, add := range []func(*runtime.SlashRegistry, runtime.SlashCommand){
+		(*runtime.SlashRegistry).AddUser,
+		(*runtime.SlashRegistry).AddSkill,
+		(*runtime.SlashRegistry).AddPlugin,
+	} {
+		reg := runtime.NewSlashRegistry()
+		add(reg, descCommand("mine", longDescText))
+		c, ok := reg.Lookup("mine")
+		if !ok {
+			t.Fatal("command not registered")
+		}
+		if got := commandDescLineCap(c); got != maxExtensionDescLines {
+			t.Errorf("extension cap = %d, want %d", got, maxExtensionDescLines)
+		}
 	}
 }

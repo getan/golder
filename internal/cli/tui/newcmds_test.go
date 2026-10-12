@@ -238,8 +238,8 @@ func TestTUISlashMenuShowsCategoryHeaders(t *testing.T) {
 	}
 	// Every rendered line is accounted for by rows() so the layout reserves the
 	// right height.
-	if got := strings.Count(view, "\n") + 1; got != m.menu.rows() {
-		t.Errorf("rendered lines = %d, rows() = %d", got, m.menu.rows())
+	if got := strings.Count(view, "\n") + 1; got != m.menu.rows(80) {
+		t.Errorf("rendered lines = %d, rows(80) = %d", got, m.menu.rows(80))
 	}
 	// A filtered prefix keeps grouping: "m" narrows to Model and Memory.
 	m = typeInto(t, NewModel(Options{}), "/m").(Model)

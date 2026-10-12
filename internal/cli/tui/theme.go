@@ -219,6 +219,115 @@ func wrapLine(out *strings.Builder, line string, width int) {
 	}
 }
 
+// WrapToWidthWords wraps s like WrapToWidth, but breaks at spaces in preference
+// to breaking inside a word: prose that is wrapped for display ("show or switch
+// the approval mode") must not come out as "re/ad-only", which is what a pure
+// rune wrapper does to any word that straddles the column. A single word wider
+// than the line still breaks by rune — the fallback that keeps a long path, a
+// URL, or a run of CJK (which has no spaces at all) from overflowing. Existing
+// newlines are hard breaks, and runs of spaces collapse to one, since the callers
+// that need exact spacing (the transcript's own wrapping) use WrapToWidth.
+func WrapToWidthWords(s string, width int) string {
+	if width <= 0 {
+		return s
+	}
+	var out strings.Builder
+	for li, line := range strings.Split(s, "\n") {
+		if li > 0 {
+			out.WriteByte('\n')
+		}
+		wrapWordsLine(&out, line, width)
+	}
+	return out.String()
+}
+
+// wrapWordsLine wraps one newline-free line into out, greedy: each word joins the
+// current line when it fits with its leading space, and starts a new line when it
+// does not. A word that cannot fit on a line of its own is broken by
+// writeBrokenWord.
+func wrapWordsLine(out *strings.Builder, line string, width int) {
+	cur := 0
+	firstWord := true
+	for _, word := range strings.Fields(line) {
+		w := ui.Width(word)
+		if !firstWord {
+			if cur+1+w > width {
+				out.WriteByte('\n')
+				cur = 0
+			} else {
+				out.WriteByte(' ')
+				cur++
+			}
+		}
+		if cur == 0 && w > width {
+			// A word no line can hold: it starts a line of its own and is broken
+			// across as many as it needs. cur is 0 here — a word that did not fit
+			// after other text already started a fresh line above.
+			writeBrokenWord(out, word, width)
+			firstWord = false
+			continue
+		}
+		out.WriteString(word)
+		cur += w
+		firstWord = false
+	}
+}
+
+// writeBrokenWord writes one word that is wider than a whole line, breaking it
+// across lines of width columns.
+//
+// The break prefers punctuation over an arbitrary rune: a usage string comes out
+// as "[read-only|ask|auto|writable|" + "readable]" rather than splitting
+// "readable" mid-word, which is what a user reads anyway. When the word carries
+// none of those separators — a long path segment, a URL, a run of CJK — it falls
+// back to a rune boundary, the rule wrapLine applies to everything, so no line
+// can overflow whatever the input.
+func writeBrokenWord(out *strings.Builder, word string, width int) {
+	var buf []rune
+	cur := 0 // display width of buf
+	for _, r := range word {
+		rw := ui.Width(string(r))
+		if cur+rw > width {
+			if cut := lastBreakable(buf); cut > 0 {
+				out.WriteString(string(buf[:cut]))
+				out.WriteByte('\n')
+				buf = append(buf[:0], buf[cut:]...)
+			} else {
+				out.WriteString(string(buf))
+				out.WriteByte('\n')
+				buf = buf[:0]
+			}
+			cur = ui.Width(string(buf))
+		}
+		buf = append(buf, r)
+		cur += rw
+	}
+	out.WriteString(string(buf))
+}
+
+// breakableAfter reports whether a word too long for its line may be broken after
+// r. The set is the punctuation that already separates the pieces of a usage
+// string ("a|b"), a comma list, or a path — breaking there lands on a seam the
+// reader expects instead of inside a word.
+func breakableAfter(r rune) bool {
+	switch r {
+	case '|', ',', ';', '/', '-':
+		return true
+	}
+	return false
+}
+
+// lastBreakable returns the index just past the last breakable rune in buf, or 0
+// when it holds none.
+func lastBreakable(buf []rune) int {
+	for i := len(buf); i > 1; i-- {
+		if breakableAfter(buf[i-1]) {
+			return i
+		}
+	}
+	return 0
+}
+
 // TruncateToWidth returns s clipped to at most width display columns, appending
 // an ellipsis "…" when it removes content. Width is measured in terminal cells
 // (CJK and emoji count as two) via ui.Width, and truncation happens on rune

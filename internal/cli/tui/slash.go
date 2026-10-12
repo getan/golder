@@ -28,6 +28,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/prompts"
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -36,6 +37,41 @@ import (
 // filtered list scrolls a window around the selection so the overlay stays a few
 // lines tall regardless of how many commands are registered.
 const maxMenuRows = 8
+
+// Description line caps for the highlighted row: how many lines its description
+// may occupy (the row itself plus its wrapped continuation) before the tail is
+// cut with an ellipsis.
+//
+// The cap is tiered by source because the two populations are written for
+// different readers. A built-in description is ours, is written to be read in
+// this menu, and the longest (/permissions, 137 columns) still fits in four lines
+// down to a ~68-column terminal — so four is a backstop, not a cut users meet
+// routinely. An extension's description is frontmatter written for the system
+// prompt, where length costs nothing and nobody is scanning a list: a skill or
+// template body legitimately runs to a paragraph. Those get a two-line preview,
+// which is enough to say what the command is; the text the agent receives is
+// untouched, and whoever wants the rest can read the file it came from.
+const (
+	maxBuiltinDescLines   = 4
+	maxExtensionDescLines = 2
+)
+
+// commandDescLineCap returns the description line cap for a command. It keys off
+// the same source test CategoryOf uses to group commands, so "the Extensions
+// block" and "the two-line cap" are the same set by construction rather than by
+// two lists that could drift apart.
+func commandDescLineCap(c runtime.SlashCommand) int {
+	if c.Source != runtime.SourceBuiltin {
+		return maxExtensionDescLines
+	}
+	return maxBuiltinDescLines
+}
+
+// minCommandDescWidth is the narrowest description column worth wrapping into.
+// Under it the terminal is too narrow for a hanging column to hold anything
+// readable — a four-column well of chopped words is worse than the one-line row
+// it would replace — so the plain row stands.
+const minCommandDescWidth = 24
 
 // pickTone colors a picker badge or detail note by meaning: configured/ready
 // (green), needs attention (yellow), explanatory (gray), or plain.
@@ -287,6 +323,64 @@ func commandRowText(c runtime.SlashCommand) string {
 	return line
 }
 
+// commandRowLines renders one command candidate as display lines (plain: no
+// caret, no styling — the caller adds both). Every row is the single
+// "/name  description" line, cut with an ellipsis when it overflows. The
+// HIGHLIGHTED row instead wraps its description onto continuation lines
+// indented under its own description column, so the command the user is
+// actually considering shows its whole text.
+//
+// The asymmetry is the point. Aligning every description into a column, or
+// wrapping every row, would turn an eight-row list into a page and make the
+// common case — short descriptions you scan past — pay for the rare long one.
+// The ellipsis on the other rows still says "there is more here", and arrowing
+// onto one is how you read it. Past the cap for the command's own source
+// (commandDescLineCap) the tail is cut with an ellipsis, so neither a verbose
+// built-in nor a paragraph-long skill description can push the composer off the
+// screen.
+func commandRowLines(c runtime.SlashCommand, selected bool, rowWidth int) []string {
+	plain := commandRowText(c)
+	if !selected || c.Description == "" {
+		return []string{TruncateToWidth(plain, rowWidth)}
+	}
+	// The description column: every wrapped line hangs under the text, not under
+	// the name, which is what keeps the "/name" column readable at a glance.
+	col := "/" + c.Name + "  "
+	textWidth := rowWidth - ui.Width(col)
+	if textWidth < minCommandDescWidth {
+		// Too narrow to hang anything readable under: the plain row is the honest
+		// answer, ellipsis and all.
+		return []string{TruncateToWidth(plain, rowWidth)}
+	}
+	wrapped := strings.Split(WrapToWidthWords(c.Description, textWidth), "\n")
+	if cap := commandDescLineCap(c); len(wrapped) > cap {
+		wrapped = wrapped[:cap]
+		// Mark the dropped remainder on the last kept line, whose own text may
+		// well fit — the ellipsis is what says "this is not all of it".
+		last := wrapped[cap-1]
+		if !strings.HasSuffix(last, ellipsis) {
+			last = TruncateToWidth(last+ellipsis, textWidth)
+		}
+		wrapped[cap-1] = last
+	}
+	indent := strings.Repeat(" ", ui.Width(col))
+	lines := make([]string, 0, len(wrapped))
+	lines = append(lines, col+wrapped[0])
+	for _, w := range wrapped[1:] {
+		lines = append(lines, indent+w)
+	}
+	return lines
+}
+
+// menuRowWidth is the number of columns one popup row may occupy: the overlay
+// reserves a two-column gutter for the caret / indent.
+func menuRowWidth(width int) int {
+	if w := width - 2; w >= 1 {
+		return w
+	}
+	return width
+}
+
 // menuRow is one display row of the command popup: either a category header or
 // a candidate command. cmdIdx indexes into mn.filtered; -1 for a header.
 type menuRow struct {
@@ -338,7 +432,12 @@ func (mn slashMenu) commandWindow() (int, int) {
 	return start, start + maxMenuRows
 }
 
-func (mn slashMenu) rows() int {
+// rows reports how many terminal rows the popup occupies at the given width, so
+// the model can reserve them out of the transcript. It counts the lines view
+// actually draws — including the continuation lines a wrapped description adds,
+// and the highlighted picker row's Info block — which is what keeps the reserved
+// height and the drawn height from disagreeing.
+func (mn slashMenu) rows(width int) int {
 	if !mn.active || mn.count() == 0 {
 		return 0
 	}
@@ -352,8 +451,37 @@ func (mn slashMenu) rows() int {
 		}
 		return n
 	}
+	rows := mn.commandLayout()
 	start, end := mn.commandWindow()
-	return end - start
+	rowWidth := menuRowWidth(width)
+	n := 0
+	for i := start; i < end; i++ {
+		n += len(mn.commandLines(rows[i], rowWidth))
+	}
+	return n
+}
+
+// commandLines renders one command layout row to the styled display lines the
+// popup shows: a category header, or a candidate behind the caret gutter ("› "
+// on the highlighted row, two spaces otherwise). rows() counts these same lines,
+// so the reserved height and the drawn height cannot drift apart.
+func (mn slashMenu) commandLines(r menuRow, rowWidth int) []string {
+	if r.header != "" {
+		return []string{mn.theme.MenuHeader.Render("  " + TruncateToWidth(r.header, rowWidth))}
+	}
+	body := commandRowLines(r.cmd, r.cmdIdx == mn.selected, rowWidth)
+	out := make([]string, 0, len(body))
+	for i, line := range body {
+		// The first line of the highlighted row carries the caret and the accent;
+		// its wrapped continuation lines stay dim under the same gutter, so the
+		// caret marks the row rather than the paragraph it grew into.
+		if i == 0 && r.cmdIdx == mn.selected {
+			out = append(out, mn.theme.Accent.Render("› "+line))
+			continue
+		}
+		out = append(out, mn.theme.System.Render("  "+line))
+	}
+	return out
 }
 
 // close deactivates the menu and drops its candidates.
@@ -462,13 +590,10 @@ func (mn slashMenu) current() (runtime.SlashCommand, bool) {
 // truncated to the width so they never wrap. Returns "" when inactive so the
 // model omits the overlay entirely (and its row) while idle.
 func (mn slashMenu) view(width int) string {
-	if !mn.active || mn.rows() == 0 {
+	if !mn.active || mn.rows(width) == 0 {
 		return ""
 	}
-	rowWidth := width - 2 // reserve the caret / indent column
-	if rowWidth < 1 {
-		rowWidth = width
-	}
+	rowWidth := menuRowWidth(width)
 	var lines []string
 	if mn.picking() {
 		start, end := mn.window()
@@ -485,17 +610,7 @@ func (mn slashMenu) view(width int) string {
 	rows := mn.commandLayout()
 	start, end := mn.commandWindow()
 	for i := start; i < end; i++ {
-		r := rows[i]
-		if r.header != "" {
-			lines = append(lines, mn.theme.MenuHeader.Render("  "+TruncateToWidth(r.header, rowWidth)))
-			continue
-		}
-		line := TruncateToWidth(commandRowText(r.cmd), rowWidth)
-		if r.cmdIdx == mn.selected {
-			lines = append(lines, mn.theme.Accent.Render("› "+line))
-		} else {
-			lines = append(lines, mn.theme.System.Render("  "+line))
-		}
+		lines = append(lines, mn.commandLines(rows[i], rowWidth)...)
 	}
 	return strings.Join(lines, "\n")
 }

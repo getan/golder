@@ -3734,7 +3734,7 @@ func (m *Model) relayout() {
 		m.pastePreview = nil
 	}
 	rows := m.height - 1 - m.input.Height() - len(m.composerExtraLines(m.width)) -
-		m.menu.rows() - m.approvalRowsHeight() - m.histSearchRows()
+		m.menu.rows(m.width) - m.approvalRowsHeight() - m.histSearchRows()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the

@@ -71,6 +71,79 @@ func TestWrapToWidthNonPositive(t *testing.T) {
 	}
 }
 
+// TestWrapToWidthWordsBreaksAtSpaces pins what the wrapper exists for: prose
+// wrapped for display breaks between words, never inside one, so a description
+// reading "read-only" can never come out as "re" + "ad-only" — the bug the
+// rune-based WrapToWidth would produce on the popup's descriptions.
+func TestWrapToWidthWordsBreaksAtSpaces(t *testing.T) {
+	got := WrapToWidthWords("show or switch the approval mode", 12)
+	for _, line := range strings.Split(got, "\n") {
+		if w := ui.Width(line); w > 12 {
+			t.Errorf("line %q exceeds the width (%d > 12)", line, w)
+		}
+	}
+	// Every line but a hard-broken tail must end on a word, so the reassembled
+	// text contains no word that the original did not.
+	if joined := strings.ReplaceAll(got, "\n", " "); joined != "show or switch the approval mode" {
+		t.Errorf("word wrap altered the text: %q", joined)
+	}
+	if !strings.Contains(got, "approval") {
+		t.Errorf("a word that fits must stay whole: %q", got)
+	}
+	// The packing is greedy, not merely legal: no line could have taken the first
+	// word of the line after it, or the text would have come out longer than the
+	// width required — the property that keeps the popup compact instead of
+	// wrapping at every space.
+	lines := strings.Split(got, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		next := strings.SplitN(lines[i+1], " ", 2)[0]
+		if w := ui.Width(lines[i]) + 1 + ui.Width(next); w <= 12 {
+			t.Errorf("line %d (%q) could have taken %q (would be %d columns):\n%s", i, lines[i], next, w, got)
+		}
+	}
+}
+
+// TestWrapToWidthWordsHardBreaksLongTokens covers the fallback: a token with no
+// spaces to break at (a usage string, a path, a CJK run) still fits the width by
+// breaking by rune, so it can never overflow the popup.
+func TestWrapToWidthWordsHardBreaksLongTokens(t *testing.T) {
+	const long = "[read-only|ask|auto|full-access|writable|readable]"
+	for _, line := range strings.Split(WrapToWidthWords(long, 20), "\n") {
+		if w := ui.Width(line); w > 20 {
+			t.Errorf("unbreakable token overflowed: %q (%d > 20)", line, w)
+		}
+	}
+	// The break lands on the token's own separator rather than inside a word:
+	// every line but the last ends at a "|", so "readable" is never split into
+	// "rea" + "dable" the way a rune wrapper would leave it.
+	lines := strings.Split(WrapToWidthWords(long, 20), "\n")
+	for i, line := range lines[:len(lines)-1] {
+		if !strings.HasSuffix(line, "|") {
+			t.Errorf("line %d should have broken at a separator: %q (all: %q)", i, line, lines)
+		}
+	}
+	// The last piece survives intact — the packing stays greedy, so it may share
+	// its line with the piece before it.
+	if tail := lines[len(lines)-1]; !strings.HasSuffix(tail, "readable]") || strings.Contains(tail, "readab\n") {
+		t.Errorf("the last piece should stay whole, got %q", tail)
+	}
+	// CJK has no spaces at all, so it is the same path.
+	const cjk = "这是一个没有空格的描述文本"
+	for _, line := range strings.Split(WrapToWidthWords(cjk, 8), "\n") {
+		if w := ui.Width(line); w > 8 {
+			t.Errorf("CJK line overflowed: %q (%d > 8)", line, w)
+		}
+	}
+	// Newlines stay hard breaks, and a non-positive width is a no-op, exactly as
+	// in WrapToWidth.
+	if got := WrapToWidthWords("ab\ncd", 10); got != "ab\ncd" {
+		t.Errorf("word wrap collapsed a hard newline: %q", got)
+	}
+	if got := WrapToWidthWords("keep me", 0); got != "keep me" {
+		t.Errorf("width<=0 should return the input unchanged, got %q", got)
+	}
+}
+
 func TestTruncateToWidth(t *testing.T) {
 	tests := []struct {
 		name  string
