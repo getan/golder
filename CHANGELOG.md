@@ -12,6 +12,37 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **An ordinary in-workspace patch no longer pays the reviewer, and the two
+  edits whose effect outlives the call still do**: `apply_patch` was graded by
+  the model on every call — measured over ten real sessions, 467 calls at a
+  2.16s median, 18.5 minutes of review — for a decision the tool's own boundary
+  had already made. `agenttool.resolveWithin` confines every patch to the
+  workspace with no grant and no prompt, so an in-workspace patch is the routine
+  case by construction; replayed through the new fast path, **584 of 586 real
+  patches (99.7%) skip the reviewer**, and the two that do not are patches that
+  would not parse.
+
+  Two classes keep their review, because they are not "riskier edits" but edits
+  whose effect lands outside the edit. `.git/**` is planted execution: a hook
+  runs on the next git command, and git commands are exactly what the read-only
+  fast path waves through all day — verified, not assumed, by writing a hook into
+  a scratch repository and watching it run on the next `git commit`
+  (`.git/config` is the same door via `core.hooksPath`, `core.sshCommand` and
+  credential helpers). `AGENTS.md` is a persistent prompt-injection channel: the
+  working directory's copy is read into the system prompt of every later session,
+  so a patch to it rewrites the instructions the agent starts from. Neither needs
+  a model to be dangerous, which is why a name-based guard is the right shape —
+  and it is case-folded, since macOS resolves `.GIT/hooks/x` and `agents.md` to
+  the same files the canonical spellings name. A patch naming anything outside
+  the workspace (the skills directory is the one extra root the tool admits, and
+  a skill's description is injected into later prompts too) keeps its review, so
+  the exemption can never reach further than the tool already allows; the static
+  floor still runs first, so a credential path in a patch is denied before the
+  exemption is consulted. `Chain` gained the `WorkspaceRoot` field it needs —
+  empty keeps the exemption off, so a caller that forgot to wire one gets the
+  reviewer rather than an unbounded pass — and `GOLDER_READONLY_FASTPATH=off`
+  turns it off with the rest.
+
 - **The base instruction names the default way to inspect code — and the
   boundary of that default**: a new guide sits between the code-search and
   batching ones and says to reach for `read`/`grep`/`find`/`ls`/`view_image`

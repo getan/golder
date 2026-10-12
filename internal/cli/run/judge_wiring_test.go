@@ -2,9 +2,11 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/provider"
 )
 
@@ -56,5 +58,42 @@ func TestReviewCheckFallsBackSession(t *testing.T) {
 	}
 	if got := provider.SessionHeaderValue("opencode-go", gotExtra); got == "" {
 		t.Fatalf("session header empty for a derived process id: %v", gotExtra)
+	}
+}
+
+// TestNewReviewerCarriesTheWorkspaceRoot pins the wiring the routine-edit fast
+// path depends on: NewReviewer must hand its cwd to the Chain, or the exemption
+// silently stays off in production and every patch pays the review again. The
+// provider is nil on purpose — that degrades the reviewer to fail-closed, which
+// makes the two outcomes distinguishable without a model: a routine patch still
+// comes back as an allow from the fast path, while a protected one comes back
+// failed (the reviewer could not run).
+func TestNewReviewerCarriesTheWorkspaceRoot(t *testing.T) {
+	root := t.TempDir()
+	classifier := NewReviewer("m", "opencode-go", nil, nil, "", root, true)
+
+	patchArgs := func(p string) []byte {
+		raw, err := json.Marshal(map[string]string{
+			"patch": "*** Begin Patch\n*** Add File: " + p + "\n+x\n*** End Patch\n",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+
+	// A routine in-workspace patch: the fast path answers, so the absent
+	// reviewer is never consulted.
+	v := classifier.Classify(context.Background(), "apply_patch", patchArgs("internal/main.go"))
+	if v.Level != judge.Allow || v.Source != "workspace-edit" {
+		t.Errorf("routine patch verdict = %+v, want the workspace-edit fast path "+
+			"(an empty WorkspaceRoot on the Chain would leave the reviewer to answer)", v)
+	}
+
+	// A protected path reaches the reviewer, and this classifier has none — so
+	// the contrast is what proves the root was actually used.
+	v = classifier.Classify(context.Background(), "apply_patch", patchArgs(".git/hooks/pre-commit"))
+	if v.Source == "workspace-edit" {
+		t.Error("a patch to .git/hooks took the fast path; the guard is not reachable from the production wiring")
 	}
 }

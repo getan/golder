@@ -76,7 +76,7 @@ func NewReviewer(model, providerName string, prov provider.Provider, creds *prov
 	if prov != nil {
 		check = ReviewCheck(model, providerName, provider.StreamFnFromProvider(prov), creds, sessionID)
 	}
-	return judge.Chain{Inner: judge.NewLLMJudge(check, cwd, trusted)}
+	return judge.Chain{Inner: judge.NewLLMJudge(check, cwd, trusted), WorkspaceRoot: cwd}
 }
 
 // ReviewCheck adapts the provider stream to judge.ReviewFunc: one system +

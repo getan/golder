@@ -143,6 +143,13 @@ var ungradedTools = map[string]bool{
 // inner error to Confirm. A nil inner grades static-only.
 type Chain struct {
 	Inner Classifier
+	// WorkspaceRoot is the project boundary the routine-edit fast path weighs a
+	// patch against (editscope.go). Empty keeps that exemption off, which is the
+	// safe default: without the boundary there is no way to tell an in-workspace
+	// patch from one reaching the skills directory, so the reviewer keeps every
+	// patch. The read-only fast path needs no root — a command's text is the whole
+	// question there — which is why only this one reads it.
+	WorkspaceRoot string
 }
 
 // Classify implements Classifier.
@@ -160,6 +167,13 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	// approved. That is the common case of a session spent reading a repository,
 	// and it was paying a model round trip per command.
 	if v, ok := readOnlyFastPath(tool, args); ok {
+		return v
+	}
+	// A patch that only touches ordinary files inside the workspace never reaches
+	// the reviewer either: the tool's own boundary already decides what it may
+	// write, and the two classes a reviewer can still add something about — the
+	// git directory and the instruction file — are excluded by name there.
+	if v, ok := applyPatchFastPath(tool, args, c.WorkspaceRoot); ok {
 		return v
 	}
 	if c.Inner == nil {
