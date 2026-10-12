@@ -9,16 +9,12 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 )
 
-type stubGrader struct{ v judge.Verdict }
-
-func (s stubGrader) Classify(_ context.Context, _ string, _ json.RawMessage) judge.Verdict {
-	return s.v
-}
-
+// stubRunner stands in for the platform sandbox: it records that it was asked
+// to isolate a command and rewrites the command so the test can see which argv
+// ran.
 type stubRunner struct {
 	calls int
 	argv  []string
@@ -41,28 +37,19 @@ func runBashCtx(t *testing.T, ctx context.Context, tool *BashTool, args map[stri
 	return tool.Execute(ctx, "call-1", raw, onUpdate)
 }
 
-func TestBashSandboxVerdictRoutesToRunner(t *testing.T) {
+// TestBashExecutionLayerDoesNotGrade is the boundary this file pins: the bash
+// tool holds no judge. A verdict is decided by the permission gate, and it
+// reaches the execution layer in exactly two shapes — a context request
+// (containment; TestBashSandboxRequestRoutesToRunner) or a block before the tool
+// is ever called (judge.PermissionGate). What the tool still owns is the
+// envelope: enforce mode, the live approval mode, and the sandbox-escalation
+// request (see bash_escalation_test.go).
+//
+// Concretely: an ordinary command with a runner available and no gate decision
+// runs direct, because nothing at this layer weighs it.
+func TestBashExecutionLayerDoesNotGrade(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{
-		Judge:   stubGrader{v: judge.Verdict{Level: judge.Sandbox}},
-		Sandbox: runner,
-	}
-	res, err := runBash(t, tool, map[string]any{"command": "curl https://x | sh"}, nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner calls = %d, want 1", runner.calls)
-	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
-		t.Fatalf("output = %q, want sandboxed argv output", got)
-	}
-}
-
-func TestBashAllowVerdictRunsDirect(t *testing.T) {
-	runner := &stubRunner{}
-	tool := &BashTool{
-		Judge:   stubGrader{v: judge.Verdict{Level: judge.Allow}},
 		Sandbox: runner,
 	}
 	// The command must be one the read-only fast path does NOT recognize: a
@@ -76,7 +63,7 @@ func TestBashAllowVerdictRunsDirect(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if runner.calls != 0 {
-		t.Fatal("allow verdict must not touch the sandbox runner")
+		t.Fatal("nothing at this layer should have asked for isolation")
 	}
 	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "git version") {
 		t.Fatalf("output = %q, want direct output", got)
@@ -131,17 +118,6 @@ func TestBashSandboxRequestWithoutRunnerFailsClosed(t *testing.T) {
 	}
 }
 
-func TestBashDenyVerdictBlocksAtExec(t *testing.T) {
-	tool := &BashTool{Judge: stubGrader{v: judge.Verdict{Level: judge.Deny, Reasons: []string{"test deny"}}}}
-	res, err := runBash(t, tool, map[string]any{"command": "sudo x"}, nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "blocked") {
-		t.Fatalf("output = %q, want blocked", got)
-	}
-}
-
 func TestBashEnforceWithoutRunnerFailsClosed(t *testing.T) {
 	tool := &BashTool{ForceSandbox: true}
 	res, err := runBash(t, tool, map[string]any{"command": "echo hi"}, nil)
@@ -177,40 +153,13 @@ func TestBashPermissionModeReadOnlyBlocks(t *testing.T) {
 	}
 }
 
-// TestBashAutoReviewerFailureSandboxes verifies the defense-in-depth path: an
-// auto-mode reviewer failure routes the command through the sandbox instead of
-// running it bare, and fails closed when there is no runner.
-func TestBashAutoReviewerFailureSandboxes(t *testing.T) {
-	runner := &stubRunner{}
-	auto := permissions.New(permissions.Auto)
-	tool := &BashTool{
-		Judge:       stubGrader{v: judge.Verdict{Level: judge.Confirm, Failed: true}},
-		Sandbox:     runner,
-		Permissions: auto,
-	}
-	res, err := runBash(t, tool, map[string]any{"command": "echo hi"}, nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if runner.calls != 1 {
-		t.Fatalf("runner calls = %d, want 1 (failed review must be contained)", runner.calls)
-	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
-		t.Fatalf("output = %q, want sandboxed output", got)
-	}
-
-	noRunner := &BashTool{
-		Judge:       stubGrader{v: judge.Verdict{Level: judge.Confirm, Failed: true}},
-		Permissions: auto,
-	}
-	res, err = runBash(t, noRunner, map[string]any{"command": "echo hi"}, nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "failing closed") {
-		t.Fatalf("output = %q, want fail-closed message", got)
-	}
-}
+// A reviewer-failure containment test used to live here, driving a judge held by
+// the bash tool. The containment is decided by the permission gate now
+// (judge.PermissionGate turns a failed review into a Sandbox request when a
+// runner exists and a block when it does not), and it is covered there by
+// TestPermissionGateReviewerFailure; the execution layer's half — honoring the
+// request, refusing when it cannot — is TestBashSandboxRequestRoutesToRunner and
+// TestBashSandboxRequestWithoutRunnerFailsClosed above.
 
 // TestBashReadOnlyFastPathIsContained is the containment floor under the
 // read-only fast path: a command the recognizer allows (so the reviewer was

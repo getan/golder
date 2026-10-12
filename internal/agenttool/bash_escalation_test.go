@@ -11,20 +11,18 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/judge"
 )
 
-// TestBashRequireEscalatedSkipsLocalJudge proves the request keeps a call out
-// of the local judge's sandbox routing (the driver-level path where no
-// permission gate decision exists).
-func TestBashRequireEscalatedSkipsLocalJudge(t *testing.T) {
+// TestBashRequireEscalatedRunsDirect proves the request keeps a call out of the
+// sandbox wrapper at this layer. The request is a REQUEST — the permission gate
+// and its reviewer weigh it (the judge's read-only recognizer declines such a
+// call precisely so they do) — and what remains here is the execution layer's
+// half: a command the gate let through is not recontained behind the model's
+// back.
+func TestBashRequireEscalatedRunsDirect(t *testing.T) {
 	dir := t.TempDir()
 	runner := &stubRunner{}
-	tool := &BashTool{
-		Dir:     dir,
-		Judge:   stubGrader{v: judge.Verdict{Level: judge.Sandbox}},
-		Sandbox: runner,
-	}
+	tool := &BashTool{Dir: dir, Sandbox: runner}
 	res, err := runBash(t, tool, map[string]any{
 		"command":             "echo escalated",
 		"sandbox_permissions": "require_escalated",
@@ -34,7 +32,7 @@ func TestBashRequireEscalatedSkipsLocalJudge(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if runner.calls != 0 {
-		t.Fatalf("require_escalated must skip the local judge's routing, calls=%d", runner.calls)
+		t.Fatalf("require_escalated must run direct, calls=%d", runner.calls)
 	}
 	if got := resultText(res); !strings.Contains(got, "escalated") {
 		t.Fatalf("output = %q, want the direct command's output", got)
@@ -90,7 +88,6 @@ func TestBashSandboxDenialHint(t *testing.T) {
 	// preserves a failing command via the actual shell and a denied marker.
 	tool := &BashTool{
 		Dir:          dir,
-		Judge:        stubGrader{v: judge.Verdict{Level: judge.Sandbox}},
 		Sandbox:      failingRunner{},
 		ForceSandbox: true,
 	}

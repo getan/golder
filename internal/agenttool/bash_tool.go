@@ -65,13 +65,6 @@ type BashTool struct {
 	// Production always wires one shared manager (BuiltinTools); tests may
 	// omit it and get a private manager per tool.
 	Sessions *execsess.Manager
-	// Judge grades each command before it runs. When nil the command runs
-	// directly (the production path: the BeforeToolCall gate grades — sharing
-	// its verdict cache — and publishes sandbox requirements through the
-	// executor context instead of a per-turn classifier here). When set, a
-	// sandbox-tier verdict routes the command through Sandbox and a deny-tier
-	// verdict blocks it, for direct callers that drive the tool without a gate.
-	Judge judge.Classifier
 	// Permissions, when set, is the live approval mode. Read-only blocks every
 	// command here too (the gate normally does it first; this covers paths
 	// without a gate, e.g. in-process sub-agents), full-access skips grading,
@@ -125,12 +118,15 @@ func (t *BashTool) StopSessions() {
 	}
 }
 
-// sandboxRoute decides whether one command must run isolated. Sources, in
-// order: GOLDER_SANDBOX=enforce (every foreground command), a sandbox request
-// published by the permission gate (auto/ask routing of a sandbox-tier grade
-// or reviewer-failure containment), then the optional Judge for direct
-// callers. It returns sandbox=true to run isolated, a non-empty message to
-// refuse, or both zero values to run directly.
+// sandboxRoute decides whether one command must run isolated. It owns the
+// envelope, not the verdict: the risk grade is the permission gate's business
+// (which publishes containment through the context) and this layer never weighs
+// a command itself. Sources, in order: GOLDER_SANDBOX=enforce (every foreground
+// command), a sandbox request published by the gate (auto/ask routing of a
+// sandbox-tier grade, or reviewer-failure containment), the read-only
+// recognizer's containment floor, and require_escalated (which clears the floor
+// because the gate already weighed that request). It returns sandbox=true to run
+// isolated, a non-empty message to refuse, or both zero values to run directly.
 func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (sandbox bool, block string) {
 	if t.Permissions != nil {
 		switch t.Permissions.Mode() {
@@ -182,31 +178,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (san
 	if t.Sandbox != nil && agentcore.ReadGrantFromContext(ctx) == "" && judge.ReadOnlyShellCommand(command) {
 		return true, ""
 	}
-	if t.Judge == nil {
-		return false, ""
-	}
-	raw, _ := json.Marshal(map[string]string{"command": command})
-	v := t.Judge.Classify(ctx, "bash", raw)
-	if v.Failed && t.Permissions != nil && t.Permissions.Mode() == permissions.Auto {
-		// The reviewer could not decide; auto mode contains the command in
-		// the sandbox rather than running it unisolated.
-		if t.Sandbox == nil {
-			return false, "bash: reviewer unavailable and no sandbox runner; failing closed"
-		}
-		return true, ""
-	}
-	switch v.Level {
-	case judge.Deny:
-		msg := "bash: blocked by risk judge (deny"
-		if len(v.Reasons) > 0 {
-			msg += ": " + v.Reasons[0]
-		}
-		return false, msg + ")"
-	case judge.Sandbox:
-		return true, ""
-	default:
-		return false, ""
-	}
+	return false, ""
 }
 
 // sandboxArgv resolves the executable argv for a command: the direct
