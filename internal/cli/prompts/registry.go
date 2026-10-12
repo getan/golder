@@ -793,22 +793,48 @@ func joinThinkingLevels(levels []agentcore.ThinkingLevel) string {
 	return strings.Join(parts, "|")
 }
 
-// permissionsArgumentHint is /permissions' grammar. It is named because two
-// things print it — the registry advertises it as the command's hint, and the
-// action's own error composes the usage line from it — and a grammar typed twice
-// is a grammar that drifts.
-const permissionsArgumentHint = "[list | read-only|ask|auto|full-access | " +
-	"writable [list|add|rm] <path> | readable [list|add|rm] <path>]"
+// The /permissions grammar, in the two shapes the command needs. The whole-command
+// form is the registry hint (what the popup and /help advertise); the two
+// subcommand forms are what a typo *inside* a subcommand is answered with, spelled
+// out because they are narrower — `list` takes no path where `add`/`rm` require
+// one, and a reader who typed the verb wants that difference, not the whole
+// command's bracket soup. They are declared together so a new verb is added where
+// the hint is read as well as where the parser is.
+const (
+	permissionsArgumentHint = "[list | read-only|ask|auto|full-access | writable " +
+		permissionsWritableHint + " | readable " + permissionsReadableHint + "]"
+	// The subcommand slices as the hint spells them (compact) and as the subcommand
+	// usage spells them (spelled out).
+	permissionsWritableHint = "[list|add|rm] <path>"
+	permissionsReadableHint = "[list|add|rm] <path>"
 
-// usageLine renders the "usage: /name <grammar>" (or its Chinese spelling) line a
-// command answers a bad argument with. It exists so that line and the command's
-// advertised hint are the same bytes: a user who typed something wrong is being
-// taught the grammar, and the two spellings of it must not disagree.
-func usageLine(name, hint, lang string) string {
+	permissionsWritableUsage = "[list | add <path> | rm <path>]"
+	permissionsReadableUsage = "[list | add <path> | rm <path>]"
+)
+
+// usageLine renders the line a command answers a bad argument with, from the
+// registry's own record of that command: the grammar the user is being taught is
+// the hint the popup and /help advertise, because they are the same string. The
+// Chinese spelling swaps the "usage: " prefix only — the grammar itself is not
+// translated, since the words in it are the literals the user types.
+func usageLine(reg *runtime.SlashRegistry, name, lang string) string {
+	line := reg.UsageLine(name)
 	if lang == "zh" {
-		return "用法：/" + name + " " + hint
+		return "用法：" + strings.TrimPrefix(line, "usage: ")
 	}
-	return "usage: /" + name + " " + hint
+	return line
+}
+
+// usageLineFor renders a usage line for a grammar this package declares but the
+// registry does not carry on its own — a subcommand's narrower form (see the
+// permissions constants). It exists so the English and Chinese spellings of one
+// grammar are written once, next to that grammar, instead of twice inside the
+// function that answers the error.
+func usageLineFor(name, grammar string, zh bool) string {
+	if zh {
+		return "用法：/" + name + " " + grammar
+	}
+	return "usage: /" + name + " " + grammar
 }
 
 // RegisterPermissionCommand installs the /permissions action command: with an
@@ -833,7 +859,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
 		Description:  "show or switch the approval mode, or manage the remembered path grants",
-		ArgumentHint: permissionsArgumentHint,
+		ArgumentHint: "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
@@ -883,7 +909,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 				// after a typo is the grammar the popup and /help advertise. Typed
 				// twice, these drifted: the hint learned `list` and the error line
 				// did not.
-				return usageLine("permissions", permissionsArgumentHint, l)
+				return usageLine(reg, "permissions", l)
 			}
 			if st != nil {
 				st.Set(m)
@@ -1020,10 +1046,7 @@ func runPermissionsWritable(arg, l string) string {
 	zh := l == "zh"
 	fields := strings.Fields(arg)
 	usage := func() string {
-		if zh {
-			return "用法：/permissions writable [list | add <路径> | rm <路径>]"
-		}
-		return "usage: /permissions writable [list | add <path> | rm <path>]"
+		return usageLineFor("permissions writable", permissionsWritableUsage, zh)
 	}
 	// restAfter returns the path argument after the verb, preserving spaces in
 	// the path itself (only the verb token is stripped).
@@ -1136,10 +1159,7 @@ func runPermissionsReadable(arg, l string) string {
 	zh := l == "zh"
 	fields := strings.Fields(arg)
 	usage := func() string {
-		if zh {
-			return "用法：/permissions readable [list | add <路径> | rm <路径>]"
-		}
-		return "usage: /permissions readable [list | add <path> | rm <path>]"
+		return usageLineFor("permissions readable", permissionsReadableUsage, zh)
 	}
 	restAfter := func(verb string) string {
 		s := strings.TrimSpace(strings.TrimPrefix(arg, "readable"))

@@ -1024,7 +1024,7 @@ func runExport(out io.Writer, deps *replDeps, line string) {
 func runImport(out io.Writer, deps *replDeps, line string) {
 	path := pathCommandArg(line, "/import")
 	if path == "" {
-		fmt.Fprintln(out, "usage: /import <path.jsonl>")
+		fmt.Fprintln(out, deps.slash.UsageLine("import"))
 		return
 	}
 	newHeader, entries, err := deps.store.Import(path, time.Now().UTC())

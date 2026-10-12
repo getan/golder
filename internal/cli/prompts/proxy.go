@@ -63,16 +63,22 @@ func ProxyProvidersSelectedFirst(selected []string) []provider.ProviderSpec {
 	return specs
 }
 
-// proxyArgumentHint is /proxy's grammar, named because the command's own error
-// composes its usage line from it (see usageLine).
-const proxyArgumentHint = "[<provider> on|off | url <url>]"
+// The /proxy grammar: the whole command (the hint, what the popup and /help
+// advertise) and the provider form alone, which is what a bad on/off verb is
+// answered with — narrower than the whole grammar because the address case is not
+// what the reader got wrong. Declared together so the two spellings of the
+// provider form cannot drift.
+const (
+	proxyArgumentHint    = "[<provider> on|off | url <url>]"
+	proxyProviderGrammar = "<provider> on|off"
+)
 
 func registerProxyCommand(reg *runtime.SlashRegistry) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "proxy",
 		Category:     runtime.CategoryModel,
 		Description:  "choose which providers use the proxy",
-		ArgumentHint: proxyArgumentHint,
+		ArgumentHint: "[<provider> on|off | url <url>]",
 		Action: func(args string) string {
 			cfg, err := provider.ProxySettings()
 			if err != nil {
@@ -97,7 +103,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 				return b.String()
 			}
 			if len(fields) != 2 {
-				return usageLine("proxy", proxyArgumentHint, "en")
+				return usageLine(reg, "proxy", "en")
 			}
 			message := ""
 			if fields[0] == "url" {
@@ -120,7 +126,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 					return fmt.Sprintf("proxy: unknown provider %q", fields[0])
 				}
 				if fields[1] != "on" && fields[1] != "off" {
-					return "usage: /proxy <provider> on|off"
+					return usageLineFor("proxy", proxyProviderGrammar, false)
 				}
 				cfg.Providers = slices.DeleteFunc(cfg.Providers, func(name string) bool { return name == spec.Name })
 				if fields[1] == "on" {

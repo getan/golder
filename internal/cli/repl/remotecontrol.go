@@ -98,7 +98,7 @@ func runRemoteControl(out io.Writer, deps *replDeps, line string) {
 		}
 		startRemoteControl(out, deps)
 	default:
-		fmt.Fprintf(out, "usage: /remote-control [stop|status]\n")
+		fmt.Fprintln(out, deps.slash.UsageLine("remote-control"))
 	}
 }
 

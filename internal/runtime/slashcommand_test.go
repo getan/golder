@@ -180,3 +180,41 @@ func TestParseUserCommandArgumentHintAndDescriptionFallback(t *testing.T) {
 		t.Errorf("argument-hint should be empty, got %q", neither.ArgumentHint)
 	}
 }
+
+// TestRegistryUsageLine pins the renderer every surface now composes from: the
+// line is built from the command's own hint, so the grammar a user is taught after
+// a bad argument cannot become a second spelling of the grammar the popup and
+// /help advertise.
+func TestRegistryUsageLine(t *testing.T) {
+	reg := NewSlashRegistry()
+	reg.AddBuiltin(SlashCommand{Name: "goal", ArgumentHint: "[--tokens N] <objective>", Action: func(string) string { return "" }})
+	reg.AddBuiltin(SlashCommand{Name: "status", Description: "show session status", Action: func(string) string { return "" }})
+
+	if got, want := reg.UsageLine("goal"), "usage: /goal [--tokens N] <objective>"; got != want {
+		t.Errorf("UsageLine(goal) = %q, want %q", got, want)
+	}
+	// A command that takes no arguments still renders a line: the caller has
+	// nothing better to print, and "usage: /status" is true.
+	if got, want := reg.UsageLine("status"), "usage: /status"; got != want {
+		t.Errorf("UsageLine(status) = %q, want %q", got, want)
+	}
+	// Accepts the leading slash, since callers hold both spellings.
+	if got := reg.UsageLine("/goal"); got != "usage: /goal [--tokens N] <objective>" {
+		t.Errorf("UsageLine(/goal) = %q, want the same line", got)
+	}
+	// An unknown name renders the bare line rather than nothing: a front-end
+	// asking about a command this registry does not carry must not print an empty
+	// notice.
+	if got, want := reg.UsageLine("nosuch"), "usage: /nosuch"; got != want {
+		t.Errorf("UsageLine(unknown) = %q, want %q", got, want)
+	}
+	if got := reg.UsageLine(""); got != "" {
+		t.Errorf("UsageLine(empty) = %q, want empty", got)
+	}
+	// A nil registry is usable, so a caller never has to nil-check before printing
+	// usage (a session-less model, a driver without a registry).
+	var nilReg *SlashRegistry
+	if got, want := nilReg.UsageLine("goal"), "usage: /goal"; got != want {
+		t.Errorf("nil registry UsageLine = %q, want %q", got, want)
+	}
+}

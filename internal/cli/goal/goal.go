@@ -85,7 +85,10 @@ func RunGoal(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, l
 		return
 	}
 	if strings.TrimSpace(objective) == "" {
-		fmt.Fprintln(out, "usage: /goal [--tokens N] <objective>")
+		// The grammar comes from the registry, which is where /goal declares it
+		// (host.Slash()): the line a user is taught after a bad argument and the
+		// line the popup and /help advertise are then one string, not two copies.
+		fmt.Fprintln(out, host.Slash().UsageLine("goal"))
 		return
 	}
 	host.Goal().Start(newGoalID(), objective, budget)

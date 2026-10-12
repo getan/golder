@@ -397,6 +397,31 @@ func (r *SlashRegistry) Lookup(name string) (SlashCommand, bool) {
 	return cmd, ok
 }
 
+// UsageLine renders the one-line usage for a command — "usage: /name <grammar>"
+// — from the grammar the command declares in ArgumentHint. It is the single
+// source for every surface that has to teach the syntax (an argument error, a
+// refusal, a picker's hint): the hint is what the popup and /help advertise, so a
+// usage line built from it cannot drift into a second spelling of the same
+// grammar. A command that takes no arguments renders as "usage: /name".
+//
+// The line is total on purpose — an unknown name (a front-end printing usage for
+// something this registry does not carry) or a nil registry still renders
+// "usage: /name", which is true and printable. Returning "" would make callers
+// print empty notices, and a caller has no better fallback than the name.
+func (r *SlashRegistry) UsageLine(name string) string {
+	name = strings.TrimPrefix(strings.TrimSpace(name), "/")
+	if name == "" {
+		return ""
+	}
+	line := "usage: /" + name
+	if r != nil {
+		if c, ok := r.Lookup(name); ok && c.ArgumentHint != "" {
+			line += " " + c.ArgumentHint
+		}
+	}
+	return line
+}
+
 // List returns all commands sorted by name.
 func (r *SlashRegistry) List() []SlashCommand {
 	out := make([]SlashCommand, 0, len(r.commands))

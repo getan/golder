@@ -2407,7 +2407,7 @@ func (m Model) runImport(line string) (tea.Model, tea.Cmd) {
 	}
 	path := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "/import")), `"`)
 	if path == "" {
-		m.transcript.addSystem("usage: /import <path.jsonl>")
+		m.transcript.addSystem(m.slash.UsageLine("import"))
 		m.relayout()
 		return m, nil
 	}
@@ -2693,7 +2693,7 @@ func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
 		m.input.Clear()
 		m.menu.close()
 		if m.session.lastBtw == nil {
-			m.transcript.addSystem("usage: /btw [question]")
+			m.transcript.addSystem(m.slash.UsageLine("btw"))
 			m.relayout()
 			return m, nil
 		}
@@ -2768,7 +2768,7 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 		if err != nil {
 			buf.WriteString("golder: " + err.Error())
 		} else if strings.TrimSpace(objective) == "" {
-			buf.WriteString("usage: /goal [--tokens N] <objective>")
+			buf.WriteString(m.slash.UsageLine("goal"))
 		} else {
 			goalpkg.Start(m.session.Goal(), objective, budget)
 			if budget > 0 {

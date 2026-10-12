@@ -25,10 +25,23 @@ interactive REPL/TUI.
   its own command or spell a `--flag`, every hint must be bracketed usage rather
   than prose, the set of commands that take arguments is pinned so a new argument
   cannot ship without a hint, and `/help` must print each of the two fields
-  exactly once. The usage line a command answers a bad argument with is composed
-  from the same hint (a shared `usageLine`), so the grammar the user is taught
-  after a typo and the grammar the popup advertises cannot be two spellings;
-  `/btw`'s message stops repeating its own description while it is at it.
+  exactly once.
+- **The usage line a command answers a bad argument with is the registry's own**:
+  every front-end printed its own copy of the grammar — the TUI, the REPL, `/goal`
+  and `/btw` through the session host, the resume resolver, and the commands whose
+  actions compose one — so a command's hint and the line a user was taught after a
+  typo were two independent strings, and they had already drifted (`/permissions`
+  advertised `list` while its error still taught the old list). They all render
+  from the command's own record now: `SlashRegistry.UsageLine(name)` builds
+  `usage: /name <hint>` from the hint the popup and `/help` advertise, and the
+  front-ends call it on the registry they already hold (`m.slash`, `deps.slash`,
+  `host.Slash()`). `cli` cannot reach a registry — `cli/prompts` imports `cli`, so
+  the resume resolver returns a sentinel instead of a grammar, and nothing in this
+  package spells usage any more. Each family's grammar text lives in one place:
+  the command hint for the whole command, and — where a subcommand is narrower than
+  the whole (a verb that takes no path, a provider without its address form) — the
+  two spellings declared side by side. The tests drive each path with a registry
+  whose hint is a sentinel, so a reinstated literal cannot pass.
 - **`/trust list` and `/permissions list` show every grant, not just the ones in
   force here**: the two halves of the permission state — per-directory trust
   (`trust.json`) and the sandbox writable/readable roots (`permissions.toml` plus

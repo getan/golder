@@ -142,7 +142,7 @@ func (m Model) runRemoteControl(line string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem(b.String())
 		return m, m.waitRemoteInput()
 	default:
-		m.transcript.addSystem("usage: /remote-control [stop|status]")
+		m.transcript.addSystem(m.slash.UsageLine("remote-control"))
 		return m, nil
 	}
 }

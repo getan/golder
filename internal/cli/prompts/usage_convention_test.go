@@ -13,6 +13,7 @@ package prompts
 // trimmed back to a sentence.
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -187,6 +188,57 @@ func TestUsageLinesAgreeWithHints(t *testing.T) {
 		msg := cmd.Action(tc.badArg)
 		if !strings.Contains(msg, cmd.ArgumentHint) {
 			t.Errorf("/%s usage line should print the hint %q, got %q", tc.name, cmd.ArgumentHint, msg)
+		}
+	}
+}
+
+// TestSubcommandVerbsAreAccepted pins the *other* direction of drift: every verb
+// the grammar advertises must actually work. A hint that offers a verb the parser
+// rejects (or a sub-usage that teaches a subcommand that was renamed) is the same
+// class of lie as a usage line that disagrees with the hint, and only a test that
+// calls the command can see it.
+//
+// The verbs are listed here rather than extracted from the hint on purpose: what is
+// being pinned is that the documented surface works, so this list is the
+// expectation — a hint that stops mentioning one is a separate failure, caught by
+// the inventory test.
+func TestSubcommandVerbsAreAccepted(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+
+	reg := builtinRegistry(t)
+	perm, ok := reg.Lookup("permissions")
+	if !ok {
+		t.Fatal("/permissions not registered")
+	}
+	for _, kw := range []string{"writable", "readable"} {
+		for _, verb := range []string{"list", "add", "rm"} {
+			arg := kw + " " + verb
+			if verb != "list" {
+				// add/rm need a path; the store is a temp dir, so these are real
+				// round trips against an empty store.
+				arg += " " + filepath.Join(dir, kw+"-"+verb)
+			}
+			if msg := perm.Action(arg); strings.Contains(msg, "usage:") {
+				t.Errorf("/permissions %s was answered with usage; the grammar advertises that verb:\n%s", arg, msg)
+			}
+		}
+	}
+	// The hint must keep advertising each one too, or the two lists have split.
+	for _, verb := range []string{"list", "add", "rm"} {
+		if !strings.Contains(perm.ArgumentHint, verb) {
+			t.Errorf("/permissions hint %q no longer names %q", perm.ArgumentHint, verb)
+		}
+	}
+	// /proxy's provider form: both verbs, and the address form, are accepted.
+	proxy, ok := reg.Lookup("proxy")
+	if !ok {
+		t.Fatal("/proxy not registered")
+	}
+	for _, arg := range []string{"url http://127.0.0.1:9", "openai on", "openai off"} {
+		if msg := proxy.Action(arg); strings.Contains(msg, "usage:") {
+			t.Errorf("/proxy %s was answered with usage:\n%s", arg, msg)
 		}
 	}
 }

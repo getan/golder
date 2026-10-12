@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -8,6 +9,14 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/session"
 )
+
+// ErrResumeNoSelector reports a /resume invocation with no selector at all. Both
+// front-ends answer that case by listing the recent sessions (see the bare form in
+// the command's own hint), so this is a guard rather than a message users meet —
+// and it carries no usage line on purpose: the grammar belongs to the registry,
+// which this package cannot reach (cli/prompts imports cli). A literal here would
+// be a second spelling of a grammar nothing in this package can check.
+var ErrResumeNoSelector = errors.New("no session selector")
 
 // ResumeListN is how many recent sessions a bare /resume view lists.
 const ResumeListN = 10
@@ -115,7 +124,7 @@ func MostRecentSession(store *session.Store, scope ResumeScope) (session.Session
 func ResolveResumeID(store *session.Store, arg, projectDir string) (string, error) {
 	scope, sel := ParseResumeArg(arg, projectDir)
 	if sel == "" {
-		return "", fmt.Errorf("usage: /resume [--all] [n|id]")
+		return "", ErrResumeNoSelector
 	}
 	if n, err := strconv.Atoi(sel); err == nil {
 		headers, err := RecentSessions(store, scope, max(n, ResumeListN))

@@ -1116,7 +1116,10 @@ func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessag
 func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return nil, fmt.Errorf("usage: /resume <session-id>")
+		// The registry's line, not a third spelling of it: this guard fires when a
+		// session id went missing (the picker confirm, a truncated /resume <id>),
+		// which is exactly the selector the command's hint documents.
+		return nil, errors.New(s.slash.UsageLine("resume"))
 	}
 	if id == s.header.ID {
 		return nil, fmt.Errorf("already on session %s", id)

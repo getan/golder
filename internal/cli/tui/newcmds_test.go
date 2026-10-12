@@ -6,7 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -249,4 +252,68 @@ func TestTUISlashMenuShowsCategoryHeaders(t *testing.T) {
 			t.Errorf("filtered menu missing category header %q:\n%s", want, view)
 		}
 	}
+}
+
+// TestUsageLinesComeFromTheRegistry drives every TUI-reachable usage path with a
+// registry whose hints are SENTINELS. A path that printed a hand-written literal
+// would fail this test — the string it prints cannot equal a sentinel it never
+// saw — which is what makes the check stronger than comparing against the real
+// hints (a literal that happens to match today would pass that).
+//
+// The paths covered are the ones the TUI answers itself; /permissions, /proxy and
+// /trust render their usage inside the registry and are covered by prompts' own
+// usage-agreement test.
+func TestUsageLinesComeFromTheRegistry(t *testing.T) {
+	const sentinel = "[SENTINEL-ARGS]"
+	for _, name := range []string{"import", "goal", "btw", "remote-control", "resume"} {
+		s, _ := newTUICmdSession(t, name, sentinel)
+		m := NewModel(Options{}).withSession(s, nil)
+		m = apply(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+		want := "usage: /" + name + " " + sentinel
+
+		switch name {
+		case "import":
+			m = typeCommand(t, m, "/import")
+		case "goal":
+			// A bare /goal reports state; the usage path is an empty objective
+			// after a recognized prefix.
+			m = typeCommand(t, m, "/goal --tokens 100")
+		case "btw":
+			m = typeCommand(t, m, "/btw")
+		case "remote-control":
+			m = typeCommand(t, m, "/remote-control bogus")
+		case "resume":
+			// Reaches switchTo with no id: the picker path owns the bare form, so
+			// the guard is driven directly.
+			if _, err := s.switchTo(""); err == nil {
+				t.Fatalf("/resume switchTo(\"\") should fail")
+			} else if err.Error() != want {
+				t.Errorf("/resume guard = %q, want the registry line %q", err.Error(), want)
+			}
+			continue
+		}
+		joined := strings.Join(blockTexts(m.transcript), "\n")
+		if !strings.Contains(joined, want) {
+			t.Errorf("%s usage should be the registry's line %q; transcript:\n%s", name, want, joined)
+		}
+	}
+}
+
+// newTUICmdSession builds a session whose registry carries ONE command, with the
+// given hint, for the usage-source tests above. The single-command registry is
+// what makes a sentinel hint safe: nothing else can print it.
+func newTUICmdSession(t *testing.T, name, hint string) (*runSession, error) {
+	t.Helper()
+	store := newTestStore(t)
+	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	if err != nil {
+		t.Fatalf("newRunSessionWithStore: %v", err)
+	}
+	s.slash = runtime.NewSlashRegistry()
+	s.slash.AddBuiltin(runtime.SlashCommand{
+		Name:         name,
+		ArgumentHint: hint,
+		Action:       func(string) string { return "" },
+	})
+	return s, nil
 }

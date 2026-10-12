@@ -668,3 +668,36 @@ func TestREPLStatusSessionSection(t *testing.T) {
 		t.Errorf("/status should report 2 messages, out=%q", s)
 	}
 }
+
+// TestUsageLinesComeFromTheRegistry drives the REPL's usage paths with a registry
+// whose hints are SENTINELS, so a hand-written literal cannot pass: the string a
+// path prints has to equal a sentinel it could only have read from the registry.
+//
+// /import and /remote-control are the two the REPL answers itself; /resume's bare
+// form lists sessions instead of printing usage, and /goal and /btw print theirs
+// through the session host (covered by the TUI's counterpart test).
+func TestUsageLinesComeFromTheRegistry(t *testing.T) {
+	const sentinel = "[SENTINEL-ARGS]"
+	for _, tc := range []struct {
+		name string
+		run  func(out *bytes.Buffer, deps *replDeps)
+	}{
+		{"import", func(out *bytes.Buffer, deps *replDeps) { runImport(out, deps, "/import") }},
+		{"remote-control", func(out *bytes.Buffer, deps *replDeps) { runRemoteControl(out, deps, "/remote-control bogus") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _ := newTestDeps(t, nil)
+			deps.slash = runtime.NewSlashRegistry()
+			deps.slash.AddBuiltin(runtime.SlashCommand{
+				Name:         tc.name,
+				ArgumentHint: sentinel,
+				Action:       func(string) string { return "" },
+			})
+			var out bytes.Buffer
+			tc.run(&out, &deps)
+			if want := "usage: /" + tc.name + " " + sentinel; !strings.Contains(out.String(), want) {
+				t.Errorf("usage line should be the registry's %q, got %q", want, out.String())
+			}
+		})
+	}
+}
