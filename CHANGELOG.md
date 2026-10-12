@@ -401,6 +401,28 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The composer keeps working while a run is in flight**: typing has always been
+  enabled mid-run (that is how a steering message is composed), but ↑/↓ refused
+  to browse the prompt history and a typed `/` refused to autocomplete — the
+  whole cluster was treated as idle-only because *submitting* a slash command
+  mid-run was refused. The refusal was one rule too broad: it existed so a
+  command would not be queued as steering prose, and so a prompt-expanding
+  command could not start a second run (which would tear the first one down) — but
+  it also blocked the commands that are meaningful exactly then (`/model`,
+  `/permissions`, `/help`), and made a long run the one time the composer stopped
+  helping. Now `/name …` lines are resolved as commands whether or not a run is in
+  flight, and each command class that must not run mid-run refuses itself where it
+  is handled: a prompt/hybrid command (a skill, a template, a plugin command)
+  would start a second run, and `/status` and `/memory` read the conversation,
+  which the run goroutine owns until the run settles — reading it from the TUI
+  goroutine is a genuine data race against the loop's own appends, pinned by a
+  race-detector test that reports three `DATA RACE` failures if either guard is
+  dropped. Both refusals say why and leave the line in the composer so it runs
+  after an Esc, and `/exit` is refused mid-run for the reason Ctrl+D already is:
+  the in-flight turn is persisted when the run settles, not before. ↑/↓, Tab
+  completion and the autocomplete popup are keyed on the buffer rather than on the
+  run state, with the sub-agent panel still owning ↑/↓ while it has rows and the
+  composer is empty.
 - **Auto-compaction now keeps 10% of the window free**: the trigger was
   `window − 16,384` tokens, which is sensible on a 128k model (~87% full) but
   a rounding error on a 1M one — a 1M-window session only compacted at 98.4%

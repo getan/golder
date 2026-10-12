@@ -1584,12 +1584,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	// While idle with the autocomplete popup open, the arrow / Tab / Esc keys
-	// drive the menu instead of the transcript or textarea (FR-15). Enter is left
-	// to the main switch below, which routes through submit → runSlash so the
-	// selected/typed command runs. These are matched via KeyPressMsg.String() so
-	// the mapping is terminal-independent.
-	if !m.running && m.menu.active {
+	// With the autocomplete popup open, the arrow / Tab / Esc keys drive the menu
+	// instead of the transcript or textarea (FR-15). Enter is left to the main
+	// switch below, which routes through submit → runSlash so the selected/typed
+	// command runs. These are matched via KeyPressMsg.String() so the mapping is
+	// terminal-independent. The popup works mid-run like it does when idle: it
+	// opens on a "/prefix" the user is typing, and most commands are meaningful
+	// then (a model switch, /permissions, the /status family) — the ones that
+	// would disturb the run refuse themselves in runSlash.
+	if m.menu.active {
 		switch msg.String() {
 		case "up":
 			m.menu.moveUp()
@@ -1791,41 +1794,38 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// while a run streams so a steering message can be composed and queued
 	// (submit handles the running case). textarea handles CJK / emoji by rune and
 	// Shift+Enter as a newline.
-	if !m.running {
-		// ↑/↓ walk the submitted-prompt history when the caret is at the top / bottom
-		// edge of the composer, and Tab completes a slash command — idle-only
-		// affordances. Mid-run ↑/↓ move the caret instead (or drive the sub-agent
-		// panel, above) and the slash popup stays closed, since submit refuses
-		// slash commands while running.
-		switch msg.String() {
-		case "up":
-			return m.historyPrev(msg)
-		case "down":
-			return m.historyNext(msg)
-		case "tab":
-			// History recall deliberately leaves the autocomplete popup closed,
-			// so Tab is the explicit "complete this /command" gesture. Opening
-			// on the current "/prefix" and completing to the highlighted
-			// candidate matches what Tab does while the popup is open; a
-			// non-slash buffer falls through to the textarea.
-			if _, ok := slashToken(m.input.Value()); ok {
-				m.menu.refresh(m.input.Value(), m.slash)
-				m = m.completeSlash()
-				m.relayout()
-				return m, nil
-			}
+	// ↑/↓ walk the submitted-prompt history when the caret is at the top / bottom
+	// edge of the composer, and Tab completes a slash command. Both work mid-run:
+	// the composer is a live editor while a run streams (typing is enabled so a
+	// steering message can be composed), and recalling what was sent earlier is
+	// exactly what a long run makes you want. historyPrev/historyNext keep the
+	// multi-line caret semantics themselves — a draft with the caret on an inner
+	// line moves the caret instead — and the sub-agent panel above has already
+	// claimed the keys when it has rows and the composer is empty.
+	switch msg.String() {
+	case "up":
+		return m.historyPrev(msg)
+	case "down":
+		return m.historyNext(msg)
+	case "tab":
+		// History recall deliberately leaves the autocomplete popup closed,
+		// so Tab is the explicit "complete this /command" gesture. Opening
+		// on the current "/prefix" and completing to the highlighted
+		// candidate matches what Tab does while the popup is open; a
+		// non-slash buffer falls through to the textarea.
+		if _, ok := slashToken(m.input.Value()); ok {
+			m.menu.refresh(m.input.Value(), m.slash)
+			m = m.completeSlash()
+			m.relayout()
+			return m, nil
 		}
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	// The autocomplete popup is an idle affordance (see above): refresh it only
-	// when idle, and close it if a run started while it was open — otherwise its
-	// rows would count against the layout while its keys are not routed.
-	if !m.running {
-		m.menu.refresh(m.input.Value(), m.slash)
-	} else if m.menu.active {
-		m.menu.close()
-	}
+	// Refresh the popup against the buffer the key produced. It is keyed on a
+	// "/prefix" and no-ops while a picker owns the menu (see slashMenu.refresh),
+	// so a run in flight needs no special case.
+	m.menu.refresh(m.input.Value(), m.slash)
 	m.relayout()
 	return m, cmd
 }
@@ -1848,6 +1848,15 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	if strings.HasPrefix(prompt, "!") {
 		return m.submitUserShell(prompt)
 	}
+	// A "/name ..." line is a slash-command invocation, never a model prompt, so
+	// it is resolved here whether or not a run is in flight — queueMidRun is for
+	// steering text, and a command queued as prose would reach the model as
+	// literal text. Commands that would disturb the run guard themselves (see
+	// runSlash), and one that would start a second run is refused there with the
+	// buffer kept.
+	if strings.HasPrefix(prompt, "/") {
+		return m.submitSlash(prompt)
+	}
 	// Mid-run Enter queues the message instead of starting a run: the loop's
 	// steering seams deliver it after the next tool execution (or when the turn
 	// settles), so a streaming run can be steered without interrupting it.
@@ -1865,12 +1874,6 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil
-	// A "/name ..." line is a slash-command invocation, not a prompt: resolve it
-	// against the shared registry (same as the REPL) rather than sending it to the
-	// agent verbatim.
-	if strings.HasPrefix(prompt, "/") {
-		return m.runSlash(prompt)
-	}
 	m.transcript.addUser(prompt)
 	m.remoteEcho("\n> " + prompt + "\n")
 	m.input.Clear()
@@ -1879,19 +1882,34 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	return m.startPrompt(prompt)
 }
 
+// submitSlash resolves a "/name ..." line against the shared registry (same as
+// the REPL) instead of sending it to the agent verbatim. It is the one submit
+// path a run in flight does not divert to the steer queue: slash lines are
+// commands, and queuing one would deliver it to the model as literal prose.
+// Whether a given command may actually run mid-run is decided in runSlash,
+// which is also where the refusal keeps the buffer so the line can be run after
+// an interrupt.
+func (m Model) submitSlash(line string) (tea.Model, tea.Cmd) {
+	// Record the input into the browse history. The EXPANDED line is stored (not
+	// the raw text with "[Pasted text #N]" placeholders): the paste bodies and
+	// image paths are dropped right after submit, so a recalled placeholder could
+	// never be re-expanded and would be sent literally.
+	m.recordHistory(line)
+	// The placeholders have been expanded into the line, so the stored paste
+	// bodies and image paths are consumed; drop them (the id counters keep climbing).
+	m.pastes = make(map[int]string)
+	m.images = make(map[int]string)
+	m.pastePreview = nil
+	return m.runSlash(line)
+}
+
 // queueMidRun appends a message typed while a run is in flight to the steer
 // queue. The message shows up in the queued-messages preview above the composer
 // (not in the transcript yet — the user block is added when the loop actually
 // injects it, via steerInjectedMsg), is recorded for ↑ recall, and the composer
-// is cleared so the next message can be typed. Slash commands are refused: they
-// are idle-oriented (session switches, pickers) and would otherwise be sent to
-// the model as literal text, so the buffer is left intact with a note.
+// is cleared so the next message can be typed. Only prompts reach it: submit
+// routes "/name ..." lines to submitSlash first.
 func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
-	if strings.HasPrefix(prompt, "/") {
-		m.transcript.addSystem("(slash commands are not available while a run is in progress — press Esc to interrupt first)")
-		m.relayout()
-		return m, nil
-	}
 	m.recordHistory(prompt)
 	// The placeholders have been expanded into the queued prompt, so the stored
 	// paste bodies and image paths are consumed; drop them (ids keep climbing).
@@ -2030,6 +2048,15 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// before slash resolution. It registers only as a no-op /help builtin, so
 	// without this the registry would resolve it to an empty action.
 	if line == "/exit" {
+		// Quitting mid-run would abandon the turn: it is persisted when the run
+		// settles, not before, so the in-flight answer would be lost — the same
+		// reason Ctrl+D is ignored while running. Esc/Ctrl+C settles the run and
+		// saves it, and a second press quits.
+		if m.running {
+			m.transcript.addSystem("Interrupt the current run first, then /exit.")
+			m.relayout()
+			return m, nil
+		}
 		m.shutdownRemote()
 		m.quitting = true
 		return m, tea.Quit
@@ -2072,6 +2099,9 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// memory store, memory root, session id, and messages that a slash Action
 	// closure (string→string) cannot reach.
 	if line == "/memory" || strings.HasPrefix(line, "/memory ") {
+		if m.running {
+			return m.refuseContextReport(line)
+		}
 		m.transcript.addUser(line)
 		m.input.Clear()
 		m.menu.close()
@@ -2098,6 +2128,9 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// reach. The rendering lives in the shared status package so the TUI and the
 	// REPL produce byte-identical output.
 	if line == "/status" || strings.HasPrefix(line, "/status ") {
+		if m.running {
+			return m.refuseContextReport(line)
+		}
 		m.transcript.addUser(line)
 		m.input.Clear()
 		m.menu.close()
@@ -2175,6 +2208,23 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if line == "/remote-control" || strings.HasPrefix(line, "/remote-control ") {
 		return m.runRemoteControl(line)
 	}
+	// A command that expands to a prompt starts an agent turn, and starting one
+	// while a run is in flight would tear the run down — startPrompt → beginRun
+	// swaps the run channel and resets the per-run card index. Those commands are
+	// therefore refused mid-run, with the composer left intact so the line can be
+	// run after an interrupt. The registry is asked WITHOUT resolving, so the
+	// refusal lands before the invocation is echoed as a user block or the
+	// composer is cleared. Commands that only inspect or adjust live state
+	// (pickers, /help, /status) carry an Action and pass through; the ones that
+	// rebuild the context or start a run of their own are intercepted above and
+	// each guards itself.
+	if m.running && m.slash != nil {
+		if name, startsRun := promptCommandName(m.slash, line); startsRun {
+			m.transcript.addSystem(fmt.Sprintf("(/%s starts a new run, and one is already in progress — press Esc to interrupt first)", name))
+			m.relayout()
+			return m, nil
+		}
+	}
 	m.transcript.addUser(line)
 	m.input.Clear()
 	m.menu.close()
@@ -2198,7 +2248,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		m.statusBar.SetThinking(string(m.live.ThinkingLevel))
 		// /model can also change the context window; recompute the gauge against
 		// the new budget so a stale percentage is not shown until the next turn.
-		if m.session != nil && m.session.agentCtx != nil {
+		// Mid-run the messages belong to the run goroutine (a read here would race
+		// its appends), and the loop reports usage at every turn boundary anyway —
+		// against the window as it was when the run started, which is the window
+		// this run is actually working against. The gauge catches up on the first
+		// turn boundary after the switch.
+		if !m.running && m.session != nil && m.session.agentCtx != nil {
 			m.refreshContextUsage(m.session.agentCtx.Messages)
 		}
 	}
@@ -2208,6 +2263,30 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.startPrompt(outcome.Prompt)
+}
+
+// promptCommandName reports the command a line invokes when that command
+// produces prompt text — i.e. would start an agent turn — so runSlash can
+// refuse it while a run is in flight. A command that carries an Action runs a
+// side effect and returns a status instead, and a hybrid (Run) is treated as
+// prompt-producing because its returned prompt starts a turn. The name is
+// looked up without resolving, so asking costs no side effect and the caller can
+// refuse before echoing the invocation. An unknown name is not a prompt command:
+// it resolves to the resolver error the generic path already reports.
+func promptCommandName(reg *runtime.SlashRegistry, line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", false
+	}
+	name := strings.TrimPrefix(fields[0], "/")
+	if name == "" {
+		return "", false
+	}
+	c, ok := reg.Lookup(name)
+	if !ok || c.Action != nil {
+		return "", false
+	}
+	return name, true
 }
 
 // startSessionOp echoes a session operation that does its work off the tea loop
@@ -2249,6 +2328,21 @@ func commandToken(line string) string {
 		name = name[:i]
 	}
 	return "/" + name
+}
+
+// refuseContextReport declines /status and /memory while a run is in flight, and
+// says why. Neither command is idle-only by design: they are refused because
+// both read agentCtx.Messages, and the run goroutine owns that list until the run
+// settles (see the runEndMsg handler). Reading it from the TUI goroutine mid-run
+// would race the loop's own appends, and the token figures they print would be a
+// moving target anyway. Nothing is lost by waiting: the status bar's context
+// gauge shows the same number mid-run, because the loop reports it at every turn
+// boundary. The composer keeps the line, so it can be run after an interrupt.
+func (m Model) refuseContextReport(line string) (tea.Model, tea.Cmd) {
+	m.transcript.addSystem("Interrupt the current run first, then " + commandToken(line) +
+		": it reads the conversation the run is still writing (the status bar's context gauge already tracks it).")
+	m.relayout()
+	return m, nil
 }
 
 // runExport handles /export [path]: persist the live turn so unsaved messages

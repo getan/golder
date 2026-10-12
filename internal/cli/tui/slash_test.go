@@ -176,6 +176,41 @@ func TestSlashMenuRendersAboveInput(t *testing.T) {
 	}
 }
 
+// TestSlashMenuWorksMidRun pins the popup as a mid-run affordance: the composer
+// is a live editor while a run streams, so typing a "/prefix" must suggest
+// commands there like it does when idle (the popup, its arrow navigation and Tab
+// completion are all keyed on the buffer, not on the run state). Pressing Enter
+// then dispatches through the same runSlash a typed line uses, so the command
+// classes that must not run mid-run are still refused there.
+func TestSlashMenuWorksMidRun(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.running = true
+
+	// A bare "/" matches the whole registry, so the arrow assertion has more
+	// than one candidate to move between.
+	m = typeInto(t, m, "/").(Model)
+	if !m.menu.active {
+		t.Fatal("a /prefix typed mid-run should open the popup")
+	}
+	if got := strings.Join(menuNames(m), ","); !strings.Contains(got, "/model") {
+		t.Errorf("mid-run candidates = %v, want /model among them", got)
+	}
+	// Arrows drive the popup rather than the transcript while it is open.
+	before := m.menu.selected
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.menu.selected == before {
+		t.Error("↓ mid-run should move the popup selection while it is open")
+	}
+	// Tab completes the highlighted command and closes the popup.
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.menu.active {
+		t.Error("Tab should close the popup after completing")
+	}
+	if got := m.input.Value(); !strings.HasPrefix(got, "/") || !strings.HasSuffix(got, " ") {
+		t.Errorf("mid-run Tab completion = %q, want a completed command name", got)
+	}
+}
+
 // TestSlashPromptCommandStartsRun verifies a prompt (Expand) command's expanded
 // text is fed to the run seam, not shown as a bare status. A stub startRunFn
 // stands in for the live provider.

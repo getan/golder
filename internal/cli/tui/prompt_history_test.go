@@ -101,3 +101,37 @@ func TestModelSubmitRecordsExpandedPrompt(t *testing.T) {
 		t.Errorf("↑ recalled %q, want the expanded paste body", got)
 	}
 }
+
+// TestModelHistoryBrowsesMidRun pins the mid-run composer contract for ↑/↓: the
+// composer is a live editor while a run streams, so browsing what was sent
+// earlier — to queue a follow-up, or to re-read the prompt driving the current
+// run — must not require interrupting it. The keys stay the sub-agent panel's
+// when that panel has rows and the composer is empty (covered by its own tests);
+// with nothing selected they browse history exactly as they do when idle.
+func TestModelHistoryBrowsesMidRun(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 12})
+	m.recordHistory("first prompt")
+	m.recordHistory("second prompt")
+
+	m.running = true
+	// A draft in the composer is stashed, not lost: browsing away and back
+	// restores it (the same contract as when idle).
+	m.input.SetValue("half a steer")
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.input.Value(); got != "second prompt" {
+		t.Fatalf("mid-run ↑ recalled %q, want the newest prompt", got)
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.input.Value(); got != "first prompt" {
+		t.Errorf("second mid-run ↑ recalled %q, want the older prompt", got)
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if got := m.input.Value(); got != "half a steer" {
+		t.Errorf("↓ past the newest entry = %q, want the stashed draft", got)
+	}
+	// Recalling never starts or queues anything by itself.
+	if got := m.steerQ.snapshot(); len(got) != 0 {
+		t.Errorf("browsing must not queue anything, got %v", got)
+	}
+}
