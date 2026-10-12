@@ -377,10 +377,15 @@ func TestSlashMenuPickerRowStructure(t *testing.T) {
 	}
 }
 
-// longDescText is the kind of description the report was about: a built-in that
-// names its own subcommands and therefore runs well past one row.
-const longDescText = "show or switch the approval mode, or manage the remembered path grants: " +
-	"/permissions [read-only|ask|auto|full-access|writable|readable …]"
+// longDescText is the kind of description a built-in carries: one sentence that
+// runs past a narrow column, which is what the report was about.
+const longDescText = "show or switch the approval mode, or manage the remembered path grants"
+
+// longHintText is the usage half of the same pair — the shape a hint takes when
+// the command has subcommands, which is the case that used to be spelled out
+// inside the description (and is where the stale "…" came from).
+const longHintText = "[read-only|ask|auto|full-access | writable [list|add|rm] <path> | " +
+	"readable [list|add|rm] <path>]"
 
 // skillDescText is the other population: a paragraph, of the length an extension's
 // frontmatter description legitimately has.
@@ -388,9 +393,17 @@ const skillDescText = "Use when the user asks for a diagram, a map of a system, 
 	"explanation: renders it as standalone HTML with inline SVG, picks a dark palette, and " +
 	"writes the file next to the docs it documents."
 
-// descCommand builds a built-in candidate (the 4-line tier).
+// descCommand builds a candidate with a description and no hint.
 func descCommand(name, desc string) runtime.SlashCommand {
 	return runtime.SlashCommand{Name: name, Description: desc, Action: func(string) string { return "" }}
+}
+
+// hintCommand builds a candidate carrying both halves: the sentence and the usage
+// hint the surfaces render beside it.
+func hintCommand(name, desc, hint string) runtime.SlashCommand {
+	c := descCommand(name, desc)
+	c.ArgumentHint = hint
+	return c
 }
 
 // TestSlashMenuWrapsHighlightedDescription is the fix for "the comment is too
@@ -404,11 +417,13 @@ func TestSlashMenuWrapsHighlightedDescription(t *testing.T) {
 
 	plain := stripANSI(m.menu.view(80))
 	// Reassembling the lines must give back the description word for word — the
-	// proof that nothing was cut. (An ellipsis check would prove nothing here: this
-	// description ends with one of its own, in the usage hint.)
+	// proof that nothing was cut.
 	flat := strings.Join(strings.Fields(strings.ReplaceAll(plain, "\n", " ")), " ")
 	if !strings.HasSuffix(flat, strings.Join(strings.Fields(longDescText), " ")) {
 		t.Errorf("wrapped description is not the original text:\n%s", plain)
+	}
+	if strings.Contains(plain, ellipsis) {
+		t.Errorf("the highlighted row must show its whole text when it fits the cap:\n%s", plain)
 	}
 	// Continuation lines hang under the description column (the two-column caret
 	// gutter plus the "/name  " column), keeping the "/name" column clear so the
@@ -523,16 +538,16 @@ func TestSlashMenuDescCapTiersBySource(t *testing.T) {
 	}
 
 	builtin := read((*runtime.SlashRegistry).AddBuiltin)
-	if got := strings.Count(builtin, "\n") + 1; got != 1+maxBuiltinDescLines {
-		t.Errorf("built-in description lines = %d, want %d:\n%s", got, 1+maxBuiltinDescLines, builtin)
+	if got := strings.Count(builtin, "\n") + 1; got != 1+maxBuiltinDetailLines {
+		t.Errorf("built-in description lines = %d, want %d:\n%s", got, 1+maxBuiltinDetailLines, builtin)
 	}
 	if !strings.Contains(builtin, ellipsis) {
 		t.Errorf("a built-in description past its cap should end with an ellipsis:\n%s", builtin)
 	}
 
 	ext := read((*runtime.SlashRegistry).AddSkill)
-	if got := strings.Count(ext, "\n") + 1; got != 1+maxExtensionDescLines {
-		t.Errorf("extension description lines = %d, want %d:\n%s", got, 1+maxExtensionDescLines, ext)
+	if got := strings.Count(ext, "\n") + 1; got != 1+maxExtensionDetailLines {
+		t.Errorf("extension description lines = %d, want %d:\n%s", got, 1+maxExtensionDetailLines, ext)
 	}
 	if !strings.Contains(ext, ellipsis) {
 		t.Errorf("an extension description past its cap should end with an ellipsis:\n%s", ext)
@@ -540,8 +555,8 @@ func TestSlashMenuDescCapTiersBySource(t *testing.T) {
 
 	// The cap follows the source, not the name: a user template is capped like a
 	// skill, and a built-in keeps its four lines even when it shares a name.
-	if got := commandDescLineCap(descCommand("permissions", longDescText)); got != maxBuiltinDescLines {
-		t.Errorf("built-in cap = %d, want %d", got, maxBuiltinDescLines)
+	if got := commandDetailLineCap(descCommand("permissions", longDescText)); got != maxBuiltinDetailLines {
+		t.Errorf("built-in cap = %d, want %d", got, maxBuiltinDetailLines)
 	}
 	for _, add := range []func(*runtime.SlashRegistry, runtime.SlashCommand){
 		(*runtime.SlashRegistry).AddUser,
@@ -554,8 +569,117 @@ func TestSlashMenuDescCapTiersBySource(t *testing.T) {
 		if !ok {
 			t.Fatal("command not registered")
 		}
-		if got := commandDescLineCap(c); got != maxExtensionDescLines {
-			t.Errorf("extension cap = %d, want %d", got, maxExtensionDescLines)
+		if got := commandDetailLineCap(c); got != maxExtensionDetailLines {
+			t.Errorf("extension cap = %d, want %d", got, maxExtensionDetailLines)
 		}
+	}
+}
+
+// TestSlashMenuShowsUsageHint is the other half of the report that produced the
+// stale "…": the popup rendered only the description, so commands with
+// subcommands spelled their usage inside it — and an abbreviation written for a
+// one-line row went stale the moment rows wrapped. The hint is a field of its
+// own, and the highlighted row now shows it: the description as a sentence, the
+// usage beneath it.
+func TestSlashMenuShowsUsageHint(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(hintCommand("permissions", longDescText, longHintText))
+	m = typeInto(t, m, "/perm").(Model)
+
+	plain := stripANSI(m.menu.view(80))
+	flat := strings.Join(strings.Fields(strings.ReplaceAll(plain, "\n", " ")), " ")
+	for _, want := range []string{longDescText, longHintText} {
+		if !strings.Contains(flat, strings.Join(strings.Fields(want), " ")) {
+			t.Errorf("highlighted row is missing %q:\n%s", want, plain)
+		}
+	}
+	// The hint reads as code, not as prose: it borrows ToolCmd, so usage is
+	// visually distinct from the sentence above it without another color. Asserted
+	// on a short hint, so the styled line is exactly one string to compare — a
+	// long one wraps and the pieces cannot be predicted without re-wrapping here.
+	short := NewModel(Options{})
+	short.slash.AddBuiltin(hintCommand("permissions", longDescText, "[list|add|rm]"))
+	short = typeInto(t, short, "/perm").(Model)
+	hanging := "  " + strings.Repeat(" ", ui.Width("/permissions  "))
+	if raw := short.menu.view(80); !strings.Contains(raw, DefaultTheme().ToolCmd.Render(hanging+"[list|add|rm]")) {
+		t.Errorf("usage hint should render in the code style:\n%q", raw)
+	}
+}
+
+// TestSlashMenuHintOnlyHighlighted: the hint belongs to the row being read, like
+// the wrapped description. Other rows stay one line, so a list of commands with
+// usage strings does not become a wall of text.
+func TestSlashMenuHintOnlyHighlighted(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(hintCommand("permissions", longDescText, longHintText))
+	m.slash.AddBuiltin(hintCommand("permalink", longDescText, longHintText))
+	m = typeInto(t, m, "/perm").(Model)
+	if len(m.menu.filtered) < 2 {
+		t.Fatalf("need two candidates, got %d", len(m.menu.filtered))
+	}
+
+	plain := stripANSI(m.menu.view(80))
+	selected := m.menu.filtered[m.menu.selected].Name
+	for _, c := range m.menu.filtered {
+		if c.Name == selected {
+			continue
+		}
+		var line string
+		for _, ln := range strings.Split(plain, "\n") {
+			if strings.Contains(ln, "/"+c.Name) {
+				line = ln
+			}
+		}
+		if strings.Contains(line, "[read-only") {
+			t.Errorf("unselected row /%s should not carry the hint: %q", c.Name, line)
+		}
+		if !strings.Contains(line, ellipsis) {
+			t.Errorf("unselected row /%s should stay one ellipsized line: %q", c.Name, line)
+		}
+	}
+}
+
+// TestSlashMenuHintBudgetIsBounded: the hint shares the highlighted block's line
+// budget, description first, so a long usage string cannot grow the popup without
+// bound. When the budget runs out mid-hint the cut is marked, which is what the
+// ellipsis in the popup now always means.
+func TestSlashMenuHintBudgetIsBounded(t *testing.T) {
+	m := NewModel(Options{})
+	m.slash.AddBuiltin(hintCommand("permissions", longDescText, strings.Repeat("|<arg>", 60)))
+	m = typeInto(t, m, "/perm").(Model)
+
+	view := stripANSI(m.menu.view(80))
+	if got := strings.Count(view, "\n") + 1; got > 1+maxBuiltinDetailLines {
+		t.Errorf("detail block grew to %d lines, cap is %d:\n%s", got-1, maxBuiltinDetailLines, view)
+	}
+	if !strings.Contains(view, ellipsis) {
+		t.Errorf("a block past the cap should end with an ellipsis:\n%s", view)
+	}
+	// The description survives: it is the part the cap protects.
+	if !strings.Contains(strings.Join(strings.Fields(view), " "), longDescText) {
+		t.Errorf("the description should be kept whole:\n%s", view)
+	}
+	if got := strings.Count(view, "\n") + 1; got != m.menu.rows(80) {
+		t.Errorf("drawn lines = %d, rows() = %d", got, m.menu.rows(80))
+	}
+}
+
+// TestSlashMenuHintWithoutDescription covers the shape the test fixtures above do
+// not: a command that has usage but no description (a bare template, or a
+// skill whose frontmatter carried only a hint) still renders its hint instead of
+// falling back to a bare "/name".
+func TestSlashMenuHintWithoutDescription(t *testing.T) {
+	m := NewModel(Options{})
+	c := descCommand("review", "")
+	c.ArgumentHint = "<PR-URL>"
+	m.slash.AddBuiltin(c)
+	m = typeInto(t, m, "/rev").(Model)
+
+	plain := stripANSI(m.menu.view(80))
+	if !strings.Contains(plain, "<PR-URL>") {
+		t.Errorf("a hint without a description must still render:\n%s", plain)
+	}
+	if got := strings.Count(plain, "\n") + 1; got != m.menu.rows(80) {
+		t.Errorf("drawn lines = %d, rows() = %d", got, m.menu.rows(80))
 	}
 }

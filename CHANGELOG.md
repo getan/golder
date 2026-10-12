@@ -12,29 +12,38 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
-- **The slash-command popup shows the whole description of the command you are
-  on**: every row was one line with an ellipsis, so a candidate whose description
-  did not fit — `/permissions` documents three subcommands in its text — was
-  unreadable exactly when you had arrowed onto it and wanted to read it. The
-  highlighted row now wraps, with its continuation lines hanging under the
-  description column so the `/name` column stays clear and the block still reads
-  as one row; the rows you are only scanning past keep the single ellipsized
-  line, which is what stops eight long descriptions from turning the popup into a
-  page. The wrap breaks at spaces rather than mid-word (`read-only` could come
-  out as `re` + `ad-only` under the transcript's rune wrapper), and a token with
-  no spaces in it — a usage string, a path, a run of CJK — breaks at its own
-  punctuation (`[a|b|` + `c]`) before falling back to a rune boundary. How many
-  lines a description may take is tiered by where the command came from, because
-  the two populations are written for different readers: a built-in is written to
-  be read here (four lines, which holds the longest one down to a ~68-column
-  terminal), while a skill, template or plugin description is frontmatter written
-  for the system prompt — a paragraph is normal there — so the menu previews it
-  in two lines and leaves the text the agent receives untouched. The tier keys
-  off the same source test that groups commands, so the `Extensions` block and
-  the two-line cap cannot drift apart. The popup also counts its reserved height
-  from the same renderer that draws it (`rows(width)`), so a wrapped row can no
-  longer make the overlay and the transcript disagree about how tall the popup
-  is.
+- **The slash-command popup shows the whole entry for the command you are on**:
+  every row was one line with an ellipsis, so a candidate whose text did not fit
+  was unreadable exactly when you had arrowed onto it and wanted to read it. The
+  highlighted row now wraps — continuation lines hanging under the description
+  column, so the `/name` column stays clear and the block still reads as one row
+  — while the rows you are only scanning past keep the single ellipsized line,
+  which is what stops eight long entries from turning the popup into a page. The
+  wrap breaks at spaces rather than mid-word (`read-only` could come out as `re` +
+  `ad-only` under the transcript's rune wrapper), and a token with no spaces in it
+  — a usage string, a path, a run of CJK — breaks at its own punctuation (`[a|b|`
+  + `c]`) before falling back to a rune boundary.
+- **The popup renders a command's usage hint**: the description and the arguments
+  are two fields (`ArgumentHint` is what `/help` and the REPL's completion already
+  render), but the popup showed only the description — so five built-ins
+  (`/model`, `/provider`, `/permissions`, `/proxy`, `/trust`) spelled their usage
+  inside the description to get it displayed at all, and `/permissions` carried a
+  hand-written `…` abbreviation that went stale the moment rows could wrap: it
+  read as a rendering bug rather than as the writer's shorthand. The hint is now
+  rendered under the description on the highlighted row, in the style the
+  transcript uses for command text, so usage reads as a signature instead of more
+  prose; the five descriptions are sentences again, and each usage string has one
+  home. How many lines the block may take is tiered by where the command came
+  from, because the two populations are written for different readers: a built-in
+  is written to be read here (four lines, which holds the longest one down to a
+  ~68-column terminal), while a skill, template or plugin description is
+  frontmatter written for the system prompt — a paragraph is normal there — so the
+  menu previews it in two lines and leaves the text the agent receives untouched.
+  The tier keys off the same source test that groups commands, so the `Extensions`
+  block and the two-line cap cannot drift apart. The popup also counts its
+  reserved height from the same renderer that draws it (`rows(width)`), so a
+  wrapped row can no longer make the overlay and the transcript disagree about how
+  tall the popup is.
 - **The REPL's risk prompt offers the write grant too**: the TUI dialog has
   offered "allow writes to `<path>`" for a while, but the line-based REPL asked
   a plain `[y/N]` for the same escalation — so the same conflict had a narrower

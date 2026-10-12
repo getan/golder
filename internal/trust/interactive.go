@@ -228,7 +228,7 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:        "trust",
 		Category:    runtime.CategoryPermissions,
-		Description: "view or set this project's trust: /trust [on|off|once|status]",
+		Description: "view or set this project's trust",
 		Action: func(args string) string {
 			switch strings.TrimSpace(strings.ToLower(args)) {
 			case "", "on":

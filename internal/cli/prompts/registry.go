@@ -606,7 +606,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "model",
 		Category:     runtime.CategoryModel,
-		Description:  "list and switch models on the current provider: /model [n|id] [level] | /model think [level]",
+		Description:  "list and switch models on the current provider",
 		ArgumentHint: "[n|id [level]|think level]",
 		Action: func(args string) string {
 			arg := strings.TrimSpace(args)
@@ -670,7 +670,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "provider",
 		Category:     runtime.CategoryModel,
-		Description:  "list providers with credential availability, or switch: /provider [name]",
+		Description:  "list providers with credential availability, or switch",
 		ArgumentHint: "[name]",
 		Action:       providerAction,
 	})
@@ -805,7 +805,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
-		Description:  "show or switch the approval mode, or manage the remembered path grants: /permissions [read-only|ask|auto|full-access|writable|readable …]",
+		Description:  "show or switch the approval mode, or manage the remembered path grants",
 		ArgumentHint: "[read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
 		Action: func(args string) string {
 			l := pickLang()

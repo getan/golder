@@ -67,7 +67,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:        "proxy",
 		Category:    runtime.CategoryModel,
-		Description: "choose which providers use the proxy: /proxy [<provider> on|off | url <url>]",
+		Description: "choose which providers use the proxy",
 		Action: func(args string) string {
 			cfg, err := provider.ProxySettings()
 			if err != nil {
