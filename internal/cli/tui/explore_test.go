@@ -60,14 +60,16 @@ func TestExploreGroupCoalescesReads(t *testing.T) {
 	}
 }
 
-// TestExploreGroupSplitsAroundSideEffects: a bash call between two read runs
-// ends the first group, so the second run opens a new cell instead of merging
-// across the side effect (the ordering the transcript must keep showing).
+// TestExploreGroupSplitsAroundSideEffects: a side-effecting bash call between
+// two read runs ends the first group, so the second run opens a new cell
+// instead of merging across it (the ordering the transcript must keep showing).
+// The command is one the recognizer declines; a read-only shell command folds
+// instead, which TestExploreGroupFoldsReadOnlyShellCalls pins.
 func TestExploreGroupSplitsAroundSideEffects(t *testing.T) {
 	tr := newTranscript(DefaultTheme())
 	tr.setSize(120, 40)
 	tr.addToolCard(exploreCard("1", "read", map[string]any{"path": "a.go"}, cardSuccess))
-	tr.addToolCard(exploreCard("2", "bash", map[string]any{"command": "git status"}, cardSuccess))
+	tr.addToolCard(exploreCard("2", "bash", map[string]any{"command": "go test ./..."}, cardSuccess))
 	tr.addToolCard(exploreCard("3", "grep", map[string]any{"pattern": "TODO", "path": "internal"}, cardSuccess))
 
 	var groups int
@@ -330,12 +332,17 @@ func TestExploreGroupIncludesViewImage(t *testing.T) {
 // TestExploreGroupExcludesResultBearingTools pins the deliberate exclusions:
 // webfetch, websearch and memory_search are parallel reads too, but their
 // RESULT is what the user came to see, so folding them would replace fetched
-// content with a summary line. bash stays out because it has side effects.
+// content with a summary line. bash is not in the native name set — it folds
+// per call, when its command is provably read-only (see
+// TestExploreGroupFoldsReadOnlyShellCalls).
 func TestExploreGroupExcludesResultBearingTools(t *testing.T) {
-	for _, name := range []string{"webfetch", "websearch", "memory_search", "bash"} {
+	for _, name := range []string{"webfetch", "websearch", "memory_search"} {
 		if isExploreTool(name) {
 			t.Errorf("%s must keep its own card (its result is the thing to read)", name)
 		}
+	}
+	if isExploreTool("bash") {
+		t.Error("bash is not a blanket exploration tool: its fold depends on the command")
 	}
 	for _, name := range []string{"read", "ls", "grep", "find", "view_image"} {
 		if !isExploreTool(name) {
@@ -406,5 +413,98 @@ func TestExploreGroupHeaderSettlesOnRunEnd(t *testing.T) {
 	got := stripANSI(renderContentStr(m))
 	if strings.Contains(got, "Exploring") {
 		t.Errorf("header stuck on Exploring after the run ended:\n%s", got)
+	}
+}
+
+// TestExploreGroupFoldsReadOnlyShellCalls is the shell half of the fold,
+// mirroring codex: a bash call whose command is provably read-only joins the
+// exploration cell (that is the same recognizer the permission gate uses to
+// skip the reviewer), while a command that writes, executes, or cannot be
+// proven keeps its own card.
+func TestExploreGroupFoldsReadOnlyShellCalls(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(140, 40)
+	tr.addToolCard(exploreCard("1", "bash", map[string]any{"command": "ls -la internal"}, cardSuccess))
+	tr.addToolCard(exploreCard("2", "bash", map[string]any{"command": "cd /repo && git log --oneline -3 2>&1"}, cardSuccess))
+	tr.addToolCard(exploreCard("3", "bash", map[string]any{"command": `rg -n TODO internal | head -20`}, cardSuccess))
+	tr.addToolCard(exploreCard("4", "bash", map[string]any{"command": "go test ./..."}, cardSuccess))
+	tr.addToolCard(exploreCard("5", "bash", map[string]any{"command": "rm -rf ./build"}, cardSuccess))
+
+	var group *exploreGroup
+	var ownCards []string
+	for _, b := range tr.blocks {
+		if b.group != nil {
+			group = b.group
+		}
+		if b.card != nil {
+			ownCards = append(ownCards, argString(b.card.input["command"]))
+		}
+	}
+	if group == nil {
+		t.Fatal("the three read-only shell calls should have coalesced into one cell")
+	}
+	var folded []string
+	for _, c := range group.cards {
+		folded = append(folded, argString(c.input["command"]))
+	}
+	wantFolded := []string{"ls -la internal", "cd /repo && git log --oneline -3 2>&1", `rg -n TODO internal | head -20`}
+	if strings.Join(folded, "\x00") != strings.Join(wantFolded, "\x00") {
+		t.Errorf("folded commands = %q, want %q", folded, wantFolded)
+	}
+	// The two that write or cannot be proven keep their own cards, which is what
+	// makes the cell safe to read: everything in it is a read the gate let
+	// through untested.
+	wantOwn := []string{"go test ./...", "rm -rf ./build"}
+	if strings.Join(ownCards, "\x00") != strings.Join(wantOwn, "\x00") {
+		t.Errorf("own cards = %q, want %q", ownCards, wantOwn)
+	}
+	view := stripANSI(strings.Join(tr.contentLines(), "\n"))
+	for _, want := range []string{"List internal", "git log --oneline -3", "Search TODO in internal"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("shell read %q missing from the cell summary:\n%s", want, view)
+		}
+	}
+}
+
+// TestExploreFoldDeclinesBeforeArgsArrive pins the honest default: a bash card
+// announced before its command streamed in has nothing to prove, so it keeps
+// its own card rather than folding on an assumption.
+func TestExploreFoldDeclinesBeforeArgsArrive(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(120, 40)
+	tr.addToolCard(exploreCard("1", "bash", nil, cardRunning))
+	for _, b := range tr.blocks {
+		if b.group != nil {
+			t.Errorf("a bash card with no command yet must not fold into an exploration cell")
+		}
+	}
+	if !isExploreTool("ls") {
+		t.Error("the native read tools still fold unconditionally")
+	}
+}
+
+// TestExploreGroupShowsMemberVerdictsWhileCollapsed pins what a folded card
+// must not hide: a gate verdict. The summary says what was read, but the note
+// says whether it was allowed, contained, or denied — and an allow carries no
+// note at all, so an ordinary read adds nothing to the cell.
+func TestExploreGroupShowsMemberVerdictsWhileCollapsed(t *testing.T) {
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(120, 40)
+	tr.addToolCard(exploreCard("1", "bash", map[string]any{"command": "ls /outside"}, cardSuccess))
+	tr.addReviewNote(judge.Note{
+		Tool: "bash", ToolCallID: "1", Kind: judge.NoteDenied, Level: judge.Deny,
+		Lang: "en", Summary: "ls /outside", Rationale: "denied by the user",
+	})
+	view := stripANSI(strings.Join(tr.contentLines(), "\n"))
+	if !strings.Contains(view, "denied by the user") {
+		t.Errorf("a verdict on a folded call must be visible without expanding the cell:\n%s", view)
+	}
+
+	// An allow is silent, so the same cell with no note renders no verdict line.
+	quiet := newTranscript(DefaultTheme())
+	quiet.setSize(120, 40)
+	quiet.addToolCard(exploreCard("2", "bash", map[string]any{"command": "ls internal"}, cardSuccess))
+	if got := stripANSI(strings.Join(quiet.contentLines(), "\n")); strings.Contains(got, "Auto-approved") {
+		t.Errorf("an allow must not print a verdict line:\n%s", got)
 	}
 }

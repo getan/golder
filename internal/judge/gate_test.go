@@ -104,7 +104,7 @@ func TestPermissionGateAskPrompts(t *testing.T) {
 		Classifier: stub,
 		Notify:     rec.emit,
 	})
-	if dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec != nil {
+	if dec := gate(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); dec != nil {
 		t.Fatal("answering y should allow")
 	}
 	if len(rec.notes) != 0 {
@@ -116,7 +116,7 @@ func TestPermissionGateAskPrompts(t *testing.T) {
 		Out:        &out2,
 		Classifier: stub,
 	})
-	if dec := gateNo(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec == nil || !dec.Block {
+	if dec := gateNo(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); dec == nil || !dec.Block {
 		t.Fatal("answering n should block")
 	}
 }
@@ -178,7 +178,7 @@ func TestPermissionGateReviewerFailure(t *testing.T) {
 		Sandboxed:  func(name string) bool { return name == "bash" },
 		Notify:     rec.emit,
 	})
-	dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`))
+	dec := gate(context.Background(), toolCall("bash", `{"command":"go test ./..."}`))
 	if dec == nil || dec.Block || !dec.Sandbox {
 		t.Fatalf("a failed review on a sandboxable tool must run contained, got %+v", dec)
 	}
@@ -264,7 +264,8 @@ func TestPermissionGateInterrupt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gate := PermissionGate(permissions.New(permissions.Ask), GateOpts{In: bufio.NewReader(r), Out: &out, Classifier: stub})
 	done := make(chan *agentcore.BeforeToolCallDecision, 1)
-	go func() { done <- gate(ctx, toolCall("bash", `{"command":"ls"}`)) }()
+	// A command the fast path declines, so the prompt is actually reached.
+	go func() { done <- gate(ctx, toolCall("bash", `{"command":"go test ./..."}`)) }()
 	cancel()
 	select {
 	case dec := <-done:
@@ -478,7 +479,7 @@ func TestEscalationRequested(t *testing.T) {
 		{`not json`, false},
 	}
 	for _, c := range cases {
-		if got := escalationRequested(toolCall("bash", c.args)); got != c.want {
+		if got := escalationRequested(json.RawMessage(c.args)); got != c.want {
 			t.Errorf("escalationRequested(%s) = %v, want %v", c.args, got, c.want)
 		}
 	}

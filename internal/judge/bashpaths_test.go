@@ -53,6 +53,11 @@ func TestBashPathCandidates(t *testing.T) {
 		{"pipeline segment", "cat " + out + "/src/a.go | wc -l", []string{out + "/src/a.go"}},
 		{"and segment", "grep -c . " + out + "/src/a.go && echo done", []string{out + "/src/a.go"}},
 		{"input redirect", "cat < " + out + "/src/a.go", []string{out + "/src/a.go"}},
+		// cd's operand is where everything after it reads from, so it is a
+		// boundary question in its own right: without it the dominant shape of a
+		// real command line carried no path the scanner could see.
+		{"cd then read", "cd " + out + " && ls", []string{out}},
+		{"cd then search", "cd " + out + "/src && rg -n x .", []string{out + "/src"}},
 		{"find path", "find " + out + " -name '*.go'", []string{out}},
 		{"command substitution", "cat $(echo " + home + "/notes.md)", []string{home + "/notes.md)"}},
 		{"glob", "cat " + home + "/*", []string{home + "/*"}},

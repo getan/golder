@@ -90,13 +90,17 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	if seam == nil {
 		t.Fatal("BeforeToolCall should hold the judge gate when remote control is off")
 	}
-	// The baseline gate decides benign calls: this test session has no reviewer,
-	// so the failed review routes bash into the sandbox when a runner exists
-	// (fail-closed containment) and blocks it when none does (fail-closed). The
-	// branch mirrors run.SandboxGate(), the same predicate buildConfig wires in,
-	// so this test holds on hosts with and without a platform sandbox. It also
+	// The baseline gate decides non-read-only calls: this test session has no
+	// reviewer, so the failed review routes bash into the sandbox when a runner
+	// exists (fail-closed containment) and blocks it when none does (fail-closed).
+	// The branch mirrors run.SandboxGate(), the same predicate buildConfig wires
+	// in, so this test holds on hosts with and without a platform sandbox. It also
 	// blocks static hard-denies regardless.
-	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}); dec == nil {
+	//
+	// The command must be one the read-only fast path declines: a read command
+	// (`ls`, `echo hi`) is now allowed without consulting the reviewer at all, so
+	// it would return nil and the fail-closed branch would never be exercised.
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"go test ./..."}`)}); dec == nil {
 		t.Fatal("judge baseline should decide on benign bash, got nil")
 	} else if run.SandboxGate() != nil {
 		if dec.Block || !dec.Sandbox {

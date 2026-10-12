@@ -165,6 +165,23 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (san
 	if escalationRequested {
 		return false, ""
 	}
+	// A provably read-only command is contained rather than run bare. Skipping
+	// the reviewer is a statement about the command (judge.ReadOnlyFastPath), not
+	// a promise that the consent gate saw every path it touches — that promise
+	// rests on two tables in another package staying in step, and when they fell
+	// out of step (`cksum /outside/x`) the read was neither asked about nor
+	// reviewed. Running it inside the sandbox is the floor under that promise:
+	// the sandbox's read whitelist is the workspace plus the roots the user
+	// granted, so a path the scanner missed is refused by the kernel instead of
+	// being read quietly.
+	//
+	// The exception is a one-call read grant (the "allow this read once" answer):
+	// a single path has no sandbox-whitelist form, so containing the call would
+	// make the read the user just approved fail. It runs directly, which is also
+	// what it did before this containment existed.
+	if t.Sandbox != nil && agentcore.ReadGrantFromContext(ctx) == "" && judge.ReadOnlyShellCommand(command) {
+		return true, ""
+	}
 	if t.Judge == nil {
 		return false, ""
 	}

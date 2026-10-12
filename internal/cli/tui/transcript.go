@@ -411,7 +411,7 @@ func (t *transcript) announceToolCard(c *toolCard) {
 // committed prefix, so the stored wrap is dropped for the next layout to
 // rebuild.
 func (t *transcript) appendToolBlock(c *toolCard) {
-	if isExploreTool(c.name) {
+	if isExploreCall(c) {
 		if n := len(t.blocks); n > 0 && t.blocks[n-1].group != nil {
 			g := t.blocks[n-1].group
 			g.cards = append(g.cards, c)

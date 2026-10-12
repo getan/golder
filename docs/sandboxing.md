@@ -38,8 +38,11 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 分级链（`internal/judge`，叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、敏感变量 echo 进网络等），只拒不放，其余全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）放行给审查器。
-2. **LLMJudge**：把「工具名 + 截断参数 + cwd 信任状态 + 最近对话（guardian 式挑选：最多 3 条最近 user 消息 + 最近 3 条任意消息，工具输出每条截 1k runes，整段 4k runes 预算）」作为 state，调用**当前 provider/model** 做一次严格 JSON 评审：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`。`rationale` 强制用对话语言书写（中文对话给中文理由），直接显示给用户。同 `(tool, args, trust, state)` 进程内缓存：一次调用里门与执行层共用一次判分，上下文变了就重判。
-3. **兜底**：审查超时（默认 30s，`GOLDER_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理。
+2. **只读快路径**（`internal/judge/readonly.go`，`GOLDER_READONLY_FASTPATH=off` 可关）：能**证明**只读的命令行直接放行，不问模型。这是 `auto` 档下最贵的一跳——每条命令一次完整往返（实测 bash 中位数 2.65s，而免审的原生工具 0.03s），而一次"读代码"的会话里绝大多数命令都是读取，且每条命令基本不重样、缓存帮不上忙。判定用的是**封闭白名单 + 严格扫描器**：扫描器只证明"将要跑的就是它返回的那些 argv"（除 `/dev/null` 与 fd 复制外任何重定向、命令替换、赋值、`env`/`nohup`/`time` 包装、变量、命令位置的通配符、按路径调用的程序一律拒绝），安全靠白名单——每个程序能写能执行的那几个开关按名字逐个排除（`rg --pre`、`find -exec/-delete/-fprint*`、`fd -x`、`sed` 非 `-n Np`、`sort -o/--compress-program/-T`、`file -C`、`diff --paginate`、`printf -v` 与 `%n`、`uniq` 的输出操作数、BSD `date MMDDhhmm`、`git -c/--config-env/--exec-path/--paginate/--output/--textconv/--ext-diff` 等）。证不出来就照旧审查——漏判只等于"它本来要付的那次审查"，不会更糟。凭据读（`cat ~/.zshrc`）**形状上是读**，所以 StaticFloor 在快路径**内部**再过一遍，而不是靠调用方记得先跑它。
+3. **LLMJudge**：把「工具名 + 截断参数 + cwd 信任状态 + 最近对话（guardian 式挑选：最多 3 条最近 user 消息 + 最近 3 条任意消息，工具输出每条截 1k runes，整段 4k runes 预算）」作为 state，调用**当前 provider/model** 做一次严格 JSON 评审：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`。`rationale` 强制用对话语言书写（中文对话给中文理由），直接显示给用户。同 `(tool, args, trust, state)` 进程内缓存：一次调用里门与执行层共用一次判分，上下文变了就重判。
+4. **兜底**：审查超时（默认 30s，`GOLDER_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理；没有审查器时快路径**不生效**（门保持"一律失败关闭"的旧语义，此时没有审查可在省）。
+
+只读快路径同时喂给 TUI：判定为只读的 shell 调用会和 `read`/`ls`/`grep`/`find` 一样折进 `• Explored` 单元格（codex 的显示对齐）；写在折叠单元格里的裁决（拒绝、收容）仍然可见，展开则逐条还原。
 
 新增依赖为零：审查用的就是会话模型，`/model` 切换后审查器随之切换，不需要 `TYPESAFE_API_KEY`。
 

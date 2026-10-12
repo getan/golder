@@ -156,6 +156,15 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	if ungradedTools[strings.ToLower(tool)] {
 		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
 	}
+	// A provably read-only shell command never reaches the reviewer: the floor
+	// above has already refused credential material, and the read-scope gate
+	// (ahead of this one in the chain) has already asked about anything outside
+	// the workspace, so what is left is a read of a directory the user opened or
+	// approved. That is the common case of a session spent reading a repository,
+	// and it was paying a model round trip per command.
+	if v, ok := ReadOnlyFastPath(tool, args); ok {
+		return v
+	}
 	if c.Inner == nil {
 		return Verdict{Level: Allow, Source: "static", Reasons: []string{"no grader configured"}}
 	}
@@ -407,7 +416,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// same denial forever), so the conflict goes to the user even
 				// in auto mode. Without a human the call is contained (the
 				// safe default) and the bash hint tells the model to stop.
-				if escalationRequested(call) {
+				if escalationRequested(call.Arguments) {
 					if interactive {
 						if ans := promptRisk(ctx, opts, call, v, "escalation request"); ans.allow {
 							if ans.writableRoot != "" {
@@ -527,18 +536,19 @@ func escalationJustification(call agentcore.AgentToolCall) string {
 	return strings.TrimSpace(a.Justification)
 }
 
-// escalationRequested reports whether the model asked to run this call
-// outside the sandbox (bash's sandbox_permissions=require_escalated). It is a
-// request, not a grant: the gate still owns the decision, this only changes
-// how a Sandbox verdict is settled — asking the user instead of silently
-// recontaining the call. The literal mirrors agenttool's
+// escalationRequested reports whether the model asked to run this call outside
+// the sandbox (bash's sandbox_permissions=require_escalated). It is a request,
+// not a grant: the gate still owns the decision, this only changes how a
+// Sandbox verdict is settled — asking the user instead of silently recontaining
+// the call — and it is why the read-only fast path declines such a call rather
+// than ignoring the request. The literal mirrors agenttool's
 // sandboxPermissionEscalated; the judge package cannot import it (agenttool
 // imports judge).
-func escalationRequested(call agentcore.AgentToolCall) bool {
+func escalationRequested(args json.RawMessage) bool {
 	var a struct {
 		SandboxPermissions string `json:"sandbox_permissions"`
 	}
-	if err := json.Unmarshal(call.Arguments, &a); err != nil {
+	if err := json.Unmarshal(args, &a); err != nil {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), "require_escalated")
@@ -585,6 +595,22 @@ func readOnlyAllowed(tool string) bool {
 // permissions.
 func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall) Verdict {
 	if opts.Classifier != nil {
+		// The read-only fast path is decided here as well as in Chain, so it
+		// applies to every wiring shape rather than only to a classifier that
+		// happens to be a Chain. Production builds one through run.NewReviewer
+		// (a Chain), but the exemption is a property of the call, not of how the
+		// reviewer was assembled, and this is the one place every gated call
+		// passes through.
+		//
+		// It sits inside this branch on purpose. With no reviewer wired the gate
+		// keeps its fail-closed contract ("a wiring mistake never widens
+		// permissions") for every gated tool, read-only or not: the fast path
+		// exists to spare the reviewer work it does not need to do, and with no
+		// reviewer there is no work to spare. Nothing is lost in production,
+		// which always wires one.
+		if v, ok := ReadOnlyFastPath(call.Name, call.Arguments); ok {
+			return v
+		}
 		return opts.Classifier.Classify(ctx, call.Name, call.Arguments)
 	}
 	if v, ok := staticDeny(call.Name, call.Arguments); ok {

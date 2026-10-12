@@ -12,6 +12,80 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A provably read-only shell command no longer waits for the reviewer**: in
+  auto mode every `bash` call was graded by the model reviewer — a whole round
+  trip per command, measured at a 2.65s median against 0.03s for the
+  reviewer-free file tools, with ~98% of a session's commands distinct enough
+  that the verdict cache could not amortize it. A session spent reading a
+  repository therefore paid the review tax on nearly every step, which is what
+  "golder feels slower than codex" was made of (codex answers the same problem
+  the same way, with a closed whitelist in
+  `codex-rs/shell-command/src/command_safety/is_safe_command.rs`).
+  `internal/judge/readonly.go` now recognizes a read-only command line and
+  allows it directly, and the same recognizer feeds the transcript, so a
+  read-only shell call folds into the `• Explored` cell beside the native read
+  tools (the display half of codex parity). `GOLDER_READONLY_FASTPATH=off` sends
+  every command back to the reviewer without a rebuild.
+
+  The safety argument is the whitelist, not the parser. A command is recognized
+  only when the scanner can prove what will run — no redirection but
+  `/dev/null` and fd duplication, no substitution, no assignment, no wrapper
+  (`env`/`nohup`/`time`), no variable, no glob in command position, no program
+  named by path — and every command in the sequence is a whitelisted program
+  whose arguments cannot write or execute. The whitelist is closed and each
+  entry's escape hatches are checked by name: `rg --pre`, `find -exec/-delete/
+  -fprint*`, `fd -x`, `sed` beyond `-n Np`, `sort -o/--compress-program/-T`,
+  `file -C`, `diff --paginate`, `printf -v` and `%n`, `uniq`'s output operand,
+  BSD `date MMDDhhmm`, `hostname NAME`, and git's `-c`/`--config-env`/
+  `--exec-path`/`--paginate`/`--output`/`--textconv`/`--ext-diff`. Anything not
+  provable keeps its review, so a miss costs only the review it would have had.
+
+  Replaying 12 real sessions (2981 bash calls) puts the hit rate at 59%: the
+  commands a reading session runs — `ls`, `cat`, `rg`, `sed -n`, `head`, `git
+  log/diff/status`, `cd`-prefixed variants — stop paying, while `go build/test`,
+  `git commit`, interpreters and `tuios` keep their review. Every (program,
+  flag) pair the replay would have allowed was read by hand and none can write
+  or execute.
+
+  Wiring the exemption up surfaced three holes in the design, each now a
+  regression test: `cat ~/.zshrc` has the *shape* of a read, so the static floor
+  is consulted inside the fast path itself rather than by caller convention;
+  `cd <dir> && <read>` exposed no path operand, so entering a directory was
+  neither asked about by the read-scope gate nor reviewed, which is why `cd`'s
+  operand is now a scanned file operand; and a folded call's verdict was
+  invisible while its exploration cell stayed collapsed, which the cell now
+  renders.
+
+  Two invariants make the whole thing hold together, and both are tests rather
+  than intentions. **The containment floor** (`C`): a command the fast path
+  allows still runs INSIDE the sandbox when a runner is available (measured at
+  ~4ms over a bare run). Skipping the review is a statement about the command,
+  not a promise that the consent gate saw every path it touches — that promise
+  rests on the recognizer's tables staying in step, and when they fell out of
+  step the read was neither asked about nor reviewed. The sandbox's read
+  whitelist (the workspace plus the roots the user granted) is the floor under
+  that promise, so a path the scanner missed is refused by the kernel instead of
+  being read quietly. Two escape hatches from that containment are pinned by
+  tests: a `require_escalated` request is declined by the fast path so the
+  reviewer weighs it (otherwise bypassing containment would be one retry away),
+  and a one-call read grant runs directly, because a single approved path has no
+  sandbox-whitelist form and containing the call would fail the read the user
+  just approved.
+
+  **The operand-coverage invariant** (`B`): every whitelisted program must
+  declare its operands — either as paths the read-scope scanner collects, or as
+  deliberately not paths with a reason — and its file-reading flags
+  (`grep -f`, `date -r`, `sort --files0-from`, `diff --from-file`, `file -m`, …)
+  must be extractable. Writing that test found two live gaps on the spot
+  (`sw_vers` undeclared, and `date`'s flags declared but unreachable), and it
+  turns the whole class of mistake into a red build: the two tables live in
+  different files and nothing else connected them, which is exactly how
+  `cksum /outside/x` came to be whitelisted while its operand was invisible.
+  Alongside it, a cross-layer regression drives the real gate chain and asserts
+  the property directly: a shell command that reads outside the workspace is
+  either asked about or reviewed, never both silent — the shapes that actually
+  fell through that gap (`cksum`, `cd <dir> && ls`, the flag-named second file,
+  `git diff --no-index`) are its cases.
 - **Every built-in command's usage is one field, and a test holds it there**: a
   command's grammar lived in two places — an `ArgumentHint` (which `/help` and the
   REPL's completion render, and which the popup now renders too) and, for the

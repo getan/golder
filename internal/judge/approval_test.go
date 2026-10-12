@@ -108,7 +108,9 @@ func TestConfirmCallbackReviewFailedTier(t *testing.T) {
 		Sandboxed:  func(string) bool { return false },
 		Confirm:    answeringConfirm(&seen, ApprovalAnswer{Approve: true, Answered: true}),
 	})
-	if dec := gate(context.Background(), bashCall("echo hi")); dec != nil {
+	// The command must be one the read-only fast path declines, or the reviewer
+	// (whose failure this test is about) never runs.
+	if dec := gate(context.Background(), bashCall("go test ./...")); dec != nil {
 		t.Fatalf("approved call should pass, got %+v", dec)
 	}
 	if seen.Kind != ApprovalReviewFailed {

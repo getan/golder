@@ -3,6 +3,8 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -63,14 +65,20 @@ func TestBashAllowVerdictRunsDirect(t *testing.T) {
 		Judge:   stubGrader{v: judge.Verdict{Level: judge.Allow}},
 		Sandbox: runner,
 	}
-	res, err := runBash(t, tool, map[string]any{"command": "echo direct"}, nil)
+	// The command must be one the read-only fast path does NOT recognize: a
+	// recognized read is now contained even on an allow verdict (see
+	// TestBashReadOnlyFastPathIsContained), so `echo direct` would route to the
+	// runner and this test would be pinning the wrong thing. `git --version` is
+	// fast and not recognized (no subcommand word), unlike a build or test run
+	// that would outlive the yield window.
+	res, err := runBash(t, tool, map[string]any{"command": "git --version"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if runner.calls != 0 {
 		t.Fatal("allow verdict must not touch the sandbox runner")
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "direct") {
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "git version") {
 		t.Fatalf("output = %q, want direct output", got)
 	}
 }
@@ -82,14 +90,17 @@ func TestBashAllowVerdictRunsDirect(t *testing.T) {
 func TestBashSandboxRequestRoutesToRunner(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}
-	res, err := runBashCtx(t, context.Background(), tool, map[string]any{"command": "echo hi"}, nil)
+	// Not a read-only-recognized command: a recognized read is contained on its
+	// own now, which would make this first assertion (no request, no runner)
+	// fail for the wrong reason.
+	res, err := runBashCtx(t, context.Background(), tool, map[string]any{"command": "git --version"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if runner.calls != 0 {
 		t.Fatal("no sandbox request should route to the runner")
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "hi") {
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "git version") {
 		t.Fatalf("output = %q, want direct output without a request", got)
 	}
 
@@ -198,5 +209,86 @@ func TestBashAutoReviewerFailureSandboxes(t *testing.T) {
 	}
 	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "failing closed") {
 		t.Fatalf("output = %q, want fail-closed message", got)
+	}
+}
+
+// TestBashReadOnlyFastPathIsContained is the containment floor under the
+// read-only fast path: a command the recognizer allows (so the reviewer was
+// skipped) still runs INSIDE the sandbox when a runner is available. Skip-the-
+// review is a statement about the command; it is not a promise that the consent
+// gate saw every path, because that rests on two tables in another package
+// staying in step. The sandbox's read whitelist — the workspace plus the roots
+// the user granted — is what refuses a path the scanner missed.
+func TestBashReadOnlyFastPathIsContained(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	res, err := runBash(t, tool, map[string]any{"command": "ls -la ."}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want 1: a recognized read must still be contained", runner.calls)
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want the sandboxed argv's output", got)
+	}
+
+	// Without a runner there is nothing to contain with, so the command runs
+	// directly — the exemption is about the reviewer, not about isolation.
+	bare := &BashTool{}
+	res, err = runBash(t, bare, map[string]any{"command": "ls -la ."}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want an unsandboxed run when no runner exists", got)
+	}
+}
+
+// TestBashReadOnlyFastPathEscalationIsNotContained keeps the containment
+// contract honest: a recognized read that ASKS to run outside the sandbox is
+// not silently re-contained. Escalation is weighed by the permission gate's
+// reviewer (judge.ReadOnlyFastPath declines such a call precisely so it is),
+// and re-containing it here after that verdict would make the model's request
+// invisible — the retry loop the escalation path exists to avoid.
+func TestBashReadOnlyFastPathEscalationIsNotContained(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	res, err := runBash(t, tool, map[string]any{
+		"command":             "ls -la .",
+		"sandbox_permissions": "require_escalated",
+		"justification":       "the sandbox hides a tree I need",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 0 {
+		t.Errorf("runner calls = %d, want 0: an escalation request must not be silently re-contained", runner.calls)
+	}
+	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want a direct run", got)
+	}
+}
+
+// TestBashReadOnlyFastPathReadGrantRunsDirect covers the "allow this read once"
+// answer: a single approved path has no sandbox-whitelist form, so containing the
+// call would fail the very read the user just approved.
+func TestBashReadOnlyFastPathReadGrantRunsDirect(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	granted := filepath.Join(t.TempDir(), "granted.txt")
+	if err := os.WriteFile(granted, []byte("granted contents\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := agentcore.WithReadGrant(context.Background(), granted)
+	res, err := runBashCtx(t, ctx, tool, map[string]any{"command": "cat " + granted}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 0 {
+		t.Fatalf("runner calls = %d, want 0: a one-call read grant must run directly", runner.calls)
+	}
+	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want the direct run the grant was given for", got)
 	}
 }

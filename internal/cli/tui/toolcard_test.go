@@ -629,7 +629,8 @@ func TestModelToolEndDiff(t *testing.T) {
 
 // TestModelCtrlTTogglesExpanded verifies Ctrl+T flips the most-recent card's
 // expanded flag so the full detail becomes visible (codex parity). The card
-// here is a bash call, which keeps its own block; a read/list/search call is
+// here is a bash call whose command is not provably read-only, which keeps its
+// own block; a read/list/search call — and a read-only shell command — is
 // coalesced into an exploration group, and Ctrl+T expands that group instead
 // (see TestExploreGroupCtrlTTogglesGroup).
 func TestModelCtrlTTogglesExpanded(t *testing.T) {
@@ -643,7 +644,7 @@ func TestModelCtrlTTogglesExpanded(t *testing.T) {
 		b.WriteByte(byte('0' + i))
 		b.WriteByte('\n')
 	}
-	next, _ = mm.Update(toolStartMsg{id: "t1", name: "bash", input: map[string]any{"command": "ls"}})
+	next, _ = mm.Update(toolStartMsg{id: "t1", name: "bash", input: map[string]any{"command": "go test ./..."}})
 	mm = next.(Model)
 	next, _ = mm.Update(toolEndMsg{id: "t1", ok: true, result: b.String()})
 	mm = next.(Model)
@@ -741,7 +742,7 @@ func TestToolCardHeadlineWraps(t *testing.T) {
 func TestModelClickTogglesAnyCard(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 60, Height: 12})
 	for _, id := range []string{"t1", "t2"} {
-		m = apply(t, m, toolStartMsg{id: id, name: "bash", input: map[string]any{"command": "echo " + id}})
+		m = apply(t, m, toolStartMsg{id: id, name: "bash", input: map[string]any{"command": "go test ./" + id}})
 		m = apply(t, m, toolEndMsg{id: id, ok: true, result: "out-" + id})
 	}
 	first, second := m.toolCards["t1"], m.toolCards["t2"]
