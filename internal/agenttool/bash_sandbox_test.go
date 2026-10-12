@@ -248,7 +248,7 @@ func TestBashReadOnlyFastPathIsContained(t *testing.T) {
 // TestBashReadOnlyFastPathEscalationIsNotContained keeps the containment
 // contract honest: a recognized read that ASKS to run outside the sandbox is
 // not silently re-contained. Escalation is weighed by the permission gate's
-// reviewer (judge.ReadOnlyFastPath declines such a call precisely so it is),
+// reviewer (judge.ReadOnlyShellCommand declines such a call precisely so it is),
 // and re-containing it here after that verdict would make the model's request
 // invisible — the retry loop the escalation path exists to avoid.
 func TestBashReadOnlyFastPathEscalationIsNotContained(t *testing.T) {

@@ -67,24 +67,24 @@ import (
 	"strings"
 )
 
-// ReadOnlyCommand reports whether cmd is provably read-only: a sequence of
+// readOnlyCommand reports whether cmd is provably read-only: a sequence of
 // commands joined by `&&`, `||`, `;` or `|`, each a whitelisted read-only
 // program used with read-only arguments.
 //
 // A false answer means "not recognized", not "dangerous": the caller's behavior
 // is unchanged for those, so the only cost of a miss is the review the command
 // would have had anyway.
-func ReadOnlyCommand(cmd string) bool {
+func readOnlyCommand(cmd string) bool {
 	_, ok := readOnlyPlan(cmd)
 	return ok
 }
 
-// ReadOnlySummary names a recognized read-only command for a transcript
+// readOnlySummary names a recognized read-only command for a transcript
 // summary: the verb to lead with ("List", "Read", "Search", "Find"), or the
 // program's own name for the rest of the whitelist, plus what it acts on.
 // ok=false means the command is not recognized (or names nothing worth showing),
 // and the caller should render it as its own card.
-func ReadOnlySummary(cmd string) (verb, detail string, ok bool) {
+func readOnlySummary(cmd string) (verb, detail string, ok bool) {
 	segs, recognized := readOnlyPlan(cmd)
 	if !recognized {
 		return "", "", false
@@ -794,7 +794,7 @@ func ReadOnlyShellCommand(command string) bool {
 	if err != nil {
 		return false
 	}
-	_, ok := ReadOnlyFastPath("bash", raw)
+	_, ok := readOnlyFastPath("bash", raw)
 	return ok
 }
 
@@ -805,7 +805,7 @@ func ReadOnlyShellCommand(command string) bool {
 // (or the kill switch, or the static floor) makes a command non-fast-path, and a
 // renderer that folded such a call would hide one the reviewer in fact judged.
 func ReadOnlyShellSummary(args json.RawMessage) (verb, detail string, ok bool) {
-	if _, ok := ReadOnlyFastPath("bash", args); !ok {
+	if _, ok := readOnlyFastPath("bash", args); !ok {
 		return "", "", false
 	}
 	cmd, ok := bashCommand(args)
@@ -819,7 +819,7 @@ func ReadOnlyShellSummary(args json.RawMessage) (verb, detail string, ok bool) {
 	return summarizePlan(segs)
 }
 
-// ReadOnlyFastPath returns the verdict that skips the reviewer for a provably
+// readOnlyFastPath returns the verdict that skips the reviewer for a provably
 // read-only bash command, and whether it applies. It is the whole decision in
 // one place, so the gate and the bash tool cannot disagree about which commands
 // are exempt.
@@ -832,7 +832,7 @@ func ReadOnlyShellSummary(args json.RawMessage) (verb, detail string, ok bool) {
 //
 // An unrecognized command returns false and keeps the caller's normal path (the
 // reviewer), which is why a miss costs nothing but the review it would have had.
-func ReadOnlyFastPath(tool string, args json.RawMessage) (Verdict, bool) {
+func readOnlyFastPath(tool string, args json.RawMessage) (Verdict, bool) {
 	if !fastPathEnabled() {
 		return Verdict{}, false
 	}
@@ -852,7 +852,7 @@ func ReadOnlyFastPath(tool string, args json.RawMessage) (Verdict, bool) {
 		return Verdict{}, false
 	}
 	cmd, ok := bashCommand(args)
-	if !ok || !ReadOnlyCommand(cmd) {
+	if !ok || !readOnlyCommand(cmd) {
 		return Verdict{}, false
 	}
 	return readOnlyFastPathAllow(), true

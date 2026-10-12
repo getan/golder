@@ -162,7 +162,7 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	// the workspace, so what is left is a read of a directory the user opened or
 	// approved. That is the common case of a session spent reading a repository,
 	// and it was paying a model round trip per command.
-	if v, ok := ReadOnlyFastPath(tool, args); ok {
+	if v, ok := readOnlyFastPath(tool, args); ok {
 		return v
 	}
 	if c.Inner == nil {
@@ -608,7 +608,7 @@ func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToo
 		// exists to spare the reviewer work it does not need to do, and with no
 		// reviewer there is no work to spare. Nothing is lost in production,
 		// which always wires one.
-		if v, ok := ReadOnlyFastPath(call.Name, call.Arguments); ok {
+		if v, ok := readOnlyFastPath(call.Name, call.Arguments); ok {
 			return v
 		}
 		return opts.Classifier.Classify(ctx, call.Name, call.Arguments)

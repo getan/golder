@@ -88,7 +88,7 @@ func TestReadOnlyFastPathKeepsTheFloorInFront(t *testing.T) {
 		if spy.calls != 0 {
 			t.Errorf("%q reached the reviewer, want the floor to have decided", cmd)
 		}
-		if ReadOnlyCommand(cmd) {
+		if readOnlyCommand(cmd) {
 			// The recognizer may well call this command's SHAPE read-only — `cat
 			// ~/.zshrc` is a cat. What must hold is the ordering: the floor
 			// decides first, so the shape never reaches a verdict.
@@ -102,9 +102,9 @@ func TestReadOnlyFastPathKeepsTheFloorInFront(t *testing.T) {
 // TestReadOnlyFastPathRefusesCredentialReadsOnItsOwn is the regression for a
 // real hole found while wiring this up: `cat ~/.zshrc` has the SHAPE of a read
 // and the recognizer accepts it, so a call site that consulted the fast path
-// before the floor (or without a floor, as a direct `ReadOnlyFastPath` caller
+// before the floor (or without a floor, as a direct `readOnlyFastPath` caller
 // does) would hand over credential material. The floor is therefore consulted
-// inside ReadOnlyFastPath, so the ordering cannot be got wrong by a caller.
+// inside readOnlyFastPath, so the ordering cannot be got wrong by a caller.
 func TestReadOnlyFastPathRefusesCredentialReadsOnItsOwn(t *testing.T) {
 	credential := []string{
 		`cat ~/.zshrc`,
@@ -114,12 +114,12 @@ func TestReadOnlyFastPathRefusesCredentialReadsOnItsOwn(t *testing.T) {
 		`head -5 ~/.zsh_history`,
 	}
 	for _, cmd := range credential {
-		if _, ok := ReadOnlyFastPath("bash", bashArgs(cmd)); ok {
-			t.Errorf("ReadOnlyFastPath(%q) allowed a credential read; the floor must decide it", cmd)
+		if _, ok := readOnlyFastPath("bash", bashArgs(cmd)); ok {
+			t.Errorf("readOnlyFastPath(%q) allowed a credential read; the floor must decide it", cmd)
 		}
 		// The shape is still recognized — cat is a cat — which is exactly why
 		// the floor check has to live inside the fast path.
-		if !ReadOnlyCommand(cmd) {
+		if !readOnlyCommand(cmd) {
 			t.Logf("%q is no longer recognized as read-only; the floor is still the decider", cmd)
 		}
 	}
@@ -136,8 +136,8 @@ func TestReadOnlyFastPathKeepsWorkspaceReadsExempt(t *testing.T) {
 		`cd /repo && git log --oneline -3`,
 		`find . -name "*.go"`,
 	} {
-		if _, ok := ReadOnlyFastPath("bash", bashArgs(cmd)); !ok {
-			t.Errorf("ReadOnlyFastPath(%q) declined; the common read lost its exemption", cmd)
+		if _, ok := readOnlyFastPath("bash", bashArgs(cmd)); !ok {
+			t.Errorf("readOnlyFastPath(%q) declined; the common read lost its exemption", cmd)
 		}
 	}
 }
@@ -175,11 +175,11 @@ func TestReadOnlyFastPathDeclinesEscalationRequests(t *testing.T) {
 		"cat go.mod",
 	} {
 		// The same command without the request is exempt...
-		if _, ok := ReadOnlyFastPath("bash", bashArgs(cmd)); !ok {
+		if _, ok := readOnlyFastPath("bash", bashArgs(cmd)); !ok {
 			t.Errorf("%q should be exempt without an escalation request", cmd)
 		}
 		// ...and must NOT be once it asks to leave the sandbox.
-		if _, ok := ReadOnlyFastPath("bash", escalated(cmd)); ok {
+		if _, ok := readOnlyFastPath("bash", escalated(cmd)); ok {
 			t.Errorf("%q with require_escalated took the fast path; the request must reach the reviewer", cmd)
 		}
 		// The request is what changes the answer, not the command text.
@@ -193,7 +193,7 @@ func TestReadOnlyFastPathDeclinesEscalationRequests(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := ReadOnlyFastPath("bash", raw); ok {
+		if _, ok := readOnlyFastPath("bash", raw); ok {
 			t.Errorf("sandbox_permissions=%q took the fast path", value)
 		}
 	}
@@ -204,7 +204,7 @@ func TestReadOnlyFastPathDeclinesEscalationRequests(t *testing.T) {
 // (apply_patch), and neither should start returning a readonly verdict.
 func TestReadOnlyFastPathAppliesOnlyToBash(t *testing.T) {
 	for _, tool := range []string{"apply_patch", "read", "grep", "task"} {
-		if _, ok := ReadOnlyFastPath(tool, json.RawMessage(`{"command":"ls"}`)); ok {
+		if _, ok := readOnlyFastPath(tool, json.RawMessage(`{"command":"ls"}`)); ok {
 			t.Errorf("tool %q took the read-only fast path, want only bash", tool)
 		}
 	}
@@ -258,16 +258,16 @@ func TestReadOnlySummaryDrivesTheFold(t *testing.T) {
 		"cat go.mod | head -5",
 		"git status --porcelain",
 	} {
-		verb, detail, ok := ReadOnlySummary(cmd)
+		verb, detail, ok := readOnlySummary(cmd)
 		if !ok {
-			t.Errorf("ReadOnlySummary(%q) declined; the TUI cannot fold it", cmd)
+			t.Errorf("readOnlySummary(%q) declined; the TUI cannot fold it", cmd)
 			continue
 		}
 		if strings.TrimSpace(verb) == "" || strings.TrimSpace(detail) == "" {
-			t.Errorf("ReadOnlySummary(%q) = (%q, %q), want both parts non-empty", cmd, verb, detail)
+			t.Errorf("readOnlySummary(%q) = (%q, %q), want both parts non-empty", cmd, verb, detail)
 		}
-		if _, ok := ReadOnlyFastPath("bash", bashArgs(cmd)); !ok {
-			t.Errorf("ReadOnlySummary(%q) summarized a command the gate would review", cmd)
+		if _, ok := readOnlyFastPath("bash", bashArgs(cmd)); !ok {
+			t.Errorf("readOnlySummary(%q) summarized a command the gate would review", cmd)
 		}
 	}
 }

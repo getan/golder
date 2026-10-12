@@ -111,8 +111,8 @@ wc -l go.mod`,
 		`printf '%s\n' a b`,
 	}
 	for _, cmd := range recognized {
-		if !ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = false, want true (this command pays an LLM review today)", cmd)
+		if !readOnlyCommand(cmd) {
+			t.Errorf("readOnlyCommand(%q) = false, want true (this command pays an LLM review today)", cmd)
 		}
 	}
 }
@@ -233,8 +233,8 @@ func TestReadOnlyCommandRejectsWhatCanWriteOrExecute(t *testing.T) {
 		{`ls | sed -n '1p`, "an unterminated quote in a later segment"},
 	}
 	for _, c := range rejected {
-		if ReadOnlyCommand(c.cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = true, want false: %s", c.cmd, c.why)
+		if readOnlyCommand(c.cmd) {
+			t.Errorf("readOnlyCommand(%q) = true, want false: %s", c.cmd, c.why)
 		}
 	}
 }
@@ -249,16 +249,16 @@ func TestReadOnlyNeverAllowsARedirectThatNamesAFile(t *testing.T) {
 	for _, op := range ops {
 		for _, target := range targets {
 			cmd := "ls " + op + " " + target
-			if ReadOnlyCommand(cmd) {
-				t.Errorf("ReadOnlyCommand(%q) = true, want false (a redirect to a file must never be a fast-path read)", cmd)
+			if readOnlyCommand(cmd) {
+				t.Errorf("readOnlyCommand(%q) = true, want false (a redirect to a file must never be a fast-path read)", cmd)
 			}
 		}
 	}
 	// The one accepted target, in the same spellings.
 	for _, op := range []string{">", ">>", "2>", "2>>", "&>", "<"} {
 		cmd := "ls " + op + "/dev/null"
-		if !ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = false, want true (the /dev/null redirect cannot create a file)", cmd)
+		if !readOnlyCommand(cmd) {
+			t.Errorf("readOnlyCommand(%q) = false, want true (the /dev/null redirect cannot create a file)", cmd)
 		}
 	}
 }
@@ -283,19 +283,19 @@ func TestReadOnlySummaryNamesTheRead(t *testing.T) {
 		{`git status`, "git", "status"},
 	}
 	for _, c := range cases {
-		verb, what, ok := ReadOnlySummary(c.cmd)
+		verb, what, ok := readOnlySummary(c.cmd)
 		if !ok {
-			t.Errorf("ReadOnlySummary(%q) not recognized, want %q %q", c.cmd, c.verb, c.what)
+			t.Errorf("readOnlySummary(%q) not recognized, want %q %q", c.cmd, c.verb, c.what)
 			continue
 		}
 		if verb != c.verb || what != c.what {
-			t.Errorf("ReadOnlySummary(%q) = (%q, %q), want (%q, %q)", c.cmd, verb, what, c.verb, c.what)
+			t.Errorf("readOnlySummary(%q) = (%q, %q), want (%q, %q)", c.cmd, verb, what, c.verb, c.what)
 		}
 	}
 	// An unrecognized command declines rather than inventing a summary.
 	for _, cmd := range []string{`go test ./...`, `python3 x.py`, `cat a > b`, `ls && rm -rf /`} {
-		if verb, what, ok := ReadOnlySummary(cmd); ok {
-			t.Errorf("ReadOnlySummary(%q) = (%q, %q), want not recognized", cmd, verb, what)
+		if verb, what, ok := readOnlySummary(cmd); ok {
+			t.Errorf("readOnlySummary(%q) = (%q, %q), want not recognized", cmd, verb, what)
 		}
 	}
 }
@@ -310,9 +310,9 @@ func TestReadOnlySummaryNeverSummarizesSomethingItWouldNotAllow(t *testing.T) {
 		`rg --pre curl x`, `cat x > y`, `ls $(rm -rf /)`, `find . -delete`,
 		`git -c core.pager=evil log`, `sed -i s/a/b/ f`, `ls & rm -rf /`,
 	} {
-		_, _, ok := ReadOnlySummary(cmd)
-		if ok && !ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlySummary(%q) summarized a command the recognizer rejects", cmd)
+		_, _, ok := readOnlySummary(cmd)
+		if ok && !readOnlyCommand(cmd) {
+			t.Errorf("readOnlySummary(%q) summarized a command the recognizer rejects", cmd)
 		}
 	}
 }
@@ -394,13 +394,13 @@ func TestReadOnlyRecognizesNoExecuteFlagOfAWhitelistedProgram(t *testing.T) {
 		if program == "git" {
 			cmd = "git " + flag + " core.pager=x log"
 		}
-		if ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = true, want false: %q must not be a fast-path read", cmd, flag)
+		if readOnlyCommand(cmd) {
+			t.Errorf("readOnlyCommand(%q) = true, want false: %q must not be a fast-path read", cmd, flag)
 		}
 	}
 	// The checks are reached: a program with an always-true check must accept
 	// something, or the table above would be vacuous.
-	if !ReadOnlyCommand("ls -la") || !ReadOnlyCommand("rg -n TODO internal") {
+	if !readOnlyCommand("ls -la") || !readOnlyCommand("rg -n TODO internal") {
 		t.Error("the whitelist must accept the ordinary read forms")
 	}
 }
@@ -422,8 +422,8 @@ func TestReadOnlyIsNotFooledByLookalikes(t *testing.T) {
 		`echo "$(cat /etc/passwd)"`,
 		`echo x > out.txt`,
 	} {
-		if ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = true, want false", cmd)
+		if readOnlyCommand(cmd) {
+			t.Errorf("readOnlyCommand(%q) = true, want false", cmd)
 		}
 	}
 	// A pattern may contain anything, including redirect characters: quoting it
@@ -434,8 +434,8 @@ func TestReadOnlyIsNotFooledByLookalikes(t *testing.T) {
 		`rg -n "cat x > y" src`,
 		`grep -rn "rm -rf /" internal`,
 	} {
-		if !ReadOnlyCommand(cmd) {
-			t.Errorf("ReadOnlyCommand(%q) = false, want true (a quoted pattern is data)", cmd)
+		if !readOnlyCommand(cmd) {
+			t.Errorf("readOnlyCommand(%q) = false, want true (a quoted pattern is data)", cmd)
 		}
 	}
 }

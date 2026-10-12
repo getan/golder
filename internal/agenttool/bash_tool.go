@@ -166,7 +166,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (san
 		return false, ""
 	}
 	// A provably read-only command is contained rather than run bare. Skipping
-	// the reviewer is a statement about the command (judge.ReadOnlyFastPath), not
+	// the reviewer is a statement about the command (judge.ReadOnlyShellCommand), not
 	// a promise that the consent gate saw every path it touches — that promise
 	// rests on two tables in another package staying in step, and when they fell
 	// out of step (`cksum /outside/x`) the read was neither asked about nor

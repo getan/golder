@@ -129,7 +129,7 @@ func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 				Name: "bash", Arguments: bashArgs(c.cmd),
 			})
 
-			recognized := ReadOnlyCommand(c.cmd)
+			recognized := readOnlyCommand(c.cmd)
 			if asked == 0 && reviewer.calls == 0 {
 				t.Fatalf("%q was neither asked about nor reviewed (recognized=%v).\n"+
 					"The consent gate saw no path AND the fast path allowed it: the read reaches\n"+
@@ -193,7 +193,7 @@ func TestRecognizedCommandsAreTheOnesTheGateSaw(t *testing.T) {
 		"cd " + outside + " && ls",
 		"grep -f " + outside + "/pat " + outside + "/a.go",
 	} {
-		if !ReadOnlyCommand(cmd) {
+		if !readOnlyCommand(cmd) {
 			t.Errorf("%q is not recognized; this test's premise (recognized AND scanned) is gone", cmd)
 			continue
 		}
@@ -215,7 +215,7 @@ func TestRecognizedCommandsAreTheOnesTheGateSaw(t *testing.T) {
 func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
 	workspace, outside := boundaryFixture(t)
 	cmd := "date -r " + outside + "/a.go"
-	if ReadOnlyCommand(cmd) {
+	if readOnlyCommand(cmd) {
 		t.Fatalf("%q is recognized; date-with-operands must stay with the reviewer "+
 			"(BSD `date MMDDhhmm` sets the clock without a flag)", cmd)
 	}
