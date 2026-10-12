@@ -210,6 +210,45 @@ func TestReadOnlyFastPathAppliesOnlyToBash(t *testing.T) {
 	}
 }
 
+// TestBareGraderStillGetsThePolicyPipeline pins what the gate's one-pass shape
+// buys: a grader that is NOT a Chain is wrapped in one, so the deterministic
+// floor runs for it too. Before this, only the fast path was applied at the gate
+// and the floor came from whichever classifier the caller happened to pass — a
+// bare grader meant the credential denials were simply absent.
+func TestBareGraderStillGetsThePolicyPipeline(t *testing.T) {
+	bare := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: bare,
+		Sandboxed:  func(string) bool { return true },
+	})
+
+	// A credential read is refused by the floor, without asking the grader.
+	if dec := gate(context.Background(), bashCall("cat ~/.zshrc")); dec == nil || !dec.Block {
+		t.Fatalf("a bare grader let a credential read through the floor: %+v", dec)
+	}
+	if bare.calls != 0 {
+		t.Errorf("the grader was consulted %d times for a floor decision, want 0", bare.calls)
+	}
+
+	// A provably read-only read is exempt from review.
+	bare.calls = 0
+	if dec := gate(context.Background(), bashCall("ls -la internal")); dec != nil {
+		t.Errorf("a read-only read must run, got %+v", dec)
+	}
+	if bare.calls != 0 {
+		t.Errorf("the grader ran %d times for a read-only read, want 0", bare.calls)
+	}
+
+	// A genuinely mutating command still reaches it.
+	bare.calls, bare.v = 0, Verdict{Level: Confirm, Reasons: []string{"recoverable"}}
+	if dec := gate(context.Background(), bashCall("go test ./...")); dec != nil {
+		t.Errorf("an auto-approved confirm must run, got %+v", dec)
+	}
+	if bare.calls != 1 {
+		t.Errorf("the grader ran %d times for a mutating command, want 1", bare.calls)
+	}
+}
+
 // TestPermissionGateAutoSkipsReviewForReadOnlyReads drives the full gate rather
 // than the chain: in auto mode the reviewer must not be consulted for an
 // in-workspace read, and no note should appear for it (an allow is silent).

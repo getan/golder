@@ -595,23 +595,21 @@ func readOnlyAllowed(tool string) bool {
 // permissions.
 func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall) Verdict {
 	if opts.Classifier != nil {
-		// The read-only fast path is decided here as well as in Chain, so it
-		// applies to every wiring shape rather than only to a classifier that
-		// happens to be a Chain. Production builds one through run.NewReviewer
-		// (a Chain), but the exemption is a property of the call, not of how the
-		// reviewer was assembled, and this is the one place every gated call
-		// passes through.
+		// The policy pipeline — static floor, then the read-only fast path, then
+		// the reviewer — lives in Chain, and it has to run ONCE per call rather
+		// than once per layer. Every production wiring builds a Chain
+		// (run.NewReviewer), so the common shape is passed straight through;
+		// a bare grader is wrapped, which keeps the deterministic floor in force
+		// for it too (a wiring mistake must not be able to drop the credential
+		// denials) and gives it the same exemption from reviewing reads.
 		//
-		// It sits inside this branch on purpose. With no reviewer wired the gate
-		// keeps its fail-closed contract ("a wiring mistake never widens
-		// permissions") for every gated tool, read-only or not: the fast path
-		// exists to spare the reviewer work it does not need to do, and with no
-		// reviewer there is no work to spare. Nothing is lost in production,
-		// which always wires one.
-		if v, ok := readOnlyFastPath(call.Name, call.Arguments); ok {
-			return v
+		// Deciding the fast path HERE instead would run the floor and parse the
+		// command a second and third time for every gated call — the duplication
+		// this shape removes.
+		if chain, ok := opts.Classifier.(Chain); ok {
+			return chain.Classify(ctx, call.Name, call.Arguments)
 		}
-		return opts.Classifier.Classify(ctx, call.Name, call.Arguments)
+		return Chain{Inner: opts.Classifier}.Classify(ctx, call.Name, call.Arguments)
 	}
 	if v, ok := staticDeny(call.Name, call.Arguments); ok {
 		return v
