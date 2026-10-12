@@ -833,6 +833,20 @@ interactive REPL/TUI.
   menu and autocomplete; the surviving spelling is `/model think <level>`
   (bare, it reports the current level), and the action's own hint now names it.
 
+### Removed
+- **The reviewer's verdict cache**: it memoized successful grades per `(tool,
+  args, trust, conversation state)` so the permission gate and the bash tool's
+  sandbox routing would share one review. Both of its reasons to exist went away
+  with the read-only fast path: the bash tool no longer grades at all (one grade
+  per call), and read-only commands no longer reach the reviewer. It also could
+  not pay for itself: replayed over eight real sessions it scored **0 hits out of
+  1548 calls that reached a reviewer**, because the conversation state in its key
+  changes with every turn while the commands are ~98% distinct — and dropping the
+  state from the key would have recovered only 3.6%, at the price of grading a
+  call against a conversation it no longer describes. It was also the one
+  unbounded `sync.Map` in the judge, growing for the life of the process. Every
+  reviewed call is now graded on its own evidence.
+
 ### Fixed
 - **`~/…` operands are asked about, and a multi-operand read is offered its
   finest directory**: two holes in the read-scope gate, both surfaced by one

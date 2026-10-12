@@ -2,17 +2,10 @@ package judge
 
 // This file holds the state-building helpers shared by the judge: the
 // guardian-style transcript selection (user intent first, then the newest
-// entries, each capped) and the per-(tool, args, state) verdict cache. The
-// reviewers use them to render the evidence block handed to the model and to
-// avoid grading the same call twice within one dispatch (the BeforeToolCall
-// gate and the bash tool's sandbox routing both consult the same verdict).
+// entries, each capped) that renders the evidence block handed to the model.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"strings"
-	"sync"
 	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -32,36 +25,6 @@ const (
 	recentUserLimit    = 3
 	recentEntryLimit   = 3
 )
-
-// verdictCache memoizes successful reviewer verdicts per (tool, args,
-// trust-note, state) so the BeforeToolCall gate and the execution layer (bash
-// sandbox routing) grade the same call once. The state is part of the key
-// because it carries the recent conversation: a grade is only reusable while
-// that context is unchanged. Failures are never stored.
-var verdictCache sync.Map // string -> Verdict
-
-func verdictCacheKey(tool string, args json.RawMessage, trust, state string) string {
-	h := sha256.Sum256([]byte(state))
-	return cacheKey(tool, args) + "\x00" + trust + "\x00" + hex.EncodeToString(h[:8])
-}
-
-func cachedVerdict(tool string, args json.RawMessage, trust, state string) (Verdict, bool) {
-	if v, ok := verdictCache.Load(verdictCacheKey(tool, args, trust, state)); ok {
-		if verdict, ok := v.(Verdict); ok {
-			return verdict, true
-		}
-	}
-	return Verdict{}, false
-}
-
-func storeVerdict(tool string, args json.RawMessage, trust, state string, v Verdict) {
-	verdictCache.Store(verdictCacheKey(tool, args, trust, state), v)
-}
-
-// clearVerdictCache drops all cached verdicts. Tests only.
-func clearVerdictCache() {
-	verdictCache = sync.Map{}
-}
 
 // clampText caps s at maxRunes without converting the whole string to runes
 // first: a rune is at most 4 bytes, so the leading maxRunes*4 bytes are a

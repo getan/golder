@@ -33,10 +33,7 @@ package judge
 // approval runs the command directly.
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -853,11 +850,4 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + " …"
-}
-
-// cacheKey hashes (tool, args) so repeated identical calls grade once per
-// process. Failures are never cached: only successful reviewer verdicts.
-func cacheKey(tool string, args json.RawMessage) string {
-	h := sha256.Sum256(append([]byte(strings.ToLower(tool)+"\x00"), bytes.TrimSpace(args)...))
-	return hex.EncodeToString(h[:])
 }

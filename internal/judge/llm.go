@@ -20,8 +20,18 @@ package judge
 //     anything still unreadable returns Failed: true at Confirm. The gate
 //     turns that into a prompt (interactive) or a conservative
 //     sandbox/block (auto), never an allow.
-//  4. Successful verdicts are cached per (tool, args, trust, state) so the
-//     gate and the bash tool's sandbox routing share one review.
+//
+// Verdicts are not cached. The reviewer used to memoize per (tool, args, trust,
+// conversation state) so the permission gate and the bash tool's sandbox
+// routing would share one review; both of those reasons are gone — the bash tool
+// no longer grades (one grade per call), and the recognizer keeps read-only
+// commands away from the reviewer entirely — and the cache could not pay for
+// itself even before that: replayed over eight real sessions it scored 0 hits
+// out of 1548 reviewed calls, because the conversation state in the key changes
+// with every turn while the commands are almost never repeated (98% distinct).
+// Dropping the state from the key would have recovered 3.6%, at the price of
+// grading a call against a conversation it no longer describes. So every
+// reviewed call is graded on its own evidence.
 
 import (
 	"context"
@@ -124,9 +134,6 @@ func (j *LLMJudge) Classify(ctx context.Context, tool string, args json.RawMessa
 		lang = ConversationLanguage(msgs)
 	}
 	state := j.reviewState(tool, args, msgs)
-	if cached, ok := cachedVerdict(tool, args, j.DirTrust, state); ok {
-		return cached
-	}
 	raw, err := j.ask(ctx, state, lang)
 	if err != nil {
 		return Verdict{
@@ -170,7 +177,6 @@ func (j *LLMJudge) Classify(ctx context.Context, tool string, args json.RawMessa
 	if v.Reasons[0] == "" {
 		v.Reasons[0] = "no rationale given"
 	}
-	storeVerdict(tool, args, j.DirTrust, state, v)
 	return v
 }
 
