@@ -12,6 +12,18 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`/trust list` and `/permissions list` show every grant, not just the ones in
+  force here**: the two halves of the permission state — per-directory trust
+  (`trust.json`) and the sandbox writable/readable roots (`permissions.toml` plus
+  the `config.toml` seed) — could only be read one scope at a time, and `/trust
+  status` answered the narrower question ("what applies to THIS directory") by
+  walking up from the working directory, which is exactly what cannot list what a
+  decision recorded for a *parent* applies to. `/trust list` prints every saved
+  decision sorted by path with this directory marked, then the session-only
+  grants that are not on disk at all (trust, and reads) and the store it read.
+  `/permissions list` prints the live approval mode, both grant kinds with their
+  provenance, the files they come from, and how to change them. Each names the
+  other, since neither covers the whole picture alone.
 - **The slash-command popup shows the whole entry for the command you are on**:
   every row was one line with an ellipsis, so a candidate whose text did not fit
   was unreadable exactly when you had arrowed onto it and wanted to read it. The
@@ -27,7 +39,9 @@ interactive REPL/TUI.
   are two fields (`ArgumentHint` is what `/help` and the REPL's completion already
   render), but the popup showed only the description — so five built-ins
   (`/model`, `/provider`, `/permissions`, `/proxy`, `/trust`) spelled their usage
-  inside the description to get it displayed at all, and `/permissions` carried a
+  inside the description to get it displayed at all (`/trust`, which had no hint
+  field, gets one here: its usage was invisible in the popup without it), and
+  `/permissions` carried a
   hand-written `…` abbreviation that went stale the moment rows could wrap: it
   read as a rendering bug rather than as the writer's shorthand. The hint is now
   rendered under the description on the highlighted row, in the style the

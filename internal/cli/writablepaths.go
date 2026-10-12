@@ -8,10 +8,9 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/seatbelt"
 )
 
@@ -171,11 +170,7 @@ func RemoveWritablePath(raw string) (WritableRemoval, error) {
 }
 
 // DisplayHomePath shortens a path under $HOME to "~/…" for display; the grant
-// itself always uses the full path.
-func DisplayHomePath(p string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" || !strings.HasPrefix(p, home+"/") {
-		return p
-	}
-	return "~" + strings.TrimPrefix(p, home)
-}
+// itself always uses the full path. It is ui's implementation, kept under this
+// name because every caller in this package (and the TUI's pickers, which share
+// the wording) reads it as cli's.
+func DisplayHomePath(p string) string { return ui.DisplayHomePath(p) }

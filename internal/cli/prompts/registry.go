@@ -22,6 +22,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
@@ -806,10 +807,13 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
 		Description:  "show or switch the approval mode, or manage the remembered path grants",
-		ArgumentHint: "[read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
+		ArgumentHint: "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
+			if arg == "list" {
+				return runPermissionsList(st, modes, l)
+			}
 			if arg == "writable" || strings.HasPrefix(arg, "writable ") {
 				return runPermissionsWritable(arg, l)
 			}
@@ -841,18 +845,18 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 					fmt.Fprintf(&b, "\n  %-12s %s%s", m.String(), m.Label(l), mark)
 				}
 				if l == "zh" {
-					fmt.Fprintf(&b, "\n沙箱可写路径：/permissions writable")
+					fmt.Fprintf(&b, "\n全部权限（模式、可写/可读路径、来源文件）：/permissions list")
 				} else {
-					fmt.Fprintf(&b, "\nsandbox writable paths: /permissions writable")
+					fmt.Fprintf(&b, "\nall permissions (mode, writable/readable paths, source files): /permissions list")
 				}
 				return b.String()
 			}
 			m, ok := permissions.Parse(arg)
 			if !ok {
 				if l == "zh" {
-					return "用法：/permissions [read-only|ask|auto|full-access | writable [add|rm] <路径>]"
+					return "用法：/permissions [list | read-only|ask|auto|full-access | writable [add|rm] <路径>]"
 				}
-				return "usage: /permissions [read-only|ask|auto|full-access | writable [add|rm] <path>]"
+				return "usage: /permissions [list | read-only|ask|auto|full-access | writable [add|rm] <path>]"
 			}
 			if st != nil {
 				st.Set(m)
@@ -863,6 +867,122 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 			return fmt.Sprintf("permissions switched to %s: %s", m.Label(l), m.Description(l))
 		},
 	})
+}
+
+// runPermissionsList renders every permission in force, not just the ones that
+// apply to the current directory: the approval mode, the sandbox writable roots,
+// and the readable roots outside the workspace, each with the file it came from
+// (config.toml seed / permissions.toml persisted / this session). It is the
+// overview the per-scope subcommands (`writable list`, `readable list`) are
+// slices of — one screen to audit before revoking something, and the one place
+// that names the files a user can edit by hand.
+//
+// The bare `/permissions` stays the mode picker (it is what the TUI's mode
+// picker prints as text); this is the full report, which the bare form points at.
+func runPermissionsList(st *permissions.State, modes []permissions.Mode, l string) string {
+	zh := l == "zh"
+	current := permissions.Auto
+	if st != nil {
+		current = st.Mode()
+	}
+	var b strings.Builder
+	if zh {
+		fmt.Fprintf(&b, "当前权限模式：%s（%s）", current.Label(l), current.Description(l))
+	} else {
+		fmt.Fprintf(&b, "approval mode: %s (%s)", current.Label(l), current.Description(l))
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "%s %s", permissionModeListLabel(zh), permissionModesInline(modes))
+
+	writable, warnW := cli.ListWritablePaths()
+	readable, warnR := cli.ListReadablePaths()
+	b.WriteString("\n")
+	if zh {
+		b.WriteString("沙箱可写路径（项目目录与临时目录之外额外授权）：")
+	} else {
+		b.WriteString("writable paths (extra grants beyond the project and temp dirs):")
+	}
+	if len(writable) == 0 {
+		b.WriteString(noneWord(zh))
+	}
+	for _, e := range writable {
+		fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), writableSourceLabel(e.Source, zh))
+	}
+	b.WriteString("\n")
+	if zh {
+		b.WriteString("工作区外的可读路径（读取不再询问）：")
+	} else {
+		b.WriteString("readable paths outside the workspace (reads no longer ask):")
+	}
+	if len(readable) == 0 {
+		b.WriteString(noneWord(zh))
+	}
+	for _, e := range readable {
+		fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), cli.ReadableSourceLabel(e.Source, zh))
+	}
+	for _, w := range append(append([]string{}, warnW...), warnR...) {
+		fmt.Fprintf(&b, "\nwarning: %s", w)
+	}
+	if zh {
+		fmt.Fprintf(&b, "\n文件：%s（本文件托管上述授权）　%s（[permissions] 手改种子）",
+			cli.DisplayHomePath(config.PermissionsConfigPath()), cli.DisplayHomePath(config.FileConfigPath()))
+		fmt.Fprintf(&b, "\n修改：/permissions <模式>　/permissions writable add <路径>　permissions readable add <路径>")
+		b.WriteString("\n信任（按目录）：/trust list")
+	} else {
+		fmt.Fprintf(&b, "\nfiles: %s (managed store for the grants above)  %s ([permissions] hand-edited seed)",
+			cli.DisplayHomePath(config.PermissionsConfigPath()), cli.DisplayHomePath(config.FileConfigPath()))
+		fmt.Fprintf(&b, "\nchange: /permissions <mode>  /permissions writable add <path>  /permissions readable add <path>")
+		b.WriteString("\ntrust (per directory): /trust list")
+	}
+	return b.String()
+}
+
+// permissionModeListLabel names the one-line echo of the available modes, so the
+// report says what can be switched to without repeating the switch syntax.
+func permissionModeListLabel(zh bool) string {
+	if zh {
+		return "可选："
+	}
+	return "modes:"
+}
+
+// permissionModesInline renders the modes as one scannable line, marking nothing:
+// the current mode is already named above, and a marker on a "modes:" line reads
+// as if the list were a picker.
+func permissionModesInline(modes []permissions.Mode) string {
+	names := make([]string, 0, len(modes))
+	for _, m := range modes {
+		names = append(names, m.String())
+	}
+	return strings.Join(names, " | ")
+}
+
+// noneWord renders the "nothing here" case, which must not read as a path.
+func noneWord(zh bool) string {
+	if zh {
+		return "无"
+	}
+	return " none"
+}
+
+// writableSourceLabel names where a writable grant came from. It is the same
+// vocabulary runPermissionsWritable prints, kept as a function so the two
+// surfaces cannot drift into different words for the same provenance.
+func writableSourceLabel(source string, zh bool) string {
+	switch {
+	case source == cli.WritableSourceConfig && zh:
+		return "（config.toml 固定授权）"
+	case source == cli.WritableSourceConfig:
+		return "(config.toml seed)"
+	case source == cli.WritableSourceSaved && zh:
+		return "（permissions.toml，已持久化）"
+	case source == cli.WritableSourceSaved:
+		return "(permissions.toml, persisted)"
+	case zh:
+		return "（仅本会话）"
+	default:
+		return "(this session)"
+	}
 }
 
 // runPermissionsWritable implements `/permissions writable [list|add|rm]
@@ -884,22 +1004,7 @@ func runPermissionsWritable(arg, l string) string {
 		s := strings.TrimSpace(strings.TrimPrefix(arg, "writable"))
 		return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), verb))
 	}
-	sourceLabel := func(source string) string {
-		switch {
-		case source == cli.WritableSourceConfig && zh:
-			return "（config.toml 固定授权）"
-		case source == cli.WritableSourceConfig:
-			return "(config.toml seed)"
-		case source == cli.WritableSourceSaved && zh:
-			return "（permissions.toml，已持久化）"
-		case source == cli.WritableSourceSaved:
-			return "(permissions.toml, persisted)"
-		case zh:
-			return "（仅本会话）"
-		default:
-			return "(this session)"
-		}
-	}
+	sourceLabel := func(source string) string { return writableSourceLabel(source, zh) }
 	if len(fields) == 1 || (len(fields) == 2 && fields[1] == "list") {
 		entries, warnings := cli.ListWritablePaths()
 		var b strings.Builder

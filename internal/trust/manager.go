@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -292,6 +294,50 @@ func (m *Manager) Forget(dir string) error {
 	dir = filepath.Clean(dir)
 	delete(m.data, dir)
 	return m.saveLocked()
+}
+
+// TrustEntry is one saved decision as /trust list reports it, with the provenance
+// that decides what revoking it takes.
+type TrustEntry struct {
+	Path     string
+	Decision Decision
+}
+
+// Entries returns every saved decision, sorted by path, plus the two
+// session-only grants: directories trusted for this process, and directories
+// whose local reads were allowed for this process. /trust status answers "what
+// applies to THIS directory" by walking up; this answers "what is in the store",
+// which is the question a user auditing their grants is actually asking.
+//
+// The walk is deliberately absent: entries are the recorded keys, so a decision
+// saved for a parent is listed once, under its own directory, instead of
+// repeated for every child that inherits it.
+func (m *Manager) Entries() (saved []TrustEntry, sessionTrust, sessionReads []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	saved = make([]TrustEntry, 0, len(m.data))
+	for path, v := range m.data {
+		saved = append(saved, TrustEntry{Path: path, Decision: decisionFromBool(v)})
+	}
+	slices.SortFunc(saved, func(a, b TrustEntry) int { return strings.Compare(a.Path, b.Path) })
+	for dir := range m.session {
+		sessionTrust = append(sessionTrust, dir)
+	}
+	for dir := range m.sessionReads {
+		sessionReads = append(sessionReads, dir)
+	}
+	slices.Sort(sessionTrust)
+	slices.Sort(sessionReads)
+	return saved, sessionTrust, sessionReads
+}
+
+// Path returns the trust file this manager reads and writes ("" when the store
+// is disabled), so a report can name the file it is describing.
+func (m *Manager) Path() string {
+	if m == nil {
+		return ""
+	}
+	return m.path
 }
 
 // DecisionFor returns the raw saved value for a single path (nil when absent or

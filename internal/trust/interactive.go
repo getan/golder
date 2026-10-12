@@ -30,6 +30,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 	"github.com/getan/golder/internal/runtime"
@@ -229,6 +230,10 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 		Name:        "trust",
 		Category:    runtime.CategoryPermissions,
 		Description: "view or set this project's trust",
+		// The hint is what the popup and /help print for the arguments, and what
+		// the usage line below must agree with: one list, or the two disagree the
+		// moment a case is added here.
+		ArgumentHint: "[on|off|once|status|list]",
 		Action: func(args string) string {
 			switch strings.TrimSpace(strings.ToLower(args)) {
 			case "", "on":
@@ -259,11 +264,69 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 					state += "; local reads are allowed for this session"
 				}
 				return state
+			case "list":
+				return trustReport(mgr, cwd)
 			default:
-				return "usage: /trust [on|off|once|status]  (default: on)"
+				return "usage: /trust [on|off|once|status|list]  (default: on)"
 			}
 		},
 	})
+}
+
+// trustReport renders the whole trust store: every saved decision, sorted by
+// path, then the session-only grants that are not on disk at all. /trust status
+// answers "what applies here" by walking up from the working directory; this
+// answers "what have I granted", which is the question a user asks before
+// revoking something — and the reason it cannot be derived from status alone is
+// that a decision saved for a parent applies to every child while being stored
+// once.
+func trustReport(mgr *Manager, cwd string) string {
+	saved, sessionTrust, sessionReads := mgr.Entries()
+	var b strings.Builder
+	store := mgr.Path()
+	if store == "" {
+		store = "(trust store disabled)"
+	}
+	fmt.Fprintf(&b, "trust decisions (%s):", ui.DisplayHomePath(store))
+	if len(saved) == 0 {
+		b.WriteString("\nnone saved")
+	}
+	for _, e := range saved {
+		fmt.Fprintf(&b, "\n  %-10s %s", e.Decision, ui.DisplayHomePath(e.Path))
+		// The directory the report was asked from is called out because it is the
+		// one the other subcommands act on, and it is the reason the user is
+		// reading the list at all.
+		if samePath(e.Path, cwd) {
+			b.WriteString("  (this directory)")
+		}
+	}
+	if len(sessionTrust) == 0 && len(sessionReads) == 0 {
+		b.WriteString("\nsession: no grants beyond the saved decisions")
+	} else {
+		b.WriteString("\nsession only (not saved; gone on exit):")
+		for _, dir := range sessionTrust {
+			fmt.Fprintf(&b, "\n  %-10s %s", "trusted", ui.DisplayHomePath(dir))
+		}
+		for _, dir := range sessionReads {
+			fmt.Fprintf(&b, "\n  %-10s %s", "reads", ui.DisplayHomePath(dir))
+		}
+	}
+	b.WriteString("\nset: /trust [on|off|once] <this directory>  all of it: /permissions list")
+	return b.String()
+}
+
+// samePath reports whether two paths name the same directory, comparing cleaned
+// absolute spellings so a relative cwd and a saved absolute entry agree.
+func samePath(a, b string) bool {
+	ca, err := filepath.Abs(filepath.Clean(a))
+	if err != nil {
+		return false
+	}
+	cb, err := filepath.Abs(filepath.Clean(b))
+	if err != nil {
+		return false
+	}
+	return ca == cb
 }
 
 // GateOpts configures the trust gate. Exactly one answer channel is used:

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -335,4 +336,63 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// TestEntriesListSavedAndSession: /trust list needs the store itself, not a
+// nearest-ancestor walk. Entries reports every recorded decision (including an
+// explicit null, which is a recorded "undecided") sorted by path, with the two
+// session-only grant kinds separated out — the split is what tells a user which
+// grants survive a restart.
+func TestEntriesListSavedAndSession(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := NewManager(filepath.Join(dir, "trust.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inserted out of order so the sort is what produces the output order.
+	for _, p := range []string{"/z/last", "/a/first"} {
+		if err := mgr.SetDecision(p, Trusted); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := mgr.SetDecision("/m/untrusted", Untrusted); err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetSessionTrust("/session/trusted")
+	mgr.SetSessionReads("/session/reads")
+
+	saved, sessionTrust, sessionReads := mgr.Entries()
+	gotPaths := make([]string, 0, len(saved))
+	for _, e := range saved {
+		gotPaths = append(gotPaths, e.Path)
+	}
+	wantPaths := []string{"/a/first", "/m/untrusted", "/z/last"}
+	if !slices.Equal(gotPaths, wantPaths) {
+		t.Errorf("saved paths = %v, want sorted %v", gotPaths, wantPaths)
+	}
+	if saved[1].Decision != Untrusted || saved[0].Decision != Trusted {
+		t.Errorf("decisions = %v, want the saved values", saved)
+	}
+	if !slices.Equal(sessionTrust, []string{"/session/trusted"}) {
+		t.Errorf("session trust = %v", sessionTrust)
+	}
+	if !slices.Equal(sessionReads, []string{"/session/reads"}) {
+		t.Errorf("session reads = %v", sessionReads)
+	}
+
+	// An explicit null is a recorded entry: it belongs in the list (the user
+	// recorded a decision) but reads as undecided.
+	if err := mgr.SetDecision("/n/undecided", Undecided); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, _ = mgr.Entries()
+	for _, e := range saved {
+		if e.Path == "/n/undecided" {
+			if e.Decision != Undecided {
+				t.Errorf("null entry decision = %v, want Undecided", e.Decision)
+			}
+			return
+		}
+	}
+	t.Errorf("an explicit null entry should still be listed: %v", saved)
 }

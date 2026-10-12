@@ -493,3 +493,69 @@ func TestRegisterTrustCommand(t *testing.T) {
 		t.Errorf("unknown arg = %q, want 'usage'", got)
 	}
 }
+
+// TestRegisterTrustCommandListsEverything is the fix for /trust being the one
+// command whose arguments were invisible (it had no hint, so the popup and /help
+// showed a sentence and nothing about on|off|once|status) plus the report the
+// list subcommand adds: /trust status answers "what applies HERE" by walking up,
+// while /trust list answers "what have I granted" — every saved decision, and the
+// session-only grants that are not on disk at all.
+func TestRegisterTrustCommandListsEverything(t *testing.T) {
+	mgr, path := newTrustManager(t)
+	dirA, dirB := t.TempDir(), t.TempDir()
+	if err := mgr.SetDecision(dirA, Trusted); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.SetDecision(dirB, Untrusted); err != nil {
+		t.Fatal(err)
+	}
+	mgr.SetSessionTrust(filepath.Join(dirA, "session-only"))
+	mgr.SetSessionReads(filepath.Join(dirB, "reads-only"))
+
+	reg := runtime.NewSlashRegistry()
+	RegisterCommand(reg, mgr, dirA)
+	cmd, ok := reg.Lookup("trust")
+	if !ok {
+		t.Fatal("/trust command not registered")
+	}
+
+	// The hint is what makes the subcommands discoverable, and it must name list.
+	for _, want := range []string{"on", "off", "once", "status", "list"} {
+		if !strings.Contains(cmd.ArgumentHint, want) {
+			t.Errorf("hint %q should name %q", cmd.ArgumentHint, want)
+		}
+	}
+
+	got := cmd.Action("list")
+	// Both saved decisions, each with its own state...
+	for _, want := range []string{"trusted", "untrusted", dirA, dirB} {
+		if !strings.Contains(got, want) {
+			t.Errorf("list output missing %q:\n%s", want, got)
+		}
+	}
+	// ...the directory the command was invoked from marked as such...
+	if !strings.Contains(got, "(this directory)") {
+		t.Errorf("list should mark the current directory:\n%s", got)
+	}
+	// ...the session-only grants, named as not saved...
+	for _, want := range []string{"session only", "not saved", filepath.Join(dirA, "session-only"), filepath.Join(dirB, "reads-only")} {
+		if !strings.Contains(got, want) {
+			t.Errorf("list output missing %q:\n%s", want, got)
+		}
+	}
+	// ...and the store it read, so the user can find the file.
+	if !strings.Contains(got, filepath.Base(path)) {
+		t.Errorf("list should name the store it read:\n%s", got)
+	}
+
+	// A directory with no session grants says so rather than printing an empty
+	// heading that reads like a truncation.
+	plainDir := t.TempDir()
+	plainMgr, _ := newTrustManager(t)
+	plainReg := runtime.NewSlashRegistry()
+	RegisterCommand(plainReg, plainMgr, plainDir)
+	plainCmd, _ := plainReg.Lookup("trust")
+	if got := plainCmd.Action("list"); !strings.Contains(got, "none saved") {
+		t.Errorf("an empty store should say so:\n%s", got)
+	}
+}
