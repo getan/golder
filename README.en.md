@@ -8,11 +8,20 @@
 
 A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. Starts in a full-screen TUI by default, with a line-based REPL and a headless mode for scripts.
 
-https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
+<p align="center">
+  <img src="docs/assets/demo-splash.png" width="92%" alt="golder's full-screen TUI: splash and status bar">
+</p>
 
 <p align="center">
-  <sub>Recorded for real, nothing staged: red <code>go test</code> → autonomous fix → all green (28s, 2× speed) · <a href="https://golder-cli.pages.dev/en/">Website</a></sub>
+  <sub>A real session, nothing staged: red <code>go test</code> → the model reads, patches, re-runs → all green (screenshots from the same run below) · <a href="https://golder-cli.pages.dev/en/">26-second video on the site</a></sub>
 </p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/assets/demo-tools.png" alt="Tool cards: reading files, applying a patch, running tests — with the real diff"></td>
+<td width="50%"><img src="docs/assets/demo-done.png" alt="The finish: all four tests green, with the verification steps spelled out"></td>
+</tr>
+</table>
 
 ## Features
 
@@ -211,6 +220,9 @@ Notes:
 
 - `/compact` immediately summarizes the context once; `/status` includes the session id, message count, creation time, and context usage (the former `/session` is folded in).
 - **Ctrl+C behaves the same everywhere**: while a run is in flight one press requests the interrupt (it prints `(interrupting…)` and settles on the single line `Interrupted.`); pressing again during the same run neither repeats the notice nor quits early. Idle, the first press discards a draft (and says so) or, on an empty composer, only arms the quit (`Press Ctrl+C again to quit.`) — matching codex, there is no "double-press to force-quit mid-run", so a stray press cannot drop an unsaved turn. Esc interrupts exactly like Ctrl+C.
+- **Ctrl+Z suspends**: pressing Ctrl+Z in any state hands the terminal back to its own job control (bubbletea releases the terminal and raises SIGTSTP), and `fg` resumes with the layout re-laid out for the current size — matching codex and every other terminal UI.
+- **`!command` passthrough**: a composer line starting with `!` runs locally — no model call, no approval, no sandbox — and joins the conversation as codex's user-role `<user_shell_command>` record (command, exit code, duration, and head+tail bounded output), so the model sees exactly what you ran and what came back. The TUI announces a live `• Running …` card that streams the command's output and settles as `• You ran …`; a record that lands mid-run is parked and merged once the run drains, so it never races the loop that owns the context. Works in both the TUI and the REPL, ↑ recalls the raw `!` line, and a bare `!` prints the usage hint.
+- `/trust list` and `/permissions list` show **every** grant, not just the ones in force here: the former prints each saved decision sorted by path with the current directory marked, then the session-only grants that are not on disk at all and the store it read; the latter prints the live approval mode, both grant kinds with their provenance and the files they come from, and how to change them. `/trust status` still answers only the narrower "what applies to this directory".
 - **Resuming rebuilds the system prompt from the current binary**: the tool guide, environment block (working directory, date, whether ripgrep is installed), AGENTS.md and the skill list are regenerated as of NOW instead of reusing the copy frozen in the session file — a session written days ago otherwise carries its creation date and ignores AGENTS.md edits. Your own words are kept: the `--system-prompt` base and `--append-system-prompt` blocks recorded with the session are carried over, and flags given on this launch win. The session file still records the prompt the session was created with, which is what `/export --include-system-prompt` shows.
 - `/resume`, `/fork`, `/tree` and `/rewind` are arrow-key pickers in the TUI and numbered selections in the REPL. A bare `/resume` lists **this project** only (a project is the repository containing the launch directory, so a repo root and its subdirectories share one history) and every row carries the directory it ran in; `/resume --all` lists every project, and a filtered or out-of-range list names `--all` instead of hiding sessions silently. `--resume <id>` and `/resume <id>` always resolve across the whole store.
 - Every skill directory under `~/.agents/skills` adds one `/command`; a fresh machine without that directory shows an empty Extensions group. Use `GOLDER_SKILLS_DIR` to relocate it or `--no-skills` to disable it entirely.

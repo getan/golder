@@ -8,11 +8,20 @@
 
 用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认进入全屏 TUI，也支持行式 REPL 与无头脚本。
 
-https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
+<p align="center">
+  <img src="docs/assets/demo-splash.png" width="92%" alt="golder 全屏 TUI：启动画面与状态栏">
+</p>
 
 <p align="center">
-  <sub>真实录制、无剪辑造假：<code>go test</code> 红 → 模型自主修复 → 全绿（28 秒 · 2× 快放） · <a href="https://golder-cli.pages.dev">官网</a></sub>
+  <sub>真实会话、无剪辑造假：<code>go test</code> 红 → 模型自主读码打补丁 → 全绿（同一次会话见下图） · <a href="https://golder-cli.pages.dev">官网上有 26 秒录像</a></sub>
 </p>
+
+<table>
+<tr>
+<td width="50%"><img src="docs/assets/demo-tools.png" alt="工具卡片：读文件、打补丁、跑测试，含真实 diff"></td>
+<td width="50%"><img src="docs/assets/demo-done.png" alt="收尾：go test 四个用例全绿，逐条给出验证结果"></td>
+</tr>
+</table>
 
 ## 特性
 
@@ -211,6 +220,9 @@ TUI 输入 `/` 会按下面的分类弹出菜单（↑↓ 选择）；`/help` �
 
 - `/compact` 立即对上下文做一次摘要压缩；`/status` 内含会话 id、消息数、创建时间与上下文用量（原 `/session` 已并入）。
 - **Ctrl+C 的一致行为**：运行中按一次即请求中断（会打印 `(interrupting…)`，随后以同一句 `Interrupted.` 结算）；同一次运行内再按不会重复提示，也不会提前退出。空闲时按一次清掉草稿（并提示已丢弃），输入框为空时第一次按下只"待命"（提示再按一次），第二次才退出——与 codex 一样，不设"运行中双击强退"，避免误触丢掉未落盘的一轮。Esc 与 Ctrl+C 的中断行为一致。
+- **Ctrl+Z 挂起**：任何状态下按 Ctrl+Z 都把终端交还给它自己的作业控制（bubbletea 释放终端并发出 SIGTSTP），`fg` 回来时重新按当前尺寸排版——与 codex 及别的终端 UI 一致。
+- **`!command` 直通**：输入框里以 `!` 开头的一行在本地直接执行——不调用模型、不走审批、不进沙箱——并以 codex 的 user 角色 `<user_shell_command>` 记录进入对话（命令、退出码、耗时，以及掐头去尾的输出），所以模型看到的正是你跑了什么、回来了什么。TUI 会先亮出一张流式 `• Running …` 卡片，结算成 `• You ran …`；运行途中落下的记录会先寄存、等这轮跑完再并入，不与持有上下文的主循环抢写。TUI 与 REPL 都有，↑ 召回的是你敲的那行原文，只有 `!` 时打印用法提示。
+- `/trust list` 与 `/permissions list` 列出**全部**授权，而不只是当前目录生效的那些：前者按路径排序打印每一条已保存的信任决定（当前目录标出），再列本会话才有的授权，以及它读的是哪个文件；后者打印当前审批档位、两类路径授权的来源与所在文件、以及怎么改。/trust status 仍然只回答"这个目录适用什么"。
 - **resume 会用当前二进制重建系统提示**：续跑旧会话时，工具用法指南、环境块（工作目录、日期、rg 是否可用）、AGENTS.md 与技能清单都按**现在**重新生成，不再沿用会话文件里冻结的那份（旧会话里那份的日期停在创建当天，AGENTS.md 的改动也不生效）；而你自己写的部分——`--system-prompt` 的替换文本与 `--append-system-prompt` 的追加块——会原样保留，本次启动显式传入的 flag 优先。会话文件里仍记录创建时的原样 prompt，`/export --include-system-prompt` 看到的是它。
 - `/resume`、`/fork`、`/tree`、`/rewind` 在 TUI 中都是方向键选择器，REPL 中输入序号选择。`/resume` 默认只列**当前项目**的会话（项目 = 启动目录所在仓库的根，子目录与根共享一份历史），列表里每条都带运行目录；`/resume --all` 列出所有项目，被过滤掉或超出范围时列表会给出提示并指到 `--all`。`--resume <id>` 与 `/resume <id>` 始终全局精确命中，不受项目过滤影响。
 - 技能目录 `~/.agents/skills` 里每多一个技能就多一条 `/命令`；全新用户没有该目录时，Extensions 组为空。可用 `GOLDER_SKILLS_DIR` 换目录、`--no-skills` 全关。
