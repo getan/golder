@@ -180,6 +180,11 @@ func TestShippedManifestIsUsable(t *testing.T) {
 		"Approve once",
 		"Approve for this session",
 		"Do you trust this folder?",
+		// The two prompts that came second: a read outside the workspace, and
+		// the trust question asked mid-run.
+		"Allow this read once",
+		"untrusted folder",
+		"Allow all tools in this folder",
 		"[screen.rule.answers]",
 		// And the resume command a restored pane is reopened with.
 		`argv   = ["golder", "--resume", "{session_id}"]`,

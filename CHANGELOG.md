@@ -37,14 +37,22 @@ interactive REPL/TUI.
 
   **The Inbox can answer for you in tuios — and that is the part with a
   standing cost.** Pressing the key is tuios's job, and it can only do it for a
-  prompt it can read: the manifest's screen rules describe golder's approval
-  dialog (`Approve once` / `Approve for this session` / `Deny`, and the
-  mid-run trust question), and the answers bind keys to those labels. So a
-  reworded dialog silently costs the ability to answer from the Inbox rather
-  than breaking anything — hence the version marker in the manifest,
-  `golder host-compat status` reporting an outdated one, and a note in
-  `internal/hostcompat/README.md` beside the strings it has to track. herdr has
-  no such coupling: it only reads reports.
+  prompt it can read: the manifest's screen rules describe all four prompts
+  golder can put to a person — the tool approval, a read outside the workspace,
+  the launch-time trust picker and the mid-run trust question — and the answers
+  bind keys to those rows' labels. tuios has five answer shapes where golder's
+  dialogs carry more rows, so the mapping is a choice rather than a
+  transcription, and it takes the conservative half: the rows that write a
+  permission to disk (the remembered read and write grants) are left to the
+  pane, because a key pressed from another window is not consent to something
+  persistent, and an answer bound to a row a dialog does not show (the narrower
+  reads rung, on a command) would press nothing at all. A reworded dialog
+  therefore costs the ability to answer from the Inbox silently rather than
+  loudly, which is why a test renders each dialog and fails when a string the
+  manifest matches on is gone (`internal/cli/tui/manifest_sync_test.go`, checked
+  to fail by breaking it), the manifest carries a version marker, and
+  `golder host-compat status` reports an outdated one. herdr has no such
+  coupling: it only reads reports.
 
   One seam was added to golder's gates, because every "a person is being asked"
   moment already passes through a single place: `OnPrompt` on

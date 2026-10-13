@@ -40,7 +40,12 @@ const manifestMarker = "golder-manifest-version:"
 // ManifestVersion goes up whenever the shipped manifest changes in a way an
 // installed copy has to be replaced to get — a new rule, a reworded one. A
 // status check compares it with the marker in the installed file.
-const ManifestVersion = 1
+//
+// 1: the first manifest: golder's detection, its tool approval dialog, the
+// launch-time trust picker, the idle and working rules, and the resume command.
+// 2: the two prompts that were still answerable only at the pane — the
+// read-outside-the-workspace question and the mid-run trust question.
+const ManifestVersion = 2
 
 // ManifestSource returns the manifest as golder ships it.
 func ManifestSource() string {

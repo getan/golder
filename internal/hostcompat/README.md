@@ -59,7 +59,8 @@ GOLDER_HOST_REPORT=herdr
 所以：
 
 1. 改动 `internal/cli/tui/approval.go` 里的**按钮文案**（`Approve once` /
-   `Approve for this session` / `Deny` / `Do you trust this folder?`）、或
+   `Approve for this session` / `Deny` / `Allow this read once` /
+   `Allow all tools in this folder (this session)` / `Do you trust this folder?`）、或
    `input.go` 的 `> ` 提示、或 `spinner.go` 的 `(1m 54s · ↓ … tokens · …)` 形状时，
    **同一次提交里改 manifest 的对应规则**，并把 `ManifestVersion` 加一。
 2. 改完要 `tuios kill-server` 才生效（daemon 启动时读 manifest）。
@@ -68,6 +69,25 @@ GOLDER_HOST_REPORT=herdr
    `outdated` 指出来。
 
 herdr 侧没有这个问题：它只读上报，没有屏幕规则。
+
+**有测试兜底**：`internal/cli/tui/manifest_sync_test.go` 会渲染四类弹窗（工具审批、
+越界读取、启动时的信任选择、运行中的信任询问）+ 输入框 + spinner，逐条检查 manifest
+里 `all` / `any` 的字符串仍然出现在画面上、两条正则仍然匹配真实渲染。改了文案却忘了
+改 manifest，`go test ./internal/cli/tui/` 会直接失败，而不是等你在 Inbox 里按不动键。
+
+## Inbox 能替你按哪些键
+
+tuios 的答案只有 `approve` / `approve_always` / `deny` / `choose`（数字）/ `text`
+这几种，而 golder 的弹窗按钮更多，所以映射是有取舍的：
+
+| 弹窗 | Inbox 提供 | 刻意不提供 |
+|---|---|---|
+| 工具审批 | 批准一次 (y) / 本会话批准 (p) / 拒绝 (esc) | |
+| 越界读取 | 只读这一次 (y) / 本会话允许读该目录 (a) / 拒绝 (esc) | **`s`（记住到磁盘）**——按一次键就把权限写进 `permissions.toml`，不是能从别的窗口代为同意的事 |
+| 运行中信任询问 | 允许一次 (y) / 本会话允该目录所有工具 (p) / 拒绝 (esc) | |
+| 启动时信任选择 | 信任本目录 (p) / 拒绝 (esc) | `y`（仅本次）、`n`（记住不信任）留在 pane 里 |
+
+未映射的按键**不是 bug**：在 pane 里照常可用，只是 Inbox 不代按。
 
 ## 设计约束
 

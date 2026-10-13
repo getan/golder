@@ -1,6 +1,6 @@
 # golder's harness manifest for tuios.
 #
-# golder-manifest-version: 1
+# golder-manifest-version: 2
 #
 # tuios reads this file to recognise a pane running golder and to read the
 # prompts golder draws. It is installed by `golder host-compat install`
@@ -73,7 +73,36 @@ approve        = { keys = ["y"] }
 approve_always = { keys = ["p"] }
 deny           = { keys = ["esc"] }
 
-# The mid-run trust question for a folder golder has not seen.
+# A read outside the workspace, where the dialog names the directory it could
+# grant.
+#
+#   read wants to read outside the workspace
+#   /etc/hosts
+#   › Allow this read once  (y)
+#     Allow reading /etc (this session)  (a)
+#     Always allow reading /etc (remembered)  (s)
+#     Deny  (esc)
+#
+# approve_always is bound to the session grant (a), not to the remembered one
+# (s): the Inbox offers "approve and do not ask again" for the session, and a
+# key that writes a permission to disk is not something a person pressing it
+# from another window can be shown to have agreed to. The remembered row stays
+# a choice made at the pane, where the dialog spells out that it persists.
+[[screen.rule]]
+state    = "needs_input"
+priority = 30
+kind     = "approval"
+message  = "Asks to read outside the workspace."
+region   = "bottom_non_empty_lines(12)"
+all      = ["Allow this read once"]
+any      = ["Deny", "Always allow reading"]
+
+[screen.rule.answers]
+approve        = { keys = ["y"] }
+approve_always = { keys = ["a"] }
+deny           = { keys = ["esc"] }
+
+# The launch-time trust picker, which asks about the folder golder started in.
 #
 #   Do you trust this folder?
 #   › Trust this folder  (p)
@@ -91,6 +120,39 @@ any      = ["Trust this folder", "Trust once"]
 [screen.rule.answers]
 approve = { keys = ["p"] }
 deny    = { keys = ["esc"] }
+
+# The trust question asked mid-run, when a tool reaches a folder the session
+# has not trusted. It comes in two shapes, because a read tool gets a narrower
+# rung than a command does:
+#
+#   bash in an untrusted folder
+#   › Allow this once  (y)
+#     Allow all tools in this folder (this session)  (p)
+#     Deny  (esc)
+#
+#   read in an untrusted folder
+#   › Allow this read only  (y)
+#     Allow reads in this folder (this session)  (a)
+#     Allow all tools in this folder (this session)  (p)
+#     Deny  (esc)
+#
+# approve_always is bound to (p), the all-tools grant, because it is the one
+# row both shapes carry: an answer bound to (a) would be offered on a command
+# dialog too, where pressing it would do nothing at all and the Inbox would
+# report a timeout. Both grants are session-only.
+[[screen.rule]]
+state    = "needs_input"
+priority = 30
+kind     = "approval"
+message  = "Asks whether to trust the folder before running a tool."
+region   = "bottom_non_empty_lines(12)"
+all      = ["untrusted folder"]
+any      = ["Deny", "Allow all tools in this folder"]
+
+[screen.rule.answers]
+approve        = { keys = ["y"] }
+approve_always = { keys = ["p"] }
+deny           = { keys = ["esc"] }
 
 # At rest: golder's composer is an input box drawn between two rules, with a
 # "> " prompt on its first line (or the placeholder prompt before anything is
@@ -110,12 +172,14 @@ regex    = ['^\s*>\s']
 #   ✻ Whirring… (1m 54s · ↓ 242 tokens · medium effort)
 #
 # The verb and the glyph change; the parenthetical does not, so the pattern
-# pins that rather than any word of it.
+# pins that rather than any word of it. The separator is optional because the
+# line sheds its parts as they become known: at the very start of a turn it is
+# "(0s)", and the token count and the effort level are appended as they arrive.
 [[screen.rule]]
 state    = "working"
 priority = 10
 message  = "Works on a turn."
-regex    = ['\(\s*(\d+h\s+)?(\d+m\s+)?\d+s\s*·']
+regex    = ['\(\s*(\d+h\s+)?(\d+m\s+)?\d+s(\s*·|\))']
 
 # How a conversation of golder is reopened after the daemon restarts. tuios
 # types this into the pane's shell, so it is the same command a person would
