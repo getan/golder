@@ -1,0 +1,125 @@
+# golder's harness manifest for tuios.
+#
+# golder-manifest-version: 1
+#
+# tuios reads this file to recognise a pane running golder and to read the
+# prompts golder draws. It is installed by `golder host-compat install`
+# (or by hand) into tuios's user manifest directory:
+#
+#     $XDG_CONFIG_HOME/tuios/harnesses/golder.toml     (~/.config/tuios/...)
+#
+# tuios loads it when the daemon starts, so run `tuios kill-server` after
+# changing it. `tuios doctor agents` lists what it loaded, and
+# `tuios explain-agent-screen` says which rule, if any, matched a pane.
+#
+# The rules below read golder's own TUI. golder ALSO reports its state through
+# `tuios set-agent-state` (see internal/hostcompat/tuios.go), and a report
+# outranks every rule here, so these rules are the fallback for the moments
+# nobody is reporting — and the thing that makes the Inbox able to press a key
+# for you. That last part is why the screen rules matter even though golder
+# reports: tuios answers a prompt by reading the screen and injecting the right
+# key, and it can only do that for a prompt a rule describes.
+#
+# MAINTENANCE: the strings below are golder's own UI text
+# (internal/cli/tui/approval.go, input.go, spinner.go). If a dialog is
+# reworded, the matching rule has to be reworded with it, or the Inbox silently
+# stops being able to answer that prompt. `golder host-compat status` warns
+# when this file is older than the golder that installed it.
+
+schema_version = 1
+id             = "golder"
+display_name   = "golder"
+priority       = 50
+
+[detect]
+comm  = ["golder"]
+argv0 = ["golder"]
+
+[screen]
+enabled   = true
+fold_case = true
+# The approval dialog sits above the composer, so its lines are inside the
+# bottom dozen rows. An approval dialog is at most a title, a few detail lines
+# and five rows.
+lines = 16
+
+# A tool-call approval: the TUI's dialog, whose rows are the answer keys.
+#
+#   bash needs approval
+#   $ npm install
+#   ‹reviewer's sentence›
+#   › Approve once  (y)
+#     Approve for this session  (p)
+#     Deny  (esc)
+#
+# "Approve once" is the row that makes this dialog what it is; "Deny" and the
+# key tags follow. A read-scope or escalation dialog has the same shape with
+# an extra row, so one rule reads them all.
+[[screen.rule]]
+state    = "needs_input"
+priority = 30
+kind     = "approval"
+message  = "Waits for approval of a tool call."
+region   = "bottom_non_empty_lines(12)"
+all      = ["Approve once"]
+any      = ["Deny", "Approve for this session"]
+
+# The answer keys, bound to the rows they belong to by nothing but this rule:
+# golder's dialog is not a numbered menu, so the keys are pressed directly.
+# Each key is the one the dialog itself prints, and the rule above is what
+# guarantees the dialog is the thing on screen.
+[screen.rule.answers]
+approve        = { keys = ["y"] }
+approve_always = { keys = ["p"] }
+deny           = { keys = ["esc"] }
+
+# The mid-run trust question for a folder golder has not seen.
+#
+#   Do you trust this folder?
+#   › Trust this folder  (p)
+#     Trust once (this session only)  (y)
+#     Don't trust (remembered)  (n)
+[[screen.rule]]
+state    = "needs_input"
+priority = 30
+kind     = "approval"
+message  = "Asks whether to trust the folder."
+region   = "bottom_non_empty_lines(12)"
+all      = ["Do you trust this folder?"]
+any      = ["Trust this folder", "Trust once"]
+
+[screen.rule.answers]
+approve = { keys = ["p"] }
+deny    = { keys = ["esc"] }
+
+# At rest: golder's composer is an input box drawn between two rules, with a
+# "> " prompt on its first line (or the placeholder prompt before anything is
+# typed). Reading the box — and only the box — is what proves the pane is at a
+# prompt rather than merely quiet.
+[[screen.rule]]
+state    = "idle"
+priority = 5
+message  = "Waits at its prompt."
+region   = "prompt_box"
+regex    = ['^\s*>\s']
+
+# Mid-turn: the spinner line sits on its own row just above the composer and
+# carries an elapsed reading in parentheses, with the streamed token count and
+# the effort level when they are known.
+#
+#   ✻ Whirring… (1m 54s · ↓ 242 tokens · medium effort)
+#
+# The verb and the glyph change; the parenthetical does not, so the pattern
+# pins that rather than any word of it.
+[[screen.rule]]
+state    = "working"
+priority = 10
+message  = "Works on a turn."
+regex    = ['\(\s*(\d+h\s+)?(\d+m\s+)?\d+s\s*·']
+
+# How a conversation of golder is reopened after the daemon restarts. tuios
+# types this into the pane's shell, so it is the same command a person would
+# run. The tokens carry no quoting because they need none.
+[resume]
+argv   = ["golder", "--resume", "{session_id}"]
+source = "golder session ids are a UTC timestamp and a counter (internal/session.NewID), so they are safe to type unquoted"

@@ -226,6 +226,44 @@ type GateOpts struct {
 	// leaf and cannot reach the sandbox registry or the managed store. why
 	// carries the failure, or the note for a grant that was already in place.
 	GrantWritable func(root string, persist bool) (made bool, why string)
+	// OnPrompt, when set, is called with the question just before a prompt is
+	// put to the person — whichever way that prompt travels (the driver's
+	// Confirm dialog, or the stdin prompt) — and returns the function to call
+	// once it has been answered. It exists so a driver can tell the terminal
+	// around it that this pane is waiting for a human: see
+	// internal/hostcompat. The returned function is called exactly once, even
+	// when the prompt ran and the answer was "no", and even when no answer
+	// arrived at all.
+	//
+	// A nil hook, or a hook returning nil, changes nothing. It is called on the
+	// run goroutine, outside the prompt mutex, and must not block: it is the
+	// driver's own transport, not part of the decision.
+	OnPrompt func(question string) func()
+}
+
+// promptNote announces a prompt about to be shown and returns the function
+// that says it is over. A nil hook yields a no-op, so callers can defer the
+// result unconditionally.
+func (o *GateOpts) promptNote(question string) func() {
+	if o.OnPrompt == nil {
+		return func() {}
+	}
+	done := o.OnPrompt(question)
+	if done == nil {
+		return func() {}
+	}
+	return done
+}
+
+// approvalQuestion is how a prompt for a tool call reads in one line, in the
+// "approve <tool>: <what>" form the rail, the risk rules and the hosts all
+// already read.
+func approvalQuestion(tool, summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return "approve " + tool
+	}
+	return "approve " + tool + ": " + summary
 }
 
 // ApprovalKind says why a call needs the user's answer.
@@ -498,6 +536,8 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 		Authorization: authWord(v.Authorization, lang),
 		Rationale:     firstReason(v),
 	}
+	done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
+	defer done()
 	ans := opts.Confirm(ctx, req)
 	if !ans.Answered {
 		return nil, false
@@ -742,6 +782,11 @@ type riskAnswer struct {
 // opts.GrantWritable and a plausible path; without them the prompt is the plain
 // y/N, which is what a driver that cannot grant should see.
 func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, unisolated string) riskAnswer {
+	// The pane is about to wait for a person, whichever way this prompt
+	// travels; the driver's transport hears about it before the read starts and
+	// hears it is over when the answer lands.
+	done := opts.promptNote(approvalQuestion(call.Name, riskSummary(call)))
+	defer done()
 	if opts.Mu != nil {
 		opts.Mu.Lock()
 		defer opts.Mu.Unlock()

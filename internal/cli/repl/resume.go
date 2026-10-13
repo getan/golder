@@ -100,6 +100,9 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	deps.hookDeps.SessionID = h.ID
 	replayTranscript(out, msgs)
 	fmt.Fprintf(out, "Resumed session %s (%s).\n", id, deps.live.Model)
+	// The pane now holds a different conversation: a host that resumed it would
+	// otherwise reopen the one this golder no longer runs.
+	deps.hostStart()
 }
 
 // resumeAllHint renders the flag that would widen this list, or "" when the

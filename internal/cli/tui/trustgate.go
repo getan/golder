@@ -33,7 +33,12 @@ func (s *runSession) sessionGates(rs *remoteSession) *run.Gates {
 		// the rest: the user is looking at the browser, and that was the first
 		// choice before this wiring existed.
 		TrustConfirm: s.trustConfirm(rs),
-		ExtraRoots:   run.ReadableExtraRoots(),
+		// Every prompt the gates put to the person passes through this, so the
+		// multiplexer around the pane can say the pane is waiting for a human —
+		// and say it is not, the moment the answer lands. A nil session (no
+		// multiplexer) makes it a no-op.
+		OnPrompt:   s.hostPrompt,
+		ExtraRoots: run.ReadableExtraRoots(),
 	})
 }
 

@@ -71,6 +71,17 @@ type GatesOpts struct {
 	// dialogs answer the rest (the pre-existing routing); nil keeps Confirm for
 	// every question.
 	TrustConfirm func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer
+	// OnPrompt, when set, is told the question just before a prompt is put to
+	// the person and returns the function to call once it is answered. It is
+	// how a session reports "this pane is waiting for a human" to the terminal
+	// multiplexer around it (see internal/hostcompat): the gates own every
+	// moment a person is asked something, which is exactly the moment a host's
+	// rail, Inbox and phone alerts care about.
+	//
+	// It is called on the run goroutine and must not block; the chain passes it
+	// to all three gates (trust, read scope, permission), so one hook covers
+	// every prompt a session can show.
+	OnPrompt func(question string) func()
 	// ExtraRoots are read roots the session advertised itself (the skills
 	// directory), never asked about. See ReadableExtraRoots.
 	ExtraRoots []string
@@ -182,6 +193,7 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		if o.TrustConfirm != nil {
 			trustOpts.Confirm = o.TrustConfirm
 		}
+		trustOpts.OnPrompt = o.OnPrompt
 	}
 	gate := trust.Gate(trustOpts)
 
@@ -195,6 +207,7 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 	}
 	if withPrompts {
 		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+		scopeOpts.OnPrompt = o.OnPrompt
 	}
 	if scopeGate := judge.ReadScopeGate(scopeOpts); scopeGate != nil {
 		gate = judge.ChainGates(gate, scopeGate)
@@ -211,6 +224,7 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 	}
 	if withPrompts {
 		permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+		permOpts.OnPrompt = o.OnPrompt
 	}
 	return judge.ChainGates(gate, judge.PermissionGate(o.Perms, permOpts))
 }

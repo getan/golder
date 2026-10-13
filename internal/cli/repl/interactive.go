@@ -301,5 +301,10 @@ func Run(opts Options) error {
 		perms:      permState,
 		notes:      reviewNotes,
 		budget:     opts.Budget,
+		// Reporting to the terminal multiplexer around this pane, when there is
+		// one: the person's rail shows golder beside the other agents, and the
+		// host gets the conversation id it needs to reopen this session. Nil
+		// outside such a pane, and nil is a working no-op.
+		host: hostReporter(os.Stderr),
 	})
 }

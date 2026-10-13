@@ -128,6 +128,22 @@ type ReadScopeOpts struct {
 	// managed store); a driver without one simply cannot offer the remembered
 	// answer, and the prompt says so.
 	Persist func(dir string) (made bool, why string)
+	// OnPrompt, when set, is told the question just before a prompt is put to
+	// the person and returns the function to call once it is answered. See
+	// GateOpts.OnPrompt: it is how a driver tells the terminal around it that
+	// this pane waits for a human (internal/hostcompat).
+	OnPrompt func(question string) func()
+}
+
+// promptNote is ReadScopeOpts' half of GateOpts.promptNote.
+func (o *ReadScopeOpts) promptNote(question string) func() {
+	if o.OnPrompt == nil {
+		return func() {}
+	}
+	if done := o.OnPrompt(question); done != nil {
+		return done
+	}
+	return func() {}
 }
 
 // ReadScopeGate builds the beforeToolCall gate that asks before a read-only
@@ -333,6 +349,10 @@ func insideAnyRoot(roots []string, target string) bool {
 // across the prompt so a parallel batch cannot interleave two questions, the
 // same contract promptRisk follows.
 func promptReadScope(ctx context.Context, opts ReadScopeOpts, target, candidate string) ApprovalAnswer {
+	// The pane is about to wait for the person: say so before the read starts,
+	// and say it is over when the answer lands, however this prompt travels.
+	done := opts.promptNote("allow reading " + target)
+	defer done()
 	if opts.Mu != nil {
 		opts.Mu.Lock()
 		defer opts.Mu.Unlock()

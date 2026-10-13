@@ -34,6 +34,7 @@ import (
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/headless"
+	"github.com/getan/golder/internal/cli/hostcmd"
 	"github.com/getan/golder/internal/cli/repl"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/sessioncmd"
@@ -191,6 +192,25 @@ func main() {
 			os.Exit(2)
 		}
 		os.Exit(sessioncmd.Run(os.Args[2], os.Args[3:], os.Stdout, os.Stderr))
+	}
+
+	// `golder host-compat` reports what the terminal multiplexer around this
+	// process sees (tuios or herdr) and installs the one file tuios needs to
+	// recognise a golder pane. Like `session`, it is a standalone action that
+	// never touches the interactive/headless flag surface, and it is
+	// deliberately usable outside a multiplexer: that is where a person checks
+	// why nothing shows up on the rail.
+	if len(os.Args) > 1 && os.Args[1] == "host-compat" {
+		hostcmd.Version = version
+		var sub string
+		if len(os.Args) > 2 {
+			sub = os.Args[2]
+		}
+		rest := []string{}
+		if len(os.Args) > 3 {
+			rest = os.Args[3:]
+		}
+		os.Exit(hostcmd.Run(sub, rest, os.Stdout, os.Stderr))
 	}
 
 	// `golder update` is binary self-update (#466: download the latest release

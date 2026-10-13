@@ -37,6 +37,7 @@ import (
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
@@ -156,6 +157,11 @@ type replDeps struct {
 	dispatcher *hooks.Dispatcher
 	// hookDeps carries the session id / project dir stamped onto every HookInput.
 	hookDeps run.HookDeps
+	// host reports this session to the terminal multiplexer around it (tuios or
+	// herdr), so the person's rail and Inbox show golder beside the other
+	// agents. It is nil outside such a pane, and nil is a working no-op. See
+	// internal/hostcompat.
+	host *hostcompat.Session
 
 	// remote holds the active remote-control session (#443), or nil when remote
 	// control is off. The /remote-control command sets/clears it in place; the
@@ -255,6 +261,11 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			deps.sessions.KillAll()
 		}
 	}()
+	// Clear this pane's agent in the multiplexer around it (tuios or herdr) on
+	// the way out, and flush the release before the process exits: otherwise the
+	// rail keeps drawing a golder that has quit until the host notices the shell
+	// prompt. Deferred early so every return path through runREPL covers it.
+	defer deps.hostClose()
 
 	// Resolve the run's hooks once per session and fire SessionStart so any
 	// injected context lands in the first turn (#423/#425). The project layer is
@@ -263,6 +274,11 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 	// session. deps.dispatcher stays nil when no hooks are configured (FR-18), so
 	// streamRun skips all hook work.
 	deps.hookDeps = run.HookDeps{SessionID: deps.header.ID, ProjectDir: deps.cwd, WarnLog: out}
+	// Tell the multiplexer around this pane which conversation it holds, before
+	// the first prompt rather than after it: a host that restarts between the
+	// two finds the id already reported, and the rail shows golder at its
+	// prompt instead of nothing at all.
+	deps.hostStart()
 	trusted := deps.trust != nil && deps.trust.IsTrusted(deps.cwd)
 	if set, err := run.ResolveHookSet(deps.cwd, trusted); err != nil {
 		fmt.Fprintf(out, "golder: hooks disabled: %v\n", err)
@@ -587,6 +603,8 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 		// Capture the leaf the turn descends from before it advances, so a rewind
 		// to this turn can move the conversation back to exactly here.
 		preTurnLeaf := deps.curLeaf
+		// The multiplexer sees the same turn boundary the transcript does.
+		deps.hostTurnStart()
 		streamRun(runCtx, out, deps, prompt)
 		cancel()
 		setCancel(nil)
@@ -784,6 +802,17 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 	// A run can end (error or interrupt) with buffered text from a final turn
 	// that never fired OnTurnEnd; flush it so no reply is silently dropped.
 	flushReply()
+	// The multiplexer hears the same verdict the person just read. An interrupt
+	// is a person's own choice rather than a failure, so it reports rest; a real
+	// error is reported as one. ctx.Err() is checked first for the reason the
+	// switch below checks it first: an interrupted run usually ends with a nil
+	// error.
+	switch {
+	case ctx.Err() != nil:
+		deps.hostTurnEnd(false)
+	default:
+		deps.hostTurnEnd(err != nil)
+	}
 	// The cancellation check is deliberately OUTSIDE the error check: an
 	// interrupted run usually ends with a nil error now (the loop records the
 	// messages it produced, and a recorded result outranks the cancelled ctx —

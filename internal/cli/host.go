@@ -70,6 +70,12 @@ type Host interface {
 	Dispatcher() *hooks.Dispatcher
 	// HookDeps carries the session id / project dir stamped onto every HookInput.
 	HookDeps() run.HookDeps
+	// PromptNote returns the session's hook for "a prompt is about to be put to
+	// the person", or nil when the session reports to no terminal multiplexer.
+	// Side-runs (/goal, /btw) install it on their own gates so a question asked
+	// from one of them also shows up as a pane waiting for a human, exactly as
+	// one asked from the main conversation does. See internal/hostcompat.
+	PromptNote() func(question string) func()
 
 	// Cwd is the directory golder was launched in; it does not change during a
 	// session and gates side-effect tools.
@@ -110,6 +116,9 @@ func HostGates(host Host, out io.Writer) *run.Gates {
 		In:         host.Input(),
 		Out:        out,
 		Mu:         host.ConfirmMu(),
+		// A question asked from a side run is a pane waiting for a person just
+		// as much as one asked from the main conversation.
+		OnPrompt:   host.PromptNote(),
 		ExtraRoots: run.ReadableExtraRoots(),
 	})
 }

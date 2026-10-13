@@ -41,9 +41,15 @@ func (d *replDeps) Goal() *agenttool.GoalState                 { return d.goal }
 func (d *replDeps) Telemetry() *cli.TelemetryHolder            { return d.telemetry }
 func (d *replDeps) Dispatcher() *hooks.Dispatcher              { return d.dispatcher }
 func (d *replDeps) HookDeps() run.HookDeps                     { return d.hookDeps }
-func (d *replDeps) Cwd() string                                { return d.cwd }
-func (d *replDeps) Input() *bufio.Reader                       { return d.in }
-func (d *replDeps) ConfirmMu() *sync.Mutex                     { return d.confirmMu }
+func (d *replDeps) PromptNote() func(question string) func() {
+	if d.host == nil {
+		return nil
+	}
+	return d.hostPrompt
+}
+func (d *replDeps) Cwd() string            { return d.cwd }
+func (d *replDeps) Input() *bufio.Reader   { return d.in }
+func (d *replDeps) ConfirmMu() *sync.Mutex { return d.confirmMu }
 
 func (d *replDeps) CurLeaf() string      { return d.curLeaf }
 func (d *replDeps) SetCurLeaf(id string) { d.curLeaf = id }

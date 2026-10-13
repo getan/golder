@@ -349,6 +349,24 @@ type GateOpts struct {
 	// with, so one driver dialog answers trust, read-scope and permission
 	// questions alike.
 	Confirm func(ctx context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer
+	// OnPrompt, when set, is told the question just before a prompt is put to
+	// the person — through Confirm or through the stdin prompt below — and
+	// returns the function to call once it is answered. See judge.GateOpts'
+	// field of the same name: it is how a driver tells the terminal around it
+	// that this pane waits for a human (internal/hostcompat).
+	OnPrompt func(question string) func()
+}
+
+// promptNote is GateOpts' half of the OnPrompt contract: a no-op when no hook
+// is wired, so the caller can always defer the result.
+func (o *GateOpts) promptNote(question string) func() {
+	if o.OnPrompt == nil {
+		return func() {}
+	}
+	if done := o.OnPrompt(question); done != nil {
+		return done
+	}
+	return func() {}
 }
 
 // Gate builds the trust gate: side-effect tools and, under StrictReads, the
@@ -392,6 +410,11 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 		}
 		var ans Answer
 		answered := false
+		// The pane is about to wait for a person. The note is taken once, here,
+		// rather than at each prompt: whether the dialog or the stdin prompt
+		// answers, the wait is one wait and it ends in the same place.
+		done := o.promptNote("approve " + call.Name + ": " + cwd + " is not trusted yet")
+		defer done()
 		if o.Confirm != nil {
 			// The one request shape every driver dialog answers. The gate owns
 			// the request (tool, preview, directory, why) so a driver only

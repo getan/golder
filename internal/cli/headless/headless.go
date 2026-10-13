@@ -18,6 +18,7 @@ import (
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
@@ -120,6 +121,13 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// process-isolated child the same.
 	notes := run.NewReviewNotes()
 	notes.Set(func(n judge.Note) { fmt.Fprintln(errOut, judge.FormatNote(n)) })
+	// Report to the multiplexer around this pane, when there is one. A
+	// one-shot run reports the same lifecycle an interactive one does — the
+	// conversation id, one turn, and a release on the way out — so a person who
+	// runs `golder -p ...` in a pane sees the same row on their rail as for any
+	// other agent. Nil outside such a pane, and nil is a working no-op.
+	host := hostcompat.OpenSession(hostcompat.Options{ErrLog: errOut})
+	host.Start(hs.header.ID, hostcompat.ResumeArgv(hs.header.ID))
 	gates := run.NewGates(run.GatesOpts{
 		Cwd:       env.Cwd,
 		Perms:     env.Permissions,
@@ -128,6 +136,11 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 		Classifier: func() judge.Classifier {
 			return run.NewReviewer(p.Model, env.ProviderName, env.Provider, creds, hs.header.ID, env.Cwd, run.Trusted(env.Cwd))
 		},
+		// A headless run has no answer channel of its own — a script cannot
+		// approve anything — but it still reports a question as a pane waiting
+		// for a person, which is exactly what the person needs to see when a
+		// headless run blocks on one.
+		OnPrompt:   func(question string) func() { return host.Block(hostcompat.KindApproval, question) },
 		ExtraRoots: run.ReadableExtraRoots(),
 	})
 
@@ -168,7 +181,15 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 		Run:  runCfg,
 	}
 	cfg.OnEvent = onEvent
+	// One turn, reported as one turn: the multiplexer sees golder start working
+	// and then finish (or fail), so a person watching the rail sees the headless
+	// run the same way they see an interactive one.
+	host.TurnStart()
+	defer func() {
+		host.Close()
+	}()
 	runErr := runtime.RunHeadless(ctx, agentCtx, cfg)
+	host.TurnEnd(runErr != nil)
 	// Persist the run's messages regardless of run outcome so a partial run is
 	// still resumable; a persistence failure is reported but does not mask a run
 	// error.

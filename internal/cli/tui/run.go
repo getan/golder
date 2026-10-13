@@ -23,6 +23,11 @@ func Run(opts Options) error {
 	// Kill still-running shell sessions (bash_ids) on exit so long-running
 	// commands are not orphaned when the TUI quits.
 	defer run.KillShellSessions(opts.Tools)
+	// Clear this pane's agent in the multiplexer around it (tuios or herdr) on
+	// the way out, and flush the release before the process exits. Deferred
+	// here rather than at the three quit call sites because every path out of
+	// the program returns through this line.
+	defer s.hostClose()
 	p := tea.NewProgram(NewModel(opts).withSession(s, history))
 	_, err = p.Run()
 	return err

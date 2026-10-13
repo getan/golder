@@ -12,6 +12,63 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **golder now shows up as an agent in the multiplexer it runs in — tuios and
+  herdr — with neither of them changing**: the terminals people already run
+  coding agents in track agent state (a rail, an Inbox, phone alerts, resuming a
+  conversation after the daemon restarts), and golder was invisible to both: no
+  harness manifest for tuios, no report of any kind for herdr. Each host already
+  accepts a report from the agent itself, so this is one new leaf package
+  (`internal/hostcompat`) speaking two dialects, plus a hook at the moments the
+  drivers already knew about.
+
+  The two hosts differ in more than a command line, which is why the package
+  keeps one neutral vocabulary and translates. tuios wants a **file** as well as
+  a report — recognition is a harness manifest, a report only moves the state of
+  a pane it can already name — so `golder host-compat install` writes
+  `~/.config/tuios/harnesses/golder.toml` (idempotent, atomic, refuses to
+  overwrite a file golder did not write, writes through a symlink so a
+  dotfile-managed config keeps control of it, and `uninstall` removes only
+  golder's). herdr wants nothing installed at all: the report names the agent,
+  and the resume command rides the report. herdr also requires a `--seq` above
+  the last one it accepted, so a frozen or backwards clock must still produce an
+  advancing number, or the rail would go silently stale. And herdr's vocabulary
+  is four states where tuios has seven: `done` and `errored` fold onto `idle`
+  with the word kept in the message, rather than being invented or dropped.
+
+  **The Inbox can answer for you in tuios — and that is the part with a
+  standing cost.** Pressing the key is tuios's job, and it can only do it for a
+  prompt it can read: the manifest's screen rules describe golder's approval
+  dialog (`Approve once` / `Approve for this session` / `Deny`, and the
+  mid-run trust question), and the answers bind keys to those labels. So a
+  reworded dialog silently costs the ability to answer from the Inbox rather
+  than breaking anything — hence the version marker in the manifest,
+  `golder host-compat status` reporting an outdated one, and a note in
+  `internal/hostcompat/README.md` beside the strings it has to track. herdr has
+  no such coupling: it only reads reports.
+
+  One seam was added to golder's gates, because every "a person is being asked"
+  moment already passes through a single place: `OnPrompt` on
+  `judge.GateOpts`, `judge.ReadScopeOpts` and `trust.GateOpts`, carried through
+  `run.GatesOpts` and `cli.HostGates` so a `/goal` or `/btw` side run answers
+  the same as the main conversation. Parallel tool calls can each open a
+  prompt, so the pane's blocked state is a count rather than a flag, and a turn
+  that ends while a prompt is still open stays `needs_input` — reporting `done`
+  over an unanswered question is how a person misses the one thing that needed
+  them. Reporting never blocks the agent: it coalesces onto a single slot,
+  sends on its own goroutine with a 1.5s deadline, and logs rather than returns
+  a failure. Outside a host pane the whole thing is nil and every call is a
+  no-op, `GOLDER_HOST_REPORT=off` disables it, and `=tuios`/`=herdr` forces a
+  host by hand.
+
+  Verified against the real thing rather than only against the contract: the
+  manifest loads in the released tuios (`Manifest golder is loaded from
+  ~/.config/tuios/harnesses/golder.toml`), and an opt-in live test run inside a
+  real pane (`GOLDER_HOSTCOMPAT_LIVE=1 go test ./internal/hostcompat/ -run
+  TestLive`) has the daemon report the pane back with golder's state and session
+  id. The unit tests pin the exact argv each host is sent, herdr's sequence
+  never moving backwards, the concurrent-prompt accounting, and the install
+  cycle including a dangling symlink.
+
 - **An ordinary in-workspace patch no longer pays the reviewer, and the two
   edits whose effect outlives the call still do**: `apply_patch` was graded by
   the model on every call — measured over ten real sessions, 467 calls at a

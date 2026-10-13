@@ -38,6 +38,7 @@ import (
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/hooks"
+	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
@@ -201,6 +202,16 @@ type runSession struct {
 	// trusted records the launch directory's trust decision at assembly, so
 	// the reviewer grades calls with the same context the trust gate enforces.
 	trusted bool
+
+	// host reports this session to the terminal multiplexer around it (tuios
+	// or herdr), so the person's rail and Inbox show golder beside the other
+	// agents. It is nil outside such a pane — and nil is a working no-op, so
+	// nothing below has to test for it.
+	//
+	// The gates' OnPrompt hook is held separately because it is a plain
+	// function on GatesOpts and the two must stay in step: set both in
+	// sessionGates, or neither.
+	host *hostcompat.Session
 }
 
 // steerQueue is the mutex-guarded FIFO behind mid-run input. The TUI goroutine
@@ -386,6 +397,10 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		budget:     opts.Budget,
 		trusted:    opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
 		steerQ:     &steerQueue{},
+		// Reporting to the terminal multiplexer around this pane, when there is
+		// one. The session id goes with it so a restored pane comes back on the
+		// same conversation; see hostStart.
+		host: hostcompat.OpenSession(hostcompat.Options{ErrLog: hostLogWriter(opts)}),
 	}
 	if s.perms == nil {
 		s.perms = permissions.New(permissions.Auto)
@@ -407,6 +422,11 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
+	// The multiplexer around this pane learns which conversation it holds
+	// before the first prompt, not after it: a daemon that restarts between the
+	// two finds the id already reported. It has to run after hookDeps, because
+	// that is where the session id lives.
+	s.hostStart()
 	// Wire hooks now when the trust decision is already known (--approve or a
 	// saved decision). In an undecided directory the TUI asks first via the
 	// first-run trust picker (Model.withSession); wireHooks then runs when the
@@ -786,6 +806,9 @@ func (s *runSession) startRun(prompt string) (chan tea.Msg, tea.Cmd) {
 	// run end can commit a rewind restore point for exactly this turn.
 	s.preTurnLeaf = s.curLeaf
 	s.preTurnLabel = prompt
+	// The multiplexer sees the same turn boundary the transcript does: golder
+	// took a prompt and is working on it.
+	s.hostTurnStart()
 	ch := s.newRunChannel()
 	return ch, startRunOn(ch, ctx, s.agentCtx, s.buildConfig(ch), s.onEvent)
 }
@@ -1176,6 +1199,9 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry, fol
 	s.lastBtw = nil
 	s.lastBtwBase = 0
 	s.hookDeps.SessionID = h.ID
+	// The pane now holds a different conversation: a host that resumed it would
+	// otherwise reopen the one this golder no longer runs.
+	s.hostStart()
 	return msgs, nil
 }
 

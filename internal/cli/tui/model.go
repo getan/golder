@@ -1282,6 +1282,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		if m.session != nil && m.session.telemetry != nil {
 			m.session.telemetry.Fold(msg.ev)
+			// Show the same context reading on the multiplexer's rail. It is
+			// display only and carries its own lifetime, so a session that stops
+			// reporting leaves nothing stale behind.
+			m.session.hostMeta()
 		}
 		return m, m.pumpNext()
 
@@ -1409,8 +1413,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// One settlement line, decided here rather than by which events happened
 		// to survive the cancellation: an interrupt reports the same way whether
 		// the aborting turn-end reached the UI before the cancel did or not.
+		//
+		// The multiplexer hears the same verdict: a run that stopped on an
+		// error is not a finished turn, and an interrupt is a person's own
+		// choice rather than a failure, so neither claims golder finished its
+		// work.
+		interrupted := wasInterrupted || errors.Is(msg.err, context.Canceled)
+		if m.session != nil {
+			m.session.hostTurnEnd(msg.err != nil && !interrupted)
+		}
 		switch {
-		case wasInterrupted || errors.Is(msg.err, context.Canceled):
+		case interrupted:
 			if !noticePrinted {
 				m.transcript.addSystem(ui.InterruptNotice)
 			}

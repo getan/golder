@@ -25,6 +25,7 @@ https://github.com/user-attachments/assets/f02bc1ec-c178-425a-92de-f73af1e862a9
 - **Out-of-workspace reads need your answer**: the read-only tools (`read` / `grep` / `find` / `ls` / `view_image`, plus the file operands a `bash` command exposes) read the workspace and nothing else until you say so — the dialog offers "just this read", "allow reading this directory (this session)" or "remembered" (written to `permissions.toml`), and a run with nobody to ask (headless, a sub-agent thread) fails closed with the path and the setting that would allow it. No permission mode waives the question (full-access turns off review, not consent). Pre-grant a directory with `[permissions] readable_roots` in `config.toml` or `GOLDER_READABLE_ROOTS`, which also widens the sandbox read whitelist; credential paths (`~/.ssh`, `~/.zshrc`, …) can never be granted.
 - **Per-provider proxy routing**: `/proxy` selects which providers use a proxy, independently; unselected providers connect directly and never inherit the shell's `HTTP_PROXY` / `HTTPS_PROXY`.
 - **Skills and templates**: skills under `~/.agents/skills` are registered as `/commands` (none ship built-in; an absent directory means zero extra commands); prompt templates and project `AGENTS.md` load automatically.
+- **A first-class agent inside tuios / herdr**: run golder in a [tuios](https://github.com/Gaurav-Gosain/tuios) window or a [herdr](https://github.com/herdrdev/herdr) pane and it reports its own state, so it appears on the rail/sidebar (working / waiting on you / idle / done), its approvals and questions land in the Inbox, and a daemon restart brings the conversation back with `golder --resume <session>`. **Neither host has to change, and only one has to be told anything**: tuios needs a harness manifest, which `golder host-compat install` writes into `~/.config/tuios/harnesses/`; herdr needs nothing installed, because the report itself names the agent. tuios can also answer a prompt from the Inbox for you — that path reads the manifest's screen rules, so **a reworded approval dialog has to be matched by an edit to that manifest** (see `internal/hostcompat/README.md`). `golder host-compat status` says which host it found and what is missing; `GOLDER_HOST_REPORT=off` disables reporting.
 
 ## Install
 
@@ -235,6 +236,11 @@ golder -l                     # list every project's sessions, with their direct
 # Session export / self-update
 golder session export <session-id> --format md --output talk.md
 golder update
+
+# Be recognised inside tuios / herdr (see Features)
+golder host-compat status      # which host, and what is missing
+golder host-compat install     # write tuios's harness manifest (herdr needs none)
+golder host-compat uninstall   # remove only what golder wrote
 ```
 
 `golder update` resolves the latest tag via the site endpoint (reachable from mainland China, no rate limit), falling back to the GitHub API. Release downloads use the same direct → mirror chain as the installer: the archive is still verified against the release's `checksums.txt` (a corrupt copy fails over to the next source), and `checksums.txt` itself prefers GitHub direct — mirror-served copies are accepted only when all responding sources agree on the digest (a lone reachable mirror is accepted with a warning on blocked networks). `GOLDER_MIRROR=off` disables mirroring.
@@ -283,6 +289,7 @@ See `golder --help` for the complete list.
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `[permissions] readable_roots`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |
+| `GOLDER_HOST_REPORT` | Host reporting: `off` disables it; `tuios` / `herdr` forces one (default detects the pane's environment; outside a host nothing is reported) |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |

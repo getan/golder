@@ -47,9 +47,15 @@ func (s *runSession) Goal() *agenttool.GoalState {
 func (s *runSession) Telemetry() *cli.TelemetryHolder { return s.telemetry }
 func (s *runSession) Dispatcher() *hooks.Dispatcher   { return s.dispatcher }
 func (s *runSession) HookDeps() run.HookDeps          { return s.hookDeps }
-func (s *runSession) Cwd() string                     { return s.cwd }
-func (s *runSession) Input() *bufio.Reader            { return nil }
-func (s *runSession) ConfirmMu() *sync.Mutex          { return nil }
+func (s *runSession) PromptNote() func(question string) func() {
+	if s.host == nil {
+		return nil
+	}
+	return s.hostPrompt
+}
+func (s *runSession) Cwd() string            { return s.cwd }
+func (s *runSession) Input() *bufio.Reader   { return nil }
+func (s *runSession) ConfirmMu() *sync.Mutex { return nil }
 
 func (s *runSession) CurLeaf() string      { return s.curLeaf }
 func (s *runSession) SetCurLeaf(id string) { s.curLeaf = id }
