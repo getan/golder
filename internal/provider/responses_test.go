@@ -73,6 +73,18 @@ func deltaFrame(delta string) string {
 		`"content_index":0,"sequence_number":1,"logprobs":[],"delta":"` + delta + `"}`
 }
 
+// emptyCompletedFrame is a response.completed event that carries nothing usable:
+// no output items at all, and no usage either. It is the shape a gateway sends
+// when it ends a turn without producing anything — the case the driver retries
+// once, because the alternative is telling the user to check their model and
+// protocol configuration over an upstream hiccup.
+func emptyCompletedFrame(id, model string) string {
+	return `{"type":"response.completed","sequence_number":1,"response":{` +
+		`"id":"` + id + `","model":"` + model + `","output":[],` +
+		`"usage":{"input_tokens":0,"output_tokens":0,` +
+		`"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}}`
+}
+
 func itoa(n int) string { return strconv.Itoa(n) }
 
 // drain collects the terminal message from a stream, mirroring how the loop
@@ -210,6 +222,74 @@ func TestResponsesDriverStreamsIncrementalDeltas(t *testing.T) {
 	// Final aggregation must match the completed payload, i.e. the last partial.
 	if got := textOf(msg); got != "Hello, world" {
 		t.Errorf("final text = %q, want %q", got, "Hello, world")
+	}
+}
+
+// An empty completion must be retried once, because the failure is usually
+// upstream: a gateway ends the turn with no text, no reasoning and no tool call.
+// The user saw "check that --model, --base-url and --protocol match the same
+// provider" and went looking for a configuration mistake that was not there.
+func TestResponsesDriverRetriesAnEmptyCompletion(t *testing.T) {
+	var calls int
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return sseResponse(emptyCompletedFrame("resp_empty", "gpt-4o")), nil
+		}
+		return sseResponse(completedFrame("recovered", "resp_ok", "gpt-4o", 5, 3)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	msg := drain(t, stream)
+
+	if calls != 2 {
+		t.Errorf("requests = %d, want 2 (one empty attempt and one retry)", calls)
+	}
+	if got := textOf(msg); got != "recovered" {
+		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	if msg.Usage == nil || msg.Usage.InputTokens != 5 {
+		t.Errorf("usage = %+v, want the retry's", msg.Usage)
+	}
+}
+
+// The retry is bounded: two empty completions in a row are surfaced as they
+// were before. Retrying forever would turn an upstream fault into a hang, and a
+// model that keeps ending its turn with nothing is not a problem another
+// request fixes.
+func TestResponsesDriverDoesNotRetryAnEmptyCompletionTwice(t *testing.T) {
+	var calls int
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return sseResponse(emptyCompletedFrame("resp_empty", "gpt-4o")), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+	msg := drain(t, stream)
+
+	if calls != 2 {
+		t.Errorf("requests = %d, want exactly 2 before giving up", calls)
+	}
+	// The empty message still reaches the caller, so the front-end keeps its
+	// note — the difference is that one transient empty no longer produces it.
+	if len(msg.Content) != 0 {
+		t.Errorf("content = %v, want the empty result to pass through", msg.Content)
 	}
 }
 

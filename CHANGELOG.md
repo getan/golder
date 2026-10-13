@@ -991,6 +991,34 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A contentless SSE frame no longer kills a turn with `unexpected end of
+  JSON input`**: the Responses driver streams through openai-go's decoder, which
+  dispatches an event on EVERY blank line — including one that terminates
+  nothing (a keep-alive, a leading blank, an extra separator after the last
+  event). The dispatch then carries empty data, the SDK runs `json.Unmarshal` on
+  it, and Go's error for empty input is that message: an assistant message with
+  no text, no tool calls and only a parse error, several times in one session
+  against a third-party relay. golder's own SSE transport was already immune
+  (its flush returns early on an empty payload), so the fix is a RoundTripper on
+  the SDK's client that drops frames carrying no content — while leaving a frame
+  WITH content byte-for-byte alone, because a blank line is what separates two
+  events and removing the wrong one would merge them. The reproduction is a
+  test: each case first asserts that the unfiltered stream fails with exactly
+  that error, so the fix cannot be mistaken for a workaround for something else.
+- **An empty completion is retried once instead of sending the user to check
+  their configuration**: a gateway occasionally closes a stream with a
+  `response.completed` event whose output carries no text, no reasoning summary
+  and no tool call — sometimes with no usage either. The turn then ended with
+  nothing, and the only thing the user saw was "note: empty response from the
+  model (no content). Check that --model, --base-url and --protocol match the
+  same provider", which sent them looking for a mistake that was not there. One
+  retry is the honest remedy and is safe exactly here: the message is empty, so
+  nothing has been shown and nothing can be duplicated. A second empty answer
+  still surfaces, because a model that keeps ending its turn with nothing is not
+  a problem another request fixes. The retry has its own flag rather than
+  reusing the loop's first-attempt test, which the hosted-search fallback also
+  needs — sharing it meant an empty first answer consumed the counter and left
+  the search fallback unable to run.
 - **`~/…` operands are asked about, and a multi-operand read is offered its
   finest directory**: two holes in the read-scope gate, both surfaced by one
   session. The shell expands a leading unquoted `~` itself, but the scanner read

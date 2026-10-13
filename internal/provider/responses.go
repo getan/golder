@@ -87,7 +87,12 @@ func (d *responsesDriver) StreamCompletion(ctx context.Context, req CompletionRe
 		opts = append(opts, option.WithHeader(OpencodeSessionHeader, sid))
 	}
 	if pc := clientForURL(d.name, d.baseURL); pc != nil {
-		opts = append(opts, option.WithHTTPClient(pc))
+		// The SDK's SSE decoder dispatches an event on every blank line, so a
+		// contentless frame (a keep-alive, a stray separator) reaches
+		// json.Unmarshal as empty input and fails the whole run with
+		// "unexpected end of JSON input". guardSSEFrames copies the client and
+		// drops those frames; see sse_guard.go.
+		opts = append(opts, option.WithHTTPClient(guardSSEFrames(pc)))
 	}
 	opts = append(opts, d.clientOpts...)
 	client := openai.NewClient(opts...)
@@ -125,10 +130,32 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 		hostedSearchCapable(req.Model) &&
 		!hostedSearchKnownUnsupported(d.name, req.Model)
 	seen := citedURLs(req.Context.Messages)
+	// retriedEmpty tracks the empty-completion retry separately from the loop
+	// counter. Both this and the hosted-search fallback below want "only on a
+	// pristine first attempt", and sharing attempt == 0 for both meant an empty
+	// first answer consumed the counter: the search fallback then never ran on
+	// the retry, so a gateway that rejects the hosted tool stayed broken.
+	retriedEmpty := false
 	for attempt := 0; ; attempt++ {
 		params := buildResponsesParams(d.name, req, useHosted)
 		msg, empty, err := d.runOnce(ctx, stream, client, params, seen)
 		if err == nil {
+			// An empty completion is useless, and it is not always the user's
+			// configuration: a gateway occasionally closes a stream with a
+			// response.completed event whose output the client cannot use — no
+			// text, no reasoning summary, no tool call, and sometimes no usage
+			// either. The front-end's "check --model/--base-url/--protocol" note
+			// then sends the user hunting for a mistake that is not there.
+			//
+			// Retrying ONCE is the honest remedy, and it is safe exactly here:
+			// the message is empty, so nothing has been shown and nothing can be
+			// duplicated. A second empty answer is surfaced as it was before,
+			// because a model that keeps ending its turn with nothing is a
+			// problem retrying cannot fix.
+			if !retriedEmpty && len(msg.Content) == 0 {
+				retriedEmpty = true
+				continue
+			}
 			stream.Emit(ctx, StreamDoneEvent{Message: msg})
 			return
 		}
