@@ -51,42 +51,70 @@ func TestFileFromJoinsUnderTheRoot(t *testing.T) {
 }
 
 // TestMigrateLegacyMovesOnce covers the move a user actually experiences: their
-// files are in ~/.config/golder, and after one launch they are in the state root
-// with the same contents. The destination winning over the source is the rule
-// that keeps a second launch, or a hand-made new file, from being clobbered.
+// files are in the legacy config directory, and after one launch they are in the
+// state root with the same contents.
+//
+// Both spellings of that directory are exercised, because both existed: the
+// releases that wrote it honored $XDG_CONFIG_HOME, so a user who sets it has
+// their files in the XDG tree and a user who does not has them under ~/.config.
+// A test that only covered the second passed for years on a machine that does
+// not set the variable and failed the moment it ran on one that does — which is
+// what CI is: the environment is part of the input, so it is stated here.
 func TestMigrateLegacyMovesOnce(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv(EnvHome, "") // the move is home-relative only
-	legacy := filepath.Join(home, ".config", "golder")
-	if err := os.MkdirAll(legacy, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{ConfigFile, GrantsFile} {
-		if err := os.WriteFile(filepath.Join(legacy, name), []byte("legacy:"+name), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	for _, tc := range []struct {
+		name      string
+		xdg       string // "" means "leave it unset/unset-like"
+		legacySub string
+	}{
+		{name: "home-relative", legacySub: filepath.Join(".config", "golder")},
+		{name: "XDG", xdg: "XDG", legacySub: "golder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv(EnvHome, "") // the move is home-relative only
 
-	var moved []string
-	MigrateLegacy(os.Getenv, func(msg string) { moved = append(moved, msg) })
-	for _, name := range []string{ConfigFile, GrantsFile} {
-		got, err := os.ReadFile(filepath.Join(home, ".golder", name))
-		if err != nil {
-			t.Fatalf("%s not moved: %v", name, err)
-		}
-		if string(got) != "legacy:"+name {
-			t.Errorf("%s content = %q, want it carried over unchanged", name, got)
-		}
-	}
-	if len(moved) < 2 {
-		t.Errorf("each move should be announced, got %v", moved)
-	}
+			// base is the directory the legacy files sit under: $HOME for the
+			// home-relative spelling, $XDG_CONFIG_HOME for the XDG one (where
+			// the old code appended "golder" itself).
+			base := home
+			if tc.xdg == "" {
+				t.Setenv("XDG_CONFIG_HOME", "")
+			} else {
+				base = t.TempDir()
+				t.Setenv("XDG_CONFIG_HOME", base)
+			}
+			legacy := filepath.Join(base, tc.legacySub)
+			if err := os.MkdirAll(legacy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{ConfigFile, GrantsFile} {
+				if err := os.WriteFile(filepath.Join(legacy, name), []byte("legacy:"+name), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	// A leftover permissions.toml is NOT moved: it is retired, and only the
-	// authorization migration reads it, from where it was written.
-	if _, err := os.Stat(filepath.Join(home, ".golder", "permissions.toml")); !os.IsNotExist(err) {
-		t.Error("permissions.toml must not be copied into the state root")
+			var moved []string
+			MigrateLegacy(os.Getenv, func(msg string) { moved = append(moved, msg) })
+			for _, name := range []string{ConfigFile, GrantsFile} {
+				got, err := os.ReadFile(filepath.Join(home, ".golder", name))
+				if err != nil {
+					t.Fatalf("%s not moved: %v", name, err)
+				}
+				if string(got) != "legacy:"+name {
+					t.Errorf("%s content = %q, want it carried over unchanged", name, got)
+				}
+			}
+			if len(moved) < 2 {
+				t.Errorf("each move should be announced, got %v", moved)
+			}
+
+			// A leftover permissions.toml is NOT moved: it is retired, and only
+			// the authorization migration reads it, from where it was written.
+			if _, err := os.Stat(filepath.Join(home, ".golder", "permissions.toml")); !os.IsNotExist(err) {
+				t.Error("permissions.toml must not be copied into the state root")
+			}
+		})
 	}
 }
 
@@ -97,6 +125,7 @@ func TestMigrateLegacyDefersToTheDestination(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv(EnvHome, "")
+	t.Setenv("XDG_CONFIG_HOME", "") // the home-relative spelling is the one here
 	legacy := filepath.Join(home, ".config", "golder")
 	if err := os.MkdirAll(legacy, 0o700); err != nil {
 		t.Fatal(err)
