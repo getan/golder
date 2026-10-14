@@ -709,7 +709,7 @@ func (s *runSession) compact(ctx context.Context) (string, error) {
 	if s.creds != nil {
 		scfg.APIKey = s.creds.GetAPIKey(context.Background(), s.live.ProviderName)
 	}
-	res, err := compaction.Compact(ctx, stream, model, msgs, settings, -1, nil, "", scfg)
+	res, err := compaction.Compact(ctx, stream, model, msgs, settings, s.live.ContextWindow, -1, nil, "", scfg)
 	if err != nil {
 		return "", err
 	}

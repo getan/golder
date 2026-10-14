@@ -211,7 +211,7 @@ func TestCompactRebuildsContext(t *testing.T) {
 	// Small keepRecentTokens so the cut lands on the recent bigUser(100) turn,
 	// leaving the earlier read/toolResult prefix to be summarized.
 	settings := CompactionSettings{Enabled: true, ReserveTokens: 16384, KeepRecentTokens: 50}
-	res, err := Compact(context.Background(), stream, provider.Model{ID: "m"}, msgs, settings, -1, nil, "", provider.StreamConfig{})
+	res, err := Compact(context.Background(), stream, provider.Model{ID: "m"}, msgs, settings, 0, -1, nil, "", provider.StreamConfig{})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestCompactNothingToSummarize(t *testing.T) {
 	// prevCompactionIndex already at/after the cut -> nil result.
 	msgs := []agentcore.Message{userMsg("a"), assistantMsg("b", nil, "")}
 	stream := fakeStreamFn(assistantText("unused"), nil)
-	res, err := Compact(context.Background(), stream, provider.Model{ID: "m"}, msgs, DefaultCompactionSettings, 5, nil, "", provider.StreamConfig{})
+	res, err := Compact(context.Background(), stream, provider.Model{ID: "m"}, msgs, DefaultCompactionSettings, 0, 5, nil, "", provider.StreamConfig{})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}

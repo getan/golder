@@ -792,6 +792,23 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Auto-compaction fires earlier and keeps more**: two defaults were wrong for
+  the way a session actually grows. The trigger sat at 90% of the window (a 10%
+  headroom), which left 20k tokens on a 200k model for the *next* turn — and a
+  tool-heavy turn adds 20-40k of file contents and command output in a single
+  batch, so the overflow arrived mid-turn as a provider error rather than as a
+  graceful compaction; it also left the model finishing its work in the dirtiest
+  tenth of the window. The headroom is now 20%, so the trigger sits at 80%. And
+  the verbatim tail went from 20k to 64k: compaction is lossy in exactly the
+  place continuity matters, since the retained messages are the raw reads, edits
+  and decisions a summary flattens, and 64k holds a real task's working set on a
+  200k window. On smaller windows the tail is clamped to half the usable window —
+  a fixed 64k tail on a 64k window is a cut the cut-point search can never reach,
+  which would have left auto-compaction silently doing nothing while the context
+  sat over its own threshold. `/status` and `/memory` print the trigger and the
+  reserve they are computed from, so both follow automatically. Settings
+  themselves are unchanged: `[compaction] max_context` is still the only knob,
+  and its clamp to the provider window still applies.
 - **The reviewer's decision model is listed apart from the chat providers**: `typesafe`
   speaks a typed-decision API, not chat completions, which the registry knew but
   the command did not say — `/provider` listed it among the conversation

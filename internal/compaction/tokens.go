@@ -43,17 +43,29 @@ type CompactionSettings struct {
 }
 
 // DefaultCompactionSettings matches pi's DEFAULT_COMPACTION_SETTINGS (reserve
-// 16k, keep 20k) plus a 10% headroom. The percentage aligns the trigger with
-// what the rest of the industry does — Codex compacts at 90% of the window and
-// Claude Code around 90-95% — and with golder's own low-budget ladder, whose
-// first notice fires at 10% remaining. Without it, a 1M-window model only
-// compacted at 98.4% full, which is later than the point where a single fat
-// turn can still overflow the window.
+// 16k reserve) with two departures from it: a 20% headroom, and a 64k tail.
+//
+// The reserve is a percentage rather than pi's fixed 16k because a fixed number
+// cannot serve every window: 16k is most of a 32k window but a rounding error on
+// a 1M one, where it let a conversation climb to 98.4% full — later than the
+// point where a single fat turn can still overflow the window, and an overflow
+// mid-turn is an API error rather than a graceful compaction. 20% means the
+// trigger sits at 80%, which is earlier than the industry's 90% (Codex) and
+// 90-95% (Claude Code) on purpose: the reserve has to absorb ONE turn, and a
+// tool-heavy turn on a 200k window can add 20-40k tokens of file contents and
+// command output in a single batch. Compacting at 90% left 20k of room for that
+// turn, and left the model finishing its work in the dirtiest 10% of the window.
+//
+// The tail went from pi's 20k to 64k because compaction is lossy in exactly the
+// place continuity matters: the retained messages are the raw file reads, edits
+// and decisions a summary flattens. 64k is a third of a 200k window — enough to
+// keep the working set of a real task verbatim — and KeepTokens clamps it on
+// smaller windows, where a fixed 64k would leave nothing to summarize.
 var DefaultCompactionSettings = CompactionSettings{
 	Enabled:          true,
 	ReserveTokens:    16384,
-	HeadroomPercent:  10,
-	KeepRecentTokens: 20000,
+	HeadroomPercent:  20,
+	KeepRecentTokens: 65536,
 }
 
 // EffectiveWindow returns the window the compaction decision counts against:
@@ -93,6 +105,25 @@ func (s CompactionSettings) UsableTokens(contextWindow int) int {
 		return 0
 	}
 	return window - s.EffectiveReserve(contextWindow)
+}
+
+// KeepTokens returns the token budget for the verbatim tail that survives a
+// compaction: KeepRecentTokens, clamped so that a compaction can always cut.
+//
+// The clamp is not a nicety. The tail and the window are independent knobs, and
+// a tail larger than the usable window leaves nothing to summarize: FindCutPoint
+// walks backwards from the end, never reaches its budget, and keeps everything —
+// so auto-compaction stops working silently, on exactly the small windows where
+// overflowing the model's window is easiest, and the run then fails against the
+// provider's limit instead of compacting. Half the usable window is the ceiling,
+// which leaves the other half for what follows the cut (the summary plus the
+// turn being worked on).
+func (s CompactionSettings) KeepTokens(contextWindow int) int {
+	keep := s.KeepRecentTokens
+	if half := s.UsableTokens(contextWindow) / 2; half > 0 && keep > half {
+		return half
+	}
+	return keep
 }
 
 // estimatedImageChars is the fixed character budget attributed to an image

@@ -98,16 +98,27 @@ func TestRunStatusUnknownContextWindow(t *testing.T) {
 	}
 }
 
+// TestBeforeCompactCalculation pins that the printed trigger point is the same
+// number the gate uses. It used to recompute window-minus-fixed-reserve by hand,
+// which was right only while the fixed reserve dominated — the moment a
+// percentage headroom took over, the test disagreed with the code it was
+// checking.
 func TestBeforeCompactCalculation(t *testing.T) {
-	reserve := compaction.DefaultCompactionSettings.ReserveTokens
-	if reserve != 16384 {
-		t.Errorf("expected reserve tokens to be 16384, got %d", reserve)
+	settings := compaction.DefaultCompactionSettings
+	if settings.ReserveTokens != 16384 {
+		t.Errorf("expected the fixed reserve to stay 16384, got %d", settings.ReserveTokens)
 	}
 
+	// 128k window: 20% headroom (25600) beats the fixed 16k, so the trigger is
+	// 128000 - 25600.
 	contextWindow := 128000
-	threshold := contextWindow - reserve
-	if threshold != 128000-16384 {
-		t.Errorf("expected threshold to be 128000-16384=%d, got %d", 128000-16384, threshold)
+	if got, want := settings.UsableTokens(contextWindow), 128000-25600; got != want {
+		t.Errorf("threshold = %d, want %d", got, want)
+	}
+	// A window small enough for the fixed reserve to dominate still compacts at
+	// half of it rather than never.
+	if got, want := settings.UsableTokens(32_000), 32_000-16_384; got != want {
+		t.Errorf("32k threshold = %d, want %d", got, want)
 	}
 }
 

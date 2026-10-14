@@ -94,7 +94,9 @@ func TestLiveConfigCompactionSettings(t *testing.T) {
 		t.Fatalf("ParseMaxContext: %v", err)
 	}
 	live := &LiveConfig{ContextWindow: 1_000_000, MaxContext: abs}
-	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 270_000; got != want {
+	// 300K resolved from max_context, minus the reserve: 20% of 300k = 60k beats
+	// the fixed 16k, so usable = 300000 - 60000.
+	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 240_000; got != want {
 		t.Errorf("absolute max_context usable = %d, want %d", got, want)
 	}
 
@@ -104,13 +106,13 @@ func TestLiveConfigCompactionSettings(t *testing.T) {
 		t.Fatalf("ParseMaxContext: %v", err)
 	}
 	live = &LiveConfig{ContextWindow: 200_000, MaxContext: pct}
-	// max_context 50% => effective window 100k, and the reserve is the larger
-	// of 16k and 10% of that window, so usable = 100k - 16384.
-	if got, want := live.CompactionSettings().UsableTokens(200_000), 100_000-16_384; got != want {
+	// max_context 50% => effective window 100k, and the reserve is the larger of
+	// 16k and 20% of that window, so usable = 100k - 20k.
+	if got, want := live.CompactionSettings().UsableTokens(200_000), 80_000; got != want {
 		t.Errorf("50%% of 200k usable = %d, want %d", got, want)
 	}
 	live.ContextWindow = 1_000_000
-	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 450_000; got != want {
+	if got, want := live.CompactionSettings().UsableTokens(1_000_000), 400_000; got != want {
 		t.Errorf("50%% of 1M usable = %d, want %d", got, want)
 	}
 }

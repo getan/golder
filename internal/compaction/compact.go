@@ -43,11 +43,16 @@ type CompactionResult struct {
 }
 
 // Compact prepares and generates a compaction over msgs. It cuts at
-// FindCutPoint(msgs, settings.KeepRecentTokens), summarizes messages in
+// FindCutPoint(msgs, settings.KeepTokens(contextWindow)), summarizes messages in
 // [prevCompactionIndex+1, firstKeptIndex) (seeding file ops from a prior
 // compaction's details when provided), and appends <read-files>/<modified-files>
 // metadata to the summary. previousSummary, when non-empty, switches to the
 // iterative update template.
+//
+// contextWindow is the window the cut has to fit inside, which is what clamps the
+// retained tail (see CompactionSettings.KeepTokens). A non-positive window means
+// unknown: the tail is then taken as configured, and the caller is the one that
+// decides whether compacting makes sense at all.
 //
 // prevCompactionIndex is the index of the last already-applied compaction point
 // (-1 when none); summarization starts just after it so each compaction only
@@ -62,12 +67,13 @@ func Compact(
 	model provider.Model,
 	msgs []agentcore.Message,
 	settings CompactionSettings,
+	contextWindow int,
 	prevCompactionIndex int,
 	prevDetails *CompactionDetails,
 	previousSummary string,
 	cfg provider.StreamConfig,
 ) (*CompactionResult, error) {
-	cut := FindCutPoint(msgs, settings.KeepRecentTokens)
+	cut := FindCutPoint(msgs, settings.KeepTokens(contextWindow))
 
 	start := prevCompactionIndex + 1
 	if start < 0 {

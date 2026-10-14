@@ -572,7 +572,8 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 
 // runCompaction invokes compaction.Compact with the loop's summarization config,
 // falling back to the primary Stream/Model when the summary-specific fields are
-// unset. Compact derives the cut point from settings.KeepRecentTokens.
+// unset. Compact derives the cut point from the settings and the window they have
+// to fit in.
 func runCompaction(ctx context.Context, msgs agentcore.MessageList, cfg *RunConfig) (*compaction.CompactionResult, error) {
 	stream := cfg.SummaryStream
 	if stream == nil {
@@ -603,7 +604,7 @@ func runCompaction(ctx context.Context, msgs agentcore.MessageList, cfg *RunConf
 		sid = processSessionID()
 	}
 	scfg.Extra = provider.WithSessionExtra(scfg.Extra, sid)
-	return compaction.Compact(ctx, stream, model, msgs, cfg.Compaction, -1, nil, "", scfg)
+	return compaction.Compact(ctx, stream, model, msgs, cfg.Compaction, cfg.ContextWindow, -1, nil, "", scfg)
 }
 
 // writeCompactionCheckpoint persists the just-produced compaction summary as a

@@ -1108,7 +1108,7 @@ func runManualCompact(ctx context.Context, out io.Writer, deps replDeps) {
 		scfg.APIKey = deps.creds.GetAPIKey(context.Background(), deps.live.ProviderName)
 	}
 	fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, "Compacting conversation…"))
-	res, err := compaction.Compact(ctx, stream, model, msgs, settings, -1, nil, "", scfg)
+	res, err := compaction.Compact(ctx, stream, model, msgs, settings, deps.live.ContextWindow, -1, nil, "", scfg)
 	if err != nil {
 		if ctx.Err() == context.Canceled {
 			fmt.Fprintln(out, "compaction cancelled (context left unchanged)")

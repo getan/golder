@@ -251,32 +251,32 @@ func TestShouldCompactThresholdBoundaries(t *testing.T) {
 }
 
 // TestShouldCompactPercentHeadroom pins the fix for a 1M-window model that only
-// compacted at 98.4% full: with the default 10% headroom the trigger sits at
-// 90% of the window, and the fixed reserve still wins on small windows where
-// 10% would hold back less than the summary needs.
+// compacted at 98.4% full: the percentage headroom sets the trigger at 80% of the
+// window, and the fixed reserve still wins on small windows where 20% would hold
+// back less than a summary plus a turn needs.
 func TestShouldCompactPercentHeadroom(t *testing.T) {
 	s := DefaultCompactionSettings
 
-	// 1M window: 100k headroom dominates the 16k reserve, so 900k is the
-	// trigger. A reading at 950k (the reported 95%) must compact.
-	if got, want := s.UsableTokens(1_000_000), 900_000; got != want {
+	// 1M window: 200k headroom dominates the 16k reserve, so 800k is the
+	// trigger. A reading at 850k must compact.
+	if got, want := s.UsableTokens(1_000_000), 800_000; got != want {
 		t.Fatalf("UsableTokens(1M) = %d, want %d", got, want)
 	}
-	if !ShouldCompact(950_000, 1_000_000, s) {
-		t.Fatal("950k of a 1M window must compact")
+	if !ShouldCompact(850_000, 1_000_000, s) {
+		t.Fatal("850k of a 1M window must compact")
 	}
-	if ShouldCompact(890_000, 1_000_000, s) {
-		t.Fatal("890k of a 1M window must not compact")
+	if ShouldCompact(790_000, 1_000_000, s) {
+		t.Fatal("790k of a 1M window must not compact")
 	}
 
-	// 128k window: 10% (12,800) is below the 16k reserve, so the fixed reserve
-	// still governs — parity with the pre-existing behavior.
-	if got, want := s.UsableTokens(128_000), 128_000-16384; got != want {
+	// 128k window: 20% (25,600) beats the 16k reserve, so the percentage governs
+	// and the trigger sits at 102,400 — the 80% the default is chosen for.
+	if got, want := s.UsableTokens(128_000), 128_000-25_600; got != want {
 		t.Fatalf("UsableTokens(128k) = %d, want %d", got, want)
 	}
 
-	// 32k window: reserve 16k would leave 16k usable; the floor must not be
-	// raised by the percentage form.
+	// 32k window: 20% is 6,400, below the 16k reserve, so the fixed floor still
+	// governs and keeps half the window usable.
 	if got, want := s.UsableTokens(32_000), 32_000-16384; got != want {
 		t.Fatalf("UsableTokens(32k) = %d, want %d", got, want)
 	}
@@ -288,18 +288,18 @@ func TestShouldCompactPercentHeadroom(t *testing.T) {
 func TestShouldCompactMaxContextLowersWindow(t *testing.T) {
 	s := DefaultCompactionSettings
 	s.MaxContextTokens = 400_000
-	// Trigger = 400k - 40k (10% headroom) = 360k, well below the 900k a 1M
+	// Trigger = 400k - 80k (20% headroom) = 320k, well below the 800k a 1M
 	// window would give.
-	if got, want := s.UsableTokens(1_000_000), 360_000; got != want {
+	if got, want := s.UsableTokens(1_000_000), 320_000; got != want {
 		t.Fatalf("UsableTokens with max_context = %d, want %d", got, want)
 	}
-	if !ShouldCompact(370_000, 1_000_000, s) {
-		t.Fatal("370k must compact when max_context is 400k")
+	if !ShouldCompact(330_000, 1_000_000, s) {
+		t.Fatal("330k must compact when max_context is 400k")
 	}
 
 	// A max_context above the provider window is clamped to it.
 	s.MaxContextTokens = 2_000_000
-	if got, want := s.UsableTokens(1_000_000), 900_000; got != want {
+	if got, want := s.UsableTokens(1_000_000), 800_000; got != want {
 		t.Fatalf("clamped UsableTokens = %d, want %d", got, want)
 	}
 }
@@ -322,13 +322,59 @@ func TestDefaultCompactionSettings(t *testing.T) {
 	if DefaultCompactionSettings.ReserveTokens != 16384 {
 		t.Fatalf("ReserveTokens: got %d, want 16384", DefaultCompactionSettings.ReserveTokens)
 	}
-	if DefaultCompactionSettings.HeadroomPercent != 10 {
-		t.Fatalf("HeadroomPercent: got %d, want 10", DefaultCompactionSettings.HeadroomPercent)
+	if DefaultCompactionSettings.HeadroomPercent != 20 {
+		t.Fatalf("HeadroomPercent: got %d, want 20 (compact at 80%%)", DefaultCompactionSettings.HeadroomPercent)
 	}
-	if DefaultCompactionSettings.KeepRecentTokens != 20000 {
-		t.Fatalf("KeepRecentTokens: got %d, want 20000", DefaultCompactionSettings.KeepRecentTokens)
+	if DefaultCompactionSettings.KeepRecentTokens != 65536 {
+		t.Fatalf("KeepRecentTokens: got %d, want 65536 (64k)", DefaultCompactionSettings.KeepRecentTokens)
 	}
 	if !DefaultCompactionSettings.Enabled {
 		t.Fatal("default settings should be enabled")
+	}
+}
+
+// TestKeepTokensClampsForSmallWindows pins the clamp that keeps auto-compaction
+// working on a window smaller than the configured tail.
+//
+// Without it, a 64k tail on a 64k window is a tail the cut can never reach:
+// FindCutPoint walks back, never accumulates the budget, keeps every message, and
+// the summarization range is empty — so the run reports "nothing to compact"
+// while sitting above its own trigger, and the next fat turn overflows the
+// provider's window instead. The clamp leaves half the usable window for the
+// summary and the work that follows the cut.
+func TestKeepTokensClampsForSmallWindows(t *testing.T) {
+	s := DefaultCompactionSettings
+
+	// A window large enough for the configured tail: no clamping, so the 64k
+	// default is what a 200k model actually keeps.
+	if got := s.KeepTokens(200_000); got != 65536 {
+		t.Errorf("KeepTokens(200k) = %d, want the configured 65536", got)
+	}
+
+	// Below that, the tail is half the usable window — derived from the same
+	// number the trigger uses, so the two cannot drift apart in this test.
+	for _, window := range []int{128_000, 64_000, 32_000} {
+		usable := s.UsableTokens(window)
+		if got, want := s.KeepTokens(window), usable/2; got != want {
+			t.Errorf("KeepTokens(%d) = %d, want half the usable window (%d)", window, got, want)
+		}
+		// The property that matters: a cut must be possible, so the tail has to
+		// leave a prefix behind.
+		if got := s.KeepTokens(window); got >= usable {
+			t.Errorf("window %d: tail %d must stay under the usable window %d, or nothing can be summarized", window, got, usable)
+		}
+	}
+
+	// A tail configured small keeps its exact value: the clamp only lowers.
+	small := s
+	small.KeepRecentTokens = 1000
+	if got := small.KeepTokens(64_000); got != 1000 {
+		t.Errorf("KeepTokens = %d, want the configured 1000 (the clamp must not raise)", got)
+	}
+
+	// An unknown window leaves the configured tail alone; the caller decides
+	// whether compacting is meaningful without a window.
+	if got := s.KeepTokens(0); got != 65536 {
+		t.Errorf("KeepTokens(0) = %d, want the configured tail", got)
 	}
 }
