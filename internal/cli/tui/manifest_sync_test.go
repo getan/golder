@@ -68,8 +68,8 @@ func dialogFrames(t *testing.T) map[string]string {
 			Rationale: "installs dependencies",
 		}),
 		"read outside the workspace": approval(judge.ApprovalRequest{
-			Kind: judge.ApprovalReadScope, Tool: "read", Summary: "/etc/hosts",
-			ReadScope: "/etc",
+			Kind: judge.ApprovalBoundary, Tool: "read", Summary: "/etc/hosts",
+			BoundaryDir: "/etc",
 		}),
 		"mid-run trust, command": approval(judge.ApprovalRequest{
 			Kind: judge.ApprovalTrust, Tool: "bash", Summary: "rm -rf /tmp/x",

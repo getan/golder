@@ -122,23 +122,6 @@ type Classifier interface {
 	Classify(ctx context.Context, tool string, args json.RawMessage) Verdict
 }
 
-// ungradedTools never reaches the grader: local reads and in-memory tools are
-// side-effect free, and write_stdin only controls a session whose original
-// command was already graded when bash spawned it (it can poll output or
-// interrupt — it cannot start anything new). Grading it again would add
-// latency and could block a benign poll on a verdict with no sandbox tier.
-var ungradedTools = map[string]bool{
-	"read": true, "view_image": true, "grep": true, "find": true, "ls": true,
-	"webfetch": true, "websearch": true, "todo": true,
-	"memory_search": true, "schedule_list": true,
-	"write_stdin": true,
-	// Context-budget tools: get_context_remaining only reads the live budget,
-	// and new_context only requests a summarized window rollover at the turn
-	// boundary — neither touches the host, so an LLM review would add latency
-	// and could block a benign control call on a verdict with no sandbox tier.
-	"get_context_remaining": true, "new_context": true,
-}
-
 // Chain runs StaticFloor first (deny wins), then inner, and degrades any
 // inner error to Confirm. A nil inner grades static-only.
 type Chain struct {
@@ -157,7 +140,7 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	if v, ok := staticDeny(tool, args); ok {
 		return v
 	}
-	if ungradedTools[strings.ToLower(tool)] {
+	if ungraded(tool) {
 		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
 	}
 	// A provably read-only shell command never reaches the reviewer: the floor
@@ -288,13 +271,13 @@ const (
 	// it Sandbox. The two sides disagree, so the gate asks the user instead
 	// of silently recontaining the call — approving runs it unisolated.
 	ApprovalEscalation ApprovalKind = "escalation"
-	// ApprovalReadScope: a read-only tool (read, view_image, grep, find, ls)
+	// ApprovalBoundary: a read-only tool (read, view_image, grep, find, ls)
 	// was pointed outside the workspace. The workspace is the directory the
 	// user opened, so this asks for consent rather than a risk verdict; the
 	// answer is "just this read" (ReadGrant) or "this directory for the
 	// session" (ReadRoot). It is the one question no approval mode waives,
 	// including full-access.
-	ApprovalReadScope ApprovalKind = "read-scope"
+	ApprovalBoundary ApprovalKind = "boundary"
 )
 
 // ApprovalRequest is what the gate shows the user: the call itself plus the
@@ -306,10 +289,10 @@ type ApprovalRequest struct {
 	// Justification carries the model's reason when the call is an escalation
 	// request (bash sandbox_permissions=require_escalated); empty otherwise.
 	Justification string
-	// ReadScope is the directory a read-scope request may be granted for the
+	// BoundaryDir is the directory a boundary request may be granted for the
 	// session, or "" when no directory is offered (the answer is then "this
-	// read" or "no"). Set only for ApprovalReadScope.
-	ReadScope string
+	// read" or "no"). Set only for ApprovalBoundary.
+	BoundaryDir string
 	// TrustDir names the directory a trust question is about, or "" for every
 	// other kind. The trust gate's session answers - allow local reads, allow
 	// all tools - are grants for this directory, so the dialog names it rather
@@ -624,23 +607,6 @@ func sandboxable(opts GateOpts, tool string) bool {
 	return opts.Sandboxed != nil && opts.Sandboxed(tool)
 }
 
-// readOnlyAllowed lists the tools read-only mode still permits. It is an
-// allow-list on purpose: plugin and future tools are blocked by default until
-// someone classifies them, so a new mutating tool cannot silently bypass the
-// mode.
-var readOnlyAllowedTools = map[string]bool{
-	"read": true, "view_image": true, "grep": true, "find": true, "ls": true,
-	"webfetch": true, "websearch": true, "todo": true,
-	"memory_search": true, "schedule_list": true,
-	"goal_complete": true, "goal_blocked": true,
-	"get_context_remaining": true, "new_context": true,
-}
-
-// readOnlyAllowed reports whether tool may run under read-only mode.
-func readOnlyAllowed(tool string) bool {
-	return readOnlyAllowedTools[strings.ToLower(strings.TrimSpace(tool))]
-}
-
 // classifyForGate grades one call. A nil classifier keeps the static floor
 // and fails closed for every gated tool, so wiring mistakes never widen
 // permissions.
@@ -665,7 +631,7 @@ func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToo
 	if v, ok := staticDeny(call.Name, call.Arguments); ok {
 		return v
 	}
-	if ungradedTools[strings.ToLower(call.Name)] {
+	if ungraded(call.Name) {
 		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
 	}
 	return Verdict{

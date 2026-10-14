@@ -1,7 +1,7 @@
 package judge
 
 // The cross-layer boundary invariant: a shell command that reads outside the
-// workspace must be seen by at least one layer — the read-scope gate asks about
+// workspace must be seen by at least one layer — the boundary gate asks about
 // the path, or the command is not recognized as read-only and the reviewer
 // judges it. Both layers being silent is the failure mode this file exists to
 // prevent, and it is invisible without a test: each layer looks correct on its
@@ -71,7 +71,7 @@ func boundaryFixture(t *testing.T) (workspace, outside string) {
 }
 
 // TestOutsideReadsAreAlwaysSeen is the invariant, exercised through the real
-// chain in the order a driver builds it: the read-scope gate in front of the
+// chain in the order a driver builds it: the boundary gate in front of the
 // permission gate, with a reviewer that records being consulted.
 func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 	workspace, outside := boundaryFixture(t)
@@ -113,7 +113,7 @@ func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			asked := 0
 			reviewer := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
-			scope := ReadScopeGate(ReadScopeOpts{
+			scope := BoundaryGate(BoundaryOpts{
 				WorkspaceRoot: workspace,
 				Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 					asked++
@@ -159,7 +159,7 @@ func TestInsideWorkspaceReadsAreNotQuestioned(t *testing.T) {
 		"grep -f " + filepath.Join(workspace, "inside") + " " + filepath.Join(workspace, "inside"),
 	} {
 		asked := 0
-		scope := ReadScopeGate(ReadScopeOpts{
+		scope := BoundaryGate(BoundaryOpts{
 			WorkspaceRoot: workspace,
 			Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 				asked++
@@ -225,7 +225,7 @@ func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
 	}
 	asked := 0
 	reviewer := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
-	scope := ReadScopeGate(ReadScopeOpts{
+	scope := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -240,6 +240,6 @@ func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
 		Name: "bash", Arguments: bashArgs(cmd),
 	})
 	if asked == 0 {
-		t.Errorf("%q: the read-scope gate stayed silent on a path named by -r", cmd)
+		t.Errorf("%q: the boundary gate stayed silent on a path named by -r", cmd)
 	}
 }

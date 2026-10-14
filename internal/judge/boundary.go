@@ -1,6 +1,6 @@
 package judge
 
-// The read-scope gate: reading outside the workspace needs the user's answer.
+// The boundary gate: reading outside the workspace needs the user's answer.
 //
 // The workspace boundary is the directory the user opened. Crossing it is a
 // question of consent rather than of risk, which is why this gate is a sibling
@@ -33,7 +33,6 @@ package judge
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -41,96 +40,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getan/golder/internal/accessgate"
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
-
-// readScopeTools are the read-only tools whose path argument is subject to the
-// workspace boundary. The mutating tool (apply_patch) is not here: a read grant
-// says nothing about writing, and widening writes is the sandbox's writable
-// roots business.
-var readScopeTools = map[string]bool{
-	"read":       true,
-	"view_image": true,
-	"grep":       true,
-	"find":       true,
-	"ls":         true,
-}
-
-// readScopeShellTools are the command tools whose file operands are subject to
-// the same boundary. They name no path argument — the paths are words in the
-// command — so the gate reads them out of the command line (bashpaths.go). That
-// reading is best-effort: what it cannot see (a variable's value, a script's
-// own reads) stays the sandbox's business, but the common spellings are asked
-// about like any other out-of-workspace read.
-var readScopeShellTools = map[string]bool{"bash": true}
-
-// readScopeTargets returns the raw path spellings this call may read: the path
-// argument for the file tools, or the file operands a command line exposes.
-// Nil means the call carries no path the boundary applies to.
-func readScopeTargets(tool string, args json.RawMessage) []string {
-	if paths := readScopePaths(tool, args); len(paths) > 0 {
-		return paths
-	}
-	if !readScopeShellTools[strings.ToLower(strings.TrimSpace(tool))] {
-		return nil
-	}
-	cmd, ok := bashCommand(args)
-	if !ok {
-		return nil
-	}
-	return shellTargets(cmd)
-}
-
-// shellTargets extracts the paths a command line names.
-//
-// The parse comes first because it sees what a word-scanner cannot: a redirect
-// target that never appears as an argument, a path inside a command
-// substitution, and — the reported confusion — the true spelling of a path, so
-// /dev/null is the device node the user typed rather than a path relative to
-// the filesystem root.
-//
-// The result is the UNION of the parsed paths and the word-scanner's, and that
-// is not belt-and-braces — each sees something the other cannot.
-//
-//   - The parser knows shell semantics: redirects, substitutions, quote
-//     removal. It does not know PROGRAMS, which is why it cannot tell that
-//     `sort --files0-from=/outside/list` names a file to read.
-//   - The scanner knows the programs: bashpaths.go declares each whitelisted
-//     program's file-reading flags (`sort --files0-from`, `grep -f`, `date -r`)
-//     and its interpreter `-c` forms. It does not know shell semantics.
-//
-// Keeping only the parser silently dropped the scanner's half, and the boundary
-// regression test caught it: `sort --files0-from=/outside/list` became neither
-// asked about nor reviewed. For a consent gate the safe direction is to ask
-// about more, not less, so the two are unioned rather than ranked.
-func shellTargets(cmd string) []string {
-	// The extraction itself lives in accessgate, which is also what the unified
-	// access gate uses. Keeping one implementation matters more here than
-	// anywhere else in this package: the two halves it unions (the shell parse
-	// and the program-aware word scanner) are exactly what a duplicate would let
-	// drift, and a boundary that asks about different paths depending on which
-	// caller reached it is worse than either list alone.
-	//
-	// Both halves are injected rather than imported by accessgate for the same
-	// reason this package injects them: the scanner and the read-only recognizer
-	// live HERE, and accessgate sits below (it cannot import this package
-	// without a cycle). So the dependency points down, and the knowledge flows
-	// up through the callback fields.
-	res := accessgate.FromCommand(cmd, accessgate.Options{
-		ReadOnly:     ReadOnlyShellCommand,
-		ScanOperands: bashPathCandidates,
-	})
-	out := make([]string, 0, len(res))
-	for _, r := range res {
-		if p := strings.TrimSpace(r.Path); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
 
 // insideSystemRoots reports whether p lives in the always-readable system
 // whitelist. Asking about /usr/bin in every command that runs a program would
@@ -144,11 +57,11 @@ func insideSystemRoots(p string) bool {
 	return permissions.InsideSystemReadRoots(p)
 }
 
-// ReadScopeOpts configures ReadScopeGate. Prompting follows the permission
+// BoundaryOpts configures BoundaryGate. Prompting follows the permission
 // gate's two shapes: interactive drivers pass In/Out (the REPL's shared stdin),
 // the TUI passes Confirm (it has no stdin), and a driver with neither gets the
 // fail-closed path.
-type ReadScopeOpts struct {
+type BoundaryOpts struct {
 	// WorkspaceRoot is the directory the file tools treat as the boundary.
 	// Empty means the process working directory, the same default the tools
 	// use.
@@ -180,8 +93,8 @@ type ReadScopeOpts struct {
 	OnPrompt func(question string) func()
 }
 
-// promptNote is ReadScopeOpts' half of GateOpts.promptNote.
-func (o *ReadScopeOpts) promptNote(question string) func() {
+// promptNote is BoundaryOpts' half of GateOpts.promptNote.
+func (o *BoundaryOpts) promptNote(question string) func() {
 	if o.OnPrompt == nil {
 		return func() {}
 	}
@@ -191,11 +104,11 @@ func (o *ReadScopeOpts) promptNote(question string) func() {
 	return func() {}
 }
 
-// ReadScopeGate builds the beforeToolCall gate that asks before a read-only
+// BoundaryGate builds the beforeToolCall gate that asks before a read-only
 // tool reaches outside the workspace. It returns nil when there is no gate to
 // build (no resolvable workspace root); callers chain it in front of the
 // permission gate so consent is settled before the call is graded.
-func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
+func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 	root := strings.TrimSpace(opts.WorkspaceRoot)
 	if root == "" {
 		wd, err := os.Getwd()
@@ -225,7 +138,7 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		// the coarser answer and loses to it; ties keep command order.
 		type question struct{ raw, target, candidate string }
 		var questions []question
-		for _, candidateRaw := range readScopeTargets(call.Name, call.Arguments) {
+		for _, candidateRaw := range boundaryPaths(call.Name, call.Arguments) {
 			resolved, err := permissions.AbsAgainst(absRoot, candidateRaw)
 			if err != nil {
 				continue
@@ -258,7 +171,7 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 			}
 			questions = append(questions, question{
 				raw: candidateRaw, target: resolved,
-				candidate: permissions.ReadScopeCandidate(resolved),
+				candidate: permissions.BoundaryCandidate(resolved),
 			})
 		}
 		if len(questions) == 0 {
@@ -284,21 +197,21 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		// shell tool: the path is what the user is deciding about, but for a
 		// command they also need to see what will run.
 		summary := raw
-		if cmd, ok := bashCommand(call.Arguments); ok && readScopeShellTools[strings.ToLower(strings.TrimSpace(call.Name))] {
+		if cmd, ok := bashCommand(call.Arguments); ok && shellTool(call.Name) {
 			summary = cmd
 		}
 		req := ApprovalRequest{
-			Kind:          ApprovalReadScope,
+			Kind:          ApprovalBoundary,
 			Tool:          call.Name,
 			Summary:       summary,
-			ReadScope:     candidate,
+			BoundaryDir:   candidate,
 			Authorization: "outside the workspace",
 			Rationale:     target + " is outside the workspace",
 		}
 		var ans ApprovalAnswer
 		switch {
 		case interactive:
-			ans = promptReadScope(ctx, opts, target, candidate)
+			ans = promptBoundary(ctx, opts, target, candidate)
 		case opts.Confirm != nil:
 			ans = opts.Confirm(ctx, req)
 		}
@@ -311,7 +224,7 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
 				Summary: target, Authorization: req.Authorization, Rationale: rationale,
 			})
-			return blockReadScope(call, target, candidate, ans.Answered)
+			return blockBoundary(call, target, candidate, ans.Answered)
 		}
 		// "This directory" registers a session grant; "just this read" rides
 		// the call's context. A directory the registry refuses (too broad, or
@@ -376,46 +289,6 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 	}
 }
 
-// readScopePaths returns a read tool call's path argument(s). grep and find
-// accept a directory or a list of them, so both JSON shapes are read: a list
-// the gate could not see would let a search reach outside the workspace with
-// no question asked. Tools that read nothing, or read the workspace root
-// itself (where the argument is empty), are not boundary questions.
-func readScopePaths(tool string, args json.RawMessage) []string {
-	if !readScopeTools[strings.ToLower(strings.TrimSpace(tool))] {
-		return nil
-	}
-	var raw struct {
-		Path json.RawMessage `json:"path"`
-	}
-	if err := json.Unmarshal(args, &raw); err != nil || len(raw.Path) == 0 {
-		return nil
-	}
-	// The string form: what ls, read and view_image declare.
-	if raw.Path[0] == '"' {
-		var one string
-		if err := json.Unmarshal(raw.Path, &one); err != nil {
-			return nil
-		}
-		if p := strings.TrimSpace(one); p != "" {
-			return []string{p}
-		}
-		return nil
-	}
-	// The list form (grep/find); a JSON null decodes to no paths.
-	var many []string
-	if err := json.Unmarshal(raw.Path, &many); err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(many))
-	for _, p := range many {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // insideAnyRoot reports whether target is inside one of the extra trusted roots.
 func insideAnyRoot(roots []string, target string) bool {
 	for _, root := range roots {
@@ -429,10 +302,10 @@ func insideAnyRoot(roots []string, target string) bool {
 	return false
 }
 
-// promptReadScope asks on stdin (interactive drivers only). The lock is held
+// promptBoundary asks on stdin (interactive drivers only). The lock is held
 // across the prompt so a parallel batch cannot interleave two questions, the
 // same contract promptRisk follows.
-func promptReadScope(ctx context.Context, opts ReadScopeOpts, target, candidate string) ApprovalAnswer {
+func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate string) ApprovalAnswer {
 	// The pane is about to wait for the person: say so before the read starts,
 	// and say it is over when the answer lands, however this prompt travels.
 	done := opts.promptNote("allow reading " + target)
@@ -488,10 +361,10 @@ func promptReadScope(ctx context.Context, opts ReadScopeOpts, target, candidate 
 	return ApprovalAnswer{Answered: true}
 }
 
-// blockReadScope refuses a read outside the workspace with guidance the model
+// blockBoundary refuses a read outside the workspace with guidance the model
 // can act on: which path, which directory would cover it, and how a person
 // makes that permanent.
-func blockReadScope(call agentcore.AgentToolCall, target, candidate string, answered bool) *agentcore.BeforeToolCallDecision {
+func blockBoundary(call agentcore.AgentToolCall, target, candidate string, answered bool) *agentcore.BeforeToolCallDecision {
 	msg := fmt.Sprintf("tool %q blocked: %s is outside the workspace and the read was not approved", call.Name, target)
 	if candidate != "" {
 		msg += "; approving it, or adding the directory to [permissions] readable_roots in config.toml (or GOLDER_READABLE_ROOTS), would allow it"

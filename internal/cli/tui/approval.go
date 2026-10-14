@@ -138,7 +138,7 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			toolApprovalRows[2],
 		}
 	}
-	readRoot := strings.TrimSpace(req.ReadScope)
+	readRoot := strings.TrimSpace(req.BoundaryDir)
 	if readRoot != "" {
 		// A read-scope question offers the directory the call read: the
 		// directory itself when it named one, the file's own directory
@@ -528,7 +528,7 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		return tool + " needs approval (automatic review was unavailable)"
 	case judge.ApprovalEscalation:
 		return tool + " asks to run outside the sandbox (reviewer graded it sandbox)"
-	case judge.ApprovalReadScope:
+	case judge.ApprovalBoundary:
 		return tool + " wants to read outside the workspace"
 	case judge.ApprovalTrust:
 		return tool + " in an untrusted folder"
@@ -564,7 +564,7 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 			rating = " (" + req.Risk + ", auth: " + req.Authorization + ")"
 		}
 		switch req.Kind {
-		case judge.ApprovalReadScope, judge.ApprovalTrust:
+		case judge.ApprovalBoundary, judge.ApprovalTrust:
 			out = append(out, r+rating)
 		default:
 			out = append(out, "Reviewer: "+r+rating)

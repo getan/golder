@@ -198,7 +198,7 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 	}
 	gate := trust.Gate(trustOpts)
 
-	scopeOpts := judge.ReadScopeOpts{
+	scopeOpts := judge.BoundaryOpts{
 		WorkspaceRoot: o.Cwd,
 		Roots:         o.ExtraRoots,
 		Notify:        o.Notes.Emit,
@@ -210,7 +210,7 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
 		scopeOpts.OnPrompt = o.OnPrompt
 	}
-	if scopeGate := judge.ReadScopeGate(scopeOpts); scopeGate != nil {
+	if scopeGate := judge.BoundaryGate(scopeOpts); scopeGate != nil {
 		gate = judge.ChainGates(gate, scopeGate)
 	}
 

@@ -1,0 +1,106 @@
+package judge
+
+// What a tool call touches: the path spellings the workspace boundary asks
+// about.
+//
+// This extraction used to live in internal/accessgate, a package below this one,
+// and it carried its two collaborators — the read-only recognizer and the
+// program-aware operand scanner — as injected function fields, because
+// accessgate could not import judge without a cycle. Both collaborators live
+// here, so folding the extraction in removes the cycle and the injection with
+// it, and what is left is the part that was ever about paths.
+
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/getan/golder/internal/shellfacts"
+)
+
+// pathArgs reads a `path` argument in either declared shape: one string (read,
+// view_image) or a list (grep, find, ls). Both shapes are read because a list
+// the gate could not see would let a search reach outside the workspace with no
+// question asked.
+func pathArgs(args json.RawMessage) []string {
+	var raw struct {
+		Path json.RawMessage `json:"path"`
+	}
+	if err := json.Unmarshal(args, &raw); err != nil || len(raw.Path) == 0 {
+		return nil
+	}
+	if raw.Path[0] == '"' {
+		var one string
+		if err := json.Unmarshal(raw.Path, &one); err != nil {
+			return nil
+		}
+		if p := strings.TrimSpace(one); p != "" {
+			return []string{p}
+		}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(raw.Path, &many); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(many))
+	for _, p := range many {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// commandPaths returns the paths a command line names: the UNION of the shell
+// parse and the program-aware word scanner.
+//
+//   - The parser knows shell semantics: redirects, substitutions, quote
+//     removal, and the true spelling of a path, so /dev/null is the device node
+//     the user typed rather than a path relative to the filesystem root.
+//   - The scanner knows PROGRAMS, which the grammar cannot say: `sort
+//     --files0-from=/outside/list` names a file to read, and nothing about the
+//     shell says so.
+//
+// Union rather than rank, because each sees what the other cannot, and for a
+// consent gate the safe direction is to ask about more rather than less. Keeping
+// only the parser silently dropped the scanner's half once, and the boundary
+// regression test caught it: that command became neither asked about nor
+// reviewed.
+//
+// An unparseable command line is not path-free: the parser's half is lost, but
+// the scanner's still applies, so the boundary is never narrower than it was
+// before the parser existed.
+func commandPaths(cmd string) []string {
+	plan := shellfacts.Parse(cmd)
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if plan.Parsed {
+		for _, a := range plan.PathAccesses() {
+			add(a.Path)
+		}
+	}
+	for _, p := range bashPathCandidates(cmd) {
+		add(p)
+	}
+	return out
+}
+
+// bashPaths reads the command out of a bash call's arguments and returns the
+// paths it names. It is the table's reader for bash: the paths a shell call
+// touches are words in its command line rather than an argument, so the reading
+// happens one step later than for the file tools.
+func bashPaths(args json.RawMessage) []string {
+	cmd, ok := bashCommand(args)
+	if !ok {
+		return nil
+	}
+	return commandPaths(cmd)
+}

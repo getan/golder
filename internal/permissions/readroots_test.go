@@ -160,11 +160,11 @@ func TestAbsAgainst(t *testing.T) {
 	}
 }
 
-// TestReadScopeCandidate covers which directory a boundary question offers:
+// TestBoundaryCandidate covers which directory a boundary question offers:
 // the path itself when it is a directory (the finest grant that covers the
 // read), the directory holding it when it is a file, and nothing when that
 // directory is too broad — a file sitting directly in $HOME.
-func TestReadScopeCandidate(t *testing.T) {
+func TestBoundaryCandidate(t *testing.T) {
 	home := readRootTestHome(t)
 	proj := filepath.Join(home, "work", "proj")
 	sub := filepath.Join(proj, "sub")
@@ -194,8 +194,8 @@ func TestReadScopeCandidate(t *testing.T) {
 		{"the filesystem root offers nothing", string(filepath.Separator), ""},
 	}
 	for _, c := range cases {
-		if got := ReadScopeCandidate(c.target); got != c.want {
-			t.Errorf("%s: ReadScopeCandidate(%q) = %q, want %q", c.name, c.target, got, c.want)
+		if got := BoundaryCandidate(c.target); got != c.want {
+			t.Errorf("%s: BoundaryCandidate(%q) = %q, want %q", c.name, c.target, got, c.want)
 		}
 	}
 }

@@ -33,10 +33,10 @@ func userHome(t *testing.T) string {
 	return home
 }
 
-// readScopeFixture gives a test a workspace, an outside directory holding a
+// readFixture gives a test a workspace, an outside directory holding a
 // readable file, and a HOME of its own, so the broad-root policy is
 // deterministic. Grants are cleared afterwards: the registry is process-wide.
-func readScopeFixture(t *testing.T) (workspace, outside, target string) {
+func readFixture(t *testing.T) (workspace, outside, target string) {
 	t.Helper()
 	// The fixture must NOT live under $TMPDIR: the system whitelist exempts the
 	// machine's temp root (the sandbox admits its own temp dir too), so a
@@ -66,12 +66,12 @@ func readScopeFixture(t *testing.T) (workspace, outside, target string) {
 	return workspace, outside, target
 }
 
-// TestReadScopeGateSilentInsideWorkspace pins the common case: a path inside
+// TestBoundaryGateSilentInsideWorkspace pins the common case: a path inside
 // the workspace is not a question, so the gate stays out of the way entirely.
-func TestReadScopeGateSilentInsideWorkspace(t *testing.T) {
-	workspace, _, _ := readScopeFixture(t)
+func TestBoundaryGateSilentInsideWorkspace(t *testing.T) {
+	workspace, _, _ := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -88,13 +88,13 @@ func TestReadScopeGateSilentInsideWorkspace(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateAsksAndGrantsOnce covers the one-read answer: the user is
+// TestBoundaryGateAsksAndGrantsOnce covers the one-read answer: the user is
 // asked, and approving returns a decision carrying the resolved path as a
 // one-call grant for the tool to honour.
-func TestReadScopeGateAsksAndGrantsOnce(t *testing.T) {
-	workspace, _, target := readScopeFixture(t)
+func TestBoundaryGateAsksAndGrantsOnce(t *testing.T) {
+	workspace, _, target := readFixture(t)
 	var got ApprovalRequest
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			got = req
@@ -102,11 +102,11 @@ func TestReadScopeGateAsksAndGrantsOnce(t *testing.T) {
 		},
 	})
 	dec := gate(context.Background(), readCall("read", target))
-	if got.Kind != ApprovalReadScope {
-		t.Errorf("kind = %q, want %q", got.Kind, ApprovalReadScope)
+	if got.Kind != ApprovalBoundary {
+		t.Errorf("kind = %q, want %q", got.Kind, ApprovalBoundary)
 	}
-	if got.ReadScope != filepath.Dir(target) {
-		t.Errorf("offered directory = %q, want %q", got.ReadScope, filepath.Dir(target))
+	if got.BoundaryDir != filepath.Dir(target) {
+		t.Errorf("offered directory = %q, want %q", got.BoundaryDir, filepath.Dir(target))
 	}
 	if dec == nil || dec.Block {
 		t.Fatalf("an approved read must return a grant, got %+v", dec)
@@ -120,19 +120,19 @@ func TestReadScopeGateAsksAndGrantsOnce(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateOffersDirectoryItself pins the grant's granularity: a call
+// TestBoundaryGateOffersDirectoryItself pins the grant's granularity: a call
 // that names a directory (an `ls` operand, or a shell command's directory
 // argument) is offered that very directory, not the tree above it. The coarse
 // answer was the one that stuck for the session, so the dialog handed over
 // more than the read had asked for.
-func TestReadScopeGateOffersDirectoryItself(t *testing.T) {
-	workspace, outside, _ := readScopeFixture(t)
+func TestBoundaryGateOffersDirectoryItself(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
 	sub := filepath.Join(outside, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var got ApprovalRequest
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			got = req
@@ -142,26 +142,26 @@ func TestReadScopeGateOffersDirectoryItself(t *testing.T) {
 	if dec := gate(context.Background(), readCall("ls", sub)); dec == nil || !dec.Block {
 		t.Fatalf("a directory outside the workspace must be gated, got %+v", dec)
 	}
-	if got.ReadScope != sub {
-		t.Errorf("offered directory = %q, want the directory itself %q", got.ReadScope, sub)
+	if got.BoundaryDir != sub {
+		t.Errorf("offered directory = %q, want the directory itself %q", got.BoundaryDir, sub)
 	}
 	// The shell spelling of the same read must land on the same answer, trailing
 	// separator and all.
 	if dec := gate(context.Background(), bashCall("ls "+sub+"/")); dec == nil || !dec.Block {
 		t.Fatalf("a command naming a directory outside must be gated, got %+v", dec)
 	}
-	if got.ReadScope != sub {
-		t.Errorf("offered directory = %q, want %q", got.ReadScope, sub)
+	if got.BoundaryDir != sub {
+		t.Errorf("offered directory = %q, want %q", got.BoundaryDir, sub)
 	}
 }
 
-// TestReadScopeGateSessionGrant covers the directory answer: it registers the
+// TestBoundaryGateSessionGrant covers the directory answer: it registers the
 // grant and returns no decision, so the call proceeds under the widened
 // boundary and the next read there is not asked about again.
-func TestReadScopeGateSessionGrant(t *testing.T) {
-	workspace, outside, target := readScopeFixture(t)
+func TestBoundaryGateSessionGrant(t *testing.T) {
+	workspace, outside, target := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -182,12 +182,12 @@ func TestReadScopeGateSessionGrant(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateDenyIsActionable pins the refusal: the model is told which
+// TestBoundaryGateDenyIsActionable pins the refusal: the model is told which
 // path was blocked and how a person would allow it, so the next attempt is
 // informed rather than blind.
-func TestReadScopeGateDenyIsActionable(t *testing.T) {
-	workspace, outside, target := readScopeFixture(t)
-	gate := ReadScopeGate(ReadScopeOpts{
+func TestBoundaryGateDenyIsActionable(t *testing.T) {
+	workspace, outside, target := readFixture(t)
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			return ApprovalAnswer{Answered: true} // explicit no
@@ -205,12 +205,12 @@ func TestReadScopeGateDenyIsActionable(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateNoPromptFailsClosed is the headless contract: with nobody to
+// TestBoundaryGateNoPromptFailsClosed is the headless contract: with nobody to
 // ask, the read is refused and the message says so, naming the config that
 // would allow it. Guessing here would quietly widen what data a script reads.
-func TestReadScopeGateNoPromptFailsClosed(t *testing.T) {
-	workspace, _, target := readScopeFixture(t)
-	gate := ReadScopeGate(ReadScopeOpts{WorkspaceRoot: workspace})
+func TestBoundaryGateNoPromptFailsClosed(t *testing.T) {
+	workspace, _, target := readFixture(t)
+	gate := BoundaryGate(BoundaryOpts{WorkspaceRoot: workspace})
 	if gate == nil {
 		t.Fatal("a gate with a workspace root must be built")
 	}
@@ -227,14 +227,14 @@ func TestReadScopeGateNoPromptFailsClosed(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateCredentialPathIsNotOffered locks the safety property: a path
+// TestBoundaryGateCredentialPathIsNotOffered locks the safety property: a path
 // the static floor refuses is never put to the user, so no dialog invites
 // granting ~/.ssh or ~/.zshrc. The call passes through unchanged and the floor
 // denies it.
-func TestReadScopeGateCredentialPathIsNotOffered(t *testing.T) {
-	workspace, _, _ := readScopeFixture(t)
+func TestBoundaryGateCredentialPathIsNotOffered(t *testing.T) {
+	workspace, _, _ := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -256,12 +256,12 @@ func TestReadScopeGateCredentialPathIsNotOffered(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateExtraRootsAreSilent pins the skills-directory case: roots
+// TestBoundaryGateExtraRootsAreSilent pins the skills-directory case: roots
 // golder itself advertises are not boundary questions.
-func TestReadScopeGateExtraRootsAreSilent(t *testing.T) {
-	workspace, outside, target := readScopeFixture(t)
+func TestBoundaryGateExtraRootsAreSilent(t *testing.T) {
+	workspace, outside, target := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Roots:         []string{outside},
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
@@ -277,13 +277,13 @@ func TestReadScopeGateExtraRootsAreSilent(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateOnlyReadTools pins the tool set: the gate answers for the
+// TestBoundaryGateOnlyReadTools pins the tool set: the gate answers for the
 // read-only tools, and never for the mutating one (a read grant says nothing
 // about writing) or for tools with no path argument.
-func TestReadScopeGateOnlyReadTools(t *testing.T) {
-	workspace, _, target := readScopeFixture(t)
+func TestBoundaryGateOnlyReadTools(t *testing.T) {
+	workspace, _, target := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -319,7 +319,7 @@ func TestReadScopeGateOnlyReadTools(t *testing.T) {
 }
 
 // TestChainGatesPreservesReadGrant is the regression for a real bug: the
-// read-scope gate runs first in the TUI chain, and the permission gate behind
+// boundary gate runs first in the TUI chain, and the permission gate behind
 // it returns nil for an ungraded read tool. Dropping the grant on composition
 // would refuse a read the user had just approved.
 func TestChainGatesPreservesReadGrant(t *testing.T) {
@@ -357,13 +357,13 @@ func TestChainGatesPreservesReadGrant(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateNotWaivedByMode pins the consent rule: full-access disables
+// TestBoundaryGateNotWaivedByMode pins the consent rule: full-access disables
 // review and sandboxing, not the user's say over what is read. The gate is a
 // sibling of the permission gate precisely so no mode reaches it.
-func TestReadScopeGateNotWaivedByMode(t *testing.T) {
-	workspace, _, target := readScopeFixture(t)
+func TestBoundaryGateNotWaivedByMode(t *testing.T) {
+	workspace, _, target := readFixture(t)
 	asked := 0
-	scope := ReadScopeGate(ReadScopeOpts{
+	scope := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -383,18 +383,18 @@ func TestReadScopeGateNotWaivedByMode(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateAsksAboutCommandOperands covers the shell half of the gate:
+// TestBoundaryGateAsksAboutCommandOperands covers the shell half of the gate:
 // a command that names a file outside the workspace is a consent question, and
 // the dialog shows the command (what will run) with the path as its reason.
-func TestReadScopeGateAsksAboutCommandOperands(t *testing.T) {
-	workspace, outside, _ := readScopeFixture(t)
+func TestBoundaryGateAsksAboutCommandOperands(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
 	target := filepath.Join(outside, "notes.md")
 	if err := os.WriteFile(target, []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var got ApprovalRequest
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -411,8 +411,8 @@ func TestReadScopeGateAsksAboutCommandOperands(t *testing.T) {
 	if dec == nil || !dec.Block {
 		t.Fatalf("denial = %+v, want a block", dec)
 	}
-	if got.Kind != ApprovalReadScope {
-		t.Errorf("kind = %q, want %q", got.Kind, ApprovalReadScope)
+	if got.Kind != ApprovalBoundary {
+		t.Errorf("kind = %q, want %q", got.Kind, ApprovalBoundary)
 	}
 	if got.Summary != cmd {
 		t.Errorf("summary = %q, want the command %q", got.Summary, cmd)
@@ -422,12 +422,12 @@ func TestReadScopeGateAsksAboutCommandOperands(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateSilentForCommandInsideWorkspace: a command that touches only
+// TestBoundaryGateSilentForCommandInsideWorkspace: a command that touches only
 // the workspace, or names no path at all, is not a boundary question.
-func TestReadScopeGateSilentForCommandInsideWorkspace(t *testing.T) {
-	workspace, _, _ := readScopeFixture(t)
+func TestBoundaryGateSilentForCommandInsideWorkspace(t *testing.T) {
+	workspace, _, _ := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -449,12 +449,12 @@ func TestReadScopeGateSilentForCommandInsideWorkspace(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateSilentForSystemPaths: the sandbox's read whitelist is not a
+// TestBoundaryGateSilentForSystemPaths: the sandbox's read whitelist is not a
 // consent question — asking about /usr/bin would train blind approval.
-func TestReadScopeGateSilentForSystemPaths(t *testing.T) {
-	workspace, _, _ := readScopeFixture(t)
+func TestBoundaryGateSilentForSystemPaths(t *testing.T) {
+	workspace, _, _ := readFixture(t)
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -469,11 +469,11 @@ func TestReadScopeGateSilentForSystemPaths(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateCommandHonorsSessionGrant: once the directory is granted for
+// TestBoundaryGateCommandHonorsSessionGrant: once the directory is granted for
 // the session, later commands reading it are silent — the same contract the file
 // tools have.
-func TestReadScopeGateCommandHonorsSessionGrant(t *testing.T) {
-	workspace, outside, _ := readScopeFixture(t)
+func TestBoundaryGateCommandHonorsSessionGrant(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
 	target := filepath.Join(outside, "notes.md")
 	if err := os.WriteFile(target, []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -482,7 +482,7 @@ func TestReadScopeGateCommandHonorsSessionGrant(t *testing.T) {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -497,15 +497,15 @@ func TestReadScopeGateCommandHonorsSessionGrant(t *testing.T) {
 	}
 }
 
-// TestReadScopeGateAsksAboutTildeOperands is the regression for a silent hole:
+// TestBoundaryGateAsksAboutTildeOperands is the regression for a silent hole:
 // the shell expands a leading `~` itself, but the scanner read the word
 // literally, so `ls ~/Desktop` resolved against the workspace, looked like an
 // in-workspace read, and reached the user's home with no question asked.
-func TestReadScopeGateAsksAboutTildeOperands(t *testing.T) {
-	workspace, outside, target := readScopeFixture(t)
+func TestBoundaryGateAsksAboutTildeOperands(t *testing.T) {
+	workspace, outside, target := readFixture(t)
 	var got ApprovalRequest
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -524,8 +524,8 @@ func TestReadScopeGateAsksAboutTildeOperands(t *testing.T) {
 	if asked != 3 {
 		t.Errorf("asked %d times, want 3 — every ~ operand is a question", asked)
 	}
-	if got.ReadScope != outside {
-		t.Errorf("offered = %q, want %q", got.ReadScope, outside)
+	if got.BoundaryDir != outside {
+		t.Errorf("offered = %q, want %q", got.BoundaryDir, outside)
 	}
 	if !strings.Contains(got.Rationale, outside) {
 		t.Errorf("rationale = %q, want the expanded path %q (not the ~ spelling)", got.Rationale, outside)
@@ -533,19 +533,19 @@ func TestReadScopeGateAsksAboutTildeOperands(t *testing.T) {
 	_ = target
 }
 
-// TestReadScopeGateOffersFinestOperandDirectory pins the granularity of the
+// TestBoundaryGateOffersFinestOperandDirectory pins the granularity of the
 // single question one command gets: when the operands name a directory and a
 // subtree inside it, the dialog must offer the subtree. Offering the ancestor
 // (the first operand in command order) hands over a tree the read never asked
 // for, and the session grant outlives the call.
-func TestReadScopeGateOffersFinestOperandDirectory(t *testing.T) {
-	workspace, outside, _ := readScopeFixture(t)
+func TestBoundaryGateOffersFinestOperandDirectory(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
 	sub := filepath.Join(outside, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var got ApprovalRequest
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			got = req
@@ -558,25 +558,25 @@ func TestReadScopeGateOffersFinestOperandDirectory(t *testing.T) {
 		if dec := gate(context.Background(), bashCall(cmd)); dec == nil || !dec.Block {
 			t.Fatalf("%q must be gated, got %+v", cmd, dec)
 		}
-		if got.ReadScope != sub {
-			t.Errorf("%q offered %q, want the subtree %q", cmd, got.ReadScope, sub)
+		if got.BoundaryDir != sub {
+			t.Errorf("%q offered %q, want the subtree %q", cmd, got.BoundaryDir, sub)
 		}
 	}
 }
 
-// TestReadScopeGateReadsThePathListForm covers grep/find's list argument: the
+// TestBoundaryGateReadsThePathListForm covers grep/find's list argument: the
 // gate read only the string form, so a search scoped with an array reached
 // outside the workspace with no question asked — the array failed the string
 // unmarshal, which the gate read as "no path here".
-func TestReadScopeGateReadsThePathListForm(t *testing.T) {
-	workspace, outside, _ := readScopeFixture(t)
+func TestBoundaryGateReadsThePathListForm(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
 	sub := filepath.Join(outside, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var got ApprovalRequest
 	asked := 0
-	gate := ReadScopeGate(ReadScopeOpts{
+	gate := BoundaryGate(BoundaryOpts{
 		WorkspaceRoot: workspace,
 		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
 			asked++
@@ -594,15 +594,15 @@ func TestReadScopeGateReadsThePathListForm(t *testing.T) {
 	if dec := gate(context.Background(), listCall(outside)); dec == nil || !dec.Block {
 		t.Fatalf("a list-form path outside must be gated, got %+v", dec)
 	}
-	if got.ReadScope != outside {
-		t.Errorf("offered = %q, want %q", got.ReadScope, outside)
+	if got.BoundaryDir != outside {
+		t.Errorf("offered = %q, want %q", got.BoundaryDir, outside)
 	}
 	// Several entries resolve like several shell operands: the finest wins.
 	if dec := gate(context.Background(), listCall(outside, sub)); dec == nil || !dec.Block {
 		t.Fatalf("a list holding a subtree must be gated, got %+v", dec)
 	}
-	if got.ReadScope != sub {
-		t.Errorf("offered = %q, want the subtree %q", got.ReadScope, sub)
+	if got.BoundaryDir != sub {
+		t.Errorf("offered = %q, want the subtree %q", got.BoundaryDir, sub)
 	}
 	if asked != 2 {
 		t.Errorf("asked %d times, want 2", asked)

@@ -142,7 +142,7 @@ func resolveWithinAny(roots []string, p string) (string, error) {
 //
 // This is the workspace boundary the tools enforce, kept in one place. The
 // boundary is consent, not risk: reading outside the directory the user opened
-// asks them first (the judge ReadScope gate), and the answer lands in
+// asks them first (the judge boundary gate), and the answer lands in
 // permissions.ReadRoots (whole directory, this session) or arrives as a
 // one-call grant in ctx (just this path). Both are honoured here, so a granted
 // path reaches the same code a workspace path does.

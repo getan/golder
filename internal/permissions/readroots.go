@@ -8,7 +8,7 @@ package permissions
 // workspace is the directory the user opened, so reading outside it is a
 // question to put to the user — not a verdict for the reviewer to make on the
 // model's behalf. The gate asks once per directory per session (internal/judge
-// ReadScope gate) and the grant lands here, where both the tools (to resolve a
+// boundary gate) and the grant lands here, where both the tools (to resolve a
 // path) and the sandbox (to widen its read whitelist) can see it.
 //
 // This parallels the sandbox's writable roots (internal/seatbelt/writable.go)
@@ -142,7 +142,7 @@ func AbsAgainst(base, p string) (string, error) {
 	return filepath.Clean(filepath.Join(absBase, raw)), nil
 }
 
-// ReadScopeCandidate returns the directory a boundary question may offer to
+// BoundaryCandidate returns the directory a boundary question may offer to
 // grant for the session, given the path a call named. The answer is as narrow
 // as the read that asked the question:
 //
@@ -157,7 +157,7 @@ func AbsAgainst(base, p string) (string, error) {
 // "" means no directory should be offered (the answer is then "this one file"
 // or nothing), which happens when the directory that would be offered is too
 // broad to hand over — a file sitting directly in the home directory, say.
-func ReadScopeCandidate(target string) string {
+func BoundaryCandidate(target string) string {
 	if target == "" {
 		return ""
 	}
