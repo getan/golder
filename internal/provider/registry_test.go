@@ -62,16 +62,6 @@ func TestAnthropicEnvVarOrder(t *testing.T) {
 	}
 }
 
-func TestHuggingfaceEnvVar(t *testing.T) {
-	spec, ok := LookupProviderSpec("huggingface")
-	if !ok {
-		t.Fatal("LookupProviderSpec(huggingface): expected hit")
-	}
-	if len(spec.EnvVars) != 1 || spec.EnvVars[0] != "HF_TOKEN" {
-		t.Errorf("EnvVars = %v, want [HF_TOKEN]", spec.EnvVars)
-	}
-}
-
 func TestChineseCloudProviders(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -131,13 +121,12 @@ func TestAzureBaseURLEnvVars(t *testing.T) {
 
 func TestRegistryContainsAllExpectedProviders(t *testing.T) {
 	expected := []string{
-		"anthropic", "openai", "ant-ling", "deepseek", "nvidia", "google",
-		"groq", "cerebras", "xai", "openrouter", "vercel-ai-gateway", "zai",
+		"anthropic", "openai", "deepseek", "nvidia", "google",
+		"groq", "cerebras", "xai", "openrouter", "zai",
 		"typesafe",
 		"zai-coding-cn", "mistral", "minimax", "minimax-cn", "moonshotai",
-		"moonshotai-cn", "huggingface", "fireworks", "together", "novita", "opencode-zen",
-		"opencode-go", "kimi-coding", "xiaomi", "xiaomi-token-plan-cn",
-		"xiaomi-token-plan-ams", "xiaomi-token-plan-sgp",
+		"moonshotai-cn", "fireworks", "together", "opencode-zen",
+		"opencode-go", "kimi-coding", "xiaomi",
 		"qianfan", "volcengine", "dashscope", "hunyuan",
 		"azure-openai-responses", "amazon-bedrock", "google-vertex",
 		"cloudflare-workers-ai", "cloudflare-ai-gateway",

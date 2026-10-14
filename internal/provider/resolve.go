@@ -208,6 +208,13 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	if !ok {
 		return nil, "", fmt.Errorf("unknown --provider %q (available: %s)", name, strings.Join(ProviderNames(), ", "))
 	}
+	if spec.DecisionOnly {
+		// A decision endpoint answers typed questions with probabilities; it
+		// cannot carry a conversation, so a run that selected one would fail on
+		// its first turn. Refusing here is the difference between an error at
+		// launch and one in the middle of a session.
+		return nil, "", fmt.Errorf("%q is a decision model, not a conversation provider: it answers the reviewer's typed questions and is selected with /proxy, never as the chat provider", name)
+	}
 	// A concurrently-set --protocol must be compatible with the provider's own
 	// protocol (equal, or a resp_api upgrade on an OpenAI-wired provider);
 	// an incompatible pair is a user error naming both flags. Normalize the raw

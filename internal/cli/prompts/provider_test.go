@@ -144,10 +144,56 @@ func TestProviderCommandUnknown(t *testing.T) {
 	}
 }
 
+// TestProviderCommandListsDecisionModelApart pins the split the user asked for:
+// the reviewer's decision model is shown in its own section — it has a
+// credential and a proxy route worth seeing — and switching to it is refused
+// with the reason, because the wire it speaks is not chat.
+func TestProviderCommandListsDecisionModelApart(t *testing.T) {
+	live := &cli.LiveConfig{Model: "m", ProviderName: "openai"}
+	reg := runtime.NewSlashRegistry()
+	RegisterLiveCommands(reg, live, provider.NewCredentialStore(nil))
+
+	out, err := reg.ResolveOutcome("/provider")
+	if err != nil {
+		t.Fatalf("ResolveOutcome /provider: %v", err)
+	}
+	msg := out.Message
+	section := strings.Index(msg, "decision model (answers the reviewer")
+	if section < 0 {
+		t.Fatalf("/provider must list the decision model in its own section:\n%s", msg)
+	}
+	if !strings.Contains(msg[section:], "typesafe") {
+		t.Errorf("the decision section should name typesafe:\n%s", msg[section:])
+	}
+	// It belongs to that section alone: any chat group naming it is the bug this
+	// replaces. (Within its own row it may appear twice — the name, and the
+	// endpoint summary's proxy note.)
+	for _, group := range strings.Split(msg, "\n\n") {
+		if strings.Contains(group, "typesafe") && !strings.HasPrefix(group, "decision model (") {
+			t.Errorf("typesafe is listed outside its section, in group:\n%s", group)
+		}
+	}
+
+	// And it cannot be selected as the conversation model.
+	switchOut, err := reg.ResolveOutcome("/provider typesafe")
+	if err != nil {
+		t.Fatalf("ResolveOutcome /provider typesafe: %v", err)
+	}
+	if !strings.Contains(switchOut.Message, "decision model") || !strings.Contains(switchOut.Message, "/proxy") {
+		t.Errorf("switch message = %q, want it refused with the /proxy route named", switchOut.Message)
+	}
+	if live.ProviderName != "openai" {
+		t.Errorf("live.ProviderName = %q, want unchanged openai", live.ProviderName)
+	}
+}
+
 // TestProvidersAvailableFirstOrdersReadyFirst verifies the shared display
 // order: providers with a credential found come first (registry order kept
 // inside each group), so both the text listing and the TUI picker put the
-// ready-to-use providers up top.
+// ready-to-use providers up top — and that the list holds every CONVERSATION
+// provider and no other. The decision-only endpoint is deliberately absent: it
+// is not a model anyone can switch to, and a picker that offered it would offer
+// a switch that cannot work.
 func TestProvidersAvailableFirstOrdersReadyFirst(t *testing.T) {
 	// Clear every plausible key, then set exactly one provider's key.
 	for _, spec := range provider.ProviderSpecs() {
@@ -158,8 +204,20 @@ func TestProvidersAvailableFirstOrdersReadyFirst(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 
 	specs := ProvidersAvailableFirst(nil)
-	if len(specs) != len(provider.ProviderSpecs()) {
-		t.Fatalf("specs = %d, want %d", len(specs), len(provider.ProviderSpecs()))
+	want := 0
+	for _, spec := range provider.ProviderSpecs() {
+		if spec.DecisionOnly {
+			continue
+		}
+		want++
+	}
+	if len(specs) != want {
+		t.Fatalf("specs = %d, want %d conversation providers", len(specs), want)
+	}
+	for _, spec := range specs {
+		if spec.DecisionOnly {
+			t.Errorf("picker offers the decision model %q, which cannot carry a conversation", spec.Name)
+		}
 	}
 	if specs[0].Name != "deepseek" {
 		t.Errorf("first spec = %q, want the configured provider deepseek", specs[0].Name)

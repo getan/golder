@@ -792,6 +792,23 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The reviewer's decision model is listed apart from the chat providers**: `typesafe`
+  speaks a typed-decision API, not chat completions, which the registry knew but
+  the command did not say — `/provider` listed it among the conversation
+  gateways, `--provider typesafe` looked legal, and the TUI picker offered it.
+  The registry now carries `DecisionOnly`, so the listing gives it its own
+  section with its credential, endpoint and proxy route intact (that is how the
+  reviewer's requests are routed and how its key is found), while switching —
+  `/provider <name>` and `--provider` alike — is refused with the reason, and
+  the picker leaves it out. `golder --help` marks it too.
+- **Seven providers retired**: `ant-ling`, `huggingface`, `novita`,
+  `vercel-ai-gateway` and the three `xiaomi-token-plan-*` regional endpoints.
+  Each was a thin alias onto an OpenAI-compatible endpoint with no model
+  metadata of its own (no `ModelPrefixes`, no `DefaultModel`), and the xiaomi
+  plans were three hostnames for one API that the vendor's own entry already
+  covers. Nothing else changes: a provider is still one entry in the registry,
+  the retired names now report "unknown --provider" with the available list, and
+  every remaining gateway keeps its metadata, tests and docs.
 - **One state root: everything golder writes now lives under `~/.golder` (or
   `$GOLDER_HOME`)**: the state was split across two directories — sessions,
   history, trust and the credential file under `~/.golder`, while `config.toml`,

@@ -36,7 +36,7 @@ func TestEnvAPIKeyFromRegistry(t *testing.T) {
 		{"groq", "GROQ_API_KEY", "sk-groq"},
 		{"zai", "ZAI_API_KEY", "sk-zai"},
 		{"moonshotai-cn", "MOONSHOT_API_KEY", "sk-moonshot-cn"},
-		{"xiaomi-token-plan-ams", "XIAOMI_TOKEN_PLAN_AMS_API_KEY", "sk-xiaomi-ams"},
+		{"kimi-coding", "KIMI_API_KEY", "sk-kimi"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.provider, func(t *testing.T) {

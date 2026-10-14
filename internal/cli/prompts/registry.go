@@ -369,6 +369,13 @@ func ProvidersAvailableFirst(creds *provider.CredentialStore) []provider.Provide
 	ready := make([]provider.ProviderSpec, 0, len(specs))
 	rest := make([]provider.ProviderSpec, 0, len(specs))
 	for _, spec := range specs {
+		// A decision-only endpoint is not a conversation model: offering it in a
+		// provider picker offers a switch that cannot work (see
+		// ProviderSpec.DecisionOnly). /provider still lists it, in its own
+		// section, so its credential and proxy routing stay discoverable.
+		if spec.DecisionOnly {
+			continue
+		}
 		if CredentialAvailable(creds, spec.Name) {
 			ready = append(ready, spec)
 		} else {
@@ -533,10 +540,14 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 				return line
 			}
 			var ready, missing []provider.ProviderSpec
+			var decision []provider.ProviderSpec
 			for _, spec := range specs {
-				if CredentialAvailable(creds, spec.Name) {
+				switch {
+				case spec.DecisionOnly:
+					decision = append(decision, spec)
+				case CredentialAvailable(creds, spec.Name):
 					ready = append(ready, spec)
-				} else {
+				default:
 					missing = append(missing, spec)
 				}
 			}
@@ -556,6 +567,16 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 					b.WriteString("\n" + row(spec))
 				}
 			}
+			if len(decision) > 0 {
+				// Listed apart, because it answers a different question: this
+				// is the endpoint the reviewer asks, not a model you can talk
+				// to. Keeping it in the chat list made it look switchable.
+				b.WriteString("\n\ndecision model (answers the reviewer; not a conversation provider):")
+				for _, spec := range decision {
+					b.WriteString("\n" + row(spec))
+				}
+				b.WriteString("\n    route its requests with /proxy; the conversation model is chosen above")
+			}
 			b.WriteString("\n\nBASE_URL is optional and applies to both chat and /models. Configure routing with /proxy.")
 			b.WriteString("\nlocal: ollama needs no key (use /model ollama/<model>)")
 			return b.String()
@@ -563,6 +584,10 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		spec, ok := provider.LookupProviderSpec(arg)
 		if !ok {
 			return fmt.Sprintf("provider: unknown provider %q\nsupported: %s", arg, strings.Join(provider.ProviderNames(), ", "))
+		}
+		if spec.DecisionOnly {
+			return fmt.Sprintf("provider: %s is a decision model, not a conversation provider — it answers the reviewer's typed questions, so switching to it would break every turn.\nRoute its requests with /proxy %s on; the conversation model stays %s.",
+				spec.Name, spec.Name, live.ProviderName)
 		}
 		model := live.Model
 		note := ""

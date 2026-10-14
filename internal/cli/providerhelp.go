@@ -23,8 +23,15 @@ func PrintProviderHelp(w io.Writer) {
 		if strings.TrimSpace(base) == "" {
 			base = "(composed from env)"
 		}
-		fmt.Fprintf(w, "  %s: %s; %s (optional) -> %s [%s]\n",
-			spec.Name, strings.Join(spec.EnvVars, ", "), strings.Join(provider.BaseURLEnvVars(spec), ", "), base, spec.Protocol)
+		note := ""
+		if spec.DecisionOnly {
+			// It is a valid name for /proxy and an invalid one for --provider, so
+			// the help says which it is rather than leaving the reader to find out
+			// from an error at launch.
+			note = " (decision model: reviewer only, not a chat provider)"
+		}
+		fmt.Fprintf(w, "  %s: %s; %s (optional) -> %s [%s]%s\n",
+			spec.Name, strings.Join(spec.EnvVars, ", "), strings.Join(provider.BaseURLEnvVars(spec), ", "), base, spec.Protocol, note)
 	}
 	fmt.Fprintf(w, "\nBase URL override precedence: --base-url > <provider>-specific *_BASE_URL env > generic <PROVIDER>_BASE_URL env > registry default.\n")
 	fmt.Fprintf(w, "API key env fallback: any provider also accepts the generic <PROVIDER>_API_KEY convention.\n")

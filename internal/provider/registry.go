@@ -62,6 +62,14 @@ type ProviderSpec struct {
 	// ForceProxy is the legacy default selection before the user saves /proxy
 	// settings. An explicit provider list replaces these defaults completely.
 	ForceProxy bool
+	// DecisionOnly marks an endpoint that is not a conversation model: it answers
+	// the reviewer's typed questions (TypeSafe's System One) and nothing else. It
+	// is listed apart from the chat providers and refused as a conversation
+	// target, because selecting it would silently break every turn — the wire it
+	// speaks is a decision API, not chat completions. It still appears in the
+	// registry so its requests follow the same proxy routing as everything else
+	// and its key is discovered by the usual credential resolution.
+	DecisionOnly bool
 
 	// ModelsDevID is this provider's key in models.dev's api.json (used by the
 	// reasoning ladder catalog). Empty means Name.
@@ -135,13 +143,6 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "gpt-6-astra",
 	},
 	{
-		Name:           "ant-ling",
-		EnvVars:        []string{"ANT_LING_API_KEY"},
-		DefaultBaseURL: "https://api.ant-ling.com/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
 		Name:           "deepseek",
 		EnvVars:        []string{"DEEPSEEK_API_KEY"},
 		DefaultBaseURL: "https://api.deepseek.com",
@@ -201,13 +202,13 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "openai/gpt-4o",
 	},
 	{
-		// TypeSafe's System One model. It speaks its own typed-decision API
-		// rather than chat completions, so it is not selectable as a
-		// conversation provider; the entry exists so the decision-model
-		// reviewer's requests follow the same proxy routing as everything else
-		// (the user can select "typesafe" in /proxy) and so its key is
-		// discovered by the usual credential resolution.
+		// TypeSafe's System One model: the decision-model reviewer's endpoint.
+		// It speaks its own typed-decision API rather than chat completions,
+		// which is what DecisionOnly says — /provider lists it apart from the
+		// chat providers and refuses to switch to it, while /proxy can still
+		// route it exactly like any other provider.
 		Name:           "typesafe",
+		DecisionOnly:   true,
 		EnvVars:        []string{"TYPESAFE_API_KEY"},
 		DefaultBaseURL: "https://api.typesafe.ai/v1/systemone",
 		Protocol:       ProtocolOpenAI,
@@ -219,14 +220,6 @@ var providerRegistry = []ProviderSpec{
 		// gated call. An explicit /proxy selection still wins — ForceProxy is
 		// only the default before the user has chosen.
 		ForceProxy: true,
-	},
-	{
-		Name:           "vercel-ai-gateway",
-		EnvVars:        []string{"AI_GATEWAY_API_KEY"},
-		DefaultBaseURL: "https://ai-gateway.vercel.sh",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelsDevID:    "vercel",
 	},
 	{
 		Name:           "zai",
@@ -289,13 +282,6 @@ var providerRegistry = []ProviderSpec{
 		AuthScheme:     AuthBearer,
 	},
 	{
-		Name:           "huggingface",
-		EnvVars:        []string{"HF_TOKEN"},
-		DefaultBaseURL: "https://router.huggingface.co/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
 		Name:           "fireworks",
 		EnvVars:        []string{"FIREWORKS_API_KEY"},
 		DefaultBaseURL: "https://api.fireworks.ai/inference",
@@ -312,15 +298,6 @@ var providerRegistry = []ProviderSpec{
 		AuthScheme:     AuthBearer,
 		ModelsDevID:    "togetherai",
 		DefaultModel:   "deepseek-ai/DeepSeek-V4-Pro",
-	},
-	{
-		Name:           "novita",
-		EnvVars:        []string{"NOVITA_API_KEY"},
-		DefaultBaseURL: "https://api.novita.ai/openai/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelsDevID:    "novita-ai",
-		DefaultModel:   "deepseek/deepseek-v4-pro",
 	},
 	{
 		// OpenCode Zen (pay-as-you-go). Renamed from "opencode" to
@@ -371,27 +348,6 @@ var providerRegistry = []ProviderSpec{
 		AuthScheme:     AuthBearer,
 		ModelPrefixes:  []string{"mimo-"},
 		DefaultModel:   "mimo-v2-pro",
-	},
-	{
-		Name:           "xiaomi-token-plan-cn",
-		EnvVars:        []string{"XIAOMI_TOKEN_PLAN_CN_API_KEY"},
-		DefaultBaseURL: "https://token-plan-cn.xiaomimimo.com/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
-		Name:           "xiaomi-token-plan-ams",
-		EnvVars:        []string{"XIAOMI_TOKEN_PLAN_AMS_API_KEY"},
-		DefaultBaseURL: "https://token-plan-ams.xiaomimimo.com/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
-		Name:           "xiaomi-token-plan-sgp",
-		EnvVars:        []string{"XIAOMI_TOKEN_PLAN_SGP_API_KEY"},
-		DefaultBaseURL: "https://token-plan-sgp.xiaomimimo.com/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
 	},
 	// Chinese cloud LLM platforms. All four expose OpenAI-compatible endpoints
 	// authenticated with a plain Bearer API key, so they reuse the standard

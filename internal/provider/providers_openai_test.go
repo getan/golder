@@ -45,13 +45,7 @@ var openAIProviderCases = []openAIWiringCase{
 	{"kimi-coding", "https://api.kimi.com/coding", "KIMI_API_KEY"},
 	{"opencode-zen", "https://opencode.ai/zen/v1", "OPENCODE_ZEN_API_KEY"},
 	{"opencode-go", "https://opencode.ai/zen/go/v1", "OPENCODE_API_KEY"},
-	{"huggingface", "https://router.huggingface.co/v1", "HF_TOKEN"},
-	{"ant-ling", "https://api.ant-ling.com/v1", "ANT_LING_API_KEY"},
-	{"vercel-ai-gateway", "https://ai-gateway.vercel.sh", "AI_GATEWAY_API_KEY"},
 	{"xiaomi", "https://api.xiaomimimo.com/v1", "XIAOMI_API_KEY"},
-	{"xiaomi-token-plan-cn", "https://token-plan-cn.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_CN_API_KEY"},
-	{"xiaomi-token-plan-ams", "https://token-plan-ams.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_AMS_API_KEY"},
-	{"xiaomi-token-plan-sgp", "https://token-plan-sgp.xiaomimimo.com/v1", "XIAOMI_TOKEN_PLAN_SGP_API_KEY"},
 }
 
 func TestOpenAIProviderWiring(t *testing.T) {
@@ -135,18 +129,20 @@ func TestLegacyKeyAliases(t *testing.T) {
 	}
 }
 
-// TestHuggingFaceTokenEnv asserts the non-standard HF_TOKEN key name resolves
-// for huggingface (it does not follow the <PROVIDER>_API_KEY convention).
-func TestHuggingFaceTokenEnv(t *testing.T) {
-	spec, ok := LookupProviderSpec("huggingface")
+// TestNonStandardEnvVarName asserts that a provider whose key variable does not
+// follow the <PROVIDER>_API_KEY convention still resolves: kimi-coding reads
+// KIMI_API_KEY, not KIMI_CODING_API_KEY. (This test used huggingface's HF_TOKEN
+// for the same point until that provider was retired.)
+func TestNonStandardEnvVarName(t *testing.T) {
+	spec, ok := LookupProviderSpec("kimi-coding")
 	if !ok {
-		t.Fatal("LookupProviderSpec(\"huggingface\"): not found")
+		t.Fatal("LookupProviderSpec(\"kimi-coding\"): not found")
 	}
-	if len(spec.EnvVars) == 0 || spec.EnvVars[0] != "HF_TOKEN" {
-		t.Fatalf("huggingface EnvVars = %v, want first = HF_TOKEN", spec.EnvVars)
+	if len(spec.EnvVars) == 0 || spec.EnvVars[0] != "KIMI_API_KEY" {
+		t.Fatalf("kimi-coding EnvVars = %v, want first = KIMI_API_KEY", spec.EnvVars)
 	}
-	t.Setenv("HF_TOKEN", "hf-secret")
-	if got := envAPIKey("huggingface"); got != "hf-secret" {
-		t.Errorf("envAPIKey(\"huggingface\") = %q, want %q", got, "hf-secret")
+	t.Setenv("KIMI_API_KEY", "sk-kimi")
+	if got := envAPIKey("kimi-coding"); got != "sk-kimi" {
+		t.Errorf("envAPIKey(\"kimi-coding\") = %q, want %q", got, "sk-kimi")
 	}
 }

@@ -163,7 +163,7 @@ Environment variables override file values: `GOLDER_MODEL`, `GOLDER_PROVIDER`, `
 
 ### Other providers
 
-Select any built-in gateway with `--provider <name> -m <model>`; API keys are read from the `<PROVIDER>_API_KEY` convention (e.g. `DEEPSEEK_API_KEY`, `ZAI_API_KEY`). The full list is in `golder --help`. For custom endpoints, specify protocol and address directly:
+Switch to any conversation gateway with `--provider <name> -m <model>`; API keys are read from the `<PROVIDER>_API_KEY` convention (e.g. `DEEPSEEK_API_KEY`, `ZAI_API_KEY`). The full list is in `golder --help`, which marks the one exception: `typesafe` is the reviewer's decision model, it does not carry a conversation, and it is routed with `/proxy` alone. For custom endpoints, specify protocol and address directly:
 
 ```bash
 golder --provider deepseek -m deepseek-v4-flash -p "explain this code"
@@ -175,7 +175,7 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # local O
 
 `/model` lists the current gateway's models and annotates the reasoning levels each supports; in the TUI, picking a model flows into a level picker (Esc cancels the whole switch), and `/model <n|id> <level>` does both in one step. To change only the level, use `/model think <level>` (bare, it reports the current one) — the level belongs to the model, so `/model` owns both.
 
-`/provider` lists every built-in gateway with the environment variables it needs and whether one is already configured (ready ones first); `/provider <name>` switches to it using the gateway's default model. In the TUI, `/provider` is an arrow-key picker.
+`/provider` lists every built-in gateway with the environment variables it needs and whether one is already configured (ready ones first); `/provider <name>` switches to it using the gateway's default model. The reviewer's decision model (`typesafe`) is listed in its own final section and refuses the switch: it answers the reviewer's typed questions rather than carrying a conversation, and is routed with `/proxy`. In the TUI, `/provider` is an arrow-key picker that leaves the decision model out.
 
 Level metadata comes from models.dev (a gateway's own `/models` only lists ids). Both the model list and the level table are cached on disk in `~/.golder` for 24 hours, so each gateway is queried about once a day rather than once per session.
 
