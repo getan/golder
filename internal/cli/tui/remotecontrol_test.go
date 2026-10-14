@@ -105,9 +105,12 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	// in, so this test holds on hosts with and without a platform sandbox. It also
 	// blocks static hard-denies regardless.
 	//
-	// The command must be one the reviewer actually grades: with the provider nil
-	// every call comes back failed, which is the branch this test is about.
-	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"go test ./..."}`)}); dec == nil {
+	// The command must be one the reviewer actually grades. The local table stage
+	// answers the routine tiers without a model — `go test ./...` is graded
+	// Confirm there, which auto mode runs — so this uses one it defers: an opaque
+	// program, whose intent only a reviewer can weigh. With the provider nil the
+	// verdict comes back failed, which is the branch this test is about.
+	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"python3 build.py"}`)}); dec == nil {
 		t.Fatal("judge baseline should decide on benign bash, got nil")
 	} else if run.SandboxGate() != nil {
 		if dec.Block || !dec.Sandbox {

@@ -201,7 +201,7 @@ func TestRecognizedCommandsAreTheOnesTheGateSaw(t *testing.T) {
 			t.Errorf("%q is not recognized; this test's premise (recognized AND scanned) is gone", cmd)
 			continue
 		}
-		if got := bashPathCandidates(cmd); len(got) == 0 {
+		if got := commandPaths(cmd); len(got) == 0 {
 			t.Errorf("%q is recognized as read-only but the scanner reports no path operand; "+
 				"the consent gate will stay silent while the reviewer is skipped", cmd)
 		} else if !strings.Contains(strings.Join(got, " "), outside) {
@@ -223,7 +223,7 @@ func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
 		t.Fatalf("%q is recognized; date-with-operands must stay with the reviewer "+
 			"(BSD `date MMDDhhmm` sets the clock without a flag)", cmd)
 	}
-	if got := bashPathCandidates(cmd); len(got) == 0 {
+	if got := commandPaths(cmd); len(got) == 0 {
 		t.Errorf("%q yields no candidates; the file named by -r must still be scanned so the "+
 			"consent gate asks about it", cmd)
 	}
@@ -245,5 +245,53 @@ func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
 	})
 	if asked == 0 {
 		t.Errorf("%q: the boundary gate stayed silent on a path named by -r", cmd)
+	}
+}
+
+// TestProgramTextIsNotScannedForPaths pins the fix for a consent dialog that
+// asked about a divisor.
+//
+// The reported command was a python program printing token arithmetic, and the
+// gate asked the user to allow reading `/60` — a run the scanner pulled out of
+// the program text because a `)` happened to precede the division. The path was
+// never a path: `(n*med)/60` divides.
+//
+// The fix is a predicate change, not a case: an interpreter's program is read
+// for path-shaped runs, and a run counts only if it sits inside a quoted string
+// AND exists on disk — and a shell program (`sh -c`) is not scanned at all but
+// parsed as the command line it is. This test holds both halves: the reported
+// shape raises nothing, and the true positive beside it still raises the
+// question.
+func TestProgramTextIsNotScannedForPaths(t *testing.T) {
+	workspace := t.TempDir()
+
+	// The reported shape, verbatim in structure: arithmetic, division, and a
+	// newline-separated program body.
+	reported := "python3 -c \"\n" +
+		"n=776; med=0.776\n" +
+		"print('耗时: %.0f 秒' % (n*med/60))\n" +
+		"print('节省: %.1f 分钟' % ((n*2.16 - n*med)/60))\n" +
+		"\""
+	if got := commandPaths(reported); len(got) != 0 {
+		t.Errorf("commandPaths = %v, want none: `/60` is a divisor, not a path", got)
+	}
+
+	asked := 0
+	gate := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true} // deny
+		},
+	})
+	_ = gate(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: bashArgs(reported)})
+	if asked != 0 {
+		t.Errorf("the gate asked %d question(s) about a program with no path in it", asked)
+	}
+
+	// The true positive: a shell program IS a command line, so its read is seen.
+	shellProgram := "sh -c 'cat /etc/hosts'"
+	if got := commandPaths(shellProgram); len(got) != 1 || got[0] != "/etc/hosts" {
+		t.Errorf("commandPaths(%q) = %v, want [/etc/hosts]", shellProgram, got)
 	}
 }

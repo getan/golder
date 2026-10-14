@@ -12,6 +12,57 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A local rule table decides the routine shell commands without a model**:
+  the reviewer is a model call — ~2.2s per gated call without the decision model
+  — and a session pays it for `ls`, `grep`, `git status` and `go test` as surely
+  as for `rm -rf`. A table now grades a shell command and the tier it names is
+  settled by the gate:
+
+  | table says | verdict | what happens |
+  |---|---|---|
+  | `READONLY` | allow | runs, no model call |
+  | `LOCAL_EFFECTS` | confirm | `auto` runs it, `ask` asks; no model call |
+  | `EXTERNAL_EFFECTS` | confirm | same |
+  | `DANGEROUS` / `UNKNOWN` | — | handed to the reviewer, unchanged |
+
+  The table is bash-classify's (Filip Prochazka, MIT), copied rather than
+  depended on: the runtime dependency would be a Python package and a tree-sitter
+  grammar, for a decision this package already has the mvdan parse for. 168
+  programs, 2,301 subcommand entries (the source nests: `gh run list` is a
+  subcommand of a subcommand) and the 32 option overrides that RAISE a
+  classification (`git push --force` is not `git push`) — the overrides that
+  lower one are deliberately not carried, which is why a rule here can only be
+  more conservative than its source. `internal/judge/gen_risk_table.go`
+  regenerates the Go table from a checkout of the reference; the shell's own
+  builtins and two tools the reference lacks (`rg`, `gofmt`) are small
+  hand-written supplements beside it, each with its own reason stated.
+
+  Measured on a real 731-command session: 65% allowed, 15% graded confirm, 80%
+  decided without a model. The 20% that still goes to one is what it should be —
+  `rm`, `python3` and other opaque or destructive commands, plus programs the
+  table has no rule for.
+
+  Where it sits is the design, and it is neither an exemption nor a second
+  opinion. The pipeline the approval gate consults is `static floor → the routine
+  grader → session model`, and the routine grader is ONE of two things: the
+  decision model when its credential resolves, the local table otherwise. They
+  answer the same question ("is this call routine?") and a run wants one answer
+  from one place, with the calls neither can settle going to the session model —
+  so a run WITH the decision model behaves exactly as before, and a run without
+  its credential gets the table instead of a ~2.2s round trip per `ls`. Chaining
+  them would have routed the decision model's escalations into the table, and an
+  escalation means "this deserves a model's judgment", not "try something
+  cheaper first". Every call is still graded by the gate's chain, and the table
+  has no off switch: it IS the fallback, and a fallback that can be disabled is a
+  fallback that leaves a run paying a model round trip for `ls`. The verdict's own
+  sentence follows the conversation's language the way the decision model's
+  rationale does.
+
+  Two things the table must not get wrong, and both are tested: a privilege
+  escalator is never unwrapped (`sudo ls` is deferred, not read as `ls`), and a
+  redirect that writes a file is a mutation whatever the program is (`ls > out`
+  is graded local-effects). An expression is as severe as its worst command, so
+  `curl … | sh` lands on the shell and is deferred.
 - **`/boundary` and `/grants`: consent and the table each get their own
   command**: the four things a person can decide used to be spread over two
   commands that each carried two subjects. `/trust` held the per-directory
@@ -1185,6 +1236,41 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A consent question is raised for a path, not for a string that looks like
+  one**: the boundary gate asked the user to allow reading `/60` — the divisor
+  in a python program's arithmetic — because the candidate list was the UNION of
+  two readers, and whichever was less careful won. One reader was the shell parse
+  (mvdan, via `shellfacts`), which reports every path-shaped ARGUMENT and says
+  the caller must narrow it; the other was a hand-rolled word scanner that knew
+  about programs (a `sed` script and a `grep` pattern are not files) but knew
+  nothing about a program handed to an interpreter. The union meant the parse's
+  un-narrowed word arrived as a question, and the scanner's `/60` arrived beside
+  it: `sed -n '/func X/,/^}/p' f.go` asked about `/func X/,/^}/p` too.
+
+  There is one reader now. The shell parse answers everything lexical, and the
+  program-semantics tables answer what a grammar cannot: which programs open a
+  file they are handed, which argument positions hold a pattern or a script, and
+  how a word's parts become a value (`$HOME` and a leading `~` are knowable from
+  the parse's parts, an unknown variable is not, and a glob is a location with a
+  pattern). The rules are the ones the scanner already had — they now run on the
+  parse's words instead of on a second tokenizer.
+
+  An interpreter's inline program is handled by kind rather than by guessing. A
+  shell program (`sh -c '…'`) IS a command line, so it is parsed recursively and
+  its reads are found exactly. Any other language is one this package does not
+  parse and never will, so its text is read for path-shaped runs that sit inside
+  a quoted string AND exist on disk: this gate asks a read question, and a path
+  that does not exist cannot be read. Two conditions, both verifiable, which is
+  what makes `/60`, `/`, `//` and `re.match("/api/v1", u)` stop being paths
+  without anyone enumerating the shapes that produce them.
+
+  Worth stating as a hole rather than an oversight: a program that CREATES a path
+  (`open("/new", "w")`) names a file that does not exist yet and is not reported.
+  Writes by a shell command are not this gate's business — the sandbox and the
+  escalation dialog are — which is the same reason bash asks about reads.
+
+  Measured on the command that produced the report: no candidates, no question.
+  Beside it, `sh -c 'cat /etc/hosts'` still yields `/etc/hosts`.
 - **A boundary refusal is the boundary gate's, not the reviewer's**: a call
   blocked by the workspace-boundary gate was announced as `✗ 自动审批拒绝` —
   an auto-review denial — with the reviewer's "(risk, authorization)" suffix.

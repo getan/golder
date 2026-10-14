@@ -12,6 +12,7 @@ package judge
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 
 	"github.com/getan/golder/internal/patch"
@@ -52,35 +53,29 @@ func pathArgs(args json.RawMessage) []string {
 	return out
 }
 
-// commandPaths returns the paths a command line names: the UNION of the shell
-// parse and the program-aware word scanner.
+// commandPaths returns the paths a command line names, from ONE answer: the
+// shell parse (shellfacts, which is mvdan) for everything lexical, and the
+// program-semantics tables in bashpaths.go for what the grammar cannot say
+// (`sort --files0-from=/outside/list` names a file to read, and nothing about the
+// shell says so).
 //
-//   - The parser knows shell semantics: redirects, substitutions, quote
-//     removal, and the true spelling of a path, so /dev/null is the device node
-//     the user typed rather than a path relative to the filesystem root.
-//   - The scanner knows PROGRAMS, which the grammar cannot say: `sort
-//     --files0-from=/outside/list` names a file to read, and nothing about the
-//     shell says so.
-//
-// Union rather than rank, because each sees what the other cannot, and for a
-// consent gate the safe direction is to ask about more rather than less. Keeping
-// only the parser silently dropped the scanner's half once, and the boundary
-// regression test caught it: that command became neither asked about nor
-// reviewed.
-//
-// An unparseable command line is not path-free: the parser's half is lost, but
-// the scanner's still applies, so the boundary is never narrower than it was
-// before the parser existed.
-func commandPaths(cmd string) []string {
+// It used to be the UNION of that parse and a second, hand-rolled reading of the
+// text: the parser's list of path-shaped words, narrowed by the scanner's rules,
+// plus the scanner's own list. Two readers meant two answers, and a word that one
+// of them misread arrived as a consent dialog — `sed -n '/func X/,/^}/p' f.go`
+// asked about `/func X/,/^}/p` because the parse reports it as an argument and
+// only the scanner knew it was a script, and `python3 -c "…((n*med)/60)"` asked
+// about `/60` because the scanner scanned a program the parse had already said
+// was one word. Neither was a missing case; they were the shape of the union.
+// There is one reader now, and the rules it applies are the ones that used to be
+// the scanner's.
+func commandPaths(cmd string) []string { return commandPathsAt(cmd, 0) }
+
+// commandPathsAt is commandPaths at one level of inline-program recursion: a
+// `sh -c "…"` program is a shell command line, so it goes through this same
+// function rather than through a second reading of the text.
+func commandPathsAt(cmd string, depth int) []string {
 	plan := shellfacts.Parse(cmd)
-	// The facts reader reports every path-shaped ARGUMENT and marks the operation
-	// unknown, because whether one is a file is the program's business — and it
-	// says as much ("the caller must narrow it with knowledge this package does
-	// not have"). This narrows: a search command's pattern and a script are
-	// path-shaped text that names no file (`sed -n '/func X/,/^}/p' f.go` asked
-	// the user about `/func X/,/^}/p`), and the scanner below already knows the
-	// positions, so the rule lives there and is applied here.
-	scripts := nonPathOperandTexts(cmd)
 	var out []string
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -91,16 +86,26 @@ func commandPaths(cmd string) []string {
 		seen[p] = true
 		out = append(out, p)
 	}
-	if plan.Parsed {
-		for _, a := range plan.PathAccesses() {
-			if a.Origin == "argument" && scripts[a.Path] {
-				continue
+	if !plan.Parsed {
+		// The shell could not parse this either, so nothing here will run — but
+		// "nothing here" is not a claim this layer should make on the parser's
+		// behalf. The fallback reads the text lexically and keeps only what
+		// EXISTS: the same verifiable predicate the interpreter programs use (see
+		// programPaths), on the same reasoning — a candidate that names nothing
+		// is not a read.
+		for _, p := range pathShapedRuns(cmd) {
+			if _, err := os.Stat(p); err == nil {
+				add(p)
 			}
-			add(a.Path)
 		}
+		return out
 	}
-	for _, p := range bashPathCandidates(cmd) {
-		add(p)
+	// AllCommands, not Commands: the latter holds the top level alone, and a
+	// command inside a substitution, a loop body or a function runs too.
+	for _, c := range plan.AllCommands() {
+		for _, p := range commandCandidates(c, depth) {
+			add(p)
+		}
 	}
 	return out
 }

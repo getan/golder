@@ -16,7 +16,6 @@ package judge
 
 import (
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -108,31 +107,67 @@ func TestCommandPathsNarrowsPatternsAndScripts(t *testing.T) {
 	}
 }
 
-// TestNonPathOperandTextsAgreesWithTheScanner pins the two readers to one rule:
-// whatever the scanner skips by position is what commandPaths strips by text, so
-// neither can learn a shape the other does not know.
-func TestNonPathOperandTextsAgreesWithTheScanner(t *testing.T) {
+// TestOneReaderOwnsTheAnswer pins the property that replaced the two-reader
+// design: whatever commandPaths returns is the whole answer, and every rule that
+// shapes it lives in one place.
+//
+// The test it replaces compared the parser's list against the scanner's skipped
+// set, because a word the parser reported and the scanner had skipped arrived as
+// a question anyway — the union let the un-narrowed side win. There is no second
+// reader to disagree with now, so what is worth pinning is the boundary of the
+// answer: a script or a pattern is absent, the file beside it is present, and the
+// command's own text never leaks in as a candidate on its own.
+func TestOneReaderOwnsTheAnswer(t *testing.T) {
 	_, out, _ := sandboxPaths(t)
-	cmds := []string{
-		`sed -n '/x/,/^}/p' ` + out + "/f.go",
-		`sed -e '/a/p' -e '/b/p' ` + out + "/f.go",
-		`grep -rn '/usr/local' ` + out,
-		`awk -F: '{print}' ` + out + "/f.go",
-		`cat ` + out + "/f.go",
-	}
-	for _, cmd := range cmds {
-		skipped := nonPathOperandTexts(cmd)
-		for text := range skipped {
-			if slices.Contains(bashPathCandidates(cmd), text) {
-				t.Errorf("both readers disagree: %q is skipped as a script yet reported as a path\ncommand: %s", text, cmd)
+	file := out + "/f.go"
+	for _, c := range []struct {
+		name   string
+		cmd    string
+		want   string
+		absent []string
+	}{
+		{
+			name:   "a sed script is not a path, the file it edits is",
+			cmd:    `sed -n '/x/,/^}/p' ` + file,
+			want:   file,
+			absent: []string{"/x/,/^}/p"},
+		},
+		{
+			name:   "every inline pattern drops, the file stays",
+			cmd:    `sed -e '/a/p' -e '/b/p' ` + file,
+			want:   file,
+			absent: []string{"/a/p", "/b/p"},
+		},
+		{
+			name:   "a search pattern that looks absolute drops",
+			cmd:    `grep -rn '/usr/local' ` + out,
+			want:   out,
+			absent: []string{"/usr/local"},
+		},
+		{
+			name:   "awk's program text is not a path",
+			cmd:    `awk -F: '{print}' ` + file,
+			want:   file,
+			absent: []string{"/x/{print}", "{print}"},
+		},
+		{
+			name: "a program handed to an interpreter is read as a program",
+			cmd:  `python3 -c "print((n*med)/60)"`,
+			absent: []string{
+				"/60",
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := commandPaths(c.cmd)
+			if c.want != "" && !slices.Contains(got, c.want) {
+				t.Errorf("paths = %v, want %q among them\ncommand: %s", got, c.want, c.cmd)
 			}
-		}
-		// And the reverse reading, for the shapes this rule is about: a
-		// path-shaped pattern must be in the skipped set.
-		for _, cand := range bashPathCandidates(cmd) {
-			if strings.Contains(cand, "usr/local") && !skipped[cand] {
-				t.Errorf("scanner reports %q but the narrowing does not list it\ncommand: %s", cand, cmd)
+			for _, bad := range c.absent {
+				if slices.Contains(got, bad) {
+					t.Errorf("paths = %v, must not contain %q (not a path)\ncommand: %s", got, bad, c.cmd)
+				}
 			}
-		}
+		})
 	}
 }

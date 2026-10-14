@@ -90,7 +90,7 @@ func TestFileFlagDeclarationsAreReachable(t *testing.T) {
 		{`file -m /outside/magic /inside/x`, "/outside/magic"},
 	}
 	for _, c := range cases {
-		got := bashPathCandidates(c.cmd)
+		got := commandPaths(c.cmd)
 		found := false
 		for _, g := range got {
 			if g == c.want {
@@ -99,18 +99,18 @@ func TestFileFlagDeclarationsAreReachable(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("bashPathCandidates(%q) = %v, want it to include %q (the flag's file operand)",
+			t.Errorf("commandPaths(%q) = %v, want it to include %q (the flag's file operand)",
 				c.cmd, got, c.want)
 		}
 	}
 	// And the flags that take a pattern still skip it rather than reporting the
 	// pattern as a path.
-	if got := bashPathCandidates(`rg -n TODO /outside/dir`); len(got) != 1 || got[0] != "/outside/dir" {
+	if got := commandPaths(`rg -n TODO /outside/dir`); len(got) != 1 || got[0] != "/outside/dir" {
 		t.Errorf(`rg -n TODO /outside/dir candidates = %v, want only the directory`, got)
 	}
 	// With patterns coming from a file, there is no pattern operand, so the
 	// FIRST non-flag word is a file too.
-	got := bashPathCandidates(`grep -f /outside/pat /outside/data`)
+	got := commandPaths(`grep -f /outside/pat /outside/data`)
 	if len(got) != 2 || got[0] != "/outside/pat" || got[1] != "/outside/data" {
 		t.Errorf(`grep -f PAT FILE candidates = %v, want both the pattern file and the data file`, got)
 	}

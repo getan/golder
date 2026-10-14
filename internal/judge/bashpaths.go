@@ -9,24 +9,31 @@ package judge
 // recovers what a static reader can: the file operands of the commands that
 // actually open files.
 //
-// # What it can and cannot do
+// # How it is read
 //
-// Shell parsing here is the same deliberate approximation as the credential
-// floor's (see static.go): quotes group words, segments split on control
-// operators, transparent prefixes unwrap. On top of that:
+// One reader, two halves, and neither guesses at the other's job:
 //
-//   - Only commands that take file operands are scanned. A path-shaped string
-//     handed to `echo`, `git commit -m`, or `jq` is not a file being read, and
-//     asking about it would train people to approve without reading.
-//   - $HOME (and ${HOME}) is substituted, because rc files and dotfiles are the
-//     common case and $HOME's value is knowable. Other variables are left
-//     alone: their values are not, and treating an unknown variable as
-//     suspicious would ask about every `cat $LOG` in a build script.
-//   - An interpreter's inline program is scanned for embedded absolute paths
-//     (`python3 -c 'open("/x")'`), because that path is a real read.
+//   - The SHELL PARSE (internal/shellfacts, which is mvdan) answers everything
+//     lexical: where a word begins and ends, what quoting did to it, which of
+//     its parts is a variable, which redirection writes where, and what runs
+//     inside a substitution, a loop or a function. This file does not do shell
+//     syntax; it reads the parse.
+//   - THIS FILE answers everything the grammar cannot: which programs open a
+//     file they are handed (so `echo /etc/hosts` is quiet and `cat /etc/hosts`
+//     is not), which argument positions hold a pattern or a script rather than
+//     a file, how a word's parts become a value (`$HOME` and a leading `~` are
+//     knowable, a glob is a location with a pattern, anything else is not), and
+//     what an interpreter's inline program means.
 //
-// It is best-effort by construction. `cat $UNKNOWN`, a script file that reads
-// other files, and a path assembled at runtime are all invisible to it. The
+// It used to be two readers with a union: the scanner walked the text with its
+// own tokenizer while the parse reported path-shaped words, and whichever was
+// less careful won. A sed script arrived as a path because the parse calls it an
+// argument, and `/60` arrived because the scanner read a program the parse had
+// already identified as one word. Those were not missing cases; they were the
+// shape of two disagreeing readers.
+//
+// It is still best-effort by construction. `cat $UNKNOWN`, a path assembled at
+// runtime, and a program that computes its own filename are invisible here. The
 // sandbox is the enforcement that does not depend on reading the command; this
 // is the part that can ask before the command runs.
 
@@ -36,6 +43,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/getan/golder/internal/shellfacts"
 )
 
 // fileOperandCommands are the commands whose arguments name files to open.
@@ -318,119 +327,205 @@ func isNonPathFlagValue(cmdName, word string) bool {
 	return false
 }
 
-// textsOf projects words onto their texts, which is the form every rule above
-// takes: quoting matters for tilde expansion and for the credential floor, and
-// not at all for "which argument is this".
-func textsOf(words []shellWord) []string {
-	out := make([]string, len(words))
-	for i, w := range words {
-		out[i] = w.text
-	}
-	return out
-}
-
-// nonPathOperandTexts returns the spellings in this command that are patterns or
-// scripts rather than paths, so a reader that only has the text — commandPaths,
-// narrowing the facts reader's argument list — can ask the same question the
-// scanner asks by position.
-func nonPathOperandTexts(cmd string) map[string]bool {
-	var out map[string]bool
-	for _, seg := range splitShellSegments(cmd) {
-		words := shellWords(seg)
-		i := commandWordIndex(words)
-		if i >= len(words) {
-			continue
-		}
-		texts := textsOf(words)
-		for j := range nonPathOperandIndices(path.Base(texts[i]), texts, i+1) {
-			if out == nil {
-				out = map[string]bool{}
-			}
-			out[texts[j]] = true
-		}
-	}
-	return out
-}
-
-// commandWordIndex returns the index of the command word in a segment, stepping
-// over the prefixes that do not change which program runs (env, sudo, and the
-// other transparent wrappers).
-func commandWordIndex(words []shellWord) int {
-	i := 0
-	for i < len(words) && (isTransparentPrefix(words[i].text) ||
-		words[i].text == "sudo" || words[i].text == "doas") {
-		i++
-	}
-	return i
-}
-
-// bashPathCandidates returns the path-shaped words a bash command may read.
-// Callers resolve each one and ask about the ones that land outside the
-// workspace; the list is ordered as the command writes it, so the first
-// outside path is also the most prominent one.
-func bashPathCandidates(cmd string) []string {
+// commandCandidates returns the paths one parsed command may read: the targets
+// of its redirections, the file operands of its program, and the programs of any
+// interpreter it runs inline.
+//
+// This function is the whole of the split this file documents: the PARSER
+// supplies everything lexical — words with quotes removed, which part of a word
+// is a variable, which redirection writes — and this function supplies
+// everything semantic: which programs open a file they are handed, which
+// argument positions hold a pattern or a script instead, and how a word's parts
+// become a value. Neither half guesses at the other's job.
+func commandCandidates(cmd shellfacts.Command, depth int) []string {
 	var out []string
-	for _, seg := range splitShellSegments(cmd) {
-		words := shellWords(seg)
-		i := commandWordIndex(words)
-		if i >= len(words) {
+
+	// Redirect targets name files by construction, whatever the program is: the
+	// shell itself opens them. (`2>&1` names no path, and a heredoc's body is
+	// further shell input rather than a target.)
+	for _, r := range cmd.Redirs {
+		if r.Dup || r.Heredoc {
 			continue
 		}
-		cmdName := path.Base(words[i].text)
-		if !fileOperandCommands[cmdName] {
-			continue
+		if v, ok := wordValue(r.Target); ok && pathShapedWord(v) {
+			out = append(out, v)
 		}
-		texts := textsOf(words)
-		// A search command's pattern, a script, and a value flag's argument are
-		// path-SHAPED often enough to matter and are never files (see
-		// nonPathOperandIndices).
-		skip := nonPathOperandIndices(cmdName, texts, i+1)
-		progWord := -1
-		if letter, ok := interpreterProgramFlags[cmdName]; ok {
-			for j := i + 1; j < len(words); j++ {
-				if flagCarriesProgram(words[j].text, letter) && j+1 < len(words) {
-					progWord = j + 1
-					break
+	}
+
+	i, ok := unwrapProgram(cmd.Argv)
+	if !ok {
+		return out
+	}
+	prog := path.Base(cmd.Argv[i].Text)
+	if !fileOperandCommands[prog] {
+		// The program does not open a path it is handed — it prints it, splits
+		// it, or never sees one — so its arguments are nobody's boundary
+		// question. This is the rule that keeps `echo /etc/hosts` quiet, and it
+		// is why the operand tables live in this layer rather than in the
+		// parser: "does this program open its argument" is knowledge about the
+		// PROGRAM, not about the shell.
+		return out
+	}
+	args := cmd.Argv[i+1:]
+	texts := make([]string, len(args))
+	for j, w := range args {
+		texts[j] = w.Text
+	}
+	// A search command's pattern and a script are path-SHAPED often enough to
+	// matter and are never files (see nonPathOperandIndices).
+	skip := nonPathOperandIndices(prog, texts, 0)
+	progWord := interpreterProgramIndex(prog, texts)
+	for j, w := range args {
+		switch {
+		case skip[j]:
+			continue
+		case j == progWord:
+			out = append(out, programPaths(prog, w.Text, depth)...)
+		default:
+			// The attached spelling of a file-reading flag carries its path
+			// inside the word (`--file=/x`), where the flag test would hide it.
+			if v, ok := fileFlagValue(prog, w.Text); ok {
+				v = expandTilde(expandKnownVars(v))
+				if pathShapedWord(v) {
+					out = append(out, v)
 				}
-			}
-		}
-		for j, w := range words {
-			switch {
-			case skip[j]:
 				continue
-			case j == progWord:
-				for _, frag := range embeddedPaths(w.text) {
-					if shellProgramInterpreters[cmdName] {
-						frag = expandTilde(frag)
-					}
-					out = append(out, frag)
-				}
+			}
+			if v, ok := wordValue(w); ok && pathShapedWord(v) {
+				out = append(out, v)
+			}
+			// `cat $(echo /outside/x)` reads /outside/x: the substitution's
+			// OUTPUT is the operand, and only a printer's words can be read back
+			// as a path.
+			out = append(out, substitutionOperands(w)...)
+		}
+	}
+	return out
+}
+
+// unwrapProgram steps over the programs that only decorate the command they run
+// — `env FOO=1`, `nohup`, `time`, `command`, `sudo`, `doas` — and returns the
+// index of the real program word. ok=false when there is none, which is what a
+// line of nothing but assignments looks like.
+//
+// The parser has already separated leading assignments (cmd.Assigns) from the
+// argument vector, so only wrappers appearing as PROGRAMS are stepped over; each
+// one's flags and assignments are skipped by the same isTransparentPrefix rule
+// the rest of the package uses.
+func unwrapProgram(argv []shellfacts.Word) (int, bool) {
+	i := 0
+	for i < len(argv) {
+		text := argv[i].Text
+		if !isTransparentPrefix(text) && text != "sudo" && text != "doas" {
+			return i, true
+		}
+		i++
+		for i < len(argv) && isTransparentPrefix(argv[i].Text) {
+			i++
+		}
+	}
+	return 0, false
+}
+
+// interpreterProgramIndex returns the index, within prog's arguments, of the
+// word holding an inline program, or -1 when the program has no such flag or
+// none is present.
+func interpreterProgramIndex(prog string, texts []string) int {
+	letter, ok := interpreterProgramFlags[prog]
+	if !ok {
+		return -1
+	}
+	for j := 0; j+1 < len(texts); j++ {
+		if flagCarriesProgram(texts[j], letter) {
+			return j + 1
+		}
+	}
+	return -1
+}
+
+// substitutionOperands returns the paths a command substitution hands to the
+// command it feeds.
+//
+// `cat $(echo /outside/x)` reads /outside/x, and neither half of the line says
+// so on its own: the substitution's OUTPUT is the operand. Only a printer passes
+// its words through unchanged (`echo`, `printf`), so only those are read back —
+// anything else produces a value this layer cannot know, which is the same limit
+// that applies to an unknown variable.
+func substitutionOperands(w shellfacts.Word) []string {
+	var out []string
+	for _, p := range w.Parts {
+		if p.Kind != shellfacts.CommandSubstPart || p.Nested == nil {
+			continue
+		}
+		for _, c := range p.Nested.AllCommands() {
+			idx, ok := unwrapProgram(c.Argv)
+			if !ok {
+				continue
+			}
+			switch path.Base(c.Argv[idx].Text) {
+			case "echo", "printf":
 			default:
-				// The attached spellings of a file-reading flag carry their path
-				// inside the word, where the flag-prefix test below would hide it.
-				if v, ok := fileFlagValue(cmdName, w.text); ok {
-					v = expandKnownVars(v)
-					if !w.leadQuoted {
-						v = expandTilde(v)
-					}
-					if pathShapedWord(v) {
-						out = append(out, v)
-					}
-					continue
-				}
-				text := expandKnownVars(w.text)
-				// The shell expands a leading ~ only when the tilde itself was
-				// written unquoted: `~/x` and `~/"x"` expand, `"~/x"` does not.
-				if !w.leadQuoted {
-					text = expandTilde(text)
-				}
-				if pathShapedWord(text) {
-					out = append(out, text)
+				continue
+			}
+			for _, a := range c.Argv[idx+1:] {
+				if v, ok := wordValue(a); ok && pathShapedWord(v) {
+					out = append(out, v)
 				}
 			}
 		}
 	}
 	return out
+}
+
+// wordValue renders one word the way the shell would hand it to the program, or
+// reports that the value cannot be known here.
+//
+// It is where the parser's structure becomes a spelling, and it replaces the
+// two approximations the old scanner used (a leadquoted flag and a textual
+// $HOME substitution):
+//
+//   - a leading unquoted `~` is a TildePart, so `~/x` and `~/"x"` expand while
+//     `"~/x"` stays literal — the shell's own rule, read from the parse rather
+//     than guessed from the first byte;
+//   - `$HOME` is a VariablePart with a known name, so it expands; any OTHER
+//     variable, and any substitution or arithmetic, makes the value unknowable
+//     and the word is skipped. Skipping is the honest answer: the old scanner
+//     passed `$UNKNOWN/x` through as a "path" that then resolved against the
+//     workspace and was silently dropped further down.
+//
+// A glob is not unknowable in that sense: the literal part still carries the
+// pattern, and `cat ~/logs/*` names a location even though the shell decides
+// which files live there.
+func wordValue(w shellfacts.Word) (string, bool) {
+	if !w.Dynamic {
+		return w.Text, true
+	}
+	home, _ := os.UserHomeDir()
+	var b strings.Builder
+	for _, p := range w.Parts {
+		switch p.Kind {
+		case shellfacts.LiteralPart, shellfacts.QuotedPart:
+			b.WriteString(p.Text)
+		case shellfacts.GlobPart, shellfacts.ExtGlobPart:
+			// The pattern's text already came through the literal part above.
+		case shellfacts.TildePart:
+			rest := strings.TrimPrefix(p.Text, "~")
+			if home == "" || (rest != "" && !strings.HasPrefix(rest, "/")) {
+				// `~other` is another user's home: the shell expands it, and this
+				// layer cannot know to what.
+				return "", false
+			}
+			b.WriteString(home + rest)
+		case shellfacts.VariablePart:
+			if p.Text != "HOME" || home == "" {
+				return "", false
+			}
+			b.WriteString(home)
+		default: // command substitution, process substitution, arithmetic
+			return "", false
+		}
+	}
+	return b.String(), true
 }
 
 // flagCarriesProgram reports whether a token is the interpreter's inline-program
@@ -510,26 +605,102 @@ func expandTilde(w string) string {
 	return filepath.Join(home, w[2:])
 }
 
-// embeddedPaths pulls absolute-path-shaped runs out of an interpreter program.
-// It splits on every character a path cannot hold, so `open("/x/y")` yields
-// /x/y — and a regex or route string that happens to look like a path yields a
-// false candidate, which is the accepted cost of seeing the real ones.
-func embeddedPaths(prog string) []string {
+// maxProgramDepth bounds the recursion into shell one-liners. `sh -c "bash -c
+// '…'"` is two levels and appears in practice; past the third the text is data
+// the reviewer reads rather than a boundary question.
+const maxProgramDepth = 3
+
+// programPaths returns the paths an interpreter's inline program names.
+//
+// Two kinds of program, answered differently on purpose:
+//
+//   - A SHELL program (`bash -c '…'`) IS a shell command line, so it is parsed
+//     as one, recursively. The answer is exact — quoting, substitutions and
+//     redirections are read the way the outer command's were, because the same
+//     parser reads both. `sh -c 'cat /outside/x'` is seen without any lexical
+//     guessing, and `sh -c 'echo a / b'` produces nothing.
+//
+//   - Any other language is one this package does not parse and never will: a
+//     Python program is not a shell command, and `/60` in `(n*med)/60` is
+//     arithmetic. So the text is scanned for path-shaped runs, and a run counts
+//     ONLY IF IT EXISTS on disk.
+//
+// The existence test is the point, not a heuristic layered on top of one. This
+// gate asks a READ question — bash's paths are read-scoped, see the tool table
+// in tools.go — and a path that does not exist cannot be read, so existence is
+// precisely the property that separates a path from a string that resembles
+// one. It is a VERIFIABLE predicate rather than a longer list of shapes:
+// `(n*med)/60` yields the run `/60`, `/60` does not exist, so it is not a path;
+// and no arithmetic, however unusual, can produce a false candidate, because a
+// candidate has to name something real.
+//
+// The hole is the mirror image, and it is design rather than oversight: a
+// program that CREATES a path (`open("/new", "w")`) names a file that does not
+// exist yet and is not reported. Writes by a shell command are not this gate's
+// business — the sandbox and the escalation dialog are their mechanism — which
+// is the same reason bash's own entry in the tool table asks about reads.
+func programPaths(interpreter, prog string, depth int) []string {
+	if shellProgramInterpreters[interpreter] {
+		if depth >= maxProgramDepth {
+			return nil
+		}
+		return commandPathsAt(prog, depth+1)
+	}
+	var out []string
+	for _, frag := range pathShapedRuns(prog) {
+		// No tilde expansion here: `open("~/x")` in Python opens a directory
+		// literally named `~`, and the stat below refuses it on its own. Refusing
+		// is right — nothing expands a tilde in that language.
+		if _, err := os.Stat(frag); err == nil {
+			out = append(out, frag)
+		}
+	}
+	return out
+}
+
+// pathShapedRuns pulls absolute-path-shaped runs out of an interpreter program,
+// keeping the ones that appear inside a quoted string.
+//
+// Two conditions, both of them structural rather than a list of shapes:
+//
+//   - The run must sit inside a quote. In every language this scans a path is a
+//     string literal, and the same characters outside one are arithmetic
+//     (`(n*med)/60` divides; `"/x/y"` names a file). Quoting is the one
+//     convention every language here shares.
+//   - programPaths then keeps only runs that EXIST, because this gate asks a
+//     read question and a path that does not exist cannot be read.
+//
+// It is a RUN extractor, not an answer: its output is a candidate list. The name
+// says so deliberately — a function called `embeddedPaths` invited callers to
+// treat what it returned as paths, which is how a consent dialog came to be
+// raised for `/60`.
+func pathShapedRuns(prog string) []string {
 	var out []string
 	start := -1
+	startQuoted := false
+	var quote rune
 	flush := func(end int) {
 		if start < 0 {
 			return
 		}
-		if frag := prog[start:end]; strings.HasPrefix(frag, "/") || strings.HasPrefix(frag, "~/") {
+		if frag := prog[start:end]; startQuoted && (strings.HasPrefix(frag, "/") || strings.HasPrefix(frag, "~/")) {
 			out = append(out, expandKnownVars(frag))
 		}
 		start = -1
 	}
 	for i, r := range prog {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'' || r == '`':
+			quote = r
+		}
 		if pathRune(r) {
 			if start < 0 {
 				start = i
+				startQuoted = quote != 0
 			}
 			continue
 		}

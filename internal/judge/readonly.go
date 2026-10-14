@@ -673,17 +673,22 @@ func flagMatches(arg, flag string) bool {
 
 // ReadOnlyShellCommand reports whether this shell command provably only reads.
 //
-// Its one caller is the execution layer, which contains such a command in the
-// sandbox rather than running it bare: recognition is a statement about what
-// the scanner could see, and the kernel is the floor under it. A miss costs
-// nothing — the command is reviewed like any other, which is now true of every
-// call in the session.
+// The fact has two readers, and they use it for different things:
 //
-// It is deliberately JUST the fact. It used to route through the fast path's
-// verdict, which meant it also carried the kill switch, the credential guard
-// and an escalation carve-out — three things a containment decision does not
-// want. Distrusting the whitelist should not stop a command from being
-// contained; containing a credential read is the safe direction; and an
+//   - the execution layer (agenttool.BashTool), which contains such a command in
+//     the sandbox rather than running it bare. Recognition is a statement about
+//     what the scanner could see, and the kernel is the floor under it: a path
+//     the scanner missed is refused by the sandbox instead of read quietly;
+//   - the local classifier stage (Local), which answers such a command without a
+//     model call — see that file for where the stage sits in the gate's pipeline
+//     and why it asserts only the provable case.
+//
+// It is deliberately JUST the fact, so neither reader inherits the other's
+// policy. It used to route through the fast path's verdict, which meant it also
+// carried a kill switch, a credential guard and an escalation carve-out — three
+// things a containment decision does not want, and three things the local stage
+// composes for itself. Distrusting the whitelist should not stop a command from
+// being contained; containing a credential read is the safe direction; and an
 // escalation request is already handled by the caller before it asks.
 func ReadOnlyShellCommand(command string) bool {
 	return readOnlyCommand(command)

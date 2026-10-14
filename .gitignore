@@ -49,6 +49,12 @@ config.toml
 # release/, which is ignored below.
 /.build/
 
+# Reference checkouts pulled by hand while working (the MIT-licensed
+# bash-classify rule table, used to seed internal/judge/risk.go). Never
+# committed and never built: they are reading material, and a stale copy in the
+# repository would be a second source of truth for data that lives in Go now.
+/.ref-*/
+
 # goreleaser output
 /dist/
 # build workflow output (macOS/Linux archives + checksums)

@@ -70,19 +70,63 @@ func WirePermissionState(tools []agentcore.AgentTool, state *permissions.State) 
 	}
 }
 
-// NewReviewer builds the model-backed classifier for one run: the static
-// floor, chained to the decision-model router, which falls back to the LLM
-// reviewer that grades calls with the session's active model. It is rebuilt per
-// turn so a /model switch changes the reviewer with the conversation. A nil
-// provider degrades to the static floor plus a fail-closed reviewer (never an
-// allow).
+// NewReviewer builds the classifier the approval gate consults for one run:
+//
+//	static floor → the routine grader → session model
+//
+// The routine grader is ONE of two things, never both:
+//
+//	the decision model (JEV)  when a credential for it resolves
+//	the local rule table      otherwise
+//
+// They are alternatives because they answer the same question — "is this call
+// routine enough to settle here?" — and a run wants one answer, from one place,
+// with the calls neither can settle going to the session model. Chaining them
+// would also mean the decision model's escalations landed in the table, which is
+// not what an escalation means: it is that layer saying the call deserves a
+// model's judgment, not a cheaper one's.
+//
+// It is rebuilt per turn so a /model switch changes the last stage with the
+// conversation. A nil provider degrades to the static floor plus a fail-closed
+// reviewer (never an allow). See judge.Local for what the table asserts.
 func NewReviewer(model, providerName string, prov provider.Provider, creds *provider.CredentialStore, sessionID, cwd string, trusted bool) judge.Classifier {
 	var check judge.ReviewFunc
 	if prov != nil {
 		check = ReviewCheck(model, providerName, provider.StreamFnFromProvider(prov), creds, sessionID)
 	}
 	llm := judge.NewLLMJudge(check, cwd, trusted)
-	return judge.Chain{Inner: JevRouter(llm, creds, cwd)}
+	return judge.Chain{Inner: routineGrader(llm, creds, cwd)}
+}
+
+// routineGrader picks the layer that settles routine calls for this run: the
+// decision model when it is configured and its credential resolves, the local
+// table otherwise.
+//
+// The choice is made once per reviewer, from the same settings the decision
+// model itself uses, so what runs and what is reported cannot disagree.
+//
+// There is no switch on the table, and that is deliberate: it is the fallback
+// for a run that has no decision model, and a fallback with an off switch is a
+// fallback that leaves the run paying a model round trip for `ls`. The one thing
+// a user might want instead — every call reviewed by a model, policy reasons
+// included — is not a preference this layer can honor while still being the
+// fallback, so it is not offered rather than offered and then contradicted.
+func routineGrader(llm judge.Classifier, creds *provider.CredentialStore, cwd string) judge.Classifier {
+	if jevConfigured(creds) {
+		return JevRouter(llm, creds, cwd)
+	}
+	return judge.Local{Next: llm}
+}
+
+// jevConfigured reports whether the decision model would actually run: enabled
+// by its switch, and holding a credential. It mirrors the check JevRouter makes,
+// stated once here so the caller can choose between the two routine graders
+// without JevRouter's own fallback deciding for it.
+func jevConfigured(creds *provider.CredentialStore) bool {
+	if !JevSettingsFromEnv(os.Getenv).Enabled {
+		return false
+	}
+	return creds != nil && creds.HasCredential(context.Background(), "typesafe")
 }
 
 // DefaultJevEndpoint is TypeSafe's evaluation endpoint.

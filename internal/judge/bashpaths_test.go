@@ -29,6 +29,11 @@ func sandboxPaths(t *testing.T) (ws, out, home string) {
 			t.Fatal(err)
 		}
 	}
+	// A real file for the interpreter-program cases: a program's path is only a
+	// path if it names something, which is the predicate those cases exercise.
+	if err := os.WriteFile(filepath.Join(out, "src", "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return ws, out, home
 }
 
@@ -59,7 +64,7 @@ func TestBashPathCandidates(t *testing.T) {
 		{"cd then read", "cd " + out + " && ls", []string{out}},
 		{"cd then search", "cd " + out + "/src && rg -n x .", []string{out + "/src"}},
 		{"find path", "find " + out + " -name '*.go'", []string{out}},
-		{"command substitution", "cat $(echo " + home + "/notes.md)", []string{home + "/notes.md)"}},
+		{"command substitution", "cat $(echo " + home + "/notes.md)", []string{home + "/notes.md"}},
 		{"glob", "cat " + home + "/*", []string{home + "/*"}},
 
 		// $HOME is the one variable whose value is knowable here.
@@ -85,7 +90,9 @@ func TestBashPathCandidates(t *testing.T) {
 		// A shell's inline program is a shell command line, so its ~ expands
 		// exactly as the outer one would; a python program's does not.
 		{"shell program tilde", `bash -c 'ls ~/work'`, []string{filepath.Join(homeOf(t), "work")}},
-		{"python program tilde", `python3 -c 'open("~/x")'`, []string{"~/x"}},
+		// Python does not expand a tilde, so this opens a literal `~/x` — which
+		// does not exist. It is not a read, and the existence test says so.
+		{"python program tilde", `python3 -c 'open("~/x")'`, nil},
 
 		// Must stay quiet.
 		{"relative path", "cat internal/main.go", nil},
@@ -101,7 +108,7 @@ func TestBashPathCandidates(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := bashPathCandidates(c.cmd)
+			got := commandPaths(c.cmd)
 			if len(got) != len(c.want) {
 				t.Fatalf("candidates = %v, want %v\ncommand: %s", got, c.want, c.cmd)
 			}
@@ -114,9 +121,9 @@ func TestBashPathCandidates(t *testing.T) {
 	}
 
 	// The workspace path itself is a candidate when a command names it — the
-	// GATE decides it is inside, not the scanner. Asserting that keeps the two
+	// GATE decides it is inside, not this layer. Asserting that keeps the two
 	// responsibilities apart.
-	if got := bashPathCandidates("cat " + ws + "/build.sh"); len(got) != 1 || got[0] != ws+"/build.sh" {
+	if got := commandPaths("cat " + ws + "/build.sh"); len(got) != 1 || got[0] != ws+"/build.sh" {
 		t.Errorf("workspace path = %v, want it reported (the gate filters, not the scanner)", got)
 	}
 }
@@ -141,7 +148,7 @@ func TestBashPathCandidatesKnownLimits(t *testing.T) {
 		"./script-that-reads-files.sh",
 		"jq '.path' " + "/tmp/x.json", // /tmp is whitelisted, but the principle: non-reader commands
 	} {
-		if got := bashPathCandidates(cmd); len(got) > 0 {
+		if got := commandPaths(cmd); len(got) > 0 {
 			t.Logf("%q -> %v (documented limit: expected to be invisible or exempt)", cmd, got)
 		}
 	}
@@ -164,9 +171,10 @@ func TestExpandKnownVars(t *testing.T) {
 	}
 }
 
-// TestEmbeddedPaths covers the program-string scan: absolute paths are pulled
-// out, relative fragments and prose are not.
-func TestEmbeddedPaths(t *testing.T) {
+// TestPathShapedRuns covers the run extractor: absolute-path-shaped runs come
+// out, relative fragments and prose do not. It is deliberately lexical — the
+// answer about which runs are PATHS belongs to programPaths, tested below.
+func TestPathShapedRuns(t *testing.T) {
 	for _, c := range []struct {
 		prog string
 		want []string
@@ -174,18 +182,130 @@ func TestEmbeddedPaths(t *testing.T) {
 		{`open("/outside/x")`, []string{"/outside/x"}},
 		{`x = "/a/b"; y = open("/c")`, []string{"/a/b", "/c"}},
 		{`print(1+1)`, nil},
+		{`print("/2024/report.csv")`, []string{"/2024/report.csv"}},
 		{`relative/path`, nil},
-		{`re.match("/api/v1", u)`, []string{"/api/v1"}}, // the accepted false positive
+		{`re.match("/api/v1", u)`, []string{"/api/v1"}},
+		// Outside a quote the same characters are arithmetic, so no run is taken;
+		// the existence test in programPaths then has less to reject.
+		{`(n*med)/60`, nil},
 	} {
-		got := embeddedPaths(c.prog)
+		got := pathShapedRuns(c.prog)
 		if len(got) != len(c.want) {
-			t.Fatalf("embeddedPaths(%q) = %v, want %v", c.prog, got, c.want)
+			t.Fatalf("pathShapedRuns(%q) = %v, want %v", c.prog, got, c.want)
 		}
 		for i := range got {
 			if got[i] != c.want[i] {
-				t.Errorf("embeddedPaths(%q)[%d] = %q, want %q", c.prog, i, got[i], c.want[i])
+				t.Errorf("pathShapedRuns(%q)[%d] = %q, want %q", c.prog, i, got[i], c.want[i])
 			}
 		}
+	}
+}
+
+// TestProgramPathsIsAVerifiablePredicate pins what replaced the lexical guess.
+//
+// A run extracted from a non-shell program counts as a path only if it exists,
+// because this gate asks a read question and a path that does not exist cannot
+// be read. The shape that motivated it is arithmetic after a closing paren —
+// `(n*med)/60` runs to `/60` — and the same predicate disposes of every other
+// shape producing a run that names nothing: `/`, `//`, `/api/v1` in a regex, a
+// URL path inside a string.
+func TestProgramPathsIsAVerifiablePredicate(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "data.csv")
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name        string
+		interpreter string
+		prog        string
+		want        []string
+	}{
+		{
+			name:        "arithmetic after a paren is not a path",
+			interpreter: "python3",
+			prog:        `print('耗时: %.0f' % ((n*2.16 - n*med)/60))`,
+			want:        nil,
+		},
+		{name: "division with spaces", interpreter: "python3", prog: `print(total / 2)`, want: nil},
+		{name: "floor division", interpreter: "python3", prog: `print(a // b)`, want: nil},
+		{
+			name:        "a regex that looks like a route is not a path",
+			interpreter: "python3",
+			prog:        `re.match("/api/v1", u)`,
+			want:        nil,
+		},
+		{
+			name:        "an existing file opened by a program IS a path",
+			interpreter: "python3",
+			prog:        `print(open("` + real + `").read())`,
+			want:        []string{real},
+		},
+		{
+			// A path the program would CREATE does not exist yet, so this gate —
+			// which asks about reads — does not report it. Writes are the
+			// sandbox's and the escalation dialog's business.
+			name:        "a path that does not exist yet is not a read",
+			interpreter: "python3",
+			prog:        `open("` + dir + `/not-created-yet.txt", "w")`,
+			want:        nil,
+		},
+		{
+			name:        "a tilde is not expanded in a non-shell language",
+			interpreter: "python3",
+			prog:        `open("~/notes.md")`,
+			want:        nil,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := programPaths(c.interpreter, c.prog, 0)
+			if len(got) != len(c.want) {
+				t.Fatalf("programPaths(%q) = %v, want %v", c.prog, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("programPaths(%q)[%d] = %q, want %q", c.prog, i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestShellProgramIsParsedNotScanned pins the other half: `sh -c '…'` is a
+// command line, so it goes through the parser and the answer is exact. A
+// one-liner that reads outside the workspace is seen, one whose text merely
+// contains a slash is not, and the recursion is bounded.
+func TestShellProgramIsParsedNotScanned(t *testing.T) {
+	_, out, _ := sandboxPaths(t)
+	target := out + "/src/a.go"
+
+	for _, c := range []struct {
+		name string
+		prog string
+		want []string
+	}{
+		{"a read is found", "cat " + target, []string{target}},
+		{"a command substitution is descended into", "echo $(cat " + target + ")", []string{target}},
+		{"no slash, no path", "echo a / b", nil},
+		{"a relative path stays quiet", "cat internal/x.go", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := programPaths("bash", c.prog, 0)
+			if len(got) != len(c.want) {
+				t.Fatalf("programPaths(bash, %q) = %v, want %v", c.prog, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Errorf("programPaths(bash, %q)[%d] = %q, want %q", c.prog, i, got[i], c.want[i])
+				}
+			}
+		})
+	}
+
+	if got := programPaths("bash", "cat "+target, maxProgramDepth); got != nil {
+		t.Errorf("at the depth limit the recursion must stop, got %v", got)
 	}
 }
 
@@ -216,7 +336,7 @@ func TestPathShapedWord(t *testing.T) {
 // a scanner that trims trailing punctuation would break the glob, so the raw
 // word is passed through and the gate resolves it.
 func TestBashPathCandidatesNoTrailingCut(t *testing.T) {
-	if got := bashPathCandidates("cat /outside/*.log"); len(got) != 1 || !strings.HasSuffix(got[0], "*.log") {
+	if got := commandPaths("cat /outside/*.log"); len(got) != 1 || !strings.HasSuffix(got[0], "*.log") {
 		t.Errorf("glob candidate = %v, want the wildcard preserved", got)
 	}
 }
