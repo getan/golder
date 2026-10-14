@@ -141,12 +141,18 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 	// compares locations rather than spellings.
 	absRoot = permissions.Canonical(absRoot)
 	interactive := opts.In != nil && opts.Out != nil
-	notify := func(n Note) {
-		if opts.Notify != nil {
-			opts.Notify(n)
-		}
-	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		// The sink is shared by every run in the process, so a note produced by a
+		// sub-agent's call would otherwise read as one the conversation produced.
+		// The origin rides the context precisely so this can name it.
+		notify := func(n Note) {
+			if n.Origin == "" {
+				n.Origin = agentcore.OriginFromContext(ctx)
+			}
+			if opts.Notify != nil {
+				opts.Notify(n)
+			}
+		}
 		// What this call does to the paths it names: read for the file and search
 		// tools, write for the one that writes. It decides which grant an answer
 		// records, which rows the dialog offers, and which silencers apply — a
@@ -184,9 +190,9 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				// way to change the answer named, because a block nobody can
 				// lift is a trap.
 				notify(Note{
-					Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
-					Summary: resolved, Authorization: "refused earlier in this session",
-					Rationale: "the user refused this path earlier",
+					Tool: call.Name, ToolCallID: call.ID, Kind: NoteBoundaryDenied, Level: Deny, Lang: lang,
+					Summary: resolved, Authorization: localized(lang, "本会话已拒绝", "refused earlier in this session"),
+					Rationale: localized(lang, "用户此前拒绝了该路径", "the user refused this path earlier"),
 				})
 				return blockRefused(call, resolved, writing)
 			}
@@ -237,9 +243,15 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			ans = opts.Confirm(ctx, req)
 		}
 		if !ans.Answered || !ans.Approve {
-			rationale := "denied by the user"
+			// The two failures are told apart in the KIND, not just the wording:
+			// "the user said no" is a decision (and is recorded below), while
+			// "nobody could be asked" is a failure to ask, which records nothing
+			// and must not read as a verdict. Reporting both as a reviewer denial
+			// — which is what this gate used to do — blamed auto-review for a
+			// consent question it never saw.
+			rationale, kind := localized(lang, "用户拒绝了本次请求", "denied by the user"), NoteBoundaryDenied
 			if !ans.Answered {
-				rationale = "no prompt available"
+				rationale, kind = localized(lang, "本次运行无人可问", "no prompt available"), NoteBoundaryNoPrompt
 			} else {
 				// A refusal is a decision, and it is recorded so the same
 				// question is not put again this session. Only a real answer
@@ -273,7 +285,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				}
 			}
 			notify(Note{
-				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+				Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: Deny, Lang: lang,
 				Summary: target, Authorization: req.Authorization, Rationale: rationale,
 			})
 			return blockBoundary(call, target, candidate, writing, ans.Answered)
@@ -290,12 +302,16 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		if granted := strings.TrimSpace(ans.WriteRoot); granted != "" {
 			if opts.GrantWritable != nil {
 				if made, why := opts.GrantWritable(granted, ans.Persisted); made {
-					rationale := "writing " + granted + " is allowed for this session"
+					rationale := localized(lang,
+						"本会话允许写入 "+granted,
+						"writing "+granted+" is allowed for this session")
 					if ans.Persisted {
-						rationale = "writing " + granted + " is allowed and remembered across sessions"
+						rationale = localized(lang,
+							"已允许写入 "+granted+"，并记住（跨会话）",
+							"writing "+granted+" is allowed and remembered across sessions")
 					}
 					notify(Note{
-						Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteBoundaryGranted, Level: Allow, Lang: lang,
 						Summary: target, Authorization: req.Authorization, Rationale: rationale,
 					})
 					return nil
@@ -304,9 +320,9 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 					// available; fall through to the one-write answer rather than
 					// failing access the user just approved.
 					notify(Note{
-						Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteBoundaryGranted, Level: Allow, Lang: lang,
 						Summary: target, Authorization: req.Authorization,
-						Rationale: "writing this file only; " + why,
+						Rationale: localized(lang, "仅本次写入该文件；"+why, "writing this file only; "+why),
 					})
 				}
 			}
@@ -320,12 +336,16 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// sandbox all read this one table, so recording it here is what
 			// makes the answer take effect everywhere on the next call.
 			if _, err := grants.AddReadRoot(granted, life, "read dialog"); err == nil {
-				rationale := "reading " + granted + " is allowed for this session"
+				rationale := localized(lang,
+					"本会话允许读取 "+granted,
+					"reading "+granted+" is allowed for this session")
 				if ans.Persisted {
-					rationale = "reading " + granted + " is allowed and remembered across sessions"
+					rationale = localized(lang,
+						"已允许读取 "+granted+"，并记住（跨会话）",
+						"reading "+granted+" is allowed and remembered across sessions")
 				}
 				notify(Note{
-					Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+					Tool: call.Name, ToolCallID: call.ID, Kind: NoteBoundaryGranted, Level: Allow, Lang: lang,
 					Summary: target, Authorization: req.Authorization,
 					Rationale: rationale,
 				})
@@ -341,6 +361,9 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		if writing {
 			onceCap, onceSource, onceReason = grants.Write, "write dialog (once)", "approved for this write only"
 		}
+		onceReason = localized(lang,
+			map[bool]string{true: "仅批准本次写入", false: "仅批准本次读取"}[writing],
+			onceReason)
 		if target != "" {
 			_, _ = grants.Add(grants.Grant{
 				Path:     target,
@@ -351,7 +374,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			})
 		}
 		notify(Note{
-			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+			Tool: call.Name, ToolCallID: call.ID, Kind: NoteBoundaryGranted, Level: Allow, Lang: lang,
 			Summary: target, Authorization: req.Authorization,
 			Rationale: onceReason,
 		})

@@ -1154,7 +1154,7 @@ func (t *transcript) renderReviewBlock(blk transcriptBlock) string {
 // line wraps to the transcript width; the icon leads.
 func renderNoteLine(theme Theme, width int, n judge.Note) string {
 	style := theme.Warn
-	if n.Kind == judge.NoteDenied || n.Kind == judge.NoteBlockedNoPrompt || n.Kind == judge.NoteReadOnly {
+	if n.Kind.Failure() {
 		style = theme.Error
 	}
 	// A verdict belongs to the call it graded, so it sits in the same content

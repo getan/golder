@@ -99,13 +99,18 @@ type SubAgentRunParams struct {
 	Tools        []string `json:"tools,omitempty"`
 	// Auth is the dispatching session's authorization snapshot (see
 	// agentcore.ToolAuth): the trust decision for the working directory, the
-	// session reads grant, and the read roots the user allowed. A subprocess
-	// cannot share the parent's gates - it is a different address space - so it
-	// is handed the decisions those gates would have applied and rebuilds
-	// equivalent gates around them. Omitted when the parent ran with no gate
-	// chain, in which case the child's own gates fail closed on anything they
-	// cannot settle.
+	// session reads grant, and the read and write roots the user allowed this
+	// session. A subprocess cannot share the parent's gates - it is a different
+	// address space - so it is handed the decisions those gates would have
+	// applied and rebuilds equivalent gates around them. Omitted when the parent
+	// ran with no gate chain, in which case the child's own gates fail closed on
+	// anything they cannot settle.
 	Auth *agentcore.ToolAuth `json:"auth,omitempty"`
+	// Origin is the label the child stamps onto the questions and notes its
+	// gates produce, so a line this process prints is attributable to the agent
+	// that asked. It is the parent's own origin plus this child's name, and it
+	// is never empty for a dispatched run.
+	Origin string `json:"origin,omitempty"`
 }
 
 // SubAgentRunResult is the JSON-RPC response payload carrying the child's final
@@ -270,6 +275,11 @@ func (t *SubAgentTool) Execute(ctx context.Context, id string, args json.RawMess
 // present (e.g. the tool is called directly in a unit test) progress reporting is
 // silently skipped.
 func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, description string, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+	// Every question this child's gates put to the person is labeled with the
+	// agent that asked. Stamped before the run starts so the label travels with
+	// the child's whole turn, and appending rather than replacing, so a nested
+	// dispatch reads as the chain that produced the question.
+	ctx = agentcore.WithAgentOrigin(ctx, t.spec.Name)
 	// Concurrency guard: when a shared semaphore is configured, acquire a slot
 	// before spawning the child and release it via defer so a panic or error
 	// still frees the slot. A full channel blocks (queues) the acquire; a
@@ -288,9 +298,13 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 	// same trust / workspace-boundary / permission gates instead of whatever its
 	// own factory assembled. This is what makes "which gates a run has" one
 	// decision: the task factory in run.go no longer needs to guess, and a
-	// nested child inherits again the same way. The chain is the channel-less
-	// variant (see run.Gates), so a child's unanswerable question fails closed
-	// rather than opening a dialog under a running batch.
+	// nested child inherits again the same way.
+	//
+	// The chain carries the driver's answer channels (see run.Gates.chain), so a
+	// child's consent question reaches the person watching the batch — labeled
+	// with this child's origin — instead of failing closed on a question they
+	// would have answered. A run with no channels (headless, an embedder) still
+	// fails closed, because there the channels are simply absent.
 	if chain := agentcore.ToolGatesFromContext(ctx); chain != nil {
 		tec := &runCfg.Batch.ToolExecutorConfig
 		if chain.BeforeToolCall != nil {
@@ -441,6 +455,9 @@ func (t *SubAgentTool) executeProcess(ctx context.Context, prompt string) (agent
 		BaseURL:      cfg.BaseURL,
 		Protocol:     cfg.Protocol,
 		Tools:        toolNames,
+		// The label the child's notes carry, composed here so the separator and
+		// the nesting rule stay in one place (see agentcore.WithAgentOrigin).
+		Origin: agentcore.OriginFromContext(agentcore.WithAgentOrigin(ctx, t.spec.Name)),
 	}
 	// Carry the session's decisions across the boundary (see SubAgentRunParams.Auth):
 	// the child rebuilds its gates from them, so a process-isolated sub-agent is

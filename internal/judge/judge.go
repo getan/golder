@@ -301,6 +301,12 @@ type ApprovalRequest struct {
 	Risk          string
 	Authorization string
 	Rationale     string
+	// Origin names the agent that asked, when it is not the session's own
+	// conversation: a sub-agent's dispatch, filled from the call's context. The
+	// dialog prints it so the person knows who is asking; a question that reads
+	// as coming from the conversation when a delegated child asked it is a
+	// question about a call they never saw.
+	Origin string
 }
 
 // ApprovalAnswer is the user's decision.
@@ -363,6 +369,20 @@ const (
 	NoteBlockedNoPrompt
 	// NoteReadOnly: read-only mode blocked a mutating tool.
 	NoteReadOnly
+	// NoteBoundaryGranted: the workspace-boundary gate was answered yes, so the
+	// call may reach outside the workspace. It is NOT a reviewer verdict: the
+	// rating suffix belongs to risk grading, and an answer to a consent question
+	// has no risk grade behind it.
+	NoteBoundaryGranted
+	// NoteBoundaryDenied: the person said no to a boundary question. The path is
+	// recorded as refused for the session, so the same question is not put again.
+	NoteBoundaryDenied
+	// NoteBoundaryNoPrompt: the boundary question could not be asked at all (no
+	// dialog and no stdin), so the call failed closed. It is a failure to ASK,
+	// not a verdict — nothing is recorded — and saying so is the point: an
+	// earlier version reported it as an auto-review denial, which blamed the
+	// reviewer for a question nobody was asked.
+	NoteBoundaryNoPrompt
 )
 
 // Note is one verdict announcement for the user: the decision, the tool, and
@@ -380,6 +400,10 @@ type Note struct {
 	Authorization string
 	Rationale     string
 	Lang          string
+	// Origin names the agent that asked, when it is not the session's own
+	// conversation (a sub-agent dispatch). Empty for a direct call. It is a
+	// label for the reader, never an input to a decision.
+	Origin string
 }
 
 // PermissionGate builds the mode-aware BeforeToolCall gate. The mode is read
@@ -396,12 +420,19 @@ type Note struct {
 // A nil state is treated as full-access (no gate).
 func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToolCallFunc {
 	interactive := opts.In != nil && opts.Out != nil
-	notify := func(n Note) {
-		if opts.Notify != nil {
-			opts.Notify(n)
-		}
-	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		// The sink is shared by every run in the process, so a note a sub-agent's
+		// call produced would otherwise be indistinguishable from one the main
+		// conversation produced. The origin rides the context precisely so this
+		// can name it.
+		notify := func(n Note) {
+			if n.Origin == "" {
+				n.Origin = agentcore.OriginFromContext(ctx)
+			}
+			if opts.Notify != nil {
+				opts.Notify(n)
+			}
+		}
 		mode := permissions.FullAccess
 		if state != nil {
 			mode = state.Mode()
@@ -526,6 +557,7 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 		Authorization: authWord(v.Authorization, lang),
 		Rationale:     firstReason(v),
 	}
+	req.Origin = agentcore.OriginFromContext(ctx)
 	done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
 	defer done()
 	ans := opts.Confirm(ctx, req)
@@ -534,26 +566,40 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 	}
 	if !ans.Approve {
 		if opts.Notify != nil {
+			denied := "denied by the user"
+			if lang == "zh" {
+				denied = "用户拒绝了本次请求"
+			}
 			opts.Notify(Note{
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
 				Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-				Rationale: "denied by the user",
+				Rationale: denied, Origin: req.Origin,
 			})
 		}
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
 	}
 	if opts.Notify != nil {
-		rationale := "approved by the user"
+		approved := "approved by the user"
+		if lang == "zh" {
+			approved = "用户批准"
+		}
+		rationale := approved
 		if root := strings.TrimSpace(ans.WritableRoot); root != "" {
 			rationale = "contained in the sandbox; " + root + " is writable for this session"
+			if lang == "zh" {
+				rationale = "已收容在沙箱内；本会话可写 " + root
+			}
 			if ans.Persisted {
 				rationale = "contained in the sandbox; " + root + " is writable and remembered"
+				if lang == "zh" {
+					rationale = "已收容在沙箱内；" + root + " 可写并已记住"
+				}
 			}
 		}
 		opts.Notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 			Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-			Rationale: rationale,
+			Rationale: rationale, Origin: req.Origin,
 		})
 	}
 	if strings.TrimSpace(ans.WritableRoot) != "" {

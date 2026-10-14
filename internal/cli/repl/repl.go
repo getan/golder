@@ -635,7 +635,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 				defer deps.confirmMu.Unlock()
 			}
 			tone := ui.Yellow
-			if n.Kind == judge.NoteDenied || n.Kind == judge.NoteBlockedNoPrompt || n.Kind == judge.NoteReadOnly {
+			if n.Kind.Failure() {
 				tone = ui.Red
 			}
 			fmt.Fprintln(out, ui.Colorize(ui.Enabled(), tone, judge.FormatNote(n)))

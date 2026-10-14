@@ -8,6 +8,29 @@ package judge
 
 import "fmt"
 
+// localized picks the string for the note's language. It exists for the gate's
+// OWN sentences — "denied by the user", "no prompt available" — which are the
+// only text on a note that did not come from the reviewer (whose rationale is
+// already written in the user's language). Spelled here rather than left
+// English in a Chinese conversation, where it read as a stray machine string.
+func localized(lang, zh, en string) string {
+	if lang == "zh" {
+		return zh
+	}
+	return en
+}
+
+// Failure reports whether the note records a call that did not run: the two
+// renderers paint those in the error color, and a new blocking kind has to be
+// added here rather than in both of them.
+func (k NoteKind) Failure() bool {
+	switch k {
+	case NoteDenied, NoteBlockedNoPrompt, NoteReadOnly, NoteBoundaryDenied, NoteBoundaryNoPrompt:
+		return true
+	}
+	return false
+}
+
 // riskWord maps a reviewer risk rating to the localized rating word.
 func riskWord(risk, lang string) string {
 	if lang != "zh" {
@@ -63,10 +86,23 @@ func FormatNote(n Note) string {
 	if rationale == "" {
 		rationale = "-"
 	}
+	// A question a sub-agent asked is labeled as such: the sink is shared, and a
+	// line that reads as coming from the conversation when a delegated child
+	// asked it is a line about a call the person never saw.
+	origin := ""
+	if n.Origin != "" {
+		origin = "[" + n.Origin + "] "
+	}
 	rating := fmt.Sprintf("risk: %s, authorization: %s", riskWord(n.Risk, n.Lang), authWord(n.Authorization, n.Lang))
 	if n.Lang == "zh" {
 		rating = fmt.Sprintf("风险：%s，授权：%s", riskWord(n.Risk, n.Lang), authWord(n.Authorization, n.Lang))
 		switch n.Kind {
+		case NoteBoundaryGranted:
+			return origin + fmt.Sprintf("⚠ 工作区边界放行（%s）：%s", tool, rationale)
+		case NoteBoundaryDenied:
+			return origin + fmt.Sprintf("✗ 工作区边界：用户拒绝（%s）：%s", tool, n.Summary)
+		case NoteBoundaryNoPrompt:
+			return origin + fmt.Sprintf("✗ 工作区边界：无人可问，已失败关闭（%s）：%s", tool, n.Summary)
 		case NoteApproved:
 			return fmt.Sprintf("⚠ 自动审批通过（%s，%s）：%s", tool, rating, rationale)
 		case NoteSandboxed:
@@ -82,6 +118,12 @@ func FormatNote(n Note) string {
 		}
 	}
 	switch n.Kind {
+	case NoteBoundaryGranted:
+		return origin + fmt.Sprintf("⚠ Workspace boundary allowed (%s): %s", tool, rationale)
+	case NoteBoundaryDenied:
+		return origin + fmt.Sprintf("✗ Workspace boundary: denied by the user (%s): %s", tool, n.Summary)
+	case NoteBoundaryNoPrompt:
+		return origin + fmt.Sprintf("✗ Workspace boundary: nobody to ask, failed closed (%s): %s", tool, n.Summary)
 	case NoteApproved:
 		return fmt.Sprintf("⚠ Auto-approved (%s, %s): %s", tool, rating, rationale)
 	case NoteSandboxed:

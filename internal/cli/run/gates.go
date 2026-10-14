@@ -102,7 +102,7 @@ func NewGates(opts GatesOpts) *Gates { return &Gates{opts: opts} }
 
 // Install wires the session's gates onto cfg: the interactive chain as the
 // tool-execution seam, the hook seams when a dispatcher is resolved, and the
-// derived (channel-less) chain as the chain a spawned sub-agent inherits.
+// chain a spawned sub-agent inherits.
 //
 // d is the session's hook dispatcher (nil when no hooks are configured, FR-18),
 // passed per call rather than held on Gates because a driver may resolve hooks
@@ -129,7 +129,7 @@ func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCal
 	// (the ordering every driver had before this file existed).
 	InstallSeams(cfg, d, deps)
 	child := &agentcore.ToolGateChain{
-		BeforeToolCall: g.chain(false),
+		BeforeToolCall: g.chain(),
 		Snapshot:       g.Authorization,
 	}
 	if d != nil {
@@ -156,7 +156,7 @@ func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCal
 // it in its own transport (the REPL's remote-control bridge intercepts confirm
 // requests before they reach the terminal). Drivers that do not wrap should
 // call Install instead, which also wires hooks and the inherited chain.
-func (g *Gates) Chain() agentcore.BeforeToolCallFunc { return g.chain(true) }
+func (g *Gates) Chain() agentcore.BeforeToolCallFunc { return g.chain() }
 
 // InstallDriver wires the session's gates AND the resolved hook set onto cfg in
 // one call: the interactive gate chain, the PreToolUse/PostToolUse seams, the
@@ -179,21 +179,34 @@ func (g *Gates) InstallDriver(ctx context.Context, cfg *runtime.RunConfig, set h
 	return d, chainEvent(onEvent, n.Handle)
 }
 
-// chain composes trust → workspace boundary → permission. withPrompts says
-// whether this chain carries the driver's answer channels: the interactive
-// chain does, the derived chain does not, so a child's unanswerable question
-// fails closed instead of parking a goroutine on a dialog nobody opened.
-func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
+// chain composes trust → workspace boundary → permission, wired with whatever
+// answer channels the driver gave the session. One builder serves both the
+// interactive chain and the chain a sub-agent inherits.
+//
+// It used to build two, and the difference was deliberate: the chain a child
+// inherited was assembled WITHOUT the channels, so a child's question failed
+// closed instead of opening a dialog under a running batch. That reasoning was
+// wrong on both halves. The person IS there — they are watching the batch — so
+// failing closed turned a question they would have answered into a silent
+// refusal the child then had to work around; and the hazard it named, parking a
+// goroutine on a dialog nobody can answer, is what the channels' own nil-ness
+// already covers: a headless run, an embedder with no driver, and a
+// process-isolated child all pass nothing here and still fail closed on their
+// own.
+//
+// What a child's question must not do is arrive unlabeled, which is why the
+// gates stamp Origin onto the request and the note from the call's context (see
+// agentcore.WithAgentOrigin): the dialog says which agent is asking, so the
+// person is not consenting to a call they believe their own conversation made.
+func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 	o := g.opts
 	trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
-	if withPrompts {
-		trustOpts.In, trustOpts.Out = o.In, o.Out
-		trustOpts.Confirm = o.Confirm
-		if o.TrustConfirm != nil {
-			trustOpts.Confirm = o.TrustConfirm
-		}
-		trustOpts.OnPrompt = o.OnPrompt
+	trustOpts.In, trustOpts.Out = o.In, o.Out
+	trustOpts.Confirm = o.Confirm
+	if o.TrustConfirm != nil {
+		trustOpts.Confirm = o.TrustConfirm
 	}
+	trustOpts.OnPrompt = o.OnPrompt
 	gate := trust.Gate(trustOpts)
 
 	scopeOpts := judge.BoundaryOpts{
@@ -211,10 +224,8 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		GrantWritable: GrantWritableRoot,
 		WritableAt:    WritableAt,
 	}
-	if withPrompts {
-		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
-		scopeOpts.OnPrompt = o.OnPrompt
-	}
+	scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+	scopeOpts.OnPrompt = o.OnPrompt
 	if scopeGate := judge.BoundaryGate(scopeOpts); scopeGate != nil {
 		gate = judge.ChainGates(gate, scopeGate)
 	}
@@ -228,10 +239,8 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		Cwd:           o.Cwd,
 		GrantWritable: GrantWritableRoot,
 	}
-	if withPrompts {
-		permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
-		permOpts.OnPrompt = o.OnPrompt
-	}
+	permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
+	permOpts.OnPrompt = o.OnPrompt
 	return judge.ChainGates(gate, judge.PermissionGate(o.Perms, permOpts))
 }
 
@@ -254,7 +263,17 @@ func (g *Gates) Authorization() agentcore.ToolAuth {
 	// about a directory its parent had already been given — the grant the user
 	// made would appear to evaporate across the process boundary. They come
 	// from the one table, including grants made earlier in this same session.
-	auth := agentcore.ToolAuth{ReadRoots: dedupePaths(grants.ReadRoots())}
+	//
+	// The write roots travel for the same reason, and used to be missing: a
+	// session-only "allow writing /x" (a sandbox dialog, /boundary writable add)
+	// lives in this process's table alone, so a child that was not handed it
+	// would refuse a write its parent had been granted — and, having no prompt,
+	// could not even ask. A remembered root needs no carrying: the child opens
+	// grants.json itself.
+	auth := agentcore.ToolAuth{
+		ReadRoots:     dedupePaths(grants.ReadRoots()),
+		WritableRoots: dedupePaths(grants.WritableRoots()),
+	}
 	if g.opts.Trust == nil {
 		auth.SessionTrust = true
 		return auth
@@ -295,6 +314,14 @@ func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
 	}
 	for _, root := range auth.ReadRoots {
 		if _, err := grants.AddReadRoot(root, grants.Session, "parent session"); err != nil {
+			refusedRoots++
+		}
+	}
+	// The write side is seeded as read+write rows, matching what the parent's
+	// answer recorded: that is what AddWritableRoot means, and a child granted
+	// "may write /x" is also allowed to read back what it wrote.
+	for _, root := range auth.WritableRoots {
+		if _, err := grants.AddWritableRoot(root, grants.Session, "parent session"); err != nil {
 			refusedRoots++
 		}
 	}

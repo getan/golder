@@ -52,6 +52,14 @@ type ToolAuth struct {
 	// ReadRoots are the workspace-boundary grants (directories the user allowed
 	// the read tools to reach outside the workspace, this session).
 	ReadRoots []string `json:"readRoots,omitempty"`
+	// WritableRoots are the same, for writing: directories the user allowed a
+	// write inside (a sandbox dialog, /boundary writable add, or an escalation
+	// answer), this session. They travel for the same reason the read roots do
+	// — a child that saw none of them would refuse a write its parent had
+	// already been granted, and, having no prompt of its own, could not even
+	// ask. A remembered root needs no carrying (it is in grants.json, which the
+	// child process opens too); a session-only one exists nowhere but here.
+	WritableRoots []string `json:"writableRoots,omitempty"`
 }
 
 // toolGatesKey is the unexported context key carrying a run's gate chain from

@@ -76,21 +76,30 @@ func TestGatesAskTrustBeforeAnythingElse(t *testing.T) {
 	}
 }
 
-// TestGatesDerivedChainFailsClosedWithoutPrompting pins the two chains apart:
-// the interactive chain asks the driver's channel, while the derived chain a
-// sub-agent inherits blocks without ever calling it. A child that could open a
-// dialog would park a goroutine on a question the user cannot answer without
-// abandoning the batch they are watching.
-func TestGatesDerivedChainFailsClosedWithoutPrompting(t *testing.T) {
+// TestGatesDerivedChainAsksWithItsOrigin pins what a sub-agent's chain does with
+// a consent question: it asks the session's own channel, labeled with the agent
+// that asked. The label is the point — the sink and the dialog are shared, so
+// an unlabeled question about a call the conversation never made reads as one
+// the person can answer from memory when they cannot.
+//
+// It used to be the opposite by design: the inherited chain was built without
+// the channels, so a child's question failed closed. That turned a question the
+// person would have answered into a silent refusal the child had to work
+// around, and the hazard it named — parking a goroutine on a dialog nobody can
+// answer — is what the channels' own absence already covers (see the second
+// half of this test).
+func TestGatesDerivedChainAsksWithItsOrigin(t *testing.T) {
 	cwd := t.TempDir()
 	mgr := gatesTrustStore(t)
 	asked := 0
+	var origins []string
 	g := NewGates(GatesOpts{
 		Trust: mgr,
 		Cwd:   cwd,
 		Perms: permissions.New(permissions.FullAccess),
-		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+		Confirm: func(_ context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
 			asked++
+			origins = append(origins, req.Origin)
 			return judge.ApprovalAnswer{Answered: true} // deny
 		},
 	})
@@ -102,23 +111,39 @@ func TestGatesDerivedChainFailsClosedWithoutPrompting(t *testing.T) {
 		t.Fatal("Install must publish the chain a sub-agent inherits")
 	}
 
-	dec := child.BeforeToolCall(context.Background(), gatesCall())
+	ctx := agentcore.WithAgentOrigin(context.Background(), "task")
+	dec := child.BeforeToolCall(ctx, gatesCall())
 	if dec == nil || !dec.Block {
-		t.Fatalf("derived chain = %+v, want a fail-closed block", dec)
+		t.Fatalf("derived chain = %+v, want the denied answer to block", dec)
 	}
-	if asked != 0 {
-		t.Fatalf("the derived chain called the interactive channel %d time(s); a sub-agent must not prompt", asked)
+	if asked != 1 {
+		t.Fatalf("the derived chain asked the session's channel %d time(s), want 1", asked)
+	}
+	if len(origins) != 1 || origins[0] != "task" {
+		t.Errorf("origin = %v, want the dispatching agent's label", origins)
+	}
+}
+
+// TestGatesChainWithoutChannelsFailsClosed pins the other half, and the reason
+// the shared chain is safe to share: a session with no answer channels — a
+// headless run, an embedder that never wired a driver — produces a chain that
+// asks nobody and blocks, and the child of such a session inherits exactly
+// that. Nothing here has to decide "is this a sub-agent"; the channels are
+// simply absent.
+func TestGatesChainWithoutChannelsFailsClosed(t *testing.T) {
+	cwd := t.TempDir()
+	g := NewGates(GatesOpts{
+		Trust: gatesTrustStore(t),
+		Cwd:   cwd,
+		Perms: permissions.New(permissions.FullAccess),
+	})
+
+	dec := g.Chain()(context.Background(), gatesCall())
+	if dec == nil || !dec.Block {
+		t.Fatalf("channel-less chain = %+v, want a fail-closed block", dec)
 	}
 	if text := agentcore.ContentToText(*dec.Content); !strings.Contains(text, "no prompt") {
 		t.Errorf("the fail-closed message should say the run has no prompt, got %q", text)
-	}
-
-	// The interactive chain (same inputs) does ask.
-	if dec := g.Chain()(context.Background(), gatesCall()); dec == nil || !dec.Block {
-		t.Fatalf("interactive chain = %+v, want a block", dec)
-	}
-	if asked != 1 {
-		t.Errorf("interactive channel asked %d time(s), want 1", asked)
 	}
 }
 

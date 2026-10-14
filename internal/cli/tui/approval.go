@@ -570,6 +570,12 @@ func approvalTitle(req judge.ApprovalRequest) string {
 	if tool == "" {
 		tool = "tool"
 	}
+	// A question a sub-agent asked says so, before anything else: the person is
+	// being asked to consent to a call their own conversation did not make, and
+	// "who is asking" is the first thing that decides how they read the rest.
+	if req.Origin != "" {
+		tool = tool + " (from " + req.Origin + ")"
+	}
 	switch req.Kind {
 	case judge.ApprovalNoSandbox:
 		return tool + " needs approval (sandbox unavailable — approving runs it unsandboxed)"
@@ -590,6 +596,12 @@ func approvalTitle(req judge.ApprovalRequest) string {
 // the command preview, the model's justification, and the reviewer's verdict.
 func approvalDetail(req judge.ApprovalRequest) []string {
 	var out []string
+	if req.Origin != "" {
+		// Named before the preview, because the preview is a file tool's path or
+		// a shell command, and both read differently when a delegated child
+		// chose them.
+		out = append(out, "Requested by "+req.Origin)
+	}
 	if s := strings.TrimSpace(req.Summary); s != "" {
 		lines := wrapLines(s, 76)
 		if len(lines) > 3 { // keep the dialog compact: preview, not the script

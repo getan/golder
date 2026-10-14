@@ -161,6 +161,13 @@ func handleSubAgentRequest(ctx context.Context, enc *json.Encoder, req *jsonrpc.
 			fmt.Fprintf(os.Stderr, "golder: sub-agent: %d read root(s) in the parent's authorization were refused\n", refused)
 		}
 	}
+	// Label this child's questions and notes with the chain that dispatched it,
+	// so the stderr lines it prints (this process has no dialog of its own) say
+	// which agent they came from. The context is fresh here, so the label is
+	// used as given rather than appended to.
+	if params.Origin != "" {
+		ctx = agentcore.WithAgentOrigin(ctx, params.Origin)
+	}
 	// Wire hooks uniformly with every other driver (#425): the child sub-agent runs
 	// its own PreToolUse/PostToolUse (and Stop) hooks from the trust-gated hook set
 	// rooted at its working directory. It has no backing session, so SessionID is

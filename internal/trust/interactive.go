@@ -588,6 +588,7 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 				Summary:   ToolCallSummary(call),
 				TrustDir:  cwd,
 				Rationale: cwd + " is not trusted yet",
+				Origin:    agentcore.OriginFromContext(ctx),
 			})
 			if a.Answered {
 				ans, answered = Answer{Allow: a.Approve, Always: a.Always, Reads: a.SessionReads}, true
