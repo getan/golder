@@ -531,7 +531,12 @@ func TestModelSubagentPanelLifecycle(t *testing.T) {
 
 // TestModelCompactionIndicator verifies compactionStartMsg pins the spinner to
 // "Compacting conversation…" while summarization runs, and compactionMsg clears
-// the label and records the "(context compacted)" system note.
+// the label and records an announcement carrying the figures the loop reported.
+//
+// The announcement is a NOTICE, not a system aside: it is the harness rewriting
+// the conversation the model reasons over, and it used to be the muted gray
+// "(context compacted)" line — the one shape of that event a user could scroll
+// past without noticing.
 func TestModelCompactionIndicator(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 20})
 	m.running = true
@@ -542,20 +547,32 @@ func TestModelCompactionIndicator(t *testing.T) {
 		t.Errorf("spinner view %q should show the compaction label", view)
 	}
 
-	m = apply(t, m, compactionMsg{})
+	m = apply(t, m, compactionMsg{reason: "threshold", tokensBefore: 160_000, tokensAfter: 24_000, summarized: 12, kept: 8})
 	if m.spinner.pinned != "" {
 		t.Errorf("compactionMsg should unpin the spinner, got %q", m.spinner.pinned)
 	}
-	if joined := strings.Join(blockTexts(m.transcript), "\n"); !strings.Contains(joined, "(context compacted)") {
-		t.Errorf("transcript should note the compaction, got:\n%s", joined)
+	joined := strings.Join(blockTexts(m.transcript), "\n")
+	for _, want := range []string{"⚠ ", "auto-compacted", "160,000", "24,000", "12 summarized", "8 kept"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("compaction announcement missing %q, got:\n%s", want, joined)
+		}
 	}
 
 	// A failed compaction must read as a failure, not as "(context compacted)".
 	m = apply(t, m, compactionStartMsg{})
 	m = apply(t, m, compactionMsg{err: "summarizer down"})
-	joined := strings.Join(blockTexts(m.transcript), "\n")
+	joined = strings.Join(blockTexts(m.transcript), "\n")
 	if !strings.Contains(joined, "compaction failed: summarizer down") {
 		t.Errorf("transcript should report the failure, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "✗ ") {
+		t.Errorf("a failed compaction should carry the failure marker, got:\n%s", joined)
+	}
+	// And it must render in the error color, like a denied gate verdict: the one
+	// thing this line may never do is look like the success above it.
+	block := m.transcript.blocks[len(m.transcript.blocks)-1]
+	if !block.noticeFailure {
+		t.Error("the failure notice must be flagged as a failure so it renders red")
 	}
 }
 

@@ -744,15 +744,24 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 			// when it starts, then a token summary when it finishes. Manual
 			// /compact prints its own summary via runManualCompact (it bypasses
 			// the loop), so only threshold/overflow events reach here.
+			//
+			// The completion line is painted like a gate verdict — the same yellow
+			// the permission notes use, red on failure — because it reports the
+			// same order of event: something rewrote the conversation the model is
+			// reasoning over. It was plain text, and a session that silently
+			// changed size mid-run is exactly the kind of thing a user should not
+			// have to scroll back to find.
 			switch e := ev.(type) {
 			case agentcore.CompactionStartEvent:
 				fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Dim, "Compacting conversation…"))
 			case agentcore.CompactionEvent:
 				if e.ErrorMessage != "" {
-					fmt.Fprintf(out, "compaction failed: %s\n", e.ErrorMessage)
+					fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Red,
+						fmt.Sprintf("✗ context compaction failed: %s (context left unchanged)", e.ErrorMessage)))
 				} else {
-					fmt.Fprintf(out, "compacted: %d → %d tokens, summarized %d messages, kept %d\n",
-						e.TokensBefore, e.TokensAfter, e.SummarizedCount, e.KeptCount)
+					fmt.Fprintln(out, ui.Colorize(ui.Enabled(), ui.Yellow,
+						fmt.Sprintf("⚠ context auto-compacted: %d → %d tokens (%d summarized, %d kept)",
+							e.TokensBefore, e.TokensAfter, e.SummarizedCount, e.KeptCount)))
 				}
 			}
 		},

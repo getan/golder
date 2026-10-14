@@ -418,12 +418,12 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// state object so a switch reaches the very gate the next run builds, and
 	// its output follows the conversation language.
 	prompts.RegisterPermissionCommand(s.slash, s.perms, func() string {
-		return judge.ConversationLanguage(s.agentCtx.Messages)
+		return s.lang()
 	})
 	// /boundary is per-session for the language reason only: the grants it
 	// reads live in the one table behind grants.Process().
 	prompts.RegisterBoundaryCommand(s.slash, func() string {
-		return judge.ConversationLanguage(s.agentCtx.Messages)
+		return s.lang()
 	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
@@ -690,6 +690,17 @@ func (s *runSession) compactCmd(ctx context.Context) tea.Cmd {
 		}
 		return rebuildDoneMsg{label: "compact", summary: summary, err: err}
 	}
+}
+
+// lang reports the language the recent conversation is being held in, which is
+// the language every piece of the session's own output follows: the slash
+// commands, the gate notes, and the transcript's notices about the session
+// itself. A nil session or an empty conversation reads as English.
+func (s *runSession) lang() string {
+	if s == nil || s.agentCtx == nil {
+		return "en"
+	}
+	return judge.ConversationLanguage(s.agentCtx.Messages)
 }
 
 // compact replaces the context with a fresh summarization checkpoint plus the

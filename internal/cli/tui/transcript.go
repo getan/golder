@@ -39,6 +39,18 @@ const (
 	// (already colored, already laid out) and emitted verbatim, so reflow neither
 	// wraps it nor overrides its colors with a role style.
 	roleBanner
+	// roleNotice is a harness announcement about the session itself — the
+	// context was compacted, auto-compaction is on and just fired — rendered
+	// exactly like a gate verdict (roleReview): amber with the same "⚠ " marker,
+	// or red on failure. Its text is a finished sentence, not a judge.Note, so
+	// none of the note's risk/authorization vocabulary applies.
+	//
+	// It exists because a plain roleSystem line ("(context compacted)") reads as
+	// a footnote, and this is not one: the harness just rewrote the conversation
+	// the model is reasoning over, which is the same order of event as a gate
+	// approving a call on the user's behalf. Being muted, it was the line users
+	// scrolled past and then wondered why the context had changed size.
+	roleNotice
 )
 
 // transcriptBlock is one rendered turn in the transcript. text is the raw
@@ -57,6 +69,10 @@ type transcriptBlock struct {
 	// note is set for roleReview blocks: the verdict determines the color
 	// (denied/blocks red, approvals/containment amber).
 	note *judge.Note
+	// noticeFailure is set for roleNotice blocks: the announcement reports
+	// something that did NOT happen (a compaction that failed), which renders in
+	// the error color and with the "✗ " marker instead of the warn color.
+	noticeFailure bool
 }
 
 // transcript is the scrolling message log. It wraps a viewport.Model and keeps
@@ -289,6 +305,30 @@ func (t *transcript) addUser(text string) {
 func (t *transcript) addSystem(text string) {
 	t.blocks = append(t.blocks, transcriptBlock{role: roleSystem, text: text})
 	t.reflow()
+}
+
+// addNotice appends a harness announcement about the session itself, rendered
+// like a gate verdict: amber with the "⚠ " marker, or red with "✗ " when
+// failure is set. It is the shape for "the harness did something to your
+// conversation", as opposed to addSystem's gray aside.
+func (t *transcript) addNotice(text string, failure bool) {
+	t.blocks = append(t.blocks, transcriptBlock{
+		role:          roleNotice,
+		text:          noticeMarker(failure) + text,
+		noticeFailure: failure,
+	})
+	t.reflow()
+}
+
+// noticeMarker is the glyph a session notice leads with. It is the same "⚠ " the
+// gate's approval line carries (judge.FormatNote's), kept here so a harness
+// announcement and a gate verdict are marked identically rather than each
+// spelling its own icon; failure announcements take the denial marker.
+func noticeMarker(failure bool) string {
+	if failure {
+		return "✗ "
+	}
+	return "⚠ "
 }
 
 // addBanner appends a pre-rendered splash block (startup logo + config). It is
@@ -1060,7 +1100,7 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 		return false
 	}
 	switch blk.role {
-	case roleUser, roleSystem, roleBanner:
+	case roleUser, roleSystem, roleBanner, roleNotice:
 		return true
 	case roleReview:
 		return true
@@ -1095,6 +1135,8 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 	switch blk.role {
 	case roleReview:
 		return t.renderReviewBlock(blk)
+	case roleNotice:
+		return renderNoticeLine(t.theme, t.width, blk.text, blk.noticeFailure)
 	case roleBanner:
 		return blk.text
 	case roleUser:
@@ -1153,14 +1195,27 @@ func (t *transcript) renderReviewBlock(blk transcriptBlock) string {
 // containment (the call proceeds), an error color for denials and blocks. The
 // line wraps to the transcript width; the icon leads.
 func renderNoteLine(theme Theme, width int, n judge.Note) string {
+	return renderNoticeLine(theme, width, judge.FormatNote(n), n.Kind.Failure())
+}
+
+// renderNoticeLine paints one harness/gate announcement: a warn color for
+// approvals and containment (the call proceeds), an error color for denials,
+// blocks, and failed announcements. The line wraps to the transcript width; the
+// icon leads, and it sits in the content column so it lines up with the call it
+// is about.
+//
+// Both note verdicts and session notices come through here, which is what makes
+// "the compaction line looks like the approval line" a property of the code
+// rather than a coincidence of two copies of a style choice.
+func renderNoticeLine(theme Theme, width int, text string, failure bool) string {
 	style := theme.Warn
-	if n.Kind.Failure() {
+	if failure {
 		style = theme.Error
 	}
 	// A verdict belongs to the call it graded, so it sits in the same content
 	// column as that call's headline, body and gutter — a note flush against the
 	// margin read as unrelated to the card it was about.
-	return style.Render(indentBlock(WrapToWidth(judge.FormatNote(n), contentWidth(width)), contentIndent))
+	return style.Render(indentBlock(WrapToWidth(text, contentWidth(width)), contentIndent))
 }
 
 // renderUserBlock renders a user turn as a full-width bar like codex's history

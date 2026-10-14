@@ -1336,14 +1336,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != "" {
 			// Compaction failure is non-fatal (the context is unchanged), but it
 			// must not look like success: without this line the transcript said
-			// "(context compacted)" for a run whose summary never landed.
-			m.transcript.addSystem("(compaction failed: " + msg.err + ")")
+			// the context was compacted for a run whose summary never landed.
+			// It takes the notice's failure style (red, ✗) for the same reason:
+			// this is the harness reporting on the conversation itself.
+			if m.conversationLang() == "zh" {
+				m.transcript.addNotice("上下文压缩失败："+msg.err+"（上下文未改动）", true)
+				return m, m.pumpNext()
+			}
+			m.transcript.addNotice("Context compaction failed: "+msg.err+" (context left unchanged)", true)
 			return m, m.pumpNext()
 		}
 		if m.session != nil {
 			m.session.markCompacted()
 		}
-		m.transcript.addSystem("(context compacted)")
+		// An announcement, not an aside: auto-compaction rewrote the
+		// conversation the model reasons over, which is the same order of event
+		// as a gate approving a call — and it was previously the one such event
+		// rendered in the muted system gray, where users scrolled past it and
+		// then wondered why the context had shrunk.
+		m.transcript.addNotice(compactionNotice(msg, m.conversationLang()), false)
 		return m, m.pumpNext()
 
 	case rebuildDoneMsg:
@@ -2849,6 +2860,29 @@ func (m *Model) reseedTranscript(notice string) {
 	m.logoRunning = false
 	m.relayout()
 }
+
+// compactionNotice renders the line that announces a completed compaction: what
+// the context measured before, what it measures now, and how much of it was
+// folded into the summary. The numbers come from the loop's CompactionEvent, so
+// the line reports what happened rather than merely that something did — which
+// is the question a user actually has when their context changes size mid-run.
+//
+// Only the automatic paths reach here ("threshold", "requested"): a manual
+// /compact prints its own result as command output, the way every other slash
+// command does.
+func compactionNotice(msg compactionMsg, lang string) string {
+	if lang == "zh" {
+		return fmt.Sprintf("上下文已自动压缩：%s → %s tokens（摘要 %d 条，保留 %d 条）",
+			humanizeInt(msg.tokensBefore), humanizeInt(msg.tokensAfter), msg.summarized, msg.kept)
+	}
+	return fmt.Sprintf("Context auto-compacted: %s → %s tokens (%d summarized, %d kept)",
+		humanizeInt(msg.tokensBefore), humanizeInt(msg.tokensAfter), msg.summarized, msg.kept)
+}
+
+// conversationLang reports the language the session's own output follows (see
+// runSession.lang), so a notice about the session is written in the language
+// the session is held in. A model with no session reads as English.
+func (m Model) conversationLang() string { return m.session.lang() }
 
 // refreshContextUsage seeds the status bar's context gauge from the messages
 // the session now holds: the inherited context at startup (a resumed session),

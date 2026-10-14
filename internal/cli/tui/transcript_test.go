@@ -813,3 +813,52 @@ func TestSystemNoticeWrapRespectsTheIndent(t *testing.T) {
 		}
 	}
 }
+
+// TestNoticeAndNoteShareOneLine pins the property the auto-compaction
+// announcement was asked for: a session notice renders through the same function
+// as a gate verdict, so it carries the same warn color and the same marker
+// rather than a copy of them that can drift.
+func TestNoticeAndNoteShareOneLine(t *testing.T) {
+	th := DefaultTheme()
+	const width = 80
+
+	note := renderNoteLine(th, width, judge.Note{
+		Tool: "bash", Kind: judge.NoteApproved, Risk: "medium", Authorization: "high",
+		Rationale: "routine", Lang: "en",
+	})
+	notice := renderNoticeLine(th, width, "⚠ context auto-compacted: 160,000 → 24,000 tokens (12 summarized, 8 kept)", false)
+
+	// sgrOpen is the styling a line opens with: the escape sequence a style emits
+	// ahead of its content. Comparing these is how "the same color" is asserted
+	// without hardcoding an escape code.
+	sgrOpen := func(rendered string) string {
+		t.Helper()
+		if i := strings.Index(rendered, "  "); i >= 0 {
+			return rendered[:i]
+		}
+		return rendered
+	}
+	warnOpen := sgrOpen(th.Warn.Render("  x"))
+	errorOpen := sgrOpen(th.Error.Render("  x"))
+
+	for name, line := range map[string]string{"note": note, "notice": notice} {
+		if got := sgrOpen(line); got != warnOpen {
+			t.Errorf("%s opens with %q, want the warn style %q", name, got, warnOpen)
+		}
+		if !strings.Contains(line, "  ⚠ ") {
+			t.Errorf("%s should carry the warn marker at the content column: %q", name, line)
+		}
+	}
+
+	// A failure swaps to the error style and the denial marker, for both.
+	failedNote := renderNoteLine(th, width, judge.Note{Tool: "read", Kind: judge.NoteDenied, Rationale: "no", Lang: "en"})
+	failedNotice := renderNoticeLine(th, width, "✗ context compaction failed: boom", true)
+	for name, line := range map[string]string{"note": failedNote, "notice": failedNotice} {
+		if got := sgrOpen(line); got != errorOpen {
+			t.Errorf("failed %s opens with %q, want the error style %q", name, got, errorOpen)
+		}
+		if !strings.Contains(line, "  ✗ ") {
+			t.Errorf("failed %s should carry the denial marker: %q", name, line)
+		}
+	}
+}

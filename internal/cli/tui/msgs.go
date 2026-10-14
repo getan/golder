@@ -107,11 +107,23 @@ type contextUsageMsg struct {
 // summarization request is in flight; compactionMsg clears it.
 type compactionStartMsg struct{}
 
-// compactionMsg signals that the loop finished a compaction attempt. err is
-// the failure text when summarization failed: the context was left unchanged
-// in that case, and a front-end that claims "(context compacted)" either way
-// makes a broken compaction indistinguishable from a working one.
-type compactionMsg struct{ err string }
+// compactionMsg signals that the loop finished a compaction attempt: the
+// figures the loop reported, so the announcement can say what happened to the
+// conversation rather than only that something did.
+//
+// err is the failure text when summarization failed — the context was left
+// unchanged in that case, and a front-end that claims the context was compacted
+// either way makes a broken compaction indistinguishable from a working one.
+type compactionMsg struct {
+	err string
+	// reason is why compaction ran: "threshold" (auto), "overflow", "manual".
+	reason string
+	// tokensBefore/After are the context sizes either side of the rewrite.
+	tokensBefore, tokensAfter int
+	// summarized is the message count folded into the summary; kept is the count
+	// retained verbatim.
+	summarized, kept int
+}
 
 // trustPromptMsg asks the model to open the first-run trust picker. It is
 // emitted by Init when withSession saw an undecided launch directory, so the

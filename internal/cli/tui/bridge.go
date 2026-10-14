@@ -131,7 +131,14 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 			case agentcore.CompactionStartEvent:
 				ch <- compactionStartMsg{}
 			case agentcore.CompactionEvent:
-				ch <- compactionMsg{err: e.ErrorMessage}
+				ch <- compactionMsg{
+					err:          e.ErrorMessage,
+					reason:       e.Reason,
+					tokensBefore: e.TokensBefore,
+					tokensAfter:  e.TokensAfter,
+					summarized:   e.SummarizedCount,
+					kept:         e.KeptCount,
+				}
 			}
 		},
 	}
