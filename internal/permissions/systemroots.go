@@ -10,6 +10,7 @@ package permissions
 import (
 	"os"
 	"runtime"
+	"sync"
 )
 
 // SystemReadRoots returns the directories a run may always read: the system
@@ -42,4 +43,54 @@ func SystemReadRoots() []string {
 		roots = append(roots, tmp)
 	}
 	return roots
+}
+
+// canonicalSystemRoots is SystemReadRoots with every entry resolved through
+// symlinks, computed once. It is the other half of InsideSystemReadRoots: the
+// literal list is what the sandbox profile uses (an allow rule must name the
+// path the kernel walks), and this list is what a boundary comparison needs
+// (where "/tmp/x" and "/private/tmp/x" must compare equal).
+var canonicalSystemRoots = sync.OnceValue(func() []string {
+	roots := SystemReadRoots()
+	out := make([]string, 0, len(roots))
+	seen := make(map[string]bool, len(roots))
+	for _, r := range roots {
+		c := Canonical(r)
+		if seen[c] {
+			continue
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	return out
+})
+
+// InsideSystemReadRoots reports whether p is admitted by the always-readable
+// system whitelist, tolerating a symlinked spelling on EITHER side.
+//
+// The two-sided check is the point. The literal list must stay literal for the
+// sandbox (its allow rules name the path the kernel walks, and resolving them
+// away broke `cat /etc/hosts` under seatbelt — measured, not assumed), while a
+// boundary comparison must treat "/tmp/x" and "/private/tmp/x" as one place or
+// it asks about a path the sandbox already admits. So both are consulted, and
+// the result is the union: a path admitted by either spelling is not a question.
+//
+// This is a leaf-layer definition shared by the read-scope gate and the access
+// gate, so the two cannot disagree about what "always readable" means.
+func InsideSystemReadRoots(p string) bool {
+	if p == "" {
+		return false
+	}
+	for _, root := range SystemReadRoots() {
+		if Inside(root, p) {
+			return true
+		}
+	}
+	canonical := Canonical(p)
+	for _, root := range canonicalSystemRoots() {
+		if Inside(root, canonical) {
+			return true
+		}
+	}
+	return false
 }

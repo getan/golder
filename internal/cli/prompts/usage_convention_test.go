@@ -95,7 +95,7 @@ func TestBuiltinUsageInventory(t *testing.T) {
 		"model":          "[n|id [level]|think level]",
 		"provider":       "[name]",
 		"permissions":    "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
-		"trust":          "[on|off|once|status|list]",
+		"trust":          "[on|off|once|status|list|add <path> <r|w|e>|rm <path>]",
 		"fork":           "[n]",
 		"tree":           "[n]",
 		"rewind":         "[n]",

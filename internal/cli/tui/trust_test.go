@@ -55,8 +55,11 @@ func TestTrustPickerFirstRun(t *testing.T) {
 		t.Errorf("dialog should ask the trust question:\n%s", view)
 	}
 
-	// "Trust this folder" is the p shortcut (remember the decision).
-	got, _ = m.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	// "Trust this folder (remembered)" is the s shortcut. It used to be p, which
+	// the tool dialog uses for "this session": a key meaning "remember forever"
+	// in one dialog and "just for now" in another is a key people get wrong, so
+	// the ladder is now the same in both (y once, p session, s saved).
+	got, _ = m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	m = got.(Model)
 
 	if !m.session.trusted {

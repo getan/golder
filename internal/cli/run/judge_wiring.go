@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/jev"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/reviewpolicy"
 	"github.com/getan/golder/internal/seatbelt"
 )
 
@@ -67,16 +71,95 @@ func WirePermissionState(tools []agentcore.AgentTool, state *permissions.State) 
 }
 
 // NewReviewer builds the model-backed classifier for one run: the static
-// floor chained to the LLM reviewer, which grades calls with the session's
-// active model. It is rebuilt per turn so a /model switch changes the
-// reviewer with the conversation. A nil provider degrades to the static
-// floor plus a fail-closed reviewer (never an allow).
+// floor, chained to the decision-model router, which falls back to the LLM
+// reviewer that grades calls with the session's active model. It is rebuilt per
+// turn so a /model switch changes the reviewer with the conversation. A nil
+// provider degrades to the static floor plus a fail-closed reviewer (never an
+// allow).
 func NewReviewer(model, providerName string, prov provider.Provider, creds *provider.CredentialStore, sessionID, cwd string, trusted bool) judge.Classifier {
 	var check judge.ReviewFunc
 	if prov != nil {
 		check = ReviewCheck(model, providerName, provider.StreamFnFromProvider(prov), creds, sessionID)
 	}
-	return judge.Chain{Inner: judge.NewLLMJudge(check, cwd, trusted), WorkspaceRoot: cwd}
+	llm := judge.NewLLMJudge(check, cwd, trusted)
+	return judge.Chain{Inner: JevRouter(llm, creds, cwd), WorkspaceRoot: cwd}
+}
+
+// DefaultJevEndpoint is TypeSafe's evaluation endpoint.
+const DefaultJevEndpoint = "https://api.typesafe.ai/v1/systemone"
+
+// JevSettings is the decision-model reviewer's resolved configuration.
+type JevSettings struct {
+	// Enabled reports whether the cheap judge participates. It is ON by
+	// default: a run that has a TypeSafe credential gets the fast path, and a
+	// run without one behaves exactly as it did before this layer existed.
+	Enabled bool
+	// Endpoint is where evaluations are sent.
+	Endpoint string
+	// Timeout bounds one evaluation.
+	Timeout time.Duration
+}
+
+// JevSettingsFromEnv resolves the settings. GOLDER_JEV=off (or 0/false/no/
+// disabled) turns the cheap judge off entirely; GOLDER_JEV_ENDPOINT and
+// GOLDER_JEV_TIMEOUT_MS override the endpoint and the per-call timeout.
+func JevSettingsFromEnv(getenv func(string) string) JevSettings {
+	if getenv == nil {
+		getenv = os.Getenv
+	}
+	out := JevSettings{Enabled: true, Endpoint: DefaultJevEndpoint, Timeout: 10 * time.Second}
+	switch strings.ToLower(strings.TrimSpace(getenv("GOLDER_JEV"))) {
+	case "off", "0", "false", "no", "disabled":
+		out.Enabled = false
+	}
+	if ep := strings.TrimSpace(getenv("GOLDER_JEV_ENDPOINT")); ep != "" {
+		out.Endpoint = ep
+	}
+	if raw := strings.TrimSpace(getenv("GOLDER_JEV_TIMEOUT_MS")); raw != "" {
+		if ms, err := time.ParseDuration(raw + "ms"); err == nil && ms > 0 {
+			out.Timeout = ms
+		}
+	}
+	return out
+}
+
+// JevRouter wraps a reviewer with the decision-model fast path. It returns the
+// reviewer unchanged when the feature is off or no credential exists, so the
+// caller gets byte-for-byte the behaviour it had before — an absent key must
+// never add a failed round trip to every gated call.
+func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd string) judge.Classifier {
+	settings := JevSettingsFromEnv(os.Getenv)
+	if !settings.Enabled {
+		return fallback
+	}
+	// The key is resolved through the credential store, so --api-key, the
+	// config layer and TYPESAFE_API_KEY all work and a refresh is picked up
+	// between attempts. The presence probe keeps a keyless run on the old path.
+	hasKey := false
+	if creds != nil {
+		hasKey = creds.HasCredential(context.Background(), "typesafe")
+	}
+	if !hasKey {
+		return fallback
+	}
+	return &reviewpolicy.Classifier{
+		Client: jev.New(jev.Config{
+			Endpoint: settings.Endpoint,
+			Timeout:  settings.Timeout,
+			APIKeyFunc: func(ctx context.Context) string {
+				if creds == nil {
+					return ""
+				}
+				return creds.GetAPIKey(ctx, "typesafe")
+			},
+			// The user's proxy selection applies: a host that cannot reach
+			// TypeSafe directly configures it in /proxy like any provider.
+			HTTPClient: provider.HTTPClientFor("typesafe", settings.Endpoint),
+		}),
+		Fallback: fallback,
+		Config:   reviewpolicy.DefaultConfig(),
+		Cwd:      cwd,
+	}
 }
 
 // ReviewCheck adapts the provider stream to judge.ReviewFunc: one system +

@@ -71,14 +71,21 @@ var toolApprovalRows = []approvalRow{
 	{"Deny", "esc", approveDeny},
 }
 
-// trustApprovalRows is the first-run trust question, in the same dialog shape:
-// p remembers the decision, y trusts just this session, n remembers distrust.
-// Esc is the dialog's cancel key: it means "not now" (untrusted for this
-// session, nothing saved), which is deliberately different from the persisted
-// "don't trust" row.
+// trustApprovalRows is the first-run trust question, in the same dialog shape.
+//
+// The keys follow the ladder every other dialog uses — y = just this once,
+// p = this session, s = saved — because they used to mean something else here
+// and the mismatch was the dangerous kind: this dialog had p for REMEMBER, so a
+// person who had learned "p means this session" from the tool dialog wrote a
+// decision to disk while meaning to try it out. A key whose meaning depends on
+// which dialog is open is a key people get wrong, and the cost here is a
+// permission they did not intend to keep.
+//
+// Esc stays the cancel key: "not now" (untrusted for this session, nothing
+// saved), deliberately different from the persisted "don't trust" row.
 var trustApprovalRows = []approvalRow{
-	{"Trust this folder", "p", trustRemember},
-	{"Trust once (this session only)", "y", trustOnce},
+	{"Trust this folder (remembered)", "s", trustRemember},
+	{"Trust for this session", "p", trustOnce},
 	{"Don't trust (remembered)", "n", trustReject},
 }
 

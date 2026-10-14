@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -174,15 +175,18 @@ func TestConfirmToolCall(t *testing.T) {
 	}{
 		{"y\n", Answer{Allow: true}},
 		{"yes\n", Answer{Allow: true}},
-		{"a\n", Answer{Allow: true, Always: true}},
-		{"all\n", Answer{Allow: true, Always: true}},
+		// The all-tools answer moved from `a` to `p`: `a` is the reads rung in
+		// the TUI dialog, and one question must not answer to two different
+		// letters depending on the front-end.
+		{"p\n", Answer{Allow: true, Always: true}},
+		{"permanent\n", Answer{Allow: true, Always: true}},
 		{"always\n", Answer{Allow: true, Always: true}},
 		{"n\n", Answer{}},
 		{"\n", Answer{}},
 		{"garbage\n", Answer{}},
-		// "r" is not an answer for a command: it falls through to denial
+		// The reads rung is not an answer for a command: it falls through to denial
 		// rather than granting a reads rung a command does not have.
-		{"r\n", Answer{}},
+		{"a\n", Answer{}},
 	}
 	for _, c := range cases {
 		var out bytes.Buffer
@@ -192,7 +196,7 @@ func TestConfirmToolCall(t *testing.T) {
 	}
 
 	read := agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}
-	for _, in := range []string{"r\n", "reads\n"} {
+	for _, in := range []string{"a\n", "reads\n"} {
 		var out bytes.Buffer
 		want := Answer{Allow: true, Reads: true}
 		if got := ConfirmToolCall(context.Background(), &out, readerOf(in), read); got != want {
@@ -202,12 +206,12 @@ func TestConfirmToolCall(t *testing.T) {
 	// The prompt offers the middle rung only where the grant reaches.
 	var out bytes.Buffer
 	ConfirmToolCall(context.Background(), &out, readerOf("n\n"), read)
-	if !strings.Contains(out.String(), "[r]eads in this folder") {
+	if !strings.Contains(out.String(), "[a]llow reads in this folder") {
 		t.Errorf("a read prompt must offer the reads rung:\n%s", out.String())
 	}
 	out.Reset()
 	ConfirmToolCall(context.Background(), &out, readerOf("n\n"), call)
-	if strings.Contains(out.String(), "[r]eads") {
+	if strings.Contains(out.String(), "[a]llow reads") {
 		t.Errorf("a command prompt must not offer the reads rung:\n%s", out.String())
 	}
 }
@@ -250,12 +254,14 @@ func TestGatesToolReadsGrant(t *testing.T) {
 }
 
 // TestBeforeToolCallReadsAnswer covers the REPL's middle rung end to end: an
-// "r" answer on a read grants session reads only, so the next read is silent
-// while a command still prompts (and can still be denied).
+// "a" answer on a read grants session reads only, so the next read is silent
+// while a command still prompts (and can still be denied). The key is the TUI
+// dialog's — the two front-ends ask the same question, so they answer to the
+// same letters.
 func TestBeforeToolCallReadsAnswer(t *testing.T) {
 	cwd := t.TempDir()
 	mgr, _ := newTrustManager(t)
-	hook := gateForTest(mgr, cwd, readerOf("r\n"), &bytes.Buffer{}, &sync.Mutex{})
+	hook := gateForTest(mgr, cwd, readerOf("a\n"), &bytes.Buffer{}, &sync.Mutex{})
 	if dec := hook(context.Background(), agentcore.AgentToolCall{Name: "read", Arguments: []byte(`{"path":"a.go"}`)}); dec != nil {
 		t.Fatalf("the approved read = %+v, want nil", dec)
 	}
@@ -380,8 +386,9 @@ func TestTrustBeforeToolCallGating(t *testing.T) {
 	// so a second call is allowed WITHOUT reading any more input.
 	mgr3, _ := newTrustManager(t)
 	var out3 bytes.Buffer
-	// Only one line of input ("a\n"); a second prompt would block on EOF.
-	hook3 := gateForTest(mgr3, cwd, readerOf("a\n"), &out3, mu)
+	// Only one line of input ("p\n"); a second prompt would block on EOF.
+	// `p` is the all-tools answer, matching the TUI dialog's row.
+	hook3 := gateForTest(mgr3, cwd, readerOf("p\n"), &out3, mu)
 	if dec := hook3(context.Background(), call); dec != nil {
 		t.Errorf("untrusted + always: hook returned %+v, want nil (allow)", dec)
 	}
@@ -557,5 +564,116 @@ func TestRegisterTrustCommandListsEverything(t *testing.T) {
 	plainCmd, _ := plainReg.Lookup("trust")
 	if got := plainCmd.Action("list"); !strings.Contains(got, "none saved") {
 		t.Errorf("an empty store should say so:\n%s", got)
+	}
+}
+
+// TestTrustCommandManagesPathAuthorizations covers the half of the unified
+// table a person drives by hand: /trust add and /trust rm. The gates record what
+// a dialog answered, and these are how the same thing is stated directly —
+// including for a path no call has touched, which is the case a dialog cannot
+// reach.
+func TestTrustCommandManagesPathAuthorizations(t *testing.T) {
+	store, err := grants.New(grants.Options{Path: filepath.Join(t.TempDir(), "grants.json")})
+	if err != nil {
+		t.Fatalf("grants.New: %v", err)
+	}
+	grants.SetProcess(store)
+	t.Cleanup(func() { grants.SetProcess(nil) })
+
+	mgr, _ := newTrustManager(t)
+	reg := runtime.NewSlashRegistry()
+	RegisterCommand(reg, mgr, t.TempDir())
+	cmd, _ := reg.Lookup("trust")
+
+	dir := t.TempDir()
+
+	// The hint must name the new verbs, or nobody discovers them.
+	for _, want := range []string{"add", "rm"} {
+		if !strings.Contains(cmd.ArgumentHint, want) {
+			t.Errorf("hint %q should name %q", cmd.ArgumentHint, want)
+		}
+	}
+
+	// add records a durable grant at the capability asked for.
+	if got := cmd.Action("add " + dir + " rw"); !strings.Contains(got, "saved") {
+		t.Errorf("add = %q, want it to report a saved grant", got)
+	}
+	if !store.Allows(dir, grants.Read) || !store.Allows(dir, grants.Write) {
+		t.Error("the grant did not take effect")
+	}
+	// Execute is NOT implied: "let me edit these files" must not quietly mean
+	// "let anything run here".
+	if store.Allows(dir, grants.Execute) {
+		t.Error("a read+write grant implied execute")
+	}
+
+	// A bad capability is refused with the spelling it accepts, rather than a
+	// silent no-op.
+	if got := cmd.Action("add " + dir + " xyz"); !strings.Contains(got, "unknown capability") {
+		t.Errorf("bad capability = %q, want it named as unknown", got)
+	}
+	// A missing argument teaches the usage line instead of panicking.
+	if got := cmd.Action("add " + dir); !strings.Contains(got, "usage") {
+		t.Errorf("missing capability = %q, want usage", got)
+	}
+	if got := cmd.Action("rm"); !strings.Contains(got, "usage") {
+		t.Errorf("rm with no path = %q, want usage", got)
+	}
+
+	// add accepts the long spellings too.
+	other := t.TempDir()
+	if got := cmd.Action("add " + other + " execute"); strings.Contains(got, "unknown") {
+		t.Errorf("add execute = %q, want it accepted", got)
+	}
+	if !store.Allows(other, grants.Execute) {
+		t.Error("the execute grant did not take effect")
+	}
+
+	// rm revokes, and says what it removed.
+	if got := cmd.Action("rm " + dir); !strings.Contains(got, "removed") {
+		t.Errorf("rm = %q, want it to report a removal", got)
+	}
+	if store.Allows(dir, grants.Read) {
+		t.Error("the grant survived rm")
+	}
+	// Removing something never granted says so: a bare success would leave the
+	// user unsure whether the command worked.
+	if got := cmd.Action("rm /definitely/not/granted"); !strings.Contains(got, "no authorization recorded") {
+		t.Errorf("rm of an unknown path = %q, want it to say nothing was recorded", got)
+	}
+}
+
+// TestTrustReportShowsTheAuthorizationTable pins the merge: /trust list renders
+// the unified table, so one command answers both "may tools run here" and "which
+// paths are readable and writable" — the two questions that used to require
+// /trust list and /permissions list pointing at each other.
+func TestTrustReportShowsTheAuthorizationTable(t *testing.T) {
+	store, err := grants.New(grants.Options{Path: filepath.Join(t.TempDir(), "grants.json")})
+	if err != nil {
+		t.Fatalf("grants.New: %v", err)
+	}
+	grants.SetProcess(store)
+	t.Cleanup(func() { grants.SetProcess(nil) })
+
+	granted := t.TempDir()
+	if _, err := store.Add(grants.Grant{Path: granted, Allow: grants.ReadWrite}); err != nil {
+		t.Fatalf("grants.Add: %v", err)
+	}
+
+	mgr, _ := newTrustManager(t)
+	cwd := t.TempDir()
+	reg := runtime.NewSlashRegistry()
+	RegisterCommand(reg, mgr, cwd)
+	cmd, _ := reg.Lookup("trust")
+
+	got := cmd.Action("list")
+	for _, want := range []string{"authorizations", "remembered across sessions", granted, "rw", granted} {
+		if !strings.Contains(got, want) {
+			t.Errorf("list output missing %q:\n%s", want, got)
+		}
+	}
+	// It must no longer send the user to /permissions list for the other half.
+	if strings.Contains(got, "/permissions list") {
+		t.Errorf("list still points at /permissions list:\n%s", got)
 	}
 }

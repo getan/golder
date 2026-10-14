@@ -41,6 +41,7 @@ import (
 	"github.com/getan/golder/internal/cli/tui"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -287,6 +288,20 @@ func main() {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
 	}
 	applyPermissionsConfig(cfg)
+
+	// The unified authorization table. It loads ~/.config/golder/grants.json and,
+	// on a first run, folds the three older stores into it (trust.json, the
+	// managed permissions.toml, and the config.toml seed). Warnings are printed
+	// once here rather than surfacing later as a tool error: a legacy file that
+	// cannot be read costs an old grant, which is an inconvenience, while
+	// refusing to start is not.
+	if warnings, err := grants.Open(os.Getenv); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
+	} else {
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
+		}
+	}
 
 	// A bare provider name ("zai", "deepseek") means that provider's default
 	// model (issue #564): canonicalize once here so every downstream consumer —

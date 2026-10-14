@@ -133,6 +133,7 @@ func TestRegistryContainsAllExpectedProviders(t *testing.T) {
 	expected := []string{
 		"anthropic", "openai", "ant-ling", "deepseek", "nvidia", "google",
 		"groq", "cerebras", "xai", "openrouter", "vercel-ai-gateway", "zai",
+		"typesafe",
 		"zai-coding-cn", "mistral", "minimax", "minimax-cn", "moonshotai",
 		"moonshotai-cn", "huggingface", "fireworks", "together", "novita", "opencode-zen",
 		"opencode-go", "kimi-coding", "xiaomi", "xiaomi-token-plan-cn",

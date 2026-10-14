@@ -45,7 +45,12 @@ const manifestMarker = "golder-manifest-version:"
 // launch-time trust picker, the idle and working rules, and the resume command.
 // 2: the two prompts that were still answerable only at the pane — the
 // read-outside-the-workspace question and the mid-run trust question.
-const ManifestVersion = 2
+// 3: the trust picker's rows were rekeyed onto the ladder every other dialog
+// uses (y once, p this session, s saved). The picker used to give p the
+// REMEMBERED meaning while the tool dialog used it for this session, so the
+// same key wrote a permission to disk in one dialog and only tried it out in
+// another. Its screen rule changed with the words.
+const ManifestVersion = 3
 
 // ManifestSource returns the manifest as golder ships it.
 func ManifestSource() string {

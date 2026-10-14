@@ -31,6 +31,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 	"github.com/getan/golder/internal/runtime"
@@ -229,10 +230,15 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "trust",
 		Category:     runtime.CategoryPermissions,
-		Description:  "view or set this project's trust",
-		ArgumentHint: "[on|off|once|status|list]",
+		Description:  "view or set this project's trust and path authorizations",
+		ArgumentHint: "[on|off|once|status|list|add <path> <r|w|e>|rm <path>]",
 		Action: func(args string) string {
-			switch strings.TrimSpace(strings.ToLower(args)) {
+			fields := strings.Fields(args)
+			verb := ""
+			if len(fields) > 0 {
+				verb = strings.ToLower(fields[0])
+			}
+			switch verb {
 			case "", "on":
 				if err := mgr.SetDecision(cwd, Trusted); err != nil {
 					return fmt.Sprintf("golder: could not save trust: %v", err)
@@ -263,6 +269,10 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 				return state
 			case "list":
 				return trustReport(mgr, cwd)
+			case "add":
+				return trustAdd(reg, fields[1:])
+			case "rm", "remove":
+				return trustRemove(reg, fields[1:])
 			default:
 				// From the command's own record, so the line taught here and the hint
 				// the popup and /help print are one string.
@@ -270,6 +280,85 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 			}
 		},
 	})
+}
+
+// trustAdd records a path authorization in the unified table.
+//
+// It is the missing write half of the table for a person at a prompt: the gates
+// record what a dialog answered, and this is how someone states the same thing
+// directly — including for a path no call has touched yet, which is the case a
+// dialog can never cover.
+//
+// Capabilities are the letters the table prints (r/w/e). Write implies read, and
+// "e" (execute) is separate on purpose: it is what directory trust has always
+// meant, and folding it into "w" would make "let me edit these files" quietly
+// equal to "let anything run here".
+func trustAdd(reg *runtime.SlashRegistry, args []string) string {
+	usage := reg.UsageLine("trust")
+	if len(args) < 2 {
+		return "usage: /trust add <path> <r|w|e|rw|rwe|all>   " + usage
+	}
+	path := args[0]
+	caps, ok := grants.ParseCapability(args[1])
+	if !ok {
+		return fmt.Sprintf("unknown capability %q; use r, w, e or a combination (rw, rwe, all)", args[1])
+	}
+	g, err := grants.Add(grants.Grant{
+		Path:     path,
+		Allow:    caps,
+		Scope:    grants.Subtree,
+		Lifetime: grants.Remembered,
+		Source:   "/trust add",
+	})
+	if err != nil {
+		return fmt.Sprintf("golder: could not add %s: %v", path, err)
+	}
+	// A grant that could not be written is still granted, for this session. The
+	// message says which one happened rather than claiming persistence the store
+	// did not achieve.
+	if g.Lifetime != grants.Remembered {
+		return fmt.Sprintf("%s: %s for this session only (could not save it)", g.Path, g.Allow)
+	}
+	return fmt.Sprintf("%s: %s (saved)", g.Path, g.Allow)
+}
+
+// trustRemove revokes a path's authorizations, remembered and session. The
+// config.toml seed is reported as untouched, because that file belongs to the
+// user and rewriting it would drop their comments.
+func trustRemove(reg *runtime.SlashRegistry, args []string) string {
+	if len(args) < 1 {
+		return "usage: /trust rm <path>   " + reg.UsageLine("trust")
+	}
+	path := args[0]
+	s := grants.Process()
+	if s == nil {
+		return "authorizations: the table is unavailable in this process"
+	}
+	rem, err := s.Remove(path)
+	if err != nil {
+		return fmt.Sprintf("golder: could not remove %s: %v", path, err)
+	}
+	var parts []string
+	if rem.Remembered {
+		parts = append(parts, "saved authorization")
+	}
+	if rem.Session {
+		parts = append(parts, "session authorization")
+	}
+	if !rem.Touched() {
+		// Reporting "nothing" is more useful than a bare success: it tells the
+		// user the path was never granted here, so they are not left wondering
+		// whether the command worked.
+		if rem.Seed {
+			return fmt.Sprintf("%s is granted by config.toml; edit that file to remove it", path)
+		}
+		return fmt.Sprintf("no authorization recorded for %s", path)
+	}
+	msg := "removed " + strings.Join(parts, " and ") + " for " + path
+	if rem.Seed {
+		msg += "; config.toml still seeds it, so it returns on the next launch"
+	}
+	return msg
 }
 
 // trustReport renders the whole trust store: every saved decision, sorted by
@@ -310,7 +399,56 @@ func trustReport(mgr *Manager, cwd string) string {
 			fmt.Fprintf(&b, "\n  %-10s %s", "reads", ui.DisplayHomePath(dir))
 		}
 	}
-	b.WriteString("\nset: /trust [on|off|once] <this directory>  all of it: /permissions list")
+	b.WriteString("\n" + grantsReport(cwd))
+	b.WriteString("\nset: /trust [on|off|once] <this directory>")
+	return b.String()
+}
+
+// grantsReport renders the unified authorization table: one row per path with
+// what it permits and how long it lasts.
+//
+// It replaced the pointer to /permissions list. The two commands each had one
+// half of the picture — trust answered "may tools run here", permissions
+// answered "which paths are readable and writable" — and each named the other
+// because neither could answer the whole question. This is that whole answer in
+// one place, which is the point of the unified table.
+func grantsReport(cwd string) string {
+	s := grants.Process()
+	var b strings.Builder
+	if s == nil {
+		return "authorizations: (table unavailable; using the legacy stores only)"
+	}
+	entries := s.Entries()
+	b.WriteString("authorizations (path · capability · lifetime):")
+	if len(entries.Seed) > 0 {
+		b.WriteString("\n  seeded by config.toml (edited there, not here):")
+		for _, g := range entries.Seed {
+			fmt.Fprintf(&b, "\n    %-4s %-12s %s", g.Allow.String(), g.Lifetime, ui.DisplayHomePath(g.Path))
+		}
+	}
+	if len(entries.Remembered) == 0 {
+		b.WriteString("\n  none remembered")
+	} else {
+		b.WriteString("\n  remembered across sessions:")
+		for _, g := range entries.Remembered {
+			fmt.Fprintf(&b, "\n    %-4s %-12s %s", g.Allow.String(), g.Lifetime, ui.DisplayHomePath(g.Path))
+			if samePath(g.Path, cwd) {
+				b.WriteString("  (this directory)")
+			}
+		}
+	}
+	if len(entries.Session) > 0 {
+		b.WriteString("\n  this session only:")
+		for _, g := range entries.Session {
+			fmt.Fprintf(&b, "\n    %-4s %-12s %s", g.Allow.String(), g.Lifetime, ui.DisplayHomePath(g.Path))
+			if samePath(g.Path, cwd) {
+				b.WriteString("  (this directory)")
+			}
+		}
+	}
+	if s.Path() != "" {
+		fmt.Fprintf(&b, "\n  store: %s", ui.DisplayHomePath(s.Path()))
+	}
 	return b.String()
 }
 
@@ -408,6 +546,18 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 		if mgr.IsTrusted(cwd) {
 			return nil
 		}
+		// The unified table is the other place a "trust this directory" answer
+		// can live now: an Execute grant there means the same thing this gate's
+		// own store means, so a session that recorded its answer through the
+		// newer path is not asked again by the older one.
+		//
+		// Execute specifically — not Read or Write. This gate asks whether
+		// side-effect tools may RUN here, which is what Execute encodes; a
+		// directory trusted for reading or writing is a different decision and
+		// must not silently authorize execution.
+		if grants.Allows(cwd, grants.Execute) {
+			return nil
+		}
 		var ans Answer
 		answered := false
 		// The pane is about to wait for a person. The note is taken once, here,
@@ -440,9 +590,31 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 		}
 		if ans.Always {
 			mgr.SetSessionTrust(cwd)
+			// Mirror the answer into the unified table, which is what /trust
+			// lists and what the next session loads. Session-scoped, because
+			// that is what this answer means here: persisting a directory is
+			// the launch picker's job, and a mid-run dialog that quietly wrote
+			// to disk would be a decision the user did not make.
+			_, _ = grants.Add(grants.Grant{
+				Path:     cwd,
+				Allow:    grants.Execute,
+				Scope:    grants.Subtree,
+				Lifetime: grants.Session,
+				Source:   "trust dialog",
+			})
 		}
 		if ans.Reads {
 			mgr.SetSessionReads(cwd)
+			// The narrower answer grants reading, not running: it must not
+			// record Execute, or the next call would skip the very question the
+			// user just declined to answer in full.
+			_, _ = grants.Add(grants.Grant{
+				Path:     cwd,
+				Allow:    grants.Read,
+				Scope:    grants.Subtree,
+				Lifetime: grants.Session,
+				Source:   "trust dialog (reads)",
+			})
 		}
 		if !ans.Allow {
 			return blockUntrusted(call, cwd, o.Confirm != nil || o.In != nil)
@@ -486,6 +658,14 @@ type Answer struct {
 
 // ConfirmToolCall asks whether a trust-gated tool call may run in an untrusted
 // directory. Denial (no/empty/EOF/interrupt) returns the zero Answer.
+//
+// The keys are the TUI dialog's, and deliberately so: this prompt and the
+// dialog ask the same question, and they used to answer it with different
+// letters (`r` for reads here, `a` for all tools here — where the dialog used
+// `a` for reads and `p` for all tools). A person who learned one front-end
+// would press the wrong key in the other, and on this question the wrong key is
+// a wider grant than intended. Now both spell the same ladder: y once, a reads
+// (this session), p all tools (this session).
 func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) Answer {
 	fmt.Fprintf(out, "\ngolder wants to use %q in an untrusted directory.\n", call.Name)
 	if summary := toolCallSummary(call); summary != "" {
@@ -497,9 +677,9 @@ func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call 
 	// command it would just be the same answer with a narrower-sounding name.
 	reads := LocalReadTools[call.Name]
 	if reads {
-		fmt.Fprint(out, "Allow? [y]es once / [n]o / [r]eads in this folder (this session) / [a]ll tools here (this session) [y/N/r/a]: ")
+		fmt.Fprint(out, "Allow? [y]es once / [n]o / [a]llow reads in this folder (this session) / [p] all tools here (this session) [y/N/a/p]: ")
 	} else {
-		fmt.Fprint(out, "Allow? [y]es once / [n]o / [a]ll tools here (this session) [y/N/a]: ")
+		fmt.Fprint(out, "Allow? [y]es once / [n]o / [p] all tools here (this session) [y/N/p]: ")
 	}
 	line, ok := readLineOrCancel(ctx, in)
 	if !ok {
@@ -508,12 +688,12 @@ func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call 
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
 		return Answer{Allow: true}
-	case "r", "reads":
+	case "a", "all", "reads":
 		if reads {
 			fmt.Fprintln(out, "Reads in this folder will not ask again this session; commands and network reads still will.")
 			return Answer{Allow: true, Reads: true}
 		}
-	case "a", "all", "always":
+	case "p", "permanent", "always":
 		return Answer{Allow: true, Always: true}
 	}
 	return Answer{}

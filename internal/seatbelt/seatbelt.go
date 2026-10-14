@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -88,6 +89,13 @@ func ReadableRoots() []string {
 	// directory is not refused by the profile while the read tool happily
 	// serves the same file.
 	roots = append(roots, permissions.ReadRoots()...)
+	// The unified authorization table's read grants, for the same reason. Both
+	// sources are consulted during the changeover: the registry is what
+	// config.toml and GOLDER_READABLE_ROOTS seed, while the table also carries
+	// what `/trust add <path> r` records — and a grant the gate honours but the
+	// sandbox refuses would be a grant that fails the moment a command touches
+	// it, which is worse than not offering it.
+	roots = append(roots, grants.ReadRoots()...)
 	roots = append(roots, sandboxReadableFromEnv()...)
 	return roots
 }

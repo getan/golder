@@ -27,6 +27,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
@@ -244,7 +245,15 @@ func (g *Gates) classifier() judge.Classifier {
 // gate at all (an explicit non-interactive invocation) or the directory is
 // trusted, so the child proceeds exactly where the parent would have.
 func (g *Gates) Authorization() agentcore.ToolAuth {
-	auth := agentcore.ToolAuth{ReadRoots: permissions.ReadRoots()}
+	// Both read-grant sources travel, because a child that saw only one would
+	// ask about a directory its parent had already been given — the grant the
+	// user made would appear to evaporate across the process boundary. The
+	// registry carries what config.toml and the environment seed; the unified
+	// table carries what a dialog or `/trust add` recorded, including grants
+	// made earlier in this same session.
+	roots := append([]string(nil), permissions.ReadRoots()...)
+	roots = append(roots, grants.ReadRoots()...)
+	auth := agentcore.ToolAuth{ReadRoots: dedupePaths(roots)}
 	if g.opts.Trust == nil {
 		auth.SessionTrust = true
 		return auth
@@ -252,6 +261,21 @@ func (g *Gates) Authorization() agentcore.ToolAuth {
 	auth.SessionTrust = g.opts.Trust.IsTrusted(g.opts.Cwd)
 	auth.SessionReads = g.opts.Trust.ReadsTrusted(g.opts.Cwd)
 	return auth
+}
+
+// dedupePaths keeps the first spelling of each path, so a grant present in both
+// sources is not listed twice in the snapshot a child reads.
+func dedupePaths(paths []string) []string {
+	seen := make(map[string]bool, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 // Seed applies a parent's authorization snapshot to this session's state,
@@ -324,6 +348,24 @@ func GrantWritableRoot(root string, persist bool) (made bool, why string) {
 	if _, err := seatbelt.AddWritableRoot(root); err != nil {
 		return false, "cannot grant write access to " + root + ": " + err.Error()
 	}
+	// The mirror into the unified table is bookkeeping and runs LAST, whatever
+	// the outcome. Two reasons it must not sit in the middle: the authoritative
+	// stores during the changeover are still the sandbox registry and
+	// permissions.toml, so a mirror failure must not stop the real persistence;
+	// and an early return on a mirror error reported "this session only" for a
+	// grant the next branch would have written down.
+	defer func() {
+		life := grants.Session
+		if persist && made {
+			life = grants.Remembered
+		}
+		// Best-effort: with no table open the grant still works through the
+		// legacy stores, and saying so per call would be noise on every answer.
+		_, _ = grants.Add(grants.Grant{
+			Path: root, Allow: grants.ReadWrite, Scope: grants.Subtree,
+			Lifetime: life, Source: "write dialog",
+		})
+	}()
 	if !persist {
 		return true, ""
 	}

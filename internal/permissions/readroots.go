@@ -76,6 +76,43 @@ func Inside(root, p string) bool {
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
+// Canonical resolves p the way the kernel will, so two spellings of one place
+// compare equal.
+//
+// Why it exists: Inside compares cleaned paths, and cleaning does not follow
+// symlinks. On macOS "/tmp" is a symlink to "/private/tmp", so a whitelist entry
+// for "/private/tmp" does not cover the literal "/tmp/x" a person actually
+// types — and the boundary then asks about a path it already admits, which is
+// how a prompt becomes noise people dismiss without reading. The same applies to
+// "/var" and to any home directory reached through a link.
+//
+// The path need not exist: resolution goes as deep as the filesystem allows and
+// the remaining components are re-appended, so a target that will be created
+// ("/tmp/new-file") is canonicalized by its existing parent. A path with no
+// existing ancestor is returned cleaned, which is the old behavior and the
+// conservative one: it can only fail to match, never match too much.
+func Canonical(p string) string {
+	p = filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	// Walk up to the deepest ancestor that exists, resolve it, and re-append
+	// what was cut. Path resolution is what the kernel does to decide whether a
+	// whitelist rule matches, so mirroring it here is the point.
+	rest := ""
+	for dir := p; ; {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest)
+		}
+	}
+}
+
 // AbsAgainst returns p as a cleaned absolute path: an absolute p is cleaned, a
 // relative one is resolved against base (which defaults to the working
 // directory when empty). "~" is deliberately NOT expanded here, because the

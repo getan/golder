@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/getan/golder/internal/grants"
 )
 
 // Decision is the tri-state trust value for a directory.
@@ -228,7 +230,44 @@ func (m *Manager) SetDecision(dir string, dec Decision) error {
 	defer m.mu.Unlock()
 	dir = filepath.Clean(dir)
 	m.data[dir] = boolFromDecision(dec)
+	m.mirror(dir, dec)
 	return m.saveLocked()
+}
+
+// mirror records a decision in the unified authorization table.
+//
+// It is called from every write path here rather than from each caller, because
+// the callers are many (the launch picker in both front-ends, /trust on|off|once,
+// the gate's dialog answers) and a decision that reached only one of the two
+// stores would make the table disagree with the gate that enforces it — the
+// worst of both, since /trust would then list something the gate ignores, or
+// hide something it obeys.
+//
+// The capability is Execute, deliberately: this store has only ever answered
+// "may side-effect tools run here", which is exactly Execute. It never implies
+// Read or Write, so trusting a directory does not silently hand out file grants
+// the user never gave — the same reasoning that shapes the legacy migration.
+//
+// The caller must hold m.mu.
+func (m *Manager) mirror(dir string, dec Decision) {
+	if m == nil {
+		return
+	}
+	switch dec {
+	case Trusted:
+		_, _ = grants.Add(grants.Grant{
+			Path: dir, Allow: grants.Execute, Scope: grants.Subtree,
+			Lifetime: grants.Remembered, Source: "trust store",
+		})
+	case Untrusted:
+		// A refusal is a decision, so it is recorded as one. Without it the
+		// table would say "undecided" and the next gate would ask a question
+		// the user already answered.
+		_, _ = grants.Refuse(dir, grants.Execute, grants.Remembered)
+	default:
+		// Undecided (an explicit null) records nothing: it said "no decision
+		// yet", which is what an absent row already means.
+	}
 }
 
 // SetSessionTrust grants trust for dir for the current process only. It is not
@@ -237,7 +276,12 @@ func (m *Manager) SetDecision(dir string, dec Decision) error {
 func (m *Manager) SetSessionTrust(dir string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.session[filepath.Clean(dir)] = true
+	dir = filepath.Clean(dir)
+	m.session[dir] = true
+	_, _ = grants.Add(grants.Grant{
+		Path: dir, Allow: grants.Execute, Scope: grants.Subtree,
+		Lifetime: grants.Session, Source: "trust (this session)",
+	})
 }
 
 // SetSessionReads grants local reads for dir for the current process only: the
@@ -248,7 +292,14 @@ func (m *Manager) SetSessionTrust(dir string) {
 func (m *Manager) SetSessionReads(dir string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.sessionReads[filepath.Clean(dir)] = true
+	dir = filepath.Clean(dir)
+	m.sessionReads[dir] = true
+	// Read, not Execute: the narrower answer must stay narrower, or a directory
+	// the user allowed reads in would silently start running commands.
+	_, _ = grants.Add(grants.Grant{
+		Path: dir, Allow: grants.Read, Scope: grants.Subtree,
+		Lifetime: grants.Session, Source: "reads (this session)",
+	})
 }
 
 // ReadsTrusted reports whether dir (or an ancestor) was granted session reads

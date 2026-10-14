@@ -12,6 +12,85 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **The reviewer routes through a decision model, and falls back to the
+  conversation model**: grading every mutating tool call with the session's own
+  model costs a full generation, and its failure mode is a parsing one — the
+  reviewer asks for strict JSON, then retries when the model writes prose around
+  it. TypeSafe's System One model answers typed questions with calibrated
+  probabilities instead: one request carries a Choice for the verdict, a Score
+  for the risk, and four independent booleans (irreversible, touches
+  credentials, matches what the user asked for, plus a reason label), and there
+  is no prose to parse.
+
+  The routing rule is the design: the cheap judge may DECIDE a call, never
+  decide it CHEAPLY. `Allow` demands high probability AND a wide margin over the
+  runner-up AND a clean bill from every danger signal; `Deny` and `Sandbox` are
+  accepted at moderate confidence, because their failure modes are a redundant
+  block or a redundant sandbox; `Confirm` always escalates, since in auto mode a
+  Confirm runs anyway and treating a cheap judge's Confirm as final would make
+  the cheapest reviewer the weakest link. The levels it emits mean exactly what
+  the slow reviewer's levels mean, so an Allow still passes every downstream
+  gate — consent is not a risk verdict, and a probability is not a permission.
+
+  Measured against the live endpoint on ten commands: seven denied, two allowed,
+  one escalated, no dangerous command passed, at ~0.7s per call against the
+  conversation model's 2.2s median. It is on by default when a `TYPESAFE_API_KEY`
+  (or a credential for the `typesafe` provider) exists and falls back silently
+  when one does not, so a run without a key behaves exactly as before.
+  `GOLDER_JEV=off` disables it, `GOLDER_JEV_ENDPOINT` / `GOLDER_JEV_TIMEOUT_MS`
+  override the endpoint and the per-call timeout, and `/proxy typesafe on`
+  routes it (TypeSafe refuses some regions with HTTP 451 — measured directly,
+  and the same request through a proxy answers 200).
+
+  Two failure behaviours are deliberate. A hard failure — the region block, a
+  rejected key — switches the cheap path off for the rest of the PROCESS, which
+  is why the breaker is package-level: the classifier is rebuilt per turn, so a
+  per-instance flag would pay one failed call per turn forever. And a caller
+  that cannot reach it escalates to the conversation model, or fails closed when
+  there is none — never an approval.
+- **The shell parse reaches the boundary, so a command's paths come from what it
+  IS rather than from what its text looks like**: the read-scope gate read
+  command lines with a hand-rolled word scanner, which sees arguments and
+  nothing else. `internal/shellfacts` parses with `mvdan.cc/sh/v3` and reports
+  facts only — argv vectors, redirects with their operation already decided
+  (shell semantics are fixed, unlike a path passed to a program), nested
+  commands inside substitutions, and which words expand at runtime. It never
+  expands anything: a word holding `$VAR` is reported as dynamic WITH the
+  variable's name, and a substitution's body is parsed rather than executed,
+  because running it to learn its output is the exact mistake the layer exists
+  to avoid. Quote removal and backslash escapes ARE applied, since both are
+  lexical; mvdan's `expand.Literal` was measured and rejected for the job, as it
+  answers "rm-rf/" for `rm$IFS-rf$IFS/` and "/x" for `"$HOME"/x` — a
+  benign-looking lie about what will run.
+
+  The gate now takes the UNION of the parse and the program-aware scanner,
+  because each sees what the other cannot: the parser knows redirects,
+  substitutions and quote removal but not that `sort --files0-from=/x` names a
+  file to read, while the scanner declares exactly those flags. Keeping only the
+  parser silently dropped the scanner's half and the boundary regression test
+  caught it — `sort --files0-from=/outside/list` became neither asked about nor
+  reviewed, which for a consent gate is the wrong direction.
+- **One authorization table replaces three stores**: per-directory trust
+  (`trust.json`), the sandbox roots (`permissions.toml` plus the `config.toml`
+  seed) and the in-memory registries each answered part of "may golder touch
+  this path", and each could only point at the others. `internal/grants` keeps
+  one row per path — what it permits, what it refuses, and how long it lasts —
+  under three capabilities rather than two: **execute** is separate from
+  read and write because it is what directory trust has always meant, and
+  folding it into write would make "let me edit these files" quietly equal to
+  "let anything run here". The existing stores are migrated on first run and
+  left untouched, and the migration cannot widen a grant: a trusted directory
+  becomes Execute (NOT read+write), an explicit refusal is carried across as a
+  refusal, an explicit null is not a decision, a writable root stays read+write,
+  and a readable root stays READ ONLY. Verified end to end by running the binary
+  against a synthetic old-user home and reading the file it wrote.
+
+  Every write path records into it — the read dialog, the trust dialog, the
+  write dialog, and every `trust.Manager` write — and every reader consults it:
+  the read-scope gate, the trust gate, the sandbox's read whitelist, and the
+  authorization snapshot a sub-agent inherits. Writes are serialized against
+  other golder processes with a lock file, and the read-modify-write merge keeps
+  a concurrent process's grant instead of overwriting it.
 - **golder now shows up as an agent in the multiplexer it runs in — tuios and
   herdr — with neither of them changing**: the terminals people already run
   coding agents in track agent state (a rail, an Inbox, phone alerts, resuming a
@@ -694,6 +773,19 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Every dialog answers to the same keys, and `p` no longer writes to disk in
+  one of them**: the keys were consistent inside each dialog and inconsistent
+  between them, in the direction that costs a permission. The launch-time trust
+  picker gave `p` the REMEMBERED meaning while the tool dialog gave it "this
+  session", so a person who learned the ladder from one place wrote a decision
+  to disk while meaning to try it out; and the same trust question answered to
+  different letters in the two front-ends (`r` for the reads rung in the REPL,
+  `a` in the TUI dialog, where `a` meant all-tools in the REPL). The ladder is
+  now one ladder everywhere — `y` once, `p` this session, `a` reads (only where
+  the grant reaches), `s` saved, `n`/Esc deny — and only `s` writes to disk. The
+  tuios manifest goes to version 3 with it, since its screen rule matches the
+  picker's own words; `golder host-compat status` reports an installed copy as
+  outdated rather than letting the Inbox go quietly unable to answer.
 - **The composer keeps working while a run is in flight**: typing has always been
   enabled mid-run (that is how a steering message is composed), but ↑/↓ refused
   to browse the prompt history and a typed `/` refused to autocomplete — the
@@ -991,6 +1083,18 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A symlinked spelling of a whitelisted path is no longer a boundary
+  question**: the read whitelist and the gates that consult it compared cleaned
+  paths, and cleaning does not follow symlinks, so on macOS a literal `/tmp/x`
+  did not match the whitelisted `/private/tmp` — the user was asked about a path
+  the sandbox already admits, which is how a prompt becomes noise people dismiss
+  without reading. `permissions.Canonical` resolves a path the way the kernel
+  will (down to the deepest existing ancestor, so a target that will be created
+  is still canonicalized by its parent) and `InsideSystemReadRoots` checks both
+  the literal list and a resolved one. Canonicalizing the LIST itself was tried
+  first and reverted: the sandbox's allow rules must name the path the kernel
+  walks, and resolving them away broke `cat /etc/hosts` under seatbelt —
+  measured, not assumed.
 - **A contentless SSE frame no longer kills a turn with `unexpected end of
   JSON input`**: the Responses driver streams through openai-go's decoder, which
   dispatches an event on EVERY blank line — including one that terminates

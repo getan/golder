@@ -45,6 +45,17 @@ func ProxyURL() string {
 	return effectiveProxyURL(cfg)
 }
 
+// HTTPClientFor returns the client a request to name/baseURL should use: the
+// user's proxy when this provider is selected for proxying, a direct client
+// otherwise. It exists so a caller outside this package — the decision-model
+// reviewer — inherits the same routing rules as every provider request instead
+// of building its own client and silently bypassing the user's proxy settings.
+//
+// The returned client is shared per route; treat it as read-only.
+func HTTPClientFor(name, baseURL string) *http.Client {
+	return clientForURL(name, baseURL)
+}
+
 func proxySelected(cfg config.ProxyConfig, name, rawURL string) bool {
 	if spec, ok := LookupProviderSpec(name); ok {
 		name = spec.Name

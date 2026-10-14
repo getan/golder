@@ -267,7 +267,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `auto`（默认） | 模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝，并给出一行理由 |
 | `full-access` | 不做审查、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
 
-首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `r`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
+首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**两个前端的按键一致**：`y` 只这一次、`p` 本会话、`s` 记住（写入磁盘的只有 `s`），同一个问题在 TUI 和 REPL 里按同一个键。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
 
 ### 常用开关
 

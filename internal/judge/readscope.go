@@ -42,6 +42,8 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/accessgate"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -79,24 +81,67 @@ func readScopeTargets(tool string, args json.RawMessage) []string {
 	if !ok {
 		return nil
 	}
-	return bashPathCandidates(cmd)
+	return shellTargets(cmd)
 }
 
-// systemRoots memoizes the always-readable whitelist: it is computed once per
-// process (the list is fixed for the run) and consulted on every candidate.
-var systemRoots = sync.OnceValue(permissions.SystemReadRoots)
+// shellTargets extracts the paths a command line names.
+//
+// The parse comes first because it sees what a word-scanner cannot: a redirect
+// target that never appears as an argument, a path inside a command
+// substitution, and — the reported confusion — the true spelling of a path, so
+// /dev/null is the device node the user typed rather than a path relative to
+// the filesystem root.
+//
+// The result is the UNION of the parsed paths and the word-scanner's, and that
+// is not belt-and-braces — each sees something the other cannot.
+//
+//   - The parser knows shell semantics: redirects, substitutions, quote
+//     removal. It does not know PROGRAMS, which is why it cannot tell that
+//     `sort --files0-from=/outside/list` names a file to read.
+//   - The scanner knows the programs: bashpaths.go declares each whitelisted
+//     program's file-reading flags (`sort --files0-from`, `grep -f`, `date -r`)
+//     and its interpreter `-c` forms. It does not know shell semantics.
+//
+// Keeping only the parser silently dropped the scanner's half, and the boundary
+// regression test caught it: `sort --files0-from=/outside/list` became neither
+// asked about nor reviewed. For a consent gate the safe direction is to ask
+// about more, not less, so the two are unioned rather than ranked.
+func shellTargets(cmd string) []string {
+	// The extraction itself lives in accessgate, which is also what the unified
+	// access gate uses. Keeping one implementation matters more here than
+	// anywhere else in this package: the two halves it unions (the shell parse
+	// and the program-aware word scanner) are exactly what a duplicate would let
+	// drift, and a boundary that asks about different paths depending on which
+	// caller reached it is worse than either list alone.
+	//
+	// Both halves are injected rather than imported by accessgate for the same
+	// reason this package injects them: the scanner and the read-only recognizer
+	// live HERE, and accessgate sits below (it cannot import this package
+	// without a cycle). So the dependency points down, and the knowledge flows
+	// up through the callback fields.
+	res := accessgate.FromCommand(cmd, accessgate.Options{
+		ReadOnly:     ReadOnlyShellCommand,
+		ScanOperands: bashPathCandidates,
+	})
+	out := make([]string, 0, len(res))
+	for _, r := range res {
+		if p := strings.TrimSpace(r.Path); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // insideSystemRoots reports whether p lives in the always-readable system
 // whitelist. Asking about /usr/bin in every command that runs a program would
 // train people to approve without reading, and the sandbox admits these paths
 // anyway, so a path there is not a boundary question.
 func insideSystemRoots(p string) bool {
-	for _, root := range systemRoots() {
-		if permissions.Inside(root, p) {
-			return true
-		}
-	}
-	return false
+	// The comparison lives in permissions so this gate and the sandbox cannot
+	// disagree about "always readable": it checks both the literal spelling
+	// (what the sandbox's own rules use) and the symlink-resolved one (where
+	// "/tmp/x" and "/private/tmp/x" are one place).
+	return permissions.InsideSystemReadRoots(p)
 }
 
 // ReadScopeOpts configures ReadScopeGate. Prompting follows the permission
@@ -197,6 +242,15 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 			if permissions.ReadableAt(resolved) {
 				continue
 			}
+			// The unified table is consulted alongside the legacy read-root
+			// registry, and either one silences the question. Two readers is
+			// deliberate during the changeover: the registry is what
+			// config.toml and GOLDER_READABLE_ROOTS seed, while the table is
+			// what every dialog answer now records, so a path granted through
+			// either route is a path the user already decided about.
+			if grants.Allows(resolved, grants.Read) {
+				continue
+			}
 			// The system whitelist is not a boundary question: the sandbox
 			// admits these paths, so asking would only train blind approval.
 			if insideSystemRoots(resolved) {
@@ -265,6 +319,22 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 		// failing the read the user just approved.
 		if granted := strings.TrimSpace(ans.ReadRoot); granted != "" {
 			if _, err := permissions.AddReadRoot(granted); err == nil {
+				// Record the same answer in the unified table. Both readers stay
+				// live during the changeover (see the check above), so writing
+				// here is what makes the table the record of what the user
+				// actually decided — which is what /trust lists and what the
+				// next session loads.
+				life := grants.Session
+				if ans.Persisted {
+					life = grants.Remembered
+				}
+				_, _ = grants.Add(grants.Grant{
+					Path:     granted,
+					Allow:    grants.Read,
+					Scope:    grants.Subtree,
+					Lifetime: life,
+					Source:   "read dialog",
+				})
 				rationale := "reading " + granted + " is allowed for this session"
 				if ans.Persisted {
 					rationale = "reading " + granted + " is allowed and remembered across sessions"
@@ -276,6 +346,20 @@ func ReadScopeGate(opts ReadScopeOpts) agentcore.BeforeToolCallFunc {
 				})
 				return nil
 			}
+		}
+		// The single-read answer is a decision too, and the narrowest one: it
+		// covers exactly the path that was asked about, for this session only.
+		// Recording it is what lets a repeated question about the same file stop
+		// being asked — the alternative is that "allow once" leaves no trace and
+		// the same command asks again next turn.
+		if target != "" {
+			_, _ = grants.Add(grants.Grant{
+				Path:     target,
+				Allow:    grants.Read,
+				Scope:    grants.Exact,
+				Lifetime: grants.Session,
+				Source:   "read dialog (once)",
+			})
 		}
 		notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,

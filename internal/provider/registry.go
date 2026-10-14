@@ -201,6 +201,26 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "openai/gpt-4o",
 	},
 	{
+		// TypeSafe's System One model. It speaks its own typed-decision API
+		// rather than chat completions, so it is not selectable as a
+		// conversation provider; the entry exists so the decision-model
+		// reviewer's requests follow the same proxy routing as everything else
+		// (the user can select "typesafe" in /proxy) and so its key is
+		// discovered by the usual credential resolution.
+		Name:           "typesafe",
+		EnvVars:        []string{"TYPESAFE_API_KEY"},
+		DefaultBaseURL: "https://api.typesafe.ai/v1/systemone",
+		Protocol:       ProtocolOpenAI,
+		AuthScheme:     AuthBearer,
+		// TypeSafe refuses whole regions with HTTP 451 (measured: direct
+		// requests from this machine are blocked, the same request through the
+		// configured proxy answers 200), so a fresh install that has a proxy
+		// address should route there by default rather than failing every
+		// gated call. An explicit /proxy selection still wins — ForceProxy is
+		// only the default before the user has chosen.
+		ForceProxy: true,
+	},
+	{
 		Name:           "vercel-ai-gateway",
 		EnvVars:        []string{"AI_GATEWAY_API_KEY"},
 		DefaultBaseURL: "https://ai-gateway.vercel.sh",

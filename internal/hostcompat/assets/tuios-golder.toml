@@ -1,6 +1,6 @@
 # golder's harness manifest for tuios.
 #
-# golder-manifest-version: 2
+# golder-manifest-version: 3
 #
 # tuios reads this file to recognise a pane running golder and to read the
 # prompts golder draws. It is installed by `golder host-compat install`
@@ -105,9 +105,16 @@ deny           = { keys = ["esc"] }
 # The launch-time trust picker, which asks about the folder golder started in.
 #
 #   Do you trust this folder?
-#   › Trust this folder  (p)
-#     Trust once (this session only)  (y)
+#   › Trust this folder (remembered)  (s)
+#     Trust for this session  (p)
 #     Don't trust (remembered)  (n)
+#
+# The keys follow the ladder every dialog uses — y once, p this session, s saved
+# — because the picker used to give p the REMEMBERED meaning while the tool
+# dialog used it for this session. A person who learned the ladder from one
+# dialog would write a permission to disk intending only to try it out. The
+# Inbox's approve key is therefore p (the session grant), not s: a key pressed
+# from another window is not consent to something persistent.
 [[screen.rule]]
 state    = "needs_input"
 priority = 30
@@ -115,7 +122,7 @@ kind     = "approval"
 message  = "Asks whether to trust the folder."
 region   = "bottom_non_empty_lines(12)"
 all      = ["Do you trust this folder?"]
-any      = ["Trust this folder", "Trust once"]
+any      = ["Trust this folder", "Trust for this session"]
 
 [screen.rule.answers]
 approve = { keys = ["p"] }
