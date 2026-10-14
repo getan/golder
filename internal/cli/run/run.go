@@ -311,7 +311,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		// adds, updates, moves, and deletes in a single call, so the model
 		// keeps one editing tool in context instead of choosing between
 		// write and edit on every change.
-		&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap},
+		&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap, WritableAt: WritableAt},
 		&agenttool.GrepTool{Root: cwd},
 		&agenttool.FindTool{Root: cwd},
 		&agenttool.BashTool{Dir: cwd, Sessions: sessions},

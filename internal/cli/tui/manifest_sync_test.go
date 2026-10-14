@@ -71,6 +71,10 @@ func dialogFrames(t *testing.T) map[string]string {
 			Kind: judge.ApprovalBoundary, Tool: "read", Summary: "/etc/hosts",
 			BoundaryDir: "/etc",
 		}),
+		"write outside the workspace": approval(judge.ApprovalRequest{
+			Kind: judge.ApprovalBoundary, Tool: "apply_patch", Summary: "/elsewhere/notes.md",
+			BoundaryDir: "/elsewhere", BoundaryWrite: true,
+		}),
 		"mid-run trust, command": approval(judge.ApprovalRequest{
 			Kind: judge.ApprovalTrust, Tool: "bash", Summary: "rm -rf /tmp/x",
 			TrustDir: "/tmp/project",

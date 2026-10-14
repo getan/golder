@@ -29,7 +29,7 @@ func authFixture(t *testing.T) (workspace, outside, target string, store *grants
 func TestAuthFactsSeparateWorkspaceFromConsent(t *testing.T) {
 	workspace, _, target, _ := authFixture(t)
 
-	inside := AuthFacts("read", readCall("read", "a.go").Arguments, workspace, nil)
+	inside := AuthFacts("read", readCall("read", "a.go").Arguments, workspace, nil, nil)
 	if len(inside) != 1 {
 		t.Fatalf("facts for an in-workspace read = %+v, want one", inside)
 	}
@@ -40,7 +40,7 @@ func TestAuthFactsSeparateWorkspaceFromConsent(t *testing.T) {
 		t.Errorf("a workspace path must not need consent: %+v", inside[0])
 	}
 
-	out := AuthFacts("read", readCall("read", target).Arguments, workspace, nil)
+	out := AuthFacts("read", readCall("read", target).Arguments, workspace, nil, nil)
 	if len(out) != 1 {
 		t.Fatalf("facts for an outside read = %+v, want one", out)
 	}
@@ -64,7 +64,7 @@ func TestAuthFactsReportTheTablesAnswer(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("granting %s: %v", outside, err)
 	}
-	granted := AuthFacts("read", readCall("read", target).Arguments, workspace, nil)
+	granted := AuthFacts("read", readCall("read", target).Arguments, workspace, nil, nil)
 	if len(granted) == 0 {
 		t.Fatal("no facts for a granted path")
 	}
@@ -82,7 +82,7 @@ func TestAuthFactsReportTheTablesAnswer(t *testing.T) {
 	if _, err := store.Refuse(outside+"/other", grants.Read, grants.Session); err != nil {
 		t.Fatalf("refusing: %v", err)
 	}
-	refused := AuthFacts("read", readCall("read", filepath.Join(outside, "other")).Arguments, workspace, nil)
+	refused := AuthFacts("read", readCall("read", filepath.Join(outside, "other")).Arguments, workspace, nil, nil)
 	if len(refused) == 0 {
 		t.Fatal("no facts for a refused path")
 	}
@@ -102,7 +102,7 @@ func TestAuthFactsFollowSymlinks(t *testing.T) {
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	facts := AuthFacts("read", readCall("read", filepath.Join(link, "a.go")).Arguments, workspace, nil)
+	facts := AuthFacts("read", readCall("read", filepath.Join(link, "a.go")).Arguments, workspace, nil, nil)
 	if len(facts) != 1 {
 		t.Fatalf("facts = %+v, want one", facts)
 	}
@@ -125,7 +125,7 @@ func TestAuthFactsCapabilitiesAreSeparate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("granting execute: %v", err)
 	}
-	facts := AuthFacts("read", readCall("read", target).Arguments, workspace, nil)
+	facts := AuthFacts("read", readCall("read", target).Arguments, workspace, nil, nil)
 	if len(facts) == 0 {
 		t.Fatal("no facts")
 	}
@@ -144,7 +144,7 @@ func TestAuthFactsCapabilitiesAreSeparate(t *testing.T) {
 // path gets no facts rather than a fabricated entry a model might reason from.
 func TestAuthFactsForAToolWithNoPaths(t *testing.T) {
 	workspace, _, _, _ := authFixture(t)
-	if got := AuthFacts("todo", []byte(`{"todos":[]}`), workspace, nil); len(got) != 0 {
+	if got := AuthFacts("todo", []byte(`{"todos":[]}`), workspace, nil, nil); len(got) != 0 {
 		t.Errorf("facts for a pathless tool = %+v, want none", got)
 	}
 }

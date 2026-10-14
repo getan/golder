@@ -50,7 +50,11 @@ const manifestMarker = "golder-manifest-version:"
 // REMEMBERED meaning while the tool dialog used it for this session, so the
 // same key wrote a permission to disk in one dialog and only tried it out in
 // another. Its screen rule changed with the words.
-const ManifestVersion = 3
+// 4: a write outside the workspace became a question. apply_patch used to be
+// refused outright with no consent path, so only the read question had a rule;
+// now the same three answers exist for a write, and the dialog says "write"
+// where it used to say "read".
+const ManifestVersion = 4
 
 // ManifestSource returns the manifest as golder ships it.
 func ManifestSource() string {

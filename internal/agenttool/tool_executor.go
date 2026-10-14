@@ -157,6 +157,11 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			if dec.ReadGrant != "" {
 				execCtx = agentcore.WithReadGrant(execCtx, dec.ReadGrant)
 			}
+			// One-call write grant (the user allowed a single write outside the
+			// workspace): published for the executing tool, which honours it once.
+			if dec.WriteGrant != "" {
+				execCtx = agentcore.WithWriteGrant(execCtx, dec.WriteGrant)
+			}
 			// Argument rewrite (PreToolUse updatedInput): replace and re-validate
 			// so a hook cannot smuggle schema-invalid args past the tool.
 			if len(dec.UpdatedInput) > 0 {

@@ -64,6 +64,11 @@ type Classifier struct {
 	// user's own or a boundary crossing — and the reviewer must see the same
 	// answer the boundary gate enforces.
 	ExtraRoots []string
+	// WritableAt reports whether a path is already writable for this session
+	// (the sandbox's writable-root registry). It travels with the rest of the
+	// boundary facts for the same reason: the reviewer must see the answer the
+	// gate enforces, and a write the registry already admits is not a question.
+	WritableAt func(path string) bool
 	// Observer, when set, receives one record per call. It runs on the calling
 	// goroutine, so it must not block: it is for telemetry, not for prompting.
 	Observer func(CallRecord)
@@ -301,7 +306,7 @@ type State struct {
 
 func (c *Classifier) state(tool string, args json.RawMessage, facts *shellfacts.Plan) State {
 	st := State{Tool: tool, Cwd: c.Cwd}
-	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots)
+	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots, c.WritableAt)
 	if facts != nil {
 		st.Command = facts.Raw
 		st.Facts = facts

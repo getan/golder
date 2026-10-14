@@ -205,6 +205,13 @@ func (g *Gates) chain(withPrompts bool) agentcore.BeforeToolCallFunc {
 		// The managed store lives in the config layer, which judge (a leaf
 		// package) cannot import; the assembly point is where the two meet.
 		Persist: PersistReadRoot,
+		// The write side's two callbacks, both shared with the escalation dialog
+		// so one answer means one thing: GrantWritable registers the sandbox root
+		// AND the table row, and WritableAt reads the registry the sandbox
+		// enforces with, so a directory a command may already write is not a
+		// question a patch gets asked again.
+		GrantWritable: GrantWritableRoot,
+		WritableAt:    WritableAt,
 	}
 	if withPrompts {
 		scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
@@ -336,6 +343,30 @@ func PersistReadRoot(dir string) (made bool, why string) {
 		return false, "cannot remember this path: " + err.Error()
 	}
 	return true, root + " is remembered across sessions"
+}
+
+// WritableAt reports whether a path is already writable for this session: the
+// sandbox's writable-root registry, which config.toml, permissions.toml and
+// every prior write dialog feed. The boundary gate asks it before putting a
+// write question, so a patch into a directory a command may already write is
+// not asked about again — the answer was given once, and the registry is where
+// it lives. It lives here rather than in judge for the same reason PersistReadRoot
+// does: judge is a leaf and cannot reach the registry.
+//
+// Both sides resolve before comparing, because a grant names a location: macOS
+// spells the temp root two ways (/var and /private/var), and a textual
+// comparison would ask again about a directory the user granted.
+func WritableAt(path string) bool {
+	p := permissions.Canonical(path)
+	if p == "" {
+		return false
+	}
+	for _, root := range seatbelt.WritableRoots() {
+		if permissions.InsideResolved(root, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // GrantWritableRoot makes a directory writable inside the sandbox, for this

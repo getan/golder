@@ -51,6 +51,8 @@ const (
 	approveWritablePersist = "writable-persist"
 	approveReadDir         = "read-dir"
 	approveReadPersist     = "read-persist"
+	approveWriteDir        = "write-dir"
+	approveWritePersist    = "write-persist"
 	approveReadsHere       = "reads-here"
 	approveDeny            = "deny"
 )
@@ -106,6 +108,10 @@ type approvalDialog struct {
 	// that row is present (a read-scope request whose candidate directory is
 	// not too broad to hand over).
 	readRoot string
+	// writeRoot is the directory the "allow writing" rows grant; set only when
+	// those rows are present (a boundary request about a write, whose candidate
+	// directory is not too broad to hand over).
+	writeRoot string
 	// trustDir is the directory a trust question is about (judge.ApprovalTrust);
 	// set only for those requests, and used to name the folder in the
 	// transcript note that each session-scoped answer prints.
@@ -138,7 +144,16 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			toolApprovalRows[2],
 		}
 	}
-	readRoot := strings.TrimSpace(req.BoundaryDir)
+	// The boundary question is about reading or about writing, and the rows say
+	// which: the two carry different grants ("allow reading /x" is not "allow
+	// writing /x"), so showing the read rows for a write question would offer a
+	// keystroke that does not do what it says. The gate names the side in
+	// BoundaryWrite; everything else about the dialog is shared.
+	boundaryDir := strings.TrimSpace(req.BoundaryDir)
+	readRoot, writeRoot := boundaryDir, ""
+	if req.Kind == judge.ApprovalBoundary && req.BoundaryWrite {
+		readRoot, writeRoot = "", boundaryDir
+	}
 	if readRoot != "" {
 		// A read-scope question offers the directory the call read: the
 		// directory itself when it named one, the file's own directory
@@ -160,6 +175,18 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			{"Deny", "esc", approveDeny},
 		}
 	}
+	if writeRoot != "" {
+		// The write side of the same question, with the same three lifetimes as
+		// the read rows above and the same key ladder (y once, a this session, s
+		// remembered). The labels say "writing" rather than "reading" because the
+		// grant differs: a directory allowed for reading is not thereby writable.
+		rows = []approvalRow{
+			{"Allow this write once", "y", approveOnce},
+			{"Allow writing " + displayPath(writeRoot) + " (this session)", "a", approveWriteDir},
+			{"Always allow writing " + displayPath(writeRoot) + " (remembered)", "s", approveWritePersist},
+			{"Deny", "esc", approveDeny},
+		}
+	}
 	m.approval = approvalDialog{
 		active:       true,
 		kind:         "tool",
@@ -168,6 +195,7 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		rows:         rows,
 		writableRoot: root,
 		readRoot:     readRoot,
+		writeRoot:    writeRoot,
 		trustDir:     req.TrustDir,
 		reply:        reply,
 	}
@@ -301,6 +329,46 @@ func (m *Model) answerApproval(value string) {
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(path) +
 							" are now remembered across sessions. Manage it with /permissions writable list|add|rm.")
+					}
+				}
+			}
+		case approveWriteDir:
+			// The gate registers the grant (it owns GrantWritableRoot, which
+			// registers the sandbox's writable root and the table's row together),
+			// so this answer only names the directory — exactly as the read rows do.
+			if dir := d.writeRoot; dir != "" {
+				ans.Approve, ans.WriteRoot = true, dir
+				if m.session != nil {
+					m.transcript.addSystem("Writing to " + displayPath(dir) +
+						" is allowed for this session only. To make it permanent, choose" +
+						" \"remembered\" next time, or run /permissions writable add " + dir)
+				}
+			}
+		case approveWritePersist:
+			// Persist first, approve second, for the reason the read rows give: a
+			// store write that fails must not leave the user believing the grant
+			// will survive. On failure the call is still approved for this session
+			// (the registries the gate owns are already in place), and the note
+			// says what happened.
+			if dir := d.writeRoot; dir != "" {
+				ans.Approve, ans.WriteRoot = true, dir
+				root, alreadySeeded, err := cli.AddWritablePath(dir)
+				switch {
+				case err != nil:
+					if m.session != nil {
+						m.transcript.addSystem("Writing to " + displayPath(dir) +
+							" is allowed for this session only; remembering it failed: " + err.Error())
+					}
+				case alreadySeeded:
+					if m.session != nil {
+						m.transcript.addSystem("Writing to " + displayPath(root) +
+							" is already remembered (" + config.FileConfigPath() + " seeds it).")
+					}
+				default:
+					ans.Persisted = true
+					if m.session != nil {
+						m.transcript.addSystem("Writing to " + displayPath(root) +
+							" is now remembered across sessions. Manage it with /permissions writable list|add|rm.")
 					}
 				}
 			}

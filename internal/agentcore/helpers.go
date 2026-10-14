@@ -64,6 +64,12 @@ type BeforeToolCallDecision struct {
 	// no plumbing because every tool reads it directly. Ignored when Block is
 	// set.
 	ReadGrant string
+	// WriteGrant, when non-empty, allows this one call to write the given path
+	// outside the workspace: the write side of ReadGrant, set by the boundary
+	// gate's "allow this write once" answer to a patch that reaches outside.
+	// The executor publishes it into the context the tool executes with
+	// (WriteGrantFromContext). Ignored when Block is set.
+	WriteGrant string
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

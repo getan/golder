@@ -293,6 +293,11 @@ type ApprovalRequest struct {
 	// session, or "" when no directory is offered (the answer is then "this
 	// read" or "no"). Set only for ApprovalBoundary.
 	BoundaryDir string
+	// BoundaryWrite reports that the boundary request is about WRITING rather
+	// than reading, so the dialog offers the write rows ("allow this write
+	// once", "allow writing <dir>") and the answer records a write grant. Set
+	// only for ApprovalBoundary.
+	BoundaryWrite bool
 	// TrustDir names the directory a trust question is about, or "" for every
 	// other kind. The trust gate's session answers - allow local reads, allow
 	// all tools - are grants for this directory, so the dialog names it rather
@@ -325,6 +330,13 @@ type ApprovalAnswer struct {
 	// is registered by the gate itself as the read-root registry's single
 	// owner, so every file tool and the sandbox see it on the next call.
 	ReadRoot string
+	// WriteRoot, when set together with Approve, means the user granted this
+	// directory for WRITING: the write side's twin of ReadRoot, answered by the
+	// boundary gate's question about a patch that reaches outside the workspace.
+	// The gate registers it through BoundaryOpts.GrantWritable, the same callback
+	// the escalation dialog uses, so the grant lands in the sandbox's writable
+	// roots and in the authorization table at once.
+	WriteRoot string
 	// SessionReads, when set together with Approve, means the user allowed
 	// local reads in the trust gate's directory for the session (the trust
 	// dialog's "reads here" answer). The gate registers it with the trust
@@ -694,7 +706,7 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		// returns nil (the common case: an ungraded read tool) would silently
 		// discard the user's decision — the read would be refused after they
 		// approved it.
-		if firstDec != nil && (firstDec.Sandbox || firstDec.ReadGrant != "") {
+		if firstDec != nil && (firstDec.Sandbox || firstDec.ReadGrant != "" || firstDec.WriteGrant != "") {
 			if dec == nil {
 				return firstDec
 			}
@@ -702,6 +714,9 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 			out.Sandbox = out.Sandbox || firstDec.Sandbox
 			if out.ReadGrant == "" {
 				out.ReadGrant = firstDec.ReadGrant
+			}
+			if out.WriteGrant == "" {
+				out.WriteGrant = firstDec.WriteGrant
 			}
 			return &out
 		}

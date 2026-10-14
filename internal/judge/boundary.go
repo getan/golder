@@ -86,6 +86,22 @@ type BoundaryOpts struct {
 	// managed store); a driver without one simply cannot offer the remembered
 	// answer, and the prompt says so.
 	Persist func(dir string) (made bool, why string)
+	// GrantWritable, when set, registers a directory as writable — for the
+	// session, and across sessions when persist is true — and reports what
+	// happened. It is the same callback the escalation dialog's writable answers
+	// use, wired once at the assembly point, and sharing it is the point: it
+	// registers the sandbox's writable root AND the authorization table's row,
+	// so an approval the next patch honours is also one the next command sees —
+	// one answer, one meaning. Nil means the remembered and directory rungs are
+	// not offered, and the one-write answer is all the prompt can show.
+	GrantWritable func(root string, persist bool) (made bool, why string)
+	// WritableAt reports whether a path is already writable for this session
+	// (the sandbox's writable-root registry, which config.toml and
+	// permissions.toml seed). It is injected for the same reason Persist is:
+	// that registry lives above this package. Nil means only the authorization
+	// table is consulted, which is the stricter reading — a seeded root then
+	// asks once and is recorded in the table by the answer.
+	WritableAt func(path string) bool
 	// OnPrompt, when set, is told the question just before a prompt is put to
 	// the person and returns the function to call once it is answered. See
 	// GateOpts.OnPrompt: it is how a driver tells the terminal around it that
@@ -131,6 +147,13 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		}
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		// What this call does to the paths it names: read for the file and search
+		// tools, write for the one that writes. It decides which grant an answer
+		// records, which rows the dialog offers, and which silencers apply — a
+		// read grant says nothing about writing, and a writable root says nothing
+		// about reading.
+		op := boundaryOp(call.Name)
+		writing := op.Has(grants.Write)
 		// A call may name several paths (a command line lists file operands).
 		// One question covers the call, so it offers the finest directory any
 		// of those reads would need: a command that names a directory and a
@@ -150,7 +173,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// outside it, and a textual comparison would call that in-workspace
 			// and stay silent — the escape the tools' own guard missed too.
 			resolved = permissions.Canonical(resolved)
-			if !boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots) {
+			if !boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, op, opts.WritableAt) {
 				continue
 			}
 			questions = append(questions, question{
@@ -189,13 +212,14 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			Tool:          call.Name,
 			Summary:       summary,
 			BoundaryDir:   candidate,
+			BoundaryWrite: writing,
 			Authorization: "outside the workspace",
 			Rationale:     target + " is outside the workspace",
 		}
 		var ans ApprovalAnswer
 		switch {
 		case interactive:
-			ans = promptBoundary(ctx, opts, target, candidate)
+			ans = promptBoundary(ctx, opts, target, candidate, writing)
 		case opts.Confirm != nil:
 			ans = opts.Confirm(ctx, req)
 		}
@@ -208,12 +232,41 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
 				Summary: target, Authorization: req.Authorization, Rationale: rationale,
 			})
-			return blockBoundary(call, target, candidate, ans.Answered)
+			return blockBoundary(call, target, candidate, writing, ans.Answered)
 		}
-		// "This directory" registers a session grant; "just this read" rides
-		// the call's context. A directory the registry refuses (too broad, or
-		// an invalid spelling) falls back to the one-call grant rather than
-		// failing the read the user just approved.
+		// "This directory" registers a session grant; "just this one" rides the
+		// call's context. A directory the registry refuses (too broad, or an
+		// invalid spelling) falls back to the one-call grant rather than failing
+		// the access the user just approved.
+		//
+		// The write side goes through opts.GrantWritable, which is the same
+		// callback the escalation dialog uses: it registers the sandbox's
+		// writable root AND the table's row, so an approval that lets the next
+		// patch write is also one the next command sees. One answer, one meaning.
+		if granted := strings.TrimSpace(ans.WriteRoot); granted != "" {
+			if opts.GrantWritable != nil {
+				if made, why := opts.GrantWritable(granted, ans.Persisted); made {
+					rationale := "writing " + granted + " is allowed for this session"
+					if ans.Persisted {
+						rationale = "writing " + granted + " is allowed and remembered across sessions"
+					}
+					notify(Note{
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+						Summary: target, Authorization: req.Authorization, Rationale: rationale,
+					})
+					return nil
+				} else if why != "" {
+					// The registration failed, so the directory rung is not
+					// available; fall through to the one-write answer rather than
+					// failing access the user just approved.
+					notify(Note{
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+						Summary: target, Authorization: req.Authorization,
+						Rationale: "writing this file only; " + why,
+					})
+				}
+			}
+		}
 		if granted := strings.TrimSpace(ans.ReadRoot); granted != "" {
 			if _, err := permissions.AddReadRoot(granted); err == nil {
 				// Record the same answer in the unified table. Both readers stay
@@ -244,31 +297,38 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				return nil
 			}
 		}
-		// The single-read answer is a decision too, and the narrowest one: it
+		// The single-path answer is a decision too, and the narrowest one: it
 		// covers exactly the path that was asked about, for this session only.
 		// Recording it is what lets a repeated question about the same file stop
 		// being asked — the alternative is that "allow once" leaves no trace and
 		// the same command asks again next turn.
+		onceCap, onceSource, onceReason := grants.Read, "read dialog (once)", "approved for this read only"
+		if writing {
+			onceCap, onceSource, onceReason = grants.Write, "write dialog (once)", "approved for this write only"
+		}
 		if target != "" {
 			_, _ = grants.Add(grants.Grant{
 				Path:     target,
-				Allow:    grants.Read,
+				Allow:    onceCap,
 				Scope:    grants.Exact,
 				Lifetime: grants.Session,
-				Source:   "read dialog (once)",
+				Source:   onceSource,
 			})
 		}
 		notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 			Summary: target, Authorization: req.Authorization,
-			Rationale: "approved for this read only",
+			Rationale: onceReason,
 		})
-		// The one-call grant rides the call's context, where the file tools
-		// honour it once. A command tool does not read that grant — it cannot,
-		// the path is inside a command it will hand to a shell — so for a
-		// command the approval means "run it this time", and the only standing
-		// constraint remains the sandbox. That is why the dialog offers the
-		// directory answer for commands too.
+		// The one-call grant rides the call's context, where the tool honours it
+		// once — read for the readers, write for the writer. A command tool does
+		// not read either grant (it cannot: the path is inside a command it will
+		// hand to a shell), so for a command the approval means "run it this
+		// time", and the only standing constraint remains the sandbox. That is
+		// why the dialog offers the directory answer for commands too.
+		if writing {
+			return &agentcore.BeforeToolCallDecision{WriteGrant: target}
+		}
 		return &agentcore.BeforeToolCallDecision{ReadGrant: target}
 	}
 }
@@ -290,14 +350,30 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 //   - credential material, which is the static floor's to refuse: passing it
 //     through untouched means the floor denies the call and no dialog offers to
 //     grant what the user should never hand over by pressing a key;
-//   - already granted, through either reader — the legacy read-root registry
-//     (what config.toml and GOLDER_READABLE_ROOTS seed) or the authorization
-//     table (what every dialog answer records now);
+//   - already granted, through either reader — the legacy registry (the
+//     read-root list for a read, the sandbox's writable roots for a write) or
+//     the authorization table (what every dialog answer records now);
 //   - the system whitelist, which the sandbox admits anyway, so asking would
-//     only train people to approve without reading.
-func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string) bool {
+//     only train people to approve without reading. It applies to READS only:
+//     those paths are read-only by design, so a write there is a question, and
+//     a prompt that offers to grant /usr is a prompt that should not exist.
+//
+// The two sides do not share their silencers, and the asymmetry is the point:
+// a read at /etc/hosts needs no answer, a write to it is a question the user
+// should see; a directory granted for reading says nothing about writing it,
+// and a sandbox writable root (which implies reading) says nothing about
+// whether a read has been approved.
+func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string, op grants.Capability, writableAt func(string) bool) bool {
 	if permissions.Inside(absRoot, resolved) || insideAnyRoot(extraRoots, resolved) {
 		return false
+	}
+	if op.Has(grants.Write) {
+		// Writing into live secret material is the static floor's to refuse, so
+		// the path passes through untouched and no dialog offers it a key.
+		if _, bad := secretPath(raw); bad {
+			return false
+		}
+		return !WriteAllowed(resolved, writableAt)
 	}
 	if _, bad := credentialPathRead(raw); bad {
 		return false
@@ -312,6 +388,30 @@ func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string) bool {
 		return false
 	}
 	return true
+}
+
+// WriteAllowed reports whether a write to path is already authorized for this
+// session: the session's writable registry covers it, or the authorization
+// table carries a write grant for it.
+//
+// It is shared, deliberately, by the two callers that must not disagree — the
+// gate, which decides whether to ASK, and the write tool, which decides whether
+// to WRITE. The gate stays silent exactly when this answers true, so a mismatch
+// is a failure the user sees: a patch refused after they approved it, or a
+// question about a directory they just granted. Both sources are consulted
+// because both are answers the user gave: the registry is where config.toml,
+// permissions.toml and the sandbox dialog put theirs, the table is where every
+// dialog answer now lands — including the one-call "allow this write" row,
+// which is recorded as an exact-path grant and would otherwise silence the
+// question while the tool kept refusing.
+//
+// writableAt may be nil for a caller that has no registry to consult; the table
+// alone then decides, which is the stricter reading.
+func WriteAllowed(path string, writableAt func(string) bool) bool {
+	if writableAt != nil && writableAt(path) {
+		return true
+	}
+	return grants.Allows(path, grants.Write)
 }
 
 // insideAnyRoot reports whether target is inside one of the extra trusted roots.
@@ -330,10 +430,14 @@ func insideAnyRoot(roots []string, target string) bool {
 // promptBoundary asks on stdin (interactive drivers only). The lock is held
 // across the prompt so a parallel batch cannot interleave two questions, the
 // same contract promptRisk follows.
-func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate string) ApprovalAnswer {
-	// The pane is about to wait for the person: say so before the read starts,
+func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate string, writing bool) ApprovalAnswer {
+	// The pane is about to wait for the person: say so before the prompt starts,
 	// and say it is over when the answer lands, however this prompt travels.
-	done := opts.promptNote("allow reading " + target)
+	verb, gerund := "read", "reading"
+	if writing {
+		verb, gerund = "write", "writing"
+	}
+	done := opts.promptNote("allow " + gerund + " " + target)
 	defer done()
 	if opts.Mu != nil {
 		opts.Mu.Lock()
@@ -343,22 +447,38 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 	if out == nil {
 		return ApprovalAnswer{}
 	}
-	fmt.Fprintf(out, "\ngolder: %s is outside the workspace.\n", target)
+	fmt.Fprintf(out, "\ngolder: %s is outside the workspace and this call %ss it.\n", target, verb)
 	if candidate != "" {
-		if opts.Persist != nil {
+		// The directory and remembered rungs need a way to register and, for the
+		// latter, a way to write it down. A write grant goes through
+		// GrantWritable; a read grant through Persist, which is the read side's
+		// caller-owned store. A driver with neither still gets the one-shot
+		// answer, which needs no registry.
+		canGrantDir := opts.GrantWritable != nil
+		if !writing {
+			canGrantDir = true
+		}
+		canPersist := opts.Persist != nil
+		if writing {
+			canPersist = opts.GrantWritable != nil
+		}
+		if canGrantDir && canPersist {
 			// The remembered rung is offered only where a driver can actually
 			// write it down: an option that silently forgets would be worse
 			// than one that is absent.
-			fmt.Fprintf(out, "  [y] allow this read once   [a] allow reading %s (this session)"+
-				"   [s] allow reading %s (remembered)   [N] deny\n", candidate, candidate)
+			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s (this session)"+
+				"   [s] allow %s %s (remembered)   [N] deny\n", verb, gerund, candidate, gerund, candidate)
+		} else if canGrantDir {
+			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s (this session)   [N] deny\n",
+				verb, gerund, candidate)
 		} else {
-			fmt.Fprintf(out, "  [y] allow this read once   [a] allow reading %s (this session)   [N] deny\n", candidate)
+			fmt.Fprintf(out, "  [y] allow this %s once   [N] deny\n", verb)
 		}
 	} else {
-		fmt.Fprint(out, "  [y] allow this read once   [N] deny\n")
+		fmt.Fprintf(out, "  [y] allow this %s once   [N] deny\n", verb)
 	}
 	fmt.Fprint(out, "Choice: ")
-	// The read is interruptible: Ctrl+C during the prompt cancels the run and
+	// The prompt is interruptible: Ctrl+C during it cancels the run and
 	// yields a denial immediately instead of trapping the user.
 	line, ok := readLineOrCancel(ctx, opts.In)
 	if !ok {
@@ -369,10 +489,20 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 		return ApprovalAnswer{Approve: true, Answered: true}
 	case "a", "all":
 		if candidate != "" {
+			if writing {
+				return ApprovalAnswer{Approve: true, WriteRoot: candidate, Answered: true}
+			}
 			return ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
 		}
 	case "s", "save":
-		if candidate != "" && opts.Persist != nil {
+		if candidate != "" && writing && opts.GrantWritable != nil {
+			// The gate registers the grant — it owns the callback, and one owner
+			// means one registration: the sandbox's writable root and the table's
+			// row are written together or not at all. This answer only says which
+			// directory and which lifetime; the gate reports what happened.
+			return ApprovalAnswer{Approve: true, WriteRoot: candidate, Answered: true, Persisted: true}
+		}
+		if candidate != "" && !writing && opts.Persist != nil {
 			made, why := opts.Persist(candidate)
 			ans := ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
 			if made {
@@ -389,12 +519,16 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 // blockBoundary refuses a read outside the workspace with guidance the model
 // can act on: which path, which directory would cover it, and how a person
 // makes that permanent.
-func blockBoundary(call agentcore.AgentToolCall, target, candidate string, answered bool) *agentcore.BeforeToolCallDecision {
-	msg := fmt.Sprintf("tool %q blocked: %s is outside the workspace and the read was not approved", call.Name, target)
+func blockBoundary(call agentcore.AgentToolCall, target, candidate string, writing, answered bool) *agentcore.BeforeToolCallDecision {
+	verb, list := "read", "readable_roots"
+	if writing {
+		verb, list = "write", "writable_roots"
+	}
+	msg := fmt.Sprintf("tool %q blocked: %s is outside the workspace and the %s was not approved", call.Name, target, verb)
 	if candidate != "" {
-		msg += "; approving it, or adding the directory to [permissions] readable_roots in config.toml (or GOLDER_READABLE_ROOTS), would allow it"
+		msg += fmt.Sprintf("; approving it, or adding the directory to [permissions] %s in config.toml, would allow it", list)
 	} else {
-		msg += "; adding a directory above it to [permissions] readable_roots in config.toml (or GOLDER_READABLE_ROOTS) would allow it"
+		msg += fmt.Sprintf("; adding a directory above it to [permissions] %s in config.toml would allow it", list)
 	}
 	if !answered {
 		msg += " — no prompt is available in this run, so ask the user to run it interactively or to configure the root"

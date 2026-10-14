@@ -57,11 +57,12 @@ type AuthFact struct {
 // AuthFacts describes the paths one tool call touches. It returns nil when the
 // call names no path this package can read, which is the honest answer for a
 // tool with no path arguments and for one the tool table has not been taught.
-func AuthFacts(tool string, args json.RawMessage, workspaceRoot string, extraRoots []string) []AuthFact {
+func AuthFacts(tool string, args json.RawMessage, workspaceRoot string, extraRoots []string, writableAt func(string) bool) []AuthFact {
 	paths := TouchedPaths(tool, args)
 	if len(paths) == 0 {
 		return nil
 	}
+	op := boundaryOp(tool)
 	root := strings.TrimSpace(workspaceRoot)
 	if root == "" {
 		// The gate falls back to the process working directory when no root was
@@ -94,7 +95,7 @@ func AuthFacts(tool string, args json.RawMessage, workspaceRoot string, extraRoo
 		out = append(out, AuthFact{
 			Path:         resolved,
 			InWorkspace:  permissions.Inside(root, resolved) || insideAnyRoot(extraRoots, resolved),
-			NeedsConsent: root != "" && boundaryQuestion(raw, resolved, root, extraRoots),
+			NeedsConsent: root != "" && boundaryQuestion(raw, resolved, root, extraRoots, op, writableAt),
 			Read:         decision(resolved, grants.Read),
 			Write:        decision(resolved, grants.Write),
 			Execute:      decision(resolved, grants.Execute),

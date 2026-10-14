@@ -26,6 +26,8 @@ package judge
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/getan/golder/internal/grants"
 )
 
 // toolInfo is one tool's leniencies. A zero toolInfo is the strict default, so
@@ -34,6 +36,16 @@ type toolInfo struct {
 	// paths reads the path spellings a call names, which the workspace boundary
 	// asks about (boundary.go). nil for a tool that names none.
 	paths func(args json.RawMessage) []string
+	// op is the capability the boundary gate asks about for those paths: Read
+	// for a tool that only reads, Write for the one that writes. It is what
+	// decides whether an answer grants reading or writing, and whether a row
+	// already in the table settles the question — a read grant says nothing
+	// about writing, which is why the two are asked and recorded apart.
+	//
+	// The zero value is Read, which is what every reader wants and what a tool
+	// added later gets by default: the strict direction for a tool nobody has
+	// classified is to ask about reading, never to assume writing is settled.
+	op grants.Capability
 	// ungraded skips the risk reviewer: the tool cannot change anything on the
 	// host, so there is no risk for a reviewer to weigh and grading it only adds
 	// latency.
@@ -60,14 +72,19 @@ var tools = map[string]toolInfo{
 	// read-only mode.
 	"bash": {paths: bashPaths, shell: true},
 
-	// The one writer (apply_patch) is absent on purpose, and the reason is the
-	// shape of the answer rather than its size. Every question this table feeds
-	// is settled with a READ grant ("allow reading <dir>"), which is why the
-	// boundary gate is not the gate for a write: a write question needs the
-	// sandbox's writable-root registry and the escalation dialog. An
-	// out-of-workspace write has no consent path at all — the tool's own
-	// resolveWithin refuses it outright, with no prompt and no grant — so such a
-	// patch is refused rather than asked about, and only the reviewer sees it.
+	// The one writer, and the only entry that asks about writing. A patch
+	// reaching outside the workspace is the same kind of question a read
+	// outside it is — consent about a place — so it takes the same three
+	// answers (once, this directory for the session, remembered) and the same
+	// gate. Its paths come from the patch text (every file it names, move
+	// destinations included), because a rename out of the workspace writes
+	// outside it as surely as an edit there.
+	//
+	// bash is deliberately not here. A command's own writes are the sandbox's
+	// business — the writable-root registry and the escalation dialog are the
+	// mechanism, and the approval gate runs them — so asking here as well would
+	// put the same question twice and invite two different answers to it.
+	"apply_patch": {paths: patchArgs, op: grants.Write},
 
 	// Network reads. ungraded because the reviewer would be grading a URL, which
 	// is neither a path to consent to nor a mutation to weigh; read-only because
@@ -135,24 +152,22 @@ func boundaryPaths(name string, args json.RawMessage) []string {
 	return t.paths(args)
 }
 
+// boundaryOp returns the capability the boundary gate asks about for this
+// tool's paths: Read unless the table says otherwise.
+func boundaryOp(name string) grants.Capability {
+	t, ok := toolLookup(name)
+	if !ok || t.op == 0 {
+		return grants.Read
+	}
+	return t.op
+}
+
 // TouchedPaths returns the path spellings a call names, for a caller outside
 // this package that needs the same extraction the boundary gate uses. It is how
 // the reviewer's state reports what a call touches, so the model reasons about
 // the same set the gate asks about rather than a second, drifting reading of
 // the arguments — a mismatch between the two is the failure the boundary
 // regression test exists to catch.
-//
-// apply_patch is read here rather than through the table, and the reason is the
-// table's own: its paths drive the gate's question, and a write has no consent
-// path yet, so listing it would put a question to the user that no tool honours
-// (an approved read grant does not let apply_patch write — see
-// TestApplyPatchIgnoresReadGrants). Until a write can be asked about, its paths
-// are extracted for the reviewer alone, through the same patch.Paths the static
-// floor uses.
 func TouchedPaths(tool string, args json.RawMessage) []string {
-	name := strings.ToLower(strings.TrimSpace(tool))
-	if name == "apply_patch" {
-		return patchArgs(args)
-	}
-	return boundaryPaths(name, args)
+	return boundaryPaths(tool, args)
 }

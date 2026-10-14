@@ -102,6 +102,12 @@ func credentialPathRead(p string) (string, bool) {
 // and want to refuse it with the same wording the static floor uses.
 func CredentialPathReason(p string) (string, bool) { return credentialPathRead(p) }
 
+// SecretPathReason is the write side's twin of CredentialPathReason: callers
+// outside this package (the file tools) refuse a write into live secret
+// material with the same wording the static floor uses, so a granted directory
+// cannot quietly become a way to rewrite an SSH key.
+func SecretPathReason(p string) (string, bool) { return secretPath(p) }
+
 // contentReaders are commands whose arguments are file content: reading,
 // copying, archiving, or hashing. Only for these does a quoted path argument
 // count too (`cat "~/.zshrc"`); every other command is graded on its bare
