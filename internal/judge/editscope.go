@@ -83,7 +83,7 @@ func applyPatchFastPath(tool string, args json.RawMessage, workspaceRoot string)
 			return Verdict{}, false
 		}
 		resolved, err := permissions.AbsAgainst(root, p)
-		if err != nil || !permissions.Inside(root, resolved) {
+		if err != nil || !permissions.InsideResolved(root, resolved) {
 			return Verdict{}, false
 		}
 	}

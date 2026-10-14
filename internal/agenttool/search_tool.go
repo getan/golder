@@ -107,6 +107,14 @@ func resolveWithin(root, p string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path %q is outside the workspace root", p)
 	}
+	// The spelling check above is half the guard. filepath.Rel compares text,
+	// and a symlink inside the root can point outside it: "link/x" passes here
+	// while the kernel opens a file in another tree entirely. Resolve before
+	// trusting the answer, so the write guard bounds locations rather than
+	// spellings.
+	if !permissions.InsideResolved(absRoot, full) {
+		return "", fmt.Errorf("path %q escapes the workspace root through a symlink", p)
+	}
 	return full, nil
 }
 
@@ -164,13 +172,30 @@ func resolveReadable(ctx context.Context, roots []string, p string) (string, err
 	}
 	// Credential material stays refused even for a granted directory: the
 	// static floor grades the raw argument, and this catches a spelling that
-	// reaches one of those locations after resolution.
-	if reason, bad := judge.CredentialPathReason(target); bad {
-		return "", fmt.Errorf("%s is not readable here", reason)
+	// reaches one of those locations after resolution. BOTH spellings are
+	// checked, and neither is redundant:
+	//
+	//   - the literal one, because $HOME may itself be reached through a link
+	//     (macOS's /var is /private/var, and every t.TempDir() lives there), so
+	//     a resolved path no longer carries the prefix credentialPathRead
+	//     matches against. Checking only the resolved form silently stopped
+	//     this refusal firing at all.
+	//   - the resolved one, because a link inside the workspace can point at
+	//     credential material, which no spelling in the argument reveals.
+	resolved := permissions.Canonical(target)
+	for _, spelling := range []string{target, resolved} {
+		if reason, bad := judge.CredentialPathReason(spelling); bad {
+			return "", fmt.Errorf("%s is not readable here", reason)
+		}
 	}
+	// Grants name locations, so compare locations: a grant for the directory a
+	// link points at covers reads through the link, and — the direction that
+	// matters — a link inside the workspace no longer stands in for an outside
+	// path the user never approved.
+	target = resolved
 	// A one-call grant describes the path the user was asked about. Compare
 	// cleaned absolute spellings so the grant and the argument agree.
-	if g := strings.TrimSpace(agentcore.ReadGrantFromContext(ctx)); g != "" && permissions.Inside(g, target) {
+	if g := strings.TrimSpace(agentcore.ReadGrantFromContext(ctx)); g != "" && permissions.InsideResolved(g, target) {
 		return target, nil
 	}
 	// A session grant is a directory in the read-root registry.

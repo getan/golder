@@ -63,8 +63,14 @@ func NormalizePath(raw string) (string, error) {
 }
 
 // Inside reports whether p is root itself or lives under it. Both paths are
-// compared as cleaned absolute paths, so a symlinked spelling or a trailing
-// separator does not change the answer.
+// compared as cleaned absolute paths, so a trailing separator does not change
+// the answer.
+//
+// It compares SPELLINGS, not locations: cleaning does not follow symlinks, so a
+// link inside root that points outside it reads as inside. That is correct for
+// a comparison between two spellings the same person wrote (the sandbox's
+// allow rules are built from the literal paths a user typed), and wrong for any
+// decision about where a path actually lands — use InsideResolved for those.
 func Inside(root, p string) bool {
 	if root == "" || p == "" {
 		return false
@@ -74,6 +80,22 @@ func Inside(root, p string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// InsideResolved reports whether p lands inside root, following symlinks on
+// both sides. It is the answer a boundary decision needs: a link inside the
+// workspace can point outside it, and a caller that compared spellings would
+// call that in-workspace and never ask. Both spellings of one place (a
+// workspace opened through a link, macOS's /tmp and /private/tmp) compare equal
+// because both sides are resolved.
+//
+// It costs a filesystem walk, so Inside stays available for the comparisons
+// that are about text rather than location — see its comment.
+func InsideResolved(root, p string) bool {
+	if root == "" || p == "" {
+		return false
+	}
+	return Inside(Canonical(root), Canonical(p))
 }
 
 // Canonical resolves p the way the kernel will, so two spellings of one place
@@ -307,14 +329,23 @@ func ReadRoots() []string {
 // ReadableAt reports whether p is inside a granted read root. This is the check
 // the file tools make once a path has failed the workspace boundary, and the
 // one the gate makes to avoid asking twice for the same directory.
+//
+// Both sides are resolved before comparing. A grant names a location ("~/work"
+// may be spelled through a link, and macOS's /tmp is /private/tmp), and the
+// caller's p has already been resolved, so a textual comparison would report
+// "not granted" for a directory the user did grant — and the gate would ask the
+// same question on every call. Resolving both sides also keeps the grant
+// bounded by location: a link inside a granted directory that points elsewhere
+// does not extend the grant to where it points.
 func ReadableAt(p string) bool {
 	if p == "" {
 		return false
 	}
+	p = Canonical(p)
 	readRoots.mu.RLock()
 	defer readRoots.mu.RUnlock()
 	for _, root := range readRoots.paths {
-		if Inside(root, p) {
+		if Inside(Canonical(root), p) {
 			return true
 		}
 	}

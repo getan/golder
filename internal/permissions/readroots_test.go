@@ -39,6 +39,51 @@ func TestInside(t *testing.T) {
 	}
 }
 
+// TestInsideResolvedFollowsSymlinks pins the difference between the two
+// comparisons, which is the whole reason both exist.
+//
+// Inside answers "does this spelling sit under that spelling" and is
+// deliberately textual: the sandbox's allow rules are built from the literal
+// paths a person typed, and resolving them away broke `cat /etc/hosts` under
+// seatbelt (measured, not assumed). InsideResolved answers "does this path
+// LAND under that one", which is the question a boundary decision asks — a
+// symlink inside the workspace pointing outside it must not read as inside, or
+// the gate stays silent while the kernel opens a file in another tree.
+func TestInsideResolvedFollowsSymlinks(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{workspace, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.go"), []byte("s"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(workspace, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	throughLink := filepath.Join(link, "secret.go")
+	if !Inside(workspace, throughLink) {
+		t.Error("Inside must stay textual: the spelling is inside the workspace")
+	}
+	if InsideResolved(workspace, throughLink) {
+		t.Error("InsideResolved must follow the link: the path lands outside the workspace")
+	}
+	// The ordinary case still answers true.
+	if !InsideResolved(workspace, filepath.Join(workspace, "a.go")) {
+		t.Error("a plain in-workspace path must resolve as inside")
+	}
+	// $TMPDIR is itself reached through a link on macOS (/var → /private/var),
+	// so this also covers the alias half: both spellings of one place agree.
+	if !InsideResolved(workspace, workspace) {
+		t.Error("a path must be inside itself however it is spelled")
+	}
+}
+
 // TestSetReadRootsRejectsBroadRoots pins the guard that keeps a grant from
 // removing the boundary: the filesystem root, the home directory itself and
 // $HOME's parent are refused, while a directory that merely sits outside the

@@ -121,6 +121,9 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 	if err != nil {
 		return nil
 	}
+	// Resolve the root the way the kernel will, so the containment test below
+	// compares locations rather than spellings.
+	absRoot = permissions.Canonical(absRoot)
 	interactive := opts.In != nil && opts.Out != nil
 	notify := func(n Note) {
 		if opts.Notify != nil {
@@ -143,6 +146,10 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			if err != nil {
 				continue
 			}
+			// Resolve before judging: a symlink inside the workspace can point
+			// outside it, and a textual comparison would call that in-workspace
+			// and stay silent — the escape the tools' own guard missed too.
+			resolved = permissions.Canonical(resolved)
 			if permissions.Inside(absRoot, resolved) || insideAnyRoot(opts.Roots, resolved) {
 				continue
 			}
@@ -295,7 +302,7 @@ func insideAnyRoot(roots []string, target string) bool {
 		if strings.TrimSpace(root) == "" {
 			continue
 		}
-		if permissions.Inside(root, target) {
+		if permissions.InsideResolved(root, target) {
 			return true
 		}
 	}
