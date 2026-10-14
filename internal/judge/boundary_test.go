@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -62,7 +64,7 @@ func readFixture(t *testing.T) (workspace, outside, target string) {
 	if err := os.WriteFile(target, []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	return workspace, outside, target
 }
 
@@ -114,9 +116,12 @@ func TestBoundaryGateAsksAndGrantsOnce(t *testing.T) {
 	if dec.ReadGrant != target {
 		t.Errorf("grant = %q, want the resolved path %q", dec.ReadGrant, target)
 	}
-	// "Once" means once: the registry must not have widened.
-	if permissions.ReadableAt(target) {
-		t.Error("a one-read answer must not register a session grant")
+	// "Once" means once: the grant rides the call (ReadGrant above) and the
+	// directory it lives in is NOT authorized. Answering "just this read" must
+	// never hand over the tree holding the file.
+	dir := filepath.Dir(target)
+	if grants.Allows(filepath.Join(dir, "sibling.go"), grants.Read) {
+		t.Error("a one-read answer must not authorize the directory")
 	}
 }
 
@@ -171,7 +176,7 @@ func TestBoundaryGateSessionGrant(t *testing.T) {
 	if dec := gate(context.Background(), readCall("read", target)); dec != nil {
 		t.Fatalf("a session grant needs no per-call decision, got %+v", dec)
 	}
-	if !permissions.ReadableAt(target) {
+	if !grants.Allows(target, grants.Read) {
 		t.Error("the directory answer must register the grant")
 	}
 	if dec := gate(context.Background(), readCall("read", filepath.Join(outside, "b.go"))); dec != nil {
@@ -224,7 +229,7 @@ func TestBoundaryGateNoPromptFailsClosed(t *testing.T) {
 	if !strings.Contains(msg, "no prompt is available") {
 		t.Errorf("the refusal should say no prompt was available: %q", msg)
 	}
-	if permissions.ReadableAt(target) {
+	if grants.Allows(target, grants.Read) {
 		t.Error("a failed-closed read must not register a grant")
 	}
 }
@@ -480,7 +485,7 @@ func TestBoundaryGateCommandHonorsSessionGrant(t *testing.T) {
 	if err := os.WriteFile(target, []byte("x\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := permissions.AddReadRoot(outside); err != nil {
+	if _, err := grants.AddReadRoot(outside, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 	asked := 0
@@ -519,6 +524,9 @@ func TestBoundaryGateAsksAboutTildeOperands(t *testing.T) {
 	// `~/outside` is the very directory a literal reading places in the
 	// workspace.
 	for _, cmd := range []string{"ls ~/outside", "ls ~/outside/", "cat ~/outside/a.go"} {
+		// A fresh table per command: this test is about the tilde being seen, and
+		// the previous command's refusal would otherwise answer for it.
+		grantstest.Install(t)
 		if dec := gate(context.Background(), bashCall(cmd)); dec == nil || !dec.Block {
 			t.Fatalf("%q must be gated, got %+v", cmd, dec)
 		}
@@ -556,6 +564,9 @@ func TestBoundaryGateOffersFinestOperandDirectory(t *testing.T) {
 	})
 	// Both orders: the finer operand wins whether it is written first or last.
 	for _, cmd := range []string{"ls " + outside + " " + sub, "ls -la " + sub + " " + outside} {
+		// Fresh table per order: the first command's refusal is remembered, so
+		// without this the second would be answered by it instead of asking.
+		grantstest.Install(t)
 		got = ApprovalRequest{}
 		if dec := gate(context.Background(), bashCall(cmd)); dec == nil || !dec.Block {
 			t.Fatalf("%q must be gated, got %+v", cmd, dec)
@@ -600,6 +611,7 @@ func TestBoundaryGateReadsThePathListForm(t *testing.T) {
 		t.Errorf("offered = %q, want %q", got.BoundaryDir, outside)
 	}
 	// Several entries resolve like several shell operands: the finest wins.
+	grantstest.Install(t) // fresh: the first list's refusal is remembered
 	if dec := gate(context.Background(), listCall(outside, sub)); dec == nil || !dec.Block {
 		t.Fatalf("a list holding a subtree must be gated, got %+v", dec)
 	}

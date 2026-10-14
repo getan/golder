@@ -1,145 +1,90 @@
 package cli
 
-// Sandbox writable paths: the shared implementation behind `/permissions
-// writable` in both the REPL (a registry Action) and the TUI (a picker). The
-// live session registry lives in internal/seatbelt; the managed store lives in
-// internal/cli/config; this file joins the two so list/add/rm behave and report
-// identically in either UI.
+// Writable paths: the write grants in the authorization table, as the sandbox
+// and the write dialogs see them. The read side's twin, over the same table.
 
 import (
-	"fmt"
-
-	"github.com/getan/golder/internal/cli/config"
-	"github.com/getan/golder/internal/cli/ui"
-	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // Where a writable path comes from; displayed next to the path.
 const (
-	WritableSourceSaved   = "permissions.toml" // the managed store
-	WritableSourceSession = "session"          // granted from an approval dialog
+	WritableSourceSaved   = ReadableSourceSaved
+	WritableSourceSession = ReadableSourceSession
 )
 
-// WritablePathEntry is one writable root with its provenance. Sources merge in
-// the order permissions.toml → session, first label winning, so the list reads
-// the same as the startup merge in cmd/golder.
+// WritablePathEntry is one writable root with its provenance.
 type WritablePathEntry struct {
 	Path   string
 	Source string
+	// Detail is the row's own Source field, kept for a caller that wants more
+	// than the two-way label.
+	Detail string
 }
 
 // WritableRemoval reports what a removal touched.
 type WritableRemoval struct {
-	Path       string
-	WasSession bool
-	WasSaved   bool
+	Path          string
+	WasSession    bool
+	WasRemembered bool
 }
 
-// Found reports whether the path was granted by any source.
-func (r WritableRemoval) Found() bool {
-	return r.WasSession || r.WasSaved
-}
+// Found reports whether the path held a write grant at all.
+func (r WritableRemoval) Found() bool { return r.WasSession || r.WasRemembered }
 
-// ListWritablePaths merges the two files with the live session registry.
-// Unreadable entries and malformed files become warnings (returned, not
-// printed) rather than errors: the list is a debugging aid and works even
-// when half of it is broken.
+// ListWritablePaths returns every row that grants writing, remembered first.
 func ListWritablePaths() ([]WritablePathEntry, []string) {
-	var entries []WritablePathEntry
-	var warnings []string
-	seen := map[string]bool{}
-	add := func(raw, source string) {
-		p, err := seatbelt.NormalizeWritableRoot(raw)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: %v", source, err))
-			return
-		}
-		if seen[p] {
-			return
-		}
-		seen[p] = true
-		entries = append(entries, WritablePathEntry{Path: p, Source: source})
+	s := grants.Process()
+	if s == nil {
+		return nil, nil
 	}
-	if cfg, err := config.LoadPermissionsConfig(); err != nil {
-		warnings = append(warnings, err.Error())
-	} else {
-		for _, raw := range cfg.WritableRoots {
-			add(raw, WritableSourceSaved)
-		}
-	}
-	for _, p := range seatbelt.WritableRoots() {
-		if seen[p] {
+	var out []WritablePathEntry
+	for _, g := range s.Entries().All() {
+		if !g.Allow.Has(grants.Write) {
 			continue
 		}
-		seen[p] = true
-		entries = append(entries, WritablePathEntry{Path: p, Source: WritableSourceSession})
+		source := WritableSourceSaved
+		if g.Lifetime == grants.Session {
+			source = WritableSourceSession
+		}
+		out = append(out, WritablePathEntry{Path: g.Path, Source: source, Detail: g.Source})
 	}
-	return entries, warnings
+	return out, nil
 }
 
-// AddWritablePath grants a path for this session and persists it to the managed
-// store, so it survives restarts. The path is validated first; on a store write
-// error nothing is granted (the caller reports and fails closed).
+// AddWritablePath grants a path read+write inside the sandbox and persists it,
+// so the next launch applies it without asking. One row answers both sides,
+// because a file you may write and not read back is a half-failure.
 func AddWritablePath(raw string) (path string, err error) {
-	root, err := seatbelt.NormalizeWritableRoot(raw)
-	if err != nil {
-		return "", err
-	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		return "", err
-	}
-	found := false
-	for _, r := range saved.WritableRoots {
-		if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
-			found = true
-			break
-		}
-	}
-	if !found {
-		saved.WritableRoots = append(saved.WritableRoots, root)
-		if err := config.SavePermissionsConfig(saved); err != nil {
-			return "", err
-		}
-	}
-	if _, err := seatbelt.AddWritableRoot(root); err != nil {
-		return "", err
-	}
-	return root, nil
+	return grants.AddWritableRoot(raw, grants.Remembered, "writable add")
 }
 
-// RemoveWritablePath revokes a path for this session and deletes it from the
-// managed store.
+// RemoveWritablePath revokes the write grant a writable root was created for.
+//
+// It clears read and write together, because that is the row this command put
+// there: a writable root carries Read implicitly (a file you may write and not
+// read back is a half-failure), so clearing only Write would leave the
+// directory readable — the opposite of what "remove the writable path" means.
+// An Execute grant on the same row survives, because trust and the boundary are
+// separate decisions and this command speaks for the boundary.
 func RemoveWritablePath(raw string) (WritableRemoval, error) {
-	root, err := seatbelt.NormalizeWritableRoot(raw)
+	root, err := permissions.NormalizePath(raw)
 	if err != nil {
 		return WritableRemoval{}, err
 	}
-	res := WritableRemoval{Path: root}
-	res.WasSession = seatbelt.RemoveWritableRoot(root)
-	saved, err := config.LoadPermissionsConfig()
+	s := grants.Process()
+	if s == nil {
+		return WritableRemoval{Path: root}, nil
+	}
+	rem, err := s.RemoveCapability(root, grants.ReadWrite)
 	if err != nil {
-		return res, err
+		return WritableRemoval{Path: root}, err
 	}
-	var kept []string
-	for _, r := range saved.WritableRoots {
-		if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
-			res.WasSaved = true
-			continue
-		}
-		kept = append(kept, r)
-	}
-	if res.WasSaved {
-		saved.WritableRoots = kept
-		if err := config.SavePermissionsConfig(saved); err != nil {
-			return res, err
-		}
-	}
-	return res, nil
+	return WritableRemoval{Path: root, WasSession: rem.Session, WasRemembered: rem.Remembered}, nil
 }
 
-// DisplayHomePath shortens a path under $HOME to "~/…" for display; the grant
-// itself always uses the full path. It is ui's implementation, kept under this
-// name because every caller in this package (and the TUI's pickers, which share
-// the wording) reads it as cli's.
-func DisplayHomePath(p string) string { return ui.DisplayHomePath(p) }
+// WritableSourceLabel renders the provenance of a writable path for the human.
+func WritableSourceLabel(source string, zh bool) string {
+	return ReadableSourceLabel(source, zh)
+}

@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/seatbelt"
 )
 
 // TestPermissionCommandWritable drives the /permissions writable surface
@@ -18,8 +18,7 @@ func TestPermissionCommandWritable(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	seatbelt.SetWritableRoots(nil)
-	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
+	grantstest.Install(t)
 
 	reg := runtime.NewSlashRegistry()
 	RegisterPermissionCommand(reg, nil, nil)
@@ -37,19 +36,18 @@ func TestPermissionCommandWritable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if !strings.Contains(out.Message, "saved to permissions.toml") {
+	if !strings.Contains(out.Message, "saved to grants.json") {
 		t.Fatalf("add should report the persistent store, got:\n%s", out.Message)
 	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil || len(saved.WritableRoots) != 1 || saved.WritableRoots[0] != granted {
-		t.Fatalf("store should hold the grant, got %+v err=%v", saved.WritableRoots, err)
+	if !grants.Allows(granted, grants.Write) {
+		t.Fatalf("the table should hold the grant: %+v", grants.Process().Entries().All())
 	}
 
 	out, err = reg.ResolveOutcome("/permissions writable")
 	if err != nil {
 		t.Fatalf("bare writable: %v", err)
 	}
-	if !strings.Contains(out.Message, granted) || !strings.Contains(out.Message, "permissions.toml, persisted") {
+	if !strings.Contains(out.Message, granted) || !strings.Contains(out.Message, "grants.json, remembered") {
 		t.Fatalf("list should mark the saved entry, got:\n%s", out.Message)
 	}
 
@@ -60,8 +58,8 @@ func TestPermissionCommandWritable(t *testing.T) {
 	if !strings.Contains(out.Message, "revoked") {
 		t.Fatalf("rm should confirm, got:\n%s", out.Message)
 	}
-	if saved, _ := config.LoadPermissionsConfig(); len(saved.WritableRoots) != 0 {
-		t.Fatalf("store should be empty after rm, got %v", saved.WritableRoots)
+	if grants.Allows(granted, grants.Write) {
+		t.Fatal("the table should hold no write row after rm")
 	}
 
 	if out, _ = reg.ResolveOutcome("/permissions writable bogus"); !strings.Contains(out.Message, "usage: /permissions writable") {
@@ -83,8 +81,7 @@ func TestPermissionCommandList(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	seatbelt.SetWritableRoots(nil)
-	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
+	grantstest.Install(t)
 
 	reg := runtime.NewSlashRegistry()
 	st := permissions.New(permissions.Ask)
@@ -110,13 +107,13 @@ func TestPermissionCommandList(t *testing.T) {
 
 	got := cmd.Action("list")
 	for _, want := range []string{
-		"approval mode: Ask",                     // the live mode, not a default
-		"read-only | ask | auto | full-access",   // what it can be switched to
-		"writable paths",                         // the grant kind
-		granted, "(permissions.toml, persisted)", // the grant and its provenance
-		"readable paths outside the workspace",    // the other grant kind
-		readable, "(permissions.toml, persisted)", // and its provenance
-		"permissions.toml",                        // the file the grants live in, named for hand editing
+		"approval mode: Ask",                   // the live mode, not a default
+		"read-only | ask | auto | full-access", // what it can be switched to
+		"writable paths",                       // the grant kind
+		granted, "(grants.json, remembered)",   // the grant and its provenance
+		"readable paths outside the workspace", // the other grant kind
+		readable, "(grants.json, remembered)",  // and its provenance
+		"grants.json",                             // the file the grants live in, named for hand editing
 		"/permissions writable add", "add <path>", // how to change what is shown
 		"/trust list", // the report this one does not cover
 	} {

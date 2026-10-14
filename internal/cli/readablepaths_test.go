@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/getan/golder/internal/cli/config"
-	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 )
 
 // isolateReadablePaths points config discovery at a temp XDG dir and resets the
@@ -20,13 +20,12 @@ func isolateReadablePaths(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	permissions.SetReadRoots(nil)
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	return dir
 }
 
 // TestReadablePathsLifecycle covers add → list → remove: the grant lands in
-// both the session registry and permissions.toml, a second add does not
+// the table, a second add does not
 // duplicate it, and removal revokes both halves.
 func TestReadablePathsLifecycle(t *testing.T) {
 	dir := isolateReadablePaths(t)
@@ -41,12 +40,8 @@ func TestReadablePathsLifecycle(t *testing.T) {
 	if err != nil || root != granted {
 		t.Fatalf("AddReadablePath = %q err=%v, want %q", root, err, granted)
 	}
-	if !permissions.ReadableAt(filepath.Join(granted, "a.md")) {
-		t.Error("the session registry did not take the grant")
-	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil || len(saved.ReadableRoots) != 1 || saved.ReadableRoots[0] != granted {
-		t.Fatalf("managed store should persist the grant, got %+v err=%v", saved.ReadableRoots, err)
+	if !grants.Allows(filepath.Join(granted, "a.md"), grants.Read) {
+		t.Error("the table did not take the grant")
 	}
 	entries, _ = ListReadablePaths()
 	if len(entries) != 1 || entries[0].Source != ReadableSourceSaved {
@@ -56,21 +51,16 @@ func TestReadablePathsLifecycle(t *testing.T) {
 	if _, err := AddReadablePath(granted); err != nil {
 		t.Fatalf("second AddReadablePath: %v", err)
 	}
-	saved, _ = config.LoadPermissionsConfig()
-	if len(saved.ReadableRoots) != 1 {
-		t.Fatalf("second add duplicated the entry: %v", saved.ReadableRoots)
+	if n := len(grants.ReadRoots()); n != 1 {
+		t.Fatalf("second add duplicated the entry: %d rows", n)
 	}
 
 	res, err := RemoveReadablePath(granted)
-	if err != nil || !res.Found() || !res.WasSession || !res.WasSaved {
+	if err != nil || !res.Found() || res.WasSession || !res.WasRemembered {
 		t.Fatalf("RemoveReadablePath = %+v err=%v", res, err)
 	}
-	if permissions.ReadableAt(filepath.Join(granted, "a.md")) {
-		t.Error("the registry should be empty after removal")
-	}
-	saved, _ = config.LoadPermissionsConfig()
-	if len(saved.ReadableRoots) != 0 {
-		t.Fatalf("managed store should be empty after removal, got %v", saved.ReadableRoots)
+	if grants.Allows(filepath.Join(granted, "a.md"), grants.Read) {
+		t.Error("the table should hold no read row after removal")
 	}
 }
 
@@ -97,9 +87,9 @@ func TestReadableSourceLabel(t *testing.T) {
 		zh     bool
 		want   string
 	}{
-		{ReadableSourceSaved, false, "(permissions.toml, persisted)"},
+		{ReadableSourceSaved, false, "(grants.json, remembered)"},
 		{ReadableSourceSession, false, "(this session)"},
-		{ReadableSourceSaved, true, "（permissions.toml，已持久化）"},
+		{ReadableSourceSaved, true, "（grants.json，已持久化）"},
 	} {
 		if got := ReadableSourceLabel(c.source, c.zh); got != c.want {
 			t.Errorf("ReadableSourceLabel(%q, zh=%v) = %q, want %q", c.source, c.zh, got, c.want)

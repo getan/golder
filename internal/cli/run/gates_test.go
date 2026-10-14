@@ -14,16 +14,17 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -151,7 +152,7 @@ func TestGatesInheritedChainCarriesToolUseHooks(t *testing.T) {
 // TestGatesAuthorizationSnapshot covers the process-boundary contract: what the
 // session decided is what a child in another address space is told.
 func TestGatesAuthorizationSnapshot(t *testing.T) {
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	cwd := t.TempDir()
 	extra := t.TempDir()
 
@@ -170,15 +171,18 @@ func TestGatesAuthorizationSnapshot(t *testing.T) {
 
 	mgr.SetSessionTrust(cwd)
 	mgr.SetSessionReads(cwd)
-	if _, err := permissions.AddReadRoot(extra); err != nil {
+	if _, err := grants.AddReadRoot(extra, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 	auth := g.Authorization()
 	if !auth.SessionTrust || !auth.SessionReads {
 		t.Errorf("snapshot = %+v, want both grants", auth)
 	}
-	if len(auth.ReadRoots) == 0 || auth.ReadRoots[0] != extra {
-		t.Errorf("snapshot read roots = %v, want %q", auth.ReadRoots, extra)
+	// It must be among the roots, not first: the snapshot is built from the
+	// table, which sorts by path, and the session-reads answer above put the
+	// working directory in the same list.
+	if !slices.Contains(auth.ReadRoots, permissions.Canonical(extra)) {
+		t.Errorf("snapshot read roots = %v, want it to contain %q", auth.ReadRoots, extra)
 	}
 }
 
@@ -187,7 +191,7 @@ func TestGatesAuthorizationSnapshot(t *testing.T) {
 // installed, and a root the read-root policy refuses (too broad) is reported
 // rather than silently widening the boundary.
 func TestGatesSeedAppliesParentAuthorizations(t *testing.T) {
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	cwd := t.TempDir()
 	extra := t.TempDir()
 	mgr := gatesTrustStore(t)
@@ -203,7 +207,7 @@ func TestGatesSeedAppliesParentAuthorizations(t *testing.T) {
 	if !mgr.ReadsTrusted(cwd) {
 		t.Error("Seed must apply the parent's session reads")
 	}
-	if !permissions.ReadableAt(filepath.Join(extra, "a.go")) {
+	if !grants.Allows(filepath.Join(extra, "a.go"), grants.Read) {
 		t.Errorf("Seed must register %q as a read root", extra)
 	}
 
@@ -222,8 +226,7 @@ func TestGrantWritableRoot(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
-	seatbelt.SetWritableRoots(nil)
+	grantstest.Install(t)
 
 	target := filepath.Join(dir, "build")
 
@@ -232,15 +235,13 @@ func TestGrantWritableRoot(t *testing.T) {
 	if !made {
 		t.Fatalf("session grant failed: %s", why)
 	}
-	if got := seatbelt.WritableRoots(); len(got) != 1 || got[0] != target {
+	if got := grants.WritableRoots(); len(got) != 1 || got[0] != permissions.Canonical(target) {
 		t.Fatalf("registry = %v, want the granted path", got)
 	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		t.Fatalf("LoadPermissionsConfig: %v", err)
-	}
-	if len(saved.WritableRoots) != 0 {
-		t.Fatalf("a session grant must not be persisted, got %v", saved.WritableRoots)
+	for _, g := range grants.Process().Entries().Remembered {
+		if g.Path == target {
+			t.Fatalf("a session grant must not be written down: %+v", g)
+		}
 	}
 
 	// Remembered: now it is written down too.
@@ -251,17 +252,13 @@ func TestGrantWritableRoot(t *testing.T) {
 	if !strings.Contains(why, "remembered") {
 		t.Errorf("why = %q, want it to confirm the durable grant", why)
 	}
-	saved, _ = config.LoadPermissionsConfig()
-	if len(saved.WritableRoots) != 1 || saved.WritableRoots[0] != target {
-		t.Fatalf("managed store = %v, want the granted path", saved.WritableRoots)
+	if !grants.Allows(target, grants.Write) {
+		t.Fatalf("the remembered grant is not in the table: %+v", grants.Process().Entries().All())
 	}
 
-	// A second remembered grant does not duplicate the entry.
-	if _, _ = GrantWritableRoot(target, true); err != nil {
-		t.Fatalf("second remembered grant: %v", err)
-	}
-	saved, _ = config.LoadPermissionsConfig()
-	if len(saved.WritableRoots) != 1 {
-		t.Fatalf("second grant duplicated the entry: %v", saved.WritableRoots)
+	// A second remembered grant is the same row: the table keys by path, so
+	// re-answering cannot accumulate duplicates.
+	if _, _ = GrantWritableRoot(target, true); len(grants.WritableRoots()) != 1 {
+		t.Fatalf("second grant duplicated the entry: %v", grants.WritableRoots())
 	}
 }

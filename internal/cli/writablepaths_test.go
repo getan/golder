@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/getan/golder/internal/cli/config"
-	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 )
 
 // isolateWritablePaths points the config discovery at a temp XDG dir, resets
@@ -15,8 +15,7 @@ func isolateWritablePaths(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	seatbelt.SetWritableRoots(nil)
-	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
+	grantstest.Install(t)
 	return dir
 }
 
@@ -36,9 +35,8 @@ func TestWritablePathsLifecycle(t *testing.T) {
 	if err != nil || root != granted {
 		t.Fatalf("AddWritablePath = %q err=%v, want %q", root, err, granted)
 	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil || len(saved.WritableRoots) != 1 || saved.WritableRoots[0] != granted {
-		t.Fatalf("managed store should persist the grant, got %+v err=%v", saved.WritableRoots, err)
+	if !grants.Allows(filepath.Join(granted, "x"), grants.Write) {
+		t.Fatalf("the persisted grant should be a row in the table: %+v", grants.Process().Entries().All())
 	}
 	entries, _ = ListWritablePaths()
 	if len(entries) != 1 || entries[0].Source != WritableSourceSaved {
@@ -49,19 +47,18 @@ func TestWritablePathsLifecycle(t *testing.T) {
 	if _, err := AddWritablePath(granted); err != nil {
 		t.Fatalf("second AddWritablePath: %v", err)
 	}
-	saved, _ = config.LoadPermissionsConfig()
-	if len(saved.WritableRoots) != 1 {
-		t.Fatalf("second add duplicated the entry: %v", saved.WritableRoots)
+	if n := len(grants.WritableRoots()); n != 1 {
+		t.Fatalf("second add duplicated the entry: %d rows", n)
 	}
 
 	res, err := RemoveWritablePath(granted)
-	if err != nil || !res.Found() || !res.WasSession || !res.WasSaved {
+	if err != nil || !res.Found() || res.WasSession || !res.WasRemembered {
 		t.Fatalf("RemoveWritablePath = %+v err=%v", res, err)
 	}
 	if entries, _ = ListWritablePaths(); len(entries) != 0 {
 		t.Fatalf("after removal the list should be empty, got %+v", entries)
 	}
-	if got := seatbelt.WritableRoots(); len(got) != 0 {
+	if got := grants.WritableRoots(); len(got) != 0 {
 		t.Fatalf("registry should be empty after removal, got %v", got)
 	}
 }

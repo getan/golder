@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -198,8 +199,8 @@ func resolveReadable(ctx context.Context, roots []string, p string) (string, err
 	if g := strings.TrimSpace(agentcore.ReadGrantFromContext(ctx)); g != "" && permissions.InsideResolved(g, target) {
 		return target, nil
 	}
-	// A session grant is a directory in the read-root registry.
-	if permissions.ReadableAt(target) {
+	// A session grant is a directory row in the authorization table.
+	if grants.Allows(target, grants.Read) {
 		return target, nil
 	}
 	return "", err

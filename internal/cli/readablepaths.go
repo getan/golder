@@ -1,136 +1,100 @@
 package cli
 
-// Readable paths: the shared implementation behind `/permissions readable` in
-// both the REPL (a registry Action) and the TUI (the same registry). It is the
-// read-side twin of writablepaths.go, and exists because the read grant had no
-// persisted form: the approval dialog's "allow reading this folder" lived in
-// memory only, while the writable grant beside it had a command that wrote
-// permissions.toml. The managed store's schema already carried ReadableRoots
-// and startup already read it back — only the writing half was missing.
+// Readable paths: the read grants in the authorization table, as the boundary
+// gate and the read tools see them. Shared by the REPL and the TUI so both
+// front-ends list and edit the same rows in the same words.
+//
+// There used to be a second store beside the table — permissions.toml, which
+// the dialogs wrote and startup read back — and these functions merged the two.
+// The table is now the only one, so the merge is gone: a row IS the grant, and
+// what a person adds here is what every layer reads on the next call.
 
 import (
-	"fmt"
-
-	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
 
-// Where a readable path comes from; displayed next to the path. The labels are
-// the writable side's, since the same two sources feed both.
+// Where a readable path comes from; displayed next to the path. The remembered
+// label names the file the row lives in, and the session label marks what dies
+// with the process.
 const (
-	ReadableSourceSaved   = WritableSourceSaved
-	ReadableSourceSession = WritableSourceSession
+	ReadableSourceSaved   = "grants.json"
+	ReadableSourceSession = "session"
 )
 
 // ReadablePathEntry is one readable root with its provenance.
 type ReadablePathEntry struct {
 	Path   string
 	Source string
+	// Detail is the row's own Source field (which dialog or command recorded
+	// it), kept for a caller that wants to show more than the two-way label.
+	Detail string
 }
 
 // ReadableRemoval reports what a removal touched.
 type ReadableRemoval struct {
-	Path       string
-	WasSession bool
-	WasSaved   bool
+	Path          string
+	WasSession    bool
+	WasRemembered bool
+	// StillReadable reports that the read grant survives the removal because
+	// the row also grants write, and write implies read: the honest answer for
+	// "remove reading" on a writable root is that writing it means reading it.
+	StillReadable bool
 }
 
-// Found reports whether the path was granted by any source.
-func (r ReadableRemoval) Found() bool {
-	return r.WasSession || r.WasSaved
-}
+// Found reports whether the path held a read grant at all.
+func (r ReadableRemoval) Found() bool { return r.WasSession || r.WasRemembered || r.StillReadable }
 
-// ListReadablePaths merges the two files with the live session registry.
-// Unreadable entries and malformed files become warnings rather than errors,
-// mirroring the writable list.
+// ListReadablePaths returns every row that grants reading, remembered first
+// (the table's own order), each with the label the dialog prints.
 func ListReadablePaths() ([]ReadablePathEntry, []string) {
-	var entries []ReadablePathEntry
-	var warnings []string
-	seen := map[string]bool{}
-	add := func(raw, source string) {
-		p, err := permissions.NormalizeReadRoot(raw)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("%s: %v", source, err))
-			return
-		}
-		if seen[p] {
-			return
-		}
-		seen[p] = true
-		entries = append(entries, ReadablePathEntry{Path: p, Source: source})
+	s := grants.Process()
+	if s == nil {
+		return nil, nil
 	}
-	if saved, err := config.LoadPermissionsConfig(); err != nil {
-		warnings = append(warnings, fmt.Sprintf("%s: %v", ReadableSourceSaved, err))
-	} else {
-		for _, r := range saved.ReadableRoots {
-			add(r, ReadableSourceSaved)
+	var out []ReadablePathEntry
+	for _, g := range s.Entries().All() {
+		if !g.Allow.Has(grants.Read) {
+			continue
 		}
+		source := ReadableSourceSaved
+		if g.Lifetime == grants.Session {
+			source = ReadableSourceSession
+		}
+		out = append(out, ReadablePathEntry{Path: g.Path, Source: source, Detail: g.Source})
 	}
-	for _, r := range permissions.ReadRoots() {
-		add(r, ReadableSourceSession)
-	}
-	return entries, warnings
+	return out, nil
 }
 
-// AddReadablePath grants a directory for reading: it registers the path for
-// this session and appends it to the managed store, so the next launch applies
-// it without asking.
+// AddReadablePath grants a directory for reading and persists it, so the next
+// launch applies it without asking. The validation is the table's
+// (grants.AddReadRoot refuses a root too broad to be a boundary), so a typo
+// cannot turn into "read everything" whichever front-end made it.
 func AddReadablePath(raw string) (path string, err error) {
-	root, err := permissions.NormalizeReadRoot(raw)
-	if err != nil {
-		return "", err
-	}
-	if p, e := permissions.AddReadRoot(root); e == nil {
-		root = p
-	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		return "", err
-	}
-	found := false
-	for _, r := range saved.ReadableRoots {
-		if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-			found = true
-			break
-		}
-	}
-	if !found {
-		saved.ReadableRoots = append(saved.ReadableRoots, root)
-		if err := config.SavePermissionsConfig(saved); err != nil {
-			return "", err
-		}
-	}
-	return root, nil
+	return grants.AddReadRoot(raw, grants.Remembered, "readable add")
 }
 
-// RemoveReadablePath revokes a path for this session and deletes it from the
-// managed store.
+// RemoveReadablePath revokes a read grant. A row that also grants write keeps
+// reading — write implies read — and says so rather than pretending the
+// revocation worked.
 func RemoveReadablePath(raw string) (ReadableRemoval, error) {
 	root, err := permissions.NormalizeReadRoot(raw)
 	if err != nil {
 		return ReadableRemoval{}, err
 	}
-	res := ReadableRemoval{Path: root}
-	res.WasSession = permissions.RemoveReadRoot(root)
-	saved, err := config.LoadPermissionsConfig()
+	s := grants.Process()
+	if s == nil {
+		return ReadableRemoval{Path: root}, nil
+	}
+	if s.Allows(root, grants.Write) {
+		return ReadableRemoval{Path: root, StillReadable: true}, nil
+	}
+	rem, err := s.RemoveCapability(root, grants.Read)
 	if err != nil {
-		return res, err
+		return ReadableRemoval{Path: root}, err
 	}
-	var kept []string
-	for _, r := range saved.ReadableRoots {
-		if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-			res.WasSaved = true
-			continue
-		}
-		kept = append(kept, r)
-	}
-	if res.WasSaved {
-		saved.ReadableRoots = kept
-		if err := config.SavePermissionsConfig(saved); err != nil {
-			return res, err
-		}
-	}
-	return res, nil
+	return ReadableRemoval{Path: root, WasSession: rem.Session, WasRemembered: rem.Remembered}, nil
 }
 
 // ReadableSourceLabel renders the provenance of a readable path for the human,
@@ -138,12 +102,18 @@ func RemoveReadablePath(raw string) (ReadableRemoval, error) {
 func ReadableSourceLabel(source string, zh bool) string {
 	switch {
 	case source == ReadableSourceSaved && zh:
-		return "（permissions.toml，已持久化）"
+		return "（" + ReadableSourceSaved + "，已持久化）"
 	case source == ReadableSourceSaved:
-		return "(permissions.toml, persisted)"
+		return "(" + ReadableSourceSaved + ", remembered)"
 	case zh:
 		return "（仅本会话）"
 	default:
 		return "(this session)"
 	}
 }
+
+// DisplayHomePath shortens a path under $HOME to "~/…" for display; the grant
+// itself always uses the full path. It is ui's implementation, kept under this
+// name because every caller in this package (and the TUI's pickers, which share
+// the wording) reads it as cli's.
+func DisplayHomePath(p string) string { return ui.DisplayHomePath(p) }

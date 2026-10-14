@@ -2040,8 +2040,8 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 				return m.reopenWritablePathsPicker(false)
 			}
 			msg := "Revoked " + cli.DisplayHomePath(res.Path) + " for this session"
-			if res.WasSaved {
-				msg += ", deleted from permissions.toml"
+			if res.WasRemembered {
+				msg += ", forgotten (grants.json)"
 			}
 			m.transcript.addSystem(msg + ".")
 			return m.reopenWritablePathsPicker(false)

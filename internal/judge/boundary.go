@@ -247,16 +247,29 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				// verdict, and recording it would turn a headless run's silence
 				// into a refusal the user never gave.
 				//
-				// The scope is the exact path the dialog named and the lifetime
-				// is the session, which is what the answer meant: Esc is "not
-				// now", not "never". A refusal on a child still beats a grant
-				// inherited from a parent, so granting the directory afterwards
-				// does not silently reopen this file.
+				// Exact scope, mirroring the one-read grant this answer sits
+				// beside: the question named a path, so the answer covers that
+				// path. A subtree refusal would be bigger than the question —
+				// "no to this file" is not "no to everything under its
+				// directory" — and it would silence a question the user has not
+				// been asked. The lifetime is the session: Esc is "not now",
+				// not "never".
+				//
+				// Exact also keeps the refusal ahead of a broader grant: the
+				// table answers most-specific-first, so granting the directory
+				// afterwards does not silently reopen the file that was refused
+				// by name.
 				for _, q := range questions {
 					if q.target == "" {
 						continue
 					}
-					_, _ = grants.Refuse(q.target, op, grants.Session)
+					_, _ = grants.Add(grants.Grant{
+						Path:     q.target,
+						Deny:     op,
+						Scope:    grants.Exact,
+						Lifetime: grants.Session,
+						Source:   "boundary dialog (denied)",
+					})
 				}
 			}
 			notify(Note{
@@ -299,23 +312,14 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			}
 		}
 		if granted := strings.TrimSpace(ans.ReadRoot); granted != "" {
-			if _, err := permissions.AddReadRoot(granted); err == nil {
-				// Record the same answer in the unified table. Both readers stay
-				// live during the changeover (see the check above), so writing
-				// here is what makes the table the record of what the user
-				// actually decided — which is what /trust lists and what the
-				// next session loads.
-				life := grants.Session
-				if ans.Persisted {
-					life = grants.Remembered
-				}
-				_, _ = grants.Add(grants.Grant{
-					Path:     granted,
-					Allow:    grants.Read,
-					Scope:    grants.Subtree,
-					Lifetime: life,
-					Source:   "read dialog",
-				})
+			life := grants.Session
+			if ans.Persisted {
+				life = grants.Remembered
+			}
+			// The row IS the grant: the boundary gate, the file tools and the
+			// sandbox all read this one table, so recording it here is what
+			// makes the answer take effect everywhere on the next call.
+			if _, err := grants.AddReadRoot(granted, life, "read dialog"); err == nil {
 				rationale := "reading " + granted + " is allowed for this session"
 				if ans.Persisted {
 					rationale = "reading " + granted + " is allowed and remembered across sessions"
@@ -422,9 +426,6 @@ func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string, op gra
 	}
 	if grants.Check(resolved, grants.Read).Decision == grants.Denied {
 		return boundaryRefused
-	}
-	if permissions.ReadableAt(resolved) {
-		return boundarySilent
 	}
 	if grants.Allows(resolved, grants.Read) {
 		return boundarySilent

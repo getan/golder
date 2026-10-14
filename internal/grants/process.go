@@ -17,6 +17,8 @@ import (
 	"errors"
 	"os"
 	"sync"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 // errNoTable reports a grant that had nowhere to live. The grant is still
@@ -115,6 +117,48 @@ func Refuse(path string, caps Capability, life Lifetime) (Grant, error) {
 	return s.Refuse(path, caps, life)
 }
 
+// RemoveCapability revokes capabilities from a path in the process table,
+// keeping whatever else the row grants. It reports which layers held it, and
+// false when there is no table (the caller has nothing to revoke).
+func RemoveCapability(path string, caps Capability) (Removal, bool, error) {
+	s := Process()
+	if s == nil {
+		return Removal{}, false, nil
+	}
+	rem, err := s.RemoveCapability(path, caps)
+	return rem, true, err
+}
+
+// AddReadRoot records a directory grant for reading and returns its normalized
+// form. It is the one way a read grant enters the table, so the validation
+// cannot be skipped by a caller: a root too broad to be a boundary (the
+// filesystem root, $HOME, $HOME's parent) is refused, which is what keeps a
+// typo from turning into "read everything".
+func AddReadRoot(raw string, life Lifetime, source string) (string, error) {
+	p, err := permissions.NormalizeReadRoot(raw)
+	if err != nil {
+		return "", err
+	}
+	if _, err := Add(Grant{Path: p, Allow: Read, Scope: Subtree, Lifetime: life, Source: source}); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+// AddWritableRoot records a directory grant for reading and writing inside the
+// sandbox, and returns its normalized form. Write carries Read (a file you may
+// write but not read back is a half-failure), so one row answers both sides.
+func AddWritableRoot(raw string, life Lifetime, source string) (string, error) {
+	p, err := permissions.NormalizePath(raw)
+	if err != nil {
+		return "", err
+	}
+	if _, err := Add(Grant{Path: p, Allow: ReadWrite, Scope: Subtree, Lifetime: life, Source: source}); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
 // ReadRoots returns the subtree paths the table grants read access to, which is
 // the form the sandbox and the read-root registry want.
 //
@@ -128,10 +172,19 @@ func ReadRoots() []string {
 		return nil
 	}
 	var out []string
+	seen := map[string]bool{}
 	for _, g := range s.Entries().All() {
 		if g.Scope == Exact || !g.Allow.Has(Read) {
 			continue
 		}
+		// One path, one entry: the same key can hold a row in two layers (a
+		// session grant beside the remembered one it was made from, or a grant
+		// re-answered in this run), and a caller here wants a set of roots, not
+		// a log of answers. Without this the sandbox would mount a path twice.
+		if seen[g.Path] {
+			continue
+		}
+		seen[g.Path] = true
 		out = append(out, g.Path)
 	}
 	return out
@@ -145,10 +198,15 @@ func WritableRoots() []string {
 		return nil
 	}
 	var out []string
+	seen := map[string]bool{}
 	for _, g := range s.Entries().All() {
 		if g.Scope == Exact || !g.Allow.Has(Write) {
 			continue
 		}
+		if seen[g.Path] {
+			continue
+		}
+		seen[g.Path] = true
 		out = append(out, g.Path)
 	}
 	return out

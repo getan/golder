@@ -9,7 +9,8 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 )
 
 // runWithCtx executes a tool with the given context, so a test can carry the
@@ -36,7 +37,7 @@ func grantFixture(t *testing.T) (workspace, outside, target string) {
 	if err := os.WriteFile(target, []byte("needle here\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	return workspace, outside, target
 }
 
@@ -80,7 +81,7 @@ func TestReadGrantIsScopedToItsPath(t *testing.T) {
 func TestSessionGrantAllowsReadAndSearch(t *testing.T) {
 	requireRG(t)
 	workspace, outside, target := grantFixture(t)
-	if _, err := permissions.AddReadRoot(outside); err != nil {
+	if _, err := grants.AddReadRoot(outside, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 
@@ -106,7 +107,7 @@ func TestSessionGrantAllowsReadAndSearch(t *testing.T) {
 func TestGrepUnderGrantReportsRelativePaths(t *testing.T) {
 	requireRG(t)
 	workspace, outside, _ := grantFixture(t)
-	if _, err := permissions.AddReadRoot(outside); err != nil {
+	if _, err := grants.AddReadRoot(outside, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 	text := resultText(runWithCtx(t, context.Background(), &GrepTool{Root: workspace}, map[string]any{"pattern": "needle", "path": outside}))
@@ -134,12 +135,12 @@ func TestCredentialPathStillRefusedUnderGrant(t *testing.T) {
 	if err := os.WriteFile(key, []byte("PRIVATE KEY\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
-	if _, err := permissions.AddReadRoot(home); err != nil {
+	grantstest.Install(t)
+	if _, err := grants.AddReadRoot(home, grants.Session, "test"); err != nil {
 		// $HOME itself is refused by design, so grant the directory above the
 		// credential one instead: the point is that a grant covering the path
 		// still does not open it.
-		if _, err := permissions.AddReadRoot(ssh); err != nil {
+		if _, err := grants.AddReadRoot(ssh, grants.Session, "test"); err != nil {
 			t.Fatalf("AddReadRoot: %v", err)
 		}
 	}
@@ -159,7 +160,7 @@ func TestCredentialPathStillRefusedUnderGrant(t *testing.T) {
 // session has granted the directory for reading, and even when both are true.
 func TestApplyPatchIgnoresReadGrants(t *testing.T) {
 	workspace, outside, _ := grantFixture(t)
-	if _, err := permissions.AddReadRoot(outside); err != nil {
+	if _, err := grants.AddReadRoot(outside, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 	target := filepath.Join(outside, "written.txt")

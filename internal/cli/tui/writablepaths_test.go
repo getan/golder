@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // TestWritablePathsPickerFlow covers the TUI surface end to end: bare
@@ -18,8 +20,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
-	seatbelt.SetWritableRoots(nil)
-	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
+	grantstest.Install(t)
 
 	granted := filepath.Join(dir, "cache", "build")
 	if _, err := cli.AddWritablePath(granted); err != nil {
@@ -49,8 +50,11 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	if len(m.menu.pick) != 2 { // Add path… + the granted entry
 		t.Fatalf("rows = %+v", m.menu.pick)
 	}
-	if m.menu.pick[1].Value != granted || !strings.Contains(m.menu.pick[1].Detail, "Enter removes") {
-		t.Fatalf("path row = %+v", m.menu.pick[1])
+	// The row shows the resolved path (the table keys by location) and its
+	// provenance, which is the file the grant now lives in.
+	want := filepath.Join(permissions.Canonical(dir), "cache", "build")
+	if m.menu.pick[1].Value != want || !strings.Contains(m.menu.pick[1].Detail, "Enter removes") {
+		t.Fatalf("path row = %+v, want %q", m.menu.pick[1], want)
 	}
 
 	// Enter on the path revokes it and keeps the picker open on the now-empty
@@ -61,8 +65,8 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	if m.menu.pickKind != "permissions-writable" || len(m.menu.pick) != 1 {
 		t.Fatalf("picker should stay open after removal: kind=%q rows=%d", m.menu.pickKind, len(m.menu.pick))
 	}
-	if roots := seatbelt.WritableRoots(); len(roots) != 0 {
-		t.Fatalf("registry not revoked: %v", roots)
+	if roots := grants.WritableRoots(); len(roots) != 0 {
+		t.Fatalf("table not revoked: %v", roots)
 	}
 	if !strings.Contains(m.transcriptText(), "Revoked") {
 		t.Fatalf("transcript should confirm removal:\n%s", m.transcriptText())

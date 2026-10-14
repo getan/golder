@@ -6,7 +6,6 @@ package tui
 
 import (
 	"context"
-	"github.com/getan/golder/internal/cli/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +16,10 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/seatbelt"
 )
 
 // trustGateForTest builds the session's gate chain with the permission gate
@@ -530,7 +530,7 @@ func TestApprovalTitleEscalation(t *testing.T) {
 // path offers the per-path grant, and choosing it registers the path and
 // answers with the containment grant (Approve + WritableRoot).
 func TestApprovalDialogWritableRow(t *testing.T) {
-	defer seatbelt.SetWritableRoots(nil)
+	grantstest.Install(t)
 	t.Setenv("HOME", t.TempDir())
 	req := judge.ApprovalRequest{
 		Kind:          judge.ApprovalEscalation,
@@ -560,7 +560,7 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 	if !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
 		t.Fatalf("answer = %+v", ans)
 	}
-	if roots := seatbelt.WritableRoots(); len(roots) != 1 || roots[0] != "/Volumes/KIOXIA/old-build" {
+	if roots := grants.WritableRoots(); len(roots) != 1 || roots[0] != "/Volumes/KIOXIA/old-build" {
 		t.Fatalf("registry = %v", roots)
 	}
 	// The path is granted now: the row disappears for the next request (and
@@ -579,7 +579,7 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 // TestInferWritableRoot pins the candidate filter: only outside paths make the
 // row, and every ambiguous or already-writable candidate hides it.
 func TestInferWritableRoot(t *testing.T) {
-	defer seatbelt.SetWritableRoots(nil)
+	grantstest.Install(t)
 	// A lexical home outside the OS temp dir: a t.TempDir() home would sit
 	// under os.TempDir() (which the filter rightly rejects) and mask the
 	// tilde expansion case.
@@ -873,11 +873,12 @@ func TestApprovalReadRememberedPersists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	grantstest.Install(t)
 	dir := filepath.Join(home, "outside")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { permissions.RemoveReadRoot(dir) })
+	t.Cleanup(func() { _, _, _ = grants.RemoveCapability(dir, grants.Read) })
 
 	session := newRemoteTestSession(t)
 	m := NewModel(Options{}).withSession(session, nil)
@@ -899,21 +900,11 @@ func TestApprovalReadRememberedPersists(t *testing.T) {
 		t.Error("the remembered answer must be marked Persisted for the gate's note")
 	}
 	// The grant is live for this session AND written down.
-	if !permissions.ReadableAt(filepath.Join(dir, "a.go")) {
-		t.Error("the session registry did not take the grant")
+	if !grants.Allows(filepath.Join(dir, "a.go"), grants.Read) {
+		t.Error("the table did not take the grant")
 	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		t.Fatalf("LoadPermissionsConfig: %v", err)
-	}
-	found := false
-	for _, r := range saved.ReadableRoots {
-		if r == dir {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("permissions.toml does not carry %s: %v", dir, saved.ReadableRoots)
+	if !grants.Allows(dir, grants.Read) {
+		t.Errorf("the table does not carry %s: %+v", dir, grants.Process().Entries().All())
 	}
 	var note strings.Builder
 	for _, b := range m.transcript.blocks {

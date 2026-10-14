@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -65,8 +66,7 @@ func boundaryFixture(t *testing.T) (workspace, outside string) {
 			t.Fatal(err)
 		}
 	}
-	permissions.SetReadRoots(nil)
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	return workspace, outside
 }
 
@@ -111,6 +111,10 @@ func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			// Each case is its own scenario: a refusal recorded by the previous
+			// one would block here without asking, which is correct behaviour
+			// but not what this test is about.
+			grantstest.Install(t)
 			asked := 0
 			reviewer := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
 			scope := BoundaryGate(BoundaryOpts{

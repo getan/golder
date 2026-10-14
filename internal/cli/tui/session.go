@@ -37,6 +37,7 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
@@ -45,7 +46,6 @@ import (
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/session"
 	"github.com/getan/golder/internal/trust"
 )
@@ -835,7 +835,7 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	// a dialog: the call is contained with the grant, which is exactly what
 	// the grant pre-decided. Without this, every retry would re-ask.
 	if root := escalationPathCandidate(req, s.cwd); root != "" {
-		for _, granted := range seatbelt.WritableRoots() {
+		for _, granted := range grants.WritableRoots() {
 			if coveredBy(root, granted) {
 				return judge.ApprovalAnswer{Approve: true, WritableRoot: root, Answered: true}
 			}

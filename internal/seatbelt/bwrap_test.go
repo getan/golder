@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -182,8 +184,7 @@ func TestReadableRootsIsAWhitelist(t *testing.T) {
 	t.Setenv("GOLDER_SANDBOX_READABLE", "")
 	// Read grants are process-wide and feed this list too (see the test below);
 	// clear them so this test states the baseline whitelist.
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
-	permissions.SetReadRoots(nil)
+	grantstest.Install(t)
 
 	roots := ReadableRoots()
 	for _, want := range []string{"/usr", "/bin", "/opt", "/etc"} {
@@ -240,15 +241,15 @@ func TestSessionReadGrantWidensSandbox(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("GOLDER_HOME", filepath.Join(home, "ghome"))
 	t.Setenv("GOLDER_SANDBOX_READABLE", "")
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
-	permissions.SetReadRoots(nil)
+	grantstest.Install(t)
 
 	granted := t.TempDir()
-	if _, err := permissions.AddReadRoot(granted); err != nil {
+	if _, err := grants.AddReadRoot(granted, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
 
-	if roots := ReadableRoots(); !slices.Contains(roots, granted) {
+	canon := permissions.Canonical(granted)
+	if roots := ReadableRoots(); !slices.Contains(roots, canon) {
 		t.Errorf("a session read grant must widen the sandbox read whitelist: %v", roots)
 	}
 
@@ -258,16 +259,16 @@ func TestSessionReadGrantWidensSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SandboxArgv: %v", err)
 	}
-	if indexOfSeq(argv, "--ro-bind", granted, granted) < 0 {
+	if indexOfSeq(argv, "--ro-bind", canon, canon) < 0 {
 		t.Errorf("bwrap argv must read-only bind the granted directory %s: %v", granted, argv)
 	}
 
 	// Revoking it takes it back out of both, so a grant is not permanent for
 	// the life of the process by accident.
-	if !permissions.RemoveReadRoot(granted) {
-		t.Fatal("RemoveReadRoot should report the grant was present")
+	if rem, _, err := grants.RemoveCapability(granted, grants.Read); err != nil || !rem.Touched() {
+		t.Fatalf("revoking the grant should report the layers it held: %+v err=%v", rem, err)
 	}
-	if roots := ReadableRoots(); slices.Contains(roots, granted) {
+	if roots := ReadableRoots(); slices.Contains(roots, canon) {
 		t.Errorf("a revoked grant must leave the whitelist: %v", roots)
 	}
 }

@@ -22,8 +22,8 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
@@ -925,13 +925,18 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 // runPermissionsList renders every permission in force, not just the ones that
 // apply to the current directory: the approval mode, the sandbox writable roots,
 // and the readable roots outside the workspace, each with the file it came from
-// (permissions.toml persisted / this session). It is the
+// (grants.json / this session). It is the
 // overview the per-scope subcommands (`writable list`, `readable list`) are
 // slices of — one screen to audit before revoking something, and the one place
 // that names the files a user can edit by hand.
 //
 // The bare `/permissions` stays the mode picker (it is what the TUI's mode
 // picker prints as text); this is the full report, which the bare form points at.
+// grantsPath names the file every grant lives in, for the report's footer. The
+// table resolves its own location (DefaultPath honours the environment), so
+// asking it is what keeps the line truthful if that ever moves.
+func grantsPath() string { return grants.DefaultPath(os.Getenv) }
+
 func runPermissionsList(st *permissions.State, modes []permissions.Mode, l string) string {
 	zh := l == "zh"
 	current := permissions.Auto
@@ -977,13 +982,13 @@ func runPermissionsList(st *permissions.State, modes []permissions.Mode, l strin
 		fmt.Fprintf(&b, "\nwarning: %s", w)
 	}
 	if zh {
-		fmt.Fprintf(&b, "\n文件：%s（本文件托管上述授权）",
-			cli.DisplayHomePath(config.PermissionsConfigPath()))
+		fmt.Fprintf(&b, "\n文件：%s（唯一授权存储）",
+			cli.DisplayHomePath(grantsPath()))
 		fmt.Fprintf(&b, "\n修改：/permissions <模式>　/permissions writable add <路径>　permissions readable add <路径>")
 		b.WriteString("\n信任（按目录）：/trust list")
 	} else {
-		fmt.Fprintf(&b, "\nfiles: %s (managed store for the grants above)",
-			cli.DisplayHomePath(config.PermissionsConfigPath()))
+		fmt.Fprintf(&b, "\nfile: %s (the one authorization store)",
+			cli.DisplayHomePath(grantsPath()))
 		fmt.Fprintf(&b, "\nchange: /permissions <mode>  /permissions writable add <path>  /permissions readable add <path>")
 		b.WriteString("\ntrust (per directory): /trust list")
 	}
@@ -1024,9 +1029,9 @@ func noneWord(zh bool) string {
 func writableSourceLabel(source string, zh bool) string {
 	switch {
 	case source == cli.WritableSourceSaved && zh:
-		return "（permissions.toml，已持久化）"
+		return "（grants.json，已持久化）"
 	case source == cli.WritableSourceSaved:
-		return "(permissions.toml, persisted)"
+		return "(grants.json, remembered)"
 	case zh:
 		return "（仅本会话）"
 	default:
@@ -1094,9 +1099,9 @@ func runPermissionsWritable(arg, l string) string {
 			}
 			display := cli.DisplayHomePath(root)
 			if zh {
-				return fmt.Sprintf("已授权 %s：沙箱内可读写，已保存到 permissions.toml（重启后仍生效）", display)
+				return fmt.Sprintf("已授权 %s：沙箱内可读写，已写入 grants.json（重启后仍生效）", display)
 			}
-			return fmt.Sprintf("granted %s: read+write inside the sandbox, saved to permissions.toml", display)
+			return fmt.Sprintf("granted %s: read+write inside the sandbox, saved to grants.json", display)
 		case "rm", "remove":
 			p := restAfter(fields[1])
 			if p == "" {
@@ -1119,13 +1124,13 @@ func runPermissionsWritable(arg, l string) string {
 			var b strings.Builder
 			if zh {
 				fmt.Fprintf(&b, "已撤销 %s", display)
-				if res.WasSaved {
-					b.WriteString("，已从 permissions.toml 删除")
+				if res.WasRemembered {
+					b.WriteString("，已从 grants.json 删除")
 				}
 			} else {
 				fmt.Fprintf(&b, "revoked %s", display)
-				if res.WasSaved {
-					b.WriteString(", deleted from permissions.toml")
+				if res.WasRemembered {
+					b.WriteString(", deleted from grants.json")
 				}
 			}
 			return b.String()
@@ -1192,9 +1197,9 @@ func runPermissionsReadable(arg, l string) string {
 			}
 			display := cli.DisplayHomePath(root)
 			if zh {
-				return fmt.Sprintf("已授权读取 %s，已保存到 permissions.toml（重启后仍生效）", display)
+				return fmt.Sprintf("已授权读取 %s，已写入 grants.json（重启后仍生效）", display)
 			}
-			return fmt.Sprintf("granted read access to %s, saved to permissions.toml", display)
+			return fmt.Sprintf("granted read access to %s, saved to grants.json", display)
 		case "rm", "remove":
 			p := restAfter(fields[1])
 			if p == "" {
@@ -1217,13 +1222,13 @@ func runPermissionsReadable(arg, l string) string {
 			var b strings.Builder
 			if zh {
 				fmt.Fprintf(&b, "已撤销 %s", display)
-				if res.WasSaved {
-					b.WriteString("，已从 permissions.toml 删除")
+				if res.WasRemembered {
+					b.WriteString("，已从 grants.json 删除")
 				}
 			} else {
 				fmt.Fprintf(&b, "revoked %s", display)
-				if res.WasSaved {
-					b.WriteString(", deleted from permissions.toml")
+				if res.WasRemembered {
+					b.WriteString(", deleted from grants.json")
 				}
 			}
 			return b.String()

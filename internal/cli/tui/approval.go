@@ -20,8 +20,8 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/judge"
-	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -288,7 +288,7 @@ func (m *Model) answerApproval(value string) {
 			// gate fails closed on an explicit negative), never silently run
 			// unisolated.
 			if root := d.writableRoot; root != "" {
-				if _, err := seatbelt.AddWritableRoot(root); err != nil {
+				if _, err := grants.AddWritableRoot(root, grants.Session, "write dialog"); err != nil {
 					if m.session != nil {
 						m.transcript.addSystem("Cannot grant write access to " + root + ": " + err.Error())
 					}
@@ -298,18 +298,12 @@ func (m *Model) answerApproval(value string) {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
 							" are allowed inside the sandbox for this session only. To make it" +
 							" permanent, choose \"remembered\" next time, or run" +
-							" /permissions writable add " + root)
+							" /boundary writable add " + root)
 					}
 				}
 			}
 		case approveWritablePersist:
 			if root := d.writableRoot; root != "" {
-				if _, err := seatbelt.AddWritableRoot(root); err != nil {
-					if m.session != nil {
-						m.transcript.addSystem("Cannot grant write access to " + root + ": " + err.Error())
-					}
-					break
-				}
 				ans.Approve, ans.WritableRoot = true, root
 				path, err := cli.AddWritablePath(root)
 				if err != nil {
@@ -317,6 +311,12 @@ func (m *Model) answerApproval(value string) {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
 							" are allowed inside the sandbox for this session only; remembering it failed: " + err.Error())
 					}
+					// The session grant still stands, so the call runs contained.
+					// The remembered write failed, so fall back to the session
+					// grant the user asked for rather than losing it: the call
+					// they approved still runs, contained, and the message above
+					// says why it will not survive a restart.
+					_, _ = grants.AddWritableRoot(root, grants.Session, "write dialog")
 				} else {
 					ans.Persisted = true
 					if m.session != nil {
@@ -450,7 +450,7 @@ func inferWritableRoot(req judge.ApprovalRequest, cwd string) string {
 	if p == "" {
 		return ""
 	}
-	for _, granted := range seatbelt.WritableRoots() {
+	for _, granted := range grants.WritableRoots() {
 		if coveredBy(p, granted) {
 			return ""
 		}

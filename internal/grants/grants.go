@@ -783,6 +783,82 @@ type Removal struct {
 // Touched reports whether any layer held the row.
 func (r Removal) Touched() bool { return r.Session || r.Remembered }
 
+// RemoveCapability revokes specific capabilities from a path, keeping the rest
+// of its row, and reports which layers held it. The row is deleted outright once
+// it grants and refuses nothing, so the file never accumulates empty rows.
+//
+// It exists because a row carries a SET, and the commands that manage it are
+// separate: `/trust` speaks for Execute, `/boundary` for Read and Write, and a
+// directory the user reads and runs commands in is one row with both (`re`).
+// Deleting the row for either command would silently revoke the other's grant,
+// which is the kind of cross-talk that makes people stop trusting a permission
+// system.
+//
+// It clears exactly the capabilities named, never more: removing Write leaves a
+// Read the row carried, because a caller that wanted to revoke reading would
+// have said so. Grant is the opposite operation and the same rule applies —
+// see mergeGrant, which drops only the bits a new answer speaks to.
+func (s *Store) RemoveCapability(path string, caps Capability) (Removal, error) {
+	if caps == 0 {
+		return Removal{}, nil
+	}
+	norm, err := storeKey(path)
+	if err != nil {
+		return Removal{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var out Removal
+	if g, ok := s.session[norm]; ok {
+		out.Session = true
+		g.Allow &^= caps
+		g.Deny &^= caps
+		// Re-apply the implication every other entry point applies: a row that
+		// grants Write grants Read, so clearing the Read bit of a writable row
+		// cannot leave a write-only row behind. The caller that meant "stop
+		// reading this" gets the honest outcome instead — the write grant still
+		// implies reading, and cli.ReadableRemoval reports it as still readable.
+		g.Allow = normalizeCaps(g.Allow)
+		if g.Allow == 0 && g.Deny == 0 {
+			delete(s.session, norm)
+		} else {
+			s.session[norm] = g
+		}
+	}
+
+	prev, ok := s.saved[norm]
+	if !ok {
+		return out, nil
+	}
+	out.Remembered = true
+	g := prev
+	g.Allow &^= caps
+	g.Deny &^= caps
+	g.Allow = normalizeCaps(g.Allow)
+	emptied := g.Allow == 0 && g.Deny == 0
+	if emptied {
+		delete(s.saved, norm)
+		// Record the intent so the merge in saveLocked cannot resurrect the row
+		// from the copy still on disk.
+		s.removed[norm] = true
+	} else {
+		s.saved[norm] = g
+	}
+	if s.path == "" {
+		return out, nil
+	}
+	if err := s.saveLocked(); err != nil {
+		s.saved[norm] = prev
+		if emptied {
+			delete(s.removed, norm)
+		}
+		return out, err
+	}
+	out.Persisted = true
+	return out, nil
+}
+
 // saveLocked writes the managed file atomically. Callers hold the write lock.
 //
 // The write is serialized against other golder processes by a lock file beside

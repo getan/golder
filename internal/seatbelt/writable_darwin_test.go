@@ -15,6 +15,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // TestWritableRootsInDarwinProfile pins the macOS policy: the generated
@@ -23,11 +27,13 @@ func TestWritableRootsInDarwinProfile(t *testing.T) {
 	if !Available() {
 		t.Skip("sandbox-exec not on PATH")
 	}
-	defer SetWritableRoots(nil)
+	store := grantstest.Install(t)
+	_ = store
 	granted := t.TempDir()
-	if _, err := AddWritableRoot(granted); err != nil {
+	if _, err := grants.AddWritableRoot(granted, grants.Session, "test"); err != nil {
 		t.Fatal(err)
 	}
+	canon := permissions.Canonical(granted)
 	project := t.TempDir()
 	r := &SeatbeltRunner{ProjectDir: project, TmpDir: t.TempDir()}
 	argv, cleanup, err := r.SandboxArgv("/bin/bash", "-c", "echo hi", project)
@@ -49,10 +55,10 @@ func TestWritableRootsInDarwinProfile(t *testing.T) {
 	if writeLine == "" {
 		t.Fatalf("profile has no write rule:\n%s", text)
 	}
-	if !strings.Contains(writeLine, "(subpath \""+granted+"\")") {
+	if !strings.Contains(writeLine, "(subpath \""+canon+"\")") {
 		t.Errorf("write rule missing the granted root:\n%s", writeLine)
 	}
-	if !strings.Contains(text, "(subpath \""+granted+"\")") {
+	if !strings.Contains(text, "(subpath \""+canon+"\")") {
 		t.Errorf("profile does not make the granted root readable:\n%s", text)
 	}
 }

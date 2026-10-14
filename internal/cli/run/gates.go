@@ -26,13 +26,11 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -252,15 +250,11 @@ func (g *Gates) classifier() judge.Classifier {
 // gate at all (an explicit non-interactive invocation) or the directory is
 // trusted, so the child proceeds exactly where the parent would have.
 func (g *Gates) Authorization() agentcore.ToolAuth {
-	// Both read-grant sources travel, because a child that saw only one would
-	// ask about a directory its parent had already been given — the grant the
-	// user made would appear to evaporate across the process boundary. The
-	// registry carries what config.toml and the environment seed; the unified
-	// table carries what a dialog or `/trust add` recorded, including grants
-	// made earlier in this same session.
-	roots := append([]string(nil), permissions.ReadRoots()...)
-	roots = append(roots, grants.ReadRoots()...)
-	auth := agentcore.ToolAuth{ReadRoots: dedupePaths(roots)}
+	// Every read grant travels, because a child that saw none of them would ask
+	// about a directory its parent had already been given — the grant the user
+	// made would appear to evaporate across the process boundary. They come
+	// from the one table, including grants made earlier in this same session.
+	auth := agentcore.ToolAuth{ReadRoots: dedupePaths(grants.ReadRoots())}
 	if g.opts.Trust == nil {
 		auth.SessionTrust = true
 		return auth
@@ -300,111 +294,63 @@ func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
 		}
 	}
 	for _, root := range auth.ReadRoots {
-		if _, err := permissions.AddReadRoot(root); err != nil {
+		if _, err := grants.AddReadRoot(root, grants.Session, "parent session"); err != nil {
 			refusedRoots++
 		}
 	}
 	return refusedRoots
 }
 
-// PersistReadRoot writes a read grant to the managed store so it survives the
-// process. It lives here, in the gate assembly, because that is where the two
-// layers that need each other can meet: judge (which owns the read-scope gate
-// and takes the answer) is a leaf package that cannot import the config layer,
-// and the cli layer above this one imports run (host.go), so run cannot import
-// cli.
-//
-// alreadySeeded is not a failure: the grant is already permanent because
-// config.toml carries it, and nothing is written — that file belongs to the
-// user, and rewriting it would drop their comments.
+// PersistReadRoot writes a read grant into the authorization table as a
+// remembered row, so it survives the process. It lives here, in the gate
+// assembly, because that is where the two layers that need each other can meet:
+// judge (which owns the boundary gate and takes the answer) is a leaf package
+// that cannot reach the config layer where the table is opened.
 func PersistReadRoot(dir string) (made bool, why string) {
-	root, err := permissions.NormalizeReadRoot(dir)
+	root, err := grants.AddReadRoot(dir, grants.Remembered, "read dialog (remembered)")
 	if err != nil {
-		return false, "cannot remember this path: " + err.Error()
-	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		return false, "cannot remember this path: " + err.Error()
-	}
-	for _, r := range saved.ReadableRoots {
-		if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-			return true, root + " is remembered across sessions"
-		}
-	}
-	saved.ReadableRoots = append(saved.ReadableRoots, root)
-	if err := config.SavePermissionsConfig(saved); err != nil {
 		return false, "cannot remember this path: " + err.Error()
 	}
 	return true, root + " is remembered across sessions"
 }
 
-// WritableAt reports whether a path is already writable for this session: the
-// sandbox's writable-root registry, which config.toml, permissions.toml and
-// every prior write dialog feed. The boundary gate asks it before putting a
-// write question, so a patch into a directory a command may already write is
-// not asked about again — the answer was given once, and the registry is where
-// it lives. It lives here rather than in judge for the same reason PersistReadRoot
-// does: judge is a leaf and cannot reach the registry.
-//
-// Both sides resolve before comparing, because a grant names a location: macOS
-// spells the temp root two ways (/var and /private/var), and a textual
-// comparison would ask again about a directory the user granted.
+// WritableAt reports whether a path is already writable for this session,
+// straight from the authorization table. The boundary gate asks it before
+// putting a write question, so a patch into a directory a command may already
+// write is not asked about again — the answer was given once, and the table is
+// where it lives.
 func WritableAt(path string) bool {
 	p := permissions.Canonical(path)
 	if p == "" {
 		return false
 	}
-	for _, root := range seatbelt.WritableRoots() {
-		if permissions.InsideResolved(root, p) {
-			return true
-		}
-	}
-	return false
+	return grants.Allows(p, grants.Write)
 }
 
 // GrantWritableRoot makes a directory writable inside the sandbox, for this
 // session and — when persist is true — for every later one. It is the callback
-// behind the REPL prompt's `w`/`s` answers, the twin of the TUI dialog's
-// rows, and it lives here for the same reason PersistReadRoot does: judge is a
-// leaf package that can reach neither the sandbox registry nor the managed
-// store, and this assembly point can.
+// behind the REPL prompt's `w`/`s` answers and the TUI dialog's rows.
+//
+// One row is the whole answer: the sandbox's profile builders read the table
+// directly (seatbelt.WritableRoots delegates to it), so there is no second
+// store to mirror into and no window where the two disagree.
 func GrantWritableRoot(root string, persist bool) (made bool, why string) {
-	if _, err := seatbelt.AddWritableRoot(root); err != nil {
+	p, err := permissions.NormalizePath(root)
+	if err != nil {
 		return false, "cannot grant write access to " + root + ": " + err.Error()
 	}
-	// The mirror into the unified table is bookkeeping and runs LAST, whatever
-	// the outcome. Two reasons it must not sit in the middle: the authoritative
-	// stores during the changeover are still the sandbox registry and
-	// permissions.toml, so a mirror failure must not stop the real persistence;
-	// and an early return on a mirror error reported "this session only" for a
-	// grant the next branch would have written down.
-	defer func() {
-		life := grants.Session
-		if persist && made {
-			life = grants.Remembered
-		}
-		// Best-effort: with no table open the grant still works through the
-		// legacy stores, and saying so per call would be noise on every answer.
-		_, _ = grants.Add(grants.Grant{
-			Path: root, Allow: grants.ReadWrite, Scope: grants.Subtree,
-			Lifetime: life, Source: "write dialog",
-		})
-	}()
+	life, source := grants.Session, "write dialog"
+	if persist {
+		life, source = grants.Remembered, "write dialog (remembered)"
+	}
+	if _, err := grants.Add(grants.Grant{
+		Path: p, Allow: grants.ReadWrite, Scope: grants.Subtree,
+		Lifetime: life, Source: source,
+	}); err != nil {
+		return false, "cannot grant write access to " + root + ": " + err.Error()
+	}
 	if !persist {
 		return true, ""
 	}
-	saved, err := config.LoadPermissionsConfig()
-	if err != nil {
-		return true, root + " is writable for this session only; cannot remember it: " + err.Error()
-	}
-	for _, r := range saved.WritableRoots {
-		if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
-			return true, root + " is writable and remembered"
-		}
-	}
-	saved.WritableRoots = append(saved.WritableRoots, root)
-	if err := config.SavePermissionsConfig(saved); err != nil {
-		return true, root + " is writable for this session only; cannot remember it: " + err.Error()
-	}
-	return true, root + " is writable and remembered"
+	return true, p + " is writable and remembered"
 }

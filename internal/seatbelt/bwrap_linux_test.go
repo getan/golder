@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/grants/grantstest"
 )
 
 func TestBwrapRunnerEndToEnd(t *testing.T) {
@@ -107,10 +107,10 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 	if err := os.WriteFile(grantedFile, []byte("granted content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := permissions.AddReadRoot(granted); err != nil {
+	if _, err := grants.AddReadRoot(granted, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
-	t.Cleanup(func() { permissions.SetReadRoots(nil) })
+	grantstest.Install(t)
 	if out, err := run("cat " + grantedFile); err != nil {
 		t.Errorf("a granted directory must be readable inside the sandbox: %v\n%s", err, out)
 	} else if !strings.Contains(out, "granted content") {

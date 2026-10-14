@@ -69,28 +69,6 @@ type FileConfig struct {
 	Dream DreamConfig `toml:"dream"`
 }
 
-// PermissionsConfig is the managed permissions store (permissions.toml):
-// WritableRoots widens the sandbox's write side (and, by construction, its read
-// side) for the listed absolute paths; ReadableRoots allows the read-only tools
-// (read, grep, find, ls, view_image) to reach the listed directories without
-// asking first, which is what a monorepo whose root sits above the opened
-// directory wants. "~/..." expands against the home directory in both lists;
-// relative paths are ignored with a warning at startup. A root too broad to be
-// a boundary (the filesystem root, $HOME itself, $HOME's parent) is refused, so
-// a typo cannot turn a grant into "read everything".
-//
-// It used to be spelled in two places: this managed file, which the dialogs and
-// /permissions write, and a [permissions] table in config.toml, which the user
-// was expected to hand-edit as a seed. The seed is gone — nobody wrote it (the
-// author's own config.toml never had one), and it was the only reason the
-// authorization table needed a third layer, so it cost more in concepts than it
-// saved in keystrokes. The environment variables remain for a machine that
-// cannot edit a file (GOLDER_READABLE_ROOTS, GOLDER_SANDBOX_READABLE).
-type PermissionsConfig struct {
-	WritableRoots []string `toml:"writable_roots"`
-	ReadableRoots []string `toml:"readable_roots,omitempty"`
-}
-
 // DreamConfig is the [dream] TOML table for /dream memory consolidation.
 // Enabled is a pointer so an absent key (nil) is distinguishable from an
 // explicit false: nil is treated as true, only enabled = false disables

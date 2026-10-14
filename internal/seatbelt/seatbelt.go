@@ -84,17 +84,11 @@ func ReadableRoots() []string {
 	roots := permissions.SystemReadRoots()
 	roots = append(roots, readableGitFiles()...)
 	// Session read grants: directories the user allowed the read-only tools to
-	// reach outside the workspace (internal/permissions). Including them keeps
-	// the sandbox and the tools consistent — a command reading a granted
-	// directory is not refused by the profile while the read tool happily
-	// serves the same file.
-	roots = append(roots, permissions.ReadRoots()...)
-	// The unified authorization table's read grants, for the same reason. Both
-	// sources are consulted during the changeover: the registry is what
-	// config.toml and GOLDER_READABLE_ROOTS seed, while the table also carries
-	// what `/trust add <path> r` records — and a grant the gate honours but the
-	// sandbox refuses would be a grant that fails the moment a command touches
-	// it, which is worse than not offering it.
+	// reach outside the workspace. They come from the authorization table,
+	// which is the one store every layer reads, so a grant the boundary gate
+	// honours is a grant the sandbox admits — a grant the gate honours but the
+	// profile refuses would fail the moment a command touched it, which is
+	// worse than not offering it.
 	roots = append(roots, grants.ReadRoots()...)
 	roots = append(roots, sandboxReadableFromEnv()...)
 	return roots
