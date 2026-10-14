@@ -82,7 +82,7 @@ func NewReviewer(model, providerName string, prov provider.Provider, creds *prov
 		check = ReviewCheck(model, providerName, provider.StreamFnFromProvider(prov), creds, sessionID)
 	}
 	llm := judge.NewLLMJudge(check, cwd, trusted)
-	return judge.Chain{Inner: JevRouter(llm, creds, cwd), WorkspaceRoot: cwd}
+	return judge.Chain{Inner: JevRouter(llm, creds, cwd)}
 }
 
 // DefaultJevEndpoint is TypeSafe's evaluation endpoint.

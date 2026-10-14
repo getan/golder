@@ -1,50 +1,37 @@
 package judge
 
-// The routine-edit fast path: a patch that only touches ordinary files inside
-// the workspace does not need a risk review.
+// Edits whose effect lands OUTSIDE the edit.
 //
-// Why it exists. apply_patch is graded by the reviewer on every call — measured
-// over ten real sessions, 467 calls at a 2.16s median, 18.5 minutes of review in
-// ten sessions — and the review has almost nothing to decide: the tool already
-// enforces the workspace boundary for every patch in the same hard, unwaivable
-// way (agenttool.resolveWithin, which offers no grant and no prompt), so an
-// in-workspace patch is the routine case by construction. The remaining question
-// a reviewer could answer — "is this edit risky?" — is about the edit's content,
-// which is exactly what the review's cheap tiers (confirm, and therefore auto
-// mode's silent pass) do not act on anyway.
+// This was the exception list of a routine-edit fast path: ordinary
+// in-workspace patches skipped the reviewer, and these two classes did not.
+// The fast path is gone — apply_patch is graded like every other call now, and
+// the decision model's latency is what made that affordable — but the
+// knowledge behind those exceptions is not about the exemption, it is about the
+// edits, so it stays and travels to the reviewer as a fact:
 //
-// Why two exceptions, and not none. `.git/**` and AGENTS.md are not "riskier
-// edits"; they are edits whose effect lands OUTSIDE the edit:
-//
-//   - `.git/hooks/*` runs on the next git command, and git commands are the ones
-//     the read-only fast path waves through all day (`git status`, `git log`,
-//     `git diff`). Writing a hook plants execution the tool loop never sees
-//     again; `.git/config` is the same door (core.hooksPath, core.sshCommand,
-//     credential helpers). Verified rather than assumed: a hook written into a
-//     scratch repository executed on the next `git commit`.
+//   - `.git/hooks/*` runs on the next git command, and git commands are the
+//     ones the read-only fast path waves through all day (`git status`, `git
+//     log`, `git diff`). Writing a hook plants execution the tool loop never
+//     sees again; `.git/config` is the same door (core.hooksPath,
+//     core.sshCommand, credential helpers). Verified rather than assumed: a
+//     hook written into a scratch repository executed on the next `git commit`.
 //   - AGENTS.md is read into the system prompt of every later session
 //     (runtime.BuildSystemPrompt injects the working directory's copy), so a
 //     patch to it rewrites the instructions the agent will start from — a
 //     persistent prompt-injection channel that needs no execution at all.
 //
-// Both are the "the effect outlives the call" class the reviewer exists for;
-// everything else — a source file, a test, a doc — is fast-pathed, which is
-// nearly every patch.
-//
-// A patch naming anything outside the workspace keeps its review too: the one
-// extra root the tool admits is the skills directory, and a skill's description
-// is likewise injected into later prompts. The exemption can therefore never
-// reach further than the tool already allows, and the static floor still runs
-// first (a credential path in a patch is denied before this is consulted).
+// It is reported, not refused. A person asking for a pre-commit hook is asking
+// for something legitimate, and the old code agreed: these paths kept their
+// review, they were never denied. A hard deny here would take a reasonable
+// request off the table; what the reviewer needs is the fact, so its verdict is
+// about what the edit will do rather than about the file name alone.
 
 import (
 	"encoding/json"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/getan/golder/internal/patch"
-	"github.com/getan/golder/internal/permissions"
 )
 
 // agentsInstructionFile mirrors runtime's injected instruction file. The name is
@@ -52,46 +39,26 @@ import (
 // imports the tool layer, which imports judge).
 const agentsInstructionFile = "AGENTS.md"
 
-// applyPatchFastPath returns the verdict for a patch that only touches ordinary
-// files inside the workspace, and whether it applies.
-func applyPatchFastPath(tool string, args json.RawMessage, workspaceRoot string) (Verdict, bool) {
-	if !fastPathEnabled() {
-		return Verdict{}, false
-	}
+// OutlivingPaths returns the paths in this call whose effect outlives the call,
+// or nil when there are none. It is exported for the reviewer's state: the
+// decision model grades every patch now, and this is the one fact about a patch
+// that its file contents do not reveal — a hook body looks like any script
+// until you know when it runs.
+func OutlivingPaths(tool string, args json.RawMessage) []string {
 	if !strings.EqualFold(strings.TrimSpace(tool), "apply_patch") {
-		return Verdict{}, false
-	}
-	// Without the boundary there is no way to tell an in-workspace patch from one
-	// reaching the skills directory, so the reviewer keeps the call.
-	if strings.TrimSpace(workspaceRoot) == "" {
-		return Verdict{}, false
+		return nil
 	}
 	text, ok := patchText(args)
 	if !ok {
-		return Verdict{}, false
+		return nil
 	}
-	paths := patch.Paths(text)
-	if len(paths) == 0 {
-		return Verdict{}, false
-	}
-	root, err := filepath.Abs(workspaceRoot)
-	if err != nil {
-		return Verdict{}, false
-	}
-	for _, p := range paths {
+	var out []string
+	for _, p := range patch.Paths(text) {
 		if protectedEditPath(p) {
-			return Verdict{}, false
-		}
-		resolved, err := permissions.AbsAgainst(root, p)
-		if err != nil || !permissions.InsideResolved(root, resolved) {
-			return Verdict{}, false
+			out = append(out, p)
 		}
 	}
-	return Verdict{
-		Level:   Allow,
-		Source:  "workspace-edit",
-		Reasons: []string{"in-workspace patch, outside the protected paths"},
-	}, true
+	return out
 }
 
 // protectedEditPath reports whether a patch path names something whose effect

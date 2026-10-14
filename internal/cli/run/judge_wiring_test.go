@@ -61,14 +61,13 @@ func TestReviewCheckFallsBackSession(t *testing.T) {
 	}
 }
 
-// TestNewReviewerCarriesTheWorkspaceRoot pins the wiring the routine-edit fast
-// path depends on: NewReviewer must hand its cwd to the Chain, or the exemption
-// silently stays off in production and every patch pays the review again. The
-// provider is nil on purpose — that degrades the reviewer to fail-closed, which
-// makes the two outcomes distinguishable without a model: a routine patch still
-// comes back as an allow from the fast path, while a protected one comes back
-// failed (the reviewer could not run).
-func TestNewReviewerCarriesTheWorkspaceRoot(t *testing.T) {
+// TestNewReviewerGradesEveryPatch pins the wiring after the routine-edit fast
+// path was removed: no patch skips the reviewer, and one whose effect outlives
+// the call reaches it like any other. The provider is nil on purpose, which
+// degrades the reviewer to fail-closed — so the outcome is a failed verdict
+// rather than an allow, and that is exactly what proves the reviewer was
+// consulted instead of a shortcut answering.
+func TestNewReviewerGradesEveryPatch(t *testing.T) {
 	root := t.TempDir()
 	classifier := NewReviewer("m", "opencode-go", nil, nil, "", root, true)
 
@@ -82,18 +81,22 @@ func TestNewReviewerCarriesTheWorkspaceRoot(t *testing.T) {
 		return raw
 	}
 
-	// A routine in-workspace patch: the fast path answers, so the absent
-	// reviewer is never consulted.
+	// An ordinary in-workspace patch still reaches the reviewer. There used to be
+	// an exemption here; with it gone, an absent reviewer fails closed, which is
+	// the safe direction and the distinguishable outcome this test relies on.
 	v := classifier.Classify(context.Background(), "apply_patch", patchArgs("internal/main.go"))
-	if v.Level != judge.Allow || v.Source != "workspace-edit" {
-		t.Errorf("routine patch verdict = %+v, want the workspace-edit fast path "+
-			"(an empty WorkspaceRoot on the Chain would leave the reviewer to answer)", v)
+	if v.Level == judge.Allow {
+		t.Errorf("a routine patch was allowed without a reviewer: %+v", v)
+	}
+	if !v.Failed {
+		t.Errorf("with no provider the verdict must fail closed, got %+v", v)
 	}
 
-	// A protected path reaches the reviewer, and this classifier has none — so
-	// the contrast is what proves the root was actually used.
+	// A patch whose effect outlives the call is graded the same way: it is not
+	// singled out into a shortcut, and the fact about it travels to the reviewer
+	// through the state (judge.OutlivingPaths) rather than gating it here.
 	v = classifier.Classify(context.Background(), "apply_patch", patchArgs(".git/hooks/pre-commit"))
-	if v.Source == "workspace-edit" {
-		t.Error("a patch to .git/hooks took the fast path; the guard is not reachable from the production wiring")
+	if v.Level == judge.Allow {
+		t.Errorf("a patch to .git/hooks was allowed without a reviewer: %+v", v)
 	}
 }

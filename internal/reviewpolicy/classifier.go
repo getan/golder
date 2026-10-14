@@ -302,11 +302,25 @@ type State struct {
 	// reading of the arguments, so the reviewer cannot be told something the gate
 	// does not believe.
 	Auth []judge.AuthFact `json:"auth,omitempty"`
+	// Outliving lists paths whose change lands OUTSIDE the edit: `.git/hooks/*`
+	// runs on the next git command (and git commands are the ones the read-only
+	// fast path waves through all day), `.git/config` is the same door
+	// (core.hooksPath, core.sshCommand, credential helpers), and AGENTS.md is
+	// injected into every later session's prompt — a persistent injection channel
+	// that needs no execution at all.
+	//
+	// It is a FACT, not a verdict, and that is the point of sending it: a person
+	// asking for a pre-commit hook is asking for something legitimate, so a hard
+	// deny on the name would take a reasonable request off the table. A hook body
+	// looks like any other script until a reader knows when it runs, which is
+	// exactly what a file's contents do not say.
+	Outliving []string `json:"outliving,omitempty"`
 }
 
 func (c *Classifier) state(tool string, args json.RawMessage, facts *shellfacts.Plan) State {
 	st := State{Tool: tool, Cwd: c.Cwd}
 	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots, c.WritableAt)
+	st.Outliving = judge.OutlivingPaths(tool, args)
 	if facts != nil {
 		st.Command = facts.Raw
 		st.Facts = facts
