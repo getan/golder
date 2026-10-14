@@ -287,7 +287,7 @@ func main() {
 	} else {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
 	}
-	applyPermissionsConfig(cfg)
+	applyPermissionsConfig()
 
 	// The unified authorization table. It loads ~/.config/golder/grants.json and,
 	// on a first run, folds the three older stores into it (trust.json, the
@@ -302,7 +302,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
 		}
 	}
-
 	// A bare provider name ("zai", "deepseek") means that provider's default
 	// model (issue #564): canonicalize once here so every downstream consumer —
 	// SetupEnv, the REPL/TUI live seeds, sub-agent children — carries a real
@@ -345,17 +344,20 @@ func main() {
 	os.Exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
 }
 
-// applyPermissionsConfig seeds both path grants from the [permissions] table in
-// config.toml plus the managed permissions.toml (the store /permissions
-// writable and the approval dialog write to): writable roots for the sandbox,
-// and readable roots for the read-only tools (which also widens the sandbox's
-// read whitelist, so the two sides agree about a granted directory). Invalid
-// entries warn and are skipped; applying grants only widens what may be written
-// or read without asking, it never unsandboxes anything. A malformed
-// config.toml leaves cfg zero, so the managed store still applies.
-func applyPermissionsConfig(cfg config.FileConfig) {
-	roots := append([]string(nil), cfg.Permissions.WritableRoots...)
-	readRoots := append([]string(nil), cfg.Permissions.ReadableRoots...)
+// applyPermissionsConfig applies the persisted path grants at startup: the
+// managed permissions.toml (which /permissions and the approval dialogs write)
+// plus the environment variables, which exist for a machine that cannot edit a
+// file: writable roots for the sandbox, and readable roots for the read-only
+// tools (which also widens the sandbox's read whitelist, so the two sides agree
+// about a granted directory). Invalid entries warn and are skipped; applying
+// grants only widens what may be written or read without asking, it never
+// unsandboxes anything.
+//
+// config.toml's [permissions] table used to be read here as a hand-edited seed.
+// It is gone: nobody wrote it, and it was the only consumer of the
+// authorization table's seed layer, so removing it removed a concept.
+func applyPermissionsConfig() {
+	var roots, readRoots []string
 	if managed, err := config.LoadPermissionsConfig(); err != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
 	} else {

@@ -96,18 +96,17 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 需要预先授权（避免反复弹窗）时有两条途径，汇入同一份注册表：
 
-- **`config.toml` 的 `[permissions] readable_roots = ["~/work/monorepo"]`**：手写固定授权，monorepo 根在启动目录之上时最常用；
-- **`GOLDER_READABLE_ROOTS`**：冒号/逗号分隔，规则与配置一致（`~/` 展开，相对路径与过宽根被丢弃）。
+- **批准读授权时选「记住」**：写入受管文件 `~/.config/golder/permissions.toml`，重启后仍生效（`/permissions readable list|add|rm` 维护）；
+- **`GOLDER_READABLE_ROOTS`**：冒号/逗号分隔，规则一致（`~/` 展开，相对路径与过宽根被丢弃），给无法编辑文件的机器用。
 
-它与 `GOLDER_SANDBOX_READABLE` 不是一回事：后者只作用于 OS 沙箱，前者是工具自己的白名单并顺带放宽沙箱。读授权也不影响写：`apply_patch` 仍只写工作区，越界要走下面的 writable_roots。
+它与 `GOLDER_SANDBOX_READABLE` 不是一回事：后者只作用于 OS 沙箱，前者是工具自己的白名单并顺带放宽沙箱。读授权也不影响写：写走下面的 writable_roots（`apply_patch` 也一样，越界时边界门问的正是同一件事）。
 
 ### 写白名单（项目 + 临时目录 + writable_roots）
 
 沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一份进程内注册表（`internal/seatbelt/writable.go`，并发安全，下一个命令立即生效）：
 
 - **审批对话框**：沙箱拒绝的命令若提到了项目外的路径，对话框会多出一行 `Allow writes to <path> (this session)`（按 `w`）。它只对**本次会话**生效，且批准不是"无沙箱放行"——命令重新回到收容态执行，只是该路径可读写；授权后对话记录会提示持久化命令。
-- **`/permissions writable add <path>`**：写入受管文件 `~/.config/golder/permissions.toml`（目录 0700、原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/permissions writable` 列出全部条目及来源（`config.toml` / `permissions.toml` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里 `/permissions` 菜单最后一行 `Sandbox writable paths…` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
-- **`config.toml` 的 `[permissions] writable_roots = ["~/cache/build"]`**：手动编辑的固定授权（UI 从不改写这个文件，避免丢注释与凭据）。因此 `/permissions writable rm` 对它是"会话内撤销"，条目仍在，需自行编辑删除。
+- **`/permissions writable add <path>`**：写入受管文件 `~/.config/golder/permissions.toml`（目录 0700、原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/permissions writable` 列出全部条目及来源（`permissions.toml` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里 `/permissions` 菜单最后一行 `Sandbox writable paths…` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
 
 可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
 

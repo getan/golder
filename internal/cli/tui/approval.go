@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
@@ -312,19 +311,13 @@ func (m *Model) answerApproval(value string) {
 					break
 				}
 				ans.Approve, ans.WritableRoot = true, root
-				path, alreadySeeded, err := cli.AddWritablePath(root)
-				switch {
-				case err != nil:
+				path, err := cli.AddWritablePath(root)
+				if err != nil {
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(root) +
 							" are allowed inside the sandbox for this session only; remembering it failed: " + err.Error())
 					}
-				case alreadySeeded:
-					if m.session != nil {
-						m.transcript.addSystem("Writes to " + displayPath(path) +
-							" are already remembered (" + config.FileConfigPath() + " seeds it).")
-					}
-				default:
+				} else {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(path) +
@@ -352,19 +345,13 @@ func (m *Model) answerApproval(value string) {
 			// says what happened.
 			if dir := d.writeRoot; dir != "" {
 				ans.Approve, ans.WriteRoot = true, dir
-				root, alreadySeeded, err := cli.AddWritablePath(dir)
-				switch {
-				case err != nil:
+				root, err := cli.AddWritablePath(dir)
+				if err != nil {
 					if m.session != nil {
 						m.transcript.addSystem("Writing to " + displayPath(dir) +
 							" is allowed for this session only; remembering it failed: " + err.Error())
 					}
-				case alreadySeeded:
-					if m.session != nil {
-						m.transcript.addSystem("Writing to " + displayPath(root) +
-							" is already remembered (" + config.FileConfigPath() + " seeds it).")
-					}
-				default:
+				} else {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Writing to " + displayPath(root) +
@@ -392,19 +379,13 @@ func (m *Model) answerApproval(value string) {
 			// grant the gate already owns), and the note says what happened.
 			if dir := d.readRoot; dir != "" {
 				ans.Approve, ans.ReadRoot = true, dir
-				root, alreadySeeded, err := cli.AddReadablePath(dir)
-				switch {
-				case err != nil:
+				root, err := cli.AddReadablePath(dir)
+				if err != nil {
 					if m.session != nil {
 						m.transcript.addSystem("Reading " + displayPath(dir) +
 							" is allowed for this session only; remembering it failed: " + err.Error())
 					}
-				case alreadySeeded:
-					if m.session != nil {
-						m.transcript.addSystem("Reading " + displayPath(root) +
-							" is already remembered (" + config.FileConfigPath() + " seeds it).")
-					}
-				default:
+				} else {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Reading " + displayPath(root) +

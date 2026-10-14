@@ -1,9 +1,8 @@
 package cli
 
-// Tests for the read-side of the managed permissions store: the merge order,
-// the add/remove round-trip, and the config.toml seed that must never be
-// duplicated into the store (the file belongs to the user). The writable side
-// has the same tests; these are its twin so the two grants cannot drift.
+// Tests for the read-side of the managed permissions store: the merge order and
+// the add/remove round-trip. The writable side has the same tests; these are
+// its twin so the two grants cannot drift.
 
 import (
 	"os"
@@ -38,9 +37,9 @@ func TestReadablePathsLifecycle(t *testing.T) {
 		t.Fatalf("fresh state should list nothing, got %+v warnings=%v", entries, warnings)
 	}
 
-	root, seeded, err := AddReadablePath(granted)
-	if err != nil || root != granted || seeded {
-		t.Fatalf("AddReadablePath = %q seeded=%v err=%v, want %q seeded=false", root, seeded, err, granted)
+	root, err := AddReadablePath(granted)
+	if err != nil || root != granted {
+		t.Fatalf("AddReadablePath = %q err=%v, want %q", root, err, granted)
 	}
 	if !permissions.ReadableAt(filepath.Join(granted, "a.md")) {
 		t.Error("the session registry did not take the grant")
@@ -54,7 +53,7 @@ func TestReadablePathsLifecycle(t *testing.T) {
 		t.Fatalf("list should show the saved grant, got %+v", entries)
 	}
 
-	if _, _, err := AddReadablePath(granted); err != nil {
+	if _, err := AddReadablePath(granted); err != nil {
 		t.Fatalf("second AddReadablePath: %v", err)
 	}
 	saved, _ = config.LoadPermissionsConfig()
@@ -63,7 +62,7 @@ func TestReadablePathsLifecycle(t *testing.T) {
 	}
 
 	res, err := RemoveReadablePath(granted)
-	if err != nil || !res.Found() || !res.WasSession || !res.WasSaved || res.WasConfig {
+	if err != nil || !res.Found() || !res.WasSession || !res.WasSaved {
 		t.Fatalf("RemoveReadablePath = %+v err=%v", res, err)
 	}
 	if permissions.ReadableAt(filepath.Join(granted, "a.md")) {
@@ -75,41 +74,6 @@ func TestReadablePathsLifecycle(t *testing.T) {
 	}
 }
 
-// TestReadablePathsConfigSeed verifies a config.toml seed is labeled as such
-// and re-adding it does not write a duplicate into the managed store.
-func TestReadablePathsConfigSeed(t *testing.T) {
-	dir := isolateReadablePaths(t)
-	seed := filepath.Join(dir, "seeded")
-	cfgPath := config.FileConfigPath()
-	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	body := "[permissions]\nreadable_roots = [\"" + seed + "\"]\n"
-	if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	entries, warnings := ListReadablePaths()
-	if len(warnings) != 0 {
-		t.Fatalf("unexpected warnings: %v", warnings)
-	}
-	if len(entries) != 1 || entries[0].Path != seed || entries[0].Source != ReadableSourceConfig {
-		t.Fatalf("list = %+v, want the config seed labeled as such", entries)
-	}
-
-	root, seeded, err := AddReadablePath(seed)
-	if err != nil || root != seed || !seeded {
-		t.Fatalf("AddReadablePath(seed) = %q seeded=%v err=%v, want seeded=true", root, seeded, err)
-	}
-	saved, _ := config.LoadPermissionsConfig()
-	if len(saved.ReadableRoots) != 0 {
-		t.Fatalf("a config seed must not be copied into the managed store, got %v", saved.ReadableRoots)
-	}
-	if !permissions.ReadableAt(filepath.Join(seed, "a.md")) {
-		t.Error("adding a seed path should still grant it for this session")
-	}
-}
-
 // TestReadablePathsRejectsBroadRoots pins re-use of the boundary guard: a grant
 // that would amount to removing the boundary is refused outright.
 func TestReadablePathsRejectsBroadRoots(t *testing.T) {
@@ -118,10 +82,10 @@ func TestReadablePathsRejectsBroadRoots(t *testing.T) {
 	if err != nil || home == "" {
 		t.Skip("no home directory")
 	}
-	if _, _, err := AddReadablePath(home); err == nil {
+	if _, err := AddReadablePath(home); err == nil {
 		t.Errorf("granting the home directory itself must be refused")
 	}
-	if _, _, err := AddReadablePath("/"); err == nil {
+	if _, err := AddReadablePath("/"); err == nil {
 		t.Errorf("granting the filesystem root must be refused")
 	}
 }
@@ -133,7 +97,6 @@ func TestReadableSourceLabel(t *testing.T) {
 		zh     bool
 		want   string
 	}{
-		{ReadableSourceConfig, false, "(config.toml seed)"},
 		{ReadableSourceSaved, false, "(permissions.toml, persisted)"},
 		{ReadableSourceSession, false, "(this session)"},
 		{ReadableSourceSaved, true, "（permissions.toml，已持久化）"},

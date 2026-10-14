@@ -116,7 +116,7 @@ func TestPermissionCommandList(t *testing.T) {
 		granted, "(permissions.toml, persisted)", // the grant and its provenance
 		"readable paths outside the workspace",    // the other grant kind
 		readable, "(permissions.toml, persisted)", // and its provenance
-		"permissions.toml", "config.toml", // the files, named for hand editing
+		"permissions.toml",                        // the file the grants live in, named for hand editing
 		"/permissions writable add", "add <path>", // how to change what is shown
 		"/trust list", // the report this one does not cover
 	} {

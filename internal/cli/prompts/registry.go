@@ -925,7 +925,7 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 // runPermissionsList renders every permission in force, not just the ones that
 // apply to the current directory: the approval mode, the sandbox writable roots,
 // and the readable roots outside the workspace, each with the file it came from
-// (config.toml seed / permissions.toml persisted / this session). It is the
+// (permissions.toml persisted / this session). It is the
 // overview the per-scope subcommands (`writable list`, `readable list`) are
 // slices of — one screen to audit before revoking something, and the one place
 // that names the files a user can edit by hand.
@@ -977,13 +977,13 @@ func runPermissionsList(st *permissions.State, modes []permissions.Mode, l strin
 		fmt.Fprintf(&b, "\nwarning: %s", w)
 	}
 	if zh {
-		fmt.Fprintf(&b, "\n文件：%s（本文件托管上述授权）　%s（[permissions] 手改种子）",
-			cli.DisplayHomePath(config.PermissionsConfigPath()), cli.DisplayHomePath(config.FileConfigPath()))
+		fmt.Fprintf(&b, "\n文件：%s（本文件托管上述授权）",
+			cli.DisplayHomePath(config.PermissionsConfigPath()))
 		fmt.Fprintf(&b, "\n修改：/permissions <模式>　/permissions writable add <路径>　permissions readable add <路径>")
 		b.WriteString("\n信任（按目录）：/trust list")
 	} else {
-		fmt.Fprintf(&b, "\nfiles: %s (managed store for the grants above)  %s ([permissions] hand-edited seed)",
-			cli.DisplayHomePath(config.PermissionsConfigPath()), cli.DisplayHomePath(config.FileConfigPath()))
+		fmt.Fprintf(&b, "\nfiles: %s (managed store for the grants above)",
+			cli.DisplayHomePath(config.PermissionsConfigPath()))
 		fmt.Fprintf(&b, "\nchange: /permissions <mode>  /permissions writable add <path>  /permissions readable add <path>")
 		b.WriteString("\ntrust (per directory): /trust list")
 	}
@@ -1023,10 +1023,6 @@ func noneWord(zh bool) string {
 // surfaces cannot drift into different words for the same provenance.
 func writableSourceLabel(source string, zh bool) string {
 	switch {
-	case source == cli.WritableSourceConfig && zh:
-		return "（config.toml 固定授权）"
-	case source == cli.WritableSourceConfig:
-		return "(config.toml seed)"
 	case source == cli.WritableSourceSaved && zh:
 		return "（permissions.toml，已持久化）"
 	case source == cli.WritableSourceSaved:
@@ -1089,7 +1085,7 @@ func runPermissionsWritable(arg, l string) string {
 			if p == "" {
 				return usage()
 			}
-			root, seeded, err := cli.AddWritablePath(p)
+			root, err := cli.AddWritablePath(p)
 			if err != nil {
 				if zh {
 					return "无法添加：" + err.Error()
@@ -1097,12 +1093,6 @@ func runPermissionsWritable(arg, l string) string {
 				return "cannot add: " + err.Error()
 			}
 			display := cli.DisplayHomePath(root)
-			if seeded {
-				if zh {
-					return fmt.Sprintf("%s 已由 config.toml 固定授权；本次会话已生效", display)
-				}
-				return fmt.Sprintf("%s is already seeded by config.toml; granted for this session", display)
-			}
 			if zh {
 				return fmt.Sprintf("已授权 %s：沙箱内可读写，已保存到 permissions.toml（重启后仍生效）", display)
 			}
@@ -1132,16 +1122,10 @@ func runPermissionsWritable(arg, l string) string {
 				if res.WasSaved {
 					b.WriteString("，已从 permissions.toml 删除")
 				}
-				if res.WasConfig {
-					b.WriteString("；config.toml 中仍有固定授权，需手动编辑才能永久移除")
-				}
 			} else {
 				fmt.Fprintf(&b, "revoked %s", display)
 				if res.WasSaved {
 					b.WriteString(", deleted from permissions.toml")
-				}
-				if res.WasConfig {
-					b.WriteString("; config.toml still seeds it — edit that file to make this permanent")
 				}
 			}
 			return b.String()
@@ -1199,7 +1183,7 @@ func runPermissionsReadable(arg, l string) string {
 			if p == "" {
 				return usage()
 			}
-			root, seeded, err := cli.AddReadablePath(p)
+			root, err := cli.AddReadablePath(p)
 			if err != nil {
 				if zh {
 					return "无法添加：" + err.Error()
@@ -1207,12 +1191,6 @@ func runPermissionsReadable(arg, l string) string {
 				return "cannot add: " + err.Error()
 			}
 			display := cli.DisplayHomePath(root)
-			if seeded {
-				if zh {
-					return fmt.Sprintf("%s 已由 config.toml 固定授权；本次会话已生效", display)
-				}
-				return fmt.Sprintf("%s is already seeded by config.toml; granted for this session", display)
-			}
 			if zh {
 				return fmt.Sprintf("已授权读取 %s，已保存到 permissions.toml（重启后仍生效）", display)
 			}
@@ -1242,16 +1220,10 @@ func runPermissionsReadable(arg, l string) string {
 				if res.WasSaved {
 					b.WriteString("，已从 permissions.toml 删除")
 				}
-				if res.WasConfig {
-					b.WriteString("；config.toml 中仍有固定授权，需手动编辑才能永久移除")
-				}
 			} else {
 				fmt.Fprintf(&b, "revoked %s", display)
 				if res.WasSaved {
 					b.WriteString(", deleted from permissions.toml")
-				}
-				if res.WasConfig {
-					b.WriteString("; config.toml still seeds it — edit that file to make this permanent")
 				}
 			}
 			return b.String()

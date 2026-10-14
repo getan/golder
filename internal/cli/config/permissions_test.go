@@ -6,24 +6,6 @@ import (
 	"testing"
 )
 
-// TestLoadFileConfigPermissionsTable pins the hand-edited seed table:
-// writable_roots under [permissions] in config.toml.
-func TestLoadFileConfigPermissionsTable(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	body := "[permissions]\nwritable_roots = [\"/Volumes/KIOXIA\", \"~/cache\"]\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadFileConfig(path)
-	if err != nil {
-		t.Fatalf("LoadFileConfig: %v", err)
-	}
-	if got := cfg.Permissions.WritableRoots; len(got) != 2 || got[0] != "/Volumes/KIOXIA" || got[1] != "~/cache" {
-		t.Fatalf("writable_roots = %v", got)
-	}
-}
-
 // TestPermissionsConfigRoundTrip covers the managed store: it lives next to
 // config.toml, a missing file is not an error, and a save/load round-trips.
 func TestPermissionsConfigRoundTrip(t *testing.T) {

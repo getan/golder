@@ -554,9 +554,10 @@ interactive REPL/TUI.
   boundary (the filesystem root, `$HOME`, `$HOME`'s parent) is refused outright,
   and **credential material is never put to the user at all** — the static floor
   denies `~/.ssh`, `~/.zshrc` and the keychain, so no dialog offers a keystroke
-  that hands them over. Pre-granting skips the dialog: `[permissions]
-  readable_roots` in `config.toml`, or `GOLDER_READABLE_ROOTS` (unlike
-  `GOLDER_SANDBOX_READABLE`, which only widens the sandbox). The write path is
+  that hands them over. Pre-granting skips the dialog:
+  `/permissions readable add <path>` writes it to the managed store, and
+  `GOLDER_READABLE_ROOTS` does the same for a machine that cannot edit a file
+  (unlike `GOLDER_SANDBOX_READABLE`, which only widens the sandbox). The write path is
   deliberately untouched: `apply_patch` still refuses an out-of-workspace target
   even when the call carries a read grant and the session has granted the
   directory for reading.

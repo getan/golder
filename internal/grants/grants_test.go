@@ -195,38 +195,6 @@ func TestRememberedGrantSurvivesRestart(t *testing.T) {
 	}
 }
 
-func TestSeedLayerIsConsultedButNeverWritten(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "grants.json")
-	s, err := New(Options{Path: path})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := s.AddSeed(Grant{Path: "/seeded", Allow: Read}); err != nil {
-		t.Fatalf("AddSeed: %v", err)
-	}
-	if !s.Allows("/seeded", Read) {
-		t.Fatal("the seed row was not consulted")
-	}
-	// The seed belongs to config.toml; this store must not rewrite it.
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read: %v", err)
-	}
-	if len(data) > 0 {
-		t.Errorf("AddSeed wrote the managed file: %s", data)
-	}
-	rem, err := s.Remove("/seeded")
-	if err != nil {
-		t.Fatalf("Remove: %v", err)
-	}
-	if !rem.Seed {
-		t.Error("Remove did not report the seed layer")
-	}
-	if rem.Persisted {
-		t.Error("Remove rewrote the file for a seed-only row")
-	}
-}
-
 // ---- Persistence failure -------------------------------------------------
 
 func TestPersistenceFailureDegradesToSessionAndRollsBack(t *testing.T) {
@@ -365,28 +333,6 @@ func TestMigratePermissionsKeepsReadableReadOnly(t *testing.T) {
 	// read+write, which would hand the user a write grant they never gave.
 	if s.Allows("/data/inputs/x", Write) {
 		t.Error("a readable root was migrated as writable")
-	}
-}
-
-func TestMigrateSeedReadsThePermissionsTableUnderItsSection(t *testing.T) {
-	dir := t.TempDir()
-	seed := filepath.Join(dir, "config.toml")
-	body := "[permissions]\nwritable_roots = [\"/cache/rust\"]\nreadable_roots = [\"/data\"]\n"
-	if err := os.WriteFile(seed, []byte(body), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	s, err := New(Options{Path: filepath.Join(dir, "grants.json")})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if _, err := s.Migrate(LegacyPaths{Seed: seed}); err != nil {
-		t.Fatalf("Migrate: %v", err)
-	}
-	if !s.Allows("/cache/rust/x", Write) {
-		t.Error("config.toml's [permissions] writable_roots was not read")
-	}
-	if !s.Allows("/data/x", Read) {
-		t.Error("config.toml's [permissions] readable_roots was not read")
 	}
 }
 

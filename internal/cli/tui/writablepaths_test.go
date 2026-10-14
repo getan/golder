@@ -22,7 +22,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	t.Cleanup(func() { seatbelt.SetWritableRoots(nil) })
 
 	granted := filepath.Join(dir, "cache", "build")
-	if _, _, err := cli.AddWritablePath(granted); err != nil {
+	if _, err := cli.AddWritablePath(granted); err != nil {
 		t.Fatal(err)
 	}
 

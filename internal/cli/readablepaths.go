@@ -16,9 +16,8 @@ import (
 )
 
 // Where a readable path comes from; displayed next to the path. The labels are
-// the writable side's, since the same three sources feed both.
+// the writable side's, since the same two sources feed both.
 const (
-	ReadableSourceConfig  = WritableSourceConfig
 	ReadableSourceSaved   = WritableSourceSaved
 	ReadableSourceSession = WritableSourceSession
 )
@@ -29,18 +28,16 @@ type ReadablePathEntry struct {
 	Source string
 }
 
-// ReadableRemoval reports what a removal touched, so the caller can warn when
-// the unedited config.toml seed still re-grants the path at the next launch.
+// ReadableRemoval reports what a removal touched.
 type ReadableRemoval struct {
 	Path       string
 	WasSession bool
 	WasSaved   bool
-	WasConfig  bool
 }
 
 // Found reports whether the path was granted by any source.
 func (r ReadableRemoval) Found() bool {
-	return r.WasSession || r.WasSaved || r.WasConfig
+	return r.WasSession || r.WasSaved
 }
 
 // ListReadablePaths merges the two files with the live session registry.
@@ -62,15 +59,6 @@ func ListReadablePaths() ([]ReadablePathEntry, []string) {
 		seen[p] = true
 		entries = append(entries, ReadablePathEntry{Path: p, Source: source})
 	}
-	// config.toml is the hand-edited seed and wins the label, exactly as the
-	// startup merge orders it.
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err != nil {
-		warnings = append(warnings, fmt.Sprintf("%s: %v", ReadableSourceConfig, err))
-	} else {
-		for _, r := range cfg.Permissions.ReadableRoots {
-			add(r, ReadableSourceConfig)
-		}
-	}
 	if saved, err := config.LoadPermissionsConfig(); err != nil {
 		warnings = append(warnings, fmt.Sprintf("%s: %v", ReadableSourceSaved, err))
 	} else {
@@ -86,52 +74,37 @@ func ListReadablePaths() ([]ReadablePathEntry, []string) {
 
 // AddReadablePath grants a directory for reading: it registers the path for
 // this session and appends it to the managed store, so the next launch applies
-// it without asking. alreadySeeded reports that config.toml already carries it
-// — the grant still took effect for this session, but nothing was written,
-// because editing the user's config.toml would drop their comments (the
-// writable side made the same call).
-func AddReadablePath(raw string) (path string, alreadySeeded bool, err error) {
+// it without asking.
+func AddReadablePath(raw string) (path string, err error) {
 	root, err := permissions.NormalizeReadRoot(raw)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	if p, e := permissions.AddReadRoot(root); e == nil {
 		root = p
 	}
-	alreadySeeded = false
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
-		for _, r := range cfg.Permissions.ReadableRoots {
-			if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-				alreadySeeded = true
-				break
-			}
+	saved, err := config.LoadPermissionsConfig()
+	if err != nil {
+		return "", err
+	}
+	found := false
+	for _, r := range saved.ReadableRoots {
+		if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
+			found = true
+			break
 		}
 	}
-	if !alreadySeeded {
-		saved, err := config.LoadPermissionsConfig()
-		if err != nil {
-			return "", false, err
-		}
-		found := false
-		for _, r := range saved.ReadableRoots {
-			if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-				found = true
-				break
-			}
-		}
-		if !found {
-			saved.ReadableRoots = append(saved.ReadableRoots, root)
-			if err := config.SavePermissionsConfig(saved); err != nil {
-				return "", false, err
-			}
+	if !found {
+		saved.ReadableRoots = append(saved.ReadableRoots, root)
+		if err := config.SavePermissionsConfig(saved); err != nil {
+			return "", err
 		}
 	}
-	return root, alreadySeeded, nil
+	return root, nil
 }
 
 // RemoveReadablePath revokes a path for this session and deletes it from the
-// managed store. A seed config.toml still holds is reported via WasConfig; that
-// file is never rewritten.
+// managed store.
 func RemoveReadablePath(raw string) (ReadableRemoval, error) {
 	root, err := permissions.NormalizeReadRoot(raw)
 	if err != nil {
@@ -157,14 +130,6 @@ func RemoveReadablePath(raw string) (ReadableRemoval, error) {
 			return res, err
 		}
 	}
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
-		for _, r := range cfg.Permissions.ReadableRoots {
-			if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-				res.WasConfig = true
-				break
-			}
-		}
-	}
 	return res, nil
 }
 
@@ -172,10 +137,6 @@ func RemoveReadablePath(raw string) (ReadableRemoval, error) {
 // in the conversation's language.
 func ReadableSourceLabel(source string, zh bool) string {
 	switch {
-	case source == ReadableSourceConfig && zh:
-		return "（config.toml 固定授权）"
-	case source == ReadableSourceConfig:
-		return "(config.toml seed)"
 	case source == ReadableSourceSaved && zh:
 		return "（permissions.toml，已持久化）"
 	case source == ReadableSourceSaved:

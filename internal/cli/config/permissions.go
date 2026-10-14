@@ -4,9 +4,13 @@ package config
 // the sandbox writable-path grants the user accumulated from approval dialogs
 // and /permissions writable, in its own file for the same reason proxy.toml
 // exists: rewriting config.toml would drop the user's comments and, worse,
-// re-serialize the credential reference next to the rest of the settings. The
-// [permissions] table in config.toml stays the hand-edited seed; startup
-// merges both (config.toml first, then this file, deduplicated).
+// re-serialize the credential reference next to the rest of the settings.
+//
+// This file is the ONLY persisted form of a path grant. config.toml used to
+// carry a [permissions] table as a hand-edited seed as well; it was removed
+// because nobody wrote it and it was the sole reason the authorization table
+// needed a third layer. A machine that cannot edit a file sets
+// GOLDER_READABLE_ROOTS instead.
 
 import (
 	"bytes"

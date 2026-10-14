@@ -2,10 +2,10 @@ package seatbelt
 
 // Session-level writable roots: paths the user explicitly granted write (and,
 // by construction, read) access to from inside the sandbox, without running
-// commands unisolated. Two sources feed them at launch — the [permissions]
-// table in config.toml and the managed permissions.toml — and the TUI approval
-// dialog adds one for the session when a sandbox denial names a path the user
-// chooses to re-admit.
+// commands unisolated. The managed permissions.toml feeds them at launch, and
+// the approval dialogs add one for the session when a sandbox denial names a
+// path the user chooses to re-admit (a write grant registers here AND in the
+// authorization table, so one answer means one thing).
 //
 // The registry is package-level rather than a Runner field because both
 // platform runners rebuild their policy per command and every BashTool in the

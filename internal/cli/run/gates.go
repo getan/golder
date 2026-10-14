@@ -322,13 +322,6 @@ func PersistReadRoot(dir string) (made bool, why string) {
 	if err != nil {
 		return false, "cannot remember this path: " + err.Error()
 	}
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
-		for _, r := range cfg.Permissions.ReadableRoots {
-			if p, e := permissions.NormalizeReadRoot(r); e == nil && p == root {
-				return true, "already remembered (" + config.FileConfigPath() + " seeds " + root + ")"
-			}
-		}
-	}
 	saved, err := config.LoadPermissionsConfig()
 	if err != nil {
 		return false, "cannot remember this path: " + err.Error()
@@ -399,13 +392,6 @@ func GrantWritableRoot(root string, persist bool) (made bool, why string) {
 	}()
 	if !persist {
 		return true, ""
-	}
-	if cfg, err := config.LoadFileConfig(config.FileConfigPath()); err == nil {
-		for _, r := range cfg.Permissions.WritableRoots {
-			if p, e := seatbelt.NormalizeWritableRoot(r); e == nil && p == root {
-				return true, "already remembered (" + config.FileConfigPath() + " seeds " + root + ")"
-			}
-		}
 	}
 	saved, err := config.LoadPermissionsConfig()
 	if err != nil {

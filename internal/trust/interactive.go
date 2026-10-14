@@ -349,15 +349,9 @@ func trustRemove(reg *runtime.SlashRegistry, args []string) string {
 		// Reporting "nothing" is more useful than a bare success: it tells the
 		// user the path was never granted here, so they are not left wondering
 		// whether the command worked.
-		if rem.Seed {
-			return fmt.Sprintf("%s is granted by config.toml; edit that file to remove it", path)
-		}
 		return fmt.Sprintf("no authorization recorded for %s", path)
 	}
 	msg := "removed " + strings.Join(parts, " and ") + " for " + path
-	if rem.Seed {
-		msg += "; config.toml still seeds it, so it returns on the next launch"
-	}
 	return msg
 }
 
@@ -420,12 +414,6 @@ func grantsReport(cwd string) string {
 	}
 	entries := s.Entries()
 	b.WriteString("authorizations (path · capability · lifetime):")
-	if len(entries.Seed) > 0 {
-		b.WriteString("\n  seeded by config.toml (edited there, not here):")
-		for _, g := range entries.Seed {
-			fmt.Fprintf(&b, "\n    %-4s %-12s %s", g.Allow.String(), g.Lifetime, ui.DisplayHomePath(g.Path))
-		}
-	}
 	if len(entries.Remembered) == 0 {
 		b.WriteString("\n  none remembered")
 	} else {

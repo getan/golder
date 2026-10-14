@@ -38,9 +38,6 @@ type LegacyPaths struct {
 	// Permissions is ~/.config/golder/permissions.toml: the managed writable
 	// and readable roots.
 	Permissions string
-	// Seed is ~/.config/golder/config.toml, whose [permissions] table is the
-	// hand-edited version of the same roots.
-	Seed string
 }
 
 // LegacyPathsFor resolves the legacy locations from the environment, matching
@@ -57,7 +54,6 @@ func LegacyPathsFor(getenv func(string) string) LegacyPaths {
 	}
 	if dir := configDir(getenv); dir != "" {
 		out.Permissions = filepath.Join(dir, "permissions.toml")
-		out.Seed = filepath.Join(dir, "config.toml")
 	}
 	return out
 }
@@ -101,7 +97,6 @@ func (s *Store) Migrate(paths LegacyPaths) (MigrateResult, error) {
 
 	res.Imported = append(res.Imported, migrateTrust(paths.Trust, &res.Warnings)...)
 	res.Imported = append(res.Imported, migratePermissions(paths.Permissions, &res.Warnings)...)
-	res.Imported = append(res.Imported, migratePermissions(paths.Seed, &res.Warnings)...)
 	if len(res.Imported) == 0 {
 		return res, nil
 	}
@@ -173,9 +168,10 @@ func migrateTrust(path string, warn *[]string) []Grant {
 	return out
 }
 
-// migratePermissions reads one permissions file: the managed store spells the
-// roots at the top level of the document, while config.toml keeps them under
-// [permissions]. Both spellings are accepted, so one parser serves both.
+// migratePermissions reads a legacy permissions file. It accepts the roots both
+// at the top level of the document and under [permissions], because the files
+// this replaced used both spellings (the managed store used the first form, the
+// config.toml table this once read used the second).
 //
 //	writable_roots → Allow ReadWrite  (a writable root was readable too: the
 //	                                   sandbox always admitted it into its read

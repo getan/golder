@@ -2043,9 +2043,6 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			if res.WasSaved {
 				msg += ", deleted from permissions.toml"
 			}
-			if res.WasConfig {
-				msg += "; config.toml still seeds it"
-			}
 			m.transcript.addSystem(msg + ".")
 			return m.reopenWritablePathsPicker(false)
 		}

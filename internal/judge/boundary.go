@@ -520,15 +520,19 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 // can act on: which path, which directory would cover it, and how a person
 // makes that permanent.
 func blockBoundary(call agentcore.AgentToolCall, target, candidate string, writing, answered bool) *agentcore.BeforeToolCallDecision {
-	verb, list := "read", "readable_roots"
+	// The guidance names the two commands that actually make a grant permanent.
+	// It used to point at config.toml's [permissions] table, which no longer
+	// exists — advice that sends a person to edit a file that does nothing is
+	// worse than no advice.
+	verb, cmd := "read", "/permissions readable add"
 	if writing {
-		verb, list = "write", "writable_roots"
+		verb, cmd = "write", "/permissions writable add"
 	}
 	msg := fmt.Sprintf("tool %q blocked: %s is outside the workspace and the %s was not approved", call.Name, target, verb)
 	if candidate != "" {
-		msg += fmt.Sprintf("; approving it, or adding the directory to [permissions] %s in config.toml, would allow it", list)
+		msg += fmt.Sprintf("; approving it, or running %s %s, would allow it", cmd, candidate)
 	} else {
-		msg += fmt.Sprintf("; adding a directory above it to [permissions] %s in config.toml would allow it", list)
+		msg += fmt.Sprintf("; running %s on a directory containing it would allow it", cmd)
 	}
 	if !answered {
 		msg += " — no prompt is available in this run, so ask the user to run it interactively or to configure the root"

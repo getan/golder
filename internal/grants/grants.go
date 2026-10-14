@@ -237,8 +237,7 @@ type Grant struct {
 	// Lifetime is Session or Remembered.
 	Lifetime Lifetime `json:"lifetime"`
 	// Source records where a remembered row came from, for /trust's provenance
-	// column: the managed store, a legacy file, or the hand-edited seed in
-	// config.toml. Empty for session rows.
+	// column: a legacy file, a dialog, or a command. Empty for session rows.
 	Source string `json:"source,omitempty"`
 }
 
@@ -293,9 +292,6 @@ type Store struct {
 	saved map[string]Grant
 	// session is the process-only layer; never written.
 	session map[string]Grant
-	// seed is the hand-edited layer from config.toml. It is consulted but never
-	// persisted, so editing that file still takes effect on the next run.
-	seed map[string]Grant
 	// removed records paths deleted from the saved layer in this process. The
 	// write path merges with what is on disk so a concurrent golder's grant is
 	// not lost, and without this set the merge cannot tell "I never saw this
@@ -363,7 +359,6 @@ func New(opts Options) (*Store, error) {
 		path:    path,
 		saved:   map[string]Grant{},
 		session: map[string]Grant{},
-		seed:    map[string]Grant{},
 		removed: map[string]bool{},
 	}
 	if path == "" {
@@ -612,9 +607,9 @@ func (s *Store) Refuse(path string, caps Capability, life Lifetime) (Grant, erro
 // the first level that speaks to this capability decides it. A refusal recorded
 // for a child therefore still beats a grant inherited from its parent.
 //
-// Layers rank session, remembered, then seed. Session ranks first so an answer
-// given in this run takes effect immediately rather than being masked by an
-// older saved row for the same directory.
+// Layers rank session, then remembered. Session ranks first so an answer given
+// in this run takes effect immediately rather than being masked by an older
+// saved row for the same directory.
 func (s *Store) Check(path string, cap Capability) Verdict {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -648,7 +643,7 @@ func (s *Store) checkLocked(path string, cap Capability) Verdict {
 		return Verdict{}
 	}
 	for dir := clean; ; dir = filepath.Dir(dir) {
-		for _, layer := range []map[string]Grant{s.session, s.saved, s.seed} {
+		for _, layer := range []map[string]Grant{s.session, s.saved} {
 			g, ok := findRow(layer, dir, clean)
 			if !ok {
 				continue
@@ -679,24 +674,20 @@ func findRow(layer map[string]Grant, level, target string) (Grant, bool) {
 	return Grant{}, false
 }
 
-// Entries returns every row: seed, then remembered, then session, each sorted
-// by path. /trust prints this; the layers are separate because removing a row
-// means different things in each.
+// Entries returns every row: remembered, then session, each sorted by path.
+// /trust prints this; the layers are separate because removing a row means
+// different things in each.
 func (s *Store) Entries() Entries {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Entries{
-		Seed:       sortedGrants(s.seed),
 		Remembered: sortedGrants(s.saved),
 		Session:    sortedGrants(s.session),
 	}
 }
 
-// Entries is the whole table, in the three layers /trust reports.
+// Entries is the whole table, in the two layers /trust reports.
 type Entries struct {
-	// Seed is the hand-edited layer from config.toml. It is not persisted here
-	// and cannot be removed with /trust rm; the file owns it.
-	Seed []Grant
 	// Remembered is the managed store.
 	Remembered []Grant
 	// Session is this process only.
@@ -705,8 +696,7 @@ type Entries struct {
 
 // All returns every row from every layer, for a caller that wants one list.
 func (e Entries) All() []Grant {
-	out := make([]Grant, 0, len(e.Seed)+len(e.Remembered)+len(e.Session))
-	out = append(out, e.Seed...)
+	out := make([]Grant, 0, len(e.Remembered)+len(e.Session))
 	out = append(out, e.Remembered...)
 	out = append(out, e.Session...)
 	return out
@@ -747,9 +737,7 @@ func (s *Store) SessionOnly(path string, cap Capability) bool {
 }
 
 // Remove revokes a path from the layers the caller can edit: the session layer
-// always, and the managed file when it holds a row. The seed layer is reported
-// as untouched because config.toml owns it — silently rewriting the user's
-// hand-edited file is not this store's business.
+// always, and the managed file when it holds a row.
 func (s *Store) Remove(path string) (Removal, error) {
 	norm, err := storeKey(path)
 	if err != nil {
@@ -761,9 +749,6 @@ func (s *Store) Remove(path string) (Removal, error) {
 	if _, ok := s.session[norm]; ok {
 		delete(s.session, norm)
 		out.Session = true
-	}
-	if _, ok := s.seed[norm]; ok {
-		out.Seed = true
 	}
 	prev, ok := s.saved[norm]
 	if !ok {
@@ -788,40 +773,15 @@ func (s *Store) Remove(path string) (Removal, error) {
 
 // Removal reports which layers a Remove touched.
 type Removal struct {
-	// Session, Remembered and Seed each report whether that layer held the row.
+	// Session and Remembered each report whether that layer held the row.
 	Session    bool
 	Remembered bool
-	Seed       bool
 	// Persisted reports that the managed file was rewritten.
 	Persisted bool
 }
 
 // Touched reports whether any layer held the row.
-func (r Removal) Touched() bool { return r.Session || r.Remembered || r.Seed }
-
-// AddSeed installs a hand-edited grant from config.toml. Seed rows are
-// consulted like any other but never written by this store, so editing that
-// file still changes behaviour on the next run — which is the whole reason the
-// seed exists next to the managed store.
-func (s *Store) AddSeed(g Grant) error {
-	norm, err := storeKey(g.Path)
-	if err != nil {
-		return err
-	}
-	g.Path = norm
-	g.Allow, g.Deny = normalizeCaps(g.Allow), normalizeCaps(g.Deny)
-	if g.Allow == 0 && g.Deny == 0 {
-		return fmt.Errorf("grants: seed row for %s grants and refuses nothing", norm)
-	}
-	g.Lifetime = Remembered
-	if g.Source == "" {
-		g.Source = "config.toml"
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.seed[norm] = mergeGrant(s.seed[norm], g)
-	return nil
-}
+func (r Removal) Touched() bool { return r.Session || r.Remembered }
 
 // saveLocked writes the managed file atomically. Callers hold the write lock.
 //

@@ -29,9 +29,9 @@
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
 - **会话与分支**：`/resume` 切换历史会话（默认只看当前项目，`--all` 看全部），`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
-- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`；网络默认关闭。**路径授权可在弹窗里一键记住**：读/写两类弹窗都提供"本会话"与"记住（跨会话）"两档，后者直接写入 `~/.config/golder/permissions.toml`（写授权在 TUI 弹窗按 `w`/`s`，REPL 提示输入 `w`/`s`；读授权按 `a`/`s`）。同一份文件可用 `/permissions readable|writable list|add|rm` 维护，也可在 `config.toml` 的 `[permissions] readable_roots` / `writable_roots` 手写种子（程序不改写该文件）。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板；提权请求与"应当收容"冲突时升级给你拍板，而不是静默收容。
+- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`；网络默认关闭。**路径授权可在弹窗里一键记住**：读/写两类弹窗都提供"本会话"与"记住（跨会话）"两档，后者直接写入 `~/.config/golder/permissions.toml`（写授权在 TUI 弹窗按 `w`/`s`，REPL 提示输入 `w`/`s`；读授权按 `a`/`s`）。同一份文件可用 `/permissions readable|writable list|add|rm` 维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板；提权请求与"应当收容"冲突时升级给你拍板，而不是静默收容。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
-- **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`，以及 `bash` 命令里能识别出的文件操作数）默认只读工作区，越界会先问你——弹窗可选「只读这一次」「本会话允许读该目录」或「记住（跨会话，写入 `permissions.toml`）」；没有可问的人时（headless、子 agent）失败关闭，并在消息里给出路径与配置办法。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`config.toml` 的 `[permissions] readable_roots` 或 `GOLDER_READABLE_ROOTS`（同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
+- **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`，以及 `bash` 命令里能识别出的文件操作数）默认只读工作区，越界会先问你——弹窗可选「只读这一次」「本会话允许读该目录」或「记住（跨会话，写入 `permissions.toml`）」；没有可问的人时（headless、子 agent）失败关闭，并在消息里给出路径与配置办法。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`GOLDER_READABLE_ROOTS` 环境变量，或 `/permissions readable add <路径>`（写入 `permissions.toml`，重启后仍生效；同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
 - **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
 - **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`（无内置技能，目录不存在时零命令）；提示词模板、项目级 `AGENTS.md` 自动装载。
 - **在 tuios / herdr 里就是一个 agent**：跑在 [tuios](https://github.com/Gaurav-Gosain/tuios) 窗口或 [herdr](https://github.com/herdrdev/herdr) pane 里时，golder 自己上报状态，于是它出现在 rail/sidebar 上（working / 等待你 / 空闲 / 完成），审批与提问进 Inbox，daemon 重启后会带着 `golder --resume <会话>` 回到原会话。**两个宿主都不用改、也都不用装**：tuios 需要一份 harness manifest，`golder host-compat install` 写进 `~/.config/tuios/harnesses/`；herdr 什么也不需要，自报即识别。在 tuios 的 Inbox 里可以直接按键替你批准/拒绝——那条路依赖 manifest 里的屏幕规则，所以**改了审批弹窗的文案要同步改那份 manifest**（见 `internal/hostcompat/README.md`）。`golder host-compat status` 说明当前宿主与缺什么；`GOLDER_HOST_REPORT=off` 一键关闭上报。
@@ -157,8 +157,6 @@ thinking_level = "max"            # off | minimal | low | medium | high | xhigh 
 # base_url = "https://..."        # 覆盖 Provider 默认端点
 # api_key = "..."                 # 建议改用环境变量或 credential 引用
 # credential = "my-key"           # 引用 ~/.golder/.credentials.yaml 中的条目
-# [permissions]
-# writable_roots = ["~/.cache/go-build", "/Volumes/KIOXIA/rust-target"]  # 沙箱额外可写（同时可读）路径
 ```
 
 也可以用环境变量覆盖：`GOLDER_MODEL`、`GOLDER_PROVIDER`、`GOLDER_THINKING_LEVEL`、`GOLDER_PERMISSIONS`。命令行 flag 优先级最高。项目级还可以放一份 `.golder/config.json` 覆盖 `model` / `provider` / `thinkingLevel` / `hooks`——仅在目录被信任时加载。
@@ -298,7 +296,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_SANDBOX` | 沙箱档执行：`off` / `auto`（默认，仅沙箱档）/ `enforce`（全部 bash 进沙箱，无 runner 则 fail-closed） |
 | `GOLDER_SANDBOX_NETWORK` | 沙箱内是否放行网络：默认关闭（出口需显式授予）；设为 `on` 恢复 |
 | `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |
-| `GOLDER_READABLE_ROOTS` | 追加读取类工具（read/grep/find/ls/view_image）的免询问目录（冒号/逗号分隔），等同 `[permissions] readable_roots`；同时放宽沙箱读白名单 |
+| `GOLDER_READABLE_ROOTS` | 追加读取类工具（read/grep/find/ls/view_image）的免询问目录（冒号/逗号分隔），等同 `/permissions readable add`；同时放宽沙箱读白名单 |
 | `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |
 | `GOLDER_HOST_REPORT` | 宿主上报开关：`off` 关闭；`tuios` / `herdr` 强制指定（默认按 pane 环境自动判断，不在宿主里则不上报） |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
