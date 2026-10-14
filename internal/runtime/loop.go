@@ -592,6 +592,17 @@ func runCompaction(ctx context.Context, msgs agentcore.MessageList, cfg *RunConf
 		}
 	}
 	scfg := provider.StreamConfig{APIKey: key, ThinkingLevel: cfg.ThinkingLevel}
+	// Carry the session id exactly as the main turn does (see the turn loop
+	// above). opencode's Responses gateway refuses a request without
+	// x-opencode-session with 400 MissingSessionID — it cannot route the call
+	// efficiently — so a compaction that omitted it failed on every attempt,
+	// and only compaction did: the main turn, the reviewer and the sub-agent
+	// paths all pass it.
+	sid := cfg.SessionID
+	if sid == "" && strings.HasPrefix(cfg.Provider, "opencode") {
+		sid = processSessionID()
+	}
+	scfg.Extra = provider.WithSessionExtra(scfg.Extra, sid)
 	return compaction.Compact(ctx, stream, model, msgs, cfg.Compaction, -1, nil, "", scfg)
 }
 

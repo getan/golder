@@ -70,13 +70,32 @@ func summaryStream(text string) provider.StreamFn {
 }
 
 func TestAutoCompactionFiresOnThreshold(t *testing.T) {
+	// The compaction request must carry the session id, exactly as the main turn
+	// does. opencode's gateway answers 400 MissingSessionID without it, so a
+	// compaction that omitted the header failed on every attempt — and only
+	// compaction did, which made it look like an upstream fault rather than a
+	// missing field in one code path.
+	var sawSession bool
+	base := summaryStream("## Goal\ncompacted")
+	spy := func(ctx context.Context, model string, llm provider.LlmContext, cfg provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+		if sid, _ := cfg.Extra[provider.ExtraSessionID].(string); sid != "" {
+			sawSession = true
+		}
+		return base(ctx, model, llm, cfg)
+	}
+
 	// Main stream just ends the turn with text; the summary stream is separate so
 	// the summarization does not consume main-stream scripted turns.
 	main := scriptedStream([]agentcore.AssistantMessage{
 		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn, Content: agentcore.ContentList{agentcore.NewTextContent("ok")}},
 	})
 	cfg := newRunCfg(main)
-	cfg.SummaryStream = summaryStream("## Goal\ncompacted")
+	cfg.SummaryStream = spy
+	// A real run has both: the session id, and the opencode provider whose
+	// gateway requires the routing header. Setting neither would test a
+	// configuration no user has.
+	cfg.SessionID = "test-session"
+	cfg.Provider = "opencode-go"
 	// Small window + reserve so a handful of fat messages exceed the threshold.
 	cfg.ContextWindow = 2000
 	cfg.Compaction = compaction.CompactionSettings{Enabled: true, ReserveTokens: 500, KeepRecentTokens: 100}
@@ -105,6 +124,10 @@ func TestAutoCompactionFiresOnThreshold(t *testing.T) {
 	}
 	if !startedBefore {
 		t.Errorf("expected a CompactionStartEvent, got events %+v", events)
+	}
+	if !sawSession {
+		t.Error("the compaction request carried no session id; the opencode gateway answers " +
+			"400 MissingSessionID without it, so compaction would fail on every attempt")
 	}
 	if ce.ErrorMessage != "" {
 		t.Fatalf("compaction should have succeeded, got error %q", ce.ErrorMessage)
