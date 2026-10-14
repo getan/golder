@@ -532,7 +532,11 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 	if out == nil {
 		return ApprovalAnswer{}
 	}
-	fmt.Fprintf(out, "\ngolder: %s is outside the workspace and this call %ss it.\n", target, verb)
+	from := ""
+	if origin := agentcore.OriginFromContext(ctx); origin != "" {
+		from = " (from " + origin + ")"
+	}
+	fmt.Fprintf(out, "\ngolder: %s is outside the workspace and this call %ss it%s.\n", target, verb, from)
 	if candidate != "" {
 		// The directory and remembered rungs need a way to register and, for the
 		// latter, a way to write it down. A write grant goes through

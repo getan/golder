@@ -812,14 +812,21 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	if out == nil {
 		return riskAnswer{}
 	}
+	// A sub-agent's question says who is asking, for the same reason the TUI
+	// dialog does: the person is consenting to a call their own conversation did
+	// not make, and the stdin prompt is the only label they will get.
+	from := ""
+	if origin := agentcore.OriginFromContext(ctx); origin != "" {
+		from = " (from " + origin + ")"
+	}
 	if unisolated != "" {
 		// Either the execution layer cannot isolate this call (no runner for
 		// the tool, GOLDER_SANDBOX=off, or no platform sandbox) or the model
 		// asked to run it outside the sandbox: approving runs it unisolated,
 		// so say so plainly.
-		fmt.Fprintf(out, "\ngolder judges %q as risk %s [%s: approving runs it unisolated].\n", call.Name, v.Level, unisolated)
+		fmt.Fprintf(out, "\ngolder judges %q as risk %s%s [%s: approving runs it unisolated].\n", call.Name, v.Level, from, unisolated)
 	} else {
-		fmt.Fprintf(out, "\ngolder judges %q as risk %s.\n", call.Name, v.Level)
+		fmt.Fprintf(out, "\ngolder judges %q as risk %s%s.\n", call.Name, v.Level, from)
 	}
 	n := len(v.Reasons)
 	if n > 3 {

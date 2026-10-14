@@ -83,30 +83,30 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 工具侧读边界（工作区外读取需确认）
 
-沙箱管的是 bash 命令；读取类工具（`read` / `grep` / `find` / `ls` / `view_image`）另有一条边界：**工作区根目录**（启动目录）。这几个工具默认只读工作区，越界不是硬拒绝，而是征求你的同意——这是范围/同意问题而非风险问题，因此**与权限模式无关**：只读、每次询问、自动审批、完全放行都会问（`full-access` 关掉的是审查与沙箱，不是知情同意）。没有可问的人时（`headless`、子 agent）失败关闭，错误消息里写明路径与可用的配置办法。
+沙箱管的是 bash 命令；读取类工具（`read` / `grep` / `find` / `ls` / `view_image`）另有一条边界：**工作区根目录**（启动目录）。这几个工具默认只读工作区，越界不是硬拒绝，而是征求你的同意——这是范围/同意问题而非风险问题，因此**与权限模式无关**：只读、每次询问、自动审批、完全放行都会问（`full-access` 关掉的是审查与沙箱，不是知情同意）。没有可问的人时失败关闭，错误消息里写明路径与可用的配置办法：`headless` 与进程隔离的子 agent 无人可问；TUI/REPL 里的子 agent 则把问题送进同一个弹窗，标题标出来源（`bash (from task)`），因为人就在旁边看着这一批任务。
 
 两种回答粒度不同：
 
 - **只读这一次**：随该次调用生效（上下文里的单次授权），不留记录；
-- **本会话允许读该目录**：登记进进程内读权注册表（`internal/permissions/readroots.go`），此后该目录下的读取不再询问，并**同时放宽沙箱读白名单**——否则会出现"工具读得到、bash 读不到"的分裂。
+- **本会话允许读该目录**：作为本会话行记进统一授权表（`grants.json`，进程内即刻生效），此后该目录下的读取不再询问，并**同时放宽沙箱读白名单**——否则会出现"工具读得到、bash 读不到"的分裂。
 
 候选目录取最细粒度：调用命名的路径本身就是目录时（`ls`/`grep`/`find` 的操作数、bash 命令里的目录参数、带尾斜杠的写法）取该目录本身，是文件时取「文件所在目录」，不会上提到更粗的一层；一次调用点名多个路径时（`ls ~/work ~/work/proj`、`grep` 的 `path` 数组）取其中最细的那个目录，先写的路径只在并列时胜出；通配符操作数（`ls ~/work/*/*.go`）取模式之上**实际存在**的最深目录。只有该目录太宽（`$HOME`、`/`、`$HOME` 的父目录）时才退回到只提供"只读这一次"。**凭据路径（`~/.ssh`、`~/.zshrc`、`~/.aws`、`~/Library/Keychains` 等）不进入询问**：静态硬拒绝层直接拦下，弹窗不会给出一个按键就交出它们的机会。
 
 命令里的操作数按**shell 的实际语义**读：前导 `~` 与 `$HOME` 都会被展开（`~/x`、`~/"x"`、`$HOME/x` 都算家目录下的路径，而引号包住波浪号的 `"~/x"` 按字面算——与 bash 一致；别人的 `~name` 不展开）。不这样做的话，`ls ~/Desktop` 会被当成工作区内的相对路径，家目录下的读取反而**不会**被询问，而同样位置的绝对路径会。
 
-需要预先授权（避免反复弹窗）时有两条途径，汇入同一份注册表：
+需要预先授权（避免反复弹窗）时有两条途径，汇入同一张授权表：
 
-- **批准读授权时选「记住」**：写入受管文件 `~/.config/golder/permissions.toml`，重启后仍生效（`/permissions readable list|add|rm` 维护）；
+- **批准读授权时选「记住」**：写入 `~/.config/golder/grants.json`，重启后仍生效（`/boundary readable list|add|rm` 查看与维护）；
 - **`GOLDER_READABLE_ROOTS`**：冒号/逗号分隔，规则一致（`~/` 展开，相对路径与过宽根被丢弃），给无法编辑文件的机器用。
 
 它与 `GOLDER_SANDBOX_READABLE` 不是一回事：后者只作用于 OS 沙箱，前者是工具自己的白名单并顺带放宽沙箱。读授权也不影响写：写走下面的 writable_roots（`apply_patch` 也一样，越界时边界门问的正是同一件事）。
 
 ### 写白名单（项目 + 临时目录 + writable_roots）
 
-沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一份进程内注册表（`internal/seatbelt/writable.go`，并发安全，下一个命令立即生效）：
+沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一张授权表（`grants.json`；本会话行在进程内即刻生效，并发安全，下一个命令就看得见）：
 
 - **审批对话框**：沙箱拒绝的命令若提到了项目外的路径，对话框会多出一行 `Allow writes to <path> (this session)`（按 `w`）。它只对**本次会话**生效，且批准不是"无沙箱放行"——命令重新回到收容态执行，只是该路径可读写；授权后对话记录会提示持久化命令。
-- **`/permissions writable add <path>`**：写入受管文件 `~/.config/golder/permissions.toml`（目录 0700、原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/permissions writable` 列出全部条目及来源（`permissions.toml` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里 `/permissions` 菜单最后一行 `Sandbox writable paths…` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
+- **`/boundary writable add <path>`**：写入 `~/.config/golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable`，或从 `/permissions` 菜单最后一行 `Sandbox writable paths…`，打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
 
 可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
 

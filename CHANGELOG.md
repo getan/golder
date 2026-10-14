@@ -12,6 +12,24 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`/boundary` and `/grants`: consent and the table each get their own
+  command**: the four things a person can decide used to be spread over two
+  commands that each carried two subjects. `/trust` held the per-directory
+  decision (`on|off|once|status`) AND the whole authorization table
+  (`list|add|rm`), while `/permissions` held the approval mode AND the path
+  grants, with `readable`/`writable` hanging off it as subcommands. A person
+  who wanted to know where a read might reach typed `/permissions` and got a
+  risk-mode list; a person who wanted the mode typed `/trust` and got a path
+  table. Now each command answers one question: `/trust` for whether
+  side-effect tools may run in this directory, `/boundary` for which paths
+  outside the workspace may be read or written, `/permissions` for how calls
+  are graded, and `/grants` for the raw table (every row, refusals included;
+  `add`/`rm` write one directly, for a path no dialog has touched yet).
+  `/permissions list` deliberately no longer lists paths at all — seeing them
+  there taught people to look for "permissions" when they meant "where may
+  this read" — and names `/boundary list` instead. The TUI's writable-path
+  picker follows (`permissions-writable` is now `boundary-writable`, and its
+  Add row seeds `/boundary writable add ` into the composer).
 - **The reviewer routes through a decision model, and falls back to the
   conversation model**: grading every mutating tool call with the session's own
   model costs a full generation, and its failure mode is a parsing one — the
@@ -774,6 +792,23 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **One authorization store: `grants.json`, and nothing else**: three things
+  held path grants — the authorization table, the managed `permissions.toml`,
+  and two process-level registries (the read roots in `internal/permissions`,
+  the sandbox writable roots in `internal/seatbelt`) — so every reader had to
+  consult the right pair, every writer had to write the right pair, and the
+  pairs drifted. That is how a directory could be granted for reading and
+  still be refused by the sandbox, or granted in a dialog and invisible to
+  `/trust`. The registries are deleted rather than shadowed (the sandbox
+  profile builders, the boundary gate and the file tools all read the same
+  rows), and `permissions.toml` is retired with them: it existed for the
+  dialogs to write, and the table is where their answers belong. Two entry
+  points keep the validation unskippable — `grants.AddReadRoot` and
+  `grants.AddWritableRoot` — because a caller must not be able to introduce a
+  grant the store itself would refuse (a root too broad to be a boundary).
+  `RemoveCapability` is new with it: a row carries a SET while the commands
+  that manage it are separate, so clearing what `/trust` speaks for must not
+  silently revoke the read or write grant beside it.
 - **Every dialog answers to the same keys, and `p` no longer writes to disk in
   one of them**: the keys were consistent inside each dialog and inconsistent
   between them, in the direction that costs a permission. The launch-time trust
@@ -1084,6 +1119,40 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A boundary refusal is the boundary gate's, not the reviewer's**: a call
+  blocked by the workspace-boundary gate was announced as `✗ 自动审批拒绝` —
+  an auto-review denial — with the reviewer's "(risk, authorization)" suffix.
+  The reviewer had not seen the call; the boundary gate had, and the person
+  had (or had not) answered. Two different things also shared that one
+  sentence: "the user said no", which is a decision and is recorded so the
+  question is not put twice, and "nobody could be asked", which is a failure
+  to ask and records nothing. Reporting the second as the first blamed
+  auto-review for a question nobody was asked — the confusion that started
+  this. There are three boundary kinds now (granted / denied / no prompt),
+  each rendered in its own words, the gates' own sentences are localized
+  (`用户拒绝了本次请求`, `本次运行无人可问`) instead of leaving English in a
+  Chinese conversation, and `NoteKind.Failure()` decides the error color in
+  one place rather than in both front-end renderers.
+- **A sub-agent's consent question reaches the person, labeled with the agent
+  that asked**: the chain a child inherited was built with the driver's answer
+  channels stripped out, deliberately, so a child's question would fail closed
+  instead of parking a goroutine on a dialog nobody opened. That reasoning was
+  wrong twice over. The person IS there — they are watching the batch — so
+  failing closed turned a question they would have answered into a silent
+  refusal the child then had to work around; and the hazard it named is what
+  the channels' own absence already covers, since a headless run, an embedder
+  with no driver and a process-isolated child all pass nothing and still fail
+  closed. Both chains now come from one builder. The label is what makes
+  sharing safe: a dispatch stamps its name onto the context (appending, so a
+  nested child reads `task › explore`), the dialog titles the request
+  `bash (from task)`, the stdin prompt and the transcript line say the same.
+  Writing the test for it exposed a real hole beside it: `ToolAuth` carried
+  the session read roots across a process boundary and not the write roots, so
+  a session-only "allow writing /x" — which exists in this process's table and
+  nowhere else — was refused by a process-isolated child that could not even
+  ask. Remembered roots never had the problem (the child opens `grants.json`
+  itself), which is why it went unnoticed; the snapshot now carries both and
+  the RPC carries the origin label too.
 - **A symlinked spelling of a whitelisted path is no longer a boundary
   question**: the read whitelist and the gates that consult it compared cleaned
   paths, and cleaning does not follow symlinks, so on macOS a literal `/tmp/x`

@@ -679,7 +679,11 @@ type Answer struct {
 // a wider grant than intended. Now both spell the same ladder: y once, a reads
 // (this session), p all tools (this session).
 func ConfirmToolCall(ctx context.Context, out io.Writer, in *bufio.Reader, call agentcore.AgentToolCall) Answer {
-	fmt.Fprintf(out, "\ngolder wants to use %q in an untrusted directory.\n", call.Name)
+	from := ""
+	if origin := agentcore.OriginFromContext(ctx); origin != "" {
+		from = " (from " + origin + ")"
+	}
+	fmt.Fprintf(out, "\ngolder wants to use %q in an untrusted directory%s.\n", call.Name, from)
 	if summary := toolCallSummary(call); summary != "" {
 		fmt.Fprintf(out, "  %s\n", summary)
 	}
