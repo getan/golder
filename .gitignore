@@ -44,6 +44,11 @@ config.toml
 # Compiled binary (go build ./cmd/golder produces ./golder)
 /golder
 
+# Local build output (scratch binaries built by hand during development).
+# Nothing here is produced by CI: .github/workflows/build.yml writes to
+# release/, which is ignored below.
+/.build/
+
 # goreleaser output
 /dist/
 # build workflow output (macOS/Linux archives + checksums)
