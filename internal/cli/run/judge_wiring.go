@@ -159,6 +159,10 @@ func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd s
 		Fallback: fallback,
 		Config:   reviewpolicy.DefaultConfig(),
 		Cwd:      cwd,
+		// The same extra roots the gate chain enforces with, so the reviewer's
+		// view of the boundary matches the gate's rather than being one directory
+		// stricter (which reads a skills read as a boundary crossing).
+		ExtraRoots: ReadableExtraRoots(),
 	}
 }
 

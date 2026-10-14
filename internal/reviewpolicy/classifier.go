@@ -58,6 +58,12 @@ type Classifier struct {
 	// Cwd is the working directory the state reports, so the judge can tell a
 	// path inside the workspace from one outside it.
 	Cwd string
+	// ExtraRoots are directories outside the workspace the session treats as its
+	// own (the skills directory golder advertises in the system prompt). They
+	// travel with Cwd because both answer the same question — is this path the
+	// user's own or a boundary crossing — and the reviewer must see the same
+	// answer the boundary gate enforces.
+	ExtraRoots []string
 	// Observer, when set, receives one record per call. It runs on the calling
 	// goroutine, so it must not block: it is for telemetry, not for prompting.
 	Observer func(CallRecord)
@@ -280,10 +286,22 @@ type State struct {
 	Facts *shellfacts.Plan `json:"facts,omitempty"`
 	// Access lists the paths the call touches, when they can be determined.
 	Access []shellfacts.AccessSummary `json:"access,omitempty"`
+	// Auth says what the session already knows about those paths: whether each
+	// lands inside the workspace, whether a consent question is in front of this
+	// call, and what the authorization table has decided (granted or refused) per
+	// capability. Without it the model grades the same text as though no answer
+	// had ever been given: it re-asks what the user just approved, or reads a
+	// pending question as settled.
+	//
+	// The flags come from the boundary gate's own predicates, never from a second
+	// reading of the arguments, so the reviewer cannot be told something the gate
+	// does not believe.
+	Auth []judge.AuthFact `json:"auth,omitempty"`
 }
 
 func (c *Classifier) state(tool string, args json.RawMessage, facts *shellfacts.Plan) State {
 	st := State{Tool: tool, Cwd: c.Cwd}
+	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots)
 	if facts != nil {
 		st.Command = facts.Raw
 		st.Facts = facts

@@ -150,30 +150,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// outside it, and a textual comparison would call that in-workspace
 			// and stay silent — the escape the tools' own guard missed too.
 			resolved = permissions.Canonical(resolved)
-			if permissions.Inside(absRoot, resolved) || insideAnyRoot(opts.Roots, resolved) {
-				continue
-			}
-			// Credential material is the static floor's to refuse. Passing it
-			// through unchanged means the floor denies the call and no dialog
-			// offers to grant it.
-			if _, bad := credentialPathRead(candidateRaw); bad {
-				continue
-			}
-			if permissions.ReadableAt(resolved) {
-				continue
-			}
-			// The unified table is consulted alongside the legacy read-root
-			// registry, and either one silences the question. Two readers is
-			// deliberate during the changeover: the registry is what
-			// config.toml and GOLDER_READABLE_ROOTS seed, while the table is
-			// what every dialog answer now records, so a path granted through
-			// either route is a path the user already decided about.
-			if grants.Allows(resolved, grants.Read) {
-				continue
-			}
-			// The system whitelist is not a boundary question: the sandbox
-			// admits these paths, so asking would only train blind approval.
-			if insideSystemRoots(resolved) {
+			if !boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots) {
 				continue
 			}
 			questions = append(questions, question{
@@ -294,6 +271,47 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		// directory answer for commands too.
 		return &agentcore.BeforeToolCallDecision{ReadGrant: target}
 	}
+}
+
+// boundaryQuestion reports whether one path needs the user's answer, given the
+// path as written and as resolved. It is the whole test, in one place, because
+// two callers need the same answer and must not drift:
+//
+//   - the gate below, which asks the question;
+//   - the reviewer's state (AuthFacts), which tells the model whether a consent
+//     question is in front of this call — a model told "outside the workspace"
+//     without "and already granted" either re-asks what the user just approved
+//     or approves what nobody has seen.
+//
+// Each clause is a reason the question is not worth asking:
+//
+//   - inside the workspace, or inside a root the session treats as its own (the
+//     skills directory golder advertises itself);
+//   - credential material, which is the static floor's to refuse: passing it
+//     through untouched means the floor denies the call and no dialog offers to
+//     grant what the user should never hand over by pressing a key;
+//   - already granted, through either reader — the legacy read-root registry
+//     (what config.toml and GOLDER_READABLE_ROOTS seed) or the authorization
+//     table (what every dialog answer records now);
+//   - the system whitelist, which the sandbox admits anyway, so asking would
+//     only train people to approve without reading.
+func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string) bool {
+	if permissions.Inside(absRoot, resolved) || insideAnyRoot(extraRoots, resolved) {
+		return false
+	}
+	if _, bad := credentialPathRead(raw); bad {
+		return false
+	}
+	if permissions.ReadableAt(resolved) {
+		return false
+	}
+	if grants.Allows(resolved, grants.Read) {
+		return false
+	}
+	if insideSystemRoots(resolved) {
+		return false
+	}
+	return true
 }
 
 // insideAnyRoot reports whether target is inside one of the extra trusted roots.
