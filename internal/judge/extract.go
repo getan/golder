@@ -73,6 +73,14 @@ func pathArgs(args json.RawMessage) []string {
 // before the parser existed.
 func commandPaths(cmd string) []string {
 	plan := shellfacts.Parse(cmd)
+	// The facts reader reports every path-shaped ARGUMENT and marks the operation
+	// unknown, because whether one is a file is the program's business — and it
+	// says as much ("the caller must narrow it with knowledge this package does
+	// not have"). This narrows: a search command's pattern and a script are
+	// path-shaped text that names no file (`sed -n '/func X/,/^}/p' f.go` asked
+	// the user about `/func X/,/^}/p`), and the scanner below already knows the
+	// positions, so the rule lives there and is applied here.
+	scripts := nonPathOperandTexts(cmd)
 	var out []string
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -85,6 +93,9 @@ func commandPaths(cmd string) []string {
 	}
 	if plan.Parsed {
 		for _, a := range plan.PathAccesses() {
+			if a.Origin == "argument" && scripts[a.Path] {
+				continue
+			}
 			add(a.Path)
 		}
 	}

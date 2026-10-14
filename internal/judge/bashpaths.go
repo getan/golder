@@ -155,11 +155,34 @@ var fileArgFlags = map[string][]string{
 	"wc":   {"--files0-from"},
 	"diff": {"--from-file", "--to-file"},
 	"file": {"-m", "--magic-file", "-f", "--files-from"},
+	// sed's and awk's -f names a script FILE, which is a real read — and, with
+	// it declared, the pattern-position rule below knows the script is not
+	// among the operands, so `sed -f /outside/p.sed f.go` is asked about
+	// instead of being skipped as "the script".
+	"sed": {"-f", "--file"}, "awk": {"-f", "--file"}, "gawk": {"-f", "--file"},
 	// date's -f is a dates FILE on GNU and a format string on BSD, and -r names
 	// a file whose mtime is reported. Declaring both is the fail-safe reading:
 	// a BSD format string is not path-shaped and adds no candidate, while a
 	// GNU path does — and a path is a read either way.
 	"date": {"-f", "--file", "-r", "--reference"},
+}
+
+// inlinePatternFlags maps a pattern command to the flags that carry the pattern
+// or script inside the command line. Their values are never files, and there can
+// be several (`sed -e '/a/p' -e '/b/p' f`, `grep -e '/usr/local' -e '/etc' f`).
+var inlinePatternFlags = map[string][]string{
+	"grep": {"-e", "--regexp"}, "egrep": {"-e", "--regexp"}, "fgrep": {"-e", "--regexp"},
+	"rg": {"-e", "--regexp"}, "ag": {"-e"}, "ack": {"-e"},
+	"sed": {"-e", "--expression"},
+	"awk": {"-e", "--source"}, "gawk": {"-e", "--source"},
+}
+
+// nonPathFlagValues maps a command to the flags whose separate argument is
+// neither a file nor the pattern: awk's -v assignment and -F separator. They
+// have to be stepped over when looking for the script, or the script itself
+// keeps looking like a path — `awk -F: '/x/{print}' f` would report `/x/{print}`.
+var nonPathFlagValues = map[string][]string{
+	"awk": {"-v", "-F"}, "gawk": {"-v", "-F"},
 }
 
 // fileFlagValue returns the path a word carries as a file-reading flag's value,
@@ -184,10 +207,10 @@ func fileFlagValue(cmdName, word string) (string, bool) {
 // fileFlagValueIndices marks the word indices that are a separate file-reading
 // flag's value (`-f /x`, `--file /x`), so the pattern-position skip cannot
 // mistake one for a search pattern.
-func fileFlagValueIndices(cmdName string, words []shellWord, from int) map[int]bool {
+func fileFlagValueIndices(cmdName string, texts []string, from int) map[int]bool {
 	out := map[int]bool{}
-	for j := from; j+1 < len(words); j++ {
-		if isFileFlag(cmdName, words[j].text) {
+	for j := from; j+1 < len(texts); j++ {
+		if isFileFlag(cmdName, texts[j]) {
 			out[j+1] = true
 		}
 	}
@@ -210,16 +233,135 @@ func isFileFlag(cmdName, word string) bool {
 // file (`grep -f patterns.txt data.txt`). With no pattern operand, every
 // non-flag word is a file to read, so the pattern-position skip must not drop
 // the first one.
-func patternFromFile(cmdName string, words []shellWord, from int) bool {
-	for j := from; j < len(words); j++ {
-		if isFileFlag(cmdName, words[j].text) {
+func patternFromFile(cmdName string, texts []string, from int) bool {
+	for j := from; j < len(texts); j++ {
+		if isFileFlag(cmdName, texts[j]) {
 			return true
 		}
-		if _, ok := fileFlagValue(cmdName, words[j].text); ok {
+		if _, ok := fileFlagValue(cmdName, texts[j]); ok {
 			return true
 		}
 	}
 	return false
+}
+
+// nonPathOperandIndices returns the indices of the words that are NOT files even
+// when they are path-shaped: the pattern of a search command, the script of sed
+// or awk, and the value of a flag that carries a script or a setting rather than
+// a file.
+//
+// This is the knowledge that a path-SHAPED word is not necessarily a path.
+// `/func X/,/^}/p` is a sed address range and `/usr/local` is a search string,
+// and both read exactly like an absolute path to anything that only looks at the
+// text. Two readers need this rule and must not drift: the scanner below, which
+// walks its own words, and commandPaths (extract.go), which narrows the facts
+// reader's list of path-shaped ARGUMENTS with it — shellfacts reports those as
+// facts and says so ("the caller must narrow it with knowledge this package does
+// not have", see Access.Op), and this is that narrowing.
+func nonPathOperandIndices(cmdName string, texts []string, from int) map[int]bool {
+	if !patternCommands[cmdName] {
+		return nil
+	}
+	out := map[int]bool{}
+	// A flag can carry the pattern or script inline, and there may be several of
+	// them: every one is a non-path operand. A flag merely HOLDING a setting
+	// (`awk -v`, `awk -F`) is stepped over the same way but does not mean the
+	// script is inline — awk still takes one as its first bare operand.
+	sawInline := false
+	for j := from; j+1 < len(texts); j++ {
+		switch {
+		case carriesInlinePattern(cmdName, texts[j]):
+			out[j+1] = true
+			sawInline = true
+		case isNonPathFlagValue(cmdName, texts[j]):
+			out[j+1] = true
+		}
+	}
+	// The bare operand is a pattern too, but only when the command has no inline
+	// pattern of its own and does not read one from a file: `sed -e '/x/p' f`
+	// has no positional script, so `f` is a file rather than the rule.
+	if !sawInline && !patternFromFile(cmdName, texts, from) {
+		fileValues := fileFlagValueIndices(cmdName, texts, from)
+		for j := from; j < len(texts); j++ {
+			// An empty word (a bare '' argument) is not an operand either: it is
+			// how a flag that takes an optional value is spelled with none.
+			if strings.HasPrefix(texts[j], "-") || texts[j] == "" || fileValues[j] || out[j] {
+				continue
+			}
+			out[j] = true
+			break
+		}
+	}
+	return out
+}
+
+// carriesInlinePattern reports whether one word is a flag this command reads its
+// pattern or script from, in the separated or attached spelling.
+func carriesInlinePattern(cmdName, word string) bool {
+	for _, f := range inlinePatternFlags[cmdName] {
+		if word == f || strings.HasPrefix(word, f) && len(word) > len(f) &&
+			(strings.HasPrefix(f, "--") && word[len(f)] == '=' || !strings.HasPrefix(f, "--")) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNonPathFlagValue reports whether one word is a flag whose separate argument
+// is a setting rather than a file (`awk -v`, `awk -F`).
+func isNonPathFlagValue(cmdName, word string) bool {
+	for _, f := range nonPathFlagValues[cmdName] {
+		if word == f {
+			return true
+		}
+	}
+	return false
+}
+
+// textsOf projects words onto their texts, which is the form every rule above
+// takes: quoting matters for tilde expansion and for the credential floor, and
+// not at all for "which argument is this".
+func textsOf(words []shellWord) []string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = w.text
+	}
+	return out
+}
+
+// nonPathOperandTexts returns the spellings in this command that are patterns or
+// scripts rather than paths, so a reader that only has the text — commandPaths,
+// narrowing the facts reader's argument list — can ask the same question the
+// scanner asks by position.
+func nonPathOperandTexts(cmd string) map[string]bool {
+	var out map[string]bool
+	for _, seg := range splitShellSegments(cmd) {
+		words := shellWords(seg)
+		i := commandWordIndex(words)
+		if i >= len(words) {
+			continue
+		}
+		texts := textsOf(words)
+		for j := range nonPathOperandIndices(path.Base(texts[i]), texts, i+1) {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[texts[j]] = true
+		}
+	}
+	return out
+}
+
+// commandWordIndex returns the index of the command word in a segment, stepping
+// over the prefixes that do not change which program runs (env, sudo, and the
+// other transparent wrappers).
+func commandWordIndex(words []shellWord) int {
+	i := 0
+	for i < len(words) && (isTransparentPrefix(words[i].text) ||
+		words[i].text == "sudo" || words[i].text == "doas") {
+		i++
+	}
+	return i
 }
 
 // bashPathCandidates returns the path-shaped words a bash command may read.
@@ -230,11 +372,7 @@ func bashPathCandidates(cmd string) []string {
 	var out []string
 	for _, seg := range splitShellSegments(cmd) {
 		words := shellWords(seg)
-		i := 0
-		for i < len(words) && (isTransparentPrefix(words[i].text) ||
-			words[i].text == "sudo" || words[i].text == "doas") {
-			i++
-		}
+		i := commandWordIndex(words)
 		if i >= len(words) {
 			continue
 		}
@@ -242,23 +380,11 @@ func bashPathCandidates(cmd string) []string {
 		if !fileOperandCommands[cmdName] {
 			continue
 		}
-		// A separated file-reading flag's value (`-f /outside/pat`) is a file
-		// operand, not the search pattern.
-		fileValues := fileFlagValueIndices(cmdName, words, i+1)
-		// A pattern command's first non-flag argument is a pattern, not a path:
-		// `rg '/usr/local' internal` searches for that text. When the pattern
-		// itself comes from a file (`grep -f pat.txt data.txt`) there is no
-		// pattern operand, so every non-flag word names a file to read.
-		skip := -1
-		if patternCommands[cmdName] && !patternFromFile(cmdName, words, i+1) {
-			for j := i + 1; j < len(words); j++ {
-				if strings.HasPrefix(words[j].text, "-") || fileValues[j] {
-					continue
-				}
-				skip = j
-				break
-			}
-		}
+		texts := textsOf(words)
+		// A search command's pattern, a script, and a value flag's argument are
+		// path-SHAPED often enough to matter and are never files (see
+		// nonPathOperandIndices).
+		skip := nonPathOperandIndices(cmdName, texts, i+1)
 		progWord := -1
 		if letter, ok := interpreterProgramFlags[cmdName]; ok {
 			for j := i + 1; j < len(words); j++ {
@@ -270,7 +396,7 @@ func bashPathCandidates(cmd string) []string {
 		}
 		for j, w := range words {
 			switch {
-			case j == skip:
+			case skip[j]:
 				continue
 			case j == progWord:
 				for _, frag := range embeddedPaths(w.text) {
