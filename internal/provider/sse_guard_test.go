@@ -147,11 +147,11 @@ func TestEmptySSEFrameFilterKeepsContent(t *testing.T) {
 	bodies := []string{
 		"data: {\"a\":1}\n\n",
 		"event: x\ndata: {\"a\":1}\n\n",
-		"data:{\"a\":1}\n\n",            // no space after the colon
-		"data: {\"a\":1}\nid: 7\n\n",    // another field after data
-		"data: one\ndata: two\n\n",      // multi-line data
-		"data: [DONE]\n\n",              // the terminator
-		"data: {\"a\":1}\r\n\r\n",       // CRLF line endings
+		"data:{\"a\":1}\n\n",         // no space after the colon
+		"data: {\"a\":1}\nid: 7\n\n", // another field after data
+		"data: one\ndata: two\n\n",   // multi-line data
+		"data: [DONE]\n\n",           // the terminator
+		"data: {\"a\":1}\r\n\r\n",    // CRLF line endings
 	}
 	for _, body := range bodies {
 		got, err := io.ReadAll(newEmptySSEFrameFilter(io.NopCloser(strings.NewReader(body))))

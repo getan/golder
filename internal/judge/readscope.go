@@ -41,8 +41,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/accessgate"
+	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )

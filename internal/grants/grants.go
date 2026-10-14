@@ -657,9 +657,9 @@ func (s *Store) Entries() Entries {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return Entries{
-		Seed:    sortedGrants(s.seed),
+		Seed:       sortedGrants(s.seed),
 		Remembered: sortedGrants(s.saved),
-		Session: sortedGrants(s.session),
+		Session:    sortedGrants(s.session),
 	}
 }
 

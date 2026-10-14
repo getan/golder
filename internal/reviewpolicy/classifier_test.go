@@ -506,4 +506,3 @@ func TestRejectedKeyDisablesToo(t *testing.T) {
 		t.Error("a rejected key did not disable the cheap path")
 	}
 }
-

@@ -355,9 +355,9 @@ type question struct {
 
 // evaluateResponse is the wire shape of a success.
 type evaluateResponse struct {
-	Model   string                    `json:"model"`
+	Model   string                     `json:"model"`
 	Answers map[string]json.RawMessage `json:"answers"`
-	Usage   Usage                     `json:"usage"`
+	Usage   Usage                      `json:"usage"`
 }
 
 type answerWire struct {
@@ -633,4 +633,3 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return false
 	}
 }
-

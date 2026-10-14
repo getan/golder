@@ -42,8 +42,8 @@ func TestCapabilityParsingAndRendering(t *testing.T) {
 		{"execute", Execute, true},
 		{"all", Full, true},
 		{"", 0, false},
-		{"x", 0, false},   // unknown letter must not be ignored
-		{"rq", 0, false},  // nor a partially-valid set
+		{"x", 0, false},  // unknown letter must not be ignored
+		{"rq", 0, false}, // nor a partially-valid set
 		{"readw", 0, false},
 	}
 	for _, c := range cases {

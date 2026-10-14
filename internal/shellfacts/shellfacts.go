@@ -12,7 +12,7 @@
 // answering a different question than the shell will: bash performs quote
 // removal, parameter expansion, command substitution and field splitting AFTER
 // any string match has run, so the bytes a matcher sees are not the argv that
-// executes. That gap is where shell-injection bypasses live (`r''m` becomes
+// executes. That gap is where shell-injection bypasses live (`r”m` becomes
 // `rm`; `$IFS` becomes whitespace; `$(echo rm)` becomes a program name). This
 // package closes the gap by handing the caller the argv vectors bash would
 // build, instead of making it infer them from text.

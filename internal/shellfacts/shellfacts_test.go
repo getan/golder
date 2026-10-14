@@ -228,9 +228,9 @@ func TestHeredocIsReportedAsFurtherShellInput(t *testing.T) {
 
 func TestConstructsAreNamed(t *testing.T) {
 	cases := map[string]string{
-		`(ls)`:                  "subshell",
-		`{ ls; }`:               "block",
-		`if true; then ls; fi`:  "if",
+		`(ls)`:                      "subshell",
+		`{ ls; }`:                   "block",
+		`if true; then ls; fi`:      "if",
 		`for i in a b; do ls; done`: "for",
 		`while true; do ls; done`:   "while",
 		`f() { ls; }`:               "function f",
@@ -350,7 +350,7 @@ func TestPathShapedIsConservative(t *testing.T) {
 		{`ls /tmp`, true},
 		{`ls ~/work`, true},
 		{`ls ../sibling`, true},
-		{`git log --oneline -3`, false},   // flags
+		{`git log --oneline -3`, false},     // flags
 		{`rg -n "explore" codex-rs`, false}, // a bare word may be a pattern
 		{`curl https://example.com`, false}, // a URL is not a local path
 		{`git commit -m "fix: typo"`, false},

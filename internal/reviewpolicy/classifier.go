@@ -63,7 +63,6 @@ type Classifier struct {
 	Observer func(CallRecord)
 	// Now is a test seam.
 	Now func() time.Time
-
 }
 
 // Process-wide circuit breaker.
