@@ -420,6 +420,11 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	prompts.RegisterPermissionCommand(s.slash, s.perms, func() string {
 		return judge.ConversationLanguage(s.agentCtx.Messages)
 	})
+	// /boundary is per-session for the language reason only: the grants it
+	// reads live in the one table behind grants.Process().
+	prompts.RegisterBoundaryCommand(s.slash, func() string {
+		return judge.ConversationLanguage(s.agentCtx.Messages)
+	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
 	// The multiplexer around this pane learns which conversation it holds
@@ -831,7 +836,7 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 		}
 	}
 	// A path the user already granted to the sandbox (a prior dialog, a
-	// manual /permissions writable, or config) settles an escalation without
+	// manual /boundary writable, or config) settles an escalation without
 	// a dialog: the call is contained with the grant, which is exactly what
 	// the grant pre-decided. Without this, every retry would re-ask.
 	if root := escalationPathCandidate(req, s.cwd); root != "" {

@@ -23,9 +23,9 @@ import (
 )
 
 // builtinRegistry assembles every built-in a session can have, in the same order
-// the front-ends do: the shared registry, then the two instance built-ins whose
+// the front-ends do: the shared registry, then the instance built-ins whose
 // closures need state (/permissions carries the live approval mode, /trust the
-// manager).
+// manager, /boundary the conversation language).
 func builtinRegistry(t *testing.T) *runtime.SlashRegistry {
 	t.Helper()
 	reg, err := BuildSlashRegistry(nil, nil, nil, nil, PromptTemplateSources{Disable: true})
@@ -33,6 +33,7 @@ func builtinRegistry(t *testing.T) *runtime.SlashRegistry {
 		t.Fatalf("BuildSlashRegistry: %v", err)
 	}
 	RegisterPermissionCommand(reg, permissions.New(permissions.Auto), nil)
+	RegisterBoundaryCommand(reg, nil)
 	mgr, err := trust.NewManager("")
 	if err != nil {
 		t.Fatalf("trust.NewManager: %v", err)
@@ -94,8 +95,10 @@ func TestBuiltinUsageInventory(t *testing.T) {
 		"proxy":          "[<provider> on|off | url <url>]",
 		"model":          "[n|id [level]|think level]",
 		"provider":       "[name]",
-		"permissions":    "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
-		"trust":          "[on|off|once|status|list|add <path> <r|w|e>|rm <path>]",
+		"permissions":    "[list | read-only|ask|auto|full-access]",
+		"boundary":       "[list | readable [list|add|rm] <path> | writable [list|add|rm] <path>]",
+		"trust":          "[on|off|once|status]",
+		"grants":         "[list | add <path> <r|w|e> | rm <path>]",
 		"fork":           "[n]",
 		"tree":           "[n]",
 		"rewind":         "[n]",
@@ -178,7 +181,9 @@ func TestUsageLinesAgreeWithHints(t *testing.T) {
 	reg := builtinRegistry(t)
 	for _, tc := range []struct{ name, badArg string }{
 		{"permissions", "bogus-mode"},
+		{"boundary", "bogus-verb"},
 		{"trust", "bogus-verb"},
+		{"grants", "bogus-verb"},
 		{"proxy", "one-arg-only"},
 	} {
 		cmd, ok := reg.Lookup(tc.name)
@@ -208,9 +213,9 @@ func TestSubcommandVerbsAreAccepted(t *testing.T) {
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 
 	reg := builtinRegistry(t)
-	perm, ok := reg.Lookup("permissions")
+	bd, ok := reg.Lookup("boundary")
 	if !ok {
-		t.Fatal("/permissions not registered")
+		t.Fatal("/boundary not registered")
 	}
 	for _, kw := range []string{"writable", "readable"} {
 		for _, verb := range []string{"list", "add", "rm"} {
@@ -220,15 +225,15 @@ func TestSubcommandVerbsAreAccepted(t *testing.T) {
 				// round trips against an empty store.
 				arg += " " + filepath.Join(dir, kw+"-"+verb)
 			}
-			if msg := perm.Action(arg); strings.Contains(msg, "usage:") {
-				t.Errorf("/permissions %s was answered with usage; the grammar advertises that verb:\n%s", arg, msg)
+			if msg := bd.Action(arg); strings.Contains(msg, "usage:") {
+				t.Errorf("/boundary %s was answered with usage; the grammar advertises that verb:\n%s", arg, msg)
 			}
 		}
 	}
 	// The hint must keep advertising each one too, or the two lists have split.
 	for _, verb := range []string{"list", "add", "rm"} {
-		if !strings.Contains(perm.ArgumentHint, verb) {
-			t.Errorf("/permissions hint %q no longer names %q", perm.ArgumentHint, verb)
+		if !strings.Contains(bd.ArgumentHint, verb) {
+			t.Errorf("/boundary hint %q no longer names %q", bd.ArgumentHint, verb)
 		}
 	}
 	// /proxy's provider form: both verbs, and the address form, are accepted.

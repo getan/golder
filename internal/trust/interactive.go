@@ -230,8 +230,8 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "trust",
 		Category:     runtime.CategoryPermissions,
-		Description:  "view or set this project's trust and path authorizations",
-		ArgumentHint: "[on|off|once|status|list|add <path> <r|w|e>|rm <path>]",
+		Description:  "trust this project, so side-effect tools may run here",
+		ArgumentHint: "[on|off|once|status]",
 		Action: func(args string) string {
 			fields := strings.Fields(args)
 			verb := ""
@@ -267,12 +267,6 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 					state += "; local reads are allowed for this session"
 				}
 				return state
-			case "list":
-				return trustReport(mgr, cwd)
-			case "add":
-				return trustAdd(reg, fields[1:])
-			case "rm", "remove":
-				return trustRemove(reg, fields[1:])
 			default:
 				// From the command's own record, so the line taught here and the hint
 				// the popup and /help print are one string.
@@ -280,9 +274,38 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 			}
 		},
 	})
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "grants",
+		Category:     runtime.CategoryPermissions,
+		Description:  "view or edit the authorization table directly",
+		ArgumentHint: "[list | add <path> <r|w|e> | rm <path>]",
+		Action: func(args string) string {
+			fields := strings.Fields(args)
+			verb := ""
+			if len(fields) > 0 {
+				verb = strings.ToLower(fields[0])
+			}
+			switch verb {
+			case "", "list":
+				// The whole picture, not just the table: /grants is where "every
+				// row" lives now that /trust answers only for its own directory.
+				// The decisions come first because "may tools run here" is the
+				// question people arrive with; the table follows.
+				return trustReport(mgr, cwd)
+			case "add":
+				return grantsAdd(reg, fields[1:])
+			case "rm", "remove":
+				return grantsRemove(reg, fields[1:])
+			default:
+				// From the command's own record, so the line taught here and the
+				// hint the popup and /help print are one string.
+				return reg.UsageLine("grants") + "  (default: list)"
+			}
+		},
+	})
 }
 
-// trustAdd records a path authorization in the unified table.
+// grantsAdd records a path authorization in the unified table.
 //
 // It is the missing write half of the table for a person at a prompt: the gates
 // record what a dialog answered, and this is how someone states the same thing
@@ -293,10 +316,10 @@ func RegisterCommand(reg *runtime.SlashRegistry, mgr *Manager, cwd string) {
 // "e" (execute) is separate on purpose: it is what directory trust has always
 // meant, and folding it into "w" would make "let me edit these files" quietly
 // equal to "let anything run here".
-func trustAdd(reg *runtime.SlashRegistry, args []string) string {
-	usage := reg.UsageLine("trust")
+func grantsAdd(reg *runtime.SlashRegistry, args []string) string {
+	usage := reg.UsageLine("grants")
 	if len(args) < 2 {
-		return "usage: /trust add <path> <r|w|e|rw|rwe|all>   " + usage
+		return "usage: /grants add <path> <r|w|e|rw|rwe|all>   " + usage
 	}
 	path := args[0]
 	caps, ok := grants.ParseCapability(args[1])
@@ -308,7 +331,7 @@ func trustAdd(reg *runtime.SlashRegistry, args []string) string {
 		Allow:    caps,
 		Scope:    grants.Subtree,
 		Lifetime: grants.Remembered,
-		Source:   "/trust add",
+		Source:   "/grants add",
 	})
 	if err != nil {
 		return fmt.Sprintf("golder: could not add %s: %v", path, err)
@@ -322,12 +345,12 @@ func trustAdd(reg *runtime.SlashRegistry, args []string) string {
 	return fmt.Sprintf("%s: %s (saved)", g.Path, g.Allow)
 }
 
-// trustRemove revokes a path's authorizations, remembered and session. The
+// grantsRemove revokes a path's authorizations, remembered and session. The
 // config.toml seed is reported as untouched, because that file belongs to the
 // user and rewriting it would drop their comments.
-func trustRemove(reg *runtime.SlashRegistry, args []string) string {
+func grantsRemove(reg *runtime.SlashRegistry, args []string) string {
 	if len(args) < 1 {
-		return "usage: /trust rm <path>   " + reg.UsageLine("trust")
+		return "usage: /grants rm <path>   " + reg.UsageLine("trust")
 	}
 	path := args[0]
 	s := grants.Process()

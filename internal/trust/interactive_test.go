@@ -501,13 +501,14 @@ func TestRegisterTrustCommand(t *testing.T) {
 	}
 }
 
-// TestRegisterTrustCommandListsEverything is the fix for /trust being the one
-// command whose arguments were invisible (it had no hint, so the popup and /help
-// showed a sentence and nothing about on|off|once|status) plus the report the
-// list subcommand adds: /trust status answers "what applies HERE" by walking up,
-// while /trust list answers "what have I granted" — every saved decision, and the
-// session-only grants that are not on disk at all.
-func TestRegisterTrustCommandListsEverything(t *testing.T) {
+// TestGrantsCommandListsEverything is the fix for /trust being the one command
+// whose arguments were invisible (it had no hint, so the popup and /help showed a
+// sentence and nothing about on|off|once|status) plus the report that answers
+// "what have I granted": every saved decision, and the session-only grants that
+// are not on disk at all. /trust status answers the narrower "what applies HERE"
+// by walking up; this is the whole store, which is why it moved to /grants when
+// /trust was cut back to its own directory.
+func TestGrantsCommandListsEverything(t *testing.T) {
 	mgr, path := newTrustManager(t)
 	dirA, dirB := t.TempDir(), t.TempDir()
 	if err := mgr.SetDecision(dirA, Trusted); err != nil {
@@ -521,15 +522,24 @@ func TestRegisterTrustCommandListsEverything(t *testing.T) {
 
 	reg := runtime.NewSlashRegistry()
 	RegisterCommand(reg, mgr, dirA)
-	cmd, ok := reg.Lookup("trust")
+	cmd, ok := reg.Lookup("grants")
 	if !ok {
-		t.Fatal("/trust command not registered")
+		t.Fatal("/grants command not registered")
 	}
 
 	// The hint is what makes the subcommands discoverable, and it must name list.
-	for _, want := range []string{"on", "off", "once", "status", "list"} {
+	for _, want := range []string{"list", "add", "rm"} {
 		if !strings.Contains(cmd.ArgumentHint, want) {
 			t.Errorf("hint %q should name %q", cmd.ArgumentHint, want)
+		}
+	}
+	// /trust keeps to its own subject: the directory it was invoked in. Naming
+	// list|add|rm there is how the two commands blurred into one screen.
+	if trustCmd, ok := reg.Lookup("trust"); ok {
+		for _, gone := range []string{"list", "add", "rm"} {
+			if strings.Contains(trustCmd.ArgumentHint, gone) {
+				t.Errorf("/trust hint %q should no longer name %q", trustCmd.ArgumentHint, gone)
+			}
 		}
 	}
 
@@ -561,18 +571,18 @@ func TestRegisterTrustCommandListsEverything(t *testing.T) {
 	plainMgr, _ := newTrustManager(t)
 	plainReg := runtime.NewSlashRegistry()
 	RegisterCommand(plainReg, plainMgr, plainDir)
-	plainCmd, _ := plainReg.Lookup("trust")
+	plainCmd, _ := plainReg.Lookup("grants")
 	if got := plainCmd.Action("list"); !strings.Contains(got, "none saved") {
 		t.Errorf("an empty store should say so:\n%s", got)
 	}
 }
 
-// TestTrustCommandManagesPathAuthorizations covers the half of the unified
-// table a person drives by hand: /trust add and /trust rm. The gates record what
-// a dialog answered, and these are how the same thing is stated directly —
+// TestGrantsCommandManagesPathAuthorizations covers the half of the unified
+// table a person drives by hand: /grants add and /grants rm. The gates record
+// what a dialog answered, and these are how the same thing is stated directly —
 // including for a path no call has touched, which is the case a dialog cannot
 // reach.
-func TestTrustCommandManagesPathAuthorizations(t *testing.T) {
+func TestGrantsCommandManagesPathAuthorizations(t *testing.T) {
 	store, err := grants.New(grants.Options{Path: filepath.Join(t.TempDir(), "grants.json")})
 	if err != nil {
 		t.Fatalf("grants.New: %v", err)
@@ -583,7 +593,7 @@ func TestTrustCommandManagesPathAuthorizations(t *testing.T) {
 	mgr, _ := newTrustManager(t)
 	reg := runtime.NewSlashRegistry()
 	RegisterCommand(reg, mgr, t.TempDir())
-	cmd, _ := reg.Lookup("trust")
+	cmd, _ := reg.Lookup("grants")
 
 	dir := t.TempDir()
 
@@ -643,11 +653,11 @@ func TestTrustCommandManagesPathAuthorizations(t *testing.T) {
 	}
 }
 
-// TestTrustReportShowsTheAuthorizationTable pins the merge: /trust list renders
-// the unified table, so one command answers both "may tools run here" and "which
-// paths are readable and writable" — the two questions that used to require
-// /trust list and /permissions list pointing at each other.
-func TestTrustReportShowsTheAuthorizationTable(t *testing.T) {
+// TestGrantsReportShowsTheAuthorizationTable pins the merge: /grants list
+// renders the unified table, so one command answers both "may tools run here"
+// and "which paths are readable and writable" — the two questions that used to
+// require /trust list and /permissions list pointing at each other.
+func TestGrantsReportShowsTheAuthorizationTable(t *testing.T) {
 	store, err := grants.New(grants.Options{Path: filepath.Join(t.TempDir(), "grants.json")})
 	if err != nil {
 		t.Fatalf("grants.New: %v", err)
@@ -664,7 +674,7 @@ func TestTrustReportShowsTheAuthorizationTable(t *testing.T) {
 	cwd := t.TempDir()
 	reg := runtime.NewSlashRegistry()
 	RegisterCommand(reg, mgr, cwd)
-	cmd, _ := reg.Lookup("trust")
+	cmd, _ := reg.Lookup("grants")
 
 	got := cmd.Action("list")
 	for _, want := range []string{"authorizations", "remembered across sessions", granted, "rw", granted} {

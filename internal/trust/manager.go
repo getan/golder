@@ -347,7 +347,7 @@ func (m *Manager) Forget(dir string) error {
 	return m.saveLocked()
 }
 
-// TrustEntry is one saved decision as /trust list reports it, with the provenance
+// TrustEntry is one saved decision as /grants list reports it, with the provenance
 // that decides what revoking it takes.
 type TrustEntry struct {
 	Path     string

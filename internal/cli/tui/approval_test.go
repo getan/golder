@@ -854,7 +854,7 @@ func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
 	if !strings.Contains(got, "for this session only") {
 		t.Errorf("note must state the scope:\n%s", got)
 	}
-	if !strings.Contains(got, "/permissions readable add") {
+	if !strings.Contains(got, "/boundary readable add") {
 		t.Errorf("note must name the command that makes it permanent:\n%s", got)
 	}
 	if !strings.Contains(got, "remembered") {

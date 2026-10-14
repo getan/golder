@@ -321,7 +321,7 @@ func (m *Model) answerApproval(value string) {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Writes to " + displayPath(path) +
-							" are now remembered across sessions. Manage it with /permissions writable list|add|rm.")
+							" are now remembered across sessions. Manage it with /boundary writable list|add|rm.")
 					}
 				}
 			}
@@ -334,7 +334,7 @@ func (m *Model) answerApproval(value string) {
 				if m.session != nil {
 					m.transcript.addSystem("Writing to " + displayPath(dir) +
 						" is allowed for this session only. To make it permanent, choose" +
-						" \"remembered\" next time, or run /permissions writable add " + dir)
+						" \"remembered\" next time, or run /boundary writable add " + dir)
 				}
 			}
 		case approveWritePersist:
@@ -355,7 +355,7 @@ func (m *Model) answerApproval(value string) {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Writing to " + displayPath(root) +
-							" is now remembered across sessions. Manage it with /permissions writable list|add|rm.")
+							" is now remembered across sessions. Manage it with /boundary writable list|add|rm.")
 					}
 				}
 			}
@@ -369,7 +369,7 @@ func (m *Model) answerApproval(value string) {
 				if m.session != nil {
 					m.transcript.addSystem("Reading " + displayPath(dir) +
 						" is allowed for this session only. To make it permanent, choose" +
-						" \"remembered\" next time, or run /permissions readable add " + dir)
+						" \"remembered\" next time, or run /boundary readable add " + dir)
 				}
 			}
 		case approveReadPersist:
@@ -389,7 +389,7 @@ func (m *Model) answerApproval(value string) {
 					ans.Persisted = true
 					if m.session != nil {
 						m.transcript.addSystem("Reading " + displayPath(root) +
-							" is now remembered across sessions. Manage it with /permissions readable list|add|rm.")
+							" is now remembered across sessions. Manage it with /boundary readable list|add|rm.")
 					}
 				}
 			}

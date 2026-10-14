@@ -682,9 +682,9 @@ func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 const writableAddPick = "@add"
 
 // openWritablePathsPicker shows the sandbox writable-path grants: the
-// config.toml seed, the managed permissions.toml store, and this session's
+// config.toml seed, the remembered rows in grants.json, and this session's
 // approval-dialog grants, in one list. Enter on a path revokes it; Enter on
-// "Add path…" drops "/permissions writable add " into the composer so the
+// "Add path…" drops "/boundary writable add " into the composer so the
 // path is typed (and its existence checked) by the same registry action the
 // REPL runs.
 func (m Model) openWritablePathsPicker() (tea.Model, tea.Cmd) {
@@ -708,9 +708,9 @@ func (m Model) reopenWritablePathsPicker(announce bool) (tea.Model, tea.Cmd) {
 			Value:  e.Path,
 		})
 	}
-	m.menu.openPickerDetailed(picks, "", "permissions-writable")
+	m.menu.openPickerDetailed(picks, "", "boundary-writable")
 	if announce {
-		m.transcript.addSystem("Sandbox writable paths: ↑↓ + Enter removes one, \"Add path…\" starts /permissions writable add. Esc closes.")
+		m.transcript.addSystem("Sandbox writable paths: ↑↓ + Enter removes one, \"Add path…\" starts /boundary writable add. Esc closes.")
 	}
 	for _, w := range warnings {
 		m.transcript.addSystem("permissions: " + w)
@@ -2025,12 +2025,12 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		}
 		// Sandbox writable paths: Enter on a path revokes it (and rebuilds the
 		// picker so the list reflects the removal); the Add row hands the
-		// composer "/permissions writable add " for typing the path.
-		if kind == "permissions-writable" && ok {
+		// composer "/boundary writable add " for typing the path.
+		if kind == "boundary-writable" && ok {
 			m.menu.close()
 			m.input.Clear()
 			if item == writableAddPick {
-				m.input.SetValue("/permissions writable add ")
+				m.input.SetValue("/boundary writable add ")
 				m.relayout()
 				return m, nil
 			}
@@ -2117,7 +2117,7 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		return m.openPermissionsPicker()
 	}
 	// /permissions writable opens the writable-path picker; its subcommands
-	// (/permissions writable add <path>, …) resolve through the registry
+	// (/boundary writable add <path>, …) resolve through the registry
 	// below, whose text output is the same the REPL prints.
 	if line == "/permissions writable" {
 		return m.openWritablePathsPicker()

@@ -44,7 +44,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	m.menu.selected = len(m.menu.pick) - 1
 	got, _ = m.submitSlashSelected()
 	m = got.(Model)
-	if m.menu.pickKind != "permissions-writable" {
+	if m.menu.pickKind != "boundary-writable" {
 		t.Fatalf("writable picker not open: kind=%q", m.menu.pickKind)
 	}
 	if len(m.menu.pick) != 2 { // Add path… + the granted entry
@@ -62,7 +62,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	m.menu.selected = 1
 	got, _ = m.submitSlashSelected()
 	m = got.(Model)
-	if m.menu.pickKind != "permissions-writable" || len(m.menu.pick) != 1 {
+	if m.menu.pickKind != "boundary-writable" || len(m.menu.pick) != 1 {
 		t.Fatalf("picker should stay open after removal: kind=%q rows=%d", m.menu.pickKind, len(m.menu.pick))
 	}
 	if roots := grants.WritableRoots(); len(roots) != 0 {
@@ -80,7 +80,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	}
 	got, _ = m.submitSlashSelected()
 	m = got.(Model)
-	if m.input.Value() != "/permissions writable add " {
+	if m.input.Value() != "/boundary writable add " {
 		t.Fatalf("Add row should seed the composer, got %q", m.input.Value())
 	}
 }

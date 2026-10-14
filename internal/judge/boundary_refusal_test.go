@@ -50,7 +50,7 @@ func TestBoundaryGateDoesNotReAskARefusedPath(t *testing.T) {
 	// reads like a fresh denial leaves the model retrying and the person
 	// wondering what just happened — and name how to change the answer.
 	msg := agentcore.ContentToText(*dec.Content)
-	for _, want := range []string{"refused earlier", "/permissions readable add"} {
+	for _, want := range []string{"refused earlier", "/boundary readable add"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the second block should mention %q: %q", want, msg)
 		}
@@ -183,7 +183,7 @@ func TestBoundaryGateDirectoryGrantDoesNotLiftAChildRefusal(t *testing.T) {
 	if asked != 1 {
 		t.Errorf("the question must not be re-asked (asked %d times)", asked)
 	}
-	if msg := agentcore.ContentToText(*dec.Content); !strings.Contains(msg, "/permissions readable add "+target) {
+	if msg := agentcore.ContentToText(*dec.Content); !strings.Contains(msg, "/boundary readable add "+target) {
 		t.Errorf("the block should name the exact path that lifts it: %q", msg)
 	}
 }

@@ -586,9 +586,9 @@ func blockBoundary(call agentcore.AgentToolCall, target, candidate string, writi
 	// It used to point at config.toml's [permissions] table, which no longer
 	// exists — advice that sends a person to edit a file that does nothing is
 	// worse than no advice.
-	verb, cmd := "read", "/permissions readable add"
+	verb, cmd := "read", "/boundary readable add"
 	if writing {
-		verb, cmd = "write", "/permissions writable add"
+		verb, cmd = "write", "/boundary writable add"
 	}
 	msg := fmt.Sprintf("tool %q blocked: %s is outside the workspace and the %s was not approved", call.Name, target, verb)
 	if candidate != "" {
@@ -611,9 +611,9 @@ func blockBoundary(call agentcore.AgentToolCall, target, candidate string, writi
 // person) thinking the question had just been put, and a block nobody can lift
 // is a trap rather than a decision.
 func blockRefused(call agentcore.AgentToolCall, target string, writing bool) *agentcore.BeforeToolCallDecision {
-	verb, cmd := "read", "/permissions readable add"
+	verb, cmd := "read", "/boundary readable add"
 	if writing {
-		verb, cmd = "write", "/permissions writable add"
+		verb, cmd = "write", "/boundary writable add"
 	}
 	msg := fmt.Sprintf("tool %q blocked: the %s of %s was refused earlier in this session, so it is not asked again", call.Name, verb, target)
 	msg += fmt.Sprintf("; to change that, run %s %s, or start a new session", cmd, target)

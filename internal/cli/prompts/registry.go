@@ -858,19 +858,13 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "permissions",
 		Category:     runtime.CategoryPermissions,
-		Description:  "show or switch the approval mode, or manage the remembered path grants",
-		ArgumentHint: "[list | read-only|ask|auto|full-access | writable [list|add|rm] <path> | readable [list|add|rm] <path>]",
+		Description:  "show or switch the approval mode",
+		ArgumentHint: "[list | read-only|ask|auto|full-access]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
 			if arg == "list" {
 				return runPermissionsList(st, modes, l)
-			}
-			if arg == "writable" || strings.HasPrefix(arg, "writable ") {
-				return runPermissionsWritable(arg, l)
-			}
-			if arg == "readable" || strings.HasPrefix(arg, "readable ") {
-				return runPermissionsReadable(arg, l)
 			}
 			if arg == "" {
 				current := permissions.Auto
@@ -897,9 +891,9 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 					fmt.Fprintf(&b, "\n  %-12s %s%s", m.String(), m.Label(l), mark)
 				}
 				if l == "zh" {
-					fmt.Fprintf(&b, "\n全部权限（模式、可写/可读路径、来源文件）：/permissions list")
+					fmt.Fprintf(&b, "\n路径授权：/boundary list　全部条目：/grants")
 				} else {
-					fmt.Fprintf(&b, "\nall permissions (mode, writable/readable paths, source files): /permissions list")
+					fmt.Fprintf(&b, "\npath grants: /boundary list  every row: /grants")
 				}
 				return b.String()
 			}
@@ -918,6 +912,51 @@ func RegisterPermissionCommand(reg *runtime.SlashRegistry, st *permissions.State
 				return fmt.Sprintf("权限模式已切换为 %s：%s", m.Label(l), m.Description(l))
 			}
 			return fmt.Sprintf("permissions switched to %s: %s", m.Label(l), m.Description(l))
+		},
+	})
+
+}
+
+// RegisterBoundaryCommand installs /boundary: which paths the read and write
+// tools may already reach without asking.
+//
+// These grants used to hang off /permissions as "writable" and "readable"
+// subcommands, which put two different subjects on one command. The workspace
+// boundary is consent — where data may come from, and where it may go — while
+// the approval mode is about how calls are graded; a person auditing one is not
+// auditing the other. The three doors now each speak for themselves: /trust for
+// the directory, /boundary for the paths, /permissions for the mode. /grants
+// stays the escape hatch that shows and edits every row of the one table.
+//
+// lang reports the conversation language ("zh"/"en") so the output matches what
+// the user is writing; a nil lang defaults to English.
+func RegisterBoundaryCommand(reg *runtime.SlashRegistry, lang func() string) {
+	if reg == nil {
+		return
+	}
+	pickLang := func() string {
+		if lang != nil && lang() == "zh" {
+			return "zh"
+		}
+		return "en"
+	}
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "boundary",
+		Category:     runtime.CategoryPermissions,
+		Description:  "allow reading or writing outside the workspace",
+		ArgumentHint: "[list | readable [list|add|rm] <path> | writable [list|add|rm] <path>]",
+		Action: func(args string) string {
+			l := pickLang()
+			arg := strings.TrimSpace(args)
+			switch {
+			case arg == "writable" || strings.HasPrefix(arg, "writable "):
+				return runBoundaryWritable(arg, l)
+			case arg == "readable" || strings.HasPrefix(arg, "readable "):
+				return runBoundaryReadable(arg, l)
+			case arg == "", arg == "list":
+				return runBoundaryList(l)
+			}
+			return usageLine(reg, "boundary", l)
 		},
 	})
 }
@@ -952,13 +991,34 @@ func runPermissionsList(st *permissions.State, modes []permissions.Mode, l strin
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "%s %s", permissionModeListLabel(zh), permissionModesInline(modes))
 
+	// Paths are deliberately absent: they are the boundary gate's business, and
+	// the two commands stay one subject each. /boundary lists them, /grants
+	// shows every row with its provenance.
+	if zh {
+		b.WriteString("\n切换：/permissions <模式>　路径授权：/boundary list")
+	} else {
+		b.WriteString("\nswitch: /permissions <mode>  path grants: /boundary list")
+	}
+	return b.String()
+}
+
+// runBoundaryList renders the two kinds of path grant the boundary gate owns:
+// what the read and write tools may already reach without asking.
+//
+// It is a separate command from /permissions on purpose. The workspace boundary
+// is consent — where data may come from, and where it may go — while the
+// approval mode is about how calls are graded; a person auditing one is not
+// auditing the other, and putting them on one screen taught people to look for
+// "permissions" when they meant "where may this read".
+func runBoundaryList(l string) string {
+	zh := l == "zh"
 	writable, warnW := cli.ListWritablePaths()
 	readable, warnR := cli.ListReadablePaths()
-	b.WriteString("\n")
+	var b strings.Builder
 	if zh {
 		b.WriteString("沙箱可写路径（项目目录与临时目录之外额外授权）：")
 	} else {
-		b.WriteString("writable paths (extra grants beyond the project and temp dirs):")
+		b.WriteString("sandbox writable paths (extra grants beyond the project and temp dirs):")
 	}
 	if len(writable) == 0 {
 		b.WriteString(noneWord(zh))
@@ -982,15 +1042,13 @@ func runPermissionsList(st *permissions.State, modes []permissions.Mode, l strin
 		fmt.Fprintf(&b, "\nwarning: %s", w)
 	}
 	if zh {
-		fmt.Fprintf(&b, "\n文件：%s（唯一授权存储）",
-			cli.DisplayHomePath(grantsPath()))
-		fmt.Fprintf(&b, "\n修改：/permissions <模式>　/permissions writable add <路径>　permissions readable add <路径>")
-		b.WriteString("\n信任（按目录）：/trust list")
+		fmt.Fprintf(&b, "\n文件：%s（唯一授权存储）", cli.DisplayHomePath(grantsPath()))
+		fmt.Fprintf(&b, "\n修改：/boundary writable add <路径>　/boundary readable add <路径>")
+		b.WriteString("\n全部条目（含信任与拒绝）：/grants")
 	} else {
-		fmt.Fprintf(&b, "\nfile: %s (the one authorization store)",
-			cli.DisplayHomePath(grantsPath()))
-		fmt.Fprintf(&b, "\nchange: /permissions <mode>  /permissions writable add <path>  /permissions readable add <path>")
-		b.WriteString("\ntrust (per directory): /trust list")
+		fmt.Fprintf(&b, "\nfile: %s (the one authorization store)", cli.DisplayHomePath(grantsPath()))
+		fmt.Fprintf(&b, "\nchange: /boundary writable add <path>  /boundary readable add <path>")
+		b.WriteString("\nevery row (trust and refusals too): /grants")
 	}
 	return b.String()
 }
@@ -1043,11 +1101,11 @@ func writableSourceLabel(source string, zh bool) string {
 // <path>`, the text surface of the shared writable-path management (the TUI
 // opens the same data as a picker). arg is the full argument, already known to
 // start with "writable".
-func runPermissionsWritable(arg, l string) string {
+func runBoundaryWritable(arg, l string) string {
 	zh := l == "zh"
 	fields := strings.Fields(arg)
 	usage := func() string {
-		return usageLineFor("permissions writable", permissionsWritableUsage, zh)
+		return usageLineFor("boundary writable", permissionsWritableUsage, zh)
 	}
 	// restAfter returns the path argument after the verb, preserving spaces in
 	// the path itself (only the verb token is stripped).
@@ -1067,7 +1125,7 @@ func runPermissionsWritable(arg, l string) string {
 			for _, e := range entries {
 				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), sourceLabel(e.Source))
 			}
-			b.WriteString("\n添加：/permissions writable add <路径>　删除：/permissions writable rm <路径>")
+			b.WriteString("\n添加：/boundary writable add <路径>　删除：/boundary writable rm <路径>")
 		} else {
 			b.WriteString("sandbox writable paths (extra grants beyond the project and temp dirs):")
 			if len(entries) == 0 {
@@ -1076,7 +1134,7 @@ func runPermissionsWritable(arg, l string) string {
 			for _, e := range entries {
 				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), sourceLabel(e.Source))
 			}
-			b.WriteString("\nadd: /permissions writable add <path>  remove: /permissions writable rm <path>")
+			b.WriteString("\nadd: /boundary writable add <path>  remove: /boundary writable rm <path>")
 		}
 		for _, w := range warnings {
 			fmt.Fprintf(&b, "\nwarning: %s", w)
@@ -1144,11 +1202,11 @@ func runPermissionsWritable(arg, l string) string {
 // maintained the same way. It exists because the read grant had no persisted
 // form at all — the approval dialog's answer lived in memory — while the
 // writable grant beside it had a command.
-func runPermissionsReadable(arg, l string) string {
+func runBoundaryReadable(arg, l string) string {
 	zh := l == "zh"
 	fields := strings.Fields(arg)
 	usage := func() string {
-		return usageLineFor("permissions readable", permissionsReadableUsage, zh)
+		return usageLineFor("boundary readable", permissionsReadableUsage, zh)
 	}
 	restAfter := func(verb string) string {
 		s := strings.TrimSpace(strings.TrimPrefix(arg, "readable"))
@@ -1165,7 +1223,7 @@ func runPermissionsReadable(arg, l string) string {
 			for _, e := range entries {
 				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), cli.ReadableSourceLabel(e.Source, true))
 			}
-			b.WriteString("\n添加：/permissions readable add <路径>　删除：/permissions readable rm <路径>")
+			b.WriteString("\n添加：/boundary readable add <路径>　删除：/boundary readable rm <路径>")
 		} else {
 			b.WriteString("readable paths outside the workspace (reads no longer ask):")
 			if len(entries) == 0 {
@@ -1174,7 +1232,7 @@ func runPermissionsReadable(arg, l string) string {
 			for _, e := range entries {
 				fmt.Fprintf(&b, "\n  %-40s %s", cli.DisplayHomePath(e.Path), cli.ReadableSourceLabel(e.Source, false))
 			}
-			b.WriteString("\nadd: /permissions readable add <path>  remove: /permissions readable rm <path>")
+			b.WriteString("\nadd: /boundary readable add <path>  remove: /boundary readable rm <path>")
 		}
 		for _, w := range warnings {
 			fmt.Fprintf(&b, "\nwarning: %s", w)

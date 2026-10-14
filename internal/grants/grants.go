@@ -6,7 +6,7 @@
 // directory to a nullable bool), the sandbox roots in
 // ~/.config/golder/permissions.toml (two string arrays), and two package-level
 // registries the gates filled as they granted things. None could answer the
-// whole question, which is why /trust list and /permissions list each had to
+// whole question, which is why /grants list and /boundary list each had to
 // point at the other. The model here is one row per path:
 //
 //	path      — cleaned absolute, covers the subtree unless Scope says otherwise
@@ -97,7 +97,7 @@ func (c Capability) String() string {
 
 // ParseCapability reads the capability spellings the command line accepts.
 // It accepts combined forms in any order ("rw", "wr", "rwe") plus the long
-// names of each bit, so both a person typing `/trust add /x rw` and a config
+// names of each bit, so both a person typing `/grants add /x rw` and a config
 // file spelling it out are understood.
 func ParseCapability(s string) (Capability, bool) {
 	text := strings.ToLower(strings.TrimSpace(s))
@@ -506,8 +506,8 @@ func capsFromString(s string) (Capability, error) {
 // truth instead of promising persistence it did not achieve.
 //
 // rows are merged into the existing row for the path: a later grant narrows or
-// widens the same path rather than shadowing it, so `/trust add /x r` after
-// `/trust add /x w` leaves /x as "rw" instead of whichever row won by ordering.
+// widens the same path rather than shadowing it, so `/grants add /x r` after
+// `/grants add /x w` leaves /x as "rw" instead of whichever row won by ordering.
 func (s *Store) Add(g Grant) (Grant, error) {
 	if strings.TrimSpace(g.Path) == "" {
 		return Grant{}, fmt.Errorf("grants: empty path")

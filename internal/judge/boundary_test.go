@@ -205,7 +205,7 @@ func TestBoundaryGateDenyIsActionable(t *testing.T) {
 	msg := agentcore.ContentToText(*dec.Content)
 	// The guidance names the command that makes the grant, not a file a person
 	// would have to edit: config.toml's [permissions] table is gone.
-	for _, want := range []string{target, outside, "/permissions readable add"} {
+	for _, want := range []string{target, outside, "/boundary readable add"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal should mention %q: %q", want, msg)
 		}
