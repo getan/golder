@@ -146,6 +146,30 @@ func normalizeCaps(c Capability) Capability {
 	return c
 }
 
+// storeKey turns a path into the form this table keys rows on: absolute and
+// resolved. Keys name LOCATIONS, because that is what an answer is about — the
+// user decided about a place, not about a spelling of it.
+//
+// The distinction is not academic. NormalizePath only cleans, and cleaning does
+// not follow symlinks, so on macOS "/var/x" and "/private/var/x" — one place,
+// two spellings — would be two unrelated rows. The gate and the tools compare
+// locations (they resolve before deciding, because a symlink inside the
+// workspace can point outside it), so a row keyed by spelling is a row the
+// caller cannot find: the user grants a directory, and the very next call asks
+// about it again. That is the failure this function exists to prevent, and it
+// is the same mistake in the other direction as the escape the resolved
+// comparisons close.
+//
+// A path that does not exist yet still keys fine: Canonical resolves the
+// deepest existing ancestor and re-appends the rest.
+func storeKey(p string) (string, error) {
+	norm, err := permissions.NormalizePath(p)
+	if err != nil {
+		return "", err
+	}
+	return permissions.Canonical(norm), nil
+}
+
 // Scope is how wide a grant reaches.
 type Scope uint8
 
@@ -422,7 +446,7 @@ func rowFromJSON(r rowJSON) (Grant, error) {
 	if strings.TrimSpace(r.Path) == "" {
 		return Grant{}, fmt.Errorf("missing path")
 	}
-	norm, err := permissions.NormalizePath(r.Path)
+	norm, err := storeKey(r.Path)
 	if err != nil {
 		return Grant{}, fmt.Errorf("path %q: %w", r.Path, err)
 	}
@@ -493,7 +517,7 @@ func (s *Store) Add(g Grant) (Grant, error) {
 	if strings.TrimSpace(g.Path) == "" {
 		return Grant{}, fmt.Errorf("grants: empty path")
 	}
-	norm, err := permissions.NormalizePath(g.Path)
+	norm, err := storeKey(g.Path)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -617,7 +641,12 @@ func (s *Store) checkLocked(path string, cap Capability) Verdict {
 	if strings.TrimSpace(path) == "" || cap == 0 {
 		return Verdict{}
 	}
-	clean := filepath.Clean(path)
+	// The query is resolved the same way the keys are (storeKey), so a grant
+	// recorded under one spelling answers a call made under another.
+	clean, err := storeKey(path)
+	if err != nil {
+		return Verdict{}
+	}
 	for dir := clean; ; dir = filepath.Dir(dir) {
 		for _, layer := range []map[string]Grant{s.session, s.saved, s.seed} {
 			g, ok := findRow(layer, dir, clean)
@@ -702,8 +731,12 @@ func (s *Store) SessionOnly(path string, cap Capability) bool {
 	if v.Decision != Allowed {
 		return false
 	}
-	for dir := filepath.Clean(path); ; dir = filepath.Dir(dir) {
-		if g, ok := findRow(s.saved, dir, filepath.Clean(path)); ok && g.Allow.Has(cap) {
+	clean, err := storeKey(path)
+	if err != nil {
+		return true
+	}
+	for dir := clean; ; dir = filepath.Dir(dir) {
+		if g, ok := findRow(s.saved, dir, clean); ok && g.Allow.Has(cap) {
 			return false
 		}
 		parent := filepath.Dir(dir)
@@ -718,7 +751,7 @@ func (s *Store) SessionOnly(path string, cap Capability) bool {
 // as untouched because config.toml owns it — silently rewriting the user's
 // hand-edited file is not this store's business.
 func (s *Store) Remove(path string) (Removal, error) {
-	norm, err := permissions.NormalizePath(path)
+	norm, err := storeKey(path)
 	if err != nil {
 		return Removal{}, err
 	}
@@ -771,7 +804,7 @@ func (r Removal) Touched() bool { return r.Session || r.Remembered || r.Seed }
 // file still changes behaviour on the next run — which is the whole reason the
 // seed exists next to the managed store.
 func (s *Store) AddSeed(g Grant) error {
-	norm, err := permissions.NormalizePath(g.Path)
+	norm, err := storeKey(g.Path)
 	if err != nil {
 		return err
 	}
