@@ -95,7 +95,7 @@ func AuthFacts(tool string, args json.RawMessage, workspaceRoot string, extraRoo
 		out = append(out, AuthFact{
 			Path:         resolved,
 			InWorkspace:  permissions.Inside(root, resolved) || insideAnyRoot(extraRoots, resolved),
-			NeedsConsent: root != "" && boundaryQuestion(raw, resolved, root, extraRoots, op, writableAt),
+			NeedsConsent: root != "" && boundaryQuestion(raw, resolved, root, extraRoots, op, writableAt) == boundaryAsk,
 			Read:         decision(resolved, grants.Read),
 			Write:        decision(resolved, grants.Write),
 			Execute:      decision(resolved, grants.Execute),

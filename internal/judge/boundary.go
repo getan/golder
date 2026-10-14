@@ -154,6 +154,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		// about reading.
 		op := boundaryOp(call.Name)
 		writing := op.Has(grants.Write)
+		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 		// A call may name several paths (a command line lists file operands).
 		// One question covers the call, so it offers the finest directory any
 		// of those reads would need: a command that names a directory and a
@@ -173,8 +174,21 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// outside it, and a textual comparison would call that in-workspace
 			// and stay silent — the escape the tools' own guard missed too.
 			resolved = permissions.Canonical(resolved)
-			if !boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, op, opts.WritableAt) {
+			switch boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, op, opts.WritableAt) {
+			case boundarySilent:
 				continue
+			case boundaryRefused:
+				// The user answered this question already, in the negative.
+				// Asking again is the thing that trains people to approve
+				// without reading, so the call is refused instead — with the
+				// way to change the answer named, because a block nobody can
+				// lift is a trap.
+				notify(Note{
+					Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+					Summary: resolved, Authorization: "refused earlier in this session",
+					Rationale: "the user refused this path earlier",
+				})
+				return blockRefused(call, resolved, writing)
 			}
 			questions = append(questions, question{
 				raw: candidateRaw, target: resolved,
@@ -199,7 +213,6 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		raw, target := chosen.raw, chosen.target
 
 		candidate := chosen.candidate
-		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 		// The dialog shows the path for a file tool and the command for a
 		// shell tool: the path is what the user is deciding about, but for a
 		// command they also need to see what will run.
@@ -227,6 +240,24 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			rationale := "denied by the user"
 			if !ans.Answered {
 				rationale = "no prompt available"
+			} else {
+				// A refusal is a decision, and it is recorded so the same
+				// question is not put again this session. Only a real answer
+				// records: "no prompt available" is a failure to ask, not a
+				// verdict, and recording it would turn a headless run's silence
+				// into a refusal the user never gave.
+				//
+				// The scope is the exact path the dialog named and the lifetime
+				// is the session, which is what the answer meant: Esc is "not
+				// now", not "never". A refusal on a child still beats a grant
+				// inherited from a parent, so granting the directory afterwards
+				// does not silently reopen this file.
+				for _, q := range questions {
+					if q.target == "" {
+						continue
+					}
+					_, _ = grants.Refuse(q.target, op, grants.Session)
+				}
 			}
 			notify(Note{
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
@@ -363,32 +394,62 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 // should see; a directory granted for reading says nothing about writing it,
 // and a sandbox writable root (which implies reading) says nothing about
 // whether a read has been approved.
-func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string, op grants.Capability, writableAt func(string) bool) bool {
+//
+// A REFUSAL outranks all of it. The table's answer for this path can be "the
+// user said no", and that is not a reason to stay silent — it is a reason to
+// block without asking, which is why the result is three-valued rather than a
+// boolean.
+func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string, op grants.Capability, writableAt func(string) bool) boundaryAction {
 	if permissions.Inside(absRoot, resolved) || insideAnyRoot(extraRoots, resolved) {
-		return false
+		return boundarySilent
 	}
 	if op.Has(grants.Write) {
 		// Writing into live secret material is the static floor's to refuse, so
 		// the path passes through untouched and no dialog offers it a key.
 		if _, bad := secretPath(raw); bad {
-			return false
+			return boundarySilent
 		}
-		return !WriteAllowed(resolved, writableAt)
+		if grants.Check(resolved, grants.Write).Decision == grants.Denied {
+			return boundaryRefused
+		}
+		if WriteAllowed(resolved, writableAt) {
+			return boundarySilent
+		}
+		return boundaryAsk
 	}
 	if _, bad := credentialPathRead(raw); bad {
-		return false
+		return boundarySilent
+	}
+	if grants.Check(resolved, grants.Read).Decision == grants.Denied {
+		return boundaryRefused
 	}
 	if permissions.ReadableAt(resolved) {
-		return false
+		return boundarySilent
 	}
 	if grants.Allows(resolved, grants.Read) {
-		return false
+		return boundarySilent
 	}
 	if insideSystemRoots(resolved) {
-		return false
+		return boundarySilent
 	}
-	return true
+	return boundaryAsk
 }
+
+// boundaryAction is what the gate owes one path.
+type boundaryAction uint8
+
+const (
+	// boundarySilent: nothing at all. The path is inside the boundary, already
+	// granted, credential material the static floor owns, or on the system
+	// whitelist the sandbox admits anyway.
+	boundarySilent boundaryAction = iota
+	// boundaryAsk: put the question to the user.
+	boundaryAsk
+	// boundaryRefused: the user already answered no about this path. The call is
+	// blocked without asking, because a question already answered is not worth
+	// putting twice.
+	boundaryRefused
+)
 
 // WriteAllowed reports whether a write to path is already authorized for this
 // session: the session's writable registry covers it, or the authorization
@@ -537,6 +598,24 @@ func blockBoundary(call agentcore.AgentToolCall, target, candidate string, writi
 	if !answered {
 		msg += " — no prompt is available in this run, so ask the user to run it interactively or to configure the root"
 	}
+	return &agentcore.BeforeToolCallDecision{
+		Block:   true,
+		Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
+	}
+}
+
+// blockRefused refuses a path the user already answered no about, without
+// asking again. The message says so plainly and names how to change the answer:
+// a refusal that reads like a fresh denial would leave the model (and the
+// person) thinking the question had just been put, and a block nobody can lift
+// is a trap rather than a decision.
+func blockRefused(call agentcore.AgentToolCall, target string, writing bool) *agentcore.BeforeToolCallDecision {
+	verb, cmd := "read", "/permissions readable add"
+	if writing {
+		verb, cmd = "write", "/permissions writable add"
+	}
+	msg := fmt.Sprintf("tool %q blocked: the %s of %s was refused earlier in this session, so it is not asked again", call.Name, verb, target)
+	msg += fmt.Sprintf("; to change that, run %s %s, or start a new session", cmd, target)
 	return &agentcore.BeforeToolCallDecision{
 		Block:   true,
 		Content: &agentcore.ContentList{agentcore.NewTextContent(msg)},
