@@ -35,13 +35,8 @@ var openAIProviderCases = []openAIWiringCase{
 	{"cerebras", "https://api.cerebras.ai/v1", "CEREBRAS_API_KEY"},
 	{"mistral", "https://api.mistral.ai", "MISTRAL_API_KEY"},
 	{"moonshotai", "https://api.moonshot.ai/v1", "MOONSHOT_API_KEY"},
-	{"moonshotai-cn", "https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"},
-	{"fireworks", "https://api.fireworks.ai/inference", "FIREWORKS_API_KEY"},
-	{"together", "https://api.together.ai/v1", "TOGETHER_API_KEY"},
 	{"openrouter", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"},
-	{"nvidia", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"},
 	{"zai", "https://api.z.ai/api/coding/paas/v4", "ZAI_API_KEY"},
-	{"zai-coding-cn", "https://open.bigmodel.cn/api/coding/paas/v4", "ZAI_CODING_CN_API_KEY"},
 	{"kimi-coding", "https://api.kimi.com/coding", "KIMI_API_KEY"},
 	{"opencode-zen", "https://opencode.ai/zen/v1", "OPENCODE_ZEN_API_KEY"},
 	{"opencode-go", "https://opencode.ai/zen/go/v1", "OPENCODE_API_KEY"},
@@ -99,7 +94,8 @@ func TestLegacyKeyAliases(t *testing.T) {
 	}{
 		{"anthropic", "ANTHROPIC_API_KEY", "CLAUDE_API_KEY"},
 		{"google", "GEMINI_API_KEY", "GOOGLE_API_KEY"},
-		{"nvidia", "NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"},
+		// The third row used to be nvidia's NVIDIA_NIM_API_KEY; that entry is
+		// retired, and the two above already cover the mechanism.
 	}
 	for _, a := range aliases {
 		t.Run(a.provider, func(t *testing.T) {

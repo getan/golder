@@ -173,18 +173,17 @@ func TestResolveProviderExplicitProvider(t *testing.T) {
 	}
 }
 
-// TestResolveProviderChineseCloudIDs verifies the Chinese-cloud model prefixes
-// route to their own provider (not the OpenRouter default) via model-name
-// inference.
+// TestResolveProviderChineseCloudIDs verifies the surviving Chinese-cloud model
+// prefix routes to its own provider (not the OpenRouter default) via model-name
+// inference. The ernie-/doubao-/hunyuan- prefixes went with their entries; a
+// name that no longer infers falls through to the default, which is the honest
+// outcome of retiring a provider rather than a special case to keep.
 func TestResolveProviderChineseCloudIDs(t *testing.T) {
 	cases := []struct {
 		model    string
 		wantName string
 	}{
-		{"ernie-4.5-turbo-32k", "qianfan"},
-		{"doubao-seed-1-6", "volcengine"},
 		{"qwen-max", "dashscope"},
-		{"hunyuan-turbos-latest", "hunyuan"},
 	}
 	for _, c := range cases {
 		_, name, err := ResolveProvider(c.model, "", "", "", os.Getenv)
@@ -198,10 +197,10 @@ func TestResolveProviderChineseCloudIDs(t *testing.T) {
 	}
 }
 
-// TestResolveProviderCNExplicit verifies --provider selects the CN providers
+// TestResolveProviderCNExplicit verifies --provider selects the CN provider
 // directly and that --base-url overrides without changing the provider name.
 func TestResolveProviderCNExplicit(t *testing.T) {
-	for _, name := range []string{"qianfan", "volcengine", "dashscope", "hunyuan"} {
+	for _, name := range []string{"dashscope"} {
 		if _, got, err := ResolveProvider("some-model", "", "", name, os.Getenv); err != nil || got != name {
 			t.Errorf("provider=%s = (%q, %v), want (%s, nil)", name, got, err, name)
 		}
@@ -257,16 +256,16 @@ func TestResolveProviderInferencePrecedence(t *testing.T) {
 }
 
 // TestResolveBaseURLPrecedence exercises all four precedence levels for a
-// hyphenated provider (zai-coding-cn → ZAI_CODING_CN_BASE_URL).
+// hyphenated provider (opencode-go → OPENCODE_GO_BASE_URL).
 func TestResolveBaseURLPrecedence(t *testing.T) {
-	spec, ok := LookupProviderSpec("zai-coding-cn")
+	spec, ok := LookupProviderSpec("opencode-go")
 	if !ok {
-		t.Fatal("expected zai-coding-cn in registry")
+		t.Fatal("expected opencode-go in registry")
 	}
 	if got := ResolveBaseURL(spec, "", os.Getenv); got != spec.DefaultBaseURL {
 		t.Errorf("default: got %q, want %q", got, spec.DefaultBaseURL)
 	}
-	t.Setenv("ZAI_CODING_CN_BASE_URL", "https://generic.example/v4")
+	t.Setenv("OPENCODE_GO_BASE_URL", "https://generic.example/v4")
 	if got := ResolveBaseURL(spec, "", os.Getenv); got != "https://generic.example/v4" {
 		t.Errorf("generic env: got %q, want %q", got, "https://generic.example/v4")
 	}

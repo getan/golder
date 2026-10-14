@@ -35,7 +35,7 @@ func TestEnvAPIKeyFromRegistry(t *testing.T) {
 		{"deepseek", "DEEPSEEK_API_KEY", "sk-deepseek"},
 		{"groq", "GROQ_API_KEY", "sk-groq"},
 		{"zai", "ZAI_API_KEY", "sk-zai"},
-		{"moonshotai-cn", "MOONSHOT_API_KEY", "sk-moonshot-cn"},
+		{"moonshotai", "MOONSHOT_API_KEY", "sk-moonshot"},
 		{"kimi-coding", "KIMI_API_KEY", "sk-kimi"},
 	}
 	for _, tc := range cases {

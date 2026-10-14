@@ -62,16 +62,17 @@ func TestAnthropicEnvVarOrder(t *testing.T) {
 	}
 }
 
-func TestChineseCloudProviders(t *testing.T) {
+// TestChineseCloudProvider pins the one Chinese cloud endpoint the registry
+// keeps. Its three siblings (Qianfan, Volcengine Ark, Hunyuan) were retired as
+// thin aliases; this entry stays for the qwen- family, so the test asserts the
+// metadata that makes it worth carrying rather than a count of platforms.
+func TestChineseCloudProvider(t *testing.T) {
 	cases := []struct {
 		name    string
 		envVars []string
 		baseURL string
 	}{
-		{"qianfan", []string{"QIANFAN_API_KEY"}, "https://qianfan.baidubce.com/v2"},
-		{"volcengine", []string{"ARK_API_KEY", "VOLCENGINE_API_KEY"}, "https://ark.cn-beijing.volces.com/api/v3"},
 		{"dashscope", []string{"DASHSCOPE_API_KEY"}, "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"hunyuan", []string{"HUNYUAN_API_KEY"}, "https://api.hunyuan.cloud.tencent.com/v1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,15 +122,12 @@ func TestAzureBaseURLEnvVars(t *testing.T) {
 
 func TestRegistryContainsAllExpectedProviders(t *testing.T) {
 	expected := []string{
-		"anthropic", "openai", "deepseek", "nvidia", "google",
+		"anthropic", "openai", "deepseek", "google",
 		"groq", "cerebras", "xai", "openrouter", "zai",
 		"typesafe",
-		"zai-coding-cn", "mistral", "minimax", "minimax-cn", "moonshotai",
-		"moonshotai-cn", "fireworks", "together", "opencode-zen",
-		"opencode-go", "kimi-coding", "xiaomi",
-		"qianfan", "volcengine", "dashscope", "hunyuan",
-		"azure-openai-responses", "amazon-bedrock", "google-vertex",
-		"cloudflare-workers-ai", "cloudflare-ai-gateway",
+		"mistral", "minimax", "moonshotai",
+		"opencode-zen", "opencode-go", "kimi-coding", "xiaomi", "dashscope",
+		"azure-openai-responses",
 	}
 	for _, name := range expected {
 		if _, ok := LookupProviderSpec(name); !ok {

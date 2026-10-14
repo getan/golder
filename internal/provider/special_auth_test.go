@@ -28,13 +28,41 @@ func baseURLOf(t *testing.T, p Provider) string {
 	}
 }
 
+// specialSpecs is the metadata the special-auth resolvers are exercised with.
+// Four of the five are no longer registry entries — the enterprise chain was cut
+// back to Azure OpenAI — but their resolvers stay in special_auth.go, and kept
+// code deserves kept coverage, so the specs they need are stated here. A name
+// that IS in the registry still uses the registry's own spec, so what ships and
+// what is tested cannot drift.
+var specialSpecs = map[string]ProviderSpec{
+	"amazon-bedrock": {
+		Name: "amazon-bedrock", EnvVars: []string{"AWS_BEARER_TOKEN_BEDROCK"},
+		Protocol: ProtocolAnthropic, AuthScheme: AuthAWS,
+	},
+	"google-vertex": {
+		Name: "google-vertex", EnvVars: []string{"GOOGLE_CLOUD_API_KEY"},
+		Protocol: ProtocolOpenAI, AuthScheme: AuthSpecial,
+	},
+	"cloudflare-workers-ai": {
+		Name: "cloudflare-workers-ai", EnvVars: []string{"CLOUDFLARE_API_KEY"},
+		Protocol: ProtocolOpenAI, AuthScheme: AuthBearer,
+	},
+	"cloudflare-ai-gateway": {
+		Name: "cloudflare-ai-gateway", EnvVars: []string{"CLOUDFLARE_API_KEY"},
+		Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey,
+	},
+}
+
 func specFor(t *testing.T, name string) ProviderSpec {
 	t.Helper()
-	spec, ok := LookupProviderSpec(name)
-	if !ok {
-		t.Fatalf("registry missing provider %q", name)
+	if spec, ok := LookupProviderSpec(name); ok {
+		return spec
 	}
-	return spec
+	if spec, ok := specialSpecs[name]; ok {
+		return spec
+	}
+	t.Fatalf("no spec for provider %q", name)
+	return ProviderSpec{}
 }
 
 func TestResolveSpecialProvider_Azure(t *testing.T) {

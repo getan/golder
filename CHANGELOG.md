@@ -801,14 +801,30 @@ interactive REPL/TUI.
   reviewer's requests are routed and how its key is found), while switching —
   `/provider <name>` and `--provider` alike — is refused with the reason, and
   the picker leaves it out. `golder --help` marks it too.
-- **Seven providers retired**: `ant-ling`, `huggingface`, `novita`,
-  `vercel-ai-gateway` and the three `xiaomi-token-plan-*` regional endpoints.
-  Each was a thin alias onto an OpenAI-compatible endpoint with no model
-  metadata of its own (no `ModelPrefixes`, no `DefaultModel`), and the xiaomi
-  plans were three hostnames for one API that the vendor's own entry already
-  covers. Nothing else changes: a provider is still one entry in the registry,
-  the retired names now report "unknown --provider" with the available list, and
-  every remaining gateway keeps its metadata, tests and docs.
+- **Twenty providers retired, from thirty-nine to nineteen**: the registry had
+  grown one entry per endpoint anyone ever named, and most carried no behaviour
+  of their own — a name, a base URL, and the generic OpenAI-compatible driver.
+  Retired in two passes: `ant-ling`, `huggingface`, `novita`,
+  `vercel-ai-gateway` and the three `xiaomi-token-plan-*` regional hostnames
+  (three names for one API the vendor's own entry already covers); then
+  `nvidia`, `fireworks`, `together`, `minimax-cn`, `moonshotai-cn`,
+  `zai-coding-cn`, `qianfan`, `volcengine`, `hunyuan`, and four of the five
+  enterprise endpoints — `amazon-bedrock`, `google-vertex`,
+  `cloudflare-workers-ai`, `cloudflare-ai-gateway` — leaving
+  `azure-openai-responses` as the one enterprise entry with the most machinery
+  behind it (endpoint composed from a resource name, an API version and a
+  deployment map). `dashscope` stays for its qwen- family, and every
+  first-tier, subscription and aggregator entry the workflow depends on is
+  untouched.
+
+  No functional code was removed: the special-auth resolvers for Bedrock,
+  Vertex and both Cloudflare forms remain in `special_auth.go` and remain
+  covered — `special_auth_test.go` builds their `ProviderSpec` locally instead
+  of looking it up, so the resolvers and the registry cannot drift — and
+  `NewNvidiaProvider` keeps its driver and its tests. Bringing any of them back
+  is one registry entry. A retired NAME now reports "unknown --provider" with
+  the available list, which is the honest answer: it is not a gateway this build
+  knows, and its old key variable is not silently accepted by another provider.
 - **One state root: everything golder writes now lives under `~/.golder` (or
   `$GOLDER_HOME`)**: the state was split across two directories — sessions,
   history, trust and the credential file under `~/.golder`, while `config.toml`,

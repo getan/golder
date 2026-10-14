@@ -35,13 +35,10 @@ func TestInferProviderFromModelKnown(t *testing.T) {
 		{"kimi-k2-thinking", "moonshotai"},
 		{"moonshot-v1-8k", "moonshotai"},
 		{"qwen-max", "dashscope"},
-		{"ernie-4.5-turbo-32k", "qianfan"},
-		{"doubao-seed-1-6", "volcengine"},
 		{"grok-4.5", "xai"},
 		{"mistral-large-latest", "mistral"},
 		{"codestral-latest", "mistral"},
 		{"devstral-medium-latest", "mistral"},
-		{"hunyuan-turbos-latest", "hunyuan"},
 		{"minimax-m2.7", "minimax"},
 		{"mimo-v2-pro", "xiaomi"},
 	}

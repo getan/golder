@@ -152,14 +152,6 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "deepseek-v4-flash",
 	},
 	{
-		Name:           "nvidia",
-		EnvVars:        []string{"NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"},
-		DefaultBaseURL: nvidiaBaseURL, // https://integrate.api.nvidia.com/v1
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		DefaultModel:   "meta/llama-3.3-70b-instruct",
-	},
-	{
 		Name:           "google",
 		EnvVars:        []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"},
 		DefaultBaseURL: "https://generativelanguage.googleapis.com/v1beta",
@@ -231,16 +223,6 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "glm-4.7",
 	},
 	{
-		Name:           "zai-coding-cn",
-		EnvVars:        []string{"ZAI_CODING_CN_API_KEY"},
-		DefaultBaseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		// The China coding plan serves the same GLM fleet as models.dev's
-		// zai-coding-plan entry, so it reuses that entry's ladders.
-		ModelsDevID: "zai-coding-plan",
-	},
-	{
 		Name:           "mistral",
 		EnvVars:        []string{"MISTRAL_API_KEY"},
 		DefaultBaseURL: "https://api.mistral.ai",
@@ -259,13 +241,6 @@ var providerRegistry = []ProviderSpec{
 		DefaultModel:   "MiniMax-M2.7",
 	},
 	{
-		Name:           "minimax-cn",
-		EnvVars:        []string{"MINIMAX_CN_API_KEY"},
-		DefaultBaseURL: "https://api.minimaxi.com/anthropic",
-		Protocol:       ProtocolAnthropic,
-		AuthScheme:     AuthXAPIKey,
-	},
-	{
 		Name:           "moonshotai",
 		EnvVars:        []string{"MOONSHOT_API_KEY"},
 		DefaultBaseURL: "https://api.moonshot.ai/v1",
@@ -273,31 +248,6 @@ var providerRegistry = []ProviderSpec{
 		AuthScheme:     AuthBearer,
 		ModelPrefixes:  []string{"kimi-", "moonshot-"},
 		DefaultModel:   "kimi-k2-thinking",
-	},
-	{
-		Name:           "moonshotai-cn",
-		EnvVars:        []string{"MOONSHOT_API_KEY"},
-		DefaultBaseURL: "https://api.moonshot.cn/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
-		Name:           "fireworks",
-		EnvVars:        []string{"FIREWORKS_API_KEY"},
-		DefaultBaseURL: "https://api.fireworks.ai/inference",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelsDevID:    "fireworks-ai",
-		DefaultModel:   "accounts/fireworks/models/deepseek-v4-pro",
-	},
-	{
-		Name:           "together",
-		EnvVars:        []string{"TOGETHER_API_KEY"},
-		DefaultBaseURL: "https://api.together.ai/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelsDevID:    "togetherai",
-		DefaultModel:   "deepseek-ai/DeepSeek-V4-Pro",
 	},
 	{
 		// OpenCode Zen (pay-as-you-go). Renamed from "opencode" to
@@ -349,33 +299,11 @@ var providerRegistry = []ProviderSpec{
 		ModelPrefixes:  []string{"mimo-"},
 		DefaultModel:   "mimo-v2-pro",
 	},
-	// Chinese cloud LLM platforms. All four expose OpenAI-compatible endpoints
-	// authenticated with a plain Bearer API key, so they reuse the standard
-	// OpenAI-compatible driver with no bespoke auth. Base URLs are the platforms'
-	// OpenAI-compatible endpoints as documented at implementation time.
+	// Alibaba Cloud DashScope, OpenAI-compatible mode. The other Chinese cloud
+	// platforms (Qianfan, Volcengine Ark, Hunyuan) were removed as thin aliases
+	// onto OpenAI-compatible endpoints with no behaviour of their own; this one
+	// stays for its qwen- family, which is what makes the entry worth carrying.
 	{
-		// Baidu AI Cloud Qianfan (Baidu Qianfan).
-		Name:           "qianfan",
-		EnvVars:        []string{"QIANFAN_API_KEY"},
-		DefaultBaseURL: "https://qianfan.baidubce.com/v2",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelPrefixes:  []string{"ernie-"},
-		DefaultModel:   "ernie-4.5-turbo-32k",
-	},
-	{
-		// ByteDance Volcengine Ark (Volcengine Ark). ARK_API_KEY is the platform's
-		// conventional variable; VOLCENGINE_API_KEY is accepted as a fallback.
-		Name:           "volcengine",
-		EnvVars:        []string{"ARK_API_KEY", "VOLCENGINE_API_KEY"},
-		DefaultBaseURL: "https://ark.cn-beijing.volces.com/api/v3",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelPrefixes:  []string{"doubao-"},
-		DefaultModel:   "doubao-seed-1-6",
-	},
-	{
-		// Alibaba Cloud DashScope (DashScope), OpenAI-compatible mode.
 		Name:           "dashscope",
 		EnvVars:        []string{"DASHSCOPE_API_KEY"},
 		DefaultBaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -384,16 +312,12 @@ var providerRegistry = []ProviderSpec{
 		ModelPrefixes:  []string{"qwen-"},
 		DefaultModel:   "qwen-max",
 	},
-	{
-		// Tencent Hunyuan (Hunyuan), OpenAI-compatible endpoint.
-		Name:           "hunyuan",
-		EnvVars:        []string{"HUNYUAN_API_KEY"},
-		DefaultBaseURL: "https://api.hunyuan.cloud.tencent.com/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-		ModelPrefixes:  []string{"hunyuan-"},
-		DefaultModel:   "hunyuan-turbos-latest",
-	},
+	// The enterprise chain, of which one entry is kept: Azure OpenAI carries the
+	// most machinery of the five (endpoint composed from a resource name or a
+	// base URL, an API version, and a deployment map) and is the endpoint most
+	// enterprises actually deploy. The other four resolvers — Bedrock, Vertex and
+	// both Cloudflare forms — remain in special_auth.go, tested, for the day one
+	// of them is wanted back: an entry here is all it takes.
 	{
 		Name:    "azure-openai-responses",
 		EnvVars: []string{"AZURE_OPENAI_API_KEY"},
@@ -403,38 +327,6 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthAzure,
 		BaseURLEnvVars: []string{"AZURE_OPENAI_BASE_URL"},
-	},
-	{
-		Name:    "amazon-bedrock",
-		EnvVars: []string{"AWS_BEARER_TOKEN_BEDROCK"},
-		// Region-specific runtime endpoint; {AWS_REGION} defaults to us-east-1.
-		DefaultBaseURL: "https://bedrock-runtime.{AWS_REGION}.amazonaws.com",
-		Protocol:       ProtocolAnthropic,
-		AuthScheme:     AuthAWS,
-	},
-	{
-		Name:    "google-vertex",
-		EnvVars: []string{"GOOGLE_CLOUD_API_KEY"},
-		// Location-specific endpoint; protocol varies by model (Gemini vs Claude).
-		DefaultBaseURL: "https://{location}-aiplatform.googleapis.com",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthSpecial,
-	},
-	{
-		Name:    "cloudflare-workers-ai",
-		EnvVars: []string{"CLOUDFLARE_API_KEY"},
-		// {id} is CLOUDFLARE_ACCOUNT_ID.
-		DefaultBaseURL: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-		Protocol:       ProtocolOpenAI,
-		AuthScheme:     AuthBearer,
-	},
-	{
-		Name:    "cloudflare-ai-gateway",
-		EnvVars: []string{"CLOUDFLARE_API_KEY"},
-		// {acct}/{gw} are CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_GATEWAY_ID.
-		DefaultBaseURL: "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/anthropic",
-		Protocol:       ProtocolAnthropic,
-		AuthScheme:     AuthXAPIKey,
 	},
 }
 

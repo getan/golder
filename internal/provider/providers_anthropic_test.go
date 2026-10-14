@@ -1,5 +1,5 @@
 // Tests for the Anthropic-Messages-protocol built-in providers (US-006, node
-// #187): anthropic, minimax, minimax-cn. They assert the registry metadata
+// #187): anthropic and minimax. They assert the registry metadata
 // (base_url, protocol, key env var) and that the constructed anthropic-compat
 // driver attaches the auth header dictated by the provider's AuthScheme.
 //
@@ -25,7 +25,6 @@ func TestAnthropicProtocolProviderRegistrySpecs(t *testing.T) {
 	}{
 		{"anthropic", "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY"},
 		{"minimax", "https://api.minimax.io/anthropic", "MINIMAX_API_KEY"},
-		{"minimax-cn", "https://api.minimaxi.com/anthropic", "MINIMAX_CN_API_KEY"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -51,10 +50,10 @@ func TestAnthropicProtocolProviderRegistrySpecs(t *testing.T) {
 // TestAnthropicProtocolProviderAuthHeader verifies that the driver built for
 // each provider (the way resolveNamedProvider builds it: name + resolved
 // base_url + spec.AuthScheme) targets the provider's base URL and sets the auth
-// header matching its AuthScheme. anthropic/minimax/minimax-cn are all
+// header matching its AuthScheme. anthropic/minimax are both
 // x-api-key + anthropic-version per pi's convention.
 func TestAnthropicProtocolProviderAuthHeader(t *testing.T) {
-	for _, name := range []string{"anthropic", "minimax", "minimax-cn"} {
+	for _, name := range []string{"anthropic", "minimax"} {
 		t.Run(name, func(t *testing.T) {
 			spec, ok := LookupProviderSpec(name)
 			if !ok {

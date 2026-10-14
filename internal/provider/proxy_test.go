@@ -158,7 +158,20 @@ func TestSpecialProvidersKeepRoutingIdentityAndBaseURLEnv(t *testing.T) {
 		"GOOGLE_CLOUD_LOCATION": "us-central1", "CLOUDFLARE_API_KEY": "test-key",
 		"CLOUDFLARE_ACCOUNT_ID": "test-account", "CLOUDFLARE_GATEWAY_ID": "test-gateway",
 	}
-	for _, name := range []string{"azure-openai-responses", "amazon-bedrock", "google-vertex", "cloudflare-workers-ai", "cloudflare-ai-gateway"} {
+	// Iterate whatever the registry ships as special-auth, rather than a list
+	// typed here: the property under test is "a special provider keeps its
+	// routing identity and honors its <PROVIDER>_BASE_URL", and that holds for
+	// each entry the registry has, present and future.
+	var names []string
+	for _, spec := range ProviderSpecs() {
+		if IsSpecialAuthProvider(spec) {
+			names = append(names, spec.Name)
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("registry ships no special-auth provider; the loop below would test nothing")
+	}
+	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
 			spec, _ := LookupProviderSpec(name)
 			envName := config.GenericBaseURLEnvVar(name)

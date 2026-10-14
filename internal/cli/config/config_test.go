@@ -124,8 +124,8 @@ func TestGenericBaseURLEnvVar(t *testing.T) {
 		want string
 	}{
 		{"deepseek", "DEEPSEEK_BASE_URL"},
-		{"zai-coding-cn", "ZAI_CODING_CN_BASE_URL"},
-		{"vercel-ai-gateway", "VERCEL_AI_GATEWAY_BASE_URL"},
+		{"opencode-go", "OPENCODE_GO_BASE_URL"},
+		{"azure-openai-responses", "AZURE_OPENAI_RESPONSES_BASE_URL"},
 		{"", ""},
 	}
 	for _, c := range cases {
