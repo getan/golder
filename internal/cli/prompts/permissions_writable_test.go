@@ -16,7 +16,7 @@ import (
 // remove, and the usage text for a bogus verb.
 func TestPermissionCommandWritable(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	grantstest.Install(t)
 
@@ -79,7 +79,7 @@ func TestPermissionCommandWritable(t *testing.T) {
 // from (the file a user edits by hand, so it is part of the contract).
 func TestPermissionCommandList(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	grantstest.Install(t)
 

@@ -249,7 +249,7 @@ func TestGatesSeedAppliesParentAuthorizations(t *testing.T) {
 // cannot be written degrades to session-only instead of failing the grant.
 func TestGrantWritableRoot(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	grantstest.Install(t)
 

@@ -20,28 +20,24 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
 )
 
 // SessionStore returns the session store rooted at ~/.golder/sessions (or under
-// GOLDER_HOME when set), creating the directory on first use. It is shared by the
+// the state root), creating the directory on first use. It is shared by the
 // headless run path and the interactive REPL.
 func SessionStore() (*session.Store, error) {
-	dir := os.Getenv("GOLDER_HOME")
+	dir := golderhome.File(golderhome.SessionsDir)
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("resolve home dir: %w", err)
-		}
-		dir = filepath.Join(home, ".golder")
+		return nil, fmt.Errorf("cannot resolve the golder state directory (set %s or a home directory)", golderhome.EnvHome)
 	}
-	return session.NewStore(filepath.Join(dir, "sessions"))
+	return session.NewStore(dir)
 }
 
 // PrintSessions prints the stored sessions, most-recent first, to out. Every

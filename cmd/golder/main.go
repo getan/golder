@@ -41,6 +41,7 @@ import (
 	"github.com/getan/golder/internal/cli/tui"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/permissions"
@@ -277,21 +278,30 @@ func main() {
 		}
 	}
 
-	// Overlay ~/.config/golder/config.toml: file values replace built-in defaults,
-	// but any flag the user set on the command line still wins (CLI > file >
-	// default). A malformed file warns but does not abort — defaults apply.
+	// One state root. A release before this one kept config.toml, proxy.toml and
+	// grants.json under ~/.config/golder while everything else lived in
+	// ~/.golder; the move happens here, before anything reads those files, and
+	// announces itself — silently relocating a file someone hand-edits would
+	// leave them editing a path that no longer does anything.
+	golderhome.MigrateLegacy(os.Getenv, func(msg string) {
+		fmt.Fprintf(os.Stderr, "golder: %s\n", msg)
+	})
+
+	// Overlay config.toml from the state root: file values replace built-in
+	// defaults, but any flag the user set on the command line still wins
+	// (CLI > file > default). A malformed file warns but does not abort —
+	// defaults apply.
 	cfg, cfgErr := config.LoadFileConfig(config.FileConfigPath())
 	if cfgErr != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", cfgErr)
 	} else {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
 	}
-	// The unified authorization table. It loads ~/.config/golder/grants.json and,
-	// on a first run, folds the three older stores into it (trust.json, the
-	// managed permissions.toml, and the config.toml seed). Warnings are printed
-	// once here rather than surfacing later as a tool error: a legacy file that
-	// cannot be read costs an old grant, which is an inconvenience, while
-	// refusing to start is not.
+	// The unified authorization table: grants.json in the state root. On a first
+	// run it folds the older stores into it (trust.json, the retired managed
+	// permissions.toml). Warnings are printed once here rather than surfacing
+	// later as a tool error: a legacy file that cannot be read costs an old
+	// grant, which is an inconvenience, while refusing to start is not.
 	if warnings, err := grants.Open(os.Getenv); err != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
 	} else {

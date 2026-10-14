@@ -12,9 +12,9 @@ package judge
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -83,12 +83,13 @@ func PlausibleWritableRoot(p, cwd string) bool {
 			return false
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if inside(filepath.Join(home, ".golder")) || p == home {
-			return false
-		}
+	if home, err := os.UserHomeDir(); err == nil && home != "" && p == home {
+		return false
 	}
-	if gh := strings.TrimSpace(os.Getenv("GOLDER_HOME")); gh != "" && inside(gh) {
+	// golder's own state is never a grant: the authorization table lives there,
+	// so a writable root over it would let the agent rewrite the rules it is
+	// being held to.
+	if gh := golderhome.Dir(); gh != "" && inside(gh) {
 		return false
 	}
 	return true

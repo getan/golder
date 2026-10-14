@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/getan/golder/internal/golderhome"
 )
 
 // checkTTL is the minimum interval between networked latest-release checks.
@@ -29,17 +31,9 @@ type updateCache struct {
 	Latest    string    `json:"latest"`
 }
 
-// cachePath returns the cache file path, or "" when the home dir is unavailable.
-func cachePath() string {
-	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
-		return filepath.Join(dir, cacheFileName)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".golder", cacheFileName)
-}
+// cachePath returns the cache file path, or "" when the state root is
+// unavailable.
+func cachePath() string { return golderhome.File(golderhome.UpdateCheckFile) }
 
 // CachedLatest returns the latest tag recorded in the cache and whether the cache
 // is still fresh (younger than checkTTL). A missing, corrupt, or unreadable cache

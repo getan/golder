@@ -7,25 +7,27 @@ import (
 	"testing"
 )
 
-func TestFileConfigPath_XDGOverride(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdgroot")
-	got := FileConfigPath()
-	want := filepath.Join("/tmp/xdgroot", "golder", "config.toml")
-	if got != want {
-		t.Fatalf("FileConfigPath() = %q, want %q", got, want)
+// TestFileConfigPath pins where the file lives now: the golder state root.
+// It used to be ~/.config/golder (or $XDG_CONFIG_HOME/golder), which is the
+// question this test exists to keep answered — the state root is also what the
+// sandbox denies, so a config file outside it is a config file the agent can
+// rewrite.
+func TestFileConfigPath(t *testing.T) {
+	t.Setenv("GOLDER_HOME", "/tmp/ghome")
+	if got, want := FileConfigPath(), filepath.Join("/tmp/ghome", "config.toml"); got != want {
+		t.Fatalf("FileConfigPath() with GOLDER_HOME = %q, want %q", got, want)
 	}
-}
 
-func TestFileConfigPath_DefaultHome(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "")
+	// Unset, the root is home-relative. XDG_CONFIG_HOME must change nothing:
+	// golder's state is one directory, and it is not the XDG one.
+	t.Setenv("GOLDER_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdgroot")
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	got := FileConfigPath()
-	want := filepath.Join(home, ".config", "golder", "config.toml")
-	if got != want {
-		t.Fatalf("FileConfigPath() = %q, want %q", got, want)
+	if got, want := FileConfigPath(), filepath.Join(home, ".golder", "config.toml"); got != want {
+		t.Fatalf("FileConfigPath() = %q, want %q (XDG_CONFIG_HOME must not decide it)", got, want)
 	}
 }
 

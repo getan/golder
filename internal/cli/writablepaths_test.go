@@ -13,7 +13,7 @@ import (
 func isolateWritablePaths(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	grantstest.Install(t)
 	return dir

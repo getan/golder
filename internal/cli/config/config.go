@@ -1,5 +1,5 @@
 // Package config implements golder's optional user config file at
-// ~/.config/golder/config.toml (honoring $XDG_CONFIG_HOME when set) plus the
+// $GOLDER_HOME/config.toml (~/.golder/config.toml by default) plus the
 // provider-agnostic base-url env-var name derivation. Values in the file
 // replace golder's built-in defaults, but an explicit command-line flag always
 // wins over the file:
@@ -18,10 +18,11 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/getan/golder/internal/golderhome"
 )
 
 // FileConfig is the on-disk shape of config.toml. Every field is optional; an
@@ -80,20 +81,10 @@ type DreamConfig struct {
 	RecentSessions int   `toml:"recent_sessions"`
 }
 
-// FileConfigPath returns the path to the user config file:
-// $XDG_CONFIG_HOME/golder/config.toml, or ~/.config/golder/config.toml by default.
-// It returns "" when neither can be resolved, so the caller treats the file as
-// absent.
-func FileConfigPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "golder", "config.toml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".config", "golder", "config.toml")
-}
+// FileConfigPath returns the path to the user config file: config.toml in the
+// golder state root ($GOLDER_HOME, else ~/.golder). It returns "" when the root
+// cannot be resolved, so the caller treats the file as absent.
+func FileConfigPath() string { return golderhome.File(golderhome.ConfigFile) }
 
 // LoadFileConfig reads and decodes config.toml. A missing file (or an empty
 // path) returns a zero config with no error; a malformed file is an error.

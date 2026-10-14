@@ -23,6 +23,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
@@ -99,21 +100,17 @@ func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, s
 	// --no-prompt-templates disables all prompt-template discovery (global,
 	// settings, CLI); built-in slash commands and skills are unaffected.
 	if !srcs.Disable {
-		dir := os.Getenv("GOLDER_HOME")
+		dir := golderhome.Dir()
 		if dir == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return reg, nil // built-ins only
-			}
-			dir = filepath.Join(home, ".golder")
+			return reg, nil // built-ins only
 		}
-		// Load user prompt templates from both the legacy ~/.golder/commands and
-		// the pi-aligned ~/.golder/prompts (both non-recursive, global tier).
+		// Load user prompt templates from both the compat commands/ directory and
+		// the pi-aligned prompts/ one (both non-recursive, global tier).
 		// Loading commands first means a same-named template in prompts/
 		// overrides the legacy one (last-write-wins within the global tier). A
 		// missing directory is not an error (LoadUserCommandsDir returns nil,
 		// nil for IsNotExist).
-		for _, sub := range []string{"commands", "prompts"} {
+		for _, sub := range []string{golderhome.CommandsDir, golderhome.PromptsDir} {
 			cmds, err := runtime.LoadUserCommandsDir(filepath.Join(dir, sub))
 			if err != nil {
 				return reg, err

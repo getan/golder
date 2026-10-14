@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/golderhome"
 )
 
 // catalogTTL is the freshness window shared by every cached catalog. Inside it
@@ -24,18 +26,8 @@ import (
 const catalogTTL = 24 * time.Hour
 
 // catalogFilePath returns the cache path for a catalog file name, or "" when
-// the home dir is unavailable. Mirrors selfupdate's cache layout: $GOLDER_HOME
-// wins over ~/.golder.
-func catalogFilePath(name string) string {
-	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
-		return filepath.Join(dir, name)
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".golder", name)
-}
+// the state root is unavailable. Mirrors selfupdate's cache layout.
+func catalogFilePath(name string) string { return golderhome.File(name) }
 
 // readCatalogFile loads and unmarshals the named catalog into v. It returns
 // false (leaving v untouched) when the file is missing, unreadable, or

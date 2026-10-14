@@ -93,27 +93,27 @@ func TestBwrapRunnerArgv(t *testing.T) {
 	if indexOfSeq(argv, "--ro-bind", ssh, ssh) >= 0 || indexOfSeq(argv, "--bind", ssh, ssh) >= 0 {
 		t.Errorf("argv must not mount $HOME/.ssh: %v", argv)
 	}
+	// The whole state root is masked, as a directory: the deny covers the
+	// authorization table, the credential file and the transcripts by
+	// construction, so a file added there later needs no new entry here.
 	golderHome := filepath.Join(home, "ghome")
-	trust := filepath.Join(golderHome, "trust.json")
-	sessions := filepath.Join(golderHome, "sessions")
-	if err := os.MkdirAll(sessions, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(golderHome, "sessions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(trust, []byte("{}"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(golderHome, "grants.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	argv, _, err = r.SandboxArgv("/bin/bash", "-c", "echo hi", project)
 	if err != nil {
 		t.Fatalf("SandboxArgv with existing golder state: %v", err)
 	}
-	trustAt := indexOfSeq(argv, "--ro-bind", "/dev/null", trust)
-	sessionsAt := indexOfSeq(argv, "--tmpfs", sessions)
+	stateAt := indexOfSeq(argv, "--tmpfs", golderHome)
 	writable := indexOfSeq(argv, "--bind", project, project)
-	if trustAt < 0 || sessionsAt < 0 {
-		t.Fatalf("argv missing golder-state masks (trust=%d sessions=%d): %v", trustAt, sessionsAt, argv)
+	if stateAt < 0 {
+		t.Fatalf("argv missing the golder-state mask for %s: %v", golderHome, argv)
 	}
-	if trustAt < writable || sessionsAt < writable {
-		t.Errorf("golder-state masks must come after the writable bind: %v", argv)
+	if stateAt < writable {
+		t.Errorf("the golder-state mask must come after the writable bind: %v", argv)
 	}
 }
 

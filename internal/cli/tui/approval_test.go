@@ -829,7 +829,7 @@ func TestTrustGateDeniesWithoutAnswer(t *testing.T) {
 func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GOLDER_HOME", filepath.Join(home, "xdg"))
 
 	session := newRemoteTestSession(t)
 	m := NewModel(Options{}).withSession(session, nil)
@@ -872,7 +872,7 @@ func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
 func TestApprovalReadRememberedPersists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("GOLDER_HOME", filepath.Join(home, "xdg"))
 	grantstest.Install(t)
 	dir := filepath.Join(home, "outside")
 	if err := os.MkdirAll(dir, 0o755); err != nil {

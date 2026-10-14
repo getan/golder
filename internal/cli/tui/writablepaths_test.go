@@ -18,7 +18,7 @@ import (
 // it.
 func TestWritablePathsPickerFlow(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("GOLDER_HOME", dir)
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	grantstest.Install(t)
 

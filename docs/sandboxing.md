@@ -96,7 +96,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 需要预先授权（避免反复弹窗）时有两条途径，汇入同一张授权表：
 
-- **批准读授权时选「记住」**：写入 `~/.config/golder/grants.json`，重启后仍生效（`/boundary readable list|add|rm` 查看与维护）；
+- **批准读授权时选「记住」**：写入 `~/.golder/grants.json`，重启后仍生效（`/boundary readable list|add|rm` 查看与维护）；
 - **`GOLDER_READABLE_ROOTS`**：冒号/逗号分隔，规则一致（`~/` 展开，相对路径与过宽根被丢弃），给无法编辑文件的机器用。
 
 它与 `GOLDER_SANDBOX_READABLE` 不是一回事：后者只作用于 OS 沙箱，前者是工具自己的白名单并顺带放宽沙箱。读授权也不影响写：写走下面的 writable_roots（`apply_patch` 也一样，越界时边界门问的正是同一件事）。
@@ -106,7 +106,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一张授权表（`grants.json`；本会话行在进程内即刻生效，并发安全，下一个命令就看得见）：
 
 - **审批对话框**：沙箱拒绝的命令若提到了项目外的路径，对话框会多出一行 `Allow writes to <path> (this session)`（按 `w`）。它只对**本次会话**生效，且批准不是"无沙箱放行"——命令重新回到收容态执行，只是该路径可读写；授权后对话记录会提示持久化命令。
-- **`/boundary writable add <path>`**：写入 `~/.config/golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable`，或从 `/permissions` 菜单最后一行 `Sandbox writable paths…`，打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
+- **`/boundary writable add <path>`**：写入 `~/.golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable`，或从 `/permissions` 菜单最后一行 `Sandbox writable paths…`，打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
 
 可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
 
@@ -114,7 +114,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **网络默认关闭**：沙箱内 `network*` 默认 deny / `--unshare-net`，联网命令会失败。`GOLDER_SANDBOX_NETWORK=on`（或 `1`/`true`/`allow`/`yes`）重新放开，适用于确实需要在沙箱内联网的工具链。
 
-**golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 列出 `trust.json`、`.credentials.yaml`、`sessions/`。它们平时就不在白名单里，但若项目根恰好在 `$GOLDER_HOME` 内，项目绑定会连它们一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs / `--ro-bind /dev/null` 覆盖，后挂载生效）。
+**golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
 

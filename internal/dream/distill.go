@@ -23,12 +23,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -57,23 +57,16 @@ type SessionSource interface {
 	Load(id string) (session.SessionHeader, agentcore.MessageList, error)
 }
 
-// resolveSessionStore opens the default session store rooted at
-// $GOLDER_HOME/sessions (else ~/.golder/sessions), mirroring
-// headless.SessionStore's resolution. It is duplicated here rather than imported
-// to keep internal/dream free of a dependency on the CLI assembly layer, exactly
-// as ResolveMemoryRoot duplicates the memory-root resolution. A resolution
-// failure yields a nil source and no error: distillation then degrades to a
-// no-op rather than failing the whole dream run.
+// resolveSessionStore opens the default session store, rooted the same way
+// headless.SessionStore roots it (internal/golderhome). A resolution failure
+// yields a nil source and no error: distillation then degrades to a no-op
+// rather than failing the whole dream run.
 func resolveSessionStore() (SessionSource, error) {
-	dir := os.Getenv("GOLDER_HOME")
+	dir := golderhome.File(golderhome.SessionsDir)
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, nil
-		}
-		dir = filepath.Join(home, ".golder")
+		return nil, nil
 	}
-	store, err := session.NewStore(filepath.Join(dir, "sessions"))
+	store, err := session.NewStore(dir)
 	if err != nil {
 		return nil, nil
 	}

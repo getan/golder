@@ -119,7 +119,7 @@ func TestResponsesDriverOpencodeSessionHeader(t *testing.T) {
 }
 
 func TestClientForURL(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "http://127.0.0.1:7897")
 	// Registry flag wins regardless of URL (covers --base-url overrides).
 	if c := clientForURL("opencode-go", "https://custom.example.com/v1/responses"); c.Transport.(*http.Transport).Proxy == nil {
@@ -155,7 +155,7 @@ func TestClientForURL(t *testing.T) {
 }
 
 func TestProxyURL(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "http://proxy.internal:8080")
 	if got := ProxyURL(); got != "http://proxy.internal:8080" {
 		t.Errorf("ProxyURL() = %q, want override", got)
@@ -167,7 +167,7 @@ func TestProxyURL(t *testing.T) {
 }
 
 func TestProxyURLDefaultsDirect(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	old, had := os.LookupEnv("GOLDER_PROXY")
 	if err := os.Unsetenv("GOLDER_PROXY"); err != nil {
 		t.Fatalf("Unsetenv: %v", err)

@@ -15,7 +15,7 @@ import (
 )
 
 func TestProxyCommandPersistsSelection(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, &cli.LiveConfig{}, nil)
@@ -49,7 +49,7 @@ func TestProxyCommandPersistsSelection(t *testing.T) {
 }
 
 func TestProviderSwitchUsesEnvironmentRelayForModelsAndCache(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	t.Setenv("OPENAI_API_KEY", "test-key")

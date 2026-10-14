@@ -46,6 +46,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -319,23 +320,17 @@ type Options struct {
 	AllowUnpersisted bool
 }
 
-// DefaultPath returns the managed file:
-// $XDG_CONFIG_HOME/golder/grants.json, or ~/.config/golder/grants.json. It sits
-// beside permissions.toml and proxy.toml because it is the same kind of thing:
-// state golder writes on the user's behalf, in a file the user may still edit.
+// DefaultPath returns the managed file: grants.json in the golder state root
+// ($GOLDER_HOME, else ~/.golder) — beside config.toml, proxy.toml and
+// trust.json, the same kind of thing: state golder writes on the user's behalf,
+// in a file the user may still edit.
+//
+// It sits in the state root rather than under ~/.config because the root is
+// also what the sandbox denies (seatbelt.ProtectedGolderPaths): a permission
+// store outside that set is a permission store the agent may be able to
+// rewrite.
 func DefaultPath(getenv func(string) string) string {
-	if getenv == nil {
-		getenv = os.Getenv
-	}
-	base := strings.TrimSpace(getenv("XDG_CONFIG_HOME"))
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return ""
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "golder", "grants.json")
+	return golderhome.FileFrom(getenv, golderhome.GrantsFile)
 }
 
 // New opens the table at the managed location. A missing file is not an error:

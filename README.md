@@ -29,7 +29,7 @@
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
 - **会话与分支**：`/resume` 切换历史会话（默认只看当前项目，`--all` 看全部），`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
-- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`；网络默认关闭。**路径授权可在弹窗里一键记住**：读/写两类弹窗都提供"本会话"与"记住（跨会话）"两档，后者直接写入 `~/.config/golder/grants.json`（写授权在 TUI 弹窗按 `w`/`s`，REPL 提示输入 `w`/`s`；读授权按 `a`/`s`）。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板；提权请求与"应当收容"冲突时升级给你拍板，而不是静默收容。
+- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；沙箱档调用自动隔离执行——macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`（bwrap，需已安装）。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`；网络默认关闭。**路径授权可在弹窗里一键记住**：读/写两类弹窗都提供"本会话"与"记住（跨会话）"两档，后者直接写入 `~/.golder/grants.json`（写授权在 TUI 弹窗按 `w`/`s`，REPL 提示输入 `w`/`s`；读授权按 `a`/`s`）。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。被拒时模型可携理由申请提权（`require_escalated`），由审查层或你拍板；提权请求与"应当收容"冲突时升级给你拍板，而不是静默收容。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
 - **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`，以及 `bash` 命令里能识别出的文件操作数）默认只读工作区，越界会先问你——弹窗可选「只读这一次」「本会话允许读该目录」或「记住（跨会话，写入 `grants.json`）」；没有可问的人时失败关闭，并在消息里给出路径与配置办法；TUI/REPL 里的子 agent 会把问题送进同一个弹窗，标题标出 `(from task)` 之类的来源——人就坐在那儿看着，唯一真正问不到人的是 headless 与进程隔离的子 agent。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`GOLDER_READABLE_ROOTS` 环境变量，或 `/boundary readable add <路径>`（写入 `grants.json`，重启后仍生效；同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
 - **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
@@ -128,7 +128,7 @@ golder -m muse-spark-1.3-contributor
 
 代理地址与 provider 选择相互独立。`GOLDER_PROXY` 优先于保存的地址，但不会让所有 provider 走代理；未选中的 provider 直接连接，不继承 `HTTP_PROXY` / `HTTPS_PROXY`。显式启用代理却未设置地址时，会提示配置地址。尚未保存选择时保留 OpenCode 的历史默认行为：设置地址才走代理。
 
-选择保存在 `~/.config/golder/proxy.toml`（支持 `XDG_CONFIG_HOME`），立即用于后续聊天和模型列表请求，重启后继续有效。例如：
+选择保存在 `~/.golder/proxy.toml`，立即用于后续聊天和模型列表请求，重启后继续有效。例如：
 
 ```toml
 url = "http://127.0.0.1:7897"
@@ -148,7 +148,7 @@ golder --provider openai
 
 ### 配置文件
 
-全局配置放在 `~/.config/golder/config.toml`，键名与 CLI flag 对应（命令行传入时优先）：
+全局配置放在 `~/.golder/config.toml`，键名与 CLI flag 对应（命令行传入时优先）：
 
 ```toml
 provider = "opencode-go"
@@ -285,8 +285,9 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 | 路径 / 变量 | 用途 |
 |-------------|------|
-| `~/.config/golder/config.toml` | 全局配置 |
-| `~/.config/golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
+| `~/.golder/config.toml` | 全局配置 |
+| `~/.golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
+| `~/.golder/grants.json` | 唯一授权表（信任决定与路径读写授权） |
 | `~/.golder/sessions` | 会话存储（JSONL） |
 | `~/.golder/.credentials.yaml` | 命名的 API Key 凭据（建议 0600 权限） |
 | `~/.agents/skills` | 技能目录（注册为 `/命令`；不存在则无扩展命令） |

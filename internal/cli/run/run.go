@@ -17,6 +17,7 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
@@ -476,21 +477,11 @@ func KillShellSessions(tools []agentcore.AgentTool) {
 	}
 }
 
-// MemoryDir returns the persistent memory root directory: $GOLDER_HOME/memory, or
-// ~/.golder/memory by default (a single global store so cross-project "global"
-// memories are searchable, mirroring the session store's ~/.golder base). It
-// returns "" when the home directory cannot be resolved and no override is set.
-func MemoryDir() string {
-	dir := os.Getenv("GOLDER_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".golder")
-	}
-	return filepath.Join(dir, "memory")
-}
+// MemoryDir returns the persistent memory root directory: memory/ under the
+// golder state root (a single global store so cross-project "global" memories
+// are searchable, mirroring the session store's location). It returns "" when
+// the root cannot be resolved.
+func MemoryDir() string { return golderhome.File(golderhome.MemoryDir) }
 
 // OpenMemoryStore opens the persistent memory store under MemoryDir() (index DB
 // at <root>/index.db). It returns (nil, nil) — not an error — when persistent
@@ -538,40 +529,18 @@ func LoadSkills(noSkills bool) ([]*runtime.Skill, error) {
 }
 
 // PluginsDir returns the directory external plugins are discovered from:
-// $GOLDER_HOME/plugins, or ~/.golder/plugins by default. An empty string is returned
-// when the home directory cannot be resolved and no override is set (Discover
-// then treats it as "no plugins").
-func PluginsDir() string {
-	dir := os.Getenv("GOLDER_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".golder")
-	}
-	return filepath.Join(dir, "plugins")
-}
+// plugins/ under the golder state root. An empty string means the root cannot be
+// resolved (Discover then treats it as "no plugins").
+func PluginsDir() string { return golderhome.File(golderhome.PluginsDir) }
 
-// ConfigDir returns the directory golder reads its global config layer from:
-// $GOLDER_HOME, or ~/.golder by default. An empty string is returned when the home
-// directory cannot be resolved and no override is set (the caller then treats
-// the global layer as absent).
-func ConfigDir() string {
-	dir := os.Getenv("GOLDER_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".golder")
-	}
-	return dir
-}
+// ConfigDir returns the golder state root, which is where the global config
+// layer lives. An empty string means the root cannot be resolved (the caller
+// then treats the global layer as absent).
+func ConfigDir() string { return golderhome.Dir() }
 
 // ResolveThinkingLevel resolves the effective reasoning-effort level through the
 // layered config chain (US-023): default < global < project < env < CLI flag.
-// The global layer is $GOLDER_HOME/config.json (or ~/.golder/config.json); the
+// The global layer is config.json in the golder state root; the
 // project layer is ./.golder/config.json in the working directory. A malformed
 // layer file or an invalid resolved value is a hard error, surfaced to the
 // caller for exit-code mapping. cliLevel is the raw --thinking-level flag ("" =

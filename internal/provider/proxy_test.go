@@ -21,7 +21,7 @@ func resetClientCache() {
 // One client is reused per resolved route so consecutive requests share a
 // transport and its connection pool; distinct routes stay isolated.
 func TestClientForURLReusesClientsPerRoute(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	if err := config.SaveProxyConfig(config.ProxyConfig{URL: "http://127.0.0.1:7897", Providers: []string{"openai"}}); err != nil {
 		t.Fatal(err)
@@ -45,7 +45,7 @@ func TestClientForURLReusesClientsPerRoute(t *testing.T) {
 }
 
 func TestProxySelectionRoutesDiscoveryAndAllChatProtocols(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	paths := make(chan string, 10)
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +103,7 @@ func TestProxySelectionRoutesDiscoveryAndAllChatProtocols(t *testing.T) {
 }
 
 func TestProxyOffBypassesEnvironmentAndLegacyDefaults(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
 	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
@@ -122,7 +122,7 @@ func TestProxyOffBypassesEnvironmentAndLegacyDefaults(t *testing.T) {
 }
 
 func TestSelectedProxyWithoutAddressFailsClearly(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	if err := config.SaveProxyConfig(config.ProxyConfig{Providers: []string{"openai"}}); err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func TestSelectedProxyWithoutAddressFailsClearly(t *testing.T) {
 }
 
 func TestProxyURLPrecedenceAndDisplay(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	if err := config.SaveProxyConfig(config.ProxyConfig{URL: "http://localhost:8080"}); err != nil {
 		t.Fatal(err)

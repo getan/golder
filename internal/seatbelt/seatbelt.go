@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -124,26 +125,23 @@ func readableGitFiles() []string {
 	return out
 }
 
-// ProtectedGolderPaths returns golder's own security-critical state. It is
-// normally outside the read whitelist anyway (it lives in $GOLDER_HOME), but a
+// ProtectedGolderPaths returns golder's own state, denied read AND write. It is
+// normally outside the read whitelist anyway (it lives in the state root), but a
 // project rooted inside that directory would otherwise inherit writable access
-// through the project bind — so both runners re-assert these as read-write
-// denied AFTER their allow rules. Reading is denied too: the credential file
-// holds live API keys and trust.json decides what the agent may run.
+// through the project bind — so both runners re-assert this AFTER their allow
+// rules.
+//
+// The whole root is denied, not a list of files inside it. A list was the old
+// shape and it had already fallen behind: grants.json, the one file that decides
+// what the agent may read and write, sat outside it while trust.json sat inside.
+// Denying the directory means a file added to the state root later is protected
+// by construction, and reading is denied too — the credential file holds live
+// API keys, and the authorization table is what the gates enforce.
 func ProtectedGolderPaths() []string {
-	home, err := os.UserHomeDir()
-	golderHome := strings.TrimSpace(os.Getenv("GOLDER_HOME"))
-	if golderHome == "" {
-		if err != nil || home == "" {
-			return nil
-		}
-		golderHome = filepath.Join(home, ".golder")
+	if dir := golderhome.Dir(); dir != "" {
+		return []string{dir}
 	}
-	return []string{
-		filepath.Join(golderHome, "trust.json"),
-		filepath.Join(golderHome, ".credentials.yaml"),
-		filepath.Join(golderHome, "sessions"),
-	}
+	return nil
 }
 
 // sandboxReadableFromEnv parses GOLDER_SANDBOX_READABLE (colon- or

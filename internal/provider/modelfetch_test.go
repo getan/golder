@@ -104,7 +104,7 @@ func TestFetchRemoteModelsFailures(t *testing.T) {
 // route client: streaming requests reuse that client and would inherit a
 // truncated deadline.
 func TestModelDiscoveryTimeoutDoesNotLeakIntoSharedClient(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

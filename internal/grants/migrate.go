@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -35,8 +36,8 @@ import (
 type LegacyPaths struct {
 	// Trust is $GOLDER_HOME/trust.json: directory → nullable bool.
 	Trust string
-	// Permissions is ~/.config/golder/permissions.toml: the managed writable
-	// and readable roots.
+	// Permissions is the retired ~/.config/golder/permissions.toml: the managed
+	// writable and readable roots it used to hold.
 	Permissions string
 }
 
@@ -47,27 +48,13 @@ func LegacyPathsFor(getenv func(string) string) LegacyPaths {
 		getenv = os.Getenv
 	}
 	var out LegacyPaths
-	if home := strings.TrimSpace(getenv("GOLDER_HOME")); home != "" {
-		out.Trust = filepath.Join(home, "trust.json")
-	} else if home, err := os.UserHomeDir(); err == nil && home != "" {
-		out.Trust = filepath.Join(home, ".golder", "trust.json")
-	}
-	if dir := configDir(getenv); dir != "" {
-		out.Permissions = filepath.Join(dir, "permissions.toml")
-	}
+	out.Trust = golderhome.FileFrom(getenv, golderhome.TrustFile)
+	// permissions.toml was retired with the managed store, so it is read where
+	// it was last written — the legacy config directory — and never where the
+	// new root keeps things. It is the one legacy file with no counterpart to
+	// move.
+	out.Permissions = golderhome.LegacyFileFrom(getenv, "permissions.toml")
 	return out
-}
-
-func configDir(getenv func(string) string) string {
-	base := strings.TrimSpace(getenv("XDG_CONFIG_HOME"))
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil || home == "" {
-			return ""
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, "golder")
 }
 
 // MigrateResult reports what a migration found and did, so the caller can tell

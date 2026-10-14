@@ -29,7 +29,7 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Many providers**: defaults to the OpenCode gateway, with 40+ built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama, …) and any OpenAI-compatible endpoint.
 - **Sessions and branches**: `/resume` switches sessions (this project by default, `--all` for every project), `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
-- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed). The sandbox is a whitelist: reads are limited to the workspace, the system runtime and two git config files (`~/.gitconfig`, `~/.config/git/*`), so everything else under `$HOME` (shell rc files, SSH/GPG keys, `~/.config/*`, credentials, history) is unreadable; writes default to the workspace, the temp dir, and explicitly granted `writable_roots`; the network is off by default. **A path grant can be remembered from the dialog**: both the read and the write question offer "this session" and "remembered" (the latter writes `~/.config/golder/grants.json`), by key in either front-end (`a`/`s` for reads, `w`/`s` for writes in the TUI dialog and the REPL prompt). The same file is inspected and maintained with `/boundary readable|writable list|add|rm`, a machine that cannot edit a file (a script, a container) uses the `GOLDER_READABLE_ROOTS` environment variable instead. A toolchain living under `$HOME` is re-admitted with `GOLDER_SANDBOX_READABLE`. When a denial blocks a legitimate command the model can request escalation (`require_escalated`) with a justification for review or approval; an escalation that conflicts with a should-be-contained verdict is raised to you instead of being silently re-contained.
+- **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed). The sandbox is a whitelist: reads are limited to the workspace, the system runtime and two git config files (`~/.gitconfig`, `~/.config/git/*`), so everything else under `$HOME` (shell rc files, SSH/GPG keys, `~/.config/*`, credentials, history) is unreadable; writes default to the workspace, the temp dir, and explicitly granted `writable_roots`; the network is off by default. **A path grant can be remembered from the dialog**: both the read and the write question offer "this session" and "remembered" (the latter writes `~/.golder/grants.json`), by key in either front-end (`a`/`s` for reads, `w`/`s` for writes in the TUI dialog and the REPL prompt). The same file is inspected and maintained with `/boundary readable|writable list|add|rm`, a machine that cannot edit a file (a script, a container) uses the `GOLDER_READABLE_ROOTS` environment variable instead. A toolchain living under `$HOME` is re-admitted with `GOLDER_SANDBOX_READABLE`. When a denial blocks a legitimate command the model can request escalation (`require_escalated`) with a justification for review or approval; an escalation that conflicts with a should-be-contained verdict is raised to you instead of being silently re-contained.
 - **Long-task support**: `/compact` context compaction, context-budget tools, autonomous `/goal` runs, `/btw` side questions, sub-agent dispatch, persistent memory and `/dream` consolidation.
 - **Out-of-workspace reads need your answer**: the read-only tools (`read` / `grep` / `find` / `ls` / `view_image`, plus the file operands a `bash` command exposes) read the workspace and nothing else until you say so — the dialog offers "just this read", "allow reading this directory (this session)" or "remembered" (written to `grants.json`), and a sub-agent in the TUI or REPL asks through the same dialog, titled with its origin (`(from task)`) — the person is right there watching the batch, so the only runs with nobody to ask are headless ones and process-isolated children, which fail closed with the path and the setting that would allow it. No permission mode waives the question (full-access turns off review, not consent). Pre-grant a directory with the `GOLDER_READABLE_ROOTS` environment variable, or with `/boundary readable add <path>` (written to `grants.json`, so it survives a restart; both also widen the sandbox read whitelist); credential paths (`~/.ssh`, `~/.zshrc`, …) can never be granted.
 - **Per-provider proxy routing**: `/proxy` selects which providers use a proxy, independently; unselected providers connect directly and never inherit the shell's `HTTP_PROXY` / `HTTPS_PROXY`.
@@ -128,7 +128,7 @@ golder -m muse-spark-1.3-contributor
 
 The proxy address and the provider selection are independent. `GOLDER_PROXY` overrides the saved address but does not proxy every provider; unselected providers connect directly and never inherit `HTTP_PROXY` / `HTTPS_PROXY`. Enabling a provider without an address warns you to configure one. Until the first explicit selection is saved, OpenCode's historical default holds: a configured address routes the OpenCode gateways.
 
-The selection is saved in `~/.config/golder/proxy.toml` (honors `XDG_CONFIG_HOME`), applies immediately to chat and model-listing requests, and survives restarts:
+The selection is saved in `~/.golder/proxy.toml`, applies immediately to chat and model-listing requests, and survives restarts:
 
 ```toml
 url = "http://127.0.0.1:7897"
@@ -148,7 +148,7 @@ Chat uses that address, model discovery requests `/models` under the same base, 
 
 ### Config file
 
-The global config lives at `~/.config/golder/config.toml`, with keys mirroring the CLI flags (flags win when both are set):
+The global config lives at `~/.golder/config.toml`, with keys mirroring the CLI flags (flags win when both are set):
 
 ```toml
 provider = "opencode-go"
@@ -286,8 +286,8 @@ See `golder --help` for the complete list.
 
 | Path / variable | Purpose |
 |-----------------|---------|
-| `~/.config/golder/config.toml` | Global configuration |
-| `~/.config/golder/proxy.toml` | Proxy address and provider selection saved by `/proxy` |
+| `~/.golder/config.toml` | Global configuration |
+| `~/.golder/proxy.toml` | Proxy address and provider selection saved by `/proxy` |
 | `~/.golder/sessions` | Session storage (JSONL) |
 | `~/.golder/.credentials.yaml` | Named API-key credentials (0600 recommended) |
 | `~/.agents/skills` | Skills directory (registered as `/commands`; absent means no extension commands) |

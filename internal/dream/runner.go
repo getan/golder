@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/memory"
 )
 
@@ -285,21 +286,9 @@ func isLocked(err error) bool {
 }
 
 // ResolveMemoryRoot returns the persistent memory root directory the same way
-// the CLI does (internal/cli/run.MemoryDir): $GOLDER_HOME/memory, else
-// ~/.golder/memory. It is duplicated here rather than imported to keep the dream
-// package free of a dependency on the CLI assembly layer (and any import cycle
-// through it). Returns "" when neither GOLDER_HOME nor the home dir is resolvable.
-func ResolveMemoryRoot() string {
-	dir := os.Getenv("GOLDER_HOME")
-	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		dir = filepath.Join(home, ".golder")
-	}
-	return filepath.Join(dir, "memory")
-}
+// the CLI does (internal/cli/run.MemoryDir), through the one resolver both use
+// (internal/golderhome). Returns "" when the state root is unresolvable.
+func ResolveMemoryRoot() string { return golderhome.File(golderhome.MemoryDir) }
 
 // withinScope reports whether target is a write target permitted by this run's
 // consolidation scope: it must live under <memoryRoot>/global or, when a

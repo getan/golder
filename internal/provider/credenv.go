@@ -17,11 +17,12 @@ package provider
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/getan/golder/internal/golderhome"
 )
 
 // credentialNameSuffixes are the name shapes that almost always carry a secret.
@@ -122,18 +123,9 @@ func CredentialFilePermissionsWarn(path string) bool {
 }
 
 // CredentialFilePath returns the named-credential file location:
-// $GOLDER_HOME/.credentials.yaml when GOLDER_HOME is set, else
-// ~/.golder/.credentials.yaml. An unresolvable home returns "".
-func CredentialFilePath() string {
-	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
-		return filepath.Join(dir, ".credentials.yaml")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".golder", ".credentials.yaml")
-}
+// .credentials.yaml in the golder state root ($GOLDER_HOME, else ~/.golder). An
+// unresolvable root returns "".
+func CredentialFilePath() string { return golderhome.File(golderhome.CredentialsFile) }
 
 // ResolveCredentialReference loads the named-credential file and returns the
 // secret stored under name. Config files should carry the name only; the

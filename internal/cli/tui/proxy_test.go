@@ -9,7 +9,7 @@ import (
 )
 
 func TestProxyPickerToggleAndAddress(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	m := NewModel(Options{})
 	got, _ := m.runSlash("/proxy")
@@ -47,7 +47,7 @@ func TestProxyPickerToggleAndAddress(t *testing.T) {
 }
 
 func TestProviderPickerShowsBaseURLAtNormalWidth(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("OPENAI_BASE_URL", "https://relay.example/v1")
 	m := NewModel(Options{})
 	m.session = &runSession{}

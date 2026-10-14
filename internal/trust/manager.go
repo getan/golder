@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 )
 
@@ -114,20 +115,10 @@ type Manager struct {
 	sessionReads map[string]bool
 }
 
-// DefaultPath returns the trust file location: $GOLDER_HOME/trust.json, or
-// ~/.golder/trust.json when GOLDER_HOME is unset. It returns "" when the home
-// directory cannot be resolved and no override is set, so a caller can treat
-// trust as disabled rather than guessing a path.
-func DefaultPath() string {
-	if dir := os.Getenv("GOLDER_HOME"); dir != "" {
-		return filepath.Join(dir, "trust.json")
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".golder", "trust.json")
-}
+// DefaultPath returns the trust file location: trust.json in the golder state
+// root ($GOLDER_HOME, else ~/.golder). It returns "" when the root cannot be
+// resolved, so a caller can treat trust as disabled rather than guessing a path.
+func DefaultPath() string { return golderhome.File(golderhome.TrustFile) }
 
 // NewManager loads the trust file at path. A missing file is not an error: the
 // manager starts empty and the file is created lazily on the first SetDecision

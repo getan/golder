@@ -792,6 +792,22 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **One state root: everything golder writes now lives under `~/.golder` (or
+  `$GOLDER_HOME`)**: the state was split across two directories — sessions,
+  history, trust and the credential file under `~/.golder`, while `config.toml`,
+  `proxy.toml` and `grants.json` sat under `~/.config/golder` (or
+  `$XDG_CONFIG_HOME/golder`) — and each location was re-derived independently in
+  a dozen packages, so "where does golder keep this" had two answers that could
+  disagree. The split had already cost something real: `grants.json`, the one
+  file that decides what the agent may read and write, sat outside the sandbox's
+  own protected set while `trust.json` sat inside it. Resolution now goes
+  through one leaf package (`internal/golderhome`), `XDG_CONFIG_HOME` no longer
+  influences golder's own paths, and the sandbox denies the state root as a
+  directory — so a file added there later is protected without anyone
+  remembering to add it to a list. Existing files are moved once, at startup:
+  the destination wins if it already exists, the move is announced, and
+  `permissions.toml` is deliberately not moved (it is retired, and only the
+  authorization migration reads it, from where it was written).
 - **One authorization store: `grants.json`, and nothing else**: three things
   held path grants — the authorization table, the managed `permissions.toml`,
   and two process-level registries (the read roots in `internal/permissions`,

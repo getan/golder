@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/patch"
 )
 
@@ -449,17 +450,18 @@ func secretPath(p string) (string, bool) {
 	}
 	cleaned := path.Clean(raw)
 
-	// The trust store lives at <state dir>/trust.json — .golder by default,
-	// or $GOLDER_HOME when set. A project's own trust.json is not the store.
+	// The trust store lives at <state root>/trust.json. A project's own
+	// trust.json is not the store, so the check is by location, not by name:
+	// either the absolute state-root spelling, or the `.golder/trust.json`
+	// component pair — the store is named that way relative to $HOME, and a
+	// relative spelling is resolved against a cwd this lexical layer does not
+	// know, so refusing it is the fail-closed reading.
+	if store := golderhome.File(golderhome.TrustFile); store != "" && cleaned == store {
+		return "write into the trust store (trust.json)", true
+	}
 	if segs := strings.Split(strings.TrimPrefix(cleaned, "/"), "/"); len(segs) >= 2 &&
-		segs[len(segs)-1] == "trust.json" {
-		store := ""
-		if dir := strings.TrimSpace(os.Getenv("GOLDER_HOME")); dir != "" {
-			store = path.Join(path.Clean(dir), "trust.json")
-		}
-		if segs[len(segs)-2] == ".golder" || (store != "" && cleaned == store) {
-			return "write into the trust store (trust.json)", true
-		}
+		segs[len(segs)-1] == golderhome.TrustFile && segs[len(segs)-2] == ".golder" {
+		return "write into the trust store (trust.json)", true
 	}
 
 	// Home-relative view of an absolute path: only the first component under
