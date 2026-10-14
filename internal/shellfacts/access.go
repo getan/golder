@@ -173,10 +173,10 @@ func isPathShaped(w Word) bool {
 // dialog needs "golder wants to read /x and write /y", not two rows for the
 // same path when a command both reads and writes it.
 type AccessSummary struct {
-	Path string
-	Op   Op
+	Path string `json:"path"`
+	Op   Op     `json:"op"`
 	// Dynamic reports that at least one occurrence was dynamic.
-	Dynamic bool
+	Dynamic bool `json:"dynamic,omitempty"`
 }
 
 // Summary folds the access list into one entry per path, in first-seen order.

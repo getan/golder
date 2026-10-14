@@ -35,6 +35,8 @@
 package shellfacts
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -57,18 +59,73 @@ const (
 	UnknownOp
 )
 
+// opWords names each operation bit, in the order the string form lists them.
+// The order is fixed so two spellings of one set compare equal as text.
+var opWords = []struct {
+	bit  Op
+	word string
+}{
+	{Read, "read"},
+	{Write, "write"},
+	{Execute, "execute"},
+	{UnknownOp, "unknown"},
+}
+
+// String renders the operation set as "+"-joined words: "write", "read+write",
+// "read+execute". It used to answer "mixed" for any set of more than one bit,
+// which was ambiguous in two ways at once — Read|Write and Read|Write|UnknownOp
+// both printed as "mixed" — and this form is also what goes on the wire (see
+// MarshalJSON), so a reader that is not a Go program can tell what the call does.
+//
+// An empty set renders as "unknown": the bit means exactly "the path was named
+// and nothing about the operation could be determined".
 func (o Op) String() string {
-	switch {
-	case o == Read:
-		return "read"
-	case o == Write:
-		return "write"
-	case o == Execute:
-		return "execute"
-	case o == UnknownOp:
+	var parts []string
+	for _, w := range opWords {
+		if o&w.bit != 0 {
+			parts = append(parts, w.word)
+		}
+	}
+	if len(parts) == 0 {
 		return "unknown"
 	}
-	return "mixed"
+	return strings.Join(parts, "+")
+}
+
+// MarshalJSON sends the words rather than the bitmask. The state this type
+// travels in is read by a model, and `"op":2` is not a fact any reader can use —
+// it was the whole operation set rendered as a number.
+func (o Op) MarshalJSON() ([]byte, error) { return json.Marshal(o.String()) }
+
+// UnmarshalJSON reads the words back, so a round trip through the wire form
+// preserves the set. An unrecognized word is an error rather than a silently
+// dropped bit: a reader that quietly ignored "read+write" would turn a write
+// into a read.
+func (o *Op) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	var out Op
+	for _, part := range strings.Split(s, "+") {
+		part = strings.ToLower(strings.TrimSpace(part))
+		if part == "" {
+			continue
+		}
+		known := false
+		for _, w := range opWords {
+			if w.word == part {
+				out |= w.bit
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("shellfacts: unknown operation %q", part)
+		}
+	}
+	*o = out
+	return nil
 }
 
 // PartKind is what one segment of a word is. The kinds exist so a caller can

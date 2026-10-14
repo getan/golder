@@ -134,3 +134,25 @@ func boundaryPaths(name string, args json.RawMessage) []string {
 	}
 	return t.paths(args)
 }
+
+// TouchedPaths returns the path spellings a call names, for a caller outside
+// this package that needs the same extraction the boundary gate uses. It is how
+// the reviewer's state reports what a call touches, so the model reasons about
+// the same set the gate asks about rather than a second, drifting reading of
+// the arguments — a mismatch between the two is the failure the boundary
+// regression test exists to catch.
+//
+// apply_patch is read here rather than through the table, and the reason is the
+// table's own: its paths drive the gate's question, and a write has no consent
+// path yet, so listing it would put a question to the user that no tool honours
+// (an approved read grant does not let apply_patch write — see
+// TestApplyPatchIgnoresReadGrants). Until a write can be asked about, its paths
+// are extracted for the reviewer alone, through the same patch.Paths the static
+// floor uses.
+func TouchedPaths(tool string, args json.RawMessage) []string {
+	name := strings.ToLower(strings.TrimSpace(tool))
+	if name == "apply_patch" {
+		return patchArgs(args)
+	}
+	return boundaryPaths(name, args)
+}

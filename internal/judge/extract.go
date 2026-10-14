@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/getan/golder/internal/patch"
 	"github.com/getan/golder/internal/shellfacts"
 )
 
@@ -103,4 +104,15 @@ func bashPaths(args json.RawMessage) []string {
 		return nil
 	}
 	return commandPaths(cmd)
+}
+
+// patchArgs returns the paths an apply_patch call touches, read from the patch
+// text. Every path counts, including a move destination: a rename out of the
+// workspace writes outside it just as surely as an edit there.
+func patchArgs(args json.RawMessage) []string {
+	text, ok := patchText(args)
+	if !ok {
+		return nil
+	}
+	return patch.Paths(text)
 }
