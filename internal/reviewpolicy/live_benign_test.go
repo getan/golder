@@ -17,19 +17,32 @@ package reviewpolicy
 //
 //	GOLDER_JEV_LIVE=1 go test ./internal/reviewpolicy/ -run TestLiveBenign -v
 //
-// Measured 2026-10-14, 32 commands: 32 allowed, 0 denied, 0 escalated. Mean
-// latency 3.5s, range 0.7s (a nested ls) to 26.7s (go build ./...), with the
-// slow tail looking like endpoint variance rather than the commands (git status
-// 6.7s, make -n 7.7s). Two things follow, and they point in opposite
-// directions from what the removal of the read-only fast path assumed:
+// Measured 2026-10-14, 32 commands: 32 allowed, 0 denied, 0 escalated.
+//
+// On latency, the first run of this corpus reported a mean of 3.5s with a tail
+// to 26.7s, and that number was wrong — not noisy, wrong, and the way it was
+// wrong is worth keeping here because it looked exactly like the model being
+// slow. The host had no routing rule for api.typesafe.ai, so the requests fell
+// through to a shared proxy group that load-balances across nodes; the spread
+// was the nodes, not the model. Pinned to a fixed node the same corpus runs at
+// p50 778ms, p90 808ms, max 1.9s (the first call, cold TLS), with 17 of 18
+// calls inside a 51ms band.
+//
+// The lesson is the one this file is for: a measurement taken through someone
+// else's routing is a measurement of their routing. Check the path before
+// believing the number — and re-run rather than argue, since the fix was one
+// rule.
+//
+// Two things follow for the fast path, and they still point in opposite
+// directions:
 //
 //   - The verdicts are not the argument for removing it. The model allows every
 //     benign read anyway, so skipping the model for them changes nothing about
-//     the outcome — it only changes what it costs.
-//   - The latency is the argument for keeping it. Even at the low end this is a
-//     per-command tax on what a session does most, and the fast path's tax is
-//     zero. An earlier measurement on the same model saw ~0.7s, so the figure
-//     moves with the endpoint; the shape does not.
+//     the outcome — only what it costs.
+//   - The latency is the argument to keep thinking about. ~0.78s per command is
+//     a real per-read tax (a hundred reads a session is a minute and a half),
+//     but it is a fraction of what the first number suggested, and it is paid
+//     where the verdict is trivially Allow. Both figures belong in the decision.
 
 import (
 	"context"
