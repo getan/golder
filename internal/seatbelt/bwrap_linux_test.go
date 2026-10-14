@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/grants/grantstest"
 )
 
@@ -107,10 +108,15 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 	if err := os.WriteFile(grantedFile, []byte("granted content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The fresh table first, then the grant: Install replaces the process table
+	// (and clears it at test end), so calling it after the Add would wipe the
+	// row this test exists to prove — the sandbox would then be asked about a
+	// directory nobody granted, and the read below would fail for the wrong
+	// reason.
+	grantstest.Install(t)
 	if _, err := grants.AddReadRoot(granted, grants.Session, "test"); err != nil {
 		t.Fatalf("AddReadRoot: %v", err)
 	}
-	grantstest.Install(t)
 	if out, err := run("cat " + grantedFile); err != nil {
 		t.Errorf("a granted directory must be readable inside the sandbox: %v\n%s", err, out)
 	} else if !strings.Contains(out, "granted content") {
