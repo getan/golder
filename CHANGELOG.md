@@ -156,36 +156,62 @@ interactive REPL/TUI.
   never moving backwards, the concurrent-prompt accounting, and the install
   cycle including a dangling symlink.
 
-- **An ordinary in-workspace patch no longer pays the reviewer, and the two
-  edits whose effect outlives the call still do**: `apply_patch` was graded by
-  the model on every call — measured over ten real sessions, 467 calls at a
-  2.16s median, 18.5 minutes of review — for a decision the tool's own boundary
-  had already made. `agenttool.resolveWithin` confines every patch to the
-  workspace with no grant and no prompt, so an in-workspace patch is the routine
-  case by construction; replayed through the new fast path, **584 of 586 real
-  patches (99.7%) skip the reviewer**, and the two that do not are patches that
-  would not parse.
+- **Every tool call is reviewed, and both grading exemptions are gone**:
+  `apply_patch` skipped the reviewer when every path it named was inside the
+  workspace (584 of 586 real patches), and a provably read-only shell command
+  skipped it always — the commands a reading session lives on. Both are removed,
+  together with the tool table's "no side effects, no review" dimension, so the
+  chain is now the static floor and then the reviewer with nothing in between.
+  The decision model is what makes that affordable: a graded call costs ~0.78s
+  against the previous reviewer's 2.16s median, and over the 32 commands a
+  session actually runs every verdict is Allow — the exemption was buying
+  latency, not a different answer.
 
-  Two classes keep their review, because they are not "riskier edits" but edits
-  whose effect lands outside the edit. `.git/**` is planted execution: a hook
-  runs on the next git command, and git commands are exactly what the read-only
-  fast path waves through all day — verified, not assumed, by writing a hook into
-  a scratch repository and watching it run on the next `git commit`
-  (`.git/config` is the same door via `core.hooksPath`, `core.sshCommand` and
-  credential helpers). `AGENTS.md` is a persistent prompt-injection channel: the
-  working directory's copy is read into the system prompt of every later session,
-  so a patch to it rewrites the instructions the agent starts from. Neither needs
-  a model to be dangerous, which is why a name-based guard is the right shape —
-  and it is case-folded, since macOS resolves `.GIT/hooks/x` and `agents.md` to
-  the same files the canonical spellings name. A patch naming anything outside
-  the workspace (the skills directory is the one extra root the tool admits, and
-  a skill's description is injected into later prompts too) keeps its review, so
-  the exemption can never reach further than the tool already allows; the static
-  floor still runs first, so a credential path in a patch is denied before the
-  exemption is consulted. `Chain` gained the `WorkspaceRoot` field it needs —
-  empty keeps the exemption off, so a caller that forgot to wire one gets the
-  reviewer rather than an unbounded pass — and `GOLDER_READONLY_FASTPATH=off`
-  turns it off with the rest.
+  Removing the exemptions is what let the rest of the design shrink. The
+  read-only recognizer no longer decides anything, so it lost the three things
+  that existed only to make an exemption defensible: the kill switch, the
+  credential-floor re-run inside itself, and the escalation carve-out. It now
+  answers one containment question — run a recognized command inside the sandbox
+  rather than bare — which is a fact about the command, never a verdict about the
+  call. The tool table lost its "ungraded" dimension for the same reason, so one
+  rule covers every tool, and the two reminder tools that had never been
+  classified (`schedule_create`, `schedule_delete`) joined it so read-only mode
+  treats that family alike.
+
+  The knowledge behind the patch exemption's two exceptions did not go with it.
+  `.git/**` (a hook runs on the next git command, and `.git/config` is the same
+  door via `core.hooksPath`/`core.sshCommand`) and `AGENTS.md` (read into the
+  system prompt of every later session, so a patch to it rewrites the
+  instructions the agent starts from) are now reported to the reviewer as
+  `State.Outliving` instead of gating the call. A person asking for a pre-commit
+  hook is asking for something legitimate, and the old code agreed: those paths
+  kept their review, they were never denied.
+
+- **A write outside the workspace is a question now, not a wall**: `apply_patch`
+  refused an out-of-workspace path outright — no prompt, no grant, no answer that
+  could have changed the outcome — while the same path as a read asked the user
+  and offered three answers. The write side now takes the same shape. The tool
+  table records which capability a tool's paths are asked about; the boundary
+  gate asks the same question (this once, this directory for the session,
+  remembered) and records the answer in the same two places (a one-call grant on
+  the call's context, and a standing grant through the callback the escalation
+  dialog already uses, so one answer means the same thing to a patch and to a
+  command). The dialog's write rows say "write" rather than "read", because a
+  directory allowed for reading is not thereby writable, and the capabilities
+  stay apart in the table and in the answer. Live secret material is refused on
+  both sides, whatever the grant says.
+
+- **The reviewer is told what a call touches — in words — and what the session
+  already decided**: the decision model's state carried a bash command's parsed
+  facts and, for every other tool, raw arguments, plus an access list whose
+  operation was a bitmask (`"Op":2`, which is not a fact a reader can use). It
+  now carries the paths a call names rendered as words (`"op":"write"`, and the
+  form round-trips), what the session knows about them (inside the workspace or
+  outside, whether a consent question is in front of this call, and the
+  authorization table's per-capability answer), and the one thing a patch's
+  contents cannot reveal: whether the edit's effect outlives the call. All of it
+  comes from the gates' own predicates rather than a second reading of the
+  arguments, so the reviewer is never told something the gate does not believe.
 
 - **The base instruction names the default way to inspect code — and the
   boundary of that default**: a new guide sits between the code-search and
@@ -212,22 +238,15 @@ interactive REPL/TUI.
   inside it" rather than "do not narrate": a progress line is worth keeping, and
   the person still needs to follow along.
 
-- **A provably read-only shell command no longer waits for the reviewer**: in
-  auto mode every `bash` call was graded by the model reviewer — a whole round
-  trip per command, measured at a 2.65s median against 0.03s for the
-  reviewer-free file tools, with ~98% of a session's commands distinct enough
-  that the verdict cache could not amortize it. A session spent reading a
-  repository therefore paid the review tax on nearly every step, which is what
-  "golder feels slower than codex" was made of (codex answers the same problem
-  the same way, with a closed whitelist in
-  `codex-rs/shell-command/src/command_safety/is_safe_command.rs`).
-  `internal/judge/readonly.go` now recognizes a read-only command line and
-  allows it directly. `GOLDER_READONLY_FASTPATH=off` sends every command back to
-  the reviewer without a rebuild. (A first cut also fed the recognizer to the
-  transcript so shell reads folded into the `• Explored` cell; that half was
-  reverted the same day — see the entry below.)
+- **A provably read-only command is contained rather than run bare**: the
+  recognizer in `internal/judge/readonly.go` used to be a grading exemption
+  (a recognized command skipped the reviewer). That exemption is gone — every
+  call is graded — and what the recognizer answers now is a containment
+  question: `readOnlyCommand` decides whether the execution layer runs a
+  command inside the sandbox instead of directly.
 
-  The safety argument is the whitelist, not the parser. A command is recognized
+  The safety argument is unchanged and still worth stating, because it is what
+  the recognition MEANS: the whitelist, not the parser. A command is recognized
   only when the scanner can prove what will run — no redirection but
   `/dev/null` and fd duplication, no substitution, no assignment, no wrapper
   (`env`/`nohup`/`time`), no variable, no glob in command position, no program
@@ -238,38 +257,19 @@ interactive REPL/TUI.
   `file -C`, `diff --paginate`, `printf -v` and `%n`, `uniq`'s output operand,
   BSD `date MMDDhhmm`, `hostname NAME`, and git's `-c`/`--config-env`/
   `--exec-path`/`--paginate`/`--output`/`--textconv`/`--ext-diff`. Anything not
-  provable keeps its review, so a miss costs only the review it would have had.
+  provable runs directly as before, and is reviewed like every other call.
 
-  Replaying 12 real sessions (2981 bash calls) puts the hit rate at 59%: the
-  commands a reading session runs — `ls`, `cat`, `rg`, `sed -n`, `head`, `git
-  log/diff/status`, `cd`-prefixed variants — stop paying, while `go build/test`,
-  `git commit`, interpreters and `tuios` keep their review. Every (program,
-  flag) pair the replay would have allowed was read by hand and none can write
-  or execute.
-
-  Wiring the exemption up surfaced three holes in the design, each now a
-  regression test: `cat ~/.zshrc` has the *shape* of a read, so the static floor
-  is consulted inside the fast path itself rather than by caller convention;
-  `cd <dir> && <read>` exposed no path operand, so entering a directory was
-  neither asked about by the read-scope gate nor reviewed, which is why `cd`'s
-  operand is now a scanned file operand; and a folded call's verdict was
-  invisible while its exploration cell stayed collapsed, which the cell now
-  renders.
-
-  Two invariants make the whole thing hold together, and both are tests rather
-  than intentions. **The containment floor** (`C`): a command the fast path
-  allows still runs INSIDE the sandbox when a runner is available (measured at
-  ~4ms over a bare run). Skipping the review is a statement about the command,
-  not a promise that the consent gate saw every path it touches — that promise
-  rests on the recognizer's tables staying in step, and when they fell out of
-  step the read was neither asked about nor reviewed. The sandbox's read
-  whitelist (the workspace plus the roots the user granted) is the floor under
-  that promise, so a path the scanner missed is refused by the kernel instead of
-  being read quietly. Two escape hatches from that containment are pinned by
-  tests: a `require_escalated` request is declined by the fast path so the
-  reviewer weighs it (otherwise bypassing containment would be one retry away),
-  and a one-call read grant runs directly, because a single approved path has no
-  sandbox-whitelist form and containing the call would fail the read the user
+  **The containment floor** is why the recognition is not an optimization: a
+  recognized command still runs INSIDE the sandbox when a runner is available
+  (measured at ~4ms over a bare run). "This only reads" is a statement about
+  what the scanner could see, not a promise that the consent gate saw every path
+  it touches — that promise rests on the recognizer's tables staying in step,
+  and when they fell out of step the read was neither asked about nor reviewed.
+  The sandbox's read whitelist (the workspace plus the roots the user granted)
+  is the floor under that promise, so a path the scanner missed is refused by
+  the kernel instead of being read quietly. One escape hatch is pinned by a
+  test: a one-call read grant runs directly, because a single approved path has
+  no sandbox-whitelist form and containing the call would fail the read the user
   just approved.
 
   **The operand-coverage invariant** (`B`): every whitelisted program must
@@ -669,7 +669,7 @@ interactive REPL/TUI.
   low-budget `<system-reminder>` fires once per crossing (<=10% remaining, an
   escalated warning at <=3%) to prompt landing the work, and the reminder
   ladder survives across prompts in the interactive drivers. Both tools are
-  registered read-only / ungraded by the judge.
+  permitted in read-only mode, and reviewed like every other call.
 - **view_image**: `view_image` reads a local image (PNG/JPEG/GIF/WebP, up to
   8 MiB, bounded to the workspace or the skills root like `read`) and attaches
   it to the conversation for visual inspection. Tool-result images now have a
@@ -678,8 +678,8 @@ interactive REPL/TUI.
   URIs, the same shape codex uses), Anthropic sends content blocks on
   `tool_result`, and Chat Completions — which has no image slot on a tool
   message — degrades to a text placeholder instead of dropping the block.
-  Read-only class in trust (gated only under `strict_reads`) and ungraded by
-  the judge.
+  Read-only class in trust (gated only under `strict_reads`) and permitted in
+  read-only mode.
 - **apply_patch (codex-style editing)**: `write` and `edit` are replaced by a
   single `apply_patch` tool carrying a whole patch per call — add, update,
   move, and delete any number of files, in the `*** Begin Patch` format.

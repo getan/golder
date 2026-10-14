@@ -1,17 +1,20 @@
 package judge
 
-// Read-only command recognition: the fast path that keeps a provably read-only
-// shell command out of the model reviewer.
+// Read-only command recognition: whether a shell command provably only reads.
 //
-// Why it exists. In auto mode every bash call is graded by the reviewer, which
-// is a whole model round trip. Measured against one real session, bash calls
-// took a 2.65s median end to end while the reviewer-free file tools took 0.03s,
-// and ~98% of the bash calls in a session are distinct, so the verdict cache
-// cannot amortize it: a session spent reading a repository pays that round trip
-// on nearly every step. codex has the same shape and answers it the same way
-// (codex-rs/shell-command/src/command_safety/is_safe_command.rs): a closed
-// whitelist of read-only programs, a deliberately crippled command-sequence
-// parser, and everything else left to the reviewer.
+// It used to be a grading exemption. A recognized command skipped the reviewer
+// entirely, which is why this file grew a closed whitelist of programs, a
+// deliberately crippled parser, a kill switch and a credential guard: the
+// exemption had to be defendable on its own. That exemption is gone — every
+// call is reviewed — and what remains is the fact itself, which one caller
+// still needs: the execution layer runs a recognized command inside the
+// sandbox, because "this only reads" is a claim about what a scanner could see,
+// and the sandbox is the floor under that claim.
+//
+// The whitelist shape is unchanged, and it is still worth its size: a fact
+// that says "this command cannot write" is what lets a read be contained
+// cheaply rather than reasoned about, and codex reached the same shape for the
+// same reason (codex-rs/shell-command/src/command_safety/is_safe_command.rs).
 //
 // The safety argument is the whitelist, not the parser. The parser's only job
 // is to guarantee that what will run is exactly the argv vectors it returns: no
@@ -54,16 +57,13 @@ package judge
 // anywhere is rejected, so a printer cannot disclose a variable, and `printf
 // -v` (which assigns) is refused by name.
 //
-// Credential material is not this layer's business and is not weakened by it:
-// the static floor runs first and denies reads of ~/.ssh, ~/.zshrc and friends,
-// and the read-scope gate has already asked about anything outside the
-// workspace before the permission gate is reached. Both stay in front of the
-// fast path, so a recognized read still cannot reach a file the user did not
-// approve.
+// Credential material is not this layer's business: the static floor runs
+// first and denies reads of ~/.ssh, ~/.zshrc and friends, and the reviewer
+// grades every call that gets past it. A recognized read therefore still
+// cannot reach a file the user did not approve — the recognition says what the
+// command does, never that it may do it.
 
 import (
-	"encoding/json"
-	"os"
 	"strings"
 )
 
@@ -671,82 +671,20 @@ func flagMatches(arg, flag string) bool {
 	return len(arg) > len(flag)
 }
 
-// readonlyFastPathEnabled reads the kill switch for the fast path: an operator
-// who suspects the whitelist can send every bash call back to the reviewer
-// without a rebuild. Unset means enabled.
-func readonlyFastPathEnabled(getenv func(string) string) bool {
-	if getenv == nil {
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(getenv("GOLDER_READONLY_FASTPATH"))) {
-	case "off", "0", "false", "no", "disabled":
-		return false
-	}
-	return true
-}
-
-// readOnlyFastPathAllow is the verdict the fast path produces. It carries a
-// distinct Source so a note, a log line or a test can tell it from a reviewer's
-// allow — the two run the same call but one of them skipped a model round trip.
-func readOnlyFastPathAllow() Verdict {
-	return Verdict{
-		Level:   Allow,
-		Source:  "readonly",
-		Reasons: []string{"provably read-only command"},
-	}
-}
-
-// fastPathEnabled reports whether the fast path is on in this process.
-func fastPathEnabled() bool { return readonlyFastPathEnabled(os.Getenv) }
-
-// ReadOnlyShellCommand reports whether this shell command is one the fast path
-// recognizes — the same predicate the permission gate uses to skip the reviewer,
-// exposed so the execution layer can contain what it allows. It carries the
-// kill switch and the static floor with it, so a caller cannot forget either.
+// ReadOnlyShellCommand reports whether this shell command provably only reads.
+//
+// Its one caller is the execution layer, which contains such a command in the
+// sandbox rather than running it bare: recognition is a statement about what
+// the scanner could see, and the kernel is the floor under it. A miss costs
+// nothing — the command is reviewed like any other, which is now true of every
+// call in the session.
+//
+// It is deliberately JUST the fact. It used to route through the fast path's
+// verdict, which meant it also carried the kill switch, the credential guard
+// and an escalation carve-out — three things a containment decision does not
+// want. Distrusting the whitelist should not stop a command from being
+// contained; containing a credential read is the safe direction; and an
+// escalation request is already handled by the caller before it asks.
 func ReadOnlyShellCommand(command string) bool {
-	raw, err := json.Marshal(map[string]string{"command": command})
-	if err != nil {
-		return false
-	}
-	_, ok := readOnlyFastPath("bash", raw)
-	return ok
-}
-
-// readOnlyFastPath returns the verdict that skips the reviewer for a provably
-// read-only bash command, and whether it applies. It is the whole decision in
-// one place, so the gate and the bash tool cannot disagree about which commands
-// are exempt.
-//
-// The static floor is consulted HERE, not merely ahead of this call by
-// convention: `cat ~/.zshrc` has the shape of a read and is recognized as one,
-// so a call site that forgot to run the floor first would let the recognizer
-// hand over credential material on its own. Checking it inside makes that
-// impossible by construction rather than by every caller remembering the order.
-//
-// An unrecognized command returns false and keeps the caller's normal path (the
-// reviewer), which is why a miss costs nothing but the review it would have had.
-func readOnlyFastPath(tool string, args json.RawMessage) (Verdict, bool) {
-	if !fastPathEnabled() {
-		return Verdict{}, false
-	}
-	if _, denied := staticDeny(tool, args); denied {
-		return Verdict{}, false
-	}
-	// A require_escalated request is about CONTAINMENT ("run me outside the
-	// sandbox"), which the fast path must not decide: the fast path exists to
-	// skip the risk review, and the escalation contract is that the reviewer (or
-	// the user) weighs the request. Letting a read-only command take the fast
-	// path here would silently ignore the request, and the model would retry it
-	// forever — the loop the escalation path is built to avoid.
-	if escalationRequested(args) {
-		return Verdict{}, false
-	}
-	if !strings.EqualFold(strings.TrimSpace(tool), "bash") {
-		return Verdict{}, false
-	}
-	cmd, ok := bashCommand(args)
-	if !ok || !readOnlyCommand(cmd) {
-		return Verdict{}, false
-	}
-	return readOnlyFastPathAllow(), true
+	return readOnlyCommand(command)
 }

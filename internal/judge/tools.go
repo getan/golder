@@ -1,27 +1,35 @@
 package judge
 
-// The tool table: every tool that earns a leniency, in the three ways this
-// package grades one.
+// The tool table: what this package knows about one tool, in the two ways a
+// gate needs it.
 //
-// It replaces four tables that each described the same tools from one angle —
-// which tools skip the reviewer, which are permitted in read-only mode, which
-// carry read paths the workspace boundary applies to, and how to read a path
-// out of the arguments. The overlap was not a coincidence: read, grep, find, ls
-// and view_image appeared in all of them. That is one fact per tool written
-// four times, so a tool added to one table and forgotten in another was a bug
-// waiting for a caller — and the fourth table, living in another package,
-// could not even see the first three.
+// Every tool is reviewed. This table does NOT say which calls skip the reviewer,
+// because none do: the risk reviewer grades every call, and the decision model
+// is what makes that affordable (~0.78s per call measured against a fixed
+// route, against 2.16s for the previous reviewer). Deleting that exemption is
+// what let the rest of the design collapse — the read-only shell recognizer no
+// longer needs a kill switch, a credential-read guard inside itself, or an
+// escalation carve-out, because it no longer decides anything. It now only
+// answers a question about CONTAINMENT (should this run in the sandbox), which
+// is a fact about the command rather than a verdict about the call.
 //
-// The three facts are independent, and the two entries that look alike are the
-// proof: write_stdin is ungraded (the command it feeds was already graded when
-// bash spawned it, so re-grading a poll proves nothing) but is NOT permitted in
-// read-only mode (a mode that lets a running session be typed into is not
-// read-only); goal_complete is the reverse.
+// What remains is two facts, plus the extractor that reads a call's paths:
 //
-// A tool absent from this table is graded by the strict default: reviewed, and
-// refused by read-only mode. Fail-safe in both directions — a new mutating tool
-// cannot slip through the mode, and a new read-only tool pays a review rather
-// than escaping one. Only tools that get a leniency need an entry.
+//   - paths and op: what the workspace-boundary gate asks about, and which
+//     capability an answer records. A read grant says nothing about writing,
+//     which is why the two are asked and recorded apart.
+//   - readOnly: whether read-only mode permits the tool. That mode exists to
+//     stop changes, so an in-memory tool belongs and the rest do not.
+//
+// The two are independent, and the entries that look alike are the proof:
+// write_stdin is permitted in read-only mode (a poll changes nothing) while
+// bash is not; goal_complete is the reverse — it changes nothing on the host
+// either, and it is permitted for the same reason.
+//
+// A tool absent from this table is treated by the strict default: its paths are
+// not extracted (so the boundary gate has nothing to ask about), and read-only
+// mode refuses it. That default is for a plugin or a tool added later: the mode
+// stays an allow-list, so a new mutating tool cannot slip through it.
 
 import (
 	"encoding/json"
@@ -46,10 +54,6 @@ type toolInfo struct {
 	// added later gets by default: the strict direction for a tool nobody has
 	// classified is to ask about reading, never to assume writing is settled.
 	op grants.Capability
-	// ungraded skips the risk reviewer: the tool cannot change anything on the
-	// host, so there is no risk for a reviewer to weigh and grading it only adds
-	// latency.
-	ungraded bool
 	// readOnly permits the tool under read-only mode.
 	readOnly bool
 	// shell reports that the call's paths come from a command line, so a dialog
@@ -58,18 +62,16 @@ type toolInfo struct {
 }
 
 var tools = map[string]toolInfo{
-	// Readers: they name paths, they change nothing, and read-only mode exists
-	// for them.
-	"read":       {paths: pathArgs, ungraded: true, readOnly: true},
-	"view_image": {paths: pathArgs, ungraded: true, readOnly: true},
-	"grep":       {paths: pathArgs, ungraded: true, readOnly: true},
-	"find":       {paths: pathArgs, ungraded: true, readOnly: true},
-	"ls":         {paths: pathArgs, ungraded: true, readOnly: true},
+	// Readers: they name paths, and read-only mode exists for them.
+	"read":       {paths: pathArgs, readOnly: true},
+	"view_image": {paths: pathArgs, readOnly: true},
+	"grep":       {paths: pathArgs, readOnly: true},
+	"find":       {paths: pathArgs, readOnly: true},
+	"ls":         {paths: pathArgs, readOnly: true},
 
 	// The shell: its paths are words in a command line rather than an argument,
-	// which is why it carries a reader of its own. It is neither ungraded (what
-	// a command does is the reviewer's whole question) nor permitted in
-	// read-only mode.
+	// which is why it carries a reader of its own. It is not permitted in
+	// read-only mode: a command can write.
 	"bash": {paths: bashPaths, shell: true},
 
 	// The one writer, and the only entry that asks about writing. A patch
@@ -86,25 +88,37 @@ var tools = map[string]toolInfo{
 	// put the same question twice and invite two different answers to it.
 	"apply_patch": {paths: patchArgs, op: grants.Write},
 
-	// Network reads. ungraded because the reviewer would be grading a URL, which
-	// is neither a path to consent to nor a mutation to weigh; read-only because
-	// a mode that forbade reading the web would be read-only in name only.
-	"webfetch":  {ungraded: true, readOnly: true},
-	"websearch": {ungraded: true, readOnly: true},
+	// Network reads: permitted in read-only mode because a mode that forbade
+	// reading the web would be read-only in name only. They are graded like
+	// everything else — a URL is not a path the boundary gate can ask about, so
+	// the reviewer is the only layer that sees where it points, which makes
+	// reviewing it the point rather than a cost.
+	"webfetch":  {readOnly: true},
+	"websearch": {readOnly: true},
 
-	// In-memory and control tools: nothing on the host changes, so an LLM review
-	// could only block a benign control call on a verdict with no sandbox tier
-	// to fall back on.
-	"todo":                  {ungraded: true, readOnly: true},
-	"memory_search":         {ungraded: true, readOnly: true},
-	"schedule_list":         {ungraded: true, readOnly: true},
-	"get_context_remaining": {ungraded: true, readOnly: true},
-	"new_context":           {ungraded: true, readOnly: true},
+	// In-memory and control tools: nothing on the host changes, so read-only
+	// mode permits them. They are reviewed like everything else, which costs one
+	// call each and buys the property this design is for — one rule, no
+	// exceptions to reason about.
+	"todo":                  {readOnly: true},
+	"memory_search":         {readOnly: true},
+	"schedule_list":         {readOnly: true},
+	"get_context_remaining": {readOnly: true},
+	"new_context":           {readOnly: true},
+	// schedule_create and schedule_delete are the same family: session-local
+	// reminders that never touch the host. Leaving them out of the table made
+	// read-only mode refuse them while permitting schedule_list — an accident of
+	// which one was listed, not a decision about the tools.
+	"schedule_create": {readOnly: true},
+	"schedule_delete": {readOnly: true},
 
-	// write_stdin polls or interrupts a session whose command was graded when
-	// bash spawned it — it cannot start anything new, so it needs no review —
-	// but read-only mode must not let a session be typed into.
-	"write_stdin": {ungraded: true},
+	// write_stdin polls or interrupts a running session. Read-only mode must not
+	// let a session be typed into — a tty session's stdin is a command line —
+	// so it is not permitted there, and it is reviewed like everything else:
+	// what a written line does is exactly the kind of question a reviewer
+	// answers, and the command that opened the session is not the command this
+	// call sends it.
+	"write_stdin": {},
 
 	// The goal signals end a loop this process is running. They change nothing
 	// on the host, so read-only mode permits them; they are reviewed all the
@@ -117,13 +131,6 @@ var tools = map[string]toolInfo{
 func toolLookup(name string) (toolInfo, bool) {
 	t, ok := tools[strings.ToLower(strings.TrimSpace(name))]
 	return t, ok
-}
-
-// ungraded reports whether the tool skips the reviewer. An unknown tool does
-// not: a tool this table has not been taught is graded like a mutating one.
-func ungraded(name string) bool {
-	t, ok := toolLookup(name)
-	return ok && t.ungraded
 }
 
 // readOnlyAllowed reports whether read-only mode permits the tool. An unknown

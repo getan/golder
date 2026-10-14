@@ -9,7 +9,7 @@ package judge
 // whitelist's membership.
 //
 // The commands below are the shapes that actually fell through that gap while
-// the fast path was being built: `cksum /outside/x` (whitelisted, operand not
+// the recognizer was being built: `cksum /outside/x` (whitelisted, operand not
 // scanned) and `cd /outside && ls` (the operand was never examined at all),
 // plus the flags that name a second file the scanner used to miss.
 
@@ -147,7 +147,7 @@ func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 
 // TestInsideWorkspaceReadsAreNotQuestioned is the other half of the invariant:
 // the regression above must not have been bought by asking about ordinary
-// in-workspace reads, which is what the fast path exists to spare.
+// in-workspace reads, which are not a boundary question.
 func TestInsideWorkspaceReadsAreNotQuestioned(t *testing.T) {
 	workspace, _ := boundaryFixture(t)
 	for _, cmd := range []string{

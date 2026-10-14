@@ -196,8 +196,12 @@ func TestPermissionGateNilClassifierFailsClosed(t *testing.T) {
 	if dec := gate(context.Background(), toolCall("bash", `{"command":"ls"}`)); dec == nil || !dec.Block {
 		t.Fatal("no reviewer must fail closed for gated tools")
 	}
-	if dec := gate(context.Background(), toolCall("read", `{"path":"x"}`)); dec != nil {
-		t.Fatal("read-only tools pass without a reviewer")
+	// A read tool fails closed too. It used to pass, because the table said it
+	// had no side effects so no reviewer was needed; with every call graded, a
+	// missing reviewer is missing for `read` as well. The floor above still
+	// decides credential material, so this is the conservative half only.
+	if dec := gate(context.Background(), toolCall("read", `{"path":"x"}`)); dec == nil || !dec.Block {
+		t.Fatalf("a read with no reviewer must fail closed, got %+v", dec)
 	}
 }
 
@@ -264,7 +268,7 @@ func TestPermissionGateInterrupt(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	gate := PermissionGate(permissions.New(permissions.Ask), GateOpts{In: bufio.NewReader(r), Out: &out, Classifier: stub})
 	done := make(chan *agentcore.BeforeToolCallDecision, 1)
-	// A command the fast path declines, so the prompt is actually reached.
+	// A command the reviewer must grade, so the prompt is actually reached.
 	go func() { done <- gate(ctx, toolCall("bash", `{"command":"go test ./..."}`)) }()
 	cancel()
 	select {

@@ -52,8 +52,8 @@ func TestBashExecutionLayerDoesNotGrade(t *testing.T) {
 	tool := &BashTool{
 		Sandbox: runner,
 	}
-	// The command must be one the read-only fast path does NOT recognize: a
-	// recognized read is now contained even on an allow verdict (see
+	// The command must be one the read-only recognizer does NOT match: a
+	// recognized command is contained even on an allow verdict (see
 	// TestBashReadOnlyFastPathIsContained), so `echo direct` would route to the
 	// runner and this test would be pinning the wrong thing. `git --version` is
 	// fast and not recognized (no subcommand word), unlike a build or test run
@@ -162,12 +162,12 @@ func TestBashPermissionModeReadOnlyBlocks(t *testing.T) {
 // TestBashSandboxRequestWithoutRunnerFailsClosed above.
 
 // TestBashReadOnlyFastPathIsContained is the containment floor under the
-// read-only fast path: a command the recognizer allows (so the reviewer was
-// skipped) still runs INSIDE the sandbox when a runner is available. Skip-the-
-// review is a statement about the command; it is not a promise that the consent
-// gate saw every path, because that rests on two tables in another package
-// staying in step. The sandbox's read whitelist — the workspace plus the roots
-// the user granted — is what refuses a path the scanner missed.
+// read-only recognizer: a command it recognizes runs INSIDE the sandbox when a
+// runner is available. Recognition is a statement about the command; it is not
+// a promise that the consent gate saw every path, because that rests on two
+// tables in another package staying in step. The sandbox's read whitelist — the
+// workspace plus the roots the user granted — is what refuses a path the
+// scanner missed.
 func TestBashReadOnlyFastPathIsContained(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}

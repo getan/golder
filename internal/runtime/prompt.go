@@ -214,16 +214,17 @@ const codeSearchGuide = "To search code, use the grep tool (file contents) and t
 //
 // The default is the native read tools, and the reason is a real asymmetry
 // rather than a preference: read/grep/find/ls/view_image run in-process (no
-// sandbox spawn), are on the judge's ungraded list so no risk reviewer ever sees
-// them, and return bounded output that names its own truncation. A read-only
-// bash command is now *contained in the sandbox* even though it skips the
-// reviewer (agenttool/bash_tool.go, the containment floor under the fast path),
-// which is a process spawn and a policy to satisfy; it also renders as its own
-// card instead of folding into the cell. So "prefer the tools" is the cheap path
-// as well as the quiet one — but only where the tools can express the read, and
-// the guide names the places they cannot (`git` has no native tool at all;
-// multiline and aggregated search were already the shell's, per
-// codeSearchGuide; a command's own output is a read no path argument describes).
+// sandbox spawn) and return bounded output that names its own truncation. A
+// read-only bash command is *contained in the sandbox* (agenttool/bash_tool.go,
+// the containment floor under the recognizer), which is a process spawn and a
+// policy to satisfy; it also renders as its own card instead of folding into the
+// cell. So "prefer the tools" is the cheap path as well as the quiet one — but
+// only where the tools can express the read, and the guide names the places they
+// cannot (`git` has no native tool at all; multiline and aggregated search were
+// already the shell's, per codeSearchGuide; a command's own output is a read no
+// path argument describes). Note that the reviewer is not part of this
+// asymmetry any more: every call is graded, so a native read and a shell read
+// pay the same review — what differs is the spawn and the card.
 // Without that second half the rule reads as "never touch a shell", which would
 // push the model off legitimate work like `git diff` — the same failure the
 // search guide had when it pointed at `--type` long after the tool had it.

@@ -105,9 +105,8 @@ func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	// in, so this test holds on hosts with and without a platform sandbox. It also
 	// blocks static hard-denies regardless.
 	//
-	// The command must be one the read-only fast path declines: a read command
-	// (`ls`, `echo hi`) is now allowed without consulting the reviewer at all, so
-	// it would return nil and the fail-closed branch would never be exercised.
+	// The command must be one the reviewer actually grades: with the provider nil
+	// every call comes back failed, which is the branch this test is about.
 	if dec := seam(t.Context(), agentcore.AgentToolCall{Name: "bash", Arguments: json.RawMessage(`{"command":"go test ./..."}`)}); dec == nil {
 		t.Fatal("judge baseline should decide on benign bash, got nil")
 	} else if run.SandboxGate() != nil {

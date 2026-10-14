@@ -1,14 +1,15 @@
 package judge
 
-// Tests for the read-only recognizer: the fast path that keeps a provably
-// read-only shell command out of the model reviewer.
+// Tests for the read-only recognizer: whether a shell command provably only
+// reads.
 //
-// The positive table is what the fast path buys (the commands a session spends
-// its time on); the negative table is what makes it safe, and it is the larger
-// half on purpose. Every entry there is a command that READS — often with a
-// whitelisted program — but can also write, execute, or outrun the boundary,
-// which is exactly why the safety argument is a closed whitelist with per-flag
-// checks rather than a "looks like a read" heuristic.
+// It is no longer a grading exemption — every call is reviewed — but the
+// execution layer still uses it, because a recognized command is contained in
+// the sandbox rather than run bare. So the negative table is what makes the
+// containment sound, and it is the larger half on purpose: every entry there is
+// a command that READS — often with a whitelisted program — but can also write,
+// execute, or outrun the boundary, which is why the answer comes from a closed
+// whitelist with per-flag checks rather than a "looks like a read" heuristic.
 
 import (
 	"strings"
@@ -291,31 +292,6 @@ func TestFlagMatchesSpellings(t *testing.T) {
 		if got := flagMatches(c.arg, c.flag); got != c.want {
 			t.Errorf("flagMatches(%q, %q) = %v, want %v", c.arg, c.flag, got, c.want)
 		}
-	}
-}
-
-// TestReadOnlyFastPathKillSwitch pins the escape hatch: an operator who does
-// not trust the whitelist can send every bash call back to the reviewer.
-func TestReadOnlyFastPathKillSwitch(t *testing.T) {
-	cases := map[string]bool{
-		"":       true,
-		"on":     true,
-		"1":      true,
-		"Off":    false,
-		"off":    false,
-		"0":      false,
-		"false":  false,
-		"No":     false,
-		" junk ": true,
-	}
-	for value, want := range cases {
-		getenv := func(string) string { return value }
-		if got := readonlyFastPathEnabled(getenv); got != want {
-			t.Errorf("readonlyFastPathEnabled(%q) = %v, want %v", value, got, want)
-		}
-	}
-	if !readonlyFastPathEnabled(nil) {
-		t.Error("a nil getenv must leave the fast path enabled")
 	}
 }
 

@@ -319,9 +319,9 @@ func TestBoundaryGateOnlyReadTools(t *testing.T) {
 }
 
 // TestChainGatesPreservesReadGrant is the regression for a real bug: the
-// boundary gate runs first in the TUI chain, and the permission gate behind
-// it returns nil for an ungraded read tool. Dropping the grant on composition
-// would refuse a read the user had just approved.
+// boundary gate runs first in the TUI chain, and the permission gate behind it
+// returns nil for a call it allows. Dropping the grant on composition would
+// refuse a read the user had just approved.
 func TestChainGatesPreservesReadGrant(t *testing.T) {
 	const granted = "/outside/a.go"
 	first := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {

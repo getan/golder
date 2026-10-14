@@ -1,19 +1,21 @@
 package judge
 
-// The operand-coverage invariant: every program the read-only fast path can
-// allow must have its operands DECLARED — either as paths the read-scope
+// The operand-coverage invariant: every program the recognizer can call
+// read-only must have its operands DECLARED — either as paths the boundary
 // scanner collects (fileOperandCommands) or as deliberately not paths
 // (readOnlyProgramsWithoutPathOperands), and its file-reading flags declared in
 // fileArgFlags.
 //
-// This is the one test that makes the fast path trustworthy as a whole. Its
-// safety argument is "a command the fast path allows reads only what the
-// consent gate has already looked at", and that argument is only as good as the
-// two tables being in step — they live in different files, and nothing else
-// connects them. The failure this prevents is concrete: `cksum /outside/x` was
-// whitelisted while `cksum` was absent from the operand table, so the read was
-// neither asked about nor reviewed. A test is the only thing that turns that
-// class of mistake into a red build instead of a silent hole.
+// This is the one test that makes the recognition trustworthy as a whole, and
+// it outlived the grading exemption the recognizer used to carry: the sandbox
+// containment floor rests on the same claim — "a command the recognizer calls
+// read-only reads only what the consent gate has already looked at" — and that
+// claim is only as good as the two tables being in step. They live in different
+// files and nothing else connects them. The failure this prevents is concrete:
+// `cksum /outside/x` was whitelisted while `cksum` was absent from the operand
+// table, so the read was neither asked about nor reviewed. A test is the only
+// thing that turns that class of mistake into a red build instead of a silent
+// hole.
 
 import (
 	"sort"

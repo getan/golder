@@ -44,11 +44,12 @@ import (
 //
 // It must cover every whitelisted program that opens a path it is handed, and
 // readOnlyProgramsWithoutPathOperands records the decision for the rest: the two
-// tables together are the statement "for each command the fast path can allow,
-// whether its operands are scanned". TestOperandCoverageIsDeclaredForEveryWhitelistedProgram
-// holds that statement, because the two tables live in different files and
-// nothing else keeps them in step — a whitelisted program missing from both is
-// exactly how `cksum /outside/x` came to be neither asked about nor reviewed.
+// tables together are the statement "for each command the recognizer can call
+// read-only, whether its operands are scanned".
+// TestOperandCoverageIsDeclaredForEveryWhitelistedProgram holds that statement,
+// because the two tables live in different files and nothing else keeps them in
+// step — a whitelisted program missing from both is exactly how `cksum
+// /outside/x` came to be neither asked about nor reviewed.
 var fileOperandCommands = map[string]bool{
 	// readers
 	"cat": true, "tac": true, "head": true, "tail": true, "less": true,

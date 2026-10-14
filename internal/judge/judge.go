@@ -122,9 +122,8 @@ type Classifier interface {
 	Classify(ctx context.Context, tool string, args json.RawMessage) Verdict
 }
 
-// Chain runs StaticFloor first (deny wins), then the read-only fast path, then
-// inner, and degrades any inner error to Confirm. A nil inner grades
-// static-only.
+// Chain runs StaticFloor first (deny wins), then inner, and degrades any inner
+// error to Confirm. A nil inner grades static-only.
 //
 // apply_patch has no exemption here. It used to: an ordinary in-workspace patch
 // skipped the reviewer, measured at 467 calls and 18.5 minutes of review over
@@ -137,21 +136,22 @@ type Chain struct {
 	Inner Classifier
 }
 
-// Classify implements Classifier.
+// Classify implements Classifier: the static floor, then the reviewer.
+//
+// There is nothing between them. This chain used to carry two exemptions — a
+// provably read-only shell command, and a set of tools with no side effects —
+// and both are gone: every call is reviewed. The decision model is what made
+// that affordable, and removing the exemptions is what made the rest of the
+// design small, because a rule with no exceptions needs no machinery to
+// justify its exceptions.
+//
+// The floor stays in front, and it is not an optimization: it is the one layer
+// that denies credential material WITHOUT asking a model, so a verdict it
+// reaches cannot be argued with, retried, or reached by a prompt. Everything
+// else — including what a model would obviously allow, like `ls` — is the
+// reviewer's to decide.
 func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
 	if v, ok := staticDeny(tool, args); ok {
-		return v
-	}
-	if ungraded(tool) {
-		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
-	}
-	// A provably read-only shell command never reaches the reviewer: the floor
-	// above has already refused credential material, and the read-scope gate
-	// (ahead of this one in the chain) has already asked about anything outside
-	// the workspace, so what is left is a read of a directory the user opened or
-	// approved. That is the common case of a session spent reading a repository,
-	// and it was paying a model round trip per command.
-	if v, ok := readOnlyFastPath(tool, args); ok {
 		return v
 	}
 	if c.Inner == nil {
@@ -581,8 +581,8 @@ func escalationJustification(call agentcore.AgentToolCall) string {
 // the sandbox (bash's sandbox_permissions=require_escalated). It is a request,
 // not a grant: the gate still owns the decision, this only changes how a
 // Sandbox verdict is settled — asking the user instead of silently recontaining
-// the call — and it is why the read-only fast path declines such a call rather
-// than ignoring the request. The literal mirrors agenttool's
+// the call. The reviewer sees it in the call's arguments, which is how it gets
+// weighed. The literal mirrors agenttool's
 // sandboxPermissionEscalated; the judge package cannot import it (agenttool
 // imports judge).
 func escalationRequested(args json.RawMessage) bool {
@@ -619,17 +619,15 @@ func sandboxable(opts GateOpts, tool string) bool {
 // permissions.
 func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall) Verdict {
 	if opts.Classifier != nil {
-		// The policy pipeline — static floor, then the read-only fast path, then
-		// the reviewer — lives in Chain, and it has to run ONCE per call rather
-		// than once per layer. Every production wiring builds a Chain
-		// (run.NewReviewer), so the common shape is passed straight through;
-		// a bare grader is wrapped, which keeps the deterministic floor in force
-		// for it too (a wiring mistake must not be able to drop the credential
-		// denials) and gives it the same exemption from reviewing reads.
+		// The pipeline — static floor, then the reviewer — lives in Chain, and it
+		// has to run ONCE per call rather than once per layer. Every production
+		// wiring builds a Chain (run.NewReviewer), so the common shape is passed
+		// straight through; a bare grader is wrapped, which keeps the
+		// deterministic floor in force for it too — a wiring mistake must not be
+		// able to drop the credential denials.
 		//
-		// Deciding the fast path HERE instead would run the floor and parse the
-		// command a second and third time for every gated call — the duplication
-		// this shape removes.
+		// Running the floor HERE instead would run it a second time for every
+		// gated call, the duplication this shape removes.
 		if chain, ok := opts.Classifier.(Chain); ok {
 			return chain.Classify(ctx, call.Name, call.Arguments)
 		}
@@ -637,9 +635,6 @@ func classifyForGate(ctx context.Context, opts GateOpts, call agentcore.AgentToo
 	}
 	if v, ok := staticDeny(call.Name, call.Arguments); ok {
 		return v
-	}
-	if ungraded(call.Name) {
-		return Verdict{Level: Allow, Source: "static", Reasons: []string{"read-only tool"}}
 	}
 	return Verdict{
 		Level:   Confirm,
@@ -698,9 +693,9 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		// no opinion about: Sandbox is the containment the permission gate
 		// demanded, and ReadGrant is the workspace-boundary answer the
 		// read-scope gate belongs to. Dropping either when the second gate
-		// returns nil (the common case: an ungraded read tool) would silently
-		// discard the user's decision — the read would be refused after they
-		// approved it.
+		// returns nil (the common case: a tool with no further opinion) would
+		// silently discard the user's decision — the read would be refused after
+		// they approved it.
 		if firstDec != nil && (firstDec.Sandbox || firstDec.ReadGrant != "" || firstDec.WriteGrant != "") {
 			if dec == nil {
 				return firstDec
