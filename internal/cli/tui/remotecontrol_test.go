@@ -79,6 +79,14 @@ func TestStartStopRemote(t *testing.T) {
 // chained on top once /remote-control is running.
 func TestBuildConfigInstallsRemoteSeam(t *testing.T) {
 	s := newRemoteTestSession(t)
+	// Keep the reviewer chain hermetic. With a TYPESAFE_API_KEY in the ambient
+	// environment the decision model is live and may legitimately ALLOW a benign
+	// command — which is a different assertion than this test makes, and made it
+	// fail on developer machines while passing in CI. GOLDER_JEV=off is the
+	// documented switch, so the chain falls back to the LLM reviewer, which has
+	// no provider in this session and therefore fail-closes: the contract under
+	// test.
+	t.Setenv("GOLDER_JEV", "off")
 	// Trust the launch directory so the trust gate is a no-op here: this test
 	// asserts what the permission gate does underneath it (an untrusted
 	// checkout would stop at the trust gate first — that path has its own
