@@ -385,6 +385,21 @@ func ProvidersAvailableFirst(creds *provider.CredentialStore) []provider.Provide
 	return append(ready, rest...)
 }
 
+// DecisionModelSpecs returns the registry's decision-only endpoints, in registry
+// order. They are not conversation providers, so no provider LIST carries them;
+// a screen that explains the setup still names them, because their key and their
+// proxy route are things the user configures. Callers show them in a section of
+// their own — the /provider listing and the TUI picker both do.
+func DecisionModelSpecs() []provider.ProviderSpec {
+	var out []provider.ProviderSpec
+	for _, spec := range provider.ProviderSpecs() {
+		if spec.DecisionOnly {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
 // protocolSuffix renders ", protocol: <effective wire>" for a resolved
 // provider/model pair, or "" when it cannot be determined. Switch
 // confirmations carry it so a mid-session protocol change is visible in

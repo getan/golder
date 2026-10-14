@@ -536,6 +536,28 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 			Info:       providerPickInfo(m.live, spec, m.session.creds),
 		})
 	}
+	// The decision model is listed too, under its own heading and after the
+	// conversation providers: it is not switchable, but its key and its proxy
+	// route are real state the user configures, and a picker that silently
+	// omitted it made it look absent rather than set apart. Entering it runs the
+	// same /provider <name> the text path does, which answers with the refusal
+	// and the /proxy route — so the row explains itself either way.
+	if decision := prompts.DecisionModelSpecs(); len(decision) > 0 {
+		picks = append(picks, pickItem{
+			Heading: true,
+			Title:   "reviewer only · not a chat provider",
+		})
+		for _, spec := range decision {
+			status, tone := providerBadge(m.session.creds, spec)
+			picks = append(picks, pickItem{
+				Title:      spec.Name,
+				Status:     status,
+				StatusTone: tone,
+				Value:      spec.Name,
+				Info:       providerPickInfo(m.live, spec, m.session.creds),
+			})
+		}
+	}
 	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
 	m.transcript.addSystem("Select a provider (↑↓ + Enter, Esc cancels):")
 	m.relayout()

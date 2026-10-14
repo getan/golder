@@ -1126,3 +1126,75 @@ func TestModelViewCursorAnchorsIME(t *testing.T) {
 		t.Errorf("cursor X = %d, want 2 (after prompt)", view.Cursor.Position.X)
 	}
 }
+
+// TestProviderPickerListsDecisionModelApart pins what the user sees: the
+// reviewer's decision model appears in the picker under a heading of its own,
+// the arrow keys step over that heading, and highlighting the row is possible
+// while Enter answers with the refusal and the /proxy route (the same answer the
+// text listing gives). It used to be left out of the picker entirely, on the
+// reasoning that a switch which cannot work should not be offered — but the row
+// is not an offer, it is the only place the TUI names the endpoint whose key and
+// proxy route the user configures, and leaving it out read as an oversight.
+func TestProviderPickerListsDecisionModelApart(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.Model = "muse-spark-1.3-contributor"
+	m.live.ProviderName = "opencode-go"
+
+	got, _ := m.runSlash("/provider")
+	m = got.(Model)
+
+	headingAt, typesafeAt := -1, -1
+	for i, item := range m.menu.pick {
+		switch {
+		case item.Heading:
+			if headingAt < 0 {
+				headingAt = i
+			}
+		case item.Title == "typesafe":
+			typesafeAt = i
+		}
+	}
+	if headingAt < 0 {
+		t.Fatal("picker has no section heading for the decision model")
+	}
+	if typesafeAt != headingAt+1 {
+		t.Fatalf("typesafe at %d, heading at %d: want it directly under its heading", typesafeAt, headingAt)
+	}
+	if headingAt != len(m.menu.pick)-2 {
+		t.Errorf("heading at %d, want the section last (pick has %d rows)", headingAt, len(m.menu.pick))
+	}
+
+	// Navigation steps over the heading: from the row before it, down lands on
+	// typesafe rather than on the heading.
+	m.menu.selected = headingAt - 1
+	m.menu.moveDown()
+	if m.menu.selected == headingAt {
+		t.Error("down landed on the heading, which cannot be chosen")
+	}
+	if m.menu.selected != typesafeAt {
+		t.Errorf("selected = %d, want %d (typesafe)", m.menu.selected, typesafeAt)
+	}
+	m.menu.moveDown()
+	if m.menu.pick[m.menu.selected].Heading {
+		t.Error("wrapping down landed on the heading")
+	}
+
+	// The heading itself submits nothing, so Enter on it is inert.
+	m.menu.selected = headingAt
+	if _, ok := m.menu.pickCurrent(); ok {
+		t.Error("the heading must not be selectable")
+	}
+
+	// And choosing the decision model answers with the explanation, not a switch.
+	m.menu.selected = typesafeAt
+	got, _ = m.submitSlashSelected()
+	m = got.(Model)
+	if m.live.ProviderName != "opencode-go" {
+		t.Errorf("provider switched to %q; the decision model must not be selectable", m.live.ProviderName)
+	}
+	if !strings.Contains(m.transcriptText(), "/proxy") {
+		t.Errorf("the answer should name the /proxy route:\n%s", m.transcriptText())
+	}
+}

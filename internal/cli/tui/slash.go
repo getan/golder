@@ -156,6 +156,14 @@ type pickItem struct {
 	Value  string
 	// Current marks the row as the live selection; view renders a "current" tag.
 	Current bool
+	// Heading marks a non-selectable section title inside a picker: the arrow
+	// keys step over it, Enter on it does nothing, and it renders as a dim rule
+	// rather than a row. It exists because a picker that must show something it
+	// cannot switch to — the reviewer's decision model, which answers typed
+	// questions rather than chat — has only two honest options: name it in a
+	// section of its own, or leave it out and let its absence read as an
+	// oversight.
+	Heading bool
 	// Info is the highlighted row's labeled detail block, rendered indented
 	// under the list so it reads as an explanation, not more rows.
 	Info []pickInfoLine
@@ -242,6 +250,11 @@ func (mn slashMenu) row(i int) string {
 // indent; the highlighted row's explanation is the Info block below.
 func (mn slashMenu) pickRowLine(i, rowWidth int) string {
 	it := mn.pick[i]
+	if it.Heading {
+		// A rule, not a row: no caret, no badge, dim, and it never carries the
+		// highlight because navigation steps over headings.
+		return ansi.Truncate(mn.theme.System.Render("  "+it.Title), rowWidth, "…")
+	}
 	var b strings.Builder
 	if i == mn.selected {
 		b.WriteString(mn.theme.Accent.Render("› "))
@@ -559,7 +572,20 @@ func (mn *slashMenu) openPickerDetailed(items []pickItem, mark, kind string) {
 	mn.pickModel = ""
 	mn.active = len(items) > 0
 	mn.filtered = nil
-	mn.selected = 0
+	mn.selected = mn.firstSelectable(0, 1)
+}
+
+// firstSelectable returns the index of the first selectable row at or after
+// from, scanning in the direction of step (1 forward, -1 backward). A picker
+// whose first row is a heading must open with a real row highlighted, or Enter
+// would do nothing on a menu that looks ready.
+func (mn slashMenu) firstSelectable(from, step int) int {
+	for i := from; i >= 0 && i < len(mn.pick); i += step {
+		if !mn.pick[i].Heading {
+			return i
+		}
+	}
+	return from
 }
 
 // openLevelPicker shows the second stage of the /model flow: the reasoning
@@ -584,6 +610,9 @@ func (mn slashMenu) pickCurrent() (string, bool) {
 	if !mn.picking() || mn.selected < 0 || mn.selected >= len(mn.pick) {
 		return "", false
 	}
+	if mn.pick[mn.selected].Heading {
+		return "", false
+	}
 	v := mn.pick[mn.selected].Value
 	if v == "" {
 		v = mn.pick[mn.selected].Title
@@ -596,12 +625,24 @@ func (mn *slashMenu) pickMove(d int) {
 	if len(mn.pick) == 0 {
 		return
 	}
-	mn.selected = (mn.selected + d + len(mn.pick)) % len(mn.pick)
+	// Step over headings, so the highlight never lands on a row that cannot be
+	// chosen. The loop terminates because a picker of nothing but headings would
+	// have had no selectable start either (see firstSelectable).
+	for i := 0; i < len(mn.pick); i++ {
+		mn.selected = (mn.selected + d + len(mn.pick)) % len(mn.pick)
+		if !mn.pick[mn.selected].Heading {
+			return
+		}
+	}
 }
 
 // moveUp / moveDown cycle the highlighted candidate, wrapping at the ends so
 // arrow navigation is continuous. Both work in picker mode via count().
 func (mn *slashMenu) moveUp() {
+	if mn.picking() {
+		mn.pickMove(-1)
+		return
+	}
 	if n := mn.count(); n > 0 {
 		mn.selected--
 		if mn.selected < 0 {
@@ -611,6 +652,10 @@ func (mn *slashMenu) moveUp() {
 }
 
 func (mn *slashMenu) moveDown() {
+	if mn.picking() {
+		mn.pickMove(1)
+		return
+	}
 	if n := mn.count(); n > 0 {
 		mn.selected++
 		if mn.selected >= n {
