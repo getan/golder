@@ -996,8 +996,8 @@ func TestResponsesDriverPromptCacheKey(t *testing.T) {
 
 // Display-only ThinkingContent is not the provider's protocol state. It must
 // never be fabricated into a reasoning item on replay; only an original item
-// from the same provider/model (or the narrowly scoped legacy DeepSeek empty
-// placeholder, tested separately below) may become a reasoning input item.
+// from the same provider/model (or the explicit missing-reasoning placeholder,
+// tested separately below) may become a reasoning input item.
 func TestResponsesDriverDoesNotReplayDisplayOnlyThinking(t *testing.T) {
 	var gotBody string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1055,35 +1055,75 @@ func TestResponsesDriverDoesNotReplayDisplayOnlyThinking(t *testing.T) {
 	}
 }
 
-// OpenCode Go's DeepSeek Responses gateway requires the reasoning_text before
-// EACH replayed function call while thinking is enabled. Older sessions have
-// no raw reasoning items at all; an empty text part makes them resumable without
-// switching off thinking. The summary displayed to the user is NOT a substitute
-// for the original item when one was returned by the gateway.
-func TestResponsesDeepSeekReasoningReplayAndLegacyContinuation(t *testing.T) {
-	const model = "deepseek-v4.1-flash"
-	first := `{"type":"reasoning","id":"rs_original","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"original private reasoning"}]}`
+// The Responses replay has ONE shape for every backend: an assistant tool-call
+// step leads with its reasoning and then replays its calls as one contiguous
+// run. Both DeepSeek endpoints (the first-party API and OpenCode Go, probed
+// live) enforce that shape from two sides — a call run with no non-empty
+// reasoning_text head answers "The `reasoning_text` in the thinking mode must be
+// passed back to the API", while an item placed INSIDE the run ends the run as
+// far as the gateway is concerned and answers "No tool output found for tool
+// call …" for a call whose output is present. The loosest backend (the OpenAI
+// relay) accepts the same body unchanged, head included.
+//
+// The head is the step's captured items replayed verbatim, plus the single
+// explicit placeholder when those items cannot satisfy the check — an item
+// whose reasoning_text is empty, or one that carries only a summary, does not.
+// There is never one placeholder per call.
+func TestResponsesReasoningHeadAndContiguousCalls(t *testing.T) {
+	const deepseek = "deepseek-v4.1-flash"
+	original := `{"type":"reasoning","id":"rs_original","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"original private reasoning"}]}`
+	emptyText := `{"type":"reasoning","id":"rs_empty","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":""}]}`
 	summaryOnly := `{"type":"reasoning","id":"rs_summary","summary":[{"type":"summary_text","text":"summary, not reasoning_text"}]}`
 	cases := []struct {
-		name, provider              string
+		name                        string
+		provider, model             string
 		originProvider, originModel string
 		reasoning                   []json.RawMessage
-		wantOriginal                bool
-		wantEmpty                   int
+		level                       agentcore.ThinkingLevel
+		// originMarker is a substring unique to the captured item; wantOrigin
+		// says whether the replay may include it.
+		originMarker    string
+		wantOrigin      bool
+		wantPlaceholder bool
 	}{
-		{name: "original reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: model, reasoning: []json.RawMessage{json.RawMessage(first)}, wantOriginal: true, wantEmpty: 1},
-		{name: "old session missing reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: model, wantEmpty: 2},
-		{name: "cross model cannot replay opaque reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: "muse-spark-1.3", reasoning: []json.RawMessage{json.RawMessage(first)}, wantEmpty: 2},
-		{name: "cross provider cannot replay opaque reasoning", provider: "opencode-go", originProvider: "openai", originModel: model, reasoning: []json.RawMessage{json.RawMessage(first)}, wantEmpty: 2},
-		{name: "summary alone does not satisfy reasoning_text", provider: "opencode-go", originProvider: "opencode-go", originModel: model, reasoning: []json.RawMessage{json.RawMessage(summaryOnly)}, wantEmpty: 2},
-		{name: "other gateway not given DeepSeek items", provider: "openai", originProvider: "openai", originModel: model},
+		{name: "captured reasoning is the head", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek,
+			reasoning: []json.RawMessage{json.RawMessage(original)}, level: agentcore.ThinkingMax,
+			originMarker: "original private reasoning", wantOrigin: true},
+		{name: "no captured reasoning gets one placeholder", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek,
+			level: agentcore.ThinkingMax, wantPlaceholder: true},
+		{name: "empty reasoning_text is replayed beside the placeholder", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek,
+			reasoning: []json.RawMessage{json.RawMessage(emptyText)}, level: agentcore.ThinkingMax,
+			originMarker: "rs_empty", wantOrigin: true, wantPlaceholder: true},
+		{name: "summary-only item is replayed beside the placeholder", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek,
+			reasoning: []json.RawMessage{json.RawMessage(summaryOnly)}, level: agentcore.ThinkingMax,
+			originMarker: "summary, not reasoning_text", wantOrigin: true, wantPlaceholder: true},
+		{name: "another model's opaque item is never replayed", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: "muse-spark-1.3",
+			reasoning: []json.RawMessage{json.RawMessage(original)}, level: agentcore.ThinkingMax,
+			originMarker: "original private reasoning", wantPlaceholder: true},
+		{name: "another provider's opaque item is never replayed", provider: "opencode-go", model: deepseek,
+			originProvider: "openai", originModel: deepseek,
+			reasoning: []json.RawMessage{json.RawMessage(original)}, level: agentcore.ThinkingMax,
+			originMarker: "original private reasoning", wantPlaceholder: true},
+		{name: "thinking off takes the bare shape", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek},
+		{name: "thinking off still replays a captured item verbatim", provider: "opencode-go", model: deepseek,
+			originProvider: "opencode-go", originModel: deepseek,
+			reasoning:    []json.RawMessage{json.RawMessage(original)},
+			originMarker: "original private reasoning", wantOrigin: true},
+		{name: "the same shape serves every gateway", provider: "openai", model: "gpt-4o",
+			originProvider: "openai", originModel: "gpt-4o", level: agentcore.ThinkingMedium, wantPlaceholder: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var sent []byte
 			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				sent, _ = io.ReadAll(r.Body)
-				return sseResponse(completedFrame("ok", "resp_new", model, 10, 5)), nil
+				return sseResponse(completedFrame("ok", "resp_new", tc.model, 10, 5)), nil
 			})
 			d := NewOpenAIResponsesProvider(tc.provider, "https://api.openai.test/v1", nil)
 			d.clientOpts = []option.RequestOption{option.WithHTTPClient(&http.Client{Transport: rt})}
@@ -1097,52 +1137,172 @@ func TestResponsesDeepSeekReasoningReplayAndLegacyContinuation(t *testing.T) {
 				},
 			}
 			stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
-				Model: model, Context: LlmContext{Messages: agentcore.MessageList{
+				Model: tc.model, Context: LlmContext{Messages: agentcore.MessageList{
 					userMsg("read two files"), assistant,
 					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: "call_one", Content: agentcore.ContentList{agentcore.NewTextContent("a")}},
 					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: "call_two", Content: agentcore.ContentList{agentcore.NewTextContent("b")}},
-				}}, Config: StreamConfig{APIKey: "sk-test", ThinkingLevel: agentcore.ThinkingHigh},
+				}}, Config: StreamConfig{APIKey: "sk-test", ThinkingLevel: tc.level},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			drain(t, stream)
+
 			var wire struct {
-				Reasoning map[string]any   `json:"reasoning"`
-				Input     []map[string]any `json:"input"`
+				Input []map[string]any `json:"input"`
 			}
 			if err := json.Unmarshal(sent, &wire); err != nil {
 				t.Fatalf("invalid request: %v", err)
 			}
-			if wire.Reasoning["effort"] == "" || wire.Reasoning["effort"] == "none" || wire.Reasoning["effort"] == nil {
-				t.Fatalf("continuing this session must retain thinking: %s", sent)
+
+			// The expected item sequence: the user message, the head (the
+			// captured items and/or the placeholder), then the two calls and
+			// their outputs as two contiguous runs.
+			kinds := make([]string, 0, len(wire.Input))
+			for _, item := range wire.Input {
+				kind, _ := item["type"].(string)
+				if kind == "" {
+					kind = "message" // an easy input message carries role/content only
+				}
+				kinds = append(kinds, kind)
 			}
-			empty, original, calls := 0, false, 0
+			want := "message"
+			if tc.wantOrigin {
+				want += ",reasoning"
+			}
+			if tc.wantPlaceholder {
+				want += ",reasoning"
+			}
+			want += ",function_call,function_call,function_call_output,function_call_output"
+			if got := strings.Join(kinds, ","); got != want {
+				t.Errorf("input items = %s, want %s; wire=%s", got, want, sent)
+			}
+
+			// A thinking-mode step that replays calls must offer at least one
+			// NON-EMPTY reasoning_text part: an empty one is what the old
+			// per-call marker sent, and both DeepSeek endpoints read it as
+			// absent.
+			var replayed strings.Builder
 			for i, item := range wire.Input {
-				switch item["type"] {
-				case "reasoning":
-					parts, _ := item["content"].([]any)
-					if len(parts) == 1 {
-						text := parts[0].(map[string]any)["text"]
-						if text == "" {
-							empty++
-						}
-						if text == "original private reasoning" {
-							original = true
-						}
-					}
-				case "function_call":
-					calls++
-					if tc.provider == "opencode-go" && (i == 0 || wire.Input[i-1]["type"] != "reasoning") {
-						t.Errorf("call %v has no immediately preceding reasoning item: %s", item["call_id"], sent)
+				if kinds[i] != "reasoning" {
+					continue
+				}
+				parts, _ := item["content"].([]any)
+				for _, p := range parts {
+					pm, _ := p.(map[string]any)
+					if pm["type"] == "reasoning_text" {
+						part, _ := pm["text"].(string)
+						replayed.WriteString(part)
 					}
 				}
 			}
-			if original != tc.wantOriginal || empty != tc.wantEmpty || calls != 2 {
-				t.Errorf("original=%v empty=%d calls=%d, want %v/%d/2; wire=%s", original, empty, calls, tc.wantOriginal, tc.wantEmpty, sent)
+			if thinkingOn := tc.level != "" && tc.level != agentcore.ThinkingOff; thinkingOn &&
+				strings.TrimSpace(replayed.String()) == "" {
+				t.Errorf("thinking-mode call step offers no non-empty reasoning_text; wire=%s", sent)
+			}
+			if tc.originMarker != "" {
+				if got := strings.Contains(string(sent), tc.originMarker); got != tc.wantOrigin {
+					t.Errorf("captured item replayed = %v, want %v; wire=%s", got, tc.wantOrigin, sent)
+				}
+			}
+			if got := strings.Contains(string(sent), "original reasoning for this step was not recorded"); got != tc.wantPlaceholder {
+				t.Errorf("placeholder replayed = %v, want %v; wire=%s", got, tc.wantPlaceholder, sent)
 			}
 			if strings.Contains(string(sent), "display summary is not protocol state") {
 				t.Errorf("must not replay display-only thinking: %s", sent)
+			}
+		})
+	}
+}
+
+// Regression for the reported failure: the history of the session whose request
+// was rejected with `No tool output found for tool call
+// call_00_XyWjxdCQYfX9QBLp13yW6601` (opencode-go / deepseek-v4.1-flash, one
+// assistant step with two parallel calls). The replay then put an empty
+// reasoning marker between the two calls; the gateway reads a reasoning item
+// inside the run as the run having ended, so it reported a call whose output is
+// present as unanswered. The step must replay as one contiguous run led by its
+// reasoning — the captured original when there is one, the explicit placeholder
+// otherwise.
+func TestResponsesReplaysReportedDeepSeekStepContiguously(t *testing.T) {
+	const (
+		provider = "opencode-go"
+		model    = "deepseek-v4.1-flash"
+		callA    = "call_00_XyWjxdCQYfX9QBLp13yW6601"
+		callB    = "call_01_FPaYgIKFJqEaUazzHKOF4327"
+	)
+	// The reasoning item the gateway returned for that step (text trimmed).
+	reasoning := json.RawMessage(`{"id":"4cc941ca-81fa-47e3-a9cf-c16f5881b2b9","type":"reasoning","status":"completed","encrypted_content":"4ba4a834-bf85-4b27-9539-54aa2f856fd8-0","content":[{"type":"reasoning_text","text":"Let me get oriented. The task list has items, some done."}],"summary":[]}`)
+	for _, tc := range []struct {
+		name            string
+		items           []json.RawMessage
+		wantPlaceholder bool
+	}{
+		{name: "reasoning captured", items: []json.RawMessage{reasoning}},
+		{name: "reasoning not recorded", wantPlaceholder: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []byte
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				sent, _ = io.ReadAll(r.Body)
+				return sseResponse(completedFrame("ok", "resp_2", model, 10, 5)), nil
+			})
+			d := NewOpenAIResponsesProvider(provider, "https://opencode.ai/zen/go/v1", nil)
+			d.clientOpts = []option.RequestOption{option.WithHTTPClient(&http.Client{Transport: rt})}
+
+			assistant := agentcore.AssistantMessage{
+				RoleField: agentcore.RoleAssistant, Provider: provider, ResponseModel: model,
+				ReasoningItems: tc.items,
+				Content: agentcore.ContentList{
+					agentcore.NewThinkingContent("Let me get oriented. The task list has items, some done."),
+					agentcore.NewToolCallContent(callA, "bash", json.RawMessage(`{"command":"pwd; ls"}`)),
+					agentcore.NewToolCallContent(callB, "memory_search", json.RawMessage(`{"query":"responses 400"}`)),
+				},
+			}
+			stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+				Model: model, Context: LlmContext{Messages: agentcore.MessageList{
+					userMsg("continue"),
+					assistant,
+					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: callA, ToolName: "bash", Content: agentcore.ContentList{agentcore.NewTextContent("workspace listing")}},
+					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: callB, ToolName: "memory_search", Content: agentcore.ContentList{agentcore.NewTextContent("one result")}},
+				}}, Config: StreamConfig{APIKey: "sk-test", ThinkingLevel: agentcore.ThinkingMax},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			drain(t, stream)
+
+			var wire struct {
+				Input []map[string]any `json:"input"`
+			}
+			if err := json.Unmarshal(sent, &wire); err != nil {
+				t.Fatalf("invalid request: %v", err)
+			}
+			var kinds []string
+			for _, item := range wire.Input {
+				kind, _ := item["type"].(string)
+				if kind == "" {
+					kind = "message"
+				}
+				kinds = append(kinds, kind)
+			}
+			want := "message,reasoning,function_call,function_call,function_call_output,function_call_output"
+			if got := strings.Join(kinds, ","); got != want {
+				t.Fatalf("input items = %s, want %s (nothing may sit inside the call run); wire=%s", got, want, sent)
+			}
+			// The head must carry non-empty reasoning_text: an empty part is
+			// exactly what the failing request sent and the gateway rejected.
+			content, _ := wire.Input[1]["content"].([]any)
+			if len(content) != 1 {
+				t.Fatalf("reasoning head content = %v, want one reasoning_text part", wire.Input[1])
+			}
+			part, _ := content[0].(map[string]any)
+			text, _ := part["text"].(string)
+			if part["type"] != "reasoning_text" || strings.TrimSpace(text) == "" {
+				t.Errorf("reasoning head = %v, want a non-empty reasoning_text part", wire.Input[1])
+			}
+			if got := strings.Contains(string(sent), "original reasoning for this step was not recorded"); got != tc.wantPlaceholder {
+				t.Errorf("placeholder replayed = %v, want %v; wire=%s", got, tc.wantPlaceholder, sent)
 			}
 		})
 	}

@@ -429,9 +429,10 @@ func appendToolCalls(content agentcore.ContentList, calls []agentcore.ToolCallCo
 // system prompt becomes Instructions; the thinking level becomes a reasoning
 // effort (with an auto summary so reasoning is returned); golder tools become
 // Responses function tools; the session id becomes the prompt_cache_key;
-// and each message is replayed as the matching input item(s): assistant tool
-// calls as function_call items, tool results as function_call_output items, and
-// text (plus any images) as a role-tagged message.
+// and each message is replayed as the matching input item(s): an assistant
+// step's reasoning items lead it, its tool calls are function_call items, tool
+// results are function_call_output items, and text (plus any images) is a
+// role-tagged message.
 func buildResponsesParams(providerName string, req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
@@ -445,7 +446,13 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 	if sp := strings.TrimSpace(req.Context.SystemPrompt); sp != "" {
 		params.Instructions = openai.String(sp)
 	}
-	if effort := WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel); effort != "" {
+	// The effort doubles as this request's thinking flag: with no effort the
+	// backend is not in thinking mode, and the reasoning-replay rules below do
+	// not apply (probed live: a thinking-off request accepts a bare tool-call
+	// step on both DeepSeek endpoints and on the OpenAI relay).
+	effort := WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel)
+	thinkingOn := effort != ""
+	if thinkingOn {
 		// The auto summary is what carries the model's reasoning back to golder,
 		// which renders it as a thinking block, matching the chat driver. It goes
 		// out unconditionally — including to OpenCode Go, whose catalog entry in
@@ -469,14 +476,14 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 		params.Tools = tools
 	}
 
-	// Only OpenCode Go's DeepSeek Responses gateway requires a reasoning_text
-	// item alongside each replayed function call. Do not synthesize one for GPT
-	// or another provider: they have different reasoning-item contracts.
-	deepseekThinking := providerName == "opencode-go" && strings.HasPrefix(strings.ToLower(req.Model), "deepseek-") &&
-		WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel) != ""
+	// One replay shape serves every Responses backend: a step's captured
+	// reasoning items lead the step, its calls and their outputs stay
+	// contiguous, and a step whose reasoning was never captured gets one
+	// explicit placeholder. Backends differ in how strictly they check that
+	// shape, not in what they accept — see appendInputItems.
 	items := make(responses.ResponseInputParam, 0, len(req.Context.Messages))
 	for _, m := range req.Context.Messages {
-		items = appendInputItems(items, m, useHostedSearch, providerName, req.Model, deepseekThinking)
+		items = appendInputItems(items, m, useHostedSearch, providerName, req.Model, thinkingOn)
 	}
 	params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: items}
 	return params
@@ -528,7 +535,16 @@ func buildResponsesTools(tools []agentcore.AgentTool, includeHosted bool) []resp
 // is unavailable"), which made every turn after a muse→deepseek model switch
 // fail permanently. Without hosted search the call is dropped from the replay —
 // the assistant's text (including its citations) is preserved either way.
-func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool, providerName, model string, deepseekThinking bool) responses.ResponseInputParam {
+//
+// thinkingOn reports whether this request asks for reasoning at all (the effort
+// is on the wire). In that mode every assistant step that replays function_call
+// items must LEAD with reasoning: the thinking backends pair a call with the
+// reasoning that produced it and reject the step otherwise ("The
+// `reasoning_text` in the thinking mode must be passed back to the API"), while
+// an item placed inside the call run instead trips their contiguity check
+// (400 "No tool output found for tool call …", naming a call whose output is
+// present). So the head goes before the calls, never between them.
+func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool, providerName, model string, thinkingOn bool) responses.ResponseInputParam {
 	switch msg := m.(type) {
 	case agentcore.ToolResultMessage:
 		// A tool result is backfilled against the model's call_id so the model
@@ -539,44 +555,38 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 		// the wire form is exactly what codex's FunctionCallOutputBody emits.
 		items = append(items, toolResultFunctionCallOutput(msg))
 	case agentcore.AssistantMessage:
-		// Reasoning is protocol state, not a transcript summary. In stateless
-		// thinking-mode tool loops the gateway requires it back before the
-		// assistant's function_call items. Never replay it to another provider
-		// or model: these items may contain opaque backend-specific fields.
+		// Reasoning is protocol state, not a transcript summary: replay the
+		// original items verbatim, and only to the model that produced them —
+		// they may carry opaque backend-specific fields no other model accepts.
 		sameModel := msg.Provider == providerName && msg.ResponseModel == model
 		var reasoning []json.RawMessage
 		if sameModel {
 			for _, raw := range msg.ReasoningItems {
-				if json.Valid(raw) && reasoningItem(raw) && (!deepseekThinking || hasReasoningText(raw)) {
+				if json.Valid(raw) && reasoningItem(raw) {
 					reasoning = append(reasoning, raw)
 				}
 			}
 		}
-		// Ordinary Responses models get only original reasoning, never synthetic
-		// reasoning. OpenCode Go/DeepSeek needs an item directly before EACH
-		// function_call, even when the prior assistant message came from another
-		// model (which must not receive that model's opaque original item). Keep
-		// the original next to its first call when no assistant text intervenes;
-		// otherwise replay it before that text and use empty markers for the calls.
-		// An empty marker is a compatibility placeholder for LOST protocol state,
-		// not a reconstruction of the model's private reasoning.
-		text := contentText(msg.Content)
 		calls := msg.ToolCalls()
-		if !deepseekThinking || len(calls) == 0 || text != "" {
-			if deepseekThinking && len(reasoning) == 0 && text != "" {
-				// A legacy text-only assistant turn also needs a marker in
-				// thinking mode, immediately before the text it belongs to.
-				items = append(items, emptyReasoningItem())
-			}
-			for _, raw := range reasoning {
-				items = append(items, param.Override[responses.ResponseInputItemUnionParam](raw))
-			}
+		for _, raw := range reasoning {
+			items = append(items, param.Override[responses.ResponseInputItemUnionParam](raw))
 		}
+		// A tool-call step that replays calls must lead with reasoning_text:
+		// the captured original satisfies that only when it carries a NON-EMPTY
+		// part (probed live: an empty or summary-only item alone still answers
+		// 400, while the same item beside the placeholder is accepted). So a
+		// step gets the placeholder exactly when its own items cannot satisfy
+		// the check — it is replayed BESIDE them, never instead of them, and
+		// always before the text and the calls, so nothing lands inside the
+		// call run. A text-only step needs no head at all.
+		if thinkingOn && hasLocalCall(calls) && !reasoningHasText(reasoning) {
+			items = append(items, missingReasoningItem())
+		}
+		text := contentText(msg.Content)
 		if text != "" {
 			items = append(items, responses.ResponseInputItemParamOfMessage(
 				text, responses.EasyInputMessageRoleAssistant))
 		}
-		callIndex := 0
 		for _, call := range calls {
 			if call.IsServer() {
 				// Hosted calls replay as their native items (no output to
@@ -589,14 +599,6 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 					}
 				}
 				continue
-			}
-			if deepseekThinking {
-				if text == "" && callIndex < len(reasoning) {
-					items = append(items, param.Override[responses.ResponseInputItemUnionParam](reasoning[callIndex]))
-				} else {
-					items = append(items, emptyReasoningItem())
-				}
-				callIndex++
 			}
 			items = append(items, responses.ResponseInputItemParamOfFunctionCall(
 				string(call.Arguments), call.ID, call.Name))
@@ -615,11 +617,29 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 	return items
 }
 
-func emptyReasoningItem() responses.ResponseInputItemUnionParam {
+// hasLocalCall reports whether a step issues at least one call golder executed
+// itself. A step holding only server-executed (hosted) calls replays no
+// function_call item, so it needs no reasoning head.
+func hasLocalCall(calls []agentcore.ToolCallContent) bool {
+	for _, c := range calls {
+		if !c.IsServer() {
+			return true
+		}
+	}
+	return false
+}
+
+// missingReasoningItem is the replay placeholder for a tool-call step with no
+// reasoning of its own to replay: another model produced the step, or the
+// backend returned none. Its text is non-empty and says exactly that — the
+// thinking backends read an empty part as absent, and a reconstructed private
+// reasoning would be a fabrication.
+func missingReasoningItem() responses.ResponseInputItemUnionParam {
 	// The OpenAI SDK's reasoning parameter type has no content field. Use the
 	// documented Responses-compatible wire shape without routing it through a
 	// type that would discard reasoning_text.
-	return param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(`{"type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":""}]}`))
+	return param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(
+		`{"type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"golder: the model's original reasoning for this step was not recorded."}]}`))
 }
 
 func reasoningItem(raw json.RawMessage) bool {
@@ -629,23 +649,28 @@ func reasoningItem(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &probe) == nil && probe.Type == "reasoning"
 }
 
-// hasReasoningText distinguishes OpenCode Go/DeepSeek's replayable content from
-// an OpenAI-style reasoning item containing only summary/encrypted_content.
-// Its presence, not non-empty text, is the requirement: an empty placeholder
-// has a reasoning_text part as well. A summary-only item would still elicit the
-// gateway's 400 if sent in place of a missing reasoning_text.
-func hasReasoningText(raw json.RawMessage) bool {
-	var item struct {
-		Content []struct {
-			Type string `json:"type"`
-		} `json:"content"`
-	}
-	if json.Unmarshal(raw, &item) != nil {
-		return false
-	}
-	for _, part := range item.Content {
-		if part.Type == "reasoning_text" {
-			return true
+// reasoningHasText reports whether a step's captured reasoning carries a
+// NON-EMPTY reasoning_text part. Presence is not enough: an empty part is what
+// the old per-call marker sent, and both DeepSeek endpoints read it as missing
+// and answer 400 (probed live with an empty-text item carrying a real id and
+// encrypted_content, and with a summary-only item). The OpenAI relay accepts
+// either. This is the only place the replay inspects an item's content; the
+// items themselves are replayed verbatim.
+func reasoningHasText(items []json.RawMessage) bool {
+	for _, raw := range items {
+		var item struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(raw, &item) != nil {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "reasoning_text" && strings.TrimSpace(part.Text) != "" {
+				return true
+			}
 		}
 	}
 	return false

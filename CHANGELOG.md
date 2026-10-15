@@ -1236,6 +1236,25 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A Responses tool step is replayed in one shape for every backend**: the
+  replay used to special-case OpenCode Go's DeepSeek models, and it did so
+  wrongly — it inserted a reasoning item directly before *each* replayed
+  function call, with an empty `reasoning_text`. Probed live against both
+  DeepSeek endpoints (the first-party API and OpenCode Go, which behave
+  identically) and an OpenAI relay, the wire rules turned out to be two, and the
+  old shape broke both: an item inside a call run ends the run as far as the
+  gateway is concerned (400 `No tool output found for tool call …`, naming a
+  call whose output *is* present — the misleading error the upstream
+  [opencode issue](https://github.com/anomalyco/opencode/issues/54698)
+  describes too), and a step whose head
+  carries no non-empty `reasoning_text` is rejected as `The 'reasoning_text' in
+  the thinking mode must be passed back to the API`. The provider/model test is
+  gone: every thinking-mode tool step now leads with its reasoning — the
+  captured items replayed verbatim, plus one explicit non-empty placeholder
+  ("the model's original reasoning for this step was not recorded") when the
+  step has none to offer — and its calls and their outputs stay contiguous.
+  Thinking-off requests, text-only steps and the OpenAI wire are unaffected.
+
 - **A consent question is raised for a path, not for a string that looks like
   one**: the boundary gate asked the user to allow reading `/60` — the divisor
   in a python program's arithmetic — because the candidate list was the UNION of
