@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/permissions"
 )
 
 func runToolArgs(t *testing.T, tool agentcore.AgentTool, args map[string]any) agentcore.AgentToolResult {
@@ -42,7 +43,7 @@ func TestBashRunningSessionThenInterrupt(t *testing.T) {
 		t.Skip("bash not available on windows")
 	}
 	sessions := execsess.NewManager()
-	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 	poll := &WriteStdinTool{Sessions: sessions}
 
 	res := runToolArgs(t, bash, map[string]any{"command": "echo start; sleep 30", "yield_time_ms": 400})
@@ -75,7 +76,7 @@ func TestWriteStdinDrainsIncrementalOutput(t *testing.T) {
 		t.Skip("bash not available on windows")
 	}
 	sessions := execsess.NewManager()
-	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 	poll := &WriteStdinTool{Sessions: sessions}
 
 	res := runToolArgs(t, bash, map[string]any{"command": "sleep 0.3; echo later; sleep 30", "yield_time_ms": 100})
@@ -97,7 +98,7 @@ func TestWriteStdinReportsExitCode(t *testing.T) {
 		t.Skip("bash not available on windows")
 	}
 	sessions := execsess.NewManager()
-	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 	poll := &WriteStdinTool{Sessions: sessions}
 
 	res := runToolArgs(t, bash, map[string]any{"command": "sleep 0.3; exit 7", "yield_time_ms": 100})
@@ -131,7 +132,7 @@ func TestWriteStdinEscapedInterruptSpellings(t *testing.T) {
 	for i, chars := range []string{`\u0003`, `^C`, "\ue002", `\uE002`, interruptChar + "\n"} {
 		t.Run(fmt.Sprintf("spelling%d", i), func(t *testing.T) {
 			sessions := execsess.NewManager()
-			bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+			bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 			poll := &WriteStdinTool{Sessions: sessions}
 
 			res := runToolArgs(t, bash, map[string]any{"command": "sleep 30", "yield_time_ms": 100})
@@ -155,7 +156,7 @@ func TestWriteStdinPipeSessionRejectsInput(t *testing.T) {
 		t.Skip("bash not available on windows")
 	}
 	sessions := execsess.NewManager()
-	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 	poll := &WriteStdinTool{Sessions: sessions}
 
 	res := runToolArgs(t, bash, map[string]any{"command": "sleep 30", "yield_time_ms": 100})
@@ -173,7 +174,7 @@ func TestWriteStdinTTYInteractiveInput(t *testing.T) {
 		t.Skip("bash not available on windows")
 	}
 	sessions := execsess.NewManager()
-	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions}
+	bash := &BashTool{Dir: t.TempDir(), Sessions: sessions, Permissions: permissions.New(permissions.FullAccess)}
 	poll := &WriteStdinTool{Sessions: sessions}
 
 	res := runToolArgs(t, bash, map[string]any{"command": `read -r x; echo "got:$x"`, "yield_time_ms": 300, "tty": true})

@@ -11,23 +11,27 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
-// TestBashRequireEscalatedRunsDirect proves the request keeps a call out of the
-// sandbox wrapper at this layer. The request is a REQUEST — the permission gate
-// and its reviewer weigh it (the judge's read-only recognizer declines such a
-// call precisely so they do) — and what remains here is the execution layer's
-// half: a command the gate let through is not recontained behind the model's
-// back.
+// TestBashRequireEscalatedRunsDirect proves the request is not authorization:
+// without a Direct grant it cannot run. An explicit decision from the gate
+// permits a single direct invocation, without re-entering the sandbox.
 func TestBashRequireEscalatedRunsDirect(t *testing.T) {
 	dir := t.TempDir()
 	runner := &stubRunner{}
 	tool := &BashTool{Dir: dir, Sandbox: runner}
-	res, err := runBash(t, tool, map[string]any{
+	args := map[string]any{
 		"command":             "echo escalated",
 		"sandbox_permissions": "require_escalated",
 		"justification":       "needs a build cache outside the workspace",
-	}, nil)
+	}
+	res, err := runBashCtx(t, context.Background(), tool, args, nil)
+	if err != nil || !strings.Contains(resultText(res), "requires explicit approval") {
+		t.Fatalf("request without authorization ran or gave the wrong refusal: result=%q err=%v", resultText(res), err)
+	}
+	res, err = runBashCtx(t, agentcore.WithDirectGrant(context.Background()), tool, args, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -141,11 +145,15 @@ func (failingRunner) SandboxArgv(shell, flag, command, dir string) ([]string, fu
 	return []string{shell, flag, "echo 'Operation not permitted' >&2; exit 1"}, func() {}, nil
 }
 
+func (failingRunner) SandboxCall(argv []string, _ string, _ seatbelt.CallPolicy) ([]string, func(), error) {
+	return []string{argv[0], argv[1], "echo 'Operation not permitted' >&2; exit 1"}, func() {}, nil
+}
+
 // TestBashNonSandboxFailureHasNoHint asserts an unsandboxed failure is not
 // labelled as a sandbox denial.
 func TestBashNonSandboxFailureHasNoHint(t *testing.T) {
 	dir := t.TempDir()
-	tool := &BashTool{Dir: dir}
+	tool := &BashTool{Dir: dir, Permissions: permissions.New(permissions.FullAccess)}
 	_, err := runBashErr(t, tool, map[string]any{"command": "echo 'Operation not permitted' >&2; exit 1"})
 	if err == nil {
 		t.Fatal("expected a failure")

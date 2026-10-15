@@ -33,6 +33,11 @@ type ApplyPatchTool struct {
 	// mutated so /rewind can roll the change back: every path a patch touches
 	// is snapshotted, creates and deletes included.
 	Snap *FileSnapshotRecorder
+	// BeforePersist, when set, runs after ALL changes are computed and before
+	// the first write. An isolated worker uses it to transfer the rewind
+	// baseline to its parent and wait for acknowledgement: a worker that dies
+	// during a write must not leave the parent without a way to rewind it.
+	BeforePersist func([]patch.Change) error
 	// WritableAt, when set, reports whether a path is already writable for this
 	// session — the sandbox's writable-root registry, which config.toml,
 	// permissions.toml and every prior write dialog feed. It is injected for the
@@ -157,6 +162,11 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	})
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
+	}
+	if t.BeforePersist != nil {
+		if err := t.BeforePersist(changes); err != nil {
+			return errorResult("apply_patch: cannot journal before writing: " + err.Error()), nil
+		}
 	}
 
 	var summaries []string

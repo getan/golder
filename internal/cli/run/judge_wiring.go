@@ -17,6 +17,7 @@ import (
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/reviewpolicy"
 	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/toolworker"
 )
 
 // WireBashSandbox injects the sandbox runner into every BashTool in tools. It
@@ -39,17 +40,26 @@ func WireBashSandbox(tools []agentcore.AgentTool, cwd string) {
 	if mode == seatbelt.ModeOff {
 		return
 	}
+	// Isolation is the default wherever this platform HAS an implementation;
+	// only a platform that never had one (Windows) keeps running bare, because
+	// failing closed there would make every shell call unusable. On Linux,
+	// bubblewrap being blocked therefore fails closed instead of silently
+	// dropping the boundary.
+	required := seatbelt.Supported()
 	for _, t := range tools {
-		b, ok := t.(*agenttool.BashTool)
-		if !ok {
-			continue
+		if b, ok := t.(*agenttool.BashTool); ok {
+			switch mode {
+			case seatbelt.ModeEnforce:
+				b.ForceSandbox = true
+				b.Sandbox = seatbelt.New(cwd)
+				b.RequireSandbox = true
+			case seatbelt.ModeAuto:
+				b.Sandbox = seatbelt.New(cwd)
+				b.RequireSandbox = required
+			}
 		}
-		switch mode {
-		case seatbelt.ModeEnforce:
-			b.ForceSandbox = true
-			b.Sandbox = seatbelt.New(cwd)
-		case seatbelt.ModeAuto:
-			b.Sandbox = seatbelt.New(cwd)
+		if w, ok := t.(*toolworker.Tool); ok {
+			w.RequireIsolation = required
 		}
 	}
 }
@@ -66,6 +76,9 @@ func WirePermissionState(tools []agentcore.AgentTool, state *permissions.State) 
 	for _, t := range tools {
 		if b, ok := t.(*agenttool.BashTool); ok {
 			b.Permissions = state
+		}
+		if w, ok := t.(*toolworker.Tool); ok {
+			w.Mode = state
 		}
 	}
 }
@@ -318,5 +331,11 @@ func SandboxGate() func(toolName string) bool {
 	if mode == seatbelt.ModeOff || !seatbelt.Available() {
 		return nil
 	}
-	return func(toolName string) bool { return strings.EqualFold(strings.TrimSpace(toolName), "bash") }
+	return func(toolName string) bool {
+		switch strings.ToLower(strings.TrimSpace(toolName)) {
+		case "bash", "read", "view_image", "grep", "find", "ls", "apply_patch":
+			return true
+		}
+		return false
+	}
 }

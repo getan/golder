@@ -6,6 +6,9 @@ package seatbelt
 // (bwrap installed, unprivileged user namespaces usable).
 func Available() bool { return bwrapAvailable() }
 
+// Supported reports that this platform has a sandbox implementation.
+func Supported() bool { return true }
+
 // New returns a Runner for projectDir, or nil when bubblewrap is unusable.
 func New(projectDir string) Runner {
 	if !Available() {

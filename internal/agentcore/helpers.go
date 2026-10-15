@@ -41,20 +41,25 @@ type PrepareArgumentsFunc func(ctx context.Context, toolName string, args json.R
 // BeforeToolCallDecision is the optional result of the beforeToolCall hook. When
 // Block is true the tool is not executed and an error result is produced;
 // Content/Details override the default block message when set. When Block is
-// false, UpdatedInput (when non-empty) replaces the tool's raw arguments before
-// execution (PreToolUse rewrite, FR-8; the replacement is re-validated against
-// the tool schema) and Sandbox asks for OS-level isolation of the call.
+// false, Sandbox asks for OS-level isolation of the already-validated call.
+// PreToolUse argument rewrites happen in PrepareArguments, before this decision.
 type BeforeToolCallDecision struct {
-	Block        bool
-	Content      *ContentList
-	Details      *any
-	UpdatedInput json.RawMessage
+	Block   bool
+	Content *ContentList
+	Details *any
 	// Sandbox asks the execution layer to run this call under OS-level
 	// isolation (e.g. a permission gate graded the command into a sandbox
 	// tier). The executor publishes the request into the context the tool
 	// executes with (SandboxRequestedFromContext); a tool that cannot isolate
 	// must fail closed. Ignored when Block is set.
 	Sandbox bool
+	// Network grants outbound network access to this invocation's sandbox. A
+	// model's "network:on" argument is only a REQUEST; only the authorization
+	// gate can set this bit after a reviewer/user approved the capability.
+	Network bool
+	// Direct is a separate per-call escape decision from the authorization gate
+	// (reviewer in auto, person in ask/uncertain). An Allow alone cannot set it.
+	Direct bool
 	// ReadGrant, when non-empty, allows this one call to read the given path
 	// outside the workspace. The executor publishes it into the context the
 	// tool executes with (ReadGrantFromContext). It carries a single path

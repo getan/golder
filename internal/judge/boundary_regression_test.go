@@ -133,12 +133,8 @@ func TestOutsideReadsAreAlwaysSeen(t *testing.T) {
 				Name: "bash", Arguments: bashArgs(c.cmd),
 			})
 
-			recognized := readOnlyCommand(c.cmd)
 			if asked == 0 && reviewer.calls == 0 {
-				t.Fatalf("%q was neither asked about nor reviewed (recognized=%v).\n"+
-					"The consent gate saw no path AND the fast path allowed it: the read reaches\n"+
-					"the filesystem with no layer looking. Either scan the operand or stop\n"+
-					"recognizing the command.", c.cmd, recognized)
+				t.Fatalf("%q was neither asked about nor reviewed; the boundary gate must see file operands", c.cmd)
 			}
 			// A denial of consent must stand: the gate blocks, and the reviewer
 			// (a layer that would have run later) is never consulted.
@@ -181,12 +177,11 @@ func TestInsideWorkspaceReadsAreNotQuestioned(t *testing.T) {
 	}
 }
 
-// TestRecognizedCommandsAreTheOnesTheGateSaw documents the relationship rather
-// than asserting a count: for every recognized command in the table above, the
-// operand scanner must report at least one candidate. It is the cheap structural
-// version of the invariant, and it fails the moment a program joins the
-// whitelist without joining the operand table.
-func TestRecognizedCommandsAreTheOnesTheGateSaw(t *testing.T) {
+// TestOutsideFileOperandsReachTheGate tests extraction for representative shell
+// readers. The OS sandbox is the enforcement if an unknown reader is absent
+// from this consent-oriented list; no separate hand-written read-only parser
+// decides whether to isolate a command anymore.
+func TestOutsideFileOperandsReachTheGate(t *testing.T) {
 	_, outside := boundaryFixture(t)
 	for _, cmd := range []string{
 		"cksum " + outside + "/a.go",
@@ -197,32 +192,19 @@ func TestRecognizedCommandsAreTheOnesTheGateSaw(t *testing.T) {
 		"cd " + outside + " && ls",
 		"grep -f " + outside + "/pat " + outside + "/a.go",
 	} {
-		if !readOnlyCommand(cmd) {
-			t.Errorf("%q is not recognized; this test's premise (recognized AND scanned) is gone", cmd)
-			continue
-		}
 		if got := commandPaths(cmd); len(got) == 0 {
-			t.Errorf("%q is recognized as read-only but the scanner reports no path operand; "+
-				"the consent gate will stay silent while the reviewer is skipped", cmd)
+			t.Errorf("%q reports no path operand; the consent gate cannot ask about it", cmd)
 		} else if !strings.Contains(strings.Join(got, " "), outside) {
 			t.Errorf("%q candidates = %v, want one under %q", cmd, got, outside)
 		}
 	}
 }
 
-// TestScannedButNotRecognizedStaysReviewed pins the fail-safe direction for a
-// command whose flags name a file while its bare operands are dangerous: `date
-// -r FILE` reads a file, but `date 010112002026` (BSD) sets the clock with no
-// flag at all, so date-with-operands is left to the reviewer. The gate still
-// asks about the file — that is what fileArgFlags is for — and the reviewer
-// still runs, which is the conservative half of the pair.
-func TestScannedButNotRecognizedStaysReviewed(t *testing.T) {
+// TestFileFlagReadIsAskedAndReviewed: a flag can name a file even when the
+// command has other effects; consent and authorization are separate questions.
+func TestFileFlagReadIsAskedAndReviewed(t *testing.T) {
 	workspace, outside := boundaryFixture(t)
 	cmd := "date -r " + outside + "/a.go"
-	if readOnlyCommand(cmd) {
-		t.Fatalf("%q is recognized; date-with-operands must stay with the reviewer "+
-			"(BSD `date MMDDhhmm` sets the clock without a flag)", cmd)
-	}
 	if got := commandPaths(cmd); len(got) == 0 {
 		t.Errorf("%q yields no candidates; the file named by -r must still be scanned so the "+
 			"consent gate asks about it", cmd)
@@ -293,5 +275,42 @@ func TestProgramTextIsNotScannedForPaths(t *testing.T) {
 	shellProgram := "sh -c 'cat /etc/hosts'"
 	if got := commandPaths(shellProgram); len(got) != 1 || got[0] != "/etc/hosts" {
 		t.Errorf("commandPaths(%q) = %v, want [/etc/hosts]", shellProgram, got)
+	}
+}
+
+// TestPythonGlobDoesNotAskForFilesystemRoot reproduces the prompt that named
+// "/" for a Python program whose only slash was inside the string "/*.jsonl".
+// Breaking a lexical path run at '*' leaves the existing root "/"; the
+// non-shell program scanner must instead check the entire string before it
+// can offer any path to the boundary gate.
+func TestPythonGlobDoesNotAskForFilesystemRoot(t *testing.T) {
+	workspace, outside := boundaryFixture(t)
+	cmd := "cd " + workspace + ` && python3 -c 'import json,glob,os;
+p=os.path.expanduser("~/.golder/sessions"); files=glob.glob(p+"/*.jsonl");
+print("sessions",len(files))'`
+	if got := commandPaths(cmd); len(got) != 1 || got[0] != workspace {
+		t.Fatalf("commandPaths = %v, want only the workspace cd (not /)", got)
+	}
+	asked := 0
+	gate := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gate(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: bashArgs(cmd)}); dec != nil || asked != 0 {
+		t.Fatalf("glob-only command prompted %d times; decision %+v", asked, dec)
+	}
+
+	// Rejecting the bogus prefix must not hide an existing external file opened
+	// by the same interpreter: the guard against a false positive cannot erase
+	// the true positive the consent gate exists to catch.
+	read := `python3 -c 'import glob; glob.glob("/*.jsonl"); open("` + outside + `/a.go")'`
+	if got := commandPaths(read); len(got) != 1 || got[0] != outside+"/a.go" {
+		t.Fatalf("commandPaths(real read) = %v, want the existing outside file", got)
+	}
+	if dec := gate(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: bashArgs(read)}); dec == nil || !dec.Block || asked != 1 {
+		t.Errorf("real outside read was not asked and denied: asked=%d decision=%+v", asked, dec)
 	}
 }

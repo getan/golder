@@ -168,9 +168,11 @@ func TestGatesInheritedChainCarriesToolUseHooks(t *testing.T) {
 	if child.AfterToolCall == nil {
 		t.Error("the inherited chain must carry the PostToolUse seam")
 	}
-	dec := child.BeforeToolCall(context.Background(), gatesCall())
-	if dec == nil || !dec.Block {
-		t.Fatalf("inherited PreToolUse hook = %+v, want a block", dec)
+	if child.PrepareArguments == nil {
+		t.Fatal("child did not inherit PreToolUse preparation")
+	}
+	if _, err := child.PrepareArguments(context.Background(), "bash", gatesCall().Arguments); err == nil {
+		t.Fatal("inherited PreToolUse hook must block before the child's gates")
 	}
 }
 

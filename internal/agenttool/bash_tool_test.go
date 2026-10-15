@@ -11,10 +11,16 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 )
 
 func runBash(t *testing.T, tool *BashTool, args map[string]any, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	t.Helper()
+	// Tests of the shell's stream, timeout and session mechanics run without
+	// a sandbox on purpose. Isolation itself is covered by bash_sandbox_test.
+	if tool.Sandbox == nil && tool.Permissions == nil && !tool.ForceSandbox {
+		tool.Permissions = permissions.New(permissions.FullAccess)
+	}
 	raw, err := json.Marshal(args)
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
@@ -114,7 +120,7 @@ func TestBashToolCancel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("bash not available on windows")
 	}
-	tool := &BashTool{}
+	tool := &BashTool{Permissions: permissions.New(permissions.FullAccess)}
 	ctx, cancel := context.WithCancel(context.Background())
 	raw, _ := json.Marshal(map[string]any{"command": "sleep 5"})
 	go func() {

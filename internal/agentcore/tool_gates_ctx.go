@@ -19,8 +19,12 @@ import "context"
 // child in a loop. OnChildStop is the counterpart that does belong: the hook
 // event written for children, with the child's own context and block budget.
 type ToolGateChain struct {
-	// BeforeToolCall is the composed gate (trust → read-scope → permission, then
-	// the PreToolUse hook seam). Nil means the run is ungated.
+	// PrepareArguments runs PreToolUse rewrites before validation and before
+	// the three gates. A derived run must inherit it along with the gate so it
+	// never authorizes the original arguments and executes rewritten ones.
+	PrepareArguments PrepareArgumentsFunc
+	// BeforeToolCall is the composed gate (trust → read-scope → permission),
+	// after any PreToolUse rewrite. Nil means the run is ungated.
 	BeforeToolCall BeforeToolCallFunc
 	// AfterToolCall is the PostToolUse seam. Nil is a no-op.
 	AfterToolCall AfterToolCallFunc

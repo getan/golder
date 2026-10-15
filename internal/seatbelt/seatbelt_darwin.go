@@ -16,6 +16,9 @@ func Available() bool {
 	return err == nil
 }
 
+// Supported reports that this platform has a sandbox implementation.
+func Supported() bool { return true }
+
 // SeatbeltRunner generates one sandbox-exec profile per command, scoped to
 // the project directory. ProjectDir should be the run's working directory;
 // TmpDir defaults to os.TempDir when empty.
@@ -34,12 +37,17 @@ func New(projectDir string) Runner {
 
 // SandboxArgv implements Runner.
 func (r *SeatbeltRunner) SandboxArgv(shell, flag, command, dir string) ([]string, func(), error) {
-	profile, err := r.writeProfile()
+	return r.SandboxCall([]string{shell, flag, command}, dir, CallPolicy{})
+}
+
+// SandboxCall confines an arbitrary one-shot tool process with per-call grants.
+func (r *SeatbeltRunner) SandboxCall(argv []string, _ string, policy CallPolicy) ([]string, func(), error) {
+	profile, err := r.writeCallProfile(policy)
 	if err != nil {
 		return nil, nil, err
 	}
 	cleanup := func() { _ = os.Remove(profile) }
-	return []string{"sandbox-exec", "-f", profile, shell, flag, command}, cleanup, nil
+	return append([]string{"sandbox-exec", "-f", profile}, argv...), cleanup, nil
 }
 
 func (r *SeatbeltRunner) tmpDir() string {
@@ -94,9 +102,13 @@ func ancestorChain(p string) []string {
 // for the project, the system runtime and ReadableRoots (so the rest of $HOME,
 // including shell rc files and credential stores, is unreadable by
 // construction); writes are confined to the project and temp dirs. Network is
-// denied unless GOLDER_SANDBOX_NETWORK opts in (egress must be granted, so a
-// sandboxed command cannot exfiltrate what it read).
+// denied unless the gate granted it for this one call (CallPolicy.Network), so
+// a sandboxed command cannot exfiltrate what it read without a decision.
 func (r *SeatbeltRunner) writeProfile() (string, error) {
+	return r.writeCallProfile(CallPolicy{})
+}
+
+func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	project := r.ProjectDir
 	if project == "" {
 		var err error
@@ -120,6 +132,10 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 	// read their own spill back, so a write-only entry would fail confusingly.
 	readRoots := append([]string{project, r.tmpDir()}, ReadableRoots()...)
 	readRoots = append(readRoots, WritableRoots()...)
+	readRoots = append(readRoots, policy.ReadDirs...)
+	readRoots = append(readRoots, policy.WriteDirs...)
+	// A one-call grant is exact: add it as a literal below, NOT to readRoots
+	// (which are subpath rules covering an entire directory).
 	readRule := fmt.Sprintf("(allow file-read* (literal \"/\") %s)", quoteAll(canonicalsAll(readRoots)))
 	// Parent chains need metadata traversal so path resolution (and getcwd)
 	// work: an allow on /a/b/c does not by itself permit stat on /a/b, and the
@@ -129,6 +145,9 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 	var metaDirs []string
 	for _, root := range readRoots {
 		metaDirs = append(metaDirs, ancestorChain(root)...)
+	}
+	for _, p := range append(append([]string{}, policy.ReadFiles...), policy.WriteFiles...) {
+		metaDirs = append(metaDirs, ancestorChain(p)...)
 	}
 	if metaDirs = dedupePaths(metaDirs); len(metaDirs) > 0 {
 		// literal, not subpath: only the ancestor directories themselves need
@@ -141,7 +160,7 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 		metaRule = fmt.Sprintf("(allow file-read-metadata %s)\n", strings.Join(quoted, " "))
 	}
 	network := "(deny network*)"
-	if NetworkEnabled() {
+	if policy.Network {
 		network = "(allow network*)"
 	}
 	// Golder's own state: denied read AND write after the allow rules, so a
@@ -164,12 +183,40 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 	b.WriteString("(allow sysctl-read)\n")
 	b.WriteString(readRule + "\n")
 	b.WriteString(metaRule)
-	writeRoots := append(canonicals(project), canonicals(r.tmpDir())...)
-	for _, root := range WritableRoots() {
-		writeRoots = append(writeRoots, canonicals(root)...)
+	if len(policy.ReadFiles)+len(policy.WriteFiles) > 0 {
+		paths := append(append([]string{}, policy.ReadFiles...), policy.WriteFiles...)
+		fmt.Fprintf(&b, "(allow file-read* %s)\n", literalAll(canonicalsAll(paths)))
+	}
+	var writeRoots []string
+	if !policy.ReadOnlyFilesystem {
+		writeRoots = append(canonicals(project), canonicals(r.tmpDir())...)
+		for _, root := range WritableRoots() {
+			writeRoots = append(writeRoots, canonicals(root)...)
+		}
+		for _, root := range policy.WriteDirs {
+			writeRoots = append(writeRoots, canonicals(root)...)
+		}
 	}
 	fmt.Fprintf(&b, "(allow file-write* %s (literal \"/dev/null\") (literal \"/dev/tty\"))\n",
 		quoteAll(dedupePaths(writeRoots)))
+	if len(policy.WriteFiles) > 0 && !policy.ReadOnlyFilesystem {
+		fmt.Fprintf(&b, "(allow file-write* %s)\n", literalAll(canonicalsAll(policy.WriteFiles)))
+	}
+	// A denied child must override a broader parent allow (project root or a
+	// directory grant). Keep exact refusals literal; a subtree refusal blocks
+	// everything below it. These rules come after all file allows.
+	if len(policy.DenyReadDirs) > 0 {
+		fmt.Fprintf(&b, "(deny file-read* %s)\n", quoteAll(canonicalsAll(policy.DenyReadDirs)))
+	}
+	if len(policy.DenyReadFiles) > 0 {
+		fmt.Fprintf(&b, "(deny file-read* %s)\n", literalAll(canonicalsAll(policy.DenyReadFiles)))
+	}
+	if len(policy.DenyWriteDirs) > 0 {
+		fmt.Fprintf(&b, "(deny file-write* %s)\n", quoteAll(canonicalsAll(policy.DenyWriteDirs)))
+	}
+	if len(policy.DenyWriteFiles) > 0 {
+		fmt.Fprintf(&b, "(deny file-write* %s)\n", literalAll(canonicalsAll(policy.DenyWriteFiles)))
+	}
 	b.WriteString(denyGolder)
 	b.WriteString("(deny file-write* (regex #\".*trust\\.json$\"))\n")
 	b.WriteString(network + "\n")
@@ -189,6 +236,15 @@ func (r *SeatbeltRunner) writeProfile() (string, error) {
 		return "", fmt.Errorf("seatbelt: write profile: %w", err)
 	}
 	return name, nil
+}
+
+// literalAll grants only the named files, never an entire directory subtree.
+func literalAll(paths []string) string {
+	var b strings.Builder
+	for _, p := range dedupePaths(paths) {
+		fmt.Fprintf(&b, " (literal %s)", quote(p))
+	}
+	return b.String()
 }
 
 // quote renders an absolute path as a double-quoted profile string.

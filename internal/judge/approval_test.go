@@ -90,8 +90,8 @@ func TestConfirmCallbackNoSandboxTier(t *testing.T) {
 		Sandboxed:  func(string) bool { return false }, // no runner for this call
 		Confirm:    answeringConfirm(&seen, ApprovalAnswer{Approve: true, Answered: true}),
 	})
-	if dec := gate(context.Background(), bashCall("rm -rf build")); dec != nil {
-		t.Fatalf("approved call should pass, got %+v", dec)
+	if dec := gate(context.Background(), bashCall("rm -rf build")); dec == nil || !dec.Direct || dec.Block {
+		t.Fatalf("approved unsandboxed call needs a Direct grant, got %+v", dec)
 	}
 	if seen.Kind != ApprovalNoSandbox {
 		t.Errorf("kind = %q, want %q", seen.Kind, ApprovalNoSandbox)
@@ -110,8 +110,8 @@ func TestConfirmCallbackReviewFailedTier(t *testing.T) {
 	})
 	// The command must be one the read-only fast path declines, or the reviewer
 	// (whose failure this test is about) never runs.
-	if dec := gate(context.Background(), bashCall("go test ./...")); dec != nil {
-		t.Fatalf("approved call should pass, got %+v", dec)
+	if dec := gate(context.Background(), bashCall("go test ./...")); dec == nil || !dec.Direct || dec.Block {
+		t.Fatalf("approved unsandboxed call needs a Direct grant, got %+v", dec)
 	}
 	if seen.Kind != ApprovalReviewFailed {
 		t.Errorf("kind = %q, want %q", seen.Kind, ApprovalReviewFailed)

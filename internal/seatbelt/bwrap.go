@@ -67,8 +67,13 @@ func (r *BwrapRunner) tmpDir() string {
 // directories are then re-bound writable, and fresh /dev (bubblewrap's
 // devtmpfs also mounts devpts, so TTY sessions keep working) and /proc are
 // mounted in a new pid namespace. The network is unshared (no egress) unless
-// GOLDER_SANDBOX_NETWORK opts back in.
+// the gate granted it for this one call (CallPolicy.Network).
 func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, func(), error) {
+	return r.SandboxCall([]string{shell, flag, command}, dir, CallPolicy{})
+}
+
+// SandboxCall runs an arbitrary argv in a one-call mount and network namespace.
+func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy) ([]string, func(), error) {
 	project := r.ProjectDir
 	if project == "" {
 		var err error
@@ -83,7 +88,7 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 		"--unshare-pid", "--unshare-uts", "--unshare-ipc",
 	}
 	// Network is unshared by default (codex parity); --share-net restores it.
-	if NetworkEnabled() {
+	if policy.Network {
 		argv = append(argv, "--share-net")
 	} else {
 		argv = append(argv, "--unshare-net")
@@ -94,6 +99,10 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 	// ReadableRoots' environment/config extension.
 	readRoots := append([]string{project}, ReadableRoots()...)
 	readRoots = append(readRoots, WritableRoots()...)
+	readRoots = append(readRoots, policy.ReadDirs...)
+	readRoots = append(readRoots, policy.WriteDirs...)
+	readRoots = append(readRoots, policy.ReadFiles...)
+	readRoots = append(readRoots, policy.WriteFiles...)
 	roots := dedupePaths(canonicalsAll(readRoots))
 	// Shorter paths first so an ancestor root (e.g. an env-provided $HOME
 	// entry) is mounted before a descendant file that needs its parent.
@@ -117,18 +126,40 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 		argv = append(argv, "--ro-bind", root, root)
 	}
 	argv = append(argv, "--dev", "/dev", "--proc", "/proc")
-	for _, p := range canonicals(project) {
-		argv = append(argv, "--bind", p, p)
+	if !policy.ReadOnlyFilesystem {
+		for _, p := range canonicals(project) {
+			argv = append(argv, "--bind", p, p)
+		}
 	}
 	// Session grants from the approval dialog / config: bound writable after
 	// the read-only pass above, so the writable bind wins for the same path.
-	for _, root := range WritableRoots() {
-		for _, p := range canonicals(root) {
+	if !policy.ReadOnlyFilesystem {
+		for _, root := range WritableRoots() {
+			for _, p := range canonicals(root) {
+				argv = append(argv, "--bind-try", p, p)
+			}
+		}
+		for _, root := range policy.WriteDirs {
+			for _, p := range canonicals(root) {
+				argv = append(argv, "--bind-try", p, p)
+			}
+		}
+		for _, file := range policy.WriteFiles {
+			for _, p := range canonicals(file) {
+				info, err := os.Stat(p)
+				if err != nil || !info.Mode().IsRegular() {
+					// bubblewrap can bind an existing file exactly, but cannot bind
+					// a new file without also exposing its containing directory for
+					// writing. Never widen an exact "write once" answer into a
+					// directory grant: let the caller request the directory explicitly.
+					return nil, nil, fmt.Errorf("bwrap: exact write to %s needs an existing regular file; grant its directory for a new file", p)
+				}
+				argv = append(argv, "--bind", p, p)
+			}
+		}
+		for _, p := range canonicals(r.tmpDir()) {
 			argv = append(argv, "--bind-try", p, p)
 		}
-	}
-	for _, p := range canonicals(r.tmpDir()) {
-		argv = append(argv, "--bind-try", p, p)
 	}
 	// Re-assert golder's own state as read-write denied after the writable
 	// binds (later mounts win), so a project rooted inside $GOLDER_HOME cannot
@@ -146,7 +177,32 @@ func (r *BwrapRunner) SandboxArgv(shell, flag, command, dir string) ([]string, f
 			}
 		}
 	}
-	argv = append(argv, shell, flag, command)
+	// Later mounts override earlier ones: mask refused children after the
+	// project and granted directory binds. A directory disappears behind an
+	// empty tmpfs; a file is replaced with /dev/null. For write-only refusals,
+	// bind the original file read-only, preserving the ability to read it.
+	for _, p := range append(append([]string{}, policy.DenyReadDirs...), policy.DenyWriteDirs...) {
+		for _, spelling := range canonicals(p) {
+			if info, err := os.Stat(spelling); err == nil && info.IsDir() {
+				argv = append(argv, "--tmpfs", spelling)
+			}
+		}
+	}
+	for _, p := range policy.DenyReadFiles {
+		for _, spelling := range canonicals(p) {
+			if info, err := os.Stat(spelling); err == nil && info.Mode().IsRegular() {
+				argv = append(argv, "--ro-bind", "/dev/null", spelling)
+			}
+		}
+	}
+	for _, p := range policy.DenyWriteFiles {
+		for _, spelling := range canonicals(p) {
+			if info, err := os.Stat(spelling); err == nil && info.Mode().IsRegular() {
+				argv = append(argv, "--ro-bind", spelling, spelling)
+			}
+		}
+	}
+	argv = append(argv, command...)
 	return argv, nil, nil
 }
 

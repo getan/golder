@@ -294,8 +294,7 @@ See `golder --help` for the complete list.
 | `GOLDER_HOME` | Override the `~/.golder` base directory |
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
-| `GOLDER_SANDBOX` | Sandbox-tier execution: `off` / `auto` (default, sandbox tier only) / `enforce` (every bash command sandboxed, fail-closed without a runner) |
-| `GOLDER_SANDBOX_NETWORK` | Network inside the sandbox: off by default (egress must be granted explicitly); set to `on` to allow |
+| `GOLDER_SANDBOX` | Execution isolation: `off` / `auto` (default: every approved bash call runs sandboxed) / `enforce` (same, and a runner is required) |
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |

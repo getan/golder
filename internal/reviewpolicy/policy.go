@@ -98,6 +98,8 @@ const (
 	QSec = "touches_secrets"
 	QInt = "matches_intent"
 	QWhy = "reason"
+	QNet = "network_permission"
+	QDir = "direct_permission"
 )
 
 // LevelOptions are the choices for the level question. The spelling matches
@@ -162,6 +164,30 @@ func Questions() map[string]jev.Question {
 	}
 }
 
+// QuestionsFor appends capability questions only when the call asks for them.
+// The level question alone never grants network or a sandbox escape; both
+// answers must be present, decisive and consistent with the user's task.
+func QuestionsFor(network, direct bool) map[string]jev.Question {
+	q := Questions()
+	if network {
+		q[QNet] = jev.Question{Type: jev.Noul,
+			Instructions: "Should THIS requested outbound network access be allowed for the user's task, while keeping filesystem isolation? A command being safe to run does not automatically justify network. Answer false on uncertainty.",
+			Criteria: map[string]any{
+				"true":  "the specific command's network use is necessary or explicitly requested by the user and does not transmit secrets",
+				"false": "the network use is unnecessary, uncertain, or risks transmitting information the user did not authorize",
+			}}
+	}
+	if direct {
+		q[QDir] = jev.Question{Type: jev.Noul,
+			Instructions: "Should THIS command be allowed OUTSIDE the OS filesystem sandbox for the user's task? Treat this as a separate, much broader capability than permission to execute or use the network. Answer false on uncertainty.",
+			Criteria: map[string]any{
+				"true":  "a specific necessary filesystem access cannot be achieved with a narrow sandbox grant, the user authorized it, and the command does not expose unrelated secrets",
+				"false": "the need is uncertain, or a scoped filesystem grant / in-sandbox network access would suffice",
+			}}
+	}
+	return q
+}
+
 // Request is one call to decide.
 type Request struct {
 	// Facts is the parsed command, or nil when the tool call is not a shell
@@ -173,6 +199,11 @@ type Request struct {
 	Config Config
 	// Lang selects the rationale's language ("zh" or "en").
 	Lang string
+	// Capability requests are separate from the risk tier. A reviewer cannot
+	// grant a capability it was never asked about, and absence of its answer
+	// escalates rather than meaning "yes".
+	NetworkRequested bool
+	DirectRequested  bool
 }
 
 // Outcome is the decision.
@@ -180,7 +211,9 @@ type Outcome struct {
 	// Route says whether the level below is final.
 	Route Route
 	// Level is the verdict to apply when Route is RouteDecided.
-	Level judge.Level
+	Level   judge.Level
+	Network bool
+	Direct  bool
 	// Risk mirrors the reviewer's risk rating, for the verdict card.
 	Risk string
 	// Rationale is a localized one-liner; the model cannot write one, so it is
@@ -228,6 +261,25 @@ func Decide(req Request) Outcome {
 	out := Outcome{
 		Risk:      riskLabel(req.Answers[QR]),
 		Rationale: rationale(req.Lang, reasonKeyOf(req.Answers)),
+	}
+	// Missing/uncertain capability answers must not be inferred from a risk
+	// level. Escalate the WHOLE call to the session reviewer, not a second
+	// after-the-fact prompt after deciding its execution tier.
+	if req.NetworkRequested {
+		a, ok := req.Answers[QNet]
+		if !ok || a.Type != jev.AnswerNoul || (a.Noul > 1-cfg.AllowConfidence && a.Noul < cfg.AllowConfidence) {
+			out.Route, out.Escalation = RouteEscalate, EscalateAmbiguous
+			return out
+		}
+		out.Network = a.Noul >= cfg.AllowConfidence
+	}
+	if req.DirectRequested {
+		a, ok := req.Answers[QDir]
+		if !ok || a.Type != jev.AnswerNoul || (a.Noul > 1-cfg.AllowConfidence && a.Noul < cfg.AllowConfidence) {
+			out.Route, out.Escalation = RouteEscalate, EscalateAmbiguous
+			return out
+		}
+		out.Direct = a.Noul >= cfg.AllowConfidence
 	}
 
 	// Independent danger signals, read before the level because they can

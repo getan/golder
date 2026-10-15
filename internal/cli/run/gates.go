@@ -31,6 +31,7 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -124,13 +125,13 @@ func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCal
 	if seam != nil {
 		tec.BeforeToolCall = seam
 	}
-	// The hook seams chain onto whatever seam the gates installed: a hook block
-	// short-circuits, so the session's gates stay authoritative over user hooks
-	// (the ordering every driver had before this file existed).
+	// The hook rewrites the input before validation and the gates. The gates
+	// then authorize exactly the input that will be executed, just once.
 	InstallSeams(cfg, d, deps)
 	child := &agentcore.ToolGateChain{
-		BeforeToolCall: g.chain(),
-		Snapshot:       g.Authorization,
+		PrepareArguments: tec.PrepareArguments,
+		BeforeToolCall:   g.chain(),
+		Snapshot:         g.Authorization,
 	}
 	if d != nil {
 		// A derived run inherits the tool-use hooks too: a PreToolUse hook that
@@ -138,7 +139,6 @@ func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCal
 		// calls. The session's Stop hook is deliberately not inherited (a child's
 		// end is its own), but the SubagentStop family is — that is the event
 		// written for children, and it carries its own block budget here.
-		child.BeforeToolCall = chainBeforeToolCall(child.BeforeToolCall, preToolCallHook(d, deps))
 		child.AfterToolCall = postToolCallHook(d, deps)
 		if sub := stopHook(d, deps, "SubagentStop", 0); sub != nil {
 			child.OnChildStop = func(ctx context.Context, agentCtx *agentcore.AgentContext) (bool, string) {
@@ -233,7 +233,11 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 	permOpts := judge.GateOpts{
 		Classifier: g.classifier(),
 		Sandboxed:  o.Sandboxed,
-		Notify:     o.Notes.Emit,
+		// Isolation is the default only where this platform has an
+		// implementation. Hardcoding true would make every bash call on a
+		// platform that never had a sandbox (Windows) fail closed.
+		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Notify:         o.Notes.Emit,
 		// The stdin prompt's `w`/`s` answers need the sandbox registry and the
 		// managed store, neither of which judge (a leaf package) can reach.
 		Cwd:           o.Cwd,

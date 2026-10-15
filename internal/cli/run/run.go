@@ -25,6 +25,8 @@ import (
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/toolworker"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -305,16 +307,26 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	// A single session manager is shared by bash and write_stdin so a command
 	// launched by bash is visible to the poll/interrupt tool.
 	sessions := execsess.NewManager()
+	extra := ReadableExtraRoots()
+	var fileRunner seatbelt.CallRunner
+	if seatbelt.ModeFromEnv() != seatbelt.ModeOff {
+		if runner := seatbelt.New(cwd); runner != nil {
+			fileRunner = runner
+		}
+	}
+	isolated := func(t agentcore.AgentTool) agentcore.AgentTool {
+		return &toolworker.Tool{Original: t, Root: cwd, ExtraRoots: extra, Snap: snap, Runner: fileRunner}
+	}
 	tools := []agentcore.AgentTool{
-		&agenttool.ReadTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
-		&agenttool.ViewImageTool{Root: cwd, ExtraRoots: ReadableExtraRoots()},
+		isolated(&agenttool.ReadTool{Root: cwd, ExtraRoots: extra}),
+		isolated(&agenttool.ViewImageTool{Root: cwd, ExtraRoots: extra}),
 		// One editing tool for the whole write path: apply_patch carries
 		// adds, updates, moves, and deletes in a single call, so the model
 		// keeps one editing tool in context instead of choosing between
 		// write and edit on every change.
-		&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: ReadableExtraRoots(), Snap: snap, WritableAt: WritableAt},
-		&agenttool.GrepTool{Root: cwd},
-		&agenttool.FindTool{Root: cwd},
+		isolated(&agenttool.ApplyPatchTool{Root: cwd, ExtraRoots: extra, Snap: snap, WritableAt: WritableAt}),
+		isolated(&agenttool.GrepTool{Root: cwd}),
+		isolated(&agenttool.FindTool{Root: cwd}),
 		&agenttool.BashTool{Dir: cwd, Sessions: sessions},
 		&agenttool.WriteStdinTool{Sessions: sessions},
 		&agenttool.TodoTool{Store: agenttool.NewTodoStore()},
@@ -451,6 +463,9 @@ func SnapshotRecorderFromTools(tools []agentcore.AgentTool) *agenttool.FileSnaps
 			if tool.Snap != nil {
 				return tool.Snap
 			}
+		}
+		if tool, ok := t.(*toolworker.Tool); ok && tool.Name() == "apply_patch" {
+			return tool.Snap
 		}
 	}
 	return nil

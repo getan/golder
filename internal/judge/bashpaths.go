@@ -51,14 +51,9 @@ import (
 // Printers are deliberately absent: `echo /etc/hosts` renders a string, it does
 // not read a file.
 //
-// It must cover every whitelisted program that opens a path it is handed, and
-// readOnlyProgramsWithoutPathOperands records the decision for the rest: the two
-// tables together are the statement "for each command the recognizer can call
-// read-only, whether its operands are scanned".
-// TestOperandCoverageIsDeclaredForEveryWhitelistedProgram holds that statement,
-// because the two tables live in different files and nothing else keeps them in
-// step — a whitelisted program missing from both is exactly how `cksum
-// /outside/x` came to be neither asked about nor reviewed.
+// Its purpose is consent, not risk grading: all bash commands run under the
+// OS read boundary by default, while this list helps the gate ask before a
+// specific read outside the workspace is attempted.
 var fileOperandCommands = map[string]bool{
 	// readers
 	"cat": true, "tac": true, "head": true, "tail": true, "less": true,
@@ -67,24 +62,21 @@ var fileOperandCommands = map[string]bool{
 	// date is here for its file-reading flags (`date -r FILE`, GNU's
 	// `date -f DATESFILE`), declared in fileArgFlags below. A bare date operand
 	// (BSD's `date MMDDhhmm`, which sets the clock) is not path-shaped, so the
-	// scanner reports nothing for it — the whitelist is what refuses it.
+	// scanner reports nothing for it — the risk grader decides whether to run it.
 	"date": true,
 	// searchers
 	"grep": true, "egrep": true, "fgrep": true, "rg": true, "ag": true,
 	"ack": true, "find": true, "fd": true, "ls": true, "tree": true,
-	// du and which look at named paths too, and the readers below were missing
-	// from this table while the whitelist recognized them: for `cksum
-	// /outside/x` the consent gate stayed silent AND the review was skipped, so
-	// the read went through unasked. The table has to cover every whitelisted
-	// program that opens a path it is handed.
+	// du and which look at named paths too. `cksum /outside/x` previously went
+	// unasked because cksum was absent; the sandbox still provides a hard stop
+	// if another program's path operands are not in this table yet.
 	"du": true, "which": true, "cksum": true, "base32": true,
 	"readlink": true, "realpath": true,
 	// cd's operand is a directory the shell enters and everything after it reads
 	// from, so it names a place the boundary applies to. Without this the
 	// dominant shape of a real command line — `cd /outside && ls` — carried no
 	// path the scanner could see, so the gate never asked about the directory
-	// being entered; the whitelist recognizes `cd`, which would leave that read
-	// unreviewed as well as unasked.
+	// being entered.
 	"cd": true,
 	// stream editors
 	"sed": true, "awk": true, "gawk": true, "sort": true, "uniq": true,
@@ -99,46 +91,6 @@ var fileOperandCommands = map[string]bool{
 	"python": true, "python3": true, "node": true, "nodejs": true,
 	"perl": true, "ruby": true, "php": true, "bash": true, "sh": true,
 	"zsh": true, "dash": true, "source": true,
-}
-
-// readOnlyProgramsWithoutPathOperands names the whitelisted programs whose bare
-// operands are NOT paths, with the reason, so "every whitelisted program has
-// been decided about" is a checkable statement rather than an assumption. The
-// whitelist (readonly.go) and the operand table above live in different files,
-// and nothing else keeps them in step — a program missing from both is how
-// `cksum /outside/x` came to be neither asked about by the consent gate nor
-// reviewed by the model.
-//
-// A program here may STILL read a file through a flag; that half is declared in
-// fileArgFlags, which is where `date -f`, `grep -f` and the like are listed.
-var readOnlyProgramsWithoutPathOperands = map[string]string{
-	// Nothing to open: the program reports on the shell or the machine.
-	"pwd":      "prints the shell's own working directory",
-	"whoami":   "prints the current user name",
-	"id":       "prints the current user's ids",
-	"uname":    "prints kernel information",
-	"sw_vers":  "prints the macOS version; it takes no operands",
-	"hostname": "prints the machine name (a bare operand would set it, which rejectsNonFlags refuses)",
-	"true":     "does nothing",
-	"false":    "does nothing but exit non-zero",
-
-	// Prints its arguments; opening them is what the shell would have to do, and
-	// the scanner has already refused the expansions that could turn one into a
-	// read (`echo "$(cat x)"` is not recognized at all).
-	"echo":   "prints its arguments, it does not open them",
-	"printf": "prints its arguments, it does not open them",
-
-	// Transforms a string: the path is never opened, only split.
-	"basename": "splits a string, it never opens the path",
-	"dirname":  "splits a string, it never opens the path",
-
-	// The exception that proves the point: git's operands ARE paths, but they
-	// are pathspecs inside the repository, and git itself refuses to leave it
-	// (`git show HEAD:../../etc/passwd` → "outside repository"). The flags that
-	// would escape that (--no-index, --git-dir, -C, --work-tree, -c, …) are
-	// refused by gitReadOnly, which is why this entry is safe without a scanned
-	// operand.
-	"git": "operands are repository-relative pathspecs; the flags that escape the repository are refused",
 }
 
 // interpreterProgramFlags maps an interpreter to the flag whose argument is an
@@ -623,7 +575,9 @@ const maxProgramDepth = 3
 //   - Any other language is one this package does not parse and never will: a
 //     Python program is not a shell command, and `/60` in `(n*med)/60` is
 //     arithmetic. So the text is scanned for path-shaped runs, and a run counts
-//     ONLY IF IT EXISTS on disk.
+//     ONLY IF IT EXISTS on disk. Keep glob metacharacters within the run: the
+//     prefix of `"/*.jsonl"` is `/`, which exists, but the program did not name
+//     the filesystem root as a file to read.
 //
 // The existence test is the point, not a heuristic layered on top of one. This
 // gate asks a READ question — bash's paths are read-scoped, see the tool table
@@ -631,8 +585,9 @@ const maxProgramDepth = 3
 // precisely the property that separates a path from a string that resembles
 // one. It is a VERIFIABLE predicate rather than a longer list of shapes:
 // `(n*med)/60` yields the run `/60`, `/60` does not exist, so it is not a path;
-// and no arithmetic, however unusual, can produce a false candidate, because a
-// candidate has to name something real.
+// and a nonexistent run cannot produce a candidate. Existence is necessary,
+// not sufficient: a bare `/` can exist as the prefix of a glob or expression,
+// so the extractor must keep the whole literal intact before statting it.
 //
 // The hole is the mirror image, and it is design rather than oversight: a
 // program that CREATES a path (`open("/new", "w")`) names a file that does not
@@ -668,12 +623,15 @@ func programPaths(interpreter, prog string, depth int) []string {
 //     (`(n*med)/60` divides; `"/x/y"` names a file). Quoting is the one
 //     convention every language here shares.
 //   - programPaths then keeps only runs that EXIST, because this gate asks a
-//     read question and a path that does not exist cannot be read.
+//     read question and a path that does not exist cannot be read. A glob is
+//     kept in the run rather than split at `*`/`?`/`[` so `"/*.jsonl"` cannot
+//     degrade into the existing filesystem root `/`.
 //
 // It is a RUN extractor, not an answer: its output is a candidate list. The name
 // says so deliberately — a function called `embeddedPaths` invited callers to
 // treat what it returned as paths, which is how a consent dialog came to be
-// raised for `/60`.
+// raised for `/60`. The same would happen for a glob's prefix `/` if the
+// extractor stopped the run at its wildcard.
 func pathShapedRuns(prog string) []string {
 	var out []string
 	start := -1
@@ -713,7 +671,7 @@ func pathShapedRuns(prog string) []string {
 // pathRune reports whether r can appear inside a path.
 func pathRune(r rune) bool {
 	switch r {
-	case '/', '~', '.', '_', '-', '+', '@', '%':
+	case '/', '~', '.', '_', '-', '+', '@', '%', '*', '?', '[', ']':
 		return true
 	}
 	return unicode.IsLetter(r) || unicode.IsDigit(r)

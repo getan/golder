@@ -689,6 +689,28 @@ type Entries struct {
 	Session []Grant
 }
 
+// FromSnapshot builds an in-memory authorization table for a one-call tool
+// worker. It never opens or writes the managed store: the parent has already
+// read it and sent the decisions this call was approved under. Keeping the two
+// layers separate preserves their precedence (session over remembered).
+func FromSnapshot(entries Entries) (*Store, error) {
+	s := &Store{saved: map[string]Grant{}, session: map[string]Grant{}, removed: map[string]bool{}}
+	for _, layer := range []struct {
+		rows []Grant
+		into map[string]Grant
+	}{{entries.Remembered, s.saved}, {entries.Session, s.session}} {
+		for _, g := range layer.rows {
+			p, err := storeKey(g.Path)
+			if err != nil {
+				return nil, fmt.Errorf("worker grant %q: %w", g.Path, err)
+			}
+			g.Path = p
+			layer.into[p] = g
+		}
+	}
+	return s, nil
+}
+
 // All returns every row from every layer, for a caller that wants one list.
 func (e Entries) All() []Grant {
 	out := make([]Grant, 0, len(e.Remembered)+len(e.Session))

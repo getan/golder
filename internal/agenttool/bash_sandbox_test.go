@@ -10,19 +10,28 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 // stubRunner stands in for the platform sandbox: it records that it was asked
 // to isolate a command and rewrites the command so the test can see which argv
 // ran.
 type stubRunner struct {
-	calls int
-	argv  []string
+	calls  int
+	argv   []string
+	policy seatbelt.CallPolicy
 }
 
 func (s *stubRunner) SandboxArgv(shell, flag, command, dir string) ([]string, func(), error) {
 	s.calls++
 	s.argv = []string{shell, flag, command, dir}
+	return []string{"echo", "sandboxed"}, func() {}, nil
+}
+
+func (s *stubRunner) SandboxCall(argv []string, dir string, policy seatbelt.CallPolicy) ([]string, func(), error) {
+	s.calls++
+	s.argv = append(append([]string{}, argv...), dir)
+	s.policy = policy
 	return []string{"echo", "sandboxed"}, func() {}, nil
 }
 
@@ -37,36 +46,22 @@ func runBashCtx(t *testing.T, ctx context.Context, tool *BashTool, args map[stri
 	return tool.Execute(ctx, "call-1", raw, onUpdate)
 }
 
-// TestBashExecutionLayerDoesNotGrade is the boundary this file pins: the bash
-// tool holds no judge. A verdict is decided by the permission gate, and it
-// reaches the execution layer in exactly two shapes — a context request
-// (containment; TestBashSandboxRequestRoutesToRunner) or a block before the tool
-// is ever called (judge.PermissionGate). What the tool still owns is the
-// envelope: enforce mode, the live approval mode, and the sandbox-escalation
-// request (see bash_escalation_test.go).
-//
-// Concretely: an ordinary command with a runner available and no gate decision
-// runs direct, because nothing at this layer weighs it.
+// No shell content inspection is needed for sandbox routing: every approved
+// command gets the same file sandbox, unless its gate decision grants Direct.
 func TestBashExecutionLayerDoesNotGrade(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{
 		Sandbox: runner,
 	}
-	// The command must be one the read-only recognizer does NOT match: a
-	// recognized command is contained even on an allow verdict (see
-	// TestBashReadOnlyFastPathIsContained), so `echo direct` would route to the
-	// runner and this test would be pinning the wrong thing. `git --version` is
-	// fast and not recognized (no subcommand word), unlike a build or test run
-	// that would outlive the yield window.
 	res, err := runBash(t, tool, map[string]any{"command": "git --version"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if runner.calls != 0 {
-		t.Fatal("nothing at this layer should have asked for isolation")
+	if runner.calls != 1 {
+		t.Fatal("an approved bash command must be isolated regardless of its spelling")
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "git version") {
-		t.Fatalf("output = %q, want direct output", got)
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want isolated output", got)
 	}
 }
 
@@ -77,18 +72,15 @@ func TestBashExecutionLayerDoesNotGrade(t *testing.T) {
 func TestBashSandboxRequestRoutesToRunner(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}
-	// Not a read-only-recognized command: a recognized read is contained on its
-	// own now, which would make this first assertion (no request, no runner)
-	// fail for the wrong reason.
 	res, err := runBashCtx(t, context.Background(), tool, map[string]any{"command": "git --version"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if runner.calls != 0 {
-		t.Fatal("no sandbox request should route to the runner")
+	if runner.calls != 1 {
+		t.Fatal("normal call should be sandboxed by default")
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "git version") {
-		t.Fatalf("output = %q, want direct output without a request", got)
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want sandboxed output", got)
 	}
 
 	// The gate's request rides agentcore.WithSandboxRequest.
@@ -108,12 +100,12 @@ func TestBashSandboxRequestRoutesToRunner(t *testing.T) {
 // TestBashSandboxRequestWithoutRunnerFailsClosed verifies a gate request that
 // cannot be honored refuses instead of running unconfined.
 func TestBashSandboxRequestWithoutRunnerFailsClosed(t *testing.T) {
-	tool := &BashTool{}
+	tool := &BashTool{RequireSandbox: true}
 	res, err := runBashCtx(t, agentcore.WithSandboxRequest(context.Background()), tool, map[string]any{"command": "echo hi"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "failing closed") {
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "refusing to run unconfined") {
 		t.Fatalf("output = %q, want fail-closed message", got)
 	}
 }
@@ -161,14 +153,8 @@ func TestBashPermissionModeReadOnlyBlocks(t *testing.T) {
 // request, refusing when it cannot — is TestBashSandboxRequestRoutesToRunner and
 // TestBashSandboxRequestWithoutRunnerFailsClosed above.
 
-// TestBashReadOnlyFastPathIsContained is the containment floor under the
-// read-only recognizer: a command it recognizes runs INSIDE the sandbox when a
-// runner is available. Recognition is a statement about the command; it is not
-// a promise that the consent gate saw every path, because that rests on two
-// tables in another package staying in step. The sandbox's read whitelist — the
-// workspace plus the roots the user granted — is what refuses a path the
-// scanner missed.
-func TestBashReadOnlyFastPathIsContained(t *testing.T) {
+// The policy no longer depends on whether a command is classified read-only.
+func TestBashOrdinaryReadIsContained(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}
 	res, err := runBash(t, tool, map[string]any{"command": "ls -la ."}, nil)
@@ -176,31 +162,27 @@ func TestBashReadOnlyFastPathIsContained(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	if runner.calls != 1 {
-		t.Fatalf("runner calls = %d, want 1: a recognized read must still be contained", runner.calls)
+		t.Fatalf("runner calls = %d, want 1: every read must be contained", runner.calls)
 	}
 	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
 		t.Fatalf("output = %q, want the sandboxed argv's output", got)
 	}
 
-	// Without a runner there is nothing to contain with, so the command runs
-	// directly — the exemption is about the reviewer, not about isolation.
-	bare := &BashTool{}
-	res, err = runBash(t, bare, map[string]any{"command": "ls -la ."}, nil)
+	// Missing sandbox does not permit an unisolated run where isolation is the
+	// platform default (RequireSandbox), while a platform without any sandbox
+	// implementation keeps its previous behavior.
+	bare := &BashTool{RequireSandbox: true}
+	res, err = runBashCtx(t, context.Background(), bare, map[string]any{"command": "ls -la ."}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
-		t.Fatalf("output = %q, want an unsandboxed run when no runner exists", got)
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "refusing to run unconfined") {
+		t.Fatalf("output = %q, want fail-closed refusal when no runner exists", got)
 	}
 }
 
-// TestBashReadOnlyFastPathEscalationIsNotContained keeps the containment
-// contract honest: a recognized read that ASKS to run outside the sandbox is
-// not silently re-contained. Escalation is weighed by the permission gate's
-// reviewer (judge.ReadOnlyShellCommand declines such a call precisely so it is),
-// and re-containing it here after that verdict would make the model's request
-// invisible — the retry loop the escalation path exists to avoid.
-func TestBashReadOnlyFastPathEscalationIsNotContained(t *testing.T) {
+// A request without the gate's Direct grant must not escape containment.
+func TestBashEscalationRequestWithoutGrantIsRefused(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}
 	res, err := runBash(t, tool, map[string]any{
@@ -214,15 +196,13 @@ func TestBashReadOnlyFastPathEscalationIsNotContained(t *testing.T) {
 	if runner.calls != 0 {
 		t.Errorf("runner calls = %d, want 0: an escalation request must not be silently re-contained", runner.calls)
 	}
-	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
-		t.Fatalf("output = %q, want a direct run", got)
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "requires explicit approval") {
+		t.Fatalf("output = %q, want refusal without a Direct grant", got)
 	}
 }
 
-// TestBashReadOnlyFastPathReadGrantRunsDirect covers the "allow this read once"
-// answer: a single approved path has no sandbox-whitelist form, so containing the
-// call would fail the very read the user just approved.
-func TestBashReadOnlyFastPathReadGrantRunsDirect(t *testing.T) {
+// A one-call file read is an exact sandbox allow, not a sandbox escape.
+func TestBashReadGrantRunsContained(t *testing.T) {
 	runner := &stubRunner{}
 	tool := &BashTool{Sandbox: runner}
 	granted := filepath.Join(t.TempDir(), "granted.txt")
@@ -234,10 +214,13 @@ func TestBashReadOnlyFastPathReadGrantRunsDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if runner.calls != 0 {
-		t.Fatalf("runner calls = %d, want 0: a one-call read grant must run directly", runner.calls)
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want 1: a one-call read grant must stay sandboxed", runner.calls)
 	}
-	if got := agentcore.ContentToText(res.Content); strings.Contains(got, "sandboxed") {
-		t.Fatalf("output = %q, want the direct run the grant was given for", got)
+	if len(runner.policy.ReadFiles) != 1 || runner.policy.ReadFiles[0] != granted {
+		t.Fatalf("one-call sandbox grant = %+v, want only %s", runner.policy, granted)
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want contained run", got)
 	}
 }

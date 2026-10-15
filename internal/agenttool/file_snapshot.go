@@ -33,6 +33,56 @@ type fileSnapshot struct {
 	Content  []byte
 }
 
+// SnapshotTransfer is the pre-write state transferred from a one-call isolated
+// tool worker. It is deliberately data, not a path for the parent to re-read:
+// the parent should not access a file outside the worker merely to journal it.
+type SnapshotTransfer struct {
+	Path     string `json:"path"`
+	Existed  bool   `json:"existed"`
+	TooLarge bool   `json:"tooLarge"`
+	Content  []byte `json:"content,omitempty"`
+}
+
+// PendingForWorker returns the baseline captured so far by the isolated tool.
+// The worker sends this before it starts persisting changes; the parent imports
+// it and acknowledges receipt before any filesystem mutation can happen.
+func (r *FileSnapshotRecorder) PendingForWorker() []SnapshotTransfer {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]SnapshotTransfer, 0, len(r.order))
+	for _, p := range r.order {
+		s := r.pending[p]
+		out = append(out, SnapshotTransfer{Path: s.Path, Existed: s.Existed, TooLarge: s.TooLarge, Content: append([]byte(nil), s.Content...)})
+	}
+	return out
+}
+
+// ImportWorkerBaseline records a worker's pre-write snapshots. First touch in
+// the turn wins, just as Record does for consecutive patches in one turn.
+func (r *FileSnapshotRecorder) ImportWorkerBaseline(snaps []SnapshotTransfer) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pending == nil {
+		r.pending = map[string]fileSnapshot{}
+	}
+	for _, s := range snaps {
+		if s.Path == "" {
+			continue
+		}
+		if _, seen := r.pending[s.Path]; seen {
+			continue
+		}
+		r.pending[s.Path] = fileSnapshot{Path: s.Path, Existed: s.Existed, TooLarge: s.TooLarge, Content: append([]byte(nil), s.Content...)}
+		r.order = append(r.order, s.Path)
+	}
+}
+
 // RestorePoint is one turn's worth of file snapshots plus the conversation leaf
 // that preceded the turn. Rewinding to it restores every file to its Snapshots
 // state and moves the active conversation leaf back to LeafID.

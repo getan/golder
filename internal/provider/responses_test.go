@@ -994,11 +994,11 @@ func TestResponsesDriverPromptCacheKey(t *testing.T) {
 	}
 }
 
-// Thinking content is UI state, not replayable input: a follow-up turn must
-// carry only the assistant's text. Replaying reasoning items (content, ids, or
-// encrypted payloads) would grow every request and break backends that reject
-// items they never issued.
-func TestResponsesDriverDoesNotReplayReasoning(t *testing.T) {
+// Display-only ThinkingContent is not the provider's protocol state. It must
+// never be fabricated into a reasoning item on replay; only an original item
+// from the same provider/model (or the narrowly scoped legacy DeepSeek empty
+// placeholder, tested separately below) may become a reasoning input item.
+func TestResponsesDriverDoesNotReplayDisplayOnlyThinking(t *testing.T) {
 	var gotBody string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Body != nil {
@@ -1052,6 +1052,123 @@ func TestResponsesDriverDoesNotReplayReasoning(t *testing.T) {
 	}
 	if strings.Contains(gotBody, "hidden chain of thought") || strings.Contains(gotBody, "encrypted_content") {
 		t.Errorf("reasoning payload leaked into the request body: %s", gotBody)
+	}
+}
+
+// OpenCode Go's DeepSeek Responses gateway requires the reasoning_text before
+// EACH replayed function call while thinking is enabled. Older sessions have
+// no raw reasoning items at all; an empty text part makes them resumable without
+// switching off thinking. The summary displayed to the user is NOT a substitute
+// for the original item when one was returned by the gateway.
+func TestResponsesDeepSeekReasoningReplayAndLegacyContinuation(t *testing.T) {
+	const model = "deepseek-v4.1-flash"
+	first := `{"type":"reasoning","id":"rs_original","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"original private reasoning"}]}`
+	summaryOnly := `{"type":"reasoning","id":"rs_summary","summary":[{"type":"summary_text","text":"summary, not reasoning_text"}]}`
+	cases := []struct {
+		name, provider              string
+		originProvider, originModel string
+		reasoning                   []json.RawMessage
+		wantOriginal                bool
+		wantEmpty                   int
+	}{
+		{name: "original reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: model, reasoning: []json.RawMessage{json.RawMessage(first)}, wantOriginal: true, wantEmpty: 1},
+		{name: "old session missing reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: model, wantEmpty: 2},
+		{name: "cross model cannot replay opaque reasoning", provider: "opencode-go", originProvider: "opencode-go", originModel: "muse-spark-1.3", reasoning: []json.RawMessage{json.RawMessage(first)}, wantEmpty: 2},
+		{name: "cross provider cannot replay opaque reasoning", provider: "opencode-go", originProvider: "openai", originModel: model, reasoning: []json.RawMessage{json.RawMessage(first)}, wantEmpty: 2},
+		{name: "summary alone does not satisfy reasoning_text", provider: "opencode-go", originProvider: "opencode-go", originModel: model, reasoning: []json.RawMessage{json.RawMessage(summaryOnly)}, wantEmpty: 2},
+		{name: "other gateway not given DeepSeek items", provider: "openai", originProvider: "openai", originModel: model},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sent []byte
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				sent, _ = io.ReadAll(r.Body)
+				return sseResponse(completedFrame("ok", "resp_new", model, 10, 5)), nil
+			})
+			d := NewOpenAIResponsesProvider(tc.provider, "https://api.openai.test/v1", nil)
+			d.clientOpts = []option.RequestOption{option.WithHTTPClient(&http.Client{Transport: rt})}
+			assistant := agentcore.AssistantMessage{
+				RoleField: agentcore.RoleAssistant, Provider: tc.originProvider, ResponseModel: tc.originModel,
+				ReasoningItems: tc.reasoning,
+				Content: agentcore.ContentList{
+					agentcore.NewThinkingContent("display summary is not protocol state"),
+					agentcore.NewToolCallContent("call_one", "read", json.RawMessage(`{"path":"a.go"}`)),
+					agentcore.NewToolCallContent("call_two", "read", json.RawMessage(`{"path":"b.go"}`)),
+				},
+			}
+			stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+				Model: model, Context: LlmContext{Messages: agentcore.MessageList{
+					userMsg("read two files"), assistant,
+					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: "call_one", Content: agentcore.ContentList{agentcore.NewTextContent("a")}},
+					agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: "call_two", Content: agentcore.ContentList{agentcore.NewTextContent("b")}},
+				}}, Config: StreamConfig{APIKey: "sk-test", ThinkingLevel: agentcore.ThinkingHigh},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			drain(t, stream)
+			var wire struct {
+				Reasoning map[string]any   `json:"reasoning"`
+				Input     []map[string]any `json:"input"`
+			}
+			if err := json.Unmarshal(sent, &wire); err != nil {
+				t.Fatalf("invalid request: %v", err)
+			}
+			if wire.Reasoning["effort"] == "" || wire.Reasoning["effort"] == "none" || wire.Reasoning["effort"] == nil {
+				t.Fatalf("continuing this session must retain thinking: %s", sent)
+			}
+			empty, original, calls := 0, false, 0
+			for i, item := range wire.Input {
+				switch item["type"] {
+				case "reasoning":
+					parts, _ := item["content"].([]any)
+					if len(parts) == 1 {
+						text := parts[0].(map[string]any)["text"]
+						if text == "" {
+							empty++
+						}
+						if text == "original private reasoning" {
+							original = true
+						}
+					}
+				case "function_call":
+					calls++
+					if tc.provider == "opencode-go" && (i == 0 || wire.Input[i-1]["type"] != "reasoning") {
+						t.Errorf("call %v has no immediately preceding reasoning item: %s", item["call_id"], sent)
+					}
+				}
+			}
+			if original != tc.wantOriginal || empty != tc.wantEmpty || calls != 2 {
+				t.Errorf("original=%v empty=%d calls=%d, want %v/%d/2; wire=%s", original, empty, calls, tc.wantOriginal, tc.wantEmpty, sent)
+			}
+			if strings.Contains(string(sent), "display summary is not protocol state") {
+				t.Errorf("must not replay display-only thinking: %s", sent)
+			}
+		})
+	}
+}
+
+func TestResponsesStoresReasoningTextFromCompletedResponse(t *testing.T) {
+	raw := `{"type":"response.completed","sequence_number":10,"response":{"id":"resp_1","model":"deepseek-v4.1-flash","output":[{"type":"reasoning","id":"rs_1","status":"completed","summary":[],"content":[{"type":"reasoning_text","text":"work through the question"}]},{"type":"function_call","call_id":"call_1","name":"read","arguments":"{}"}]}}`
+	d := newResponsesTestDriver("https://api.openai.test/v1", func(*http.Request) (*http.Response, error) { return sseResponse(raw), nil })
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{Model: "deepseek-v4.1-flash", Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}}, Config: StreamConfig{APIKey: "sk-test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := drain(t, stream)
+	if len(msg.ReasoningItems) != 1 || !strings.Contains(string(msg.ReasoningItems[0]), `"reasoning_text"`) {
+		t.Fatalf("completed reasoning item lost: %+v", msg)
+	}
+	if len(msg.Content) == 0 || msg.Content[0].(agentcore.ThinkingContent).Thinking != "work through the question" {
+		t.Fatalf("reasoning_text was not displayed as thinking: %+v", msg.Content)
+	}
+	encoded, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored agentcore.AssistantMessage
+	if err := json.Unmarshal(encoded, &stored); err != nil || len(stored.ReasoningItems) != 1 {
+		t.Fatalf("reasoning item not preserved in session history: err=%v items=%v", err, stored.ReasoningItems)
 	}
 }
 

@@ -336,6 +336,19 @@ func (d *responsesDriver) mapResponse(resp *responses.Response, seen map[string]
 	msg.StopReason = agentcore.StopReasonEndTurn
 	msg.ResponseID = resp.ID
 	msg.ResponseModel = string(resp.Model)
+	for _, item := range resp.Output {
+		if item.Type != "reasoning" {
+			continue
+		}
+		// The SDK's reasoning struct describes OpenAI's summary/encrypted fields,
+		// but DeepSeek's Responses-compatible gateway returns content[] with
+		// reasoning_text. The raw union item retains unknown fields; replay the
+		// exact item, not the display-only thinking summary and not a fabricated
+		// SDK param that silently drops its content.
+		if raw := item.RawJSON(); json.Valid([]byte(raw)) {
+			msg.ReasoningItems = append(msg.ReasoningItems, json.RawMessage(raw))
+		}
+	}
 	if thinking := reasoningText(resp); thinking != "" {
 		msg.Content = append(msg.Content, agentcore.NewThinkingContent(thinking))
 	}
@@ -373,15 +386,27 @@ func toolCallContent(fc responses.ResponseFunctionToolCall) agentcore.ToolCallCo
 	return agentcore.NewToolCallContent(fc.CallID, fc.Name, json.RawMessage(fc.Arguments))
 }
 
-// reasoningText concatenates the summary text of every reasoning item in a
-// completed response. The Responses API returns the model's reasoning as one or
-// more reasoning items, each carrying summary parts; golder surfaces the joined
-// text as a single thinking block, mirroring how the chat driver renders
-// accumulated reasoning_content.
+// reasoningText renders the available reasoning for the transcript. DeepSeek
+// Responses emits content[].reasoning_text rather than OpenAI's summary parts;
+// read the raw item for that provider-specific field so the UI can see it too.
+// The replay path uses ReasoningItems (original JSON), never this display text.
 func reasoningText(resp *responses.Response) string {
 	var b strings.Builder
 	for _, item := range resp.Output {
 		if r := item.AsReasoning(); r.Type == "reasoning" {
+			var raw struct {
+				Content []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			if json.Unmarshal([]byte(item.RawJSON()), &raw) == nil {
+				for _, c := range raw.Content {
+					if c.Type == "reasoning_text" {
+						b.WriteString(c.Text)
+					}
+				}
+			}
 			for _, s := range r.Summary {
 				b.WriteString(s.Text)
 			}
@@ -444,9 +469,14 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 		params.Tools = tools
 	}
 
+	// Only OpenCode Go's DeepSeek Responses gateway requires a reasoning_text
+	// item alongside each replayed function call. Do not synthesize one for GPT
+	// or another provider: they have different reasoning-item contracts.
+	deepseekThinking := providerName == "opencode-go" && strings.HasPrefix(strings.ToLower(req.Model), "deepseek-") &&
+		WireReasoningEffort(providerName, req.Model, req.Config.ThinkingLevel) != ""
 	items := make(responses.ResponseInputParam, 0, len(req.Context.Messages))
 	for _, m := range req.Context.Messages {
-		items = appendInputItems(items, m, useHostedSearch)
+		items = appendInputItems(items, m, useHostedSearch, providerName, req.Model, deepseekThinking)
 	}
 	params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: items}
 	return params
@@ -498,7 +528,7 @@ func buildResponsesTools(tools []agentcore.AgentTool, includeHosted bool) []resp
 // is unavailable"), which made every turn after a muse→deepseek model switch
 // fail permanently. Without hosted search the call is dropped from the replay —
 // the assistant's text (including its citations) is preserved either way.
-func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool) responses.ResponseInputParam {
+func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool, providerName, model string, deepseekThinking bool) responses.ResponseInputParam {
 	switch msg := m.(type) {
 	case agentcore.ToolResultMessage:
 		// A tool result is backfilled against the model's call_id so the model
@@ -509,11 +539,45 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 		// the wire form is exactly what codex's FunctionCallOutputBody emits.
 		items = append(items, toolResultFunctionCallOutput(msg))
 	case agentcore.AssistantMessage:
-		if text := contentText(msg.Content); text != "" {
+		// Reasoning is protocol state, not a transcript summary. In stateless
+		// thinking-mode tool loops the gateway requires it back before the
+		// assistant's function_call items. Never replay it to another provider
+		// or model: these items may contain opaque backend-specific fields.
+		sameModel := msg.Provider == providerName && msg.ResponseModel == model
+		var reasoning []json.RawMessage
+		if sameModel {
+			for _, raw := range msg.ReasoningItems {
+				if json.Valid(raw) && reasoningItem(raw) && (!deepseekThinking || hasReasoningText(raw)) {
+					reasoning = append(reasoning, raw)
+				}
+			}
+		}
+		// Ordinary Responses models get only original reasoning, never synthetic
+		// reasoning. OpenCode Go/DeepSeek needs an item directly before EACH
+		// function_call, even when the prior assistant message came from another
+		// model (which must not receive that model's opaque original item). Keep
+		// the original next to its first call when no assistant text intervenes;
+		// otherwise replay it before that text and use empty markers for the calls.
+		// An empty marker is a compatibility placeholder for LOST protocol state,
+		// not a reconstruction of the model's private reasoning.
+		text := contentText(msg.Content)
+		calls := msg.ToolCalls()
+		if !deepseekThinking || len(calls) == 0 || text != "" {
+			if deepseekThinking && len(reasoning) == 0 && text != "" {
+				// A legacy text-only assistant turn also needs a marker in
+				// thinking mode, immediately before the text it belongs to.
+				items = append(items, emptyReasoningItem())
+			}
+			for _, raw := range reasoning {
+				items = append(items, param.Override[responses.ResponseInputItemUnionParam](raw))
+			}
+		}
+		if text != "" {
 			items = append(items, responses.ResponseInputItemParamOfMessage(
 				text, responses.EasyInputMessageRoleAssistant))
 		}
-		for _, call := range msg.ToolCalls() {
+		callIndex := 0
+		for _, call := range calls {
 			if call.IsServer() {
 				// Hosted calls replay as their native items (no output to
 				// pair) when the request declares hosted search; otherwise
@@ -525,6 +589,14 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 					}
 				}
 				continue
+			}
+			if deepseekThinking {
+				if text == "" && callIndex < len(reasoning) {
+					items = append(items, param.Override[responses.ResponseInputItemUnionParam](reasoning[callIndex]))
+				} else {
+					items = append(items, emptyReasoningItem())
+				}
+				callIndex++
 			}
 			items = append(items, responses.ResponseInputItemParamOfFunctionCall(
 				string(call.Arguments), call.ID, call.Name))
@@ -541,6 +613,42 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 		}
 	}
 	return items
+}
+
+func emptyReasoningItem() responses.ResponseInputItemUnionParam {
+	// The OpenAI SDK's reasoning parameter type has no content field. Use the
+	// documented Responses-compatible wire shape without routing it through a
+	// type that would discard reasoning_text.
+	return param.Override[responses.ResponseInputItemUnionParam](json.RawMessage(`{"type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":""}]}`))
+}
+
+func reasoningItem(raw json.RawMessage) bool {
+	var probe struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(raw, &probe) == nil && probe.Type == "reasoning"
+}
+
+// hasReasoningText distinguishes OpenCode Go/DeepSeek's replayable content from
+// an OpenAI-style reasoning item containing only summary/encrypted_content.
+// Its presence, not non-empty text, is the requirement: an empty placeholder
+// has a reasoning_text part as well. A summary-only item would still elicit the
+// gateway's 400 if sent in place of a missing reasoning_text.
+func hasReasoningText(raw json.RawMessage) bool {
+	var item struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &item) != nil {
+		return false
+	}
+	for _, part := range item.Content {
+		if part.Type == "reasoning_text" {
+			return true
+		}
+	}
+	return false
 }
 
 // toolResultFunctionCallOutput builds the function_call_output item for one

@@ -13,6 +13,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 
@@ -49,9 +50,9 @@ func BuildDispatcher(set hooks.HookSet, deps HookDeps) *hooks.Dispatcher {
 // per-turn install path for multi-turn drivers. A nil dispatcher is a no-op, so
 // callers can invoke it unconditionally.
 //
-// PreToolUse is CHAINED onto the existing BeforeToolCall seam (occupied by the
-// trust gate) rather than replacing it: trust runs first and stays authoritative
-// (a trust block short-circuits before the user hook runs). PostToolUse is
+// PreToolUse runs at PrepareArguments: its rewrite is schema-validated and then
+// the trust, boundary and authorization gates see the final input exactly ONCE.
+// A hook block stops the call before any gate. PostToolUse is
 // chained onto AfterToolCall as a last-writer so it can append feedback to an
 // already-executed tool's result without undoing it. The Stop hook is chained
 // onto the loop's natural-end seam (FR-10), bounded by the decorator's
@@ -61,32 +62,45 @@ func InstallSeams(cfg *runtime.RunConfig, d *hooks.Dispatcher, deps HookDeps) {
 		return
 	}
 	tec := &cfg.Batch.ToolExecutorConfig
-	tec.BeforeToolCall = chainBeforeToolCall(tec.BeforeToolCall, preToolCallHook(d, deps))
+	tec.PrepareArguments = chainPrepareArguments(tec.PrepareArguments, preToolCallHook(d, deps))
 	tec.AfterToolCall = chainAfterToolCall(tec.AfterToolCall, postToolCallHook(d, deps))
 	installStopHook(cfg, d, deps, "Stop")
 }
 
-// preToolCallHook adapts the dispatcher's PreToolUse event to the BeforeToolCall
-// seam. It dispatches with the tool name and raw arguments; a block becomes a
-// blocking decision whose reason is surfaced as the tool's error result, and an
-// updatedInput becomes an argument rewrite (re-validated by the executor).
-func preToolCallHook(d *hooks.Dispatcher, deps HookDeps) agentcore.BeforeToolCallFunc {
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		dec := d.Dispatch(ctx, hooks.EventPreToolUse, call.Name, hooks.HookInput{
+// preToolCallHook reads the user's PreToolUse decision before any authorization.
+// It returns prepared arguments or a block error, not a gate decision.
+func preToolCallHook(d *hooks.Dispatcher, deps HookDeps) agentcore.PrepareArgumentsFunc {
+	return func(ctx context.Context, toolName string, args json.RawMessage) (json.RawMessage, error) {
+		dec := d.Dispatch(ctx, hooks.EventPreToolUse, toolName, hooks.HookInput{
 			EventType:  hooks.EventPreToolUse,
 			SessionID:  deps.SessionID,
 			ProjectDir: deps.ProjectDir,
-			ToolName:   call.Name,
-			ToolInput:  call.Arguments,
+			ToolName:   toolName,
+			ToolInput:  args,
 		})
 		if dec.Block {
-			content := agentcore.ContentList{agentcore.NewTextContent(hookReason(dec.Reason, call.Name))}
-			return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
+			return nil, fmt.Errorf("%s", hookReason(dec.Reason, toolName))
 		}
 		if len(dec.UpdatedInput) > 0 {
-			return &agentcore.BeforeToolCallDecision{UpdatedInput: dec.UpdatedInput}
+			return dec.UpdatedInput, nil
 		}
-		return nil
+		return args, nil
+	}
+}
+
+// chainPrepareArguments applies any earlier argument preparation before the
+// user hook, then carries the hook's final input into the ONE authorization
+// pass. A block is an error result, not a second gate invocation.
+func chainPrepareArguments(prev, hook agentcore.PrepareArgumentsFunc) agentcore.PrepareArgumentsFunc {
+	return func(ctx context.Context, toolName string, args json.RawMessage) (json.RawMessage, error) {
+		if prev != nil {
+			var err error
+			args, err = prev(ctx, toolName, args)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return hook(ctx, toolName, args)
 	}
 }
 
@@ -153,10 +167,33 @@ func chainBeforeToolCall(prev, next agentcore.BeforeToolCallFunc) agentcore.Befo
 		return prev
 	}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if dec := prev(ctx, call); dec != nil && dec.Block {
-			return dec
+		first := prev(ctx, call)
+		if first != nil && first.Block {
+			return first
 		}
-		return next(ctx, call)
+		second := next(ctx, call)
+		if second != nil && second.Block {
+			return second
+		}
+		if first == nil {
+			return second
+		}
+		if second == nil {
+			return first
+		}
+		// A hook may rewrite arguments but must not erase capabilities the gates
+		// already decided for this call (nor invent an unapproved sandbox escape).
+		out := *second
+		out.Sandbox = first.Sandbox || out.Sandbox
+		out.Network = first.Network
+		out.Direct = first.Direct && !out.Sandbox
+		if out.ReadGrant == "" {
+			out.ReadGrant = first.ReadGrant
+		}
+		if out.WriteGrant == "" {
+			out.WriteGrant = first.WriteGrant
+		}
+		return &out
 	}
 }
 

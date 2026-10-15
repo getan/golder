@@ -5,8 +5,8 @@ package run
 // one-shot entry (headless / subagent_rpc / and every driver that assembles its
 // gates, via Gates.InstallDriver) and the per-turn entry (repl / tui / goal /
 // btw via BuildDispatcher once + InstallSeams per run) — and this asserts a
-// PreToolUse hook installed through either reaches the BeforeToolCall seam and
-// blocks. It also pins FR-18: an empty hook set wires no seam, so a run with no
+// PreToolUse hook installed through either reaches PrepareArguments and blocks
+// before BeforeToolCall. It also pins FR-18: an empty hook set wires no seam, so a run with no
 // hooks configured behaves exactly as before.
 
 import (
@@ -21,24 +21,21 @@ import (
 )
 
 // blockingPreToolUse is a hook set whose PreToolUse hook exits 2 (Claude Code
-// block semantics), so any wired BeforeToolCall seam must return a blocking
-// decision when it fires.
+// block semantics), so argument preparation fails before any gate is consulted.
 func blockingPreToolUse() hooks.HookSet {
 	return hooks.HookSet{
 		"PreToolUse": {{Matcher: "*", Hooks: []hooks.HookConfig{{Command: "exit 2"}}}},
 	}
 }
 
-// fireBeforeToolCall drives the wired BeforeToolCall seam once and reports
-// whether it produced a blocking decision. A nil seam (no hook wired) reports
-// false.
-func fireBeforeToolCall(cfg *runtime.RunConfig) bool {
-	seam := cfg.Batch.ToolExecutorConfig.BeforeToolCall
-	if seam == nil {
+// firePreToolUse checks the hook seam without invoking any authorization gate.
+func firePreToolUse(cfg *runtime.RunConfig) bool {
+	prepare := cfg.Batch.ToolExecutorConfig.PrepareArguments
+	if prepare == nil {
 		return false
 	}
-	dec := seam(context.Background(), agentcore.AgentToolCall{Name: "Bash"})
-	return dec != nil && dec.Block
+	_, err := prepare(context.Background(), "Bash", json.RawMessage(`{"command":"echo hi"}`))
+	return err != nil
 }
 
 // TestHookConvergenceBothPaths asserts the same PreToolUse hook set fires in both
@@ -57,12 +54,15 @@ func TestHookConvergenceBothPaths(t *testing.T) {
 		if d == nil {
 			t.Fatal("expected dispatcher for non-empty hook set")
 		}
-		if !fireBeforeToolCall(&cfg) {
+		if !firePreToolUse(&cfg) {
 			t.Fatal("gates path: PreToolUse hook did not block")
 		}
 		// The same assembly also published the chain a sub-agent inherits.
 		if cfg.Batch.ToolExecutorConfig.GateChain == nil {
 			t.Fatal("gates path: the inherited chain was not published")
+		}
+		if cfg.Batch.ToolExecutorConfig.GateChain.PrepareArguments == nil {
+			t.Fatal("gates path: a child must inherit the PreToolUse preparation")
 		}
 	})
 
@@ -74,7 +74,7 @@ func TestHookConvergenceBothPaths(t *testing.T) {
 		}
 		var cfg runtime.RunConfig
 		InstallSeams(&cfg, d, deps)
-		if !fireBeforeToolCall(&cfg) {
+		if !firePreToolUse(&cfg) {
 			t.Fatal("repl path: PreToolUse hook did not block")
 		}
 	})
@@ -130,6 +130,9 @@ func TestHookConvergenceNoHooksUnchanged(t *testing.T) {
 		InstallSeams(&cfg, d, deps) // nil dispatcher must be a no-op
 		if cfg.Batch.ToolExecutorConfig.BeforeToolCall != nil {
 			t.Fatal("repl path: seam wired despite no hooks")
+		}
+		if cfg.Batch.ToolExecutorConfig.PrepareArguments != nil {
+			t.Fatal("repl path: argument preparation wired despite no hooks")
 		}
 	})
 }

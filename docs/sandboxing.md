@@ -46,7 +46,7 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 - **只读快路径**：能*证明*只读的命令行直接放行。判定用的是封闭白名单 + 严格扫描器（重定向、命令替换、赋值、`env`/`nohup`/`time` 包装、变量、命令位置的路径调用一律拒绝；每个程序按名字排除能写能执行的开关：`rg --pre`、`find -exec/-delete`、`sed` 非 `-n Np`、`git --output/--textconv` 等）。删除它的理由不是它不安全，而是**它买的东西不值它的复杂度**：决策模型把一次审查压到约 0.78s，而白名单为了自证清白需要 kill switch、内部再跑一遍凭据底线、以及升级请求的例外——三样都是"豁免"这个身份带来的。现在整条链只剩一条规则：**每个调用都审**。
 - **日常编辑快路径**：`apply_patch` 的目标全在工作区内时直接放行（实测 586 个真实补丁里 584 个走这条）。它的两个"例外"其实是**关于编辑的事实**而不是豁免的一部分：`.git/**` 是植入执行（hook 在下一次 git 命令时运行，而 git 命令正是只读快路径天天放行的那一类；`.git/config` 是同一扇门：`core.hooksPath`、`core.sshCommand`、credential helper——已实测：往临时仓库写一个 hook，下一次 `git commit` 就执行了它），`AGENTS.md` 是持久的提示注入通道（工作目录的这一份会被读进**之后每个会话**的系统提示词，改它等于改写 agent 的起始指令）。这两条事实没有随快路径消失：它们现在作为 `State.Outliving` 送给审查者（`judge.OutlivingPaths`），**报告而不拒绝**——请求写一个 pre-commit hook 是合理的需求，旧代码也同意（这些路径只是保留审查，从没被拒），硬拒会把合理请求一起挡掉。
 
-**扫描器还在**（`internal/judge/readonly.go`）：`ReadOnlyShellCommand` 现在只回答一个**收容**问题——这条命令是否可证明只读，是则进沙箱跑而不是裸跑。它不再决定任何判决，所以也不再带 kill switch、凭据例外和升级例外。理由写在原处：**"只读"是关于扫描器能看到什么的一个声明，沙箱是压在这个声明下面的地板**——两张表曾经不同步（`cksum /outside/x` 既没被问也没被审），内核拒读比静默读好。
+**沙箱现在是默认执行环境，与命令内容无关**：获准执行的每条 `bash` 调用都进沙箱，不论它是 `ls` 还是 `go test`；原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）改由**一次性 worker** 在沙箱内执行。原先那套"手写 shell 解析器 + 白名单"判断命令是否只读、只读才收容的机制**已整体删除**（`internal/judge/readonly.go` 与它的交叉表），因为路由不再依赖命令内容：`cksum /outside/x` 这类漏判不再需要"只读识别"兜底，沙箱本来就是地板。
 
 只读快路径**不再喂给 TUI**：`bash` 卡片一律保留自己的卡片并显示完整命令，不进 `• Explored` 单元格。折叠需要一行摘要，而摘要必须在复合命令里挑一段来命名——实测 20% 挑中的是 `echo "==="` 这类 banner 回声，真正干活的命令反而被藏了。卡片直接显示命令就不可能说错跑了什么。原生读工具（`read`/`ls`/`grep`/`find`/`view_image`）保持折叠：它们的参数就是整个调用，`Read a.go, b.go` 是忠实的概括。写在折叠单元格里的裁决（拒绝、收容）仍然可见，展开则逐条还原。
 
@@ -58,9 +58,9 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 
 ### 执行隔离
 
-Sandbox 档的判定以"执行层**真的**能隔离这次调用"为准：门在放行前会问 `run.SandboxGate()`，它与 `WireBashSandbox` 挂载 runner 的条件逐条一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner、且只有 `bash` 有 runner；`full-access` 下不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。隔离替确认：runner 可用时不再弹窗，因为沙箱本身就是执行约束。
+**隔离是默认，不再由评级决定**：门在放行前会问 `run.SandboxGate()`——它覆盖 `bash` 与那几个原生文件工具，并与 `WireBashSandbox`/worker 的装配条件一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner；`full-access` 不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。只有平台**从未实现过**沙箱（Windows）才保持裸跑；Linux 上 bubblewrap 被禁则失败关闭，而不是悄悄降级。
 
-执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，只是 `bash` 的后端从 `bash -c` 换成平台沙箱。两个平台同一条策略——**读白名单、写白名单、网络默认关闭**：
+执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，语句从 `bash -c` 换成平台沙箱；原生文件工具走一次性 worker，用同一套策略。两个平台同一条策略——**读白名单、写白名单、网络默认关闭**：
 
 - **macOS**：`sandbox-exec -f <现场生成的 profile> bash -c …`。profile 按规范 vnode 路径匹配，而 `/var` 是 `/private/var` 的软链，因此项目与临时目录同时写入**符号链接形式与 `EvalSymlinks` 后的规范路径**（只写软链形式会导致该允许的写操作被静默拒绝）。
 - **Linux**：`bwrap --die-with-parent --unshare-pid --unshare-uts --unshare-ipc --unshare-net --ro-bind <各白名单路径> --dev /dev --proc /proc --bind <项目> <项目> --bind-try <TMPDIR> <TMPDIR> … bash -c …`。`--dev` 会挂载新的 devtmpfs（含 devpts），所以 `tty=true` 的交互式会话照常工作。bwrap 是否可用在执行前**实探**一次（能否真的创建 userns/挂载；被 AppArmor 或内核开关挡掉时视为不可用，回退为询问/fail-closed，而不是命令跑到一半才报错）。
@@ -112,7 +112,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 网络与 golder 自身状态
 
-**网络默认关闭**：沙箱内 `network*` 默认 deny / `--unshare-net`，联网命令会失败。`GOLDER_SANDBOX_NETWORK=on`（或 `1`/`true`/`allow`/`yes`）重新放开，适用于确实需要在沙箱内联网的工具链。
+**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。普通 `Allow/Confirm` 评级**不**等于联网许可；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 

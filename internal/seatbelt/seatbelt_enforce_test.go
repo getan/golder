@@ -28,6 +28,73 @@ func runSandboxed(t *testing.T, r Runner, dir, command string) (string, error) {
 	return string(out), err
 }
 
+// runSandboxedWithPolicy is the per-call counterpart used for exact grants and
+// refusals: the policy belongs to this invocation, not the shared runner.
+func runSandboxedWithPolicy(t *testing.T, r Runner, dir, command string, policy CallPolicy) (string, error) {
+	t.Helper()
+	argv, cleanup, err := r.SandboxCall([]string{"/bin/bash", "-c", command}, dir, policy)
+	if err != nil {
+		t.Fatalf("SandboxCall: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestSeatbeltPerCallFilePolicy(t *testing.T) {
+	requireSandboxExec(t)
+	root := t.TempDir()
+	// The system temp tree is intentionally readable inside the sandbox. Use
+	// an ungranted directory under HOME so this assertion actually tests the
+	// exact grant, not the sandbox's pre-existing temp whitelist.
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("home directory unavailable")
+	}
+	outside, err := os.MkdirTemp(home, ".golder-sandbox-exact-*")
+	if err != nil {
+		t.Skipf("cannot create protected home fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	allowed := filepath.Join(outside, "one.txt")
+	other := filepath.Join(outside, "other.txt")
+	if err := os.WriteFile(allowed, []byte("ALLOW_ONLY_THIS_FILE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("SIBLING_MUST_BE_HIDDEN"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &SeatbeltRunner{ProjectDir: root, TmpDir: t.TempDir()}
+	policy := CallPolicy{ReadFiles: []string{allowed}}
+	if out, err := runSandboxedWithPolicy(t, r, root, "cat \""+allowed+"\"", policy); err != nil || !strings.Contains(out, "ALLOW_ONLY_THIS_FILE") {
+		t.Fatalf("exact read grant should admit one file: %q, %v", out, err)
+	}
+	if out, err := runSandboxedWithPolicy(t, r, root, "cat \""+other+"\"", policy); err == nil || strings.Contains(out, "SIBLING_MUST_BE_HIDDEN") {
+		t.Fatalf("exact read grant exposed its sibling: %q, %v", out, err)
+	}
+	secret := filepath.Join(root, "refused.txt")
+	if err := os.WriteFile(secret, []byte("REFUSED_SUBPATH"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy = CallPolicy{DenyReadFiles: []string{secret}}
+	if out, err := runSandboxedWithPolicy(t, r, root, "cat \""+secret+"\"", policy); err == nil || strings.Contains(out, "REFUSED_SUBPATH") {
+		t.Fatalf("exact refusal did not beat workspace read rule: %q, %v", out, err)
+	}
+	policy = CallPolicy{ReadOnlyFilesystem: true}
+	file := filepath.Join(root, "read-only-worker-wrote.txt")
+	if out, err := runSandboxedWithPolicy(t, r, root, "printf pwn > \""+file+"\"", policy); err == nil {
+		_ = os.Remove(file)
+		t.Fatalf("read-only worker wrote in workspace: %q", out)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("read-only worker left a file (stat %v)", err)
+	}
+}
+
 func requireSandboxExec(t *testing.T) {
 	t.Helper()
 	if !Available() {

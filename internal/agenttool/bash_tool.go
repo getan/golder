@@ -19,8 +19,8 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/execsess"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 // bashMaxOutputBytes caps how many bytes of combined stdout/stderr one result
@@ -78,6 +78,12 @@ type BashTool struct {
 	// ForceSandbox routes every foreground command through Sandbox
 	// (GOLDER_SANDBOX=enforce) and fails closed when Sandbox is nil.
 	ForceSandbox bool
+	// RequireSandbox is set where isolation IS the default (a platform with a
+	// sandbox implementation, and GOLDER_SANDBOX not off). With it set, a
+	// missing runner fails closed rather than silently running unconfined;
+	// where isolation was never implemented (Windows) it stays false, and the
+	// command runs directly as it always did.
+	RequireSandbox bool
 	// sessionsMu guards the lazy Sessions fallback in manager(). Production
 	// wires one manager before any call runs (BuiltinTools shares it with
 	// write_stdin); the lock exists for direct callers, and because bash is
@@ -93,6 +99,7 @@ type BashTool struct {
 // internal/seatbelt satisfies it structurally and the cli layer injects it.
 type SandboxRunner interface {
 	SandboxArgv(shell, flag, command, dir string) (argv []string, cleanup func(), err error)
+	SandboxCall(argv []string, dir string, policy seatbelt.CallPolicy) (sandboxed []string, cleanup func(), err error)
 }
 
 // manager returns the tool's session manager, creating a private one when the
@@ -118,16 +125,12 @@ func (t *BashTool) StopSessions() {
 	}
 }
 
-// sandboxRoute decides whether one command must run isolated. It owns the
-// envelope, not the verdict: the risk grade is the permission gate's business
-// (which publishes containment through the context) and this layer never weighs
-// a command itself. Sources, in order: GOLDER_SANDBOX=enforce (every foreground
-// command), a sandbox request published by the gate (auto/ask routing of a
-// sandbox-tier grade, or reviewer-failure containment), the read-only
-// recognizer's containment floor, and require_escalated (which clears the floor
-// because the gate already weighed that request). It returns sandbox=true to run
-// isolated, a non-empty message to refuse, or both zero values to run directly.
-func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (sandbox bool, block string) {
+// sandboxRoute chooses the execution envelope, NOT whether the command may
+// execute. Approval is settled by the three gates. Every approved bash call
+// runs confined by default, regardless of command text or risk level. Only an
+// explicitly authorized Direct grant, or the user's full-access mode, permits a bare
+// shell. A model's require_escalated argument is never itself an authorization.
+func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool, block string) {
 	if t.Permissions != nil {
 		switch t.Permissions.Mode() {
 		case permissions.ReadOnly:
@@ -136,49 +139,23 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (san
 			return false, ""
 		}
 	}
-	// require_escalated (codex parity) asks to run OUTSIDE the sandbox. It is a
-	// request, not a grant: the permission gate ran before execution and its
-	// containment decisions stay authoritative, so the two sources below beat
-	// the request. What the request changes is the *local* judge path at the
-	// end — and, more importantly, it is visible to the gate's reviewer in the
-	// call arguments, which is what actually grants it (grade allow → direct).
-	escalationRequested := strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated)
 	if t.ForceSandbox {
 		return true, ""
 	}
-	// The permission gate graded this exact call into the sandbox tier (or the
-	// reviewer failed and auto mode chose containment); the decision rides the
-	// executor context so routing holds in every driver without per-turn
-	// classifier wiring. No runner cannot be honored safely → fail closed.
-	if agentcore.SandboxRequestedFromContext(ctx) {
-		if t.Sandbox == nil {
-			return false, "bash: the permission gate requires sandboxing but no sandbox runner is available; failing closed"
-		}
-		return true, ""
-	}
-	// Gate or enforce did not require isolation: honor the escalation request
-	// by keeping this call out of the local judge's sandbox routing too.
-	if escalationRequested {
+	if agentcore.DirectGrantedFromContext(ctx) && !agentcore.SandboxRequestedFromContext(ctx) {
 		return false, ""
 	}
-	// A provably read-only command is contained rather than run bare. Skipping
-	// the reviewer is a statement about the command (judge.ReadOnlyShellCommand), not
-	// a promise that the consent gate saw every path it touches — that promise
-	// rests on two tables in another package staying in step, and when they fell
-	// out of step (`cksum /outside/x`) the read was neither asked about nor
-	// reviewed. Running it inside the sandbox is the floor under that promise:
-	// the sandbox's read whitelist is the workspace plus the roots the user
-	// granted, so a path the scanner missed is refused by the kernel instead of
-	// being read quietly.
-	//
-	// The exception is a one-call read grant (the "allow this read once" answer):
-	// a single path has no sandbox-whitelist form, so containing the call would
-	// make the read the user just approved fail. It runs directly, which is also
-	// what it did before this containment existed.
-	if t.Sandbox != nil && agentcore.ReadGrantFromContext(ctx) == "" && judge.ReadOnlyShellCommand(command) {
-		return true, ""
+	if strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated) &&
+		!agentcore.SandboxRequestedFromContext(ctx) {
+		return false, "bash: running outside the sandbox requires explicit approval; failing closed"
 	}
-	return false, ""
+	if t.Sandbox == nil {
+		if t.RequireSandbox {
+			return false, "bash: no OS sandbox runner available; refusing to run unconfined (install bubblewrap, use full-access, or approve an explicit one-call escape)"
+		}
+		return false, ""
+	}
+	return true, ""
 }
 
 // sandboxArgv resolves the executable argv for a command: the direct
@@ -189,7 +166,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, command, perms string) (san
 // the result builder can label sandbox-shaped failures for the model.
 func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms string) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
 	argv = []string{shell, flag, command}
-	sandbox, block := t.sandboxRoute(ctx, command, perms)
+	sandbox, block := t.sandboxRoute(ctx, perms)
 	if block != "" {
 		return nil, nil, block, false, false
 	}
@@ -197,17 +174,16 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 		return argv, nil, "", true, false
 	}
 	if t.Sandbox == nil {
-		if t.ForceSandbox {
-			return nil, nil, "bash: GOLDER_SANDBOX=enforce but no sandbox runner is available (requires sandbox-exec on macOS or bubblewrap on Linux); failing closed", false, false
-		}
-		return argv, nil, "", true, false
+		return nil, nil, "bash: no OS sandbox runner available; failing closed", false, false
 	}
-	sa, cl, err := t.Sandbox.SandboxArgv(shell, flag, command, t.Dir)
+	policy := seatbelt.CallPolicy{Network: agentcore.NetworkGrantedFromContext(ctx)}
+	seatbelt.RefusedPaths(&policy)
+	if p := agentcore.ReadGrantFromContext(ctx); p != "" {
+		policy.ReadFiles = []string{p}
+	}
+	sa, cl, err := t.Sandbox.SandboxCall(argv, t.Dir, policy)
 	if err != nil {
-		if t.ForceSandbox {
-			return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false, false
-		}
-		return argv, nil, "", true, false
+		return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false, false
 	}
 	return sa, cl, "", true, true
 }
@@ -216,6 +192,10 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 type bashToolArgs struct {
 	// Command is the shell command line to run.
 	Command string `json:"command"`
+	// Network asks the authorization gate for outbound access inside the file
+	// sandbox. "on" is a request, NOT an entitlement; the gate's one-call
+	// network grant is required before execution.
+	Network string `json:"network,omitempty"`
 	// TimeoutMs is an optional hard deadline in milliseconds: the command is
 	// killed when it elapses. 0 (the default) means no deadline.
 	TimeoutMs int `json:"timeout_ms,omitempty"`
@@ -244,12 +224,16 @@ func (t *BashTool) Description() string {
 		"after yield_time_ms (default 10s) it keeps running as a session and the " +
 		"result carries a bash_id: read more output with write_stdin, and send " +
 		"chars \"" + interruptHint + "\" (Ctrl-C) to interrupt it. timeout_ms is a " +
-		"hard deadline that kills the command (capped at 10 minutes). Commands may " +
-		"run inside an OS sandbox (writes confined to the workspace and temp dir, " +
-		"network off); a sandbox denial is labelled in the output — when a command " +
-		"legitimately needs what the sandbox denies, retry it with " +
+		"hard deadline that kills the command (capped at 10 minutes). Commands run " +
+		"inside an OS sandbox by default (writes confined to the workspace and temp dir, " +
+		"network off). Set network=on for a call that needs outbound access, such as " +
+		"git push or a package download: the authorization gate decides execution " +
+		"AND network in one review, keeping the file sandbox. A sandbox denial is " +
+		"labelled in the output — when a command legitimately needs files the " +
+		"sandbox denies, retry it with " +
 		"sandbox_permissions=\"require_escalated\" plus a short justification, which " +
-		"asks the user to run it unsandboxed. Set tty=true " +
+		"asks the user to run it unsandboxed. Network access alone never requires " +
+		"running outside the sandbox. Set tty=true " +
 		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
 		"prompt). A non-zero " +
 		"exit code is reported as an error. On Windows the command runs under bash " +
@@ -263,10 +247,11 @@ func (t *BashTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "command":    {"type": "string", "description": "Shell command line to run."},
+	    "network": {"type": "string", "enum": ["off", "on"], "description": "Outbound network access for THIS invocation inside the file sandbox. Default off. For git push/fetch, curl or package downloads, request on; the authorization gate must approve it alongside execution. This does not allow reading additional files."},
     "timeout_ms": {"type": "integer", "description": "Hard deadline in milliseconds; the command is killed when it elapses (capped at 10 minutes). Omit for no deadline.", "minimum": 0},
     "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
     "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."},
-    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command sandbox override. Defaults to use_default. Set require_escalated to ask to run OUTSIDE the sandbox when the sandbox denies access the command genuinely needs (e.g. build caches outside the project, or network). The user approves it; include justification."},
+	    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command file sandbox override. Defaults to use_default. Set require_escalated only if a legitimate call needs FILE access the sandbox denies (e.g. a build cache outside the project); it asks the user for a one-call sandbox escape. For network use network=on instead."},
     "justification": {"type": "string", "description": "User-facing reason for a require_escalated request; omit otherwise."}
   },
   "required": ["command"],
@@ -438,6 +423,10 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	if a.Command == "" {
 		return errorResult("bash: command is required"), nil
+	}
+	if a.Network == "on" && (t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess) &&
+		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) {
+		return errorResult("bash: network access was requested but not authorized; failing closed"), nil
 	}
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)

@@ -191,8 +191,29 @@ type Local struct {
 // defer the rest.
 func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
 	if v, ok := localGradeOf(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
+		if NetworkRequested(tool, args) {
+			// The local table may approve network only for calls it has actually
+			// classified as outbound work. A read-only-looking or local-effects
+			// command asking for network needs the session reviewer's judgment;
+			// an Allow/Confirm for some other effect is NOT network permission.
+			if v.Level != Confirm || v.Risk != "medium" || len(v.Reasons) == 0 ||
+				v.Reasons[0] != localRationale(v.Lang, "external_effects") {
+				return l.deferToNext(ctx, tool, args)
+			}
+			v.Network = true
+		}
+		if escalationRequested(args) {
+			// The source table classifies the command, not why it needs files
+			// beyond the sandbox. Only a reviewer with conversation context can
+			// explicitly authorize a one-call escape.
+			return l.deferToNext(ctx, tool, args)
+		}
 		return v
 	}
+	return l.deferToNext(ctx, tool, args)
+}
+
+func (l Local) deferToNext(ctx context.Context, tool string, args json.RawMessage) Verdict {
 	if l.Next == nil {
 		// No reviewer to defer to: fail closed with the same shape the LLM
 		// classifier uses when it is not wired, so a missing reviewer is never an

@@ -2,10 +2,32 @@ package seatbelt
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
+	"github.com/getan/golder/internal/permissions"
 )
+
+func TestRefusedPathsOverrideParentGrant(t *testing.T) {
+	grantstest.Install(t)
+	dir := t.TempDir()
+	denied := filepath.Join(dir, "denied.txt")
+	if _, err := grants.Add(grants.Grant{Path: dir, Allow: grants.Read, Scope: grants.Subtree, Lifetime: grants.Session}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := grants.Add(grants.Grant{Path: denied, Deny: grants.Read, Scope: grants.Exact, Lifetime: grants.Session}); err != nil {
+		t.Fatal(err)
+	}
+	policy := CallPolicy{}
+	RefusedPaths(&policy)
+	if len(policy.DenyReadFiles) != 1 || policy.DenyReadFiles[0] != permissions.Canonical(denied) {
+		t.Errorf("sandbox refusals = %+v, want an exact child refusal", policy)
+	}
+}
 
 func TestModeFromEnv(t *testing.T) {
 	t.Setenv("GOLDER_SANDBOX", "")

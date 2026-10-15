@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/getan/golder/internal/permissions"
 )
 
 // TestBashToolCancelKillsProcessGroup cancels a pipeline whose shell forks
@@ -13,7 +15,7 @@ import (
 // leave `sleep` holding the stdout pipe, so a fast return proves the whole
 // process group was terminated, not just the direct child.
 func TestBashToolCancelKillsProcessGroup(t *testing.T) {
-	tool := &BashTool{Dir: t.TempDir()}
+	tool := &BashTool{Dir: t.TempDir(), Permissions: permissions.New(permissions.FullAccess)}
 	raw, err := json.Marshal(map[string]any{"command": "sleep 30 | cat"})
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)
@@ -47,7 +49,7 @@ func TestBashToolCancelKillsProcessGroup(t *testing.T) {
 // TestBashToolTimeoutKillsProcessGroup mirrors the cancel test through the
 // timeout path: the command must not outlive its deadline via a forked child.
 func TestBashToolTimeoutKillsProcessGroup(t *testing.T) {
-	tool := &BashTool{Dir: t.TempDir()}
+	tool := &BashTool{Dir: t.TempDir(), Permissions: permissions.New(permissions.FullAccess)}
 	raw, err := json.Marshal(map[string]any{"command": "sleep 30 | cat", "timeout_ms": 200})
 	if err != nil {
 		t.Fatalf("marshal args: %v", err)

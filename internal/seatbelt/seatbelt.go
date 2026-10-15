@@ -5,14 +5,18 @@
 // tool without creating an import cycle (agenttool defines its own
 // SandboxRunner interface; the platform runners satisfy it structurally).
 //
-// The runner only changes the execution layer: the tool name, arguments,
-// and CLI surface are untouched. On macOS a sandboxed command runs as
-// "sandbox-exec -f <generated profile> <shell> -c <command>"; on Linux as
-// "bwrap <policy flags> <shell> -c <command>". Both policies are whitelists:
-// reads are allowed only for the project, the system runtime and the extra
-// roots in ReadableRoots (so everything else under $HOME is unreadable by
-// construction), writes are confined to the project and TMPDIR, and the
-// network is off unless GOLDER_SANDBOX_NETWORK opts in.
+// The runner only changes the execution layer: the tool name, arguments, and
+// CLI surface are untouched. On macOS a sandboxed call runs as "sandbox-exec -f
+// <generated profile> <argv…>"; on Linux as "bwrap <policy flags> <argv…>".
+// Both policies are whitelists: reads are allowed only for the project, the
+// system runtime and the extra roots in ReadableRoots (so everything else under
+// $HOME is unreadable by construction), and writes are confined to the project,
+// TMPDIR and the session's writable roots.
+//
+// Isolation is the DEFAULT for every approved bash call and for the native file
+// tools (which run through a one-call worker). Network and extra paths are
+// per-call capabilities in CallPolicy, decided by the authorization gate for
+// that single invocation — a tool argument can never create one.
 package seatbelt
 
 import (
@@ -47,20 +51,6 @@ func ModeFromEnv() Mode {
 		return ModeEnforce
 	default:
 		return ModeAuto
-	}
-}
-
-// NetworkEnabled reports whether sandboxed commands keep network access.
-// Off by default (codex parity: egress must be granted explicitly, so a
-// sandboxed command cannot exfiltrate what it reads). Set
-// GOLDER_SANDBOX_NETWORK=on (also 1/true/allow/yes) to re-enable it for
-// toolchains that legitimately need the network inside the sandbox.
-func NetworkEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOLDER_SANDBOX_NETWORK"))) {
-	case "on", "1", "true", "allow", "yes":
-		return true
-	default:
-		return false
 	}
 }
 
@@ -167,6 +157,71 @@ func sandboxReadableFromEnv() []string {
 // runs after the command finishes.
 type Runner interface {
 	SandboxArgv(shell, flag, command, dir string) (argv []string, cleanup func(), err error)
+	CallRunner
+}
+
+// CallPolicy is an execution capability, scoped to exactly one sandboxed call.
+// It is constructed after the gates have decided; a tool argument cannot create
+// one. The sandbox may open the network without opening any additional files.
+// ReadFiles and WriteFiles are one-call, exact-file grants, not directory roots.
+type CallPolicy struct {
+	Network bool
+	// ReadOnlyFilesystem is for native read/search workers. They may create no
+	// files, including inside the workspace and temp directory. Bash and patch
+	// workers leave this false: their writes remain confined to permitted roots.
+	ReadOnlyFilesystem bool
+	ReadDirs           []string
+	WriteDirs          []string
+	ReadFiles          []string
+	WriteFiles         []string
+	// Explicit refusals override a broader allow at the OS boundary too.
+	DenyReadDirs   []string
+	DenyWriteDirs  []string
+	DenyReadFiles  []string
+	DenyWriteFiles []string
+}
+
+// RefusedPaths mirrors effective grant-table refusals into one OS sandbox
+// policy. A denied child must stay denied even when an ancestor was mounted by
+// an earlier directory grant. The OS layer is the last line of defence for a
+// shell program or native worker that does not use the path helper correctly.
+func RefusedPaths(policy *CallPolicy) {
+	if policy == nil {
+		return
+	}
+	s := grants.Process()
+	if s == nil {
+		return
+	}
+	for _, g := range s.Entries().All() {
+		if g.Deny == 0 {
+			continue
+		}
+		readDenied := g.Deny.Has(grants.Read) && s.Check(g.Path, grants.Read).Decision == grants.Denied
+		writeDenied := g.Deny.Has(grants.Write) && s.Check(g.Path, grants.Write).Decision == grants.Denied
+		if g.Scope == grants.Exact {
+			if readDenied {
+				policy.DenyReadFiles = append(policy.DenyReadFiles, g.Path)
+			}
+			if writeDenied {
+				policy.DenyWriteFiles = append(policy.DenyWriteFiles, g.Path)
+			}
+		} else {
+			if readDenied {
+				policy.DenyReadDirs = append(policy.DenyReadDirs, g.Path)
+			}
+			if writeDenied {
+				policy.DenyWriteDirs = append(policy.DenyWriteDirs, g.Path)
+			}
+		}
+	}
+}
+
+// CallRunner accepts per-call capabilities and an argv, so the same OS policy
+// can isolate a shell and a one-shot native-tool worker. A nil policy is the
+// default: no network and no additional paths.
+type CallRunner interface {
+	SandboxCall(argv []string, dir string, policy CallPolicy) (sandboxed []string, cleanup func(), err error)
 }
 
 // canonicals returns the path plus its symlink-resolved form (deduped). Both

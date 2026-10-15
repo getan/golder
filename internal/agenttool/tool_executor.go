@@ -130,7 +130,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		return nil, nil, ctx, &r, true
 	}
 
-	// beforeToolCall hook (may block or rewrite arguments).
+	// beforeToolCall gate sees the final, already-validated arguments.
 	if cfg.BeforeToolCall != nil {
 		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args}); dec != nil {
 			if dec.Block {
@@ -149,7 +149,13 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			// publish it for the executing tool. A tool that cannot isolate must
 			// refuse; the bash tool translates it into the sandbox-exec argv.
 			if dec.Sandbox {
-				execCtx = agentcore.WithSandboxRequest(ctx)
+				execCtx = agentcore.WithSandboxRequest(execCtx)
+			}
+			if dec.Network {
+				execCtx = agentcore.WithNetworkGrant(execCtx)
+			}
+			if dec.Direct {
+				execCtx = agentcore.WithDirectGrant(execCtx)
 			}
 			// One-call read grant (the user allowed a single read outside the
 			// workspace): publish it for the executing tool, which honours it
@@ -161,15 +167,6 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			// workspace): published for the executing tool, which honours it once.
 			if dec.WriteGrant != "" {
 				execCtx = agentcore.WithWriteGrant(execCtx, dec.WriteGrant)
-			}
-			// Argument rewrite (PreToolUse updatedInput): replace and re-validate
-			// so a hook cannot smuggle schema-invalid args past the tool.
-			if len(dec.UpdatedInput) > 0 {
-				args = dec.UpdatedInput
-				if errs := cfg.Registry.Validate(call.Name, args); len(errs) > 0 {
-					r := ValidationErrorResult(call.Name, errs)
-					return nil, nil, ctx, &r, true
-				}
 			}
 		}
 	}

@@ -47,6 +47,7 @@ import (
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/selfupdate"
+	"github.com/getan/golder/internal/toolworker"
 	"github.com/getan/golder/internal/webhook"
 )
 
@@ -179,6 +180,16 @@ type cliOptions struct {
 }
 
 func main() {
+	// Run a one-call file tool in the sandbox before reading config, credentials,
+	// grants.json or CLI flags. The request and its authorization snapshot arrive
+	// over stdin from the parent, which already ran the three gates.
+	if len(os.Args) > 1 && os.Args[1] == toolworker.Flag {
+		if err := toolworker.Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "golder: tool worker:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	// Session subcommands (golder session export|list, issue #570) dispatch early
 	// `golder session resume <id>` is sugar for `--resume <id>`: capture the id
 	// and drop both words from argv so flag parsing sees a normal invocation;

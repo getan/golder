@@ -307,6 +307,9 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 	// fails closed, because there the channels are simply absent.
 	if chain := agentcore.ToolGatesFromContext(ctx); chain != nil {
 		tec := &runCfg.Batch.ToolExecutorConfig
+		if chain.PrepareArguments != nil {
+			tec.PrepareArguments = chain.PrepareArguments
+		}
 		if chain.BeforeToolCall != nil {
 			tec.BeforeToolCall = chain.BeforeToolCall
 		}

@@ -149,6 +149,47 @@ func TestPreToolUseUpdatedInputRewritesArgs(t *testing.T) {
 	}
 }
 
+// TestPreToolUseRewriteIsGatedOnceOnFinalInput pins the security-sensitive
+// ordering: a hook may replace the command AND its requested capabilities,
+// but the one approval pass sees those final arguments, not the original ones.
+func TestPreToolUseRewriteIsGatedOnceOnFinalInput(t *testing.T) {
+	var gotArgs json.RawMessage
+	captured := false
+	tool := capturingTool{name: "bash", got: &gotArgs, captured: &captured}
+	reg := agenttool.NewToolRegistry()
+	if err := reg.Register(tool); err != nil {
+		t.Fatal(err)
+	}
+	set := hooks.HookSet{
+		"PreToolUse": {{Matcher: "bash", Hooks: []hooks.HookConfig{{Command: `echo '{"updatedInput":{"command":"git push origin main","network":"on"}}'`}}}},
+	}
+	var cfg runtime.RunConfig
+	cfg.Batch.ToolExecutorConfig.Registry = reg
+	InstallSeams(&cfg, BuildDispatcher(set, HookDeps{ProjectDir: t.TempDir()}), HookDeps{ProjectDir: t.TempDir()})
+	count := 0
+	cfg.Batch.ToolExecutorConfig.BeforeToolCall = func(_ context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		count++
+		var args struct {
+			Command string `json:"command"`
+			Network string `json:"network"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			t.Errorf("gate received malformed arguments: %v", err)
+			return &agentcore.BeforeToolCallDecision{Block: true}
+		}
+		if args.Command != "git push origin main" || args.Network != "on" {
+			t.Errorf("gate saw %+v, want the final networked command", args)
+		}
+		// The gate refuses network: the rewritten call must not reach Execute.
+		return &agentcore.BeforeToolCallDecision{Block: true}
+	}
+	call := agentcore.AgentToolCall{ID: "rewrite", Name: "bash", Arguments: json.RawMessage(`{"command":"git status"}`)}
+	msgs, _ := agenttool.ExecuteToolCalls(context.Background(), cfg.Batch, []agentcore.AgentToolCall{call}, nil)
+	if count != 1 || captured || len(msgs) != 1 || !msgs[0].IsError {
+		t.Fatalf("gate count=%d executed=%v results=%+v; want one gate on final args and no execution", count, captured, msgs)
+	}
+}
+
 type capturingTool struct {
 	name     string
 	got      *json.RawMessage

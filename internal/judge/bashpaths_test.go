@@ -185,6 +185,13 @@ func TestPathShapedRuns(t *testing.T) {
 		{`print("/2024/report.csv")`, []string{"/2024/report.csv"}},
 		{`relative/path`, nil},
 		{`re.match("/api/v1", u)`, []string{"/api/v1"}},
+		// Python's glob is a string expression; splitting a run at '*' turns
+		// "/*.jsonl" into "/", which always exists and invites the boundary gate
+		// to offer the entire filesystem as a read root.
+		{`glob.glob(p+"/*.jsonl")`, []string{"/*.jsonl"}},
+		{`glob.glob("/outside/*.jsonl")`, []string{"/outside/*.jsonl"}},
+		{`glob.glob("/outside/file?.jsonl")`, []string{"/outside/file?.jsonl"}},
+		{`glob.glob("/[abc].jsonl")`, []string{"/[abc].jsonl"}},
 		// Outside a quote the same characters are arithmetic, so no run is taken;
 		// the existence test in programPaths then has less to reject.
 		{`(n*med)/60`, nil},
@@ -230,6 +237,12 @@ func TestProgramPathsIsAVerifiablePredicate(t *testing.T) {
 		},
 		{name: "division with spaces", interpreter: "python3", prog: `print(total / 2)`, want: nil},
 		{name: "floor division", interpreter: "python3", prog: `print(a // b)`, want: nil},
+		{
+			name:        "glob fragment is not the filesystem root",
+			interpreter: "python3",
+			prog:        `p=os.path.expanduser("~/.golder/sessions"); files=glob.glob(p+"/*.jsonl")`,
+			want:        nil,
+		},
 		{
 			name:        "a regex that looks like a route is not a path",
 			interpreter: "python3",

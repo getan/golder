@@ -235,13 +235,13 @@ func TestChainGatesPreservesSandboxRequest(t *testing.T) {
 		t.Fatalf("sandbox request must survive composition, got %+v", dec)
 	}
 
-	// A later gate that rewrites arguments keeps the sandbox request too.
+	// A later non-blocking decision keeps the sandbox request too.
 	chained = ChainGates(first, func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		return &agentcore.BeforeToolCallDecision{UpdatedInput: json.RawMessage(`{"command":"echo hi"}`)}
+		return &agentcore.BeforeToolCallDecision{}
 	})
 	dec = chained(context.Background(), toolCall("bash", `{"command":"ls"}`))
-	if dec == nil || !dec.Sandbox || len(dec.UpdatedInput) == 0 {
-		t.Fatalf("sandbox request must merge with a later rewrite, got %+v", dec)
+	if dec == nil || !dec.Sandbox {
+		t.Fatalf("sandbox request must survive a later non-blocking decision, got %+v", dec)
 	}
 
 	// A later block still wins: containment is moot when the call is refused.
@@ -352,8 +352,8 @@ func TestPermissionGateEscalationConflictAsksEvenInAuto(t *testing.T) {
 		return ApprovalAnswer{Approve: true, Answered: true}
 	}
 	gate := PermissionGate(permissions.New(permissions.Auto), opts)
-	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec != nil {
-		t.Fatalf("approved escalation must run directly without a sandbox bit, got %+v", dec)
+	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block || dec.Sandbox {
+		t.Fatalf("approved escalation needs a Direct grant without a sandbox bit, got %+v", dec)
 	}
 	if gotReq.Kind != ApprovalEscalation {
 		t.Fatalf("kind = %q, want %q", gotReq.Kind, ApprovalEscalation)
@@ -450,8 +450,8 @@ func TestPermissionGateEscalationPromptsOnStdinEvenInAuto(t *testing.T) {
 	opts.In = bufio.NewReader(strings.NewReader("y\n"))
 	opts.Out = &out
 	gate := PermissionGate(permissions.New(permissions.Auto), opts)
-	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec != nil {
-		t.Fatalf("answering y must let the escalation run, got %+v", dec)
+	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block {
+		t.Fatalf("answering y must grant a one-call Direct escape, got %+v", dec)
 	}
 	if !strings.Contains(out.String(), "unisolated") {
 		t.Errorf("prompt must spell out that approval runs the call unisolated:\n%s", out.String())
@@ -609,8 +609,8 @@ func TestGateWriteGrantKeepsTheCallContained(t *testing.T) {
 		switch {
 		case c.wantSandbox && (dec == nil || !dec.Sandbox):
 			t.Errorf("%q: decision = %+v, want the sandbox bit (contained)", c.in, dec)
-		case !c.wantSandbox && dec != nil:
-			t.Errorf("%q: decision = %+v, want a direct approval", c.in, dec)
+		case !c.wantSandbox && (dec == nil || !dec.Direct || dec.Block):
+			t.Errorf("%q: decision = %+v, want an explicit Direct approval", c.in, dec)
 		}
 		if !c.wantSandbox {
 			// A plain yes runs the call unisolated, so there is no containment

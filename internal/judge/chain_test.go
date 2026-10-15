@@ -110,12 +110,8 @@ func TestChainKeepsTheFloorInFront(t *testing.T) {
 			t.Errorf("%q was decided by %q, want the static floor", cmd, v.Source)
 		}
 	}
-	// The recognizer may well call a credential read's SHAPE read-only — `cat
-	// ~/.zshrc` is a cat — and that is now harmless: the shape is a fact about
-	// containment, and the floor decides the call.
-	if !readOnlyCommand(`cat ~/.zshrc`) {
-		t.Log("the recognizer no longer calls a credential read read-only; the floor is still the decider")
-	}
+	// The static credential floor remains authoritative regardless of how the
+	// default sandbox would constrain this call at execution time.
 }
 
 // TestChainSendsEscalationRequestsToTheReviewer keeps the containment contract:

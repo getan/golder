@@ -342,13 +342,13 @@ func TestChainGatesPreservesReadGrant(t *testing.T) {
 		t.Fatalf("the read grant must survive a nil second gate, got %+v", dec)
 	}
 
-	// A later gate that only rewrites input keeps it too.
+	// A later non-blocking decision keeps the grant too.
 	chained = ChainGates(first, func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		return &agentcore.BeforeToolCallDecision{UpdatedInput: json.RawMessage(`{"path":"x"}`)}
+		return &agentcore.BeforeToolCallDecision{}
 	})
 	dec = chained(context.Background(), readCall("read", granted))
-	if dec == nil || dec.ReadGrant != granted || len(dec.UpdatedInput) == 0 {
-		t.Fatalf("the grant must merge with a later rewrite, got %+v", dec)
+	if dec == nil || dec.ReadGrant != granted {
+		t.Fatalf("the grant must survive a later non-blocking decision, got %+v", dec)
 	}
 
 	// Both requests survive together.

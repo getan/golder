@@ -20,9 +20,9 @@ func TestSandboxGateModeOff(t *testing.T) {
 
 // TestSandboxGateMatchesWiring is the consistency guarantee behind the
 // pass-through: the gate says "yes, this will be isolated" only when
-// WireBashSandbox actually attached a runner to the bash tool. A mismatch in
-// either direction is a security bug — the gate would wave through a call the
-// executor runs bare, or block a call it could have isolated.
+// WireBashSandbox actually attached a runner to bash and the native file tools
+// are wrapped in one-call workers. A mismatch in either direction would let
+// the gate approve a call the executor runs without its claimed boundary.
 func TestSandboxGateMatchesWiring(t *testing.T) {
 	t.Setenv("GOLDER_SANDBOX", "enforce")
 	tools := []agentcore.AgentTool{&agenttool.BashTool{Dir: t.TempDir()}}
@@ -44,9 +44,14 @@ func TestSandboxGateMatchesWiring(t *testing.T) {
 	if !gate("bash") {
 		t.Error("predicate must accept bash")
 	}
-	for _, name := range []string{"read", "apply_patch", "grep"} {
+	for _, name := range []string{"read", "view_image", "find", "ls", "apply_patch", "grep"} {
+		if !gate(name) {
+			t.Errorf("predicate must accept %s: it has an isolated file worker", name)
+		}
+	}
+	for _, name := range []string{"webfetch", "websearch", "todo", "write_stdin"} {
 		if gate(name) {
-			t.Errorf("predicate must not accept %s: no runner exists for it", name)
+			t.Errorf("predicate must reject %s: this tool does not run in a file worker", name)
 		}
 	}
 }
