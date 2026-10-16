@@ -67,6 +67,40 @@ func (s *OnceSet) First(key string) bool {
 	return true
 }
 
+// PathWriteNeed reports whether a denied path is needed for WRITING rather than
+// reading, so the question can say which it is and lead with the row that
+// actually unblocks the command. Two signals, cheapest first: a path that does
+// not exist can only have been needed for writing (there is nothing to read out
+// of it), and otherwise the command is scanned for the verbs that make a path a
+// write target. It stays a heuristic — the dialog still offers both sides — and
+// it is biased to "read" when unsure, which is the narrower grant.
+func PathWriteNeed(path, summary string) bool {
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return true
+	}
+	for _, tok := range strings.Fields(summary) {
+		if strings.Contains(tok, ">") {
+			return true
+		}
+		if writeVerbs[tok] {
+			return true
+		}
+	}
+	return false
+}
+
+// writeVerbs are the command names that make their path argument a write target.
+// Deliberately short: the missing-path signal carries the common cases, and a
+// wrong "false" here only reorders two rows.
+var writeVerbs = map[string]bool{
+	"mkdir": true, "touch": true, "rm": true, "rmdir": true, "mv": true, "cp": true,
+	"tee": true, "install": true, "chmod": true, "chown": true, "ln": true, "dd": true,
+	"truncate": true, "sed": true,
+}
+
 // pathTokens splits s into shell-ish tokens that name an absolute or ~ path.
 // It is deliberately lexical: quotes, =, ':' and shell punctuation break
 // tokens, and a surviving token must start with "/" or "~/". Commands are

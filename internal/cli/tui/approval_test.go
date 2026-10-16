@@ -579,6 +579,42 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 	}
 }
 
+// TestApprovalReAdmitWriteLeads: when the denied path was needed for writing, the
+// dialog says so and the row that grants it leads — the first row is the one a
+// reader who trusts the dialog takes, and a read grant would leave the retry
+// failing on the same path.
+func TestApprovalReAdmitWriteLeads(t *testing.T) {
+	grantstest.Install(t)
+	const path = "/Volumes/KIOXIA/golder-probe4"
+	req := judge.ApprovalRequest{
+		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Sandbox,
+		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true,
+	}
+	if title := approvalTitle(req); !strings.Contains(title, "writing") {
+		t.Errorf("title = %q, want the denied side named", title)
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m := NewModel(Options{})
+	m.openApproval(req, reply)
+	if len(m.approval.rows) != 4 {
+		t.Fatalf("rows = %d, want four", len(m.approval.rows))
+	}
+	if got := m.approval.rows[0]; got.key != "w" || !strings.Contains(got.label, "reads and writes") {
+		t.Fatalf("first row = %+v, want the read+write grant leading a write need", got)
+	}
+	if got := m.approval.rows[1]; got.key != "a" {
+		t.Fatalf("second row = %+v, want the read grant next", got)
+	}
+	if got := m.approval.rows[3]; got.key != "esc" {
+		t.Fatalf("last row = %+v, want deny", got)
+	}
+	// The leading row answers the write grant, which is what the tool needs.
+	m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	if ans := awaitAnswer(t, reply); !ans.Approve || ans.WritableRoot != path {
+		t.Fatalf("answer = %+v, want the writable root set", ans)
+	}
+}
+
 // TestApprovalReAdmitRows: the re-admission question offers bringing the blocked
 // path back inside the sandbox — reads at two lifetimes plus a session
 // read+write grant, since a toolchain cache needs both — and each row sets the

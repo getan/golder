@@ -880,6 +880,11 @@ interactive REPL/TUI.
   (`ApplyReAdmittedPath`) and one once-per-path memo (`OnceSet`) — wired where
   every driver installs its gates, so the tool and the gate cannot drift apart in
   what a "yes" means.
+  The question also says which side was denied and leads with the row that
+  unblocks it: a path that is not there can only have been needed for writing, so
+  the write row comes first and the title reads "denied writing"; anything
+  unrecognizable stays "read", the narrower grant, and the read rows stay one
+  keystroke away either way.
 - **A refused escape now offers the smaller answer where it is refused**: under
   auto, an escape request the reviewer declined used to hand back a message and
   nothing else. When the request names a path, the gate now asks the person

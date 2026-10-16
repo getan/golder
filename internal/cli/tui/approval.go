@@ -195,11 +195,18 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			// than re-extracting from the summary — keeps the rows and the
 			// answer naming the same path the gate offered.
 			readRoot, root = p, p
-			rows = []approvalRow{
-				{"Allow reading " + displayPath(p) + " (this session)", "a", approveReadDir},
-				{"Always allow reading " + displayPath(p) + " (remembered)", "s", approveReadPersist},
-				{"Allow reads and writes to " + displayPath(p) + " (this session)", "w", approveWritable},
-				{"Deny", "esc", approveDeny},
+			readRow := approvalRow{"Allow reading " + displayPath(p) + " (this session)", "a", approveReadDir}
+			rememberedRow := approvalRow{"Always allow reading " + displayPath(p) + " (remembered)", "s", approveReadPersist}
+			writeRow := approvalRow{"Allow reads and writes to " + displayPath(p) + " (this session)", "w", approveWritable}
+			denyRow := approvalRow{"Deny", "esc", approveDeny}
+			rows = []approvalRow{readRow, rememberedRow, writeRow, denyRow}
+			if req.NeedsWrite {
+				// The command needed to write there, so the row that unblocks it
+				// leads: the first row is the one a reader who trusts the dialog
+				// will take, and a read grant would leave the retry failing. The
+				// read rows stay right below — narrower is still a choice, and
+				// the title says which side was denied.
+				rows = []approvalRow{writeRow, readRow, rememberedRow, denyRow}
 			}
 		} else {
 			rows = []approvalRow{{"Deny", "esc", approveDeny}}
@@ -648,7 +655,13 @@ func approvalTitle(req judge.ApprovalRequest) string {
 	case judge.ApprovalEscalation:
 		return tool + " asks to run outside the sandbox"
 	case judge.ApprovalReAdmit:
-		return tool + " is blocked by a path outside the sandbox"
+		// Which side was denied comes first in the title: the rows name the
+		// grants and the path, but a reader needs to know whether the command
+		// was writing or reading before the rows mean anything to them.
+		if req.NeedsWrite {
+			return tool + " was denied writing outside the sandbox"
+		}
+		return tool + " was denied reading outside the sandbox"
 	case judge.ApprovalBoundary:
 		if req.BoundaryWrite {
 			return tool + " wants to write outside the workspace"

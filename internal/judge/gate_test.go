@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -652,6 +653,31 @@ func TestPermissionGateEscalationReadmitAskedOnce(t *testing.T) {
 	}
 	if got := agentcore.ContentToText(*dec.Content); !strings.Contains(got, "/boundary readable add") {
 		t.Errorf("refusal = %q, want the smaller fix named", got)
+	}
+}
+
+// TestPathWriteNeed: the signal that decides which row leads the dialog. A path
+// that is not there can only have been needed for writing; otherwise the command
+// decides, and anything unrecognizable stays "read" — the narrower grant.
+func TestPathWriteNeed(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "not-yet")
+	existing := t.TempDir()
+	cases := []struct {
+		name    string
+		path    string
+		summary string
+		want    bool
+	}{
+		{"no path", "", "mkdir -p /x", false},
+		{"missing path is a write", missing, "cat " + missing, true},
+		{"mkdir on an existing dir", existing, "mkdir -p " + existing, true},
+		{"plain read", existing, "ls " + existing, false},
+		{"redirect", existing, "go build -o " + existing + "/x 2> " + existing + "/err", true},
+	}
+	for _, c := range cases {
+		if got := PathWriteNeed(c.path, c.summary); got != c.want {
+			t.Errorf("%s: PathWriteNeed(%q, %q) = %v, want %v", c.name, c.path, c.summary, got, c.want)
+		}
 	}
 }
 

@@ -335,6 +335,11 @@ type ApprovalRequest struct {
 	// sandbox, for reading. Set only for ApprovalReAdmit; empty means there is
 	// no path to offer and the caller keeps its refusal.
 	ReadRoot string
+	// NeedsWrite reports that the blocked path is needed for writing, so the
+	// dialog says so in its title and leads with the row that grants both (a
+	// write grant carries read). Set only for ApprovalReAdmit, from
+	// PathWriteNeed: false means the question is presented as a read.
+	NeedsWrite bool
 	// TrustDir names the directory a trust question is about, or "" for every
 	// other kind. The trust gate's session answers - allow local reads, allow
 	// all tools - are grants for this directory, so the dialog names it rather
