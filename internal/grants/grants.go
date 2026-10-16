@@ -719,31 +719,6 @@ func sortedGrants(m map[string]Grant) []Grant {
 	return out
 }
 
-// SessionOnly reports whether path is granted only for this process, which the
-// dialog uses to offer "remember this" without re-asking a question already
-// answered durably.
-func (s *Store) SessionOnly(path string, cap Capability) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	v := s.checkLocked(path, cap)
-	if v.Decision != Allowed {
-		return false
-	}
-	clean, err := storeKey(path)
-	if err != nil {
-		return true
-	}
-	for dir := clean; ; dir = filepath.Dir(dir) {
-		if g, ok := findRow(s.saved, dir, clean); ok && g.Allow.Has(cap) {
-			return false
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return true
-		}
-	}
-}
-
 // Remove revokes a path from the layers the caller can edit: the session layer
 // always, and the managed file when it holds a row.
 func (s *Store) Remove(path string) (Removal, error) {

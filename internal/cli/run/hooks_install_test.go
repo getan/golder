@@ -39,38 +39,6 @@ func TestInstallHooksBuildsDispatcher(t *testing.T) {
 	}
 }
 
-func TestChainBeforeToolCall(t *testing.T) {
-	block := &agentcore.BeforeToolCallDecision{Block: true}
-	allow := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision { return nil }
-	deny := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision { return block }
-
-	// nil operands act as identity.
-	if got := chainBeforeToolCall(nil, deny); got == nil {
-		t.Fatal("nil prev should return next")
-	}
-	if got := chainBeforeToolCall(allow, nil); got == nil {
-		t.Fatal("nil next should return prev")
-	}
-
-	// prev blocks → short-circuit, next never runs.
-	nextRan := false
-	spy := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		nextRan = true
-		return nil
-	}
-	if dec := chainBeforeToolCall(deny, spy)(context.Background(), agentcore.AgentToolCall{}); dec == nil || !dec.Block {
-		t.Fatalf("expected block decision, got %v", dec)
-	}
-	if nextRan {
-		t.Fatal("next should not run after prev blocks")
-	}
-
-	// prev allows → next runs and decides.
-	if dec := chainBeforeToolCall(allow, deny)(context.Background(), agentcore.AgentToolCall{}); dec == nil || !dec.Block {
-		t.Fatalf("expected next's block decision, got %v", dec)
-	}
-}
-
 func TestChainAfterToolCall(t *testing.T) {
 	content := agentcore.ContentList{}
 	prevRes := &agentcore.AfterToolCallResult{Content: &content}
@@ -95,23 +63,3 @@ func TestChainAfterToolCall(t *testing.T) {
 	}
 }
 
-func TestChainShouldStop(t *testing.T) {
-	yes := func(context.Context, *agentcore.AgentContext) bool { return true }
-	no := func(context.Context, *agentcore.AgentContext) bool { return false }
-
-	if got := chainShouldStop(no, no)(context.Background(), nil); got {
-		t.Fatal("both false should be false")
-	}
-	if got := chainShouldStop(no, yes)(context.Background(), nil); !got {
-		t.Fatal("next true should stop")
-	}
-	// prev true short-circuits without consulting next.
-	nextRan := false
-	spy := func(context.Context, *agentcore.AgentContext) bool { nextRan = true; return false }
-	if got := chainShouldStop(yes, spy)(context.Background(), nil); !got {
-		t.Fatal("prev true should stop")
-	}
-	if nextRan {
-		t.Fatal("next should not run after prev returns true")
-	}
-}

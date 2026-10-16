@@ -328,16 +328,6 @@ func (m *Manager) ClearSessionTrust(dir string) {
 	}
 }
 
-// Forget removes any saved decision for dir (both true/false and an explicit
-// null entry), so the directory is treated as undecided on the next lookup.
-func (m *Manager) Forget(dir string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	dir = filepath.Clean(dir)
-	delete(m.data, dir)
-	return m.saveLocked()
-}
-
 // TrustEntry is one saved decision as /grants list reports it, with the provenance
 // that decides what revoking it takes.
 type TrustEntry struct {
@@ -380,19 +370,6 @@ func (m *Manager) Path() string {
 		return ""
 	}
 	return m.path
-}
-
-// DecisionFor returns the raw saved value for a single path (nil when absent or
-// null). It is the exact-path lookup (no walk), used by /trust status to show
-// what is stored for the current directory itself.
-func (m *Manager) DecisionFor(dir string) (Decision, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	v, ok := m.data[filepath.Clean(dir)]
-	if !ok {
-		return Undecided, false
-	}
-	return decisionFromBool(v), true
 }
 
 // saveLocked writes the trust map to disk atomically so a crash mid-write

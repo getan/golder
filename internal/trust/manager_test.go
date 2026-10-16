@@ -224,40 +224,6 @@ func TestClearSessionTrust(t *testing.T) {
 	}
 }
 
-// TestForget verifies Forget removes an entry so the directory becomes
-// undecided again, both in-memory and after reload.
-func TestForget(t *testing.T) {
-	m := newTestManager(t)
-	if err := m.SetDecision("/a", Trusted); err != nil {
-		t.Fatalf("SetDecision: %v", err)
-	}
-	if err := m.Forget("/a"); err != nil {
-		t.Fatalf("Forget: %v", err)
-	}
-	if got := m.NearestTrustDecision("/a"); got.Found {
-		t.Errorf("NearestTrustDecision after Forget = %+v, want Found=false", got)
-	}
-	// Forget is idempotent: forgetting a path with no entry is not an error.
-	if err := m.Forget("/a"); err != nil {
-		t.Errorf("Forget missing entry: %v", err)
-	}
-}
-
-// TestDecisionForExactPath verifies the exact-path lookup (no walk) returns the
-// stored decision and a Found flag, distinct from the walk-based nearest.
-func TestDecisionForExactPath(t *testing.T) {
-	m := newTestManager(t)
-	if err := m.SetDecision("/a", Trusted); err != nil {
-		t.Fatalf("SetDecision: %v", err)
-	}
-	if dec, found := m.DecisionFor("/a"); !found || dec != Trusted {
-		t.Errorf("DecisionFor(/a) = %v,%v, want Trusted,true", dec, found)
-	}
-	if dec, found := m.DecisionFor("/a/b"); found {
-		t.Errorf("DecisionFor(/a/b) = %v,%v, want _,false (no exact entry)", dec, found)
-	}
-}
-
 // TestDefaultPath verifies DefaultPath honors GOLDER_HOME and falls back to
 // ~/.golder/trust.json.
 func TestDefaultPath(t *testing.T) {
@@ -332,7 +298,6 @@ func TestConcurrentAccess(t *testing.T) {
 			_ = m.IsTrusted(dir)
 			_ = m.NearestTrustDecision(dir)
 			m.SetSessionTrust(dir)
-			_, _ = m.DecisionFor(dir)
 		}(i)
 	}
 	wg.Wait()

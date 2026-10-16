@@ -10,8 +10,6 @@ package session
 // path alone, so it can be compared against already-persisted headers.
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 )
@@ -46,20 +44,6 @@ func ProjectRoot(dir string) string {
 		}
 		d = parent
 	}
-}
-
-// ProjectID returns a stable 12-hex-character id for the project containing
-// dir: the first 12 hex chars of sha256(ProjectRoot(dir)), or "" when dir is
-// unresolvable. It is the same shape internal/memory.resolveProjectId derives
-// for a project scope, so in-repo both sides agree once they are handed the
-// repository root.
-func ProjectID(dir string) string {
-	root := ProjectRoot(dir)
-	if root == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(root))
-	return hex.EncodeToString(sum[:])[:12]
 }
 
 // SameProject reports whether directories a and b belong to the same project.

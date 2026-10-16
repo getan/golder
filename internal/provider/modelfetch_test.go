@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// TestFetchRemoteModelsOpenAICompatible verifies the OpenAI-compatible path:
+// TestFetchProviderModelsOpenAICompatible verifies the OpenAI-compatible path:
 // GET {base}/models with a Bearer header, ids parsed, deduplicated, sorted.
-func TestFetchRemoteModelsOpenAICompatible(t *testing.T) {
+func TestFetchProviderModelsOpenAICompatible(t *testing.T) {
 	var gotPath, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -20,9 +20,9 @@ func TestFetchRemoteModelsOpenAICompatible(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := FetchRemoteModels(context.Background(), srv.URL+"/v1", "openai", "test-key")
+	ids, err := FetchProviderModels(context.Background(), "", srv.URL+"/v1", "openai", "test-key")
 	if err != nil {
-		t.Fatalf("FetchRemoteModels: %v", err)
+		t.Fatalf("FetchProviderModels: %v", err)
 	}
 	if gotPath != "/v1/models" {
 		t.Errorf("path = %q, want /v1/models", gotPath)
@@ -35,9 +35,9 @@ func TestFetchRemoteModelsOpenAICompatible(t *testing.T) {
 	}
 }
 
-// TestFetchRemoteModelsAnthropic verifies the Anthropic path: GET {base}/v1/models
+// TestFetchProviderModelsAnthropic verifies the Anthropic path: GET {base}/v1/models
 // with x-api-key + anthropic-version headers.
-func TestFetchRemoteModelsAnthropic(t *testing.T) {
+func TestFetchProviderModelsAnthropic(t *testing.T) {
 	var gotPath, gotKey, gotVersion string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -48,9 +48,9 @@ func TestFetchRemoteModelsAnthropic(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := FetchRemoteModels(context.Background(), srv.URL, "anthropic", "test-key")
+	ids, err := FetchProviderModels(context.Background(), "", srv.URL, "anthropic", "test-key")
 	if err != nil {
-		t.Fatalf("FetchRemoteModels: %v", err)
+		t.Fatalf("FetchProviderModels: %v", err)
 	}
 	if gotPath != "/v1/models" {
 		t.Errorf("path = %q, want /v1/models", gotPath)
@@ -63,14 +63,14 @@ func TestFetchRemoteModelsAnthropic(t *testing.T) {
 	}
 }
 
-// TestFetchRemoteModelsFailures verifies graceful failure reporting: a missing
+// TestFetchProviderModelsFailures verifies graceful failure reporting: a missing
 // base URL, an unknown protocol, server errors, malformed bodies, and that an
 // empty key sends no auth header at all.
-func TestFetchRemoteModelsFailures(t *testing.T) {
-	if _, err := FetchRemoteModels(context.Background(), "  ", "openai", "k"); err == nil {
+func TestFetchProviderModelsFailures(t *testing.T) {
+	if _, err := FetchProviderModels(context.Background(), "", "  ", "openai", "k"); err == nil {
 		t.Error("empty base URL succeeded, want error")
 	}
-	if _, err := FetchRemoteModels(context.Background(), "http://x", "carrier-pigeon", "k"); err == nil {
+	if _, err := FetchProviderModels(context.Background(), "", "http://x", "carrier-pigeon", "k"); err == nil {
 		t.Error("unknown protocol succeeded, want error")
 	}
 
@@ -81,13 +81,13 @@ func TestFetchRemoteModelsFailures(t *testing.T) {
 	}))
 	defer srv.Close()
 	// An empty key sends no auth header at all (local gateways like Ollama).
-	if _, err := FetchRemoteModels(context.Background(), srv.URL, "openai", ""); err == nil {
+	if _, err := FetchProviderModels(context.Background(), "", srv.URL, "openai", ""); err == nil {
 		t.Error("401 response succeeded, want error")
 	}
 	if sawAuth {
 		t.Error("empty key sent an Authorization header, want none")
 	}
-	if _, err := FetchRemoteModels(context.Background(), srv.URL, "openai", "k"); err == nil {
+	if _, err := FetchProviderModels(context.Background(), "", srv.URL, "openai", "k"); err == nil {
 		t.Error("401 response succeeded, want error")
 	}
 
@@ -95,7 +95,7 @@ func TestFetchRemoteModelsFailures(t *testing.T) {
 		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv2.Close()
-	if _, err := FetchRemoteModels(context.Background(), srv2.URL, "openai", "k"); err == nil || !strings.Contains(err.Error(), "response shape") {
+	if _, err := FetchProviderModels(context.Background(), "", srv2.URL, "openai", "k"); err == nil || !strings.Contains(err.Error(), "response shape") {
 		t.Errorf("malformed body error = %v, want response-shape failure", err)
 	}
 }

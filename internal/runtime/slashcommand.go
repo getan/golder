@@ -347,13 +347,6 @@ func (r *SlashRegistry) AddProject(cmd SlashCommand) {
 	r.add(cmd)
 }
 
-// AddPackage installs a package-discovered prompt template (TierPackage).
-func (r *SlashRegistry) AddPackage(cmd SlashCommand) {
-	cmd.Source = SourceUser
-	cmd.Tier = TierPackage
-	r.add(cmd)
-}
-
 // AddSettings installs a prompt template referenced by config.toml (TierSettings).
 func (r *SlashRegistry) AddSettings(cmd SlashCommand) {
 	cmd.Source = SourceUser

@@ -66,24 +66,6 @@ func TestProjectRootEmptyAndRelative(t *testing.T) {
 	}
 }
 
-func TestProjectIDSameForRepoAndSubdir(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	sub := filepath.Join(repo, "a", "b")
-	if err := os.MkdirAll(sub, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	id, subID := ProjectID(repo), ProjectID(sub)
-	if id == "" || id != subID {
-		t.Errorf("ProjectID(repo) = %q, ProjectID(sub) = %q; want equal non-empty", id, subID)
-	}
-	if len(id) != 12 {
-		t.Errorf("ProjectID length = %d, want 12", len(id))
-	}
-}
-
 func TestSameProject(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {

@@ -446,12 +446,6 @@ func TestRemoveRevokesEveryLayer(t *testing.T) {
 	s := newStore(t)
 	mustAdd(t, s, Grant{Path: "/x", Allow: Full})
 	mustAdd(t, s, Grant{Path: "/x", Allow: Read, Lifetime: Session})
-	// The remembered row grants it, so the path is NOT session-only: a dialog
-	// asking "remember this?" must not be offered for something already
-	// durable. SessionOnly answers exactly that question.
-	if s.SessionOnly("/x", Read) {
-		t.Error("a path with a remembered grant was reported as session-only")
-	}
 	rem, err := s.Remove("/x")
 	if err != nil {
 		t.Fatalf("Remove: %v", err)
@@ -461,26 +455,6 @@ func TestRemoveRevokesEveryLayer(t *testing.T) {
 	}
 	if s.Allows("/x", Full) {
 		t.Error("a removed path is still allowed")
-	}
-	// With the remembered row gone too, the session row alone would make it
-	// session-only; both are gone, so nothing grants it at all.
-	if s.SessionOnly("/x", Read) {
-		t.Error("a fully removed path was reported as session-only")
-	}
-}
-
-func TestSessionOnlyReportsTheLayerThatGranted(t *testing.T) {
-	s := newStore(t)
-	mustAdd(t, s, Grant{Path: "/saved", Allow: Read})
-	mustAdd(t, s, Grant{Path: "/live", Allow: Read, Lifetime: Session})
-	if s.SessionOnly("/saved", Read) {
-		t.Error("a remembered grant was reported as session-only")
-	}
-	if !s.SessionOnly("/live", Read) {
-		t.Error("a session grant was not reported as session-only")
-	}
-	if s.SessionOnly("/absent", Read) {
-		t.Error("an absent path was reported as session-only")
 	}
 }
 

@@ -85,7 +85,6 @@ func TestSlashTierFullOrdering(t *testing.T) {
 	r := NewSlashRegistry()
 	r.AddCLI(SlashCommand{Name: "t", Expand: func(string) string { return "cli" }})
 	r.AddSettings(SlashCommand{Name: "t", Expand: func(string) string { return "settings" }})
-	r.AddPackage(SlashCommand{Name: "t", Expand: func(string) string { return "package" }})
 	r.AddUser(SlashCommand{Name: "t", Expand: func(string) string { return "global" }})
 	r.AddProject(SlashCommand{Name: "t", Expand: func(string) string { return "project" }})
 	r.AddBuiltin(SlashCommand{Name: "t", Action: func(string) string { return "builtin" }})
@@ -93,9 +92,9 @@ func TestSlashTierFullOrdering(t *testing.T) {
 	if !ok || cmd.Source != SourceBuiltin {
 		t.Fatalf("built-in must win the full ladder, got ok=%v source=%v", ok, cmd.Source)
 	}
-	// Five lower-tier commands (cli, settings, package, global, project) lost.
-	if len(r.Shadowed()) != 5 {
-		t.Errorf("expected 5 shadowed entries, got %d: %v", len(r.Shadowed()), r.Shadowed())
+	// Four lower-tier commands (cli, settings, global, project) lost.
+	if len(r.Shadowed()) != 4 {
+		t.Errorf("expected 4 shadowed entries, got %d: %v", len(r.Shadowed()), r.Shadowed())
 	}
 }
 

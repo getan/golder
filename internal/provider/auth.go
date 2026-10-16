@@ -39,20 +39,6 @@ func LoadAPIKeyConfig(data []byte) (*APIKeyConfig, error) {
 	return &cfg, nil
 }
 
-// LoadAPIKeyConfigFile reads and parses an APIKeyConfig from a file path. A
-// missing file is not an error — it returns an empty config so env/OAuth can
-// still resolve keys.
-func LoadAPIKeyConfigFile(path string) (*APIKeyConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &APIKeyConfig{Keys: make(map[string]string)}, nil
-		}
-		return nil, fmt.Errorf("auth: read api key config %q: %w", path, err)
-	}
-	return LoadAPIKeyConfig(data)
-}
-
 // envAPIKey returns the API key for a provider from the environment. It derives
 // the candidate variable names from the provider registry (the single source of
 // truth: LookupProviderSpec(provider).EnvVars, in precedence order), then falls

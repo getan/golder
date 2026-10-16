@@ -89,15 +89,6 @@ func TestLoadAPIKeyConfig(t *testing.T) {
 	}
 }
 
-func TestLoadAPIKeyConfigFileMissing(t *testing.T) {
-	cfg, err := LoadAPIKeyConfigFile("/no/such/path/keys.json")
-	if err != nil {
-		t.Fatalf("missing file must not error: %v", err)
-	}
-	if len(cfg.Keys) != 0 {
-		t.Errorf("missing file must yield empty keys, got %v", cfg.Keys)
-	}
-}
 
 // TestCredentialStoreResolutionOrder verifies OAuth > env > config precedence.
 func TestCredentialStoreResolutionOrder(t *testing.T) {

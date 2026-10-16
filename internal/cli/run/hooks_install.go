@@ -154,49 +154,6 @@ func joinHookText(a, b string) string {
 	}
 }
 
-// chainBeforeToolCall composes two BeforeToolCall seams into one that runs prev
-// first, then next. A blocking decision from prev short-circuits (next does not
-// run), so an earlier gate (e.g. trust) is authoritative over a later hook. A
-// nil operand is treated as identity, so composing onto an unset seam returns
-// the other unchanged.
-func chainBeforeToolCall(prev, next agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
-	if prev == nil {
-		return next
-	}
-	if next == nil {
-		return prev
-	}
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		first := prev(ctx, call)
-		if first != nil && first.Block {
-			return first
-		}
-		second := next(ctx, call)
-		if second != nil && second.Block {
-			return second
-		}
-		if first == nil {
-			return second
-		}
-		if second == nil {
-			return first
-		}
-		// A hook may rewrite arguments but must not erase capabilities the gates
-		// already decided for this call (nor invent an unapproved sandbox escape).
-		out := *second
-		out.Sandbox = first.Sandbox || out.Sandbox
-		out.Network = first.Network
-		out.Direct = first.Direct && !out.Sandbox
-		if out.ReadGrant == "" {
-			out.ReadGrant = first.ReadGrant
-		}
-		if out.WriteGrant == "" {
-			out.WriteGrant = first.WriteGrant
-		}
-		return &out
-	}
-}
-
 // chainAfterToolCall composes two AfterToolCall seams into one that runs prev
 // first, then next. next's non-nil result wins (last writer), so a hook layered
 // after an existing seam can override it; when next returns nil, prev's result
@@ -217,20 +174,3 @@ func chainAfterToolCall(prev, next agentcore.AfterToolCallFunc) agentcore.AfterT
 	}
 }
 
-// chainShouldStop composes two ShouldStopAfterTurn seams with OR semantics: the
-// run stops after a turn if either predicate says so. prev runs first and
-// short-circuits when true. A nil operand is identity.
-func chainShouldStop(prev, next func(context.Context, *agentcore.AgentContext) bool) func(context.Context, *agentcore.AgentContext) bool {
-	if prev == nil {
-		return next
-	}
-	if next == nil {
-		return prev
-	}
-	return func(ctx context.Context, agentCtx *agentcore.AgentContext) bool {
-		if prev(ctx, agentCtx) {
-			return true
-		}
-		return next(ctx, agentCtx)
-	}
-}

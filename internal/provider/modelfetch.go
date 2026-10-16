@@ -39,16 +39,6 @@ type remoteModelList struct {
 	} `json:"data"`
 }
 
-// FetchRemoteModels queries baseURL (with protocol selecting the URL shape and
-// auth header convention) for its model catalog and returns the ids sorted and
-// deduplicated. protocol may be empty, a canonical value ("openai",
-// "openai/resp_api", "anthropic"), or a raw alias — it is normalized first, and
-// the Responses protocol shares the Chat Completions /models path. An empty
-// apiKey sends no auth header (local gateways like Ollama need none).
-func FetchRemoteModels(ctx context.Context, baseURL, protocol, apiKey string) ([]string, error) {
-	return FetchProviderModels(ctx, "", baseURL, protocol, apiKey)
-}
-
 // FetchProviderModels uses the same provider identity for routing as chat
 // requests, even when baseURL points at a user-configured relay.
 func FetchProviderModels(ctx context.Context, providerName, baseURL, protocol, apiKey string) ([]string, error) {
