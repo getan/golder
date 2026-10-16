@@ -335,7 +335,7 @@ const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require
 // auto mode. Review is the only decider there, so the model is pointed at the
 // one step that actually changes the answer instead of being left to retry an
 // escape no human will be shown.
-const sandboxEscalationAutoNote = " This run is in auto mode, where the reviewer alone answers escapes: retrying cannot change the answer, but the user can switch /permissions to ask and approve one."
+const sandboxEscalationAutoNote = " This run is in auto mode, where the reviewer alone answers escapes: retrying cannot change the answer, but two smaller fixes can — (1) if the blocked access is a read, ask the user to re-admit that path inside the sandbox (`/boundary readable add <path>`, or GOLDER_SANDBOX_READABLE for the next run); (2) to write a directory, ask them to switch /permissions to ask, where the dialog's w/s rows grant the path and keep the call contained."
 
 // looksRGMissing reports whether a failed command's output says ripgrep is not
 // installed. Only the failure path consults it.

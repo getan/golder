@@ -40,6 +40,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -277,6 +278,14 @@ const (
 	// way), ask puts the escape to the person with containment as the default,
 	// headless re-contains or fails closed.
 	ApprovalEscalation ApprovalKind = "escalation"
+	// ApprovalReAdmit asks whether to re-admit, for READING and inside the
+	// sandbox, the path a declined escape was blocked on. Auto asks it at the
+	// moment it refuses the escape: dropping the sandbox for the whole call is
+	// rarely what the call needs, and one path is usually all it does need. The
+	// answer is recorded in the same table the gates and the sandbox read, and
+	// the call then runs contained with that path readable. Only drivers with a
+	// dialog ask it; without one the refusal message carries the same fix.
+	ApprovalReAdmit ApprovalKind = "re-admit"
 	// ApprovalNetwork asks for one call's network capability when the routine
 	// grader could not authorize it. An approval keeps the filesystem sandbox;
 	// this is NOT permission to run the call outside containment.
@@ -318,6 +327,10 @@ type ApprovalRequest struct {
 	// once", "allow writing <dir>") and the answer records a write grant. Set
 	// only for ApprovalBoundary.
 	BoundaryWrite bool
+	// ReadRoot is the path a re-admission question can bring back inside the
+	// sandbox, for reading. Set only for ApprovalReAdmit; empty means there is
+	// no path to offer and the caller keeps its refusal.
+	ReadRoot string
 	// TrustDir names the directory a trust question is about, or "" for every
 	// other kind. The trust gate's session answers - allow local reads, allow
 	// all tools - are grants for this directory, so the dialog names it rather
@@ -462,6 +475,10 @@ type Note struct {
 // A nil state is treated as full-access (no gate).
 func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToolCallFunc {
 	interactive := opts.In != nil && opts.Out != nil
+	// readmitAsked remembers the paths this gate already put to the person, so a
+	// retried escape does not re-open a question they have answered. Created per
+	// gate: that is the lifetime of the answer it guards.
+	readmitAsked := map[string]bool{}
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
 		mode := permissions.FullAccess
 		if state != nil {
@@ -541,6 +558,10 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			// authorize is not contained by running the command locally.
 			containable := sandboxable(opts, call.Name) &&
 				(v.Failed || v.Level == Sandbox) && (!network || v.Network)
+			// The path the request named, for the guidance a refusal carries: a
+			// smaller fix than dropping the sandbox for the whole call usually
+			// exists, and naming it beats inviting the same request again.
+			deniedPath := EscalationPathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
 			switch {
 			case v.Level == Deny && !v.Failed:
 				notify(noteFor(call, v, NoteDenied, lang))
@@ -570,8 +591,28 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					})
 					return grant(true)
 				}
+				// The escape is declined, but what the call needs is usually one
+				// path — ask whether to re-admit it for READING inside the
+				// sandbox. That is the smaller fix, asked where it is needed,
+				// and the answer is recorded in the table the sandbox itself
+				// reads, so this command and every later one see it. Asked once
+				// per path per run: a refusal must not become a nag.
+				if deniedPath != "" && opts.Confirm != nil && !readmitAsked[deniedPath] {
+					readmitAsked[deniedPath] = true
+					if dec, ok := ask(ctx, call, v, ApprovalReAdmit); ok && dec != nil {
+						notify(Note{
+							Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Sandbox, Lang: lang,
+							Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
+							Authorization: authWord(v.Authorization, lang),
+							Rationale: localized(lang,
+								"越界请求被拒；已把该路径放进沙箱读白名单，改为在沙箱内运行",
+								"the escape was declined; the blocked path is readable inside the sandbox, so it runs contained"),
+						})
+						return dec
+					}
+				}
 				notify(noteFor(call, v, NoteDenied, lang))
-				return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask")
+				return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask"+escapeFixGuidance(deniedPath))
 			}
 			if interactive && opts.Confirm == nil {
 				ans := promptRisk(ctx, opts, mode.String(), call, v, ApprovalEscalation)
@@ -603,7 +644,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return grant(true)
 			}
-			return blockCall(call, v, "running outside the sandbox was not authorized; failing closed")
+			return blockCall(call, v, "running outside the sandbox was not authorized; failing closed"+escapeFixGuidance(deniedPath))
 		}
 		switch {
 		case v.Failed:
@@ -743,6 +784,15 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 		Rationale:     firstReason(v),
 	}
 	req.Origin = agentcore.OriginFromContext(ctx)
+	if kind == ApprovalReAdmit {
+		// The path is the whole question, extracted the same way the escape
+		// dialog's write rows are. Nothing to name means nothing to approve:
+		// the caller keeps its refusal rather than asking an empty question.
+		req.ReadRoot = EscalationPathFromText(req.Summary, req.Justification, opts.Cwd)
+		if req.ReadRoot == "" {
+			return nil, false
+		}
+	}
 	done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
 	defer done()
 	ans := opts.Confirm(ctx, req)
@@ -781,6 +831,18 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 				}
 			}
 		}
+		if root := strings.TrimSpace(ans.ReadRoot); root != "" {
+			rationale = "contained in the sandbox; " + root + " is readable for this session"
+			if lang == "zh" {
+				rationale = "已收容在沙箱内；本会话可读 " + root
+			}
+			if ans.Persisted {
+				rationale = "contained in the sandbox; " + root + " is readable and remembered"
+				if lang == "zh" {
+					rationale = "已收容在沙箱内；" + root + " 可读并已记住"
+				}
+			}
+		}
 		opts.Notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 			Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
@@ -799,6 +861,20 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 		// unisolated approval it replaces.
 		return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
 	}
+	if root := strings.TrimSpace(ans.ReadRoot); root != "" {
+		// The re-admission answer, and the reason the gate owns this
+		// registration: one table is what the boundary gate, the file tools and
+		// the sandbox all read, so recording it here is what makes the answer
+		// take effect on the very next call — including this one, which then
+		// runs contained with the path readable.
+		life, source := grants.Session, "escape re-admission"
+		if ans.Persisted {
+			life, source = grants.Remembered, "escape re-admission (remembered)"
+		}
+		if _, err := grants.AddReadRoot(root, life, source); err == nil {
+			return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
+		}
+	}
 	switch kind {
 	case ApprovalNetwork:
 		return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: true}, true
@@ -807,6 +883,23 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 	default:
 		return nil, true
 	}
+}
+
+// escapeFixGuidance names the smaller fix for a declined escape. The request
+// asks to drop the sandbox for a whole call, when what the call needs is
+// usually one path: a read re-admitted inside the sandbox (/boundary readable
+// add, or GOLDER_SANDBOX_READABLE for the next run), a write granted by the ask
+// dialog's w/s rows, which keep the call contained. root is named when the
+// request itself carried a plausible one, so the advice points at a real
+// operand instead of a placeholder.
+func escapeFixGuidance(root string) string {
+	at := ""
+	if root != "" {
+		at = " (" + root + ")"
+	}
+	return " A smaller fix usually exists: a blocked read" + at +
+		" can be re-admitted inside the sandbox with `/boundary readable add <path>` (or GOLDER_SANDBOX_READABLE)," +
+		" and a blocked write with the ask dialog's w/s rows, which grant the path and keep the call contained."
 }
 
 // escalationJustification extracts the model's reason from a bash escalation

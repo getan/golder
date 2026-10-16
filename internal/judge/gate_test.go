@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -474,6 +476,118 @@ func TestPermissionGateEscalationAutoDirectFromReview(t *testing.T) {
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteEscaped {
 		t.Fatalf("notes = %+v, want one NoteEscaped", rec.notes)
+	}
+}
+
+// TestPermissionGateEscalationAutoDeclinedNamesTheSmallerFix: a refusal under
+// auto is not a dead end. A bare Allow is not a Direct grant and leaves nothing
+// to contain, so the escape is refused — and the message hands back the
+// least-privilege route (re-admit the path inside the sandbox) instead of
+// repeating the request that just failed.
+func TestPermissionGateEscalationAutoDeclinedNamesTheSmallerFix(t *testing.T) {
+	rec := &noteRecorder{}
+	opts := escalationGateOpts(rec)
+	opts.Classifier = &stubClassifier{v: Verdict{
+		Level: Allow, Risk: "low", Authorization: "unknown",
+		Reasons: []string{"builds or tests, writing only caches and artifacts"},
+	}}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || !dec.Block {
+		t.Fatalf("an allow grade without a Direct grant must refuse the escape, got %+v", dec)
+	}
+	got := agentcore.ContentToText(*dec.Content)
+	if !strings.Contains(got, "switch /permissions to ask") {
+		t.Errorf("refusal must keep the mode-switch advice, got %q", got)
+	}
+	if !strings.Contains(got, "/boundary readable add") || !strings.Contains(got, "GOLDER_SANDBOX_READABLE") {
+		t.Errorf("refusal must name the read re-admission fix, got %q", got)
+	}
+	// escalationArgs names a path (~/work/harness/scratch), so the advice points
+	// at the operand the request carried rather than a placeholder.
+	if !strings.Contains(got, "scratch") {
+		t.Errorf("refusal should name the path the request carried, got %q", got)
+	}
+}
+
+// TestPermissionGateEscalationAutoOffersReadReAdmission: an escape auto refuses
+// is not necessarily a dead end. When the request names a path, the gate asks
+// whether to bring that path back INSIDE the sandbox — the smaller answer than
+// running the call bare — and a yes runs the call contained with the path
+// readable. The grant lands in the one table the sandbox itself reads, so the
+// next call sees it too.
+func TestPermissionGateEscalationAutoOffersReadReAdmission(t *testing.T) {
+	grantstest.Install(t)
+	rec := &noteRecorder{}
+	var gotReq ApprovalRequest
+	opts := escalationGateOpts(rec)
+	opts.Cwd = t.TempDir()
+	opts.Classifier = &stubClassifier{v: Verdict{
+		Level: Allow, Risk: "low", Authorization: "unknown",
+		Reasons: []string{"builds or tests, writing only caches and artifacts"},
+	}}
+	opts.Confirm = func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+		gotReq = req
+		return ApprovalAnswer{Approve: true, Answered: true, ReadRoot: req.ReadRoot}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
+		t.Fatalf("a re-admitted path must run the call contained, got %+v", dec)
+	}
+	if gotReq.Kind != ApprovalReAdmit {
+		t.Fatalf("kind = %q, want %q (the re-admission question, not the escape)", gotReq.Kind, ApprovalReAdmit)
+	}
+	if gotReq.ReadRoot == "" || !strings.Contains(gotReq.ReadRoot, "scratch") {
+		t.Errorf("ReadRoot = %q, want the path the request carried", gotReq.ReadRoot)
+	}
+	found := false
+	for _, root := range grants.ReadRoots() {
+		if root == gotReq.ReadRoot {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("read roots = %v, want the re-admitted path in the table the sandbox reads", grants.ReadRoots())
+	}
+	last := rec.notes[len(rec.notes)-1]
+	if last.Kind != NoteSandboxed || !strings.Contains(last.Rationale, "readable") {
+		t.Errorf("note = %+v, want the contained note naming the readable path", last)
+	}
+}
+
+// TestPermissionGateEscalationReadmitAskedOnce: a refused re-admission is an
+// answer, and the retry loop the refusal message already breaks must not become
+// a nag — the question is asked once per path per run.
+func TestPermissionGateEscalationReadmitAskedOnce(t *testing.T) {
+	grantstest.Install(t)
+	asked := 0
+	opts := escalationGateOpts(&noteRecorder{})
+	opts.Cwd = t.TempDir()
+	opts.Classifier = &stubClassifier{v: Verdict{Level: Allow, Risk: "low", Authorization: "unknown"}}
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		asked++
+		return ApprovalAnswer{Answered: true} // refused
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	call := toolCall("bash", escalationArgs)
+	if dec := gate(context.Background(), call); dec == nil || !dec.Block {
+		t.Fatalf("a refused re-admission must keep the refusal, got %+v", dec)
+	}
+	if asked != 1 {
+		t.Fatalf("asked = %d, want the question asked once", asked)
+	}
+	// A retry of the same request does not re-open a question already answered,
+	// and the refusal still names the smaller fix.
+	dec := gate(context.Background(), call)
+	if dec == nil || !dec.Block {
+		t.Fatalf("retry must stay refused, got %+v", dec)
+	}
+	if asked != 1 {
+		t.Errorf("asked = %d after a retry, want one question per path", asked)
+	}
+	if got := agentcore.ContentToText(*dec.Content); !strings.Contains(got, "/boundary readable add") {
+		t.Errorf("refusal = %q, want the smaller fix named", got)
 	}
 }
 

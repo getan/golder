@@ -49,7 +49,13 @@ func readFixture(t *testing.T) (workspace, outside, target string) {
 	// tests are about.
 	home := filepath.Join(userHome(t), ".golder-test", t.Name())
 	if err := os.MkdirAll(home, 0o755); err != nil {
-		t.Fatal(err)
+		// A sandboxed run cannot reach $HOME: the sandbox read whitelist
+		// excludes it by construction, and the fixture must live outside
+		// $TMPDIR to be a real boundary case (see the comment above). Skip
+		// rather than fail — the environment cannot host the fixture, which is
+		// not the same as the behavior being wrong — and keep the sibling
+		// fixture's rule, so both fail the same way everywhere.
+		t.Skipf("cannot create fixture under $HOME: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 	t.Setenv("HOME", home)

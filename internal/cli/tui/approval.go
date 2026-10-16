@@ -179,7 +179,32 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 	if req.Kind == judge.ApprovalBoundary && req.BoundaryWrite {
 		readRoot, writeRoot = "", boundaryDir
 	}
-	if readRoot != "" {
+	if req.Kind == judge.ApprovalReAdmit {
+		// The escape was refused by review; the one thing this dialog can do is
+		// bring the blocked path back inside the sandbox — the smaller answer
+		// than running the call bare, and the reason the question is asked at
+		// all. Same rows, keys and grants as the boundary dialog's read side:
+		// it is the same question, asked at the moment it matters. The write
+		// row is there because a toolchain cache needs to be written as well as
+		// read, and a write grant carries read; permanence is not offered for
+		// writes in one keystroke, so the session row's note names
+		// /boundary writable add for that.
+		if p := strings.TrimSpace(req.ReadRoot); p != "" {
+			// The gate extracted this path when it refused the escape, so it is
+			// already the candidate for both sides. Using it verbatim — rather
+			// than re-extracting from the summary — keeps the rows and the
+			// answer naming the same path the gate offered.
+			readRoot, root = p, p
+			rows = []approvalRow{
+				{"Allow reading " + displayPath(p) + " (this session)", "a", approveReadDir},
+				{"Always allow reading " + displayPath(p) + " (remembered)", "s", approveReadPersist},
+				{"Allow reads and writes to " + displayPath(p) + " (this session)", "w", approveWritable},
+				{"Deny", "esc", approveDeny},
+			}
+		} else {
+			rows = []approvalRow{{"Deny", "esc", approveDeny}}
+		}
+	} else if readRoot != "" {
 		// A read-scope question offers the directory the call read: the
 		// directory itself when it named one, the file's own directory
 		// otherwise — and never one the gate judged too broad to grant. It
@@ -622,6 +647,8 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		return tool + " needs approval (automatic review was unavailable)"
 	case judge.ApprovalEscalation:
 		return tool + " asks to run outside the sandbox"
+	case judge.ApprovalReAdmit:
+		return tool + " is blocked by a path outside the sandbox"
 	case judge.ApprovalBoundary:
 		if req.BoundaryWrite {
 			return tool + " wants to write outside the workspace"

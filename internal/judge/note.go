@@ -117,6 +117,8 @@ func AskDisposition(kind ApprovalKind, lang string) string {
 	switch kind {
 	case ApprovalEscalation:
 		return localized(lang, "由你决定 · 沙箱外请求", "your call · sandbox escape")
+	case ApprovalReAdmit:
+		return localized(lang, "由你决定 · 重准入被拒路径", "your call · re-admit the blocked path")
 	case ApprovalNetwork:
 		return localized(lang, "由你决定 · 联网", "your call · network")
 	case ApprovalBoundary:

@@ -863,6 +863,28 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **A refused escape now offers the smaller answer where it is refused**: under
+  auto, an escape request the reviewer declined used to hand back a message and
+  nothing else. When the request names a path, the gate now asks the person
+  directly — a dialog that re-admits *that path* inside the sandbox instead of
+  dropping the sandbox for the whole call: reading for the session (`a`) or
+  remembered (`s`), or reads and writes for the session (`w`), because a
+  toolchain cache needs both and a write grant carries read. The answer is
+  registered in the same table the gates and the sandbox read, so the call runs
+  contained and every later call sees the grant too. The question is asked once
+  per path per run, so a retry cannot turn a refusal into a nag; a refusal keeps
+  the message that names the smaller fix.
+- **A refused escape now names the smaller fix**: under auto, an escape request
+  the reviewer did not authorize was refused with "make the command work inside
+  the sandbox, or switch to ask" — which never said what usually unblocks it:
+  *one path*. The refusal (and the headless one) now adds the least-privilege
+  route, naming the path the request itself carried when there is one: re-admit
+  a blocked read with `/boundary readable add <path>` (or
+  `GOLDER_SANDBOX_READABLE`), or grant a blocked directory through the ask
+  dialog's `w`/`s` rows and stay contained. The model-facing sandbox-denial hint
+  under auto carries the same two fixes, so a `go test` blocked by an unreadable
+  module cache learns to ask for a read grant instead of retrying the escape
+  that was just declined.
 - **One vocabulary for approvals, everywhere it is spoken**: the words that
   describe who answers a call now match what actually answers it. The system
   prompt, the bash tool's description and its `sandbox_permissions` schema, and

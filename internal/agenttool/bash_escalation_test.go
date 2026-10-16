@@ -161,11 +161,12 @@ func TestBashEscalationAutoNote(t *testing.T) {
 		}
 		return err.Error()
 	}
-	if got := run(permissions.Auto); !strings.Contains(got, "auto mode") || !strings.Contains(got, "/permissions to ask") {
-		t.Errorf("auto denied hint should name the mode switch, got: %v", got)
+	if got := run(permissions.Auto); !strings.Contains(got, "auto mode") ||
+		!strings.Contains(got, "/permissions to ask") || !strings.Contains(got, "/boundary readable add") {
+		t.Errorf("auto denied hint should name both smaller fixes (read re-admission, mode switch), got: %v", got)
 	}
-	if got := run(permissions.Ask); strings.Contains(got, "auto mode") {
-		t.Errorf("ask denied hint must not talk about auto, got: %v", got)
+	if got := run(permissions.Ask); strings.Contains(got, "auto mode") || strings.Contains(got, "/boundary readable add") {
+		t.Errorf("ask denied hint must not talk about auto or its escape hatches, got: %v", got)
 	}
 }
 
