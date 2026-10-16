@@ -27,9 +27,9 @@
 
 - **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
-- **多 Provider**：默认 OpenCode 网关，内置 OpenAI / Anthropic / OpenRouter / DeepSeek / Ollama 等 40+ 网关，也可指向任意 OpenAI 兼容端点。
+- **多 Provider**：默认 OpenCode 网关，内置 19 个网关（OpenAI / Anthropic / OpenRouter / DeepSeek 等），也可指向任意 OpenAI 兼容端点。
 - **会话与分支**：`/resume` 切换历史会话（默认只看当前项目，`--all` 看全部），`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
-- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；**获准执行的 `bash` 调用一律在沙箱内跑**（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`，需已安装），与命令内容无关——原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）也由一次性沙箱 worker 执行。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的 `writable_roots`；**网络默认关闭，且按次授权**——需要联网的调用声明 `network:"on"`，授权门在同一次审批里决定（批了仍在文件沙箱内，不必脱离沙箱）。**路径授权可在弹窗里一键记住**：读/写两类弹窗都提供"本会话"与"记住（跨会话）"两档，后者直接写入 `~/.golder/grants.json`（写授权在 TUI 弹窗按 `w`/`s`，REPL 提示输入 `w`/`s`；读授权按 `a`/`s`）。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。确实需要**文件**访问而沙箱挡不住时，模型可申请 `require_escalated`——这只是**同一次评审**里的又一个能力问题，不是第二轮审批：auto 下由评估器拍板（批了就在沙箱外跑并播报，不批则重新收容、也播报，不会打断你），ask 下弹窗问你（默认项是"收容重跑"，`e` 才是故意出沙箱），没人可问则收容或失败关闭。
+- **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；**获准执行的 `bash` 调用一律在沙箱内跑**（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`，需已安装），与命令内容无关——原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）也由一次性沙箱 worker 执行。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的写根；**网络默认关闭，且按次授权**——需要联网的调用声明 `network:"on"`，授权门在同一次审批里决定（批了仍在文件沙箱内，不必脱离沙箱）。**路径授权可在弹窗里一键记住**：读授权按 `a`（本会话）/`s`（记住）；写确认弹窗（`apply_patch` 写工作区外）按 `y`/`a`/`s`；越界申请与重准入弹窗里的写行是 `w`（本会话）/`s`（记住）。记住档直接写入 `~/.golder/grants.json`。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。确实需要**文件**访问而沙箱挡不住时，模型可申请 `require_escalated`——这只是**同一次评审**里的又一个能力问题，不是第二轮审批：auto 下由评估器拍板（批了就在沙箱外跑并播报；不批则**当场弹窗**把被拒路径拿给你选：`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝——题面写明被拒的是读还是写，需要写时写行在首行，批准后命令**收容重跑**；没有路径可提时则静默收容并播报），ask 下弹窗问你（默认项是"收容重跑"，`e` 才是故意出沙箱），没人可问则收容或失败关闭。**命令被沙箱拒绝时同理**：只要命令或理由点得出路径，就当场问你要不要把它放回沙箱，批准后原命令在沙箱内自动重跑。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
 - **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`，以及 `bash` 命令里能识别出的文件操作数）默认只读工作区，越界会先问你——弹窗可选「只读这一次」「本会话允许读该目录」或「记住（跨会话，写入 `grants.json`）」；没有可问的人时失败关闭，并在消息里给出路径与配置办法；TUI/REPL 里的子 agent 会把问题送进同一个弹窗，标题标出 `(from task)` 之类的来源——人就坐在那儿看着，唯一真正问不到人的是 headless 与进程隔离的子 agent。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`GOLDER_READABLE_ROOTS` 环境变量，或 `/boundary readable add <路径>`（写入 `grants.json`，重启后仍生效；同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
 - **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
@@ -261,11 +261,11 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | 模式 | 行为 |
 |------|------|
 | `read-only` | 只读；改动型调用直接拒绝 |
-| `ask` | 改动型调用先经当前模型审查，低风险放行、其余询问你（无输入时拒绝） |
+| `ask` | 改动型调用先经当前模型审查：低风险放行，需隔离的进沙箱，其余询问你（无输入时拒绝） |
 | `auto`（默认） | 模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝，并给出一行理由 |
 | `full-access` | 不做审查、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
 
-首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**两个前端的按键一致**：`y` 只这一次、`p` 本会话、`s` 记住（写入磁盘的只有 `s`），同一个问题在 TUI 和 REPL 里按同一个键。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
+首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
 
 ### 常用开关
 
@@ -274,7 +274,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `-p, --print` | 无头模式的 prompt（位置参数等价） |
 | `-m, --model` / `--provider` | 选择模型与网关 |
 | `-a, --approve` | 本次运行信任工作目录，跳过逐次确认 |
-| `--thinking-level` | 推理档位：`off` / `low` / `medium` / `high` / `xhigh` / `max` |
+| `--thinking-level` | 推理档位：`off` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max` |
 | `--no-tools`、`--allowed-tools`、`--disallowed-tools` | 工具级准入控制 |
 | `--no-skills`、`--no-prompt-templates` | 关闭技能 / 提示词模板发现 |
 | `--no-tui` | 交互模式下改用行式 REPL（不使用全屏 TUI） |

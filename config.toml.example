@@ -75,22 +75,23 @@ no_skills = false
 
 # --- Persistent memory + infinite context (nested tables) ---
 
-# [permissions] holds the two path grants. Both lists take "~/..." spellings
-# (relative paths are ignored with a warning), and neither can be turned into
-# "everything": the filesystem root, $HOME itself and $HOME's parent are always
-# refused.
+# Path grants live in the authorization table (~/.golder/grants.json), not here.
+# Manage them where they are granted:
 #
-# readable_roots lets the read-only tools (read, grep, find, ls, view_image)
-# reach a directory outside the opened workspace without asking first — the
-# monorepo case, where the project root sits above the directory you launched
-# in. Without it the tools ask, once per directory per session (the dialog
-# offers "allow this read once" and "allow reading <dir> (this session)"), and
-# a non-interactive run refuses with the path and this setting named. A grant
-# also widens the sandbox's read whitelist, so a command and a tool agree about
-# a granted directory.
-# [permissions]
-# readable_roots = ["~/work/monorepo"]
-# writable_roots = ["~/cache/build"]
+#   /boundary readable add <path>   read outside the workspace without asking
+#                                   (the monorepo case); also widens the
+#                                   sandbox's read whitelist
+#   /boundary writable add <path>   write outside the workspace (build caches,
+#                                   CARGO_TARGET_DIR, ~/go/pkg/mod); write
+#                                   implies read
+#   GOLDER_READABLE_ROOTS           the same read grant for a machine that
+#                                   cannot edit the file (a script, a container)
+#   GOLDER_SANDBOX_READABLE         toolchains under $HOME, sandbox-side only
+#
+# The dialogs grant the same rows (reads answer to a/s; the write question to
+# y/a/s; the escalation and re-admission write rows to w/s). Relative paths are
+# refused, and no grant can be turned into "everything": the filesystem root,
+# $HOME itself and $HOME's parent are always refused.
 
 # [memory] controls the persistent memory system. All keys are optional and
 # default to the values shown; set memory.enabled = false to fully disable it.

@@ -4,7 +4,9 @@
 
 ## 默认立场（与 pi 相同）
 
-golder **不内置权限沙箱**。默认情况下，golder 以启动它的用户与进程的全部权限运行：`bash` 能做你用户能做的任何事，`apply_patch` 能改工作区内外的文件。golder 内置的护栏（trust 三态、`--approve`、`--allowed-tools`/`--disallowed-tools`）是**准入控制**——它们约束"模型是否被允许发起某个工具调用"，而不是操作系统层面的隔离。需要更强的边界时，把 golder 容器化或沙箱化。
+golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 一律在沙箱内跑（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`），原生文件工具走一次性沙箱 worker。沙箱是**白名单**：读限项目 + 系统运行时 + 显式授权的读根，写限项目 + `TMPDIR` + 显式授权的写根，网络默认关闭、按次授权（见下文"执行隔离"）。
+
+沙箱之外还有一层**准入控制**（trust 三态、四档权限模式、`--approve`、`--allowed-tools`/`--disallowed-tools`）：它约束"模型是否被允许发起某个工具调用"，与操作系统隔离是两件事。只有 `GOLDER_SANDBOX=off`、或平台从未实现沙箱（Windows）时才裸跑；需要比 OS 沙箱更强的边界（整机隔离、容器）时，再把 golder 容器化。
 
 ## 三层防线的分工
 
@@ -38,7 +40,7 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 分级链（`internal/judge`，叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、敏感变量 echo 进网络等），只拒不放，其余全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）放行给审查器。它也是**唯一不经过模型就拒绝**的一层——正因如此，凭据读这类结论既不能被重试，也不能被提示词说服。
-2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 按两个规则路由：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny/Sandbox 中等置信即接受，因为它们的失败模式只是多余的拦截或收容；Confirm 一律升级）。没有 TypeSafe 凭据时整条 jev 路径静默不接（`blessed` 的旧行为）。
+2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 按两个规则路由：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny/Sandbox 中等置信即接受，因为它们的失败模式只是多余的拦截或收容；Confirm 一律升级）。没有 TypeSafe 凭据时，这一层换成**本地规则表** `judge.Local`（同样每个调用都判，判不了的档上交会话模型），jev 整条路径不接。
 3. **兜底**：审查超时（默认 30s，`GOLDER_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理。
 
 **曾经有两条豁免，都已删除**（记录于此，因为它们的设计理由仍然成立，只是不再换来那点延迟）：
@@ -58,7 +60,7 @@ golder **不内置权限沙箱**。默认情况下，golder 以启动它的用�
 
 ### 执行隔离
 
-**隔离是默认，不再由评级决定**：门在放行前会问 `run.SandboxGate()`——它覆盖 `bash` 与那几个原生文件工具，并与 `WireBashSandbox`/worker 的装配条件一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner；`full-access` 不挂 runner）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。只有平台**从未实现过**沙箱（Windows）才保持裸跑；Linux 上 bubblewrap 被禁则失败关闭，而不是悄悄降级。
+**隔离是默认，不再由评级决定**：门在放行前会问 `run.SandboxGate()`——它覆盖 `bash` 与那几个原生文件工具，并与 `WireBashSandbox`/worker 的装配条件一致（`GOLDER_SANDBOX` 非 off、平台有可用 runner；`full-access` 照挂 runner，只在执行时绕过它）。`SandboxGateMatchesWiring` 测试把这条一致性钉死。只有平台**从未实现过**沙箱（Windows）才保持裸跑；Linux 上 bubblewrap 被禁则失败关闭，而不是悄悄降级。
 
 执行隔离（`internal/seatbelt`）：CLI 与工具参数都不变，语句从 `bash -c` 换成平台沙箱；原生文件工具走一次性 worker，用同一套策略。两个平台同一条策略——**读白名单、写白名单、网络默认关闭**：
 
@@ -103,9 +105,12 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 写白名单（项目 + 临时目录 + writable_roots）
 
-沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有三条授权途径，它们汇入同一张授权表（`grants.json`；本会话行在进程内即刻生效，并发安全，下一个命令就看得见）：
+沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有两条授权途径，它们汇入同一张授权表（`grants.json`；本会话行在进程内即刻生效，并发安全，下一个命令就看得见）：
 
-- **审批对话框**：沙箱拒绝的命令若提到了项目外的路径，对话框会多出一行 `Allow writes to <path> (this session)`（按 `w`）。它只对**本次会话**生效，且批准不是"无沙箱放行"——命令重新回到收容态执行，只是该路径可读写；授权后对话记录会提示持久化命令。
+- **审批对话框**（三条相关路径；都只影响**那一个路径**，批准不是"无沙箱放行"——命令始终收容执行）：
+  - **重准入**：越界申请被评审拒绝、或命令被沙箱拒绝时，弹窗把被拒路径拿给你选：`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝。题面写明被拒的是读还是写（`denied writing` / `denied reading`），**需要写时写行在首行**；批准后命令**收容重跑**，同一路径每次运行只问一次。
+  - **写确认**（`apply_patch` 写工作区外）：`y` 仅本次、`a` 写/本会话、`s` 写/记住。
+  - **越界申请的写行**（ask 模式的 escalation 弹窗）：`w` 该路径可读写/本会话、`s` 记住。
 - **`/boundary writable add <path>`**：写入 `~/.golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable`，或从 `/permissions` 菜单最后一行 `Sandbox writable paths…`，打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
 
 可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
@@ -118,7 +123,14 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
 
-当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，由**模式**决定谁裁决：**auto 下评审的话作数**——重新收容并在转写里播报"越界请求被拒，改为沙箱内运行"，不弹任何对话框（越界是能力问题，不是风险问题；auto 的承诺是这类决策不打断人）；**ask 下才弹给人**（TUI 弹审批对话框，REPL 走 stdin 提示），且默认项就是"收容重跑"，`e` 才是故意出沙箱——若沙箱拒绝的是项目外某个路径，弹窗里还会多出 `Allow writes to <path>`（本会话）/ `Always allow …`（记住）两行，把那个路径放进沙箱，比出沙箱更省事。评审明确给出 **Direct** 授权时才会真的在沙箱外跑，且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
+当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，由**模式**决定谁裁决：
+
+- **auto**：评审的话作数。若请求点名了路径，先把"要不要把该路径放回沙箱"问你——`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝；题面写明被拒的是读还是写（`denied writing` / `denied reading`），需要写时写行就在首行。批准后命令**收容重跑**（同一路径每次运行只问一次）；**没有可提的路径**时则静默重新收容并在转写里播报"越界请求被拒，改为在沙箱内运行"（越界是能力问题，不是风险问题）。
+- **ask**：把整个越界交给你（TUI 弹审批对话框，REPL 走 stdin 提示），默认项就是"收容重跑"，`e` 才是故意出沙箱——弹窗里还会多出 `Allow reads and writes to <path> (this session)`（按 `w`）等写行，把那个路径放进沙箱，比出沙箱更省事。
+
+评审明确给出 **Direct** 授权时才会真的在沙箱外跑，且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
+
+**命令没有申请越界、却被沙箱拒绝**时同理（模型只是照常跑命令）：只要命令或理由里点得出路径，就当场弹同一个重准入窗，批准后原命令在沙箱内**自动重跑**；拒绝、或重跑后仍失败，则维持原结果与给模型的提示。
 
 ### 用户直通命令（`!command`）
 
@@ -147,7 +159,7 @@ bash needs approval
 | Sandbox 档但无法隔离 | 无 runner / 非 bash 工具 | 对话框明确标注"批准将以非沙箱方式运行" |
 | 审查失败且无处隔离 | LLM 审查超时/报错 | 对话框标注"自动审查不可用" |
 | **未信任目录的副作用工具** | 每次 bash/apply_patch | 此前 TUI 完全没装这道门；现在是"批准一次 / 本会话信任此目录 / 拒绝" |
-| **首启信任** | 目录未决时启动 | 同一个对话框的 trust 形态：`p` 记住、`y` 仅本会话、`n` 记住不信任、Esc 取消（不落盘） |
+| **首启信任** | 目录未决时启动 | 同一个对话框的 trust 形态：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）。运行中的信任问句另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问**不落盘**（持久化是启动选择器的职责） |
 
 行为约定：对话框是**模态**的（打开期间所有按键归它，输入框收不到字符）；同一时刻只允许一个待审批（第二个请求 fail-closed）；run 被中断时对话框随之关闭，未作答一律按 fail-closed 处理（沉默不等于批准）。远程控制连接时，信任确认优先路由到浏览器（原有行为）。
 
