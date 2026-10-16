@@ -541,16 +541,19 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)
 	m := NewModel(Options{})
 	m.openApproval(req, reply)
-	// Five rows: approve once, approve for the session, the session write
-	// grant, its remembered twin, and deny.
+	// Five rows: the contained answer (the default), the session write grant,
+	// its remembered twin, the deliberate escape, and deny.
 	if len(m.approval.rows) != 5 {
 		t.Fatalf("rows = %d, want 5 with both writable grants", len(m.approval.rows))
 	}
-	label := m.approval.rows[2].label
+	if first := m.approval.rows[0].label; !strings.Contains(first, "in the sandbox") {
+		t.Fatalf("escalation must lead with the contained answer, got %q", first)
+	}
+	label := m.approval.rows[1].label
 	if !strings.Contains(label, "/Volumes/KIOXIA/old-build") || !strings.Contains(label, "this session") {
 		t.Fatalf("writable row label = %q", label)
 	}
-	remembered := m.approval.rows[3].label
+	remembered := m.approval.rows[2].label
 	if !strings.Contains(remembered, "/Volumes/KIOXIA/old-build") || !strings.Contains(remembered, "remembered") {
 		t.Fatalf("remembered row label = %q", remembered)
 	}
@@ -573,6 +576,38 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 	s := &runSession{cwd: t.TempDir()} // no approvalCh: a dialog would fail closed
 	if ans := s.confirmApproval(context.Background(), req); !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
 		t.Fatalf("pre-granted escalation should be contained without a dialog, got %+v", ans)
+	}
+}
+
+// TestApprovalEscalationRows: the escalation dialog leads with containment, makes
+// the escape a deliberate second key, and prints the decision line — which mode
+// is asking, on what grade, and why it is asking at all.
+func TestApprovalEscalationRows(t *testing.T) {
+	req := judge.ApprovalRequest{
+		Kind: judge.ApprovalEscalation, Tool: "bash", Mode: "ask", Level: judge.Sandbox,
+		Summary: "command: ls /etc",
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m := NewModel(Options{})
+	m.openApproval(req, reply)
+	if got := m.approval.rows[0]; got.key != "y" || got.value != approveContained {
+		t.Fatalf("first row = %+v, want the contained answer on y", got)
+	}
+	if joined := strings.Join(m.approval.detail, "\n"); !strings.Contains(joined, "bash · ask · sandbox → your call · sandbox escape") {
+		t.Errorf("detail is missing the decision line:\n%s", joined)
+	}
+	m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if ans := awaitAnswer(t, reply); !ans.Approve || !ans.Contained {
+		t.Fatalf("y must answer containment, got %+v", ans)
+	}
+
+	// 'e' is the escape, granted deliberately rather than by default.
+	reply2 := make(chan judge.ApprovalAnswer, 1)
+	m2 := NewModel(Options{})
+	m2.openApproval(req, reply2)
+	m2.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if ans := awaitAnswer(t, reply2); !ans.Approve || ans.Contained {
+		t.Fatalf("e must answer the escape, got %+v", ans)
 	}
 }
 

@@ -292,6 +292,25 @@ func TestModelRevealRunsOnceThenStops(t *testing.T) {
 	}
 }
 
+// TestStatusBarShowsApprovalMode: the bar carries the live approval mode, so
+// "will a human be asked?" is answerable without opening a dialog or remembering
+// what was typed at /permissions.
+func TestStatusBarShowsApprovalMode(t *testing.T) {
+	s := newTestStatusBar()
+	s.SetMode("auto")
+	if out := stripANSI(s.Render(120)); !strings.Contains(out, glyphMode+" auto") {
+		t.Errorf("mode segment missing: %q", out)
+	}
+	s.SetMode("full-access")
+	if out := stripANSI(s.Render(120)); !strings.Contains(out, "full-access") {
+		t.Errorf("mode segment should follow the switch: %q", out)
+	}
+	s.SetMode("")
+	if out := stripANSI(s.Render(120)); strings.Contains(out, glyphMode) {
+		t.Errorf("empty mode should render no segment: %q", out)
+	}
+}
+
 func TestStatusBarHidesGitWhenNotRepo(t *testing.T) {
 	s := newTestStatusBar()
 	s.SetGit(gitInfoMsg{ok: false})

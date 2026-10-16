@@ -863,6 +863,33 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Approval says who decides, and auto means auto**: every approval surface now
+  carries one decision line — `tool · mode · grade → who settles it`, e.g.
+  `bash · ask · confirm → your call` or
+  `bash · auto · sandbox → contained · runs in the sandbox` — built by a single
+  renderer (`judge.DecisionLine`), so the dialog, the transcript notes and the
+  REPL prompt use the same words as `/permissions`. The mode and the grade are
+  the canonical tokens rather than paraphrases, because they answer the question
+  people actually have ("does a human need to answer this?"): the same `confirm`
+  is the user's call under ask and already decided under auto, and that used to
+  be invisible. Under auto an escape request no longer interrupts the person at
+  all — the reviewer decides, an explicit Direct grant runs the call bare and
+  announces it with a new `NoteEscaped` kind, anything less re-contains it and
+  says so — and a run outside the sandbox is never silent. Under ask the
+  escalation dialog now leads with "Run it in the sandbox (recommended)" and
+  makes the escape a deliberate second key (`e`), so approving a command no
+  longer means approving its escape by default. The note line stops hiding
+  "approved" and "approved but contained" behind one sentence, and the status bar
+  carries the live mode (`⚖ auto`, in the alert block for `full-access`), so "am
+  I being asked at all?" is answered before the next dialog rather than by it.
+- **A network tool is gated like a network tool**: `NetworkRequested` recognized
+  only bash's `network: "on"`, so `webfetch`/`websearch` — which run in this
+  process, where no OS sandbox can contain them — reached the internet with no
+  consent step, on the strength of their descriptions. They take the network
+  path now: the reviewer's capability or the person's answer decides, the
+  "networked call needs a runner" refusal stays scoped to exec tools (a fetch has
+  no filesystem boundary to lose), and nothing about a call is announced while a
+  question about it is still open.
 - **The status bar adapts to its width, and moves only when something changed**:
   the bar is one fixed-width row, and it used to drop whole fields when they did
   not fit — the cwd first, being the lowest priority. Replacing the app badge with

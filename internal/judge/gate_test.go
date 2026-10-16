@@ -319,17 +319,65 @@ func TestConversationLanguage(t *testing.T) {
 }
 
 func TestFormatNoteLocalized(t *testing.T) {
-	zh := FormatNote(Note{Tool: "bash", Kind: NoteApproved, Risk: "medium", Authorization: "high", Rationale: "常规操作", Lang: "zh"})
-	if !strings.Contains(zh, "自动审批通过") || !strings.Contains(zh, "风险：中") || !strings.Contains(zh, "常规操作") {
+	zh := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteApproved, Risk: "medium", Authorization: "high", Rationale: "常规操作", Lang: "zh"})
+	if !strings.Contains(zh, "bash · auto · allow → 已批准") || !strings.Contains(zh, "风险：中") || !strings.Contains(zh, "常规操作") {
 		t.Errorf("zh note = %q", zh)
 	}
-	en := FormatNote(Note{Tool: "bash", Kind: NoteDenied, Risk: "high", Authorization: "low", Rationale: "dangerous", Lang: "en"})
-	if !strings.Contains(en, "Auto-review denied") || !strings.Contains(en, "risk: high") {
+	en := FormatNote(Note{Tool: "bash", Mode: "ask", Kind: NoteDenied, Level: Deny, Risk: "high", Authorization: "low", Rationale: "dangerous", Lang: "en"})
+	if !strings.Contains(en, "✗ bash · ask · deny → denied") || !strings.Contains(en, "risk: high") {
 		t.Errorf("en note = %q", en)
 	}
 }
 
 const escalationArgs = `{"command":"rm -rf ~/work/harness/scratch","sandbox_permissions":"require_escalated","justification":"cleanup outside the workspace"}`
+
+// TestNetworkRequestedCoversWebTools: the tools whose whole effect is an
+// outbound request must take the network path, not run on the strength of their
+// description. They execute in this process, so the gate is the only boundary
+// they have.
+func TestNetworkRequestedCoversWebTools(t *testing.T) {
+	for _, tool := range []string{"webfetch", "websearch", "WebFetch", "webfetch "} {
+		if !NetworkRequested(tool, nil) {
+			t.Errorf("NetworkRequested(%q) = false, want true", tool)
+		}
+	}
+	if NetworkRequested("bash", json.RawMessage(`{"command":"ls"}`)) {
+		t.Error("bash without network:on must not count as a network request")
+	}
+	if !NetworkRequested("bash", json.RawMessage(`{"command":"git push","network":"on"}`)) {
+		t.Error("bash with network:on must count as a network request")
+	}
+}
+
+// TestPermissionGateWebFetchAsksForNetwork: a fetch the reviewer does not
+// authorize takes the network question to the person — the honest version of
+// "the gate decides execution AND network" — and it is the network question
+// (not a no-sandbox one), because those tools never had a sandbox to lose.
+func TestPermissionGateWebFetchAsksForNetwork(t *testing.T) {
+	rec := &noteRecorder{}
+	var gotReq ApprovalRequest
+	opts := GateOpts{
+		Classifier:     &stubClassifier{v: Verdict{Level: Allow, Risk: "low", Authorization: "medium", Reasons: []string{"reads a public page"}}},
+		Sandboxed:      func(name string) bool { return name == "bash" },
+		RequireSandbox: true,
+		Notify:         rec.emit,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			gotReq = req
+			return ApprovalAnswer{Approve: true, Answered: true}
+		},
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("webfetch", `{"url":"https://example.com"}`))
+	if dec == nil || dec.Block {
+		t.Fatalf("an approved fetch should run, got %+v", dec)
+	}
+	if gotReq.Kind != ApprovalNetwork {
+		t.Fatalf("kind = %q, want %q (the network question, not no-sandbox)", gotReq.Kind, ApprovalNetwork)
+	}
+	if gotReq.Mode != "auto" || gotReq.Level != Allow {
+		t.Errorf("request mode/level = %q/%v, want auto/allow", gotReq.Mode, gotReq.Level)
+	}
+}
 
 func escalationGateOpts(rec *noteRecorder) GateOpts {
 	return GateOpts{
@@ -339,11 +387,38 @@ func escalationGateOpts(rec *noteRecorder) GateOpts {
 	}
 }
 
-// TestPermissionGateEscalationConflictAsksEvenInAuto locks the conflict rule:
-// the model asked to run outside the sandbox while the reviewer graded the
-// call Sandbox, so the gate must ask the user even in auto mode — silently
-// recontaining the call would loop forever.
-func TestPermissionGateEscalationConflictAsksEvenInAuto(t *testing.T) {
+// TestPermissionGateEscalationAutoContainsWithoutAsking locks the mode rule: an
+// escape request is settled by review under auto. The reviewer graded the call
+// sandbox-tier, so it runs contained and no dialog opens — interrupting the
+// person here would break the one promise auto makes.
+func TestPermissionGateEscalationAutoContainsWithoutAsking(t *testing.T) {
+	rec := &noteRecorder{}
+	asked := false
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(_ context.Context, _ ApprovalRequest) ApprovalAnswer {
+		asked = true
+		return ApprovalAnswer{Approve: true, Answered: true}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
+		t.Fatalf("auto must contain an escape request, got %+v", dec)
+	}
+	if asked {
+		t.Error("auto mode must not open a dialog for an escape request")
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed || rec.notes[0].Mode != "auto" {
+		t.Fatalf("notes = %+v, want one NoteSandboxed stamped with the mode", rec.notes)
+	}
+	if !strings.Contains(rec.notes[0].Rationale, "containable") {
+		t.Errorf("rationale = %q, want it to say the escape was declined", rec.notes[0].Rationale)
+	}
+}
+
+// TestPermissionGateEscalationAskModePrompts: under ask the person answers, and
+// the request carries the mode and the grade so the dialog's decision line can
+// say which mode is asking and what it is about.
+func TestPermissionGateEscalationAskModePrompts(t *testing.T) {
 	rec := &noteRecorder{}
 	var gotReq ApprovalRequest
 	opts := escalationGateOpts(rec)
@@ -351,18 +426,54 @@ func TestPermissionGateEscalationConflictAsksEvenInAuto(t *testing.T) {
 		gotReq = req
 		return ApprovalAnswer{Approve: true, Answered: true}
 	}
-	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	gate := PermissionGate(permissions.New(permissions.Ask), opts)
 	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block || dec.Sandbox {
 		t.Fatalf("approved escalation needs a Direct grant without a sandbox bit, got %+v", dec)
 	}
-	if gotReq.Kind != ApprovalEscalation {
-		t.Fatalf("kind = %q, want %q", gotReq.Kind, ApprovalEscalation)
+	if gotReq.Kind != ApprovalEscalation || gotReq.Mode != "ask" || gotReq.Level != Sandbox {
+		t.Fatalf("request = %+v, want kind escalation, mode ask, level sandbox", gotReq)
 	}
 	if gotReq.Justification != "cleanup outside the workspace" {
 		t.Errorf("justification = %q, want the model's reason", gotReq.Justification)
 	}
-	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteApproved {
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteApproved || rec.notes[0].Mode != "ask" {
 		t.Fatalf("notes = %+v, want one NoteApproved", rec.notes)
+	}
+}
+
+// TestPermissionGateEscalationContainsAnswerReContains: the dialog's default
+// answer — "keep it in the sandbox" — runs the call contained even though the
+// model asked to leave, and no Direct grant rides along.
+func TestPermissionGateEscalationContainsAnswerReContains(t *testing.T) {
+	rec := &noteRecorder{}
+	opts := escalationGateOpts(rec)
+	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		return ApprovalAnswer{Approve: true, Contained: true, Answered: true}
+	}
+	gate := PermissionGate(permissions.New(permissions.Ask), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
+		t.Fatalf("the contained answer must re-contain the call, got %+v", dec)
+	}
+}
+
+// TestPermissionGateEscalationAutoDirectFromReview: the one way auto lets a call
+// out is the reviewer saying so — and it announces it, so a run outside the
+// sandbox is never invisible.
+func TestPermissionGateEscalationAutoDirectFromReview(t *testing.T) {
+	rec := &noteRecorder{}
+	opts := escalationGateOpts(rec)
+	opts.Classifier = &stubClassifier{v: Verdict{
+		Level: Allow, Direct: true, Risk: "medium", Authorization: "high",
+		Reasons: []string{"the user asked for this path in the prompt"},
+	}}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || !dec.Direct || dec.Block {
+		t.Fatalf("a reviewer Direct grant must run the call bare, got %+v", dec)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteEscaped {
+		t.Fatalf("notes = %+v, want one NoteEscaped", rec.notes)
 	}
 }
 
@@ -375,7 +486,7 @@ func TestPermissionGateEscalationConflictDenyBlocks(t *testing.T) {
 	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
 		return ApprovalAnswer{Answered: true}
 	}
-	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	gate := PermissionGate(permissions.New(permissions.Ask), opts)
 	dec := gate(context.Background(), toolCall("bash", escalationArgs))
 	if dec == nil || !dec.Block || dec.Sandbox {
 		t.Fatalf("denied escalation must block, got %+v", dec)
@@ -398,7 +509,7 @@ func TestPermissionGateEscalationWritableGrantContains(t *testing.T) {
 	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
 		return ApprovalAnswer{Approve: true, Answered: true, WritableRoot: root}
 	}
-	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	gate := PermissionGate(permissions.New(permissions.Ask), opts)
 	dec := gate(context.Background(), toolCall("bash", escalationArgs))
 	if dec == nil || dec.Block || !dec.Sandbox {
 		t.Fatalf("a path grant must re-contain the call, got %+v", dec)
@@ -410,7 +521,7 @@ func TestPermissionGateEscalationWritableGrantContains(t *testing.T) {
 	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
 		return ApprovalAnswer{Answered: true, WritableRoot: root}
 	}
-	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	gate = PermissionGate(permissions.New(permissions.Ask), opts)
 	dec = gate(context.Background(), toolCall("bash", escalationArgs))
 	if dec == nil || !dec.Block {
 		t.Fatalf("deny with a path must still block, got %+v", dec)
@@ -442,29 +553,44 @@ func TestPermissionGateEscalationConflictNoHumanContains(t *testing.T) {
 	}
 }
 
-// TestPermissionGateEscalationPromptsOnStdinEvenInAuto: the REPL path asks on
-// stdin and, on yes, lets the call run unisolated.
-func TestPermissionGateEscalationPromptsOnStdinEvenInAuto(t *testing.T) {
+// TestPermissionGateEscalationStdin: under ask the REPL puts the escape question
+// on stdin — y runs the call unisolated, n leaves it contained — while auto
+// never asks at all, on stdin or anywhere else.
+func TestPermissionGateEscalationStdin(t *testing.T) {
 	var out bytes.Buffer
 	opts := escalationGateOpts(&noteRecorder{})
 	opts.In = bufio.NewReader(strings.NewReader("y\n"))
 	opts.Out = &out
-	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	gate := PermissionGate(permissions.New(permissions.Ask), opts)
 	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block {
 		t.Fatalf("answering y must grant a one-call Direct escape, got %+v", dec)
 	}
 	if !strings.Contains(out.String(), "unisolated") {
 		t.Errorf("prompt must spell out that approval runs the call unisolated:\n%s", out.String())
 	}
-	// No answer means denial, and the call is contained rather than allowed.
+	// No answer means containment, never a bare run.
 	var out2 bytes.Buffer
 	opts = escalationGateOpts(&noteRecorder{})
 	opts.In = bufio.NewReader(strings.NewReader("n\n"))
 	opts.Out = &out2
-	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	gate = PermissionGate(permissions.New(permissions.Ask), opts)
 	dec := gate(context.Background(), toolCall("bash", escalationArgs))
 	if dec == nil || dec.Block || !dec.Sandbox {
 		t.Fatalf("answering n must fall back to the sandbox, got %+v", dec)
+	}
+
+	// Auto decides by review: the typed answer is never read.
+	var auto bytes.Buffer
+	opts = escalationGateOpts(&noteRecorder{})
+	opts.In = bufio.NewReader(strings.NewReader("y\n"))
+	opts.Out = &auto
+	gate = PermissionGate(permissions.New(permissions.Auto), opts)
+	dec = gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
+		t.Fatalf("auto must contain without prompting, got %+v", dec)
+	}
+	if strings.Contains(auto.String(), "Allow?") {
+		t.Errorf("auto mode must not put the escape question on stdin:\n%s", auto.String())
 	}
 }
 

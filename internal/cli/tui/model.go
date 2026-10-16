@@ -2956,6 +2956,13 @@ func (m *Model) syncLiveDisplay() {
 	m.statusBar.SetProvider(m.live.ProviderName)
 	m.statusBar.SetModel(m.live.Model)
 	m.statusBar.SetThinking(string(m.live.ThinkingLevel))
+	// The approval mode is session policy rather than live model config, so it
+	// is published from the session — and from here rather than from the
+	// /permissions handler alone, because adopting a session (/resume, /fork)
+	// brings its mode with it and the bar must not keep describing the old one.
+	if m.session != nil && m.session.perms != nil {
+		m.statusBar.SetMode(m.session.perms.Mode().String())
+	}
 	// A switch can also change the context window; recompute the gauge against
 	// the new budget so a stale percentage is not shown until the next turn.
 	// Mid-run the messages belong to the run goroutine (a read here would race

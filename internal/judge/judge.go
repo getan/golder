@@ -291,7 +291,17 @@ const (
 // ApprovalRequest is what the gate shows the user: the call itself plus the
 // reviewer's verdict, so the decision is informed rather than a bare yes/no.
 type ApprovalRequest struct {
-	Kind    ApprovalKind
+	Kind ApprovalKind
+	// Mode is the approval mode in force for this call (auto, ask, read-only,
+	// full-access). It is the answer to the reader's real question — "does a
+	// human have to answer this?" — which is why every surface prints it: the
+	// same verdict is the user's to settle under ask and already settled under
+	// auto.
+	Mode string
+	// Level is the grade the gate acted on (allow, confirm, sandbox, deny),
+	// printed as the canonical token rather than a paraphrase so the dialog,
+	// the notes and /permissions all use one vocabulary.
+	Level   Level
 	Tool    string
 	Summary string
 	// Justification carries the model's reason when the call is an escalation
@@ -330,6 +340,11 @@ type ApprovalAnswer struct {
 	// Always remembers the decision for this session, keyed by the request's
 	// tool and summary prefix, so the same shape of call is not asked again.
 	Always bool
+	// Contained, when set with Approve, answers "keep it in the sandbox" — the
+	// escalation dialog's default row. The gate re-contains the call: a request
+	// to leave the sandbox is not an entitlement to, and the reviewer had
+	// already graded the call runnable under containment.
+	Contained bool
 	// Answered is false when the dialog could not run (ctx cancelled, no UI);
 	// the gate then falls back to its fail-closed behavior.
 	Answered bool
@@ -372,6 +387,11 @@ const (
 	NoteApproved NoteKind = iota
 	// NoteSandboxed: a Sandbox-tier call runs isolated.
 	NoteSandboxed
+	// NoteEscaped: a call ran OUTSIDE the sandbox — the reviewer approved an
+	// escalation request, or the user did. It is the one outcome a sandboxed
+	// session must never reach the user unannounced, so it has its own kind
+	// rather than riding on NoteApproved.
+	NoteEscaped
 	// NoteDenied: the reviewer (or the static floor) denied the call.
 	NoteDenied
 	// NoteUnavailable: the reviewer failed and the call was handled
@@ -413,6 +433,13 @@ type Note struct {
 	Authorization string
 	Rationale     string
 	Lang          string
+	// Mode is the approval mode that was in force for this call (auto, ask,
+	// read-only, full-access), stamped by the permission gate. It is what makes
+	// a verdict line answer the reader's real question — the same grade means
+	// "a human said yes" under ask and "the reviewer decided" under auto — so a
+	// note built outside a gate (trust, boundary bookkeeping) may leave it empty
+	// and render without it.
+	Mode string
 	// Origin names the agent that asked, when it is not the session's own
 	// conversation (a sub-agent dispatch). Empty for a direct call. It is a
 	// label for the reader, never an input to a decision.
@@ -434,23 +461,32 @@ type Note struct {
 func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToolCallFunc {
 	interactive := opts.In != nil && opts.Out != nil
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		// The sink is shared by every run in the process, so a note a sub-agent's
-		// call produced would otherwise be indistinguishable from one the main
-		// conversation produced. The origin rides the context precisely so this
-		// can name it.
-		notify := func(n Note) {
-			if n.Origin == "" {
-				n.Origin = agentcore.OriginFromContext(ctx)
-			}
-			if opts.Notify != nil {
-				opts.Notify(n)
-			}
-		}
 		mode := permissions.FullAccess
 		if state != nil {
 			mode = state.Mode()
 		}
 		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		// The sink is shared by every run in the process, so a note a sub-agent's
+		// call produced would otherwise be indistinguishable from one the main
+		// conversation produced. The origin rides the context precisely so this
+		// can name it, and the mode is stamped the same way: every line a call
+		// produces says which mode decided it.
+		notify := func(n Note) {
+			if n.Origin == "" {
+				n.Origin = agentcore.OriginFromContext(ctx)
+			}
+			if n.Mode == "" {
+				n.Mode = mode.String()
+			}
+			if opts.Notify != nil {
+				opts.Notify(n)
+			}
+		}
+		// ask carries the mode and the language into every approval request, so
+		// the dialog prints the decision line without each call site repeating it.
+		ask := func(ctx context.Context, call agentcore.AgentToolCall, v Verdict, kind ApprovalKind) (*agentcore.BeforeToolCallDecision, bool) {
+			return askApproval(ctx, opts, mode.String(), call, v, kind, lang)
+		}
 		switch mode {
 		case permissions.FullAccess:
 			if v, ok := staticDeny(call.Name, call.Arguments); ok {
@@ -477,25 +513,63 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		// a direct one-call run; an unanswered dialog still fails closed.
 		askNetwork := func() (*agentcore.BeforeToolCallDecision, bool) {
 			kind := ApprovalNetwork
-			if opts.RequireSandbox && !sandboxable(opts, call.Name) {
+			// A shell that cannot be isolated is a bigger question than a network
+			// grant — approving runs the command bare — so it keeps the no-sandbox
+			// kind. A tool that never had a sandbox to lose (webfetch, websearch)
+			// is asked about the network and nothing else.
+			if opts.RequireSandbox && strings.EqualFold(call.Name, "bash") && !sandboxable(opts, call.Name) {
 				kind = ApprovalNoSandbox
 			}
-			return askApproval(ctx, opts, call, v, kind, lang)
+			return ask(ctx, call, v, kind)
 		}
 		grant := func(sandbox bool) *agentcore.BeforeToolCallDecision {
 			return &agentcore.BeforeToolCallDecision{Sandbox: sandbox, Network: network && v.Network}
 		}
-		// An escalation is a request, not an escape. The same grader can
-		// explicitly approve Direct in auto mode; a bare Allow cannot. When the
-		// grader chose containment instead, declining the escape leaves the call
-		// contained (and never treats its network request as a grant).
+		// An escalation is a request, not an escape, and the mode decides who
+		// answers it. Auto answers by review alone: an explicit Direct grant from
+		// the reviewer runs the call bare (and says so), anything less is
+		// re-contained — pulling a human in here would break the one promise
+		// auto makes. Ask answers with a human, whose dialog now defaults to
+		// containment, because the reviewer already graded the call runnable
+		// inside the sandbox.
 		if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") {
+			// Containment is available whenever the sandbox can do the
+			// enforcing: the reviewer graded the call sandbox-tier, or could not
+			// be reached at all. A network request the reviewer did not
+			// authorize is not contained by running the command locally.
+			containable := sandboxable(opts, call.Name) &&
+				(v.Failed || v.Level == Sandbox) && (!network || v.Network)
 			switch {
 			case v.Level == Deny && !v.Failed:
 				notify(noteFor(call, v, NoteDenied, lang))
 				return blockCall(call, v, DenyGuidance)
-			case !v.Failed && v.Level != Sandbox && optsIsAuto(state) && v.Direct:
-				return &agentcore.BeforeToolCallDecision{Direct: true}
+			case optsIsAuto(state):
+				if !v.Failed && v.Level != Sandbox && v.Direct {
+					// The reviewer itself approved the escape. Announcing it is
+					// what keeps "ran outside the sandbox" from being invisible.
+					notify(Note{
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteEscaped, Level: Allow, Lang: lang,
+						Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
+						Authorization: authWord(v.Authorization, lang),
+						Rationale: localized(lang,
+							"评审批准了本次越界，命令将在沙箱外运行",
+							"review approved the escape; the call runs outside the sandbox"),
+					})
+					return &agentcore.BeforeToolCallDecision{Direct: true}
+				}
+				if containable {
+					notify(Note{
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Sandbox, Lang: lang,
+						Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
+						Authorization: authWord(v.Authorization, lang),
+						Rationale: localized(lang,
+							"模型请求在沙箱外运行，auto 由评审决定：判定可收容，改为在沙箱内运行",
+							"the model asked to run outside; auto leaves that to review, which graded it containable — it runs in the sandbox"),
+					})
+					return grant(true)
+				}
+				notify(noteFor(call, v, NoteDenied, lang))
+				return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask")
 			}
 			if interactive && opts.Confirm == nil {
 				ans := promptRisk(ctx, opts, call, v, "escalation request")
@@ -514,16 +588,16 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					}
 					return &agentcore.BeforeToolCallDecision{Direct: true}
 				}
-				if v.Level == Sandbox && !v.Failed && sandboxable(opts, call.Name) && !network {
+				if containable {
 					notify(noteFor(call, v, NoteSandboxed, lang))
 					return grant(true)
 				}
 				return blockCall(call, v, "sandbox escape was not approved; failing closed")
 			}
-			if dec, ok := askApproval(ctx, opts, call, v, ApprovalEscalation, lang); ok {
+			if dec, ok := ask(ctx, call, v, ApprovalEscalation); ok {
 				return dec
 			}
-			if v.Level == Sandbox && !v.Failed && sandboxable(opts, call.Name) && !network {
+			if containable {
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return grant(true)
 			}
@@ -531,15 +605,18 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		}
 		switch {
 		case v.Failed:
-			notify(noteFor(call, v, NoteUnavailable, lang))
 			if network {
 				// An unavailable reviewer is not an authorization to turn the
 				// network on. The same approval dialog can decide it explicitly.
+				// The note waits for that answer: nothing about this call is
+				// announced while a question about it is still open.
 				if dec, ok := askNetwork(); ok {
 					return dec
 				}
+				notify(noteFor(call, v, NoteUnavailable, lang))
 				return blockCall(call, v, "cannot review this network request; failing closed")
 			}
+			notify(noteFor(call, v, NoteUnavailable, lang))
 			if sandboxable(opts, call.Name) {
 				// Contain it: the execution layer runs the call isolated (the
 				// decision rides the executor context down to the tool).
@@ -548,7 +625,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
-			if dec, ok := askApproval(ctx, opts, call, v, ApprovalReviewFailed, lang); ok {
+			if dec, ok := ask(ctx, call, v, ApprovalReviewFailed); ok {
 				return dec
 			}
 			return blockCall(call, v, "reviewer unavailable and no sandbox for this tool; failing closed")
@@ -560,13 +637,20 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return blockCall(call, v, "network access was not authorized; failing closed")
 			}
 			if network {
-				if opts.RequireSandbox && !sandboxable(opts, call.Name) {
+				// A shell that reaches the network needs BOTH the filesystem
+				// sandbox and the grant: where the platform demands isolation, a
+				// shell we cannot isolate must not run networked at all. The rule
+				// names bash because it is about exec tools — a web tool reaches
+				// the network from this process and has no filesystem boundary to
+				// lose, so its consent is the network question above, not a
+				// missing runner.
+				if opts.RequireSandbox && strings.EqualFold(call.Name, "bash") && !sandboxable(opts, call.Name) {
 					return blockCall(call, v, "no OS sandbox available for networked bash; failing closed")
 				}
 				return grant(false)
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
-				if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
+				if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 					return dec
 				}
 				return blockCall(call, v, "no OS sandbox available for bash; failing closed")
@@ -589,7 +673,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
-			if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
+			if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 				return dec
 			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
@@ -602,7 +686,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return blockCall(call, v, "network access was not authorized; failing closed")
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
-				if dec, ok := askApproval(ctx, opts, call, v, ApprovalNoSandbox, lang); ok {
+				if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 					return dec
 				}
 				return blockCall(call, v, "no OS sandbox available for bash; failing closed")
@@ -620,7 +704,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 				return nil
 			}
-			if dec, ok := askApproval(ctx, opts, call, v, ApprovalConfirm, lang); ok {
+			if dec, ok := ask(ctx, call, v, ApprovalConfirm); ok {
 				if network && dec == nil {
 					return grant(false)
 				}
@@ -636,15 +720,19 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 }
 
 // askApproval routes a call that needs the user's answer through the driver's
-// Confirm callback. ok=false means no callback is wired (or it could not
-// answer): the caller keeps its fail-closed behavior, so a driver that never
-// wired approval can not be tricked into allowing by silence.
-func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, kind ApprovalKind, lang string) (*agentcore.BeforeToolCallDecision, bool) {
+// Confirm callback. mode and lang ride along so the question can say which mode
+// is asking and which grade it is about — the two facts that tell a person
+// whether this dialog is even theirs to answer. ok=false means no callback is
+// wired (or it could not answer): the caller keeps its fail-closed behavior, so
+// a driver that never wired approval can not be tricked into allowing by silence.
+func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore.AgentToolCall, v Verdict, kind ApprovalKind, lang string) (*agentcore.BeforeToolCallDecision, bool) {
 	if opts.Confirm == nil {
 		return nil, false
 	}
 	req := ApprovalRequest{
 		Kind:          kind,
+		Mode:          mode,
+		Level:         v.Level,
 		Tool:          call.Name,
 		Summary:       riskSummary(call),
 		Justification: escalationJustification(call),
@@ -668,7 +756,7 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 			opts.Notify(Note{
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
 				Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-				Rationale: denied, Origin: req.Origin,
+				Rationale: denied, Origin: req.Origin, Mode: mode,
 			})
 		}
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
@@ -694,8 +782,14 @@ func askApproval(ctx context.Context, opts GateOpts, call agentcore.AgentToolCal
 		opts.Notify(Note{
 			Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
 			Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-			Rationale: rationale, Origin: req.Origin,
+			Rationale: rationale, Origin: req.Origin, Mode: mode,
 		})
+	}
+	if ans.Contained {
+		// "Keep it in the sandbox" — the escalation dialog's default answer, and
+		// an approval of the call rather than of the escape: the tool runs with
+		// the sandbox doing the enforcing.
+		return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
 	}
 	if strings.TrimSpace(ans.WritableRoot) != "" {
 		// The call ran into the sandbox (or could not be reviewed); with the
@@ -749,17 +843,28 @@ func EscalationRequested(tool string, args json.RawMessage) bool {
 	return strings.EqualFold(tool, "bash") && escalationRequested(args)
 }
 
-// NetworkRequested is the shell tool's explicit request, not an authorization.
-// The authorization gate can only grant it after the selected reviewer or the
-// person answers; the executor never reads this field as a capability.
+// NetworkRequested reports whether a call reaches the network. Two shapes count:
+// bash asking for it (`network: "on"`), and the tools whose whole effect IS an
+// outbound request — webfetch and websearch. The second shape matters because
+// those tools run in this process, where no OS sandbox can contain them: the
+// gate is the only boundary they have, so a call that skipped the network
+// question would reach the internet on the strength of a tool description
+// rather than on a decision.
+//
+// A request is never an authorization: the gate grants it only after the
+// selected reviewer or the person answers, and the executor never reads the
+// argument as a capability.
 func NetworkRequested(tool string, args json.RawMessage) bool {
-	if !strings.EqualFold(tool, "bash") {
-		return false
+	switch strings.ToLower(strings.TrimSpace(tool)) {
+	case "bash":
+		var a struct {
+			Network string `json:"network"`
+		}
+		return json.Unmarshal(args, &a) == nil && a.Network == "on"
+	case "webfetch", "websearch":
+		return true
 	}
-	var a struct {
-		Network string `json:"network"`
-	}
-	return json.Unmarshal(args, &a) == nil && a.Network == "on"
+	return false
 }
 
 // firstReason returns the verdict's leading reason, for the dialog body.

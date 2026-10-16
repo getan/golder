@@ -93,14 +93,19 @@ func TestJudgeNoteMsgRenders(t *testing.T) {
 		Tool:          "bash",
 		ToolCallID:    "call_1",
 		Kind:          judge.NoteApproved,
+		Mode:          "auto",
 		Risk:          "medium",
 		Authorization: "high",
 		Rationale:     "提交本地 commit，完全可回滚。",
 		Lang:          "zh",
 	}
 	next, _ := m.Update(judgeNoteMsg{note: note})
-	view := next.View().Content
-	if !strings.Contains(view, "自动审批通过") || !strings.Contains(view, "完全可回滚") {
+	// Stripped: the transcript paints the disposition (the part after the arrow)
+	// in its own style, so the raw view has ANSI inside the phrase.
+	view := stripANSI(next.View().Content)
+	// The rationale is asserted by a fragment: the note wraps at the test's 80
+	// columns, so the full sentence is split across two rendered lines.
+	if !strings.Contains(view, "bash · auto · allow → 已批准") || !strings.Contains(view, "完全可") {
 		t.Errorf("view missing review note:\n%s", view)
 	}
 }
@@ -122,7 +127,7 @@ func TestReviewNoteSitsBelowCommandAboveOutput(t *testing.T) {
 	})
 	text := strings.Join(tr.contentLines(), "\n")
 	cmdAt := strings.Index(text, "commit")
-	noteAt := strings.Index(text, "自动审批通过")
+	noteAt := strings.Index(text, "已批准")
 	outAt := strings.Index(text, "output line")
 	if cmdAt < 0 || noteAt < 0 || outAt < 0 {
 		t.Fatalf("missing command, note or output:\n%s", text)
@@ -149,7 +154,7 @@ func TestReviewNoteStaysBelowCommandWhenOutputArrives(t *testing.T) {
 	tr.reflow()
 	text := strings.Join(tr.contentLines(), "\n")
 	cmdAt := strings.Index(text, "commit")
-	noteAt := strings.Index(text, "自动审批通过")
+	noteAt := strings.Index(text, "已批准")
 	outAt := strings.Index(text, "first output line")
 	if cmdAt < 0 || noteAt < 0 || outAt < 0 {
 		t.Fatalf("missing command, note or output:\n%s", text)
@@ -167,11 +172,11 @@ func TestReviewNoteUnknownCardAppends(t *testing.T) {
 	tr.setSize(60, 20)
 	tr.addToolCard(&toolCard{id: "call_other", name: "bash", input: map[string]any{"command": "echo hi"}, state: cardSuccess})
 	tr.addReviewNote(judge.Note{
-		Tool: "bash", ToolCallID: "call_child", Kind: judge.NoteDenied,
+		Tool: "bash", ToolCallID: "call_child", Kind: judge.NoteDenied, Level: judge.Deny,
 		Risk: "high", Authorization: "low", Rationale: "子任务被拒", Lang: "zh",
 	})
 	text := strings.Join(tr.contentLines(), "\n")
-	if !strings.Contains(text, "自动审批拒绝") || !strings.Contains(text, "子任务被拒") {
+	if !strings.Contains(text, "bash · deny → 已拒绝") || !strings.Contains(text, "子任务被拒") {
 		t.Errorf("standalone note missing:\n%s", text)
 	}
 }

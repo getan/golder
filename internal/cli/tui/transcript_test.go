@@ -774,7 +774,7 @@ func TestTranscriptNoticesAlignWithContentColumn(t *testing.T) {
 	}
 	t.Logf("rendered:\n%s", strings.Join(lines, "\n"))
 
-	for _, want := range []string{"• Ran bash make test", "自动审批通过", ui.InterruptingNotice, ui.InterruptNotice} {
+	for _, want := range []string{"• Ran bash make test", "已批准", ui.InterruptingNotice, ui.InterruptNotice} {
 		found := false
 		for _, ln := range lines {
 			if !strings.Contains(ln, want) {

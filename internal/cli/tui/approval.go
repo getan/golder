@@ -54,6 +54,13 @@ const (
 	approveWritePersist    = "write-persist"
 	approveReadsHere       = "reads-here"
 	approveDeny            = "deny"
+	// approveContained is the escalation dialog's default: keep the call in the
+	// sandbox. approveDirect is the deliberate second answer: run this one call
+	// outside it. The two are separate values because they are separate
+	// decisions — a reader who wants the command to run should not have to
+	// choose "leave the sandbox" to get it.
+	approveContained = "contained"
+	approveDirect    = "direct"
 )
 
 // Trust-question values (the first-run dialog; the same three-way choice the
@@ -130,7 +137,26 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 	if req.Kind == judge.ApprovalTrust {
 		rows = trustGateRows(req.Tool)
 	}
-	if root != "" {
+	if req.Kind == judge.ApprovalEscalation {
+		// An escalation's default answer is containment, not escape: the
+		// reviewer already graded the call runnable inside the sandbox, so
+		// "keep it there" is the safe row and it leads (y, and Enter on the
+		// default selection). Leaving the sandbox stays possible — the reviewer
+		// is not always right — but it is a deliberate second key whose label
+		// says what it costs. There is no "for this session" row: a remembered
+		// escape is not a decision to make in one keystroke.
+		rows = []approvalRow{{"Run it in the sandbox (recommended)", "y", approveContained}}
+		if root != "" {
+			rows = append(rows,
+				approvalRow{"Allow writes to " + displayPath(root) + " (this session)", "w", approveWritable},
+				approvalRow{"Always allow writes to " + displayPath(root) + " (remembered)", "s", approveWritablePersist},
+			)
+		}
+		rows = append(rows,
+			approvalRow{"Run it outside the sandbox anyway", "e", approveDirect},
+			approvalRow{"Deny", "esc", approveDeny},
+		)
+	} else if root != "" {
 		// The escalation's blocker is a path the sandbox denies: offer to
 		// re-admit just that path (read+write, this session) instead of
 		// unisolating the whole command. Inserted before Deny so Esc keeps
@@ -260,6 +286,19 @@ func (m *Model) answerApproval(value string) {
 		switch value {
 		case approveOnce:
 			ans.Approve = true
+		case approveContained:
+			// "Keep it in the sandbox": an approval of the call, not of the
+			// escape. The gate re-contains it (the reviewer had already graded
+			// it runnable under containment), so nothing leaves the sandbox.
+			ans.Approve, ans.Contained = true, true
+		case approveDirect:
+			// The escape, granted deliberately: this one call runs outside the
+			// sandbox. The transcript says so, because "the reviewer let it
+			// through" and "I let it through" must not look alike later.
+			ans.Approve = true
+			if m.session != nil {
+				m.transcript.addSystem("This call runs outside the sandbox (approved by you).")
+			}
 		case approveSession:
 			ans.Approve, ans.Always = true, true
 			// In a trust question this answer reaches the whole directory, so
@@ -578,11 +617,11 @@ func approvalTitle(req judge.ApprovalRequest) string {
 	}
 	switch req.Kind {
 	case judge.ApprovalNoSandbox:
-		return tool + " needs approval (sandbox unavailable — approving runs it unsandboxed)"
+		return tool + " cannot be sandboxed — approving runs it outside the sandbox"
 	case judge.ApprovalReviewFailed:
 		return tool + " needs approval (automatic review was unavailable)"
 	case judge.ApprovalEscalation:
-		return tool + " asks to run outside the sandbox (reviewer graded it sandbox)"
+		return tool + " asks to run outside the sandbox"
 	case judge.ApprovalBoundary:
 		return tool + " wants to read outside the workspace"
 	case judge.ApprovalTrust:
@@ -595,7 +634,12 @@ func approvalTitle(req judge.ApprovalRequest) string {
 // approvalDetail renders the body lines above the options for a tool approval:
 // the command preview, the model's justification, and the reviewer's verdict.
 func approvalDetail(req judge.ApprovalRequest) []string {
-	var out []string
+	// The decision line leads: tool · mode · grade → who settles it. The mode is
+	// the fact a person forgets between two dialogs — the same "confirm" is
+	// theirs to answer under ask and already decided under auto — so it is
+	// printed above the command, in the same words the notes and /permissions
+	// use.
+	out := []string{judge.DecisionLine(req.Tool, req.Mode, req.Level, judge.AskDisposition(req.Kind, "en"))}
 	if req.Origin != "" {
 		// Named before the preview, because the preview is a file tool's path or
 		// a shell command, and both read differently when a delegated child

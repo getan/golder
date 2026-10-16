@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/permissions"
 )
 
 // statusBar renders the persistent bottom line described in the SPEC (US-003,
@@ -37,6 +38,14 @@ type statusBar struct {
 	// Static-ish config sourced from Options.
 	model    string
 	thinking string
+
+	// mode is the live approval mode ("auto", "ask", "read-only",
+	// "full-access"), published by the session. It answers the question the
+	// dialog and the notes keep answering per call — who decides whether a tool
+	// may run — once, permanently, so a person does not have to open a dialog
+	// to remember whether they are being asked at all. It is empty until a
+	// session exists, and hidden then rather than guessed at.
+	mode string
 
 	// cwd is the launch directory with $HOME already abbreviated to "~".
 	cwd string
@@ -117,6 +126,11 @@ func (s *statusBar) SetModel(model string) { s.model = model }
 // (including its `think` form).
 func (s *statusBar) SetThinking(level string) { s.thinking = level }
 
+// SetMode publishes the live approval mode. It is set with the other live
+// fields (see Model.syncLiveDisplay), so /permissions is visible the moment it
+// takes effect rather than only when the next dialog appears.
+func (s *statusBar) SetMode(mode string) { s.mode = mode }
+
 // SetTelemetry updates the context-usage percentage from a telemetry event.
 // A zero/unknown window (ContextWindow == 0) leaves the segment hidden.
 func (s *statusBar) SetTelemetry(ev telemetryEventView) {
@@ -161,6 +175,7 @@ const (
 	glyphDirty = "●" // uncommitted changes
 	glyphAhead = "⇡" // commits ahead of upstream
 	glyphModel = "✱" // model name
+	glyphMode  = "⚖" // approval mode (who decides a tool call)
 	glyphThink = "✽" // thinking level
 	glyphCwd   = "▸" // working directory
 	glyphCtx   = "◔" // context-window usage
@@ -181,6 +196,13 @@ const (
 
 	sbGitFg = "231" // git text
 	sbGitBg = "65"  // git block (muted green)
+
+	sbModeFg = "234" // approval mode text (dark, on mid gray)
+	sbModeBg = "245" // approval mode block
+	// full-access wears the alert block: it is the one mode where nothing else
+	// on the bar warns that review and the sandbox are both switched off.
+	sbModeWarnFg = "231"
+	sbModeWarnBg = "131"
 
 	sbModelFg = "231" // model text
 	sbModelBg = "97"  // model block (muted purple)
@@ -204,6 +226,8 @@ const (
 	// theme decides how light each one is.
 	sbPlainProv  = "15" // bright white
 	sbPlainGit   = "10" // bright green
+	sbPlainMode  = "7"  // white for the default modes…
+	sbPlainWarn  = "9"  // …and bright red for full-access
 	sbPlainModel = "13" // bright magenta
 	sbPlainThink = "12" // bright blue
 	sbPlainCwd   = "14" // bright cyan
@@ -392,6 +416,16 @@ func (s statusBar) segments() []segment {
 
 	if s.git.ok {
 		segs = append(segs, segment{text: s.gitText(), fg: sbGitFg, bg: sbGitBg, plainFg: sbPlainGit, priority: prioGit})
+	}
+	if s.mode != "" {
+		// The approval mode sits beside git: it is state about the session, not
+		// about the conversation, and it is the one segment that says whether a
+		// tool call will be decided by a human or by review.
+		fg, bg, plainFg := sbModeFg, sbModeBg, sbPlainMode
+		if s.mode == permissions.FullAccess.String() {
+			fg, bg, plainFg = sbModeWarnFg, sbModeWarnBg, sbPlainWarn
+		}
+		segs = append(segs, segment{text: glyphMode + " " + s.mode, fg: fg, bg: bg, plainFg: plainFg, priority: prioGit})
 	}
 	if s.model != "" {
 		segs = append(segs, segment{text: glyphModel + " " + s.model, scrollable: true, fg: sbModelFg, bg: sbModelBg, plainFg: sbPlainModel, priority: prioModel})
