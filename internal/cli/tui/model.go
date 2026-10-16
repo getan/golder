@@ -50,6 +50,12 @@ type Model struct {
 	width  int
 	height int
 
+	// scrollArmed is true while the status bar's marquee clock is running: a long
+	// field (the model name, the cwd) does not fit the bar, and each tick slides
+	// its window one column (see syncStatusScroll). A bar that fits stops it, so
+	// an ordinary session never repaints for the bar.
+	scrollArmed bool
+
 	// transcript is the scrolling message log (user / assistant / system turns).
 	transcript transcript
 
@@ -809,7 +815,8 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
 	m.logoRunning = false
-	return m, nil
+	cmd := m.syncStatusScroll()
+	return m, cmd
 }
 
 // Init implements tea.Model. It kicks off the async git probe so the status bar
@@ -832,11 +839,31 @@ func (m Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// Update implements tea.Model. It tracks the terminal size, drives the minimal
-// input line, starts runs on submit, and pumps bridged run events into the
-// transcript and status bar. It quits on the standard exit keys (Ctrl+C /
-// Ctrl+D).
+// Update implements tea.Model. Every message is handled by update, and the one
+// piece of state that depends on what the bar ends up holding — whether its long
+// fields have to scroll — is re-judged here, at the single exit, rather than at
+// each of the places that can change a field: a git branch arrives late, a
+// context gauge appears on the first run, a resize lands, a /model switch
+// renames the model. Missing one of those call sites is how a windowed bar ends
+// up frozen at offset zero.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	nm, ok := next.(Model)
+	if !ok {
+		return next, cmd
+	}
+	scroll := nm.syncStatusScroll()
+	if scroll == nil {
+		return nm, cmd
+	}
+	return nm, tea.Batch(cmd, scroll)
+}
+
+// update is the message dispatch behind Update: it tracks the terminal size,
+// drives the minimal input line, starts runs on submit, and pumps bridged run
+// events into the transcript and status bar. It quits on the standard exit keys
+// (Ctrl+C / Ctrl+D).
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The lazy seed may have materialized older history above the viewport
 	// since the last event; keep a live content-anchored selection on the text
 	// it points at before this event reads or moves its endpoints.
@@ -852,7 +879,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selScrollDir = 0
 		m.selScrollGen++
 		m.relayout()
-		return m, m.armUnseenWatch()
+		// A resize can make a scrolling field fit (or stop fitting), so the
+		// marquee clock is re-judged with the new width.
+		watch, scroll := m.armUnseenWatch(), m.syncStatusScroll()
+		return m, tea.Batch(watch, scroll)
 
 	case tea.ResumeMsg:
 		// The program just came back from a Ctrl+Z suspension: the terminal may
@@ -1034,6 +1064,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+
+	case statusScrollMsg:
+		// A long field does not fit the bar: slide its window one column and keep
+		// the clock running while it still does not.
+		m.statusBar.SetScroll(m.statusBar.scroll + 1)
+		cmd := m.continueStatusScroll()
+		return m, cmd
 
 	case selScrollTickMsg:
 		// Stale tick (older drag), released button, or scrolling switched off:
@@ -1319,7 +1356,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// reporting leaves nothing stale behind.
 			m.session.hostMeta()
 		}
-		return m, m.pumpNext()
+		// The context segment appears (or clears) here, which changes how much
+		// room the scrolling fields have.
+		pump, scroll := m.pumpNext(), m.syncStatusScroll()
+		return m, tea.Batch(pump, scroll)
 
 	case contextUsageMsg:
 		// Mid-run context-gauge refresh: the loop reports usage at every turn
@@ -2319,7 +2359,10 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// An action command is complete once its status is shown; a hybrid with no
 	// prompt (notifications only) likewise starts no run.
 	if outcome.Kind == runtime.SlashAction || outcome.Prompt == "" {
-		return m, nil
+		// A command that moved the model (or its thinking level) can change how
+		// much room the bar's scrolling fields have.
+		cmd := m.syncStatusScroll()
+		return m, cmd
 	}
 	return m.startPrompt(outcome.Prompt)
 }
@@ -3841,6 +3884,43 @@ func (m *Model) updateSelAutoscroll() tea.Cmd {
 		m.selScrollDir = dir
 		return selScrollTick(m.selScrollGen)
 	}
+	return nil
+}
+
+// scrollInterval is how often the status bar's window slides while a long field
+// does not fit: one column per step, fast enough to read a path without making
+// the bar shimmer.
+const scrollInterval = 200 * time.Millisecond
+
+// statusScrollTick schedules the next marquee step.
+func statusScrollTick() tea.Cmd {
+	return tea.Tick(scrollInterval, func(time.Time) tea.Msg { return statusScrollMsg{} })
+}
+
+// syncStatusScroll keeps the marquee clock in step with the bar's needs: a tick
+// is armed while some scrolling field is windowed at the current width, and the
+// chain stops as soon as the row fits again. A bar that fits is a still bar, and
+// an idle session should not repaint for it.
+func (m *Model) syncStatusScroll() tea.Cmd {
+	need := m.width > 0 && m.statusBar.needsScroll(m.width)
+	switch {
+	case need && !m.scrollArmed:
+		m.scrollArmed = true
+		return statusScrollTick()
+	case !need && m.scrollArmed:
+		m.scrollArmed = false
+	}
+	return nil
+}
+
+// continueStatusScroll carries an already-running marquee clock one step further:
+// a tick is one-shot, so every step that still has a window to show schedules the
+// next one, and the step that finds the bar fitting stops the chain.
+func (m *Model) continueStatusScroll() tea.Cmd {
+	if m.width > 0 && m.statusBar.needsScroll(m.width) {
+		return statusScrollTick()
+	}
+	m.scrollArmed = false
 	return nil
 }
 

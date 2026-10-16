@@ -96,6 +96,158 @@ func TestSyncLiveDisplayPublishesLiveConfig(t *testing.T) {
 	}
 }
 
+// TestStatusBarShowsAShortPathBeforeScrolling: a roomy terminal gets a still bar.
+// When the whole path does not fit but its directory name does, the bar spends the
+// abbreviation — "…/golder" — and keeps everything visible without moving, which
+// is what a normal-sized window should see.
+func TestStatusBarShowsAShortPathBeforeScrolling(t *testing.T) {
+	s := newStatusBar(DefaultTheme(), Options{
+		Model:         "claude-haiku-5-5",
+		ProviderName:  "opencode-go",
+		ThinkingLevel: agentcore.ThinkingHigh,
+	}, "/tmp/x")
+	s.cwd = "~/work/harness/golder"
+	s.SetGit(gitInfoMsg{branch: "master", ok: true})
+
+	const roomy = 76
+	out := stripANSI(s.Render(roomy))
+	if !strings.Contains(out, "…/golder") {
+		t.Errorf("a %d-column bar should shorten the path, got %q", roomy, out)
+	}
+	if strings.Contains(out, "~/work/harness/golder") {
+		t.Errorf("the full path should not fit at %d columns: %q", roomy, out)
+	}
+	if !strings.Contains(out, "claude-haiku-5-5") {
+		t.Errorf("the model name should be whole when only the path needs shortening: %q", out)
+	}
+	if s.needsScroll(roomy) {
+		t.Errorf("a bar that fits with the short path should not scroll: %q", out)
+	}
+}
+
+// TestStatusBarWindowsLongFields: on a narrow terminal — phone-sized, where even
+// the shortened path cannot fit — the two fields whose values can outgrow a bar
+// are never dropped. They scroll inside their own segment while every other field
+// stays whole.
+func TestStatusBarWindowsLongFields(t *testing.T) {
+	s := newStatusBar(DefaultTheme(), Options{
+		Model:         "claude-haiku-5-5",
+		ProviderName:  "opencode-go",
+		ThinkingLevel: agentcore.ThinkingHigh,
+	}, "/tmp/x")
+	s.cwd = "~/work/harness/golder"
+	s.SetGit(gitInfoMsg{branch: "master", ok: true})
+
+	const narrow = 64
+	var modelWin, cwdWin int
+	for _, seg := range s.layout(s.segments(), narrow) {
+		switch {
+		case strings.HasPrefix(seg.text, glyphModel):
+			modelWin = seg.win
+		case strings.HasPrefix(seg.text, glyphCwd):
+			cwdWin = seg.win
+		}
+	}
+	if modelWin == 0 || cwdWin == 0 {
+		t.Fatalf("long fields should be windowed at %d columns: model=%d cwd=%d", narrow, modelWin, cwdWin)
+	}
+	if !s.needsScroll(narrow) {
+		t.Error("needsScroll should report the windowed bar so the clock runs")
+	}
+
+	at0 := stripANSI(s.Render(narrow))
+	s.SetScroll(4)
+	at4 := stripANSI(s.Render(narrow))
+	if at0 == at4 {
+		t.Errorf("the marquee did not move:\n%q\n%q", at0, at4)
+	}
+	for _, out := range []string{at0, at4} {
+		if w := ui.Width(out); w != narrow {
+			t.Errorf("row width = %d, want exactly %d:\n%q", w, narrow, out)
+		}
+		// The short fields are drawn whole, exactly as before.
+		for _, want := range []string{"opencode-go", glyphGit + " master", glyphThink + " high"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("fixed field %q should be whole at %d columns:\n%q", want, narrow, out)
+			}
+		}
+	}
+
+	// A bar that fits has nothing to scroll at all.
+	s.SetScroll(0)
+	if s.needsScroll(200) {
+		t.Error("a bar that fits should not scroll")
+	}
+	if wide := stripANSI(s.Render(200)); !strings.Contains(wide, "~/work/harness/golder") {
+		t.Errorf("a wide bar should show the whole path:\n%q", wide)
+	}
+}
+
+// TestWindowTextWrapsWithAGap pins the marquee's cycle: the value, a blank gap,
+// then the value again — so the tail flows back into the head instead of jumping.
+func TestWindowTextWrapsWithAGap(t *testing.T) {
+	const text = "abcdef"
+	cases := []struct {
+		off, width int
+		want       string
+	}{
+		{0, 6, "abcdef"}, // the whole value fits: unchanged
+		{0, 3, "abc"},
+		{4, 3, "ef "}, // the gap follows the tail
+		{6, 3, "   "}, // inside the gap
+		{7, 3, "  a"}, // wrapped back to the head
+		{9, 3, "abc"}, // a full cycle later
+	}
+	for _, tc := range cases {
+		if got := windowText(text, tc.width, tc.off); got != tc.want {
+			t.Errorf("windowText(%q, %d, off=%d) = %q, want %q", text, tc.width, tc.off, got, tc.want)
+		}
+	}
+}
+
+// TestModelStatusScrollClock: the marquee clock runs only while a long field does
+// not fit. A resize that makes the bar fit stops it — a bar at rest is a bar that
+// is not repainting for nothing — and each tick slides the window one column.
+func TestModelStatusScrollClock(t *testing.T) {
+	m := NewModel(Options{Model: "claude-haiku-5-5", ProviderName: "opencode-go"})
+	m.statusBar.cwd = "~/work/harness/golder"
+
+	got, cmd := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	m = got.(Model)
+	if !m.statusBar.needsScroll(40) {
+		t.Fatal("expected windowing at 40 columns")
+	}
+	if cmd == nil {
+		t.Fatal("a windowed bar should arm the marquee clock")
+	}
+	if !m.scrollArmed {
+		t.Error("scrollArmed should be set while the clock runs")
+	}
+
+	before := m.statusBar.scroll
+	got, cmd = m.Update(statusScrollMsg{})
+	m = got.(Model)
+	if m.statusBar.scroll != before+1 {
+		t.Errorf("scroll = %d, want %d", m.statusBar.scroll, before+1)
+	}
+	if cmd == nil {
+		t.Error("the clock should keep running while the bar still does not fit")
+	}
+
+	// A wide terminal fits everything: the clock stops.
+	got, _ = m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	m = got.(Model)
+	if m.statusBar.needsScroll(120) {
+		t.Fatal("120 columns should fit")
+	}
+	if _, cmd := m.Update(statusScrollMsg{}); cmd != nil {
+		t.Error("the clock should stop once the bar fits")
+	}
+	if m.scrollArmed {
+		t.Error("scrollArmed should be cleared once the bar fits")
+	}
+}
+
 func TestStatusBarHidesGitWhenNotRepo(t *testing.T) {
 	s := newTestStatusBar()
 	s.SetGit(gitInfoMsg{ok: false})
