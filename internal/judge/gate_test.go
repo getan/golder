@@ -382,6 +382,53 @@ func TestPermissionGateWebFetchAsksForNetwork(t *testing.T) {
 	}
 }
 
+// TestPermissionGateWebFetchNetworkAuthorizedRunsSilently: when the reviewer
+// answers the network question itself (the prompt tells it to for these tools),
+// the fetch runs without a dialog — the person is asked only when the answer is
+// missing or a deny.
+func TestPermissionGateWebFetchNetworkAuthorizedRunsSilently(t *testing.T) {
+	asked := false
+	rec := &noteRecorder{}
+	opts := GateOpts{
+		Classifier: &stubClassifier{v: Verdict{
+			Level: Allow, Risk: "low", Authorization: "high",
+			Reasons: []string{"the user asked for this search"}, Network: true,
+		}},
+		Sandboxed:      func(name string) bool { return name == "bash" },
+		RequireSandbox: true,
+		Notify:         rec.emit,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			asked = true
+			return ApprovalAnswer{Approve: true, Answered: true}
+		},
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("websearch", `{"query":"terminal-browser"}`))
+	if dec == nil || dec.Block {
+		t.Fatalf("an authorized search should run, got %+v", dec)
+	}
+	if asked {
+		t.Error("a network answer from the reviewer must not open a dialog")
+	}
+}
+
+// TestReviewSystemPromptCoversWebToolNetwork pins the other half of that
+// contract: the prompt must ask the reviewer for the network answer on the
+// in-process tools. Without it the reviewer can never authorize a search, and
+// every call falls through to the person.
+func TestReviewSystemPromptCoversWebToolNetwork(t *testing.T) {
+	p := reviewSystemPrompt("en")
+	if !strings.Contains(p, "webfetch and websearch") {
+		t.Error("prompt does not name the in-process network tools")
+	}
+	if !strings.Contains(p, "always for webfetch and websearch") {
+		t.Error("prompt does not require the network answer for the web tools")
+	}
+	if strings.Contains(p, "Only include network if network:on was requested") {
+		t.Error("prompt still scopes the network answer to network:on alone")
+	}
+}
+
 func escalationGateOpts(rec *noteRecorder) GateOpts {
 	return GateOpts{
 		Classifier: &stubClassifier{v: Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"recursive delete outside the workspace"}}},

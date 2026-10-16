@@ -104,8 +104,10 @@ type Verdict struct {
 	Confidence float64
 	Source     string
 	// Network is an explicit one-call capability decision, independent of the
-	// level. It is set only when this classifier actually reviewed a bash call
-	// requesting network access. Allow/Confirm/Sandbox alone never imply it.
+	// level. It is set only when this classifier actually reviewed a call that
+	// requests network access: a bash call asking network:on, or the in-process
+	// network tools (webfetch, websearch), which cannot run without it. A level
+	// of Allow/Confirm/Sandbox alone never implies it.
 	Network bool
 	// Direct is an explicit decision to waive the file sandbox for THIS call,
 	// independent of the four risk tiers. A bare Allow is not a direct grant.
