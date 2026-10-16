@@ -271,9 +271,11 @@ const (
 	// asks the same question the REPL's first-run prompt does.
 	ApprovalTrust ApprovalKind = "trust"
 	// ApprovalEscalation: the model asked to run a call outside the sandbox
-	// (bash sandbox_permissions=require_escalated) while the reviewer graded
-	// it Sandbox. The two sides disagree, so the gate asks the user instead
-	// of silently recontaining the call — approving runs it unisolated.
+	// (bash sandbox_permissions=require_escalated) while the reviewer graded it
+	// Sandbox. The two sides disagree, and the mode decides who settles it:
+	// auto re-contains the call (the reviewer's answer stands, announced either
+	// way), ask puts the escape to the person with containment as the default,
+	// headless re-contains or fails closed.
 	ApprovalEscalation ApprovalKind = "escalation"
 	// ApprovalNetwork asks for one call's network capability when the routine
 	// grader could not authorize it. An approval keeps the filesystem sandbox;
@@ -572,7 +574,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask")
 			}
 			if interactive && opts.Confirm == nil {
-				ans := promptRisk(ctx, opts, call, v, "escalation request")
+				ans := promptRisk(ctx, opts, mode.String(), call, v, ApprovalEscalation)
 				if ans.allow {
 					if ans.writableRoot != "" {
 						rationale := "contained in the sandbox; " + ans.writableRoot + " is writable for this session"
@@ -622,7 +624,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// decision rides the executor context down to the tool).
 				return grant(true)
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalReviewFailed); ok {
@@ -670,7 +672,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return grant(true)
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, call, v, "sandbox unavailable").allow {
+			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
@@ -698,7 +700,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 				return nil
 			}
-			if interactive && promptRisk(ctx, opts, call, v, "").allow {
+			if interactive && promptRisk(ctx, opts, mode.String(), call, v, ApprovalConfirm).allow {
 				if network {
 					return grant(false)
 				}
@@ -1017,16 +1019,18 @@ type riskAnswer struct {
 	persisted    bool
 }
 
-// promptRisk asks the user on stdin (interactive drivers only) whether a call
-// may run. unisolated explains why approving runs the call WITHOUT the
-// sandbox; empty means the ordinary risk confirmation.
+// promptRisk asks the person on stdin (interactive drivers only) whether a call
+// may run. mode and kind are what the decision line needs to open with: the
+// same grade is a different question under auto and under ask, and the kind
+// says what is being weighed — an escape, a missing sandbox runner, or an
+// ordinary confirmation.
 //
 // An escalation additionally offers the twin of the TUI dialog's rows: `w`
 // re-admits just the path the command was denied, keeping the call contained,
 // and `s` does the same while remembering the grant across sessions. Both need
 // opts.GrantWritable and a plausible path; without them the prompt is the plain
 // y/N, which is what a driver that cannot grant should see.
-func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall, v Verdict, unisolated string) riskAnswer {
+func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.AgentToolCall, v Verdict, kind ApprovalKind) riskAnswer {
 	// The pane is about to wait for a person, whichever way this prompt
 	// travels; the driver's transport hears about it before the read starts and
 	// hears it is over when the answer lands.
@@ -1047,15 +1051,15 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 	if origin := agentcore.OriginFromContext(ctx); origin != "" {
 		from = " (from " + origin + ")"
 	}
-	if unisolated != "" {
-		// Either the execution layer cannot isolate this call (no runner for
-		// the tool, GOLDER_SANDBOX=off, or no platform sandbox) or the model
-		// asked to run it outside the sandbox: approving runs it unisolated,
-		// so say so plainly.
-		fmt.Fprintf(out, "\ngolder judges %q as risk %s%s [%s: approving runs it unisolated].\n", call.Name, v.Level, from, unisolated)
-	} else {
-		fmt.Fprintf(out, "\ngolder judges %q as risk %s%s.\n", call.Name, v.Level, from)
+	// The decision line leads, as it does in the dialog and the transcript
+	// note: tool · mode · grade → who settles it. Stdin has no color and no
+	// layout to carry that context, so this line has to say the whole thing by
+	// itself — and "which mode am I in" is the first question a reader has.
+	rating := ""
+	if v.Risk != "" || v.Authorization != "" {
+		rating = fmt.Sprintf(" (risk: %s, authorization: %s)", riskWord(v.Risk, v.Lang), authWord(v.Authorization, v.Lang))
 	}
+	fmt.Fprintf(out, "\n%s%s%s\n", DecisionLine(call.Name, mode, v.Level, AskDisposition(kind, v.Lang)), rating, from)
 	n := len(v.Reasons)
 	if n > 3 {
 		n = 3
@@ -1070,12 +1074,14 @@ func promptRisk(ctx context.Context, opts GateOpts, call agentcore.AgentToolCall
 		fmt.Fprintf(out, "  model's reason: %s\n", truncateRunes(j, 160))
 	}
 	grantRoot := ""
-	if unisolated == "escalation request" && opts.GrantWritable != nil {
+	if kind == ApprovalEscalation && opts.GrantWritable != nil {
 		grantRoot = EscalationPathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
 	}
 	if grantRoot != "" {
-		fmt.Fprintf(out, "Allow? [y]es (runs unisolated) / [n]o / [w]rites to %s (this session)"+
+		fmt.Fprintf(out, "Allow? [y]es (runs outside the sandbox) / [n]o / [w]rites to %s (this session)"+
 			" / [s]ave writes to %s (remembered) [y/N/w/s]: ", grantRoot, grantRoot)
+	} else if kind == ApprovalEscalation || kind == ApprovalNoSandbox {
+		fmt.Fprint(out, "Allow? [y]es (runs outside the sandbox) / [n]o [y/N]: ")
 	} else {
 		fmt.Fprint(out, "Allow? [y/N]: ")
 	}

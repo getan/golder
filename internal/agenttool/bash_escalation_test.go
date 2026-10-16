@@ -137,6 +137,38 @@ func TestBashEscalationDeniedHint(t *testing.T) {
 	}
 }
 
+// TestBashEscalationAutoNote: under auto nobody will ever see the escape
+// request, so the denied hint names the one step that changes the answer
+// (switching to ask) instead of leaving the model to retry a dead end — and
+// under ask, where the question did reach the person, it says nothing of the
+// sort.
+func TestBashEscalationAutoNote(t *testing.T) {
+	dir := t.TempDir()
+	run := func(mode permissions.Mode) string {
+		tool := &BashTool{
+			Dir:          dir,
+			Sandbox:      failingRunner{},
+			ForceSandbox: true,
+			Permissions:  permissions.New(mode),
+		}
+		_, err := runBashErr(t, tool, map[string]any{
+			"command":             "true",
+			"sandbox_permissions": "require_escalated",
+			"justification":       "please",
+		})
+		if err == nil {
+			t.Fatal("expected a failure from the sandboxed probe")
+		}
+		return err.Error()
+	}
+	if got := run(permissions.Auto); !strings.Contains(got, "auto mode") || !strings.Contains(got, "/permissions to ask") {
+		t.Errorf("auto denied hint should name the mode switch, got: %v", got)
+	}
+	if got := run(permissions.Ask); strings.Contains(got, "auto mode") {
+		t.Errorf("ask denied hint must not talk about auto, got: %v", got)
+	}
+}
+
 // failingRunner simulates a sandbox whose command fails with a denial-shaped
 // message (the shape a real sandbox-exec/bwrap refusal produces).
 type failingRunner struct{}

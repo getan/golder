@@ -118,7 +118,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
 
-当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，冲突会**升级给人**：即使 auto 模式也会弹（TUI 弹审批对话框，REPL 走 stdin 提示；对话框里，沙箱拒绝提到项目外路径时还会多出 `Allow writes to <path>` 一行），而不是静默收容导致模型反复重试。没有交互界面时按最安全的默认收容，bash 提示会告诉模型停止申请。
+当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，由**模式**决定谁裁决：**auto 下评审的话作数**——重新收容并在转写里播报"越界请求被拒，改为沙箱内运行"，不弹任何对话框（越界是能力问题，不是风险问题；auto 的承诺是这类决策不打断人）；**ask 下才弹给人**（TUI 弹审批对话框，REPL 走 stdin 提示），且默认项就是"收容重跑"，`e` 才是故意出沙箱——若沙箱拒绝的是项目外某个路径，弹窗里还会多出 `Allow writes to <path>`（本会话）/ `Always allow …`（记住）两行，把那个路径放进沙箱，比出沙箱更省事。评审明确给出 **Direct** 授权时才会真的在沙箱外跑，且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
 
 ### 用户直通命令（`!command`）
 

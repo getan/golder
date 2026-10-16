@@ -123,22 +123,22 @@ func (m Mode) Description(lang string) string {
 		case ReadOnly:
 			return "只读文件；bash、apply_patch 等改动型工具会被直接拒绝"
 		case Ask:
-			return "改动型调用先由模型审查：低风险直接放行，其余询问你（无输入时拒绝）"
+			return "改动型调用先由模型审查：低风险直接放行，需隔离的进沙箱，其余询问你（无输入时拒绝）"
 		case FullAccess:
 			return "不做审查、不套沙箱；仅保留静态硬拒名单（sudo、rm -rf / 等）"
 		default:
-			return "由当前模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝，并附一行理由"
+			return "由当前模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝；只有工作区边界、联网、无沙箱运行器或评审不可用时会问你"
 		}
 	}
 	switch m {
 	case ReadOnly:
 		return "Read files only; bash and apply_patch are blocked"
 	case Ask:
-		return "The model reviews changes first: low risk runs, the rest asks you"
+		return "The model reviews changes first: low risk runs, sandbox-tier runs contained, the rest asks you"
 	case FullAccess:
 		return "No review, no sandbox; only the hard blocklist applies"
 	default:
-		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked, with a reason"
+		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked; it asks you only for workspace boundaries, network, a missing sandbox runner, or when review is unavailable"
 	}
 }
 

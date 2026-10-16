@@ -305,7 +305,8 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"inside the working directory or $TMPDIR — never in sibling or home directories, where writes " +
 	"are denied and nothing can be cleaned up from inside the sandbox. If a command legitimately " +
 	"needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" " +
-	"and a short justification; the user decides. If that escalation is not granted (the command " +
+	"and a short justification. The approval mode decides who answers: the reviewer under auto, " +
+	"the user under ask. If that escalation is not granted (the command " +
 	"runs sandboxed again), stop retrying, tell the user what access the task needs, and continue " +
 	"with a sandbox-compatible approach."
 

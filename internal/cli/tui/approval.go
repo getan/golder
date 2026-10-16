@@ -623,6 +623,9 @@ func approvalTitle(req judge.ApprovalRequest) string {
 	case judge.ApprovalEscalation:
 		return tool + " asks to run outside the sandbox"
 	case judge.ApprovalBoundary:
+		if req.BoundaryWrite {
+			return tool + " wants to write outside the workspace"
+		}
 		return tool + " wants to read outside the workspace"
 	case judge.ApprovalTrust:
 		return tool + " in an untrusted folder"

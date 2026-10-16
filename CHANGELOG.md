@@ -863,6 +863,20 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **One vocabulary for approvals, everywhere it is spoken**: the words that
+  describe who answers a call now match what actually answers it. The system
+  prompt, the bash tool's description and its `sandbox_permissions` schema, and
+  both sandbox-denial hints told the model the *user* decides an escape — true
+  under ask, wrong under auto, where review does — and the REPL's stdin prompt
+  was the one surface still printing its own sentence instead of the decision
+  line. They all say the same thing now: the approval mode decides who answers;
+  under ask an escape takes a deliberate second key next to containment-first
+  defaults; under auto review decides, and retrying cannot change that answer,
+  so the denial hint names the one step that can (switching `/permissions` to
+  ask). The mode descriptions in `/permissions` say what each mode will and will
+  not ask, the boundary dialog says "write" when the question is about writing,
+  and the READMEs and `docs/sandboxing.md` describe the mode-split the code
+  implements.
 - **Approval says who decides, and auto means auto**: every approval surface now
   carries one decision line — `tool · mode · grade → who settles it`, e.g.
   `bash · ask · confirm → your call` or

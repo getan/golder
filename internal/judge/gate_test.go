@@ -565,8 +565,14 @@ func TestPermissionGateEscalationStdin(t *testing.T) {
 	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block {
 		t.Fatalf("answering y must grant a one-call Direct escape, got %+v", dec)
 	}
-	if !strings.Contains(out.String(), "unisolated") {
-		t.Errorf("prompt must spell out that approval runs the call unisolated:\n%s", out.String())
+	if !strings.Contains(out.String(), "outside the sandbox") {
+		t.Errorf("prompt must spell out that approval runs the call outside the sandbox:\n%s", out.String())
+	}
+	// The stdin prompt leads with the same decision line as the dialog and the
+	// notes: the person reading it learns which mode is asking before anything
+	// else.
+	if !strings.Contains(out.String(), "bash · ask · sandbox → your call · sandbox escape") {
+		t.Errorf("stdin prompt must open with the decision line:\n%s", out.String())
 	}
 	// No answer means containment, never a bare run.
 	var out2 bytes.Buffer
@@ -635,7 +641,7 @@ func escalationStdinOpts(rec *noteRecorder, in string, grant func(root string, p
 // command could already write.
 func TestPromptRiskOffersWriteGrant(t *testing.T) {
 	rec := &noteRecorder{}
-	const want = "\nAllow? [y]es (runs unisolated) / [n]o / [w]rites to /Volumes/KIOXIA/build/out (this session)" +
+	const want = "\nAllow? [y]es (runs outside the sandbox) / [n]o / [w]rites to /Volumes/KIOXIA/build/out (this session)" +
 		" / [s]ave writes to /Volumes/KIOXIA/build/out (remembered) [y/N/w/s]: "
 
 	args := `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"the cache lives there"}`
@@ -647,7 +653,7 @@ func TestPromptRiskOffersWriteGrant(t *testing.T) {
 	var out bytes.Buffer
 	opts := escalationStdinOpts(rec, "n\n", nil)
 	opts.Out = &out
-	if ans := promptRisk(context.Background(), opts, call, v, "escalation request"); ans.allow {
+	if ans := promptRisk(context.Background(), opts, permissions.Ask.String(), call, v, ApprovalEscalation); ans.allow {
 		t.Error("denied prompt returned allow")
 	}
 	if got := out.String(); strings.Contains(got, "[w]rites") || !strings.Contains(got, "[y/N]") {
@@ -658,7 +664,7 @@ func TestPromptRiskOffersWriteGrant(t *testing.T) {
 	out.Reset()
 	opts = escalationStdinOpts(rec, "n\n", func(string, bool) (bool, string) { return true, "" })
 	opts.Out = &out
-	promptRisk(context.Background(), opts, call, v, "escalation request")
+	promptRisk(context.Background(), opts, permissions.Ask.String(), call, v, ApprovalEscalation)
 	if got := out.String(); !strings.Contains(got, want) {
 		t.Errorf("prompt = %q, want it to carry %q", got, want)
 	}
@@ -669,7 +675,7 @@ func TestPromptRiskOffersWriteGrant(t *testing.T) {
 	opts = escalationStdinOpts(rec, "n\n", func(string, bool) (bool, string) { return true, "" })
 	opts.Out = &out
 	inWorkspace := toolCall("bash", `{"command":"go build -o `+opts.Cwd+`/out","sandbox_permissions":"require_escalated","justification":"local"}`)
-	promptRisk(context.Background(), opts, inWorkspace, v, "escalation request")
+	promptRisk(context.Background(), opts, permissions.Ask.String(), inWorkspace, v, ApprovalEscalation)
 	if got := out.String(); strings.Contains(got, "[w]rites") {
 		t.Errorf("an already-writable path must not be offered: %q", got)
 	}
@@ -702,7 +708,7 @@ func TestPromptRiskWriteAnswers(t *testing.T) {
 		opts := escalationStdinOpts(&noteRecorder{}, c.in, grant)
 		var out bytes.Buffer
 		opts.Out = &out
-		ans := promptRisk(context.Background(), opts, call, v, "escalation request")
+		ans := promptRisk(context.Background(), opts, permissions.Ask.String(), call, v, ApprovalEscalation)
 		if ans.allow != c.wantAllow || ans.writableRoot != c.wantRoot || ans.persisted != c.wantPers {
 			t.Errorf("%q -> %+v, want allow=%v root=%q persisted=%v",
 				c.in, ans, c.wantAllow, c.wantRoot, c.wantPers)

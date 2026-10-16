@@ -232,7 +232,9 @@ func (t *BashTool) Description() string {
 		"labelled in the output — when a command legitimately needs files the " +
 		"sandbox denies, retry it with " +
 		"sandbox_permissions=\"require_escalated\" plus a short justification, which " +
-		"asks the user to run it unsandboxed. Network access alone never requires " +
+		"asks for a one-call escape (the reviewer decides that under auto, the user " +
+		"under ask; a declined request leaves the command in the sandbox). Network " +
+		"access alone never requires " +
 		"running outside the sandbox. Set tty=true " +
 		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
 		"prompt). A non-zero " +
@@ -251,7 +253,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "timeout_ms": {"type": "integer", "description": "Hard deadline in milliseconds; the command is killed when it elapses (capped at 10 minutes). Omit for no deadline.", "minimum": 0},
     "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
     "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."},
-	    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command file sandbox override. Defaults to use_default. Set require_escalated only if a legitimate call needs FILE access the sandbox denies (e.g. a build cache outside the project); it asks the user for a one-call sandbox escape. For network use network=on instead."},
+	    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command file sandbox override. Defaults to use_default. Set require_escalated only if a legitimate call needs FILE access the sandbox denies (e.g. a build cache outside the project); it asks for a one-call sandbox escape, decided by the reviewer under auto and by the user under ask. For network use network=on instead."},
     "justification": {"type": "string", "description": "User-facing reason for a require_escalated request; omit otherwise."}
   },
   "required": ["command"],
@@ -320,14 +322,20 @@ const sandboxFalseNegativeNote = " Note: sandbox-denied file checks are false ne
 // denial. It tells the model exactly what the situation is and how to proceed,
 // mirroring codex's guidance to retry with escalation when the sandbox (not the
 // command) is the blocker.
-const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox policy (writes are confined to the project and TMPDIR; the network is off). If the command is legitimate and needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" and a short justification, which asks the user to approve running it outside the sandbox.]" + sandboxFalseNegativeNote
+const sandboxEscalationHint = "\n[sandboxed: this failure looks like sandbox policy (writes are confined to the project and TMPDIR; the network is off). If the command is legitimate and needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" and a short justification — that asks for a one-call escape, which the reviewer decides under auto and the user under ask. If it is not granted, the command runs sandboxed again.]" + sandboxFalseNegativeNote
 
 // sandboxEscalationDeniedHint is the loop-breaker: the command already carried
 // sandbox_permissions=require_escalated and still ran sandboxed, so the request
 // was not granted (the user denied it, nobody could approve it, or the reviewer
 // kept the call contained). Telling the model to retry again would loop
 // forever, so this hint names the dead end and points at the way out.
-const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require_escalated\" was not granted (denied by the user, or no approver available), so this command ran inside the sandbox again. Retrying the same escalation will fail the same way — stop and tell the user what access the task needs, or finish with a sandbox-compatible approach.]" + sandboxFalseNegativeNote
+const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require_escalated\" was not granted (the reviewer declined it, the user declined it, or there was nobody to ask), so this command ran inside the sandbox again. Retrying the same escalation will fail the same way — stop and tell the user what access the task needs, or finish with a sandbox-compatible approach.]" + sandboxFalseNegativeNote
+
+// sandboxEscalationAutoNote is appended to the denied hint when the run is in
+// auto mode. Review is the only decider there, so the model is pointed at the
+// one step that actually changes the answer instead of being left to retry an
+// escape no human will be shown.
+const sandboxEscalationAutoNote = " This run is in auto mode, where the reviewer alone answers escapes: retrying cannot change the answer, but the user can switch /permissions to ask and approve one."
 
 // looksRGMissing reports whether a failed command's output says ripgrep is not
 // installed. Only the failure path consults it.
@@ -509,6 +517,12 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if sandboxDenied {
 		if strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
 			hint = sandboxEscalationDeniedHint
+			// Under auto the request never reached a person, so the hint names
+			// the one step that changes the answer instead of leaving the model
+			// to retry an escape nobody will be shown.
+			if t.Permissions != nil && t.Permissions.Mode() == permissions.Auto {
+				hint += sandboxEscalationAutoNote
+			}
 		} else {
 			hint = sandboxEscalationHint
 		}
