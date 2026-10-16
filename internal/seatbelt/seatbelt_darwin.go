@@ -97,17 +97,13 @@ func ancestorChain(p string) []string {
 	return out
 }
 
-// writeProfile renders the seatbelt profile with absolute paths and stores it
+// writeCallProfile renders the seatbelt profile with absolute paths and stores it
 // under the temp dir. Both directions are whitelists: reads are allowed only
 // for the project, the system runtime and ReadableRoots (so the rest of $HOME,
 // including shell rc files and credential stores, is unreadable by
 // construction); writes are confined to the project and temp dirs. Network is
 // denied unless the gate granted it for this one call (CallPolicy.Network), so
 // a sandboxed command cannot exfiltrate what it read without a decision.
-func (r *SeatbeltRunner) writeProfile() (string, error) {
-	return r.writeCallProfile(CallPolicy{})
-}
-
 func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	project := r.ProjectDir
 	if project == "" {

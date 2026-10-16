@@ -67,8 +67,6 @@ type Kind string
 const (
 	KindNone     Kind = ""
 	KindApproval Kind = "approval"
-	KindQuestion Kind = "question"
-	KindAuth     Kind = "auth"
 )
 
 // Report is one state report. Message is one plain line: for a blocked state
@@ -418,14 +416,6 @@ func execArgv(ctx context.Context, argv []string) error {
 		return ctx.Err()
 	}
 	return err
-}
-
-// runArgv is the helper every host uses to exec one command line.
-func (r *Reporter) runArgv(ctx context.Context, argv []string) error {
-	if len(argv) == 0 {
-		return nil
-	}
-	return r.run(ctx, argv)
 }
 
 // oneLine flattens text into the single line a host shows, cutting it well

@@ -156,18 +156,6 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			approvalRow{"Run it outside the sandbox anyway", "e", approveDirect},
 			approvalRow{"Deny", "esc", approveDeny},
 		)
-	} else if root != "" {
-		// The escalation's blocker is a path the sandbox denies: offer to
-		// re-admit just that path (read+write, this session) instead of
-		// unisolating the whole command. Inserted before Deny so Esc keeps
-		// its meaning and the negative option stays last.
-		rows = []approvalRow{
-			toolApprovalRows[0],
-			toolApprovalRows[1],
-			{"Allow writes to " + displayPath(root) + " (this session)", "w", approveWritable},
-			{"Always allow writes to " + displayPath(root) + " (remembered)", "s", approveWritablePersist},
-			toolApprovalRows[2],
-		}
 	}
 	// The boundary question is about reading or about writing, and the rows say
 	// which: the two carry different grants ("allow reading /x" is not "allow

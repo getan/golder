@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"strconv"
-	"strings"
 )
 
 // The tuios dialect.
@@ -215,23 +214,6 @@ func ResumeArgv(id string) []string {
 		return nil
 	}
 	return []string{Harness, "--resume", id}
-}
-
-// resumeArgvString renders an argv for a host that wants one string, quoting
-// only what needs it. A golder resume command never does, so this exists for
-// the general case and returns "" for an argv that cannot be rendered safely.
-func resumeArgvString(argv []string) string {
-	var b strings.Builder
-	for i, tok := range argv {
-		if tok == "" || strings.ContainsAny(tok, " \t\n\"'\\$`&|;<>()*?[]{}!#~") {
-			return ""
-		}
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		b.WriteString(tok)
-	}
-	return b.String()
 }
 
 // metaContext renders a context reading as a percentage, which is the form

@@ -24,9 +24,6 @@ package provider
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -130,19 +127,3 @@ func (f *emptySSEFrameFilter) classify(line []byte) {
 }
 
 func (f *emptySSEFrameFilter) Close() error { return f.r.Close() }
-
-// sseStreamError names a failed SSE read. A JSON syntax failure means the
-// upstream stream was malformed (or truncated mid-frame); saying so, and
-// naming the provider, beats leaving Go's bare parser error as the whole
-// message — the shape that made "unexpected end of JSON input" unexplained.
-func sseStreamError(name string, err error) error {
-	if err == nil {
-		return nil
-	}
-	var syn *json.SyntaxError
-	if errors.As(err, &syn) || strings.Contains(err.Error(), "unexpected end of JSON input") {
-		return fmt.Errorf("%s: upstream sent a malformed event frame (%s): %w",
-			name, err.Error(), err)
-	}
-	return fmt.Errorf("%s: %w", name, err)
-}

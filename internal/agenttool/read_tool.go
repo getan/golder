@@ -31,7 +31,6 @@ const readToolMaxLineLen = 2000
 const (
 	scanBufInit    = 64 * 1024
 	readScanBufMax = 16 * 1024 * 1024
-	grepScanBufMax = 1 * 1024 * 1024
 )
 
 // filePerm / dirPerm are the modes new files and parent directories are created

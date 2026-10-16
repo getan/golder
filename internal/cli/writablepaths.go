@@ -83,8 +83,3 @@ func RemoveWritablePath(raw string) (WritableRemoval, error) {
 	}
 	return WritableRemoval{Path: root, WasSession: rem.Session, WasRemembered: rem.Remembered}, nil
 }
-
-// WritableSourceLabel renders the provenance of a writable path for the human.
-func WritableSourceLabel(source string, zh bool) string {
-	return ReadableSourceLabel(source, zh)
-}

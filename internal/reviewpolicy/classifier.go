@@ -94,26 +94,6 @@ var disabledEndpoints = struct {
 	reason map[string]string
 }{reason: map[string]string{}}
 
-// DisabledEndpoints reports every endpoint switched off in this process and
-// why, for a status line. The map is a copy.
-func DisabledEndpoints() map[string]string {
-	disabledEndpoints.mu.Lock()
-	defer disabledEndpoints.mu.Unlock()
-	out := make(map[string]string, len(disabledEndpoints.reason))
-	for k, v := range disabledEndpoints.reason {
-		out[k] = v
-	}
-	return out
-}
-
-// ResetDisabledEndpoints clears the breaker. It exists for tests, which share
-// one process across cases and would otherwise inherit a case's disable.
-func ResetDisabledEndpoints() {
-	disabledEndpoints.mu.Lock()
-	defer disabledEndpoints.mu.Unlock()
-	disabledEndpoints.reason = map[string]string{}
-}
-
 func (c *Classifier) isDisabled() bool {
 	if c.Client == nil {
 		return false

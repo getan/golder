@@ -242,9 +242,6 @@ type Grant struct {
 	Source string `json:"source,omitempty"`
 }
 
-// Capabilities returns the row's effective allow set.
-func (g Grant) Capabilities() Capability { return g.Allow }
-
 // String renders one row the way /trust prints it.
 func (g Grant) String() string {
 	allow := g.Allow.String()
@@ -379,12 +376,6 @@ func (s *Store) Warnings() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return append([]string(nil), s.warn...)
-}
-
-func (s *Store) addWarning(msg string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.warn = append(s.warn, msg)
 }
 
 // load reads the managed file into the saved layer.

@@ -33,7 +33,6 @@
 package reviewpolicy
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
@@ -363,7 +362,6 @@ func factsEscalation(p *shellfacts.Plan) string {
 // Danger thresholds, as returned by dangerLevel.
 const (
 	DangerNone    = 0
-	DangerWarn    = 1
 	DangerConfirm = 2
 	DangerDeny    = 3
 )
@@ -493,12 +491,4 @@ func sortedQuestionIDs() []string {
 	}
 	sort.Strings(ids)
 	return ids
-}
-
-// Describe renders an outcome for a log line or a test failure message.
-func (o Outcome) Describe() string {
-	if o.Route == RouteDecided {
-		return fmt.Sprintf("decided %s (%s)", o.Level, o.Rationale)
-	}
-	return fmt.Sprintf("escalated: %s", o.Escalation)
 }

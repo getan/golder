@@ -52,7 +52,6 @@ type ThinkingContent struct {
 // for display + history replay only. Empty means local, so sessions persisted
 // before the marker decode unchanged.
 const (
-	ToolCallKindLocal  = "local"
 	ToolCallKindServer = "server"
 )
 

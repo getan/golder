@@ -38,9 +38,6 @@ const (
 	GrantsFile      = "grants.json"
 	TrustFile       = "trust.json"
 	CredentialsFile = ".credentials.yaml"
-	HistoryFile     = "history.jsonl"
-	BtwFile         = "btw.json"
-	ConfigJSONFile  = "config.json"
 	UpdateCheckFile = "update-check.json"
 
 	SessionsDir = "sessions"
@@ -89,14 +86,11 @@ func FileFrom(getenv func(string) string, name string) string {
 // $XDG_CONFIG_HOME/golder, or ~/.config/golder.
 const legacySubdir = "golder"
 
-// LegacyFile returns where a release before the one-root change kept name. It
-// exists for exactly two readers — the one-time move below and the authorization
-// migration, which has to find the retired permissions.toml — and for nothing
-// else: a path that both the old and the new code can write is a path that
-// splits the truth again.
-func LegacyFile(name string) string { return LegacyFileFrom(os.Getenv, name) }
-
-// LegacyFileFrom is LegacyFile with an injectable environment.
+// LegacyFileFrom returns where a release before the one-root change kept name,
+// with an injectable environment. It exists for exactly two readers — the
+// one-time move above and the authorization migration, which has to find the
+// retired permissions.toml — and for nothing else: a path that both the old and
+// the new code can write is a path that splits the truth again.
 func LegacyFileFrom(getenv func(string) string, name string) string {
 	base := legacyDir(getenv)
 	if base == "" {

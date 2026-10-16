@@ -2,7 +2,6 @@ package hostcompat
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -211,37 +210,4 @@ func (h *herdrHost) Release(ctx context.Context) error {
 		"--agent", Harness,
 		"--seq", strconv.FormatUint(h.nextSeq(), 10),
 	})
-}
-
-// herdrResumeArgvError reports why an argv cannot be sent to herdr, for the
-// diagnostic. Nothing in golder can build a bad one (see ResumeArgv), so this
-// is the guard against a future caller handing one in.
-func herdrResumeArgvError(argv []string) error {
-	if len(argv) == 0 {
-		return nil
-	}
-	if len(argv) > 64 {
-		return fmt.Errorf("resume command has %d arguments, and herdr takes 64", len(argv))
-	}
-	for _, tok := range argv {
-		if containsAny(tok, "\x00\n\r\t") {
-			return fmt.Errorf("resume command contains a control character")
-		}
-	}
-	if stub := resumeArgvString(argv); stub == "" {
-		return fmt.Errorf("resume command cannot be rendered as one line")
-	}
-	return nil
-}
-
-// containsAny reports whether s holds any byte of set.
-func containsAny(s, set string) bool {
-	for i := 0; i < len(s); i++ {
-		for j := 0; j < len(set); j++ {
-			if s[i] == set[j] {
-				return true
-			}
-		}
-	}
-	return false
 }

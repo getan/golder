@@ -163,14 +163,6 @@ const (
 // Risk is how much attention a command deserves, independently of what it does:
 // `git status` and `rm -rf` differ in both axes, but so do `ls` and `cat
 // ~/.ssh/id_rsa`, which are both read-only.
-type Risk string
-
-const (
-	Low    Risk = "LOW"
-	Medium Risk = "MEDIUM"
-	High   Risk = "HIGH"
-)
-
 // Local grades a shell command from the rule table, and defers the tiers it
 // cannot weigh to Next.
 //
@@ -228,7 +220,9 @@ func (l Local) deferToNext(ctx context.Context, tool string, args json.RawMessag
 	return l.Next.Classify(ctx, tool, args)
 }
 
-// localGrade decides the call, or reports that it cannot.
+// localGradeOf decides the call, or reports that it cannot, with the rationale
+// written in the language the conversation is held in — the same rule JEV's
+// layer follows: a decision model returns labels, and the LAYER owns the wording.
 //
 // The rule it applies is the one thing a table can be trusted for: naming what a
 // command IS. Whether a particular destructive or unmodelled invocation should
@@ -246,16 +240,6 @@ func (l Local) deferToNext(ctx context.Context, tool string, args json.RawMessag
 // gate settles a Confirm by the mode it is in — auto runs it, ask asks the user.
 // That is what makes this stage cheap in `auto` without turning it into a second
 // policy of its own.
-func localGrade(tool string, args json.RawMessage) (Verdict, bool) {
-	if !strings.EqualFold(strings.TrimSpace(tool), "bash") {
-		return Verdict{}, false
-	}
-	return localGradeOf(tool, args, "en")
-}
-
-// localGradeOf is localGrade with the rationale's language pinned, so the caller
-// can pass the language the conversation is being held in — the same rule JEV's
-// layer follows: a decision model returns labels, and the LAYER owns the wording.
 func localGradeOf(_ string, args json.RawMessage, lang string) (Verdict, bool) {
 	cmd, ok := bashCommand(args)
 	if !ok || strings.TrimSpace(cmd) == "" {

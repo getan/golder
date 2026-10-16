@@ -872,13 +872,6 @@ func joinThinkingLevels(levels []agentcore.ThinkingLevel) string {
 // command's bracket soup. They are declared together so a new verb is added where
 // the hint is read as well as where the parser is.
 const (
-	permissionsArgumentHint = "[list | read-only|ask|auto|full-access | writable " +
-		permissionsWritableHint + " | readable " + permissionsReadableHint + "]"
-	// The subcommand slices as the hint spells them (compact) and as the subcommand
-	// usage spells them (spelled out).
-	permissionsWritableHint = "[list|add|rm] <path>"
-	permissionsReadableHint = "[list|add|rm] <path>"
-
 	permissionsWritableUsage = "[list | add <path> | rm <path>]"
 	permissionsReadableUsage = "[list | add <path> | rm <path>]"
 )

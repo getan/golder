@@ -3,7 +3,6 @@ package remotecontrol
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net"
@@ -43,10 +42,9 @@ const (
 
 // Config controls a remote-control server instance.
 type Config struct {
-	PairTTL        time.Duration // pairing-token lifetime; 0 → defaultPairTTL
-	Host           string        // LAN IP for the printed URL; "" → auto-detect
-	Port           int           // 0 → auto-pick, fall back on conflict
-	ConfirmTimeout time.Duration // 0 → wait forever for a remote decision
+	PairTTL time.Duration // pairing-token lifetime; 0 → defaultPairTTL
+	Host    string        // LAN IP for the printed URL; "" → auto-detect
+	Port    int           // 0 → auto-pick, fall back on conflict
 
 	// OnClientConnect, if set, is invoked (on the WebSocket goroutine) when a
 	// browser pairs and connects, with the client's remote address. The REPL uses
@@ -628,6 +626,3 @@ func (r *ringBuffer) snapshot() []byte {
 	copy(out, r.buf)
 	return out
 }
-
-// ErrNotStarted is returned by operations that require a running server.
-var ErrNotStarted = errors.New("remotecontrol: server not started")

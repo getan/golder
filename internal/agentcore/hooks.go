@@ -32,13 +32,3 @@ type AfterToolCallResult struct {
 	Terminate *bool
 	IsError   *bool
 }
-
-// AgentLoopTurnUpdate is the optional result of the prepareNextTurn hook: it can
-// swap the context, model, or thinking level for the next turn. Pointer fields
-// distinguish "not provided" from an explicit value; ThinkingLevel is
-// three-state (nil = keep, &"off" = disable, &level = set).
-type AgentLoopTurnUpdate struct {
-	Context       *AgentContext
-	Model         *string
-	ThinkingLevel *ThinkingLevel
-}

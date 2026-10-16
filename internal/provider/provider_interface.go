@@ -13,8 +13,6 @@ package provider
 
 import (
 	"context"
-
-	"github.com/getan/golder/internal/agentcore"
 )
 
 // Model is provider-agnostic metadata describing a single model's identity and
@@ -40,9 +38,6 @@ type Model struct {
 	// When false, an image block in the request is reported as a hard error
 	// rather than silently dropped, so the user learns the model cannot see it.
 	SupportsImages bool `json:"supportsImages,omitempty"`
-	// ThinkingLevels maps unified thinking levels to this model's wire values.
-	// nil when the model does not support thinking (decision #10).
-	ThinkingLevels agentcore.ThinkingLevelMap `json:"-"`
 }
 
 // CompletionRequest is the provider-agnostic input to StreamCompletion: the

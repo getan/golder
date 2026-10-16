@@ -69,7 +69,6 @@ func ProxyProvidersSelectedFirst(selected []string) []provider.ProviderSpec {
 // what the reader got wrong. Declared together so the two spellings of the
 // provider form cannot drift.
 const (
-	proxyArgumentHint    = "[<provider> on|off | url <url>]"
 	proxyProviderGrammar = "<provider> on|off"
 )
 

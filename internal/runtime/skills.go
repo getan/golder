@@ -262,11 +262,6 @@ func (s *Skill) SubAgentSpec(tools []agentcore.AgentTool, newRunConfig func(tool
 	}
 }
 
-// SkillTool materializes a skill as an invocable sub-agent tool.
-func (s *Skill) SkillTool(tools []agentcore.AgentTool, newRunConfig func(tools []agentcore.AgentTool) RunConfig) *SubAgentTool {
-	return NewSubAgentTool(s.SubAgentSpec(tools, newRunConfig))
-}
-
 // SlashCommand exposes the skill as a "/name" slash command (mirrors Claude Code's
 // /skill-name invocation). Invoking it expands to the skill's instructions (its
 // markdown body) as the prompt, with any arguments appended, so the skill runs

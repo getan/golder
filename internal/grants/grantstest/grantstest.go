@@ -26,11 +26,3 @@ func Install(t *testing.T) *grants.Store {
 	t.Cleanup(func() { grants.SetProcess(nil) })
 	return s
 }
-
-// Nothing gives the test no table at all, for the case a caller must handle:
-// grants.Process() returns nil and every question is "undecided".
-func Nothing(t *testing.T) {
-	t.Helper()
-	grants.SetProcess(nil)
-	t.Cleanup(func() { grants.SetProcess(nil) })
-}
