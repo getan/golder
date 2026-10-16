@@ -35,10 +35,10 @@ type streamRenderTickMsg struct{}
 // an earlier drag (a new press bumps Model.selScrollGen and orphans them).
 type selScrollTickMsg struct{ gen int }
 
-// statusScrollMsg advances the status bar's marquee by one column. It is armed
-// only while a long field (the model name, the cwd) does not fit the bar, so a
-// session whose bar fits never runs the timer at all.
-type statusScrollMsg struct{}
+// statusRevealMsg advances the status bar's change reveal by one column: the
+// bounded pass a long value makes right after it changes, before it settles onto
+// its still, elided form. Nothing else on the bar schedules a timer.
+type statusRevealMsg struct{}
 
 // turnEndMsg fires once per completed turn with the final assistant message and
 // the tool results produced during it.

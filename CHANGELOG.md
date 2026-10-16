@@ -863,21 +863,23 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
-- **The status bar adapts to its width instead of losing fields**: the bar is one
-  fixed-width row, and it used to drop whole fields when they did not fit — the
-  cwd first, being the lowest priority. Replacing the app badge with the provider
-  name (`opencode-go` where `golder` was) made the row five columns wider, which
-  is how a path that had always been visible started disappearing on an
-  80-column terminal. It now solves the row in three steps, in order of how
-  little they cost the reader: the whole path when it fits; the directory it ends
-  in when it does not (`▸ …/golder`, a still bar — what a normal-sized window
-  gets); and only then windowing, where the model name and the path keep their
-  place and slide one column every 200ms inside their own segment, tail flowing
-  back into head across a short gap, with the clock running only while a window
-  is actually needed. Every other field holds a short value and is drawn whole; a
-  fixed field gives way only when even one-column windows cannot fit, so a bar
-  narrower than a single block still degrades in the old priority order rather
-  than overflowing.
+- **The status bar adapts to its width, and moves only when something changed**:
+  the bar is one fixed-width row, and it used to drop whole fields when they did
+  not fit — the cwd first, being the lowest priority. Replacing the app badge with
+  the provider name (`opencode-go` where `golder` was) made the row five columns
+  wider, which is how a path that had always been visible started disappearing on
+  an 80-column terminal. It now solves the row in three steps, in order of how
+  little they cost the reader: the whole value when it fits; the abbreviation when
+  it does not (`▸ …/golder`, a still bar — what a normal-sized window gets); and
+  then a tail-keeping cut, so the model stays recognisable (`✱ …haiku-5-5`) and the
+  path keeps whole trailing directories (`▸ …/harness/golder`) rather than a
+  directory sliced in half. Nothing on the bar moves on its own: a value that just
+  changed — a `/model` or `/provider` switch, a session adopted, the first frame —
+  is shown in motion for one pass (head to tail, a brief dwell) and then settles,
+  so "what changed?" is answered once instead of living as perpetual motion. Every
+  other field holds a short value and is drawn whole; a fixed field gives way only
+  when even one-column cuts cannot fit, so a bar narrower than a single block
+  still degrades in the old priority order rather than overflowing.
 - **Resuming a session no longer moves the process onto the session's recorded
   model**: `/resume` adopted the target header's `Provider`/`Model` — re-resolving
   the driver, clearing `--base-url`/`--protocol` — so switching into a

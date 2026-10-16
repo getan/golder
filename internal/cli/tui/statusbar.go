@@ -65,10 +65,15 @@ type statusBar struct {
 	// less to draw with, not a worse version of the same picture.
 	plain bool
 
-	// scroll is the marquee offset in display columns, advanced by the model
-	// while a long field does not fit (see Render's windowing). It never moves
-	// while the whole bar fits, so an ordinary session has a still bar.
-	scroll int
+	// revealLeft / revealMax / scroll carry the one-pass motion a long value gets
+	// right after it changes: while revealLeft > 0 the elided fields slide from
+	// their head to their tail (offset scroll, capped at revealMax), dwell for
+	// revealDwell ticks, and settle onto the static elision. A bar that is still by
+	// default and moves only when something changed is a bar that can be ignored
+	// until it has something to say.
+	revealLeft int
+	revealMax  int
+	scroll     int
 }
 
 // newStatusBar builds a status bar from the theme, resolved Options, and the
@@ -258,14 +263,16 @@ const (
 // segments(), so the two forms differ only in what they paint with.
 //
 // Either way the two fields whose values can outgrow a bar — the model name and
-// the cwd — are windowed and scrolled rather than dropped, because a status line
-// that silently loses the model or the path is worse than one whose long value
-// moves. Every other field is short and is drawn whole; only when the fixed
-// fields alone cannot fit (a terminal narrower than one block) does the SPEC
-// priority order still drop one, and a single survivor too wide for the bar is
-// truncated. The rendered row's display width (ui.Width, which ignores ANSI) is
-// always exactly width for width > 0; a non-positive width yields the empty
-// string.
+// the cwd — are elided rather than dropped: the value keeps its tail behind an
+// ellipsis (see elideTail), so the model is still recognisable and the path still
+// names the directory. Every other field is short and is drawn whole; only when
+// the fixed fields alone cannot fit (a terminal narrower than one block) does the
+// SPEC priority order still drop one, and a single survivor too wide for the bar
+// is truncated. Nothing on the bar moves: a value settles on the slice it can
+// show, because a status line in motion is a status line that draws the eye
+// away from the work. The rendered row's display width (ui.Width, which ignores
+// ANSI) is always exactly width for width > 0; a non-positive width yields the
+// empty string.
 func (s statusBar) Render(width int) string {
 	if width <= 0 {
 		return ""
@@ -274,24 +281,23 @@ func (s statusBar) Render(width int) string {
 	segs := s.layout(s.segments(), width)
 
 	if s.plain {
-		line, w := s.plainLine(segs, s.scroll)
+		line, w := s.plainLine(segs)
 		if w <= width {
 			return line + strings.Repeat(" ", width-w)
 		}
 		// One field wider than the whole bar, even alone: truncate it, keeping
-		// its color (the scrollable fields are windowed by layout and never
-		// reach this).
-		text := TruncateToWidth(segText(segs[0], s.scroll), width)
+		// its color (the elided fields are sized by layout and never reach this).
+		text := TruncateToWidth(s.segText(segs[0]), width)
 		return lipgloss.NewStyle().Foreground(lipgloss.Color(segs[0].plainFg)).Render(text)
 	}
 
-	ribbon, w := renderRibbon(segs, s.scroll)
+	ribbon, w := s.renderRibbon(segs)
 	if w <= width {
 		return ribbon + barPad(width-w)
 	}
 	// Same last resort in the ribbon form: hard-truncate the survivor's text onto
 	// the bar background (no separators, so width stays bounded).
-	txt := TruncateToWidth(segText(segs[0], s.scroll), width)
+	txt := TruncateToWidth(s.segText(segs[0]), width)
 	base := lipgloss.NewStyle().Foreground(lipgloss.Color(sbProvFg)).Background(lipgloss.Color(sbBarBg))
 	return base.Render(txt) + barPad(width-ui.Width(txt))
 }
@@ -299,7 +305,7 @@ func (s statusBar) Render(width int) string {
 // renderRibbon builds the styled powerline string for segs and returns it with
 // its visible width (excluding ANSI). The left edge starts at the first
 // segment's background; a closing arrow caps any trailing block back to the bar.
-func renderRibbon(segs []segment, off int) (string, int) {
+func (s statusBar) renderRibbon(segs []segment) (string, int) {
 	resolve := func(bg string) string {
 		if bg == "" {
 			return sbBarBg
@@ -321,7 +327,7 @@ func renderRibbon(segs []segment, off int) (string, int) {
 				Render(sepArrow))
 			vis += ui.Width(sepArrow)
 		}
-		content := " " + segText(seg, off) + " "
+		content := " " + s.segText(seg) + " "
 		b.WriteString(lipgloss.NewStyle().
 			Foreground(lipgloss.Color(seg.fg)).
 			Background(lipgloss.Color(curBg)).
@@ -345,7 +351,7 @@ func renderRibbon(segs []segment, off int) (string, int) {
 // competing with the labels. It pads with nothing: the caller pads the row with
 // plain spaces rather than the bar background, because painting a background is
 // the thing the plain form exists to avoid.
-func (s statusBar) plainLine(segs []segment, off int) (string, int) {
+func (s statusBar) plainLine(segs []segment) (string, int) {
 	var b strings.Builder
 	vis := 0
 	for i, seg := range segs {
@@ -353,7 +359,7 @@ func (s statusBar) plainLine(segs []segment, off int) (string, int) {
 			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorGray)).Render(sepPlain))
 			vis += ui.Width(sepPlain)
 		}
-		text := segText(seg, off)
+		text := s.segText(seg)
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(seg.plainFg)).Render(text))
 		vis += ui.Width(text)
 	}
@@ -458,32 +464,9 @@ func humanizeInt(n int) string {
 	return b.String()
 }
 
-// scrollFloor is the smallest window a scrolling field keeps before the layout
-// gives up on it, and scrollGap is the blank run between a value's tail and its
-// head as the marquee wraps, so the two do not run together.
-const (
-	scrollFloor = 6
-	scrollGap   = 3
-)
-
-// SetScroll records the marquee offset the model's clock has reached, in display
-// columns. The bar only moves while a long field is windowed (see Render).
-func (s *statusBar) SetScroll(n int) { s.scroll = n }
-
-// needsScroll reports whether this width cannot show the scrolling fields at full
-// length, so the model knows whether the marquee clock has to run at all: a bar
-// that fits is a still bar.
-func (s statusBar) needsScroll(width int) bool {
-	if width <= 0 {
-		return false
-	}
-	for _, seg := range s.layout(s.segments(), width) {
-		if seg.win > 0 && seg.win < ui.Width(seg.text) {
-			return true
-		}
-	}
-	return false
-}
+// elideFloor is the narrowest a long field is squeezed before the layout stops
+// giving it room: below a handful of columns there is nothing left to recognise.
+const elideFloor = 6
 
 // shortenPath compacts a display path to the directory name it ends in, behind an
 // ellipsis ("~/work/harness/golder" → "…/golder"), so a cwd that does not fit at
@@ -512,21 +495,73 @@ func shrinkToShorts(segs []segment) bool {
 	return changed
 }
 
-// segText returns the text a segment shows at this marquee offset: a window of the
-// value for a scrolling field the layout could not fit, the whole value otherwise.
-func segText(seg segment, off int) string {
+// elided is the settled (still) form of a field: the whole value when it fits,
+// otherwise its tail behind an ellipsis (see elideTail).
+func (s statusBar) elided(seg segment) string {
 	if seg.win <= 0 || ui.Width(seg.text) <= seg.win {
 		return seg.text
 	}
-	return windowText(seg.text, seg.win, off)
+	return elideTail(seg.text, seg.win)
 }
 
-// windowText returns the w-column window of text that starts off columns into a
-// marquee cycle: the value, scrollGap blanks, then the value again, so the tail
-// flows back into the head instead of jumping. It honours display width — a wide
-// rune with no room for its second column renders as a blank — and always returns
-// exactly w columns, which is what the layout's arithmetic assumed.
-func windowText(text string, w, off int) string {
+// segText returns what a segment shows now: its settled form, or — while a change
+// reveal is running — a window of the same width sliding from the head toward the
+// tail. Matching the settled width is what keeps the fields around it from moving
+// as the motion stops.
+func (s statusBar) segText(seg segment) string {
+	settled := s.elided(seg)
+	if s.revealLeft <= 0 || settled == seg.text {
+		return settled
+	}
+	return slideWindow(seg.text, ui.Width(settled), s.scroll)
+}
+
+// revealDwell is how many ticks a change reveal rests on the tail before settling
+// onto the static elision, so the end of the value is readable.
+const revealDwell = 3
+
+// StartReveal arms the one-pass motion a value gets right after it changes (a
+// /model or /provider switch, a session adopted, the first frame — wherever the
+// bar's configuration is republished). The step count is how far the widest elided
+// field must slide to show its tail; with nothing elided there is nothing to
+// reveal and the bar simply stays still.
+func (s *statusBar) StartReveal(width int) {
+	s.revealLeft, s.revealMax, s.scroll = 0, 0, 0
+	if width <= 0 {
+		return
+	}
+	steps := 0
+	for _, seg := range s.layout(s.segments(), width) {
+		if seg.win <= 0 || seg.win >= ui.Width(seg.text) {
+			continue
+		}
+		if need := ui.Width(seg.text) - ui.Width(s.elided(seg)); need > steps {
+			steps = need
+		}
+	}
+	if steps <= 0 {
+		return
+	}
+	s.revealMax, s.revealLeft = steps, steps+revealDwell
+}
+
+// AdvanceReveal steps the reveal one tick and reports whether it is still running.
+// The chain ends by itself: there is no clock on the bar unless something changed.
+func (s *statusBar) AdvanceReveal() bool {
+	if s.revealLeft <= 0 {
+		return false
+	}
+	s.revealLeft--
+	if s.scroll < s.revealMax {
+		s.scroll++
+	}
+	return s.revealLeft > 0
+}
+
+// slideWindow returns the w-column window of text at offset off, clamped so the
+// window never runs past either end — the motion a change reveal makes, head to
+// tail. Display width is honoured and the result measures exactly w columns.
+func slideWindow(text string, w, off int) string {
 	if w <= 0 {
 		return ""
 	}
@@ -534,32 +569,131 @@ func windowText(text string, w, off int) string {
 	if len(cols) <= w {
 		return text
 	}
-	total := len(cols) + scrollGap
-	start := off % total
+	start := off
+	if start > len(cols)-w {
+		start = len(cols) - w
+	}
 	if start < 0 {
-		start += total
+		start = 0
 	}
 	var b strings.Builder
-	for c := 0; c < w; {
-		src := (start + c) % total
-		if src >= len(cols) || cols[src] == 0 {
+	used := 0
+	for c := start; c < len(cols) && used < w; {
+		r := cols[c]
+		if r == 0 {
 			b.WriteByte(' ')
+			used++
 			c++
 			continue
 		}
-		r := cols[src]
-		if ui.Width(string(r)) == 2 {
-			if c+2 > w {
-				b.WriteByte(' ')
-				c++
-				continue
-			}
-			b.WriteRune(r)
-			c += 2
+		rw := ui.Width(string(r))
+		if used+rw > w {
+			b.WriteByte(' ')
+			used++
+			c++
 			continue
 		}
 		b.WriteRune(r)
-		c++
+		used += rw
+		c += rw
+	}
+	return b.String()
+}
+
+// elideTail shortens a segment's text to width display columns, keeping the tail —
+// the part that names the thing — behind a leading ellipsis. A path is cut at a
+// component boundary ("▸ …/harness/golder"), so a directory name is never sliced
+// in half; anything else is cut by column ("✱ …haiku-5-5"). The same width always
+// yields the same slice: a bar whose long values sit still is a bar the reader can
+// ignore.
+func elideTail(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ui.Width(text) <= width {
+		return text
+	}
+	prefix, value := "", text
+	if i := strings.IndexByte(text, ' '); i >= 0 {
+		prefix, value = text[:i+1], text[i+1:]
+	}
+	if strings.Contains(value, "/") {
+		if elided := elidePathTail(prefix, value, width); elided != "" {
+			return elided
+		}
+	}
+	return truncateTail(text, width)
+}
+
+// elidePathTail keeps the trailing whole components of a path that fit width
+// behind "…/" ("▸ …/harness/golder"), and returns "" when not even the last one
+// fits, leaving that case to the column-wise cut.
+func elidePathTail(prefix, path string, width int) string {
+	parts := strings.Split(path, "/")
+	var kept []string
+	used := 0
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := parts[i]
+		if part == "" {
+			continue
+		}
+		add := ui.Width(part)
+		if len(kept) > 0 {
+			add++ // the slash joining it to the component kept after it
+		}
+		if ui.Width(prefix)+ui.Width("…/")+used+add > width {
+			break
+		}
+		kept = append([]string{part}, kept...)
+		used += add
+	}
+	if len(kept) == 0 {
+		return ""
+	}
+	return prefix + "…/" + strings.Join(kept, "/")
+}
+
+// truncateTail shortens s to width display columns by dropping leading runes and
+// marking the cut with an ellipsis, so the tail survives. A wide rune with no room
+// for its second column renders as a blank in that column, which keeps the result
+// exactly width columns wide.
+func truncateTail(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if width == 1 {
+		return "…"
+	}
+	cols := displayColumns(s)
+	if len(cols) <= width {
+		return s
+	}
+	budget := width - 1 // the ellipsis takes one column
+	start := len(cols) - budget
+	if start < 0 {
+		start = 0
+	}
+	var b strings.Builder
+	b.WriteString("…")
+	used := 0
+	for c := start; c < len(cols) && used < budget; {
+		r := cols[c]
+		if r == 0 {
+			b.WriteByte(' ')
+			used++
+			c++
+			continue
+		}
+		w := ui.Width(string(r))
+		if used+w > budget {
+			b.WriteByte(' ')
+			used++
+			c++
+			continue
+		}
+		b.WriteRune(r)
+		used += w
+		c += w
 	}
 	return b.String()
 }
@@ -589,7 +723,7 @@ func (s statusBar) layout(segs []segment, width int) []segment {
 	copy(out, segs)
 
 	cost := func(seg segment) int {
-		n := ui.Width(segText(seg, s.scroll))
+		n := ui.Width(s.segText(seg))
 		if !s.plain {
 			n += 2 // the ribbon pads every block with one space on each side
 		}
@@ -697,8 +831,8 @@ func (s statusBar) layout(segs []segment, width int) []segment {
 		if share > natural {
 			share = natural
 		}
-		if share < scrollFloor && room >= scrollFloor {
-			share = scrollFloor
+		if share < elideFloor && room >= elideFloor {
+			share = elideFloor
 		}
 		if share < natural {
 			out[i].win = share
