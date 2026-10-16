@@ -19,6 +19,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/seatbelt"
 )
@@ -71,6 +72,19 @@ type BashTool struct {
 	// and an auto-mode reviewer failure routes the command into the sandbox
 	// instead of letting it run unisolated.
 	Permissions *permissions.State
+	// OnSandboxDenied, when set, is asked before a sandbox-denied command gives
+	// up: the sandbox refused a path this command needs, and the person may want
+	// to re-admit it. It receives the path (already extracted from the command
+	// and its justification) and the command line the question is about, and
+	// reports whether a grant was registered. A yes re-runs the command — still
+	// contained, with the path now reachable — and a no leaves the original
+	// failure in place. Wired by the drivers through cli/run, so the question is
+	// literally the same one the refused-escape dialog asks; a nil hook keeps the
+	// old behavior (the denial is labelled for the model, nobody is interrupted).
+	OnSandboxDenied func(ctx context.Context, path, summary string) bool
+	// deniedAsked is this tool's once-per-path memo for that question, the same
+	// rule the gate applies: asked and answered is answered.
+	deniedAsked judge.OnceSet
 	// Sandbox builds the sandboxed argv for a command. Nil means no isolation
 	// is available: sandbox-tier commands run directly (the gate already
 	// prompted for them).
@@ -424,6 +438,22 @@ func bashYield(ms int) time.Duration {
 // bash_id when it is still running. Caller cancellation during that initial
 // wait kills the command (the behavior Ctrl+C users expect); once Execute has
 // returned a session, the process survives until write_stdin or exit.
+// sandboxRetryKey marks a command that is already the retry after a path was
+// re-admitted: the second run must not re-open the question that produced it.
+type sandboxRetryKey struct{}
+
+func withSandboxRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sandboxRetryKey{}, true)
+}
+
+func sandboxRetryDone(ctx context.Context) bool {
+	done, _ := ctx.Value(sandboxRetryKey{}).(bool)
+	return done
+}
+
+// Execute runs one command: sandboxed by default, direct only where the gate
+// granted a Direct decision. A sandbox denial that names a path is offered back
+// to the person before the failure is returned (see OnSandboxDenied).
 func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	a, bad := decodeArgs[bashToolArgs](args, "bash")
 	if bad != nil {
@@ -537,6 +567,22 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if snap.ExitCode != 0 && !sandboxDenied && looksRGMissing(out) {
 		rgMissing = true
 		hint = rgMissingHint
+	}
+
+	// The sandbox denied a path this command needs. Offer it back to the person
+	// — the question is the refused-escape dialog's, asked at the moment the
+	// failure makes it concrete — and on a yes run the command again with the
+	// path admitted: the grant is in the table before the retry builds its
+	// profile, so the second run happens INSIDE the sandbox. A refusal, or a
+	// second denial, leaves the original failure in place. Escalation requests
+	// are skipped: the escape flow already had its say about that path.
+	if sandboxDenied && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
+		!strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
+		if p := judge.GrantablePathFromText(a.Command, a.Justification, t.Dir); p != "" && t.deniedAsked.First(p) {
+			if t.OnSandboxDenied(ctx, p, a.Command) {
+				return t.Execute(withSandboxRetry(ctx), id, args, onUpdate)
+			}
+		}
 	}
 
 	if !exited {

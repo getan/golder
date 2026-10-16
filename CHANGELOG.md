@@ -863,6 +863,23 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **A blocked path is offered back at the moment it blocks**: until now the
+  sandbox's own refusals only labelled the failure for the model — the person got
+  nothing to answer, and the way forward was a `/boundary writable add` somebody
+  had to be told about. A bash command the sandbox denied is now offered the path
+  it named, through the *same* question the refused-escape dialog asks (reading
+  for the session or remembered, reads and writes for the session, or deny) and
+  the *same* registration every layer reads; a yes re-runs the command with that
+  path admitted — still contained, never bare. Asked once per path per run, and
+  skipped for a command that names no path, for a driver with no dialog, and for
+  an escalation request (the escape flow already had its say about that path).
+  Read and write capabilities stay independent: `a`/`s` grant reading, `w` grants
+  both, and a read grant never makes a write succeed.
+  The question now has one implementation for its two triggers — one dialog kind,
+  one path extractor (`GrantablePathFromText`), one answer-to-grant mapping
+  (`ApplyReAdmittedPath`) and one once-per-path memo (`OnceSet`) — wired where
+  every driver installs its gates, so the tool and the gate cannot drift apart in
+  what a "yes" means.
 - **A refused escape now offers the smaller answer where it is refused**: under
   auto, an escape request the reviewer declined used to hand back a message and
   nothing else. When the request names a path, the gate now asks the person

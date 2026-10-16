@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
@@ -122,6 +123,18 @@ func (g *Gates) Install(cfg *runtime.RunConfig, d *hooks.Dispatcher, deps HookDe
 // session's gates rather than the wrapper.
 func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCallFunc, d *hooks.Dispatcher, deps HookDeps) {
 	tec := &cfg.Batch.ToolExecutorConfig
+	// The bash tool asks the same path question the gate asks, when the sandbox
+	// has already refused: one answer channel and one registration, whichever
+	// layer noticed the blocked path first (see BashTool.OnSandboxDenied). A
+	// driver without a dialog gets a nil asker and keeps the old behavior — the
+	// denial is labelled for the model and nobody is interrupted.
+	if ask := g.SandboxDenialAsker(); ask != nil && tec.Registry != nil {
+		for _, t := range tec.Registry.List() {
+			if b, ok := t.(*agenttool.BashTool); ok {
+				b.OnSandboxDenied = ask
+			}
+		}
+	}
 	if seam != nil {
 		tec.BeforeToolCall = seam
 	}
@@ -356,6 +369,53 @@ func WritableAt(path string) bool {
 		return false
 	}
 	return grants.Allows(p, grants.Write)
+}
+
+// SandboxDenialAsker builds the question a sandbox denial puts to the person,
+// and applies the answer. It is the second trigger for the same question the
+// refused-escape dialog asks (Kind ApprovalReAdmit, the same rows, the same
+// registration), asked from the execution layer instead of the gate: the command
+// already ran and the sandbox refused the path it needed, so running it again
+// with that path admitted is the smaller fix — and the retry stays contained.
+//
+// nil means there is nothing to ask with (no driver dialog): the denial keeps
+// its labeling for the model and nobody is interrupted.
+func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary string) bool {
+	if g == nil || g.opts.Confirm == nil {
+		return nil
+	}
+	return func(ctx context.Context, path, summary string) bool {
+		mode := ""
+		if g.opts.Perms != nil {
+			mode = g.opts.Perms.Mode().String()
+		}
+		req := judge.ApprovalRequest{
+			Kind: judge.ApprovalReAdmit, Mode: mode, Level: judge.Sandbox,
+			Tool: "bash", Summary: summary, ReadRoot: path,
+			Rationale: "the sandbox denied " + path,
+		}
+		req.Origin = agentcore.OriginFromContext(ctx)
+		ans := g.opts.Confirm(ctx, req)
+		if !ans.Answered || !ans.Approve {
+			return false
+		}
+		lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		how, granted := judge.ApplyReAdmittedPath(ans, lang)
+		if !granted {
+			return false
+		}
+		if g.opts.Notes != nil {
+			rationale := "the sandbox denied that path; " + how + " — retrying the command contained"
+			if lang == "zh" {
+				rationale = "沙箱拒绝了该路径；" + how + "，改为在沙箱内重跑"
+			}
+			g.opts.Notes.Emit(judge.Note{
+				Tool: "bash", Kind: judge.NoteBoundaryGranted, Level: judge.Allow, Lang: lang,
+				Summary: summary, Rationale: rationale,
+			})
+		}
+		return true
+	}
 }
 
 // GrantWritableRoot makes a directory writable inside the sandbox, for this

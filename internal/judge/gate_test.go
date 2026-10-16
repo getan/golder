@@ -655,6 +655,52 @@ func TestPermissionGateEscalationReadmitAskedOnce(t *testing.T) {
 	}
 }
 
+// TestApplyReAdmittedPath pins the one answer→grant mapping both triggers share:
+// a read row registers a subtree read grant, a write row needs no registration
+// here (the write dialog made it), and a refusal grants nothing.
+func TestApplyReAdmittedPath(t *testing.T) {
+	grantstest.Install(t)
+
+	how, ok := ApplyReAdmittedPath(ApprovalAnswer{Approve: true, Answered: true, ReadRoot: "/Volumes/KIOXIA/build"}, "en")
+	if !ok || !strings.Contains(how, "readable") {
+		t.Fatalf("read answer = %q ok=%v, want a readable phrase", how, ok)
+	}
+	found := false
+	for _, root := range grants.ReadRoots() {
+		if root == "/Volumes/KIOXIA/build" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("read roots = %v, want the granted path in the table the sandbox reads", grants.ReadRoots())
+	}
+
+	if how, ok := ApplyReAdmittedPath(ApprovalAnswer{Approve: true, Answered: true, WritableRoot: "/Volumes/KIOXIA/build"}, "en"); !ok || !strings.Contains(how, "writable") {
+		t.Errorf("write answer = %q ok=%v, want a writable phrase", how, ok)
+	}
+	if _, ok := ApplyReAdmittedPath(ApprovalAnswer{Answered: true}, "en"); ok {
+		t.Error("a refusal must not report a grant")
+	}
+}
+
+// TestOnceSet: the memo behind every path-scoped question — the first sighting
+// asks, later ones do not, and an empty key is not a question at all.
+func TestOnceSet(t *testing.T) {
+	var s OnceSet
+	if s.First("") {
+		t.Error("an empty key must never be asked about")
+	}
+	if !s.First("/a") {
+		t.Error("the first sighting must report true")
+	}
+	if s.First("/a") {
+		t.Error("a second sighting must report false")
+	}
+	if !s.First("/b") {
+		t.Error("a different key is a new question")
+	}
+}
+
 // TestPermissionGateEscalationConflictDenyBlocks: refusing the escalation
 // blocks the call with the user-denied message; it must not run unisolated
 // and must not fall through to the silent sandbox either.

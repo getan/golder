@@ -170,6 +170,68 @@ func TestBashEscalationAutoNote(t *testing.T) {
 	}
 }
 
+// countedRunner counts how many times a sandbox was built, so a test can tell a
+// retry from a single run; every run fails denial-shaped, the way a real
+// sandbox refuses a path outside the whitelist.
+type countedRunner struct {
+	runs int
+}
+
+func (c *countedRunner) SandboxArgv(shell, flag, _ string, _ string) ([]string, func(), error) {
+	c.runs++
+	return []string{shell, flag, "echo 'Operation not permitted' >&2; exit 1"}, func() {}, nil
+}
+
+func (c *countedRunner) SandboxCall(argv []string, _ string, _ seatbelt.CallPolicy) ([]string, func(), error) {
+	c.runs++
+	return []string{argv[0], argv[1], "echo 'Operation not permitted' >&2; exit 1"}, func() {}, nil
+}
+
+// TestBashSandboxDenialOffersPathAndRetries: a path the sandbox refused is
+// offered to the person at the moment the failure makes it concrete, and a yes
+// re-runs the command with the path admitted — still contained, asked once.
+func TestBashSandboxDenialOffersPathAndRetries(t *testing.T) {
+	probe := func(t *testing.T, command string, answer func(path string) bool) (*countedRunner, []string) {
+		t.Helper()
+		runner := &countedRunner{}
+		var asked []string
+		tool := &BashTool{
+			Dir: t.TempDir(), Sandbox: runner, ForceSandbox: true,
+			Permissions: permissions.New(permissions.Auto),
+			OnSandboxDenied: func(_ context.Context, path, _ string) bool {
+				asked = append(asked, path)
+				return answer(path)
+			},
+		}
+		if _, err := runBashErr(t, tool, map[string]any{"command": command}); err == nil {
+			t.Fatal("expected the sandboxed probe to fail")
+		}
+		return runner, asked
+	}
+
+	// A yes: one question, and the command runs a second time with the path in
+	// the table (the retry's own failure does not re-open the question).
+	runner, asked := probe(t, "go build -o /Volumes/KIOXIA/build/out .", func(string) bool { return true })
+	if len(asked) != 1 || asked[0] != "/Volumes/KIOXIA/build/out" {
+		t.Fatalf("asked = %v, want the one path the command named", asked)
+	}
+	if runner.runs != 2 {
+		t.Errorf("sandbox runs = %d, want a retry after the grant", runner.runs)
+	}
+
+	// A no: the failure stands, with one question and one run.
+	runner, asked = probe(t, "go build -o /Volumes/KIOXIA/build/out .", func(string) bool { return false })
+	if len(asked) != 1 || runner.runs != 1 {
+		t.Errorf("refusal: asked = %v, runs = %d, want one of each", asked, runner.runs)
+	}
+
+	// Nothing to offer: a command that names no path never opens the question.
+	runner, asked = probe(t, "make", func(string) bool { return true })
+	if len(asked) != 0 || runner.runs != 1 {
+		t.Errorf("no path: asked = %v, runs = %d, want no question and one run", asked, runner.runs)
+	}
+}
+
 // failingRunner simulates a sandbox whose command fails with a denial-shaped
 // message (the shape a real sandbox-exec/bwrap refusal produces).
 type failingRunner struct{}

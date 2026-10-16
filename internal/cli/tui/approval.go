@@ -529,7 +529,7 @@ func escalationPathCandidate(req judge.ApprovalRequest, cwd string) string {
 	if req.Kind != judge.ApprovalEscalation {
 		return ""
 	}
-	return judge.EscalationPathFromText(req.Summary, req.Justification, cwd)
+	return judge.GrantablePathFromText(req.Summary, req.Justification, cwd)
 }
 
 // coveredBy reports whether p is root itself or lives under it.

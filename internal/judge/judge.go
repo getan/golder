@@ -480,9 +480,9 @@ type Note struct {
 func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToolCallFunc {
 	interactive := opts.In != nil && opts.Out != nil
 	// readmitAsked remembers the paths this gate already put to the person, so a
-	// retried escape does not re-open a question they have answered. Created per
-	// gate: that is the lifetime of the answer it guards.
-	readmitAsked := map[string]bool{}
+	// retried escape does not re-open a question they have answered. Per gate:
+	// that is the lifetime of the answer it guards.
+	var readmitAsked OnceSet
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
 		mode := permissions.FullAccess
 		if state != nil {
@@ -569,31 +569,8 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if !ans.Answered || !ans.Approve {
 				return nil
 			}
-			readRoot, writeRoot := strings.TrimSpace(ans.ReadRoot), strings.TrimSpace(ans.WritableRoot)
-			how := ""
-			switch {
-			case readRoot != "":
-				// The row names the path; the gate owns the registration, so
-				// one answer means one entry in the table every layer reads —
-				// the sandbox included, on this call and every later one.
-				life, source := grants.Session, "escape re-admission"
-				if ans.Persisted {
-					life, source = grants.Remembered, "escape re-admission (remembered)"
-				}
-				if _, err := grants.AddReadRoot(readRoot, life, source); err != nil {
-					return nil
-				}
-				how = localized(lang, "本会话可读 "+readRoot, readRoot+" is readable for this session")
-				if ans.Persisted {
-					how = localized(lang, readRoot+" 可读并已记住", readRoot+" is readable and remembered")
-				}
-			case writeRoot != "":
-				// The write rows register the root themselves (the write
-				// dialog owns that callback) and a write grant carries read,
-				// so the blocked path is covered either way.
-				how = localized(lang, "本会话可读写 "+writeRoot+"（仍在沙箱内）",
-					writeRoot+" is readable and writable for this session (still contained)")
-			default:
+			how, granted := ApplyReAdmittedPath(ans, lang)
+			if !granted {
 				return nil
 			}
 			notify(Note{
@@ -623,7 +600,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			// The path the request named, for the guidance a refusal carries: a
 			// smaller fix than dropping the sandbox for the whole call usually
 			// exists, and naming it beats inviting the same request again.
-			deniedPath := EscalationPathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
+			deniedPath := GrantablePathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
 			switch {
 			case v.Level == Deny && !v.Failed:
 				notify(noteFor(call, v, NoteDenied, lang))
@@ -650,8 +627,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// fail on the very path) and one that cannot (which would
 				// otherwise just stop). Asked once per path per run: a refusal
 				// must not become a nag, and it changes nothing below.
-				if deniedPath != "" && opts.Confirm != nil && !readmitAsked[deniedPath] {
-					readmitAsked[deniedPath] = true
+				if deniedPath != "" && opts.Confirm != nil && readmitAsked.First(deniedPath) {
 					if dec := readmitPath(deniedPath); dec != nil {
 						return dec
 					}
@@ -816,6 +792,41 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			return blockCall(call, v, "needs confirmation; failing closed without a prompt")
 		}
 	}
+}
+
+// ApplyReAdmittedPath registers what a re-admission answer granted and returns
+// the phrase a note should carry. Read answers are registered here — the gate
+// owns the read-root registry — while the write rows register themselves (the
+// write dialog owns that callback), and a write grant carries read, so either
+// shape leaves the blocked path reachable inside the sandbox. ok=false means the
+// answer granted nothing: a denial, or a registration the registry refused.
+//
+// It is the one place that turns one of these answers into a table row, so the
+// two triggers that ask the question — a refused escape, and a command the
+// sandbox just denied — cannot drift apart in what a "yes" means.
+func ApplyReAdmittedPath(ans ApprovalAnswer, lang string) (how string, ok bool) {
+	readRoot, writeRoot := strings.TrimSpace(ans.ReadRoot), strings.TrimSpace(ans.WritableRoot)
+	switch {
+	case readRoot != "":
+		life, source := grants.Session, "path re-admission"
+		if ans.Persisted {
+			life, source = grants.Remembered, "path re-admission (remembered)"
+		}
+		if _, err := grants.AddReadRoot(readRoot, life, source); err != nil {
+			return "", false
+		}
+		how = localized(lang, "本会话可读 "+readRoot, readRoot+" is readable for this session")
+		if ans.Persisted {
+			how = localized(lang, readRoot+" 可读并已记住", readRoot+" is readable and remembered")
+		}
+		return how, true
+	case writeRoot != "":
+		// The write rows register the root themselves, and a write grant carries
+		// read, so the blocked path is covered either way.
+		return localized(lang, "本会话可读写 "+writeRoot+"（仍在沙箱内）",
+			writeRoot+" is readable and writable for this session (still contained)"), true
+	}
+	return "", false
 }
 
 // askApproval routes a call that needs the user's answer through the driver's
@@ -1189,7 +1200,7 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 	}
 	grantRoot := ""
 	if kind == ApprovalEscalation && opts.GrantWritable != nil {
-		grantRoot = EscalationPathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
+		grantRoot = GrantablePathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
 	}
 	if grantRoot != "" {
 		fmt.Fprintf(out, "Allow? [y]es (runs outside the sandbox) / [n]o / [w]rites to %s (this session)"+
