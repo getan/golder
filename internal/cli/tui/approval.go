@@ -171,12 +171,11 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		// The escape was refused by review; the one thing this dialog can do is
 		// bring the blocked path back inside the sandbox — the smaller answer
 		// than running the call bare, and the reason the question is asked at
-		// all. Same rows, keys and grants as the boundary dialog's read side:
-		// it is the same question, asked at the moment it matters. The write
-		// row is there because a toolchain cache needs to be written as well as
-		// read, and a write grant carries read; permanence is not offered for
-		// writes in one keystroke, so the session row's note names
-		// /boundary writable add for that.
+		// all. The read rows carry the boundary dialog's read-side grants (same
+		// keys, same lifetimes); this dialog adds the write row, because a
+		// blocked command may have been refused for writing, and a write grant
+		// carries read. Permanence is not offered for writes in one keystroke,
+		// so the session row's note names /boundary writable add for that.
 		if p := strings.TrimSpace(req.ReadRoot); p != "" {
 			// The gate extracted this path when it refused the escape, so it is
 			// already the candidate for both sides. Using it verbatim — rather

@@ -127,7 +127,7 @@ func (m Mode) Description(lang string) string {
 		case FullAccess:
 			return "不做审查、不套沙箱；仅保留静态硬拒名单（sudo、rm -rf / 等）"
 		default:
-			return "由当前模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝；只有工作区边界、联网、无沙箱运行器或评审不可用时会问你"
+			return "由当前模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝；只有工作区边界、联网、首次信任、被拒路径的重准入、无沙箱运行器或评审不可用时会问你"
 		}
 	}
 	switch m {
@@ -138,7 +138,7 @@ func (m Mode) Description(lang string) string {
 	case FullAccess:
 		return "No review, no sandbox; only the hard blocklist applies"
 	default:
-		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked; it asks you only for workspace boundaries, network, a missing sandbox runner, or when review is unavailable"
+		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked; it asks you only for workspace boundaries, network, first-run trust, a blocked path it may re-admit, a missing sandbox runner, or when review is unavailable"
 	}
 }
 

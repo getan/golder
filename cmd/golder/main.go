@@ -196,8 +196,9 @@ func main() {
 	// the id feeds the resumeID resolution below. A bare `session resume`
 	// without an id is a usage error.
 	sessionResumeID := peelSessionResumeID(&os.Args)
-	// like the package-management ones: they are standalone actions that never
-	// touch the interactive/headless flag surface.
+	// like the other early-dispatch subcommands (host-compat, update, dream):
+	// they are standalone actions that never touch the interactive/headless flag
+	// surface.
 	if len(os.Args) > 1 && os.Args[1] == "session" {
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: golder session export <session-id> [flags] | golder session list | golder session resume <session-id>")
@@ -686,13 +687,6 @@ func applyPermissionsFlag(env *run.Env, value string, errOut io.Writer) bool {
 	return true
 }
 
-// runDream executes the subprocess memory-consolidation pass (SPEC §4.1/§4.2).
-// It runs dream.Runner to completion, marshals the resulting Report as a single
-// line of JSON on stdout (the parent/scheduler parses this), and returns the
-// process exit code: 0 on success (including a "skipped" run when another dream
-// holds the lock) or 1 on failure. Progress and diagnostics go to errOut. The
-// project scope comes from the working directory, which -C/--cwd already applied
-// via os.Chdir before dispatch, so an empty ProjectDir here resolves to cwd.
 // runGitHubReview serves the isolated GitHub ready-for-review webhook
 // (issue #567). The secret is resolved indirectly — the flag names the env var
 // that carries the high-entropy shared secret — so it never sits in config or
@@ -751,6 +745,13 @@ func runGitHubReview(ctx context.Context, opts cliOptions, errOut io.Writer) int
 	return 0
 }
 
+// runDream executes the subprocess memory-consolidation pass (SPEC §4.1/§4.2).
+// It runs dream.Runner to completion, marshals the resulting Report as a single
+// line of JSON on stdout (the parent/scheduler parses this), and returns the
+// process exit code: 0 on success (including a "skipped" run when another dream
+// holds the lock) or 1 on failure. Progress and diagnostics go to errOut. The
+// project scope comes from the working directory, which -C/--cwd already applied
+// via os.Chdir before dispatch, so an empty ProjectDir here resolves to cwd.
 func runDream(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 	projectDir, err := os.Getwd()
 	if err != nil {

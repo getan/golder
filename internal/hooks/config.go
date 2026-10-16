@@ -1,9 +1,9 @@
 // Package hooks implements golder's user-extensible lifecycle hook system: a
 // config-driven way to run shell commands at agent lifecycle points (tool
 // calls, prompt submission, session start/end, etc.) without writing Go or
-// compiling a plugin. It is a leaf package depending only on the standard
-// library, so it can be composed into the runtime/cli layers without creating
-// an import cycle.
+// compiling a plugin. It depends only on the standard library plus
+// internal/agentcore (the event types it reports), so it can be composed into
+// the runtime/cli layers without creating an import cycle.
 //
 // This file defines the configuration types and their validation. A hook is a
 // single shell command; a matcher binds a group of hooks to an event (and,

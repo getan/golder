@@ -35,8 +35,8 @@ import (
 )
 
 // agentsInstructionFile mirrors runtime's injected instruction file. The name is
-// duplicated rather than imported because judge is a leaf package (runtime
-// imports the tool layer, which imports judge).
+// duplicated rather than imported because the import would be a cycle: runtime
+// imports the tool layer, which imports judge.
 const agentsInstructionFile = "AGENTS.md"
 
 // OutlivingPaths returns the paths in this call whose effect outlives the call,

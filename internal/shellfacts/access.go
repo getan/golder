@@ -157,7 +157,7 @@ func isPathShaped(w Word) bool {
 	case text == "~" || len(text) > 1 && text[0] == '~' && text[1] == '/':
 		return true
 	}
-	// A relative path with a separator, e.g. `internal/judge/readonly.go`.
+	// A relative path with a separator, e.g. `internal/judge/credential_read.go`.
 	// A bare word (`main.go`, `readonly`) is NOT reported: it may equally be a
 	// search pattern, a branch name or a package name, and asking about it
 	// would train the user to dismiss the dialog.

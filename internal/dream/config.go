@@ -2,7 +2,7 @@
 // layer: the resolved [dream] configuration, on-disk run state, and the
 // deterministic due-check that decides whether an auto-trigger is warranted.
 // This layer has no LLM dependency; the runner, scheduler, lock, and plan/apply
-// logic live in later nodes. See tasks/spec-dream-memory-consolidation.md
+// logic live in this package. See tasks/spec-dream-memory-consolidation.md
 // §3.2/§3.3/§5.1/§5.4.
 package dream
 

@@ -1,17 +1,19 @@
 package judge
 
-// The boundary gate: reading outside the workspace needs the user's answer.
+// The boundary gate: stepping outside the workspace needs the user's answer,
+// for reading and for writing alike.
 //
 // The workspace boundary is the directory the user opened. Crossing it is a
 // question of consent rather than of risk, which is why this gate is a sibling
 // of the permission gate instead of a tier inside it, and why no approval mode
 // waives it: read-only, ask, auto and full-access all ask before a file outside
-// the workspace is read. full-access turns off review and sandboxing, not the
-// user's say over where data comes from, and a run with no prompt available
-// (headless, a sub-agent thread with no UI) fails closed with guidance rather
-// than guessing.
+// the workspace is touched. full-access turns off review and sandboxing, not the
+// user's say over where data comes from or goes, and a run with no prompt
+// available (headless, a sub-agent thread with no UI) fails closed with guidance
+// rather than guessing.
 //
-// Two answers are possible, and they are deliberately different sizes:
+// The answers are deliberately different sizes (the read side below, the write
+// side in the same shape — see BoundaryWrite):
 //
 //   - "just this read" is a one-call grant. It travels in the executor context
 //     (agentcore.WithReadGrant) and is consumed by the call it was asked for.
@@ -81,10 +83,10 @@ type BoundaryOpts struct {
 	Notify func(Note)
 	// Persist, when set, makes a read grant survive the process: the gate
 	// calls it after the user chooses the remembered option and reports the
-	// outcome in the note. It is a callback rather than a direct write because
-	// this package is a leaf (it cannot import the config layer that owns the
-	// managed store); a driver without one simply cannot offer the remembered
-	// answer, and the prompt says so.
+	// outcome in the note. It is a callback because the managed file is opened
+	// by the cli assembly, which owns its path and its on-disk shape; a driver
+	// without one simply cannot offer the remembered answer, and the prompt says
+	// so (the session grant still lands in the table the gate writes itself).
 	Persist func(dir string) (made bool, why string)
 	// GrantWritable, when set, registers a directory as writable — for the
 	// session, and across sessions when persist is true — and reports what

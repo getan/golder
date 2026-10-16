@@ -3,10 +3,10 @@
 // process-isolated sub-agent JSON-RPC server (--subagent-rpc).
 //
 // This file gives headless / stream-json runs the same session persistence and
-// resume the interactive REPL has (cmd/golder/interactive.go). Before this, a
-// headless run built an in-memory AgentContext and threw it away on exit, so
-// `--output-format stream-json` emitted no session id and `--resume`/`--continue`
-// only worked in the REPL.
+// resume the interactive front-ends have, through the shared persist path
+// (internal/cli/persist.go). Before this, a headless run built an in-memory
+// AgentContext and threw it away on exit, so `--output-format stream-json` emitted
+// no session id and `--resume`/`--continue` only worked in the REPL.
 //
 // Now a headless run is backed by a session file: resuming seeds the context
 // from a prior session (and re-anchors the branch leaf), a fresh run creates a
@@ -100,7 +100,7 @@ type headlessSession struct {
 	persisted int
 	// model/provider are the model and provider the run actually used, refreshed
 	// onto the header before persisting so a resumed run does not write back the
-	// original session's stale values (matching the REPL, repl.go persistTurn).
+	// original session's stale values (matching the REPL, cli.PersistTurn).
 	model    string
 	provider string
 }

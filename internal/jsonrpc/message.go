@@ -1,8 +1,8 @@
 // Package jsonrpc implements a minimal JSON-RPC 2.0 client over a subprocess's
-// stdio (US-014/#116). It is the shared transport foundation reused by the MCP
-// client (#130/#131), the plugin system (#132/#133) and process-isolated
-// sub-agents (#135): each spawns an external executable and speaks line-delimited
-// JSON-RPC 2.0 over the child's stdin/stdout.
+// stdio (US-014/#116). It is the shared transport foundation reused by the
+// plugin system (#132/#133) and process-isolated sub-agents (#135): each spawns
+// an external executable and speaks line-delimited JSON-RPC 2.0 over the child's
+// stdin/stdout.
 //
 // The wire format follows the spec: every message carries "jsonrpc":"2.0". A
 // request has an id and expects a matching response; a notification omits the id

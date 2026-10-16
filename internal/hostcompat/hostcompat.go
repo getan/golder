@@ -11,7 +11,7 @@
 //     needs_input, idle, done, errored, unknown). Being *recognised* as an
 //     agent at all is the one thing a report cannot do on its own: that needs
 //     a harness manifest, a file, which this package ships and installs (see
-//     manifest.go).
+//     install.go).
 //   - herdr takes `$HERDR_BIN_PATH pane report-agent`. No file: the report
 //     names the agent, so it is identified by reporting. State is one of four
 //     (working, blocked, idle, unknown) and a resume command rides the report.

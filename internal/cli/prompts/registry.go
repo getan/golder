@@ -462,8 +462,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	// thinkAction views or switches the reasoning-effort level, backing the
 	// /model think [level] form. It used to also back a standalone /think; that
 	// command was retired because the level belongs to the model and /model
-	// already carries both (see runtime.retiredCommands for the redirect a
-	// lingering /think gets).
+	// already carries both.
 	thinkAction := func(args string) string {
 		lvl := strings.TrimSpace(args)
 		if lvl == "" {

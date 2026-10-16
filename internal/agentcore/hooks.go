@@ -1,7 +1,7 @@
 package agentcore
 
 // ThinkingLevel is the unified reasoning-effort enum (agent layer). It keeps
-// pi's full 6 levels; providers map it to their own wire format via a
+// pi's full seven levels; providers map it to their own wire format via a
 // per-model ThinkingLevelMap (decision #10).
 type ThinkingLevel string
 

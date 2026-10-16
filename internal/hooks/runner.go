@@ -31,7 +31,6 @@ const blockExitCode = 2
 // Runner executes hook commands. Shell defaults to "sh" with a "-c" flag; it is
 // a field so tests can substitute a shell and future platforms can override it.
 // ProjectDir is the working directory hook commands run in (the project root).
-// ExtraEnv is appended to the process environment (GOLDER_* variables).
 type Runner struct {
 	Shell      string
 	ProjectDir string

@@ -3,8 +3,8 @@
 // It is backed by a pure-Go SQLite database (modernc.org/sqlite, no CGO) with
 // an FTS5 full-text index over Markdown memory files. This file provides the
 // Store type together with database opening and idempotent schema migration.
-// Later nodes extend the package with path resolution, reconcile (lazy
-// indexing/pruning) and BM25 search.
+// The package also holds path resolution, reconcile (lazy indexing/pruning) and
+// BM25 search.
 package memory
 
 import (

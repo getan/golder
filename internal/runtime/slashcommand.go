@@ -1,6 +1,7 @@
 // This file implements slash-commands (US-029, #45): typed "/name" shortcuts a
-// user invokes in the REPL. There are two sources, resolved with a fixed
-// priority:
+// user invokes in the REPL. Commands come from four sources — built-in
+// registrations, user markdown templates, skills and plugins (the Source*
+// constants) — resolved with a fixed priority:
 //
 //   - Built-in commands are registered at compile time via RegisterBuiltin
 //     (from init() in the fork's own code). They are always available.
@@ -13,8 +14,9 @@
 // loser is reported via Shadowed. Built-ins are load-bearing and always win.
 // Within a tier, the last-added command overrides earlier ones (a re-load).
 //
-// There is deliberately no standalone plugin mechanism: a fork adds built-ins
-// via init() registration, and external extensions go through MCP (deferred).
+// Plugins extend the set through the plugin package (SourcePlugin) rather than a
+// second mechanism, and a fork can add built-ins via init() registration; the
+// MCP client is not implemented, so nothing is sourced from MCP.
 package runtime
 
 import (

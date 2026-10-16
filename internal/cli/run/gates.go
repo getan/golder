@@ -226,8 +226,8 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 		WorkspaceRoot: o.Cwd,
 		Roots:         o.ExtraRoots,
 		Notify:        o.Notes.Emit,
-		// The managed store lives in the config layer, which judge (a leaf
-		// package) cannot import; the assembly point is where the two meet.
+		// The managed store lives in the config layer; the assembly point is
+		// where judge and the store meet.
 		Persist: PersistReadRoot,
 		// The write side's two callbacks, both shared with the escalation dialog
 		// so one answer means one thing: GrantWritable registers the sandbox root
@@ -251,8 +251,8 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 		// platform that never had a sandbox (Windows) fail closed.
 		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
 		Notify:         o.Notes.Emit,
-		// The stdin prompt's `w`/`s` answers need the sandbox registry and the
-		// managed store, neither of which judge (a leaf package) can reach.
+		// The stdin prompt's `w`/`s` answers need the sandbox's writable registry
+		// and the remembered row's spelling, both of which live here.
 		Cwd:           o.Cwd,
 		GrantWritable: GrantWritableRoot,
 	}
@@ -348,8 +348,8 @@ func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
 // PersistReadRoot writes a read grant into the authorization table as a
 // remembered row, so it survives the process. It lives here, in the gate
 // assembly, because that is where the two layers that need each other can meet:
-// judge (which owns the boundary gate and takes the answer) is a leaf package
-// that cannot reach the config layer where the table is opened.
+// judge owns the boundary gate and takes the answer, and this layer opens the
+// managed file the row has to reach.
 func PersistReadRoot(dir string) (made bool, why string) {
 	root, err := grants.AddReadRoot(dir, grants.Remembered, "read dialog (remembered)")
 	if err != nil {
@@ -412,8 +412,11 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			if lang == "zh" {
 				rationale = "沙箱拒绝了该路径；" + how + "，改为在沙箱内重跑"
 			}
+			// NoteSandboxed, the same kind the gate's own re-admission path
+			// emits: the outcome is "the call runs contained", and the
+			// rationale carries the granted path.
 			g.opts.Notes.Emit(judge.Note{
-				Tool: "bash", Kind: judge.NoteBoundaryGranted, Level: judge.Allow, Lang: lang,
+				Tool: "bash", Kind: judge.NoteSandboxed, Level: judge.Allow, Lang: lang,
 				Summary: summary, Rationale: rationale,
 			})
 		}

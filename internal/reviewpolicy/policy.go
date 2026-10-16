@@ -482,8 +482,8 @@ func rationale(lang, key string) string {
 	return table["unknown"]
 }
 
-// stateForTest exposes the sorted question ids, so a test can assert the set
-// without depending on Go's map iteration order.
+// sortedQuestionIDs exposes the sorted question ids, so a test can assert the
+// set without depending on Go's map iteration order.
 func sortedQuestionIDs() []string {
 	ids := make([]string, 0, len(reasonKeys))
 	for id := range Questions() {

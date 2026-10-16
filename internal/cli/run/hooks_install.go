@@ -4,10 +4,10 @@
 // only exposes the generic seams (BeforeToolCall/AfterToolCall/ShouldStopAfterTurn),
 // while this helper knows about both the resolved Config.Hooks and the seams.
 //
-// #419 establishes the skeleton: InstallHooks builds a Dispatcher (or short-
-// circuits to nil when no hooks are configured, FR-18) and offers generic
-// decorator combinators for the seams. The concrete per-event wiring is filled
-// in by later issues (#420–#424); this file deliberately wires no event yet.
+// BuildDispatcher builds a dispatcher (or short-circuits to nil when no hooks
+// are configured, FR-18) and InstallSeams wires the per-event seams the issues
+// #420–#424 landed: PrepareArguments/PreToolUse, AfterToolCall/PostToolUse and
+// the Stop family.
 package run
 
 import (
@@ -46,9 +46,9 @@ func BuildDispatcher(set hooks.HookSet, deps HookDeps) *hooks.Dispatcher {
 }
 
 // InstallSeams wires the tool-execution and Stop hook points onto cfg from an
-// already-built dispatcher. It is the shared body of InstallHooks and the
-// per-turn install path for multi-turn drivers. A nil dispatcher is a no-op, so
-// callers can invoke it unconditionally.
+// already-built dispatcher. It is the shared install body every driver and the
+// per-turn install path for multi-turn drivers use. A nil dispatcher is a no-op,
+// so callers can invoke it unconditionally.
 //
 // PreToolUse runs at PrepareArguments: its rewrite is schema-validated and then
 // the trust, boundary and authorization gates see the final input exactly ONCE.

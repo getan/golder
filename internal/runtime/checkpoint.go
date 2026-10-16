@@ -11,10 +11,9 @@
 // convention (see internal/memory, TypeCheckpoint = "checkpoint") so the memory
 // indexer can pick these files up unchanged.
 //
-// This node provides only the persistence primitives plus the summarize→
-// Checkpoint bridge. Wiring into the run loop (#481) is deliberately out of
-// scope: a checkpoint write failure is returned to the caller, which is expected
-// to log-and-continue rather than abort the turn.
+// This file provides the persistence primitives plus the summarize→Checkpoint
+// bridge; the run loop calls both through writeCompactionCheckpoint, which
+// logs-and-continues on a write failure rather than aborting the turn.
 package runtime
 
 import (

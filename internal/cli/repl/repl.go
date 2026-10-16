@@ -1,8 +1,8 @@
-// This file implements the line-based interactive REPL (US-003/#106) that
-// replaces the former full-screen bubbletea TUI. When golder is invoked without a
-// prompt on a terminal it runs a simple read → run → stream-print loop over a
-// persisted session: no full-screen rendering, no popup menus, no viewport — a
-// prompt, the agent's streamed reply, and a new prompt.
+// This file implements the line-based interactive REPL (US-003/#106), the
+// --no-tui path (the full-screen TUI in internal/cli/tui is the default
+// front-end). It runs a simple read → run → stream-print loop over a persisted
+// session: no full-screen rendering, no popup menus, no viewport — a prompt, the
+// agent's streamed reply, and a new prompt.
 //
 // The REPL is a synchronous loop on the main goroutine: it reads one line,
 // resolves slash-commands, launches an agent run, drains the run's event stream
@@ -967,7 +967,7 @@ func runForkClone(out io.Writer, deps *replDeps, line string) {
 //     "← current". Each printed row is numbered so it can be selected.
 //   - "/tree N" switches the active leaf to the N-th printed entry: it rebuilds
 //     the shared context to the root→leaf path feeding that entry, so the next
-//     prompt continues from there. Because persistTurn appends new turns as a
+//     prompt continues from there. Because cli.PersistTurn appends new turns as a
 //     branch descending from the (moved) leaf, continuing after a switch grows a
 //     real sibling branch on disk rather than truncating history.
 func runTree(out io.Writer, deps *replDeps, line string) {

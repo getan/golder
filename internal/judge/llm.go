@@ -48,8 +48,8 @@ import (
 
 // ReviewFunc performs one model call for the reviewer: given a system prompt
 // and a user message, it returns the model's final text. The wiring layer
-// (cli/run) builds it from the active provider, so this leaf package stays
-// free of provider imports. Implementations must be safe for concurrent use.
+// (cli/run) builds it from the active provider, so judge stays free of provider
+// imports. Implementations must be safe for concurrent use.
 type ReviewFunc func(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 
 // Review defaults. The timeout bounds how long one tool call can stall on

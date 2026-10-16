@@ -3,10 +3,11 @@ package judge
 // Package judge grades the risk of a single tool call so the run gets a
 // middle tier between "directory trusted, run anything" and "ask a human
 // for everything" (trust tri-state in internal/trust, allow/deny lists in
-// internal/cli/run). It is a leaf package: standard library plus
-// internal/agentcore and internal/permissions, no imports from
-// trust/runtime/hooks, so the cli layer can chain it onto the existing
-// BeforeToolCall seam without creating an import cycle.
+// internal/cli/run). It stays below the layers that drive it — no imports from
+// trust/runtime/hooks — so the cli layer can chain it onto the existing
+// BeforeToolCall seam without creating an import cycle; its own imports are the
+// leaf packages it shares with them (agentcore, permissions, grants,
+// golderhome, patch, shellfacts).
 //
 // Chain of responsibility, cheapest first:
 //
@@ -210,9 +211,9 @@ type GateOpts struct {
 	// GrantWritable, when set, registers a path as writable for the session and
 	// — when persist is true — makes that survive the process. It backs the
 	// stdin prompt's `w`/`s` answers, the twin of the TUI dialog's rows, and is
-	// a callback for the same reason the read grant's is: this package is a
-	// leaf and cannot reach the sandbox registry or the managed store. why
-	// carries the failure, or the note for a grant that was already in place.
+	// a callback because the sandbox's writable registry and the remembered
+	// row's spelling live in the cli assembly, not here. why carries the
+	// failure, or the note for a grant that was already in place.
 	GrantWritable func(root string, persist bool) (made bool, why string)
 	// OnPrompt, when set, is called with the question just before a prompt is
 	// put to the person — whichever way that prompt travels (the driver's
@@ -278,28 +279,30 @@ const (
 	// way), ask puts the escape to the person with containment as the default,
 	// headless re-contains or fails closed.
 	ApprovalEscalation ApprovalKind = "escalation"
-	// ApprovalReAdmit asks whether to re-admit, for READING and inside the
-	// sandbox, the path a declined escape was blocked on. Auto asks it at the
-	// moment it refuses the escape: dropping the sandbox for the whole call is
-	// rarely what the call needs, and one path is usually all it does need. The
-	// answer is recorded in the same table the gates and the sandbox read — the
-	// read rows through the gate, the write row through the write dialog's own
-	// callback — and the call then runs contained with that path reachable. A
-	// "no" leaves auto's default untouched (contain the call when containment is
-	// possible, refuse it otherwise) and records no denial, because nothing was
-	// denied. Asked at most once per path per run. Only drivers with a dialog
-	// ask it; without one the refusal message carries the same fix.
+	// ApprovalReAdmit asks whether to re-admit a path the sandbox refused, for
+	// reading or for reading and writing, and it has two triggers: an escape
+	// request the reviewer declined, and a command the sandbox just denied. In
+	// both cases dropping the sandbox for the whole call is rarely what the call
+	// needs, and one path is usually all it does need. The answer is recorded in
+	// the same table the gates and the sandbox read — the read rows through the
+	// gate, the write row through the write dialog's own callback — and the call
+	// then runs contained with that path reachable. A "no" leaves the caller's
+	// default untouched (contain the call when containment is possible, refuse it
+	// otherwise) and records no denial, because nothing was denied. Asked at most
+	// once per path per run. Only drivers with a dialog ask it; without one the
+	// refusal message carries the same fix.
 	ApprovalReAdmit ApprovalKind = "re-admit"
 	// ApprovalNetwork asks for one call's network capability when the routine
 	// grader could not authorize it. An approval keeps the filesystem sandbox;
 	// this is NOT permission to run the call outside containment.
 	ApprovalNetwork ApprovalKind = "network"
-	// ApprovalBoundary: a read-only tool (read, view_image, grep, find, ls)
-	// was pointed outside the workspace. The workspace is the directory the
-	// user opened, so this asks for consent rather than a risk verdict; the
-	// answer is "just this read" (ReadGrant) or "this directory for the
-	// session" (ReadRoot). It is the one question no approval mode waives,
-	// including full-access.
+	// ApprovalBoundary: a tool was pointed outside the workspace — a read tool
+	// (read, view_image, grep, find, ls) or a bash command's file operands on the
+	// read side, apply_patch on the write side. The workspace is the directory
+	// the user opened, so this asks for consent rather than a risk verdict; the
+	// answers are "just this one" (ReadGrant / WriteGrant) and "this directory
+	// for the session" (ReadRoot / WriteRoot, see BoundaryWrite). It is the one
+	// question no approval mode waives, including full-access.
 	ApprovalBoundary ApprovalKind = "boundary"
 )
 
@@ -332,8 +335,9 @@ type ApprovalRequest struct {
 	// only for ApprovalBoundary.
 	BoundaryWrite bool
 	// ReadRoot is the path a re-admission question can bring back inside the
-	// sandbox, for reading. Set only for ApprovalReAdmit; empty means there is
-	// no path to offer and the caller keeps its refusal.
+	// sandbox, for reading or for reading and writing (see NeedsWrite). Set only
+	// for ApprovalReAdmit; empty means there is no path to offer and the caller
+	// keeps its refusal.
 	ReadRoot string
 	// NeedsWrite reports that the blocked path is needed for writing, so the
 	// dialog says so in its title and leads with the row that grants both (a
@@ -407,7 +411,8 @@ type ApprovalAnswer struct {
 type NoteKind int
 
 const (
-	// NoteApproved: auto mode approved a Confirm-tier call (runs directly).
+	// NoteApproved: a call the gate allowed to run directly — auto's Confirm
+	// grade, or a user's yes under ask.
 	NoteApproved NoteKind = iota
 	// NoteSandboxed: a Sandbox-tier call runs isolated.
 	NoteSandboxed

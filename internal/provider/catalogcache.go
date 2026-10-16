@@ -1,7 +1,7 @@
 // This file holds the shared disk-cache plumbing for the two model catalogs
 // golder keeps under the golder home directory:
 //
-//   - the models.dev reasoning ladder catalog (reasoning_catalog.go)
+//   - the models.dev reasoning ladder catalog (reasoning.go)
 //   - the provider model list (modelcatalog.go)
 //
 // Both are JSON files written opportunistically and read best-effort: a
