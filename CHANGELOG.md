@@ -873,7 +873,11 @@ interactive REPL/TUI.
   registered in the same table the gates and the sandbox read, so the call runs
   contained and every later call sees the grant too. The question is asked once
   per path per run, so a retry cannot turn a refusal into a nag; a refusal keeps
-  the message that names the smaller fix.
+  the message that names the smaller fix. The offer covers both shapes of
+  refusal: a call the reviewer graded containable (which would otherwise run
+  contained and fail on the very path) and one it left uncontainable (which would
+  otherwise just stop). A "no" records no denial, because nothing was denied —
+  the call is contained when containment is possible, refused otherwise.
 - **A refused escape now names the smaller fix**: under auto, an escape request
   the reviewer did not authorize was refused with "make the command work inside
   the sandbox, or switch to ask" — which never said what usually unblocks it:

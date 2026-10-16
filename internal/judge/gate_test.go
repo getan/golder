@@ -389,11 +389,12 @@ func escalationGateOpts(rec *noteRecorder) GateOpts {
 	}
 }
 
-// TestPermissionGateEscalationAutoContainsWithoutAsking locks the mode rule: an
-// escape request is settled by review under auto. The reviewer graded the call
-// sandbox-tier, so it runs contained and no dialog opens — interrupting the
-// person here would break the one promise auto makes.
-func TestPermissionGateEscalationAutoContainsWithoutAsking(t *testing.T) {
+// TestPermissionGateEscalationAutoContainsWithNothingToOffer locks the mode
+// rule: an escape request is settled by review under auto. The reviewer graded
+// the call sandbox-tier, so it runs contained — and with no path to re-admit
+// there is nothing to ask about, so no dialog opens. Interrupting the person
+// with no answer to offer would break the one promise auto makes.
+func TestPermissionGateEscalationAutoContainsWithNothingToOffer(t *testing.T) {
 	rec := &noteRecorder{}
 	asked := false
 	opts := escalationGateOpts(rec)
@@ -402,18 +403,81 @@ func TestPermissionGateEscalationAutoContainsWithoutAsking(t *testing.T) {
 		return ApprovalAnswer{Approve: true, Answered: true}
 	}
 	gate := PermissionGate(permissions.New(permissions.Auto), opts)
-	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	// No path in the command or the justification: nothing to re-admit.
+	dec := gate(context.Background(), toolCall("bash", `{"command":"true","sandbox_permissions":"require_escalated","justification":"please"}`))
 	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
 		t.Fatalf("auto must contain an escape request, got %+v", dec)
 	}
 	if asked {
-		t.Error("auto mode must not open a dialog for an escape request")
+		t.Error("auto mode must not open a dialog when there is no path to offer")
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed || rec.notes[0].Mode != "auto" {
 		t.Fatalf("notes = %+v, want one NoteSandboxed stamped with the mode", rec.notes)
 	}
 	if !strings.Contains(rec.notes[0].Rationale, "containable") {
 		t.Errorf("rationale = %q, want it to say the escape was declined", rec.notes[0].Rationale)
+	}
+}
+
+// TestPermissionGateEscalationAutoReAdmitsWhenContained: a contained call that
+// asked to leave the sandbox for a path will fail on that very path, so the
+// person is still offered it back — and a "no" changes nothing about auto's
+// default: the call runs contained, with one note and no "denied by the user",
+// because nothing was denied.
+func TestPermissionGateEscalationAutoReAdmitsWhenContained(t *testing.T) {
+	grantstest.Install(t)
+
+	// A yes: the path is re-admitted inside the sandbox and the call runs there.
+	rec := &noteRecorder{}
+	var gotReq ApprovalRequest
+	opts := escalationGateOpts(rec) // grades Sandbox: containable
+	opts.Cwd = t.TempDir()
+	opts.Confirm = func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+		gotReq = req
+		return ApprovalAnswer{Approve: true, Answered: true, ReadRoot: req.ReadRoot}
+	}
+	gate := PermissionGate(permissions.New(permissions.Auto), opts)
+	dec := gate(context.Background(), toolCall("bash", escalationArgs))
+	if dec == nil || dec.Block || !dec.Sandbox || dec.Direct {
+		t.Fatalf("a re-admitted path must run the call contained, got %+v", dec)
+	}
+	if gotReq.Kind != ApprovalReAdmit || gotReq.ReadRoot == "" {
+		t.Fatalf("request = %+v, want the re-admission question for a named path", gotReq)
+	}
+	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed {
+		t.Fatalf("notes = %+v, want exactly one containment note", rec.notes)
+	}
+	if !strings.Contains(rec.notes[0].Rationale, "readable") {
+		t.Errorf("rationale = %q, want the re-admitted path named", rec.notes[0].Rationale)
+	}
+	found := false
+	for _, root := range grants.ReadRoots() {
+		if root == gotReq.ReadRoot {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("read roots = %v, want the re-admitted path in the table the sandbox reads", grants.ReadRoots())
+	}
+
+	// A no: containment stands, once asked, with no denial recorded.
+	rec2 := &noteRecorder{}
+	asked := 0
+	opts2 := escalationGateOpts(rec2)
+	opts2.Cwd = t.TempDir()
+	opts2.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
+		asked++
+		return ApprovalAnswer{Answered: true}
+	}
+	gate2 := PermissionGate(permissions.New(permissions.Auto), opts2)
+	if dec := gate2(context.Background(), toolCall("bash", escalationArgs)); dec == nil || dec.Block || !dec.Sandbox {
+		t.Fatalf("a refused re-admission must leave containment in place, got %+v", dec)
+	}
+	if asked != 1 {
+		t.Errorf("asked = %d, want one question", asked)
+	}
+	if len(rec2.notes) != 1 || rec2.notes[0].Kind != NoteSandboxed {
+		t.Fatalf("notes = %+v, want one containment note and no denial", rec2.notes)
 	}
 }
 
