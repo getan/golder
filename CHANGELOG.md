@@ -12,6 +12,26 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A gateway can serve more than one wire, and opencode-go's Messages endpoint
+  is now reachable**: `ProviderSpec.WireVariants` lets a registry entry declare
+  the extra protocols a gateway is known to serve, each with the auth scheme that
+  wire takes. An explicit `--protocol` naming one resolves to that wire's driver
+  under the provider's own name — so per-provider request decoration (the
+  opencode routing header) still applies — while the registered protocol stays
+  the default and nothing changes for a user who does not ask.
+  `opencode-go` declares `anthropic` (x-api-key, probed), so
+  `--provider opencode-go --protocol anthropic --model claude-haiku-5-5` runs
+  over its `/messages` endpoint; the conflict error now lists every value the
+  provider accepts instead of only its default.
+- **Thinking control follows the model's advertised shape**: models.dev (the same
+  catalog and 24h cache the context windows come from) publishes each model's
+  `reasoning_options`, and golder reads them now. A model whose control is an
+  effort ladder takes the adaptive body — `thinking: {"type":"adaptive"}` plus
+  `output_config.effort`, the requested level clamped into that model's own
+  ladder (claude-haiku-5-5 rejects `minimal`, and the legacy token-budget block
+  outright) — while a model that still advertises a budget keeps the
+  byte-for-byte body golder has always sent, and a model the catalog does not
+  cover is never guessed at.
 - **A local rule table decides the routine shell commands without a model**:
   the reviewer is a model call — ~2.2s per gated call without the decision model
   — and a session pays it for `ls`, `grep`, `git status` and `go test` as surely
@@ -843,6 +863,26 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Resuming a session no longer moves the process onto the session's recorded
+  model**: `/resume` adopted the target header's `Provider`/`Model` — re-resolving
+  the driver, clearing `--base-url`/`--protocol` — so switching into a
+  conversation started on another gateway silently changed what every later turn
+  ran on, and cost. It also made the two ways to resume disagree: launching with
+  `--resume` / `-c` / `golder session resume <id>` seeds the run configuration
+  from the CLI/config and had always ignored the record. Both now keep the live
+  configuration; a session's recorded `Model`/`Provider` are its history, shown
+  in the `/resume` list and in exports, and a user who wants them says so with
+  `/model` or `/provider`, here or at launch. Replay is unaffected either way:
+  the history is re-encoded for whichever wire is in use, the same path a
+  mid-session `/model` switch already takes.
+- **The status bar's first block is the provider, not the app badge**: the
+  left-most block said `golder` — a word already on every line of the transcript
+  — while the fact the bar could not express was which gateway the conversation
+  is talking to, since a model id does not name its gateway. The block now shows
+  the provider, live state like the model, so `/provider`, `/model` and the
+  `/resume` that adopts another conversation's history all move it. An unknown
+  provider renders no block rather than a placeholder, and the provider rides
+  the model's truncation tier, so a narrow terminal keeps them together.
 - **Auto-compaction fires earlier and keeps more**: two defaults were wrong for
   the way a session actually grows. The trigger sat at 90% of the window (a 10%
   headroom), which left 20k tokens on a 200k model for the *next* turn — and a
@@ -1236,6 +1276,47 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A thinking request a gateway refuses is re-issued in the shape it named**:
+  the provider catalog is fetched in the background, so a one-shot run
+  (`golder -p`) may never have it — and a model newer than the cache then got
+  the legacy token-budget body, which the Messages API rejects outright
+  ("thinking.type.enabled is not supported for this model ... use
+  thinking.type.adaptive", reproduced live against opencode-go). A 400 whose
+  message names the adaptive form now corrects the body and re-issues the
+  request once, and the verdict is remembered for the rest of the process, so
+  the failure costs one extra request instead of the turn. Unrelated 400s are
+  not retried: the correction is anchored on the shape the error names.
+- **Reasoning from another provider is no longer replayed onto the Messages
+  wire**: the Anthropic encoder echoed every stored thinking block, signature or
+  not, so a conversation carried over from another gateway (`/model`,
+  `/provider`, or a resume) sent that model's reasoning as a signature-less
+  `thinking` block — which the API refuses outright ("messages.1.content.0.
+  thinking.signature: Field required", reproduced live against opencode-go's
+  Messages endpoint with Claude Haiku 5.5). A block is now replayed only when
+  golder holds the evidence that it came from this wire — the signature the
+  Anthropic decoder fills (or a redacted block's data) — and only when the
+  request turns thinking on; anything else is dropped while the text and the
+  call/result pairing ride as before. The reverse directions were already
+  covered and are now pinned by tests: the Responses input builder and the Chat
+  Completions encoder take text and calls only, and the Responses reasoning
+  items stay gated to the model that produced them.
+- **The Messages driver now sends opencode's routing header**: `opencode-go`
+  refuses a `/messages` request without `x-opencode-session` (400
+  MissingSessionID: "cannot be routed efficiently"), the header the chat and
+  Responses drivers already attached. The Anthropic-wire driver attaches it for
+  `opencode`-named providers too, so those gateways' Messages models are
+  reachable.
+- **`/resume` leaves the bar and the banner describing the conversation in the
+  pane**: the status bar and the redrawn splash panel printed the launch
+  provider and model after a session switch, so `/status` (which reads the live
+  config) disagreed with both. `/resume` is intercepted before the generic slash
+  path that re-synced the bar, and the banner was rendered from the launch
+  Options. Both now read the live config: the bar through one helper
+  (`syncLiveDisplay`) that `/model`, `/provider`, `/resume`, `/clone`, `/fork`,
+  `/import`, a branch switch, `/rewind` and the first frame all go through, and
+  the banner through `bannerOptions`, which layers the live provider, model,
+  protocol and thinking level over the launch snapshot. Every surface that shows
+  the provider/model now shows the same one.
 - **A Responses tool step is replayed in one shape for every backend**: the
   replay used to special-case OpenCode Go's DeepSeek models, and it did so
   wrongly — it inserted a reasoning item directly before *each* replayed

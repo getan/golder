@@ -93,6 +93,49 @@ func TestChatDriverOpencodeSessionHeader(t *testing.T) {
 	}
 }
 
+// TestAnthropicDriverOpencodeSessionHeader: the Anthropic-wire driver attaches
+// the same sticky-routing header the chat and Responses drivers do. opencode's
+// Messages endpoint refuses a request without it (400 MissingSessionID), which
+// the live probe against opencode-go reproduced before this was wired.
+func TestAnthropicDriverOpencodeSessionHeader(t *testing.T) {
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get(OpencodeSessionHeader)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(anthropicToolUseSSE))
+	}))
+	defer srv.Close()
+
+	mk := func(name string) Provider {
+		return NewAnthropicProtocolProvider(name, srv.URL, AuthXAPIKey, []Model{{Provider: name, ID: "m"}})
+	}
+	req := func() CompletionRequest {
+		return CompletionRequest{Model: "m", Config: StreamConfig{APIKey: "k", Extra: map[string]any{ExtraSessionID: "sess-7"}}}
+	}
+
+	stream, err := mk("opencode-go").StreamCompletion(context.Background(), req())
+	if err != nil {
+		t.Fatalf("opencode-go stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	if gotHeader != "sess-7" {
+		t.Errorf("opencode-go Messages header = %q, want sess-7", gotHeader)
+	}
+
+	// Other providers never send it.
+	gotHeader = "unset"
+	stream, err = mk("anthropic").StreamCompletion(context.Background(), req())
+	if err != nil {
+		t.Fatalf("anthropic stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	if gotHeader != "" {
+		t.Errorf("anthropic header = %q, want empty", gotHeader)
+	}
+}
+
 func TestResponsesDriverOpencodeSessionHeader(t *testing.T) {
 	var gotHeader string
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {

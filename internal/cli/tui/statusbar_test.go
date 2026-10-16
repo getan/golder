@@ -17,7 +17,7 @@ import (
 // newTestStatusBar builds a status bar with a known cwd (already ~-abbreviated
 // by the caller's intent) so tests do not depend on the real $HOME.
 func newTestStatusBar() statusBar {
-	opts := Options{Model: "claude-opus", ThinkingLevel: agentcore.ThinkingHigh}
+	opts := Options{Model: "claude-opus", ProviderName: "openai", ThinkingLevel: agentcore.ThinkingHigh}
 	s := newStatusBar(DefaultTheme(), opts, "/tmp/project")
 	s.cwd = "~/project"
 	return s
@@ -33,7 +33,7 @@ func TestStatusBarRendersAllFields(t *testing.T) {
 	out := s.Render(width)
 
 	for _, want := range []string{
-		"golder",         // app badge
+		"openai",         // provider
 		"claude-opus",    // model
 		"high",           // thinking level
 		"~/project",      // cwd
@@ -50,6 +50,49 @@ func TestStatusBarRendersAllFields(t *testing.T) {
 
 	if w := ui.Width(out); w > width {
 		t.Errorf("render width %d exceeds terminal width %d", w, width)
+	}
+}
+
+// TestStatusBarProviderLeadsTheBar pins the left-most block: it holds the
+// provider name, and the retired app badge ("golder") is gone — the word is on
+// every line of the transcript already, while the gateway a conversation talks
+// to was the one fact the bar could not express. An unknown provider renders no
+// block at all rather than a placeholder.
+func TestStatusBarProviderLeadsTheBar(t *testing.T) {
+	s := newTestStatusBar()
+	segs := s.segments()
+	if len(segs) == 0 || segs[0].text != "openai" {
+		t.Fatalf("leading segment = %+v, want the provider block", segs)
+	}
+	if out := stripANSI(s.Render(120)); strings.Contains(out, "golder") {
+		t.Errorf("the app badge is retired; the leading block belongs to the provider: %q", out)
+	}
+
+	s.SetProvider("")
+	if segs := s.segments(); len(segs) > 0 && (segs[0].text == "openai" || segs[0].text == "golder") {
+		t.Errorf("unknown provider should add no block, got leading %+v", segs[0])
+	}
+}
+
+// TestSyncLiveDisplayPublishesLiveConfig exercises the helper every live-state
+// command ends with, independently of the command that moved the config: what
+// the bar shows must be live's provider/model/thinking, not the launch snapshot
+// it was constructed with.
+func TestSyncLiveDisplayPublishesLiveConfig(t *testing.T) {
+	m := NewModel(Options{Model: "launch-model", ProviderName: "launch-provider"})
+	if m.statusBar.provider != "launch-provider" || m.statusBar.model != "launch-model" {
+		t.Fatalf("initial bar = (%q, %q), want the launch config", m.statusBar.provider, m.statusBar.model)
+	}
+	m.live.ProviderName = "openai"
+	m.live.Model = "gpt-4o"
+	m.live.ThinkingLevel = agentcore.ThinkingLow
+	m.syncLiveDisplay()
+
+	if m.statusBar.provider != "openai" || m.statusBar.model != "gpt-4o" {
+		t.Errorf("bar = (%q, %q), want the live (openai, gpt-4o)", m.statusBar.provider, m.statusBar.model)
+	}
+	if m.statusBar.thinking != "low" {
+		t.Errorf("thinking = %q, want the live level", m.statusBar.thinking)
 	}
 }
 
@@ -173,6 +216,7 @@ func TestStatusBarGitTextFormatting(t *testing.T) {
 // seven blocks (or all seven colored fields in plain mode).
 func barFixture() statusBar {
 	s := newStatusBar(DefaultTheme(), Options{}, "/home/u/work/golder")
+	s.SetProvider("openai")
 	s.SetModel("sonnet-4")
 	s.SetThinking("medium")
 	s.SetTelemetry(telemetryEventView{util: 0.42, window: 200000, tokens: 84000})
@@ -212,7 +256,7 @@ func TestStatusBarPlainModeAt16Colors(t *testing.T) {
 		t.Errorf("plain bar must not paint backgrounds:\n%q", out)
 	}
 	// Each field is present...
-	for _, want := range []string{"golder", "sonnet-4", "medium", "/home/u/work/golder", "84,000"} {
+	for _, want := range []string{"openai", "sonnet-4", "medium", "/home/u/work/golder", "84,000"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plain bar is missing %q:\n%q", want, out)
 		}

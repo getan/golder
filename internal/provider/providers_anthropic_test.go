@@ -174,7 +174,7 @@ func TestEncodeAnthropicRequestIncludesModel(t *testing.T) {
 	req := CompletionRequest{
 		Model: "claude-opus-4-8",
 	}
-	body, err := encodeAnthropicRequest(req, nil)
+	body, err := encodeAnthropicRequest("", req, nil)
 	if err != nil {
 		t.Fatalf("encodeAnthropicRequest: %v", err)
 	}

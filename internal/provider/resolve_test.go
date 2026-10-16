@@ -7,10 +7,104 @@ package provider
 // via os.Getenv here.
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/agentcore"
 )
+
+// TestResolveNamedProviderWireVariant pins option (a) end to end: a gateway that
+// declares an extra wire (ProviderSpec.WireVariants) resolves an explicit
+// --protocol naming it to that wire's driver, under the provider's own name and
+// with the wire's declared auth scheme — so the opencode routing header still
+// rides — and the catalog still decides the body's thinking shape. An undeclared
+// protocol remains a conflict, with an error that names what the provider does
+// accept.
+func TestResolveNamedProviderWireVariant(t *testing.T) {
+	var (
+		gotKey, gotVersion, gotSession string
+		gotBody                        []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		gotSession = r.Header.Get(OpencodeSessionHeader)
+		gotBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(anthropicToolUseSSE))
+	}))
+	defer srv.Close()
+
+	// claude-haiku-5-5 is effort-shaped in models.dev: the body must come out
+	// adaptive, not as the legacy token-budget block this gateway rejects.
+	setReasoningCatalogForTest(t, map[string]map[string]reasoningEntry{
+		"opencode-go": {"claude-haiku-5-5": {
+			Reasoning: true,
+			Options:   []string{"toggle", "effort"},
+			Levels:    []string{"low", "medium", "high", "xhigh", "max"},
+		}},
+	})
+
+	p, name, err := ResolveNamedProvider("opencode-go", "claude-haiku-5-5", srv.URL, "anthropic", os.Getenv)
+	if err != nil {
+		t.Fatalf("ResolveNamedProvider: %v", err)
+	}
+	if name != "opencode-go" {
+		t.Errorf("provider name = %q, want opencode-go (the spec name, so decoration applies)", name)
+	}
+	if _, ok := p.(*anthropicCompatDriver); !ok {
+		t.Fatalf("driver = %T, want *anthropicCompatDriver (the Messages wire)", p)
+	}
+
+	stream, err := p.StreamCompletion(context.Background(), CompletionRequest{
+		Model: "claude-haiku-5-5",
+		Context: LlmContext{Messages: agentcore.MessageList{
+			agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+		}},
+		Config: StreamConfig{APIKey: "k", ThinkingLevel: agentcore.ThinkingHigh, Extra: map[string]any{ExtraSessionID: "sess-v"}},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+	for range stream.Events() {
+	}
+
+	if gotKey != "k" {
+		t.Errorf("x-api-key = %q, want the declared variant scheme to attach it", gotKey)
+	}
+	if gotVersion == "" {
+		t.Error("anthropic-version header missing on the Messages variant")
+	}
+	if gotSession != "sess-v" {
+		t.Errorf("session header = %q, want sess-v (opencode routing rides the provider name)", gotSession)
+	}
+	body := decodeBody(t, gotBody)
+	th, ok := body["thinking"].(map[string]any)
+	if !ok || th["type"] != "adaptive" {
+		t.Errorf("thinking = %#v, want the adaptive switch the catalog's effort shape selects", body["thinking"])
+	}
+	if oc, ok := body["output_config"].(map[string]any); !ok || oc["effort"] != "high" {
+		t.Errorf("output_config = %#v, want effort high", body["output_config"])
+	}
+
+	// An undeclared protocol is still a conflict, and the message names what the
+	// provider does accept. (The openai spec registers the Chat Completions wire
+	// and has no Messages variant.)
+	_, _, err = ResolveNamedProvider("openai", "gpt-6-astra", "", "anthropic", os.Getenv)
+	if err == nil {
+		t.Fatal("undeclared protocol should conflict")
+	}
+	for _, want := range []string{`"openai"`, `"openai/resp_api"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("conflict error = %q, want it to name %s", err, want)
+		}
+	}
+}
 
 // TestResolveProviderPrefixAndNamespacedIDs verifies prefixed ids resolve to
 // their own gateway while an unknown namespaced id falls through to the
@@ -468,9 +562,14 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if _, ok := p.(*openAICompatDriver); !ok {
 		t.Errorf("explicit openai = %T, want *openAICompatDriver", p)
 	}
-	// Incompatible explicit protocol still errors.
-	if _, _, err = ResolveNamedProvider("opencode-go", "gpt-4o", "", "anthropic", os.Getenv); err == nil {
-		t.Error("anthropic protocol on opencode-go should error")
+	// The Messages wire this gateway declares is selectable (see
+	// TestResolveNamedProviderWireVariant for the request-level detail).
+	p, _, err = ResolveNamedProvider("opencode-go", "claude-haiku-5-5", "", "anthropic", os.Getenv)
+	if err != nil {
+		t.Fatalf("declared anthropic variant error: %v", err)
+	}
+	if _, ok := p.(*anthropicCompatDriver); !ok {
+		t.Errorf("explicit anthropic on opencode-go = %T, want *anthropicCompatDriver", p)
 	}
 	// Anthropic-wired providers never take the heuristic path.
 	if _, name, err := ResolveNamedProvider("anthropic", "claude-opus-4-8", "", "", os.Getenv); err != nil || name != "anthropic" {

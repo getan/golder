@@ -84,6 +84,14 @@ type TransportConfig struct {
 	NewRequest func(ctx context.Context) (*http.Request, error)
 	// Decoder converts SSE payloads to StreamEvents (required).
 	Decoder Decoder
+	// RetryBody, when non-nil, is consulted once for a 4xx rejection with the
+	// upstream status and response body: returning true re-issues the request,
+	// which the caller has corrected (its NewRequest closure reads whatever body
+	// it now points at). It exists for a model newer than the provider catalog:
+	// the gateway answers 400 naming the body shape it accepts, and one
+	// re-issued request is cheaper than a failed turn — and than blocking a run
+	// on a catalog fetch.
+	RetryBody func(status int, body []byte) bool
 	// MaxConnectRetries bounds connect-only retries (default 2).
 	MaxConnectRetries int
 }
@@ -110,7 +118,7 @@ func StreamRequest(ctx context.Context, cfg TransportConfig) (*AssistantMessageE
 
 	// Connect once up front so a "cannot even build the stream" failure surfaces
 	// as a returned error (the only early-error case per FR-13).
-	resp, err := connect(ctx, client, cfg.NewRequest, maxRetries)
+	resp, err := connect(ctx, client, cfg.NewRequest, maxRetries, cfg.RetryBody)
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +131,11 @@ func StreamRequest(ctx context.Context, cfg TransportConfig) (*AssistantMessageE
 // connect performs the initial connection with retry. It only retries when the
 // server explicitly signals a retryable condition (429/503/529); it never
 // replays a consumed stream, so retrying at connect time is always safe.
-func connect(ctx context.Context, client *http.Client, newReq func(context.Context) (*http.Request, error), maxRetries int) (*http.Response, error) {
+func connect(ctx context.Context, client *http.Client, newReq func(context.Context) (*http.Request, error), maxRetries int, retryBody func(status int, body []byte) bool) (*http.Response, error) {
 	var lastErr error
+	// retried guards the body correction below to a single re-issue per stream:
+	// the loop's attempt budget is for transport conditions.
+	var retried bool
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		req, err := newReq(ctx)
 		if err != nil {
@@ -158,6 +169,11 @@ func connect(ctx context.Context, client *http.Client, newReq func(context.Conte
 		if resp.StatusCode >= 400 {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 			resp.Body.Close()
+			if !retried && attempt < maxRetries && retryBody != nil && retryBody(resp.StatusCode, body) {
+				retried = true
+				lastErr = fmt.Errorf("transport: upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+				continue
+			}
 			return nil, fmt.Errorf("transport: upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 		return resp, nil

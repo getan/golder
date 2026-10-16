@@ -3,16 +3,14 @@ package repl
 import (
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
-	"github.com/getan/golder/internal/provider"
 )
 
 // runResume implements /resume: it swaps the active REPL session without
 // leaving the program, mirroring the TUI's runSession.switchTo (persist
-// current, load target, live model/provider follow the stored header). A bare
+// current, load target, keep serving with the live run configuration). A bare
 // /resume lists the current project's recent sessions; a 1-based number selects
 // one, --all widens the list to every project, and a literal id always resolves
 // globally.
@@ -73,22 +71,11 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	// The guide and environment are rebuilt from this binary; the incoming
 	// session's own user-authored inputs are carried over.
 	sysPrompt := cli.ResumeSystemPrompt(h, deps.prompt)
-	if h.Provider != "" && h.Provider != deps.live.ProviderName {
-		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
-		if err != nil {
-			fmt.Fprintf(out, "resume: resolve session provider: %v\n", err)
-			return
-		}
-		deps.live.Provider = prov
-		deps.live.ProviderName = name
-		deps.live.BaseURL = ""
-		deps.live.Protocol = ""
-	}
-	if h.Model != "" {
-		deps.live.Model = h.Model
-	}
-	// The resumed session may run a different model than the launch one;
-	// re-resolve the context budget so the gauge and auto-compaction follow.
+	// The live run configuration stays with this process, exactly as it does for
+	// a launch on this session (see the TUI's switchTo): the session's recorded
+	// Model/Provider are its history, listed above, not a configuration to adopt.
+	// Re-resolving the context budget keeps the gauge and auto-compaction honest
+	// about the model actually in use.
 	deps.live.RefreshContextWindow()
 	deps.header = h
 	deps.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: deps.agentCtx.Tools}

@@ -64,8 +64,10 @@ type SessionHeader struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// UpdatedAt is when the session was last appended to.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// Model / Provider record what the session ran against, for display and to
-	// re-establish the run configuration on resume. Optional.
+	// Model / Provider record what the session ran against, for display (the
+	// /resume list, exports, /status's session section). They are history, not a
+	// configuration: resuming a session serves it with the live provider/model of
+	// the process doing the resuming, exactly as a launch does. Optional.
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	// SystemPrompt is the system prompt the session ran under. Persisted so the

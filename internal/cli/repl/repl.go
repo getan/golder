@@ -497,7 +497,7 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 		}
 		if line == "/resume" || strings.HasPrefix(line, "/resume ") {
 			// /resume swaps the active session without leaving the REPL
-			// (persist current, load target, live follows the stored header).
+			// (persist current, load target, keep serving with the live config).
 			// The exact-or-space-prefix guard keeps "/resumed" from matching.
 			runResume(out, &deps, strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
 			continue

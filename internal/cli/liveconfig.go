@@ -75,8 +75,9 @@ func ResolveContextWindow(providerName, model string) int {
 }
 
 // RefreshContextWindow re-resolves ContextWindow from the current provider and
-// model. Call it after a /model or /provider switch, and after /resume applies
-// a session header, so the status-bar percentage and the auto-compaction
+// model. Call it after a /model or /provider switch, and after a /resume adopts
+// another session (which changes the context being described even when the
+// model does not), so the status-bar percentage and the auto-compaction
 // threshold track the model actually in use instead of the launch model.
 func (l *LiveConfig) RefreshContextWindow() {
 	l.ContextWindow = ResolveContextWindow(l.ProviderName, l.Model)

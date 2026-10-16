@@ -77,7 +77,7 @@ func TestEncodeOpenAIMessageNoImageIsString(t *testing.T) {
 // encodes to the content-block array form with a base64 image source.
 func TestEncodeAnthropicMessageImageBlock(t *testing.T) {
 	msg := imageUserMessage("describe", "REVG", "image/jpeg")
-	entry := encodeAnthropicMessage(msg)
+	entry := encodeAnthropicMessage(msg, true)
 	if entry["role"] != "user" {
 		t.Errorf("role = %v, want user", entry["role"])
 	}
@@ -110,7 +110,7 @@ func TestEncodeAnthropicMessageNoImageIsString(t *testing.T) {
 		RoleField: agentcore.RoleUser,
 		Content:   agentcore.ContentList{agentcore.NewTextContent("hi")},
 	}
-	entry := encodeAnthropicMessage(msg)
+	entry := encodeAnthropicMessage(msg, true)
 	if s, ok := entry["content"].(string); !ok || s != "hi" {
 		t.Errorf("content = %#v, want string \"hi\"", entry["content"])
 	}
@@ -123,7 +123,7 @@ func TestImageBlocksAreJSONSerializable(t *testing.T) {
 	if _, err := json.Marshal(encodeOpenAIMessage(msg)); err != nil {
 		t.Errorf("marshal openai image message: %v", err)
 	}
-	if _, err := json.Marshal(encodeAnthropicMessage(msg)); err != nil {
+	if _, err := json.Marshal(encodeAnthropicMessage(msg, true)); err != nil {
 		t.Errorf("marshal anthropic image message: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestEncodeOpenAIMessageToolResultImageDegrades(t *testing.T) {
 // TestEncodeAnthropicToolResultImage asserts the Messages API tool_result
 // carries the image as a content block.
 func TestEncodeAnthropicToolResultImage(t *testing.T) {
-	entry := encodeAnthropicMessage(imageToolResult("Viewed image", "REVG", "image/jpeg"))
+	entry := encodeAnthropicMessage(imageToolResult("Viewed image", "REVG", "image/jpeg"), true)
 	blocks, ok := entry["content"].([]map[string]any)
 	if !ok || len(blocks) != 1 {
 		t.Fatalf("content = %#v, want one tool_result block", entry["content"])
@@ -189,7 +189,7 @@ func TestAnthropicToolResultTextOnlyStaysString(t *testing.T) {
 	entry := encodeAnthropicMessage(agentcore.ToolResultMessage{
 		RoleField: agentcore.RoleToolResult, ToolCallID: "call_1", ToolName: "bash",
 		Content: agentcore.ContentList{agentcore.NewTextContent("ok")},
-	})
+	}, true)
 	blocks := entry["content"].([]map[string]any)
 	if s, ok := blocks[0]["content"].(string); !ok || s != "ok" {
 		t.Fatalf("tool_result content = %#v, want string \"ok\"", blocks[0]["content"])

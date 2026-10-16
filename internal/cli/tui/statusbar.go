@@ -12,8 +12,9 @@ import (
 )
 
 // statusBar renders the persistent bottom line described in the SPEC (US-003,
-// Section 5.1): model name, thinking level, cwd (with $HOME abbreviated to ~),
-// git branch + dirty/ahead markers, context-usage %, and the current task text.
+// Section 5.1): the provider (the block the app badge used to hold), model name,
+// thinking level, cwd (with $HOME abbreviated to ~), git branch + dirty/ahead
+// markers, context-usage %, and the current task text.
 // It holds no styling of its own beyond the Theme's StatusBar style; all width
 // fitting is done against ui.Width so CJK/emoji count as two columns.
 //
@@ -23,6 +24,15 @@ import (
 // gitinfo.go and feeds it via SetGit.
 type statusBar struct {
 	theme Theme
+
+	// provider / model / thinking are the live run configuration, re-read from
+	// cli.LiveConfig through the setters whenever a command moves it (/model,
+	// /provider, and the /resume that adopts another session's configuration).
+	// provider fills the left-most block, where the app badge used to sit: which
+	// gateway the conversation is talking to is identity the rest of the bar
+	// cannot express — a model id does not name its gateway — while "golder" was
+	// already on every line of the transcript.
+	provider string
 
 	// Static-ish config sourced from Options.
 	model    string
@@ -62,6 +72,7 @@ type statusBar struct {
 func newStatusBar(theme Theme, opts Options, cwd string) statusBar {
 	return statusBar{
 		theme:      theme,
+		provider:   opts.ProviderName,
 		model:      opts.Model,
 		thinking:   string(opts.ThinkingLevel),
 		cwd:        abbreviateHome(cwd),
@@ -82,6 +93,12 @@ func (s *statusBar) SetGit(g gitInfoMsg) { s.git = g }
 func (s *statusBar) SetColorProfile(p colorprofile.Profile) {
 	s.plain = p < colorprofile.ANSI256
 }
+
+// SetProvider updates the displayed provider (gateway) name. The value is live
+// state like the model: /provider, /model and a /resume that adopted another
+// session's configuration all move it. An empty name hides the segment rather
+// than printing a guess.
+func (s *statusBar) SetProvider(provider string) { s.provider = provider }
 
 // SetModel updates the displayed model name after a /model switch.
 func (s *statusBar) SetModel(model string) { s.model = model }
@@ -124,9 +141,6 @@ type telemetryEventView struct {
 	tokens int
 }
 
-// appName is the badge shown at the far left of the bar.
-const appName = "golder"
-
 // Glyphs prefixing each segment plus the powerline separator, matching the
 // decorated Claude-Code-plugin look. The segment icons are common Unicode; the
 // separator (sepArrow) is a powerline glyph in the private-use area that Nerd
@@ -152,8 +166,8 @@ const (
 const (
 	sbBarBg = "236" // bar background behind the trailing pad
 
-	sbAppFg = "233" // app badge text (dark, on light gray)
-	sbAppBg = "252" // app badge block (light gray)
+	sbProvFg = "233" // provider text (dark, on light gray)
+	sbProvBg = "252" // provider block (light gray)
 
 	sbGitFg = "231" // git text
 	sbGitBg = "65"  // git block (muted green)
@@ -178,7 +192,7 @@ const (
 	// fields stay distinguishable by color alone when the blocks are gone. They
 	// are picked to differ in hue rather than in brightness, since the terminal's
 	// theme decides how light each one is.
-	sbPlainApp   = "15" // bright white
+	sbPlainProv  = "15" // bright white
 	sbPlainGit   = "10" // bright green
 	sbPlainModel = "13" // bright magenta
 	sbPlainThink = "12" // bright blue
@@ -211,12 +225,12 @@ type segment struct {
 // Priority order (SPEC: task > model/app > token > git > cwd). Higher is more
 // important and dropped/truncated last.
 const (
-	prioCwd   = 0
-	prioGit   = 1
-	prioToken = 2
-	prioModel = 3
-	prioApp   = 3 // the app badge rides at the model tier
-	prioTask  = 4
+	prioCwd      = 0
+	prioGit      = 1
+	prioToken    = 2
+	prioModel    = 3
+	prioProvider = 3 // the provider rides at the model tier
+	prioTask     = 4
 )
 
 // Render lays the bar out to exactly the configured width, in one of two forms.
@@ -254,7 +268,7 @@ func (s statusBar) Render(width int) string {
 	// Even a single highest-priority segment overflows: hard-truncate its text
 	// onto the bar background (no separators, so width stays bounded).
 	txt := TruncateToWidth(s.highestText(), width)
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color(sbAppFg)).Background(lipgloss.Color(sbBarBg))
+	base := lipgloss.NewStyle().Foreground(lipgloss.Color(sbProvFg)).Background(lipgloss.Color(sbBarBg))
 	return base.Render(txt) + barPad(width-ui.Width(txt))
 }
 
@@ -360,8 +374,13 @@ func barPad(n int) string {
 func (s statusBar) segments() []segment {
 	var segs []segment
 
-	// App badge leads the bar as a filled block.
-	segs = append(segs, segment{text: appName, fg: sbAppFg, bg: sbAppBg, plainFg: sbPlainApp, priority: prioApp})
+	// The provider leads the bar as a filled block, in the slot the app badge
+	// used to hold. It is live state (the setters move it with the model), and it
+	// answers what the model segment cannot: which gateway this conversation is
+	// talking to. An unknown provider renders nothing rather than a placeholder.
+	if s.provider != "" {
+		segs = append(segs, segment{text: s.provider, fg: sbProvFg, bg: sbProvBg, plainFg: sbPlainProv, priority: prioProvider})
+	}
 
 	if s.git.ok {
 		segs = append(segs, segment{text: s.gitText(), fg: sbGitFg, bg: sbGitBg, plainFg: sbPlainGit, priority: prioGit})

@@ -384,8 +384,8 @@ func userMsg(text string) agentcore.Message {
 }
 
 // TestSwitchToSession verifies in-TUI session switching: the current session is
-// persisted first, the target loads with its history, and the live model
-// follows the stored header.
+// persisted first, the target loads with its history, and the live run
+// configuration stays with this process (see TestSwitchToKeepsLiveRunConfig).
 func TestSwitchToSession(t *testing.T) {
 	store := newTestStore(t)
 	idA := saveSessionWith(t, store, "model-a", "prov", nil)
@@ -408,8 +408,8 @@ func TestSwitchToSession(t *testing.T) {
 	if s.header.ID != idB {
 		t.Errorf("header.ID = %q, want %q", s.header.ID, idB)
 	}
-	if s.live.Model != "model-b" {
-		t.Errorf("live.Model = %q, want model-b", s.live.Model)
+	if s.live.Model != "model-a" {
+		t.Errorf("live.Model = %q, want it untouched at model-a (the record is history, not a configuration)", s.live.Model)
 	}
 	if s.persisted != 1 || s.curLeaf == "" {
 		t.Errorf("persisted = %d curLeaf = %q, want 1 and non-empty", s.persisted, s.curLeaf)
@@ -445,30 +445,48 @@ func TestSwitchToSession(t *testing.T) {
 	}
 }
 
-// TestSwitchToFollowsProvider verifies a provider change re-resolves the live
-// driver from the registry (no network), while the thinking level is kept.
-func TestSwitchToFollowsProvider(t *testing.T) {
+// TestSwitchToKeepsLiveRunConfig pins what /resume does NOT do: the target's
+// recorded provider/model are its history, not a configuration to adopt, so a
+// session switched mid-flight keeps serving with the live provider, model,
+// overrides and thinking level — exactly as a launch on the same session does.
+func TestSwitchToKeepsLiveRunConfig(t *testing.T) {
 	store := newTestStore(t)
-	idA := saveSessionWith(t, store, "model-a", "prov", nil)
+	idA := saveSessionWith(t, store, "model-a", "anthropic", nil)
 	idB := saveSessionWith(t, store, "gpt-4o", "openai", nil)
 
+	live := &cli.LiveConfig{
+		Model:         "model-a",
+		ProviderName:  "anthropic",
+		ThinkingLevel: "xhigh",
+		BaseURL:       "https://gateway.example/v1",
+		Protocol:      "openai",
+	}
 	s := &runSession{
 		store:    store,
-		header:   session.SessionHeader{ID: idA, Model: "model-a", Provider: "prov"},
+		header:   session.SessionHeader{ID: idA, Model: "model-a", Provider: "anthropic"},
 		agentCtx: &agentcore.AgentContext{},
-		live:     &cli.LiveConfig{Model: "model-a", ProviderName: "prov", ThinkingLevel: "xhigh"},
+		live:     live,
 	}
 	if _, err := s.switchTo(idB); err != nil {
 		t.Fatalf("switchTo: %v", err)
 	}
-	if s.live.ProviderName != "openai" || s.live.Model != "gpt-4o" {
-		t.Errorf("live = (%q, %q), want (openai, gpt-4o)", s.live.ProviderName, s.live.Model)
+	if s.header.ID != idB {
+		t.Fatalf("header.ID = %q, want the target session %q", s.header.ID, idB)
 	}
-	if s.live.Provider == nil {
-		t.Error("live.Provider should be re-resolved, got nil")
+	if s.live.ProviderName != "anthropic" || s.live.Model != "model-a" {
+		t.Errorf("live = (%q, %q), want it untouched at (anthropic, model-a): resume must not adopt the session's record",
+			s.live.ProviderName, s.live.Model)
+	}
+	if s.live.BaseURL != "https://gateway.example/v1" || s.live.Protocol != "openai" {
+		t.Errorf("base-url/protocol = (%q, %q), want the live overrides untouched", s.live.BaseURL, s.live.Protocol)
 	}
 	if s.live.ThinkingLevel != "xhigh" {
 		t.Errorf("thinking level should be kept, got %q", s.live.ThinkingLevel)
+	}
+	// The budget is still re-resolved against the live model, so the gauge and
+	// the auto-compaction threshold describe the model actually in use.
+	if s.live.ContextWindow <= 0 {
+		t.Errorf("ContextWindow = %d, want a resolved budget", s.live.ContextWindow)
 	}
 }
 

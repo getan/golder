@@ -226,19 +226,26 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	// Responses driver (family heuristic, see PreferResponses). Anthropic-wired
 	// providers never take the heuristic path.
 	effective := spec.Protocol
+	authScheme := spec.AuthScheme
 	if strings.TrimSpace(protocol) != "" {
 		canonical, err := NormalizeProtocol(protocol)
 		if err != nil {
 			return nil, "", err
 		}
-		// An OpenAI-wired provider is assumed to serve both wire variants, so
-		// an explicit resp_api selection is an upgrade, not a conflict.
-		compatible := canonical == spec.Protocol ||
-			(spec.Protocol == ProtocolOpenAI && canonical == ProtocolOpenAIResponses)
-		if !compatible {
-			return nil, "", fmt.Errorf("--provider %q speaks the %q protocol, which conflicts with --protocol %q; drop --protocol or set it to %q", name, spec.Protocol, protocol, spec.Protocol)
+		// An OpenAI-wired provider serves both of its wire variants (the
+		// resp_api selection is an upgrade, not a conflict), and a gateway may
+		// declare further variants it is known to serve (ProviderSpec.WireVariants,
+		// e.g. the Messages endpoint opencode-go also exposes).
+		if !AllowsProtocol(spec, canonical) {
+			return nil, "", fmt.Errorf("--provider %q speaks the %q protocol, which conflicts with --protocol %q; drop --protocol or set it to one of %s", name, spec.Protocol, protocol, ProtocolChoices(spec))
 		}
 		effective = canonical
+		// A declared variant carries the auth scheme that wire expects: the same
+		// gateway may authenticate its Messages endpoint differently from its
+		// OpenAI-family one.
+		if v, ok := wireVariantFor(spec, canonical); ok && v.AuthScheme != "" {
+			authScheme = v.AuthScheme
+		}
 	} else if spec.Protocol == ProtocolOpenAI && PreferResponses(model) {
 		effective = ProtocolOpenAIResponses
 	}
@@ -265,9 +272,12 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	case ProtocolAnthropic:
 		// Auth header follows the spec's AuthScheme (x-api-key + anthropic-version
 		// for anthropic/minimax/minimax-cn; Bearer for any anthropic-protocol
-		// gateway that authenticates with a plain bearer token). The driver name is
-		// the spec name so errors reference the selected provider.
-		return NewAnthropicProtocolProvider(spec.Name, url, spec.AuthScheme, models), spec.Name, nil
+		// gateway that authenticates with a plain bearer token), or the scheme the
+		// selected wire variant declares for a Messages endpoint on an
+		// OpenAI-wired gateway. The driver name is the spec name so errors
+		// reference the selected provider — and so per-provider request
+		// decoration (the opencode session header) reaches this wire too.
+		return NewAnthropicProtocolProvider(spec.Name, url, authScheme, models), spec.Name, nil
 	case ProtocolOpenAI:
 		return NewOpenAICompatibleProviderAs(spec.Name, url, models), spec.Name, nil
 	case ProtocolOpenAIResponses:

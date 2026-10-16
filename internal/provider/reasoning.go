@@ -143,9 +143,10 @@ const (
 	reasoningCatalogTimeout = 20 * time.Second
 	// reasoningCatalogVersion is the schema version of the cached file. A
 	// cache written by an older golder may lack fields newer code reads (for
-	// example Context), so an out-of-date version is treated as "no cache" and
-	// refreshed in the background instead of surfacing zero values.
-	reasoningCatalogVersion = 2
+	// example Context, or the Options that decide the request's thinking shape),
+	// so an out-of-date version is treated as "no cache" and refreshed in the
+	// background instead of surfacing zero values.
+	reasoningCatalogVersion = 3
 )
 
 // reasoningEntry is one model's catalog metadata: whether the model reasons at
@@ -156,6 +157,12 @@ const (
 type reasoningEntry struct {
 	Reasoning bool     `json:"reasoning"`
 	Levels    []string `json:"levels,omitempty"`
+	// Options are the reasoning-control shapes models.dev lists for the model, in
+	// the order it lists them: "budget_tokens", "effort", "toggle". They decide
+	// the request shape (see ReasoningControl): a model whose only modern control
+	// is an effort level does not accept the legacy token-budget thinking block,
+	// and one that still advertises the budget keeps that shape.
+	Options []string `json:"options,omitempty"`
 	// Context is models.dev's limit.context, the model's total context-token
 	// budget. It rides the same API response and 24h disk cache the reasoning
 	// metadata uses, so context-window lookups cost no extra network request.
@@ -346,6 +353,75 @@ func KnownReasoningLevels(providerName, model string) []agentcore.ThinkingLevel 
 	return parseReasoningLevels(e.Levels)
 }
 
+// ReasoningShape describes how a model's reasoning is switched on, as models.dev
+// reports it in reasoning_options. The wire consequence differs per shape: a
+// budget-shaped model takes the legacy thinking block (type "enabled" plus a
+// token budget), an effort-shaped one takes the adaptive switch plus an effort
+// level, and a toggle-shaped one takes the adaptive switch with no level.
+type ReasoningShape int
+
+const (
+	// ReasoningShapeUnknown: the catalog says nothing definite (no entry, or no
+	// control golder understands). Callers keep their historical wire shape
+	// rather than guessing.
+	ReasoningShapeUnknown ReasoningShape = iota
+	// ReasoningShapeBudget: {"type":"budget_tokens","min":N}.
+	ReasoningShapeBudget
+	// ReasoningShapeEffort: {"type":"effort","values":[...]}.
+	ReasoningShapeEffort
+	// ReasoningShapeToggle: {"type":"toggle"} — on/off only.
+	ReasoningShapeToggle
+)
+
+// ReasoningControl reports the wire shape a model's reasoning takes and, for the
+// effort shape, the levels it accepts (ascending, as the catalog lists them). It
+// reads the same catalog ContextWindowFor does, so it never blocks on the
+// network and returns ReasoningShapeUnknown for a model the catalog does not
+// cover. A case-only difference in the model id still matches.
+//
+// Precedence when models.dev lists several options — it does for models that
+// kept their legacy controls (claude-opus-4-6 lists effort AND budget_tokens):
+// budget_tokens wins, so a model that still advertises the legacy shape keeps
+// the request golder has always sent. Effort answers when it is the model's
+// modern control: claude-haiku-5-5 lists toggle+effort and rejects the legacy
+// token-budget body outright ("thinking.type.enabled is not supported for this
+// model ... use thinking.type.adaptive and output_config.effort", probed live).
+func ReasoningControl(providerName, model string) (ReasoningShape, []agentcore.ThinkingLevel) {
+	if providerName == "" || model == "" {
+		return ReasoningShapeUnknown, nil
+	}
+	e, ok := catalogEntry(providerName, model)
+	if !ok {
+		e, ok = catalogEntryFold(providerName, model)
+		if !ok {
+			return ReasoningShapeUnknown, nil
+		}
+	}
+	if !e.Reasoning {
+		return ReasoningShapeUnknown, nil
+	}
+	var hasBudget, hasEffort, hasToggle bool
+	for _, opt := range e.Options {
+		switch opt {
+		case "budget_tokens":
+			hasBudget = true
+		case "effort":
+			hasEffort = true
+		case "toggle":
+			hasToggle = true
+		}
+	}
+	switch {
+	case hasBudget:
+		return ReasoningShapeBudget, nil
+	case hasEffort:
+		return ReasoningShapeEffort, parseReasoningLevels(e.Levels)
+	case hasToggle:
+		return ReasoningShapeToggle, nil
+	}
+	return ReasoningShapeUnknown, nil
+}
+
 // ContextWindowFor returns the context-token budget models.dev lists for
 // (providerName, model), or 0 when it has no value. Lookups read the reasoning
 // catalog's in-memory/disk copy, so they never block on the network; callers
@@ -533,11 +609,16 @@ func fetchModelsDevCatalog(ctx context.Context, ifNoneMatch string) (map[string]
 		for id, m := range prov.Models {
 			e := reasoningEntry{Reasoning: m.Reasoning, Context: m.Limit.Context}
 			for _, opt := range m.ReasoningOptions {
-				if opt.Type != "effort" {
-					continue
-				}
-				for _, v := range opt.Values {
-					e.Levels = append(e.Levels, v)
+				switch opt.Type {
+				case "effort":
+					// The values are the effort ladder the model accepts; the
+					// option's presence is what makes the request adaptive-shaped.
+					e.Options = append(e.Options, opt.Type)
+					for _, v := range opt.Values {
+						e.Levels = append(e.Levels, v)
+					}
+				case "budget_tokens", "toggle":
+					e.Options = append(e.Options, opt.Type)
 				}
 			}
 			models[id] = e

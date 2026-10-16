@@ -56,6 +56,57 @@ func useModelsDevURL(t *testing.T, url string) {
 	t.Cleanup(func() { modelsDevURL = old })
 }
 
+// TestReasoningControl pins the shape query the Anthropic encoder selects on:
+// budget_tokens wins when the model still advertises it (a legacy-bodied model
+// keeps the request golder has always sent), effort answers for models whose
+// only modern control is an effort ladder, toggle covers on/off-only entries,
+// and anything the catalog does not cover reports Unknown so the encoder keeps
+// its historical shape instead of guessing.
+func TestReasoningControl(t *testing.T) {
+	setReasoningCatalogForTest(t, map[string]map[string]reasoningEntry{
+		"gw": {
+			"legacy":  {Reasoning: true, Options: []string{"budget_tokens"}},
+			"mixed":   {Reasoning: true, Options: []string{"effort", "budget_tokens"}, Levels: []string{"low", "high"}},
+			"modern":  {Reasoning: true, Options: []string{"toggle", "effort"}, Levels: []string{"low", "medium", "high", "xhigh", "max"}},
+			"toggly":  {Reasoning: true, Options: []string{"toggle"}},
+			"norason": {Reasoning: false, Options: []string{"effort"}, Levels: []string{"low"}},
+		},
+		// models.dev keeps vendor casing; a gateway id may differ only by case.
+		"brand": {"MiniMax-M2.7": {Reasoning: true, Options: []string{"effort"}, Levels: []string{"high", "low"}}},
+	})
+
+	cases := []struct {
+		model  string
+		want   ReasoningShape
+		levels []agentcore.ThinkingLevel
+	}{
+		{"legacy", ReasoningShapeBudget, nil},
+		{"mixed", ReasoningShapeBudget, nil},
+		{"modern", ReasoningShapeEffort, []agentcore.ThinkingLevel{"low", "medium", "high", "xhigh", "max"}},
+		{"toggly", ReasoningShapeToggle, nil},
+		{"norason", ReasoningShapeUnknown, nil},
+		{"missing", ReasoningShapeUnknown, nil},
+	}
+	for _, tc := range cases {
+		shape, levels := ReasoningControl("gw", tc.model)
+		if shape != tc.want {
+			t.Errorf("%s: shape = %v, want %v", tc.model, shape, tc.want)
+		}
+		if !reflect.DeepEqual(levels, tc.levels) {
+			t.Errorf("%s: levels = %v, want %v", tc.model, levels, tc.levels)
+		}
+	}
+	// The effort ladder comes back in ascending order regardless of the order the
+	// catalog lists it in, so a clamp can walk it.
+	if _, levels := ReasoningControl("brand", "minimax-m2.7"); !reflect.DeepEqual(levels, []agentcore.ThinkingLevel{"low", "high"}) {
+		t.Errorf("case-folded lookup levels = %v, want [low high]", levels)
+	}
+	// An unknown provider is not an error: it is simply not covered.
+	if shape, levels := ReasoningControl("no-such-gw", "m"); shape != ReasoningShapeUnknown || levels != nil {
+		t.Errorf("unknown provider = (%v, %v), want (Unknown, nil)", shape, levels)
+	}
+}
+
 // TestEnsureReasoningCatalogExtractsCachesAndRefreshes covers the fetch path:
 // effort values are extracted (other option types and "none" dropped), only
 // registry providers are kept, the result is written to the disk cache, and a

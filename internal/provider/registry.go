@@ -52,6 +52,17 @@ type ProviderSpec struct {
 	// AuthScheme names how credentials are attached: "bearer", "x-api-key",
 	// "aws", "azure", or "special".
 	AuthScheme string
+	// WireVariants are additional wire protocols this gateway is known to serve
+	// beyond its registered Protocol, each with the auth scheme that wire takes
+	// (a gateway may authenticate its Messages endpoint differently from its
+	// OpenAI-family one). An explicit --protocol naming a variant is legal and
+	// builds the matching driver under this provider's own name, so per-provider
+	// request decoration (the opencode session header, for one) still applies.
+	// The registered Protocol stays the default: nothing changes for a user who
+	// does not ask. Declare a variant only for a gateway whose other wire has
+	// been verified — the registry's word is what turns "explicitly requested"
+	// into "known to exist".
+	WireVariants []WireVariant
 	// ExtraHeaders are provider-specific headers attached to every request (may
 	// be nil).
 	ExtraHeaders map[string]string
@@ -95,6 +106,14 @@ type ProviderSpec struct {
 	// provider name. Empty means the provider has no default; a bare name is
 	// then reported as a provider/model mismatch instead of guessing.
 	DefaultModel string
+}
+
+// WireVariant is one extra wire a gateway serves besides its registered
+// Protocol: the protocol selector an explicit --protocol may name, and the auth
+// scheme that wire expects.
+type WireVariant struct {
+	Protocol   string
+	AuthScheme string
 }
 
 // ReasoningLadder is one model-family reasoning-effort rule: Match is a
@@ -273,6 +292,13 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
+		// The gateway also serves the Messages wire at {base}/messages, which is
+		// how its Claude models are reached (probed live with claude-haiku-5-5:
+		// x-api-key auth, plus the x-opencode-session routing header every
+		// opencode endpoint requires — attached automatically because the driver
+		// carries this provider's name). The OpenAI-family endpoints serve the
+		// rest of the lineup and stay the default.
+		WireVariants: []WireVariant{{Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey}},
 		// Muse spark advertises "max" in its error text but rejects it on the
 		// wire; xhigh is the highest usable rung on this gateway.
 		ReasoningLadders: []ReasoningLadder{{

@@ -379,6 +379,10 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// newRunSessionWithStore), and /status can list skill/plugin/user commands.
 	m.live = s.live
 	m.slash = s.slash
+	// Publish the live config before the first frame is drawn: the bar was built
+	// from the launch Options, and resuming a session is exactly the case where
+	// those two can differ (see syncLiveDisplay).
+	m.syncLiveDisplay()
 	// A fresh session starts with the wordmark blank so it can type itself in;
 	// a resumed one shows the settled word (its banner is history nobody is
 	// watching) by starting at the resting frame.
@@ -386,7 +390,7 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	if len(history) > 0 {
 		startFrame = logoFrames
 	}
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, startFrame))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, startFrame))
 	m.logoRunning = len(history) == 0
 	seedTranscript(&m.transcript, history)
 	// Seed the context gauge with the resumed session's inherited context so the
@@ -743,8 +747,13 @@ func (m Model) reopenWritablePathsPicker(announce bool) (tea.Model, tea.Cmd) {
 
 // resumeSession implements /resume: it swaps the active session without
 // leaving the TUI, following runSession.switchTo (persist current, load target,
-// live model/provider follow the stored header). The transcript is reset and
+// keep serving with the live run configuration). The transcript is reset and
 // reseeded from the loaded history. Refused while a run is in flight.
+//
+// The switch ends by republishing the live config (see syncLiveDisplay) and by
+// re-drawing the banner from it, so the bar, the splash panel and the gauge all
+// describe the conversation now in the pane — the same state a launch on this
+// session would have shown.
 //
 // A bare /resume lists the current project's recent sessions; --all widens the
 // list to every project, and a literal id — which is unique across the store —
@@ -792,9 +801,10 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
 		return m, nil
 	}
+	m.syncLiveDisplay()
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
@@ -1105,10 +1115,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.frame >= logoFrames {
 			m.logoRunning = false
-			m.transcript.setBannerText(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+			m.transcript.setBannerText(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
 			return m, nil
 		}
-		m.transcript.setBannerText(renderBannerFrame(m.theme, m.opts, m.cwd, msg.frame))
+		m.transcript.setBannerText(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, msg.frame))
 		return m, m.tickLogo(msg.frame + 1)
 
 	case textDeltaMsg:
@@ -2302,22 +2312,10 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if outcome.Message != "" {
 		m.transcript.addSystem(outcome.Message)
 	}
-	// A live-state command (/model, and its `think` form) may have mutated m.live; sync the
-	// status bar so the model/thinking segments reflect the switch immediately.
-	if m.live != nil {
-		m.statusBar.SetModel(m.live.Model)
-		m.statusBar.SetThinking(string(m.live.ThinkingLevel))
-		// /model can also change the context window; recompute the gauge against
-		// the new budget so a stale percentage is not shown until the next turn.
-		// Mid-run the messages belong to the run goroutine (a read here would race
-		// its appends), and the loop reports usage at every turn boundary anyway —
-		// against the window as it was when the run started, which is the window
-		// this run is actually working against. The gauge catches up on the first
-		// turn boundary after the switch.
-		if !m.running && m.session != nil && m.session.agentCtx != nil {
-			m.refreshContextUsage(m.session.agentCtx.Messages)
-		}
-	}
+	// A live-state command (/model, /provider, and their `think` form) may have
+	// mutated m.live; republish it so every surface that shows it reflects the
+	// switch immediately.
+	m.syncLiveDisplay()
 	// An action command is complete once its status is shown; a hybrid with no
 	// prompt (notifications only) likewise starts no run.
 	if outcome.Kind == runtime.SlashAction || outcome.Prompt == "" {
@@ -2713,7 +2711,7 @@ func (m Model) runRewind(line string) (tea.Model, tea.Cmd) {
 	}
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
 	seedTranscript(&m.transcript, msgs)
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(notice)
@@ -2849,13 +2847,16 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 }
 
 // reseedTranscript rebuilds the transcript from the freshly adopted session
-// context: the launch banner, the historical turns, and a one-line notice.
+// context: the banner, the historical turns, and a one-line notice. The banner
+// is drawn from the live config and the bar is republished with it, so a
+// session adopted mid-flight (/clone, /fork, /import, a branch switch) is
+// described by the same provider/model the next turn will run on.
 func (m *Model) reseedTranscript(notice string) {
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.opts, m.cwd, logoFrames))
+	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
 	seedTranscript(&m.transcript, m.session.agentCtx.Messages)
-	m.refreshContextUsage(m.session.agentCtx.Messages)
+	m.syncLiveDisplay()
 	m.transcript.addSystem(notice)
 	m.logoRunning = false
 	m.relayout()
@@ -2905,6 +2906,60 @@ func (m *Model) refreshContextUsage(msgs []agentcore.Message) {
 		window: m.live.ContextWindow,
 		tokens: tokens,
 	})
+}
+
+// syncLiveDisplay republishes the live run configuration onto the status bar:
+// the provider, model and thinking segments plus the context gauge. It exists
+// because commands move that configuration behind the bar's back — /model and
+// /provider mutate cli.LiveConfig through the slash registry — and because a
+// session adopted mid-flight (/resume, /clone, /fork, /import, a branch switch)
+// can leave the bar describing the conversation this process was launched on
+// rather than the one in the pane. Every such command calls this, and so does
+// withSession, so the first frame and every later one describe the same session.
+func (m *Model) syncLiveDisplay() {
+	if m.live == nil {
+		return
+	}
+	m.statusBar.SetProvider(m.live.ProviderName)
+	m.statusBar.SetModel(m.live.Model)
+	m.statusBar.SetThinking(string(m.live.ThinkingLevel))
+	// A switch can also change the context window; recompute the gauge against
+	// the new budget so a stale percentage is not shown until the next turn.
+	// Mid-run the messages belong to the run goroutine (a read here would race
+	// its appends), and the loop reports usage at every turn boundary anyway —
+	// against the window as it was when the run started, which is the window
+	// this run is actually working against. The gauge catches up on the first
+	// turn boundary after the switch.
+	if !m.running && m.session != nil && m.session.agentCtx != nil {
+		m.refreshContextUsage(m.session.agentCtx.Messages)
+	}
+}
+
+// bannerOptions returns the Options the splash panel is drawn from: the launch
+// Options with the live run configuration layered over them. The panel lists the
+// conversation's model, provider, protocol and thinking level, and every one of
+// those can move after launch (/model, /provider, and the /resume that adopts
+// another session's configuration) — so re-drawing it from the launch snapshot
+// alone would print a provider the pane is no longer talking to. BaseURL and
+// Protocol follow the live values for the same reason: a provider switch clears
+// the launch overrides, and the protocol row is derived from them.
+func (m Model) bannerOptions() Options {
+	opts := m.opts
+	if m.live == nil {
+		return opts
+	}
+	if m.live.ProviderName != "" {
+		opts.ProviderName = m.live.ProviderName
+	}
+	if m.live.Model != "" {
+		opts.Model = m.live.Model
+	}
+	if m.live.ThinkingLevel != "" {
+		opts.ThinkingLevel = m.live.ThinkingLevel
+	}
+	opts.BaseURL = m.live.BaseURL
+	opts.Protocol = m.live.Protocol
+	return opts
 }
 
 // recordHistory appends an submitted input to the browse history (skipping a

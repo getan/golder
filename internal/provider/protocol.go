@@ -105,9 +105,7 @@ func EffectiveProtocol(providerName, model, protocol string) string {
 		if err != nil {
 			return ""
 		}
-		compatible := canonical == spec.Protocol ||
-			(spec.Protocol == ProtocolOpenAI && canonical == ProtocolOpenAIResponses)
-		if !compatible {
+		if !AllowsProtocol(spec, canonical) {
 			return ""
 		}
 		return canonical
@@ -116,6 +114,63 @@ func EffectiveProtocol(providerName, model, protocol string) string {
 		return ProtocolOpenAIResponses
 	}
 	return spec.Protocol
+}
+
+// AllowsProtocol reports whether an explicit protocol selection is legal for a
+// provider: its own registered Protocol, the Responses upgrade every
+// OpenAI-wired gateway is assumed to serve, or a wire variant the spec declares
+// (see ProviderSpec.WireVariants). It is the single rule behind both the
+// resolver's conflict error and the display path's protocol label, so what
+// `/provider` and the banner call a gateway's protocol and what a run can
+// actually select cannot disagree.
+func AllowsProtocol(spec ProviderSpec, canonical string) bool {
+	if canonical == "" {
+		return false
+	}
+	if canonical == spec.Protocol {
+		return true
+	}
+	if spec.Protocol == ProtocolOpenAI && canonical == ProtocolOpenAIResponses {
+		return true
+	}
+	for _, v := range spec.WireVariants {
+		if v.Protocol == canonical {
+			return true
+		}
+	}
+	return false
+}
+
+// wireVariantFor returns the declared wire variant matching canonical, so the
+// resolver can take that wire's auth scheme.
+func wireVariantFor(spec ProviderSpec, canonical string) (WireVariant, bool) {
+	for _, v := range spec.WireVariants {
+		if v.Protocol == canonical {
+			return v, true
+		}
+	}
+	return WireVariant{}, false
+}
+
+// ProtocolChoices renders the protocol values an explicit --protocol may name
+// for this provider — quoted, comma-separated — for a conflict error: the
+// registered protocol, the Responses upgrade when it applies, and every declared
+// wire variant.
+func ProtocolChoices(spec ProviderSpec) string {
+	choices := []string{spec.Protocol}
+	if spec.Protocol == ProtocolOpenAI {
+		choices = append(choices, ProtocolOpenAIResponses)
+	}
+	for _, v := range spec.WireVariants {
+		if v.Protocol != spec.Protocol {
+			choices = append(choices, v.Protocol)
+		}
+	}
+	quoted := make([]string, 0, len(choices))
+	for _, c := range choices {
+		quoted = append(quoted, fmt.Sprintf("%q", c))
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // ProtocolLabel maps a raw --protocol value to the human-facing label shown in

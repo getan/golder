@@ -1146,12 +1146,16 @@ func replayToolCard(c agentcore.ToolCallContent, res *agentcore.ToolResultMessag
 
 // switchTo replaces the active session with the stored session id, persisting
 // the current session first so unsaved turns are not lost. It returns the
-// loaded messages for transcript seeding. The live model/provider follow the
-// stored header: a different provider name re-resolves the driver from the
-// registry (defaults; API keys resolve from the environment via the session's
-// credential store), while the thinking level and context window stay with the
-// current live config. Hook identity follows the new session; no SessionStart
-// is re-dispatched (project hooks fired once at launch).
+// loaded messages for transcript seeding.
+//
+// The run configuration does NOT follow the stored header: this process keeps
+// serving the conversation with its own live provider/model, exactly as a launch
+// on the same session does (the launch path seeds live from the CLI/config, not
+// from the file). A session's recorded Model/Provider are its history — what it
+// ran against last time, shown in the /resume list — and a user who wants a
+// different model says so with /model or /provider, here or at launch. Hook
+// identity follows the new session; no SessionStart is re-dispatched (project
+// hooks fired once at launch).
 func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -1170,15 +1174,15 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.adopt(h, entries, true)
+	return s.adopt(h, entries)
 }
 
 // adopt replaces the active session with header h and its entry path: it
-// rebuilds the flat message list and resets the branch cursor. With followHeader
-// the stored model/provider win (re-resolving the driver when the provider
-// differs), as /resume needs; without it the live config stays untouched (branch
-// switches and imports keep serving with the provider already in use).
-func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry, followHeader bool) ([]agentcore.Message, error) {
+// rebuilds the flat message list and resets the branch cursor. The live run
+// configuration is left untouched — every adoption (a /resume, a branch switch,
+// a /clone, /fork or /import) keeps serving with the provider and model already
+// in use, which is also what a launch on the same session does.
+func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry) ([]agentcore.Message, error) {
 	msgs := make(agentcore.MessageList, len(entries))
 	for i, e := range entries {
 		msgs[i] = e.Message
@@ -1187,21 +1191,8 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry, fol
 	// preserved (see cli.ResumeSystemPrompt) — a session resumed mid-flight gets
 	// the same treatment as one resumed at launch.
 	sysPrompt := cli.ResumeSystemPrompt(h, s.prompt)
-	if followHeader && h.Provider != "" && h.Provider != s.live.ProviderName {
-		prov, name, err := provider.ResolveProvider(h.Model, "", "", h.Provider, os.Getenv)
-		if err != nil {
-			return nil, fmt.Errorf("resolve session provider: %w", err)
-		}
-		s.live.Provider = prov
-		s.live.ProviderName = name
-		s.live.BaseURL = ""
-		s.live.Protocol = ""
-	}
-	if followHeader && h.Model != "" {
-		s.live.Model = h.Model
-	}
-	// The resumed session may run a different model than the launch one;
-	// re-resolve the context budget so the gauge and auto-compaction follow.
+	// Re-resolve the context budget against the provider/model actually in use,
+	// so the gauge and the auto-compaction threshold follow the live config.
 	s.live.RefreshContextWindow()
 	s.header = h
 	s.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: s.agentCtx.Tools}
@@ -1231,7 +1222,7 @@ func (s *runSession) importSession(path string) ([]agentcore.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.adopt(h, entries, false)
+	return s.adopt(h, entries)
 }
 
 // cloneSession duplicates the current conversation at its active leaf into a
@@ -1255,7 +1246,7 @@ func (s *runSession) cloneSession() ([]agentcore.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.adopt(h, path, false)
+	return s.adopt(h, path)
 }
 
 // forkCandidates lists the historical user messages (entry order), one line
@@ -1302,7 +1293,7 @@ func (s *runSession) forkAt(n int) ([]agentcore.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.adopt(h, path, false)
+	return s.adopt(h, path)
 }
 
 // treeLines returns the session's branch tree (render order) after persisting
@@ -1334,5 +1325,5 @@ func (s *runSession) switchBranchIndex(n int) ([]agentcore.Message, error) {
 	}
 	target := lines[n-1].Entry
 	path := session.PathToLeaf(entries, target.ID)
-	return s.adopt(s.header, path, false)
+	return s.adopt(s.header, path)
 }

@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+// TestOpencodeGoDeclaresMessagesVariant pins the declaration the wire-variant
+// path rests on: opencode-go stays OpenAI-wired by default (nothing changes for
+// a user who does not ask), and declares its Messages endpoint as an extra wire
+// with the auth scheme that endpoint expects — probed live, x-api-key.
+func TestOpencodeGoDeclaresMessagesVariant(t *testing.T) {
+	spec, ok := LookupProviderSpec("opencode-go")
+	if !ok {
+		t.Fatal("opencode-go spec missing")
+	}
+	if spec.Protocol != ProtocolOpenAI {
+		t.Errorf("Protocol = %q, want the OpenAI family to stay the default", spec.Protocol)
+	}
+	if len(spec.WireVariants) != 1 {
+		t.Fatalf("WireVariants = %+v, want one declared wire", spec.WireVariants)
+	}
+	if v := spec.WireVariants[0]; v.Protocol != ProtocolAnthropic || v.AuthScheme != AuthXAPIKey {
+		t.Errorf("variant = %+v, want {anthropic x-api-key}", v)
+	}
+}
+
 func TestLookupProviderSpec_Hit(t *testing.T) {
 	spec, ok := LookupProviderSpec("deepseek")
 	if !ok {

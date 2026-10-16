@@ -92,8 +92,11 @@ func TestRunResume(t *testing.T) {
 	if deps.header.ID != idB {
 		t.Fatalf("header.ID = %q, want %q", deps.header.ID, idB)
 	}
-	if deps.live.Model != "model-b" {
-		t.Errorf("live.Model = %q, want model-b", deps.live.Model)
+	// The live run configuration stays with this process: the target's recorded
+	// model is its history, not a configuration to adopt (parity with the TUI's
+	// switchTo and with a launch on the same session).
+	if deps.live.Model != "model-a" || deps.live.ProviderName != "prov" {
+		t.Errorf("live = (%q, %q), want it untouched at (model-a, prov)", deps.live.Model, deps.live.ProviderName)
 	}
 	if len(deps.agentCtx.Messages) != 1 {
 		t.Errorf("messages = %d, want 1", len(deps.agentCtx.Messages))

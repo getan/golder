@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
 )
@@ -295,7 +296,8 @@ func (d *anthropicCompatDriver) StreamCompletion(ctx context.Context, req Comple
 	if err := checkImageSupport(d.name, req.Model, d.models, req.Context.Messages); err != nil {
 		return nil, err
 	}
-	body, err := encodeAnthropicRequest(req, d.models)
+	plan := anthropicThinkingPlanFor(d.name, req.Model, req.Config.ThinkingLevel)
+	body, err := encodeAnthropicRequestWithPlan(req, d.models, plan)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build request body: %w", d.name, err)
 	}
@@ -313,18 +315,47 @@ func (d *anthropicCompatDriver) StreamCompletion(ctx context.Context, req Comple
 		if d.authHeader != nil {
 			d.authHeader(httpReq, req.Config.APIKey)
 		}
+		// opencode's gateways route by client session id and refuse a Messages
+		// request without it (400 MissingSessionID: "cannot be routed
+		// efficiently"), the same header the chat and Responses drivers attach
+		// (see SessionHeaderValue). Gated on the provider name there, so only
+		// opencode-* providers are decorated.
+		if sid := SessionHeaderValue(d.name, req.Config.Extra); sid != "" {
+			httpReq.Header.Set(OpencodeSessionHeader, sid)
+		}
 		return httpReq, nil
 	}
-	return StreamRequest(ctx, TransportConfig{Client: clientForURL(d.name, d.baseURL), NewRequest: newReq, Decoder: NewAnthropicDecoder()})
+	return StreamRequest(ctx, TransportConfig{
+		Client:     clientForURL(d.name, d.baseURL),
+		NewRequest: newReq,
+		Decoder:    NewAnthropicDecoder(),
+		// A model newer than the catalog still gets the thinking body it accepts:
+		// the gateway names the adaptive form in a 400 and the request is
+		// re-issued once with it (see thinkingShapeCorrection).
+		RetryBody: d.thinkingShapeCorrection(req, plan, &body),
+	})
 }
 
 // encodeAnthropicRequest serializes a CompletionRequest into an Anthropic
 // Messages JSON body with streaming enabled. The system prompt is a top-level
 // field; tool results and tool calls follow the Messages content-block shape.
-func encodeAnthropicRequest(req CompletionRequest, models []Model) ([]byte, error) {
+//
+// providerName keys the reasoning catalog, which decides which thinking shape
+// the model accepts (see anthropicThinkingPlanFor); the same answer decides
+// whether history's thinking blocks may be echoed.
+func encodeAnthropicRequest(providerName string, req CompletionRequest, models []Model) ([]byte, error) {
+	return encodeAnthropicRequestWithPlan(req, models,
+		anthropicThinkingPlanFor(providerName, req.Model, req.Config.ThinkingLevel))
+}
+
+// encodeAnthropicRequestWithPlan builds the Messages body for an already-decided
+// thinking plan. The recovery path re-encodes the same request after a gateway
+// named the shape it accepts; going through the plan keeps one body builder, so
+// the corrected request cannot drift from the original.
+func encodeAnthropicRequestWithPlan(req CompletionRequest, models []Model, plan anthropicThinkingPlan) ([]byte, error) {
 	msgs := make([]map[string]any, 0, len(req.Context.Messages))
 	for _, m := range req.Context.Messages {
-		if enc := encodeAnthropicMessage(m); enc != nil {
+		if enc := encodeAnthropicMessage(m, plan.thinking != nil); enc != nil {
 			msgs = append(msgs, enc)
 		}
 	}
@@ -343,20 +374,22 @@ func encodeAnthropicRequest(req CompletionRequest, models []Model) ([]byte, erro
 		// truncation/retry loops on longer edits).
 		maxTok = anthropicDefaultMaxTokens(req.Model, models)
 	}
-	// Extended thinking: when a thinking level is requested, enable the Anthropic
-	// thinking block with a budget derived from the level. Omitted for off/unset
-	// so non-thinking requests keep their prior shape.
-	if budget := anthropicThinkingBudget(req.Config.ThinkingLevel); budget > 0 {
+	if plan.budget > 0 {
 		// Anthropic counts thinking tokens toward max_tokens and requires
 		// budget_tokens < max_tokens (else a 400). Guarantee headroom for the
 		// visible reply by lifting max_tokens above the budget when the caller's
 		// cap is too low to fit both the reasoning and a real answer.
-		if minTok := budget + anthropicResponseHeadroom; maxTok < minTok {
+		if minTok := plan.budget + anthropicResponseHeadroom; maxTok < minTok {
 			maxTok = minTok
 		}
-		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
 	}
 	body["max_tokens"] = maxTok
+	if plan.thinking != nil {
+		body["thinking"] = plan.thinking
+	}
+	if plan.effort != "" {
+		body["output_config"] = map[string]any{"effort": plan.effort}
+	}
 	if tools := encodeAnthropicTools(req.Context.Tools); len(tools) > 0 {
 		body["tools"] = tools
 	}
@@ -367,6 +400,154 @@ func encodeAnthropicRequest(req CompletionRequest, models []Model) ([]byte, erro
 // on top of the thinking budget, so max_tokens always exceeds budget_tokens (an
 // Anthropic hard requirement) with room left for a real answer.
 const anthropicResponseHeadroom = 4096
+
+// anthropicThinkingPlan is the thinking control one Messages request carries.
+type anthropicThinkingPlan struct {
+	// thinking is the body's "thinking" value, or nil when the request sends no
+	// thinking control at all (level off or unset).
+	thinking map[string]any
+	// effort is the output_config.effort value for the adaptive shape.
+	effort string
+	// budget is the legacy shape's budget_tokens; only that shape must fit under
+	// max_tokens.
+	budget int
+}
+
+// anthropicThinkingPlanFor selects the thinking body shape for a (provider,
+// model) pair at the given level. Which shape a model accepts is its own
+// property, not golder's preference:
+//
+//   - effort-shaped (models.dev lists an effort ladder and no legacy budget):
+//     {"type":"adaptive"} plus output_config.effort, the level clamped into
+//     that ladder. claude-haiku-5-5 rejects the legacy token-budget body
+//     outright ("thinking.type.enabled is not supported for this model", probed
+//     live), so this is the only shape that turns its thinking on at all.
+//   - toggle-shaped (on/off only): the adaptive switch, with no level to name.
+//   - budget-shaped, or a model the catalog does not cover: the legacy
+//     {"type":"enabled","budget_tokens":N} body golder has always sent. An
+//     unknown model keeps the historical shape rather than being guessed at.
+func anthropicThinkingPlanFor(providerName, model string, level agentcore.ThinkingLevel) anthropicThinkingPlan {
+	if anthropicThinkingBudget(level) <= 0 { // off or unset
+		return anthropicThinkingPlan{}
+	}
+	// A gateway that already rejected the legacy body wins over the catalog: the
+	// model is newer than golder's copy of it (see thinkingShapeCorrection).
+	if effortThinkingForced(providerName, model) {
+		return anthropicThinkingPlan{
+			thinking: map[string]any{"type": "adaptive"},
+			effort:   adaptiveEffort(providerName, model, level),
+		}
+	}
+	switch shape, ladder := ReasoningControl(providerName, model); shape {
+	case ReasoningShapeEffort:
+		return anthropicThinkingPlan{
+			thinking: map[string]any{"type": "adaptive"},
+			effort:   clampEffort(level, ladder),
+		}
+	case ReasoningShapeToggle:
+		return anthropicThinkingPlan{thinking: map[string]any{"type": "adaptive"}}
+	default:
+		budget := anthropicThinkingBudget(level)
+		return anthropicThinkingPlan{
+			thinking: map[string]any{"type": "enabled", "budget_tokens": budget},
+			budget:   budget,
+		}
+	}
+}
+
+// thinkingShapeCorrection returns the transport's RetryBody hook for a request
+// whose thinking body was the legacy token-budget one: a model newer than the
+// catalog rejects it with a message naming the adaptive form, and the same
+// request is re-issued once with that body — and the verdict remembered for the
+// rest of the process. It returns nil when there is nothing to correct
+// (thinking off, or the adaptive shape already sent).
+func (d *anthropicCompatDriver) thinkingShapeCorrection(req CompletionRequest, plan anthropicThinkingPlan, body *[]byte) func(int, []byte) bool {
+	if plan.thinking == nil || plan.effort != "" {
+		return nil
+	}
+	return func(status int, respBody []byte) bool {
+		if status != http.StatusBadRequest || !bytes.Contains(respBody, []byte(effortShapeHint)) {
+			return false
+		}
+		corrected, err := encodeAnthropicRequestWithPlan(req, d.models, anthropicThinkingPlan{
+			thinking: map[string]any{"type": "adaptive"},
+			effort:   adaptiveEffort(d.name, req.Model, req.Config.ThinkingLevel),
+		})
+		if err != nil {
+			return false
+		}
+		*body = corrected
+		rememberEffortThinking(d.name, req.Model)
+		return true
+	}
+}
+
+// effortShapeHint is the phrase the Messages API uses when it rejects the legacy
+// token-budget thinking body and names the adaptive one instead (probed live:
+// `"thinking.type.enabled" is not supported for this model. Use
+// "thinking.type.adaptive" and "output_config.effort"`). Anchored on the type
+// name so an unrelated 400 — a bad tool schema, an oversized prompt — never
+// triggers the correction.
+const effortShapeHint = "thinking.type.adaptive"
+
+// effortThinkingVerdicts remembers (provider, model) pairs whose gateway has
+// said it wants the adaptive thinking body. It is process state: the catalog
+// cache is the durable answer, and this covers the window before it is fetched —
+// a one-shot run may never fetch models.dev at all.
+var effortThinkingVerdicts sync.Map
+
+// rememberEffortThinking records the gateway's verdict for (provider, model).
+func rememberEffortThinking(providerName, model string) {
+	if providerName == "" || model == "" {
+		return
+	}
+	effortThinkingVerdicts.Store(providerName+"\x00"+model, struct{}{})
+}
+
+// effortThinkingForced reports whether this process has already been told that
+// (provider, model) takes the adaptive thinking body.
+func effortThinkingForced(providerName, model string) bool {
+	_, ok := effortThinkingVerdicts.Load(providerName + "\x00" + model)
+	return ok
+}
+
+// adaptiveEffortLadder is the effort set the adaptive-thinking API accepts, used
+// when the catalog has no ladder for the model — the recovery path, where the
+// gateway named the shape but golder has never seen the model's own values
+// (probed: haiku-5-5 answers "Input should be 'low', 'medium', 'high', 'xhigh'
+// or 'max'" for anything outside it).
+var adaptiveEffortLadder = []agentcore.ThinkingLevel{
+	agentcore.ThinkingLow, agentcore.ThinkingMedium, agentcore.ThinkingHigh,
+	agentcore.ThinkingXHigh, agentcore.ThinkingMax,
+}
+
+// adaptiveEffort maps a level onto the effort value to send: the model's own
+// catalog ladder when it has one, else the adaptive API's own set.
+func adaptiveEffort(providerName, model string, level agentcore.ThinkingLevel) string {
+	ladder := KnownReasoningLevels(providerName, model)
+	if len(ladder) == 0 {
+		ladder = adaptiveEffortLadder
+	}
+	return clampEffort(level, ladder)
+}
+
+// clampEffort picks the effort value to send for level from a model's advertised
+// ladder (ascending): the level itself when it is allowed, else the closest rung
+// below it, else the lowest rung. An empty ladder returns the level verbatim —
+// the catalog said the model takes effort control without naming its values, and
+// the gateway is the authority on what it accepts.
+func clampEffort(level agentcore.ThinkingLevel, ladder []agentcore.ThinkingLevel) string {
+	if len(ladder) == 0 {
+		return string(level)
+	}
+	best := ladder[0]
+	for _, l := range ladder {
+		if reasoningRank[l] <= reasoningRank[level] {
+			best = l
+		}
+	}
+	return string(best)
+}
 
 // anthropicDefaultMaxTokens picks the max_tokens fallback when no explicit hint
 // is given: the model's declared MaxOutputTokens if present in the driver's
@@ -405,7 +586,12 @@ func anthropicThinkingBudget(level agentcore.ThinkingLevel) int {
 // encodeAnthropicMessage maps one golder message onto the Anthropic Messages
 // wire shape. Assistant tool calls become tool_use blocks; tool results become
 // a user message carrying a tool_result block (Anthropic's convention).
-func encodeAnthropicMessage(m agentcore.Message) map[string]any {
+//
+// thinkingOn is the request's extended-thinking setting: thinking blocks ride
+// the wire only when the request turns thinking on (the Messages API validates
+// them against that setting), and even then only when they are ours to echo —
+// see anthropicThinkingReplayable.
+func encodeAnthropicMessage(m agentcore.Message, thinkingOn bool) map[string]any {
 	switch msg := m.(type) {
 	case agentcore.UserMessage:
 		return map[string]any{"role": "user", "content": anthropicUserContent(msg.Content)}
@@ -418,22 +604,22 @@ func encodeAnthropicMessage(m agentcore.Message) map[string]any {
 		// Anthropic extended-thinking requires the prior thinking block (and its
 		// signature) to be echoed back verbatim on tool-use turns, or the API
 		// rejects/degrades the request. Emit them first.
-		for _, c := range msg.Content {
-			if t, ok := c.(agentcore.ThinkingContent); ok {
-				if t.Redacted {
+		if thinkingOn {
+			for _, c := range msg.Content {
+				if t, ok := c.(agentcore.ThinkingContent); ok {
+					if !anthropicThinkingReplayable(t) {
+						continue
+					}
+					if t.Redacted {
+						blocks = append(blocks, map[string]any{
+							"type": "redacted_thinking", "data": t.ThinkingSignature,
+						})
+						continue
+					}
 					blocks = append(blocks, map[string]any{
-						"type": "redacted_thinking", "data": t.ThinkingSignature,
+						"type": "thinking", "thinking": t.Thinking, "signature": t.ThinkingSignature,
 					})
-					continue
 				}
-				if t.Thinking == "" {
-					continue
-				}
-				block := map[string]any{"type": "thinking", "thinking": t.Thinking}
-				if t.ThinkingSignature != "" {
-					block["signature"] = t.ThinkingSignature
-				}
-				blocks = append(blocks, block)
 			}
 		}
 		for _, c := range msg.Content {
@@ -474,6 +660,27 @@ func encodeAnthropicMessage(m agentcore.Message) map[string]any {
 	default:
 		return nil
 	}
+}
+
+// anthropicThinkingReplayable reports whether a stored thinking block may be
+// echoed back on the Messages wire. The API validates an echoed thinking block
+// against its own signature, and a signature is exactly the provenance evidence
+// golder holds: only the Anthropic-wired decoder fills ThinkingSignature (the
+// OpenAI chat driver's reasoning_content and the Responses reasoning summary
+// carry none). So a block with a signature (or, for a redacted block, the
+// encrypted data that lives in the same field) is ours to replay, and anything
+// else — another protocol's reasoning that happens to be in the history after a
+// /model or /provider switch, or a truncation that emptied it — is dropped
+// rather than sent as a signature-less thinking block the API would reject, and
+// rather than presenting another model's reasoning as this conversation's.
+func anthropicThinkingReplayable(t agentcore.ThinkingContent) bool {
+	if t.ThinkingSignature == "" {
+		return false
+	}
+	if t.Redacted {
+		return true // the payload is the data field; there is no display text
+	}
+	return t.Thinking != ""
 }
 
 // anthropicToolResultContent renders a tool result's content for a tool_result

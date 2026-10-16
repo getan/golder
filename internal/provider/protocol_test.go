@@ -59,6 +59,8 @@ func TestEffectiveProtocol(t *testing.T) {
 		{"unknown provider no protocol", "nope", "x", "", ""},
 		{"bad protocol rejected", "opencode-go", "glm-4.7", "carrier-pigeon", ""},
 		{"conflicting pair rejected", "anthropic", "claude-fable-5-1", "openai", ""},
+		{"declared wire variant allowed", "opencode-go", "claude-haiku-5-5", "anthropic", ProtocolAnthropic},
+		{"undeclared variant rejected", "deepseek", "deepseek-chat", "anthropic", ""},
 		{"renamed alias resolves", "opencode", "glm-4.7", "", ProtocolOpenAI},
 	}
 	for _, tc := range tests {
@@ -81,6 +83,53 @@ func TestNormalizeProtocolErrorNamesAcceptedValues(t *testing.T) {
 	for _, want := range []string{"openai", "openai/chat", "openai/resp_api", "anthropic"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing accepted value %q", err.Error(), want)
+		}
+	}
+}
+
+// TestAllowsProtocol pins the one rule behind both the resolver's conflict
+// error and the display path's protocol label: a provider's own protocol, the
+// Responses upgrade an OpenAI-wired gateway is assumed to serve, and any wire
+// variant it declares are legal; everything else — including the Messages wire
+// on a gateway that has not declared it — is not.
+func TestAllowsProtocol(t *testing.T) {
+	opencodeGo, ok := LookupProviderSpec("opencode-go")
+	if !ok {
+		t.Fatal("opencode-go spec missing")
+	}
+	deepseek, ok := LookupProviderSpec("deepseek")
+	if !ok {
+		t.Fatal("deepseek spec missing")
+	}
+	anthropic, ok := LookupProviderSpec("anthropic")
+	if !ok {
+		t.Fatal("anthropic spec missing")
+	}
+	cases := []struct {
+		name string
+		spec ProviderSpec
+		in   string
+		want bool
+	}{
+		{"registered protocol", opencodeGo, ProtocolOpenAI, true},
+		{"responses upgrade on an OpenAI-wired gateway", opencodeGo, ProtocolOpenAIResponses, true},
+		{"declared wire variant", opencodeGo, ProtocolAnthropic, true},
+		{"undeclared Messages wire", deepseek, ProtocolAnthropic, false},
+		{"registered protocol on an Anthropic-wired gateway", anthropic, ProtocolAnthropic, true},
+		{"responses upgrade does not apply to it", anthropic, ProtocolOpenAIResponses, false},
+		{"empty is not a protocol", opencodeGo, "", false},
+	}
+	for _, tc := range cases {
+		if got := AllowsProtocol(tc.spec, tc.in); got != tc.want {
+			t.Errorf("%s: AllowsProtocol(%s, %q) = %v, want %v", tc.name, tc.spec.Name, tc.in, got, tc.want)
+		}
+	}
+	// The conflict message names every value the provider accepts, so a user who
+	// typed the wrong wire can self-correct.
+	choices := ProtocolChoices(opencodeGo)
+	for _, want := range []string{`"openai"`, `"openai/resp_api"`, `"anthropic"`} {
+		if !strings.Contains(choices, want) {
+			t.Errorf("ProtocolChoices(opencode-go) = %q, want it to name %s", choices, want)
 		}
 	}
 }
