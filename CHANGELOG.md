@@ -1291,6 +1291,21 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Ctrl+C closes an open picker, exactly like Esc**: the command popup and the
+  pickers hold focus with an empty composer (the command that opened one was
+  submitted), so Ctrl+C fell through to the global handler, whose empty-box
+  branch arms the quit — the selection box stayed up, and a second press quit
+  the program. It now dismisses whatever is open first, and the second press
+  does its usual job.
+- **A model list can no longer describe the gateway you already left**: `/model`'s
+  catalog fetch is asynchronous, and its cache key was computed after the
+  request — so a `/provider` switch that landed while the list was in flight
+  filed the old gateway's lineup under the new gateway's key, in the session and
+  on disk (24h). Every later `/model` then offered the previous provider's models
+  under the new provider's name, which read as "the switch didn't take". The
+  gateway identity is now read once, before the request: a result whose provider
+  no longer matches is neither adopted nor stored, the fetch reports the change
+  instead, and the picker refuses to open for a gateway it no longer describes.
 - **A thinking request a gateway refuses is re-issued in the shape it named**:
   the provider catalog is fetched in the background, so a one-shot run
   (`golder -p`) may never have it — and a model newer than the cache then got

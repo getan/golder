@@ -439,6 +439,11 @@ func resumeMeta(it cli.ResumeItem) string {
 type modelsFetchedMsg struct {
 	ids []string
 	err error
+	// key names the gateway the fetch was started for (prompts.ModelCatalogKey).
+	// A /provider switch can land while the request is in flight, and a picker
+	// offering the previous gateway's models under the new provider's name is
+	// exactly what a stale result would look like.
+	key string
 }
 
 // openModelPicker shows the interactive model picker for the live provider.
@@ -461,13 +466,20 @@ func (m Model) openModelPicker() (tea.Model, tea.Cmd) {
 	// the level stage gets real levels whenever a cache exists (from this or a
 	// previous session) and the family fallback otherwise.
 	return m, func() tea.Msg {
+		key := prompts.ModelCatalogKey(m.live)
 		ids, err := prompts.EnsureModelCatalog(m.live, m.session.creds)
-		return modelsFetchedMsg{ids: ids, err: err}
+		return modelsFetchedMsg{ids: ids, err: err, key: key}
 	}
 }
 
 // applyModelsFetched opens the picker once the async catalog fetch lands.
 func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
+	if msg.key != "" && msg.key != prompts.ModelCatalogKey(m.live) {
+		// The gateway changed while the list was in flight; the fetch itself
+		// refuses to adopt it (see fetchModelCatalogIDs), so there is nothing to
+		// show and nothing to say.
+		return m, nil
+	}
 	if msg.err != nil {
 		m.transcript.addSystem(fmt.Sprintf("model list unavailable: %v\nswitch directly with /model <id>", msg.err))
 		return m, nil
@@ -1710,7 +1722,13 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m = m.completeSlash()
 			m.relayout()
 			return m, nil
-		case "esc":
+		case "esc", "ctrl+c":
+			// Ctrl+C is the shell's way out of a prompt, so with the popup or a
+			// picker open it closes that first — exactly like Esc. Without this it
+			// fell through to the global Ctrl+C, which with an empty composer arms
+			// the quit (a picker is opened by a submitted command, so the box is
+			// empty by then), leaving a selection box only Esc could dismiss and a
+			// second press that quit the program outright.
 			m.menu.close()
 			m.relayout()
 			return m, nil

@@ -255,11 +255,21 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 	if strings.TrimSpace(protocol) == "" {
 		protocol = spec.Protocol
 	}
+	// The list belongs to the gateway this fetch names, so the identity is read
+	// once, before the network: a /provider switch that lands while the request is
+	// in flight must neither adopt this lineup nor file it under the new gateway's
+	// key — which is how a previous gateway's models came back from the cache, and
+	// kept coming back for as long as the entry lived.
+	providerName := live.ProviderName
+	key, keyed := modelCatalogKey(live)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ids, err := provider.FetchProviderModels(ctx, live.ProviderName, baseURL, protocol, creds.GetAPIKey(ctx, live.ProviderName))
+	ids, err := provider.FetchProviderModels(ctx, providerName, baseURL, protocol, creds.GetAPIKey(ctx, providerName))
+	if moved := gatewayMovedOn(live, providerName, key, keyed); moved != "" {
+		return nil, fmt.Errorf("the provider changed while the model list was loading (%s → %s); run /model again", moved, live.ProviderName)
+	}
 	if err != nil {
-		if key, ok := modelCatalogKey(live); ok {
+		if keyed {
 			if stale, _ := provider.CachedModelCatalog(key); len(stale) > 0 {
 				live.FetchedModels = stale
 				live.FetchedAt = time.Now()
@@ -267,18 +277,42 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 				return stale, nil
 			}
 		}
-		if provider.NeedsProxy(live.ProviderName, baseURL) && provider.ProxyURL() == "" {
-			return nil, fmt.Errorf("%w (provider %q usually needs egress: export GOLDER_PROXY=http://127.0.0.1:7897 and retry)", err, live.ProviderName)
+		if provider.NeedsProxy(providerName, baseURL) && provider.ProxyURL() == "" {
+			return nil, fmt.Errorf("%w (provider %q usually needs egress: export GOLDER_PROXY=http://127.0.0.1:7897 and retry)", err, providerName)
 		}
 		return nil, err
 	}
-	if key, ok := modelCatalogKey(live); ok {
+	if keyed {
 		provider.StoreModelCatalog(key, ids)
 		live.FetchedKey = key
 	}
 	live.FetchedModels = ids
 	live.FetchedAt = time.Now()
 	return ids, nil
+}
+
+// gatewayMovedOn reports the gateway a fetch was started for when the live
+// provider no longer matches it — a different provider name, or a different
+// resolved catalog key (a base-url/protocol override that changed) — and "" while
+// the fetch is still describing the provider in use.
+func gatewayMovedOn(live *cli.LiveConfig, providerName, key string, keyed bool) string {
+	if live.ProviderName != providerName {
+		return providerName
+	}
+	if keyed {
+		if cur, ok := modelCatalogKey(live); !ok || cur != key {
+			return providerName
+		}
+	}
+	return ""
+}
+
+// ModelCatalogKey names the gateway a model list belongs to (provider plus the
+// endpoint it resolved to), or "" when the provider is unknown. Callers use it to
+// tell whether a list fetched earlier still describes the live provider.
+func ModelCatalogKey(live *cli.LiveConfig) string {
+	key, _ := modelCatalogKey(live)
+	return key
 }
 
 // EnsureModelCatalog returns the live catalog, preferring the session cache,

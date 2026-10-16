@@ -12,7 +12,9 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -889,6 +891,105 @@ func TestModelPickerTwoStageConfirm(t *testing.T) {
 	}
 	if gm3.menu.picking() {
 		t.Error("picker should close after the level confirm")
+	}
+}
+
+// TestCtrlCClosesThePicker: a picker holds focus with an empty composer — the
+// command that opened it was submitted, so the box is empty by then — and Ctrl+C
+// must get out of it, exactly like Esc. It used to fall through to the global
+// Ctrl+C, whose empty-box branch arms the quit: the selection box stayed, and a
+// second press quit the program.
+func TestCtrlCClosesThePicker(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 90, Height: 24})
+	m.session = &runSession{}
+	m.live.FetchedModels = []string{"m-a", "m-b"}
+	m.live.ProviderName = "openai"
+
+	got, _ := m.runSlash("/model") // a cached catalog opens the picker synchronously
+	m = got.(Model)
+	if !m.menu.picking() {
+		t.Fatal("bare /model should open the picker")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("the composer should be empty while the picker is up, got %q", m.input.Value())
+	}
+
+	got, cmd := m.Update(keyPress("ctrl+c"))
+	m = got.(Model)
+	if m.menu.picking() {
+		t.Error("ctrl+c should close the picker")
+	}
+	if m.quitting {
+		t.Error("ctrl+c must not arm the quit while it is closing a picker")
+	}
+	if cmd != nil {
+		if msg := cmd(); msg == (tea.QuitMsg{}) {
+			t.Error("ctrl+c must not quit while it is closing a picker")
+		}
+	}
+}
+
+// TestProviderSwitchDropsTheFetchedCatalog: a model list belongs to the gateway
+// that served it. After /provider, bare /model must not offer the previous
+// lineup — with nothing cached for the new gateway it fetches, and any list it
+// does show comes from that gateway.
+func TestProviderSwitchDropsTheFetchedCatalog(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store := newTestStore(t)
+	s, _, err := newRunSessionWithStore(store, Options{Model: "glm-5.3", ProviderName: "opencode-go"})
+	if err != nil {
+		t.Fatalf("newRunSessionWithStore: %v", err)
+	}
+	m := NewModel(Options{Model: "glm-5.3", ProviderName: "opencode-go"}).withSession(s, nil)
+	m.live.FetchedModels = []string{"glm-5.1", "glm-5.3"}
+	m.live.FetchedAt = time.Now()
+	m.live.FetchedKey = provider.ModelCatalogCacheKey("opencode-go", "https://opencode.ai/zen/go/v1")
+
+	got, _ := m.runSlash("/provider deepseek")
+	m = got.(Model)
+	if m.live.ProviderName != "deepseek" {
+		t.Fatalf("provider = %q, want deepseek", m.live.ProviderName)
+	}
+	if len(m.live.FetchedModels) != 0 || m.live.FetchedKey != "" {
+		t.Errorf("the previous gateway's catalog survived the switch: %v (key %q)",
+			m.live.FetchedModels, m.live.FetchedKey)
+	}
+
+	got, cmd := m.runSlash("/model")
+	m = got.(Model)
+	if m.menu.picking() {
+		var rows []string
+		for _, it := range m.menu.pick {
+			rows = append(rows, it.Value)
+		}
+		t.Errorf("bare /model offered %v; the previous gateway's lineup must not come back", rows)
+	}
+	if cmd == nil {
+		t.Error("expected the async fetch for the new gateway")
+	}
+}
+
+// TestStaleModelFetchDoesNotOpenThePicker: a fetch result that belongs to the
+// gateway the session just left must not open the model picker — its rows would
+// carry the previous provider's ids under the new provider's name.
+func TestStaleModelFetchDoesNotOpenThePicker(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := NewModel(Options{Model: "glm-5.3", ProviderName: "opencode-go"})
+	m.session = &runSession{}
+
+	stale := provider.ModelCatalogCacheKey("opencode-go", "https://api.example.test/v1")
+	got, _ := m.applyModelsFetched(modelsFetchedMsg{ids: []string{"glm-5.1", "glm-5.3"}, key: stale})
+	m = got.(Model)
+	if m.menu.picking() {
+		t.Error("a stale fetch must not open the model picker")
+	}
+
+	live := prompts.ModelCatalogKey(m.live)
+	got, _ = m.applyModelsFetched(modelsFetchedMsg{ids: []string{"glm-5.1"}, key: live})
+	m = got.(Model)
+	if !m.menu.picking() {
+		t.Error("a fetch for the live gateway should open the picker")
 	}
 }
 

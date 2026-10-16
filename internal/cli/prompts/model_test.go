@@ -224,6 +224,52 @@ func TestModelCommandSetsLevel(t *testing.T) {
 	}
 }
 
+// TestModelFetchDoesNotCrossAGatewaySwitch: the async list is filed under the
+// gateway it was fetched for. A /provider switch that lands while the request is
+// in flight must neither adopt the old lineup nor store it under the new
+// gateway's key — such an entry would keep answering /model with the previous
+// gateway's models for as long as it lived, which is exactly how a switched
+// session went on listing the provider it had left.
+func TestModelFetchDoesNotCrossAGatewaySwitch(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	live := &cli.LiveConfig{Model: "glm-5.3", ProviderName: "opencode-go"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The switch lands mid-request: the answer that follows belongs to the
+		// gateway the session just left.
+		live.ProviderName = "deepseek"
+		live.BaseURL = ""
+		_, _ = w.Write([]byte(`{"data":[{"id":"glm-5.1"},{"id":"glm-5.3"}]}`))
+	}))
+	defer srv.Close()
+	live.BaseURL = srv.URL
+
+	creds := provider.NewCredentialStore(nil)
+	creds.SetOverride("opencode-go", "test-key")
+
+	ids, err := EnsureModelCatalog(live, creds)
+	if err == nil {
+		t.Fatalf("expected the change to be reported, got %v", ids)
+	}
+	if !strings.Contains(err.Error(), "provider changed") {
+		t.Errorf("error = %v, want it to name the provider change", err)
+	}
+	if len(live.FetchedModels) != 0 {
+		t.Errorf("the previous gateway's lineup was adopted: %v", live.FetchedModels)
+	}
+	// FetchedKey may still name the gateway that was being listed (the lookup
+	// bookmarks it), but it must never end up as the new gateway's key while the
+	// models behind it are someone else's — and no timestamp may claim a fresh list.
+	if live.FetchedKey == provider.ModelCatalogCacheKey("deepseek", "") {
+		t.Errorf("FetchedKey = %q, want it not to name the new gateway", live.FetchedKey)
+	}
+	if !live.FetchedAt.IsZero() {
+		t.Errorf("FetchedAt = %v, want the list not to look freshly adopted", live.FetchedAt)
+	}
+	if cached, _ := provider.CachedModelCatalog(provider.ModelCatalogCacheKey("deepseek", "")); len(cached) != 0 {
+		t.Errorf("the old lineup was stored under the new gateway's key: %v", cached)
+	}
+}
+
 // TestModelListAnnotatesCatalogLevels verifies the bare /model list annotates
 // the models the models.dev cache knows with their advertised reasoning levels
 // and context window (the file shape matches provider's on-disk cache), marks
