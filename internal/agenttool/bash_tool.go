@@ -298,31 +298,13 @@ var shellLookPath = exec.LookPath
 // it; the permission gate decides, so this is a request, not a grant.
 const sandboxPermissionEscalated = "require_escalated"
 
-// sandboxDeniedMarkers are the failure signatures that indicate the OS sandbox
-// refused an operation, as opposed to the command itself failing. They mirror
-// codex's detection list (sandboxing/src/denial.rs) so the model can tell the
-// difference and, when appropriate, retry with sandbox_permissions:
-// require_escalated.
-var sandboxDeniedMarkers = []string{
-	"operation not permitted",
-	"permission denied",
-	"read-only file system",
-	"sandbox",
-	"landlock",
-	"seccomp",
-}
-
 // looksSandboxDenied reports whether a sandboxed command's output looks like a
 // sandbox denial rather than an ordinary command failure. exitCode must be
-// non-zero; the caller only consults this for failed sandboxed runs.
+// non-zero; the caller only consults this for failed sandboxed runs. The
+// signatures live in judge, beside the path extraction that reads the same
+// lines, so one list both recognizes a denial and describes it.
 func looksSandboxDenied(output string) bool {
-	lower := strings.ToLower(output)
-	for _, marker := range sandboxDeniedMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
+	return judge.LooksSandboxDenied(output)
 }
 
 // sandboxFalseNegativeNote warns the model that sandbox-denied file checks can
@@ -578,7 +560,15 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// are skipped: the escape flow already had its say about that path.
 	if sandboxDenied && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
 		!strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
-		if p := judge.GrantablePathFromText(a.Command, a.Justification, t.Dir); p != "" && t.deniedAsked.First(p) {
+		// The denial's own message is the ground truth about which path was
+		// refused: the OS prints the file the syscall failed on, read or write,
+		// whatever the shell built it from. The command text only gets a say
+		// when the message names nothing grantable.
+		p := judge.PathsFromDenial(out, t.Dir)
+		if p == "" {
+			p = judge.GrantablePathFromText(a.Command, a.Justification, t.Dir)
+		}
+		if p != "" && t.deniedAsked.First(p) {
 			if t.OnSandboxDenied(ctx, p, a.Command) {
 				return t.Execute(withSandboxRetry(ctx), id, args, onUpdate)
 			}

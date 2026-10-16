@@ -14,6 +14,7 @@ package judge
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -21,13 +22,100 @@ import (
 	"github.com/getan/golder/internal/permissions"
 )
 
+// SandboxDenialMarkers are the failure signatures that indicate the OS sandbox
+// refused an operation, as opposed to the command itself failing. They mirror
+// codex's detection list (sandboxing/src/denial.rs). One list answers both
+// questions about a denial — whether it happened (LooksSandboxDenied) and which
+// path it named (PathsFromDenial) — so the two can never disagree.
+var SandboxDenialMarkers = []string{
+	"operation not permitted",
+	"permission denied",
+	"read-only file system",
+	"sandbox",
+	"landlock",
+	"seccomp",
+}
+
+// LooksSandboxDenied reports whether a sandboxed command's output looks like a
+// sandbox denial rather than an ordinary command failure. The caller only
+// consults this for failed sandboxed runs.
+func LooksSandboxDenied(output string) bool {
+	lower := strings.ToLower(output)
+	for _, marker := range SandboxDenialMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// PathsFromDenial returns the first path a sandbox denial named, or "". The OS
+// message is the ground truth about what was refused: it prints the path the
+// syscall failed on — read or write — including paths no static reading of the
+// command can derive (variables, loops, generated names) and paths it can get
+// wrong (a shell metacharacter in a sed expression once offered "/\1"). Only
+// lines carrying a denial marker are read, and every candidate must survive
+// NormalizePath and PlausibleWritableRoot, so a denial naming nothing grantable
+// yields "" and the caller falls back to the command text.
+func PathsFromDenial(output, cwd string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if !LooksSandboxDenied(line) {
+			continue
+		}
+		for _, raw := range denialLinePaths(line) {
+			p, err := permissions.NormalizePath(raw)
+			if err != nil {
+				continue
+			}
+			if PlausibleWritableRoot(p, cwd) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// denialLinePaths pulls path candidates out of one denial line. The commonest
+// shape is "<prog>: <path>: <message>"; the create-shaped messages wrap the
+// path in quotes ("cp: cannot create regular file '/x/y': Operation not
+// permitted", "touch: cannot touch '/x/y'", "dd: failed to open '/x/y'"). The
+// line's plain tokens are the last resort — the line itself is the denial, so
+// its tokens are better evidence than the command's — and every candidate is
+// validated by the caller.
+func denialLinePaths(line string) []string {
+	var out []string
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	if i := strings.Index(line, ": "); i >= 0 {
+		rest := line[i+2:]
+		if j := strings.Index(rest, ": "); j >= 0 {
+			add(rest[:j])
+		} else {
+			add(rest)
+		}
+	}
+	for _, quoted := range strings.Split(line, "'") {
+		quoted = strings.TrimSpace(quoted)
+		if strings.HasPrefix(quoted, "/") || strings.HasPrefix(quoted, "~/") {
+			add(quoted)
+		}
+	}
+	return append(out, pathTokens(line)...)
+}
+
 // GrantablePathFromText extracts the first plausible path token from a call's
-// summary and its justification, resolved against cwd. "" means no grant is
+// justification and its summary, resolved against cwd. The justification is
+// read first because it is prose written by the model — its tokens are paths,
+// while a command's tokens are shell expressions — and the summary still backs
+// it up for the commands that name their path plainly. "" means no grant is
 // offered — a dialog then shows only allow/deny and a denial has nothing to
 // re-admit — which is the fail-closed direction: a missed path hides a row, it
 // never grants one.
 func GrantablePathFromText(summary, justification, cwd string) string {
-	for _, raw := range append(pathTokens(summary), pathTokens(justification)...) {
+	for _, raw := range append(pathTokens(justification), pathTokens(summary)...) {
 		p, err := permissions.NormalizePath(raw)
 		if err != nil {
 			continue
@@ -118,6 +206,13 @@ func pathTokens(s string) []string {
 		f = strings.TrimLeft(f, ">|<")
 		f = strings.TrimRight(f, ".,;:)]}")
 		if strings.HasPrefix(f, "~/") || (strings.HasPrefix(f, "/") && f != "/") {
+			// A shell metacharacter means this token is an expression, not a
+			// literal path — the sed backreference "\1" in a s#…#…# command
+			// reached a dialog once. Skipping it hides a row; keeping it grants
+			// something that does not exist.
+			if strings.ContainsAny(f, `\*?${}#%`) {
+				continue
+			}
 			out = append(out, f)
 		}
 	}
@@ -132,6 +227,19 @@ func pathTokens(s string) []string {
 func PlausibleWritableRoot(p, cwd string) bool {
 	inside := func(dir string) bool {
 		return dir != "" && permissions.Inside(dir, p)
+	}
+	if p == "/" || p == "//" {
+		return false
+	}
+	// A direct child of the filesystem root that does not exist is a token, not
+	// a path: sed's s///g flag reaches here as "/g", and a backreference as
+	// "/\1". Real top-level directories exist (a mounted volume) or are already
+	// refused above; nested candidates ("…/build") are untouched, so a volume
+	// root that is not mounted this minute still gets its row.
+	if filepath.Dir(p) == "/" {
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
 	}
 	if inside(cwd) {
 		return false
