@@ -99,27 +99,19 @@ type statusBar struct {
 	protocol func() string
 }
 
-// Fold: the bar shows identity in full and keeps the rest a hover away.
+// Fold: every field but the focused one is collapsed, and a hover expands it.
 //
 // The bar carries more fields than a terminal has room for, and every one of them
 // is wanted (they come from the SPEC's own list). Collapsing is the compromise:
-// the leading segments — the provider and the branch — hold their full value, and
-// every later field collapses to a sliver showing its glyph and the first
-// character of its value ("⚖ a" for the approval mode). A folded field is drawn
-// one column over the block before it, and that single column is the whole
-// visual: the slivers read as a stack tucked behind one another rather than as a
-// row of stubs.
+// each field keeps its glyph and as much of its value as the row can afford, and
+// the spare columns are shared among the folded fields rather than left as a
+// sliver apiece. No field is privileged — the provider and the branch fold like
+// every other one — so a single rule explains the whole bar.
 //
 // The pointer expands one — hovering a segment, or clicking it, which pins it for
 // terminals whose mouse reporting carries no motion events. What is painted and
-// what the pointer hits come from the same cell row (see statusBar.row), so the
-// two can never disagree.
-const (
-	// foldLead is how many leading segments stay expanded. The provider and the
-	// branch are identity — which gateway, which checkout — the two facts the rest
-	// of the bar cannot express.
-	foldLead = 2
-)
+// what the pointer hits come from the same layout (see statusBar.row), so the two
+// can never disagree.
 
 // segFocus is a status-bar segment index that can be unset: the zero value means
 // "nothing focused", so a Model built as a struct literal is already correct
@@ -611,7 +603,7 @@ func (s statusBar) foldLayout(width int) []segment {
 		focusID = focusIndex(focus)
 	}
 	for i := range segs {
-		if i >= foldLead && i != focus {
+		if i != focus {
 			segs[i].folded = true
 		}
 	}

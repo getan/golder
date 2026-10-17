@@ -191,6 +191,9 @@ func (m *Manager) nearestLocked(cwd string) Result {
 // tree it returns {Decision: Undecided, Found: false} so the caller knows to
 // prompt the user.
 func (m *Manager) NearestTrustDecision(cwd string) Result {
+	if m == nil {
+		return Result{Decision: Undecided}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.nearestLocked(cwd)
@@ -200,8 +203,11 @@ func (m *Manager) NearestTrustDecision(cwd string) Result {
 // returns true when the nearest persisted decision is Trusted, or when cwd (or
 // an ancestor) was granted session trust via SetSessionTrust. Everything else
 // (Untrusted, Undecided, or no entry) returns false, meaning side-effect tools
-// require confirmation.
+// require confirmation. A nil manager — trust disabled — is untrusted.
 func (m *Manager) IsTrusted(cwd string) bool {
+	if m == nil {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, dir := range walkUp(cwd) {
@@ -263,8 +269,13 @@ func (m *Manager) mirror(dir string, dec Decision) {
 
 // SetSessionTrust grants trust for dir for the current process only. It is not
 // persisted: a future golder launch re-prompts. Used by the "just once" REPL
-// choice and by the confirmation prompt's "always" response.
+// choice and by the confirmation prompt's "always" response. A nil manager — the
+// store could not be opened, so trust is disabled — grants nothing, matching
+// every other method here; it must not crash the caller that answered a prompt.
 func (m *Manager) SetSessionTrust(dir string) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	dir = filepath.Clean(dir)
@@ -279,8 +290,11 @@ func (m *Manager) SetSessionTrust(dir string) {
 // read tools that read the folder's own files (LocalReadTools) stop asking in
 // dir and its ancestors, while side-effect tools and network reads keep asking.
 // It is not persisted: a future golder launch re-prompts. Used by the trust
-// prompt's "reads here" answer.
+// prompt's "reads here" answer. A nil manager grants nothing.
 func (m *Manager) SetSessionReads(dir string) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	dir = filepath.Clean(dir)
@@ -320,6 +334,9 @@ func (m *Manager) ReadsTrusted(cwd string) bool {
 // before persisted, so without this clear the "off" command would be
 // ineffective until restart.
 func (m *Manager) ClearSessionTrust(dir string) {
+	if m == nil {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, d := range walkUp(dir) {

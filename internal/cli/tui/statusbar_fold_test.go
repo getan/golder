@@ -43,28 +43,58 @@ func glyphCol(s statusBar, width int, r rune) int {
 	return -1
 }
 
-// TestStatusBarFoldsPastTheLead is the fold's contract: the provider and the
-// branch hold their full value, and every later field is a sliver showing its
-// glyph and the first character of its value.
-func TestStatusBarFoldsPastTheLead(t *testing.T) {
+// TestStatusBarFoldsEveryField is the fold's contract: no field is privileged.
+// The provider and the branch fold like the rest — each keeps its glyph and as
+// much of its value as its share allows — and none of them disappears.
+func TestStatusBarFoldsEveryField(t *testing.T) {
 	out := stripANSI(foldFixture().Render(foldWidth))
 
-	for _, want := range []string{"commandcode", glyphGit + " master", glyphDirty + "1"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the lead should be whole, missing %q: %q", want, out)
-		}
-	}
 	for _, want := range []string{
-		glyphMode + " auto", glyphModel + " …pus", glyphThink + " high",
-		glyphCwd + " …der", glyphCtx + " …%)", glyphTask + " …ad",
+		glyphGit + " …er", glyphMode + " auto", glyphModel + " …opus", glyphThink + " high",
+		glyphCwd + " …lder", glyphCtx + " …42%)", glyphTask + " …Read",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("folded field %q should show its window: %q", want, out)
 		}
 	}
-	for _, absent := range []string{"claude-opus", "~/work/harness/golder", "84,000", "running: Read"} {
+	// The provider is text-only — it has no glyph to keep — so its fold keeps the
+	// start and the tail of the name rather than a leading marker.
+	if !strings.Contains(out, "…dcode") {
+		t.Errorf("the provider should keep a recognisable tail: %q", out)
+	}
+	for _, absent := range []string{"commandcode", "master", "claude-opus", "~/work/harness/golder", "84,000", "running: Read"} {
 		if strings.Contains(out, absent) {
 			t.Errorf("folded field should not show %q until focused: %q", absent, out)
+		}
+	}
+}
+
+// TestStatusBarHoverRestoresEveryField: each field — the provider and the branch
+// included — comes back at full value when it is the focused one.
+func TestStatusBarHoverRestoresEveryField(t *testing.T) {
+	s := foldFixture()
+	for _, tc := range []struct{ glyph, want string }{
+		{"", "commandcode"},
+		{glyphGit, glyphGit + " master"},
+		{glyphMode, "auto"},
+		{glyphModel, "claude-opus"},
+		{glyphProto, "…"}, // the fixture sets no protocol; covered by its own test
+		{glyphThink, "high"},
+		{glyphCwd, "~/work/harness/golder"},
+		{glyphCtx, "84,000"},
+		{glyphTask, "running: Read"},
+	} {
+		if tc.glyph == glyphProto {
+			continue
+		}
+		focused := s
+		if tc.glyph == "" {
+			focused.hover = focusIndex(0)
+		} else {
+			focused = focusSegment(t, s, tc.glyph)
+		}
+		if out := stripANSI(focused.Render(foldWidth)); !strings.Contains(out, tc.want) {
+			t.Errorf("focused %q should show %q: %q", tc.glyph, tc.want, out)
 		}
 	}
 }

@@ -361,3 +361,21 @@ func TestEntriesListSavedAndSession(t *testing.T) {
 	}
 	t.Errorf("an explicit null entry should still be listed: %v", saved)
 }
+
+// A nil manager means the store could not be opened, which the front-ends report
+// as "trust disabled" and carry on. Every read already answers that way; the
+// session-grant setters must too, because a caller that just answered a trust
+// prompt does not know whether the store existed. They used to dereference the
+// receiver and crash the process.
+func TestNilManagerSessionGrantsAreNoOps(t *testing.T) {
+	var m *Manager
+	m.SetSessionTrust("/work/project")
+	m.SetSessionReads("/work/project")
+	m.ClearSessionTrust("/work/project")
+	if m.IsTrusted("/work/project") {
+		t.Error("a nil manager must grant nothing")
+	}
+	if m.ReadsTrusted("/work/project") {
+		t.Error("a nil manager must grant no reads")
+	}
+}
