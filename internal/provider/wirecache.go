@@ -17,9 +17,9 @@ import (
 // (provider, "family:"+family): a gateway routes one line the same way, so the
 // first model asked answers for its siblings (see ModelFamily).
 //
-// Entries expire after wireCacheTTL: a gateway can change what it serves, and a
-// stale answer would silently pin the wrong wire. An expired entry is treated as
-// absent and re-probed on the next resolution.
+// Entries expire after wireCacheTTL (one month): a gateway can change what it
+// serves, and a stale answer would silently pin the wrong wire. An expired entry
+// is treated as absent and re-probed in the background on the next resolution.
 
 const wireCacheTTL = 30 * 24 * time.Hour
 

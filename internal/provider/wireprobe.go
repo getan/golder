@@ -8,16 +8,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
-// probeWait bounds how long provider resolution waits for the lazy probe before
-// answering from the static table and letting the probe finish in the
-// background. Startup must stay snappy: the wire is a routing detail, and a
-// gateway that answers slowly should cost the first run a fallback, not every
-// launch a stall. The background answer is stored (see wirecache.go), so the
-// next resolution is instant.
-const probeWait = 800 * time.Millisecond
+// probeInflight deduplicates background probes: one question per (provider,
+// model) at a time, so a re-resolution cannot stack a second request.
+var probeInflight sync.Map
 
 // ProbeWire asks an endpoint which wire it actually serves for a model. It is
 // the answer for the case the static tables cannot describe: a gateway that
@@ -127,15 +124,16 @@ func wireProbeDisabled(env func(string) string) bool {
 	return false
 }
 
-// selectWireWithProbe is SelectWire plus the lazy probe, for every provider
+// selectWireWithProbe is SelectWire plus a background probe, for every provider
 // alike: when the model's native wire differs from the provider's registered
-// wire, the static answer is a guess about how this endpoint routes the model,
-// and the endpoint is asked. The answer is remembered per model and per family
-// (see wirecache.go), so one confirmed model answers for its siblings and a
-// restart does not pay again. Two cases skip the question because it cannot
-// change anything: a provider that serves a single wire, and a model whose
-// native wire is the provider's own registered wire. GOLDER_WIRE_PROBE=off
-// disables new questions for offline runs; cached answers still apply.
+// wire, the static answer is a guess about how this endpoint routes the model.
+// The guess is returned immediately — resolution never waits on the network —
+// and the endpoint is asked in the background; its answer is stored per model
+// and per family (see wirecache.go), so the next resolution already knows. A
+// cached answer (one month) skips the question entirely, as do a provider that
+// serves a single wire and a model whose native wire is the registered one.
+// GOLDER_WIRE_PROBE=off disables new questions for offline runs; cached answers
+// still apply.
 func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(string) string) Wire {
 	wire := SelectWire(spec, model)
 	if len(ProviderWires(spec)) < 2 {
@@ -161,24 +159,20 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	if len(spec.EnvVars) > 0 && env != nil {
 		apiKey = env(spec.EnvVars[0])
 	}
-	answer := make(chan Wire, 1)
+	// One probe per (provider, model) at a time: a re-resolution while the
+	// first question is still in flight must not spawn a second.
+	key := wireCacheKey(spec.Name, model)
+	if _, busy := probeInflight.LoadOrStore(key, struct{}{}); busy {
+		return wire
+	}
 	go func() {
+		defer probeInflight.Delete(key)
 		if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, 5*time.Second); err == nil {
 			storeWire(spec.Name, model, probed)
 			if fam := ModelFamily(model); fam != "" {
 				storeWire(spec.Name, "family:"+fam, probed)
 			}
-			answer <- probed
-			return
 		}
-		answer <- wire
 	}()
-	select {
-	case confirmed := <-answer:
-		return confirmed
-	case <-time.After(probeWait):
-		// Let the probe finish and store its answer; this run uses the static
-		// wire.
-		return wire
-	}
+	return wire
 }
