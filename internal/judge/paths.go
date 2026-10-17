@@ -20,6 +20,7 @@ import (
 
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/shellfacts"
 )
 
 // SandboxDenialMarkers are the failure signatures that indicate the OS sandbox
@@ -132,35 +133,63 @@ func GrantablePathFromText(summary, justification, cwd string) string {
 	return ""
 }
 
+// commandPlan parses a call's command text once. The dialog's summary carries a
+// "command: " prefix, so that is stripped before the parse; the words the shell
+// would build are what the scans below read.
+func commandPlan(summary string) *shellfacts.Plan {
+	return shellfacts.Parse(strings.TrimPrefix(strings.TrimSpace(summary), "command: "))
+}
+
 // writeTargetPaths returns the path operands of a command whose effect is a
 // write or a delete — "rm -rf <dir>", "mkdir -p <dir>", "cp a <dst>" — which
 // the boundary reader does not always collect: it reads what a command READS,
 // and rm deletes. sed and awk only count when they write in place; their other
 // flags take scripts, and a script's words are not paths.
 func writeTargetPaths(s string) []string {
-	fields := strings.Fields(strings.TrimPrefix(s, "command: "))
-	if len(fields) == 0 {
+	plan := commandPlan(s)
+	if !plan.Parsed {
 		return nil
 	}
-	verb := fields[0]
-	switch verb {
-	case "sed", "awk", "gawk":
-		inPlace := false
-		for _, f := range fields[1:] {
-			if f == "-i" || strings.HasPrefix(f, "-i") || f == "--in-place" || strings.HasPrefix(f, "--in-place=") {
-				inPlace = true
-				break
+	var out []string
+	for _, c := range plan.AllCommands() {
+		prog, ok := c.Program()
+		if !ok {
+			continue
+		}
+		verb := filepath.Base(prog)
+		switch verb {
+		case "sed", "awk", "gawk":
+			if !inPlaceFlag(c.Args()) {
+				continue
+			}
+		default:
+			if !writeVerbs[verb] {
+				continue
 			}
 		}
-		if !inPlace {
-			return nil
-		}
-	default:
-		if !writeVerbs[verb] {
-			return nil
+		for _, a := range c.Args() {
+			if v, ok := wordValue(a); ok && literalPath(v) {
+				out = append(out, v)
+			}
 		}
 	}
-	return pathTokens(s)
+	return out
+}
+
+// inPlaceFlag reports whether an argument list carries sed/awk's in-place flag
+// (-i, -i.bak, --in-place, --in-place=…).
+func inPlaceFlag(args []shellfacts.Word) bool {
+	for _, a := range args {
+		v, ok := wordValue(a)
+		if !ok {
+			continue
+		}
+		if v == "--in-place" || strings.HasPrefix(v, "--in-place=") ||
+			v == "-i" || (strings.HasPrefix(v, "-i") && !strings.HasPrefix(v, "--")) {
+			return true
+		}
+	}
+	return false
 }
 
 // pathFlagNames are the flags whose value is a write target in practice, for
@@ -175,25 +204,35 @@ var pathFlagNames = map[string]bool{
 	"--destination": true, "--tmpdir": true, "--workdir": true, "--work-tree": true,
 }
 
-// flagValuePaths returns the values of path-taking flags. Adjacency is the
-// evidence here: a path-shaped word after an unrelated flag is a script's
-// argument ("sed -n '/func X/,/^}/p'"), not a target, which is why this is not
-// another pass of pathTokens.
+// flagValuePaths returns the values of path-taking flags, read from the shell's
+// own words. Adjacency is the evidence here: a path-shaped word after an
+// unrelated flag is a script's argument ("sed -n '/func X/,/^}/p'"), not a
+// target — and the parse is what tells the two apart.
 func flagValuePaths(s string) []string {
-	fields := strings.Fields(s)
+	plan := commandPlan(s)
+	if !plan.Parsed {
+		return nil
+	}
 	var out []string
-	for i, f := range fields {
-		if eq := strings.IndexByte(f, '='); eq > 0 && strings.HasPrefix(f, "-") {
-			if v := f[eq+1:]; literalPath(v) {
+	for _, c := range plan.AllCommands() {
+		args := c.Args()
+		for i, a := range args {
+			name, ok := wordValue(a)
+			if !ok || !strings.HasPrefix(name, "-") {
+				continue
+			}
+			if eq := strings.IndexByte(name, '='); eq > 0 {
+				if pathFlagNames[name[:eq]] && literalPath(name[eq+1:]) {
+					out = append(out, name[eq+1:])
+				}
+				continue
+			}
+			if !pathFlagNames[name] || i+1 >= len(args) {
+				continue
+			}
+			if v, ok := wordValue(args[i+1]); ok && literalPath(v) {
 				out = append(out, v)
 			}
-			continue
-		}
-		if i == 0 || !literalPath(f) {
-			continue
-		}
-		if pathFlagNames[strings.TrimRight(fields[i-1], "=")] {
-			out = append(out, f)
 		}
 	}
 	return out
@@ -238,11 +277,13 @@ func (s *OnceSet) First(key string) bool {
 
 // PathWriteNeed reports whether a denied path is needed for WRITING rather than
 // reading, so the question can say which it is and lead with the row that
-// actually unblocks the command. Two signals, cheapest first: a path that does
+// actually unblocks the command. Three signals, cheapest first: a path that does
 // not exist can only have been needed for writing (there is nothing to read out
-// of it), and otherwise the command is scanned for the verbs that make a path a
-// write target. It stays a heuristic — the dialog still offers both sides — and
-// it is biased to "read" when unsure, which is the narrower grant.
+// of it); a redirection that writes to the path (or under it); and a command
+// whose verb, or path-taking flag, makes the path a write target. The parse is
+// what keeps a stderr redirect (`2>/dev/null`) from counting as a write. It
+// stays a heuristic — the dialog still offers both sides — and it is biased to
+// "read" when unsure, which is the narrower grant.
 func PathWriteNeed(path, summary string) bool {
 	if path == "" {
 		return false
@@ -250,13 +291,63 @@ func PathWriteNeed(path, summary string) bool {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return true
 	}
-	for _, tok := range strings.Fields(summary) {
-		if strings.Contains(tok, ">") {
+	plan := commandPlan(summary)
+	if !plan.Parsed {
+		return false
+	}
+	for _, c := range plan.AllCommands() {
+		for _, r := range c.Redirs {
+			if r.Dup || r.Heredoc || !isWriteOp(r.Op) {
+				continue
+			}
+			if target, ok := wordValue(r.Target); ok && pathCovers(path, target) {
+				return true
+			}
+		}
+		prog, ok := c.Program()
+		if !ok {
+			continue
+		}
+		verb := filepath.Base(prog)
+		writes := writeVerbs[verb]
+		if verb == "sed" || verb == "awk" || verb == "gawk" {
+			writes = inPlaceFlag(c.Args())
+		}
+		if !writes {
+			continue
+		}
+		for _, a := range c.Args() {
+			if v, ok := wordValue(a); ok && pathCovers(path, v) {
+				return true
+			}
+		}
+	}
+	for _, v := range flagValuePaths(summary) {
+		if pathCovers(path, v) {
 			return true
 		}
-		if writeVerbs[tok] {
-			return true
-		}
+	}
+	return false
+}
+
+// pathCovers reports whether root is target itself or contains it.
+func pathCovers(root, target string) bool {
+	nr, err := permissions.NormalizePath(root)
+	if err != nil {
+		return false
+	}
+	nt, err := permissions.NormalizePath(target)
+	if err != nil {
+		return false
+	}
+	return nt == nr || permissions.Inside(nr, nt)
+}
+
+// isWriteOp reports whether a redirection operator writes to its target.
+func isWriteOp(op string) bool {
+	switch op {
+	case ">", ">>", ">|", "&>", "&>>", "<>":
+		return true
 	}
 	return false
 }

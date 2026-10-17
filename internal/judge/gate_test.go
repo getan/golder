@@ -720,6 +720,8 @@ func TestPathWriteNeed(t *testing.T) {
 		{"mkdir on an existing dir", existing, "mkdir -p " + existing, true},
 		{"plain read", existing, "ls " + existing, false},
 		{"redirect", existing, "go build -o " + existing + "/x 2> " + existing + "/err", true},
+		{"stderr to /dev/null is not a write", existing, "ls " + existing + " 2>/dev/null", false},
+		{"path-taking flag", existing, "go build -o " + existing + "/x", true},
 	}
 	for _, c := range cases {
 		if got := PathWriteNeed(c.path, c.summary); got != c.want {
