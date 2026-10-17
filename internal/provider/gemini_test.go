@@ -154,6 +154,7 @@ func TestGeminiResolve(t *testing.T) {
 	if name != "opencode-go" {
 		t.Errorf("name = %q, want opencode-go", name)
 	}
+	p = UnwrapProvider(p)
 	d, ok := p.(*geminiCompatDriver)
 	if !ok {
 		t.Fatalf("driver = %T, want *geminiCompatDriver", p)

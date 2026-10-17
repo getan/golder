@@ -1406,6 +1406,15 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A model without a Responses endpoint falls back to Chat automatically**:
+  when a pristine first request on the Responses wire is rejected with
+  `400 ModelProtocolUnsupported` (the reported opencode-go/mimo-v2.6-flash
+  case), the driver retries the same request over the gateway's Chat
+  Completions wire, forwards that stream, and records Chat in the persistent
+  wire cache for the model and its family. `ProviderSpec.ModelWireRules` pins
+  known exceptions — `mimo` on opencode-go — so a fresh install chooses Chat
+  without paying for the first failed request; the cache still covers every
+  other family the gateway rejects.
 - **Shift+Enter keeps working after a paste**: a terminal or multiplexer that
   pushes/pops its keyboard-enhancement flags around a paste can leave
   Shift+Enter encoded as a bare Enter, which the composer reads as submit — so

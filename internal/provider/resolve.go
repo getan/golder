@@ -231,8 +231,8 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	// registered wire (SelectWire). A gateway that serves a model some other way
 	// — a translated wire, or a family it hosts natively — can be asked once via
 	// GOLDER_WIRE_PROBE. An explicit --protocol still wins, verbatim.
+	var primaryWire Wire
 	effective := spec.Protocol
-	authScheme := spec.AuthScheme
 	if strings.TrimSpace(protocol) != "" {
 		canonical, err := NormalizeProtocol(protocol)
 		if err != nil {
@@ -242,9 +242,34 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 			return nil, "", fmt.Errorf("--provider %q speaks the %q protocol, which conflicts with --protocol %q; drop --protocol or set it to one of %s", name, spec.Protocol, protocol, ProtocolChoices(spec))
 		}
 		effective = canonical
-	} else if canonical, ok := protocolForWire(selectWireWithProbe(spec, model, baseURL, env)); ok {
-		effective = canonical
+		primaryWire = wireForProtocol(canonical)
+	} else {
+		primaryWire = selectWireWithProbe(spec, model, baseURL, env)
+		if canonical, ok := protocolForWire(primaryWire); ok {
+			effective = canonical
+		}
 	}
+	p, err := buildNamedProvider(spec, model, baseURL, effective, env)
+	if err != nil {
+		return nil, "", err
+	}
+	// An automatically chosen wire may be a guess (the model's native wire on a
+	// gateway that serves it differently, or a family the gateway cannot carry
+	// on that wire yet). Wrap it so the first ModelProtocolUnsupported answer
+	// retries the provider's remaining declared wires in WirePriority order and
+	// records the one that works. An explicit --protocol is the user's choice
+	// and is never overridden; special-auth providers have one fixed endpoint.
+	if strings.TrimSpace(protocol) == "" && !IsSpecialAuthProvider(spec) {
+		p = withWireFallback(spec, model, baseURL, primaryWire, p, env)
+	}
+	return p, spec.Name, nil
+}
+
+// buildNamedProvider constructs the driver for one already-resolved protocol.
+// It performs the provider's base-URL/auth composition but no validation and no
+// fallback wrapping, so the fallback wrapper can reuse it for each wire.
+func buildNamedProvider(spec ProviderSpec, model, baseURL, effective string, env func(string) string) (Provider, error) {
+	authScheme := spec.AuthScheme
 	// A declared variant carries the auth scheme that wire expects: the same
 	// gateway may authenticate its Messages endpoint differently from its
 	// OpenAI-family one.
@@ -254,49 +279,30 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	// Special-auth providers (Azure / Bedrock / Vertex / Cloudflare) compose
 	// their endpoint from several env vars and/or need non-standard credential
 	// validation, so route them to the dedicated resolver (US-007 / node #188).
-	// It performs its own base-URL composition (honoring the --base-url override)
-	// and returns a clear error naming any absent required env var.
 	if IsSpecialAuthProvider(spec) {
-		p, err := ResolveSpecialProvider(spec, model, baseURL, env)
-		if err != nil {
-			return nil, "", err
-		}
-		return p, spec.Name, nil
+		return ResolveSpecialProvider(spec, model, baseURL, env)
 	}
 	// Base-URL precedence (US-004 / FR-8, FR-9): --base-url flag > provider-
 	// specific base-url env var(s) > generic <PROVIDER>_BASE_URL > spec default.
 	url := ResolveBaseURL(spec, baseURL, env)
 	models := []Model{{Provider: spec.Name, ID: model, SupportsImages: true}}
-	// Note: spec.ExtraHeaders would be attached here, but the exported generic
-	// constructors do not yet accept custom headers; all built-in specs currently
-	// carry no ExtraHeaders, so this is a no-op today (refined alongside #188).
 	switch effective {
 	case ProtocolAnthropic:
-		// Auth header follows the spec's AuthScheme (x-api-key + anthropic-version
-		// for anthropic/minimax/minimax-cn; Bearer for any anthropic-protocol
-		// gateway that authenticates with a plain bearer token), or the scheme the
-		// selected wire variant declares for a Messages endpoint on an
-		// OpenAI-wired gateway. The driver name is the spec name so errors
-		// reference the selected provider — and so per-provider request
-		// decoration (the opencode session header) reaches this wire too.
-		return NewAnthropicProtocolProvider(spec.Name, url, authScheme, models), spec.Name, nil
+		return NewAnthropicProtocolProvider(spec.Name, url, authScheme, models), nil
 	case ProtocolOpenAI:
-		return NewOpenAICompatibleProviderAs(spec.Name, url, models), spec.Name, nil
+		return NewOpenAICompatibleProviderAs(spec.Name, url, models), nil
 	case ProtocolOpenAIResponses:
-		return NewOpenAIResponsesProvider(spec.Name, url, models), spec.Name, nil
+		return NewOpenAIResponsesProvider(spec.Name, url, models), nil
 	case ProtocolGemini:
 		// The v1beta wire may live on a different endpoint than the provider's
-		// OpenAI-family one, so a declared variant can carry its own base URL
-		// (opencode-go serves it under …/google/v1beta).
+		// OpenAI-family one, so a declared variant can carry its own base URL.
 		geminiURL := url
 		if v, ok := wireVariantFor(spec, ProtocolGemini); ok && strings.TrimSpace(v.BaseURL) != "" {
 			geminiURL = strings.TrimSpace(v.BaseURL)
 		}
-		return NewGeminiProtocolProvider(spec.Name, geminiURL, authScheme, models), spec.Name, nil
+		return NewGeminiProtocolProvider(spec.Name, geminiURL, authScheme, models), nil
 	default:
-		// The registry only ever stores openai/openai-resp/anthropic; guard anyway
-		// so an unexpected value is a clear error rather than a nil provider.
-		return nil, "", fmt.Errorf("--provider %q has unsupported protocol %q", name, spec.Protocol)
+		return nil, fmt.Errorf("--provider %q has unsupported protocol %q", spec.Name, spec.Protocol)
 	}
 }
 

@@ -22,10 +22,12 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/openai/openai-go"
@@ -169,6 +171,38 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 		d.emitError(stream, err)
 		return
 	}
+}
+
+// isModelProtocolUnsupportedErr reports the gateway's explicit "this model does
+// not speak the requested wire" 400, the shape opencode-go returns for a
+// domestic model with no Responses endpoint.
+func isModelProtocolUnsupportedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	// The SDK's structured error keeps the response body (it restores it after
+	// reading); the gateway's top-level {"type":"ModelProtocolUnsupported"...}
+	// shape is not wrapped in an "error" object, so its parsed Type/Message
+	// fields are empty and the raw string is the reliable signal.
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		if strings.Contains(strings.ToLower(apiErr.Type), "modelprotocolunsupported") ||
+			strings.Contains(strings.ToLower(apiErr.Message), "does not support this protocol") {
+			return true
+		}
+		if apiErr.Response != nil && apiErr.Response.Body != nil {
+			body, _ := io.ReadAll(io.LimitReader(apiErr.Response.Body, 1<<16))
+			apiErr.Response.Body = io.NopCloser(bytes.NewReader(body))
+			msg := strings.ToLower(string(body))
+			if strings.Contains(msg, "modelprotocolunsupported") ||
+				strings.Contains(msg, "does not support this protocol") {
+				return true
+			}
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "modelprotocolunsupported") ||
+		strings.Contains(msg, "does not support this protocol")
 }
 
 // runOnce consumes one Responses SSE stream, emitting text/thinking/tool-call

@@ -55,6 +55,7 @@ func TestEffectiveProtocol(t *testing.T) {
 		{"gateway muse takes its native Responses wire", "opencode-go", "muse-spark-1.3", "", ProtocolOpenAIResponses},
 		{"gateway claude takes its native Messages wire", "opencode-go", "claude-haiku-5-5", "", ProtocolAnthropic},
 		{"gateway gemini takes its native v1beta wire", "opencode-go", "gemini-4-argon-contributor", "", ProtocolGemini},
+		{"gateway mimo is pinned to Chat (no Responses endpoint)", "opencode-go", "mimo-v2.6-flash", "", ProtocolOpenAI},
 		{"chat-only gateway translates gemini", "openrouter", "gemini-3.8-flash", "", ProtocolOpenAI},
 		{"explicit resp_api wins", "opencode-go", "glm-4.7", "openai/resp_api", ProtocolOpenAIResponses},
 		{"explicit chat wins over the native wire", "opencode-go", "claude-haiku-5-5", "openai", ProtocolOpenAI},

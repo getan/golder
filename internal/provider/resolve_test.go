@@ -532,6 +532,7 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("family model error: %v", err)
 	}
+	p = UnwrapProvider(p)
 	if _, ok := p.(*responsesDriver); !ok {
 		t.Errorf("muse-spark on opencode-go = %T, want *responsesDriver", p)
 	}
@@ -541,6 +542,7 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("non-family model error: %v", err)
 	}
+	p = UnwrapProvider(p)
 	if _, ok := p.(*openAICompatDriver); !ok {
 		t.Errorf("mistral-large-latest on opencode-go = %T, want *openAICompatDriver", p)
 	}

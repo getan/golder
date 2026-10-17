@@ -190,6 +190,11 @@ func wireProbeDisabled(env func(string) string) bool {
 // still apply.
 func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(string) string) Wire {
 	wire := SelectWire(spec, model)
+	if _, pinned := staticWire(spec, model); pinned {
+		// A declared override is the answer for this family; a probe cannot
+		// improve on it, and a stale cache entry must not override it.
+		return wire
+	}
 	if len(ProviderWires(spec)) < 2 {
 		return wire
 	}

@@ -20,8 +20,10 @@ const (
 	WireChat      Wire = "chat"
 )
 
-// WirePriority is the fixed preference order.
-var WirePriority = []Wire{WireResponses, WireMessages, WireGemini, WireChat}
+// WirePriority is the fixed preference order, used both for probing and for the
+// adaptive fallback when a gateway rejects a model's current wire: Responses,
+// Messages, Chat, then the Gemini v1beta wire.
+var WirePriority = []Wire{WireResponses, WireMessages, WireChat, WireGemini}
 
 // protocolForWire maps a wire onto the internal protocol selector the resolver
 // switches on. ok=false means the wire has no driver yet.
@@ -127,6 +129,9 @@ func ProviderWires(spec ProviderSpec) []Wire {
 // An explicit --protocol is not handled here: the resolver validates it with
 // AllowsProtocol and keeps the user's choice verbatim.
 func SelectWire(spec ProviderSpec, model string) Wire {
+	if w, ok := staticWire(spec, model); ok {
+		return w
+	}
 	wires := ProviderWires(spec)
 	if len(wires) == 0 {
 		return WireChat
@@ -138,6 +143,24 @@ func SelectWire(spec ProviderSpec, model string) Wire {
 		return registered
 	}
 	return wires[0]
+}
+
+// staticWire returns the gateway's declared wire override for a model family,
+// when one matches and the gateway actually serves that wire.
+func staticWire(spec ProviderSpec, model string) (Wire, bool) {
+	id := strings.ToLower(strings.TrimSpace(model))
+	if id == "" {
+		return "", false
+	}
+	for _, rule := range spec.ModelWireRules {
+		if rule.Match == "" || !strings.Contains(id, strings.ToLower(rule.Match)) {
+			continue
+		}
+		if wireAllowed(spec, rule.Wire) {
+			return rule.Wire, true
+		}
+	}
+	return "", false
 }
 
 // WireNative reports whether the provider serves the model's native wire, which

@@ -53,7 +53,7 @@ func TestProviderWires(t *testing.T) {
 		return s
 	}
 	want := map[string][]Wire{
-		"opencode-go": {WireResponses, WireMessages, WireGemini, WireChat},
+		"opencode-go": {WireResponses, WireMessages, WireChat, WireGemini},
 		"openrouter":  {WireResponses, WireChat},
 		"anthropic":   {WireMessages},
 		"deepseek":    {WireResponses},
@@ -119,6 +119,7 @@ func TestSelectWire(t *testing.T) {
 		{"opencode-go", "gemini-4-argon-contributor", WireGemini},
 		{"opencode-go", "glm-5.3", WireResponses},
 		{"opencode-go", "deepseek-v4.1-flash", WireResponses},
+		{"opencode-go", "mimo-v2.6-flash", WireChat},
 		{"openrouter", "gemini-3.8-flash", WireChat},
 		{"openrouter", "gpt-6-luna", WireResponses},
 		{"openrouter", "deepseek-v4-pro", WireResponses},

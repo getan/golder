@@ -100,6 +100,14 @@ type ProviderSpec struct {
 	// the upstream API accepts). Empty means "no quirks".
 	ReasoningLadders []ReasoningLadder
 
+	// ModelWireRules overrides the shared model-family wire table for this
+	// gateway: the first rule whose Match is a case-insensitive substring of the
+	// model id wins. Declare one for a family the gateway does not serve on its
+	// upstream vendor's usual wire (e.g. a domestic model with no Responses
+	// endpoint yet). A rule is ignored when the gateway does not declare the
+	// wire.
+	ModelWireRules []ModelWireRule
+
 	// DefaultModel is the model id a bare provider name resolves to (e.g.
 	// "zai" → "glm-4.7", see CanonicalizeModel), so /model <provider> and
 	// --model <provider> select a real wire id instead of sending the literal
@@ -120,6 +128,13 @@ type WireVariant struct {
 	// registered base (opencode-go serves Gemini under …/google/v1beta).
 	// Empty means "use the provider's base".
 	BaseURL string
+}
+
+// ModelWireRule pins a model family to one wire on a gateway. Match is a
+// case-insensitive substring of the model id; the first matching rule wins.
+type ModelWireRule struct {
+	Match string
+	Wire  Wire
 }
 
 // ReasoningLadder is one model-family reasoning-effort rule: Match is a
@@ -322,6 +337,11 @@ var providerRegistry = []ProviderSpec{
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
 		DefaultModel:   "deepseek-v4.1-flash",
+		// Xiaomi's MiMo lineup has no Responses endpoint on this gateway yet;
+		// the upstream family table says Responses, so pin it to Chat here.
+		// The runtime fallback below records the same answer for any other
+		// family the gateway rejects, and the persistent wire cache keeps it.
+		ModelWireRules: []ModelWireRule{{Match: "mimo", Wire: WireChat}},
 		// The gateway also serves the Messages wire at {base}/messages, which is
 		// how its Claude models are reached (probed live with claude-haiku-5-5:
 		// x-api-key auth, plus the x-opencode-session routing header every
