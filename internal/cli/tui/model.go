@@ -962,6 +962,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// put it and the cursor jumps here, selecting everything in between —
 		// across pages, either direction — with no edge aiming.
 		if msg.Button == tea.MouseLeft {
+			// A left press on the status bar works the fold: it pins the segment
+			// under the pointer open, and a second press (or a press on the bar's
+			// background) releases it. It never starts a text selection, which is
+			// the one thing the bar gives up for it — every field is still
+			// reachable in full through /status.
+			if m.onStatusBar(msg.Y) {
+				m.statusBar.pin = m.pinnedAfterClick(msg.X)
+				return m, nil
+			}
 			m.pendingCardClick = nil
 			if m.onScrollbar(msg.X, msg.Y) {
 				m.draggingScrollbar = true
@@ -1017,6 +1026,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
 			return m, m.updateSelAutoscroll()
 		}
+		// Otherwise the pointer is only hovering: it may be over the status bar's
+		// folded segments, which expand under it.
+		m.statusBar.hover = m.statusSegmentAt(msg.X, msg.Y)
 		return m, nil
 
 	case tea.MouseReleaseMsg:
@@ -3550,7 +3562,14 @@ func (m Model) View() tea.View {
 	// alt-screen swallows the wheel (no native scrollback), so history could only
 	// be reached via PgUp/PgDn; enabling it lets the wheel scroll the transcript
 	// and drives both scrollbar drag and mouse text selection.
-	v := tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeCellMotion}
+	//
+	// AllMotion (xterm 1003) is the same set plus motion with no button held,
+	// which is what the status bar's fold is driven by: a segment expands while
+	// the pointer rests on it, without a click. Terminals that report 1002 only
+	// simply deliver no motion events, and the fold stays reachable by clicking a
+	// segment instead. Everything the cell-motion mode gave us — click, release,
+	// wheel, drag — is a subset of this one.
+	v := tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeAllMotion}
 	// Park the REAL terminal cursor on the input caret: this is the anchor the
 	// IME candidate window follows (the old virtual cursor hid the real one, so
 	// the candidate popup landed in the wrong place). inputRow counts the frame
@@ -4008,6 +4027,37 @@ func (m Model) onScrollbar(x, y int) bool {
 	}
 	h := m.transcript.viewportHeight()
 	return x == m.width-1 && y >= 0 && y < h
+}
+
+// onStatusBar reports whether a screen row is the status bar's. The bar is the
+// last row of the frame: relayout's height arithmetic starts at m.height-1 (that
+// one row is the bar) and renderContent writes it last, so its row is always
+// m.height-1.
+func (m Model) onStatusBar(y int) bool {
+	return m.height > 0 && y == m.height-1
+}
+
+// statusSegmentAt returns the status bar's folded segment under a screen cell, or
+// the zero focus when the cell is off the bar or on its background. The hit test
+// runs the same layout the renderer paints (statusBar.segmentAt), so a pointer can
+// only land on a segment that is really drawn there.
+func (m Model) statusSegmentAt(x, y int) segFocus {
+	if !m.onStatusBar(y) || m.width <= 0 {
+		return 0
+	}
+	return m.statusBar.segmentAt(x, m.width)
+}
+
+// pinnedAfterClick is the pin a press on the bar leaves behind: a press on a
+// segment pins it open, and a press on that same segment again — or on the bar's
+// background — releases it. This is the fold's fallback for a terminal whose
+// mouse reporting carries no motion events, where a hover can never happen.
+func (m Model) pinnedAfterClick(x int) segFocus {
+	seg := m.statusBar.segmentAt(x, m.width)
+	if seg == 0 || seg == m.statusBar.pin {
+		return 0
+	}
+	return seg
 }
 
 // transcriptHeight returns the fallback number of rows for the transcript before

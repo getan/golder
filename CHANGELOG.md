@@ -1503,6 +1503,19 @@ interactive REPL/TUI.
   nothing explaining why the two differed; that reads as a contradiction rather
   than a decision, and it is why an approval card could look like it had both
   allowed and refused the same call.
+- **The status bar folds what is not pinned, and expands on hover**: the bar now
+  keeps its lead — the provider and the branch — at full width and collapses every
+  later field (the approval mode, model, thinking level, cwd, context gauge and
+  task) to a three-column sliver: its glyph and the first character of its value,
+  drawn one column over the block before it so the slivers read as a stack tucked
+  behind one another. Moving the pointer onto a segment expands it in place, and
+  clicking one pins it open — the fallback for a terminal whose mouse reporting
+  carries no motion events — with a second click, or a click on the bar's
+  background, releasing it. What is painted and what the pointer hits come from
+  one layout pass, so they cannot disagree, and `/status` still prints every field
+  whole. The mouse mode moves from xterm 1002 to 1003 (all motion) to deliver a
+  hover at all; click, release, wheel and drag are a subset of it, and a terminal
+  that reports 1002 only keeps the click path.
 - **A retry explains itself in the TUI instead of leaving a bare spinner**: when
   a cut stream is re-issued, the transcript now shows a notice naming the
   provider and the failure — `provider commandcode 的流中断（1m30s 无数据），

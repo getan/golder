@@ -23,25 +23,68 @@ func newTestStatusBar() statusBar {
 	return s
 }
 
+// focusSegment returns s with the segment whose text starts with glyph expanded,
+// which is the state a hover (or a click that pinned it) puts the bar in. Tests
+// use it to assert a field's whole value under the fold.
+func focusSegment(t *testing.T, s statusBar, glyph string) statusBar {
+	t.Helper()
+	for i, seg := range s.segments() {
+		if strings.HasPrefix(seg.text, glyph) {
+			s.hover = focusIndex(i)
+			return s
+		}
+	}
+	t.Fatalf("no segment starting with %q", glyph)
+	return s
+}
+
+// elisionWidth returns the widest bar at which the focused segment named by glyph
+// still has to be elided. Under the fold a roomy terminal fits even a focused long
+// value, so a test about elision has to ask for the width where it happens rather
+// than assume one.
+func elisionWidth(t *testing.T, s statusBar, glyph string) int {
+	t.Helper()
+	for width := 120; width > 8; width-- {
+		for _, seg := range s.foldLayout(width) {
+			if strings.HasPrefix(seg.text, glyph) && seg.win > 0 {
+				return width
+			}
+		}
+	}
+	t.Fatalf("no width elides %q", glyph)
+	return 0
+}
+
+// focusedSegmentAt returns what the fold layout decided for glyph at width — the
+// window it got, and whether it was abbreviated — so a test can assert the choice
+// rather than only the painted row.
+func focusedSegmentAt(t *testing.T, s statusBar, width int, glyph string) segment {
+	t.Helper()
+	for _, seg := range s.foldLayout(width) {
+		if strings.HasPrefix(seg.text, glyph) {
+			return seg
+		}
+	}
+	t.Fatalf("no segment starting with %q at width %d", glyph, width)
+	return segment{}
+}
+
 func TestStatusBarRendersAllFields(t *testing.T) {
 	s := newTestStatusBar()
 	s.SetGit(gitInfoMsg{branch: "master", dirty: 3, ahead: 4, ok: true})
 	s.SetTelemetry(telemetryEventView{util: 0.42, window: 200000})
 	s.SetTask("running: Read")
+	s.SetMode("auto")
 
 	const width = 200
-	out := s.Render(width)
+	out := stripANSI(s.Render(width))
 
+	// The lead — provider and branch — is always whole.
 	for _, want := range []string{
 		"openai",         // provider
-		"claude-opus",    // model
-		"high",           // thinking level
-		"~/project",      // cwd
 		"master",         // git branch
 		glyphDirty + "3", // dirty marker
 		glyphAhead + "4", // ahead marker
-		"42%",            // context usage
-		"running: Read",  // task
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q; got %q", want, out)
@@ -50,6 +93,22 @@ func TestStatusBarRendersAllFields(t *testing.T) {
 
 	if w := ui.Width(out); w > width {
 		t.Errorf("render width %d exceeds terminal width %d", w, width)
+	}
+
+	// Every other field is one hover away, and shows its whole value when it has
+	// the focus.
+	for _, tc := range []struct{ glyph, want string }{
+		{glyphMode, "auto"},
+		{glyphModel, "claude-opus"},
+		{glyphThink, "high"},
+		{glyphCwd, "~/project"},
+		{glyphCtx, "42%"},
+		{glyphTask, "running: Read"},
+	} {
+		focused := stripANSI(focusSegment(t, s, tc.glyph).Render(width))
+		if !strings.Contains(focused, tc.want) {
+			t.Errorf("focused %q should show %q; got %q", tc.glyph, tc.want, focused)
+		}
 	}
 }
 
@@ -108,8 +167,23 @@ func TestStatusBarShowsAShortPathBeforeScrolling(t *testing.T) {
 	}, "/tmp/x")
 	s.cwd = "~/work/harness/golder"
 	s.SetGit(gitInfoMsg{branch: "master", ok: true})
+	// The path is what this test is about, so it is the focused field: a folded
+	// field has nothing to shorten.
+	s = focusSegment(t, s, glyphCwd)
 
-	const roomy = 76
+	// Sweep down from a width that shows the whole path: the first width that
+	// cannot should be the one that spends the abbreviation, not the one that
+	// starts slicing the value.
+	roomy := 0
+	for w := 200; w > 8; w-- {
+		if focusedSegmentAt(t, s, w, glyphCwd).text != "▸ ~/work/harness/golder" {
+			roomy = w
+			break
+		}
+	}
+	if roomy == 0 {
+		t.Fatal("the path never gave anything up, so the abbreviation was never reached")
+	}
 	out := stripANSI(s.Render(roomy))
 	if !strings.Contains(out, "…/golder") {
 		t.Errorf("a %d-column bar should shorten the path, got %q", roomy, out)
@@ -117,8 +191,8 @@ func TestStatusBarShowsAShortPathBeforeScrolling(t *testing.T) {
 	if strings.Contains(out, "~/work/harness/golder") {
 		t.Errorf("the full path should not fit at %d columns: %q", roomy, out)
 	}
-	if !strings.Contains(out, "claude-haiku-5-5") {
-		t.Errorf("the model name should be whole when only the path needs shortening: %q", out)
+	if !strings.Contains(out, "opencode-go") {
+		t.Errorf("the lead should stay whole while the focused path shortens: %q", out)
 	}
 	s.StartReveal(roomy)
 	if s.revealLeft != 0 {
@@ -139,18 +213,18 @@ func TestStatusBarWindowsLongFields(t *testing.T) {
 	s.cwd = "~/work/harness/golder"
 	s.SetGit(gitInfoMsg{branch: "master", ok: true})
 
-	const narrow = 64
-	var modelWin, cwdWin int
-	for _, seg := range s.layout(s.segments(), narrow) {
-		switch {
-		case strings.HasPrefix(seg.text, glyphModel):
-			modelWin = seg.win
-		case strings.HasPrefix(seg.text, glyphCwd):
+	// The path is the field this test windows, so it holds the focus: a folded
+	// field has no window to scroll.
+	s = focusSegment(t, s, glyphCwd)
+	narrow := elisionWidth(t, s, glyphCwd)
+	var cwdWin int
+	for _, seg := range s.foldLayout(narrow) {
+		if strings.HasPrefix(seg.text, glyphCwd) {
 			cwdWin = seg.win
 		}
 	}
-	if modelWin == 0 || cwdWin == 0 {
-		t.Fatalf("long fields should be elided at %d columns: model=%d cwd=%d", narrow, modelWin, cwdWin)
+	if cwdWin == 0 {
+		t.Fatalf("the focused path should be elided at %d columns, got window %d", narrow, cwdWin)
 	}
 	s.StartReveal(narrow)
 	if s.revealLeft <= 0 {
@@ -161,15 +235,15 @@ func TestStatusBarWindowsLongFields(t *testing.T) {
 	s.revealLeft, s.revealMax, s.scroll = 0, 0, 0
 
 	out := stripANSI(s.Render(narrow))
-	if !strings.Contains(out, "…/") {
-		t.Errorf("the path should keep its trailing components: %q", out)
+	if !strings.Contains(out, "golder") {
+		t.Errorf("the elided path should still name the directory: %q", out)
 	}
 	for _, frame := range []string{out, stripANSI(s.Render(narrow))} {
 		if w := ui.Width(frame); w != narrow {
 			t.Errorf("row width = %d, want exactly %d:\n%q", w, narrow, frame)
 		}
 		// The short fields are drawn whole, exactly as before.
-		for _, want := range []string{"opencode-go", glyphGit + " master", glyphThink + " high", "haiku"} {
+		for _, want := range []string{"opencode-go", glyphGit + " master", glyphThink + " h", glyphModel + " c"} {
 			if !strings.Contains(frame, want) {
 				t.Errorf("fixed field %q should be whole at %d columns:\n%q", want, narrow, frame)
 			}
@@ -225,8 +299,10 @@ func TestStatusBarRevealRunsOnceAndSettles(t *testing.T) {
 	}, "/tmp/x")
 	s.cwd = "~/work/harness/golder"
 	s.SetGit(gitInfoMsg{branch: "master", ok: true})
+	// Only the focused field can be elided, so the path takes the focus.
+	s = focusSegment(t, s, glyphCwd)
 
-	const narrow = 64
+	narrow := elisionWidth(t, s, glyphCwd)
 	settled := stripANSI(s.Render(narrow))
 	s.StartReveal(narrow)
 	if s.revealLeft <= 0 {
@@ -338,19 +414,19 @@ func TestStatusBarTruncationKeepsPriorityFields(t *testing.T) {
 	s.SetTelemetry(telemetryEventView{util: 0.42, window: 200000})
 	s.SetTask("TASK")
 
-	// Narrow width: only the highest-priority fields (task > model > token)
-	// should survive; cwd and git should drop first.
-	const width = 24
-	out := s.Render(width)
+	// The fold changes what fits, not who yields: the SPEC priority order still
+	// decides, so the cwd (lowest) goes before the task (highest) and a narrow bar
+	// still says what is running.
+	const width = 40
+	out := stripANSI(s.Render(width))
 
-	if w := ui.Width(out); w > width {
-		t.Fatalf("truncated render width %d exceeds %d: %q", w, width, out)
+	if w := ui.Width(out); w != width {
+		t.Fatalf("render width %d, want exactly %d: %q", w, width, out)
 	}
-	if !strings.Contains(out, "TASK") {
+	if !strings.Contains(out, glyphTask) {
 		t.Errorf("highest-priority task field dropped under truncation: %q", out)
 	}
-	// cwd (lowest priority) must be gone before task.
-	if strings.Contains(out, "~/project") {
+	if strings.Contains(out, glyphCwd) {
 		t.Errorf("lowest-priority cwd should drop first under truncation: %q", out)
 	}
 }
@@ -379,6 +455,7 @@ func TestStatusBarZeroWidthEmpty(t *testing.T) {
 func TestStatusBarContextTokenCount(t *testing.T) {
 	s := newTestStatusBar()
 	s.SetTelemetry(telemetryEventView{util: 0.46, window: 200000, tokens: 90866})
+	s = focusSegment(t, s, glyphCtx)
 
 	out := s.Render(200)
 	for _, want := range []string{glyphCtx, "90,866", "46%"} {
@@ -470,10 +547,22 @@ func TestStatusBarPlainModeAt16Colors(t *testing.T) {
 	if strings.Contains(out, "48;") || regexp.MustCompile(`\x1b\[4[0-7]m`).MatchString(out) {
 		t.Errorf("plain bar must not paint backgrounds:\n%q", out)
 	}
-	// Each field is present...
-	for _, want := range []string{"openai", "sonnet-4", "medium", "/home/u/work/golder", "84,000"} {
+	// Each field is reachable, and the folded ones show their value when focused...
+	for _, tc := range []struct{ glyph, want string }{
+		{glyphThink, "medium"},
+		{glyphCwd, "/home/u/work/golder"},
+		{glyphCtx, "84,000"},
+		{glyphTask, "go test"},
+	} {
+		focused := downgrade(t, colorprofile.ANSI, focusSegment(t, s, tc.glyph).Render(100))
+		if !strings.Contains(focused, tc.want) {
+			t.Errorf("focused plain field %q is missing %q:\n%q", tc.glyph, tc.want, focused)
+		}
+	}
+	// ...and the lead is whole without any focus at all.
+	for _, want := range []string{"openai", "sonnet-4"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("plain bar is missing %q:\n%q", want, out)
+			t.Errorf("plain bar is missing the lead %q:\n%q", want, out)
 		}
 	}
 	// ...and carries its own color: the fields' foreground codes are all distinct,
@@ -547,10 +636,10 @@ func TestStatusBarPlainModeWidth(t *testing.T) {
 	narrow := barFixture()
 	narrow.SetColorProfile(colorprofile.ANSI)
 	got := stripANSI(narrow.Render(30))
-	if !strings.Contains(got, "go test") {
+	if !strings.Contains(got, glyphTask) {
 		t.Errorf("a 30-column bar should keep the highest-priority field (the task), got %q", got)
 	}
-	if strings.Contains(got, "/home/u/work") {
+	if strings.Contains(got, glyphCwd) {
 		t.Errorf("a 30-column bar should have dropped the cwd (lowest priority), got %q", got)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -83,6 +84,67 @@ type statusBar struct {
 	revealLeft int
 	revealMax  int
 	scroll     int
+
+	// hover is the segment under the pointer and pin the one a click fixed open;
+	// the zero value of either means "none" (see segFocus). Both are interaction
+	// state the Model owns and sets; the layout reads them through foldedSegments.
+	hover segFocus
+	pin   segFocus
+}
+
+// Fold: the bar shows identity in full and keeps the rest a hover away.
+//
+// The bar carries more fields than a terminal has room for, and every one of them
+// is wanted (they come from the SPEC's own list). Collapsing is the compromise:
+// the leading segments — the provider and the branch — hold their full value, and
+// every later field collapses to a sliver showing its glyph and the first
+// character of its value ("⚖ a" for the approval mode). A folded field is drawn
+// one column over the block before it, and that single column is the whole
+// visual: the slivers read as a stack tucked behind one another rather than as a
+// row of stubs.
+//
+// The pointer expands one — hovering a segment, or clicking it, which pins it for
+// terminals whose mouse reporting carries no motion events. What is painted and
+// what the pointer hits come from the same cell row (see statusBar.row), so the
+// two can never disagree.
+const (
+	// foldLead is how many leading segments stay expanded. The provider and the
+	// branch are identity — which gateway, which checkout — the two facts the rest
+	// of the bar cannot express.
+	foldLead = 2
+	// foldOverlap is how many columns a folded segment is drawn over the block
+	// before it.
+	foldOverlap = 1
+)
+
+// segFocus is a status-bar segment index that can be unset: the zero value means
+// "nothing focused", so a Model built as a struct literal is already correct
+// without an initializer.
+type segFocus int
+
+// focusIndex converts a 0-based segment index into a focus value.
+func focusIndex(i int) segFocus { return segFocus(i + 1) }
+
+// index returns the 0-based segment index, or -1 when nothing is focused.
+func (f segFocus) index() int { return int(f) - 1 }
+
+// valid reports whether f names a segment that exists in a list of n.
+func (f segFocus) valid(n int) bool {
+	i := f.index()
+	return i >= 0 && i < n
+}
+
+// statusCell is one column of the bar. A double-width rune occupies its own cell
+// plus a continuation cell (r == 0), so a CJK path or task text stays aligned
+// while the row remains addressable column by column — which is what makes hit
+// testing exact.
+type statusCell struct {
+	r  rune
+	fg string
+	bg string
+	// seg is the owning segment, shifted one up so a zeroed cell means "bar
+	// background" (see focusIndex).
+	seg int
 }
 
 // newStatusBar builds a status bar from the theme, resolved Options, and the
@@ -266,6 +328,9 @@ type segment struct {
 	// color survives both the 16-color and the 256-color profile unchanged.
 	plainFg  string
 	priority int // larger = kept longer under truncation
+	// folded marks a segment drawn in its collapsed form (see foldedSegment):
+	// its value reduced to the glyph and one character, never scrolled.
+	folded bool
 }
 
 // Priority order (SPEC: task > model/app > token > git > cwd). Higher is more
@@ -279,126 +344,274 @@ const (
 	prioTask     = 4
 )
 
-// Render lays the bar out to exactly the configured width, in one of two forms.
-// The ribbon (the default) draws each segment as a filled block joined to the next
-// by an arrow in the left block's background color, padded with the bar
-// background; the plain form (below 256 colors) draws the same fields as colored
-// text joined by a separator. Both take their fields, order and priorities from
-// segments(), so the two forms differ only in what they paint with.
+// Render lays the bar out to exactly the configured width as one row of cells,
+// in one of two forms. The ribbon (the default) draws each segment as a filled
+// block joined to the next by an arrow in the left block's background color; the
+// plain form (below 256 colors) draws the same fields as colored text joined by a
+// separator. Both take their fields, order and priorities from segments(), so the
+// two forms differ only in what they paint with.
 //
-// Either way the two fields whose values can outgrow a bar — the model name and
-// the cwd — are elided rather than dropped: the value keeps its tail behind an
-// ellipsis (see elideTail), so the model is still recognisable and the path still
-// names the directory. Every other field is short and is drawn whole; only when
-// the fixed fields alone cannot fit (a terminal narrower than one block) does the
-// SPEC priority order still drop one, and a single survivor too wide for the bar
-// is truncated. Nothing on the bar moves: a value settles on the slice it can
-// show, because a status line in motion is a status line that draws the eye
-// away from the work. The rendered row's display width (ui.Width, which ignores
-// ANSI) is always exactly width for width > 0; a non-positive width yields the
-// empty string.
+// The fold is applied either way (see the fold comment above). A focused field is
+// elided rather than dropped when it cannot fit — the model name and the cwd keep
+// their tail behind an ellipsis (see elideTail), so the model is still
+// recognisable and the path still names the directory — and only when the fixed
+// fields alone cannot fit (a terminal narrower than one block) does the SPEC
+// priority order drop one. The row is always exactly width columns wide; a
+// non-positive width yields the empty string.
 func (s statusBar) Render(width int) string {
 	if width <= 0 {
 		return ""
 	}
-
-	segs := s.layout(s.segments(), width)
-
-	if s.plain {
-		line, w := s.plainLine(segs)
-		if w <= width {
-			return line + strings.Repeat(" ", width-w)
-		}
-		// One field wider than the whole bar, even alone: truncate it, keeping
-		// its color (the elided fields are sized by layout and never reach this).
-		text := TruncateToWidth(s.segText(segs[0]), width)
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(segs[0].plainFg)).Render(text)
-	}
-
-	ribbon, w := s.renderRibbon(segs)
-	if w <= width {
-		return ribbon + barPad(width-w)
-	}
-	// Same last resort in the ribbon form: hard-truncate the survivor's text onto
-	// the bar background (no separators, so width stays bounded).
-	txt := TruncateToWidth(s.segText(segs[0]), width)
-	base := lipgloss.NewStyle().Foreground(lipgloss.Color(sbProvFg)).Background(lipgloss.Color(sbBarBg))
-	return base.Render(txt) + barPad(width-ui.Width(txt))
+	return renderStatusRow(s.row(width))
 }
 
-// renderRibbon builds the styled powerline string for segs and returns it with
-// its visible width (excluding ANSI). The left edge starts at the first
-// segment's background; a closing arrow caps any trailing block back to the bar.
-func (s statusBar) renderRibbon(segs []segment) (string, int) {
-	resolve := func(bg string) string {
-		if bg == "" {
-			return sbBarBg
-		}
-		return bg
+// row lays the bar out as a fixed-width cell row with the fold applied. Both the
+// renderer and the hit test read this one function, and each cell carries the
+// segment it belongs to, so what is painted and what the pointer hits cannot
+// disagree and a span is never computed twice.
+func (s statusBar) row(width int) []statusCell {
+	cells := make([]statusCell, width)
+	for i := range cells {
+		cells[i] = s.fillerCell()
 	}
+	segs := s.foldLayout(width)
 
-	var b strings.Builder
-	vis := 0
+	x := 0
 	for i, seg := range segs {
-		curBg := resolve(seg.bg)
-		if i > 0 {
-			// The separator arrow is filled with the LEFT block's background, so
-			// it matches the item it flows out of, sitting on the next block's bg.
-			leftBg := resolve(segs[i-1].bg)
-			b.WriteString(lipgloss.NewStyle().
-				Foreground(lipgloss.Color(leftBg)).
-				Background(lipgloss.Color(curBg)).
-				Render(sepArrow))
-			vis += ui.Width(sepArrow)
+		if x >= width {
+			break
 		}
-		content := " " + s.segText(seg) + " "
-		b.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color(seg.fg)).
-			Background(lipgloss.Color(curBg)).
-			Render(content))
-		vis += ui.Width(content)
+		x = s.drawSeparator(cells, segs, i, x)
+		fg, bg := seg.fg, s.blockBg(seg)
+		if s.plain {
+			// The plain form has no blocks to separate: a field keeps its own
+			// color on the terminal's background.
+			fg, bg = seg.plainFg, ""
+		}
+		own := focusIndex(i)
+		if !s.plain {
+			x = drawStatusText(cells, x, " ", fg, bg, own)
+		}
+		x = drawStatusText(cells, x, s.segText(seg), fg, bg, own)
+		if !s.plain {
+			x = drawStatusText(cells, x, " ", fg, bg, own)
+		}
 	}
-
 	// Cap a trailing colored block with an arrow back to the bar background.
-	if lastBg := resolve(segs[len(segs)-1].bg); lastBg != sbBarBg {
-		b.WriteString(lipgloss.NewStyle().
-			Foreground(lipgloss.Color(lastBg)).
-			Background(lipgloss.Color(sbBarBg)).
-			Render(sepArrow))
-		vis += ui.Width(sepArrow)
-	}
-	return b.String(), vis
-}
-
-// plainLine renders segs and reports their display width. Each field keeps its
-// own color; the separator between them is dim, so it separates without
-// competing with the labels. It pads with nothing: the caller pads the row with
-// plain spaces rather than the bar background, because painting a background is
-// the thing the plain form exists to avoid.
-func (s statusBar) plainLine(segs []segment) (string, int) {
-	var b strings.Builder
-	vis := 0
-	for i, seg := range segs {
-		if i > 0 {
-			b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(colorGray)).Render(sepPlain))
-			vis += ui.Width(sepPlain)
+	if !s.plain && len(segs) > 0 {
+		if lastBg := s.blockBg(segs[len(segs)-1]); lastBg != sbBarBg {
+			drawStatusText(cells, x, sepArrow, lastBg, sbBarBg, 0)
 		}
-		text := s.segText(seg)
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color(seg.plainFg)).Render(text))
-		vis += ui.Width(text)
 	}
-	return b.String(), vis
+	return cells
 }
 
-// barPad returns n spaces painted with the bar background so the row fills the
-// full terminal width. n <= 0 yields the empty string.
-func barPad(n int) string {
-	if n <= 0 {
+// drawSeparator paints what sits between segment i-1 and segment i: the ribbon's
+// arrow (filled with the LEFT block's background so it reads as that item's color
+// spilling into the next), the plain form's dim bullet, or — for a folded segment
+// — one column of overlap onto the block before it, which is the fold's whole
+// visual.
+func (s statusBar) drawSeparator(cells []statusCell, segs []segment, i, x int) int {
+	switch {
+	case i == 0:
+		return x
+	case s.plain:
+		return drawStatusText(cells, x, sepPlain, colorGray, "", 0)
+	case segs[i].folded && x > 0 && cells[x-1].r != 0:
+		return x - foldOverlap
+	default:
+		return drawStatusText(cells, x, sepArrow, s.blockBg(segs[i-1]), s.blockBg(segs[i]), 0)
+	}
+}
+
+// fillerCell is one column of bar background: the ribbon paints it, and the plain
+// form leaves a plain space, because painting a background is the thing the plain
+// form exists to avoid.
+func (s statusBar) fillerCell() statusCell {
+	if s.plain {
+		return statusCell{r: ' ', fg: colorGray}
+	}
+	return statusCell{r: ' ', fg: sbBarBg, bg: sbBarBg}
+}
+
+// blockBg resolves a segment's background, falling back to the bar's own for a
+// segment that has none.
+func (s statusBar) blockBg(seg segment) string {
+	if seg.bg == "" {
+		return sbBarBg
+	}
+	return seg.bg
+}
+
+// drawStatusText writes text into cells from x, attributing every cell to own (a
+// segment focus, 0 for the bar itself) and returning the new x. A double-width
+// rune claims a continuation cell so the columns after it stay addressable; text
+// that would run past the row is dropped, which is the only truncation the canvas
+// needs — the row is exactly as wide as the terminal.
+func drawStatusText(cells []statusCell, x int, text, fg, bg string, own segFocus) int {
+	for _, r := range text {
+		w := 1
+		if r >= 0x80 { // the only runes that can be double width
+			w = ui.Width(string(r))
+		}
+		if w <= 0 {
+			continue
+		}
+		if x+w > len(cells) {
+			return len(cells)
+		}
+		cells[x] = statusCell{r: r, fg: fg, bg: bg, seg: int(own)}
+		if w == 2 {
+			cells[x+1] = statusCell{r: 0, fg: fg, bg: bg, seg: int(own)}
+		}
+		x += w
+	}
+	return x
+}
+
+// renderStatusRow turns the cell row into the styled line the terminal draws.
+// Runs of cells sharing a style are rendered together, so a full-width bar costs
+// a handful of style sequences rather than one per segment.
+func renderStatusRow(cells []statusCell) string {
+	var b strings.Builder
+	for i := 0; i < len(cells); {
+		if cells[i].r == 0 {
+			// The continuation of a wide rune already written.
+			i++
+			continue
+		}
+		j := i
+		var run strings.Builder
+		for j < len(cells) && cells[j].fg == cells[i].fg && cells[j].bg == cells[i].bg {
+			if cells[j].r != 0 {
+				run.WriteRune(cells[j].r)
+			}
+			j++
+		}
+		b.WriteString(cellStyle(cells[i].fg, cells[i].bg).Render(run.String()))
+		i = j
+	}
+	return b.String()
+}
+
+// cellStyle builds the style for one run. A cell with no background (the plain
+// form) keeps the terminal's own.
+func cellStyle(fg, bg string) lipgloss.Style {
+	st := lipgloss.NewStyle().Foreground(lipgloss.Color(fg))
+	if bg != "" {
+		st = st.Background(lipgloss.Color(bg))
+	}
+	return st
+}
+
+// segmentAt maps a column of the bar to the segment drawn there, or the zero
+// focus when the column is bar background or outside the row.
+//
+// It walks the same fold layout row paints — the same separators, the same tuck —
+// without building the cell row, because a motion event asks this on every pointer
+// move and a full canvas per answer would make a hover cost more than a frame.
+// The walk keeps the LAST segment whose span covers the column rather than the
+// first: a folded segment is drawn over the column it tucks behind, so the later
+// one is what a person sees there. TestStatusBarSegmentAtAgreesWithTheRow pins the
+// two against each other, column by column.
+func (s statusBar) segmentAt(x, width int) segFocus {
+	if x < 0 || x >= width {
+		return 0
+	}
+	segs := s.foldLayout(width)
+	pos := 0
+	found := segFocus(0)
+	for i, seg := range segs {
+		// The order matches drawSeparator's: the plain form always separates with
+		// the dim bullet (it has no blocks to tuck behind), and only the ribbon
+		// folds.
+		switch {
+		case i == 0:
+		case s.plain:
+			pos += ui.Width(sepPlain)
+		case seg.folded:
+			// The tuck: this block is drawn one column over the previous one.
+			if pos > 0 {
+				pos -= foldOverlap
+			}
+		default:
+			pos += ui.Width(sepArrow)
+		}
+		block := ui.Width(s.segText(seg))
+		if !s.plain {
+			block += 2 // the ribbon pads every block with one space on each side
+		}
+		if x >= pos && x < pos+block {
+			found = focusIndex(i)
+		}
+		pos += block
+	}
+	return found
+}
+
+// foldLayout fits the bar to width with the fold applied.
+func (s statusBar) foldLayout(width int) []segment {
+	return s.layout(s.foldedSegments(), width)
+}
+
+// foldedSegments returns the bar's segments with the fold applied: everything
+// past the lead collapses to a sliver, except the focused segment.
+func (s statusBar) foldedSegments() []segment {
+	segs := s.segments()
+	focus := s.focus(len(segs))
+	for i := range segs {
+		if i < foldLead || i == focus {
+			continue
+		}
+		segs[i] = foldedSegment(segs[i])
+	}
+	return segs
+}
+
+// focus is the segment currently expanded: the pointer wins over the pin, so
+// hovering reads as "show me this now" without losing the pinned one.
+func (s statusBar) focus(n int) int {
+	if s.hover.valid(n) {
+		return s.hover.index()
+	}
+	if s.pin.valid(n) {
+		return s.pin.index()
+	}
+	return -1
+}
+
+// foldedSegment is seg in its collapsed form: the glyph and the first character
+// of its value, never scrolled and never abbreviated — there is nothing left to
+// abbreviate.
+func foldedSegment(seg segment) segment {
+	seg.text = foldedText(seg.text)
+	seg.short = ""
+	seg.scrollable = false
+	seg.win = 0
+	seg.folded = true
+	return seg
+}
+
+// foldedText keeps a field's glyph and the first character of its value: "⚖ auto"
+// folds to "⚖ a", which names the field and hints at its value in three columns.
+// A value that is nothing but a glyph comes back alone.
+func foldedText(text string) string {
+	first := ' '
+	found := false
+	for _, r := range text {
+		if unicode.IsSpace(r) {
+			continue
+		}
+		if !found {
+			first, found = r, true
+			continue
+		}
+		return string(first) + " " + string(r)
+	}
+	if !found {
 		return ""
 	}
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color(sbBarBg)).
-		Render(strings.Repeat(" ", n))
+	return string(first)
 }
 
 // segments builds the ordered list of visible segments. Order in the slice is
@@ -543,6 +756,11 @@ func (s statusBar) elided(seg segment) string {
 // tail. Matching the settled width is what keeps the fields around it from moving
 // as the motion stops.
 func (s statusBar) segText(seg segment) string {
+	if seg.folded {
+		// A folded field shows its sliver as-is: the change reveal slides a value
+		// into view, and there is no view to slide it into.
+		return seg.text
+	}
 	settled := s.elided(seg)
 	if s.revealLeft <= 0 || settled == seg.text {
 		return settled
@@ -565,7 +783,7 @@ func (s *statusBar) StartReveal(width int) {
 		return
 	}
 	steps := 0
-	for _, seg := range s.layout(s.segments(), width) {
+	for _, seg := range s.foldLayout(width) {
 		if seg.win <= 0 || seg.win >= ui.Width(seg.text) {
 			continue
 		}
