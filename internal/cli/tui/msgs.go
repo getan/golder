@@ -130,6 +130,11 @@ type compactionMsg struct {
 	summarized, kept int
 }
 
+// providerNoticeMsg carries a provider-layer progress note that is not message
+// content: today, a cut stream that is being retried. It is rendered as a
+// harness notice so the wait has an explanation instead of only a spinner.
+type providerNoticeMsg struct{ ev agentcore.ProviderNoticeEvent }
+
 // trustPromptMsg asks the model to open the first-run trust picker. It is
 // emitted by Init when withSession saw an undecided launch directory, so the
 // dialog appears on the Update goroutine before the first prompt.

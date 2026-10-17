@@ -44,9 +44,11 @@ type Decoder interface {
 	Finish() ([]StreamEvent, error)
 }
 
-// defaultIdleTimeout is the watchdog idle window; GOLDER_STREAM_IDLE_TIMEOUT
-// (a Go duration string, e.g. "3m") overrides it.
-const defaultIdleTimeout = 5 * time.Minute
+// defaultIdleTimeout is the watchdog idle window; GOLDER_STREAM_IDLE_TIMEOUT (a
+// Go duration string, e.g. "3m") overrides it. Ninety seconds is long enough for
+// a slow request to emit its first event and short enough that a silent gateway
+// does not look like a hang; five minutes was neither.
+const defaultIdleTimeout = 90 * time.Second
 
 const (
 	// defaultMaxConnectRetries bounds connect-only retries when TransportConfig

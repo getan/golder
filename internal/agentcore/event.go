@@ -1,5 +1,7 @@
 package agentcore
 
+import "time"
+
 // AgentEvent is the sealed interface implemented by every event the loop emits.
 // Consumers dispatch with a type switch, consistent with Content. golder covers
 // all 10 of pi's event types (PRD FR-24).
@@ -27,6 +29,7 @@ const (
 	EventContextUsage        = "context_usage"
 	EventTelemetry           = "telemetry"
 	EventSubAgentProgress    = "subagent_progress"
+	EventProviderNotice      = "provider_notice"
 )
 
 // AgentStartEvent is emitted once when a loop run begins. SessionID, when set,
@@ -145,6 +148,22 @@ type SubAgentProgressEvent struct {
 	Tokens int
 }
 
+// ProviderNoticeEvent is a non-terminal provider-layer progress note surfaced
+// to the UI while the run continues: today, a cut stream that is being retried.
+// It is not a message event and never enters the conversation; a front-end that
+// ignores it behaves exactly as before.
+type ProviderNoticeEvent struct {
+	// Kind is the notice family; "retry" is the only one today.
+	Kind string
+	// Provider names the gateway whose stream was cut.
+	Provider string
+	// Reason is the cut kind: "idle", "stall", "truncated", or "silent".
+	Reason string
+	// Window is the watchdog window that expired, for idle/stall; zero
+	// otherwise.
+	Window time.Duration
+}
+
 // ToolTiming records how long one tool invocation took, keyed by tool name in
 // TelemetryEvent.ToolDurationsMs. It aggregates repeated calls of the same tool
 // so a summary stays compact regardless of turn count.
@@ -219,6 +238,7 @@ func (CompactionStartEvent) isAgentEvent()     {}
 func (ContextUsageEvent) isAgentEvent()        {}
 func (TelemetryEvent) isAgentEvent()           {}
 func (SubAgentProgressEvent) isAgentEvent()    {}
+func (ProviderNoticeEvent) isAgentEvent()      {}
 
 func (AgentStartEvent) EventType() string          { return EventAgentStart }
 func (AgentEndEvent) EventType() string            { return EventAgentEnd }
@@ -235,3 +255,4 @@ func (CompactionStartEvent) EventType() string     { return EventCompactionStart
 func (ContextUsageEvent) EventType() string        { return EventContextUsage }
 func (TelemetryEvent) EventType() string           { return EventTelemetry }
 func (SubAgentProgressEvent) EventType() string    { return EventSubAgentProgress }
+func (ProviderNoticeEvent) EventType() string      { return EventProviderNotice }

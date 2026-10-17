@@ -11,6 +11,7 @@ package provider
 
 import (
 	"context"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 )
@@ -32,6 +33,7 @@ const (
 	StreamEventToolCall = "toolcall"
 	StreamEventDone     = "done"
 	StreamEventError    = "error"
+	StreamEventNotice   = "notice"
 )
 
 // StreamStartEvent carries the initial (usually empty) partial message.
@@ -56,12 +58,33 @@ type StreamErrorEvent struct {
 	Err     error
 }
 
+// StreamNoticeEvent is a non-terminal progress note from the provider layer —
+// something the user should see while the run continues, without becoming part
+// of the assistant message. Today it carries the cut-stream retry: which
+// provider was cut, why, and that a second attempt is starting. It is emitted
+// by the retry wrapper itself (streamretry.go), not by a driver.
+type StreamNoticeEvent struct {
+	// Kind is the notice family; StreamNoticeRetry is the only one today.
+	Kind string
+	// Provider names the gateway whose stream was cut.
+	Provider string
+	// Reason is the cut kind: "idle", "stall", "truncated", or "silent".
+	Reason string
+	// Window is the watchdog window that expired, for idle/stall; zero
+	// otherwise.
+	Window time.Duration
+}
+
+// StreamNoticeRetry is the notice kind for a stream that is being re-issued.
+const StreamNoticeRetry = "retry"
+
 func (StreamStartEvent) isAssistantMessageEvent()    {}
 func (StreamTextEvent) isAssistantMessageEvent()     {}
 func (StreamThinkingEvent) isAssistantMessageEvent() {}
 func (StreamToolCallEvent) isAssistantMessageEvent() {}
 func (StreamDoneEvent) isAssistantMessageEvent()     {}
 func (StreamErrorEvent) isAssistantMessageEvent()    {}
+func (StreamNoticeEvent) isAssistantMessageEvent()   {}
 
 func (StreamStartEvent) EventKind() string    { return StreamEventStart }
 func (StreamTextEvent) EventKind() string     { return StreamEventText }
@@ -69,6 +92,7 @@ func (StreamThinkingEvent) EventKind() string { return StreamEventThinking }
 func (StreamToolCallEvent) EventKind() string { return StreamEventToolCall }
 func (StreamDoneEvent) EventKind() string     { return StreamEventDone }
 func (StreamErrorEvent) EventKind() string    { return StreamEventError }
+func (StreamNoticeEvent) EventKind() string   { return StreamEventNotice }
 
 // AssistantMessageEventStream is the provider-level stream: deltas of type
 // AssistantMessageEvent with a final AssistantMessage result. isComplete fires

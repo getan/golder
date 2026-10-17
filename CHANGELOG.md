@@ -1477,7 +1477,7 @@ interactive REPL/TUI.
   line, including one that closed a comment-only keep-alive frame with no
   `data:` payload. A gateway that keeps saying "I'm alive" while producing
   nothing therefore defeated the very guard meant to catch it, and the turn hung
-  until the idle window (five minutes) or Ctrl+C. Only a framed payload resets
+  until the idle window or Ctrl+C. Only a framed payload resets
   the stall window now; keep-alives still reset the idle window, which is what
   they are for.
 - **A stream that ends without a final event is retried like a dropped
@@ -1487,6 +1487,18 @@ interactive REPL/TUI.
   commandcode/mimo turn that ended in fourteen seconds with that sentence. Both
   sides now share a sentinel, so the silent end is classified as a cut and gets
   the same single retry when nothing has been shown.
+- **A retry explains itself in the TUI instead of leaving a bare spinner**: when
+  a cut stream is re-issued, the transcript now shows a notice naming the
+  provider and the failure — `provider commandcode 的流中断（1m30s 无数据），
+  正在重试…` (or the English equivalent, following the conversation's language).
+  It covers the idle, content-stall, truncated and silent-end cuts, and it is
+  emitted by the retry layer itself, so it appears exactly when a second attempt
+  actually starts rather than on every failure.
+- **The idle watchdog now defaults to 90 seconds**: five minutes of silence was
+  indistinguishable from a hang, and it made a single cut cost up to ten minutes
+  once the retry's own window was added. A provider that has sent nothing for
+  90 seconds is now declared cut and retried; `GOLDER_STREAM_IDLE_TIMEOUT` still
+  overrides the window (and the content-stall window remains 1.2× it).
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

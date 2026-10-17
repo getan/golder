@@ -134,6 +134,18 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 			if err := emit(ctx, agentcore.MessageUpdateEvent{Message: e.Partial, AssistantMessageEvent: e}); err != nil {
 				return agentcore.AssistantMessage{}, err
 			}
+		case provider.StreamNoticeEvent:
+			// Provider-layer progress (a cut stream being retried) is an observer
+			// event, not message content: it must not create or mutate the
+			// assistant partial, and a front-end that ignores it loses nothing.
+			if err := emit(ctx, agentcore.ProviderNoticeEvent{
+				Kind:     e.Kind,
+				Provider: e.Provider,
+				Reason:   e.Reason,
+				Window:   e.Window,
+			}); err != nil {
+				return agentcore.AssistantMessage{}, err
+			}
 		case provider.StreamDoneEvent:
 			finalizeMessage(agentCtx, e.Message, &addedPartial)
 			if err := emit(ctx, agentcore.MessageEndEvent{Message: e.Message}); err != nil {

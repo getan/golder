@@ -132,18 +132,30 @@ func errorMessage(events []AssistantMessageEvent) string {
 	return ""
 }
 
-// A stream cut before anything was shown is re-issued, and the caller never
-// learns the first attempt happened: one start, the retry's content, no error.
-// That is the reported failure — "error: unexpected EOF" on a turn that had
-// produced nothing — turned into the answer the user asked for.
-func TestStreamRetryReissuesACutAttemptInvisibly(t *testing.T) {
+func noticeEvents(events []AssistantMessageEvent) []StreamNoticeEvent {
+	var out []StreamNoticeEvent
+	for _, ev := range events {
+		if n, ok := ev.(StreamNoticeEvent); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// A stream cut before anything was shown is re-issued: the cut attempt's start
+// is dropped, the retry's content is what the caller sees, and a notice explains
+// the wait. That is the reported failure — "error: unexpected EOF" on a turn
+// that had produced nothing — turned into the answer the user asked for, with
+// the retry visible instead of silent.
+func TestStreamRetryReissuesACutAttempt(t *testing.T) {
 	for _, cut := range []struct {
-		name string
-		err  error
+		name   string
+		err    error
+		reason string
 	}{
-		{"dropped connection", io.ErrUnexpectedEOF},
-		{"idle connection", fmt.Errorf("no data for 5m0s: %w", errStreamIdle)},
-		{"quiet model", fmt.Errorf("no output for 6m0s: %w", errStreamStall)},
+		{"dropped connection", io.ErrUnexpectedEOF, StreamCutTruncated},
+		{"idle connection", fmt.Errorf("no data for 5m0s: %w", errStreamIdle), StreamCutIdle},
+		{"quiet model", fmt.Errorf("no output for 6m0s: %w", errStreamStall), StreamCutStall},
 	} {
 		t.Run(cut.name, func(t *testing.T) {
 			inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
@@ -166,6 +178,16 @@ func TestStreamRetryReissuesACutAttemptInvisibly(t *testing.T) {
 			if got := lastText(events); got != "recovered" {
 				t.Errorf("final text = %q, want the retry's answer", got)
 			}
+			notices := noticeEvents(events)
+			if len(notices) != 1 {
+				t.Fatalf("notices = %d (%+v), want exactly 1 before the retry", len(notices), notices)
+			}
+			if notices[0].Kind != StreamNoticeRetry || notices[0].Provider != "scripted" {
+				t.Errorf("notice = %+v, want a retry notice naming the provider", notices[0])
+			}
+			if notices[0].Reason != cut.reason {
+				t.Errorf("notice reason = %q, want %q", notices[0].Reason, cut.reason)
+			}
 		})
 	}
 }
@@ -186,6 +208,9 @@ func TestStreamRetryKeepsContentAndNamesTheCut(t *testing.T) {
 	}
 	if got := lastText(events); got != "half an answer" {
 		t.Errorf("text = %q, want the streamed content kept", got)
+	}
+	if got := len(noticeEvents(events)); got != 0 {
+		t.Errorf("notices = %d, want none when the cut cannot be retried", got)
 	}
 	got := errorMessage(events)
 	if !strings.Contains(got, "scripted: stream cut") {
@@ -213,6 +238,9 @@ func TestStreamRetryGivesUpAfterASecondCut(t *testing.T) {
 	if got := countEvents[StreamErrorEvent](events); got != 1 {
 		t.Fatalf("error events = %d, want exactly 1 terminal error", got)
 	}
+	if got := len(noticeEvents(events)); got != 1 {
+		t.Errorf("notices = %d, want exactly 1 (one retry was attempted)", got)
+	}
 	if got := errorMessage(events); !strings.Contains(got, "stream cut") {
 		t.Errorf("failure = %q, want the cut named even when the retry failed", got)
 	}
@@ -235,6 +263,9 @@ func TestStreamRetryLeavesRealFailuresAlone(t *testing.T) {
 	if got := errorMessage(events); !strings.Contains(got, "model_coming_soon") {
 		t.Errorf("failure = %q, want the wire's own answer untouched", got)
 	}
+	if got := len(noticeEvents(events)); got != 0 {
+		t.Errorf("notices = %d, want none for a real failure", got)
+	}
 }
 
 // A stream that ends without any terminal event and without content is as cut as
@@ -253,6 +284,10 @@ func TestStreamRetryRetriesASilentlyEndedAttempt(t *testing.T) {
 	}
 	if got := lastText(events); got != "recovered" {
 		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || notices[0].Reason != StreamCutSilent {
+		t.Errorf("notices = %+v, want one silent-cut notice", notices)
 	}
 }
 

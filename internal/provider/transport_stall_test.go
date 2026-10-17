@@ -12,6 +12,17 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 )
 
+// TestDefaultIdleTimeoutIsNinetySeconds pins the wait a person sees before a
+// silent gateway is declared cut. Five minutes read as a hang; ninety seconds is
+// short enough to retry inside a coffee sip, long enough for a slow request to
+// emit its first event.
+func TestDefaultIdleTimeoutIsNinetySeconds(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "")
+	if got := idleTimeout(); got != 90*time.Second {
+		t.Fatalf("idleTimeout() = %s, want 90s", got)
+	}
+}
+
 // nopDecoder accepts each framed payload and produces nothing; the keep-alive
 // test never sends a payload, so it only has to satisfy the interface.
 type nopDecoder struct{}

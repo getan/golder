@@ -33,6 +33,16 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
+)
+
+// The cut kinds carried by StreamNoticeEvent/ProviderNoticeEvent. They are the
+// vocabulary a front-end localizes, so they stay stable strings.
+const (
+	StreamCutIdle      = "idle"
+	StreamCutStall     = "stall"
+	StreamCutTruncated = "truncated"
+	StreamCutSilent    = "silent"
 )
 
 // isTruncatedStreamErr reports a stream whose body ended before the response
@@ -60,6 +70,35 @@ func isStreamCutErr(err error) bool {
 		errors.Is(err, errStreamIdle) ||
 		errors.Is(err, errStreamStall) ||
 		errors.Is(err, errStreamNoTerminal)
+}
+
+// streamCutReason names which cut happened, in the stable vocabulary above.
+// Call it only after isStreamCutErr says the error is a cut.
+func streamCutReason(err error) string {
+	switch {
+	case errors.Is(err, errStreamIdle):
+		return StreamCutIdle
+	case errors.Is(err, errStreamStall):
+		return StreamCutStall
+	case isTruncatedStreamErr(err):
+		return StreamCutTruncated
+	default:
+		return StreamCutSilent
+	}
+}
+
+// streamCutWindow is the watchdog window that expired, for the two time-based
+// cuts; zero for the others. A front-end prints it so the notice matches the
+// setting (GOLDER_STREAM_IDLE_TIMEOUT) the user can change.
+func streamCutWindow(err error) time.Duration {
+	switch {
+	case errors.Is(err, errStreamIdle):
+		return idleTimeout()
+	case errors.Is(err, errStreamStall):
+		return stallTimeout()
+	default:
+		return 0
+	}
 }
 
 // streamCutError renders a cut stream for the transcript: what happened, whose

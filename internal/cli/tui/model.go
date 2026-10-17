@@ -1365,6 +1365,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner.pin("Compacting conversation")
 		return m, m.pumpNext()
 
+	case providerNoticeMsg:
+		// A retry is in flight: say who was cut and why, so the spinner's wait
+		// has an explanation. addNotice reflows the transcript itself.
+		m.transcript.addNotice(providerNoticeText(msg.ev, m.conversationLang()), false)
+		return m, m.pumpNext()
+
 	case compactionMsg:
 		m.spinner.unpin()
 		if msg.err != "" {

@@ -66,6 +66,15 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 			return
 		} else {
 			retried = true
+			// Tell the front-end before the second attempt starts. The first
+			// attempt's start event was held, so without this the interface shows
+			// only the spinner and the user cannot tell a retry from a hang.
+			_ = out.Emit(ctx, StreamNoticeEvent{
+				Kind:     StreamNoticeRetry,
+				Provider: p.Name(),
+				Reason:   streamCutReason(cut),
+				Window:   streamCutWindow(cut),
+			})
 			// The retry may re-resolve a wire (the wrapper sits above the wire
 			// fallback) and always builds a fresh request and decoder, so no
 			// state from the cut attempt is carried over.
