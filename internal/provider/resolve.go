@@ -192,8 +192,9 @@ func IsProviderName(id string) bool {
 // It looks the name up in the built-in registry and constructs the wire driver
 // for the effective protocol: "openai" → an OpenAI-compatible (Bearer) driver,
 // "anthropic" → an Anthropic-Messages driver, "openai/resp_api" → the Responses
-// driver. An explicit --protocol wins; otherwise a Responses-family model id
-// upgrades an OpenAI-wired provider (see PreferResponses). The base URL follows the override
+// driver, "gemini" → selected but not yet implemented. An explicit --protocol
+// wins; otherwise the wire comes from SelectWire (the model's native wire when
+// the provider serves it). The base URL follows the override
 // precedence in ResolveBaseURL (--base-url > provider-specific env > generic
 // <PROVIDER>_BASE_URL > spec default). The returned provider-name string is the
 // spec name, so downstream API-key resolution reads the provider's own env var
@@ -222,9 +223,11 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	// falsely conflict, and a genuine typo surfaces as a clear "unknown --protocol"
 	// error rather than a misleading conflict message.
 	// Effective wire protocol: an explicit --protocol wins; otherwise a
-	// Responses-family model id upgrades an OpenAI-wired provider to the
-	// Responses driver (family heuristic, see PreferResponses). Anthropic-wired
-	// providers never take the heuristic path.
+	// The wire is chosen from capabilities, not per-provider rules: the model's
+	// native wire when this provider serves it, otherwise the provider's
+	// registered wire (SelectWire). A gateway that serves a model some other way
+	// — a translated wire, or a family it hosts natively — can be asked once via
+	// GOLDER_WIRE_PROBE. An explicit --protocol still wins, verbatim.
 	effective := spec.Protocol
 	authScheme := spec.AuthScheme
 	if strings.TrimSpace(protocol) != "" {
@@ -232,22 +235,18 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 		if err != nil {
 			return nil, "", err
 		}
-		// An OpenAI-wired provider serves both of its wire variants (the
-		// resp_api selection is an upgrade, not a conflict), and a gateway may
-		// declare further variants it is known to serve (ProviderSpec.WireVariants,
-		// e.g. the Messages endpoint opencode-go also exposes).
 		if !AllowsProtocol(spec, canonical) {
 			return nil, "", fmt.Errorf("--provider %q speaks the %q protocol, which conflicts with --protocol %q; drop --protocol or set it to one of %s", name, spec.Protocol, protocol, ProtocolChoices(spec))
 		}
 		effective = canonical
-		// A declared variant carries the auth scheme that wire expects: the same
-		// gateway may authenticate its Messages endpoint differently from its
-		// OpenAI-family one.
-		if v, ok := wireVariantFor(spec, canonical); ok && v.AuthScheme != "" {
-			authScheme = v.AuthScheme
-		}
-	} else if spec.Protocol == ProtocolOpenAI && PreferResponses(model) {
-		effective = ProtocolOpenAIResponses
+	} else if canonical, ok := protocolForWire(selectWireWithProbe(spec, model, baseURL, env)); ok {
+		effective = canonical
+	}
+	// A declared variant carries the auth scheme that wire expects: the same
+	// gateway may authenticate its Messages endpoint differently from its
+	// OpenAI-family one.
+	if v, ok := wireVariantFor(spec, effective); ok && v.AuthScheme != "" {
+		authScheme = v.AuthScheme
 	}
 	// Special-auth providers (Azure / Bedrock / Vertex / Cloudflare) compose
 	// their endpoint from several env vars and/or need non-standard credential
@@ -282,6 +281,8 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 		return NewOpenAICompatibleProviderAs(spec.Name, url, models), spec.Name, nil
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponsesProvider(spec.Name, url, models), spec.Name, nil
+	case ProtocolGemini:
+		return nil, "", fmt.Errorf("--provider %q selected the Gemini v1beta wire for %q, which golder does not implement yet; use --protocol openai or openai/resp_api to route it over another wire", name, model)
 	default:
 		// The registry only ever stores openai/openai-resp/anthropic; guard anyway
 		// so an unexpected value is a clear error rather than a nil provider.

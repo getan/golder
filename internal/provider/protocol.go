@@ -26,34 +26,10 @@ import (
 // SDK-based Responses driver.
 const ProtocolOpenAIResponses = "openai/resp_api"
 
-// responsesFamilySubstrings are model-id substrings (matched case-insensitively)
-// whose models prefer the Responses wire protocol when the provider serves both
-// OpenAI wire variants. "muse" covers the muse-spark series (not Claude). The
-// o-series reasoning models (o1/o3/o4-mini) carry no "gpt" marker and are
-// handled by the leading-letter rule in PreferResponses.
-var responsesFamilySubstrings = []string{"grok", "muse", "deepseek", "gpt"}
-
-// PreferResponses reports whether modelID belongs to a Responses-preferred
-// family. It is a pure naming heuristic (mirroring opencode's own
-// shouldUseResponsesApi): an explicit --protocol always wins over it, and it
-// never applies to Anthropic-wired providers (ResolveNamedProvider guards
-// that), so a Claude id can never be routed to the Responses driver here.
-func PreferResponses(modelID string) bool {
-	m := strings.ToLower(strings.TrimSpace(modelID))
-	if m == "" {
-		return false
-	}
-	for _, sub := range responsesFamilySubstrings {
-		if strings.Contains(m, sub) {
-			return true
-		}
-	}
-	// o-series reasoning models: o1, o3, o4-mini, ...
-	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
-		return true
-	}
-	return false
-}
+// ProtocolGemini is the selector for the Gemini v1beta wire. Selection knows
+// the wire (see ModelWire), but the driver does not exist yet, so a run that
+// selects it reports that plainly instead of silently using another wire.
+const ProtocolGemini = "gemini"
 
 // NormalizeProtocol maps a raw --protocol / protocol value to a canonical
 // internal selector. Input is trimmed and lower-cased before matching. An empty
@@ -71,8 +47,10 @@ func NormalizeProtocol(raw string) (string, error) {
 		return ProtocolOpenAIResponses, nil
 	case ProtocolAnthropic:
 		return ProtocolAnthropic, nil
+	case ProtocolGemini:
+		return ProtocolGemini, nil
 	default:
-		return "", fmt.Errorf("unknown --protocol %q (want openai|openai/chat|openai/resp_api|anthropic)", raw)
+		return "", fmt.Errorf("unknown --protocol %q (want openai|openai/chat|openai/resp_api|anthropic|gemini)", raw)
 	}
 }
 
@@ -82,9 +60,9 @@ func NormalizeProtocol(raw string) (string, error) {
 // driver construction or errors, so the startup banner can display the real
 // wire format (a multi-protocol gateway such as opencode-go shows
 // openai/resp_api for a deepseek model and openai/chat for anything else).
-// An explicit protocol wins when it is valid and compatible with the
-// provider; otherwise the provider's registry default applies, upgraded to
-// Responses for Responses-family models on OpenAI-wired providers. Unknown
+// An explicit protocol wins when it is valid and compatible with the provider;
+// otherwise the wire comes from SelectWire — the model's native wire when the
+// provider serves it, the provider's registered wire otherwise. Unknown
 // providers, unknown protocols, and incompatible pairs yield "" so the caller
 // falls back to its placeholder instead of displaying a misleading value.
 func EffectiveProtocol(providerName, model, protocol string) string {
@@ -110,8 +88,8 @@ func EffectiveProtocol(providerName, model, protocol string) string {
 		}
 		return canonical
 	}
-	if spec.Protocol == ProtocolOpenAI && PreferResponses(model) {
-		return ProtocolOpenAIResponses
+	if canonical, ok := protocolForWire(SelectWire(spec, model)); ok {
+		return canonical
 	}
 	return spec.Protocol
 }

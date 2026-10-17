@@ -48,18 +48,25 @@ func TestEffectiveProtocol(t *testing.T) {
 		protocol string
 		want     string
 	}{
-		{"gateway family model upgrades to resp_api", "opencode-go", "deepseek-v4.1-flash", "", ProtocolOpenAIResponses},
-		{"gateway non-family model stays chat", "opencode-go", "glm-4.7", "", ProtocolOpenAI},
+		{"gateway open-weight family stays chat", "opencode-go", "deepseek-v4.1-flash", "", ProtocolOpenAI},
+		{"gateway glm stays chat", "opencode-go", "glm-4.7", "", ProtocolOpenAI},
+		{"gateway gpt takes its native Responses wire", "opencode-go", "gpt-5.6-luna", "", ProtocolOpenAIResponses},
+		{"gateway grok takes its native Responses wire", "opencode-go", "grok-4.7", "", ProtocolOpenAIResponses},
+		{"gateway muse takes its native Responses wire", "opencode-go", "muse-spark-1.3", "", ProtocolOpenAIResponses},
+		{"gateway claude takes its native Messages wire", "opencode-go", "claude-haiku-5-5", "", ProtocolAnthropic},
+		{"gateway gemini takes its native v1beta wire", "opencode-go", "gemini-4-argon-contributor", "", ProtocolGemini},
+		{"chat-only gateway translates gemini", "openrouter", "gemini-3.8-flash", "", ProtocolOpenAI},
 		{"explicit resp_api wins", "opencode-go", "glm-4.7", "openai/resp_api", ProtocolOpenAIResponses},
-		{"explicit chat wins over family upgrade", "opencode-go", "deepseek-v4.1-flash", "openai", ProtocolOpenAI},
-		{"anthropic provider never upgrades", "anthropic", "claude-fable-5-1", "", ProtocolAnthropic},
-		{"first-party deepseek upgrades", "deepseek", "deepseek-chat", "", ProtocolOpenAIResponses},
+		{"explicit chat wins over the native wire", "opencode-go", "claude-haiku-5-5", "openai", ProtocolOpenAI},
+		{"anthropic provider serves Messages", "anthropic", "claude-fable-5-1", "", ProtocolAnthropic},
+		{"first-party deepseek serves Responses", "deepseek", "deepseek-chat", "", ProtocolOpenAIResponses},
 		{"inferred provider from model", "", "deepseek-chat", "", ProtocolOpenAIResponses},
 		{"unknown provider falls back to explicit", "nope", "x", "anthropic", ProtocolAnthropic},
 		{"unknown provider no protocol", "nope", "x", "", ""},
 		{"bad protocol rejected", "opencode-go", "glm-4.7", "carrier-pigeon", ""},
 		{"conflicting pair rejected", "anthropic", "claude-fable-5-1", "openai", ""},
 		{"declared wire variant allowed", "opencode-go", "claude-haiku-5-5", "anthropic", ProtocolAnthropic},
+		{"gemini selector accepted on the gateway", "opencode-go", "gemini-4-argon-contributor", "gemini", ProtocolGemini},
 		{"undeclared variant rejected", "deepseek", "deepseek-chat", "anthropic", ""},
 		{"renamed alias resolves", "opencode", "glm-4.7", "", ProtocolOpenAI},
 	}
@@ -134,30 +141,3 @@ func TestAllowsProtocol(t *testing.T) {
 	}
 }
 
-func TestPreferResponses(t *testing.T) {
-	cases := []struct {
-		id   string
-		want bool
-	}{
-		{"grok-4", true},
-		{"x-ai/grok-2-1212", true},
-		{"muse-spark-1.3", true},
-		{"MUSE-SPARK-1.3-CONTRIBUTOR", true},
-		{"deepseek-chat", true},
-		{"deepseek/deepseek-r1", true},
-		{"gpt-4o", true},
-		{"GPT-4o-mini", true},
-		{"o3", true},
-		{"o4-mini", true},
-		{"claude-opus-4-8", false},
-		{"anthropic/claude-3.5-sonnet", false},
-		{"qwen-max", false},
-		{"meta/llama-3.3-70b-instruct", false},
-		{"", false},
-	}
-	for _, c := range cases {
-		if got := PreferResponses(c.id); got != c.want {
-			t.Errorf("PreferResponses(%q) = %v, want %v", c.id, got, c.want)
-		}
-	}
-}

@@ -298,7 +298,14 @@ var providerRegistry = []ProviderSpec{
 		// opencode endpoint requires — attached automatically because the driver
 		// carries this provider's name). The OpenAI-family endpoints serve the
 		// rest of the lineup and stay the default.
-		WireVariants: []WireVariant{{Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey}},
+		WireVariants: []WireVariant{
+			{Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey},
+			// Gemini models are served on the native v1beta wire (its models
+			// page lists …/google/v1beta/models/<id> for every Gemini id). The
+			// selector is declared so selection and the banner tell the truth;
+			// the resolver reports the missing driver when one is chosen.
+			{Protocol: ProtocolGemini, AuthScheme: AuthBearer},
+		},
 		// Muse spark advertises "max" in its error text but rejects it on the
 		// wire; xhigh is the highest usable rung on this gateway.
 		ReasoningLadders: []ReasoningLadder{{
