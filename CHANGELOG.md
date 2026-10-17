@@ -1406,6 +1406,16 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **The wire probe can no longer mistake a gateway's web page for a working
+  wire**: a probe accepted any 2xx and threw the body away, so a gateway that
+  serves its SPA at unknown paths answered a root-level `/messages` with 200 +
+  HTML and was cached as an Anthropic endpoint — which then made
+  `/provider openai` display (and use) `protocol: anthropic` against a relay
+  that actually speaks Responses. The probe now asks only the wires the
+  provider declares, accepts a 2xx only when the body is that wire's own
+  response shape (JSON, not HTML or an error object), and ignores a cached
+  answer outside the provider's declared wires. Existing false positives stop
+  applying without deleting `wire-cache.json`.
 - **A PTY failure is a capability answer, not a sandbox-path denial**: when the
   environment cannot allocate a pseudo-terminal, the bash tool now appends a
   hint that no escalation can create one and points at in-process tests. Before,

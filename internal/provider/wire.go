@@ -251,3 +251,11 @@ func containsWire(wires []Wire, w Wire) bool {
 	}
 	return false
 }
+
+// wireAllowed reports whether the provider declares a wire: its registered
+// protocol, a declared WireVariant, or the Responses upgrade every OpenAI-wired
+// gateway is assumed to serve. A probed answer outside this set is not a
+// capability the provider claims, so it must not override the static choice.
+func wireAllowed(spec ProviderSpec, w Wire) bool {
+	return containsWire(ProviderWires(spec), w)
+}

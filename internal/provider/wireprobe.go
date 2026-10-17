@@ -16,17 +16,20 @@ import (
 // model) at a time, so a re-resolution cannot stack a second request.
 var probeInflight sync.Map
 
-// ProbeWire asks an endpoint which wire it actually serves for a model. It is
-// the answer for the case the static tables cannot describe: a gateway that
-// translates a model onto another wire, or serves a family on several. The
-// candidates are tried in WirePriority order with one minimal request each, and
-// the first 2xx wins.
+// ProbeWire asks an endpoint which of the provider's declared wires it actually
+// serves for a model. It is the answer for the case the static tables cannot
+// describe: a gateway that translates a model onto another wire, or serves a
+// family on several. Candidates are tried in the caller's order with one minimal
+// request each; the first one that answers with a 2xx AND a body shaped like
+// that wire's response wins. A 2xx alone is not enough: a gateway's web UI
+// answers unknown paths with 200 + HTML, which is how a root-level /messages
+// used to be mistaken for a working Anthropic endpoint.
 //
 // The probe is deliberately tiny — a one-token completion, no tools — so the
 // cost is one cheap request per candidate. It is opt-in (see
 // selectWireWithProbe): golder only pays for it when GOLDER_WIRE_PROBE is set,
 // because a run that never needed the answer should not spend it.
-func ProbeWire(ctx context.Context, baseURL, apiKey, model string, timeout time.Duration) (Wire, error) {
+func ProbeWire(ctx context.Context, baseURL, apiKey, model string, candidates []Wire, timeout time.Duration) (Wire, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		return "", fmt.Errorf("probe: no base URL")
@@ -34,9 +37,12 @@ func ProbeWire(ctx context.Context, baseURL, apiKey, model string, timeout time.
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	if len(candidates) == 0 {
+		candidates = WirePriority
+	}
 	client := &http.Client{Timeout: timeout}
 	var failures []string
-	for _, wire := range WirePriority {
+	for _, wire := range candidates {
 		path, body, headers := probeRequest(wire, model)
 		if path == "" {
 			continue
@@ -58,14 +64,62 @@ func ProbeWire(ctx context.Context, baseURL, apiKey, model string, timeout time.
 			failures = append(failures, fmt.Sprintf("%s: %v", wire, err))
 			continue
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 &&
+			probeAccepted(wire, resp.Header.Get("Content-Type"), respBody) {
 			return wire, nil
 		}
-		failures = append(failures, fmt.Sprintf("%s: HTTP %d", wire, resp.StatusCode))
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			failures = append(failures, fmt.Sprintf("%s: HTTP %d, body is not a %s response", wire, resp.StatusCode, wire))
+		} else {
+			failures = append(failures, fmt.Sprintf("%s: HTTP %d", wire, resp.StatusCode))
+		}
 	}
 	return "", fmt.Errorf("probe: no wire answered for %q (%s)", model, strings.Join(failures, "; "))
+}
+
+// probeAccepted reports whether a response really came from the wire that was
+// asked. The status and the body both have to agree: a gateway that serves its
+// SPA for unknown paths returns 200 + HTML (the case that made a root
+// /messages look like a working Anthropic endpoint), and some gateways return
+// an error object with a 2xx. Only the wire's own response shape counts.
+func probeAccepted(wire Wire, contentType string, body []byte) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(ct, "html") || strings.Contains(ct, "xml") {
+		return false
+	}
+	b := bytes.TrimSpace(body)
+	if len(b) == 0 || b[0] == '<' {
+		return false
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(b, &obj) != nil {
+		return false
+	}
+	nonNull := func(key string) bool {
+		raw, ok := obj[key]
+		return ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+	}
+	text := func(key string) string {
+		var s string
+		_ = json.Unmarshal(obj[key], &s)
+		return s
+	}
+	if nonNull("error") {
+		return false
+	}
+	switch wire {
+	case WireResponses:
+		return text("object") == "response" || nonNull("output") || strings.HasPrefix(text("id"), "resp_")
+	case WireMessages:
+		return text("type") == "message" || nonNull("content")
+	case WireGemini:
+		return nonNull("candidates") || nonNull("promptFeedback")
+	case WireChat:
+		return nonNull("choices")
+	}
+	return false
 }
 
 // probeRequest builds the minimal body each wire accepts.
@@ -142,7 +196,7 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	if ModelWire(model) == wireForProtocol(spec.Protocol) {
 		return wire
 	}
-	if confirmed, ok := CachedWire(spec.Name, model); ok {
+	if confirmed, ok := CachedWire(spec.Name, model); ok && wireAllowed(spec, confirmed) {
 		return confirmed
 	}
 	if wireProbeDisabled(env) {
@@ -167,7 +221,7 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	}
 	go func() {
 		defer probeInflight.Delete(key)
-		if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, 5*time.Second); err == nil {
+		if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, ProviderWires(spec), 5*time.Second); err == nil {
 			storeWire(spec.Name, model, probed)
 			if fam := ModelFamily(model); fam != "" {
 				storeWire(spec.Name, "family:"+fam, probed)
