@@ -140,4 +140,3 @@ func TestAllowsProtocol(t *testing.T) {
 		}
 	}
 }
-

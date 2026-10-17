@@ -14,4 +14,3 @@ package session
 // memory dir or the runtime. It sits alongside ParentSession (which records
 // lineage) — inheritance additionally records *where the collapsed context came
 // from* so a forked/continued session need not re-summarize early context.
-

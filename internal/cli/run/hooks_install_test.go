@@ -62,4 +62,3 @@ func TestChainAfterToolCall(t *testing.T) {
 		t.Fatalf("expected next result to win, got %v", got)
 	}
 }
-

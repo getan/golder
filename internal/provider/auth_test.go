@@ -89,7 +89,6 @@ func TestLoadAPIKeyConfig(t *testing.T) {
 	}
 }
 
-
 // TestCredentialStoreResolutionOrder verifies OAuth > env > config precedence.
 func TestCredentialStoreResolutionOrder(t *testing.T) {
 	cfg, _ := LoadAPIKeyConfig([]byte(`{"keys":{"anthropic":"sk-cfg","openai":"sk-openai-cfg"}}`))

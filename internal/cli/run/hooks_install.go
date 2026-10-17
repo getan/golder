@@ -173,4 +173,3 @@ func chainAfterToolCall(prev, next agentcore.AfterToolCallFunc) agentcore.AfterT
 		return prevRes
 	}
 }
-
