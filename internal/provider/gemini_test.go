@@ -8,6 +8,38 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 )
 
+// TestGeminiSchemaStripsUnsupportedKeywords: golder's schemas carry
+// additionalProperties (OpenAI-shaped) and the gateway answers 400 for it, so
+// only the v1beta subset survives — at every level.
+func TestGeminiSchemaStripsUnsupportedKeywords(t *testing.T) {
+	raw := `{"type":"object","$schema":"http://json-schema.org/draft-07/schema#","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string","description":"cmd"},"nested":{"type":"object","additionalProperties":false,"properties":{"x":{"type":"string"}}}}}`
+	var out map[string]any
+	b, err := json.Marshal(geminiSchema(json.RawMessage(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out["additionalProperties"]; ok {
+		t.Error("additionalProperties survived")
+	}
+	if _, ok := out["$schema"]; ok {
+		t.Error("$schema survived")
+	}
+	if out["type"] != "object" {
+		t.Errorf("type = %v, want object", out["type"])
+	}
+	props := out["properties"].(map[string]any)
+	nested := props["nested"].(map[string]any)
+	if _, ok := nested["additionalProperties"]; ok {
+		t.Error("nested additionalProperties survived")
+	}
+	if nested["type"] != "object" {
+		t.Errorf("nested type = %v, want object", nested["type"])
+	}
+}
+
 // TestEncodeGeminiRequest pins the v1beta body: contents with user/model turns,
 // systemInstruction, functionDeclarations, functionResponse for a tool result
 // (by name, from the assistant message that called it), and the output cap.

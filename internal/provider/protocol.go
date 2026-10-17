@@ -181,6 +181,8 @@ func ProtocolLabel(raw string) string {
 		return ProtocolOpenAIResponses
 	case ProtocolAnthropic:
 		return ProtocolAnthropic
+	case ProtocolGemini:
+		return ProtocolGemini
 	default:
 		return ""
 	}

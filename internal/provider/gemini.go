@@ -191,6 +191,62 @@ func geminiModelParts(list agentcore.ContentList) []map[string]any {
 	return out
 }
 
+// geminiSchemaKeys are the JSON Schema keywords v1beta accepts in a function
+// declaration. Anything else — most commonly additionalProperties, which
+// golder's tool schemas carry for OpenAI — makes the gateway answer 400 with an
+// empty body, so the sanitizer keeps only this subset.
+var geminiSchemaKeys = map[string]bool{
+	"type": true, "properties": true, "required": true, "items": true,
+	"enum": true, "description": true, "format": true, "nullable": true,
+	"minimum": true, "maximum": true, "minItems": true, "maxItems": true,
+	"minLength": true, "maxLength": true, "pattern": true,
+}
+
+// geminiSchema cleans one tool schema into the subset v1beta accepts.
+func geminiSchema(raw json.RawMessage) any {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return map[string]any{"type": "object"}
+	}
+	return sanitizeGeminiSchema(v)
+}
+
+func sanitizeGeminiSchema(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			switch k {
+			case "properties":
+				props, ok := val.(map[string]any)
+				if !ok {
+					continue
+				}
+				clean := make(map[string]any, len(props))
+				for name, sub := range props {
+					clean[name] = sanitizeGeminiSchema(sub)
+				}
+				out[k] = clean
+			case "items":
+				out[k] = sanitizeGeminiSchema(val)
+			default:
+				if geminiSchemaKeys[k] {
+					out[k] = val
+				}
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(x))
+		for _, sub := range x {
+			out = append(out, sanitizeGeminiSchema(sub))
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 // encodeGeminiTools maps golder tools onto functionDeclarations.
 func encodeGeminiTools(tools []agentcore.AgentTool) []map[string]any {
 	if len(tools) == 0 {
@@ -198,14 +254,10 @@ func encodeGeminiTools(tools []agentcore.AgentTool) []map[string]any {
 	}
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
-		schema := json.RawMessage(t.Schema())
-		if len(schema) == 0 {
-			schema = json.RawMessage(`{"type":"object"}`)
-		}
 		out = append(out, map[string]any{
 			"name":        t.Name(),
 			"description": t.Description(),
-			"parameters":  schema,
+			"parameters":  geminiSchema(json.RawMessage(t.Schema())),
 		})
 	}
 	return out
