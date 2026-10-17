@@ -215,9 +215,9 @@ func TestModelCommandSetsLevel(t *testing.T) {
 	live.Model = "m-a"
 	live.ProviderName = "openai"
 	live.BaseURL = srv.URL + "/v1"
-	out, err = reg.ResolveOutcome("/model 2 medium")
+	out, err = reg.ResolveOutcome("/model 1 medium")
 	if err != nil {
-		t.Fatalf("ResolveOutcome /model 2 medium: %v", err)
+		t.Fatalf("ResolveOutcome /model 1 medium: %v", err)
 	}
 	if live.Model != "m-b" || live.ThinkingLevel != "medium" {
 		t.Errorf("numeric pick = (%q, %q), want (m-b, medium)", live.Model, live.ThinkingLevel)
