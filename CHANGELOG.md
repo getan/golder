@@ -1451,19 +1451,27 @@ interactive REPL/TUI.
   their error in the captured output, while process-group interrupts still
   reach forked children. `tty=true` sessions keep their PTY and prompts by
   design.
-- **A stream cut mid-response is retried, and named when it cannot be**: a
-  connection that dies before the answer finishes reaches the client as
-  `io.ErrUnexpectedEOF`, whose text is exactly `unexpected EOF` (`net/http`
-  reports it for a chunked body that never sees its last chunk, or one short of
-  its Content-Length). On the Responses wire the OpenAI SDK's SSE scanner hands
-  that reader error back unchanged, so the transcript showed a bare
-  `error: unexpected EOF` — no provider, no wire, no statement of what was lost,
-  and a turn that had simply ended. A truncation before any content arrives is
-  now retried once (nothing was shown, so nothing can be duplicated); one that
-  lands after content explains itself — `stream truncated — the connection
-  closed before the answer finished (unexpected EOF); retry the turn` — and the
-  Chat/Messages transport classifies the same error instead of reporting it
-  behind a generic "read error".
+- **A stream cut before the answer arrives is retried, and named when it cannot
+  be**: a stream ends early in three ways, and every one of them ended the turn.
+  The connection dies mid-response — `io.ErrUnexpectedEOF`, whose text is
+  exactly `unexpected EOF` (`net/http` reports it for a chunked body that never
+  sees its last chunk, or one short of its Content-Length), which the Responses
+  wire's OpenAI SDK hands back unchanged, so the transcript showed a bare
+  `error: unexpected EOF` naming neither provider, nor wire, nor what was lost.
+  The connection goes quiet entirely, which the Responses wire had no watchdog
+  for at all: a gateway that accepted the request and then went silent left the
+  turn hanging with no timeout, no error, and no way out but Ctrl+C. Or the
+  connection stays alive on SSE keep-alives while the model produces nothing,
+  the failure a keep-alive-happy gateway hides longest. All three now speak one
+  vocabulary and are retried once when nothing has been shown yet — the same
+  safety rule as the empty-completion retry, since no content means a retry
+  cannot duplicate anything — while a cut that lands after content keeps the
+  partial answer and explains itself: `opencode-go: stream cut — the connection
+  closed before the answer finished (unexpected EOF); retry the turn`. The retry
+  is one decorator applied at resolution, so the policy cannot vary by wire or
+  by how the provider was selected, and the SDK path now carries the same dual
+  watchdogs as golder's own transport, governed by the same
+  `GOLDER_STREAM_IDLE_TIMEOUT`.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

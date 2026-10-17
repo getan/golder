@@ -75,16 +75,20 @@ type wireFallbackProvider struct {
 func (p *wireFallbackProvider) Name() string    { return p.primary.Name() }
 func (p *wireFallbackProvider) Models() []Model { return p.primary.Models() }
 
-// UnwrapProvider returns the concrete driver behind an adaptive wire wrapper.
+// UnwrapProvider returns the concrete driver behind the wrappers resolution
+// adds: the cut-stream retry (streamretry.go) and the adaptive wire fallback.
 // Resolution tests and diagnostics that need the driver's own type can use it;
 // runtime code should drive the Provider interface.
 func UnwrapProvider(p Provider) Provider {
 	for {
-		w, ok := p.(*wireFallbackProvider)
-		if !ok {
+		switch w := p.(type) {
+		case *wireFallbackProvider:
+			p = w.primary
+		case *streamRetryProvider:
+			p = w.inner
+		default:
 			return p
 		}
-		p = w.primary
 	}
 }
 

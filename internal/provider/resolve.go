@@ -42,10 +42,24 @@ import (
 // An unknown protocol value is an error, surfaced to the caller for exit-code
 // mapping rather than silently falling back.
 func ResolveProvider(model, baseURL, protocol, providerName string, env func(string) string) (Provider, string, error) {
+	p, name, err := resolveProvider(model, baseURL, protocol, providerName, env)
+	if err != nil {
+		return nil, "", err
+	}
+	// Whatever path resolved the provider, the stream it produces gets the same
+	// treatment: a stream cut before anything was shown is retried once, and a
+	// cut that cannot be retried is explained (streamretry.go). It is applied
+	// here, at the boundary, so no provider entry point can forget it.
+	return withStreamRetry(p), name, nil
+}
+
+// resolveProvider is ResolveProvider's selection logic, before the retry
+// wrapper is applied.
+func resolveProvider(model, baseURL, protocol, providerName string, env func(string) string) (Provider, string, error) {
 	// Explicit --provider selects a built-in provider from the registry and
 	// wins over both --protocol inference and model-id heuristics.
 	if strings.TrimSpace(providerName) != "" {
-		return ResolveNamedProvider(providerName, model, baseURL, protocol, env)
+		return resolveNamedProvider(providerName, model, baseURL, protocol, env)
 	}
 
 	// 0. Explicit protocol selection wins over every heuristic. Normalize the
@@ -105,7 +119,7 @@ func ResolveProvider(model, baseURL, protocol, providerName string, env func(str
 	//    skipped when one is given. Ambiguous/unknown names fall through to (4).
 	if strings.TrimSpace(baseURL) == "" {
 		if name, ok := InferProviderFromModel(model); ok {
-			return ResolveNamedProvider(name, model, baseURL, protocol, env)
+			return resolveNamedProvider(name, model, baseURL, protocol, env)
 		}
 	}
 	// 4. Default: OpenRouter — but a bare built-in provider name that reached this
@@ -205,6 +219,17 @@ func IsProviderName(id string) bool {
 // ResolveSpecialProvider, which validates their required env vars and composes
 // the concrete endpoint (node #188).
 func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string) string) (Provider, string, error) {
+	p, resolved, err := resolveNamedProvider(name, model, baseURL, protocol, env)
+	if err != nil {
+		return nil, "", err
+	}
+	return withStreamRetry(p), resolved, nil
+}
+
+// resolveNamedProvider is ResolveNamedProvider's construction, before the retry
+// wrapper is applied. The internal delegations call this one so a provider is
+// never wrapped twice.
+func resolveNamedProvider(name, model, baseURL, protocol string, env func(string) string) (Provider, string, error) {
 	spec, ok := LookupProviderSpec(name)
 	if !ok {
 		return nil, "", fmt.Errorf("unknown --provider %q (available: %s)", name, strings.Join(ProviderNames(), ", "))

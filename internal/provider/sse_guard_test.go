@@ -1,6 +1,7 @@
 package provider
 
-// Tests for the empty-SSE-frame filter (sse_guard.go).
+// Tests for the SSE stream guard (sse_guard.go): the frame filter, and the two
+// watchdogs that share the same wrapper.
 //
 // The first test is a reproduction: it pins the failure the filter removes, so
 // the fix cannot be mistaken for a workaround for something else. The control
@@ -154,7 +155,7 @@ func TestEmptySSEFrameFilterKeepsContent(t *testing.T) {
 		"data: {\"a\":1}\r\n\r\n",    // CRLF line endings
 	}
 	for _, body := range bodies {
-		got, err := io.ReadAll(newEmptySSEFrameFilter(io.NopCloser(strings.NewReader(body))))
+		got, err := io.ReadAll(newSSEStreamGuard(io.NopCloser(strings.NewReader(body))))
 		if err != nil {
 			t.Fatalf("%q: read: %v", body, err)
 		}
@@ -171,7 +172,7 @@ func TestEmptySSEFrameFilterKeepsContent(t *testing.T) {
 func TestEmptySSEFrameFilterDropsOnlyEmptyFrames(t *testing.T) {
 	in := "\n\ndata: a\n\ndata: b\n\n\n"
 	want := "data: a\n\ndata: b\n\n"
-	got, err := io.ReadAll(newEmptySSEFrameFilter(io.NopCloser(strings.NewReader(in))))
+	got, err := io.ReadAll(newSSEStreamGuard(io.NopCloser(strings.NewReader(in))))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

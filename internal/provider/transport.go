@@ -74,6 +74,14 @@ func idleTimeout() time.Duration {
 	return defaultIdleTimeout
 }
 
+// stallTimeout is the content-stall window: the idle window slackened by
+// stallFactor. It is derived in one place because both watchdogs — the
+// transport's own and the SDK path's (see sse_guard.go) — must agree, and
+// because the sentence a cut stream prints quotes it (see streamfail.go).
+func stallTimeout() time.Duration {
+	return time.Duration(float64(idleTimeout()) * stallFactor)
+}
+
 // TransportConfig configures a single StreamRequest run.
 type TransportConfig struct {
 	// Client is the HTTP client; defaults to http.DefaultClient when nil.
@@ -191,7 +199,7 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 	idle := idleTimeout()
 	// content-stall watchdog is slightly slacker than idle (idle × stallFactor)
 	// so a slow but progressing stream is not killed by the stall guard.
-	stall := time.Duration(float64(idle) * stallFactor)
+	stall := stallTimeout()
 
 	// The watchdog fires by cancelling a derived context; reads race against it.
 	watchCtx, cancel := context.WithCancel(ctx)

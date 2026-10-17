@@ -554,6 +554,7 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explicit resp_api error: %v", err)
 	}
+	p = UnwrapProvider(p)
 	if _, ok := p.(*responsesDriver); !ok {
 		t.Errorf("explicit resp_api = %T, want *responsesDriver", p)
 	}
@@ -562,6 +563,7 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("explicit openai error: %v", err)
 	}
+	p = UnwrapProvider(p)
 	if _, ok := p.(*openAICompatDriver); !ok {
 		t.Errorf("explicit openai = %T, want *openAICompatDriver", p)
 	}
@@ -571,6 +573,7 @@ func TestResolveNamedProviderFamilyHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("declared anthropic variant error: %v", err)
 	}
+	p = UnwrapProvider(p)
 	if _, ok := p.(*anthropicCompatDriver); !ok {
 		t.Errorf("explicit anthropic on opencode-go = %T, want *anthropicCompatDriver", p)
 	}
