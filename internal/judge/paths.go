@@ -106,16 +106,21 @@ func denialLinePaths(line string) []string {
 	return append(out, pathTokens(line)...)
 }
 
-// GrantablePathFromText extracts the first plausible path token from a call's
-// justification and its summary, resolved against cwd. The justification is
-// read first because it is prose written by the model — its tokens are paths,
-// while a command's tokens are shell expressions — and the summary still backs
-// it up for the commands that name their path plainly. "" means no grant is
-// offered — a dialog then shows only allow/deny and a denial has nothing to
+// GrantablePathFromText extracts the first plausible path from a call's command
+// and its justification, resolved against cwd. The command goes through
+// commandPaths — the boundary gate's own reader: shellfacts (mvdan) for the
+// grammar, plus the program tables for what the grammar cannot say — so a
+// script's words are never mistaken for paths ("sed -E 's#x#y#g'" has no path
+// in it, and its "/g" flag once reached a dialog). The justification is prose
+// written by the model, so it is read with the lexical scan. "" means no grant
+// is offered — a dialog then shows only allow/deny and a denial has nothing to
 // re-admit — which is the fail-closed direction: a missed path hides a row, it
 // never grants one.
 func GrantablePathFromText(summary, justification, cwd string) string {
-	for _, raw := range append(pathTokens(justification), pathTokens(summary)...) {
+	candidates := append(commandPaths(strings.TrimPrefix(summary, "command: ")), flagValuePaths(summary)...)
+	candidates = append(candidates, writeTargetPaths(summary)...)
+	candidates = append(candidates, pathTokens(justification)...)
+	for _, raw := range candidates {
 		p, err := permissions.NormalizePath(raw)
 		if err != nil {
 			continue
@@ -125,6 +130,82 @@ func GrantablePathFromText(summary, justification, cwd string) string {
 		}
 	}
 	return ""
+}
+
+// writeTargetPaths returns the path operands of a command whose effect is a
+// write or a delete — "rm -rf <dir>", "mkdir -p <dir>", "cp a <dst>" — which
+// the boundary reader does not always collect: it reads what a command READS,
+// and rm deletes. sed and awk only count when they write in place; their other
+// flags take scripts, and a script's words are not paths.
+func writeTargetPaths(s string) []string {
+	fields := strings.Fields(strings.TrimPrefix(s, "command: "))
+	if len(fields) == 0 {
+		return nil
+	}
+	verb := fields[0]
+	switch verb {
+	case "sed", "awk", "gawk":
+		inPlace := false
+		for _, f := range fields[1:] {
+			if f == "-i" || strings.HasPrefix(f, "-i") || f == "--in-place" || strings.HasPrefix(f, "--in-place=") {
+				inPlace = true
+				break
+			}
+		}
+		if !inPlace {
+			return nil
+		}
+	default:
+		if !writeVerbs[verb] {
+			return nil
+		}
+	}
+	return pathTokens(s)
+}
+
+// pathFlagNames are the flags whose value is a write target in practice, for
+// the tools the program tables in bashpaths.go do not describe ("cargo build
+// --target-dir /x", "go build -o /x"). Deliberately short and conservative: an
+// unlisted flag hides a row, it never grants one — and flags that take scripts
+// (sed -n/-e, awk -e) must stay out, or a script's words come back as paths.
+var pathFlagNames = map[string]bool{
+	"-o": true, "--output": true, "--out": true, "--out-dir": true, "--output-dir": true,
+	"-C": true, "--directory": true, "--target-dir": true, "--prefix": true,
+	"--cache-dir": true, "--store": true, "--root": true, "--dest": true,
+	"--destination": true, "--tmpdir": true, "--workdir": true, "--work-tree": true,
+}
+
+// flagValuePaths returns the values of path-taking flags. Adjacency is the
+// evidence here: a path-shaped word after an unrelated flag is a script's
+// argument ("sed -n '/func X/,/^}/p'"), not a target, which is why this is not
+// another pass of pathTokens.
+func flagValuePaths(s string) []string {
+	fields := strings.Fields(s)
+	var out []string
+	for i, f := range fields {
+		if eq := strings.IndexByte(f, '='); eq > 0 && strings.HasPrefix(f, "-") {
+			if v := f[eq+1:]; literalPath(v) {
+				out = append(out, v)
+			}
+			continue
+		}
+		if i == 0 || !literalPath(f) {
+			continue
+		}
+		if pathFlagNames[strings.TrimRight(fields[i-1], "=")] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// literalPath reports whether s is a path spelling that carries no shell
+// expression syntax.
+func literalPath(s string) bool {
+	if !strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "~/") {
+		return false
+	}
+	return !strings.ContainsAny(s, `\*?${}#%`)
 }
 
 // OnceSet answers "is this the first time?" for the path-scoped questions the

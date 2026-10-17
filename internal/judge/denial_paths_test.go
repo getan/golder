@@ -72,6 +72,22 @@ func TestPlausibleWritableRootRefusesOnlyTheRootsThatAreNotChoices(t *testing.T)
 	}
 }
 
+// TestGrantablePathFromTextReadsTheCommandWithTheBoundaryParser: the command's
+// paths come from the same reader the workspace boundary uses, so a script is
+// one word rather than a bag of path-shaped tokens — and a real operand still
+// comes through.
+func TestGrantablePathFromTextReadsTheCommandWithTheBoundaryParser(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	cwd := t.TempDir()
+	dest := filepath.Join(home, "backup", "out")
+	if got := GrantablePathFromText("cp seed "+dest, "", cwd); got != dest {
+		t.Errorf("operand = %q, want %q", got, dest)
+	}
+}
+
 // TestPathTokensRejectShellExpressions: a token that starts like a path but
 // carries shell syntax is an expression, not a literal path. The sed
 // backreference in a s#…#…# command reached a dialog once as "/\1"; skipping it
