@@ -64,6 +64,15 @@ type Provider interface {
 	StreamCompletion(ctx context.Context, req CompletionRequest) (*AssistantMessageEventStream, error)
 }
 
+// WireReporter is implemented by providers (and the wrappers around them) that
+// can name the wire currently serving requests. The status bar reads it to show
+// the protocol actually in use, which is not always the resolved guess: the wire
+// fallback can move a model to another endpoint mid-session, and the reported
+// value changes with it.
+type WireReporter interface {
+	CurrentWire() Wire
+}
+
 // StreamFnFromProvider adapts a Provider to the loop's StreamFn contract so a
 // Provider can drive streamAssistantResponse directly. The two failure models
 // are identical, so the adaptation is a straight delegation.

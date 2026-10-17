@@ -95,7 +95,7 @@ func TestStreamCutErrorNamesTheProviderOnce(t *testing.T) {
 // the same way, "retry the turn" alone leaves the user wondering whether a retry
 // had even run. It did.
 func TestStreamCutRetriedErrorSaysTheRetryIsSpent(t *testing.T) {
-	got := streamCutRetriedError("commandcode", &fallbackTestErr{"commandcode: unexpected EOF"}).Error()
+	got := streamCutRetriedError("commandcode", &fallbackTestErr{"commandcode: unexpected EOF"}, 1).Error()
 	if !strings.Contains(got, "already retried once") {
 		t.Errorf("streamCutRetriedError = %q, want it to say the retry was made", got)
 	}

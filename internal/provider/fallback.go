@@ -75,6 +75,19 @@ type wireFallbackProvider struct {
 func (p *wireFallbackProvider) Name() string    { return p.primary.Name() }
 func (p *wireFallbackProvider) Models() []Model { return p.primary.Models() }
 
+// CurrentWire reports the wire serving requests now: the one promoted after a
+// successful fallback when there is one, otherwise the resolved primary. The
+// status bar reads it live, so a fallback that succeeds mid-turn updates the
+// protocol segment on the next frame.
+func (p *wireFallbackProvider) CurrentWire() Wire {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.promotedWire != "" {
+		return p.promotedWire
+	}
+	return p.primaryWire
+}
+
 // UnwrapProvider returns the concrete driver behind the wrappers resolution
 // adds: the cut-stream retry (streamretry.go) and the adaptive wire fallback.
 // Resolution tests and diagnostics that need the driver's own type can use it;

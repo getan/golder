@@ -73,6 +73,10 @@ type StreamNoticeEvent struct {
 	// Window is the watchdog window that expired, for idle/stall; zero
 	// otherwise.
 	Window time.Duration
+	// Attempt is the 1-based retry about to start, and MaxAttempts the budget it
+	// is counting against; both are zero for notices that are not a retry.
+	Attempt     int
+	MaxAttempts int
 }
 
 // StreamNoticeRetry is the notice kind for a stream that is being re-issued.

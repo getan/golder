@@ -112,8 +112,12 @@ func streamCutError(provider string, err error) error {
 // after the retry: saying only "retry the turn" would leave the user wondering
 // whether the retry had run at all, and whether waiting would help. It did, and
 // it will not.
-func streamCutRetriedError(provider string, err error) error {
-	return cutError(provider, err, "already retried once, and the connection dropped again — retry the turn")
+func streamCutRetriedError(provider string, err error, retries int) error {
+	times := "once"
+	if retries != 1 {
+		times = fmt.Sprintf("%d times", retries)
+	}
+	return cutError(provider, err, fmt.Sprintf("already retried %s, and the connection dropped again — retry the turn", times))
 }
 
 // cutError builds the sentence for a cut stream with the given remedy.

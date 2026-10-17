@@ -89,7 +89,7 @@ func doneEvent(text string) AssistantMessageEvent {
 // drainEvents runs the wrapper and reports everything the caller saw.
 func drainEvents(t *testing.T, inner Provider, ctx context.Context) []AssistantMessageEvent {
 	t.Helper()
-	stream, err := withStreamRetry(inner).StreamCompletion(ctx, CompletionRequest{Model: "m"})
+	stream, err := withStreamRetry(inner, "").StreamCompletion(ctx, CompletionRequest{Model: "m"})
 	if err != nil {
 		t.Fatalf("StreamCompletion: %v", err)
 	}
@@ -142,12 +142,22 @@ func noticeEvents(events []AssistantMessageEvent) []StreamNoticeEvent {
 	return out
 }
 
+// fastRetryBackoff removes the production delay so a retry test runs instantly;
+// the backoff itself is a separate, deterministic calculation.
+func fastRetryBackoff(t *testing.T) {
+	t.Helper()
+	old := streamRetryBackoff
+	streamRetryBackoff = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { streamRetryBackoff = old })
+}
+
 // A stream cut before anything was shown is re-issued: the cut attempt's start
 // is dropped, the retry's content is what the caller sees, and a notice explains
 // the wait. That is the reported failure — "error: unexpected EOF" on a turn
 // that had produced nothing — turned into the answer the user asked for, with
 // the retry visible instead of silent.
 func TestStreamRetryReissuesACutAttempt(t *testing.T) {
+	fastRetryBackoff(t)
 	for _, cut := range []struct {
 		name   string
 		err    error
@@ -188,6 +198,9 @@ func TestStreamRetryReissuesACutAttempt(t *testing.T) {
 			if notices[0].Reason != cut.reason {
 				t.Errorf("notice reason = %q, want %q", notices[0].Reason, cut.reason)
 			}
+			if notices[0].Attempt != 1 || notices[0].MaxAttempts != defaultStreamMaxRetries {
+				t.Errorf("notice attempt = %d/%d, want 1/%d", notices[0].Attempt, notices[0].MaxAttempts, defaultStreamMaxRetries)
+			}
 		})
 	}
 }
@@ -224,6 +237,8 @@ func TestStreamRetryKeepsContentAndNamesTheCut(t *testing.T) {
 // One retry, not a loop: a connection that drops twice is not a problem another
 // request fixes, and the caller still needs a terminal event.
 func TestStreamRetryGivesUpAfterASecondCut(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "1")
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), cutEvent(io.ErrUnexpectedEOF)},
 		{startEvent(), cutEvent(io.ErrUnexpectedEOF)},
@@ -246,6 +261,51 @@ func TestStreamRetryGivesUpAfterASecondCut(t *testing.T) {
 	}
 	if got := errorMessage(events); !strings.Contains(got, "already retried once") {
 		t.Errorf("failure = %q, want it to say the retry was already made", got)
+	}
+}
+
+// The budget is a budget, not a single retry: a long-running turn gets several
+// reconnects before it is declared lost, with the notice counting them.
+func TestStreamRetryUsesTheConfiguredBudget(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "3")
+	cut := []AssistantMessageEvent{startEvent(), cutEvent(io.ErrUnexpectedEOF)}
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{cut, cut, cut, cut}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 4 {
+		t.Errorf("attempts = %d, want 4 (the first and three retries)", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 3 {
+		t.Fatalf("notices = %d, want 3", len(notices))
+	}
+	for i, n := range notices {
+		if n.Attempt != i+1 || n.MaxAttempts != 3 {
+			t.Errorf("notice %d = %d/%d, want %d/3", i, n.Attempt, n.MaxAttempts, i+1)
+		}
+	}
+	if got := errorMessage(events); !strings.Contains(got, "already retried 3 times") {
+		t.Errorf("failure = %q, want the spent budget named", got)
+	}
+}
+
+// The default budget is several reconnects; a setting only changes it when it is
+// a valid count.
+func TestStreamMaxRetriesConfiguration(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "")
+	if got := streamMaxRetries(); got != defaultStreamMaxRetries {
+		t.Errorf("default = %d, want %d", got, defaultStreamMaxRetries)
+	}
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "7")
+	if got := streamMaxRetries(); got != 7 {
+		t.Errorf("configured = %d, want 7", got)
+	}
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "not-a-number")
+	if got := streamMaxRetries(); got != defaultStreamMaxRetries {
+		t.Errorf("malformed = %d, want the default %d", got, defaultStreamMaxRetries)
 	}
 }
 
@@ -274,6 +334,7 @@ func TestStreamRetryLeavesRealFailuresAlone(t *testing.T) {
 // A stream that ends without any terminal event and without content is as cut as
 // a dropped connection, and worth the same single retry.
 func TestStreamRetryRetriesASilentlyEndedAttempt(t *testing.T) {
+	fastRetryBackoff(t)
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent()}, // the producer ends without a terminal event
 		{startEvent(), textEvent("recovered"), doneEvent("recovered")},
@@ -300,6 +361,7 @@ func TestStreamRetryRetriesASilentlyEndedAttempt(t *testing.T) {
 // through the fallback's wrapping and retry — otherwise the fallback's generic
 // sentence is what the user sees, with no second attempt.
 func TestStreamRetryRetriesAWireFallbacksSilentEnd(t *testing.T) {
+	fastRetryBackoff(t)
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), cutEvent(fmt.Errorf("commandcode: %w", errStreamNoTerminal))},
 		{startEvent(), textEvent("recovered"), doneEvent("recovered")},

@@ -3006,6 +3006,10 @@ func (m *Model) syncLiveDisplay() {
 	m.statusBar.SetProvider(m.live.ProviderName)
 	m.statusBar.SetModel(m.live.Model)
 	m.statusBar.SetThinking(string(m.live.ThinkingLevel))
+	// The protocol segment follows the live provider, not the launch flag: a
+	// /provider or /model switch replaces the provider (and its adaptive wire
+	// fallback), and the status bar must read the new one's current wire.
+	m.statusBar.protocol = protocolSource(m.live.Provider, m.live.Protocol)
 	// The approval mode is session policy rather than live model config, so it
 	// is published from the session — and from here rather than from the
 	// /permissions handler alone, because adopting a session (/resume, /fork)

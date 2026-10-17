@@ -1503,31 +1503,49 @@ interactive REPL/TUI.
   nothing explaining why the two differed; that reads as a contradiction rather
   than a decision, and it is why an approval card could look like it had both
   allowed and refused the same call.
-- **The status bar folds what is not pinned, and expands on hover**: the bar now
-  keeps its lead — the provider and the branch — at full width and collapses every
-  later field (the approval mode, model, thinking level, cwd, context gauge and
-  task) to a three-column sliver: its glyph and the first character of its value,
-  drawn one column over the block before it so the slivers read as a stack tucked
-  behind one another. Moving the pointer onto a segment expands it in place, and
-  clicking one pins it open — the fallback for a terminal whose mouse reporting
-  carries no motion events — with a second click, or a click on the bar's
-  background, releasing it. What is painted and what the pointer hits come from
-  one layout pass, so they cannot disagree, and `/status` still prints every field
-  whole. The mouse mode moves from xterm 1002 to 1003 (all motion) to deliver a
-  hover at all; click, release, wheel and drag are a subset of it, and a terminal
-  that reports 1002 only keeps the click path.
-- **A retry explains itself in the TUI instead of leaving a bare spinner**: when
-  a cut stream is re-issued, the transcript now shows a notice naming the
-  provider and the failure — `provider commandcode 的流中断（1m30s 无数据），
-  正在重试…` (or the English equivalent, following the conversation's language).
-  It covers the idle, content-stall, truncated and silent-end cuts, and it is
-  emitted by the retry layer itself, so it appears exactly when a second attempt
-  actually starts rather than on every failure.
+- **The status bar folds what is not pinned, spends the whole row, and expands on
+  hover**: the bar keeps its lead — the provider and the branch — at full width and
+  folds every later field (the approval mode, model, protocol, thinking level,
+  cwd, context gauge and task). A folded field is not a fixed stub: after the lead
+  and the focused field have what they need, the remaining columns are shared
+  among the folded fields, so each shows as much of its value as the row can
+  afford — the end of the model name, the last path components, the context
+  percentage — and the row is used to its last column. All fields, folded or not,
+  are separated by the bar's own powerline arrows. Moving the pointer onto a
+  segment expands it in place (the path shows whole), and moving away collapses it
+  on the next frame; clicking pins one open for a terminal whose mouse reporting
+  carries no motion events, with a second click or a click on the background
+  releasing it. A **protocol** segment after the model reports the wire actually
+  in use (`responses`, `messages`, `chat`, `v1beta`), read live from the provider
+  so an adaptive wire fallback updates it mid-session. What is painted and what
+  the pointer hits come from one layout pass, so they cannot disagree, and
+  `/status` still prints every field whole. The mouse mode moves from xterm 1002
+  to 1003 (all motion) to deliver a hover at all; click, release, wheel and drag
+  are a subset of it, and a terminal that reports 1002 only keeps the click path.
+- **A cut stream gets several reconnects, and each explains itself**: the retry
+  layer now makes up to four reconnects (five attempts) instead of one, separated
+  by an exponential backoff from 250ms to 5s, because a long-running turn is
+  expensive to lose and a reconnect usually succeeds within a few tries.
+  `GOLDER_STREAM_MAX_RETRIES` overrides the budget (0 disables retries). Before
+  each attempt the transcript shows a notice naming the provider and the failure —
+  `provider commandcode 的流中断（1m30s 无数据），正在重试（2/4）…` (or the English
+  equivalent, following the conversation's language) — and a spent budget says
+  `already retried 4 times`, so the wait is never a bare spinner.
 - **The idle watchdog now defaults to 90 seconds**: five minutes of silence was
   indistinguishable from a hang, and it made a single cut cost up to ten minutes
   once the retry's own window was added. A provider that has sent nothing for
   90 seconds is now declared cut and retried; `GOLDER_STREAM_IDLE_TIMEOUT` still
   overrides the window (and the content-stall window remains 1.2× it).
+- **A failed patch hunk explains the closest match, and out-of-order hunks
+  apply**: `apply_patch` now retries a hunk from the start of the file when the
+  forward search fails, so a patch whose hunks were listed out of order still
+  applies as long as they do not overlap. When a hunk genuinely cannot be located,
+  the error names the closest line, how many of the hunk's lines matched, and the
+  first expected/found pair — `closest match at line 42 (3/5 lines match; expected
+  "foo", found "bar"); re-read the file and resend` — instead of a bare hunk
+  number. The patch guide now says explicitly that hunks are matched against the
+  file as it is now, must not overlap, and that a failed patch should be re-read
+  and resent rather than retried verbatim.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

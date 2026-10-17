@@ -18,29 +18,37 @@ func providerNoticeText(ev agentcore.ProviderNoticeEvent, lang string) string {
 		providerName = "provider"
 	}
 	zh := lang == "zh"
+	progress := ""
+	if ev.Attempt > 0 {
+		if zh {
+			progress = fmt.Sprintf("（%d/%d）", ev.Attempt, ev.MaxAttempts)
+		} else {
+			progress = fmt.Sprintf(" (%d/%d)", ev.Attempt, ev.MaxAttempts)
+		}
+	}
 
 	switch ev.Reason {
 	case provider.StreamCutIdle:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（%s 无数据），正在重试…", providerName, ev.Window)
+			return fmt.Sprintf("provider %s 的流中断（%s 无数据），正在重试%s…", providerName, ev.Window, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (no data for %s); retrying…", providerName, ev.Window)
+		return fmt.Sprintf("provider %s: stream cut (no data for %s); retrying%s…", providerName, ev.Window, progress)
 	case provider.StreamCutStall:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（%s 无输出），正在重试…", providerName, ev.Window)
+			return fmt.Sprintf("provider %s 的流中断（%s 无输出），正在重试%s…", providerName, ev.Window, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (no output for %s); retrying…", providerName, ev.Window)
+		return fmt.Sprintf("provider %s: stream cut (no output for %s); retrying%s…", providerName, ev.Window, progress)
 	case provider.StreamCutTruncated:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（连接提前关闭），正在重试…", providerName)
+			return fmt.Sprintf("provider %s 的流中断（连接提前关闭），正在重试%s…", providerName, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (the connection closed early); retrying…", providerName)
+		return fmt.Sprintf("provider %s: stream cut (the connection closed early); retrying%s…", providerName, progress)
 	default:
 		// Silent: the stream ended without a final event. This is the case the
 		// wire fallback used to surface as a dead end, so name it plainly.
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（流在没有结束事件的情况下关闭），正在重试…", providerName)
+			return fmt.Sprintf("provider %s 的流中断（流在没有结束事件的情况下关闭），正在重试%s…", providerName, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (the stream ended without a final event); retrying…", providerName)
+		return fmt.Sprintf("provider %s: stream cut (the stream ended without a final event); retrying%s…", providerName, progress)
 	}
 }

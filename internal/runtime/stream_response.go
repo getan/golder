@@ -139,10 +139,12 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 			// event, not message content: it must not create or mutate the
 			// assistant partial, and a front-end that ignores it loses nothing.
 			if err := emit(ctx, agentcore.ProviderNoticeEvent{
-				Kind:     e.Kind,
-				Provider: e.Provider,
-				Reason:   e.Reason,
-				Window:   e.Window,
+				Kind:        e.Kind,
+				Provider:    e.Provider,
+				Reason:      e.Reason,
+				Window:      e.Window,
+				Attempt:     e.Attempt,
+				MaxAttempts: e.MaxAttempts,
 			}); err != nil {
 				return agentcore.AssistantMessage{}, err
 			}

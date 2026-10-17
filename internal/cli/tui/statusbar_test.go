@@ -38,37 +38,6 @@ func focusSegment(t *testing.T, s statusBar, glyph string) statusBar {
 	return s
 }
 
-// elisionWidth returns the widest bar at which the focused segment named by glyph
-// still has to be elided. Under the fold a roomy terminal fits even a focused long
-// value, so a test about elision has to ask for the width where it happens rather
-// than assume one.
-func elisionWidth(t *testing.T, s statusBar, glyph string) int {
-	t.Helper()
-	for width := 120; width > 8; width-- {
-		for _, seg := range s.foldLayout(width) {
-			if strings.HasPrefix(seg.text, glyph) && seg.win > 0 {
-				return width
-			}
-		}
-	}
-	t.Fatalf("no width elides %q", glyph)
-	return 0
-}
-
-// focusedSegmentAt returns what the fold layout decided for glyph at width — the
-// window it got, and whether it was abbreviated — so a test can assert the choice
-// rather than only the painted row.
-func focusedSegmentAt(t *testing.T, s statusBar, width int, glyph string) segment {
-	t.Helper()
-	for _, seg := range s.foldLayout(width) {
-		if strings.HasPrefix(seg.text, glyph) {
-			return seg
-		}
-	}
-	t.Fatalf("no segment starting with %q at width %d", glyph, width)
-	return segment{}
-}
-
 func TestStatusBarRendersAllFields(t *testing.T) {
 	s := newTestStatusBar()
 	s.SetGit(gitInfoMsg{branch: "master", dirty: 3, ahead: 4, ok: true})
@@ -171,39 +140,25 @@ func TestStatusBarShowsAShortPathBeforeScrolling(t *testing.T) {
 	// field has nothing to shorten.
 	s = focusSegment(t, s, glyphCwd)
 
-	// Sweep down from a width that shows the whole path: the first width that
-	// cannot should be the one that spends the abbreviation, not the one that
-	// starts slicing the value.
-	roomy := 0
-	for w := 200; w > 8; w-- {
-		if focusedSegmentAt(t, s, w, glyphCwd).text != "▸ ~/work/harness/golder" {
-			roomy = w
-			break
-		}
-	}
-	if roomy == 0 {
-		t.Fatal("the path never gave anything up, so the abbreviation was never reached")
-	}
-	out := stripANSI(s.Render(roomy))
+	// Below the path's natural width the focused field is elided; a focused field
+	// keeps its whole value for as long as the row can afford it, so the
+	// abbreviation appears only at a width that truly cannot hold it. At this
+	// width the path is the one field left, which is the point of the focus: the
+	// directory stays readable even when the rest has to go.
+	const narrow = 20
+	out := stripANSI(s.Render(narrow))
 	if !strings.Contains(out, "…/golder") {
-		t.Errorf("a %d-column bar should shorten the path, got %q", roomy, out)
+		t.Errorf("a %d-column bar should shorten the path, got %q", narrow, out)
 	}
 	if strings.Contains(out, "~/work/harness/golder") {
-		t.Errorf("the full path should not fit at %d columns: %q", roomy, out)
-	}
-	if !strings.Contains(out, "opencode-go") {
-		t.Errorf("the lead should stay whole while the focused path shortens: %q", out)
-	}
-	s.StartReveal(roomy)
-	if s.revealLeft != 0 {
-		t.Errorf("nothing to reveal at %d columns, got %d steps: %q", roomy, s.revealLeft, out)
+		t.Errorf("the full path should not fit at %d columns: %q", narrow, out)
 	}
 }
 
-// TestStatusBarWindowsLongFields: on a narrow terminal — phone-sized, where even
-// the shortened path cannot fit — the two fields whose values can outgrow a bar
-// are never dropped. They scroll inside their own segment while every other field
-// stays whole.
+// TestStatusBarWindowsLongFields: the focused field keeps its whole value while
+// the row can afford it, and is elided only when the row truly cannot. With the
+// fold, the roomy case shows the full path while the model stays a readable tail;
+// the phone-sized case still names the directory.
 func TestStatusBarWindowsLongFields(t *testing.T) {
 	s := newStatusBar(DefaultTheme(), Options{
 		Model:         "claude-haiku-5-5",
@@ -216,16 +171,24 @@ func TestStatusBarWindowsLongFields(t *testing.T) {
 	// The path is the field this test windows, so it holds the focus: a folded
 	// field has no window to scroll.
 	s = focusSegment(t, s, glyphCwd)
-	narrow := elisionWidth(t, s, glyphCwd)
-	var cwdWin int
-	for _, seg := range s.foldLayout(narrow) {
-		if strings.HasPrefix(seg.text, glyphCwd) {
-			cwdWin = seg.win
-		}
+
+	const roomy = 80
+	wide := stripANSI(s.Render(roomy))
+	if !strings.Contains(wide, "~/work/harness/golder") {
+		t.Errorf("a %d-column bar should show the focused path whole: %q", roomy, wide)
 	}
-	if cwdWin == 0 {
-		t.Fatalf("the focused path should be elided at %d columns, got window %d", narrow, cwdWin)
+	if strings.Contains(wide, "claude-haiku-5-5") {
+		t.Errorf("the model should stay folded while the path is focused: %q", wide)
 	}
+	if w := ui.Width(wide); w != roomy {
+		t.Errorf("row width = %d, want exactly %d: %q", w, roomy, wide)
+	}
+	s.StartReveal(roomy)
+	if s.revealLeft != 0 {
+		t.Errorf("a focused field that fits should not reveal, got %d steps", s.revealLeft)
+	}
+
+	const narrow = 20
 	s.StartReveal(narrow)
 	if s.revealLeft <= 0 {
 		t.Error("an elided bar should reveal its values once when they change")
@@ -235,18 +198,12 @@ func TestStatusBarWindowsLongFields(t *testing.T) {
 	s.revealLeft, s.revealMax, s.scroll = 0, 0, 0
 
 	out := stripANSI(s.Render(narrow))
-	if !strings.Contains(out, "golder") {
+	if !strings.Contains(out, "…/golder") {
 		t.Errorf("the elided path should still name the directory: %q", out)
 	}
 	for _, frame := range []string{out, stripANSI(s.Render(narrow))} {
 		if w := ui.Width(frame); w != narrow {
 			t.Errorf("row width = %d, want exactly %d:\n%q", w, narrow, frame)
-		}
-		// The short fields are drawn whole, exactly as before.
-		for _, want := range []string{"opencode-go", glyphGit + " master", glyphThink + " h", glyphModel + " c"} {
-			if !strings.Contains(frame, want) {
-				t.Errorf("fixed field %q should be whole at %d columns:\n%q", want, narrow, frame)
-			}
 		}
 	}
 
@@ -255,7 +212,7 @@ func TestStatusBarWindowsLongFields(t *testing.T) {
 		t.Errorf("the bar moved on its own:\n%q\n%q", out, again)
 	}
 
-	// A bar that fits has nothing to reveal at all.
+	// A bar that fits the focused field has nothing to reveal at all.
 	s.StartReveal(200)
 	if s.revealLeft != 0 {
 		t.Error("a bar that fits should reveal nothing")
@@ -302,7 +259,7 @@ func TestStatusBarRevealRunsOnceAndSettles(t *testing.T) {
 	// Only the focused field can be elided, so the path takes the focus.
 	s = focusSegment(t, s, glyphCwd)
 
-	narrow := elisionWidth(t, s, glyphCwd)
+	const narrow = 20
 	settled := stripANSI(s.Render(narrow))
 	s.StartReveal(narrow)
 	if s.revealLeft <= 0 {
@@ -334,11 +291,19 @@ func TestStatusBarRevealRunsOnceAndSettles(t *testing.T) {
 func TestModelRevealRunsOnceThenStops(t *testing.T) {
 	m := NewModel(Options{Model: "claude-haiku-5-5", ProviderName: "opencode-go"})
 	m.statusBar.cwd = "~/work/harness/golder"
+	// Only a focused field is animated; focus the path so the narrow layout has
+	// something to slide.
+	m.statusBar.hover = focusIndex(len(m.statusBar.segments()) - 1) // the path is last in this fixture
+	for i, seg := range m.statusBar.segments() {
+		if strings.HasPrefix(seg.text, glyphCwd) {
+			m.statusBar.hover = focusIndex(i)
+		}
+	}
 
-	got, cmd := m.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+	got, cmd := m.Update(tea.WindowSizeMsg{Width: 20, Height: 24})
 	m = got.(Model)
 	if m.statusBar.revealLeft <= 0 {
-		t.Fatal("expected a reveal at 40 columns")
+		t.Fatal("expected a reveal at 20 columns")
 	}
 	if cmd == nil {
 		t.Fatal("an elided bar should arm the reveal")

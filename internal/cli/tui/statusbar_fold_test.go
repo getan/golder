@@ -29,9 +29,9 @@ func foldFixture() statusBar {
 	return s
 }
 
-// foldWidth is roomy enough that a folded bar fits with every sliver present, so
-// a test that asserts "X is folded" is never really asserting "X was dropped".
-const foldWidth = 160
+// foldWidth is a typical terminal: the lead fits whole, the folded fields share
+// the rest, and the long values still have to give something up.
+const foldWidth = 80
 
 // glyphCol returns the column the first cell carrying r sits at, or -1.
 func glyphCol(s statusBar, width int, r rune) int {
@@ -55,14 +55,14 @@ func TestStatusBarFoldsPastTheLead(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		glyphMode + " a", glyphModel + " c", glyphThink + " h",
-		glyphCwd + " ~", glyphCtx + " 8", glyphTask + " r",
+		glyphMode + " auto", glyphModel + " …pus", glyphThink + " high",
+		glyphCwd + " …der", glyphCtx + " …%)", glyphTask + " …ad",
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("folded field %q should show its sliver: %q", want, out)
+			t.Errorf("folded field %q should show its window: %q", want, out)
 		}
 	}
-	for _, absent := range []string{"claude-opus", "high", "~/work/harness/golder", "84,000", "running: Read"} {
+	for _, absent := range []string{"claude-opus", "~/work/harness/golder", "84,000", "running: Read"} {
 		if strings.Contains(out, absent) {
 			t.Errorf("folded field should not show %q until focused: %q", absent, out)
 		}
@@ -79,7 +79,7 @@ func TestStatusBarHoverExpandsOnlyTheHoveredSegment(t *testing.T) {
 	if !strings.Contains(out, "claude-opus") {
 		t.Errorf("the hovered field should expand: %q", out)
 	}
-	if !strings.Contains(out, glyphTask+" r") || strings.Contains(out, "running: Read") {
+	if !strings.Contains(out, glyphTask) || strings.Contains(out, "running: Read") {
 		t.Errorf("the other fields should stay folded: %q", out)
 	}
 	if w := ui.Width(out); w != foldWidth {
@@ -144,6 +144,70 @@ func TestStatusBarFoldedRowIsExactlyTheRequestedWidth(t *testing.T) {
 				t.Fatalf("plain=%v width %d: row is %d columns: %q", plain, width, w, stripANSI(got))
 			}
 		}
+	}
+}
+
+// TestStatusBarFoldedFieldsUseArrows: a folded field is separated from its
+// neighbour by the bar's own powerline arrow, not by the hard vertical edge of two
+// adjacent blocks. The arrow is what makes the row read as one ribbon.
+func TestStatusBarFoldedFieldsUseArrows(t *testing.T) {
+	s := foldFixture()
+	segs := s.foldLayout(foldWidth)
+	out := stripANSI(s.Render(foldWidth))
+	if got, want := strings.Count(out, sepArrow), len(segs); got != want {
+		t.Errorf("arrows = %d, want %d (one between each pair and one closing): %q", got, want, out)
+	}
+	if strings.Contains(out, "│") {
+		t.Errorf("folded fields should not be separated by a vertical rule: %q", out)
+	}
+}
+
+// TestStatusBarFoldedFieldsUseTheWholeRow: the fold is not a fixed three-column
+// stub per field. The layout spends every column the lead and the focused field do
+// not need, so the folded values grow to fill the terminal instead of leaving a
+// strip of empty bar.
+func TestStatusBarFoldedFieldsUseTheWholeRow(t *testing.T) {
+	s := foldFixture()
+	segs := s.foldLayout(foldWidth)
+	used := 0
+	for _, seg := range segs {
+		text := s.segText(seg)
+		if seg.folded {
+			if got := ui.Width(text); got != seg.win {
+				t.Errorf("folded %q painted %d columns, its window is %d", text, got, seg.win)
+			}
+			if seg.win < foldMinWidth(seg.text) {
+				t.Errorf("folded %q window %d is below its minimum %d", seg.text, seg.win, foldMinWidth(seg.text))
+			}
+		}
+		used += ui.Width(text)
+		if !s.plain {
+			used += 2
+		}
+	}
+	if !s.plain {
+		used += len(segs) // between + closing arrows
+	} else {
+		used += (len(segs) - 1) * ui.Width(sepPlain)
+	}
+	if used != foldWidth {
+		t.Errorf("the row uses %d columns, want %d: %q", used, foldWidth, stripANSI(s.Render(foldWidth)))
+	}
+}
+
+// TestStatusBarHoverShowsTheWholePath: the path is the field a person most often
+// needs in full, and a hover gives it its natural width before the other folded
+// fields take their share.
+func TestStatusBarHoverShowsTheWholePath(t *testing.T) {
+	s := foldFixture()
+	s = focusSegment(t, s, glyphCwd)
+	const width = 120
+	out := stripANSI(s.Render(width))
+	if !strings.Contains(out, "~/work/harness/golder") {
+		t.Errorf("the hovered path should be shown whole: %q", out)
+	}
+	if w := ui.Width(out); w != width {
+		t.Errorf("row width = %d, want %d: %q", w, width, out)
 	}
 }
 

@@ -50,7 +50,22 @@ func ResolveProvider(model, baseURL, protocol, providerName string, env func(str
 	// treatment: a stream cut before anything was shown is retried once, and a
 	// cut that cannot be retried is explained (streamretry.go). It is applied
 	// here, at the boundary, so no provider entry point can forget it.
-	return withStreamRetry(p), name, nil
+	return withStreamRetry(p, protocolWire(protocol)), name, nil
+}
+
+// protocolWire maps an explicit protocol selector to the wire it names; an empty
+// or unknown selector falls back to Chat, the dialect every direct path in
+// ResolveProvider speaks. An adaptive provider reports its own wire instead, so
+// this is only the initial answer for a direct driver.
+func protocolWire(protocol string) Wire {
+	canonical, err := NormalizeProtocol(protocol)
+	if err != nil {
+		return WireChat
+	}
+	if w := wireForProtocol(canonical); w != "" {
+		return w
+	}
+	return WireChat
 }
 
 // resolveProvider is ResolveProvider's selection logic, before the retry
@@ -223,7 +238,15 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	if err != nil {
 		return nil, "", err
 	}
-	return withStreamRetry(p), resolved, nil
+	initial := protocolWire(protocol)
+	if strings.TrimSpace(protocol) == "" {
+		if spec, ok := LookupProviderSpec(name); ok {
+			if w := wireForProtocol(spec.Protocol); w != "" {
+				initial = w
+			}
+		}
+	}
+	return withStreamRetry(p, initial), resolved, nil
 }
 
 // resolveNamedProvider is ResolveNamedProvider's construction, before the retry

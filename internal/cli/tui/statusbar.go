@@ -11,6 +11,7 @@ import (
 
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/provider"
 )
 
 // statusBar renders the persistent bottom line described in the SPEC (US-003,
@@ -87,9 +88,15 @@ type statusBar struct {
 
 	// hover is the segment under the pointer and pin the one a click fixed open;
 	// the zero value of either means "none" (see segFocus). Both are interaction
-	// state the Model owns and sets; the layout reads them through foldedSegments.
+	// state the Model owns and sets; the layout reads them through foldLayout.
 	hover segFocus
 	pin   segFocus
+
+	// protocol reports the wire the live provider is actually using, including a
+	// wire the adaptive fallback moved the model to mid-session. It is read on
+	// every render, so the segment changes as soon as the provider does; a nil
+	// source hides the segment.
+	protocol func() string
 }
 
 // Fold: the bar shows identity in full and keeps the rest a hover away.
@@ -112,9 +119,6 @@ const (
 	// branch are identity — which gateway, which checkout — the two facts the rest
 	// of the bar cannot express.
 	foldLead = 2
-	// foldOverlap is how many columns a folded segment is drawn over the block
-	// before it.
-	foldOverlap = 1
 )
 
 // segFocus is a status-bar segment index that can be unset: the zero value means
@@ -158,6 +162,43 @@ func newStatusBar(theme Theme, opts Options, cwd string) statusBar {
 		thinking:   string(opts.ThinkingLevel),
 		cwd:        abbreviateHome(cwd),
 		contextPct: -1,
+		protocol:   protocolSource(opts.Provider, opts.Protocol),
+	}
+}
+
+// protocolSource builds the live protocol readout: the provider's current wire
+// when it can report one, otherwise the protocol the user selected. The closure is
+// deliberately read per render — a wire fallback can change it mid-turn, and the
+// status bar should follow without an event or a timer.
+func protocolSource(p provider.Provider, protocol string) func() string {
+	initial := protocolWireLabel(protocol)
+	return func() string {
+		if p != nil {
+			if wr, ok := p.(provider.WireReporter); ok {
+				if w := wr.CurrentWire(); w != "" {
+					return string(w)
+				}
+			}
+		}
+		return initial
+	}
+}
+
+// protocolWireLabel maps the user-facing protocol selector to the wire name the
+// status bar shows. An empty or unknown selector stays empty, which hides the
+// segment rather than guessing.
+func protocolWireLabel(protocol string) string {
+	switch protocol {
+	case provider.ProtocolOpenAI:
+		return string(provider.WireChat)
+	case provider.ProtocolOpenAIResponses:
+		return string(provider.WireResponses)
+	case provider.ProtocolAnthropic:
+		return string(provider.WireMessages)
+	case provider.ProtocolGemini:
+		return string(provider.WireGemini)
+	default:
+		return strings.TrimSpace(protocol)
 	}
 }
 
@@ -242,6 +283,7 @@ const (
 	glyphCwd   = "▸" // working directory
 	glyphCtx   = "◔" // context-window usage
 	glyphTask  = "⏵" // current activity
+	glyphProto = "⇄" // wire protocol actually in use
 
 	sepArrow = "" // filled right arrow — used at a background transition
 )
@@ -275,6 +317,9 @@ const (
 	sbCwdFg = "231" // cwd text
 	sbCwdBg = "67"  // cwd block (steel blue)
 
+	sbProtoFg = "231" // protocol text
+	sbProtoBg = "31"  // protocol block (teal)
+
 	sbCtxFg = "236" // context text (dark, on amber)
 	sbCtxBg = "179" // context block (amber/gold)
 
@@ -293,6 +338,7 @@ const (
 	sbPlainModel = "13" // bright magenta
 	sbPlainThink = "12" // bright blue
 	sbPlainCwd   = "14" // bright cyan
+	sbPlainProto = "6"  // cyan
 	sbPlainCtx   = "11" // bright yellow
 	sbPlainTask  = "9"  // bright red
 )
@@ -328,9 +374,13 @@ type segment struct {
 	// color survives both the 16-color and the 256-color profile unchanged.
 	plainFg  string
 	priority int // larger = kept longer under truncation
-	// folded marks a segment drawn in its collapsed form (see foldedSegment):
-	// its value reduced to the glyph and one character, never scrolled.
+	// folded marks a segment drawn in its collapsed form (see foldLayout): its
+	// value reduced to the glyph plus as much of the tail as its window affords.
 	folded bool
+	// id is the segment's stable focus value. It is assigned once in segments()
+	// and survives layout drops, so a hover or a pin still names the same field
+	// when a narrow terminal removes its neighbours.
+	id segFocus
 }
 
 // Priority order (SPEC: task > model/app > token > git > cwd). Higher is more
@@ -388,7 +438,7 @@ func (s statusBar) row(width int) []statusCell {
 			// color on the terminal's background.
 			fg, bg = seg.plainFg, ""
 		}
-		own := focusIndex(i)
+		own := seg.id
 		if !s.plain {
 			x = drawStatusText(cells, x, " ", fg, bg, own)
 		}
@@ -408,17 +458,15 @@ func (s statusBar) row(width int) []statusCell {
 
 // drawSeparator paints what sits between segment i-1 and segment i: the ribbon's
 // arrow (filled with the LEFT block's background so it reads as that item's color
-// spilling into the next), the plain form's dim bullet, or — for a folded segment
-// — one column of overlap onto the block before it, which is the fold's whole
-// visual.
+// spilling into the next) or the plain form's dim bullet. Folded segments use the
+// same separator as expanded ones: a block boundary reads as a hard vertical cut,
+// while the arrow is the bar's own way of saying "the next field follows".
 func (s statusBar) drawSeparator(cells []statusCell, segs []segment, i, x int) int {
 	switch {
 	case i == 0:
 		return x
 	case s.plain:
 		return drawStatusText(cells, x, sepPlain, colorGray, "", 0)
-	case segs[i].folded && x > 0 && cells[x-1].r != 0:
-		return x - foldOverlap
 	default:
 		return drawStatusText(cells, x, sepArrow, s.blockBg(segs[i-1]), s.blockBg(segs[i]), 0)
 	}
@@ -507,13 +555,11 @@ func cellStyle(fg, bg string) lipgloss.Style {
 // segmentAt maps a column of the bar to the segment drawn there, or the zero
 // focus when the column is bar background or outside the row.
 //
-// It walks the same fold layout row paints — the same separators, the same tuck —
-// without building the cell row, because a motion event asks this on every pointer
-// move and a full canvas per answer would make a hover cost more than a frame.
-// The walk keeps the LAST segment whose span covers the column rather than the
-// first: a folded segment is drawn over the column it tucks behind, so the later
-// one is what a person sees there. TestStatusBarSegmentAtAgreesWithTheRow pins the
-// two against each other, column by column.
+// It walks the same fold layout row paints — the same separators, the same
+// windows — without building the cell row, because a motion event asks this on
+// every pointer move and a full canvas per answer would make a hover cost more
+// than a frame. TestStatusBarSegmentAtAgreesWithTheRow pins the two against each
+// other, column by column.
 func (s statusBar) segmentAt(x, width int) segFocus {
 	if x < 0 || x >= width {
 		return 0
@@ -522,18 +568,10 @@ func (s statusBar) segmentAt(x, width int) segFocus {
 	pos := 0
 	found := segFocus(0)
 	for i, seg := range segs {
-		// The order matches drawSeparator's: the plain form always separates with
-		// the dim bullet (it has no blocks to tuck behind), and only the ribbon
-		// folds.
 		switch {
 		case i == 0:
 		case s.plain:
 			pos += ui.Width(sepPlain)
-		case seg.folded:
-			// The tuck: this block is drawn one column over the previous one.
-			if pos > 0 {
-				pos -= foldOverlap
-			}
 		default:
 			pos += ui.Width(sepArrow)
 		}
@@ -542,7 +580,7 @@ func (s statusBar) segmentAt(x, width int) segFocus {
 			block += 2 // the ribbon pads every block with one space on each side
 		}
 		if x >= pos && x < pos+block {
-			found = focusIndex(i)
+			found = seg.id
 		}
 		pos += block
 	}
@@ -550,22 +588,192 @@ func (s statusBar) segmentAt(x, width int) segFocus {
 }
 
 // foldLayout fits the bar to width with the fold applied.
+//
+// The folded fields are not fixed-width slivers: after the lead and the focused
+// field have what they need, every remaining column is shared among them, so a
+// folded field shows as much of its value as the row can afford (the model name,
+// the last path components, the context percentage). A narrow terminal shrinks
+// them back toward the three-column minimum and then drops the lowest-priority
+// fields; a wide one shows them whole.
+//
+// The focused field — hover or pin — takes its natural width first, so the path
+// shows in full while the pointer rests on it, and the fields after it are the
+// ones that give the columns back. Only when even that cannot fit does the focus
+// itself get elided.
 func (s statusBar) foldLayout(width int) []segment {
-	return s.layout(s.foldedSegments(), width)
-}
-
-// foldedSegments returns the bar's segments with the fold applied: everything
-// past the lead collapses to a sliver, except the focused segment.
-func (s statusBar) foldedSegments() []segment {
 	segs := s.segments()
+	if len(segs) == 0 || width <= 0 {
+		return nil
+	}
 	focus := s.focus(len(segs))
+	focusID := segFocus(0)
+	if focus >= 0 {
+		focusID = focusIndex(focus)
+	}
 	for i := range segs {
-		if i < foldLead || i == focus {
+		if i >= foldLead && i != focus {
+			segs[i].folded = true
+		}
+	}
+
+	pad := 0
+	sep := ui.Width(sepPlain)
+	closing := 0
+	if !s.plain {
+		pad = 2
+		sep = ui.Width(sepArrow)
+		closing = ui.Width(sepArrow)
+	}
+	seps := func(n int) int {
+		switch {
+		case n <= 0:
+			return 0
+		case n == 1:
+			return closing
+		default:
+			return (n-1)*sep + closing
+		}
+	}
+	// A folded field's block is exactly the window the layout gave it: the text
+	// is padded to that width (see segText), so the columns promised here are the
+	// columns painted and the row can be filled exactly.
+	cost := func(seg segment) int {
+		if seg.folded {
+			return seg.win + pad
+		}
+		return ui.Width(s.segText(seg)) + pad
+	}
+	total := func() int {
+		n := seps(len(segs))
+		for _, seg := range segs {
+			n += cost(seg)
+		}
+		return n
+	}
+
+	// The narrowest form: folded fields keep their glyph and one value character;
+	// the lead and the focus ask for their whole value.
+	for i := range segs {
+		if segs[i].folded {
+			segs[i].win = foldMinWidth(segs[i].text)
+		} else {
+			segs[i].win = 0
+		}
+	}
+
+	// Drop by priority while even the narrow form cannot fit.
+	for total() > width && len(segs) > 1 {
+		idx := dropCandidate(segs, focusID)
+		if idx < 0 {
+			break
+		}
+		segs = append(segs[:idx], segs[idx+1:]...)
+	}
+	// Then shrink what is left, the focus last: a field at one column is still a
+	// field, and the alternative is an overflowing row.
+	for total() > width {
+		idx := shrinkCandidate(segs, focusID)
+		if idx < 0 {
+			break
+		}
+		seg := &segs[idx]
+		natural := ui.Width(seg.text)
+		cur := seg.win
+		if cur <= 0 {
+			cur = natural
+		}
+		if cur > 1 {
+			seg.win = cur - 1
 			continue
 		}
-		segs[i] = foldedSegment(segs[i])
+		drop := dropCandidate(segs, focusID)
+		if drop < 0 || len(segs) <= 1 {
+			break
+		}
+		segs = append(segs[:drop], segs[drop+1:]...)
+	}
+
+	// Spend every remaining column on the folded fields, a round at a time so a
+	// short value stops growing while its neighbours keep going.
+	extra := width - total()
+	for extra > 0 {
+		var cand []int
+		for i, seg := range segs {
+			if seg.folded && seg.win < ui.Width(seg.text) {
+				cand = append(cand, i)
+			}
+		}
+		if len(cand) == 0 {
+			break
+		}
+		share := extra / len(cand)
+		if share < 1 {
+			share = 1
+		}
+		progressed := false
+		for _, i := range cand {
+			if extra == 0 {
+				break
+			}
+			grow := ui.Width(segs[i].text) - segs[i].win
+			if grow > share {
+				grow = share
+			}
+			if grow > extra {
+				grow = extra
+			}
+			if grow > 0 {
+				segs[i].win += grow
+				extra -= grow
+				progressed = true
+			}
+		}
+		if !progressed {
+			break
+		}
 	}
 	return segs
+}
+
+// dropCandidate is the field to give up when the row cannot fit: the lowest
+// priority, with the focused field pushed to the end of the queue so a hover does
+// not disappear under the pointer. Ties go to the wider field, which frees more.
+func dropCandidate(segs []segment, focusID segFocus) int {
+	best, bestKey, bestW := -1, 0, 0
+	for i, seg := range segs {
+		key := seg.priority * 2
+		if seg.id == focusID {
+			key += 100
+		}
+		w := ui.Width(seg.text)
+		if best < 0 || key < bestKey || (key == bestKey && w > bestW) {
+			best, bestKey, bestW = i, key, w
+		}
+	}
+	return best
+}
+
+// shrinkCandidate is the field to take one column from: the same priority order,
+// the focus last, and among equals the widest first.
+func shrinkCandidate(segs []segment, focusID segFocus) int {
+	best, bestKey, bestW := -1, 0, 0
+	for i, seg := range segs {
+		cur := seg.win
+		if cur <= 0 {
+			cur = ui.Width(seg.text)
+		}
+		if cur <= 1 {
+			continue
+		}
+		key := seg.priority * 2
+		if seg.id == focusID {
+			key += 100
+		}
+		if best < 0 || key < bestKey || (key == bestKey && cur > bestW) {
+			best, bestKey, bestW = i, key, cur
+		}
+	}
+	return best
 }
 
 // focus is the segment currently expanded: the pointer wins over the pin, so
@@ -580,38 +788,68 @@ func (s statusBar) focus(n int) int {
 	return -1
 }
 
-// foldedSegment is seg in its collapsed form: the glyph and the first character
-// of its value, never scrolled and never abbreviated — there is nothing left to
-// abbreviate.
-func foldedSegment(seg segment) segment {
-	seg.text = foldedText(seg.text)
-	seg.short = ""
-	seg.scrollable = false
-	seg.win = 0
-	seg.folded = true
-	return seg
-}
-
-// foldedText keeps a field's glyph and the first character of its value: "⚖ auto"
-// folds to "⚖ a", which names the field and hints at its value in three columns.
-// A value that is nothing but a glyph comes back alone.
-func foldedText(text string) string {
-	first := ' '
-	found := false
-	for _, r := range text {
+// foldMinWidth is the narrowest a folded field is allowed to become: its glyph,
+// a space, and the first character of its value (or just the glyph when the value
+// has nothing after it).
+func foldMinWidth(text string) int {
+	natural := ui.Width(text)
+	rs := []rune(text)
+	if len(rs) == 0 {
+		return 0
+	}
+	if natural <= 2 {
+		return natural
+	}
+	glyphW := ui.Width(string(rs[0]))
+	for _, r := range rs[1:] {
 		if unicode.IsSpace(r) {
 			continue
 		}
-		if !found {
-			first, found = r, true
-			continue
+		min := glyphW + 1 + ui.Width(string(r))
+		if min > natural {
+			return natural
 		}
-		return string(first) + " " + string(r)
+		return min
 	}
-	if !found {
+	return natural
+}
+
+// foldWindow is a folded field's value in the window the layout gave it: the
+// glyph stays, and the value keeps its tail (the end of a model name, the last
+// path components, the percentage after the token count). A one-column window
+// keeps only the glyph; a window with room for one value character shows that
+// character, which is more useful than an ellipsis.
+func foldWindow(text string, win int) string {
+	natural := ui.Width(text)
+	if win <= 0 || win >= natural {
+		return text
+	}
+	rs := []rune(text)
+	if len(rs) == 0 {
 		return ""
 	}
-	return string(first)
+	glyph := string(rs[0])
+	glyphW := ui.Width(glyph)
+	if win <= glyphW {
+		return TruncateToWidth(glyph, win)
+	}
+	value := strings.TrimSpace(string(rs[1:]))
+	if value == "" {
+		return glyph
+	}
+	remaining := win - glyphW - 1 // the space after the glyph
+	if remaining <= 0 {
+		return glyph
+	}
+	runes := []rune(value)
+	switch {
+	case remaining == 1:
+		return glyph + " " + string(runes[0])
+	case remaining == 2:
+		return glyph + " " + string(runes[0]) + "…"
+	default:
+		return glyph + " " + elideTail(value, remaining)
+	}
 }
 
 // segments builds the ordered list of visible segments. Order in the slice is
@@ -643,6 +881,15 @@ func (s statusBar) segments() []segment {
 	if s.model != "" {
 		segs = append(segs, segment{text: glyphModel + " " + s.model, scrollable: true, fg: sbModelFg, bg: sbModelBg, plainFg: sbPlainModel, priority: prioModel})
 	}
+	// The protocol sits immediately after the model: which API dialect the model
+	// is actually reached over right now. The provider can move a model between
+	// wires mid-session (the adaptive fallback), and the closure reads that live
+	// state, so the segment follows the move rather than repeating the launch flag.
+	if s.protocol != nil {
+		if name := strings.TrimSpace(s.protocol()); name != "" {
+			segs = append(segs, segment{text: glyphProto + " " + name, fg: sbProtoFg, bg: sbProtoBg, plainFg: sbPlainProto, priority: prioModel})
+		}
+	}
 	if s.thinking != "" {
 		// Thinking rides with the model priority — it is cheap and contextual.
 		segs = append(segs, segment{text: glyphThink + " " + s.thinking, fg: sbThinkFg, bg: sbThinkBg, plainFg: sbPlainThink, priority: prioModel})
@@ -664,6 +911,11 @@ func (s statusBar) segments() []segment {
 	}
 	if s.task != "" {
 		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, plainFg: sbPlainTask, priority: prioTask})
+	}
+	// Stable ids: a layout drop removes segments, but hover and pin still have to
+	// name the same field they were set on.
+	for i := range segs {
+		segs[i].id = focusIndex(i)
 	}
 	return segs
 }
@@ -757,9 +1009,14 @@ func (s statusBar) elided(seg segment) string {
 // as the motion stops.
 func (s statusBar) segText(seg segment) string {
 	if seg.folded {
-		// A folded field shows its sliver as-is: the change reveal slides a value
-		// into view, and there is no view to slide it into.
-		return seg.text
+		// A folded field shows its window as-is: the change reveal slides a long
+		// value into view, and a folded field is already the settled slice the
+		// layout chose for it.
+		text := foldWindow(seg.text, seg.win)
+		if w := ui.Width(text); w < seg.win {
+			text += strings.Repeat(" ", seg.win-w)
+		}
+		return text
 	}
 	settled := s.elided(seg)
 	if s.revealLeft <= 0 || settled == seg.text {
@@ -784,7 +1041,10 @@ func (s *statusBar) StartReveal(width int) {
 	}
 	steps := 0
 	for _, seg := range s.foldLayout(width) {
-		if seg.win <= 0 || seg.win >= ui.Width(seg.text) {
+		// A folded field is still by design: its window is the settled slice the
+		// layout chose, not something to slide into view. Only a focused field
+		// moves.
+		if seg.folded || seg.win <= 0 || seg.win >= ui.Width(seg.text) {
 			continue
 		}
 		if need := ui.Width(seg.text) - ui.Width(s.elided(seg)); need > steps {
