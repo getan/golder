@@ -144,6 +144,13 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 			newContent := joinContent(updated, trailing)
 			st.content = newContent
 			if op.MoveTo == "" {
+				// A hunk made entirely of context lines matches but changes
+				// nothing. Reporting it as a change would write an identical file
+				// and tell the caller "Applied 1 change(s)" with no diff — the
+				// shape of a real edit that silently did nothing.
+				if newContent == old {
+					break
+				}
 				changes = append(changes, Change{Kind: ChangeUpdate, Path: full, OldContent: old, NewContent: newContent})
 				break
 			}

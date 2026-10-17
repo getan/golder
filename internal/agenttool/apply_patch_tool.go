@@ -164,6 +164,18 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
 	}
+	if len(changes) == 0 {
+		// Every hunk matched, and every one of them was context-only. Saying
+		// "Applied 0 change(s)" invites the reader to wonder what went wrong;
+		// naming the actual shape — the lines matched, nothing was added or
+		// removed — says the patch did not describe an edit.
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(
+				"apply_patch: no changes — every hunk matched the file but none added or removed a line " +
+					"(a patch of context lines only). Nothing was written; send a patch with +/- lines.")},
+			Details: map[string]any{"changes": 0, "files": []string{}, "diff": ""},
+		}, nil
+	}
 	if t.BeforePersist != nil {
 		if err := t.BeforePersist(changes); err != nil {
 			return errorResult("apply_patch: cannot journal before writing: " + err.Error()), nil

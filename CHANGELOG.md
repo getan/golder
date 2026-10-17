@@ -1504,24 +1504,24 @@ interactive REPL/TUI.
   than a decision, and it is why an approval card could look like it had both
   allowed and refused the same call.
 - **The status bar folds what is not pinned, spends the whole row, and expands on
-  hover**: the bar keeps its lead — the provider and the branch — at full width and
-  folds every later field (the approval mode, model, protocol, thinking level,
-  cwd, context gauge and task). A folded field is not a fixed stub: after the lead
-  and the focused field have what they need, the remaining columns are shared
-  among the folded fields, so each shows as much of its value as the row can
-  afford — the end of the model name, the last path components, the context
-  percentage — and the row is used to its last column. All fields, folded or not,
-  are separated by the bar's own powerline arrows. Moving the pointer onto a
-  segment expands it in place (the path shows whole), and moving away collapses it
-  on the next frame; clicking pins one open for a terminal whose mouse reporting
-  carries no motion events, with a second click or a click on the background
-  releasing it. A **protocol** segment after the model reports the wire actually
-  in use (`responses`, `messages`, `chat`, `v1beta`), read live from the provider
-  so an adaptive wire fallback updates it mid-session. What is painted and what
-  the pointer hits come from one layout pass, so they cannot disagree, and
-  `/status` still prints every field whole. The mouse mode moves from xterm 1002
-  to 1003 (all motion) to deliver a hover at all; click, release, wheel and drag
-  are a subset of it, and a terminal that reports 1002 only keeps the click path.
+  hover**: every field folds — the provider and the branch included, so a single
+  rule explains the whole bar — into its glyph plus as much of its value as its
+  share allows. A folded field is not a fixed stub: after the focused field has
+  what it needs, the remaining columns are shared among the folded ones, so each
+  shows a recognisable slice (the end of the model name, the last path components,
+  the context percentage) and the row is used to its last column. All fields,
+  folded or not, are separated by the bar's own powerline arrows. Moving the
+  pointer onto a segment expands it in place (the path shows whole), and moving
+  away collapses it on the next frame; clicking pins one open for a terminal
+  whose mouse reporting carries no motion events, with a second click or a click
+  on the background releasing it. A **protocol** segment after the model reports
+  the wire actually in use (`responses`, `messages`, `chat`, `v1beta`), read live
+  from the provider so an adaptive wire fallback updates it mid-session. What is
+  painted and what the pointer hits come from one layout pass, so they cannot
+  disagree, and `/status` still prints every field whole. The mouse mode moves
+  from xterm 1002 to 1003 (all motion) to deliver a hover at all; click, release,
+  wheel and drag are a subset of it, and a terminal that reports 1002 only keeps
+  the click path.
 - **A cut stream gets several reconnects, and each explains itself**: the retry
   layer now makes up to four reconnects (five attempts) instead of one, separated
   by an exponential backoff from 250ms to 5s, because a long-running turn is
@@ -1546,6 +1546,19 @@ interactive REPL/TUI.
   number. The patch guide now says explicitly that hunks are matched against the
   file as it is now, must not overlap, and that a failed patch should be re-read
   and resent rather than retried verbatim.
+- **A patch that changes nothing says so**: a hunk made only of context lines
+  matched the file, wrote it back unchanged, and reported `Applied 1 change(s)`
+  with no diff — indistinguishable from a real edit whose diff had gone missing.
+  Such an update now produces no change at all, and a patch with no changes tells
+  the caller `no changes — every hunk matched the file but none added or removed a
+  line`, so a context-only patch is never mistaken for a successful edit.
+- **A nil trust store no longer crashes a session grant**: when `trust.json` could
+  not be opened, the front-ends carry on with trust disabled and a nil manager.
+  Every read already answered "untrusted" there, but `SetSessionTrust`,
+  `SetSessionReads` and `ClearSessionTrust` dereferenced the receiver — so
+  answering a trust prompt in that state panicked the process (it took down an
+  unrelated TUI test on a sandboxed host). All three are no-ops on a nil manager
+  now, matching the rest of the package.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

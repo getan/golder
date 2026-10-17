@@ -377,6 +377,28 @@ func TestComputeUpdateOverlappingHunksFailWithTheStaleLine(t *testing.T) {
 	}
 }
 
+// A hunk made entirely of context lines matches the file and changes nothing.
+// Reporting it as a change would write an identical file and tell the caller
+// "Applied 1 change(s)" with no diff to show for it.
+func TestComputeUpdateOfContextOnlyIsNoChange(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "one\ntwo\n")
+	ops, err := Parse("*** Begin Patch\n*** Update File: a.txt\n@@\n one\n two\n*** End Patch\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes, err := Compute(ops, resolverFor(t, dir))
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("changes = %+v, want none for a context-only hunk", changes)
+	}
+	if got := readFile(t, dir, "a.txt"); got != "one\ntwo\n" {
+		t.Errorf("file = %q, want it untouched", got)
+	}
+}
+
 func TestComputeEOFAnchor(t *testing.T) {
 	dir := t.TempDir()
 	// "end" appears twice; the EOF anchor must pick the final occurrence.

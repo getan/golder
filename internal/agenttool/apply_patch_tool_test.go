@@ -140,6 +140,25 @@ func TestApplyPatchToolContextMismatchIsAtomic(t *testing.T) {
 	}
 }
 
+// TestApplyPatchToolContextOnlyPatchIsANoOp: a patch whose hunk has no +/- lines
+// matches the file and would otherwise be reported as "Applied 1 change(s)" with
+// an empty diff — the card looked like a real edit that changed nothing. It now
+// says exactly that, and writes nothing.
+func TestApplyPatchToolContextOnlyPatchIsANoOp(t *testing.T) {
+	dir := patchTree(t)
+	tool := &ApplyPatchTool{Root: dir}
+	res := runPatch(t, tool, "*** Begin Patch\n*** Update File: a.go\n@@\n package a\n\n func old() {}\n*** End Patch\n")
+	if txt := resultText(res); !strings.Contains(txt, "no changes") || !strings.Contains(txt, "context lines only") {
+		t.Fatalf("result = %q, want a no-op explanation", txt)
+	}
+	if got := readToolFile(t, dir, "a.go"); got != "package a\n\nfunc old() {}\n" {
+		t.Errorf("a.go = %q, want it untouched", got)
+	}
+	if d, ok := res.Details.(map[string]any); !ok || d["changes"] != 0 || d["diff"] != "" {
+		t.Errorf("details = %#v, want zero changes and no diff", res.Details)
+	}
+}
+
 // TestApplyPatchToolRejectsEscape verifies the workspace guard: a patch path
 // outside Root fails as an error result and writes nothing.
 func TestApplyPatchToolRejectsEscape(t *testing.T) {
