@@ -653,6 +653,9 @@ func TestPermissionGateEscalationAutoOffersReadReAdmission(t *testing.T) {
 	if gotReq.ReadRoot == "" || !strings.Contains(gotReq.ReadRoot, "scratch") {
 		t.Errorf("ReadRoot = %q, want the path the request carried", gotReq.ReadRoot)
 	}
+	if !gotReq.NeedsWrite {
+		t.Error("NeedsWrite = false, want true: rm -rf needs the write side, and the dialog must lead with that row")
+	}
 	found := false
 	for _, root := range grants.ReadRoots() {
 		if root == gotReq.ReadRoot {

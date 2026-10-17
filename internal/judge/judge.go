@@ -573,6 +573,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				Justification: escalationJustification(call),
 				Risk:          riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 				Rationale: firstReason(v), ReadRoot: root,
+				NeedsWrite: PathWriteNeed(root, riskSummary(call)),
 			}
 			req.Origin = agentcore.OriginFromContext(ctx)
 			done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
