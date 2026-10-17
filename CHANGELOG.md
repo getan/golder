@@ -1441,6 +1441,16 @@ interactive REPL/TUI.
   wrapper now promotes the confirmed wire in-process (first success wins, safe
   under concurrent sub-agent turns) and keeps the remaining declared wires as a
   fallback if the gateway changes its routing mid-session.
+- **A pipe-mode command can no longer prompt on the TUI's terminal**: a
+  non-tty session's stdout/stderr are captured, but the child inherited
+  golder's controlling terminal, so ssh's host-key confirmation (seen on a push
+  whose sandbox could not read `~/.ssh/known_hosts`), sudo and git credential
+  prompts opened `/dev/tty` and wrote straight through the raw-mode TUI —
+  leaving a stray "yes" prompt and garbled screen. Pipe sessions now start in
+  their own session with no controlling terminal: those prompts fail fast with
+  their error in the captured output, while process-group interrupts still
+  reach forked children. `tty=true` sessions keep their PTY and prompts by
+  design.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

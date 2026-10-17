@@ -11,9 +11,9 @@ import (
 // os.Process.Kill, which is immediate.
 const terminationGracePeriod = 50 * time.Millisecond
 
-// configureProcessGroup is a no-op on Windows: golder cannot create a process
+// configurePipeProcess is a no-op on Windows: golder cannot create a process
 // group or signal one portably.
-func configureProcessGroup(_ *exec.Cmd) {}
+func configurePipeProcess(_ *exec.Cmd) {}
 
 // configureTTYProcess is unreachable on Windows: openPTY already fails a
 // tty=true request before the process is configured.

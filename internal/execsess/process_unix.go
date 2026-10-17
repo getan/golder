@@ -12,11 +12,21 @@ import (
 // SIGKILL to the process group.
 const terminationGracePeriod = 50 * time.Millisecond
 
-// configureProcessGroup puts the child in its own process group so a kill or
-// interrupt reaches forked children too (a `sleep 30 | cat` pipeline cannot
-// outlive its shell).
-func configureProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+// configurePipeProcess puts the child in its own session and process group so a
+// kill or interrupt reaches forked children too (a `sleep 30 | cat` pipeline
+// cannot outlive its shell), and so the child has no controlling terminal.
+//
+// The terminal detachment is as important as the signal group. A pipe session
+// captures stdout/stderr, but a program that opens /dev/tty — ssh's host-key
+// confirmation, sudo's password prompt, git's credential prompt — would bypass
+// those pipes and write straight into golder's terminal. In the TUI that
+// corrupts the raw-mode screen and leaves the user typing "yes" into a prompt
+// the tool cannot see. With no controlling terminal the open fails, the
+// program reports its error on the captured stderr, and the session ends
+// instead of taking over the screen. The session leader's process group id
+// equals its pid, so process-group signals still reach forked children.
+func configurePipeProcess(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 }
 
 // configureTTYProcess gives a tty session its own session and makes the slave

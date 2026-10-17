@@ -356,7 +356,7 @@ func (s *Session) start() error {
 		configureTTYProcess(cmd)
 		cmd.Env = ttyEnv(os.Environ(), s.env)
 	} else {
-		configureProcessGroup(cmd)
+		configurePipeProcess(cmd)
 		// Both streams append to the same bounded buffer through Write, so
 		// output ordering is best-effort exactly as it is on a terminal.
 		cmd.Stdout = s

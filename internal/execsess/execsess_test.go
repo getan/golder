@@ -81,6 +81,30 @@ func TestSessionRunToExit(t *testing.T) {
 	}
 }
 
+// TestPipeSessionHasNoControllingTerminal pins the reason a non-tty session is
+// started with setsid: a program that opens /dev/tty must not be able to write
+// past the captured streams into golder's terminal. Opening /dev/tty succeeds
+// only when the process has a controlling terminal, so this reproduces the
+// ssh-host-key-prompt corruption whenever the test binary itself runs from a
+// terminal.
+func TestPipeSessionHasNoControllingTerminal(t *testing.T) {
+	requireShell(t)
+	m := NewManager()
+	s, err := m.Start(StartRequest{
+		Command: "open /dev/tty",
+		Argv:    bashArgv("exec 3<>/dev/tty"),
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !s.Wait(context.Background(), 5*time.Second, WaitExit) {
+		t.Fatalf("session did not exit")
+	}
+	if snap := s.Snapshot(); snap.ExitCode == 0 {
+		t.Fatalf("a pipe session opened /dev/tty (exit 0); the child kept the controlling terminal: %q", s.ReadNew())
+	}
+}
+
 func TestSessionExitCode(t *testing.T) {
 	requireShell(t)
 	m := NewManager()
