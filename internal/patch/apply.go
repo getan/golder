@@ -180,10 +180,16 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, error) {
 		old := chunkOldLines(ch.Lines)
 		idx, ok := seekSequence(lines, old, cursor, ch.EOF)
 		if !ok {
-			if ch.Header != "" {
-				return nil, fmt.Errorf("could not find the context for hunk %d (%s)", i+1, ch.Header)
+			// A hunk listed out of file order (or shifted by an earlier hunk)
+			// still has a home: retry the whole file before failing. Sequential
+			// application stays the normal path, so a patch that could apply to
+			// an earlier duplicate does not silently move.
+			if idx, ok = seekSequence(lines, old, 0, ch.EOF); !ok {
+				if ch.Header != "" {
+					return nil, fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))
+				}
+				return nil, fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))
 			}
-			return nil, fmt.Errorf("could not find the context for hunk %d", i+1)
 		}
 		// Context lines keep the FILE's text (they only anchored the match),
 		// so a fuzzy hit never rewrites whitespace or punctuation; additions
@@ -209,6 +215,39 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, error) {
 		cursor = idx + len(replacement)
 	}
 	return lines, nil
+}
+
+// hunkDiagnostic explains a failed match in the terms a patch author can act on:
+// the closest line and the first expected/found pair that differs. A bare "could
+// not find the context" leaves the author guessing whether the file moved, the
+// hunk was stale, or the context was simply too short.
+func hunkDiagnostic(lines, old []string) string {
+	if len(old) == 0 || len(old) > len(lines) {
+		return "; re-read the file and resend the hunk"
+	}
+	bestAt, bestHits := -1, 0
+	for start := 0; start+len(old) <= len(lines); start++ {
+		hits := 0
+		for j := range old {
+			if equalLine(lines[start+j], old[j], matchNormalized) {
+				hits++
+			}
+		}
+		if hits > bestHits {
+			bestAt, bestHits = start, hits
+		}
+	}
+	if bestAt < 0 || bestHits == 0 {
+		return "; no line in the file matches the hunk's context; re-read the file and resend"
+	}
+	for j := range old {
+		if equalLine(lines[bestAt+j], old[j], matchNormalized) {
+			continue
+		}
+		return fmt.Sprintf("; closest match at line %d (%d/%d lines match; expected %q, found %q); re-read the file and resend",
+			bestAt+1, bestHits, len(old), old[j], lines[bestAt+j])
+	}
+	return "; re-read the file and resend"
 }
 
 // chunkOldLines returns the lines the matcher must locate: the chunk's context

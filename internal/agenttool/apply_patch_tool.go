@@ -64,8 +64,9 @@ func (t *ApplyPatchTool) Description() string {
 	return "Edit files with one patch: add, update, move, or delete any number " +
 		"of files per call. The patch text uses the *** Begin Patch / *** End " +
 		"Patch format; update chunks are line-oriented diffs with optional " +
-		"@@ context and fuzzy matching. Use this instead of shelling out to " +
-		"patch utilities."
+		"@@ context and fuzzy matching. Hunks are matched in order against the " +
+		"file as it is now: re-read a file that changed, and keep hunks " +
+		"non-overlapping. Use this instead of shelling out to patch utilities."
 }
 
 // Schema implements AgentTool.

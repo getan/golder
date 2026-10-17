@@ -304,6 +304,79 @@ func TestComputeUpdateNoMatchFails(t *testing.T) {
 	}
 }
 
+// Hunks are normally applied in file order, but a patch that lists them out of
+// order still has a well-defined result when they do not overlap. Retrying a
+// failed hunk from the start keeps that case working instead of forcing the author
+// to re-read and reorder a patch whose content was already correct.
+func TestComputeUpdateAcceptsHunksListedOutOfOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "one\ntwo\nthree\n")
+	changes := patch(t, dir, `*** Begin Patch
+*** Update File: a.txt
+@@
+-three
++THREE
+@@
+-one
++ONE
+*** End Patch
+`)
+	if got, want := changes[0].NewContent, "ONE\ntwo\nTHREE\n"; got != want {
+		t.Errorf("NewContent = %q, want %q", got, want)
+	}
+}
+
+// A failed hunk names the closest line and the first mismatch, so the author can
+// tell a stale context from a wrong path without re-reading the whole file.
+func TestComputeUpdateNoMatchReportsTheClosestLine(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "alpha\nbeta\ngamma\n")
+	ops, err := Parse("*** Begin Patch\n*** Update File: a.txt\n@@\n alpha\n-betx\n+beta\n*** End Patch\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Compute(ops, resolverFor(t, dir))
+	if err == nil {
+		t.Fatal("Compute succeeded, want an Invalid Context error")
+	}
+	for _, want := range []string{"Invalid Context", "hunk 1", "closest match at line 1", "expected \"betx\"", "found \"beta\"", "re-read"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+}
+
+// Two hunks whose contexts overlap cannot both be applied: the first changes the
+// line the second expects. The error must say which line was stale, not fail
+// silently or apply the second hunk somewhere else.
+func TestComputeUpdateOverlappingHunksFailWithTheStaleLine(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt", "alpha\nbeta\n")
+	ops, err := Parse(`*** Begin Patch
+*** Update File: a.txt
+@@
+-alpha
++ALPHA
+@@
+ alpha
+-beta
++BETA
+*** End Patch
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Compute(ops, resolverFor(t, dir))
+	if err == nil {
+		t.Fatal("Compute succeeded, want an Invalid Context error for the overlapping hunk")
+	}
+	for _, want := range []string{"hunk 2", "closest match", "expected \"alpha\"", "found \"ALPHA\""} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err, want)
+		}
+	}
+}
+
 func TestComputeEOFAnchor(t *testing.T) {
 	dir := t.TempDir()
 	// "end" appears twice; the EOF anchor must pick the final occurrence.
