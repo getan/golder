@@ -1458,6 +1458,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case usageDoneMsg:
+		// /usage finished. The report is text (either the quota table or the
+		// explanation for a provider with no endpoint), so it lands in the
+		// transcript like any other command's outcome.
+		m.spinner.unpin()
+		m.spinner.stop()
+		m.running = false
+		m.sessionOpCancel = nil
+		switch {
+		case msg.err != nil:
+			m.transcript.addSystem("usage: could not read the quota: " + msg.err.Error())
+		default:
+			m.transcript.addSystem(strings.TrimRight(msg.text, "\n"))
+		}
+		m.relayout()
+		if next, cmd, ok := m.startQueuedSteer(); ok {
+			return next, cmd
+		}
+		return m, nil
+
 	case runEndMsg:
 		// Capture before the reset: the settlement below reports an interrupt
 		// differently depending on whether the press already announced it, and
@@ -2303,6 +2323,14 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if line == "/compact" {
 		return m.startSessionOp(line, "Compacting conversation", func(ctx context.Context) tea.Cmd {
 			return m.session.compactCmd(ctx)
+		})
+	}
+	// /usage asks the provider's billing endpoint what is left of the plan. It is
+	// a network call, so it rides the same off-loop session-op path as /compact:
+	// the spinner says what is happening and Ctrl+C cancels it.
+	if line == "/usage" || strings.HasPrefix(line, "/usage ") {
+		return m.startSessionOp(line, "Checking quota", func(ctx context.Context) tea.Cmd {
+			return m.session.usageCmd(ctx)
 		})
 	}
 	if line == "/dream" || strings.HasPrefix(line, "/dream ") {

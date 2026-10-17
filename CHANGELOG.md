@@ -12,6 +12,17 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`/usage` reports the remaining subscription quota**: three providers answer
+  it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
+  5h/weekly/monthly windows as percentages with their reset times; `commandcode`
+  (`/alpha/billing/credits` and `/subscriptions`), the 5h and weekly dollars used
+  against their caps plus the monthly credit balance, plan and renewal date; and
+  `deepseek` (`/user/balance`), the prepaid and granted balance. Every other
+  provider answers with the explanation instead of a failed request: a relay such
+  as sub2api exposes its own wallet balance, which is not the upstream
+  subscription's remaining quota, and no endpoint can ask the upstream on its
+  behalf. The TUI runs the lookup off the tea loop (spinner, cancellable) and the
+  REPL uses the shared registry action, so both surfaces print the same report.
 - **Command Code (GOAT) is a first-class provider**: `commandcode` (alias
   `command-code`) uses the official Provider API at
   `https://api.commandcode.ai/provider/v1`, authenticates with

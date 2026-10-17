@@ -752,6 +752,42 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		ArgumentHint: "[name]",
 		Action:       providerAction,
 	})
+	// /usage reports what is left of the live provider's subscription. Three
+	// providers answer it with the same key the conversation uses; everything else
+	// gets the explanation UsageHint carries (a relay's wallet balance is not the
+	// upstream plan's quota, and no endpoint can ask the upstream on its behalf).
+	// The TUI intercepts this command to run it off the tea loop; the action here
+	// is what the REPL and any other registry consumer gets.
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:        "usage",
+		Category:    runtime.CategoryGeneral,
+		Description: "show the provider's remaining subscription quota (opencode-go, commandcode, deepseek)",
+		Action: func(string) string {
+			name := live.ProviderName
+			if !provider.UsageSupported(name) {
+				return provider.UsageHint(name)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			key := ""
+			if creds != nil {
+				key = creds.GetAPIKey(ctx, name)
+			}
+			base := ""
+			if spec, ok := provider.LookupProviderSpec(name); ok {
+				base = provider.ResolveBaseURL(spec, live.BaseURL, os.Getenv)
+			}
+			text, err := provider.FetchUsage(ctx, provider.UsageRequest{
+				Provider: name,
+				BaseURL:  base,
+				APIKey:   key,
+			})
+			if err != nil {
+				return fmt.Sprintf("usage: could not read %s's quota: %v", name, err)
+			}
+			return text
+		},
+	})
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:        "help",
 		Category:    runtime.CategoryGeneral,
