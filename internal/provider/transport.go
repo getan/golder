@@ -406,6 +406,12 @@ func classifyTransportError(err error) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		// A body that ends before the response does is a dropped connection, not
+		// a protocol problem; name it (see streamtrunc.go) instead of reporting
+		// the reader's bare "unexpected EOF".
+		return fmt.Errorf("transport: stream truncated (connection closed mid-response): %w", err)
+	}
 	if errors.Is(err, context.Canceled) {
 		return fmt.Errorf("transport: canceled: %w", err)
 	}

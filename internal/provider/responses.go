@@ -138,6 +138,10 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 	// first answer consumed the counter: the search fallback then never ran on
 	// the retry, so a gateway that rejects the hosted tool stayed broken.
 	retriedEmpty := false
+	// retriedTruncated is the same bounded retry for a connection that died
+	// mid-response (see streamtrunc.go): safe exactly when nothing has been
+	// shown, which is what `empty` reports.
+	retriedTruncated := false
 	for attempt := 0; ; attempt++ {
 		params := buildResponsesParams(d.name, req, useHosted)
 		msg, empty, err := d.runOnce(ctx, stream, client, params, seen)
@@ -168,7 +172,15 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 			useHosted = false
 			continue
 		}
-		d.emitError(stream, err)
+		// A stream cut mid-response is usually the network, not the endpoint: the
+		// same request over a fresh connection tends to complete. Retrying is safe
+		// only while nothing has been shown, and only once — a connection that
+		// drops twice is not a problem another request fixes.
+		if empty && !retriedTruncated && isTruncatedStreamErr(err) {
+			retriedTruncated = true
+			continue
+		}
+		d.emitError(stream, streamTruncatedError(d.name, err))
 		return
 	}
 }

@@ -1451,6 +1451,19 @@ interactive REPL/TUI.
   their error in the captured output, while process-group interrupts still
   reach forked children. `tty=true` sessions keep their PTY and prompts by
   design.
+- **A stream cut mid-response is retried, and named when it cannot be**: a
+  connection that dies before the answer finishes reaches the client as
+  `io.ErrUnexpectedEOF`, whose text is exactly `unexpected EOF` (`net/http`
+  reports it for a chunked body that never sees its last chunk, or one short of
+  its Content-Length). On the Responses wire the OpenAI SDK's SSE scanner hands
+  that reader error back unchanged, so the transcript showed a bare
+  `error: unexpected EOF` — no provider, no wire, no statement of what was lost,
+  and a turn that had simply ended. A truncation before any content arrives is
+  now retried once (nothing was shown, so nothing can be duplicated); one that
+  lands after content explains itself — `stream truncated — the connection
+  closed before the answer finished (unexpected EOF); retry the turn` — and the
+  Chat/Messages transport classifies the same error instead of reporting it
+  behind a generic "read error".
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to
