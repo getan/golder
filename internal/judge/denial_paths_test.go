@@ -72,6 +72,24 @@ func TestPlausibleWritableRootRefusesOnlyTheRootsThatAreNotChoices(t *testing.T)
 	}
 }
 
+// TestReportedCommandYieldsNoPath: the command from the field report — rg over
+// a credential file piped through sed with a backreference and a /g flag — is
+// the shape that produced "/g" in a re-admission dialog. The credential path
+// itself is inside golder's own state and never grantable, and nothing else in
+// the line is a path.
+func TestReportedCommandYieldsNoPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	cwd := t.TempDir()
+	command := `rg -n --color never '.' ` + filepath.Join(home, ".golder", "proxy.toml") +
+		` 2>/dev/null | sed -E 's/(=|:)[[:space:]]*"[^"]*"/\1 "<redacted>"/g; s#(//)[^@]*@#\1<redacted>@#g' | head -20`
+	if got := GrantablePathFromText("command: "+command, "", cwd); got != "" {
+		t.Errorf("reported command = %q, want no path", got)
+	}
+}
+
 // TestGrantablePathFromTextReadsTheCommandWithTheBoundaryParser: the command's
 // paths come from the same reader the workspace boundary uses, so a script is
 // one word rather than a bag of path-shaped tokens — and a real operand still
