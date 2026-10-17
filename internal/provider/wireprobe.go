@@ -11,6 +11,14 @@ import (
 	"time"
 )
 
+// probeWait bounds how long provider resolution waits for the lazy probe before
+// answering from the static table and letting the probe finish in the
+// background. Startup must stay snappy: the wire is a routing detail, and a
+// gateway that answers slowly should cost the first run a fallback, not every
+// launch a stall. The background answer is stored (see wirecache.go), so the
+// next resolution is instant.
+const probeWait = 800 * time.Millisecond
+
 // ProbeWire asks an endpoint which wire it actually serves for a model. It is
 // the answer for the case the static tables cannot describe: a gateway that
 // translates a model onto another wire, or serves a family on several. The
@@ -144,18 +152,33 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	}
 	// A family routes the same way on a given endpoint, so the question is asked
 	// about the family's newest model (see newestInFamily) and the answer is
-	// stored for the family and for the model the run actually uses.
+	// stored for the family and for the model the run actually uses. The wait is
+	// bounded: a slow gateway costs this run the static answer (and, at worst,
+	// one failed request the background answer then fixes), never a stalled
+	// launch.
 	target := newestInFamily(spec, model, baseURL, env)
 	apiKey := ""
 	if len(spec.EnvVars) > 0 && env != nil {
 		apiKey = env(spec.EnvVars[0])
 	}
-	if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, 5*time.Second); err == nil {
-		storeWire(spec.Name, model, probed)
-		if fam := ModelFamily(model); fam != "" {
-			storeWire(spec.Name, "family:"+fam, probed)
+	answer := make(chan Wire, 1)
+	go func() {
+		if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, 5*time.Second); err == nil {
+			storeWire(spec.Name, model, probed)
+			if fam := ModelFamily(model); fam != "" {
+				storeWire(spec.Name, "family:"+fam, probed)
+			}
+			answer <- probed
+			return
 		}
-		return probed
+		answer <- wire
+	}()
+	select {
+	case confirmed := <-answer:
+		return confirmed
+	case <-time.After(probeWait):
+		// Let the probe finish and store its answer; this run uses the static
+		// wire.
+		return wire
 	}
-	return wire
 }
