@@ -951,6 +951,10 @@ func TestProviderSwitchDropsTheFetchedCatalog(t *testing.T) {
 	if m.live.ProviderName != "deepseek" {
 		t.Fatalf("provider = %q, want deepseek", m.live.ProviderName)
 	}
+	if m.statusBar.provider != "deepseek" || m.statusBar.model != "deepseek-v4-flash" {
+		t.Errorf("status bar = (%q, %q), want the switched (deepseek, deepseek-v4-flash)",
+			m.statusBar.provider, m.statusBar.model)
+	}
 	if len(m.live.FetchedModels) != 0 || m.live.FetchedKey != "" {
 		t.Errorf("the previous gateway's catalog survived the switch: %v (key %q)",
 			m.live.FetchedModels, m.live.FetchedKey)
@@ -1088,8 +1092,38 @@ func TestProviderPickerSelectSwitches(t *testing.T) {
 	if gm2.live.Model != "deepseek-v4-flash" {
 		t.Errorf("live.Model = %q, want the deepseek default model", gm2.live.Model)
 	}
+	// The bar is the surface the user reads: both blocks move with the live
+	// configuration, so the model must not keep naming the gateway just left.
+	if gm2.statusBar.provider != "deepseek" || gm2.statusBar.model != "deepseek-v4-flash" {
+		t.Errorf("status bar = (%q, %q), want the switched (deepseek, deepseek-v4-flash)",
+			gm2.statusBar.provider, gm2.statusBar.model)
+	}
 	if gm2.menu.picking() {
 		t.Error("picker should close after confirm")
+	}
+}
+
+// TestProviderSwitchToDefaultGatewayMovesTheModel pins the reported experience:
+// a /provider switch must land on the new gateway's model, not keep the one the
+// previous gateway was serving. opencode-go is the multi-vendor gateway golder
+// launches on; without a declared default it kept the old model, so only the
+// provider block moved and the status bar still read e.g. gpt-6-astra.
+func TestProviderSwitchToDefaultGatewayMovesTheModel(t *testing.T) {
+	m := NewModel(Options{Model: "gpt-6-astra", ProviderName: "openai"})
+	m.session = &runSession{}
+
+	got, _ := m.runSlash("/provider opencode-go")
+	m = got.(Model)
+
+	if m.live.ProviderName != "opencode-go" {
+		t.Fatalf("live.ProviderName = %q, want opencode-go", m.live.ProviderName)
+	}
+	if m.live.Model != "deepseek-v4.1-flash" {
+		t.Errorf("live.Model = %q, want the gateway's default deepseek-v4.1-flash", m.live.Model)
+	}
+	if m.statusBar.provider != "opencode-go" || m.statusBar.model != "deepseek-v4.1-flash" {
+		t.Errorf("status bar = (%q, %q), want the switched (opencode-go, deepseek-v4.1-flash)",
+			m.statusBar.provider, m.statusBar.model)
 	}
 }
 

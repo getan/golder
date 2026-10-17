@@ -3,9 +3,10 @@
 // in order:
 //
 //  1. a base instruction (who the agent is and how it should behave),
-//  2. an environment block (working directory, OS/arch, current date), and
-//  3. every AGENTS.md found on the path from a root directory down to the
-//     working directory, concatenated general-to-specific.
+//  2. an environment block (working directory, OS/arch, current date),
+//  3. the user-wide AGENTS.md under the state root (when present), and
+//  4. every project AGENTS.md found on the path from a root directory down to
+//     the working directory, concatenated general-to-specific.
 //
 // The AGENTS.md ordering mirrors zero/pi's monorepo behavior: a repo-root
 // AGENTS.md states broad conventions, and a nested package's AGENTS.md refines
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/golderhome"
 )
 
 // agentsFileName is the per-directory instruction file injected into the system
@@ -100,6 +102,11 @@ type PromptConfig struct {
 	// ReadFile reads a file's contents. When nil, os.ReadFile is used. Injected
 	// for tests so AGENTS.md layout can be faked without touching disk.
 	ReadFile func(path string) ([]byte, error)
+	// GlobalInstructionsPath is the user-wide AGENTS.md injected before the
+	// project chain. When empty, $GOLDER_HOME/AGENTS.md (typically
+	// ~/.golder/AGENTS.md) is used. The read is best-effort: a missing or
+	// unreadable file is skipped, so personal instructions can never block a run.
+	GlobalInstructionsPath string
 	// Skills are the model-invocable skills to advertise in an <available_skills>
 	// block at the end of the prompt (mirrors pi's progressive disclosure). Only their
 	// name/description/location are injected; the model loads a skill's body with
@@ -124,6 +131,7 @@ const DefaultBaseInstruction = "You are golder, a helpful coding agent. " +
 	taskGuide + "\n\n" +
 	patchGuide + "\n\n" +
 	sandboxGuide + "\n\n" +
+	approvalGuide + "\n\n" +
 	codeSearchGuide + "\n\n" +
 	inspectGuide + "\n\n" +
 	batchGuide + "\n\n" +
@@ -310,6 +318,24 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"runs sandboxed again), stop retrying, tell the user what access the task needs, and continue " +
 	"with a sandbox-compatible approach."
 
+// approvalGuide keeps capability approvals from becoming a retry loop. The
+// sandbox guide already says "one escalation then stop"; this adds the shapes
+// that actually caused repeated human dialogs: per-call network grants, path
+// consent raised by an absolute $HOME operand the call did not need, and PTY
+// allocation, which no escalation can grant.
+const approvalGuide = "Approvals are capability answers, not retries. " +
+	"Batch calls that need the same capability: one command for several downloads or network tests, " +
+	"one write to a known external path, one interactive run. " +
+	"After a sandbox escape, path grant or network request is refused, never repeat the same " +
+	"capability or the same path — change the approach or tell the user exactly what access is needed. " +
+	"When the sandbox reports that it cannot allocate a pseudo-terminal (PTY), do not retry with " +
+	"sandbox_permissions=\"require_escalated\"; use an in-process or unit test instead. " +
+	"Invoke installed programs by name rather than by an absolute $HOME path, so a read the call " +
+	"does not need does not raise a consent dialog. " +
+	"For predictable out-of-workspace I/O, ask once for a boundary grant " +
+	"(/boundary readable|writable add), and state network intent up front so the reviewer can " +
+	"authorize it."
+
 // BuildSystemPrompt assembles the full system prompt from cfg: base instruction,
 // environment block, then AGENTS.md files ordered general-to-specific from Root
 // down to WorkingDir. Missing AGENTS.md files are skipped silently; only a
@@ -344,9 +370,28 @@ func BuildSystemPrompt(cfg PromptConfig) (string, error) {
 	fmt.Fprintf(&b, "- Search: %s\n", searchTooling(cfg.LookPath))
 	fmt.Fprintf(&b, "- Date: %s", now().Format("2006-01-02"))
 
+	// User-wide instructions layer in before the project chain, so a repository's
+	// AGENTS.md can refine them. Best-effort by design: this file lives in the
+	// user's state root, and a permission problem there must not prevent a run.
+	globalPath := strings.TrimSpace(cfg.GlobalInstructionsPath)
+	if globalPath == "" {
+		globalPath = golderhome.File(agentsFileName)
+	}
+	globalPath = filepath.Clean(globalPath)
+	if globalPath != "." && globalPath != string(filepath.Separator) {
+		if data, err := readFile(globalPath); err == nil {
+			if content := strings.TrimSpace(string(data)); content != "" {
+				fmt.Fprintf(&b, "\n\n# User instructions (%s)\n%s", globalPath, content)
+			}
+		}
+	}
+
 	dirs := agentsDirChain(cfg.Root, wd)
 	for _, dir := range dirs {
 		path := filepath.Join(dir, agentsFileName)
+		if filepath.Clean(path) == globalPath {
+			continue // already injected as user-wide instructions
+		}
 		data, err := readFile(path)
 		if err != nil {
 			if os.IsNotExist(err) {

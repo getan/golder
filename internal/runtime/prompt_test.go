@@ -95,6 +95,126 @@ func TestBuildSystemPromptAdvertisesBatchedToolCalls(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptApprovalGuide pins the capability-approval etiquette:
+// the model must batch calls that share a capability, treat a refusal as final,
+// never retry a PTY failure with an escalation, avoid absolute $HOME operands,
+// and ask for boundary/network grants up front.
+func TestBuildSystemPromptApprovalGuide(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	lower := strings.ToLower(got)
+	for _, want := range []string{
+		"capability answers, not retries",
+		"never repeat the same",
+		"pseudo-terminal",
+		"in-process or unit test",
+		"absolute $home path",
+		"/boundary readable|writable add",
+		"network intent up front",
+	} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("approval guide missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestBuildSystemPromptGlobalInstructions: the user-wide AGENTS.md under the
+// state root is injected before the project chain, so repository instructions
+// can refine it rather than replace it.
+func TestBuildSystemPromptGlobalInstructions(t *testing.T) {
+	global := filepath.Clean("/home/u/.golder/AGENTS.md")
+	root := filepath.Clean("/repo")
+	wd := filepath.Join(root, "api")
+	files := map[string]string{
+		global:                              "GLOBAL PREFERENCES",
+		filepath.Join(root, agentsFileName): "ROOT CONVENTIONS",
+		filepath.Join(wd, agentsFileName):   "API CONVENTIONS",
+	}
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir:             wd,
+		Root:                   root,
+		GlobalInstructionsPath: global,
+		Now:                    fixedTime,
+		ReadFile: func(path string) ([]byte, error) {
+			if c, ok := files[path]; ok {
+				return []byte(c), nil
+			}
+			return nil, os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	iGlobal := strings.Index(got, "GLOBAL PREFERENCES")
+	iRoot := strings.Index(got, "ROOT CONVENTIONS")
+	iAPI := strings.Index(got, "API CONVENTIONS")
+	if iGlobal < 0 || iRoot < 0 || iAPI < 0 {
+		t.Fatalf("all instruction files must be injected, got:\n%s", got)
+	}
+	if !(iGlobal < iRoot && iRoot < iAPI) {
+		t.Errorf("ordering = global@%d root@%d api@%d, want global → root → api:\n%s", iGlobal, iRoot, iAPI, got)
+	}
+	if !strings.Contains(got, "# User instructions ("+global+")") {
+		t.Errorf("global block should be labelled as user instructions:\n%s", got)
+	}
+}
+
+// TestBuildSystemPromptGlobalInstructionsBestEffort: a state-root AGENTS.md
+// that cannot be read must not fail the run. Unlike a project file (where a
+// real I/O error is surfaced), the user-wide file is a convenience.
+func TestBuildSystemPromptGlobalInstructionsBestEffort(t *testing.T) {
+	global := filepath.Clean("/home/u/.golder/AGENTS.md")
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir:             "/work/proj",
+		GlobalInstructionsPath: global,
+		Now:                    fixedTime,
+		ReadFile: func(path string) ([]byte, error) {
+			if path == global {
+				return nil, os.ErrPermission
+			}
+			return nil, os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatalf("unreadable global instructions must not fail the prompt: %v", err)
+	}
+	if strings.Contains(got, "User instructions") {
+		t.Errorf("unreadable global instructions produced a block:\n%s", got)
+	}
+}
+
+// TestBuildSystemPromptGlobalInstructionsDedup: when the working directory is
+// the state root itself, the same AGENTS.md must not be injected twice (once as
+// user-wide, once as the working directory's project file).
+func TestBuildSystemPromptGlobalInstructionsDedup(t *testing.T) {
+	wd := filepath.Clean("/home/u/.golder")
+	global := filepath.Join(wd, agentsFileName)
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir:             wd,
+		Root:                   wd,
+		GlobalInstructionsPath: global,
+		Now:                    fixedTime,
+		ReadFile: func(path string) ([]byte, error) {
+			if path == global {
+				return []byte("ONLY ONCE"), nil
+			}
+			return nil, os.ErrNotExist
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	if n := strings.Count(got, "ONLY ONCE"); n != 1 {
+		t.Errorf("global instructions injected %d times, want 1:\n%s", n, got)
+	}
+}
+
 // TestBuildSystemPromptAdvertisesToolFirstReads: the base instruction must state
 // which half of the tool set to reach for when inspecting code, and it must name
 // the other half's boundary at the same time. "Prefer the tools" alone reads as

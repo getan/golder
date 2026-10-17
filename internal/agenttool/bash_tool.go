@@ -375,6 +375,37 @@ func looksRGMissing(output string) bool {
 // three turns for something the environment block already knows.
 const rgMissingHint = "\n[ripgrep is not installed on this machine. The grep and find tools cannot run either (they are ripgrep-backed), so use the shell's own grep/find for this and later searches — e.g. `grep -rn \"pattern\" .` and `find . -name '*.go'`. Installing ripgrep (macOS: brew install ripgrep, Debian/Ubuntu: apt install ripgrep) restores the faster tools.]"
 
+// looksPTYUnavailable reports whether a failed command could not get a
+// pseudo-terminal. The shapes are the ones a tool like expect prints when the
+// environment has no PTYs left ("The system has no more ptys", "out of ptys",
+// "failed to allocate pty"); the match is deliberately narrow so ordinary
+// output mentioning a pty does not get the hint.
+func looksPTYUnavailable(output string) bool {
+	lower := strings.ToLower(output)
+	for _, marker := range []string{
+		"no more ptys",
+		"out of ptys",
+		"no ptys available",
+		"failed to allocate pty",
+		"cannot allocate pty",
+		"could not allocate pty",
+		"unable to allocate pty",
+		"pty allocation failed",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// ptyUnavailableHint stops the escalation loop a PTY failure would otherwise
+// start. A pseudo-terminal is an OS capability, not a file path: no sandbox
+// escape grants one, so retrying with require_escalated repeats the same
+// human-facing path-consent dialog without ever fixing the failure. The
+// alternative is to test the interactive behavior in-process.
+const ptyUnavailableHint = "\n[pty: this environment cannot allocate a pseudo-terminal (the sandbox provides no PTYs). A sandbox_permissions=\"require_escalated\" retry will not create one — do not retry it. Test the interactive/TUI behavior with an in-process or unit test instead.]"
+
 // resolveShell picks the interpreter and the flag that makes it read the command
 // from the next argument. An explicit shell (BashTool.Shell) is always honored as
 // a POSIX-style "<shell> -c <command>".
@@ -526,7 +557,14 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// result content), not to the user's view.
 	hint := ""
 	sandboxDenied := sandboxed && snap.ExitCode != 0 && looksSandboxDenied(out)
-	if sandboxDenied {
+	// A missing PTY is a capability answer, not a sandbox-path denial: no
+	// escalation can create one, so it gets its own hint before the sandbox
+	// advice and the retry loop it would otherwise invite.
+	ptyUnavailable := snap.ExitCode != 0 && looksPTYUnavailable(out)
+	switch {
+	case ptyUnavailable:
+		hint = ptyUnavailableHint
+	case sandboxDenied:
 		if strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
 			hint = sandboxEscalationDeniedHint
 			// Under auto the request never reached a person, so the hint names
@@ -546,7 +584,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// escalation advice; the two markers do not overlap in practice (a missing
 	// binary prints "command not found", not "operation not permitted").
 	rgMissing := false
-	if snap.ExitCode != 0 && !sandboxDenied && looksRGMissing(out) {
+	if snap.ExitCode != 0 && !ptyUnavailable && !sandboxDenied && looksRGMissing(out) {
 		rgMissing = true
 		hint = rgMissingHint
 	}

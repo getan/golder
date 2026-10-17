@@ -25,6 +25,39 @@ func TestOpencodeGoDeclaresMessagesVariant(t *testing.T) {
 	}
 }
 
+// TestProviderDefaultsForSwitching pins the two defaults a /provider switch
+// depends on: openai resolves to GPT-6.1 Sol, the family's current balanced
+// model (not the Pro-tier Astra), and opencode-go — the multi-vendor gateway
+// golder launches on — declares the same model pair the CLI launches with.
+// Without the latter,
+// switching to opencode-go kept the previous gateway's model in the live
+// configuration, so the status bar changed provider but not model.
+func TestProviderDefaultsForSwitching(t *testing.T) {
+	openai, ok := LookupProviderSpec("openai")
+	if !ok || openai.DefaultModel != "gpt-6.1-sol" {
+		t.Errorf("openai default = %q, want gpt-6.1-sol", openai.DefaultModel)
+	}
+	goSpec, ok := LookupProviderSpec("opencode-go")
+	if !ok || goSpec.DefaultModel != "deepseek-v4.1-flash" {
+		t.Errorf("opencode-go default = %q, want deepseek-v4.1-flash (the CLI's launch pairing)", goSpec.DefaultModel)
+	}
+	if got := CanonicalizeModel("opencode-go"); got != "deepseek-v4.1-flash" {
+		t.Errorf("CanonicalizeModel(opencode-go) = %q, want the declared default", got)
+	}
+}
+
+// TestEveryProviderHasADefaultModel pins the /provider contract for the whole
+// registry: a switch must always land on a model, so every built-in spec
+// declares one. The decision model is included because a bare name still has to
+// resolve to a real wire id, even though /provider refuses to switch to it.
+func TestEveryProviderHasADefaultModel(t *testing.T) {
+	for _, spec := range ProviderSpecs() {
+		if spec.DefaultModel == "" {
+			t.Errorf("provider %q has no DefaultModel; /provider would keep the previous gateway's model", spec.Name)
+		}
+	}
+}
+
 func TestLookupProviderSpec_Hit(t *testing.T) {
 	spec, ok := LookupProviderSpec("deepseek")
 	if !ok {

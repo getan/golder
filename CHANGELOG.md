@@ -12,6 +12,12 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **User-wide instructions**: `$GOLDER_HOME/AGENTS.md` (usually
+  `~/.golder/AGENTS.md`) is now injected into every session before the project
+  AGENTS.md chain. Personal working preferences no longer need a per-repository
+  file or a `--append-system-prompt` wrapper; a project's AGENTS.md still comes
+  later and can refine them. The read is best-effort, so an unreadable file
+  never blocks a run.
 - **A gateway can serve more than one wire, and opencode-go's Messages endpoint
   is now reachable**: `ProviderSpec.WireVariants` lets a registry entry declare
   the extra protocols a gateway is known to serve, each with the auth scheme that
@@ -863,6 +869,24 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The system prompt now spells out approval etiquette**: batch calls that
+  need the same capability, treat a refused escape/path/network request as
+  final instead of retrying it, never answer a PTY allocation failure with
+  `require_escalated`, invoke installed programs by name rather than by an
+  absolute `$HOME` path, and ask once for a boundary grant or state network
+  intent up front. This is the behavior that turned one capability question
+  into several dialogs.
+- **OpenAI's default model is `gpt-6.1-sol`**: GPT-6.1 Sol — the Sol line's
+  current release, near-Astra capability at a fraction of the price — takes the
+  slot `gpt-6-astra` held. Astra remains the Pro-tier option and both
+  `gpt-6.1-sol` and the previous `gpt-6-sol` stay selectable by id. A bare
+  `/provider openai` (and `/model openai`) now resolves to GPT-6.1 Sol.
+- **Every built-in provider now declares a default model**: the gaps —
+  `opencode-zen`, `kimi-coding`, `azure-openai-responses` and the `typesafe`
+  decision endpoint — are filled with the highest-version model each gateway
+  serves (`gpt-6.1-sol` for OpenCode Zen and Azure's OpenAI family, `k3` for
+  Kimi Code, `jev-latest` for TypeSafe). `/provider <name>` therefore always
+  moves the model with the provider, never just the provider block.
 - **A blocked path is offered back at the moment it blocks**: until now the
   sandbox's own refusals only labelled the failure for the model — the person got
   nothing to answer, and the way forward was a `/boundary writable add` somebody
@@ -1382,6 +1406,19 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A PTY failure is a capability answer, not a sandbox-path denial**: when the
+  environment cannot allocate a pseudo-terminal, the bash tool now appends a
+  hint that no escalation can create one and points at in-process tests. Before,
+  the failure fell through to the sandbox advice, which invited a
+  `require_escalated` retry that could only produce the same consent dialog.
+- **A `/provider` switch lands on a model, not just a gateway**: `opencode-go`
+  — the multi-vendor gateway golder launches on — declared no default model, so
+  switching to it changed the provider block while the model kept naming the
+  previous gateway; the status bar read `opencode-go` beside `gpt-6-astra`, and
+  the next turn went out with the old model. The gateway now declares the pair
+  golder launches with (`deepseek-v4.1-flash`), so both blocks move together.
+  A registry test now pins a default for every built-in provider, so a future
+  entry cannot reopen the gap.
 - **Ctrl+C closes an open picker, exactly like Esc**: the command popup and the
   pickers hold focus with an empty composer (the command that opened one was
   submitted), so Ctrl+C fell through to the global handler, whose empty-box

@@ -103,8 +103,10 @@ type ProviderSpec struct {
 	// DefaultModel is the model id a bare provider name resolves to (e.g.
 	// "zai" → "glm-4.7", see CanonicalizeModel), so /model <provider> and
 	// --model <provider> select a real wire id instead of sending the literal
-	// provider name. Empty means the provider has no default; a bare name is
-	// then reported as a provider/model mismatch instead of guessing.
+	// provider name. Every built-in provider declares one (pinned by a registry
+	// test), so a /provider switch always moves the model too. Empty remains
+	// valid for a spec with no sensible default; a bare name is then reported as
+	// a provider/model mismatch instead of guessing.
 	DefaultModel string
 }
 
@@ -163,7 +165,11 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ModelPrefixes:  []string{"gpt-", "o1-", "o3-", "o4-"},
-		DefaultModel:   "gpt-6-astra",
+		// GPT-6.1 Sol is the family's current balanced model: near-Astra
+		// capability at a fraction of the price, and the successor to GPT-6 Sol
+		// (`gpt-6-sol`). Astra remains the Pro tier; a bare `openai` used to
+		// resolve to it, which put an expensive model behind `/provider openai`.
+		DefaultModel: "gpt-6.1-sol",
 	},
 	{
 		Name:           "deepseek",
@@ -228,6 +234,11 @@ var providerRegistry = []ProviderSpec{
 		DefaultBaseURL: "https://api.typesafe.ai/v1/systemone",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
+		// Decision-model ids are recognised so a bare "typesafe" (canonicalized
+		// to jev-latest) or a jev / systemone id resolves to this spec and the
+		// run path refuses it with a clear decision-model error, instead of
+		// falling through to OpenRouter.
+		ModelPrefixes: []string{"jev", "systemone"},
 		// TypeSafe refuses whole regions with HTTP 451 (measured: direct
 		// requests from this machine are blocked, the same request through the
 		// configured proxy answers 200), so a fresh install that has a proxy
@@ -235,6 +246,10 @@ var providerRegistry = []ProviderSpec{
 		// gated call. An explicit /proxy selection still wins — ForceProxy is
 		// only the default before the user has chosen.
 		ForceProxy: true,
+		// TypeSafe's flagship alias (internal/jev.DefaultModel): the reviewer's
+		// decision model. The provider is not switchable as a chat provider, but
+		// a bare name still has to resolve to a real wire id.
+		DefaultModel: "jev-latest",
 	},
 	{
 		Name:           "zai",
@@ -288,14 +303,25 @@ var providerRegistry = []ProviderSpec{
 		// provider missed the catalog entirely (windows fell back to 1M and
 		// reasoning levels to the family ladder).
 		ModelsDevID: "opencode",
+		// The curated lineup is multi-vendor, so the default is its
+		// highest-version live model: GPT-6.1 Sol (v6.1) on models.dev's
+		// "opencode" entry.
+		DefaultModel: "gpt-6.1-sol",
 	},
 	{
-		Name:           "opencode-go",
+		Name: "opencode-go",
+		// The subscription gateway serves a curated multi-vendor lineup, so its
+		// default is the pairing golder itself launches on (see cmd/golder's -m
+		// default) rather than a "newest model" guess. Declaring it matters to
+		// /provider: without a default the switch kept the previous gateway's
+		// model while the provider block moved, so the status bar still named a
+		// model the new gateway was not chosen for.
 		EnvVars:        []string{"OPENCODE_API_KEY"},
 		DefaultBaseURL: "https://opencode.ai/zen/go/v1",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
+		DefaultModel:   "deepseek-v4.1-flash",
 		// The gateway also serves the Messages wire at {base}/messages, which is
 		// how its Claude models are reached (probed live with claude-haiku-5-5:
 		// x-api-key auth, plus the x-opencode-session routing header every
@@ -330,6 +356,9 @@ var providerRegistry = []ProviderSpec{
 		DefaultBaseURL: "https://api.kimi.com/coding",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
+		// Kimi Code's catalog tops out at K3 (1M context); k3-256k is the
+		// reduced-context variant of the same release, not a newer version.
+		DefaultModel: "k3",
 	},
 	{
 		Name:           "xiaomi",
@@ -368,6 +397,10 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthAzure,
 		BaseURLEnvVars: []string{"AZURE_OPENAI_BASE_URL"},
+		// The endpoint's OpenAI family tops out at GPT-6.1 Sol. The deployment
+		// map (AZURE_OPENAI_DEPLOYMENT_NAME_MAP) still translates this model id
+		// to the deployment name when one is configured.
+		DefaultModel: "gpt-6.1-sol",
 	},
 }
 

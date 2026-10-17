@@ -277,6 +277,71 @@ func TestLooksSandboxDenied(t *testing.T) {
 	}
 }
 
+// TestLooksPTYUnavailable locks the marker matching: a PTY exhaustion message
+// is recognised, while ordinary output that merely mentions a pty is not.
+func TestLooksPTYUnavailable(t *testing.T) {
+	cases := []struct {
+		out  string
+		want bool
+	}{
+		{"The system has no more ptys.  Ask your system administrator to create more.", true},
+		{"expect: out of ptys", true},
+		{"failed to allocate pty: No such file or directory", true},
+		{"cannot allocate pty", true},
+		{"tests passed; pty helpers skipped", false},
+		{"bash: /Users/x/y: Operation not permitted", false},
+	}
+	for _, c := range cases {
+		if got := looksPTYUnavailable(c.out); got != c.want {
+			t.Errorf("looksPTYUnavailable(%q) = %v, want %v", c.out, got, c.want)
+		}
+	}
+}
+
+// ptyRunner simulates a sandbox whose command cannot get a pseudo-terminal —
+// the shape expect prints when the environment has no PTYs left.
+type ptyRunner struct{}
+
+const ptyUnavailableOutput = "The system has no more ptys.  Ask your system administrator to create more."
+
+func (ptyRunner) SandboxArgv(shell, flag, _, _ string) ([]string, func(), error) {
+	return []string{shell, flag, "echo '" + ptyUnavailableOutput + "' >&2; exit 1"}, func() {}, nil
+}
+
+func (ptyRunner) SandboxCall(argv []string, _ string, _ seatbelt.CallPolicy) ([]string, func(), error) {
+	return []string{argv[0], argv[1], "echo '" + ptyUnavailableOutput + "' >&2; exit 1"}, func() {}, nil
+}
+
+// TestBashPTYUnavailableHint: a PTY allocation failure must not look like a
+// path denial. It gets its own hint, which says an escalation cannot create a
+// PTY and points at in-process tests — even when the call did ask for an
+// escalation. This is the loop-breaker for the repeated path-consent dialogs.
+func TestBashPTYUnavailableHint(t *testing.T) {
+	for _, args := range []map[string]any{
+		{"command": "expect -c 'spawn true'"},
+		{
+			"command":             "expect -c 'spawn true'",
+			"sandbox_permissions": "require_escalated",
+			"justification":       "drive the TUI through a pty",
+		},
+	} {
+		tool := &BashTool{Dir: t.TempDir(), Sandbox: ptyRunner{}, ForceSandbox: true}
+		_, err := runBashErr(t, tool, args)
+		if err == nil {
+			t.Fatal("expected the PTY probe to fail")
+		}
+		if !strings.Contains(err.Error(), "pseudo-terminal") || !strings.Contains(err.Error(), "do not retry") {
+			t.Errorf("PTY failure should carry the no-retry hint, got: %v", err)
+		}
+		if strings.Contains(err.Error(), "retry it once with sandbox_permissions") {
+			t.Errorf("PTY failure must not advise an escalation retry: %v", err)
+		}
+		if strings.Contains(err.Error(), "was not granted") {
+			t.Errorf("PTY failure is a capability answer, not a denied escalation: %v", err)
+		}
+	}
+}
+
 // runBashErr is the error-returning sibling of runBash for failure assertions.
 func runBashErr(t *testing.T, tool *BashTool, args map[string]any) (string, error) {
 	t.Helper()

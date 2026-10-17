@@ -479,10 +479,11 @@ func TestResolveProviderAnthropicIDs(t *testing.T) {
 }
 
 // TestResolveProviderOpenAIAndNewIDs verifies gpt-* ids resolve to the
-// first-party openai provider (bare "openai" defaults to the newest flagship
-// through DefaultModel), and the xiaomi/xai/zai ids resolve unchanged.
+// first-party openai provider (bare "openai" defaults to GPT-6.1 Sol, the
+// family's current balanced model, through DefaultModel), and the
+// xiaomi/xai/zai ids resolve unchanged.
 func TestResolveProviderOpenAIAndNewIDs(t *testing.T) {
-	for _, id := range []string{"gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"} {
+	for _, id := range []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.5"} {
 		prov, name, err := ResolveProvider(id, "", "", "", os.Getenv)
 		if err != nil {
 			t.Fatalf("ResolveProvider(%q): %v", id, err)
@@ -495,8 +496,8 @@ func TestResolveProviderOpenAIAndNewIDs(t *testing.T) {
 			t.Errorf("ResolveProvider(%q) models = %+v, want one openai entry with the same id", id, models)
 		}
 	}
-	if got := CanonicalizeModel("openai"); got != "gpt-6-astra" {
-		t.Errorf("CanonicalizeModel(openai) = %q, want gpt-6-astra (newest-first)", got)
+	if got := CanonicalizeModel("openai"); got != "gpt-6.1-sol" {
+		t.Errorf("CanonicalizeModel(openai) = %q, want gpt-6.1-sol (the family's current balanced model)", got)
 	}
 	provGoogle, googleName, gerr := ResolveProvider("google", "", "", "", os.Getenv)
 	if gerr != nil {
