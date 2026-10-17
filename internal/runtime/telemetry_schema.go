@@ -17,11 +17,7 @@
 // projections.
 package runtime
 
-import (
-	"encoding/json"
-
-	"github.com/getan/golder/internal/agentcore"
-)
+import "encoding/json"
 
 // TelemetrySchemaVersion is the discriminant stamped on every
 // TelemetrySummary document. A breaking shape change MUST bump it (v2) and
@@ -46,29 +42,8 @@ type TelemetrySummary struct {
 	ToolDurations      map[string]ToolTimingSummary `json:"tool_durations_ms"`
 }
 
-// TelemetrySummaryFromEvent maps the accumulator's TelemetryEvent onto the
-// frozen export document. It is pure: the same event always yields the same
-// document (and thus the same golden fixture).
-func TelemetrySummaryFromEvent(e agentcore.TelemetryEvent) TelemetrySummary {
-	tools := make(map[string]ToolTimingSummary, len(e.ToolDurationsMs))
-	for name, t := range e.ToolDurationsMs {
-		tools[name] = ToolTimingSummary{Count: t.Count, TotalMs: t.TotalMs}
-	}
-	return TelemetrySummary{
-		SchemaVersion:      TelemetrySchemaVersion,
-		Turns:              e.Turns,
-		TruncationCount:    e.TruncationCount,
-		CompactionCount:    e.CompactionCount,
-		ContextTokens:      e.ContextTokens,
-		ContextWindow:      e.ContextWindow,
-		ContextUtilization: e.ContextUtilization,
-		ToolDurations:      tools,
-	}
-}
-
 // MarshalJSON guarantees the document always carries the schema_version
-// discriminator even when constructed directly rather than through
-// TelemetrySummaryFromEvent.
+// discriminator even when constructed directly.
 func (s TelemetrySummary) MarshalJSON() ([]byte, error) {
 	if s.SchemaVersion == "" {
 		s.SchemaVersion = TelemetrySchemaVersion

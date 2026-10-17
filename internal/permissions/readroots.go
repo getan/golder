@@ -292,28 +292,6 @@ func AddReadRoot(raw string) (string, error) {
 	return p, nil
 }
 
-// RemoveReadRoot revokes one grant. It reports whether the path was present.
-func RemoveReadRoot(raw string) bool {
-	p, err := NormalizeReadRoot(raw)
-	if err != nil {
-		return false
-	}
-	readRoots.mu.Lock()
-	defer readRoots.mu.Unlock()
-	if !readRoots.seen[p] {
-		return false
-	}
-	delete(readRoots.seen, p)
-	out := readRoots.paths[:0]
-	for _, existing := range readRoots.paths {
-		if existing != p {
-			out = append(out, existing)
-		}
-	}
-	readRoots.paths = out
-	return true
-}
-
 // ReadRoots returns the current grant list (a copy, safe to retain).
 func ReadRoots() []string {
 	readRoots.mu.RLock()
@@ -324,58 +302,6 @@ func ReadRoots() []string {
 	out := make([]string, len(readRoots.paths))
 	copy(out, readRoots.paths)
 	return out
-}
-
-// ReadableAt reports whether p is inside a granted read root. This is the check
-// the file tools make once a path has failed the workspace boundary, and the
-// one the gate makes to avoid asking twice for the same directory.
-//
-// Both sides are resolved before comparing. A grant names a location ("~/work"
-// may be spelled through a link, and macOS's /tmp is /private/tmp), and the
-// caller's p has already been resolved, so a textual comparison would report
-// "not granted" for a directory the user did grant — and the gate would ask the
-// same question on every call. Resolving both sides also keeps the grant
-// bounded by location: a link inside a granted directory that points elsewhere
-// does not extend the grant to where it points.
-func ReadableAt(p string) bool {
-	if p == "" {
-		return false
-	}
-	p = Canonical(p)
-	readRoots.mu.RLock()
-	defer readRoots.mu.RUnlock()
-	for _, root := range readRoots.paths {
-		if Inside(Canonical(root), p) {
-			return true
-		}
-	}
-	return false
-}
-
-// SetReadRoots replaces the whole list: startup applies the config file and the
-// environment with it, and tests reset state with SetReadRoots(nil). Invalid or
-// too-broad entries are skipped and reported, while every valid one still
-// applies — one typo in config.toml should not cost the rest of the list.
-func SetReadRoots(paths []string) []error {
-	var errs []error
-	var normalized []string
-	seen := map[string]bool{}
-	for _, raw := range paths {
-		p, err := NormalizeReadRoot(raw)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		if !seen[p] {
-			seen[p] = true
-			normalized = append(normalized, p)
-		}
-	}
-	readRoots.mu.Lock()
-	defer readRoots.mu.Unlock()
-	readRoots.paths = normalized
-	readRoots.seen = seen
-	return errs
 }
 
 // ReadableRootsFromEnv parses GOLDER_READABLE_ROOTS: colon- or comma-separated

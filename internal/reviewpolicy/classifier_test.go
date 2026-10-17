@@ -449,10 +449,8 @@ func TestHardFailureDisablesTheCheapPath(t *testing.T) {
 	if got := atomic.LoadInt32(&calls); got != 1 {
 		t.Fatalf("endpoint calls = %d, want 1", got)
 	}
-	if disabled, reason := c.Disabled(); !disabled {
+	if !c.isDisabled() {
 		t.Error("a 451 did not disable the cheap path")
-	} else if !strings.Contains(reason, "region") {
-		t.Errorf("reason = %q, want it to name the region block", reason)
 	}
 
 	// Every later call must skip the network entirely and go to the fallback.
@@ -484,7 +482,7 @@ func TestRetryableFailureDoesNotDisable(t *testing.T) {
 	c := newClassifier(t, srv, fb)
 
 	c.Classify(context.Background(), "bash", json.RawMessage(`{"command":"ls"}`))
-	if disabled, _ := c.Disabled(); disabled {
+	if c.isDisabled() {
 		t.Error("a retryable failure disabled the cheap path")
 	}
 	c.Classify(context.Background(), "bash", json.RawMessage(`{"command":"ls"}`))
@@ -502,7 +500,7 @@ func TestRejectedKeyDisablesToo(t *testing.T) {
 	fb := &spyFallback{v: judge.Verdict{Level: judge.Confirm, Source: "llm"}}
 	c := newClassifier(t, srv, fb)
 	c.Classify(context.Background(), "bash", json.RawMessage(`{"command":"ls"}`))
-	if disabled, _ := c.Disabled(); !disabled {
+	if !c.isDisabled() {
 		t.Error("a rejected key did not disable the cheap path")
 	}
 }

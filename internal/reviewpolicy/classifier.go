@@ -122,18 +122,6 @@ func (c *Classifier) disable(err error) {
 	disabledEndpoints.reason[c.Client.Endpoint()] = err.Error()
 }
 
-// Disabled reports whether this classifier's endpoint has switched itself off,
-// and why.
-func (c *Classifier) Disabled() (bool, string) {
-	if c.Client == nil {
-		return false, ""
-	}
-	disabledEndpoints.mu.Lock()
-	defer disabledEndpoints.mu.Unlock()
-	reason, off := disabledEndpoints.reason[c.Client.Endpoint()]
-	return off, reason
-}
-
 // CallRecord is what one call cost and how it was answered, for telemetry.
 type CallRecord struct {
 	Tool string

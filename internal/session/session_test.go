@@ -830,14 +830,12 @@ func TestContextHeaderFieldsOmittedWhenZero(t *testing.T) {
 	}
 }
 
-// TestSetContextInheritanceRoundTrips verifies that a session created with
-// inheritance set via SetContextInheritance writes both fields and exposes them
-// (via the ContextInheritance accessor) when read back.
-func TestSetContextInheritanceRoundTrips(t *testing.T) {
+// TestContextInheritanceRoundTrips verifies that a session created with the
+// inheritance fields set writes both of them and reads them back.
+func TestContextInheritanceRoundTrips(t *testing.T) {
 	s := newStore(t)
 	now := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
-	header := SessionHeader{ID: NewID(now), CreatedAt: now, UpdatedAt: now}
-	SetContextInheritance(&header, "src-sess-42", 12)
+	header := SessionHeader{ID: NewID(now), CreatedAt: now, UpdatedAt: now, ContextFrom: "src-sess-42", ContextWatermark: 12}
 
 	if err := s.Save(header, sampleMessages()); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -846,56 +844,8 @@ func TestSetContextInheritanceRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	fromID, watermark, ok := got.ContextInheritance()
-	if !ok {
-		t.Fatalf("ContextInheritance ok = false, want true")
-	}
-	if fromID != "src-sess-42" || watermark != 12 {
-		t.Errorf("ContextInheritance = (%q, %d), want (%q, 12)", fromID, watermark, "src-sess-42")
-	}
-	if !got.HasContextInheritance() {
-		t.Errorf("HasContextInheritance = false, want true")
-	}
-}
-
-// TestSetContextInheritanceClears verifies an empty source or non-positive
-// watermark clears both fields, so the header round-trips as a no-inheritance
-// session (omitempty keeps it byte-compatible with older files).
-func TestSetContextInheritanceClears(t *testing.T) {
-	cases := []struct {
-		name      string
-		fromID    string
-		watermark int
-	}{
-		{"empty source", "", 5},
-		{"zero watermark", "src", 0},
-		{"negative watermark", "src", -3},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			header := SessionHeader{ID: "h", ContextFrom: "stale", ContextWatermark: 99}
-			SetContextInheritance(&header, tc.fromID, tc.watermark)
-			if header.ContextFrom != "" || header.ContextWatermark != 0 {
-				t.Errorf("expected cleared inheritance, got (%q, %d)", header.ContextFrom, header.ContextWatermark)
-			}
-			if header.HasContextInheritance() {
-				t.Errorf("HasContextInheritance = true after clear")
-			}
-		})
-	}
-}
-
-// TestContextInheritanceRejectsPartial verifies the accessor treats a header
-// with only one of the two fields as "no inheritance" (ok=false) rather than
-// reporting a half-configured record.
-func TestContextInheritanceRejectsPartial(t *testing.T) {
-	onlyFrom := SessionHeader{ContextFrom: "src"}
-	if _, _, ok := onlyFrom.ContextInheritance(); ok {
-		t.Errorf("ok = true for header with source but no watermark")
-	}
-	onlyWatermark := SessionHeader{ContextWatermark: 8}
-	if _, _, ok := onlyWatermark.ContextInheritance(); ok {
-		t.Errorf("ok = true for header with watermark but no source")
+	if got.ContextFrom != "src-sess-42" || got.ContextWatermark != 12 {
+		t.Errorf("inheritance = (%q, %d), want (%q, 12)", got.ContextFrom, got.ContextWatermark, "src-sess-42")
 	}
 }
 
@@ -930,9 +880,6 @@ func TestLoadedSessionsWithoutInheritanceReadZero(t *testing.T) {
 		}
 		if got.ContextFrom != "" || got.ContextWatermark != 0 {
 			t.Errorf("%s: expected zero inheritance, got (%q, %d)", id, got.ContextFrom, got.ContextWatermark)
-		}
-		if got.HasContextInheritance() {
-			t.Errorf("%s: HasContextInheritance = true, want false", id)
 		}
 	}
 }

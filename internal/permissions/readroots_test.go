@@ -14,8 +14,16 @@ func readRootTestHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Cleanup(func() { SetReadRoots(nil) })
+	t.Cleanup(resetReadRoots)
 	return home
+}
+
+// resetReadRoots clears the session grant list between tests.
+func resetReadRoots() {
+	readRoots.mu.Lock()
+	readRoots.paths = nil
+	readRoots.seen = nil
+	readRoots.mu.Unlock()
 }
 
 func TestInside(t *testing.T) {
@@ -84,37 +92,40 @@ func TestInsideResolvedFollowsSymlinks(t *testing.T) {
 	}
 }
 
-// TestSetReadRootsRejectsBroadRoots pins the guard that keeps a grant from
+// TestAddReadRootRejectsBroadRoots pins the guard that keeps a grant from
 // removing the boundary: the filesystem root, the home directory itself and
 // $HOME's parent are refused, while a directory that merely sits outside the
 // workspace (including a workspace parent) is fine.
-func TestSetReadRootsRejectsBroadRoots(t *testing.T) {
+func TestAddReadRootRejectsBroadRoots(t *testing.T) {
 	home := readRootTestHome(t)
 	sibling := filepath.Join(home, "work", "proj")
 	if err := os.MkdirAll(sibling, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	errs := SetReadRoots([]string{"/", home, filepath.Dir(home), sibling})
-	if len(errs) != 3 {
-		t.Errorf("expected 3 refusals (/, $HOME, $HOME's parent), got %d: %v", len(errs), errs)
+	refused := 0
+	for _, raw := range []string{"/", home, filepath.Dir(home)} {
+		if _, err := AddReadRoot(raw); err == nil {
+			t.Errorf("AddReadRoot(%q) succeeded, want a refusal", raw)
+		} else {
+			refused++
+		}
 	}
-	roots := ReadRoots()
-	if len(roots) != 1 || roots[0] != sibling {
+	if refused != 3 {
+		t.Errorf("refusals = %d, want 3 (/, $HOME, $HOME's parent)", refused)
+	}
+	if _, err := AddReadRoot(sibling); err != nil {
+		t.Fatalf("AddReadRoot(sibling): %v", err)
+	}
+	if roots := ReadRoots(); len(roots) != 1 || roots[0] != sibling {
 		t.Fatalf("only the ordinary directory should be granted, got %v", roots)
-	}
-	if !ReadableAt(filepath.Join(sibling, "a", "b.go")) {
-		t.Error("a path under the grant should read as readable")
-	}
-	if ReadableAt(home) {
-		t.Error("$HOME must not be readable by a grant to a directory inside it")
 	}
 }
 
-// TestAddAndRemoveReadRoot covers the session grant lifecycle: the same
-// directory granted twice is stored once, "~" expands, and removal takes it
-// off the list.
-func TestAddAndRemoveReadRoot(t *testing.T) {
+// TestAddReadRootStoresOnce covers the session grant lifecycle's remaining
+// half: the same directory granted twice is stored once and "~" expands. The
+// revocation half lives in internal/grants now, which owns the layers.
+func TestAddReadRootStoresOnce(t *testing.T) {
 	home := readRootTestHome(t)
 	dir := filepath.Join(home, "repo")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -132,15 +143,6 @@ func TestAddAndRemoveReadRoot(t *testing.T) {
 	}
 	if roots := ReadRoots(); len(roots) != 1 {
 		t.Errorf("a duplicate grant should be stored once, got %v", roots)
-	}
-	if !RemoveReadRoot(dir) {
-		t.Error("RemoveReadRoot should report the path was present")
-	}
-	if ReadableAt(dir) {
-		t.Error("a removed grant must not read as readable")
-	}
-	if RemoveReadRoot(dir) {
-		t.Error("removing twice should report absence")
 	}
 }
 

@@ -57,10 +57,30 @@ func writeOrCompare(t *testing.T, path string, got []byte) {
 	}
 }
 
+// goldenSummary builds the canonical document from the fixture event. The
+// mapping used to live in production (TelemetrySummaryFromEvent); it is a
+// test-fixture concern now, so the golden pins the document itself.
+func goldenSummary() TelemetrySummary {
+	tools := make(map[string]ToolTimingSummary, len(goldenEvent.ToolDurationsMs))
+	for name, t := range goldenEvent.ToolDurationsMs {
+		tools[name] = ToolTimingSummary{Count: t.Count, TotalMs: t.TotalMs}
+	}
+	return TelemetrySummary{
+		SchemaVersion:      TelemetrySchemaVersion,
+		Turns:              goldenEvent.Turns,
+		TruncationCount:    goldenEvent.TruncationCount,
+		CompactionCount:    goldenEvent.CompactionCount,
+		ContextTokens:      goldenEvent.ContextTokens,
+		ContextWindow:      goldenEvent.ContextWindow,
+		ContextUtilization: goldenEvent.ContextUtilization,
+		ToolDurations:      tools,
+	}
+}
+
 // TestTelemetrySummaryGoldenConformance pins the canonical TelemetrySummary
 // JSON document byte-for-byte.
 func TestTelemetrySummaryGoldenConformance(t *testing.T) {
-	doc := TelemetrySummaryFromEvent(goldenEvent)
+	doc := goldenSummary()
 	got, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +92,7 @@ func TestTelemetrySummaryGoldenConformance(t *testing.T) {
 // asserts each field's JSON type explicitly, so a Go type change that silently
 // alters the wire shape (e.g. int → string) fails even if key names match.
 func TestTelemetrySummaryFieldTypes(t *testing.T) {
-	raw, err := json.Marshal(TelemetrySummaryFromEvent(goldenEvent))
+	raw, err := json.Marshal(goldenSummary())
 	if err != nil {
 		t.Fatal(err)
 	}
