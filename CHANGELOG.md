@@ -1406,6 +1406,13 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Shift+Enter keeps working after a paste**: a terminal or multiplexer that
+  pushes/pops its keyboard-enhancement flags around a paste can leave
+  Shift+Enter encoded as a bare Enter, which the composer reads as submit — so
+  no newline is inserted. Every paste now re-asserts the flags Bubble Tea
+  requested at startup (`CSI =1;1u` plus modifyOtherKeys level 2); the sequence
+  is a no-op when the flags survived. Ctrl+J remains the protocol-free fallback,
+  and the composer placeholder names it.
 - **The wire probe can no longer mistake a gateway's web page for a working
   wire**: a probe accepted any 2xx and threw the body away, so a gateway that
   serves its SPA at unknown paths answered a root-level `/messages` with 200 +

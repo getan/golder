@@ -3370,7 +3370,17 @@ func (m Model) feedInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.input, cmd = m.input.Update(msg)
 	m.menu.refresh(m.input.Value(), m.slash)
 	m.relayout()
-	return m, cmd
+	return m, tea.Batch(cmd, reassertKeyboardProtocol())
+}
+
+// reassertKeyboardProtocol restores the key-disambiguation state after a paste.
+// A terminal or multiplexer that handles the paste by pushing/popping its
+// keyboard flags can leave Shift+Enter encoded as a bare Enter — which the
+// composer submits, so it cannot insert a newline. Re-sending the same flags
+// Bubble Tea requested at startup is a no-op when they survived, and restores
+// them when they did not. Ctrl+J remains the protocol-free fallback.
+func reassertKeyboardProtocol() tea.Cmd {
+	return tea.Raw("\x1b[=1;1u\x1b[>4;2m")
 }
 
 // pastePlaceholderRe matches the "[Pasted text #N · …]" tokens handlePaste
