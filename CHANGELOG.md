@@ -1472,6 +1472,21 @@ interactive REPL/TUI.
   by how the provider was selected, and the SDK path now carries the same dual
   watchdogs as golder's own transport, governed by the same
   `GOLDER_STREAM_IDLE_TIMEOUT`.
+- **Chat, Messages and Gemini streams can no longer be held open by
+  keep-alives**: their content-stall watchdog was re-armed on every SSE blank
+  line, including one that closed a comment-only keep-alive frame with no
+  `data:` payload. A gateway that keeps saying "I'm alive" while producing
+  nothing therefore defeated the very guard meant to catch it, and the turn hung
+  until the idle window (five minutes) or Ctrl+C. Only a framed payload resets
+  the stall window now; keep-alives still reset the idle window, which is what
+  they are for.
+- **A stream that ends without a final event is retried like a dropped
+  connection**: the wire fallback turns a start-only stream into
+  `stream ended without a terminal event`, which the retry layer saw as a real
+  provider answer and surfaced without a second attempt — the exact
+  commandcode/mimo turn that ended in fourteen seconds with that sentence. Both
+  sides now share a sentinel, so the silent end is classified as a cut and gets
+  the same single retry when nothing has been shown.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

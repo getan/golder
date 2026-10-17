@@ -256,6 +256,31 @@ func TestStreamRetryRetriesASilentlyEndedAttempt(t *testing.T) {
 	}
 }
 
+// The wire fallback sits inside the retry wrapper and turns a start-only stream
+// into an error event ("stream ended without a terminal event"). That error is
+// the same failure as a dropped connection, so the wrapper must recognize it
+// through the fallback's wrapping and retry — otherwise the fallback's generic
+// sentence is what the user sees, with no second attempt.
+func TestStreamRetryRetriesAWireFallbacksSilentEnd(t *testing.T) {
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(fmt.Errorf("commandcode: %w", errStreamNoTerminal))},
+		{startEvent(), textEvent("recovered"), doneEvent("recovered")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (a silent end is a cut)", got)
+	}
+	if got := lastText(events); got != "recovered" {
+		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	if got := countEvents[StreamErrorEvent](events); got != 0 {
+		t.Errorf("error events = %d (%q), want none", got, errorMessage(events))
+	}
+}
+
 // A resolved provider carries the wrapper, whichever way it was selected, and
 // UnwrapProvider still reaches the concrete driver underneath.
 func TestResolvedProvidersCarryTheStreamRetry(t *testing.T) {

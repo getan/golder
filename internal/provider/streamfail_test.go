@@ -29,6 +29,8 @@ func TestIsStreamCutErr(t *testing.T) {
 		{"idle wording only", &fallbackTestErr{"no data for 5m0s"}, false},
 		{"stall", errStreamStall, true},
 		{"wrapped stall", fmt.Errorf("no output for 6m0s: %w", errStreamStall), true},
+		{"silent end", errStreamNoTerminal, true},
+		{"wrapped silent end", fmt.Errorf("commandcode: %w", errStreamNoTerminal), true},
 		{"clean eof", io.EOF, false},
 		{"client error", &fallbackTestErr{"400 invalid tools"}, false},
 		{"nil", nil, false},
@@ -52,6 +54,7 @@ func TestStreamCutErrorNamesEachCase(t *testing.T) {
 		{"truncation", io.ErrUnexpectedEOF, "closed before the answer finished"},
 		{"idle", errStreamIdle, "went quiet"},
 		{"stall", errStreamStall, "stopped producing"},
+		{"silent end", errStreamNoTerminal, "without a final event"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -134,7 +134,7 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 	// as much a cut stream as a dropped connection; with content produced the
 	// caller has to be told the answer stops there.
 	if !shown {
-		return fmt.Errorf("%s: stream ended without a terminal event", p.Name())
+		return fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
 	}
 	emitStart()
 	_ = out.Emit(ctx, StreamErrorEvent{
@@ -143,7 +143,7 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 			Provider:   p.Name(),
 			StopReason: agentcore.StopReasonError,
 		},
-		Err: fmt.Errorf("%s: stream ended without a terminal event", p.Name()),
+		Err: fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal),
 	})
 	return nil
 }

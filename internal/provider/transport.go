@@ -253,21 +253,27 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 		})
 	}
 
-	flush := func() bool {
+	// flushPayload flushes the accumulated data field and reports whether a
+	// payload was actually framed. Only a real payload may reset the stall
+	// window: an SSE keep-alive is a comment, and a blank line after only
+	// event:/id:/comment fields frames nothing — letting those reset the stall
+	// timer is how a gateway that says "I'm alive" forever without producing
+	// anything defeats the very watchdog meant to catch it.
+	flushPayload := func() (ok, produced bool) {
 		if dataBuf.Len() == 0 {
-			return true
+			return true, false
 		}
 		payload := dataBuf.String()
 		dataBuf.Reset()
 		if payload == "[DONE]" {
-			return true
+			return true, false
 		}
 		events, err := dec.Decode([]byte(payload))
 		if err != nil {
 			fail("decode error: "+err.Error(), err)
-			return false
+			return false, false
 		}
-		return emit(events)
+		return emit(events), true
 	}
 
 	for {
@@ -287,7 +293,7 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 				return
 			}
 			// Clean EOF: flush any buffered payload, then finish the decoder.
-			if !flush() {
+			if ok, _ := flushPayload(); !ok {
 				return
 			}
 			finalEvents, ferr := dec.Finish()
@@ -307,12 +313,19 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			switch {
 			case line == "":
 				// Blank line = event boundary: flush accumulated data.
-				if !flush() {
+				ok, produced := flushPayload()
+				if !ok {
 					return
 				}
-				resetTimer(stallTimer, stall)
+				// A keep-alive or an event: without data field is not progress;
+				// only a framed payload resets the content-stall window.
+				if produced {
+					resetTimer(stallTimer, stall)
+				}
 			case strings.HasPrefix(line, ":"):
-				// Comment / keep-alive: ignore payload, watchdog already reset.
+				// Comment / keep-alive: ignore payload. The idle timer already saw
+				// the bytes; the stall timer deliberately stays armed because no
+				// output was framed.
 			case strings.HasPrefix(line, "data:"):
 				dataBuf.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 			default:
@@ -359,8 +372,9 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 // Sentinel errors for watchdog classification.
 var (
-	errStreamIdle  = errors.New("stream idle timeout")
-	errStreamStall = errors.New("stream content stall")
+	errStreamIdle       = errors.New("stream idle timeout")
+	errStreamStall      = errors.New("stream content stall")
+	errStreamNoTerminal = errors.New("stream ended without a terminal event")
 )
 
 // retryAfter parses a Retry-After header (seconds or HTTP-date), returning 0

@@ -2,8 +2,8 @@ package provider
 
 // Stream failures: why this exists.
 //
-// A stream can end early in three ways, and every wire golder speaks reports all
-// three as raw machinery:
+// A stream can end early in four ways, and every wire golder speaks reports them
+// as raw machinery:
 //
 //   - the connection dies mid-response. net/http reports io.ErrUnexpectedEOF,
 //     whose text is exactly "unexpected EOF", for a chunked body that never sees
@@ -16,8 +16,13 @@ package provider
 //   - the connection stays alive but stops producing: SSE keep-alives keep the
 //     idle window satisfied while the model says nothing (the content-stall
 //     watchdog), the failure that a keep-alive-happy gateway hides longest.
+//   - the stream ends without a terminal event at all: a start event and then a
+//     clean close, which the wire fallback used to turn into a generic error
+//     ("stream ended without a terminal event") — a sentence that names the
+//     symptom but is not recognized as a cut, so it was surfaced without the
+//     retry every other cut gets.
 //
-// None of the three is a configuration mistake, and all three turn a turn that
+// None of the four is a configuration mistake, and all of them turn a turn that
 // had produced nothing into a dead end: they ended the stream instead of being
 // retried. This file is the shared vocabulary — one place that decides "this
 // stream was cut" and one sentence to say so — while streamretry.go owns the
@@ -53,7 +58,8 @@ func isStreamCutErr(err error) bool {
 	}
 	return isTruncatedStreamErr(err) ||
 		errors.Is(err, errStreamIdle) ||
-		errors.Is(err, errStreamStall)
+		errors.Is(err, errStreamStall) ||
+		errors.Is(err, errStreamNoTerminal)
 }
 
 // streamCutError renders a cut stream for the transcript: what happened, whose
@@ -81,6 +87,8 @@ func streamCutDetail(err error) string {
 		return fmt.Sprintf("no data arrived for %s (the connection went quiet)", idleTimeout())
 	case errors.Is(err, errStreamStall):
 		return fmt.Sprintf("no output arrived for %s (the model stopped producing)", stallTimeout())
+	case errors.Is(err, errStreamNoTerminal):
+		return "the stream ended without a final event (the connection closed before the answer was complete)"
 	default:
 		return fmt.Sprintf("the connection closed before the answer finished (%v)", err)
 	}

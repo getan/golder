@@ -247,7 +247,7 @@ func (p *wireFallbackProvider) forwardAccepted(ctx context.Context, out *Assista
 		}
 	}
 	if !accepted {
-		return false, fmt.Errorf("%s: stream ended without a terminal event", p.Name())
+		return false, fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
 	}
 	return true, nil
 }
