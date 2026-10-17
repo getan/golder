@@ -84,8 +84,8 @@ func TestCommandCodeProvider(t *testing.T) {
 	if len(spec.EnvVars) != 1 || spec.EnvVars[0] != "COMMANDCODE_API_KEY" {
 		t.Errorf("EnvVars = %v, want [COMMANDCODE_API_KEY]", spec.EnvVars)
 	}
-	if spec.DefaultModel != "deepseek/deepseek-v4-flash" {
-		t.Errorf("DefaultModel = %q, want deepseek/deepseek-v4-flash", spec.DefaultModel)
+	if spec.DefaultModel != "deepseek/deepseek-v4.1-flash" {
+		t.Errorf("DefaultModel = %q, want deepseek/deepseek-v4.1-flash", spec.DefaultModel)
 	}
 	if len(spec.WireVariants) != 1 {
 		t.Fatalf("WireVariants = %+v, want one Messages variant", spec.WireVariants)

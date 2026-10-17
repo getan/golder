@@ -380,7 +380,7 @@ var providerRegistry = []ProviderSpec{
 		DefaultBaseURL: "https://api.commandcode.ai/provider/v1",
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
-		DefaultModel:   "deepseek/deepseek-v4-flash",
+		DefaultModel:   "deepseek/deepseek-v4.1-flash",
 		// The foreign upstreams behind the Provider API are reached through
 		// the local proxy in this environment; ForceProxy keeps the legacy
 		// default selection when GOLDER_PROXY is configured, without inventing

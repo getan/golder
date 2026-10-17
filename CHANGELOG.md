@@ -16,9 +16,10 @@ interactive REPL/TUI.
   `command-code`) uses the official Provider API at
   `https://api.commandcode.ai/provider/v1`, authenticates with
   `COMMANDCODE_API_KEY`, and carries the OpenAI Chat, OpenAI Responses, and
-  Anthropic Messages wires. GOAT's API usage is metered against its plan
-  credits, and the provider joins the ForceProxy gateways so foreign upstreams
-  use the configured local proxy.
+  Anthropic Messages wires; its default model is
+  `deepseek/deepseek-v4.1-flash`, matching the CLI's default family. GOAT's API
+  usage is metered against its plan credits, and the provider joins the
+  ForceProxy gateways so foreign upstreams use the configured local proxy.
 - **User-wide instructions**: `$GOLDER_HOME/AGENTS.md` (usually
   `~/.golder/AGENTS.md`) is now injected into every session before the project
   AGENTS.md chain. Personal working preferences no longer need a per-repository
