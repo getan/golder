@@ -1495,6 +1495,14 @@ interactive REPL/TUI.
   instead of inviting the user to wait for a retry that has already run, and an
   interrupted turn that was mid-retry is filed as an abort again rather than as a
   provider failure.
+- **A denial says what it refused**: a call that asked to run outside the sandbox
+  and had that request declined now reads `denied · the sandbox escape was not
+  granted` (or the Chinese equivalent) instead of a bare `denied`. The verdict line
+  judges such a call twice — once on the command, once on the escape — so a plain
+  denial left a grade and an outcome beside each other, `allow → denied`, with
+  nothing explaining why the two differed; that reads as a contradiction rather
+  than a decision, and it is why an approval card could look like it had both
+  allowed and refused the same call.
 - **A retry explains itself in the TUI instead of leaving a bare spinner**: when
   a cut stream is re-issued, the transcript now shows a notice naming the
   provider and the failure — `provider commandcode 的流中断（1m30s 无数据），

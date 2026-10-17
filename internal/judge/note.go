@@ -148,6 +148,12 @@ func dispositionFor(n Note) string {
 	case NoteEscaped:
 		return localized(n.Lang, "沙箱外运行", "runs OUTSIDE the sandbox")
 	case NoteDenied:
+		if n.Escalation {
+			// The call was graded on its own merits AND asked to leave the
+			// sandbox. Naming which of the two was refused is the difference
+			// between a readable line and "allow → denied".
+			return localized(n.Lang, "已拒绝 · 沙箱外请求未获准", "denied · the sandbox escape was not granted")
+		}
 		return localized(n.Lang, "已拒绝", "denied")
 	case NoteUnavailable:
 		return localized(n.Lang, "评审不可用 · 按保守策略处理", "review unavailable · handled conservatively")

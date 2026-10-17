@@ -475,6 +475,12 @@ type Note struct {
 	// conversation (a sub-agent dispatch). Empty for a direct call. It is a
 	// label for the reader, never an input to a decision.
 	Origin string
+	// Escalation records that the call asked to run outside the sandbox (bash's
+	// sandbox_permissions=require_escalated). The gate decides such a call twice
+	// — once on the command's own merits, once on the escape — and a note that
+	// cannot say which of the two was refused renders as "allow → denied", which
+	// reads as a contradiction instead of a decision.
+	Escalation bool
 }
 
 // PermissionGate builds the mode-aware BeforeToolCall gate. The mode is read
@@ -879,7 +885,7 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 			opts.Notify(Note{
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
 				Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
-				Rationale: denied, Origin: req.Origin, Mode: mode,
+				Rationale: denied, Origin: req.Origin, Mode: mode, Escalation: askedToEscape(call),
 			})
 		}
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
@@ -977,6 +983,12 @@ func escalationRequested(args json.RawMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), "require_escalated")
 }
 
+// askedToEscape reports whether a call asked to leave the sandbox, which only
+// bash can do. It is what lets a note say what a denial refused.
+func askedToEscape(call agentcore.AgentToolCall) bool {
+	return strings.EqualFold(call.Name, "bash") && escalationRequested(call.Arguments)
+}
+
 // EscalationRequested is a request fact for the fast decision-model reviewer.
 // It does not authorize the escape; only the final Verdict.Direct does.
 func EscalationRequested(tool string, args json.RawMessage) bool {
@@ -1066,6 +1078,7 @@ func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string
 		Summary:       riskSummary(call),
 		Risk:          v.Risk,
 		Authorization: v.Authorization,
+		Escalation:    askedToEscape(call),
 		Lang:          v.Lang,
 	}
 	if len(v.Reasons) > 0 {

@@ -332,6 +332,33 @@ func TestFormatNoteLocalized(t *testing.T) {
 	}
 }
 
+// TestFormatNoteNamesTheRefusedEscape: a denied call that asked to leave the
+// sandbox must say which of the two decisions went against it. Without that the
+// line reads "allow → denied" — a grade next to an outcome, with nothing
+// explaining why the two differ — which is exactly how a reader ends up unable to
+// tell whether the command was allowed or not.
+func TestFormatNoteNamesTheRefusedEscape(t *testing.T) {
+	zh := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteDenied, Level: Allow, Escalation: true, Risk: "low", Authorization: "unknown", Rationale: "只读操作，不改变任何文件", Lang: "zh"})
+	if !strings.Contains(zh, "已拒绝 · 沙箱外请求未获准") {
+		t.Errorf("zh note = %q, want it to name the refused escape", zh)
+	}
+	if !strings.Contains(zh, "allow →") {
+		t.Errorf("zh note = %q, want the reviewer's grade kept", zh)
+	}
+
+	en := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteDenied, Level: Allow, Escalation: true, Risk: "low", Lang: "en"})
+	if !strings.Contains(en, "denied · the sandbox escape was not granted") {
+		t.Errorf("en note = %q, want it to name the refused escape", en)
+	}
+
+	// A denial that never asked to escape keeps the plain word: there is nothing
+	// else it could have been about.
+	plain := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteDenied, Level: Deny, Lang: "en"})
+	if !strings.Contains(plain, "→ denied:") {
+		t.Errorf("plain note = %q, want an unchanged denial", plain)
+	}
+}
+
 const escalationArgs = `{"command":"rm -rf ~/work/harness/scratch","sandbox_permissions":"require_escalated","justification":"cleanup outside the workspace"}`
 
 // TestNetworkRequestedCoversWebTools: the tools whose whole effect is an
