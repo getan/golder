@@ -114,6 +114,10 @@ type ProviderSpec struct {
 type WireVariant struct {
 	Protocol   string
 	AuthScheme string
+	// BaseURL is that wire's own endpoint when it differs from the provider's
+	// registered base (opencode-go serves Gemini under …/google/v1beta).
+	// Empty means "use the provider's base".
+	BaseURL string
 }
 
 // ReasoningLadder is one model-family reasoning-effort rule: Match is a
@@ -303,8 +307,12 @@ var providerRegistry = []ProviderSpec{
 			// Gemini models are served on the native v1beta wire (its models
 			// page lists …/google/v1beta/models/<id> for every Gemini id). The
 			// selector is declared so selection and the banner tell the truth;
-			// the resolver reports the missing driver when one is chosen.
-			{Protocol: ProtocolGemini, AuthScheme: AuthBearer},
+			// the base URL is the Google one, not the OpenAI-family one.
+			{
+				Protocol:   ProtocolGemini,
+				AuthScheme: AuthBearer,
+				BaseURL:    "https://opencode.ai/inference/go/google/v1beta",
+			},
 		},
 		// Muse spark advertises "max" in its error text but rejects it on the
 		// wire; xhigh is the highest usable rung on this gateway.

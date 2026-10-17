@@ -209,6 +209,9 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	if !ok {
 		return nil, "", fmt.Errorf("unknown --provider %q (available: %s)", name, strings.Join(ProviderNames(), ", "))
 	}
+	if IsDecisionModel(model) {
+		return nil, "", fmt.Errorf("%q is a decision model (System One), not a conversation model; it is reached through the judge, not a run", model)
+	}
 	if spec.DecisionOnly {
 		// A decision endpoint answers typed questions with probabilities; it
 		// cannot carry a conversation, so a run that selected one would fail on
@@ -282,7 +285,14 @@ func ResolveNamedProvider(name, model, baseURL, protocol string, env func(string
 	case ProtocolOpenAIResponses:
 		return NewOpenAIResponsesProvider(spec.Name, url, models), spec.Name, nil
 	case ProtocolGemini:
-		return nil, "", fmt.Errorf("--provider %q selected the Gemini v1beta wire for %q, which golder does not implement yet; use --protocol openai or openai/resp_api to route it over another wire", name, model)
+		// The v1beta wire may live on a different endpoint than the provider's
+		// OpenAI-family one, so a declared variant can carry its own base URL
+		// (opencode-go serves it under …/google/v1beta).
+		geminiURL := url
+		if v, ok := wireVariantFor(spec, ProtocolGemini); ok && strings.TrimSpace(v.BaseURL) != "" {
+			geminiURL = strings.TrimSpace(v.BaseURL)
+		}
+		return NewGeminiProtocolProvider(spec.Name, geminiURL, authScheme, models), spec.Name, nil
 	default:
 		// The registry only ever stores openai/openai-resp/anthropic; guard anyway
 		// so an unexpected value is a clear error rather than a nil provider.

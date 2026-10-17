@@ -143,6 +143,17 @@ func WireNative(spec ProviderSpec, model string) bool {
 	return containsWire(ProviderWires(spec), ModelWire(model))
 }
 
+// IsDecisionModel reports whether a model id names a decision model — TypeSafe's
+// System One (jev / systemone) — rather than a conversation model. Decision
+// models answer typed questions and share nothing with the chat wires, so the
+// run path refuses them; the judge reaches them through its own client. Some
+// gateways list one beside their chat models, which is why the check is on the
+// model, not on the provider.
+func IsDecisionModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(m, "jev") || strings.HasPrefix(m, "systemone")
+}
+
 // ModelFamily groups model ids a vendor ships as one line: "deepseek-v4.1-flash"
 // and "deepseek-v4-pro" are both the deepseek family. The probe uses it so one
 // confirmed model answers for its siblings — a gateway routes a family the same
