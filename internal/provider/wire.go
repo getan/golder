@@ -1,6 +1,9 @@
 package provider
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Wire is one API dialect. The values are the wires golder speaks today
 // (Responses, Messages, Chat Completions) or has a selector for (Gemini
@@ -177,6 +180,67 @@ func ModelFamily(model string) string {
 		return ""
 	}
 	return m[:end]
+}
+
+// ModelSeries groups a model id by the vendor that ships it — the "series" a
+// person picks by. OpenAI's ids span gpt-, codex- and the o-series but are one
+// series; everything else falls back to its leading name (glm, qwen, kimi, …).
+func ModelSeries(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndexByte(m, '/'); i >= 0 {
+		m = m[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(m, "gpt"), strings.HasPrefix(m, "codex"),
+		(len(m) > 1 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9'):
+		return "openai"
+	case strings.HasPrefix(m, "claude"):
+		return "anthropic"
+	case strings.HasPrefix(m, "gemini"):
+		return "google"
+	case strings.HasPrefix(m, "grok"):
+		return "xai"
+	case strings.HasPrefix(m, "muse"), strings.HasPrefix(m, "llama"):
+		return "meta"
+	case strings.HasPrefix(m, "mistral"):
+		return "mistral"
+	case strings.HasPrefix(m, "qwen"):
+		return "alibaba"
+	case strings.HasPrefix(m, "glm"):
+		return "zhipu"
+	case strings.HasPrefix(m, "kimi"):
+		return "moonshot"
+	case strings.HasPrefix(m, "minimax"):
+		return "minimax"
+	case strings.HasPrefix(m, "deepseek"):
+		return "deepseek"
+	case strings.HasPrefix(m, "mimo"):
+		return "xiaomi"
+	case strings.HasPrefix(m, "jev"), strings.HasPrefix(m, "systemone"):
+		return "typesafe"
+	}
+	if fam := ModelFamily(m); fam != "" {
+		return fam
+	}
+	return m
+}
+
+// OrderModelIDs sorts ids for a picker: grouped by series (alphabetically) and,
+// inside a series, newest version first; ties fall back to the id so the order
+// is stable across calls.
+func OrderModelIDs(ids []string) []string {
+	out := append([]string(nil), ids...)
+	sort.SliceStable(out, func(i, j int) bool {
+		si, sj := ModelSeries(out[i]), ModelSeries(out[j])
+		if si != sj {
+			return si < sj
+		}
+		if c := CompareModelVersion(out[i], out[j]); c != 0 {
+			return c > 0
+		}
+		return out[i] < out[j]
+	})
+	return out
 }
 
 func containsWire(wires []Wire, w Wire) bool {

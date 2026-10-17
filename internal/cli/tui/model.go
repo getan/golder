@@ -497,7 +497,7 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 // fallback ladder never masquerades as catalog data).
 func modelPickItems(providerName string, ids []string) []pickItem {
 	items := make([]pickItem, 0, len(ids))
-	for _, id := range ids {
+	for _, id := range provider.OrderModelIDs(ids) {
 		it := pickItem{Title: id, Value: id}
 		var detail []string
 		// The catalog's context window, when it knows the model: the same

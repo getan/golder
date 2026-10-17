@@ -692,6 +692,9 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 					return fmt.Sprintf("model: %s (provider: %s, think: %s)\nmodel list unavailable: %v\nswitch directly with /model <id>",
 						live.Model, live.ProviderName, thinkDisplay(live), err)
 				}
+				// Group by series and show the newest version first: the order a
+				// person picks in, not the order the endpoint listed them.
+				ids = provider.OrderModelIDs(ids)
 				var b strings.Builder
 				fmt.Fprintf(&b, "model: %s (provider: %s, think: %s%s)\nmodels on %s (/model <n|id> to switch):",
 					live.Model, live.ProviderName, thinkDisplay(live),
