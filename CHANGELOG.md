@@ -1433,6 +1433,14 @@ interactive REPL/TUI.
   answer instead of replacing it with a later wire's generic protocol
   rejection. The answering wire is recorded, so a model that is merely not
   live yet stops paying for the remaining attempts.
+- **A fallback wire is discovered once per process, not once per turn**: after
+  the adaptive chain finds the wire a model actually speaks, later requests
+  start on that wire instead of replaying the static guess and its `400` every
+  turn. The persistent cache already covered the next resolution, but a running
+  session reuses the same provider, so it kept paying the failed request; the
+  wrapper now promotes the confirmed wire in-process (first success wins, safe
+  under concurrent sub-agent turns) and keeps the remaining declared wires as a
+  fallback if the gateway changes its routing mid-session.
 - **Command Code's endpoint-mismatch 400 advances the wire chain**: its
   `unsupported_model` response says the model "is not available on this
   endpoint" (or "not supported on this endpoint") and names the endpoint to

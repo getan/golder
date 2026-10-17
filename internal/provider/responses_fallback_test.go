@@ -112,6 +112,89 @@ func TestModelProtocolUnsupportedFallsBackInPriorityOrder(t *testing.T) {
 	}
 }
 
+// TestFallbackPromotesConfirmedWireOnce verifies the discovery is not repeated
+// on every turn: after the first answer walks Responses → Messages → Chat and
+// succeeds on Chat, the second request must go straight to Chat. The persistent
+// wire cache covers the next resolution, but a running session reuses the same
+// wrapper, so only an in-process promotion saves it from replaying the 400.
+func TestFallbackPromotesConfirmedWireOnce(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_WIRE_PROBE", "off")
+	resetWireCache()
+
+	const model = "glm-5.3"
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/responses", "/messages":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}`)
+		case "/chat/completions":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"id":"c1","model":"`+model+`","choices":[{"delta":{"content":"pong"}}]}`+"\n\n")
+			_, _ = io.WriteString(w, `data: {"id":"c1","model":"`+model+`","choices":[{"delta":{},"finish_reason":"stop"}]}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, _, err := ResolveNamedProvider("opencode-go", model, srv.URL, "", os.Getenv)
+	if err != nil {
+		t.Fatalf("ResolveNamedProvider: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := CompletionRequest{
+		Model: model,
+		Context: LlmContext{Messages: agentcore.MessageList{
+			agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+		}},
+		Config: StreamConfig{APIKey: "test-key"},
+	}
+	drain := func() {
+		stream, err := p.StreamCompletion(ctx, req)
+		if err != nil {
+			t.Fatalf("StreamCompletion: %v", err)
+		}
+		var text strings.Builder
+		for ev := range stream.Events() {
+			switch e := ev.(type) {
+			case StreamTextEvent:
+				text.WriteString(fallbackTextOf(e.Partial))
+			case StreamDoneEvent:
+				text.WriteString(fallbackTextOf(e.Message))
+			case StreamErrorEvent:
+				t.Errorf("fallback surfaced an error: %v", e.Err)
+			}
+		}
+		if !strings.Contains(text.String(), "pong") {
+			t.Errorf("streamed text = %q, want pong", text.String())
+		}
+	}
+	drain()
+	drain()
+
+	mu.Lock()
+	seen := append([]string(nil), paths...)
+	mu.Unlock()
+	want := []string{"/responses", "/messages", "/chat/completions", "/chat/completions"}
+	if len(seen) != len(want) {
+		t.Fatalf("attempted paths = %v, want %v (second turn must reuse the confirmed wire)", seen, want)
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Fatalf("attempted paths = %v, want %v", seen, want)
+		}
+	}
+}
+
 // TestFallbackWiresOrder pins the declared-wire chain: Responses → Messages →
 // Chat → Gemini, starting after the resolved wire.
 func TestFallbackWiresOrder(t *testing.T) {

@@ -13,6 +13,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
 )
@@ -58,6 +59,17 @@ type wireFallbackProvider struct {
 	primaryWire   Wire
 	primary       Provider
 	fallbackWires []Wire
+	// mu guards the promotion below. The provider is resolved once per process
+	// but StreamCompletion runs for every turn (and, for sub-agents, may run
+	// concurrently), so the confirmed wire has to be readable across calls.
+	mu sync.Mutex
+	// promotedWire/promoted hold the wire whose request was accepted the first
+	// time fallback had to walk the chain. Later turns start there instead of
+	// replaying the stale static guess and its 400 — the discovery is a
+	// per-process cost, not a per-turn one (the persistent cache already
+	// covers the next resolution).
+	promotedWire Wire
+	promoted     Provider
 }
 
 func (p *wireFallbackProvider) Name() string    { return p.primary.Name() }
@@ -92,7 +104,27 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 		wire Wire
 		prov Provider
 	}
-	attempts := []attempt{{p.primaryWire, p.primary}}
+	p.mu.Lock()
+	promotedWire, promoted := p.promotedWire, p.promoted
+	p.mu.Unlock()
+
+	// The confirmed wire goes first; the stale static guess and the rest of the
+	// declared chain stay behind it as a safety net if the gateway changes its
+	// routing mid-session. Duplicates are dropped so a promoted wire that was
+	// already in the chain is not requested twice.
+	attempts := make([]attempt, 0, len(p.fallbackWires)+2)
+	add := func(w Wire, prov Provider) {
+		for _, a := range attempts {
+			if a.wire == w {
+				return
+			}
+		}
+		attempts = append(attempts, attempt{wire: w, prov: prov})
+	}
+	if promotedWire != "" && promoted != nil {
+		add(promotedWire, promoted)
+	}
+	add(p.primaryWire, p.primary)
 	for _, w := range p.fallbackWires {
 		protocol, ok := protocolForWire(w)
 		if !ok {
@@ -102,7 +134,7 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 		if err != nil {
 			continue
 		}
-		attempts = append(attempts, attempt{wire: w, prov: prov})
+		add(w, prov)
 	}
 
 	var lastErr error
@@ -124,6 +156,7 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 		}
 		accepted, err := p.forwardAccepted(ctx, out, in)
 		if accepted {
+			p.promote(a.wire, a.prov)
 			p.rememberWire(a.wire)
 			return
 		}
@@ -134,6 +167,17 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 		lastErr = fmt.Errorf("%s: no declared wire answered for %q", p.Name(), p.model)
 	}
 	p.emitError(ctx, out, lastErr)
+}
+
+// promote records the wire that answered so every later request starts there.
+// First promotion wins: two concurrent first turns may race, and whichever
+// answer arrived first is as good as the other.
+func (p *wireFallbackProvider) promote(w Wire, prov Provider) {
+	p.mu.Lock()
+	if p.promotedWire == "" {
+		p.promotedWire, p.promoted = w, prov
+	}
+	p.mu.Unlock()
 }
 
 func (p *wireFallbackProvider) rememberWire(w Wire) {
