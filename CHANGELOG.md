@@ -1412,7 +1412,11 @@ interactive REPL/TUI.
   no newline is inserted. Every paste now re-asserts the flags Bubble Tea
   requested at startup (`CSI =1;1u` plus modifyOtherKeys level 2); the sequence
   is a no-op when the flags survived. Ctrl+J remains the protocol-free fallback,
-  and the composer placeholder names it.
+  and the composer placeholder names it. The composer also recognizes the same
+  gesture when a terminal encodes it as Shift+Enter carrying associated text
+  (`String()` is a bare `"\r"`) or as xterm modifyOtherKeys' Ctrl+J code 10
+  (`String()` is `"ctrl+\n"`); those shapes used to fall through as unhandled
+  keys, which is why Ctrl+J looked dead while ordinary typing still worked.
 - **The wire probe can no longer mistake a gateway's web page for a working
   wire**: a probe accepted any 2xx and threw the body away, so a gateway that
   serves its SPA at unknown paths answered a root-level `/messages` with 200 +

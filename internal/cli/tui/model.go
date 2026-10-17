@@ -1742,6 +1742,20 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Some terminals encode the newline gestures in shapes the textarea's key
+	// bindings do not spell. Shift+Enter sent with associated text decodes with
+	// Text "\r" and String() "\r"; xterm modifyOtherKeys encodes Ctrl+J as key
+	// code 10, whose String() is "ctrl+\n". Both are the gesture the user made,
+	// so normalize them to the binding the editor knows instead of letting them
+	// fall through as unhandled keys (the "nothing happens" case).
+	if newlineKey(msg) {
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+		m.menu.refresh(m.input.Value(), m.slash)
+		m.relayout()
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		// Ctrl+C copies the current mouse selection when there is one (over OSC52),
@@ -1932,6 +1946,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.menu.refresh(m.input.Value(), m.slash)
 	m.relayout()
 	return m, cmd
+}
+
+// newlineKey reports whether a key press is a newline gesture encoded in a
+// shape the textarea's InsertNewline binding does not spell. Plain Enter has no
+// modifier and is deliberately excluded (it submits).
+func newlineKey(msg tea.KeyPressMsg) bool {
+	switch msg.Code {
+	case tea.KeyEnter:
+		// Shift+Enter is the documented binding; Alt/Ctrl+Enter are the
+		// protocol-free fallbacks. Matching the code and modifiers keeps
+		// associated text ("\r") from turning the key into an unknown String().
+		return msg.Mod&(tea.ModShift|tea.ModAlt|tea.ModCtrl) != 0
+	case 10: // LF: Ctrl+J, including xterm modifyOtherKeys' code-10 encoding
+		return msg.Mod&tea.ModCtrl != 0 || msg.Mod == 0
+	case 'j':
+		return msg.Mod&tea.ModCtrl != 0
+	}
+	return false
 }
 
 // submit starts a run for the current buffer: it appends the user block, clears
