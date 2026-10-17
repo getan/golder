@@ -1415,6 +1415,12 @@ interactive REPL/TUI.
   known exceptions — `mimo` on opencode-go — so a fresh install chooses Chat
   without paying for the first failed request; the cache still covers every
   other family the gateway rejects.
+- **A non-protocol wire answer is no longer masked by the fallback**: when the
+  current wire says `model_coming_soon` — or fails for any reason other than
+  `ModelProtocolUnsupported` — the adaptive chain stops and surfaces that real
+  answer instead of replacing it with a later wire's generic protocol
+  rejection. The answering wire is recorded, so a model that is merely not
+  live yet stops paying for the remaining attempts.
 - **Shift+Enter keeps working after a paste**: a terminal or multiplexer that
   pushes/pops its keyboard-enhancement flags around a paste can leave
   Shift+Enter encoded as a bare Enter, which the composer reads as submit — so

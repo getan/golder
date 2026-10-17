@@ -109,22 +109,43 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 	for _, a := range attempts {
 		in, err := a.prov.StreamCompletion(ctx, req)
 		if err != nil {
+			if !isModelProtocolUnsupportedErr(err) {
+				// This wire answered with its real failure — missing auth, the
+				// model not being live yet, and so on. Falling through to a
+				// later wire would replace that answer with a generic protocol
+				// rejection and hide the actionable error. Remember the wire
+				// (it speaks the model's protocol) and surface the failure.
+				p.rememberWire(a.wire)
+				p.emitError(ctx, out, err)
+				return
+			}
 			lastErr = err
 			continue
 		}
 		accepted, err := p.forwardAccepted(ctx, out, in)
 		if accepted {
-			storeWire(p.Name(), p.model, a.wire)
-			if fam := ModelFamily(p.model); fam != "" {
-				storeWire(p.Name(), "family:"+fam, a.wire)
-			}
+			p.rememberWire(a.wire)
 			return
 		}
 		lastErr = err
 	}
 
-	// Every candidate failed. Emit one start and the last failure so the caller
-	// sees a normal terminal error instead of an empty stream.
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%s: no declared wire answered for %q", p.Name(), p.model)
+	}
+	p.emitError(ctx, out, lastErr)
+}
+
+func (p *wireFallbackProvider) rememberWire(w Wire) {
+	storeWire(p.Name(), p.model, w)
+	if fam := ModelFamily(p.model); fam != "" {
+		storeWire(p.Name(), "family:"+fam, w)
+	}
+}
+
+// emitError emits one start and a terminal error so the caller sees a normal
+// stream instead of an empty one.
+func (p *wireFallbackProvider) emitError(ctx context.Context, out *AssistantMessageEventStream, err error) {
 	partial := agentcore.AssistantMessage{
 		RoleField: agentcore.RoleAssistant,
 		API:       "openai",
@@ -132,9 +153,6 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 		Model:     p.model,
 	}
 	_ = out.Emit(ctx, StreamStartEvent{Partial: partial})
-	if lastErr == nil {
-		lastErr = fmt.Errorf("%s: no declared wire answered for %q", p.Name(), p.model)
-	}
 	_ = out.Emit(ctx, StreamErrorEvent{
 		Message: agentcore.AssistantMessage{
 			RoleField:    agentcore.RoleAssistant,
@@ -142,9 +160,9 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 			Provider:     p.Name(),
 			Model:        p.model,
 			StopReason:   agentcore.StopReasonError,
-			ErrorMessage: lastErr.Error(),
+			ErrorMessage: err.Error(),
 		},
-		Err: lastErr,
+		Err: err,
 	})
 }
 

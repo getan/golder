@@ -143,6 +143,70 @@ func TestFallbackWiresOrder(t *testing.T) {
 	}
 }
 
+// TestNonProtocolErrorIsNotMaskedByFallback reproduces the reported
+// after-restart log: the gateway's Chat endpoint answered "model_coming_soon",
+// but the wrapper fell through to Gemini and surfaced Gemini's generic
+// ModelProtocolUnsupported instead. A non-protocol failure is the wire's real
+// answer and must stop the chain.
+func TestNonProtocolErrorIsNotMaskedByFallback(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_WIRE_PROBE", "off")
+	resetWireCache()
+
+	const model = "mimo-v2.6-flash"
+	var mu sync.Mutex
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		switch r.URL.Path {
+		case "/chat/completions":
+			_, _ = io.WriteString(w, `{"error":{"param":"model","type":"invalid_request_error","message":"Upstream request failed: [model_coming_soon] This model is coming soon."}}`)
+		default:
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"ModelProtocolUnsupported","message":"Model does not support this protocol."}}`)
+		}
+	}))
+	defer srv.Close()
+
+	p, _, err := ResolveNamedProvider("opencode-go", model, srv.URL, "", os.Getenv)
+	if err != nil {
+		t.Fatalf("ResolveNamedProvider: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := p.StreamCompletion(ctx, CompletionRequest{
+		Model: model,
+		Context: LlmContext{Messages: agentcore.MessageList{
+			agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+		}},
+		Config: StreamConfig{APIKey: "test-key"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+	var gotErr string
+	for ev := range stream.Events() {
+		if se, ok := ev.(StreamErrorEvent); ok {
+			gotErr = se.Err.Error()
+		}
+	}
+	if !strings.Contains(gotErr, "model_coming_soon") {
+		t.Errorf("surfaced error = %q, want the Chat model_coming_soon answer", gotErr)
+	}
+	mu.Lock()
+	seen := append([]string(nil), paths...)
+	mu.Unlock()
+	if len(seen) != 1 || seen[0] != "/chat/completions" {
+		t.Errorf("attempted paths = %v, want only /chat/completions", seen)
+	}
+	if w, ok := CachedWire("opencode-go", model); !ok || w != WireChat {
+		t.Errorf("cached wire = %q,%v, want chat,true", w, ok)
+	}
+}
+
 func fallbackTextOf(m agentcore.AssistantMessage) string {
 	var b strings.Builder
 	for _, c := range m.Content {
