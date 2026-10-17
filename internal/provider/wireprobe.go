@@ -142,11 +142,15 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	if wireProbeDisabled(env) {
 		return wire
 	}
+	// A family routes the same way on a given endpoint, so the question is asked
+	// about the family's newest model (see newestInFamily) and the answer is
+	// stored for the family and for the model the run actually uses.
+	target := newestInFamily(spec, model, baseURL, env)
 	apiKey := ""
 	if len(spec.EnvVars) > 0 && env != nil {
 		apiKey = env(spec.EnvVars[0])
 	}
-	if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, model, 5*time.Second); err == nil {
+	if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, 5*time.Second); err == nil {
 		storeWire(spec.Name, model, probed)
 		if fam := ModelFamily(model); fam != "" {
 			storeWire(spec.Name, "family:"+fam, probed)
