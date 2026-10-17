@@ -105,6 +105,19 @@ func streamCutWindow(err error) time.Duration {
 // stream it was, and the one thing worth trying. Any other error is returned
 // unchanged, so this is safe to call on every failure path.
 func streamCutError(provider string, err error) error {
+	return cutError(provider, err, "retry the turn")
+}
+
+// streamCutRetriedError is the same sentence for a stream that was cut again
+// after the retry: saying only "retry the turn" would leave the user wondering
+// whether the retry had run at all, and whether waiting would help. It did, and
+// it will not.
+func streamCutRetriedError(provider string, err error) error {
+	return cutError(provider, err, "already retried once, and the connection dropped again — retry the turn")
+}
+
+// cutError builds the sentence for a cut stream with the given remedy.
+func cutError(provider string, err error, remedy string) error {
 	if !isStreamCutErr(err) {
 		return err
 	}
@@ -114,13 +127,15 @@ func streamCutError(provider string, err error) error {
 	} else {
 		where += ":"
 	}
-	return fmt.Errorf("%s stream cut — %s; retry the turn", where, streamCutDetail(err))
+	return fmt.Errorf("%s stream cut — %s; %s", where, streamCutDetail(provider, err), remedy)
 }
 
 // streamCutDetail names which of the three happened, with the window that
 // expired where one did — the numbers the watchdogs used, so the sentence
-// matches the setting (GOLDER_STREAM_IDLE_TIMEOUT) the user can change.
-func streamCutDetail(err error) string {
+// matches the setting (GOLDER_STREAM_IDLE_TIMEOUT) the user can change. The
+// underlying cause is rendered without the provider prefix the drivers already
+// put on it, so the gateway is not named twice in one sentence.
+func streamCutDetail(provider string, err error) string {
 	switch {
 	case errors.Is(err, errStreamIdle):
 		return fmt.Sprintf("no data arrived for %s (the connection went quiet)", idleTimeout())
@@ -129,6 +144,16 @@ func streamCutDetail(err error) string {
 	case errors.Is(err, errStreamNoTerminal):
 		return "the stream ended without a final event (the connection closed before the answer was complete)"
 	default:
-		return fmt.Sprintf("the connection closed before the answer finished (%v)", err)
+		return fmt.Sprintf("the connection closed before the answer finished (%s)", cutCause(provider, err))
 	}
+}
+
+// cutCause is the reader's error as the user should read it: the drivers prefix
+// their errors with the provider name, which the sentence already carries.
+func cutCause(provider string, err error) string {
+	text := err.Error()
+	if p := strings.TrimSpace(provider); p != "" {
+		text = strings.TrimPrefix(text, p+": ")
+	}
+	return text
 }

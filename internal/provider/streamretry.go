@@ -57,37 +57,46 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 
 	retried := false
 	for {
-		if cut := p.forward(ctx, out, in); cut == nil {
+		cut := p.forward(ctx, out, in)
+		switch {
+		case cut == nil:
 			return
-		} else if retried || ctx.Err() != nil {
-			// A second cut, or a cancelled turn: report it. A connection that
-			// drops twice is not a problem another request fixes.
-			p.emitFailure(ctx, out, cut)
+		case ctx.Err() != nil:
+			// The turn was cancelled while the cut was being handled: this is the
+			// user's own interrupt, and every front-end prints its own notice for
+			// an abort. Filing it as a provider failure is the wording bug that
+			// once made Ctrl+C read as a malfunction.
+			p.emitAborted(ctx, out)
 			return
-		} else {
-			retried = true
-			// Tell the front-end before the second attempt starts. The first
-			// attempt's start event was held, so without this the interface shows
-			// only the spinner and the user cannot tell a retry from a hang.
-			_ = out.Emit(ctx, StreamNoticeEvent{
-				Kind:     StreamNoticeRetry,
-				Provider: p.Name(),
-				Reason:   streamCutReason(cut),
-				Window:   streamCutWindow(cut),
-			})
-			// The retry may re-resolve a wire (the wrapper sits above the wire
-			// fallback) and always builds a fresh request and decoder, so no
-			// state from the cut attempt is carried over.
-			next, err := p.inner.StreamCompletion(ctx, req)
-			if err != nil {
-				// The retry could not even start; the cut is still the failure
-				// the stream ended with, and the early error (a missing key, a
-				// bad flag) has its own reporting path.
-				p.emitFailure(ctx, out, cut)
-				return
-			}
-			in = next
+		case retried:
+			// A second cut: a connection that drops twice is not a problem
+			// another request fixes, so say the retry is spent.
+			p.emitFailure(ctx, out, cut, true)
+			return
 		}
+
+		retried = true
+		// Tell the front-end before the second attempt starts. The first
+		// attempt's start event was held, so without this the interface shows
+		// only the spinner and the user cannot tell a retry from a hang.
+		_ = out.Emit(ctx, StreamNoticeEvent{
+			Kind:     StreamNoticeRetry,
+			Provider: p.Name(),
+			Reason:   streamCutReason(cut),
+			Window:   streamCutWindow(cut),
+		})
+		// The retry may re-resolve a wire (the wrapper sits above the wire
+		// fallback) and always builds a fresh request and decoder, so no state
+		// from the cut attempt is carried over.
+		next, err := p.inner.StreamCompletion(ctx, req)
+		if err != nil {
+			// The retry could not even start; the cut is still the failure the
+			// stream ended with, and the early error (a missing key, a bad flag)
+			// has its own reporting path.
+			p.emitFailure(ctx, out, cut, true)
+			return
+		}
+		in = next
 	}
 }
 
@@ -158,8 +167,14 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 }
 
 // emitFailure ends the stream with a start and a terminal error, so the caller
-// sees a normal stream rather than one that closed on it.
-func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMessageEventStream, err error) {
+// sees a normal stream rather than one that closed on it. afterRetry selects the
+// sentence: a cut that happened before any retry invites one, and a cut that
+// survived one says so.
+func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMessageEventStream, err error, afterRetry bool) {
+	sentence := streamCutError(p.Name(), err)
+	if afterRetry {
+		sentence = streamCutRetriedError(p.Name(), err)
+	}
 	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
 		RoleField: agentcore.RoleAssistant,
 		Provider:  p.Name(),
@@ -169,8 +184,25 @@ func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMes
 			RoleField:    agentcore.RoleAssistant,
 			Provider:     p.Name(),
 			StopReason:   agentcore.StopReasonError,
-			ErrorMessage: streamCutError(p.Name(), err).Error(),
+			ErrorMessage: sentence.Error(),
 		},
 		Err: err,
+	})
+}
+
+// emitAborted ends a cancelled turn: the front-end prints its own interrupt
+// notice for this stop reason, so the message stays empty.
+func (p *streamRetryProvider) emitAborted(ctx context.Context, out *AssistantMessageEventStream) {
+	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Provider:  p.Name(),
+	}})
+	_ = out.Emit(ctx, StreamErrorEvent{
+		Message: agentcore.AssistantMessage{
+			RoleField:  agentcore.RoleAssistant,
+			Provider:   p.Name(),
+			StopReason: agentcore.StopReasonAborted,
+		},
+		Err: context.Canceled,
 	})
 }

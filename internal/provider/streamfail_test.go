@@ -79,6 +79,31 @@ func TestStreamCutErrorNamesEachCase(t *testing.T) {
 	}
 }
 
+// TestStreamCutErrorNamesTheProviderOnce: the drivers prefix their errors with the
+// provider, and the sentence already carries it. Naming the gateway twice in one
+// line is the kind of noise that makes an error look like machinery talking.
+func TestStreamCutErrorNamesTheProviderOnce(t *testing.T) {
+	err := &fallbackTestErr{"commandcode: unexpected EOF"}
+	got := streamCutError("commandcode", err).Error()
+	want := "commandcode: stream cut — the connection closed before the answer finished (unexpected EOF); retry the turn"
+	if got != want {
+		t.Errorf("streamCutError = %q, want %q", got, want)
+	}
+}
+
+// TestStreamCutRetriedErrorSaysTheRetryIsSpent: when the second attempt was cut
+// the same way, "retry the turn" alone leaves the user wondering whether a retry
+// had even run. It did.
+func TestStreamCutRetriedErrorSaysTheRetryIsSpent(t *testing.T) {
+	got := streamCutRetriedError("commandcode", &fallbackTestErr{"commandcode: unexpected EOF"}).Error()
+	if !strings.Contains(got, "already retried once") {
+		t.Errorf("streamCutRetriedError = %q, want it to say the retry was made", got)
+	}
+	if strings.Contains(got, "commandcode: unexpected EOF") {
+		t.Errorf("streamCutRetriedError = %q, want the provider named once", got)
+	}
+}
+
 // The transport wire names the same condition: without this, a cut stream on
 // the Chat or Messages wire reported the reader's bare "unexpected EOF" behind a
 // generic "read error" prefix.

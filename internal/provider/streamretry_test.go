@@ -244,6 +244,9 @@ func TestStreamRetryGivesUpAfterASecondCut(t *testing.T) {
 	if got := errorMessage(events); !strings.Contains(got, "stream cut") {
 		t.Errorf("failure = %q, want the cut named even when the retry failed", got)
 	}
+	if got := errorMessage(events); !strings.Contains(got, "already retried once") {
+		t.Errorf("failure = %q, want it to say the retry was already made", got)
+	}
 }
 
 // Anything that is not a cut is the wire's real answer: it must be surfaced

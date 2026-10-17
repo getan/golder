@@ -1487,6 +1487,14 @@ interactive REPL/TUI.
   commandcode/mimo turn that ended in fourteen seconds with that sentence. Both
   sides now share a sentinel, so the silent end is classified as a cut and gets
   the same single retry when nothing has been shown.
+- **A cut stream's sentence names the provider once and admits a spent retry**:
+  the drivers already prefix their errors with the provider, so the sentence read
+  `commandcode: stream cut — … (commandcode: unexpected EOF)`; the cause is now
+  stripped of the prefix the sentence already carries. A cut that survived the
+  retry says so — `already retried once, and the connection dropped again` —
+  instead of inviting the user to wait for a retry that has already run, and an
+  interrupted turn that was mid-retry is filed as an abort again rather than as a
+  provider failure.
 - **A retry explains itself in the TUI instead of leaving a bare spinner**: when
   a cut stream is re-issued, the transcript now shows a notice naming the
   provider and the failure — `provider commandcode 的流中断（1m30s 无数据），
