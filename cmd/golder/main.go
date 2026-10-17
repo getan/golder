@@ -327,6 +327,16 @@ func main() {
 	// model (issue #564): canonicalize once here so every downstream consumer —
 	// SetupEnv, the REPL/TUI live seeds, sub-agent children — carries a real
 	// model id instead of routing the literal name to OpenRouter.
+	// A provider selected without a model also starts on that provider's
+	// declared default, the same rule /provider uses. The flag's global default
+	// belongs to the default gateway; vendor-prefixed ids (Command Code's
+	// deepseek/…, xiaomi/…) would otherwise be sent as the bare CLI default.
+	if !flag.CommandLine.Changed("model") && cfg.Model == "" &&
+		(flag.CommandLine.Changed("provider") || cfg.Provider != "") {
+		if spec, ok := provider.LookupProviderSpec(opts.provider); ok && spec.DefaultModel != "" {
+			opts.model = spec.DefaultModel
+		}
+	}
 	opts.model = provider.CanonicalizeModel(opts.model)
 
 	// Resolve a credential reference into an API key (issue #568): the config

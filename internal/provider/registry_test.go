@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"reflect"
 	"sort"
 	"testing"
 )
@@ -62,6 +63,89 @@ func TestEveryProviderHasADefaultModel(t *testing.T) {
 		if spec.DefaultModel == "" {
 			t.Errorf("provider %q has no DefaultModel; /provider would keep the previous gateway's model", spec.Name)
 		}
+	}
+}
+
+// TestCommandCodeProvider pins the official Provider API wiring: OpenAI-family
+// default (Chat + the Responses upgrade), a Messages variant authenticated with
+// x-api-key at the same /v1 base, and model-family wire selection for the
+// vendor-prefixed ids Command Code publishes.
+func TestCommandCodeProvider(t *testing.T) {
+	spec, ok := LookupProviderSpec("commandcode")
+	if !ok {
+		t.Fatal("commandcode spec missing")
+	}
+	if spec.Protocol != ProtocolOpenAI || spec.AuthScheme != AuthBearer {
+		t.Errorf("protocol/auth = %q/%q, want openai/bearer", spec.Protocol, spec.AuthScheme)
+	}
+	if spec.DefaultBaseURL != "https://api.commandcode.ai/provider/v1" {
+		t.Errorf("base URL = %q, want the Provider API /v1 endpoint", spec.DefaultBaseURL)
+	}
+	if len(spec.EnvVars) != 1 || spec.EnvVars[0] != "COMMANDCODE_API_KEY" {
+		t.Errorf("EnvVars = %v, want [COMMANDCODE_API_KEY]", spec.EnvVars)
+	}
+	if spec.DefaultModel != "deepseek/deepseek-v4-flash" {
+		t.Errorf("DefaultModel = %q, want deepseek/deepseek-v4-flash", spec.DefaultModel)
+	}
+	if len(spec.WireVariants) != 1 {
+		t.Fatalf("WireVariants = %+v, want one Messages variant", spec.WireVariants)
+	}
+	if v := spec.WireVariants[0]; v.Protocol != ProtocolAnthropic || v.AuthScheme != AuthXAPIKey || v.BaseURL != "" {
+		t.Errorf("Messages variant = %+v, want anthropic/x-api-key on the shared base URL", v)
+	}
+	if alias, ok := LookupProviderSpec("command-code"); !ok || alias.Name != "commandcode" {
+		t.Errorf("command-code alias = %q,%v, want commandcode,true", alias.Name, ok)
+	}
+	if got, want := ProviderWires(spec), []Wire{WireResponses, WireMessages, WireChat}; !reflect.DeepEqual(got, want) {
+		t.Errorf("ProviderWires = %v, want %v", got, want)
+	}
+
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	env := func(key string) string {
+		switch key {
+		case "GOLDER_WIRE_PROBE":
+			return "off"
+		case "COMMANDCODE_API_KEY":
+			return "test-key"
+		default:
+			return ""
+		}
+	}
+	cases := []struct {
+		model  string
+		wire   Wire
+		driver any
+	}{
+		{"xiaomi/mimo-v2.6-flash", WireResponses, (*responsesDriver)(nil)},
+		{"claude-haiku-5-5", WireMessages, (*anthropicCompatDriver)(nil)},
+		{"google/gemini-3.8-flash", WireChat, (*openAICompatDriver)(nil)},
+	}
+	for _, c := range cases {
+		if got := SelectWire(spec, c.model); got != c.wire {
+			t.Errorf("SelectWire(%s) = %s, want %s", c.model, got, c.wire)
+		}
+		p, name, err := ResolveNamedProvider("commandcode", c.model, "", "", env)
+		if err != nil {
+			t.Errorf("ResolveNamedProvider(%s): %v", c.model, err)
+			continue
+		}
+		if name != "commandcode" {
+			t.Errorf("ResolveNamedProvider(%s) name = %q, want commandcode", c.model, name)
+		}
+		if got := reflect.TypeOf(UnwrapProvider(p)); got != reflect.TypeOf(c.driver) {
+			t.Errorf("ResolveNamedProvider(%s) driver = %v, want %v", c.model, got, reflect.TypeOf(c.driver))
+		}
+	}
+}
+
+// TestCommandCodeUsesConfiguredLocalProxy pins the routing requirement for the
+// foreign upstreams: when GOLDER_PROXY is set, Command Code joins the
+// ForceProxy gateways and uses that local proxy.
+func TestCommandCodeUsesConfiguredLocalProxy(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "http://127.0.0.1:7897")
+	if got := ProxyStatus("commandcode", "https://api.commandcode.ai/provider/v1"); got != "proxy" {
+		t.Errorf("Command Code proxy status = %q, want proxy via the configured local proxy", got)
 	}
 }
 
@@ -186,7 +270,7 @@ func TestRegistryContainsAllExpectedProviders(t *testing.T) {
 		"groq", "cerebras", "xai", "openrouter", "zai",
 		"typesafe",
 		"mistral", "minimax", "moonshotai",
-		"opencode-zen", "opencode-go", "kimi-coding", "xiaomi", "dashscope",
+		"opencode-zen", "opencode-go", "commandcode", "kimi-coding", "xiaomi", "dashscope",
 		"azure-openai-responses",
 	}
 	for _, name := range expected {

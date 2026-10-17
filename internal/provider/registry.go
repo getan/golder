@@ -371,6 +371,30 @@ var providerRegistry = []ProviderSpec{
 		}},
 	},
 	{
+		// Command Code's GOAT subscription includes Provider API access: the
+		// same key authenticates the CLI and the API, and API usage is metered
+		// against the plan's credits. The API is the OpenAI/Anthropic-compatible
+		// Provider API, not the CLI's internal wire, so the generic drivers fit.
+		Name:           "commandcode",
+		EnvVars:        []string{"COMMANDCODE_API_KEY"},
+		DefaultBaseURL: "https://api.commandcode.ai/provider/v1",
+		Protocol:       ProtocolOpenAI,
+		AuthScheme:     AuthBearer,
+		DefaultModel:   "deepseek/deepseek-v4-flash",
+		// The foreign upstreams behind the Provider API are reached through
+		// the local proxy in this environment; ForceProxy keeps the legacy
+		// default selection when GOLDER_PROXY is configured, without inventing
+		// a route when it is not. /proxy commandcode on|off still wins.
+		ForceProxy: true,
+		// The Provider API serves Anthropic Messages at {base}/messages with
+		// x-api-key auth (verified live). Responses is the OpenAI-wired
+		// upgrade every OpenAI-compatible provider already gets; Command Code
+		// serves it at {base}/responses for the models that advertise it.
+		WireVariants: []WireVariant{
+			{Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey},
+		},
+	},
+	{
 		Name:           "kimi-coding",
 		EnvVars:        []string{"KIMI_API_KEY"},
 		DefaultBaseURL: "https://api.kimi.com/coding",
@@ -440,7 +464,8 @@ var providerRegistryByName = func() map[string]ProviderSpec {
 // resolution, catalog keys, help text) sees the canonical name; the alias
 // itself is never listed by ProviderSpecs or ProviderNames.
 var providerAliases = map[string]string{
-	"opencode": "opencode-zen",
+	"opencode":     "opencode-zen",
+	"command-code": "commandcode",
 }
 
 // LookupProviderSpec returns the ProviderSpec for a provider name and whether it

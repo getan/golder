@@ -227,6 +227,10 @@ func TestIsModelProtocolUnsupportedErr(t *testing.T) {
 		{io.EOF, false},
 		{&fallbackTestErr{"400 Bad Request ModelProtocolUnsupported"}, true},
 		{&fallbackTestErr{"Model does not support this protocol."}, true},
+		{&fallbackTestErr{`Model "z-ai/glm-5.3-flash" is not available on this endpoint. Call it on /provider/v1/chat/completions instead.`}, true},
+		{&fallbackTestErr{`Model "z-ai/glm-5.3-flash" is not supported on this endpoint. Use /provider/v1/chat/completions for OpenAI and OSS models.`}, true},
+		{&fallbackTestErr{`Model "deepseek-v4.1-flash" is not supported on this endpoint.`}, false},
+		{&fallbackTestErr{`{"code":"unsupported_model","message":"No such model"}`}, false},
 		{&fallbackTestErr{"400 invalid tools"}, false},
 		{nil, false},
 	} {

@@ -40,6 +40,7 @@ var openAIProviderCases = []openAIWiringCase{
 	{"kimi-coding", "https://api.kimi.com/coding", "KIMI_API_KEY"},
 	{"opencode-zen", "https://opencode.ai/zen/v1", "OPENCODE_ZEN_API_KEY"},
 	{"opencode-go", "https://opencode.ai/zen/go/v1", "OPENCODE_API_KEY"},
+	{"commandcode", "https://api.commandcode.ai/provider/v1", "COMMANDCODE_API_KEY"},
 	{"xiaomi", "https://api.xiaomimimo.com/v1", "XIAOMI_API_KEY"},
 }
 

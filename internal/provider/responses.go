@@ -174,8 +174,10 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 }
 
 // isModelProtocolUnsupportedErr reports the gateway's explicit "this model does
-// not speak the requested wire" 400, the shape opencode-go returns for a
-// domestic model with no Responses endpoint.
+// not speak the requested wire" 400. Gateways phrase it differently: opencode-go
+// says ModelProtocolUnsupported, Command Code says the model "is not available
+// on this endpoint" (or "not supported on this endpoint") and points at the
+// endpoint to use instead. Both are wire mismatches, not model/auth failures.
 func isModelProtocolUnsupportedErr(err error) bool {
 	if err == nil {
 		return false
@@ -186,23 +188,30 @@ func isModelProtocolUnsupportedErr(err error) bool {
 	// fields are empty and the raw string is the reliable signal.
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
-		if strings.Contains(strings.ToLower(apiErr.Type), "modelprotocolunsupported") ||
-			strings.Contains(strings.ToLower(apiErr.Message), "does not support this protocol") {
+		if wireMismatchText(apiErr.Type) || wireMismatchText(apiErr.Code) || wireMismatchText(apiErr.Message) {
 			return true
 		}
 		if apiErr.Response != nil && apiErr.Response.Body != nil {
 			body, _ := io.ReadAll(io.LimitReader(apiErr.Response.Body, 1<<16))
 			apiErr.Response.Body = io.NopCloser(bytes.NewReader(body))
-			msg := strings.ToLower(string(body))
-			if strings.Contains(msg, "modelprotocolunsupported") ||
-				strings.Contains(msg, "does not support this protocol") {
+			if wireMismatchText(string(body)) {
 				return true
 			}
 		}
 	}
-	msg := strings.ToLower(err.Error())
+	return wireMismatchText(err.Error())
+}
+
+func wireMismatchText(text string) bool {
+	msg := strings.ToLower(text)
 	return strings.Contains(msg, "modelprotocolunsupported") ||
-		strings.Contains(msg, "does not support this protocol")
+		strings.Contains(msg, "does not support this protocol") ||
+		strings.Contains(msg, "not available on this endpoint") ||
+		(strings.Contains(msg, "not supported on this endpoint") &&
+			(strings.Contains(msg, "chat/completions") ||
+				strings.Contains(msg, "provider/v1/") ||
+				strings.Contains(msg, "use /provider"))) ||
+		(strings.Contains(msg, "unsupported_model") && strings.Contains(msg, "endpoint"))
 }
 
 // runOnce consumes one Responses SSE stream, emitting text/thinking/tool-call

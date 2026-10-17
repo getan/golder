@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Command Code (GOAT) is a first-class provider**: `commandcode` (alias
+  `command-code`) uses the official Provider API at
+  `https://api.commandcode.ai/provider/v1`, authenticates with
+  `COMMANDCODE_API_KEY`, and carries the OpenAI Chat, OpenAI Responses, and
+  Anthropic Messages wires. GOAT's API usage is metered against its plan
+  credits, and the provider joins the ForceProxy gateways so foreign upstreams
+  use the configured local proxy.
 - **User-wide instructions**: `$GOLDER_HOME/AGENTS.md` (usually
   `~/.golder/AGENTS.md`) is now injected into every session before the project
   AGENTS.md chain. Personal working preferences no longer need a per-repository
@@ -869,6 +876,10 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **`--provider` without `--model` starts on that provider's default model**:
+  the global `-m` default belongs to the default gateway. Selecting another
+  provider now uses its `DefaultModel` (the same rule `/provider` uses), which
+  is what makes vendor-prefixed Command Code ids work without repeating `-m`.
 - **The system prompt now spells out approval etiquette**: batch calls that
   need the same capability, treat a refused escape/path/network request as
   final instead of retrying it, never answer a PTY allocation failure with
@@ -1421,6 +1432,12 @@ interactive REPL/TUI.
   answer instead of replacing it with a later wire's generic protocol
   rejection. The answering wire is recorded, so a model that is merely not
   live yet stops paying for the remaining attempts.
+- **Command Code's endpoint-mismatch 400 advances the wire chain**: its
+  `unsupported_model` response says the model "is not available on this
+  endpoint" (or "not supported on this endpoint") and names the endpoint to
+  use instead. That phrasing now counts as a wire mismatch, so a model served
+  only on `/chat/completions` falls through Responses and Messages to Chat
+  instead of being cached on the wrong wire.
 - **Shift+Enter keeps working after a paste**: a terminal or multiplexer that
   pushes/pops its keyboard-enhancement flags around a paste can leave
   Shift+Enter encoded as a bare Enter, which the composer reads as submit — so
