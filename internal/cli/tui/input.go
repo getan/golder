@@ -30,6 +30,15 @@ import (
 // row accounting stays bounded and the transcript never collapses to nothing.
 const maxInputRows = 6
 
+// maxInputLines is the content cap, deliberately far above the visible height.
+// textarea's legacy content check treats MaxHeight as BOTH the display height
+// and the maximum logical line count when MaxContentHeight is unset, so a
+// 6-row composer used to stop accepting a newline on its 7th line. Setting
+// MaxContentHeight decouples the two: the box stays six rows tall and scrolls,
+// while the buffer keeps growing (10000 visual lines, matching textarea's own
+// internal ceiling).
+const maxInputLines = 10000
+
 // input is the prompt editor. It embeds a textarea.Model and exposes just the
 // surface the root model needs: value/clear, focus/blur (input is blurred while
 // a run is in flight so keystrokes never corrupt an in-flight prompt), a width
@@ -72,6 +81,7 @@ func newInput() input {
 	// scrolled it back — so a two-line buffer rendered as two blank lines.
 	ta.MinHeight = 1
 	ta.MaxHeight = maxInputRows
+	ta.MaxContentHeight = maxInputLines
 	ta.DynamicHeight = true
 	// textarea.New starts at defaultHeight (6). DynamicHeight only recomputes on
 	// edits, so pin the empty editor to one row up front — otherwise the shell

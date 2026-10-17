@@ -1417,6 +1417,13 @@ interactive REPL/TUI.
   (`String()` is a bare `"\r"`) or as xterm modifyOtherKeys' Ctrl+J code 10
   (`String()` is `"ctrl+\n"`); those shapes used to fall through as unhandled
   keys, which is why Ctrl+J looked dead while ordinary typing still worked.
+- **The composer keeps accepting newlines past its six visible rows**: the
+  textarea's `MaxHeight` doubles as a logical-line cap through its legacy
+  content check when `MaxContentHeight` is unset, so the seventh Shift+Enter
+  was silently refused and later characters piled onto the sixth line. The
+  editor now sets `MaxContentHeight` independently: the box stays six rows
+  tall and scrolls internally, while the buffer keeps growing to 10000 visual
+  lines.
 - **The wire probe can no longer mistake a gateway's web page for a working
   wire**: a probe accepted any 2xx and threw the body away, so a gateway that
   serves its SPA at unknown paths answered a root-level `/messages` with 200 +

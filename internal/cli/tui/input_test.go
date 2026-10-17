@@ -110,6 +110,29 @@ func TestInputNewlineRendersBothLines(t *testing.T) {
 	}
 }
 
+// TestInputKeepsNewliningAtMaxVisibleRows guards the regression the composer
+// hit at six lines: textarea treats MaxHeight as a logical-line cap too unless
+// MaxContentHeight is set, so the seventh Shift+Enter was silently dropped.
+// The box must stay capped at maxInputRows visible rows while the buffer keeps
+// accepting lines and scrolling.
+func TestInputKeepsNewliningAtMaxVisibleRows(t *testing.T) {
+	in := newInput()
+	in.SetWidth(40)
+	for i := 0; i < maxInputRows+2; i++ {
+		in, _ = in.Update(runeKey(rune('a' + i)))
+		in, _ = in.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	}
+	if got, want := in.Value(), "a\nb\nc\nd\ne\nf\ng\nh\n"; got != want {
+		t.Fatalf("Value() = %q, want %q (newlines past the visible cap must be kept)", got, want)
+	}
+	if got := in.LineCount(); got <= maxInputRows {
+		t.Errorf("LineCount = %d, want more than the visible cap %d", got, maxInputRows)
+	}
+	if got := in.Height(); got > maxInputRows+2 {
+		t.Errorf("Height = %d, want the visible cap plus the two rule rows", got)
+	}
+}
+
 // TestInputPromptOnlyOnFirstLine locks the composer's gutter: the "> " prompt
 // marks the first line only, and continuation lines are indented two spaces so
 // their text aligns under the first line's text. Rendering the prompt on every
