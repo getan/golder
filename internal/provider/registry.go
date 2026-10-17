@@ -63,13 +63,6 @@ type ProviderSpec struct {
 	// been verified — the registry's word is what turns "explicitly requested"
 	// into "known to exist".
 	WireVariants []WireVariant
-	// Gateway marks a provider that serves several wires for its models (a
-	// curated gateway such as opencode-go), as opposed to a first-party API that
-	// publishes each model on one wire. Only a gateway is asked the lazy
-	// "which wire do you actually serve for this model" question: for anyone
-	// else the model's native wire and the provider's registered wire already
-	// agree, and a probe would spend a request to learn nothing.
-	Gateway bool
 	// ExtraHeaders are provider-specific headers attached to every request (may
 	// be nil).
 	ExtraHeaders map[string]string
@@ -217,7 +210,6 @@ var providerRegistry = []ProviderSpec{
 		DefaultBaseURL: openRouterBaseURL, // https://openrouter.ai/api/v1
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
-		Gateway:        true,
 		DefaultModel:   "openai/gpt-4o",
 	},
 	{
@@ -288,7 +280,6 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
-		Gateway:        true,
 		// models.dev keys the Zen gateway as "opencode"; without this the
 		// provider missed the catalog entirely (windows fell back to 1M and
 		// reasoning levels to the family ladder).
@@ -301,7 +292,6 @@ var providerRegistry = []ProviderSpec{
 		Protocol:       ProtocolOpenAI,
 		AuthScheme:     AuthBearer,
 		ForceProxy:     true,
-		Gateway:        true,
 		// The gateway also serves the Messages wire at {base}/messages, which is
 		// how its Claude models are reached (probed live with claude-haiku-5-5:
 		// x-api-key auth, plus the x-opencode-session routing header every

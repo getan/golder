@@ -143,6 +143,31 @@ func WireNative(spec ProviderSpec, model string) bool {
 	return containsWire(ProviderWires(spec), ModelWire(model))
 }
 
+// ModelFamily groups model ids a vendor ships as one line: "deepseek-v4.1-flash"
+// and "deepseek-v4-pro" are both the deepseek family. The probe uses it so one
+// confirmed model answers for its siblings — a gateway routes a family the same
+// way, and the first model asked pays for the answer. A routed id
+// ("google/gemini-…") is grouped by its model half.
+func ModelFamily(model string) string {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndexByte(m, '/'); i >= 0 {
+		m = m[i+1:]
+	}
+	end := 0
+	for end < len(m) {
+		c := m[end]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			end++
+			continue
+		}
+		break
+	}
+	if end == 0 {
+		return ""
+	}
+	return m[:end]
+}
+
 func containsWire(wires []Wire, w Wire) bool {
 	for _, have := range wires {
 		if have == w {

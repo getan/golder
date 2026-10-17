@@ -73,6 +73,28 @@ func TestProviderWires(t *testing.T) {
 	}
 }
 
+// TestModelFamily pins the grouping the probe cache uses: one confirmed model
+// answers for its line, and a routed id is grouped by its model half.
+func TestModelFamily(t *testing.T) {
+	cases := map[string]string{
+		"deepseek-v4.1-flash":     "deepseek",
+		"deepseek-v4-pro":         "deepseek",
+		"anthropic/claude-opus-5": "claude",
+		"google/gemini-3.8-flash": "gemini",
+		"glm-5.3":                 "glm",
+		"qwen3.8-max":             "qwen",
+		"gpt-5.6-luna":            "gpt",
+		"o3":                      "o",
+		"":                        "",
+		"...":                     "",
+	}
+	for id, want := range cases {
+		if got := ModelFamily(id); got != want {
+			t.Errorf("ModelFamily(%q) = %q, want %q", id, got, want)
+		}
+	}
+}
+
 // TestSelectWire pins the static half: the model's native wire when the
 // provider serves it, the provider's registered wire otherwise. The domestic
 // families are Responses-native now, so a gateway that still routes them over
