@@ -97,9 +97,9 @@ func TestModelSwitchMessageIncludesProtocol(t *testing.T) {
 		t.Errorf("message = %q, want it to name protocol openai/resp_api", out.Message)
 	}
 
-	out, err = reg.ResolveOutcome("/model glm-4.7")
+	out, err = reg.ResolveOutcome("/model mistral-large-latest")
 	if err != nil {
-		t.Fatalf("ResolveOutcome /model glm-4.7: %v", err)
+		t.Fatalf("ResolveOutcome /model mistral-large-latest: %v", err)
 	}
 	if !strings.Contains(out.Message, "protocol: openai/chat") {
 		t.Errorf("message = %q, want it to name protocol openai/chat", out.Message)
@@ -138,16 +138,16 @@ func TestModelListsLiveCatalogAndSwitchesByNumber(t *testing.T) {
 	if live.FetchedAt.IsZero() {
 		t.Error("FetchedAt not stamped")
 	}
-	for _, want := range []string{"m-a (current)", "1. m-a", "2. m-b", "openai"} {
+	for _, want := range []string{"m-a (current)", "1. m-b", "2. m-a", "openai"} {
 		if !strings.Contains(out.Message, want) {
 			t.Errorf("message missing %q:\n%s", want, out.Message)
 		}
 	}
 
 	// Numeric pick switches pinned to the live provider.
-	out, err = reg.ResolveOutcome("/model 2")
+	out, err = reg.ResolveOutcome("/model 1")
 	if err != nil {
-		t.Fatalf("ResolveOutcome /model 2: %v", err)
+		t.Fatalf("ResolveOutcome /model 1: %v", err)
 	}
 	if live.Model != "m-b" || live.ProviderName != "openai" {
 		t.Fatalf("live = (%q, %q), want (m-b, openai)", live.Model, live.ProviderName)
@@ -416,7 +416,7 @@ func TestModelListUsesDiskCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveOutcome /model: %v", err)
 	}
-	for _, want := range []string{"1. cached-a", "2. cached-b"} {
+	for _, want := range []string{"1. cached-b", "2. cached-a"} {
 		if !strings.Contains(out.Message, want) {
 			t.Errorf("message missing %q:\n%s", want, out.Message)
 		}

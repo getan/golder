@@ -831,7 +831,12 @@ func TestModelPickerSelectSwitches(t *testing.T) {
 	if !gm.menu.picking() {
 		t.Fatal("bare /model should open the picker")
 	}
-	gm.menu.moveDown()
+	for i, it := range gm.menu.pick {
+		if it.Value == "m-b" {
+			gm.menu.selected = i
+			break
+		}
+	}
 	got2, _ := gm.submitSlashSelected()
 	gm2 := got2.(Model)
 	if !gm2.menu.picking() || gm2.menu.pickKind != "model-level" {
@@ -860,7 +865,12 @@ func TestModelPickerTwoStageConfirm(t *testing.T) {
 
 	got, _ := m.runSlash("/model")
 	gm := got.(Model)
-	gm.menu.moveDown() // m-b
+	for i, it := range gm.menu.pick {
+		if it.Value == "m-b" {
+			gm.menu.selected = i
+			break
+		}
+	}
 	got2, _ := gm.submitSlashSelected()
 	gm2 := got2.(Model)
 	if gm2.menu.pickMark != "high" {

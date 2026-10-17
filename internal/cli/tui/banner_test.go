@@ -100,7 +100,7 @@ func TestRenderBannerProtocolEffective(t *testing.T) {
 		want     string
 	}{
 		{"opencode-go", "deepseek-v4.1-flash", "openai/resp_api"},
-		{"opencode-go", "glm-4.7", "openai/chat"},
+		{"opencode-go", "mistral-large-latest", "openai/chat"},
 		{"anthropic", "claude-fable-5-1", "anthropic"},
 	}
 	for _, c := range cases {

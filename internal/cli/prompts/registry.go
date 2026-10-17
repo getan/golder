@@ -548,6 +548,10 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			if err != nil {
 				return fmt.Sprintf("model: list unavailable: %v\nswitch directly with /model <id>", err), false
 			}
+			// Index the same order the bare /model list renders (series, newest
+			// first); otherwise "/model 1" would pick from the endpoint's raw
+			// order and could switch to a different model than the row numbered 1.
+			ids = provider.OrderModelIDs(ids)
 			if n < 1 || n > len(ids) {
 				return fmt.Sprintf("model: %d out of range (1-%d)", n, len(ids)), false
 			}

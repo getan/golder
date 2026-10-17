@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// TestOpencodeGoDeclaresMessagesVariant pins the declaration the wire-variant
+// TestOpencodeGoDeclaresMessagesVariant pins the declarations the wire-variant
 // path rests on: opencode-go stays OpenAI-wired by default (nothing changes for
-// a user who does not ask), and declares its Messages endpoint as an extra wire
-// with the auth scheme that endpoint expects — probed live, x-api-key.
+// a user who does not ask), and declares its Messages and Gemini endpoints as
+// extra wires with the auth schemes those endpoints expect.
 func TestOpencodeGoDeclaresMessagesVariant(t *testing.T) {
 	spec, ok := LookupProviderSpec("opencode-go")
 	if !ok {
@@ -17,11 +17,18 @@ func TestOpencodeGoDeclaresMessagesVariant(t *testing.T) {
 	if spec.Protocol != ProtocolOpenAI {
 		t.Errorf("Protocol = %q, want the OpenAI family to stay the default", spec.Protocol)
 	}
-	if len(spec.WireVariants) != 1 {
-		t.Fatalf("WireVariants = %+v, want one declared wire", spec.WireVariants)
+	if len(spec.WireVariants) != 2 {
+		t.Fatalf("WireVariants = %+v, want Messages and Gemini wires", spec.WireVariants)
 	}
-	if v := spec.WireVariants[0]; v.Protocol != ProtocolAnthropic || v.AuthScheme != AuthXAPIKey {
-		t.Errorf("variant = %+v, want {anthropic x-api-key}", v)
+	byProtocol := map[string]WireVariant{}
+	for _, v := range spec.WireVariants {
+		byProtocol[v.Protocol] = v
+	}
+	if v := byProtocol[ProtocolAnthropic]; v.AuthScheme != AuthXAPIKey {
+		t.Errorf("Messages variant = %+v, want x-api-key auth", v)
+	}
+	if v := byProtocol[ProtocolGemini]; v.AuthScheme != AuthBearer || v.BaseURL == "" {
+		t.Errorf("Gemini variant = %+v, want bearer auth and its own base URL", v)
 	}
 }
 

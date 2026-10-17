@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/getan/golder/internal/cli"
@@ -50,12 +51,15 @@ func TestProxyCommandPersistsSelection(t *testing.T) {
 
 func TestProviderSwitchUsesEnvironmentRelayForModelsAndCache(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
-	t.Setenv("GOLDER_HOME", t.TempDir())
 	t.Setenv("GOLDER_PROXY", "")
 	t.Setenv("OPENAI_API_KEY", "test-key")
-	requests := 0
+	// The provider switch resolves a wire for openai; without this the
+	// background probe would ask the relay for /responses as well, racing the
+	// model-list request the test is counting.
+	t.Setenv("GOLDER_WIRE_PROBE", "off")
+	var requests atomic.Int32
 	relay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Error("incorrect relay model request")
 		}
@@ -70,8 +74,8 @@ func TestProviderSwitchUsesEnvironmentRelayForModelsAndCache(t *testing.T) {
 	RegisterLiveCommands(reg, live, creds)
 	reg.ResolveOutcome("/provider openai")
 	ids, err := EnsureModelCatalog(live, creds)
-	if err != nil || len(ids) != 1 || ids[0] != "relay-only-model" || requests != 1 {
-		t.Fatalf("relay discovery failed: ids=%v err=%v requests=%d", ids, err, requests)
+	if err != nil || len(ids) != 1 || ids[0] != "relay-only-model" || requests.Load() != 1 {
+		t.Fatalf("relay discovery failed: ids=%v err=%v requests=%d", ids, err, requests.Load())
 	}
 	key := provider.ModelCatalogCacheKey("openai", relay.URL+"/v1")
 	if cached, fresh := provider.CachedModelCatalog(key); !fresh || len(cached) != 1 {
