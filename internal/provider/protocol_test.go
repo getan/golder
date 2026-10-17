@@ -48,8 +48,8 @@ func TestEffectiveProtocol(t *testing.T) {
 		protocol string
 		want     string
 	}{
-		{"gateway open-weight family stays chat", "opencode-go", "deepseek-v4.1-flash", "", ProtocolOpenAI},
-		{"gateway glm stays chat", "opencode-go", "glm-4.7", "", ProtocolOpenAI},
+		{"gateway deepseek takes its native Responses wire", "opencode-go", "deepseek-v4.1-flash", "", ProtocolOpenAIResponses},
+		{"gateway glm takes its native Responses wire", "opencode-go", "glm-4.7", "", ProtocolOpenAIResponses},
 		{"gateway gpt takes its native Responses wire", "opencode-go", "gpt-5.6-luna", "", ProtocolOpenAIResponses},
 		{"gateway grok takes its native Responses wire", "opencode-go", "grok-4.7", "", ProtocolOpenAIResponses},
 		{"gateway muse takes its native Responses wire", "opencode-go", "muse-spark-1.3", "", ProtocolOpenAIResponses},
@@ -68,7 +68,7 @@ func TestEffectiveProtocol(t *testing.T) {
 		{"declared wire variant allowed", "opencode-go", "claude-haiku-5-5", "anthropic", ProtocolAnthropic},
 		{"gemini selector accepted on the gateway", "opencode-go", "gemini-4-argon-contributor", "gemini", ProtocolGemini},
 		{"undeclared variant rejected", "deepseek", "deepseek-chat", "anthropic", ""},
-		{"renamed alias resolves", "opencode", "glm-4.7", "", ProtocolOpenAI},
+		{"renamed alias resolves to the model's native wire", "opencode", "glm-4.7", "", ProtocolOpenAIResponses},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

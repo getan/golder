@@ -8,8 +8,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
+
+// probedWires caches the answer ProbeWire gave for (provider, model), so the
+// lazy question is asked once per process rather than once per call.
+var probedWires sync.Map
 
 // ProbeWire asks an endpoint which wire it actually serves for a model. It is
 // the answer for the case the static tables cannot describe: a gateway that
@@ -107,31 +112,61 @@ func setProbeAuth(req *http.Request, wire Wire, key string) {
 	}
 }
 
-// wireProbeEnabled reports whether the opt-in probe is on.
-func wireProbeEnabled(env func(string) string) bool {
+// wireProbeDisabled reports whether the lazy probe was switched off.
+func wireProbeDisabled(env func(string) string) bool {
 	if env == nil {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(env("GOLDER_WIRE_PROBE"))) {
-	case "1", "on", "true", "yes":
+	case "0", "off", "false", "no", "disabled":
 		return true
 	}
 	return false
 }
 
-// selectWireWithProbe is SelectWire plus the opt-in probe: when the model's
-// native wire is not among the provider's wires and the probe is enabled, ask
-// the endpoint once which wire it serves.
+// probeKey is the cache key for one (provider, model) answer.
+func probeKey(providerName, model string) string {
+	return providerName + "\x00" + strings.ToLower(strings.TrimSpace(model))
+}
+
+// CachedWire returns the wire ProbeWire confirmed for (provider, model), if the
+// lazy question has already been asked in this process.
+func CachedWire(providerName, model string) (Wire, bool) {
+	if v, ok := probedWires.Load(probeKey(providerName, model)); ok {
+		return v.(Wire), true
+	}
+	return "", false
+}
+
+// selectWireWithProbe is SelectWire plus the lazy probe. The static table picks
+// the model's native wire; a gateway that serves several wires is asked once
+// which one it actually answers for this model, and the answer is cached. Two
+// cases skip the question because it cannot change anything: a provider with a
+// single wire, and a model whose native wire is the provider's own registered
+// wire. GOLDER_WIRE_PROBE=off disables the question for offline runs.
 func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(string) string) Wire {
 	wire := SelectWire(spec, model)
-	if WireNative(spec, model) || !wireProbeEnabled(env) {
+	if !spec.Gateway {
 		return wire
 	}
-	key := ""
-	if len(spec.EnvVars) > 0 && env != nil {
-		key = env(spec.EnvVars[0])
+	if len(ProviderWires(spec)) < 2 {
+		return wire
 	}
-	if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), key, model, 5*time.Second); err == nil {
+	if ModelWire(model) == wireForProtocol(spec.Protocol) {
+		return wire
+	}
+	if wireProbeDisabled(env) {
+		return wire
+	}
+	if cached, ok := CachedWire(spec.Name, model); ok {
+		return cached
+	}
+	apiKey := ""
+	if len(spec.EnvVars) > 0 && env != nil {
+		apiKey = env(spec.EnvVars[0])
+	}
+	if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, model, 5*time.Second); err == nil {
+		probedWires.Store(probeKey(spec.Name, model), probed)
 		return probed
 	}
 	return wire

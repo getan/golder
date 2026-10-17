@@ -88,7 +88,13 @@ func EffectiveProtocol(providerName, model, protocol string) string {
 		}
 		return canonical
 	}
-	if canonical, ok := protocolForWire(SelectWire(spec, model)); ok {
+	// The lazy probe may already have confirmed the endpoint's real wire for
+	// this model; prefer that answer so the banner and the run agree.
+	wire := SelectWire(spec, model)
+	if confirmed, ok := CachedWire(spec.Name, model); ok {
+		wire = confirmed
+	}
+	if canonical, ok := protocolForWire(wire); ok {
 		return canonical
 	}
 	return spec.Protocol

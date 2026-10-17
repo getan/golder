@@ -15,6 +15,10 @@ func TestMain(m *testing.M) {
 		os.Exit(m.Run())
 	}
 	os.Setenv("GOLDER_HOME", dir)
+	// No test may pay for the lazy wire probe: it sends real requests, and the
+	// registry's gateways would reach the network. Tests that exercise the
+	// probe set the variable themselves.
+	os.Setenv("GOLDER_WIRE_PROBE", "off")
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)

@@ -21,11 +21,17 @@ func TestModelWire(t *testing.T) {
 		{"anthropic/claude-opus-5", WireMessages},
 		{"gemini-4-argon-contributor", WireGemini},
 		{"google/gemini-3.8-flash", WireGemini},
-		{"glm-5.3", WireChat},
-		{"deepseek-v4.1-flash", WireChat},
-		{"qwen3.8-max", WireChat},
-		{"kimi-k3", WireChat},
-		{"minimax-m3", WireChat},
+		{"glm-5.3", WireResponses},
+		{"deepseek-v4.1-flash", WireResponses},
+		{"qwen3.8-max", WireResponses},
+		{"kimi-k3", WireResponses},
+		{"minimax-m3", WireResponses},
+		{"longcat-2.0", WireResponses},
+		{"step-5-preview", WireResponses},
+		{"hy3", WireResponses},
+		{"meta/llama-3.3-70b-instruct", WireChat},
+		{"mistral-large-4", WireChat},
+		{"space-bunny", WireChat},
 		{"", WireChat},
 	}
 	for _, c := range cases {
@@ -67,10 +73,11 @@ func TestProviderWires(t *testing.T) {
 	}
 }
 
-// TestSelectWire pins the whole rule end to end, against the gateway's own
-// published table (opencode.ai/docs/zen): GPT/Grok/Muse → responses, Claude →
-// messages, Gemini → v1beta, the open-weight families → chat. A provider that
-// serves only some of them translates the rest onto its registered wire.
+// TestSelectWire pins the static half: the model's native wire when the
+// provider serves it, the provider's registered wire otherwise. The domestic
+// families are Responses-native now, so a gateway that still routes them over
+// Chat is the lazy probe's business (see selectWireWithProbe), not this
+// table's.
 func TestSelectWire(t *testing.T) {
 	spec := func(name string) ProviderSpec {
 		s, ok := LookupProviderSpec(name)
@@ -88,10 +95,11 @@ func TestSelectWire(t *testing.T) {
 		{"opencode-go", "muse-spark-1.3-contributor", WireResponses},
 		{"opencode-go", "claude-haiku-5-5", WireMessages},
 		{"opencode-go", "gemini-4-argon-contributor", WireGemini},
-		{"opencode-go", "glm-5.3", WireChat},
-		{"opencode-go", "deepseek-v4.1-flash", WireChat},
+		{"opencode-go", "glm-5.3", WireResponses},
+		{"opencode-go", "deepseek-v4.1-flash", WireResponses},
 		{"openrouter", "gemini-3.8-flash", WireChat},
 		{"openrouter", "gpt-6-luna", WireResponses},
+		{"openrouter", "deepseek-v4-pro", WireResponses},
 		{"anthropic", "claude-fable-5-1", WireMessages},
 		{"deepseek", "deepseek-chat", WireResponses},
 		{"google", "gemini-3.8-flash", WireChat},

@@ -55,9 +55,11 @@ func wireForProtocol(p string) Wire {
 // — independent of who serves it. It is deliberately a naming heuristic on the
 // model id (the signal opencode itself uses): GPT, Codex, o-series, Grok and
 // Muse are announced on the Responses API; Claude on Messages; Gemini on the
-// Gemini v1beta API; the open-weight families (GLM, Kimi, DeepSeek, Qwen,
-// MiniMax, MiMo, …) were all published as Chat Completions. An unknown id gets
-// Chat, the dialect every OpenAI-compatible server speaks.
+// Gemini v1beta API. The domestic families (DeepSeek, GLM, Kimi, Qwen, MiniMax,
+// MiMo, LongCat, Step, Hy) all publish a Responses endpoint today — DeepSeek
+// first, the rest following — so they are Responses-native too; what a *given
+// gateway* actually serves is settled by the lazy probe, not by guessing here.
+// Anything else gets Chat, the dialect every OpenAI-compatible server speaks.
 func ModelWire(model string) Wire {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -70,6 +72,12 @@ func ModelWire(model string) Wire {
 		return WireGemini
 	case strings.Contains(m, "gpt"), strings.Contains(m, "codex"),
 		strings.Contains(m, "muse"), strings.Contains(m, "grok"):
+		return WireResponses
+	case strings.Contains(m, "deepseek"), strings.Contains(m, "glm"),
+		strings.Contains(m, "kimi"), strings.Contains(m, "qwen"),
+		strings.Contains(m, "minimax"), strings.Contains(m, "mimo"),
+		strings.Contains(m, "longcat"), strings.Contains(m, "step-"),
+		strings.Contains(m, "hy3"), strings.Contains(m, "hy4"):
 		return WireResponses
 	}
 	if len(m) >= 2 && m[0] == 'o' && m[1] >= '0' && m[1] <= '9' {
