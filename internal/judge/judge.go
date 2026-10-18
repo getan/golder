@@ -199,6 +199,11 @@ type GateOpts struct {
 	// RequireSandbox makes an authorized bash call default to OS isolation.
 	// Only an explicit one-call Direct decision can override this requirement.
 	RequireSandbox bool
+	// Enforce is the sandbox's enforce mode: every bash call runs contained, so
+	// the bare envelope (and the network fold that rides it) must not apply.
+	// RequireSandbox is also true in auto; that only says isolation is the
+	// default, not that the envelope cannot choose the host.
+	Enforce bool
 	// Notify, when set, receives one Note per non-trivial verdict (approval,
 	// sandbox routing, denial, read-only block, reviewer failure) so the
 	// driver can show the decision and its rationale. Callbacks run on the
@@ -601,7 +606,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		// every call and keeps the network grant explicit; a contained call
 		// keeps it too.
 		envelopeBare, envelopeWhy := envelopeFor(call, lang)
-		bareNetwork := envelopeBare && network && !v.Network && !opts.RequireSandbox && !v.Failed &&
+		bareNetwork := envelopeBare && network && !v.Network && !opts.Enforce && !v.Failed &&
 			(v.Level == Allow || (v.Level == Confirm && optsIsAuto(state)))
 		// The boundary gate may have asked the network side in the same prompt
 		// it used for a path. Consume that answer before any remembered rule or

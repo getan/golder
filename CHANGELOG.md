@@ -34,10 +34,10 @@ interactive REPL/TUI.
   mode is unchanged.
 - **Command Code stream endurance**: the `commandcode` provider gets its own
   transport — no HTTP/2, no compression, no keep-alive reuse — so a proxy cannot
-  lose the tail of a long stream through a stale pooled connection. With
-  `GOLDER_STREAM_RESUME=1`, a cut after visible text with no tool call is
-  continued from the partial answer (up to two continuations); the default
-  stays off, and a tool-call turn still surfaces the cut.
+  lose the tail of a long stream through a stale pooled connection. A cut after
+  visible text with no tool call is continued from the partial answer by
+  default (up to two continuations; set `GOLDER_STREAM_RESUME=0`/`off` to keep
+  every cut terminal). A tool-call turn still surfaces the cut.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`
@@ -1459,6 +1459,10 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **The bare-run network fold now checks enforce, not RequireSandbox**: auto
+  sets `RequireSandbox` because isolation is the default, but the envelope can
+  still choose the host. A separate `Enforce` flag now gates the fold, so an
+  auto Bare+Allow carries its network while `enforce` still asks.
 - **A refused escape no longer explains itself with the command's safety**: the
   note read `allow → denied …: this command is read-only and reasonable`, because
   it reused the reviewer's rationale for grading the COMMAND while the thing

@@ -47,18 +47,34 @@ func TestResumeContinuesTextAfterACut(t *testing.T) {
 	}
 }
 
-func TestResumeIsOffByDefault(t *testing.T) {
-	t.Setenv("GOLDER_STREAM_RESUME", "")
+func TestResumeDisabledByEnv(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_RESUME", "0")
 	p := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), textEvent("Hello "), cutEvent(io.ErrUnexpectedEOF)},
 		{startEvent(), textEvent("world"), doneEvent("world")},
 	}}
 	events := drainEvents(t, p, context.Background())
 	if got := p.attemptsRun(); got != 1 {
-		t.Fatalf("attempts = %d, want 1 without the opt-in", got)
+		t.Fatalf("attempts = %d, want 1 with the opt-out", got)
 	}
 	if msg := errorMessage(events); !strings.Contains(msg, "stream cut") {
 		t.Fatalf("error = %q, want the stream-cut sentence", msg)
+	}
+}
+
+func TestResumeIsOnByDefault(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_RESUME", "")
+	fastRetryBackoff(t)
+	p := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), textEvent("Hello "), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), textEvent("world"), doneEvent("world")},
+	}}
+	events := drainEvents(t, p, context.Background())
+	if got := p.attemptsRun(); got != 2 {
+		t.Fatalf("attempts = %d, want 2 with the default on", got)
+	}
+	if got := lastText(events); got != "Hello world" {
+		t.Fatalf("last text = %q, want Hello world", got)
 	}
 }
 

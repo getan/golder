@@ -137,6 +137,10 @@ func TestBareNetworkSkipsTheSeparatePrompt(t *testing.T) {
 	var prompts int
 	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
 		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Sandboxed:  func(string) bool { return true },
+		// The real auto chain sets this; it means isolation is the default, not
+		// that the envelope cannot choose the host.
+		RequireSandbox: true,
 		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
 			prompts++
 			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
@@ -148,6 +152,26 @@ func TestBareNetworkSkipsTheSeparatePrompt(t *testing.T) {
 	}
 	if prompts != 0 {
 		t.Fatalf("the bare call asked the network question %d times", prompts)
+	}
+}
+
+// In enforce every bash call is contained, so the bare envelope cannot carry
+// the network bit; the question must still be asked.
+func TestBareNetworkAsksUnderEnforce(t *testing.T) {
+	var prompts int
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier:     &stubClassifier{v: Verdict{Level: Allow}},
+		Sandboxed:      func(string) bool { return true },
+		RequireSandbox: true,
+		Enforce:        true,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			prompts++
+			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+		},
+	})
+	gate(context.Background(), toolCall("bash", `{"command":"curl -fsSL https://example.com","network":"on"}`))
+	if prompts != 1 {
+		t.Fatalf("enforce should ask the network question once, got %d", prompts)
 	}
 }
 

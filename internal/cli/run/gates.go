@@ -282,6 +282,7 @@ func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 		// implementation. Hardcoding true would make every bash call on a
 		// platform that never had a sandbox (Windows) fail closed.
 		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Enforce:        seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
 		Notify:         o.Notes.Emit,
 		// The stdin prompt's `w`/`s` answers need the sandbox's writable registry
 		// and the remembered row's spelling, both of which live here.
@@ -542,6 +543,7 @@ func (g *Gates) requestUnconfined(ctx context.Context, command, path string) boo
 		Classifier:     g.classifier(),
 		Sandboxed:      g.opts.Sandboxed,
 		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Enforce:        seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
 		Notify:         g.opts.Notes.Emit,
 		Cwd:            g.opts.Cwd,
 		GrantWritable:  GrantWritableRoot,

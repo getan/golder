@@ -308,7 +308,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_SKILLS_DIR` | 覆盖技能发现目录（默认 `~/.agents/skills`） |
 | `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
 | `GOLDER_SANDBOX` | 执行隔离：`off`（不启用）/ `auto`（默认，获准的 bash 默认收容；可完整枚举的信封直接跑）/ `enforce`（全部收容，且强制要求 runner） |
-| `GOLDER_STREAM_RESUME` | `1`/`true`/`on`：流在已输出文本且无工具调用时被切断，自动从断点续写（默认关）；`commandcode` 另用禁用 HTTP/2、压缩和连接复用的传输 |
+| `GOLDER_STREAM_RESUME` | `0`/`false`/`off`：关闭文本续写；默认开：流在已输出文本且无工具调用时被切断，自动从断点续写；`commandcode` 另用禁用 HTTP/2、压缩和连接复用的传输 |
 | `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | 追加读取类工具（read/grep/find/ls/view_image）的免询问目录（冒号/逗号分隔），等同 `/boundary readable add`；同时放宽沙箱读白名单 |
 | `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |

@@ -221,6 +221,9 @@ func TestStreamRetryReissuesACutAttempt(t *testing.T) {
 // what the user already read. It must at least say what happened — the reader's
 // bare "unexpected EOF" names nothing.
 func TestStreamRetryKeepsContentAndNamesTheCut(t *testing.T) {
+	// The default-on resume is covered by streamresume_test.go; this test pins
+	// the terminal behavior with the opt-out.
+	t.Setenv("GOLDER_STREAM_RESUME", "0")
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), textEvent("half an answer"), cutEvent(io.ErrUnexpectedEOF)},
 	}}

@@ -55,16 +55,17 @@ var (
 	errResumeExhausted = errors.New("the resumed stream was cut again")
 )
 
-// streamResumeEnabled is the opt-in for continuing a text answer that was cut
-// after it had been shown. It is deliberately off by default: a continuation is
-// a second model call that can repeat or contradict the first, and only the
-// person who reads the transcript can decide that trade is worth it.
+// streamResumeEnabled lets a text answer that was cut after it had been shown
+// continue from the partial text. It is on by default because a lost turn is
+// the more common cost; set it to 0/false/off to keep every cut terminal. A
+// continuation is still bounded to text-only turns (see forward), so a tool
+// call is never replayed.
 func streamResumeEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOLDER_STREAM_RESUME"))) {
-	case "1", "true", "on", "yes":
-		return true
+	case "0", "false", "off", "no":
+		return false
 	}
-	return false
+	return true
 }
 
 // forwardState is what the relay saw, so a cut can be described and (when the
