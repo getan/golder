@@ -1429,6 +1429,13 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Remote control no longer replaces the gate chain**: while a browser was
+  paired, `bridgeBeforeToolCall` returned nil after the browser answer, so the
+  workspace-boundary and permission gates never ran for tools the trust manager
+  could gate. It now uses the trust answer only for the trust question and then
+  runs the boundary → permission chain; calls the trust manager does not gate
+  run the full local chain. A browser may answer "do you trust this folder"; it
+  may not answer "may this read leave the workspace" or "may this command run".
 - **Network approvals can be remembered per host or command**: `webfetch` keys
   on the exact host, `websearch` on the tool (its backend host depends on which
   credential is present), and `bash` on a literal program/subcommand such as

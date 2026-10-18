@@ -169,7 +169,16 @@ func (g *Gates) InstallWith(cfg *runtime.RunConfig, seam agentcore.BeforeToolCal
 // it in its own transport (the REPL's remote-control bridge intercepts confirm
 // requests before they reach the terminal). Drivers that do not wrap should
 // call Install instead, which also wires hooks and the inherited chain.
-func (g *Gates) Chain() agentcore.BeforeToolCallFunc { return g.chain() }
+func (g *Gates) Chain() agentcore.BeforeToolCallFunc { return g.chainWithTrust(true) }
+
+// ChainAfterTrust returns the same boundary → permission chain without the
+// trust gate. A remote-control bridge uses it after the browser answered the
+// trust question itself: the browser replaces the trust prompt, never the
+// boundary or permission gates. Keeping this a named chain (rather than a
+// context flag) makes the bypass impossible to reintroduce by accident.
+func (g *Gates) ChainAfterTrust() agentcore.BeforeToolCallFunc {
+	return g.chainWithTrust(false)
+}
 
 // InstallDriver wires the session's gates AND the resolved hook set onto cfg in
 // one call: the interactive gate chain, the PreToolUse/PostToolUse seams, the
@@ -212,20 +221,27 @@ func (g *Gates) InstallDriver(ctx context.Context, cfg *runtime.RunConfig, set h
 // agentcore.WithAgentOrigin): the dialog says which agent is asking, so the
 // person is not consenting to a call they believe their own conversation made.
 func (g *Gates) chain() agentcore.BeforeToolCallFunc {
+	return g.chainWithTrust(true)
+}
+
+func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 	o := g.opts
 	// One coordinator per chain: a path question that also covers network
 	// records its answer here, and the permission gate consumes it without a
 	// second dialog. It is per-chain rather than package-global so a child run
 	// cannot read a parent call's answer.
 	askCoord := judge.NewAskCoord()
-	trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
-	trustOpts.In, trustOpts.Out = o.In, o.Out
-	trustOpts.Confirm = o.Confirm
-	if o.TrustConfirm != nil {
-		trustOpts.Confirm = o.TrustConfirm
+	var gate agentcore.BeforeToolCallFunc
+	if includeTrust {
+		trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
+		trustOpts.In, trustOpts.Out = o.In, o.Out
+		trustOpts.Confirm = o.Confirm
+		if o.TrustConfirm != nil {
+			trustOpts.Confirm = o.TrustConfirm
+		}
+		trustOpts.OnPrompt = o.OnPrompt
+		gate = trust.Gate(trustOpts)
 	}
-	trustOpts.OnPrompt = o.OnPrompt
-	gate := trust.Gate(trustOpts)
 
 	scopeOpts := judge.BoundaryOpts{
 		WorkspaceRoot: o.Cwd,

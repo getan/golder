@@ -19,9 +19,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/run"
-	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/remotecontrol"
 	"github.com/getan/golder/internal/trust"
 )
@@ -192,21 +190,22 @@ func replSeam(deps *replDeps, out io.Writer, gates *run.Gates) agentcore.BeforeT
 	if deps.remote == nil {
 		return local
 	}
-	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, cli.HostReviewer(deps), local)
+	return bridgeBeforeToolCall(deps.trust, deps.cwd, deps.remote, out, deps.confirmMu, local, gates.ChainAfterTrust())
 }
 
-// bridgeBeforeToolCall wraps the local stdin confirmation seam so that while a
-// browser is connected, side-effect tool-call confirmations are routed to the
-// browser instead of blocking on the local terminal. When no browser is
-// connected it delegates to the local prompt so behavior is unchanged.
+// bridgeBeforeToolCall routes the trust question to the browser while a client
+// is connected, then runs the rest of the gate chain (boundary → permission)
+// locally. It used to return nil after a browser approval, which meant the
+// browser replaced the whole chain: path consent and the permission gate never
+// ran for any tool the browser could answer for. A browser may replace the
+// trust prompt; it must not replace the gates that ask where data comes from or
+// whether the call may run.
 //
-// This mirrors trust.BeforeToolCall's gating (Manager.GatesTool, honoring
-// session trust) but delegates the allow/always decision to the remote client
-// via Bridge.Confirm. A ctx cancellation (e.g. SIGINT) makes Confirm return
-// remote=false, which we treat as a denial so an interrupted run does not
-// silently proceed. Refinements (local-answer race, timeouts) are the hardening
-// node's job (#445).
-func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out io.Writer, mu *sync.Mutex, classifier judge.Classifier, local agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
+// A call the trust manager does not gate still runs the full local chain, so
+// read tools and other non-trust-gated calls keep their boundary and permission
+// decisions. A ctx cancellation (SIGINT) makes Confirm return remote=false,
+// which is a denial, not a silent proceed.
+func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out io.Writer, mu *sync.Mutex, local, afterTrust agentcore.BeforeToolCallFunc) agentcore.BeforeToolCallFunc {
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
 		if !rs.hasClient() || mgr == nil {
 			if local != nil {
@@ -215,33 +214,26 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 			return nil
 		}
 		if !mgr.GatesTool(call.Name, cwd) {
+			if local != nil {
+				return local(ctx, call)
+			}
 			return nil
 		}
-		if mu != nil {
-			mu.Lock()
-			defer mu.Unlock()
-		}
 		if mgr.IsTrusted(cwd) {
+			if afterTrust != nil {
+				return afterTrust(ctx, call)
+			}
 			return nil
 		}
 		summary := trust.ToolCallSummary(call)
-		if classifier != nil {
-			v := classifier.Classify(ctx, call.Name, call.Arguments)
-			switch v.Level {
-			case judge.Deny:
-				reason := "risk judge"
-				if len(v.Reasons) > 0 {
-					reason = v.Reasons[0]
-				}
-				msg := fmt.Sprintf("tool %q blocked by %s", call.Name, reason)
-				content := agentcore.ContentList{agentcore.NewTextContent(msg)}
-				return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
-			case judge.Sandbox, judge.Confirm:
-				summary = fmt.Sprintf("[risk: %s] %s", v.Level, summary)
-			}
+		if mu != nil {
+			mu.Lock()
 		}
 		fmt.Fprintf(out, "\ngolder wants to run %q — approve on the paired device…\n", call.Name)
 		d, remote := rs.bridge.Confirm(ctx, call.Name, summary)
+		if mu != nil {
+			mu.Unlock()
+		}
 		if !remote {
 			// Interrupted / cancelled before the browser answered: deny.
 			return blockToolCall(call, cwd)
@@ -251,6 +243,9 @@ func bridgeBeforeToolCall(mgr *trust.Manager, cwd string, rs *remoteSession, out
 		}
 		if !d.Approve {
 			return blockToolCall(call, cwd)
+		}
+		if afterTrust != nil {
+			return afterTrust(ctx, call)
 		}
 		return nil
 	}

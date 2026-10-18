@@ -46,6 +46,33 @@ func gatesCall() agentcore.AgentToolCall {
 	return agentcore.AgentToolCall{ID: "c1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo hi"}`)}
 }
 
+// ChainAfterTrust is the chain the remote-control bridge uses after the
+// browser answered the trust question. It must skip trust and still run the
+// permission gate; otherwise the browser would replace the whole gate chain.
+func TestChainAfterTrustSkipsOnlyTrust(t *testing.T) {
+	mgr := gatesTrustStore(t)
+	asked := false
+	gates := NewGates(GatesOpts{
+		Trust: mgr,
+		Cwd:   t.TempDir(),
+		Perms: permissions.New(permissions.FullAccess),
+		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+			asked = true
+			return judge.ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gates.ChainAfterTrust()(context.Background(), gatesCall()); dec != nil && dec.Block {
+		t.Fatalf("after-trust chain blocked echo: %+v", dec)
+	}
+	if asked {
+		t.Fatal("ChainAfterTrust asked the trust question again")
+	}
+	_ = gates.Chain()(context.Background(), gatesCall())
+	if !asked {
+		t.Fatal("the full chain should ask trust in an untrusted directory")
+	}
+}
+
 // TestGatesAskTrustBeforeAnythingElse pins the composition order: in an
 // untrusted directory the trust question is settled first, so a blocked trust
 // answer is what the model sees — not a permission verdict or a static-floor
