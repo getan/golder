@@ -90,6 +90,22 @@ func TestDenialExplanationNamesTheRealBlocker(t *testing.T) {
 	}
 }
 
+// A Chinese justification has no spaces between clauses, so "~/.ssh，避免…"
+// used to survive as one token: a path that does not exist and that the
+// credential check could not recognise (its first component was ".ssh，…").
+// The dialog then offered to grant it. Both halves are pinned here.
+func TestPathTokensSplitChineseProse(t *testing.T) {
+	got := pathTokens("用工作区内的 known_hosts 代替 ~/.ssh，避免读取凭据目录，只需网络。")
+	if len(got) != 1 || got[0] != "~/.ssh" {
+		t.Fatalf("tokens = %q, want exactly ~/.ssh", got)
+	}
+	// And the credential check refuses a token that starts with a secret
+	// directory even if a scanner produced it with trailing junk.
+	if _, bad := SecretPathReason("~/.ssh，避免读取凭据目录"); !bad {
+		t.Error("a token that begins with .ssh must be treated as secret material")
+	}
+}
+
 // TestPlausibleWritableRootRefusesOnlyTheRootsThatAreNotChoices: "/" and "//"
 // are never grants, but a root that does not exist yet is a normal target — a
 // build directory, a volume that is not mounted this minute — and refusing

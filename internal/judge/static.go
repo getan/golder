@@ -482,6 +482,17 @@ func secretPath(p string) (string, bool) {
 	if head == ".ssh" || head == ".gnupg" {
 		return "write into live secret directory (" + head + ")", true
 	}
+	// A lexical scan can hand over a token that swallowed prose punctuation
+	// ("~/.ssh，避免…" from a Chinese sentence, before the CJK delimiters were
+	// added). Treat a segment that STARTS with a secret directory name as that
+	// directory: the tolerant reading refuses a path that only looks unrelated
+	// because of one trailing character, and a real ".ssh-backup" being
+	// refused alongside it is the fail-closed direction.
+	for _, secret := range []string{".ssh", ".gnupg"} {
+		if strings.HasPrefix(head, secret) {
+			return "write into live secret directory (" + secret + ")", true
+		}
+	}
 	return "", false
 }
 

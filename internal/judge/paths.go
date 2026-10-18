@@ -438,10 +438,23 @@ var writeVerbs = map[string]bool{
 // It is deliberately lexical: quotes, =, ':' and shell punctuation break
 // tokens, and a surviving token must start with "/" or "~/". Commands are
 // free-form, so a missed path only hides the row (fail closed), never grants.
+//
+// CJK punctuation is in the delimiter set on purpose. Chinese prose carries no
+// spaces between clauses, so a justification reading "…代替 ~/.ssh，避免读取
+// 凭据目录…" used to yield the single token "~/.ssh，避免读取凭据目录…" — a
+// nonexistent path that is not recognised as credential material either (its
+// first component is ".ssh，…", not ".ssh"), and a dialog offered to grant it.
 func pathTokens(s string) []string {
 	fields := strings.FieldsFunc(s, func(r rune) bool {
 		switch r {
 		case ' ', '\t', '\n', '\r', '\'', '"', '`', '=', ':', '(', ')', ',', ';':
+			return true
+		}
+		// Full-width punctuation (and the ideographic space): the same break in
+		// prose written in Chinese, which has no ASCII commas to split on.
+		switch r {
+		case '，', '。', '；', '：', '、', '！', '？', '（', '）', '【', '】',
+			'“', '”', '‘', '’', '《', '》', '\u3000':
 			return true
 		}
 		return false
@@ -449,7 +462,7 @@ func pathTokens(s string) []string {
 	var out []string
 	for _, f := range fields {
 		f = strings.TrimLeft(f, ">|<")
-		f = strings.TrimRight(f, ".,;:)]}")
+		f = strings.TrimRight(f, ".,;:)]}，。；：、！？）】”’")
 		if strings.HasPrefix(f, "~/") || (strings.HasPrefix(f, "/") && f != "/") {
 			// A shell metacharacter means this token is an expression, not a
 			// literal path — the sed backreference "\1" in a s#…#…# command
