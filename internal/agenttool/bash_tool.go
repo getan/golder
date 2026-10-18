@@ -596,6 +596,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// profile, so the second run happens INSIDE the sandbox. A refusal, or a
 	// second denial, leaves the original failure in place. Escalation requests
 	// are skipped: the escape flow already had its say about that path.
+	denialPath := ""
 	if sandboxDenied && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
 		!strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
 		// The denial's own message is the ground truth about which path was
@@ -606,10 +607,20 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		if p == "" {
 			p = judge.GrantablePathFromText(a.Command, a.Justification, t.Dir)
 		}
+		denialPath = p
 		if p != "" && t.deniedAsked.First(p) {
 			if t.OnSandboxDenied(ctx, p, a.Command) {
 				return t.Execute(withSandboxRetry(ctx), id, args, onUpdate)
 			}
+		}
+	}
+	if sandboxDenied && denialPath == "" {
+		// Every path the OS named was system-protected or credential material.
+		// Offering a one-click path grant would be a lie: SIP will still refuse
+		// /private/var/select/sh, and ~/.ssh/known_hosts is not something this
+		// dialog may hand over. Say what the user can actually do.
+		if why := judge.DenialExplanation(out, t.Dir); why != "" {
+			hint += "\n[sandboxed: " + why + "]" + sandboxFalseNegativeNote
 		}
 	}
 

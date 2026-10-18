@@ -1429,6 +1429,14 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A SIP error is no longer offered as a sandbox path grant**: macOS reports
+  protected system files such as `/private/var/select/sh` as `Operation not
+  permitted` even outside the sandbox. The re-admission dialog used to take that
+  first path and offer to allow it, while the real blocker (`~/.ssh/known_hosts`
+  in the reported push) was never named. `PathsFromDenial` now skips
+  system-protected and credential paths; when no grantable path remains, the
+  tool explains what was refused and points at a one-call unisolated approval or
+  a known_hosts copy outside `~/.ssh`, instead of a misleading grant.
 - **Remote control no longer replaces the gate chain**: while a browser was
   paired, `bridgeBeforeToolCall` returned nil after the browser answer, so the
   workspace-boundary and permission gates never ran for tools the trust manager

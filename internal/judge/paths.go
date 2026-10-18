@@ -68,12 +68,85 @@ func PathsFromDenial(output, cwd string) string {
 			if err != nil {
 				continue
 			}
+			if _, bad := CredentialPathReason(p); bad {
+				// SSH keys, known_hosts and shell rc files are credential
+				// material. A path re-admission is not the right answer for
+				// them (and the static floor would refuse it anyway); skip so a
+				// later, grantable path can still be offered.
+				continue
+			}
 			if PlausibleWritableRoot(p, cwd) {
 				return p
 			}
 		}
 	}
 	return ""
+}
+
+// DenialExplanation explains a sandbox denial that has no grantable path. It is
+// the other half of PathsFromDenial: when every path the OS named is system
+// protected or credential material, saying so is more useful than silently
+// falling back to the command text and offering a path that cannot fix it.
+//
+// A protected system path is often not a sandbox decision at all: macOS SIP
+// reports /private/var/select/sh as "Operation not permitted" even outside the
+// sandbox. A credential path is one the static floor deliberately refuses to
+// hand over by a keystroke. Both need a one-call unisolated approval, not a
+// path grant.
+func DenialExplanation(output, cwd string) string {
+	credential, system := "", ""
+	for _, line := range strings.Split(output, "\n") {
+		if !LooksSandboxDenied(line) {
+			continue
+		}
+		for _, raw := range denialLinePaths(line) {
+			p, err := permissions.NormalizePath(raw)
+			if err != nil {
+				continue
+			}
+			if _, bad := CredentialPathReason(p); bad {
+				if credential == "" {
+					credential = p
+				}
+				continue
+			}
+			if systemProtectedPath(p) {
+				if system == "" {
+					system = p
+				}
+				continue
+			}
+			if PlausibleWritableRoot(p, cwd) {
+				// There is a grantable path; the normal re-admission dialog is
+				// the right explanation, so this function has nothing to add.
+				return ""
+			}
+		}
+	}
+	switch {
+	case credential != "":
+		return "the sandbox denied " + credential + ", which is credential material and cannot be granted by a path re-admission. If the command needs it, ask the user to approve one unisolated run of this exact command, or point the program at a copy of that file outside ~/.ssh"
+	case system != "":
+		return "the only path the OS named is the system-protected " + system + "; a sandbox path grant would not fix it (macOS reports SIP-protected paths as Operation not permitted). If the command is legitimate, the user can approve one unisolated run"
+	default:
+		return ""
+	}
+}
+
+// systemProtectedPath reports whether p is in a system-owned tree whose
+// "Operation not permitted" is not a sandbox decision. It is intentionally
+// lexical and short: the point is to stop offering a grant for an OS path, not
+// to enumerate every protected file.
+func systemProtectedPath(p string) bool {
+	for _, root := range []string{
+		"/private/var", "/private/etc", "/System", "/Library", "/usr",
+		"/bin", "/sbin", "/lib", "/lib64", "/opt", "/dev", "/proc",
+	} {
+		if permissions.Inside(root, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // denialLinePaths pulls path candidates out of one denial line. The commonest
@@ -424,6 +497,10 @@ func PlausibleWritableRoot(p, cwd string) bool {
 	for _, dir := range []string{
 		"/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt", "/etc",
 		"/System", "/Library", "/Applications", "/dev", "/proc", "/var",
+		// macOS's canonical spellings: /var and /etc are symlinks into
+		// /private, so a denial reports the /private form. Without these the
+		// dialog offered a grant for SIP-protected /private/var/select/sh.
+		"/private/var", "/private/etc",
 	} {
 		if inside(dir) {
 			return false

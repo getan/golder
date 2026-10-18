@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/golderhome"
@@ -51,6 +52,42 @@ func TestPathsFromDenialReadsTheRefusedPath(t *testing.T) {
 	if got := PathsFromDenial("cat: "+inside+": Permission denied\n", cwd); got != "" {
 		t.Errorf("in-workspace denial = %q, want no path", got)
 	}
+	// macOS reports SIP-protected system files as "Operation not permitted".
+	// That is not a sandbox path a grant can fix, and it must never become the
+	// dialog's subject.
+	if got := PathsFromDenial("ssh: Error opening /private/var/select/sh: Operation not permitted\n", cwd); got != "" {
+		t.Errorf("SIP-protected system path = %q, want no path", got)
+	}
+	// SSH host keys are credential material: the static floor refuses them, so
+	// a one-click re-admission is not a valid answer either.
+	knownHosts := filepath.Join(home, ".ssh", "known_hosts")
+	if got := PathsFromDenial("hostkeys: "+knownHosts+": Operation not permitted\n", cwd); got != "" {
+		t.Errorf("credential path = %q, want no path", got)
+	}
+}
+
+// TestDenialExplanationNamesTheRealBlocker: when no path is grantable, the
+// message must say why and point at the one-call unisolated approval instead of
+// offering a misleading path.
+func TestDenialExplanationNamesTheRealBlocker(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	cwd := t.TempDir()
+	knownHosts := filepath.Join(home, ".ssh", "known_hosts")
+	out := "ssh: Error opening /private/var/select/sh: Operation not permitted\n" +
+		"hostkeys: " + knownHosts + ": Operation not permitted\n"
+	got := DenialExplanation(out, cwd)
+	for _, want := range []string{"known_hosts", "credential material", "unisolated run"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("explanation = %q, want %q", got, want)
+		}
+	}
+	systemOnly := "ssh: Error opening /private/var/select/sh: Operation not permitted\n"
+	if got := DenialExplanation(systemOnly, cwd); !strings.Contains(got, "SIP") || !strings.Contains(got, "unisolated") {
+		t.Errorf("system-only explanation = %q, want the SIP diagnosis and the unisolated approval", got)
+	}
 }
 
 // TestPlausibleWritableRootRefusesOnlyTheRootsThatAreNotChoices: "/" and "//"
@@ -69,6 +106,9 @@ func TestPlausibleWritableRootRefusesOnlyTheRootsThatAreNotChoices(t *testing.T)
 	}
 	if !PlausibleWritableRoot("/nonexistent-top-level-xyz/build", cwd) {
 		t.Error("a path under a not-yet-existing root is still a grant to offer")
+	}
+	if PlausibleWritableRoot("/private/var/select/sh", cwd) {
+		t.Error("SIP-protected macOS system path must never be offered as a grant")
 	}
 	if fi, err := os.Stat("/Users"); err == nil && fi.IsDir() {
 		if !PlausibleWritableRoot("/Users", cwd) {
