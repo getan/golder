@@ -1067,6 +1067,146 @@ func RegisterBoundaryCommand(reg *runtime.SlashRegistry, lang func() string) {
 	})
 }
 
+// RegisterNetworkCommand installs /network: the remembered host, command and
+// tool answers used by the network gate. It is deliberately separate from
+// /boundary (paths) and /permissions (the mode): a network rule answers a
+// different question from either, and mixing them is how a person loses track
+// of what they have already allowed.
+func RegisterNetworkCommand(reg *runtime.SlashRegistry, lang func() string) {
+	if reg == nil {
+		return
+	}
+	pickLang := func() string {
+		if lang != nil && lang() == "zh" {
+			return "zh"
+		}
+		return "en"
+	}
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name:         "network",
+		Category:     runtime.CategoryPermissions,
+		Description:  "show or remove remembered network rules",
+		ArgumentHint: "[list | rm [host|command|tool] <key>]",
+		Action: func(args string) string {
+			l := pickLang()
+			arg := strings.TrimSpace(args)
+			switch {
+			case arg == "", arg == "list":
+				return runNetworkList(l)
+			case arg == "rm" || strings.HasPrefix(arg, "rm "):
+				return runNetworkRemove(strings.TrimSpace(strings.TrimPrefix(arg, "rm")), l)
+			}
+			return usageLine(reg, "network", l)
+		},
+	})
+}
+
+func runNetworkList(l string) string {
+	store := grants.ProcessNetwork()
+	if store == nil {
+		if l == "zh" {
+			return "网络授权表尚未打开。"
+		}
+		return "the network grant table is not open."
+	}
+	entries := store.Entries()
+	rows := entries.All()
+	if len(rows) == 0 {
+		if l == "zh" {
+			return "没有记住的网络规则。下一次批准时会提供“仅本次 / 本会话 / 记住”选项。"
+		}
+		return "no remembered network rules. The next approval offers this call / this session / remembered."
+	}
+	var b strings.Builder
+	if l == "zh" {
+		b.WriteString("记住的网络规则：\n")
+	} else {
+		b.WriteString("remembered network rules:\n")
+	}
+	for _, g := range rows {
+		scope := string(g.Kind) + " " + g.Key
+		if g.Tool != "" {
+			scope += " (" + g.Tool + ")"
+		}
+		life := string(g.Lifetime)
+		if g.Lifetime == grants.Session {
+			if l == "zh" {
+				life = "本会话"
+			} else {
+				life = "this session"
+			}
+		}
+		if g.Allow {
+			b.WriteString("  allow  " + scope + "  [" + life + "]\n")
+		} else {
+			b.WriteString("  deny   " + scope + "  [" + life + "]\n")
+		}
+	}
+	if l == "zh" {
+		b.WriteString("删除：/network rm <host|command|tool> <key>")
+	} else {
+		b.WriteString("remove: /network rm <host|command|tool> <key>")
+	}
+	return b.String()
+}
+
+func runNetworkRemove(arg, l string) string {
+	fields := strings.Fields(arg)
+	if len(fields) == 0 {
+		return usageLineText(l, "/network rm [host|command|tool] <key>")
+	}
+	kind := grants.NetworkKind("")
+	if len(fields) >= 2 {
+		switch fields[0] {
+		case "host":
+			kind = grants.NetworkHost
+		case "command":
+			kind = grants.NetworkCommand
+		case "tool":
+			kind = grants.NetworkTool
+		}
+	}
+	key := arg
+	if kind != "" {
+		key = strings.TrimSpace(strings.TrimPrefix(arg, fields[0]))
+	}
+	if kind != "" {
+		if grants.RemoveNetwork(kind, key) {
+			return removedNetworkText(kind, key, l)
+		}
+		return notFoundNetworkText(key, l)
+	}
+	for _, k := range []grants.NetworkKind{grants.NetworkHost, grants.NetworkCommand, grants.NetworkTool} {
+		if grants.RemoveNetwork(k, key) {
+			return removedNetworkText(k, key, l)
+		}
+	}
+	return notFoundNetworkText(key, l)
+}
+
+func removedNetworkText(kind grants.NetworkKind, key, l string) string {
+	if l == "zh" {
+		return "已删除网络规则：" + string(kind) + " " + key
+	}
+	return "removed network rule: " + string(kind) + " " + key
+}
+
+func notFoundNetworkText(key, l string) string {
+	if l == "zh" {
+		return "没有找到网络规则：" + key + "（用 /network list 查看）"
+	}
+	return "no network rule matched " + key + " (see /network list)"
+}
+
+// usageLineText is the small text-only usage line for a command that is not
+// registered in a test's registry.
+func usageLineText(l, line string) string {
+	if l == "zh" {
+		return "用法：" + line
+	}
+	return "usage: " + line
+}
+
 // runPermissionsList renders every permission in force, not just the ones that
 // apply to the current directory: the approval mode, the sandbox writable roots,
 // and the readable roots outside the workspace, each with the file it came from

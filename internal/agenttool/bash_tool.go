@@ -161,7 +161,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 	}
 	if strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated) &&
 		!agentcore.SandboxRequestedFromContext(ctx) {
-		return false, "bash: running outside the sandbox requires explicit approval; failing closed"
+		return false, "bash: running outside the sandbox requires explicit approval; the command was not run"
 	}
 	if t.Sandbox == nil {
 		if t.RequireSandbox {
@@ -188,7 +188,7 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 		return argv, nil, "", true, false
 	}
 	if t.Sandbox == nil {
-		return nil, nil, "bash: no OS sandbox runner available; failing closed", false, false
+		return nil, nil, "bash: no OS sandbox runner is available; the command was not run. Install a platform sandbox, use full-access, or approve an explicit one-call escape", false, false
 	}
 	policy := seatbelt.CallPolicy{Network: agentcore.NetworkGrantedFromContext(ctx)}
 	seatbelt.RefusedPaths(&policy)
@@ -197,7 +197,7 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 	}
 	sa, cl, err := t.Sandbox.SandboxCall(argv, t.Dir, policy)
 	if err != nil {
-		return nil, nil, fmt.Sprintf("bash: sandbox setup failed (%v); failing closed", err), false, false
+		return nil, nil, fmt.Sprintf("bash: the sandbox could not be created (%v); the command was not run. Check the platform sandbox, or approve an explicit one-call escape", err), false, false
 	}
 	return sa, cl, "", true, true
 }
@@ -477,7 +477,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	if a.Network == "on" && (t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess) &&
 		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) {
-		return errorResult("bash: network access was requested but not authorized; failing closed"), nil
+		return errorResult("bash: network access was requested but was not authorized; the command was not run. Ask for a network approval, or keep the command local"), nil
 	}
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)

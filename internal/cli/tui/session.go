@@ -425,6 +425,9 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	prompts.RegisterBoundaryCommand(s.slash, func() string {
 		return s.lang()
 	})
+	prompts.RegisterNetworkCommand(s.slash, func() string {
+		return s.lang()
+	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
 	// The multiplexer around this pane learns which conversation it holds

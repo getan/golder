@@ -66,7 +66,11 @@ func (s *runSession) trustConfirm(rs *remoteSession) func(context.Context, judge
 			if remote {
 				return judge.ApprovalAnswer{Approve: d.Approve, Always: d.Always, Answered: true}
 			}
-			return judge.ApprovalAnswer{Answered: true}
+			// The browser could not deliver the question (the client vanished
+			// or the run was interrupted). That is "nobody answered", not a
+			// refusal: recording it as a denial would silence the next question
+			// for the same tool and shape.
+			return judge.ApprovalAnswer{}
 		}
 		return s.confirmApproval(ctx, req)
 	}

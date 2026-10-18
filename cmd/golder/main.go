@@ -321,6 +321,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
 		}
 	}
+	// Remembered network answers live in their own file: a host or command is
+	// not a path, and keeping the two apart is what lets an older binary read
+	// grants.json without dropping the network rules it does not understand.
+	if warnings, err := grants.OpenNetwork(os.Getenv); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
+	} else {
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
+		}
+	}
 	// After the table is open: the environment's read grants are rows in it.
 	applyReadableRootsFromEnv()
 	// A bare provider name ("zai", "deepseek") means that provider's default

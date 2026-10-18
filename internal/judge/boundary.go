@@ -109,6 +109,11 @@ type BoundaryOpts struct {
 	// GateOpts.OnPrompt: it is how a driver tells the terminal around it that
 	// this pane waits for a human (internal/hostcompat).
 	OnPrompt func(question string) func()
+	// AskCoord carries this prompt's network answer to the permission gate when
+	// the same call needs both a path decision and a network grant. A nil
+	// coordinator keeps the two gates asking separately, which is the old
+	// behavior and the safe fallback for drivers that do not wire it.
+	AskCoord *AskCoord
 }
 
 // promptNote is BoundaryOpts' half of GateOpts.promptNote.
@@ -237,12 +242,25 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			Authorization: "outside the workspace",
 			Rationale:     target + " is outside the workspace",
 		}
+		if NetworkRequested(call.Name, call.Arguments) {
+			req.NetworkRequest = true
+			if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
+				req.NetworkKey = key
+				req.NetworkRememberable = true
+			}
+		}
 		var ans ApprovalAnswer
 		switch {
 		case interactive:
-			ans = promptBoundary(ctx, opts, target, candidate, writing)
+			ans = promptBoundary(ctx, opts, target, candidate, writing, req.NetworkRequest, req.NetworkKey, req.NetworkRememberable)
 		case opts.Confirm != nil:
 			ans = opts.Confirm(ctx, req)
+		}
+		if req.NetworkRequest && opts.AskCoord != nil && ans.Answered && ans.Approve {
+			// The permission gate would otherwise ask the network side again.
+			// Carry the answer only after the path side approved: a denied path
+			// already ends the call here.
+			opts.AskCoord.Put(call.ID, ans)
 		}
 		if !ans.Answered || !ans.Approve {
 			// The two failures are told apart in the KIND, not just the wording:
@@ -517,7 +535,7 @@ func insideAnyRoot(roots []string, target string) bool {
 // promptBoundary asks on stdin (interactive drivers only). The lock is held
 // across the prompt so a parallel batch cannot interleave two questions, the
 // same contract promptRisk follows.
-func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate string, writing bool) ApprovalAnswer {
+func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate string, writing bool, networkRequest bool, networkKey string, networkRememberable bool) ApprovalAnswer {
 	// The pane is about to wait for the person: say so before the prompt starts,
 	// and say it is over when the answer lands, however this prompt travels.
 	verb, gerund := "read", "reading"
@@ -575,15 +593,17 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 	if !ok {
 		return ApprovalAnswer{}
 	}
+	ans := ApprovalAnswer{Answered: true}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return ApprovalAnswer{Approve: true, Answered: true}
+		ans.Approve = true
 	case "a", "all":
 		if candidate != "" {
 			if writing {
-				return ApprovalAnswer{Approve: true, WriteRoot: candidate, Answered: true}
+				ans.Approve, ans.WriteRoot = true, candidate
+			} else {
+				ans.Approve, ans.ReadRoot = true, candidate
 			}
-			return ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
 		}
 	case "s", "save":
 		if candidate != "" && writing && opts.GrantWritable != nil {
@@ -591,20 +611,48 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 			// means one registration: the sandbox's writable root and the table's
 			// row are written together or not at all. This answer only says which
 			// directory and which lifetime; the gate reports what happened.
-			return ApprovalAnswer{Approve: true, WriteRoot: candidate, Answered: true, Persisted: true}
+			ans.Approve, ans.WriteRoot, ans.Persisted = true, candidate, true
 		}
 		if candidate != "" && !writing && opts.Persist != nil {
 			made, why := opts.Persist(candidate)
-			ans := ApprovalAnswer{Approve: true, ReadRoot: candidate, Answered: true}
+			ans.Approve, ans.ReadRoot = true, candidate
 			if made {
 				ans.Persisted = true
 			} else if why != "" {
 				fmt.Fprintf(out, "  %s\n", why)
 			}
-			return ans
 		}
 	}
-	return ApprovalAnswer{Answered: true}
+	if !ans.Approve || !networkRequest {
+		return ans
+	}
+	// The path is settled; the same popup can now ask the network side. Asking
+	// here rather than letting the permission gate open a second prompt is the
+	// whole point of the combined request.
+	if networkKey != "" && networkRememberable {
+		fmt.Fprintf(out, "Network access: [y] this call only   [a] this session for %s   [s] remember %s   [N] deny\n",
+			networkKey, networkKey)
+	} else {
+		fmt.Fprint(out, "Network access: [y] this call only   [N] deny\n")
+	}
+	fmt.Fprint(out, "Network choice: ")
+	nline, nok := readLineOrCancel(ctx, opts.In)
+	if !nok {
+		return ApprovalAnswer{Answered: true}
+	}
+	switch strings.ToLower(strings.TrimSpace(nline)) {
+	case "y", "yes":
+		ans.Network = true
+	case "a", "all":
+		if networkKey != "" && networkRememberable {
+			ans.Network, ans.NetworkSession = true, true
+		}
+	case "s", "save":
+		if networkKey != "" && networkRememberable {
+			ans.Network, ans.NetworkRemember = true, true
+		}
+	}
+	return ans
 }
 
 // blockBoundary refuses a read outside the workspace with guidance the model

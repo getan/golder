@@ -165,7 +165,12 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 		return v
 	}
 	if c.Inner == nil {
-		return Verdict{Level: Allow, Source: "static", Reasons: []string{"no grader configured"}}
+		// A chain with no inner grader cannot review anything. It used to
+		// answer Allow, which made a mis-wired gate silently permissive; a
+		// Failed verdict keeps the same "never guess" contract as every other
+		// reviewer failure.
+		return Verdict{Level: Confirm, Source: "static", Failed: true,
+			Reasons: []string{"no reviewer configured"}}
 	}
 	return c.Inner.Classify(ctx, tool, args)
 }
@@ -230,6 +235,10 @@ type GateOpts struct {
 	// run goroutine, outside the prompt mutex, and must not block: it is the
 	// driver's own transport, not part of the decision.
 	OnPrompt func(question string) func()
+	// AskCoord is the boundary gate's half of a combined prompt: it carries the
+	// path prompt's network answer so this gate does not ask the same call's
+	// network question a second time. Nil means no combined prompt is in use.
+	AskCoord *AskCoord
 }
 
 // promptNote announces a prompt about to be shown and returns the function
@@ -312,6 +321,16 @@ const (
 // reviewer's verdict, so the decision is informed rather than a bare yes/no.
 type ApprovalRequest struct {
 	Kind ApprovalKind
+	// NetworkRequest marks a prompt whose network side is also being decided.
+	// It is set only when the same call asks for a path decision and a network
+	// grant, so the dialog can show both groups instead of interrupting twice.
+	NetworkRequest bool
+	// NetworkKey names the host/command a remembered answer would cover. Empty
+	// means the decision is for this call only (an unsafe or unparseable key).
+	NetworkKey string
+	// NetworkRememberable reports that NetworkKey may be written to the managed
+	// store; false still offers the one-call and session rows.
+	NetworkRememberable bool
 	// Mode is the approval mode in force for this call (auto, ask, read-only,
 	// full-access). It is the answer to the reader's real question — "does a
 	// human have to answer this?" — which is why every surface prints it: the
@@ -364,6 +383,14 @@ type ApprovalRequest struct {
 
 // ApprovalAnswer is the user's decision.
 type ApprovalAnswer struct {
+	// Network, with Approve, grants this call outbound access. A combined
+	// prompt sets it explicitly; a network-only ApprovalNetwork answer keeps
+	// deciding it by Kind so older drivers are unaffected.
+	Network bool
+	// NetworkSession and NetworkRemember carry the lifetime the person chose
+	// for a network answer. Both false with Network true means this call only.
+	NetworkSession  bool
+	NetworkRemember bool
 	// Approve runs the call. False blocks it (the model is told it was
 	// denied and can propose something else).
 	Approve bool
@@ -549,6 +576,62 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 
 		v := classifyForGate(ctx, opts, call)
 		network := NetworkRequested(call.Name, call.Arguments)
+		// The boundary gate may have asked the network side in the same prompt
+		// it used for a path. Consume that answer before any remembered rule or
+		// second dialog: a person's explicit "no" outranks a standing grant, and
+		// an explicit "yes" must not be asked again.
+		if network && opts.AskCoord != nil {
+			if ans, ok := opts.AskCoord.Take(call.ID); ok {
+				if !ans.Network {
+					notify(Note{
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+						Summary: riskSummary(call),
+						Rationale: localized(lang,
+							"同一次确认中，网络访问被拒绝",
+							"network access was declined in the same prompt"),
+					})
+					return blockCall(call, v, "network access was declined in the same prompt as the path decision; propose a local alternative or ask for a new prompt")
+				}
+				v.Network = true
+				recordNetworkAnswer(call, riskAnswer{
+					network:         true,
+					networkSession:  ans.NetworkSession,
+					networkRemember: ans.NetworkRemember,
+				}, "combined path/network dialog")
+			}
+		}
+		// A standing answer may settle the network side before any prompt. It
+		// only ever sets the network bit: the risk tier and a reviewer failure
+		// still decide whether the call itself may run, so a remembered "yes,
+		// github.com" cannot turn a Deny into an Allow.
+		if network {
+			if remembered, ok := NetworkRemembered(call.Name, call.Arguments); ok && !v.Failed {
+				switch remembered.Decision {
+				case grants.NetworkDenied:
+					if v.Level != Deny {
+						notify(Note{
+							Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+							Summary: riskSummary(call),
+							Rationale: localized(lang,
+								"已记住的网络规则拒绝了这次访问",
+								"a remembered network rule refuses this access"),
+						})
+						return blockCall(call, v, "the remembered network rule refuses this host or command; run /network rm to forget it")
+					}
+				case grants.NetworkAllowed:
+					if v.Level != Deny {
+						v.Network = true
+						notify(Note{
+							Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+							Summary: riskSummary(call),
+							Rationale: localized(lang,
+								"已记住的网络规则允许本次访问："+remembered.By.Key,
+								"a remembered network rule allows this access: "+remembered.By.Key),
+						})
+					}
+				}
+			}
+		}
 		// Do not offer a "network inside the sandbox" answer if the process
 		// cannot create that sandbox. The user can instead explicitly authorize
 		// a direct one-call run; an unanswered dialog still fails closed.
@@ -561,7 +644,25 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if opts.RequireSandbox && strings.EqualFold(call.Name, "bash") && !sandboxable(opts, call.Name) {
 				kind = ApprovalNoSandbox
 			}
-			return ask(ctx, call, v, kind)
+			if opts.Confirm != nil {
+				return ask(ctx, call, v, kind)
+			}
+			// The REPL has stdin but no Confirm callback. Before this, a network
+			// request there could only be blocked: the person was never shown
+			// the one question that would let it run. Ask on stdin and carry the
+			// answer back as the same decision the dialog would produce.
+			if interactive {
+				a := promptRisk(ctx, opts, mode.String(), call, v, kind)
+				if !a.allow {
+					return blockCall(call, v, "network access was not authorized; the call did not run"), true
+				}
+				recordNetworkAnswer(call, a, "network prompt")
+				if kind == ApprovalNoSandbox {
+					return &agentcore.BeforeToolCallDecision{Direct: true}, true
+				}
+				return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: true}, true
+			}
+			return nil, false
 		}
 		grant := func(sandbox bool) *agentcore.BeforeToolCallDecision {
 			return &agentcore.BeforeToolCallDecision{Sandbox: sandbox, Network: network && v.Network}
@@ -584,7 +685,12 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			req.Origin = agentcore.OriginFromContext(ctx)
 			done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
 			defer done()
-			ans := opts.Confirm(ctx, req)
+			var ans ApprovalAnswer
+			if opts.Confirm != nil {
+				ans = opts.Confirm(ctx, req)
+			} else {
+				ans = AskReAdmit(ctx, opts.In, opts.Out, opts.Mu, root, riskSummary(call), lang)
+			}
 			if !ans.Answered || !ans.Approve {
 				return nil
 			}
@@ -646,7 +752,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// fail on the very path) and one that cannot (which would
 				// otherwise just stop). Asked once per path per run: a refusal
 				// must not become a nag, and it changes nothing below.
-				if deniedPath != "" && opts.Confirm != nil && readmitAsked.First(deniedPath) {
+				if deniedPath != "" && (opts.Confirm != nil || interactive) && readmitAsked.First(deniedPath) {
 					if dec := readmitPath(deniedPath); dec != nil {
 						return dec
 					}
@@ -686,7 +792,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					notify(noteFor(call, v, NoteSandboxed, lang))
 					return grant(true)
 				}
-				return blockCall(call, v, "sandbox escape was not approved; failing closed")
+				return blockCall(call, v, "the sandbox escape was not approved; the call did not run. Keep the command inside the sandbox, or ask for an explicit one-call escape")
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalEscalation); ok {
 				return dec
@@ -695,11 +801,11 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return grant(true)
 			}
-			return blockCall(call, v, "running outside the sandbox was not authorized; failing closed"+escapeFixGuidance(deniedPath))
+			return blockCall(call, v, "running outside the sandbox was not authorized and no one answered; the call did not run"+escapeFixGuidance(deniedPath))
 		}
 		switch {
 		case v.Failed:
-			if network {
+			if network && !v.Network {
 				// An unavailable reviewer is not an authorization to turn the
 				// network on. The same approval dialog can decide it explicitly.
 				// The note waits for that answer: nothing about this call is
@@ -708,7 +814,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					return dec
 				}
 				notify(noteFor(call, v, NoteUnavailable, lang))
-				return blockCall(call, v, "cannot review this network request; failing closed")
+				return blockCall(call, v, "the reviewer could not decide the network request and no one answered; the call did not run")
 			}
 			notify(noteFor(call, v, NoteUnavailable, lang))
 			if sandboxable(opts, call.Name) {
@@ -716,19 +822,19 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// decision rides the executor context down to the tool).
 				return grant(true)
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
+			if interactive && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalReviewFailed); ok {
 				return dec
 			}
-			return blockCall(call, v, "reviewer unavailable and no sandbox for this tool; failing closed")
+			return blockCall(call, v, "reviewer unavailable and this tool cannot be sandboxed; answer the approval prompt to run one call unconfined, or choose another approach")
 		case v.Level == Allow:
 			if network && !v.Network {
 				if dec, ok := askNetwork(); ok {
 					return dec
 				}
-				return blockCall(call, v, "network access was not authorized; failing closed")
+				return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 			}
 			if network {
 				// A shell that reaches the network needs BOTH the filesystem
@@ -739,15 +845,23 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// lose, so its consent is the network question above, not a
 				// missing runner.
 				if opts.RequireSandbox && strings.EqualFold(call.Name, "bash") && !sandboxable(opts, call.Name) {
-					return blockCall(call, v, "no OS sandbox available for networked bash; failing closed")
+					if dec, ok := askNetwork(); ok {
+						return dec
+					}
+					return blockCall(call, v, "network access and no OS sandbox are both unavailable for this bash call; approve the unconfined one-call prompt, install a sandbox, or run the command yourself")
 				}
 				return grant(false)
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
+				if interactive {
+					if ans := promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox); ans.allow {
+						return &agentcore.BeforeToolCallDecision{Direct: true}
+					}
+				}
 				if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 					return dec
 				}
-				return blockCall(call, v, "no OS sandbox available for bash; failing closed")
+				return blockCall(call, v, "no OS sandbox is available for bash; approve the one-call unconfined prompt, install a sandbox, or run the command yourself")
 			}
 			return nil
 		case v.Level == Deny:
@@ -758,32 +872,37 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				if dec, ok := askNetwork(); ok {
 					return dec
 				}
-				return blockCall(call, v, "network access was not authorized; failing closed")
+				return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 			}
 			if sandboxable(opts, call.Name) {
 				notify(noteFor(call, v, NoteSandboxed, lang))
 				return grant(true)
 			}
-			if interactive && !optsIsAuto(state) && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
+			if interactive && promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox).allow {
 				return &agentcore.BeforeToolCallDecision{Direct: true}
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 				return dec
 			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
-			return blockCall(call, v, "no sandbox runner for this call (GOLDER_SANDBOX=off or no platform sandbox available); failing closed")
+			return blockCall(call, v, "no sandbox runner is available for this call (GOLDER_SANDBOX=off, or the platform sandbox is missing); approve the one-call unconfined prompt, install a sandbox, or run it yourself")
 		default: // Confirm
 			if network && !v.Network {
 				if dec, ok := askNetwork(); ok {
 					return dec
 				}
-				return blockCall(call, v, "network access was not authorized; failing closed")
+				return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
+				if interactive {
+					if ans := promptRisk(ctx, opts, mode.String(), call, v, ApprovalNoSandbox); ans.allow {
+						return &agentcore.BeforeToolCallDecision{Direct: true}
+					}
+				}
 				if dec, ok := ask(ctx, call, v, ApprovalNoSandbox); ok {
 					return dec
 				}
-				return blockCall(call, v, "no OS sandbox available for bash; failing closed")
+				return blockCall(call, v, "no OS sandbox is available for bash; approve the one-call unconfined prompt, install a sandbox, or run the command yourself")
 			}
 			if optsIsAuto(state) {
 				notify(noteFor(call, v, NoteApproved, lang))
@@ -808,7 +927,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return dec
 			}
 			notify(noteFor(call, v, NoteBlockedNoPrompt, lang))
-			return blockCall(call, v, "needs confirmation; failing closed without a prompt")
+			return blockCall(call, v, "this call needs confirmation but no prompt is available; run it interactively, or choose a call that does not need one")
 		}
 	}
 }
@@ -869,6 +988,13 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 		Authorization: authWord(v.Authorization, lang),
 		Rationale:     firstReason(v),
 	}
+	if kind == ApprovalNetwork {
+		req.NetworkRequest = true
+		if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
+			req.NetworkKey = key
+			req.NetworkRememberable = true
+		}
+	}
 	req.Origin = agentcore.OriginFromContext(ctx)
 	done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
 	defer done()
@@ -928,12 +1054,42 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 	}
 	switch kind {
 	case ApprovalNetwork:
+		// A combined prompt sets Network explicitly; an older driver answers
+		// with Approve alone, and that still means yes.
+		if ans.Network || (!ans.NetworkSession && !ans.NetworkRemember) {
+			recordNetworkAnswer(call, riskAnswer{
+				network:         true,
+				networkSession:  ans.NetworkSession,
+				networkRemember: ans.NetworkRemember,
+			}, "network dialog")
+		}
 		return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: true}, true
 	case ApprovalEscalation, ApprovalNoSandbox, ApprovalReviewFailed:
 		return &agentcore.BeforeToolCallDecision{Direct: true}, true
 	default:
 		return nil, true
 	}
+}
+
+// recordNetworkAnswer writes the lifetime the person chose for a network
+// answer. A one-call answer writes nothing; a session or remembered answer is
+// a standing rule, and only the remembered one is persisted.
+func recordNetworkAnswer(call agentcore.AgentToolCall, a riskAnswer, source string) {
+	if !a.network || (!a.networkSession && !a.networkRemember) {
+		return
+	}
+	kind, key, ok := NetworkKey(call.Name, call.Arguments)
+	if !ok {
+		return
+	}
+	life := grants.Session
+	if a.networkRemember {
+		life = grants.Remembered
+	}
+	_, _ = grants.AddNetwork(grants.NetworkGrant{
+		Kind: kind, Key: key, Tool: call.Name, Allow: true,
+		Lifetime: life, Source: source,
+	})
 }
 
 // escapeFixGuidance names the smaller fix for a declined escape. The request
@@ -1168,6 +1324,12 @@ type riskAnswer struct {
 	allow        bool
 	writableRoot string
 	persisted    bool
+	// network answers an ApprovalNetwork prompt: allow is true only when the
+	// person authorized the network side. The two lifetime bits say whether the
+	// answer should be recorded for this session or across sessions.
+	network         bool
+	networkSession  bool
+	networkRemember bool
 }
 
 // promptRisk asks the person on stdin (interactive drivers only) whether a call
@@ -1228,7 +1390,20 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 	if kind == ApprovalEscalation && opts.GrantWritable != nil {
 		grantRoot = GrantablePathFromText(riskSummary(call), escalationJustification(call), opts.Cwd)
 	}
-	if grantRoot != "" {
+	networkKey := ""
+	if kind == ApprovalNetwork {
+		if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
+			networkKey = key
+		}
+	}
+	if kind == ApprovalNetwork {
+		if networkKey != "" {
+			fmt.Fprintf(out, "Allow network access for this call? [y] once / [a] this session"+
+				" / [s] remember %s / [N] deny [y/N/a/s]: ", networkKey)
+		} else {
+			fmt.Fprint(out, "Allow network access for this call? [y] once / [N] deny [y/N]: ")
+		}
+	} else if grantRoot != "" {
 		fmt.Fprintf(out, "Allow? [y]es (runs outside the sandbox) / [n]o / [w]rites to %s (this session)"+
 			" / [s]ave writes to %s (remembered) [y/N/w/s]: ", grantRoot, grantRoot)
 	} else if kind == ApprovalEscalation || kind == ApprovalNoSandbox {
@@ -1245,7 +1420,15 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 	}
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
+		if kind == ApprovalNetwork {
+			return riskAnswer{allow: true, network: true}
+		}
 		return riskAnswer{allow: true}
+	case "a", "all":
+		if kind == ApprovalNetwork && networkKey != "" {
+			return riskAnswer{allow: true, network: true, networkSession: true}
+		}
+		return riskAnswer{}
 	case "w", "write", "writes":
 		if grantRoot != "" {
 			if made, why := opts.GrantWritable(grantRoot, false); made {
@@ -1256,6 +1439,9 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 		}
 		return riskAnswer{}
 	case "s", "save":
+		if kind == ApprovalNetwork && networkKey != "" {
+			return riskAnswer{allow: true, network: true, networkRemember: true}
+		}
 		if grantRoot != "" {
 			if made, why := opts.GrantWritable(grantRoot, true); made {
 				return riskAnswer{allow: true, writableRoot: grantRoot, persisted: true}

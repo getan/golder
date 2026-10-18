@@ -54,6 +54,11 @@ const (
 	approveWritePersist    = "write-persist"
 	approveReadsHere       = "reads-here"
 	approveDeny            = "deny"
+	// Network answers are separate values because they carry a lifetime: a
+	// one-call grant must not be confused with a session or remembered rule.
+	approveNetwork         = "network-once"
+	approveNetworkSession  = "network-session"
+	approveNetworkRemember = "network-remember"
 	// approveContained is the escalation dialog's default: keep the call in the
 	// sandbox. approveDirect is the deliberate second answer: run this one call
 	// outside it. The two are separate values because they are separate
@@ -124,6 +129,14 @@ type approvalDialog struct {
 	trustDir string
 	// reply is non-nil for a tool approval: the waiting gate reads the answer.
 	reply chan judge.ApprovalAnswer
+	// combined marks a request that also asks the network question. The dialog
+	// stays open across both stages: stage 0 chooses the path answer, stage 1
+	// chooses network access, and only then is one ApprovalAnswer delivered.
+	combined            bool
+	stage               int
+	pathValue           string
+	networkKey          string
+	networkRememberable bool
 	// selected highlights a row, so ↑↓ and Enter work as well as the
 	// single-key shortcuts (the two input styles share one row model).
 	selected int
@@ -156,6 +169,22 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			approvalRow{"Run it outside the sandbox anyway", "e", approveDirect},
 			approvalRow{"Deny", "esc", approveDeny},
 		)
+	}
+	if req.Kind == judge.ApprovalNetwork {
+		// The network question used to fall through to the generic tool rows,
+		// so its title was "needs approval" and the answer had no lifetime. The
+		// key names exactly what a standing answer would cover; when it is empty
+		// (a local host, an IP, a command the parser cannot pin down) only the
+		// one-call answer is offered.
+		key := strings.TrimSpace(req.NetworkKey)
+		rows = []approvalRow{{"Allow network for this call only", "y", approveNetwork}}
+		if key != "" && req.NetworkRememberable {
+			rows = append(rows,
+				approvalRow{"Allow " + key + " for this session", "a", approveNetworkSession},
+				approvalRow{"Always allow " + key + " (remembered)", "s", approveNetworkRemember},
+			)
+		}
+		rows = append(rows, approvalRow{"Deny network", "esc", approveDeny})
 	}
 	// The boundary question is about reading or about writing, and the rows say
 	// which: the two carry different grants ("allow reading /x" is not "allow
@@ -232,16 +261,19 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		}
 	}
 	m.approval = approvalDialog{
-		active:       true,
-		kind:         "tool",
-		title:        approvalTitle(req),
-		detail:       approvalDetail(req),
-		rows:         rows,
-		writableRoot: root,
-		readRoot:     readRoot,
-		writeRoot:    writeRoot,
-		trustDir:     req.TrustDir,
-		reply:        reply,
+		active:              true,
+		kind:                "tool",
+		title:               approvalTitle(req),
+		detail:              approvalDetail(req),
+		rows:                rows,
+		writableRoot:        root,
+		readRoot:            readRoot,
+		writeRoot:           writeRoot,
+		trustDir:            req.TrustDir,
+		reply:               reply,
+		combined:            req.NetworkRequest && req.Kind == judge.ApprovalBoundary,
+		networkKey:          req.NetworkKey,
+		networkRememberable: req.NetworkRememberable,
 	}
 }
 
@@ -292,6 +324,10 @@ func (m *Model) answerApproval(value string) {
 		return
 	}
 	d := m.approval
+	if d.combined {
+		m.answerCombinedApproval(d, value)
+		return
+	}
 	m.approval = approvalDialog{}
 	switch d.kind {
 	case "trust":
@@ -305,6 +341,12 @@ func (m *Model) answerApproval(value string) {
 		switch value {
 		case approveOnce:
 			ans.Approve = true
+		case approveNetwork:
+			ans.Approve, ans.Network = true, true
+		case approveNetworkSession:
+			ans.Approve, ans.Network, ans.NetworkSession = true, true, true
+		case approveNetworkRemember:
+			ans.Approve, ans.Network, ans.NetworkRemember = true, true, true
 		case approveContained:
 			// "Keep it in the sandbox": an approval of the call, not of the
 			// escape. The gate re-contains it (the reviewer had already graded
@@ -452,14 +494,86 @@ func (m *Model) answerApproval(value string) {
 				}
 			}
 		}
-		select {
-		case d.reply <- ans:
-		default:
-			// The run was cancelled and nobody is listening; the dialog is
-			// already closed, so the gate falls back to failing closed.
-		}
-		m.openNextQueuedApproval()
+		m.deliverApproval(d, ans)
 	}
+}
+
+// answerCombinedApproval walks a path+network request through its two stages
+// without closing the dialog. Stage 0 records the path choice; stage 1 records
+// the network choice and delivers one ApprovalAnswer, so the gates cannot ask
+// the same call twice.
+func (m *Model) answerCombinedApproval(d approvalDialog, value string) {
+	if d.stage == 0 {
+		if value == approveDeny {
+			m.approval = approvalDialog{}
+			m.deliverApproval(d, judge.ApprovalAnswer{Answered: true})
+			return
+		}
+		d.pathValue = value
+		d.stage = 1
+		d.selected = 0
+		d.rows = networkApprovalRows(d.networkKey, d.networkRememberable)
+		d.title = "Network access for this call"
+		d.detail = []string{"The path decision is recorded. This is the network half of the same prompt."}
+		m.approval = d
+		return
+	}
+	m.approval = approvalDialog{}
+	ans := combinedPathAnswer(d)
+	switch value {
+	case approveNetwork:
+		ans.Network = true
+	case approveNetworkSession:
+		ans.Network, ans.NetworkSession = true, true
+	case approveNetworkRemember:
+		ans.Network, ans.NetworkRemember = true, true
+	default:
+		ans.Network = false
+	}
+	m.deliverApproval(d, ans)
+}
+
+// combinedPathAnswer replays only the boundary rows a combined request can
+// carry. Registration stays in the boundary gate (it owns the read-root and
+// writable-root callbacks), which is why this returns the grant shape rather
+// than writing it twice.
+func combinedPathAnswer(d approvalDialog) judge.ApprovalAnswer {
+	ans := judge.ApprovalAnswer{Answered: true}
+	switch d.pathValue {
+	case approveOnce:
+		ans.Approve = true
+	case approveReadDir:
+		ans.Approve, ans.ReadRoot = true, d.readRoot
+	case approveReadPersist:
+		ans.Approve, ans.ReadRoot, ans.Persisted = true, d.readRoot, true
+	case approveWriteDir:
+		ans.Approve, ans.WriteRoot = true, d.writeRoot
+	case approveWritePersist:
+		ans.Approve, ans.WriteRoot, ans.Persisted = true, d.writeRoot, true
+	}
+	return ans
+}
+
+func networkApprovalRows(key string, rememberable bool) []approvalRow {
+	rows := []approvalRow{{"Allow network for this call only", "y", approveNetwork}}
+	if key != "" && rememberable {
+		rows = append(rows,
+			approvalRow{"Allow " + key + " for this session", "a", approveNetworkSession},
+			approvalRow{"Always allow " + key + " (remembered)", "s", approveNetworkRemember},
+		)
+	}
+	return append(rows, approvalRow{"Deny network", "esc", approveDeny})
+}
+
+// deliverApproval sends exactly one answer and advances the queue.
+func (m *Model) deliverApproval(d approvalDialog, ans judge.ApprovalAnswer) {
+	select {
+	case d.reply <- ans:
+	default:
+		// The run was cancelled and nobody is listening; the dialog is already
+		// closed, so the gate falls back to failing closed.
+	}
+	m.openNextQueuedApproval()
 }
 
 // openNextQueuedApproval opens the oldest queued approval request, if any. It
@@ -650,10 +764,21 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		}
 		return tool + " was denied reading outside the sandbox"
 	case judge.ApprovalBoundary:
+		if req.NetworkRequest {
+			if req.BoundaryWrite {
+				return tool + " wants to write outside the workspace and reach the network"
+			}
+			return tool + " wants to read outside the workspace and reach the network"
+		}
 		if req.BoundaryWrite {
 			return tool + " wants to write outside the workspace"
 		}
 		return tool + " wants to read outside the workspace"
+	case judge.ApprovalNetwork:
+		if req.NetworkKey != "" {
+			return tool + " wants network access to " + req.NetworkKey
+		}
+		return tool + " wants network access"
 	case judge.ApprovalTrust:
 		return tool + " in an untrusted folder"
 	default:
@@ -703,6 +828,14 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 			out = append(out, r+rating)
 		default:
 			out = append(out, "Reviewer: "+r+rating)
+		}
+	}
+	if req.NetworkRequest {
+		key := strings.TrimSpace(req.NetworkKey)
+		if key == "" {
+			out = append(out, "Network access will be asked next; this call can only be approved for one use.")
+		} else {
+			out = append(out, "Network access will be asked next ("+key+").")
 		}
 	}
 	return out

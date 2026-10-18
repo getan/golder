@@ -439,6 +439,119 @@ func TestPermissionGateWebFetchNetworkAuthorizedRunsSilently(t *testing.T) {
 	}
 }
 
+// A standing network rule settles the network side without a dialog, but it
+// never changes the risk tier: the reviewer's Allow still decides whether the
+// call runs at all.
+func TestPermissionGateRememberedNetworkAllowSkipsPrompt(t *testing.T) {
+	dir := t.TempDir()
+	store, err := grants.NewNetwork(grants.Options{Path: filepath.Join(dir, "network.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants.SetProcessNetwork(store)
+	defer grants.SetProcessNetwork(nil)
+	if _, err := grants.AddNetworkHost("example.com", "webfetch", true, grants.Session, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	asked := false
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow, Reasons: []string{"public page"}}},
+		Sandboxed:  func(string) bool { return true },
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked = true
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	dec := gate(context.Background(), toolCall("webfetch", `{"url":"https://example.com/page"}`))
+	if dec == nil || dec.Block || !dec.Network {
+		t.Fatalf("remembered allow = %+v, want a networked run", dec)
+	}
+	if asked {
+		t.Error("a remembered rule must not open the network dialog")
+	}
+}
+
+// A remembered refusal is a decision too: it blocks without asking again.
+func TestPermissionGateRememberedNetworkDenyBlocks(t *testing.T) {
+	dir := t.TempDir()
+	store, err := grants.NewNetwork(grants.Options{Path: filepath.Join(dir, "network.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grants.SetProcessNetwork(store)
+	defer grants.SetProcessNetwork(nil)
+	if _, err := grants.AddNetworkHost("example.com", "webfetch", false, grants.Session, "test"); err != nil {
+		t.Fatal(err)
+	}
+	asked := false
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked = true
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	dec := gate(context.Background(), toolCall("webfetch", `{"url":"https://example.com/page"}`))
+	if dec == nil || !dec.Block {
+		t.Fatalf("remembered deny = %+v, want a block", dec)
+	}
+	if asked {
+		t.Error("a remembered refusal must not open the dialog again")
+	}
+}
+
+// The boundary gate asks the network side in the same prompt and hands the
+// answer to the permission gate, which must not ask again.
+func TestCombinedPathAndNetworkPromptReachesPermissionGate(t *testing.T) {
+	root := t.TempDir()
+	// t.TempDir() is the system temp root, which the boundary gate deliberately
+	// treats as always-readable. Use a path under home that is outside the
+	// workspace and is not a credential location; the boundary gate only needs
+	// to ask, it does not need the file to exist.
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	outside := filepath.Join(home, "golder-boundary-combined-test", "outside.txt")
+	args, _ := json.Marshal(map[string]string{
+		"command": "cat " + outside,
+		"network": "on",
+	})
+	call := agentcore.AgentToolCall{ID: "combined-1", Name: "bash", Arguments: args}
+	coord := NewAskCoord()
+	boundary := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: root,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			return ApprovalAnswer{Approve: true, Network: true, Answered: true}
+		},
+		AskCoord: coord,
+	})
+	if boundary == nil {
+		t.Fatal("no boundary gate")
+	}
+	if dec := boundary(context.Background(), call); dec != nil && dec.Block {
+		t.Fatalf("boundary refused the approved path: %+v", dec)
+	}
+	asked := false
+	perm := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Sandboxed:  func(string) bool { return true },
+		AskCoord:   coord,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked = true
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	dec := perm(context.Background(), call)
+	if dec == nil || dec.Block || !dec.Network {
+		t.Fatalf("combined answer = %+v, want a networked run", dec)
+	}
+	if asked {
+		t.Error("permission gate asked the network question a second time")
+	}
+}
+
 // TestReviewSystemPromptCoversWebToolNetwork pins the other half of that
 // contract: the prompt must ask the reviewer for the network answer on the
 // in-process tools. Without it the reviewer can never authorize a search, and

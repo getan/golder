@@ -1429,6 +1429,27 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Network approvals can be remembered per host or command**: `webfetch` keys
+  on the exact host, `websearch` on the tool (its backend host depends on which
+  credential is present), and `bash` on a literal program/subcommand such as
+  `git push`. The question now offers one call / this session / remembered, and
+  `/network list|rm` manages the rules. Local, private and IP-literal hosts are
+  never offered as standing rules.
+- **A path prompt and its network question are one dialog**: when a call needs
+  both consent to reach outside the workspace and network access, the boundary
+  prompt carries the network question instead of the permission gate opening a
+  second one. The TUI keeps one modal open across both stages; the REPL asks the
+  second question in the same block.
+- **A person can now answer the questions that used to fail closed**: network
+  approval, no-sandbox approval, re-admission after a sandbox denial and a
+  failed-review call all have stdin prompts where a REPL is present, and the TUI
+  dialog covers the same paths. Auto mode still decides ordinary risk tiers by
+  review; it asks only when it cannot proceed (reviewer unavailable, no sandbox,
+  or network not authorized).
+- **Failure text says what was not done and what to do next**: the gate and bash
+  no longer end at `failing closed`; the model-facing messages name the missing
+  capability and the smaller fix. The TUI trust prompt no longer records an
+  undeliverable browser question as a user denial.
 - **A session grant for a credential path no longer breaks every file tool**:
   after approving a one-session read of `~/.ssh`, every later `apply_patch`,
   `read` or `grep` call failed with `tool worker grant targets protected state or

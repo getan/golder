@@ -95,6 +95,35 @@ func TestApprovalDialogAnswers(t *testing.T) {
 	}
 }
 
+// A path+network request keeps one dialog open for both halves: the path answer
+// is recorded, the network question replaces the rows, and one combined answer
+// reaches the waiting gate.
+func TestApprovalCombinedPathAndNetworkStages(t *testing.T) {
+	req := judge.ApprovalRequest{
+		Kind: judge.ApprovalBoundary, Tool: "bash",
+		Summary: "command: git push", BoundaryDir: "/tmp/example",
+		NetworkRequest: true, NetworkKey: "github.com", NetworkRememberable: true,
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m := NewModel(Options{})
+	m.openApproval(req, reply)
+	if !m.approval.combined || m.approval.stage != 0 {
+		t.Fatalf("combined dialog not armed: %+v", m.approval)
+	}
+	m.answerApproval(approveOnce)
+	if !m.approval.active || m.approval.stage != 1 {
+		t.Fatalf("dialog did not stay open for the network stage: %+v", m.approval)
+	}
+	if len(m.approval.rows) != 4 || m.approval.rows[0].value != approveNetwork {
+		t.Fatalf("network rows = %+v", m.approval.rows)
+	}
+	m.answerApproval(approveNetworkSession)
+	ans := awaitAnswer(t, reply)
+	if !ans.Approve || !ans.Network || !ans.NetworkSession {
+		t.Fatalf("combined answer = %+v", ans)
+	}
+}
+
 // TestApprovalDialogIsModal locks the key ownership: while the dialog is open
 // the composer must not receive input, and an unrelated key must neither
 // dismiss nor answer the decision.

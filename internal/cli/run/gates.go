@@ -213,6 +213,11 @@ func (g *Gates) InstallDriver(ctx context.Context, cfg *runtime.RunConfig, set h
 // person is not consenting to a call they believe their own conversation made.
 func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 	o := g.opts
+	// One coordinator per chain: a path question that also covers network
+	// records its answer here, and the permission gate consumes it without a
+	// second dialog. It is per-chain rather than package-global so a child run
+	// cannot read a parent call's answer.
+	askCoord := judge.NewAskCoord()
 	trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
 	trustOpts.In, trustOpts.Out = o.In, o.Out
 	trustOpts.Confirm = o.Confirm
@@ -239,6 +244,7 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 	}
 	scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
 	scopeOpts.OnPrompt = o.OnPrompt
+	scopeOpts.AskCoord = askCoord
 	if scopeGate := judge.BoundaryGate(scopeOpts); scopeGate != nil {
 		gate = judge.ChainGates(gate, scopeGate)
 	}
@@ -258,6 +264,7 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 	}
 	permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
 	permOpts.OnPrompt = o.OnPrompt
+	permOpts.AskCoord = askCoord
 	return judge.ChainGates(gate, judge.PermissionGate(o.Perms, permOpts))
 }
 
@@ -381,7 +388,7 @@ func WritableAt(path string) bool {
 // nil means there is nothing to ask with (no driver dialog): the denial keeps
 // its labeling for the model and nobody is interrupted.
 func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary string) bool {
-	if g == nil || g.opts.Confirm == nil {
+	if g == nil || (g.opts.Confirm == nil && g.opts.In == nil) {
 		return nil
 	}
 	return func(ctx context.Context, path, summary string) bool {
@@ -398,7 +405,13 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			NeedsWrite: judge.PathWriteNeed(path, summary),
 		}
 		req.Origin = agentcore.OriginFromContext(ctx)
-		ans := g.opts.Confirm(ctx, req)
+		var ans judge.ApprovalAnswer
+		if g.opts.Confirm != nil {
+			ans = g.opts.Confirm(ctx, req)
+		} else {
+			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+			ans = judge.AskReAdmit(ctx, g.opts.In, g.opts.Out, g.opts.Mu, path, summary, lang)
+		}
 		if !ans.Answered || !ans.Approve {
 			return false
 		}
