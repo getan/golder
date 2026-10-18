@@ -177,6 +177,8 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 
 `/provider` 列出全部内置网关：每个网关需要哪些环境变量、当前有没有配好（已配好的排在最前），`/provider <名称>` 直接切换网关（自动用该网关的默认模型）。审查器的决策模型（`typesafe`）单独列在最后一节，并拒绝切换：它回答的是审查器的类型化提问，不是聊天模型，给它路由请用 `/proxy`。TUI 里 `/provider` 是方向键选择器，同样不包括决策模型。
 
+**默认 provider（新会话从哪个网关开始）**：`/provider default <名称>` 把它写进 `~/.golder/config.toml` 的 `provider` 行（`/provider default` 查看、`/provider default off` 清除）；如果配置文件里已经钉了 `model`，那一行会一起换成新网关自己的默认模型，避免把某个网关的模型 id 发给另一个网关。列表里带 `(default)` 的就是它，`(current)` 是当前会话用的那个——两者可以不同。TUI 选择器里按 `d` 直接把高亮的一行设为默认，不用退出列表。改文件只动这两行，注释和其余设置原样保留。
+
 档位元数据来自 models.dev（网关自身的 `/models` 只返回模型 id，不含档位）。模型列表与档位表都以 24 小时磁盘缓存存在 `~/.golder` 下，因此每个网关大约一天只请求一次，而不是每次会话都请求。
 
 ## 内置工具
@@ -298,7 +300,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 | 路径 / 变量 | 用途 |
 |-------------|------|
-| `~/.golder/config.toml` | 全局配置 |
+| `~/.golder/config.toml` | 全局配置（`provider`/`model` 可用 `/provider default <名称>` 写入） |
 | `~/.golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
 | `~/.golder/grants.json` | 唯一授权表（信任决定与路径读写授权） |
 | `~/.golder/sessions` | 会话存储（JSONL） |

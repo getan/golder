@@ -94,7 +94,7 @@ func TestBuiltinUsageInventory(t *testing.T) {
 	want := map[string]string{
 		"proxy":          "[<provider> on|off | url <url>]",
 		"model":          "[n|id [level]|think level]",
-		"provider":       "[name]",
+		"provider":       "[name | default [name|off]]",
 		"permissions":    "[list | read-only|ask|auto|full-access]",
 		"boundary":       "[list | readable [list|add|rm] <path> | writable [list|add|rm] <path>]",
 		"trust":          "[on|off|once|status]",

@@ -397,6 +397,81 @@ func CredentialAvailable(creds *provider.CredentialStore, name string) bool {
 	return credentialStatus(creds, name).Available()
 }
 
+// providerDefaultText reports, sets or clears the provider new sessions start
+// on (`/provider default [<name>|off]`). The default lives in config.toml, one
+// line, which is also why the switch and the default are separate verbs: the
+// first changes this session, the second changes what the next session opens
+// with.
+func providerDefaultText(arg string, creds *provider.CredentialStore) string {
+	switch {
+	case arg == "":
+		name, err := config.DefaultProvider()
+		if err != nil {
+			return "provider: cannot read the default: " + err.Error()
+		}
+		if name == "" {
+			return "default provider: unset (new sessions use the built-in default gateway)\nset it with /provider default <name>"
+		}
+		return "default provider: " + name + " (config.toml; new sessions start there)"
+	case arg == "off" || arg == "none" || arg == "unset":
+		if _, err := config.SetDefaultProvider("", ""); err != nil {
+			return "provider: cannot clear the default: " + err.Error()
+		}
+		return "default provider cleared; new sessions use the built-in default gateway"
+	}
+	return SetDefaultProviderText(arg, creds)
+}
+
+// DefaultProviderName returns the config.toml default provider, or "" when the
+// file does not set one. A read error reads as unset: a listing marks the
+// default, it does not repair the file.
+func DefaultProviderName() string {
+	name, err := config.DefaultProvider()
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+// SetDefaultProviderText persists name as the default provider and returns the
+// report. It is exported because the TUI's provider picker offers the same
+// action on a key, and both surfaces must say exactly the same thing.
+//
+// The provider's own default model rides along when config.toml already pins a
+// model: a model id belongs to the gateway that serves it, so leaving a stale
+// one behind would pair the new provider with an id it does not know.
+func SetDefaultProviderText(name string, creds *provider.CredentialStore) string {
+	spec, ok := provider.LookupProviderSpec(name)
+	if !ok {
+		return fmt.Sprintf("provider: unknown provider %q\nsupported: %s", name, strings.Join(provider.ProviderNames(), ", "))
+	}
+	if spec.DecisionOnly {
+		return fmt.Sprintf("provider: %s is a decision model, not a conversation provider — it cannot be the default (route it with /proxy %s on).",
+			spec.Name, spec.Name)
+	}
+	rewrote, err := config.SetDefaultProvider(spec.Name, spec.DefaultModel)
+	if err != nil {
+		return "provider: cannot save the default: " + err.Error()
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "default provider set to %s", spec.Name)
+	if spec.DefaultModel != "" {
+		fmt.Fprintf(&b, " (its default model: %s)", spec.DefaultModel)
+	}
+	if rewrote {
+		b.WriteString("; config.toml's model line was updated to match")
+	}
+	b.WriteString("\nnew sessions start there; /provider " + spec.Name + " switches this one now")
+	if !CredentialAvailable(creds, spec.Name) {
+		key := "a key"
+		if len(spec.EnvVars) > 0 {
+			key = strings.Join(spec.EnvVars, " / ")
+		}
+		b.WriteString("\nwarning: no credential found for " + spec.Name + " yet; set " + key)
+	}
+	return b.String()
+}
+
 // ProvidersAvailableFirst returns the built-in provider specs ordered for
 // display: providers with a credential found first (so the ready-to-use ones
 // are quick to pick), then the rest. Both groups keep registry order.
@@ -563,6 +638,12 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	}
 	providerAction := func(args string) string {
 		arg := strings.TrimSpace(args)
+		// /provider default [name|off] sets the config.toml provider new
+		// sessions start on; it is a different verb from "switch this one", so
+		// it is resolved before the switch path.
+		if arg == "default" || strings.HasPrefix(arg, "default ") {
+			return providerDefaultText(strings.TrimSpace(strings.TrimPrefix(arg, "default")), creds)
+		}
 		if arg == "" {
 			specs := provider.ProviderSpecs()
 			// Dynamic column width so a long env list (or long provider name)
@@ -581,6 +662,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 					envWidth = w
 				}
 			}
+			defaultProvider, _ := config.DefaultProvider()
 			row := func(spec provider.ProviderSpec) string {
 				envs := "no key needed"
 				if len(spec.EnvVars) > 0 {
@@ -589,6 +671,9 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 				line := fmt.Sprintf("  %-*s  %-*s  %s", nameWidth, spec.Name, envWidth, envs, CredentialSummary(creds, spec.Name))
 				if spec.Name == live.ProviderName {
 					line += "  (current)"
+				}
+				if spec.Name == defaultProvider {
+					line += "  (default)"
 				}
 				line += "\n    " + ProviderEndpointSummary(live, spec)
 				return line
@@ -606,7 +691,12 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 				}
 			}
 			var b strings.Builder
-			fmt.Fprintf(&b, "provider: %s\nswitch with /provider <name>; set any one of the listed variables (earlier ones win)", live.ProviderName)
+			defaultLabel := defaultProvider
+			if defaultLabel == "" {
+				defaultLabel = "(unset; new sessions use the built-in default gateway)"
+			}
+			fmt.Fprintf(&b, "provider: %s\ndefault for new sessions: %s\nswitch with /provider <name>; make one the default with /provider default <name>; set any one of the listed variables (earlier ones win)",
+				live.ProviderName, defaultLabel)
 			if len(ready) == 0 {
 				b.WriteString("\n\nno provider credentials found on this machine; set one of the variables below")
 			} else {
@@ -750,8 +840,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "provider",
 		Category:     runtime.CategoryModel,
-		Description:  "list providers with credential availability, or switch",
-		ArgumentHint: "[name]",
+		Description:  "list providers with credential availability, switch, or set the default for new sessions",
+		ArgumentHint: "[name | default [name|off]]",
 		Action:       providerAction,
 	})
 	// /usage reports what is left of the live provider's subscription. Three

@@ -177,6 +177,8 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # local O
 
 `/provider` lists every built-in gateway with the environment variables it needs and whether one is already configured (ready ones first); `/provider <name>` switches to it using the gateway's default model. The reviewer's decision model (`typesafe`) is listed in its own final section and refuses the switch: it answers the reviewer's typed questions rather than carrying a conversation, and is routed with `/proxy`. In the TUI, `/provider` is an arrow-key picker that leaves the decision model out.
 
+**Default provider (which gateway a new session opens with)**: `/provider default <name>` writes it into the `provider` line of `~/.golder/config.toml` (`/provider default` shows it, `/provider default off` clears it). When the file already pins a `model`, that line is rewritten to the new gateway's own default model — a model id belongs to the gateway that serves it. Rows carry `(default)` for it and `(current)` for this session's gateway; the two can differ. In the TUI picker, `d` sets the highlighted row as the default without leaving the list. The edit touches only those lines: comments and every other setting survive.
+
 Level metadata comes from models.dev (a gateway's own `/models` only lists ids). Both the model list and the level table are cached on disk in `~/.golder` for 24 hours, so each gateway is queried about once a day rather than once per session.
 
 ## Built-in tools

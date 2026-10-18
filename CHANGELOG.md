@@ -40,6 +40,13 @@ interactive REPL/TUI.
   visible text with no tool call is continued from the partial answer by
   default (up to two continuations; set `GOLDER_STREAM_RESUME=0`/`off` to keep
   every cut terminal). A tool-call turn still surfaces the cut.
+- **A default provider you can set from inside the session**: `/provider default
+  <name>` writes the `provider` line of `config.toml` (show, or `off` to clear),
+  rewriting the pinned `model` line to the new gateway's own default when one is
+  set. The provider list tags it `(default)` beside `(current)`, and the TUI
+  picker sets it on `d` without leaving the list. The write edits those two
+  lines, so comments and unrelated settings survive; asking for it through the
+  picker or the command produces the same report.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`

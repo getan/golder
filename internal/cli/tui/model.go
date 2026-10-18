@@ -540,6 +540,10 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 	// Providers with a credential found come first so the ready-to-use ones are
 	// quick to pick (same ordering as the /provider text listing).
 	specs := prompts.ProvidersAvailableFirst(m.session.creds)
+	// The default lives in config.toml and applies to NEW sessions, so it is a
+	// separate tag from "current": one row can carry both, and the picker says
+	// which one a switch has changed.
+	defaultName := prompts.DefaultProviderName()
 	picks := make([]pickItem, 0, len(specs))
 	for _, spec := range specs {
 		status, tone := providerBadge(m.session.creds, spec)
@@ -549,6 +553,7 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 			StatusTone: tone,
 			Value:      spec.Name,
 			Current:    spec.Name == m.live.ProviderName,
+			Default:    spec.Name == defaultName,
 			Info:       providerPickInfo(m.live, spec, m.session.creds),
 		})
 	}
@@ -575,9 +580,39 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 		}
 	}
 	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
-	m.transcript.addSystem("Select a provider (↑↓ + Enter, Esc cancels):")
+	m.transcript.addSystem("Select a provider (↑↓ + Enter, d makes it the default for new sessions, Esc cancels):")
 	m.relayout()
 	return m, nil
+}
+
+// setPickerDefaultProvider persists the highlighted provider as the default for
+// new sessions and reopens the picker, so the tag it just wrote is visible in
+// place. It is the picker's second verb: Enter switches this session, `d`
+// changes what the next session opens with.
+func (m Model) setPickerDefaultProvider() (tea.Model, tea.Cmd) {
+	name, ok := m.menu.pickCurrent()
+	if !ok {
+		return m, nil
+	}
+	var creds *provider.CredentialStore
+	if m.session != nil {
+		creds = m.session.creds
+	}
+	m.transcript.addSystem(prompts.SetDefaultProviderText(name, creds))
+	next, cmd := m.openProviderPicker()
+	if nm, ok := next.(Model); ok {
+		// Keep the highlight on the row the action was about: reopening resets
+		// it to the first selectable row, and the user's cursor moving on its
+		// own reads as a lost selection.
+		for i, it := range nm.menu.pick {
+			if !it.Heading && it.Value == name {
+				nm.menu.selected = i
+				break
+			}
+		}
+		return nm, cmd
+	}
+	return next, cmd
 }
 
 // providerBadge is the picker row's short credential state: what the user
@@ -1732,6 +1767,14 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m = m.completeSlash()
 			m.relayout()
 			return m, nil
+		case "d":
+			// The provider picker's second verb: make the highlighted provider
+			// the default for NEW sessions. Guarded to that picker, because "d"
+			// is otherwise an ordinary character (it filters the command list);
+			// falling out of the switch leaves it for the composer.
+			if m.menu.picking() && m.menu.pickKind == "provider" {
+				return m.setPickerDefaultProvider()
+			}
 		case "esc", "ctrl+c":
 			// Ctrl+C is the shell's way out of a prompt, so with the popup or a
 			// picker open it closes that first — exactly like Esc. Without this it

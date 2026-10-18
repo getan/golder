@@ -156,6 +156,11 @@ type pickItem struct {
 	Value  string
 	// Current marks the row as the live selection; view renders a "current" tag.
 	Current bool
+	// Default marks the row as the provider new sessions start on (the
+	// config.toml default); view renders a "default" tag. It is separate from
+	// Current on purpose: this session and the next one are different answers,
+	// and conflating them would hide which one a switch changed.
+	Default bool
 	// Heading marks a non-selectable section title inside a picker: the arrow
 	// keys step over it, Enter on it does nothing, and it renders as a dim rule
 	// rather than a row. It exists because a picker that must show something it
@@ -270,6 +275,9 @@ func (mn slashMenu) pickRowLine(i, rowWidth int) string {
 	}
 	if it.Current || (it.Value != "" && it.Value == mn.pickMark) {
 		b.WriteString("  " + mn.theme.Accent.Render("(current)"))
+	}
+	if it.Default {
+		b.WriteString("  " + mn.theme.Accent.Render("(default)"))
 	}
 	return ansi.Truncate(b.String(), rowWidth, "…")
 }
