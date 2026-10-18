@@ -260,6 +260,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 - 整条命令可完整枚举且不碰凭据的批准调用（`git push`、`go test`、`ls`、`cargo build` 等）直接在宿主上跑，卡片/REPL 标 `·unconfined`，结果 `details.envelope` 为 `bare`；
 - 含变量/替换/进程替换、解释器或包装器（`bash`/`python`/`make`/`docker`/`env` 等）、凭据路径的仍收容（`sandbox`）；
+- 原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）由 `toolworker` 的一次性沙箱执行时也标 `·sandbox`；`full-access`/Direct/无 runner 退回进程内时标 `·unconfined`；`todo`/`websearch`/`webfetch` 等不走 OS 沙箱的工具没有标记；
 - `GOLDER_SANDBOX=enforce` 仍把每一条都收进沙箱，优先于信封；`full-access` 不变。
 
 网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权。

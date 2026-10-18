@@ -337,7 +337,13 @@ func (c toolCard) renderHeadline(theme Theme, width int) string {
 	// The verb is prepended at render time (not part of the wrapped text), so
 	// reserve its columns in the wrap budget: bullet(2) + verb + space.
 	avail := max(1, width-len(verb)-4)
-	lines := strings.Split(WrapToWidth(c.headline(), avail), "\n")
+	headline := c.headline()
+	if marker := c.envelopeMarker(); marker != "" {
+		// Every tool that reports an envelope gets the marker on its own
+		// headline, not only the shell path.
+		headline += " " + marker
+	}
+	lines := strings.Split(WrapToWidth(headline, avail), "\n")
 	first := lines[0]
 	head := theme.ToolVerb.Render(verb) + " "
 	if rest, ok := strings.CutPrefix(first, c.name); ok {

@@ -44,7 +44,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 一律在沙
 - 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
 - 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
 
-`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果的 `details.envelope` 是 `sandbox`/`bare`，TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
+`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
 
 网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
 

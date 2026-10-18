@@ -48,6 +48,19 @@ func TestGrantSnapshotCarriesCapabilitiesAcrossJSON(t *testing.T) {
 	}
 }
 
+func TestWithEnvelopePreservesDetails(t *testing.T) {
+	res := withEnvelope(agentcore.AgentToolResult{Details: map[string]any{"files": 2}}, true)
+	details, ok := res.Details.(map[string]any)
+	if !ok || details["files"] != 2 || details["envelope"] != "sandbox" {
+		t.Fatalf("sandboxed details = %#v, want files=2 envelope=sandbox", res.Details)
+	}
+	res = withEnvelope(agentcore.AgentToolResult{}, false)
+	details, ok = res.Details.(map[string]any)
+	if !ok || details["envelope"] != "bare" {
+		t.Fatalf("in-process details = %#v, want envelope=bare", res.Details)
+	}
+}
+
 // A session grant for a credential path used to fail every worker call with
 // "grant targets protected state or credential material", because the policy
 // check rejected the whole request. The path must be dropped from the mounts,

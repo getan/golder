@@ -111,13 +111,15 @@ func (t *Tool) ExecutionMode() agentcore.ToolExecutionMode { return t.Original.E
 
 func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	if t.Mode != nil && t.Mode.Mode() == permissions.FullAccess {
-		return t.Original.Execute(ctx, id, args, nil)
+		res, err := t.Original.Execute(ctx, id, args, nil)
+		return withEnvelope(res, false), err
 	}
 	if agentcore.DirectGrantedFromContext(ctx) && !agentcore.SandboxRequestedFromContext(ctx) {
 		// A gate (not the tool arguments) explicitly approved running this
 		// one call without the OS runner. The native tool's own path policy and
 		// one-call read/write grants still apply.
-		return t.Original.Execute(ctx, id, args, nil)
+		res, err := t.Original.Execute(ctx, id, args, nil)
+		return withEnvelope(res, false), err
 	}
 	if t.Name() == "apply_patch" && t.Snap == nil {
 		return failed("no rewind recorder for isolated patch; refusing to write")
@@ -126,7 +128,8 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 		if t.RequireIsolation {
 			return failed("no OS sandbox for this file tool; refusing to run outside the sandbox")
 		}
-		return t.Original.Execute(ctx, id, args, nil)
+		res, err := t.Original.Execute(ctx, id, args, nil)
+		return withEnvelope(res, false), err
 	}
 	bin := t.Binary
 	if bin == "" {
@@ -215,7 +218,7 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	if haveResult && waitErr == nil {
-		return outcome, nil
+		return withEnvelope(outcome, true), nil
 	}
 	if err == nil || errors.Is(err, io.EOF) {
 		err = waitErr
@@ -298,6 +301,26 @@ func safePaths(paths []string) []string {
 
 func failed(why string) (agentcore.AgentToolResult, error) {
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(why)}}, errors.New(why)
+}
+
+// withEnvelope records where the call actually ran: inside the worker's
+// per-call OS sandbox, or in-process because the mode, a gate grant, or a
+// missing runner took the native route. The card and the transcript read this
+// one key; a call that failed before choosing a route gets nothing rather than
+// a guess.
+func withEnvelope(res agentcore.AgentToolResult, sandboxed bool) agentcore.AgentToolResult {
+	value := "bare"
+	if sandboxed {
+		value = "sandbox"
+	}
+	switch details := res.Details.(type) {
+	case map[string]any:
+		details["envelope"] = value
+		res.Details = details
+	case nil:
+		res.Details = map[string]any{"envelope": value}
+	}
+	return res
 }
 
 func workerStderr(s string) string {

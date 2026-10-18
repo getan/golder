@@ -18,7 +18,9 @@ interactive REPL/TUI.
   and credential paths keep a call contained. A bare call carries its network
   as part of the same approval, and `GOLDER_SANDBOX=enforce` still contains
   every call. Results expose `details.envelope`, and the card/REPL marker says
-  `sandbox` or `unconfined`.
+  `sandbox` or `unconfined`. The same marker covers `read`/`grep`/`find`/`ls`/
+  `view_image`/`apply_patch` when the one-shot file worker runs them, with the
+  in-process fallback marked `unconfined`.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`
