@@ -1446,6 +1446,10 @@ interactive REPL/TUI.
   dialog covers the same paths. Auto mode still decides ordinary risk tiers by
   review; it asks only when it cannot proceed (reviewer unavailable, no sandbox,
   or network not authorized).
+- **Session network answers reach isolated sub-agents**: the parent's
+  session-only network rules travel in the child's authorization snapshot, so a
+  delegated run does not ask again for a host or command the parent already
+  allowed. Remembered rules are reopened from `network_grants.json` by the child.
 - **Failure text says what was not done and what to do next**: the gate and bash
   no longer end at `failing closed`; the model-facing messages name the missing
   capability and the smaller fix. The TUI trust prompt no longer records an

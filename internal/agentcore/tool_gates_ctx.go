@@ -64,6 +64,20 @@ type ToolAuth struct {
 	// ask. A remembered root needs no carrying (it is in grants.json, which the
 	// child process opens too); a session-only one exists nowhere but here.
 	WritableRoots []string `json:"writableRoots,omitempty"`
+	// NetworkRules are the session-only network answers (a host, command or
+	// tool). Remembered rules need no carrying: the child opens
+	// network_grants.json itself. They travel so a process-isolated child does
+	// not re-ask a question its parent already answered.
+	NetworkRules []NetworkRule `json:"networkRules,omitempty"`
+}
+
+// NetworkRule is one session network answer on the wire. It mirrors the grants
+// package's row without importing it into this leaf package.
+type NetworkRule struct {
+	Kind  string `json:"kind"`
+	Key   string `json:"key"`
+	Tool  string `json:"tool,omitempty"`
+	Allow bool   `json:"allow"`
 }
 
 // toolGatesKey is the unexported context key carrying a run's gate chain from
