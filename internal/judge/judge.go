@@ -239,6 +239,11 @@ type GateOpts struct {
 	// path prompt's network answer so this gate does not ask the same call's
 	// network question a second time. Nil means no combined prompt is in use.
 	AskCoord *AskCoord
+	// SkipReAdmit suppresses the auto-mode path re-admission offer for this
+	// call. The sandbox-denial asker sets it when it re-enters the gate for an
+	// escape request: the denial dialog already asked about the path, and the
+	// second question must be about the escape, not a repeat of the first.
+	SkipReAdmit bool
 }
 
 // promptNote announces a prompt about to be shown and returns the function
@@ -770,7 +775,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				// fail on the very path) and one that cannot (which would
 				// otherwise just stop). Asked once per path per run: a refusal
 				// must not become a nag, and it changes nothing below.
-				if deniedPath != "" && (opts.Confirm != nil || interactive) && readmitAsked.First(deniedPath) {
+				if deniedPath != "" && !opts.SkipReAdmit && (opts.Confirm != nil || interactive) && readmitAsked.First(deniedPath) {
 					if dec := readmitPath(deniedPath); dec != nil {
 						return dec
 					}

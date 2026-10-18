@@ -121,10 +121,9 @@ const (
 	// SandboxDenialReAdmitted: the refused path is registered, so re-running the
 	// command inside the sandbox can now reach it.
 	SandboxDenialReAdmitted
-	// SandboxDenialUnconfined: run this one command outside the sandbox. The
-	// asker has already recorded the decision (which emits a note, so an
-	// unconfined run is never silent); the tool re-runs it once with a Direct
-	// grant. Nothing about this is remembered.
+	// SandboxDenialUnconfined: the permission gate approved one unconfined run
+	// of this command (the asker only forwards that verdict). The tool re-runs
+	// it once with a Direct grant; nothing about this is remembered.
 	SandboxDenialUnconfined
 )
 

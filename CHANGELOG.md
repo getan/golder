@@ -1439,15 +1439,16 @@ interactive REPL/TUI.
   The retry layer covers it on the first call and mid-stream alike, and when the
   budget is spent the sentence names the provider, the attempt count and the
   transport's own text.
-- **The denial dialog can run the command once outside the sandbox**: when the
+- **The denial dialog can request one unconfined run**: when the
   sandbox refuses a path the command needs and no grant can fix it — a
   SIP-protected system file, or credential material the static floor refuses to
-  hand over — the question now offers `Run this command once outside the sandbox`
-  beside the path grants. The command already ran and was already reviewed, so
-  this is a decision about a path rather than about the call; it is one call
-  only (nothing is registered or remembered), it is announced as an unconfined
-  run like the escalation dialog's escape, and it is not offered in read-only
-  mode. Both the TUI dialog and the REPL prompt carry it.
+  hand over — the question now offers `Request one unconfined run` beside the
+  path grants. That is a request, not the answer: it goes through the permission
+  gate again (a second, narrow confirmation under ask; the reviewer under auto),
+  and only a Direct verdict runs the command once outside the sandbox. Nothing
+  is registered or remembered, the run is announced like any escape, and the row
+  is not offered in read-only mode. Both the TUI dialog and the REPL prompt
+  carry it.
 - **A SIP error is no longer offered as a sandbox path grant**: macOS reports
   protected system files such as `/private/var/select/sh` as `Operation not
   permitted` even outside the sandbox. The re-admission dialog used to take that

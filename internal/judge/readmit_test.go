@@ -35,8 +35,8 @@ func TestAskReAdmitAnswers(t *testing.T) {
 			if ans.Approve != c.approve || ans.Unconfined != c.unconfined {
 				t.Fatalf("answer = %+v, want approve=%v unconfined=%v", ans, c.approve, c.unconfined)
 			}
-			if !strings.Contains(out.String(), "outside the sandbox") {
-				t.Errorf("prompt = %q, want the unconfined option described", out.String())
+			if !strings.Contains(out.String(), "unconfined run") {
+				t.Errorf("prompt = %q, want the unconfined request described", out.String())
 			}
 		})
 	}

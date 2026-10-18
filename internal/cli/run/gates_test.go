@@ -29,6 +29,18 @@ import (
 	"github.com/getan/golder/internal/trust"
 )
 
+type allowReviewer struct{}
+
+func (allowReviewer) Classify(context.Context, string, json.RawMessage) judge.Verdict {
+	return judge.Verdict{Level: judge.Allow}
+}
+
+type directReviewer struct{}
+
+func (directReviewer) Classify(context.Context, string, json.RawMessage) judge.Verdict {
+	return judge.Verdict{Level: judge.Allow, Direct: true, Reasons: []string{"the user asked for this exact one-call escape"}}
+}
+
 // gatesTrustStore builds an empty trust store for a test. The file lives in the
 // test's temp dir, so nothing reads the machine's real decisions.
 func gatesTrustStore(t *testing.T) *trust.Manager {
@@ -83,11 +95,19 @@ func TestSandboxDenialAskerAnswersUnconfined(t *testing.T) {
 	notes := NewReviewNotes()
 	var got []judge.Note
 	notes.Set(func(n judge.Note) { got = append(got, n) })
+	calls := 0
 	gates := NewGates(GatesOpts{
-		Perms: permissions.New(permissions.Auto),
-		Notes: notes,
+		// Ask mode: the escape row is a request; the permission gate asks the
+		// person a second, narrower question before it becomes a Direct run.
+		Perms:      permissions.New(permissions.Ask),
+		Classifier: func() judge.Classifier { return allowReviewer{} },
+		Notes:      notes,
 		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
-			return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
+			calls++
+			if calls == 1 {
+				return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
+			}
+			return judge.ApprovalAnswer{Approve: true, Answered: true}
 		},
 	})
 	ask := gates.SandboxDenialAsker()
@@ -97,8 +117,17 @@ func TestSandboxDenialAskerAnswersUnconfined(t *testing.T) {
 	if answer := ask(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out"); answer != agenttool.SandboxDenialUnconfined {
 		t.Fatalf("answer = %v, want the unconfined one", answer)
 	}
-	if len(got) != 1 || got[0].Kind != judge.NoteEscaped {
+	escaped := 0
+	for _, n := range got {
+		if n.Kind == judge.NoteEscaped {
+			escaped++
+		}
+	}
+	if escaped != 1 {
 		t.Fatalf("notes = %+v, want one escape announcement", got)
+	}
+	if calls != 2 {
+		t.Errorf("approval prompts = %d, want 2 (denial question + gate's escape question)", calls)
 	}
 }
 
@@ -140,6 +169,40 @@ func TestSandboxDenialAskerOmitsUnconfinedInReadOnly(t *testing.T) {
 	}
 	if seen.UnconfineOffer {
 		t.Error("read-only mode must not offer an unconfined run")
+	}
+}
+
+// Auto mode: the escape row is a request the reviewer decides. A bare Allow is
+// not a Direct grant, so the command stays refused; a Direct verdict is what
+// makes the unconfined retry possible.
+func TestSandboxDenialAskerAutoUsesReviewerForEscape(t *testing.T) {
+	grantstest.Install(t)
+	for _, tc := range []struct {
+		name     string
+		reviewer judge.Classifier
+		want     agenttool.SandboxDenialAnswer
+	}{
+		{"allow is not direct", allowReviewer{}, agenttool.SandboxDenialRefused},
+		{"direct is", directReviewer{}, agenttool.SandboxDenialUnconfined},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			gates := NewGates(GatesOpts{
+				Perms:      permissions.New(permissions.Auto),
+				Classifier: func() judge.Classifier { return tc.reviewer },
+				Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+					calls++
+					return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
+				},
+			})
+			answer := gates.SandboxDenialAsker()(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out")
+			if answer != tc.want {
+				t.Fatalf("answer = %v, want %v", answer, tc.want)
+			}
+			if calls != 1 {
+				t.Errorf("dialogs = %d, want only the denial question (auto leaves the escape to review)", calls)
+			}
+		})
 	}
 }
 

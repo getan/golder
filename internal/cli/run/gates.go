@@ -22,6 +22,7 @@ package run
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"sync"
@@ -454,9 +455,16 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			return agenttool.SandboxDenialRefused
 		}
 		if ans.Unconfined {
-			// The person chose to run this one command outside the sandbox. The
-			// note is what keeps an unconfined run from being invisible; nothing
-			// is registered and nothing is remembered.
+			// The person asked to run this one command outside the sandbox. That
+			// is a request, not the approval: the permission gate decides it —
+			// the reviewer under auto, the person again under ask — exactly as
+			// it does for any other escape. Only a Direct verdict comes back
+			// here as an unconfined answer.
+			if !g.requestUnconfined(ctx, summary, path) {
+				return agenttool.SandboxDenialRefused
+			}
+			// The note is what keeps an unconfined run from being invisible;
+			// nothing is registered and nothing is remembered.
 			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 			if g.opts.Notes != nil {
 				rationale := "the sandbox denied " + path + "; you approved one unconfined run of this command"
@@ -499,6 +507,49 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 		}
 		return agenttool.SandboxDenialReAdmitted
 	}
+}
+
+// requestUnconfined puts the denial dialog's escape request through the same
+// permission gate every other escape goes through. The command already ran once
+// under a normal approval, but "run it outside the sandbox" is a new decision:
+// under auto the reviewer sees it, under ask the person answers a second,
+// narrower question. A Direct verdict is the only yes.
+//
+// It builds the synthetic call rather than reusing the original arguments so the
+// gate sees exactly what is being requested: the same command with
+// sandbox_permissions=require_escalated and the denial as its justification.
+func (g *Gates) requestUnconfined(ctx context.Context, command, path string) bool {
+	if g == nil || g.opts.Perms == nil || g.opts.Perms.Mode() == permissions.ReadOnly {
+		return false
+	}
+	args, err := json.Marshal(map[string]string{
+		"command":             command,
+		"sandbox_permissions": "require_escalated",
+		"justification":       "the sandbox denied " + path + "; run this exact command once outside the sandbox",
+	})
+	if err != nil {
+		return false
+	}
+	gate := judge.PermissionGate(g.opts.Perms, judge.GateOpts{
+		Classifier:     g.classifier(),
+		Sandboxed:      g.opts.Sandboxed,
+		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Notify:         g.opts.Notes.Emit,
+		Cwd:            g.opts.Cwd,
+		GrantWritable:  GrantWritableRoot,
+		In:             g.opts.In,
+		Out:            g.opts.Out,
+		Mu:             g.opts.Mu,
+		Confirm:        g.opts.Confirm,
+		OnPrompt:       g.opts.OnPrompt,
+		SkipReAdmit:    true,
+	})
+	dec := gate(ctx, agentcore.AgentToolCall{
+		ID:        "sandbox-denial-escape",
+		Name:      "bash",
+		Arguments: args,
+	})
+	return dec != nil && dec.Direct && !dec.Block
 }
 
 // GrantWritableRoot makes a directory writable inside the sandbox, for this

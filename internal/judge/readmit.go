@@ -30,10 +30,10 @@ func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.M
 	fmt.Fprintf(out, "\nthe sandbox denied %s for this %s.\n", path, verb)
 	if writing {
 		fmt.Fprintf(out, "  [y] allow reads and writes to %s (this session)   [s] remember it"+
-			"   [e] run this command once outside the sandbox   [N] skip\n", path)
+			"   [e] request one unconfined run (the gate decides)   [N] skip\n", path)
 	} else {
 		fmt.Fprintf(out, "  [y] allow reading %s (this session)   [s] remember it"+
-			"   [e] run this command once outside the sandbox   [N] skip\n", path)
+			"   [e] request one unconfined run (the gate decides)   [N] skip\n", path)
 	}
 	fmt.Fprint(out, "Choice: ")
 	line, ok := readLineOrCancel(ctx, in)

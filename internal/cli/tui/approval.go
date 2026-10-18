@@ -236,7 +236,7 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 				// answer that works, so it is offered here and never as the
 				// default. Inserted before Deny so the destructive row stays last.
 				escapeRow := approvalRow{
-					"Run this command once outside the sandbox (you approve it now)",
+					"Request one unconfined run outside the sandbox (the gate decides)",
 					"e", approveUnconfined,
 				}
 				rows = append(rows[:len(rows)-1], escapeRow, rows[len(rows)-1])
@@ -359,13 +359,12 @@ func (m *Model) answerApproval(value string) {
 		case approveOnce:
 			ans.Approve = true
 		case approveUnconfined:
-			// A denial's escape answer: run this one command without the
-			// sandbox. The transcript says so for the same reason the
-			// escalation dialog's escape does — "I let it through" must not
-			// read like "the reviewer let it through" later.
+			// A denial's escape request: it asks the permission gate to decide
+			// whether this one command may run without the sandbox. The gate
+			// asks the reviewer under auto and the person again under ask.
 			ans.Approve, ans.Unconfined = true, true
 			if m.session != nil {
-				m.transcript.addSystem("This command runs outside the sandbox once (approved by you).")
+				m.transcript.addSystem("Requesting one unconfined run; the permission gate decides.")
 			}
 		case approveNetwork:
 			ans.Approve, ans.Network = true, true
