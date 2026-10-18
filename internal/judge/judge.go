@@ -791,7 +791,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					})
 					return grant(true)
 				}
-				notify(noteFor(call, v, NoteDenied, lang))
+				notify(escapeDeniedNote(call, v, lang))
 				return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask"+escapeFixGuidance(deniedPath))
 			}
 			if interactive && opts.Confirm == nil {
@@ -1267,6 +1267,36 @@ func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string
 	}
 	if n.Lang == "" {
 		n.Lang = lang
+	}
+	return n
+}
+
+// escapeDeniedNote is the note for an escape auto refused. It cannot reuse the
+// reviewer's reason as the explanation: when the reviewer graded the command
+// allow, that reason says the command is safe — which is exactly what made the
+// line read "allow → denied, because it is safe". The refusal is about the
+// ESCAPE, a decision the reviewer did not make in the call's favor, so the note
+// has to say that in its own words.
+func escapeDeniedNote(call agentcore.AgentToolCall, v Verdict, lang string) Note {
+	n := noteFor(call, v, NoteDenied, lang)
+	n.Escalation = true
+	switch v.Level {
+	case Allow:
+		n.Rationale = localized(n.Lang,
+			"评审认为命令本身安全（allow），但没有给出 Direct；auto 不把 allow 当作离开沙箱的许可。如果只是需要联网，请用 network:on 重新请求；如果要出沙箱，请切到 /permissions ask 由你决定。",
+			"the reviewer graded the command safe (allow) but gave no Direct grant; auto does not treat allow as permission to leave the sandbox. If it only needs network, retry with network:on; to leave the sandbox, switch /permissions ask.")
+	case Confirm:
+		n.Rationale = localized(n.Lang,
+			"评审给了 confirm，但没有给出 Direct；auto 不会把一次普通确认当作越界许可。要出沙箱，请切到 /permissions ask 由你决定。",
+			"the reviewer asked for confirmation but gave no Direct grant; auto does not treat an ordinary confirmation as permission to leave the sandbox. To leave it, switch /permissions ask.")
+	case Sandbox:
+		n.Rationale = localized(n.Lang,
+			"评审要求这条命令收容执行，但没有给出 Direct，且当前没有可用的收容/越界路径；auto 不能自行放行到沙箱外。",
+			"the reviewer required this call to stay contained and gave no Direct grant, and auto has no containment/escape path here; it cannot approve running outside the sandbox.")
+	default:
+		n.Rationale = localized(n.Lang,
+			"评审没有批准这次越界（没有 Direct 授权）；auto 只按评审的越界决定放行，不会因为命令本身安全就离开沙箱。",
+			"the reviewer did not approve this escape (no Direct grant); auto only runs outside the sandbox when review explicitly says so, not merely because the command is safe.")
 	}
 	return n
 }

@@ -748,6 +748,17 @@ func TestPermissionGateEscalationAutoDeclinedNamesTheSmallerFix(t *testing.T) {
 	if dec == nil || !dec.Block {
 		t.Fatalf("an allow grade without a Direct grant must refuse the escape, got %+v", dec)
 	}
+	// The note must explain the refusal, not repeat the reviewer's "safe"
+	// rationale: the command was allowed, the ESCAPE was not.
+	if len(rec.notes) != 1 {
+		t.Fatalf("notes = %+v, want one denial", rec.notes)
+	}
+	line := FormatNote(rec.notes[0])
+	for _, want := range []string{"allow →", "sandbox escape was not granted", "Direct", "network:on"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("note = %q, want %q", line, want)
+		}
+	}
 	got := agentcore.ContentToText(*dec.Content)
 	if !strings.Contains(got, "switch /permissions to ask") {
 		t.Errorf("refusal must keep the mode-switch advice, got %q", got)

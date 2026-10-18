@@ -1429,6 +1429,12 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A refused escape no longer explains itself with the command's safety**: the
+  note read `allow → denied …: this command is read-only and reasonable`, because
+  it reused the reviewer's rationale for grading the COMMAND while the thing
+  refused was the ESCAPE. It now says the command was allowed but no `Direct`
+  grant was given, and names the two real fixes: request `network:on` if only
+  network is needed, or switch `/permissions ask` to decide the escape yourself.
 - **A connection that dies before any response is retried instead of ending the
   turn**: a POST that never got a reply reaches the user as net/http's own
   wrapper — `error: Post "https://…/responses": EOF` — which nothing classified
