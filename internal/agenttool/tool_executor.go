@@ -145,7 +145,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				}
 				return nil, nil, ctx, &r, true
 			}
-			// Sandbox request (judge Sandbox tier / reviewer-failure containment):
+			// Sandbox request (judge Contain tier / reviewer-failure containment):
 			// publish it for the executing tool. A tool that cannot isolate must
 			// refuse; the bash tool translates it into the sandbox-exec argv.
 			if dec.Sandbox {

@@ -84,7 +84,7 @@ func authWord(auth, lang string) string {
 // approval mode in force, the reviewer's grade, and who settles it —
 //
 //	bash · ask · confirm → your call
-//	bash · auto · sandbox → contained · runs in the sandbox
+//	bash · auto · contain → contained · runs in the sandbox
 //
 // The mode and the grade are the canonical tokens the CLI itself uses
 // (/permissions auto, the reviewer's verdict) rather than paraphrases, because

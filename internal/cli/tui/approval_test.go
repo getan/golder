@@ -751,7 +751,7 @@ func TestApprovalEscalationRows(t *testing.T) {
 	if got := m.approval.rows[0]; got.key != "y" || got.value != approveContained {
 		t.Fatalf("first row = %+v, want the contained answer on y", got)
 	}
-	if joined := strings.Join(m.approval.detail, "\n"); !strings.Contains(joined, "bash · ask · sandbox → your call · sandbox escape") {
+	if joined := strings.Join(m.approval.detail, "\n"); !strings.Contains(joined, "bash · ask · contain → your call · sandbox escape") {
 		t.Errorf("detail is missing the decision line:\n%s", joined)
 	}
 	m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})

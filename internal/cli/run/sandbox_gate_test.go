@@ -9,7 +9,7 @@ import (
 )
 
 // TestSandboxGateModeOff verifies the predicate disables itself when isolation
-// is switched off, so the judge gate keeps failing Sandbox tiers closed rather
+// is switched off, so the judge gate keeps failing Contain tiers closed rather
 // than passing them to an execution layer that would run them unisolated.
 func TestSandboxGateModeOff(t *testing.T) {
 	t.Setenv("GOLDER_SANDBOX", "off")
