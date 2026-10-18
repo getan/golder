@@ -54,6 +54,10 @@ const (
 	approveWritePersist    = "write-persist"
 	approveReadsHere       = "reads-here"
 	approveDeny            = "deny"
+	// approveUnconfined is the denial dialog's "run this one command outside the
+	// sandbox" answer. It is a one-call decision, which is why it has no session
+	// or remembered twin.
+	approveUnconfined = "unconfined"
 	// Network answers are separate values because they carry a lifetime: a
 	// one-call grant must not be confused with a session or remembered rule.
 	approveNetwork         = "network-once"
@@ -224,6 +228,19 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 				// the title says which side was denied.
 				rows = []approvalRow{writeRow, readRow, rememberedRow, denyRow}
 			}
+			if req.UnconfineOffer {
+				// The command already ran, so it was already reviewed: what the
+				// sandbox refused is a path. When no grant can fix it — a
+				// system-protected path, or a credential file the floor will not
+				// hand over — running this one command outside the sandbox is the
+				// answer that works, so it is offered here and never as the
+				// default. Inserted before Deny so the destructive row stays last.
+				escapeRow := approvalRow{
+					"Run this command once outside the sandbox (you approve it now)",
+					"e", approveUnconfined,
+				}
+				rows = append(rows[:len(rows)-1], escapeRow, rows[len(rows)-1])
+			}
 		} else {
 			rows = []approvalRow{{"Deny", "esc", approveDeny}}
 		}
@@ -341,6 +358,15 @@ func (m *Model) answerApproval(value string) {
 		switch value {
 		case approveOnce:
 			ans.Approve = true
+		case approveUnconfined:
+			// A denial's escape answer: run this one command without the
+			// sandbox. The transcript says so for the same reason the
+			// escalation dialog's escape does — "I let it through" must not
+			// read like "the reviewer let it through" later.
+			ans.Approve, ans.Unconfined = true, true
+			if m.session != nil {
+				m.transcript.addSystem("This command runs outside the sandbox once (approved by you).")
+			}
 		case approveNetwork:
 			ans.Approve, ans.Network = true, true
 		case approveNetworkSession:

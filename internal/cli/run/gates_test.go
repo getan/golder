@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/hooks"
@@ -70,6 +71,75 @@ func TestChainAfterTrustSkipsOnlyTrust(t *testing.T) {
 	_ = gates.Chain()(context.Background(), gatesCall())
 	if !asked {
 		t.Fatal("the full chain should ask trust in an untrusted directory")
+	}
+}
+
+// TestSandboxDenialAskerAnswersUnconfined: the denial question may be answered
+// with "run this one command outside the sandbox". That answer is a one-call
+// decision, and it is announced — an unconfined run is never silent, the same
+// promise the escalation dialog's escape row keeps.
+func TestSandboxDenialAskerAnswersUnconfined(t *testing.T) {
+	grantstest.Install(t)
+	notes := NewReviewNotes()
+	var got []judge.Note
+	notes.Set(func(n judge.Note) { got = append(got, n) })
+	gates := NewGates(GatesOpts{
+		Perms: permissions.New(permissions.Auto),
+		Notes: notes,
+		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+			return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
+		},
+	})
+	ask := gates.SandboxDenialAsker()
+	if ask == nil {
+		t.Fatal("a wired dialog must produce an asker")
+	}
+	if answer := ask(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out"); answer != agenttool.SandboxDenialUnconfined {
+		t.Fatalf("answer = %v, want the unconfined one", answer)
+	}
+	if len(got) != 1 || got[0].Kind != judge.NoteEscaped {
+		t.Fatalf("notes = %+v, want one escape announcement", got)
+	}
+}
+
+// The contained answers keep working: a grant registers the path and asks for
+// the same-command retry inside the sandbox.
+func TestSandboxDenialAskerAnswersReAdmitted(t *testing.T) {
+	grantstest.Install(t)
+	gates := NewGates(GatesOpts{
+		Perms: permissions.New(permissions.Auto),
+		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+			return judge.ApprovalAnswer{Approve: true, ReadRoot: "/Volumes/KIOXIA/cache", Answered: true}
+		},
+	})
+	ask := gates.SandboxDenialAsker()
+	if ask == nil {
+		t.Fatal("a wired dialog must produce an asker")
+	}
+	if answer := ask(context.Background(), "/Volumes/KIOXIA/cache", "cp a /Volumes/KIOXIA/cache/b"); answer != agenttool.SandboxDenialReAdmitted {
+		t.Fatalf("answer = %v, want the contained retry", answer)
+	}
+	if !grants.Allows("/Volumes/KIOXIA/cache", grants.Read) {
+		t.Error("the granted path was not registered")
+	}
+}
+
+// A read-only run never ran the command, so the unconfined row is not offered.
+func TestSandboxDenialAskerOmitsUnconfinedInReadOnly(t *testing.T) {
+	grantstest.Install(t)
+	var seen judge.ApprovalRequest
+	gates := NewGates(GatesOpts{
+		Perms: permissions.New(permissions.ReadOnly),
+		Confirm: func(_ context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
+			seen = req
+			return judge.ApprovalAnswer{Answered: true}
+		},
+	})
+	if ask := gates.SandboxDenialAsker(); ask != nil {
+		_ = ask(context.Background(), "/Volumes/KIOXIA/x", "rm -rf /Volumes/KIOXIA/x")
+	}
+	if seen.UnconfineOffer {
+		t.Error("read-only mode must not offer an unconfined run")
 	}
 }
 

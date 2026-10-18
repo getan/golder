@@ -7,8 +7,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-
-	"github.com/getan/golder/internal/grants"
 )
 
 // AskReAdmit is the stdin shape of the sandbox re-admission question. It is the
@@ -31,9 +29,11 @@ func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.M
 	}
 	fmt.Fprintf(out, "\nthe sandbox denied %s for this %s.\n", path, verb)
 	if writing {
-		fmt.Fprintf(out, "  [y] allow reads and writes to %s (this session)   [s] remember it   [N] skip\n", path)
+		fmt.Fprintf(out, "  [y] allow reads and writes to %s (this session)   [s] remember it"+
+			"   [e] run this command once outside the sandbox   [N] skip\n", path)
 	} else {
-		fmt.Fprintf(out, "  [y] allow reading %s (this session)   [s] remember it   [N] skip\n", path)
+		fmt.Fprintf(out, "  [y] allow reading %s (this session)   [s] remember it"+
+			"   [e] run this command once outside the sandbox   [N] skip\n", path)
 	}
 	fmt.Fprint(out, "Choice: ")
 	line, ok := readLineOrCancel(ctx, in)
@@ -45,24 +45,21 @@ func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.M
 	case "y", "yes":
 	case "s", "save":
 		lifeRemember = true
+	case "e", "escape", "outside":
+		// Run this one command without the sandbox. The command already ran and
+		// was already reviewed; what the sandbox refused is a path, so this is a
+		// decision about this call only, and nothing is remembered.
+		return ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
 	default:
 		return ApprovalAnswer{Answered: true}
 	}
+	// The answer states the intent (which root, which lifetime); registering it
+	// belongs to the gate assembly, which owns the authorization table and the
+	// sandbox's writable roots — the same owner the TUI's rows go through. A
+	// prompt that registered here would be a second writer, and its failure
+	// would have to invent a refusal of its own.
 	ans := ApprovalAnswer{Approve: true, Answered: true, Persisted: lifeRemember}
 	if writing {
-		life := grants.Session
-		if lifeRemember {
-			life = grants.Remembered
-		}
-		// Unlike the TUI write rows, this path has no driver-side registration
-		// step. Register here so a "yes" in the REPL actually widens the
-		// sandbox the retry runs in.
-		if _, err := grants.Add(grants.Grant{
-			Path: path, Allow: grants.ReadWrite, Scope: grants.Subtree,
-			Lifetime: life, Source: "sandbox re-admission",
-		}); err != nil {
-			return ApprovalAnswer{Answered: true}
-		}
 		ans.WritableRoot = path
 	} else {
 		ans.ReadRoot = path

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -18,9 +19,13 @@ import (
 
 // scriptedProvider plays one canned script per attempt and counts them.
 type scriptedProvider struct {
-	mu       sync.Mutex
-	scripts  [][]AssistantMessageEvent
-	attempts int
+	mu      sync.Mutex
+	scripts [][]AssistantMessageEvent
+	// connectErrs, when set, makes an attempt fail before any stream exists:
+	// attempt i returns connectErrs[i] instead of playing its script. It is how
+	// the reported `Post "…": EOF` is reproduced.
+	connectErrs []error
+	attempts    int
 }
 
 func (p *scriptedProvider) Name() string    { return "scripted" }
@@ -30,8 +35,15 @@ func (p *scriptedProvider) StreamCompletion(ctx context.Context, _ CompletionReq
 	p.mu.Lock()
 	i := p.attempts
 	p.attempts++
+	var connectErr error
+	if i < len(p.connectErrs) {
+		connectErr = p.connectErrs[i]
+	}
 	p.mu.Unlock()
 
+	if connectErr != nil {
+		return nil, connectErr
+	}
 	s := NewAssistantMessageEventStream(0)
 	go func() {
 		defer s.Close()
@@ -333,6 +345,85 @@ func TestStreamRetryLeavesRealFailuresAlone(t *testing.T) {
 
 // A stream that ends without any terminal event and without content is as cut as
 // a dropped connection, and worth the same single retry.
+// The reported failure: a POST that never reached a response, which the Responses
+// driver hands back as a stream error event. Nothing was produced, so it takes
+// the retry instead of ending the turn with net/http's wrapper.
+func TestStreamRetryRetriesAConnectFailureBeforeContent(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	eof := &url.Error{Op: "Post", URL: "https://api.commandcode.ai/provider/v1/responses", Err: io.EOF}
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(eof)},
+		{startEvent(), textEvent("hello"), doneEvent("hello")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (the connect failure is retried)", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || notices[0].Reason != StreamCutConnect {
+		t.Fatalf("notices = %+v, want one connect retry", notices)
+	}
+	if !strings.Contains(notices[0].Detail, "EOF") {
+		t.Errorf("notice detail = %q, want the transport's own text", notices[0].Detail)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have succeeded", got)
+	}
+	if got := lastText(events); !strings.Contains(got, "hello") {
+		t.Errorf("text = %q, want the retry's answer", got)
+	}
+}
+
+// The same failure on the very first call, before any stream exists: nothing can
+// be announced on a stream that does not exist yet, so that retry is silent.
+func TestStreamCompletionRetriesAConnectFailure(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	eof := &url.Error{Op: "Post", URL: "https://api.commandcode.ai/provider/v1/responses", Err: io.EOF}
+	inner := &scriptedProvider{
+		connectErrs: []error{eof},
+		scripts: [][]AssistantMessageEvent{
+			nil,
+			{startEvent(), textEvent("hello"), doneEvent("hello")},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have succeeded", got)
+	}
+	if got := lastText(events); !strings.Contains(got, "hello") {
+		t.Errorf("text = %q, want the retry's answer", got)
+	}
+}
+
+// With the budget spent the turn ends with a sentence naming the provider, the
+// attempt count and the transport's text — not the bare wrapper.
+func TestStreamCompletionConnectFailureSentenceWhenBudgetSpent(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "0")
+	eof := &url.Error{Op: "Post", URL: "https://api.commandcode.ai/provider/v1/responses", Err: io.EOF}
+	inner := &scriptedProvider{connectErrs: []error{eof}}
+	_, err := withStreamRetry(inner, "").StreamCompletion(context.Background(), CompletionRequest{Model: "m"})
+	if err == nil {
+		t.Fatal("want the connect failure to surface")
+	}
+	for _, want := range []string{"scripted", "api.commandcode.ai", "retry the turn"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want %q", err.Error(), want)
+		}
+	}
+}
+
 // Two attempts that never start an answer mean the upstream is not answering at
 // all. The retry budget is not spent on a third and fourth identical wait; the
 // turn ends with a sentence that says what happened.

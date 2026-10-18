@@ -39,9 +39,9 @@ func TestBashSandboxDenialPrefersThePathTheOSNamed(t *testing.T) {
 	tool := &BashTool{
 		Dir: t.TempDir(), Sandbox: runner, ForceSandbox: true,
 		Permissions: permissions.New(permissions.Auto),
-		OnSandboxDenied: func(_ context.Context, path, _ string) bool {
+		OnSandboxDenied: func(_ context.Context, path, _ string) SandboxDenialAnswer {
 			asked = append(asked, path)
-			return false
+			return SandboxDenialRefused
 		},
 	}
 	if _, err := runBashErr(t, tool, map[string]any{"command": "cp seed " + named}); err == nil {

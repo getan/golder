@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,65 @@ func TestFirstContentTimeoutWidensPerAttempt(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "soon")
 	if got := firstContentTimeout(base); got != 3*time.Minute {
 		t.Errorf("malformed setting = %s, want the 3m default", got)
+	}
+}
+
+// The reported failure: a POST that dies before any response arrives, which
+// net/http wraps as `Post "https://…": EOF`. It produced nothing, so it is a
+// cut and must be retried instead of ending the turn with the raw wrapper.
+func TestConnectFailureClassification(t *testing.T) {
+	postEOF := func(err error) error {
+		return &url.Error{Op: "Post", URL: "https://api.example/v1/responses", Err: err}
+	}
+	retryable := []error{
+		postEOF(io.EOF),
+		postEOF(errors.New("connection reset by peer")),
+		postEOF(errors.New("dial tcp 1.2.3.4:443: connect: connection refused")),
+		errors.New("net/http: TLS handshake timeout"),
+		errors.New("read tcp: i/o timeout"),
+	}
+	for _, err := range retryable {
+		if !isConnectFailure(err) || !isStreamCutErr(err) {
+			t.Errorf("%v must count as a connect failure", err)
+		}
+		if got := streamCutReason(err); got != StreamCutConnect {
+			t.Errorf("reason for %v = %q, want %q", err, got, StreamCutConnect)
+		}
+	}
+	// A response that ended early is the truncation path's, not a connect
+	// failure; a bare io.EOF is the transport's normal end of stream; and the
+	// user's own interrupt is never retried.
+	notRetryable := []error{
+		io.ErrUnexpectedEOF,
+		io.EOF,
+		errors.New("unexpected EOF"),
+		context.Canceled,
+		context.DeadlineExceeded,
+		errors.New("commandcode: missing API key (set COMMANDCODE_API_KEY)"),
+		errors.New("transport: upstream 400: bad request"),
+	}
+	for _, err := range notRetryable {
+		if isConnectFailure(err) {
+			t.Errorf("%v must not count as a connect failure", err)
+		}
+	}
+}
+
+// The sentence names the provider, the attempt count and the transport's own
+// text, instead of the bare wrapper the user saw.
+func TestStreamConnectErrorSentence(t *testing.T) {
+	err := &url.Error{Op: "Post", URL: "https://api.commandcode.ai/provider/v1/responses", Err: io.EOF}
+	got := streamConnectError("commandcode", err, 3).Error()
+	for _, want := range []string{"commandcode", "3 attempts", "api.commandcode.ai", "EOF", "retry the turn"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("sentence = %q, want %q", got, want)
+		}
+	}
+	// A configuration error is returned unchanged: retrying it would only delay
+	// the message that says how to fix it.
+	cfg := errors.New("commandcode: missing API key (set COMMANDCODE_API_KEY)")
+	if got := streamConnectError("commandcode", cfg, 3); got != cfg {
+		t.Errorf("config error = %v, want it unchanged", got)
 	}
 }
 

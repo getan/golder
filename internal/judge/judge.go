@@ -321,6 +321,12 @@ const (
 // reviewer's verdict, so the decision is informed rather than a bare yes/no.
 type ApprovalRequest struct {
 	Kind ApprovalKind
+	// UnconfineOffer marks a re-admission question that may also be answered
+	// with "run this one call outside the sandbox". It is set only by the
+	// sandbox-denial asker, where the command already ran (and was already
+	// reviewed) and the refusal is about a path rather than about the call; the
+	// refused-escape dialog has its own escape row and does not set it.
+	UnconfineOffer bool
 	// NetworkRequest marks a prompt whose network side is also being decided.
 	// It is set only when the same call asks for a path decision and a network
 	// grant, so the dialog can show both groups instead of interrupting twice.
@@ -383,6 +389,10 @@ type ApprovalRequest struct {
 
 // ApprovalAnswer is the user's decision.
 type ApprovalAnswer struct {
+	// Unconfined, with Approve, means "run this one call outside the sandbox" —
+	// the answer to a denial question that offered it. It is a one-call
+	// decision: nothing is registered and nothing is remembered.
+	Unconfined bool
 	// Network, with Approve, grants this call outbound access. A combined
 	// prompt sets it explicitly; a network-only ApprovalNetwork answer keeps
 	// deciding it by Kind so older drivers are unaffected.
@@ -694,6 +704,14 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if !ans.Answered || !ans.Approve {
 				return nil
 			}
+			// A write answer's registration is the assembly's (see
+			// ApplyReAdmittedPath); the gate owns the callback that does it, so
+			// the REPL prompt and the TUI rows land in the same place.
+			if root := strings.TrimSpace(ans.WritableRoot); root != "" && opts.GrantWritable != nil {
+				if made, _ := opts.GrantWritable(root, ans.Persisted); !made {
+					return nil
+				}
+			}
 			how, granted := ApplyReAdmittedPath(ans, lang)
 			if !granted {
 				return nil
@@ -934,10 +952,12 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 
 // ApplyReAdmittedPath registers what a re-admission answer granted and returns
 // the phrase a note should carry. Read answers are registered here — the gate
-// owns the read-root registry — while the write rows register themselves (the
-// write dialog owns that callback), and a write grant carries read, so either
-// shape leaves the blocked path reachable inside the sandbox. ok=false means the
-// answer granted nothing: a denial, or a registration the registry refused.
+// owns the read-root registry — while a write answer is registered by the
+// caller through GrantWritable, the one callback that writes both the table row
+// and the sandbox's writable root; a write grant carries read, so either shape
+// leaves the blocked path reachable inside the sandbox. ok=false means the
+// answer granted nothing: a denial, a write whose registration the caller
+// refused, or a read the registry would not take.
 //
 // It is the one place that turns one of these answers into a table row, so the
 // two triggers that ask the question — a refused escape, and a command the

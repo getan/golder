@@ -437,8 +437,14 @@ func sleepBackoff(ctx context.Context, attempt int, retryAfter time.Duration) bo
 }
 
 // isRetryableNetErr reports whether a client.Do error is a transient network
-// condition worth reconnecting for (timeout / temporary).
+// condition worth reconnecting for. A connection that dies before any response
+// byte is safe to re-issue — nothing was streamed, and NewRequest rebuilds the
+// request — so the connect loop covers EOF and the other pre-response failures,
+// not only timeouts. See isConnectFailure for the classification.
 func isRetryableNetErr(err error) bool {
+	if isConnectFailure(err) {
+		return true
+	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		return netErr.Timeout()

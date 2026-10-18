@@ -74,14 +74,14 @@ type BashTool struct {
 	Permissions *permissions.State
 	// OnSandboxDenied, when set, is asked before a sandbox-denied command gives
 	// up: the sandbox refused a path this command needs, and the person may want
-	// to re-admit it. It receives the path (already extracted from the command
-	// and its justification) and the command line the question is about, and
-	// reports whether a grant was registered. A yes re-runs the command — still
-	// contained, with the path now reachable — and a no leaves the original
-	// failure in place. Wired by the drivers through cli/run, so the question is
-	// literally the same one the refused-escape dialog asks; a nil hook keeps the
-	// old behavior (the denial is labelled for the model, nobody is interrupted).
-	OnSandboxDenied func(ctx context.Context, path, summary string) bool
+	// to re-admit it — or to run this one command without the sandbox at all.
+	// It receives the path (already extracted from the command and its
+	// justification) and the command line the question is about, and reports
+	// what was granted (see SandboxDenialAnswer). Wired by the drivers through
+	// cli/run, so the question is literally the same one the refused-escape
+	// dialog asks; a nil hook keeps the old behavior (the denial is labelled for
+	// the model, nobody is interrupted).
+	OnSandboxDenied func(ctx context.Context, path, summary string) SandboxDenialAnswer
 	// deniedAsked is this tool's once-per-path memo for that question, the same
 	// rule the gate applies: asked and answered is answered.
 	deniedAsked judge.OnceSet
@@ -105,6 +105,28 @@ type BashTool struct {
 	// same time.
 	sessionsMu sync.Mutex
 }
+
+// SandboxDenialAnswer is what came back from the question a sandbox denial puts
+// to the person. It is a choice, not a boolean, because "let it reach that path"
+// and "let it out of the box" are different decisions with different
+// consequences — and the second one exists because the command was already
+// reviewed and approved before it ran; what the sandbox refused is a path, not
+// the call.
+type SandboxDenialAnswer int
+
+const (
+	// SandboxDenialRefused: nothing was granted. The original failure stands,
+	// with its labelling for the model.
+	SandboxDenialRefused SandboxDenialAnswer = iota
+	// SandboxDenialReAdmitted: the refused path is registered, so re-running the
+	// command inside the sandbox can now reach it.
+	SandboxDenialReAdmitted
+	// SandboxDenialUnconfined: run this one command outside the sandbox. The
+	// asker has already recorded the decision (which emits a note, so an
+	// unconfined run is never silent); the tool re-runs it once with a Direct
+	// grant. Nothing about this is remembered.
+	SandboxDenialUnconfined
+)
 
 // SandboxRunner builds a sandboxed argv for one shell invocation: argv[0] is
 // the executable, argv[1:] its args. dir is advisory (the caller keeps
@@ -156,7 +178,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 	if t.ForceSandbox {
 		return true, ""
 	}
-	if agentcore.DirectGrantedFromContext(ctx) && !agentcore.SandboxRequestedFromContext(ctx) {
+	if (agentcore.DirectGrantedFromContext(ctx) || unconfinedApproved(ctx)) && !agentcore.SandboxRequestedFromContext(ctx) {
 		return false, ""
 	}
 	if strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated) &&
@@ -464,6 +486,23 @@ func sandboxRetryDone(ctx context.Context) bool {
 	return done
 }
 
+// unconfinedKey marks a command the person approved to re-run outside the
+// sandbox from the denial question (SandboxDenialUnconfined). It is the gate's
+// own answer travelling to the retry, exactly as agentcore.WithDirectGrant is
+// for a gate-approved escape — the difference is only which question produced
+// it: this one is asked at the moment the sandbox refused, with the command
+// already in front of the person.
+type unconfinedKey struct{}
+
+func withUnconfinedRun(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unconfinedKey{}, true)
+}
+
+func unconfinedApproved(ctx context.Context) bool {
+	v, _ := ctx.Value(unconfinedKey{}).(bool)
+	return v
+}
+
 // Execute runs one command: sandboxed by default, direct only where the gate
 // granted a Direct decision. A sandbox denial that names a path is offered back
 // to the person before the failure is returned (see OnSandboxDenied).
@@ -476,7 +515,8 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		return errorResult("bash: command is required"), nil
 	}
 	if a.Network == "on" && (t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess) &&
-		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) {
+		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) &&
+		!unconfinedApproved(ctx) {
 		return errorResult("bash: network access was requested but was not authorized; the command was not run. Ask for a network approval, or keep the command local"), nil
 	}
 
@@ -609,8 +649,15 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}
 		denialPath = p
 		if p != "" && t.deniedAsked.First(p) {
-			if t.OnSandboxDenied(ctx, p, a.Command) {
+			switch t.OnSandboxDenied(ctx, p, a.Command) {
+			case SandboxDenialReAdmitted:
 				return t.Execute(withSandboxRetry(ctx), id, args, onUpdate)
+			case SandboxDenialUnconfined:
+				// The person chose to run this one command outside the sandbox,
+				// at the moment the sandbox refused it. The retry flag keeps the
+				// denial question from being asked again if it fails for another
+				// reason; the unconfined flag is what sandboxRoute honours.
+				return t.Execute(withUnconfinedRun(withSandboxRetry(ctx)), id, args, onUpdate)
 			}
 		}
 	}

@@ -23,6 +23,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -418,11 +419,11 @@ func WritableAt(path string) bool {
 //
 // nil means there is nothing to ask with (no driver dialog): the denial keeps
 // its labeling for the model and nobody is interrupted.
-func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary string) bool {
+func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary string) agenttool.SandboxDenialAnswer {
 	if g == nil || (g.opts.Confirm == nil && g.opts.In == nil) {
 		return nil
 	}
-	return func(ctx context.Context, path, summary string) bool {
+	return func(ctx context.Context, path, summary string) agenttool.SandboxDenialAnswer {
 		mode := ""
 		if g.opts.Perms != nil {
 			mode = g.opts.Perms.Mode().String()
@@ -434,6 +435,12 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			// Which side was denied, so the dialog says it and leads with the
 			// row that unblocks the retry (see judge.PathWriteNeed).
 			NeedsWrite: judge.PathWriteNeed(path, summary),
+			// The command already ran, so it was already reviewed: what the
+			// sandbox refused is a path. Running it once unconfined is a
+			// decision the person can make here, and it is offered only when
+			// they are actually answering (the mode is not read-only, which
+			// would have refused the command before it ran).
+			UnconfineOffer: g.opts.Perms == nil || g.opts.Perms.Mode() != permissions.ReadOnly,
 		}
 		req.Origin = agentcore.OriginFromContext(ctx)
 		var ans judge.ApprovalAnswer
@@ -444,12 +451,38 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			ans = judge.AskReAdmit(ctx, g.opts.In, g.opts.Out, g.opts.Mu, path, summary, lang)
 		}
 		if !ans.Answered || !ans.Approve {
-			return false
+			return agenttool.SandboxDenialRefused
+		}
+		if ans.Unconfined {
+			// The person chose to run this one command outside the sandbox. The
+			// note is what keeps an unconfined run from being invisible; nothing
+			// is registered and nothing is remembered.
+			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+			if g.opts.Notes != nil {
+				rationale := "the sandbox denied " + path + "; you approved one unconfined run of this command"
+				if lang == "zh" {
+					rationale = "沙箱拒绝了 " + path + "；你批准了本次在沙箱外运行这条命令"
+				}
+				g.opts.Notes.Emit(judge.Note{
+					Tool: "bash", Kind: judge.NoteEscaped, Level: judge.Allow, Lang: lang,
+					Summary: summary, Rationale: rationale,
+				})
+			}
+			return agenttool.SandboxDenialUnconfined
+		}
+		// The write side's registration belongs here, where the callback that
+		// writes the table row and the sandbox's writable root lives — the same
+		// one the dialog's write rows use. ApplyReAdmittedPath then reports what
+		// the answer granted, for both sides.
+		if root := strings.TrimSpace(ans.WritableRoot); root != "" {
+			if made, _ := GrantWritableRoot(root, ans.Persisted); !made {
+				return agenttool.SandboxDenialRefused
+			}
 		}
 		lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 		how, granted := judge.ApplyReAdmittedPath(ans, lang)
 		if !granted {
-			return false
+			return agenttool.SandboxDenialRefused
 		}
 		if g.opts.Notes != nil {
 			rationale := "the sandbox denied that path; " + how + " — retrying the command contained"
@@ -464,7 +497,7 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 				Summary: summary, Rationale: rationale,
 			})
 		}
-		return true
+		return agenttool.SandboxDenialReAdmitted
 	}
 }
 

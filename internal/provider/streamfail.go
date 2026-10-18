@@ -33,6 +33,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -45,6 +47,11 @@ const (
 	StreamCutStall     = "stall"
 	StreamCutTruncated = "truncated"
 	StreamCutSilent    = "silent"
+	// StreamCutConnect is the failure that never became a stream: the request
+	// reached no response at all. It is a cut — nothing was produced, and a fresh
+	// request is the fix — but its own kind, because the sentence and the retry
+	// reason differ from a stream that died mid-answer.
+	StreamCutConnect = "connect"
 )
 
 // Watchdog phases: the two windows are different questions, and a person reading
@@ -119,6 +126,11 @@ func streamCutEvidence(err error) string {
 	if errors.As(err, &wd) {
 		return wd.Seen.String()
 	}
+	if isConnectFailure(err) {
+		// A connect failure has no watchdog evidence; the transport's own text
+		// (the URL and the failure kind) is what the notice can show.
+		return connectDetail(err)
+	}
 	return ""
 }
 
@@ -143,6 +155,92 @@ func isTruncatedStreamErr(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "unexpected eof")
 }
 
+// isConnectFailure reports whether err is a connection-level failure from the
+// request itself — before any response existed — that a fresh request can
+// reasonably fix: the connection closed (EOF), dropped (reset, broken pipe,
+// GOAWAY), or never opened (refused, unreachable, DNS, timeout).
+//
+// It exists because this is the one failure that reaches the user as raw
+// machinery. A POST that dies with EOF produces no stream to cut and no status
+// to report, so the transcript showed exactly net/http's wrapper —
+// "Post \"https://…\": EOF" — with no retry at all, even though nothing had been
+// produced and re-issuing was obviously safe.
+//
+// A configuration error is deliberately not a connect failure: a missing API
+// key, a 400, or a bad base URL is the wire's real answer, and retrying it only
+// delays the message. Canceled and deadline-exceeded are excluded for the same
+// reason — those are the caller's decisions, not the upstream's.
+func isConnectFailure(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		// A response that ended early belongs to the truncation path: the
+		// stream existed and died, which is a different question from a request
+		// that never produced one.
+		return false
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		// client.Do's wrapper is the signal that no response was produced; its
+		// inner error says what happened. This is the shape the reported failure
+		// arrived in: `Post "https://…": EOF`.
+		if urlErr.Timeout() {
+			return true
+		}
+		return isConnectCause(urlErr.Err)
+	}
+	if errors.Is(err, io.EOF) {
+		// A bare io.EOF is the transport's own "the body ended" signal, which
+		// the pump consumes as a normal end of stream. It is not a connect
+		// failure, and treating it as one would retry every clean close.
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return isConnectCause(err)
+}
+
+// isConnectCause reports whether the innermost error names a connection that
+// produced no response.
+func isConnectCause(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	text := strings.ToLower(err.Error())
+	if text == "eof" {
+		return true
+	}
+	for _, s := range connectFailureTexts {
+		if strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// connectFailureTexts are the textual shapes net/http and the SDKs use when the
+// connection produced no response. The sentinels above are checked first; these
+// cover the wrappers that preserve only the message.
+var connectFailureTexts = []string{
+	"connection reset by peer",
+	"broken pipe",
+	"connection refused",
+	"connection closed",
+	"use of closed network connection",
+	"server sent goaway",
+	"network is unreachable",
+	"no route to host",
+	"i/o timeout",
+	"tls handshake timeout",
+	"no such host",
+}
+
 // isStreamCutErr reports any failure that means "the stream ended early": a
 // dropped connection, an idle watchdog, or a content stall. It is deliberately
 // narrower than "any error" — a 400 or a decoder failure is the wire's real
@@ -152,6 +250,7 @@ func isStreamCutErr(err error) bool {
 		return false
 	}
 	return isTruncatedStreamErr(err) ||
+		isConnectFailure(err) ||
 		errors.Is(err, errStreamIdle) ||
 		errors.Is(err, errStreamStall) ||
 		errors.Is(err, errStreamNoTerminal)
@@ -167,6 +266,8 @@ func streamCutReason(err error) string {
 		return StreamCutStall
 	case isTruncatedStreamErr(err):
 		return StreamCutTruncated
+	case isConnectFailure(err):
+		return StreamCutConnect
 	default:
 		return StreamCutSilent
 	}
@@ -209,6 +310,54 @@ func streamCutRetriedError(provider string, err error, retries int) error {
 	return cutError(provider, err, fmt.Sprintf("already retried %s, and the connection dropped again — retry the turn", times))
 }
 
+// streamConnectError renders a turn whose request never reached a response. It
+// names the provider, how many attempts were made, and the transport's own text
+// (which carries the URL and the failure kind) — instead of the raw
+// `Post "https://…": EOF` that used to be the whole message.
+//
+// Any other error is returned unchanged, so this is safe to call on every path:
+// a missing key or a 400 keeps its own wording.
+func streamConnectError(provider string, err error, attempts int) error {
+	if !isConnectFailure(err) {
+		return err
+	}
+	where := strings.TrimSpace(provider)
+	if where == "" {
+		where = "the provider"
+	} else {
+		where += ":"
+	}
+	tries := fmt.Sprintf("%d attempts", attempts)
+	if attempts <= 1 {
+		tries = "one attempt"
+	}
+	return fmt.Errorf("%s could not reach a response after %s — %s; retry the turn",
+		where, tries, cutCause(provider, err))
+}
+
+// connectOrCut picks the failure to report when an attempt could not be started
+// at all: the connection error when that is what happened (it names the cause),
+// and the original cut otherwise, so a configuration error that surfaced on the
+// retry keeps its own wording.
+func connectOrCut(provider string, err, cut error) error {
+	if isConnectFailure(err) {
+		return streamConnectError(provider, err, 1)
+	}
+	if err != nil {
+		return err
+	}
+	return cut
+}
+
+// connectDetail is the clause a retry notice carries for a connection failure:
+// the transport's own text, which names the URL and the failure kind.
+func connectDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 // cutError builds the sentence for a cut stream with the given remedy.
 func cutError(provider string, err error, remedy string) error {
 	if !isStreamCutErr(err) {
@@ -240,6 +389,8 @@ func streamCutDetail(provider string, err error) string {
 		return fmt.Sprintf("no output arrived for %s (the model stopped producing)", stallTimeout())
 	case errors.Is(err, errStreamNoTerminal):
 		return "the stream ended without a final event (the connection closed before the answer was complete)"
+	case isConnectFailure(err):
+		return "the request reached no response (" + cutCause(provider, err) + ")"
 	default:
 		return fmt.Sprintf("the connection closed before the answer finished (%s)", cutCause(provider, err))
 	}

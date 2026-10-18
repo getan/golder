@@ -105,21 +105,61 @@ func (p *streamRetryProvider) CurrentWire() Wire {
 // StreamCompletion starts the relay pump and returns the single stream the
 // caller consumes. An attempt that was cut before showing anything never reaches
 // the caller: its events are held, then dropped.
+//
+// The first call is retried here, before any stream exists, when it fails at the
+// connection level: a POST that dies with EOF has produced nothing, and the
+// caller has no stream to report it on. The retry is silent because there is no
+// stream to announce it on yet; the pump's later retries do announce theirs.
 func (p *streamRetryProvider) StreamCompletion(ctx context.Context, req CompletionRequest) (*AssistantMessageEventStream, error) {
-	in, err := p.inner.StreamCompletion(withStreamAttempt(ctx, 0), req)
+	max := streamMaxRetries()
+	in, spent, err := p.connect(ctx, req, 0, max, nil)
 	if err != nil {
-		return nil, err
+		return nil, streamConnectError(p.Name(), err, spent+1)
 	}
 	out := NewAssistantMessageEventStream(0)
-	go p.pump(ctx, req, in, out)
+	go p.pumpFrom(ctx, req, in, out, spent)
 	return out, nil
 }
 
+// connect issues one attempt and retries a connection-level failure until the
+// shared budget is spent. start is the retry number the call carries (the
+// watchdog budgets widen with it); onRetry, when set, is told about each retry
+// before it is made — the pump emits a notice there, while the very first call
+// has no stream to notify on yet.
+//
+// It returns the stream, the attempt number the next call should use, and the
+// error when the attempt could not be started at all.
+func (p *streamRetryProvider) connect(ctx context.Context, req CompletionRequest, start, max int, onRetry func(attempt int, err error)) (*AssistantMessageEventStream, int, error) {
+	attempt := start
+	for {
+		in, err := p.inner.StreamCompletion(withStreamAttempt(ctx, attempt), req)
+		if err == nil {
+			return in, attempt, nil
+		}
+		if !isConnectFailure(err) || attempt >= max || ctx.Err() != nil {
+			return nil, attempt, err
+		}
+		attempt++
+		if onRetry != nil {
+			onRetry(attempt, err)
+		}
+		if !waitRetry(ctx, streamRetryBackoff(attempt)) {
+			return nil, attempt, err
+		}
+	}
+}
+
 func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, in *AssistantMessageEventStream, out *AssistantMessageEventStream) {
+	p.pumpFrom(ctx, req, in, out, 0)
+}
+
+// pumpFrom is pump with the number of connection retries already spent, so the
+// budget covers the whole turn rather than resetting after the first call.
+func (p *streamRetryProvider) pumpFrom(ctx context.Context, req CompletionRequest, in *AssistantMessageEventStream, out *AssistantMessageEventStream, spent int) {
 	defer out.Close()
 
 	max := streamMaxRetries()
-	retries := 0
+	retries := spent
 	// firstTokenCuts counts consecutive attempts that produced nothing at all. Two
 	// of those mean the upstream is not answering — widening the budget a third
 	// time only makes the user wait longer for the same silence.
@@ -173,12 +213,30 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 		// The retry may re-resolve a wire (the wrapper sits above the wire
 		// fallback) and always builds a fresh request and decoder, so no state
 		// from the cut attempt is carried over.
-		next, err := p.inner.StreamCompletion(withStreamAttempt(ctx, retries), req)
+		next, used, err := p.connect(ctx, req, retries, max, func(attempt int, cerr error) {
+			// A retry that cannot connect is the same failure the loop exists
+			// for, so it is announced the same way instead of ending the turn
+			// with a raw transport error.
+			_ = out.Emit(ctx, StreamNoticeEvent{
+				Kind:        StreamNoticeRetry,
+				Provider:    p.Name(),
+				Reason:      StreamCutConnect,
+				Attempt:     attempt,
+				MaxAttempts: max,
+				Detail:      connectDetail(cerr),
+			})
+		})
+		retries = used
 		if err != nil {
-			// The retry could not even start; the cut is still the failure the
-			// stream ended with, and the early error (a missing key, a bad flag)
-			// has its own reporting path.
-			p.emitFailure(ctx, out, cut, retries)
+			if ctx.Err() != nil {
+				p.emitAborted(ctx, out)
+				return
+			}
+			// The retry could not start. A connection failure is the failure
+			// this loop is for, so it is reported with the connect sentence; a
+			// configuration error (a missing key, a bad flag) keeps its own
+			// wording, which is what the caller needs to fix it.
+			p.emitFailure(ctx, out, connectOrCut(p.Name(), err, cut), retries)
 			return
 		}
 		in = next
@@ -271,9 +329,15 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 // sentence: a cut that happened before any retry invites one, and a cut that
 // survived one says so.
 func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMessageEventStream, err error, retries int) {
-	sentence := streamCutError(p.Name(), err)
-	if retries > 0 {
-		sentence = streamCutRetriedError(p.Name(), err, retries)
+	// A connection failure gets the "never reached a response" sentence, which
+	// counts the attempts; a stream cut keeps the cut sentence, which names
+	// which window expired.
+	sentence := streamConnectError(p.Name(), err, retries+1)
+	if !isConnectFailure(err) {
+		sentence = streamCutError(p.Name(), err)
+		if retries > 0 {
+			sentence = streamCutRetriedError(p.Name(), err, retries)
+		}
 	}
 	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
 		RoleField: agentcore.RoleAssistant,

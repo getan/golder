@@ -612,6 +612,52 @@ func TestApprovalDialogWritableRow(t *testing.T) {
 // dialog says so and the row that grants it leads — the first row is the one a
 // reader who trusts the dialog takes, and a read grant would leave the retry
 // failing on the same path.
+// TestApprovalReAdmitOffersUnconfinedRun: the denial dialog can also answer "run
+// this one command outside the sandbox" — the answer that works when no grant
+// can (a system-protected path, credential material) — and the row appears only
+// when the asker offered it, never as the default and never last.
+func TestApprovalReAdmitOffersUnconfinedRun(t *testing.T) {
+	grantstest.Install(t)
+	const path = "/Volumes/KIOXIA/golder-probe-unconfined"
+	req := judge.ApprovalRequest{
+		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Sandbox,
+		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true, UnconfineOffer: true,
+	}
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m := NewModel(Options{})
+	m.openApproval(req, reply)
+	escape := -1
+	for i, row := range m.approval.rows {
+		if row.key == "e" {
+			escape = i
+			if !strings.Contains(row.label, "outside the sandbox") {
+				t.Errorf("escape row = %q, want it to say what it does", row.label)
+			}
+		}
+	}
+	if escape < 0 {
+		t.Fatalf("no escape row: %+v", m.approval.rows)
+	}
+	if last := m.approval.rows[len(m.approval.rows)-1]; last.key != "esc" {
+		t.Errorf("last row = %+v, want Deny last", last)
+	}
+	m.answerApproval(approveUnconfined)
+	if ans := awaitAnswer(t, reply); !ans.Approve || !ans.Unconfined {
+		t.Fatalf("answer = %+v, want an unconfined approval", ans)
+	}
+
+	// Without the offer there is no row: the refused-escape dialog has its own
+	// escape answer, and two escape rows in one dialog would be a bug.
+	req.UnconfineOffer = false
+	m2 := NewModel(Options{})
+	m2.openApproval(req, make(chan judge.ApprovalAnswer, 1))
+	for _, row := range m2.approval.rows {
+		if row.key == "e" {
+			t.Fatalf("escape row offered without an offer: %+v", row)
+		}
+	}
+}
+
 func TestApprovalReAdmitWriteLeads(t *testing.T) {
 	grantstest.Install(t)
 	const path = "/Volumes/KIOXIA/golder-probe4"

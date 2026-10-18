@@ -116,8 +116,13 @@ func TestBashEnforceWithoutRunnerFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "failing closed") {
-		t.Fatalf("output = %q, want fail-closed message", got)
+	// The message says what was not done and what to do next, rather than the
+	// old bare "failing closed".
+	got := agentcore.ContentToText(res.Content)
+	for _, want := range []string{"was not run", "Install a platform sandbox"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
 	}
 }
 
