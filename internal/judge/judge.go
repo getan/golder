@@ -659,6 +659,13 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 			}
 		}
+		// Opt-in: under auto an Allow has already settled the risk question, so
+		// the network capability may ride that answer instead of being asked
+		// again. A remembered denial returned above; ask mode, Confirm, Contain,
+		// Deny and a failed review keep their own paths.
+		if network && !v.Network && NetworkFollow() && optsIsAuto(state) && v.Level == Allow && !v.Failed {
+			v.Network = true
+		}
 		// Do not offer a "network inside the sandbox" answer if the process
 		// cannot create that sandbox. The user can instead explicitly authorize
 		// a direct one-call run; an unanswered dialog still fails closed.

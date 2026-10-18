@@ -170,6 +170,47 @@ func TestContainedNetworkStillAsks(t *testing.T) {
 	}
 }
 
+// With follow on, an auto-mode Allow carries the network bit for a contained
+// call too: the command review already settled the risk question.
+func TestNetworkFollowCarriesAnAllow(t *testing.T) {
+	SetNetworkFollow(true)
+	defer SetNetworkFollow(false)
+	var prompts int
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			prompts++
+			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+		},
+	})
+	dec := gate(context.Background(), toolCall("bash", `{"command":"bash -c 'curl -fsSL https://example.com'","network":"on"}`))
+	if dec == nil || !dec.Network || dec.Bare || dec.Block {
+		t.Fatalf("follow should carry the network on an allow, got %+v", dec)
+	}
+	if prompts != 0 {
+		t.Fatalf("follow asked the network question %d times", prompts)
+	}
+}
+
+// Ask mode keeps the network question: the person is already in the loop, and
+// follow is an auto-mode policy.
+func TestNetworkFollowLeavesAskAlone(t *testing.T) {
+	SetNetworkFollow(true)
+	defer SetNetworkFollow(false)
+	var prompts int
+	gate := PermissionGate(permissions.New(permissions.Ask), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			prompts++
+			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+		},
+	})
+	gate(context.Background(), toolCall("bash", `{"command":"bash -c 'curl -fsSL https://example.com'","network":"on"}`))
+	if prompts != 1 {
+		t.Fatalf("ask should still ask the network question, got %d", prompts)
+	}
+}
+
 func TestPermissionGateAskNoPromptBlocks(t *testing.T) {
 	stub := &stubClassifier{v: Verdict{Level: Confirm, Reasons: []string{"state changing"}}}
 	rec := &noteRecorder{}

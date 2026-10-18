@@ -21,6 +21,10 @@ func TestNetworkKey(t *testing.T) {
 		{"bash", `{"command":"git push origin main"}`, grants.NetworkCommand, "git push", true},
 		{"bash", `{"command":"curl https://example.com"}`, "", "", false},
 		{"bash", `{"command":"git push && curl evil"}`, "", "", false},
+		{"bash", `{"command":"cd /tmp && GOCACHE=/x go test ./... | tail -5"}`, grants.NetworkCommand, "go test", true},
+		{"bash", `{"command":"go test ./... | tail -5"}`, grants.NetworkCommand, "go test", true},
+		{"bash", `{"command":"go test ./... && git push"}`, "", "", false},
+		{"bash", `{"command":"find . -exec go test ./... \\;"}`, "", "", false},
 	}
 	for _, c := range cases {
 		kind, key, ok := NetworkKey(c.tool, []byte(c.args))

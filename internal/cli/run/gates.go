@@ -29,6 +29,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
@@ -102,7 +103,14 @@ type Gates struct {
 // no inputs still installs hooks and the authorization snapshot, and its chain
 // is nil (an ungated run), which is what the callers previously expressed with
 // a nil BeforeToolCall.
-func NewGates(opts GatesOpts) *Gates { return &Gates{opts: opts} }
+func NewGates(opts GatesOpts) *Gates {
+	// The network policy is persisted beside config.toml; a parse/open failure
+	// leaves the safe default (off) rather than guessing.
+	if cfg, err := config.LoadNetworkConfig(); err == nil {
+		judge.SetNetworkFollow(cfg.Follow)
+	}
+	return &Gates{opts: opts}
+}
 
 // Install wires the session's gates onto cfg: the interactive chain as the
 // tool-execution seam, the hook seams when a dispatcher is resolved, and the

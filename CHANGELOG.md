@@ -21,6 +21,17 @@ interactive REPL/TUI.
   `sandbox` or `unconfined`. The same marker covers `read`/`grep`/`find`/`ls`/
   `view_image`/`apply_patch` when the one-shot file worker runs them, with the
   in-process fallback marked `unconfined`.
+- **Assignments are classified by what they change, not by whether they contain
+  a slash**: `GOCACHE=…`/`TMPDIR=…` no longer push an otherwise enumerable
+  command out of the envelope; `PATH`, `LD_*`/`DYLD_*`, `HOME`, and the
+  interpreter/toolchain variables still contain.
+- **Compound network commands can be remembered**: `/network add host|command|tool
+  <key>` pre-authorizes, and a compound line with one rememberable program plus
+  non-network parts (`cd … && GOCACHE=… go test … | tail`) remembers `go test`;
+  a line with a second or unknown network-capable program stays per-call.
+- **`/network follow`**: an opt-in policy (persisted in `network.toml`) where an
+  auto-mode Allow carries its network; a remembered denial still wins, and ask
+  mode is unchanged.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`

@@ -22,9 +22,11 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
@@ -1086,15 +1088,19 @@ func RegisterNetworkCommand(reg *runtime.SlashRegistry, lang func() string) {
 		Name:         "network",
 		Category:     runtime.CategoryPermissions,
 		Description:  "show or remove remembered network rules",
-		ArgumentHint: "[list | rm [host|command|tool] <key>]",
+		ArgumentHint: "[list | add host|command|tool <key> | rm [host|command|tool] <key> | follow on|off]",
 		Action: func(args string) string {
 			l := pickLang()
 			arg := strings.TrimSpace(args)
 			switch {
 			case arg == "", arg == "list":
 				return runNetworkList(l)
+			case arg == "add" || strings.HasPrefix(arg, "add "):
+				return runNetworkAdd(strings.TrimSpace(strings.TrimPrefix(arg, "add")), l)
 			case arg == "rm" || strings.HasPrefix(arg, "rm "):
 				return runNetworkRemove(strings.TrimSpace(strings.TrimPrefix(arg, "rm")), l)
+			case arg == "follow" || strings.HasPrefix(arg, "follow "):
+				return runNetworkFollow(strings.TrimSpace(strings.TrimPrefix(arg, "follow")), l)
 			}
 			return usageLine(reg, "network", l)
 		},
@@ -1143,11 +1149,123 @@ func runNetworkList(l string) string {
 		}
 	}
 	if l == "zh" {
-		b.WriteString("删除：/network rm <host|command|tool> <key>")
+		b.WriteString("添加：/network add host|command|tool <key>\n删除：/network rm <host|command|tool> <key>")
 	} else {
-		b.WriteString("remove: /network rm <host|command|tool> <key>")
+		b.WriteString("add: /network add host|command|tool <key>\nremove: /network rm <host|command|tool> <key>")
 	}
 	return b.String()
+}
+
+// runNetworkAdd records a standing allow rule. The keys are validated by the
+// same normalizers the dialog uses, so a rule added here is one the runtime can
+// match; a key that cannot be normalized is refused rather than stored.
+func runNetworkAdd(arg, l string) string {
+	fields := strings.Fields(arg)
+	if len(fields) < 2 {
+		return usageLineText(l, "/network add host|command|tool <key>")
+	}
+	var g grants.NetworkGrant
+	var err error
+	switch fields[0] {
+	case "host":
+		tool := ""
+		if len(fields) >= 3 {
+			tool = fields[2]
+		}
+		g, err = grants.AddNetworkHost(fields[1], tool, true, grants.Remembered, "slash command")
+	case "command":
+		g, err = grants.AddNetworkCommand(strings.Join(fields[1:], " "), true, grants.Remembered, "slash command")
+	case "tool":
+		g, err = grants.AddNetwork(grants.NetworkGrant{
+			Kind: grants.NetworkTool, Key: fields[1], Allow: true,
+			Lifetime: grants.Remembered, Source: "slash command",
+		})
+	default:
+		return usageLineText(l, "/network add host|command|tool <key>")
+	}
+	if err != nil {
+		if l == "zh" {
+			return "无法添加网络规则：" + err.Error()
+		}
+		return "cannot add network rule: " + err.Error()
+	}
+	return addedNetworkText(g, l)
+}
+
+func addedNetworkText(g grants.NetworkGrant, l string) string {
+	scope := string(g.Kind) + " " + g.Key
+	if g.Tool != "" {
+		scope += " (" + g.Tool + ")"
+	}
+	life := string(g.Lifetime)
+	if g.Lifetime == grants.Session {
+		if l == "zh" {
+			life = "本会话"
+		} else {
+			life = "this session"
+		}
+	}
+	if l == "zh" {
+		return "已添加网络规则：" + scope + " [" + life + "]"
+	}
+	return "added network rule: " + scope + " [" + life + "]"
+}
+
+// runNetworkFollow persists and applies the opt-in auto-allow network policy.
+// The default is off; turning it on never weakens a remembered denial, and it
+// does not touch ask mode.
+func runNetworkFollow(arg, l string) string {
+	cfg, err := config.LoadNetworkConfig()
+	if err != nil {
+		return networkFollowError(err, l)
+	}
+	switch arg {
+	case "", "show":
+		return networkFollowText(cfg.Follow, true, l)
+	case "on":
+		cfg.Follow = true
+	case "off":
+		cfg.Follow = false
+	default:
+		return usageLineText(l, "/network follow [on|off]")
+	}
+	if err := config.SaveNetworkConfig(cfg); err != nil {
+		return networkFollowError(err, l)
+	}
+	judge.SetNetworkFollow(cfg.Follow)
+	return networkFollowText(cfg.Follow, false, l)
+}
+
+func networkFollowText(on, show bool, l string) string {
+	if l == "zh" {
+		if show {
+			if on {
+				return "网络跟随评审的 Allow：开（auto 的 Allow 不再单独问网络）"
+			}
+			return "网络跟随评审的 Allow：关（网络是每次单独的问题）"
+		}
+		if on {
+			return "已开启：auto 模式下 Allow 的调用直接携带网络（记住的拒绝仍优先；ask 不变）"
+		}
+		return "已关闭：网络恢复为每次单独授权"
+	}
+	if show {
+		if on {
+			return "network follows an auto-mode allow: on"
+		}
+		return "network follows an auto-mode allow: off"
+	}
+	if on {
+		return "enabled: an auto-mode allow carries its network; a remembered denial still wins and ask is unchanged"
+	}
+	return "disabled: network is a separate per-call question again"
+}
+
+func networkFollowError(err error, l string) string {
+	if l == "zh" {
+		return "无法保存网络策略：" + err.Error()
+	}
+	return "cannot save the network policy: " + err.Error()
 }
 
 func runNetworkRemove(arg, l string) string {

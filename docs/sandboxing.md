@@ -4,7 +4,7 @@
 
 ## 默认立场（与 pi 相同）
 
-golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 一律在沙箱内跑（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`），原生文件工具走一次性沙箱 worker。沙箱是**白名单**：读限项目 + 系统运行时 + 显式授权的读根，写限项目 + `TMPDIR` + 显式授权的写根，网络默认关闭、按次授权（见下文"执行隔离"）。
+golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙箱内跑（可完整枚举且不碰凭据的调用可能裸跑，见"信封"），原生文件工具走一次性沙箱 worker。沙箱是**白名单**：读限项目 + 系统运行时 + 显式授权的读根，写限项目 + `TMPDIR` + 显式授权的写根，网络默认关闭、按次授权（见下文"执行隔离"）。
 
 沙箱之外还有一层**准入控制**（trust 三态、四档权限模式、`--approve`、`--allowed-tools`/`--disallowed-tools`）：它约束"模型是否被允许发起某个工具调用"，与操作系统隔离是两件事。只有 `GOLDER_SANDBOX=off`、或平台从未实现沙箱（Windows）时才裸跑；需要比 OS 沙箱更强的边界（整机隔离、容器）时，再把 golder 容器化。
 
@@ -39,14 +39,14 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 一律在沙
 
 四档模式回答"准不准跑"，信封回答"在哪跑"；两者正交。一个已批准的 bash 调用，只有在**整条命令的效果都能从文本读出**时才不套文件沙箱（`Bare`），否则默认收容：
 
-- `shellfacts` 解析失败、含 `for`/`if` 等构造、出现 `$VAR`/`$(...)`/`$((...))`/进程替换、赋值里带路径（`PATH=/tmp/bin`、`LD_PRELOAD=...`）→ 收容；
+- `shellfacts` 解析失败、含 `for`/`if` 等构造、出现 `$VAR`/`$(...)`/`$((...))`/进程替换、赋值改变程序或加载（`PATH=/tmp/bin`、`LD_PRELOAD=...`、`HOME=...`）→ 收容；`GOCACHE=`/`TMPDIR=` 这类缓存/临时目录不改变执行，仍可枚举；
 - 程序本身是运行文本或包装器（`bash`/`sh`/`python`/`node`/`make`/`docker`/`env`/`xargs`/`sudo` 等）→ 收容；
 - 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
 - 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
 
 `GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
 
-网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
+网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。默认下 contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）把 auto 模式下**所有 Allow**（包括 contained）的网络一起带上；`/network add host|command|tool <key>` 可以预授权，`/network rm` 删除。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
 
 ### `auto` 的审查器（就是会话模型）
 
@@ -131,9 +131,11 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 网络与 golder 自身状态
 
-**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。普通 `Allow/Confirm` 评级**不**等于联网许可；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
+**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。普通 `Allow/Confirm` 评级**不**等于联网许可（`/network follow on` 的可选例外见下：auto 的 Allow 直接携带网络；ask/Confirm 仍按次）；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
-**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。contained 调用和 `GOLDER_SANDBOX=enforce` 仍按次授权，或由 `/network` 记住。
+**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。默认下 contained 调用和 `GOLDER_SANDBOX=enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）让 auto 的 Allow（含 contained）一起携带网络；`/network add host|command|tool <key>` 预授权，`/network rm` 删除。
+
+**`/network` 的三种用法**：`/network add host|command|tool <key>` 预先记住"允许"（host 可带工具名）；`/network rm` 删除；`/network follow on|off` 切换"auto 的 Allow 直接携带网络"（默认关，保存在 `network.toml`，记住的拒绝仍优先，`ask` 不变）。复合命令的 command key 只有在这种形状才成立：每个部分要么是同一个可记住的程序，要么是非联网程序（`cd … && GOCACHE=… go test … | tail` → `go test`；`git push && curl evil` 不记）。
 
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 

@@ -263,7 +263,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 - 原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）由 `toolworker` 的一次性沙箱执行时也标 `·sandbox`；`full-access`/Direct/无 runner 退回进程内时标 `·unconfined`；`todo`/`websearch`/`webfetch` 等不走 OS 沙箱的工具没有标记；
 - `GOLDER_SANDBOX=enforce` 仍把每一条都收进沙箱，优先于信封；`full-access` 不变。
 
-网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权。
+网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。默认下 contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）让 auto 的 Allow（含 contained）直接携带网络；`/network add host|command|tool <key>` 可预授权。信封不是网络白名单，也不是持久授权。
 
 ### 权限模式
 
@@ -277,6 +277,8 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `full-access` | 不做审查、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
 
 首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
+
+**网络授权**：默认每次单独问；`/network add host|command|tool <key>` 预授权、`/network follow on` 让 auto 的 Allow 直接携带网络（记住的拒绝仍优先，ask 不变）、`/network rm` 删除、`/network list` 查看；`follow` 持久化在 `network.toml`。
 
 ### 常用开关
 
