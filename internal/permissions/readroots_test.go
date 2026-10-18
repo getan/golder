@@ -3,6 +3,7 @@ package permissions
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,18 @@ func resetReadRoots() {
 	readRoots.paths = nil
 	readRoots.seen = nil
 	readRoots.mu.Unlock()
+}
+
+func TestSystemReadRootsIncludeTheShellSelector(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS shell selector")
+	}
+	for _, root := range SystemReadRoots() {
+		if root == "/private/var/select" {
+			return
+		}
+	}
+	t.Error("/private/var/select missing from SystemReadRoots")
 }
 
 func TestInside(t *testing.T) {

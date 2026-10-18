@@ -28,6 +28,10 @@ func SystemReadRoots() []string {
 		roots = append(roots,
 			"/System", "/Library", "/Applications",
 			"/private/var/db", "/private/etc", "/private/tmp", "/private/var/tmp",
+			// /private/var/select holds the shell selector (/bin/sh reads
+			// /private/var/select/sh); without it a nested `sh -c` fails with
+			// EPERM even when every other system path is readable.
+			"/private/var/select",
 		)
 	} else {
 		roots = append(roots, "/var/lib", "/var/cache")
