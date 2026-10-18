@@ -48,6 +48,61 @@ func TestGrantSnapshotCarriesCapabilitiesAcrossJSON(t *testing.T) {
 	}
 }
 
+// A session grant for a credential path used to fail every worker call with
+// "grant targets protected state or credential material", because the policy
+// check rejected the whole request. The path must be dropped from the mounts,
+// while ordinary grants on the same call still apply.
+func TestWorkerPolicyDropsAmbientProtectedGrant(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	secret := filepath.Join(home, ".ssh")
+	work := t.TempDir()
+	entries := grants.Entries{Session: []grants.Grant{
+		{Path: secret, Allow: grants.Read, Scope: grants.Subtree, Lifetime: grants.Session},
+		{Path: work, Allow: grants.Read, Scope: grants.Subtree, Lifetime: grants.Session},
+	}}
+	store, err := grants.FromSnapshot(entries)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	grants.SetProcess(store)
+	defer grants.SetProcess(nil)
+
+	policy, err := workerPolicy(Request{Grants: entries}, nil, "/bin/true")
+	if err != nil {
+		t.Fatalf("ambient protected grant must not fail the call: %v", err)
+	}
+	for _, p := range policy.ReadDirs {
+		if p == secret {
+			t.Errorf("protected path %q was mounted into the worker", p)
+		}
+	}
+	found := false
+	for _, p := range policy.ReadDirs {
+		if p == work {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ordinary grant %q missing from mounts: %+v", work, policy.ReadDirs)
+	}
+}
+
+// An explicit one-call grant for a protected path is still refused: that is the
+// caller asking for this exact file, not an ambient grant it did not choose.
+func TestWorkerPolicyRefusesExplicitProtectedRead(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home directory")
+	}
+	_, err = workerPolicy(Request{ReadFile: filepath.Join(home, ".ssh", "id_ed25519")}, nil, "/bin/true")
+	if err == nil || !strings.Contains(err.Error(), "protected state or credential material") {
+		t.Fatalf("explicit protected read = %v, want the protected-path refusal", err)
+	}
+}
+
 func TestIsolatedFileToolsAndRewind(t *testing.T) {
 	if runtime.GOOS != "darwin" || !seatbelt.Available() {
 		t.Skip("integration test requires macOS sandbox-exec")

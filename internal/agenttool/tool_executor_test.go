@@ -82,6 +82,31 @@ func TestExecutorNormal(t *testing.T) {
 	}
 }
 
+// A tool that returns normally but reports a failure in its result (a refused
+// command, a failed patch) must reach the caller as an error: the message and
+// the end event both carry IsError, which is what colors the tool card.
+func TestExecutorResultFlaggedIsError(t *testing.T) {
+	tool := execTool{name: "refuse", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent("refused")},
+			IsError: true,
+		}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+
+	var events []agentcore.AgentEvent
+	emit := func(ctx context.Context, ev agentcore.AgentEvent) error { events = append(events, ev); return nil }
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "refuse"}, emit)
+
+	if !msg.IsError {
+		t.Fatalf("result IsError was lost: %+v", msg)
+	}
+	end, ok := events[len(events)-1].(agentcore.ToolExecutionEndEvent)
+	if !ok || !end.IsError {
+		t.Fatalf("end event = %+v, want IsError", events[len(events)-1])
+	}
+}
+
 func TestExecutorUnknownTool(t *testing.T) {
 	cfg := ToolExecutorConfig{Registry: NewToolRegistry()}
 	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "ghost"}, nil)

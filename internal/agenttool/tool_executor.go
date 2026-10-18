@@ -238,7 +238,10 @@ func runTool(ctx context.Context, tool agentcore.AgentTool, call agentcore.Agent
 	if err != nil {
 		return errorResult(fmt.Sprintf("tool %q failed: %v", call.Name, err)), err, true
 	}
-	return res, nil, false
+	// A tool may report a failure through its result instead of an error (a
+	// refused command, a patch that did not apply). Carry that flag through:
+	// it is what marks the card and the tool message as an error.
+	return res, nil, res.IsError
 }
 
 // finalizeToolCall applies the afterToolCall hook (field-level override, no deep
@@ -284,7 +287,10 @@ func finalizeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcor
 
 // errorResult builds an error AgentToolResult carrying a single text block.
 func errorResult(msg string) agentcore.AgentToolResult {
-	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(msg)}}
+	return agentcore.AgentToolResult{
+		Content: agentcore.ContentList{agentcore.NewTextContent(msg)},
+		IsError: true,
+	}
 }
 
 // clipToolResultContent enforces the executor-layer byte budget on a tool

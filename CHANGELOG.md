@@ -1429,6 +1429,18 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A session grant for a credential path no longer breaks every file tool**:
+  after approving a one-session read of `~/.ssh`, every later `apply_patch`,
+  `read` or `grep` call failed with `tool worker grant targets protected state or
+  credential material`. The worker policy check rejected the whole request when
+  any mounted path was protected; it now drops that ambient grant from the mount
+  set and proceeds. A call that explicitly requests a protected path is still
+  refused, because that is the caller asking for this exact file.
+- **A refused command no longer ends with a green success dot**: tool results
+  carried no error flag, so `bash` rejecting a network request (and any other
+  `errorResult`) was recorded as a successful run. `AgentToolResult` now carries
+  `IsError`, the executor passes it to the end event and the tool message, and
+  the card colors the refusal as an error.
 - **A long prefill is no longer cut like a mid-stream hang**: the stream guard
   uses two different budgets now — a first-token window (3 minutes, widening to
   4 and 5 minutes on the first two retries;

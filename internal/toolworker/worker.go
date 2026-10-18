@@ -142,45 +142,13 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 		req.Grants = s.Entries()
 		req.Rows = grantRows(req.Grants)
 	}
-	policy := seatbelt.CallPolicy{ReadDirs: t.ExtraRoots, ReadFiles: []string{bin}}
-	for _, g := range req.Grants.All() {
-		if g.Allow == 0 {
-			continue
-		}
-		// The worker gets only effective grants, including exact "this read"
-		// grants recorded in an earlier call. The whole table travels as well,
-		// so a later exact refusal still overrides an ancestor at the tool level.
-		if g.Allow.Has(grants.Read) && grants.Allows(g.Path, grants.Read) {
-			if g.Scope == grants.Subtree {
-				policy.ReadDirs = append(policy.ReadDirs, g.Path)
-			} else {
-				policy.ReadFiles = append(policy.ReadFiles, g.Path)
-			}
-		}
-		if g.Allow.Has(grants.Write) && grants.Allows(g.Path, grants.Write) {
-			if g.Scope == grants.Subtree {
-				policy.WriteDirs = append(policy.WriteDirs, g.Path)
-			} else {
-				policy.WriteFiles = append(policy.WriteFiles, g.Path)
-			}
-		}
-	}
-	if req.ReadFile != "" {
-		policy.ReadFiles = append(policy.ReadFiles, req.ReadFile)
-	}
-	if req.WriteFile != "" {
-		policy.WriteFiles = append(policy.WriteFiles, req.WriteFile)
-	}
-	// A caller must never turn a path under the protected state root into a
-	// readable worker mount, even via a directly constructed worker tool.
-	for _, p := range append(append(append([]string{}, policy.ReadDirs...), policy.WriteDirs...), append(policy.ReadFiles, policy.WriteFiles...)...) {
-		if _, bad := judge.SecretPathReason(p); bad {
-			return failed("tool worker grant targets protected state or credential material")
-		}
+	policy, perr := workerPolicy(req, t.ExtraRoots, bin)
+	if perr != nil {
+		return failed(perr.Error())
 	}
 	if t.Name() == "apply_patch" {
 		// Patches may edit advertised skills, while reads cannot write there.
-		policy.WriteDirs = append(policy.WriteDirs, t.ExtraRoots...)
+		policy.WriteDirs = append(policy.WriteDirs, safePaths(t.ExtraRoots)...)
 	} else {
 		// The read tools cannot write. Do not give an in-process bug or a
 		// compromised rg subprocess write access merely because the user granted
@@ -256,6 +224,76 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 		err = errors.New("worker returned no result")
 	}
 	return failed("tool worker failed: " + err.Error() + workerStderr(stderr.String()))
+}
+
+// workerPolicy builds the mount set for one worker call. Ambient grants (the
+// session table) and configured extra roots are filtered: a grant for a
+// protected path must not become a worker mount, and — the bug this fixes — it
+// must not fail an unrelated call either. One session read grant for ~/.ssh
+// used to make every later tool call fail with "grant targets protected state
+// or credential material", because the check rejected the whole request
+// instead of dropping the one path.
+//
+// The one-call read/write grants are different: the caller asked for that exact
+// path on this call, so a protected target is a real refusal, not ambient noise.
+func workerPolicy(req Request, extraRoots []string, bin string) (seatbelt.CallPolicy, error) {
+	policy := seatbelt.CallPolicy{ReadDirs: safePaths(extraRoots), ReadFiles: []string{bin}}
+	for _, g := range req.Grants.All() {
+		if g.Allow == 0 {
+			continue
+		}
+		if !safeWorkerPath(g.Path) {
+			continue
+		}
+		// The worker gets only effective grants, including exact "this read"
+		// grants recorded in an earlier call. The whole table travels as well,
+		// so a later exact refusal still overrides an ancestor at the tool level.
+		if g.Allow.Has(grants.Read) && grants.Allows(g.Path, grants.Read) {
+			if g.Scope == grants.Subtree {
+				policy.ReadDirs = append(policy.ReadDirs, g.Path)
+			} else {
+				policy.ReadFiles = append(policy.ReadFiles, g.Path)
+			}
+		}
+		if g.Allow.Has(grants.Write) && grants.Allows(g.Path, grants.Write) {
+			if g.Scope == grants.Subtree {
+				policy.WriteDirs = append(policy.WriteDirs, g.Path)
+			} else {
+				policy.WriteFiles = append(policy.WriteFiles, g.Path)
+			}
+		}
+	}
+	if req.ReadFile != "" {
+		if !safeWorkerPath(req.ReadFile) {
+			return seatbelt.CallPolicy{}, fmt.Errorf("tool worker grant targets protected state or credential material")
+		}
+		policy.ReadFiles = append(policy.ReadFiles, req.ReadFile)
+	}
+	if req.WriteFile != "" {
+		if !safeWorkerPath(req.WriteFile) {
+			return seatbelt.CallPolicy{}, fmt.Errorf("tool worker grant targets protected state or credential material")
+		}
+		policy.WriteFiles = append(policy.WriteFiles, req.WriteFile)
+	}
+	return policy, nil
+}
+
+// safeWorkerPath reports whether p may be mounted into the worker. Protected
+// state and credential material may never cross that boundary.
+func safeWorkerPath(p string) bool {
+	_, bad := judge.SecretPathReason(p)
+	return !bad
+}
+
+// safePaths drops every path a worker must not mount.
+func safePaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if safeWorkerPath(p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func failed(why string) (agentcore.AgentToolResult, error) {

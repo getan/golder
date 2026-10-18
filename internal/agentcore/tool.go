@@ -58,4 +58,9 @@ type AgentToolResult struct {
 	Content   ContentList `json:"content"`
 	Details   any         `json:"details,omitempty"`
 	Terminate *bool       `json:"terminate,omitempty"`
+	// IsError marks a result that reports a failure in its content (a refused
+	// command, a patch that did not apply) while the tool itself returned
+	// normally. Without it the execution layer cannot tell "ran and succeeded"
+	// from "refused to run", so a refusal would be recorded as success.
+	IsError bool `json:"isError,omitempty"`
 }
