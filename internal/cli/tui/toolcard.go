@@ -70,6 +70,12 @@ type toolCard struct {
 	// directly below the command no matter how long the output or diff grows,
 	// instead of being pushed away by it.
 	notes []judge.Note
+
+	// envelope is where the call actually ran: envContained or envUnconfined,
+	// empty when the tool reported neither. "Was this isolated" is a question a
+	// reader has about every command in a transcript, and answering it per card
+	// costs one word (see envelopeMarker).
+	envelope string
 }
 
 // setInput fills the decoded call arguments when the announce/start event
@@ -196,7 +202,43 @@ func (c toolCard) title() string {
 	if c.state == cardRunning {
 		return "Running " + header
 	}
-	return "Ran " + header
+	return strings.TrimSpace("Ran " + header + " " + c.envelopeMarker())
+}
+
+// The two envelopes a shell call can run under, spelled the way the result
+// metadata carries them (agenttool's envelopeDetail).
+const (
+	envContained  = "sandbox"
+	envUnconfined = "bare"
+)
+
+// envelopeMarker is the one-word note the card's title carries: the answer to
+// "did this run isolated", on the same line as the command so a reader never
+// has to look for it. It is deliberately quiet — a tool that is always
+// contained reports nothing, and then there is nothing to say.
+func (c toolCard) envelopeMarker() string {
+	switch c.envelope {
+	case envContained:
+		return "·sandbox"
+	case envUnconfined:
+		return "·unconfined"
+	}
+	return ""
+}
+
+// envelopeFromDetails reads the per-call envelope marker a shell result carries
+// (agenttool's envelopeDetail). Any other shape reads as empty: a tool that
+// reported nothing gets no marker rather than a claim.
+func envelopeFromDetails(details any) string {
+	m, ok := details.(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch v, _ := m["envelope"].(string); v {
+	case envContained, envUnconfined:
+		return v
+	}
+	return ""
 }
 
 // render draws the card codex-style: the headline wraps a long command onto
@@ -483,6 +525,9 @@ func (c *toolCard) complete(ok bool, result string, details any) {
 		c.state = cardSuccess
 	} else {
 		c.state = cardWarn
+	}
+	if env := envelopeFromDetails(details); env != "" {
+		c.envelope = env
 	}
 	// A tool that reported a diff gets the dedicated colored Diff section; the
 	// diff is also embedded in the result text, so strip it there to keep the

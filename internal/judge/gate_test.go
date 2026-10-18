@@ -32,6 +32,13 @@ func toolCall(name, args string) agentcore.AgentToolCall {
 	return agentcore.AgentToolCall{Name: name, Arguments: json.RawMessage(args)}
 }
 
+// approvedToRun reports the two shapes an approval takes: no decision (the tool
+// keeps its default envelope) or the gate's Bare decision (the command is
+// enumerable, so it runs unconfined).
+func approvedToRun(dec *agentcore.BeforeToolCallDecision) bool {
+	return dec == nil || (dec.Bare && !dec.Block && !dec.Sandbox && !dec.Direct)
+}
+
 // noteRecorder captures the notes a gate emits.
 type noteRecorder struct{ notes []Note }
 
@@ -41,7 +48,7 @@ func TestPermissionGateAutoApprovesConfirm(t *testing.T) {
 	stub := &stubClassifier{v: Verdict{Level: Confirm, Risk: "medium", Authorization: "high", Reasons: []string{"recoverable install"}}}
 	rec := &noteRecorder{}
 	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{Classifier: stub, Notify: rec.emit})
-	if dec := gate(context.Background(), toolCall("bash", `{"command":"npm install"}`)); dec != nil {
+	if dec := gate(context.Background(), toolCall("bash", `{"command":"npm install"}`)); !approvedToRun(dec) {
 		t.Fatalf("auto mode should approve a confirm verdict, got %+v", dec)
 	}
 	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteApproved {
@@ -53,7 +60,7 @@ func TestPermissionGateAutoApprovesConfirm(t *testing.T) {
 }
 
 func TestPermissionGateAutoSandboxRoutes(t *testing.T) {
-	stub := &stubClassifier{v: Verdict{Level: Sandbox, Reasons: []string{"pipes remote content into a shell"}}}
+	stub := &stubClassifier{v: Verdict{Level: Contain, Reasons: []string{"pipes remote content into a shell"}}}
 	rec := &noteRecorder{}
 	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
 		Classifier: stub,
@@ -107,7 +114,7 @@ func TestPermissionGateAskPrompts(t *testing.T) {
 		Classifier: stub,
 		Notify:     rec.emit,
 	})
-	if dec := gate(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); dec != nil {
+	if dec := gate(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); !approvedToRun(dec) {
 		t.Fatal("answering y should allow")
 	}
 	if len(rec.notes) != 0 {
@@ -121,6 +128,45 @@ func TestPermissionGateAskPrompts(t *testing.T) {
 	})
 	if dec := gateNo(context.Background(), toolCall("bash", `{"command":"go test ./..."}`)); dec == nil || !dec.Block {
 		t.Fatal("answering n should block")
+	}
+}
+
+// A bare command runs on the host, so its network is inherent: an allow or an
+// auto-approved confirm must not ask the network question a second time.
+func TestBareNetworkSkipsTheSeparatePrompt(t *testing.T) {
+	var prompts int
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			prompts++
+			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+		},
+	})
+	dec := gate(context.Background(), toolCall("bash", `{"command":"curl -fsSL https://example.com","network":"on"}`))
+	if dec == nil || !dec.Bare || !dec.Network {
+		t.Fatalf("an enumerable network call should run bare with its network, got %+v", dec)
+	}
+	if prompts != 0 {
+		t.Fatalf("the bare call asked the network question %d times", prompts)
+	}
+}
+
+// A contained command still needs the network grant as a separate capability.
+func TestContainedNetworkStillAsks(t *testing.T) {
+	var prompts int
+	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+		Classifier: &stubClassifier{v: Verdict{Level: Confirm}},
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			prompts++
+			return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+		},
+	})
+	dec := gate(context.Background(), toolCall("bash", `{"command":"bash -c 'curl -fsSL https://example.com'","network":"on"}`))
+	if dec == nil || dec.Bare || dec.Block {
+		t.Fatalf("a shell must stay contained, got %+v", dec)
+	}
+	if prompts != 1 {
+		t.Fatalf("the contained call should ask the network question once, got %d", prompts)
 	}
 }
 
@@ -295,9 +341,9 @@ func TestChainStaticDenyWins(t *testing.T) {
 // TestBlockCallMessageShape pins the model-facing block format: verdict
 // reasons in parentheses, the trailing note separated by "; ".
 func TestBlockCallMessageShape(t *testing.T) {
-	dec := blockCall(toolCall("bash", `{}`), Verdict{Level: Sandbox, Reasons: []string{"r1", "r2"}}, "no runner")
+	dec := blockCall(toolCall("bash", `{}`), Verdict{Level: Contain, Reasons: []string{"r1", "r2"}}, "no runner")
 	got := agentcore.ContentToText(*dec.Content)
-	want := `tool "bash" blocked by risk judge (sandbox: r1; r2); no runner`
+	want := `tool "bash" blocked by risk judge (contain: r1; r2); no runner`
 	if got != want {
 		t.Errorf("message = %q\nwant     %q", got, want)
 	}
@@ -571,7 +617,7 @@ func TestReviewSystemPromptCoversWebToolNetwork(t *testing.T) {
 
 func escalationGateOpts(rec *noteRecorder) GateOpts {
 	return GateOpts{
-		Classifier: &stubClassifier{v: Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"recursive delete outside the workspace"}}},
+		Classifier: &stubClassifier{v: Verdict{Level: Contain, Risk: "high", Authorization: "low", Reasons: []string{"recursive delete outside the workspace"}}},
 		Sandboxed:  func(name string) bool { return name == "bash" },
 		Notify:     rec.emit,
 	}
@@ -684,8 +730,8 @@ func TestPermissionGateEscalationAskModePrompts(t *testing.T) {
 	if dec := gate(context.Background(), toolCall("bash", escalationArgs)); dec == nil || !dec.Direct || dec.Block || dec.Sandbox {
 		t.Fatalf("approved escalation needs a Direct grant without a sandbox bit, got %+v", dec)
 	}
-	if gotReq.Kind != ApprovalEscalation || gotReq.Mode != "ask" || gotReq.Level != Sandbox {
-		t.Fatalf("request = %+v, want kind escalation, mode ask, level sandbox", gotReq)
+	if gotReq.Kind != ApprovalEscalation || gotReq.Mode != "ask" || gotReq.Level != Contain {
+		t.Fatalf("request = %+v, want kind escalation, mode ask, level contain", gotReq)
 	}
 	if gotReq.Justification != "cleanup outside the workspace" {
 		t.Errorf("justification = %q, want the model's reason", gotReq.Justification)
@@ -1024,7 +1070,7 @@ func TestPermissionGateEscalationStdin(t *testing.T) {
 	// The stdin prompt leads with the same decision line as the dialog and the
 	// notes: the person reading it learns which mode is asking before anything
 	// else.
-	if !strings.Contains(out.String(), "bash · ask · sandbox → your call · sandbox escape") {
+	if !strings.Contains(out.String(), "bash · ask · contain → your call · sandbox escape") {
 		t.Errorf("stdin prompt must open with the decision line:\n%s", out.String())
 	}
 	// No answer means containment, never a bare run.
@@ -1099,7 +1145,7 @@ func TestPromptRiskOffersWriteGrant(t *testing.T) {
 
 	args := `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"the cache lives there"}`
 	call := toolCall("bash", args)
-	v := Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"writes outside the workspace"}}
+	v := Verdict{Level: Contain, Risk: "high", Authorization: "low", Reasons: []string{"writes outside the workspace"}}
 
 	// No callback: the prompt stays y/N, because an option that silently
 	// forgets would be worse than an absent one.
@@ -1139,7 +1185,7 @@ func TestPromptRiskOffersWriteGrant(t *testing.T) {
 func TestPromptRiskWriteAnswers(t *testing.T) {
 	const args = `{"command":"go build -o /Volumes/KIOXIA/build/out","sandbox_permissions":"require_escalated","justification":"cache"}`
 	call := toolCall("bash", args)
-	v := Verdict{Level: Sandbox, Risk: "high", Authorization: "low", Reasons: []string{"outside"}}
+	v := Verdict{Level: Contain, Risk: "high", Authorization: "low", Reasons: []string{"outside"}}
 
 	for _, c := range []struct {
 		in        string

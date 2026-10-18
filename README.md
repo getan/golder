@@ -254,6 +254,16 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 `golder update` 的版本检查走站点接口（大陆可达、无速率限制），失败回退 GitHub API；下载 release 时与安装脚本同一条「直连 → 公益镜像」回退链，归档按 release 的 `checksums.txt` 校验（坏包自动换下一个源），而 `checksums.txt` 本身优先直连 GitHub，只有镜像应答时要求各来源一致（单源可用时告警后继续）；`GOLDER_MIRROR=off` 可禁用镜像。
 
+### 批准之后的信封（envelope）
+
+四档模式回答"准不准跑"，信封回答"在哪跑"；两者正交，并且**修订**了上面"获准执行的 bash 调用一律在沙箱内跑"的说法：
+
+- 整条命令可完整枚举且不碰凭据的批准调用（`git push`、`go test`、`ls`、`cargo build` 等）直接在宿主上跑，卡片/REPL 标 `·unconfined`，结果 `details.envelope` 为 `bare`；
+- 含变量/替换/进程替换、解释器或包装器（`bash`/`python`/`make`/`docker`/`env` 等）、凭据路径的仍收容（`sandbox`）；
+- `GOLDER_SANDBOX=enforce` 仍把每一条都收进沙箱，优先于信封；`full-access` 不变。
+
+网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权。
+
 ### 权限模式
 
 改动型工具（`bash` / `apply_patch`）的审批由四档模式控制，启动时默认 `auto`，运行中用 `/permissions` 切换，也可用 `--permissions <mode>` 或 `GOLDER_PERMISSIONS` 指定：
@@ -261,8 +271,8 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | 模式 | 行为 |
 |------|------|
 | `read-only` | 只读；改动型调用直接拒绝 |
-| `ask` | 改动型调用先经当前模型审查：低风险放行，需隔离的进沙箱，其余询问你（无输入时拒绝） |
-| `auto`（默认） | 模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝，并给出一行理由 |
+| `ask` | 改动型调用先经当前模型审查：低风险放行，需隔离的收容（contain），其余询问你（无输入时拒绝） |
+| `auto`（默认） | 模型审查每次改动型调用：低风险放行、需隔离的收容（contain）、高危拒绝，并给出一行理由 |
 | `full-access` | 不做审查、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
 
 首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
@@ -294,7 +304,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_HOME` | 覆盖 `~/.golder` 基础目录 |
 | `GOLDER_SKILLS_DIR` | 覆盖技能发现目录（默认 `~/.agents/skills`） |
 | `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
-| `GOLDER_SANDBOX` | 执行隔离：`off`（不启用）/ `auto`（默认，获准的 bash 调用都在沙箱内跑）/ `enforce`（同上，且强制要求 runner） |
+| `GOLDER_SANDBOX` | 执行隔离：`off`（不启用）/ `auto`（默认，获准的 bash 默认收容；可完整枚举的信封直接跑）/ `enforce`（全部收容，且强制要求 runner） |
 | `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | 追加读取类工具（read/grep/find/ls/view_image）的免询问目录（冒号/逗号分隔），等同 `/boundary readable add`；同时放宽沙箱读白名单 |
 | `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |

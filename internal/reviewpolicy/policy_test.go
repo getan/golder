@@ -156,11 +156,11 @@ func TestDangerSignalOverridesAPermissiveLevel(t *testing.T) {
 		// Sandbox is the safe direction, so a danger signal does not have to
 		// block it — that is the difference between escalating and containing.
 		out := Decide(Request{
-			Answers: answers("sandbox", map[string]float64{"sandbox": 0.8, "allow": 0.1}, 0.75,
+			Answers: answers("contain", map[string]float64{"contain": 0.8, "allow": 0.1}, 0.75,
 				func(m map[string]jev.Answer) { m[QRev] = noul(0.6) }),
 			Config: cfg(),
 		})
-		if out.Route != RouteDecided || out.Level != judge.Sandbox {
+		if out.Route != RouteDecided || out.Level != judge.Contain {
 			t.Errorf("outcome = %+v, want a decided sandbox", out)
 		}
 	})
@@ -199,7 +199,7 @@ func TestDenyAndSandboxAcceptModerateConfidence(t *testing.T) {
 		level  judge.Level
 	}{
 		{"deny", judge.Deny},
-		{"sandbox", judge.Sandbox},
+		{"contain", judge.Contain},
 	} {
 		out := Decide(Request{
 			Answers: answers(c.option, map[string]float64{c.option: 0.7, "allow": 0.3}, 0.65),
@@ -406,7 +406,7 @@ func TestQuestionIDSetIsStable(t *testing.T) {
 func TestDecideIsTotal(t *testing.T) {
 	// Every combination must produce an outcome, and the only level reachable
 	// without a clean bill is Deny or Sandbox — never Allow.
-	levels := []string{"allow", "confirm", "sandbox", "deny", "", "bogus"}
+	levels := []string{"allow", "confirm", "contain", "deny", "", "bogus"}
 	confs := []float64{0, 0.3, 0.7, 0.95}
 	probs := []map[string]float64{
 		{"allow": 0.99, "deny": 0.01},
@@ -428,7 +428,7 @@ func TestDecideIsTotal(t *testing.T) {
 					// Decided: the level must be one of the four, and an
 					// Allow only with a clean danger reading.
 					switch out.Level {
-					case judge.Deny, judge.Sandbox:
+					case judge.Deny, judge.Contain:
 					case judge.Allow:
 						if danger >= cfg().DangerConfirm {
 							t.Errorf("allow decided despite danger %v (level=%q probs=%v)", danger, level, p)

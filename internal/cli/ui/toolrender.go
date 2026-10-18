@@ -40,7 +40,24 @@ func RenderToolResult(out io.Writer, tr agentcore.ToolResultMessage) {
 		}
 		return
 	}
-	fmt.Fprintf(out, "  %s %s\n", Colorize(color, Green, "← result:"), OneLine(text))
+	fmt.Fprintf(out, "  %s %s%s\n", Colorize(color, Green, "← result:"), OneLine(text), envelopeSuffix(tr.Details))
+}
+
+// envelopeSuffix is the one-word note a shell result carries about where it
+// ran (agenttool's envelopeDetail): "·sandbox" or "·unconfined". A tool that is
+// always contained reports nothing, and then there is nothing to say.
+func envelopeSuffix(details any) string {
+	m, ok := details.(map[string]any)
+	if !ok {
+		return ""
+	}
+	switch v, _ := m["envelope"].(string); v {
+	case "sandbox":
+		return " ·sandbox"
+	case "bare":
+		return " ·unconfined"
+	}
+	return ""
 }
 
 // firstLine returns s up to (not including) its first newline, so a multi-line

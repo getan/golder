@@ -75,6 +75,18 @@ type BeforeToolCallDecision struct {
 	// The executor publishes it into the context the tool executes with
 	// (WriteGrantFromContext). Ignored when Block is set.
 	WriteGrant string
+	// Bare asks the execution layer to run this call OUTSIDE the OS sandbox,
+	// because everything the command touches is enumerable from its text (see
+	// judge.EnvelopeBare). It is not an escape the model asked for — that is
+	// Direct — but the routine case: the gate decided the call may run, and the
+	// command's whole effect is readable, so containment buys nothing and costs
+	// the call its credentials. The executor publishes it
+	// (BareEnvelopeFromContext); the sandbox ladder still wins inside the tool
+	// (GOLDER_SANDBOX=enforce contains it anyway). Ignored when Block is set,
+	// and never set together with Sandbox.
+	Bare bool
+	// BareReason is the sentence a note and the card carry when Bare is set.
+	BareReason string
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

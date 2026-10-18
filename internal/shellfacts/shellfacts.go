@@ -450,7 +450,21 @@ func buildCommand(call *syntax.CallExpr, st *syntax.Stmt, inPipeline, inSubshell
 		if a == nil || a.Name == nil {
 			continue
 		}
-		c.Assigns = append(c.Assigns, Word{Text: a.Name.Value, Parts: []Part{{Kind: LiteralPart, Text: a.Name.Value}}})
+		// Keep the whole assignment, not just its name. The value is the fact
+		// callers need: `PATH=/tmp/bin ls` and `LD_PRELOAD=/x.so ls` run
+		// something other than the program on the line, and a field that said
+		// only "PATH" made that fact invisible to every caller.
+		if a.Array != nil {
+			text := a.Name.Value + "=(...)"
+			c.Assigns = append(c.Assigns, Word{Text: text, Dynamic: true, Parts: []Part{{Kind: LiteralPart, Text: text}}})
+			continue
+		}
+		value := buildWord(a.Value)
+		text := a.Name.Value + "=" + value.Text
+		parts := make([]Part, 0, len(value.Parts)+1)
+		parts = append(parts, Part{Kind: LiteralPart, Text: a.Name.Value + "="})
+		parts = append(parts, value.Parts...)
+		c.Assigns = append(c.Assigns, Word{Text: text, Dynamic: value.Dynamic, Parts: parts})
 	}
 	for _, arg := range call.Args {
 		w := buildWord(arg)

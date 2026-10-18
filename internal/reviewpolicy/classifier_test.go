@@ -112,7 +112,7 @@ func TestEscalationReachesTheFallbackWithTheSameCall(t *testing.T) {
 	// A confirm verdict always escalates.
 	answers[QL] = `{"type":"choice","choice":"confirm","probabilities":{"confirm":0.9,"allow":0.1},"confidence":0.9}`
 	srv := jevServer(t, answers)
-	fb := &spyFallback{v: judge.Verdict{Level: judge.Sandbox, Source: "llm"}}
+	fb := &spyFallback{v: judge.Verdict{Level: judge.Contain, Source: "llm"}}
 	c := newClassifier(t, srv, fb)
 
 	args := json.RawMessage(`{"command":"npm install"}`)
@@ -126,7 +126,7 @@ func TestEscalationReachesTheFallbackWithTheSameCall(t *testing.T) {
 	if string(fb.args[0]) != string(args) {
 		t.Errorf("fallback got args %s, want %s", fb.args[0], args)
 	}
-	if v.Level != judge.Sandbox || v.Source != "llm" {
+	if v.Level != judge.Contain || v.Source != "llm" {
 		t.Errorf("verdict = %+v, want the fallback's", v)
 	}
 }
@@ -136,7 +136,7 @@ func TestUnreachableJudgeEscalates(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
-	fb := &spyFallback{v: judge.Verdict{Level: judge.Sandbox, Source: "llm"}}
+	fb := &spyFallback{v: judge.Verdict{Level: judge.Contain, Source: "llm"}}
 	c := newClassifier(t, srv, fb)
 
 	v := c.Classify(context.Background(), "bash", json.RawMessage(`{"command":"ls"}`))
@@ -408,7 +408,7 @@ func TestEscalationErrorIsWrappedNotSwallowed(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	t.Cleanup(dead.Close)
-	fb := &spyFallback{v: judge.Verdict{Level: judge.Sandbox, Source: "llm"}}
+	fb := &spyFallback{v: judge.Verdict{Level: judge.Contain, Source: "llm"}}
 	c := newClassifier(t, dead, fb)
 	c.Observer = func(rec CallRecord) { records = append(records, rec) }
 
@@ -441,7 +441,7 @@ func TestHardFailureDisablesTheCheapPath(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	fb := &spyFallback{v: judge.Verdict{Level: judge.Sandbox, Source: "llm"}}
+	fb := &spyFallback{v: judge.Verdict{Level: judge.Contain, Source: "llm"}}
 	c := newClassifier(t, srv, fb)
 
 	// The first call discovers the block.

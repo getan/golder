@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **The approval envelope**: an approved bash command whose whole effect is
+  enumerable (`git push`, `go test`, `ls`, …) now runs on the host instead of
+  inside the file sandbox; variables, substitutions, interpreters, wrappers,
+  and credential paths keep a call contained. A bare call carries its network
+  as part of the same approval, and `GOLDER_SANDBOX=enforce` still contains
+  every call. Results expose `details.envelope`, and the card/REPL marker says
+  `sandbox` or `unconfined`.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`
@@ -888,6 +895,10 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The `sandbox` reviewer tier is now `contain`**: the tier names what the
+  execution layer must do, not the mechanism. Custom reviewer prompts must
+  return `contain` instead of `sandbox`; `allow`, `confirm`, and `deny` are
+  unchanged.
 - **`--provider` without `--model` starts on that provider's default model**:
   the global `-m` default belongs to the default gateway. Selecting another
   provider now uses its `DefaultModel` (the same rule `/provider` uses), which

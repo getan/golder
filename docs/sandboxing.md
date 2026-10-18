@@ -29,18 +29,31 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 一律在沙
 | 模式 | 行为 | REPL（可交互） | TUI/headless（无 stdin） |
 |------|------|----------------|--------------------------|
 | `read-only` | 只读；改动型工具直接拒绝 | 拒绝 `bash`/`apply_patch`，只放行 read/图片/搜索/待办等 | 同左 |
-| `ask` | 低风险放行，其余询问 | 弹 `[y/N]`；可隔离的 Sandbox 档在有 runner 时直接进沙箱 | 无输入可问 → 拒绝（带理由卡片） |
-| `auto`（默认） | 模型审查后自动决定 | Confirm 放行、Sandbox 进沙箱、Deny 拒绝，各附一行理由 | 同左 |
+| `ask` | 低风险放行，其余询问 | 弹 `[y/N]`；可隔离的 Contain 档在有 runner 时直接进沙箱 | 无输入可问 → 拒绝（带理由卡片） |
+| `auto`（默认） | 模型审查后自动决定 | Confirm 放行、Contain 进沙箱、Deny 拒绝，各附一行理由 | 同左 |
 | `full-access` | 不审查、不套沙箱 | 直放；仅静态硬拒名单生效 | 同左 |
 
 切换方式：会话内 `/permissions`（TUI 是 ↑↓ + Enter 选择器，带每档说明），启动参数 `--permissions <mode>`，环境变量 `GOLDER_PERMISSIONS`（`GOLDER_JUDGE=off` 作为旧的逃生舱别名等价于 `full-access`）。模式是进程内实时状态：切换后**下一次工具调用**立刻生效，子 Agent 继承父会话的模式（进程隔离子 Agent 通过环境变量继承）。
+
+### 批准之后的信封（envelope）
+
+四档模式回答"准不准跑"，信封回答"在哪跑"；两者正交。一个已批准的 bash 调用，只有在**整条命令的效果都能从文本读出**时才不套文件沙箱（`Bare`），否则默认收容：
+
+- `shellfacts` 解析失败、含 `for`/`if` 等构造、出现 `$VAR`/`$(...)`/`$((...))`/进程替换、赋值里带路径（`PATH=/tmp/bin`、`LD_PRELOAD=...`）→ 收容；
+- 程序本身是运行文本或包装器（`bash`/`sh`/`python`/`node`/`make`/`docker`/`env`/`xargs`/`sudo` 等）→ 收容；
+- 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
+- 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
+
+`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果的 `details.envelope` 是 `sandbox`/`bare`，TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
+
+网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）；contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
 
 ### `auto` 的审查器（就是会话模型）
 
 分级链（`internal/judge`，叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、敏感变量 echo 进网络等），只拒不放，其余全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）放行给审查器。它也是**唯一不经过模型就拒绝**的一层——正因如此，凭据读这类结论既不能被重试，也不能被提示词说服。
-2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|sandbox|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 按两个规则路由：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny/Sandbox 中等置信即接受，因为它们的失败模式只是多余的拦截或收容；Confirm 一律升级）。没有 TypeSafe 凭据时，这一层换成**本地规则表** `judge.Local`（同样每个调用都判，判不了的档上交会话模型），jev 整条路径不接。
+2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|contain|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 按两个规则路由：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny/Contain 中等置信即接受，因为它们的失败模式只是多余的拦截或收容；Confirm 一律升级）。没有 TypeSafe 凭据时，这一层换成**本地规则表** `judge.Local`（同样每个调用都判，判不了的档上交会话模型），jev 整条路径不接。
 3. **兜底**：审查超时（默认 30s，`GOLDER_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理。
 
 **曾经有两条豁免，都已删除**（记录于此，因为它们的设计理由仍然成立，只是不再换来那点延迟）：
@@ -120,11 +133,13 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。普通 `Allow/Confirm` 评级**不**等于联网许可；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
+**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。contained 调用和 `GOLDER_SANDBOX=enforce` 仍按次授权，或由 `/network` 记住。
+
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
 
-当模型确实申请了提权、而审查器给的却是 **Sandbox** 档（该调用本应被收容）时，由**模式**决定谁裁决：
+当模型确实申请了提权、而审查器给的却是 **Contain** 档（该调用本应被收容）时，由**模式**决定谁裁决：
 
 - **auto**：评审的话作数。若请求点名了路径，先把"要不要把该路径放回沙箱"问你——`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝；题面写明被拒的是读还是写（`denied writing` / `denied reading`），需要写时写行就在首行。批准后命令**收容重跑**（同一路径每次运行只问一次）；**没有可提的路径**时则静默重新收容并在转写里播报"越界请求被拒，改为在沙箱内运行"（越界是能力问题，不是风险问题）。
 - **ask**：把整个越界交给你（TUI 弹审批对话框，REPL 走 stdin 提示），默认项就是"收容重跑"，`e` 才是故意出沙箱——弹窗里还会多出 `Allow reads and writes to <path> (this session)`（按 `w`）等写行，把那个路径放进沙箱，比出沙箱更省事。
@@ -159,7 +174,7 @@ bash needs approval
 | 场景 | 触发 | 说明 |
 |---|---|---|
 | 权限门 Confirm 档 | `ask` 模式下的中等风险调用 | auto 模式不弹（模型自行批准） |
-| Sandbox 档但无法隔离 | 无 runner / 非 bash 工具 | 对话框明确标注"批准将以非沙箱方式运行" |
+| Contain 档但无法隔离 | 无 runner / 非 bash 工具 | 对话框明确标注"批准将以非沙箱方式运行" |
 | 审查失败且无处隔离 | LLM 审查超时/报错 | 对话框标注"自动审查不可用" |
 | **未信任目录的副作用工具** | 每次 bash/apply_patch | 此前 TUI 完全没装这道门；现在是"批准一次 / 本会话信任此目录 / 拒绝" |
 | **首启信任** | 目录未决时启动 | 同一个对话框的 trust 形态：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）。运行中的信任问句另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问**不落盘**（持久化是启动选择器的职责） |
@@ -192,7 +207,7 @@ container run --rm --cap-add ALL -m 6G -v "$PWD":/src -w /src golder-linuxtest:1
 
 ```bash
 export GOLDER_PERMISSIONS=auto  # read-only | ask | auto（默认）| full-access
-export GOLDER_SANDBOX=auto      # off | auto（默认，仅 sandbox 档隔离）| enforce（全部 bash 进沙箱，无 runner 则 fail-closed）
+export GOLDER_SANDBOX=auto      # off | auto（默认，仅 contain 档隔离）| enforce（全部 bash 进沙箱，无 runner 则 fail-closed）
 export GOLDER_REVIEW_TIMEOUT_MS=30000  # 审查超时（3s–120s）
 # GOLDER_JUDGE=off 为兼容保留：等价于默认 full-access
 ```

@@ -86,7 +86,7 @@ func TestConfirmCallbackNoSandboxTier(t *testing.T) {
 	state := permissions.New(permissions.Ask)
 	var seen ApprovalRequest
 	gate := PermissionGate(state, GateOpts{
-		Classifier: &stubClassifier{v: Verdict{Level: Sandbox}},
+		Classifier: &stubClassifier{v: Verdict{Level: Contain}},
 		Sandboxed:  func(string) bool { return false }, // no runner for this call
 		Confirm:    answeringConfirm(&seen, ApprovalAnswer{Approve: true, Answered: true}),
 	})
@@ -133,7 +133,7 @@ func TestConfirmCallbackNotUsedInAutoMode(t *testing.T) {
 			return ApprovalAnswer{Answered: true}
 		},
 	})
-	if dec := gate(context.Background(), bashCall("npm install")); dec != nil {
+	if dec := gate(context.Background(), bashCall("npm install")); !approvedToRun(dec) {
 		t.Fatalf("auto mode should approve Confirm-tier calls, got %+v", dec)
 	}
 	if asked {

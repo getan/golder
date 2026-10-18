@@ -430,7 +430,7 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			mode = g.opts.Perms.Mode().String()
 		}
 		req := judge.ApprovalRequest{
-			Kind: judge.ApprovalReAdmit, Mode: mode, Level: judge.Sandbox,
+			Kind: judge.ApprovalReAdmit, Mode: mode, Level: judge.Contain,
 			Tool: "bash", Summary: summary, ReadRoot: path,
 			Rationale: "the sandbox denied " + path,
 			// Which side was denied, so the dialog says it and leads with the

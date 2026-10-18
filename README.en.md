@@ -255,6 +255,16 @@ golder host-compat uninstall   # remove only what golder wrote
 
 `golder update` resolves the latest tag via the site endpoint (reachable from mainland China, no rate limit), falling back to the GitHub API. Release downloads use the same direct → mirror chain as the installer: the archive is still verified against the release's `checksums.txt` (a corrupt copy fails over to the next source), and `checksums.txt` itself prefers GitHub direct — mirror-served copies are accepted only when all responding sources agree on the digest (a lone reachable mirror is accepted with a warning on blocked networks). `GOLDER_MIRROR=off` disables mirroring.
 
+### The approval envelope
+
+The four modes decide *whether* a call may run; the envelope decides *where*. This revises the "sandbox-tier" line above:
+
+- An approved command whose whole effect is enumerable (`git push`, `go test`, `ls`, `cargo build`, …) runs on the host, marked `·unconfined`, with `details.envelope: bare`.
+- Variables, substitutions, interpreters or wrappers (`bash`/`python`/`make`/`docker`/`env`, …), and credential paths stay contained (`sandbox`).
+- `GOLDER_SANDBOX=enforce` still contains every call, ahead of the envelope; `full-access` is unchanged.
+
+Network is a separate dimension: a bare run is on the host, so its network is inherent; an allow or an auto-approved confirm no longer asks the network question separately (a remembered network denial still wins). A contained call and `enforce` still grant network per call, or remember it with `/network`. The envelope is not a network whitelist and not a persistent grant.
+
 ### Permission modes
 
 Approval for mutating tools (`bash` / `apply_patch`) is governed by four modes, starting at `auto`; switch at runtime with `/permissions`, or set `--permissions <mode>` / `GOLDER_PERMISSIONS`:
@@ -262,8 +272,8 @@ Approval for mutating tools (`bash` / `apply_patch`) is governed by four modes, 
 | Mode | Behavior |
 |------|----------|
 | `read-only` | Read-only; mutating calls are refused |
-| `ask` | The current model reviews each mutating call: low risk passes, sandbox-tier calls are contained, the rest asks you (denied when there is no input) |
-| `auto` (default) | The model reviews every mutating call: low risk passes, sandbox-tier calls are isolated, high risk is denied — each with a one-line reason |
+| `ask` | The current model reviews each mutating call: low risk passes, contain-tier calls are contained, the rest asks you (denied when there is no input) |
+| `auto` (default) | The model reviews every mutating call: low risk passes, contain-tier calls are isolated, high risk is denied — each with a one-line reason |
 | `full-access` | No review, no sandbox; only the static hard-deny list (`sudo`, `rm -rf /`, …) remains |
 
 The first launch in a directory asks whether to trust it; `--approve` grants one run up front. An untrusted directory can also allow reads alone for the session (`read` / `grep` / `find` / `ls` / `view_image`): pick `Allow reads in this folder (this session)` in the TUI dialog, or press `a` in the REPL — commands and network reads still ask, and `/trust off` revokes the reads grant with the rest. **The first-run trust dialog** answers to `s` (remembered), `p` (this session), `n` (remembered refusal) and Esc (cancel); **the mid-run trust question** has its own keys — `y` for once, `a` for reads in this folder this session, `p` for all tools here this session — and it never writes to disk: persisting a directory is the launch picker's job. For OS-level isolation see [docs/sandboxing.md](docs/sandboxing.md).
@@ -294,7 +304,7 @@ See `golder --help` for the complete list.
 | `GOLDER_HOME` | Override the `~/.golder` base directory |
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
-| `GOLDER_SANDBOX` | Execution isolation: `off` / `auto` (default: every approved bash call runs sandboxed) / `enforce` (same, and a runner is required) |
+| `GOLDER_SANDBOX` | Execution isolation: `off` / `auto` (default: approved bash calls are contained; a fully enumerable envelope runs bare) / `enforce` (all calls contained, and a runner is required) |
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |

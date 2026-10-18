@@ -9,7 +9,7 @@
 //   - read-only:   mutating tools (bash, apply_patch) are blocked outright.
 //   - ask:         the reviewer grades each mutating call; Allow runs, the
 //     rest asks the human (or is denied when no prompt exists).
-//   - auto:        the reviewer decides: Allow/Confirm run, Sandbox runs
+//   - auto:        the reviewer decides: Allow/Confirm run, Contain runs
 //     isolated, Deny is blocked — each non-trivial decision is announced
 //     with a one-line rationale.
 //   - full-access: no review and no sandbox; only the static hard-deny

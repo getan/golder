@@ -164,8 +164,10 @@ func TestAssignmentIsSeparateFromArgv(t *testing.T) {
 		t.Fatalf("parse failed: %s", p.ParseError)
 	}
 	c := p.Commands[0]
-	if len(c.Assigns) != 1 || c.Assigns[0].Text != "LD_PRELOAD" {
-		t.Fatalf("assigns = %+v, want one named LD_PRELOAD", c.Assigns)
+	// The whole assignment, value included: a caller that saw only the name
+	// could not tell that `LD_PRELOAD=/evil.so` changes what `ls` runs.
+	if len(c.Assigns) != 1 || c.Assigns[0].Text != "LD_PRELOAD=/evil.so" {
+		t.Fatalf("assigns = %+v, want the whole LD_PRELOAD assignment", c.Assigns)
 	}
 	if len(c.Argv) == 0 || c.Argv[0].Text != "ls" {
 		t.Fatalf("argv[0] = %+v, want ls", c.Argv)

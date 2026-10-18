@@ -174,10 +174,19 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 			return false, ""
 		}
 	}
+	// enforce (ForceSandbox) is checked before the envelope on purpose: the
+	// ladder's strictest setting is a promise about EVERY call, and an
+	// enumerable command is exactly the case it is meant to cover.
 	if t.ForceSandbox {
 		return true, ""
 	}
 	if (agentcore.DirectGrantedFromContext(ctx) || unconfinedApproved(ctx)) && !agentcore.SandboxRequestedFromContext(ctx) {
+		return false, ""
+	}
+	// The gate's envelope: everything this command touches is readable from its
+	// text, so the sandbox adds nothing it can enforce and its whitelist would
+	// refuse the credentials the call legitimately needs (see judge/envelope.go).
+	if _, ok := agentcore.BareEnvelopeFromContext(ctx); ok && !agentcore.SandboxRequestedFromContext(ctx) {
 		return false, ""
 	}
 	if strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated) &&
@@ -679,16 +688,23 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			sess.ID, sess.ID, interruptHint)
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(text)},
-			Details: map[string]any{"bash_id": sess.ID, "status": string(execsess.StatusRunning)},
+			Details: map[string]any{
+				"bash_id": sess.ID, "status": string(execsess.StatusRunning),
+				"envelope": envelopeDetail(sandboxed),
+			},
 		}, nil
 	}
 
 	if snap.TimedOut {
-		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(out)}},
+		return agentcore.AgentToolResult{
+				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
+				Details: map[string]any{"envelope": envelopeDetail(sandboxed)},
+			},
 			fmt.Errorf("bash: command timed out after %s\n%s", snap.Timeout, out)
 	}
 	if snap.ExitCode != 0 {
 		details := map[string]any{"exitCode": snap.ExitCode}
+		details["envelope"] = envelopeDetail(sandboxed)
 		if sandboxDenied {
 			details["sandboxDenied"] = true
 		}
@@ -703,6 +719,17 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(out)},
-		Details: map[string]any{"exitCode": 0},
+		Details: map[string]any{"exitCode": 0, "envelope": envelopeDetail(sandboxed)},
 	}, nil
+}
+
+// envelopeDetail is the per-call marker the card and the transcript show: where
+// the command actually ran. It is the fact the sandbox question turns on, so it
+// rides every result rather than only the failures — a card that says nothing
+// is a card whose reader has to guess.
+func envelopeDetail(sandboxed bool) string {
+	if sandboxed {
+		return "sandbox"
+	}
+	return "bare"
 }

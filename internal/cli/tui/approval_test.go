@@ -620,7 +620,7 @@ func TestApprovalReAdmitOffersUnconfinedRun(t *testing.T) {
 	grantstest.Install(t)
 	const path = "/Volumes/KIOXIA/golder-probe-unconfined"
 	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Sandbox,
+		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Contain,
 		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true, UnconfineOffer: true,
 	}
 	reply := make(chan judge.ApprovalAnswer, 1)
@@ -662,7 +662,7 @@ func TestApprovalReAdmitWriteLeads(t *testing.T) {
 	grantstest.Install(t)
 	const path = "/Volumes/KIOXIA/golder-probe4"
 	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Sandbox,
+		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Contain,
 		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true,
 	}
 	if title := approvalTitle(req); !strings.Contains(title, "writing") {
@@ -742,7 +742,7 @@ func TestApprovalReAdmitRows(t *testing.T) {
 // is asking, on what grade, and why it is asking at all.
 func TestApprovalEscalationRows(t *testing.T) {
 	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalEscalation, Tool: "bash", Mode: "ask", Level: judge.Sandbox,
+		Kind: judge.ApprovalEscalation, Tool: "bash", Mode: "ask", Level: judge.Contain,
 		Summary: "command: ls /etc",
 	}
 	reply := make(chan judge.ApprovalAnswer, 1)

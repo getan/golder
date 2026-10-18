@@ -157,6 +157,12 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			if dec.Direct {
 				execCtx = agentcore.WithDirectGrant(execCtx)
 			}
+			// The gate's envelope decision: this call's whole effect is readable
+			// from its text, so it may run outside the OS sandbox. Never set
+			// beside Sandbox — a gate that asked for containment gets it.
+			if dec.Bare && !dec.Sandbox {
+				execCtx = agentcore.WithBareEnvelope(execCtx, dec.BareReason)
+			}
 			// One-call read grant (the user allowed a single read outside the
 			// workspace): publish it for the executing tool, which honours it
 			// once for this call only.

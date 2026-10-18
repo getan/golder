@@ -15,7 +15,7 @@ package judge
 //     calls (sudo, mkfs, keys under .ssh). It never allows, it only denies.
 //  2. LLMJudge — the active conversation model reviews the call against a
 //     policy prompt and the user's recent messages, and returns one of
-//     Allow/Confirm/Sandbox/Deny plus a rationale written in the user's
+//     Allow/Confirm/Contain/Deny plus a rationale written in the user's
 //     language. There is no separate classification service: the dependency
 //     is the model the session is already using.
 //  3. Fallback — any reviewer failure (timeout, transport error, malformed
@@ -53,9 +53,13 @@ const (
 	Allow Level = iota
 	// Confirm needs an explicit human yes.
 	Confirm
-	// Sandbox must run isolated; without a sandbox runner it prompts
-	// (interactive) or blocks (headless) with a sandbox note.
-	Sandbox
+	// Contain must run isolated: the reviewer will not vouch for this call
+	// running anywhere else. Without a sandbox runner the gate prompts
+	// (interactive) or blocks (headless) with a containment note. The name says
+	// what the tier REQUIRES, not where the call ends up — Allow and Confirm
+	// execute inside the sandbox too, unless the gate's envelope admits them
+	// (see envelope.go).
+	Contain
 	// Deny never runs.
 	Deny
 )
@@ -66,8 +70,8 @@ func (l Level) String() string {
 		return "allow"
 	case Confirm:
 		return "confirm"
-	case Sandbox:
-		return "sandbox"
+	case Contain:
+		return "contain"
 	default:
 		return "deny"
 	}
@@ -77,8 +81,8 @@ func levelFromString(s string) Level {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "allow":
 		return Allow
-	case "sandbox":
-		return Sandbox
+	case "contain":
+		return Contain
 	case "deny":
 		return Deny
 	default:
@@ -90,7 +94,7 @@ func levelFromString(s string) Level {
 // answer outside the vocabulary fail closed.
 func isKnownTier(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "allow", "confirm", "sandbox", "deny":
+	case "allow", "confirm", "contain", "deny":
 		return true
 	default:
 		return false
@@ -107,7 +111,7 @@ type Verdict struct {
 	// level. It is set only when this classifier actually reviewed a call that
 	// requests network access: a bash call asking network:on, or the in-process
 	// network tools (webfetch, websearch), which cannot run without it. A level
-	// of Allow/Confirm/Sandbox alone never implies it.
+	// of Allow/Confirm/Contain alone never implies it.
 	Network bool
 	// Direct is an explicit decision to waive the file sandbox for THIS call,
 	// independent of the four risk tiers. A bare Allow is not a direct grant.
@@ -176,7 +180,7 @@ func (c Chain) Classify(ctx context.Context, tool string, args json.RawMessage) 
 }
 
 // GateOpts tunes PermissionGate. Interactive drivers pass the shared stdin
-// reader/writer so Confirm/Sandbox prompts behave exactly like the trust
+// reader/writer so Confirm/Contain prompts behave exactly like the trust
 // gate; headless drivers leave In nil and get the fail-closed path.
 type GateOpts struct {
 	In  *bufio.Reader
@@ -186,7 +190,7 @@ type GateOpts struct {
 	// reviewer; nil keeps the static floor but fails closed on every gated
 	// (non-read-only) tool instead of allowing it.
 	Classifier Classifier
-	// Sandboxed reports whether a tool call at the Sandbox tier will actually
+	// Sandboxed reports whether a tool call at the Contain tier will actually
 	// run isolated by the execution layer (the bash tool's seatbelt runner).
 	// When it returns true the gate lets the call through — isolation is the
 	// enforcement, not a prompt or a block. Nil, or false for this tool,
@@ -201,7 +205,7 @@ type GateOpts struct {
 	// run goroutine; implementations must not block on the UI thread.
 	Notify func(Note)
 	// Confirm, when set, is the driver's approval dialog for a call the gate
-	// cannot settle on its own: a Confirm tier outside auto mode, a Sandbox
+	// cannot settle on its own: a Confirm tier outside auto mode, a Contain
 	// tier the execution layer cannot isolate, or a failed review with no
 	// containment. The interactive terminal drivers use In/Out instead; the
 	// TUI has no stdin and supplies a callback that renders a dialog and
@@ -290,7 +294,7 @@ const (
 	ApprovalTrust ApprovalKind = "trust"
 	// ApprovalEscalation: the model asked to run a call outside the sandbox
 	// (bash sandbox_permissions=require_escalated) while the reviewer graded it
-	// Sandbox. The two sides disagree, and the mode decides who settles it:
+	// Contain. The two sides disagree, and the mode decides who settles it:
 	// auto re-contains the call (the reviewer's answer stands, announced either
 	// way), ask puts the escape to the person with containment as the default,
 	// headless re-contains or fails closed.
@@ -348,7 +352,7 @@ type ApprovalRequest struct {
 	// same verdict is the user's to settle under ask and already settled under
 	// auto.
 	Mode string
-	// Level is the grade the gate acted on (allow, confirm, sandbox, deny),
+	// Level is the grade the gate acted on (allow, confirm, contain, deny),
 	// printed as the canonical token rather than a paraphrase so the dialog,
 	// the notes and /permissions all use one vocabulary.
 	Level   Level
@@ -533,7 +537,7 @@ type Note struct {
 //   - ask:       verdicts above Allow prompt the human when In is set, and
 //     are blocked (with a note) otherwise.
 //   - auto:      verdicts above Allow are decided by the reviewer — Confirm
-//     runs, Sandbox runs isolated, Deny blocks — each announced with a note.
+//     runs, Contain runs isolated, Deny blocks — each announced with a note.
 //   - full-access: no review; only the static floor can deny.
 //
 // A nil state is treated as full-access (no gate).
@@ -591,6 +595,14 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 
 		v := classifyForGate(ctx, opts, call)
 		network := NetworkRequested(call.Name, call.Arguments)
+		// The envelope is computed before the network question: a bare run is on
+		// the host, so its network is inherent and a separate question would be
+		// a second approval for the same capability. Enforce still contains
+		// every call and keeps the network grant explicit; a contained call
+		// keeps it too.
+		envelopeBare, envelopeWhy := envelopeFor(call, lang)
+		bareNetwork := envelopeBare && network && !v.Network && !opts.RequireSandbox && !v.Failed &&
+			(v.Level == Allow || (v.Level == Confirm && optsIsAuto(state)))
 		// The boundary gate may have asked the network side in the same prompt
 		// it used for a path. Consume that answer before any remembered rule or
 		// second dialog: a person's explicit "no" outranks a standing grant, and
@@ -682,6 +694,22 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		grant := func(sandbox bool) *agentcore.BeforeToolCallDecision {
 			return &agentcore.BeforeToolCallDecision{Sandbox: sandbox, Network: network && v.Network}
 		}
+		// approveTail is the "the gate is ready to let this run" return, and the
+		// one place the envelope is consulted. A call whose whole effect is
+		// readable from its text runs OUTSIDE the sandbox — the note and the
+		// card say so — and everything else keeps exactly the shape it had: nil
+		// for a plain approval, a network grant beside it, containment through
+		// grant(true) where the reviewer asked for it.
+		approveTail := func() (dec *agentcore.BeforeToolCallDecision, named bool) {
+			net := network && v.Network
+			if envelopeBare {
+				return &agentcore.BeforeToolCallDecision{Bare: true, BareReason: envelopeWhy, Network: net}, true
+			}
+			if net {
+				return grant(false), false
+			}
+			return nil, false
+		}
 		// readmitPath asks whether to bring a path a refused escape needs back
 		// inside the sandbox. It is deliberately not routed through
 		// askApproval: a "no" here is not a refusal of the CALL — auto may
@@ -722,7 +750,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return nil
 			}
 			notify(Note{
-				Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Sandbox, Lang: lang,
+				Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Contain, Lang: lang,
 				Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
 				Authorization: authWord(v.Authorization, lang),
 				Rationale: localized(lang,
@@ -744,7 +772,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			// be reached at all. A network request the reviewer did not
 			// authorize is not contained by running the command locally.
 			containable := sandboxable(opts, call.Name) &&
-				(v.Failed || v.Level == Sandbox) && (!network || v.Network)
+				(v.Failed || v.Level == Contain) && (!network || v.Network)
 			// The path the request named, for the guidance a refusal carries: a
 			// smaller fix than dropping the sandbox for the whole call usually
 			// exists, and naming it beats inviting the same request again.
@@ -754,7 +782,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				notify(noteFor(call, v, NoteDenied, lang))
 				return blockCall(call, v, DenyGuidance)
 			case optsIsAuto(state):
-				if !v.Failed && v.Level != Sandbox && v.Direct {
+				if !v.Failed && v.Level != Contain && v.Direct {
 					// The reviewer itself approved the escape. Announcing it is
 					// what keeps "ran outside the sandbox" from being invisible.
 					notify(Note{
@@ -782,7 +810,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 				if containable {
 					notify(Note{
-						Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Sandbox, Lang: lang,
+						Tool: call.Name, ToolCallID: call.ID, Kind: NoteSandboxed, Level: Contain, Lang: lang,
 						Summary: riskSummary(call), Risk: riskWord(v.Risk, lang),
 						Authorization: authWord(v.Authorization, lang),
 						Rationale: localized(lang,
@@ -854,10 +882,13 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			return blockCall(call, v, "reviewer unavailable and this tool cannot be sandboxed; answer the approval prompt to run one call unconfined, or choose another approach")
 		case v.Level == Allow:
 			if network && !v.Network {
-				if dec, ok := askNetwork(); ok {
+				if bareNetwork {
+					v.Network = true
+				} else if dec, ok := askNetwork(); ok {
 					return dec
+				} else {
+					return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 				}
-				return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 			}
 			if network {
 				// A shell that reaches the network needs BOTH the filesystem
@@ -873,7 +904,8 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					}
 					return blockCall(call, v, "network access and no OS sandbox are both unavailable for this bash call; approve the unconfined one-call prompt, install a sandbox, or run the command yourself")
 				}
-				return grant(false)
+				dec, _ := approveTail()
+				return dec
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
 				if interactive {
@@ -886,11 +918,12 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 				return blockCall(call, v, "no OS sandbox is available for bash; approve the one-call unconfined prompt, install a sandbox, or run the command yourself")
 			}
-			return nil
+			dec, _ := approveTail()
+			return dec
 		case v.Level == Deny:
 			notify(noteFor(call, v, NoteDenied, lang))
 			return blockCall(call, v, DenyGuidance)
-		case v.Level == Sandbox:
+		case v.Level == Contain:
 			if network && !v.Network {
 				if dec, ok := askNetwork(); ok {
 					return dec
@@ -911,10 +944,13 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			return blockCall(call, v, "no sandbox runner is available for this call (GOLDER_SANDBOX=off, or the platform sandbox is missing); approve the one-call unconfined prompt, install a sandbox, or run it yourself")
 		default: // Confirm
 			if network && !v.Network {
-				if dec, ok := askNetwork(); ok {
+				if bareNetwork {
+					v.Network = true
+				} else if dec, ok := askNetwork(); ok {
 					return dec
+				} else {
+					return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 				}
-				return blockCall(call, v, "network access was not authorized and no one answered; the call did not run")
 			}
 			if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox && !sandboxable(opts, call.Name) {
 				if interactive {
@@ -928,17 +964,17 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				return blockCall(call, v, "no OS sandbox is available for bash; approve the one-call unconfined prompt, install a sandbox, or run the command yourself")
 			}
 			if optsIsAuto(state) {
-				notify(noteFor(call, v, NoteApproved, lang))
-				if network {
-					return grant(false)
+				dec, _ := approveTail()
+				// An allow is silent; a confirm keeps its reviewer line. The
+				// envelope rides the card marker, not a second note.
+				if v.Level != Allow {
+					notify(noteFor(call, v, NoteApproved, lang))
 				}
-				return nil
+				return dec
 			}
 			if interactive && promptRisk(ctx, opts, mode.String(), call, v, ApprovalConfirm).allow {
-				if network {
-					return grant(false)
-				}
-				return nil
+				dec, _ := approveTail()
+				return dec
 			}
 			if dec, ok := ask(ctx, call, v, ApprovalConfirm); ok {
 				if network && dec == nil {
@@ -1149,7 +1185,7 @@ func escalationJustification(call agentcore.AgentToolCall) string {
 // escalationRequested reports whether the model asked to run this call outside
 // the sandbox (bash's sandbox_permissions=require_escalated). It is a request,
 // not a grant: the gate still owns the decision, this only changes how a
-// Sandbox verdict is settled — asking the user instead of silently recontaining
+// Contain verdict is settled — asking the user instead of silently recontaining
 // the call. The reviewer sees it in the call's arguments, which is how it gets
 // weighed. The literal mirrors agenttool's
 // sandboxPermissionEscalated; the judge package cannot import it (agenttool
@@ -1289,7 +1325,7 @@ func escapeDeniedNote(call agentcore.AgentToolCall, v Verdict, lang string) Note
 		n.Rationale = localized(n.Lang,
 			"评审给了 confirm，但没有给出 Direct；auto 不会把一次普通确认当作越界许可。要出沙箱，请切到 /permissions ask 由你决定。",
 			"the reviewer asked for confirmation but gave no Direct grant; auto does not treat an ordinary confirmation as permission to leave the sandbox. To leave it, switch /permissions ask.")
-	case Sandbox:
+	case Contain:
 		n.Rationale = localized(n.Lang,
 			"评审要求这条命令收容执行，但没有给出 Direct，且当前没有可用的收容/越界路径；auto 不能自行放行到沙箱外。",
 			"the reviewer required this call to stay contained and gave no Direct grant, and auto has no containment/escape path here; it cannot approve running outside the sandbox.")
@@ -1326,7 +1362,7 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		}
 		// Merge the first gate's requests into the second's decision. Both
 		// fields describe what the FIRST gate asked for and the second gate has
-		// no opinion about: Sandbox is the containment the permission gate
+		// no opinion about: the containment request is what the permission gate
 		// demanded, and ReadGrant is the workspace-boundary answer the
 		// read-scope gate belongs to. Dropping either when the second gate
 		// returns nil (the common case: a tool with no further opinion) would

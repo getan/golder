@@ -130,7 +130,7 @@ func TestChainSendsEscalationRequestsToTheReviewer(t *testing.T) {
 		return raw
 	}
 	for _, cmd := range []string{"ls -la .", `rg -n TODO internal`, "cat go.mod"} {
-		spy := &reviewerSpy{v: Verdict{Level: Sandbox, Source: "llm"}}
+		spy := &reviewerSpy{v: Verdict{Level: Contain, Source: "llm"}}
 		v := Chain{Inner: spy}.Classify(context.Background(), "bash", escalated(cmd))
 		if spy.calls != 1 {
 			t.Errorf("%q with require_escalated reached the reviewer %d times, want 1", cmd, spy.calls)
@@ -162,7 +162,7 @@ func TestBareGraderStillGetsThePolicyPipeline(t *testing.T) {
 
 	// A read-only command reaches the grader like everything else.
 	bare.calls = 0
-	if dec := gate(context.Background(), bashCall("ls -la internal")); dec != nil {
+	if dec := gate(context.Background(), bashCall("ls -la internal")); !approvedToRun(dec) {
 		t.Errorf("an allowed read must run, got %+v", dec)
 	}
 	if bare.calls != 1 {
@@ -171,7 +171,7 @@ func TestBareGraderStillGetsThePolicyPipeline(t *testing.T) {
 
 	// A mutating command does too.
 	bare.calls = 0
-	if dec := gate(context.Background(), bashCall("go test ./...")); dec != nil {
+	if dec := gate(context.Background(), bashCall("go test ./...")); !approvedToRun(dec) {
 		t.Errorf("an auto-approved confirm must run, got %+v", dec)
 	}
 	if bare.calls != 1 {
@@ -191,7 +191,7 @@ func TestPermissionGateReviewsReadsToo(t *testing.T) {
 		Sandboxed: func(name string) bool { return name == "bash" },
 		Notify:    rec.emit,
 	})
-	if dec := gate(context.Background(), bashCall("ls -la internal")); dec != nil {
+	if dec := gate(context.Background(), bashCall("ls -la internal")); !approvedToRun(dec) {
 		t.Errorf("an allowed read must run, got %+v", dec)
 	}
 	if spy.calls != 1 {
@@ -202,7 +202,7 @@ func TestPermissionGateReviewsReadsToo(t *testing.T) {
 	}
 
 	// The same gate still routes a genuinely risky command through the reviewer.
-	spy.v = Verdict{Level: Sandbox, Source: "llm", Reasons: []string{"risky"}}
+	spy.v = Verdict{Level: Contain, Source: "llm", Reasons: []string{"risky"}}
 	dec := gate(context.Background(), bashCall("rm -rf ./build"))
 	if spy.calls != 2 {
 		t.Errorf("the reviewer ran %d times in total, want 2", spy.calls)

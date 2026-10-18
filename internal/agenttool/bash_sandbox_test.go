@@ -65,6 +65,27 @@ func TestBashExecutionLayerDoesNotGrade(t *testing.T) {
 	}
 }
 
+// A bare envelope is the gate's "the command is fully enumerable" decision: it
+// skips the sandbox, while enforce still wins and the absence of the envelope
+// keeps the default containment.
+func TestBareEnvelopeSkipsTheSandbox(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	ctx := agentcore.WithBareEnvelope(context.Background(), "enumerable")
+
+	if sandbox, block := tool.sandboxRoute(ctx, ""); sandbox || block != "" {
+		t.Fatalf("a bare envelope must skip the sandbox, got sandbox=%v block=%q", sandbox, block)
+	}
+	tool.ForceSandbox = true
+	if sandbox, _ := tool.sandboxRoute(ctx, ""); !sandbox {
+		t.Error("enforce must contain even an enumerable call")
+	}
+	tool.ForceSandbox = false
+	if sandbox, _ := tool.sandboxRoute(context.Background(), ""); !sandbox {
+		t.Error("without the gate's envelope a call is contained")
+	}
+}
+
 // TestBashSandboxRequestRoutesToRunner verifies the execution layer honors a
 // sandbox request published by the permission gate (via the executor context):
 // auto-mode sandbox-tier commands must run isolated without a per-turn

@@ -19,7 +19,7 @@
 // Escalation is the safe direction and the expensive one, so the thresholds are
 // asymmetric on purpose:
 //
-//   - Deny and Sandbox are accepted at moderate confidence. Their failure mode
+//   - Deny and Contain are accepted at moderate confidence. Their failure mode
 //     is a redundant block or a redundant sandbox — the command is slowed or
 //     retried, nothing is lost.
 //   - Allow demands a high probability, a wide margin over the runner-up, and
@@ -63,7 +63,7 @@ type Config struct {
 	// runner-up. A 0.86/0.84 split is not a verdict even though the winner
 	// clears AllowConfidence.
 	AllowMargin float64
-	// DecideConfidence is the minimum for accepting Deny or Sandbox, whose
+	// DecideConfidence is the minimum for accepting Deny or Contain, whose
 	// failure modes are cheap.
 	DecideConfidence float64
 	// DangerConfirm is the probability at which an independent danger signal
@@ -105,7 +105,7 @@ const (
 // judge's own vocabulary so a caller can map it without a second table.
 var LevelOptions = map[string]any{
 	"allow":   "routine: a read, a build, a test run, an edit inside the workspace, nothing that leaves the machine or destroys work",
-	"sandbox": "carries real risk but can be contained by running it isolated (an install, a build script, an untrusted generator)",
+	"contain": "carries real risk but can be contained by running it isolated (an install, a build script, an untrusted generator)",
 	"confirm": "a person should decide: its effect depends on context a reviewer cannot see",
 	"deny":    "must not run: it destroys work, exfiltrates data, escalates privilege, or writes outside anything the user opened",
 }
@@ -297,11 +297,11 @@ func Decide(req Request) Outcome {
 		out.Route, out.Escalation = RouteEscalate, EscalateLowConfidence
 		return out
 
-	case "sandbox":
+	case "contain":
 		// Containment is the safe direction too: worst case the command runs
 		// isolated and fails for lack of access, which is visible and fixable.
 		if danger >= DangerDeny || clearAnswer(level, cfg.DecideConfidence) {
-			out.Route, out.Level = RouteDecided, judge.Sandbox
+			out.Route, out.Level = RouteDecided, judge.Contain
 			return out
 		}
 		out.Route, out.Escalation = RouteEscalate, EscalateLowConfidence
