@@ -175,6 +175,54 @@ func TestSessionGrantOutranksSavedAndIsNotPersisted(t *testing.T) {
 	}
 }
 
+// A remembered grant is the newer answer. A session refusal for the same path
+// outranks the saved layer in Check, so without clearing it the grant would
+// never take effect and RefusedPaths would emit a deny after the allow in the
+// sandbox profile.
+func TestRememberedGrantClearsAnEarlierSessionDeny(t *testing.T) {
+	s := newStore(t)
+	SetProcess(s)
+	t.Cleanup(func() { SetProcess(nil) })
+
+	path := filepath.Join(t.TempDir(), "cache")
+	if _, err := Refuse(path, Write, Session); err != nil {
+		t.Fatalf("Refuse: %v", err)
+	}
+	if _, err := AddWritableRoot(path, Remembered, "test"); err != nil {
+		t.Fatalf("AddWritableRoot: %v", err)
+	}
+	if !Allows(path, Write) {
+		t.Error("a remembered grant must clear an earlier session refusal")
+	}
+	if !Allows(path, Read) {
+		t.Error("a write grant carries read")
+	}
+}
+
+// The converse must stay true: a refusal given after the grant is the newer
+// answer and still wins.
+func TestSessionDenyAfterAGrantStillWins(t *testing.T) {
+	s := newStore(t)
+	SetProcess(s)
+	t.Cleanup(func() { SetProcess(nil) })
+
+	path := filepath.Join(t.TempDir(), "cache")
+	if _, err := AddWritableRoot(path, Remembered, "test"); err != nil {
+		t.Fatalf("AddWritableRoot: %v", err)
+	}
+	if _, err := Refuse(path, Write, Session); err != nil {
+		t.Fatalf("Refuse: %v", err)
+	}
+	if Allows(path, Write) {
+		t.Error("a later session refusal must win")
+	}
+	// Write carries Read in this capability model, so refusing write refuses
+	// both; the point here is only that the later answer wins.
+	if Allows(path, Read) {
+		t.Error("write implies read; a write refusal denies read too")
+	}
+}
+
 func TestRememberedGrantSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "grants.json")
 	s, err := New(Options{Path: path})

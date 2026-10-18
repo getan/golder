@@ -203,12 +203,22 @@ func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	// everything below it. These rules come after all file allows.
 	if len(policy.DenyReadDirs) > 0 {
 		fmt.Fprintf(&b, "(deny file-read* %s)\n", quoteAll(canonicalsAll(policy.DenyReadDirs)))
+		// A deny names a subtree; a more specific grant inside it is still the
+		// table's decision (most-specific-wins). Later rules win, so re-assert
+		// the effective grants after the deny. File denies and the state deny
+		// below still win because they come later.
+		if re := readGrantsInsideDenies(policy.DenyReadDirs); len(re) > 0 {
+			fmt.Fprintf(&b, "(allow file-read* %s)\n", quoteAll(canonicalsAll(re)))
+		}
 	}
 	if len(policy.DenyReadFiles) > 0 {
 		fmt.Fprintf(&b, "(deny file-read* %s)\n", literalAll(canonicalsAll(policy.DenyReadFiles)))
 	}
 	if len(policy.DenyWriteDirs) > 0 {
 		fmt.Fprintf(&b, "(deny file-write* %s)\n", quoteAll(canonicalsAll(policy.DenyWriteDirs)))
+		if re := writeGrantsInsideDenies(policy.DenyWriteDirs); len(re) > 0 {
+			fmt.Fprintf(&b, "(allow file-write* %s)\n", quoteAll(canonicalsAll(re)))
+		}
 	}
 	if len(policy.DenyWriteFiles) > 0 {
 		fmt.Fprintf(&b, "(deny file-write* %s)\n", literalAll(canonicalsAll(policy.DenyWriteFiles)))

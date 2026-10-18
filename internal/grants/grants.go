@@ -532,6 +532,22 @@ func (s *Store) Add(g Grant) (Grant, error) {
 		s.session[norm] = mergeGrant(s.session[norm], g)
 		return s.session[norm], nil
 	}
+	// A remembered grant is the newer answer for the capabilities it names.
+	// Session rows outrank remembered ones in Check, so an earlier refusal in
+	// this run would otherwise mask the grant for the rest of the process —
+	// and RefusedPaths would emit a deny after the allow in the sandbox
+	// profile. Clear only the bits this grant speaks to; a later session
+	// refusal still wins because it is added after this call.
+	if g.Allow != 0 {
+		if row, ok := s.session[norm]; ok {
+			row.Deny &^= g.Allow
+			if row.Allow == 0 && row.Deny == 0 {
+				delete(s.session, norm)
+			} else {
+				s.session[norm] = row
+			}
+		}
+	}
 	prev, had := s.saved[norm]
 	s.saved[norm] = mergeGrant(prev, g)
 	// Adding a path clears any tombstone for it: the user's latest answer is

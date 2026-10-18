@@ -30,3 +30,45 @@ func NormalizeWritableRoot(raw string) (string, error) {
 // WritableRoots returns the directory grants the profile may write, in the
 // form both platform runners want (subtree roots, sorted by the table).
 func WritableRoots() []string { return grants.WritableRoots() }
+
+// readGrantsInsideDenies returns the table's effective read grants that lie
+// strictly inside one of denyDirs. A deny rule is emitted after the broad
+// allows (later rules win), so a more specific grant under a denied subtree
+// must be re-asserted after the deny to match the table's most-specific-wins
+// decision.
+func readGrantsInsideDenies(denyDirs []string) []string {
+	return specificGrantsInsideDenies(grants.ReadRoots(), grants.Read, denyDirs)
+}
+
+// writeGrantsInsideDenies is readGrantsInsideDenies for the write side.
+func writeGrantsInsideDenies(denyDirs []string) []string {
+	return specificGrantsInsideDenies(grants.WritableRoots(), grants.Write, denyDirs)
+}
+
+// specificGrantsInsideDenies returns the effective user grants that are
+// strictly inside one of denyDirs. A grant that is a parent of the deny is
+// deliberately not returned: re-asserting it would re-open the whole subtree
+// the refusal singled out, and the table itself would still deny the child
+// because the more specific row wins.
+func specificGrantsInsideDenies(roots []string, cap grants.Capability, denyDirs []string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	for _, root := range roots {
+		if !grants.Allows(root, cap) {
+			continue
+		}
+		for _, deny := range denyDirs {
+			if deny == "" || root == "" || deny == root {
+				continue
+			}
+			if permissions.Inside(deny, root) {
+				if !seen[root] {
+					seen[root] = true
+					out = append(out, root)
+				}
+				break
+			}
+		}
+	}
+	return out
+}

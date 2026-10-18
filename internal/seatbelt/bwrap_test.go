@@ -117,6 +117,58 @@ func TestBwrapRunnerArgv(t *testing.T) {
 	}
 }
 
+// A parent refusal must not swallow a more specific grant. The tmpfs mask is
+// mounted after the broad binds, so the child has to be created and re-bound
+// after the mask (later mounts win) to match the table's most-specific-wins.
+func TestBwrapSpecificGrantWinsOverParentDeny(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GOLDER_HOME", filepath.Join(home, "ghome"))
+	grantstest.Install(t)
+
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := grants.AddWritableRoot(child, grants.Remembered, "test"); err != nil {
+		t.Fatalf("AddWritableRoot: %v", err)
+	}
+	if _, err := grants.Refuse(parent, grants.ReadWrite, grants.Remembered); err != nil {
+		t.Fatalf("Refuse: %v", err)
+	}
+	if !grants.Allows(child, grants.Write) {
+		t.Fatal("the table should allow the more specific child")
+	}
+
+	policy := CallPolicy{}
+	RefusedPaths(&policy)
+	r := &BwrapRunner{ProjectDir: t.TempDir(), TmpDir: t.TempDir()}
+	argv, cleanup, err := r.SandboxCall([]string{"/bin/bash", "-c", "echo hi"}, "", policy)
+	if err != nil {
+		t.Fatalf("SandboxCall: %v", err)
+	}
+	if cleanup != nil {
+		cleanup()
+	}
+
+	parentCanon := permissions.Canonical(parent)
+	childCanon := permissions.Canonical(child)
+	maskAt := indexOfSeq(argv, "--tmpfs", parentCanon)
+	if maskAt < 0 {
+		t.Fatalf("argv missing the parent deny mask for %s: %v", parentCanon, argv)
+	}
+	if indexOfSeq(argv, "--dir", childCanon) < maskAt {
+		t.Errorf("the child directory must be created after the parent mask: %v", argv)
+	}
+	if indexOfSeq(argv[maskAt:], "--ro-bind", childCanon, childCanon) < 0 {
+		t.Errorf("child read grant not re-bound after the parent mask: %v", argv)
+	}
+	if indexOfSeq(argv[maskAt:], "--bind", childCanon, childCanon) < 0 {
+		t.Errorf("child write grant not re-bound after the parent mask: %v", argv)
+	}
+}
+
 func TestBwrapRunnerSymlinkedProject(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

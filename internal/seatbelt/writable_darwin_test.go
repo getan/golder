@@ -13,6 +13,7 @@ package seatbelt
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,5 +61,85 @@ func TestWritableRootsInDarwinProfile(t *testing.T) {
 	}
 	if !strings.Contains(text, "(subpath \""+canon+"\")") {
 		t.Errorf("profile does not make the granted root readable:\n%s", text)
+	}
+}
+
+// A parent refusal must not swallow a more specific grant: the table resolves
+// most-specific-wins, so the profile has to re-assert the child after the
+// parent's deny rule (later rules win).
+func TestSpecificGrantIsReassertedAfterParentDeny(t *testing.T) {
+	if !Available() {
+		t.Skip("sandbox-exec not on PATH")
+	}
+	grantstest.Install(t)
+	parent := t.TempDir()
+	child := filepath.Join(parent, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if _, err := grants.AddWritableRoot(child, grants.Remembered, "test"); err != nil {
+		t.Fatalf("AddWritableRoot: %v", err)
+	}
+	if _, err := grants.Refuse(parent, grants.ReadWrite, grants.Remembered); err != nil {
+		t.Fatalf("Refuse: %v", err)
+	}
+	if !grants.Allows(child, grants.Write) {
+		t.Fatal("the table should allow the more specific child")
+	}
+
+	policy := CallPolicy{}
+	RefusedPaths(&policy)
+	r := &SeatbeltRunner{ProjectDir: t.TempDir(), TmpDir: t.TempDir()}
+	argv, cleanup, err := r.SandboxCall([]string{"/bin/bash", "-c", "echo hi"}, "", policy)
+	if err != nil {
+		t.Fatalf("SandboxCall: %v", err)
+	}
+	defer cleanup()
+	data, err := os.ReadFile(argv[2])
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+
+	parentCanon := permissions.Canonical(parent)
+	childCanon := permissions.Canonical(child)
+	denyRead, denyWrite, allowRead, allowWrite := -1, -1, -1, -1
+	for i, line := range strings.Split(string(data), "\n") {
+		switch {
+		case strings.HasPrefix(line, "(deny file-read*") && strings.Contains(line, `(subpath "`+parentCanon+`")`):
+			denyRead = i
+		case strings.HasPrefix(line, "(deny file-write*") && strings.Contains(line, `(subpath "`+parentCanon+`")`):
+			denyWrite = i
+		case strings.HasPrefix(line, "(allow file-read*") && strings.Contains(line, `(subpath "`+childCanon+`")`):
+			allowRead = i
+		case strings.HasPrefix(line, "(allow file-write*") && strings.Contains(line, `(subpath "`+childCanon+`")`):
+			allowWrite = i
+		}
+	}
+	if denyRead < 0 || allowRead <= denyRead {
+		t.Errorf("read: child allow (line %d) must follow the parent deny (line %d)\n%s", allowRead, denyRead, data)
+	}
+	if denyWrite < 0 || allowWrite <= denyWrite {
+		t.Errorf("write: child allow (line %d) must follow the parent deny (line %d)\n%s", allowWrite, denyWrite, data)
+	}
+}
+
+// /bin/sh reads /private/var/select/sh; the profile must admit it or a nested
+// `sh -c` fails with EPERM even though /bin and /usr are readable.
+func TestDarwinProfileAdmitsTheShellSelector(t *testing.T) {
+	if !Available() {
+		t.Skip("sandbox-exec not on PATH")
+	}
+	r := &SeatbeltRunner{ProjectDir: t.TempDir(), TmpDir: t.TempDir()}
+	argv, cleanup, err := r.SandboxArgv("/bin/bash", "-c", "echo hi", "")
+	if err != nil {
+		t.Fatalf("SandboxArgv: %v", err)
+	}
+	defer cleanup()
+	data, err := os.ReadFile(argv[2])
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	if !strings.Contains(string(data), `(subpath "/private/var/select")`) {
+		t.Errorf("profile does not admit /private/var/select; nested sh -c will fail:\n%s", data)
 	}
 }

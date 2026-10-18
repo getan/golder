@@ -202,6 +202,29 @@ func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy)
 			}
 		}
 	}
+	// Later mounts win: re-admit the effective grants that are more specific
+	// than a denied subtree. A denied directory is masked with an empty tmpfs,
+	// so the child does not exist in the new namespace; --dir creates it and
+	// the bind restores the grant. The combined list is used for both sides
+	// because a write refusal is masked with a tmpfs as well, which also hides
+	// the read side.
+	deniedDirs := append(append([]string{}, policy.DenyReadDirs...), policy.DenyWriteDirs...)
+	for _, root := range readGrantsInsideDenies(deniedDirs) {
+		for _, p := range canonicals(root) {
+			if info, err := os.Stat(p); err != nil || !info.IsDir() {
+				continue
+			}
+			argv = append(argv, "--dir", p, "--ro-bind", p, p)
+		}
+	}
+	for _, root := range writeGrantsInsideDenies(deniedDirs) {
+		for _, p := range canonicals(root) {
+			if info, err := os.Stat(p); err != nil || !info.IsDir() {
+				continue
+			}
+			argv = append(argv, "--dir", p, "--bind", p, p)
+		}
+	}
 	argv = append(argv, command...)
 	return argv, nil, nil
 }
