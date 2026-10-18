@@ -77,6 +77,9 @@ type StreamNoticeEvent struct {
 	// is counting against; both are zero for notices that are not a retry.
 	Attempt     int
 	MaxAttempts int
+	// Detail carries the watchdog's evidence ("12 keep-alives, last line: comment"),
+	// so a front-end can show why the wait is happening without opening the log.
+	Detail string
 }
 
 // StreamNoticeRetry is the notice kind for a stream that is being re-issued.

@@ -36,7 +36,7 @@ package provider
 import (
 	"bufio"
 	"bytes"
-	"fmt"
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -65,7 +65,7 @@ func (t *sseGuardTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	if !strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), sseContentType) {
 		return resp, nil
 	}
-	resp.Body = newSSEStreamGuard(resp.Body)
+	resp.Body = newSSEStreamGuard(req.Context(), resp.Body)
 	return resp, nil
 }
 
@@ -110,18 +110,32 @@ type sseStreamGuard struct {
 	timer       *time.Timer
 	lastByte    time.Time
 	lastContent time.Time
+
+	// started anchors the first-token budget, and gotContent flips the guard from
+	// that budget to the inter-chunk one: a cold prefill may legitimately take
+	// minutes, a stall after output began may not.
+	started    time.Time
+	gotContent bool
+	first      time.Duration
+	phase      string
+	seen       StreamEvidence
 }
 
-func newSSEStreamGuard(r io.ReadCloser) *sseStreamGuard {
+func newSSEStreamGuard(ctx context.Context, r io.ReadCloser) *sseStreamGuard {
+	now := time.Now()
 	g := &sseStreamGuard{
 		r:           r,
 		idle:        idleTimeout(),
 		stall:       stallTimeout(),
+		first:       firstContentTimeout(ctx),
+		phase:       StreamPhaseFirstToken,
 		chunks:      make(chan guardChunk, guardChunkBuf),
 		done:        make(chan struct{}),
 		timer:       time.NewTimer(time.Hour),
-		lastByte:    time.Now(),
-		lastContent: time.Now(),
+		lastByte:    now,
+		lastContent: now,
+		started:     now,
+		seen:        StreamEvidence{LastFrame: "none"},
 	}
 	g.timer.Stop()
 	go g.read()
@@ -151,8 +165,14 @@ func (g *sseStreamGuard) Read(p []byte) (int, error) {
 // fill waits for the next surviving chunk within both windows.
 func (g *sseStreamGuard) fill() error {
 	wait := g.idle - time.Since(g.lastByte)
-	if s := g.stall - time.Since(g.lastContent); s < wait {
-		wait = s
+	content := g.stall - time.Since(g.lastContent)
+	if !g.gotContent {
+		// Before the first content frame the budget is measured from the request,
+		// not from the last content: nothing has produced yet.
+		content = g.first - time.Since(g.started)
+	}
+	if content < wait {
+		wait = content
 	}
 	if wait <= 0 {
 		return g.timeout()
@@ -169,6 +189,9 @@ func (g *sseStreamGuard) fill() error {
 		g.lastByte = time.Now()
 		if c.content {
 			g.lastContent = g.lastByte
+			g.seen.Frames++
+			g.gotContent = true
+			g.phase = StreamPhaseStream
 		}
 		g.out = append(g.out, c.data...)
 		return nil
@@ -182,10 +205,14 @@ func (g *sseStreamGuard) fill() error {
 // same failure in the same words.
 func (g *sseStreamGuard) timeout() error {
 	g.stop()
-	if time.Since(g.lastByte) >= g.idle {
-		return fmt.Errorf("%w: no data for %s", errStreamIdle, g.idle)
+	window := g.stall
+	if !g.gotContent {
+		window = g.first
 	}
-	return fmt.Errorf("%w: no output for %s", errStreamStall, g.stall)
+	if time.Since(g.lastByte) >= g.idle {
+		return watchdogError(errStreamIdle, g.phase, g.idle, g.seen)
+	}
+	return watchdogError(errStreamStall, g.phase, window, g.seen)
 }
 
 // stop closes done and the body so the reader goroutine unblocks and exits. It
@@ -211,6 +238,19 @@ func (g *sseStreamGuard) read() {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
+			g.seen.Bytes += int64(len(line))
+			trimmed := bytes.TrimRight(line, "\r\n")
+			switch {
+			case len(bytes.TrimSpace(trimmed)) == 0:
+				g.seen.LastFrame = "blank"
+			case bytes.HasPrefix(bytes.TrimLeft(trimmed, " \t"), []byte(":")):
+				g.seen.KeepAlives++
+				g.seen.LastFrame = "comment"
+			case bytes.HasPrefix(bytes.TrimLeft(trimmed, " \t"), []byte("data:")):
+				g.seen.LastFrame = "data"
+			default:
+				g.seen.LastFrame = "event"
+			}
 			if keep, content := classifySSELine(line, &have); keep {
 				if !g.send(guardChunk{data: line, content: content}) {
 					return

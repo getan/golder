@@ -193,7 +193,7 @@ func TestResponsesDriverReportsATruncatedStreamVerbatim(t *testing.T) {
 // shortened through the same knob the transport reads.
 func TestSSEGuardIdleWatchdogFires(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "20ms")
-	guard := newSSEStreamGuard(io.NopCloser(&stallingBody{}))
+	guard := newSSEStreamGuard(context.Background(), io.NopCloser(&stallingBody{}))
 	defer guard.Close()
 
 	start := time.Now()
@@ -214,7 +214,10 @@ func TestSSEGuardIdleWatchdogFires(t *testing.T) {
 // exist.
 func TestSSEGuardStallWatchdogFiresOnKeepAlives(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "20ms")
-	guard := newSSEStreamGuard(io.NopCloser(&keepAliveBody{}))
+	// The keep-alives keep the idle window happy; it is the first-token budget
+	// that must expire, so it is the one shortened here.
+	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "40ms")
+	guard := newSSEStreamGuard(context.Background(), io.NopCloser(&keepAliveBody{}))
 	defer guard.Close()
 
 	_, err := io.ReadAll(guard)
@@ -224,13 +227,42 @@ func TestSSEGuardStallWatchdogFiresOnKeepAlives(t *testing.T) {
 	if !errors.Is(err, errStreamStall) {
 		t.Errorf("err = %v, want the content-stall sentinel (not idle: keep-alives did arrive)", err)
 	}
-	if !strings.Contains(streamCutError("opencode-go", err).Error(), "stopped producing") {
-		t.Errorf("streamCutError = %q, want the stall named", streamCutError("opencode-go", err))
+	// Nothing was produced at all, so the failure is in the first-token phase and
+	// must say that rather than claiming the output stopped mid-answer.
+	got := streamCutError("opencode-go", err).Error()
+	for _, want := range []string{"no answer started", "keep-alives", "last line"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("streamCutError = %q, want %q", got, want)
+		}
 	}
 }
 
 // stallingBody delivers nothing and never returns.
 type stallingBody struct{}
+
+// TestFirstContentTimeoutWidensPerAttempt: the first-token budget is not one
+// number repeated. A request that is genuinely slow gets more room on each retry,
+// so it is not cut three times at the same mark, while a later attempt still ends
+// the turn instead of hanging.
+func TestFirstContentTimeoutWidensPerAttempt(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "1m")
+	base := context.Background()
+	for attempt, want := range map[int]time.Duration{
+		0: time.Minute,
+		1: 2 * time.Minute,
+		2: 3 * time.Minute,
+		9: 3 * time.Minute,
+	} {
+		if got := firstContentTimeout(withStreamAttempt(base, attempt)); got != want {
+			t.Errorf("attempt %d budget = %s, want %s", attempt, got, want)
+		}
+	}
+	// A malformed setting falls back to the default rather than to no budget.
+	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "soon")
+	if got := firstContentTimeout(base); got != 3*time.Minute {
+		t.Errorf("malformed setting = %s, want the 3m default", got)
+	}
+}
 
 func (b *stallingBody) Read([]byte) (int, error) {
 	time.Sleep(time.Hour)

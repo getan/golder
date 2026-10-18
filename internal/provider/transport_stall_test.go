@@ -66,6 +66,7 @@ func (b *sseKeepAliveBody) Close() error {
 // every blank line let a keep-alive-happy gateway hold a turn open forever.
 func TestTransportStallIgnoresKeepAlives(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "50ms")
+	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "120ms")
 	body := newSSEKeepAliveBody()
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -86,8 +87,13 @@ func TestTransportStallIgnoresKeepAlives(t *testing.T) {
 	if !errors.Is(got, errStreamStall) {
 		t.Fatalf("watchdog error = %v, want errStreamStall (keep-alives must not reset stall)", got)
 	}
-	if !strings.Contains(streamCutError("opencode-go", got).Error(), "stopped producing") {
-		t.Errorf("streamCutError = %q, want the stall named", streamCutError("opencode-go", got))
+	// The keep-alive-only body never produced a frame, so the first-token phase is
+	// the one that expired and the sentence describes that phase.
+	rendered := streamCutError("opencode-go", got).Error()
+	for _, want := range []string{"no answer started", "0 content frames", "keep-alives"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("streamCutError = %q, want %q", rendered, want)
+		}
 	}
 	if msg, _ := stream.Result(context.Background()); msg.StopReason != agentcore.StopReasonError {
 		t.Errorf("stop reason = %q, want error", msg.StopReason)

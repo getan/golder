@@ -202,6 +202,11 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 	// content-stall watchdog is slightly slacker than idle (idle × stallFactor)
 	// so a slow but progressing stream is not killed by the stall guard.
 	stall := stallTimeout()
+	// Before the first content frame the budget is the first-token window, not the
+	// inter-chunk one: a cold prefill or a long silent think is legitimate, and
+	// cutting it at the same mark as a mid-stream hang was the false positive this
+	// phase split fixes. The budget widens on each retry (see firstContentTimeout).
+	first := firstContentTimeout(ctx)
 
 	// The watchdog fires by cancelling a derived context; reads race against it.
 	watchCtx, cancel := context.WithCancel(ctx)
@@ -217,9 +222,13 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 
 	var dataBuf strings.Builder
 	idleTimer := time.NewTimer(idle)
-	stallTimer := time.NewTimer(stall)
+	contentTimer := time.NewTimer(first)
 	defer idleTimer.Stop()
-	defer stallTimer.Stop()
+	defer contentTimer.Stop()
+
+	// What the guard has seen, so a failure can say whether bytes were arriving.
+	phase := StreamPhaseFirstToken
+	seen := StreamEvidence{LastFrame: "none"}
 
 	emit := func(events []StreamEvent) bool {
 		for _, ev := range events {
@@ -275,6 +284,11 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			fail("decode error: "+err.Error(), err)
 			return false, false
 		}
+		seen.Frames++
+		// The first framed payload ends the first-token phase; from here the
+		// inter-chunk window applies.
+		phase = StreamPhaseStream
+		resetTimer(contentTimer, stall)
 		return emit(events), true
 	}
 
@@ -284,10 +298,15 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			abort()
 			return
 		case <-idleTimer.C:
-			fail("idle timeout: no data received", errStreamIdle)
+			fail("idle timeout: no data received",
+				watchdogError(errStreamIdle, phase, idle, seen))
 			return
-		case <-stallTimer.C:
-			fail("content stall timeout", errStreamStall)
+		case <-contentTimer.C:
+			window := stall
+			if phase == StreamPhaseFirstToken {
+				window = first
+			}
+			fail("content stall timeout", watchdogError(errStreamStall, phase, window, seen))
 			return
 		case err := <-readErr:
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -309,28 +328,31 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			if !ok {
 				continue
 			}
+			seen.Bytes += int64(len(line))
 			// Any byte resets the idle watchdog; a flushed event resets stall.
 			resetTimer(idleTimer, idle)
 			line = strings.TrimRight(line, "\r\n")
 			switch {
 			case line == "":
+				seen.LastFrame = "blank"
 				// Blank line = event boundary: flush accumulated data.
-				ok, produced := flushPayload()
-				if !ok {
+				// A keep-alive or an event: without data field is not progress;
+				// only a framed payload resets the content window, which
+				// flushPayload already did.
+				if ok, _ := flushPayload(); !ok {
 					return
 				}
-				// A keep-alive or an event: without data field is not progress;
-				// only a framed payload resets the content-stall window.
-				if produced {
-					resetTimer(stallTimer, stall)
-				}
 			case strings.HasPrefix(line, ":"):
+				seen.KeepAlives++
+				seen.LastFrame = "comment"
 				// Comment / keep-alive: ignore payload. The idle timer already saw
 				// the bytes; the stall timer deliberately stays armed because no
 				// output was framed.
 			case strings.HasPrefix(line, "data:"):
+				seen.LastFrame = "data"
 				dataBuf.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 			default:
+				seen.LastFrame = "event"
 				// Non-data field (event:, id:, etc.) — ignored for our decoders.
 			}
 		}

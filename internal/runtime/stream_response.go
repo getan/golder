@@ -145,6 +145,7 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 				Window:      e.Window,
 				Attempt:     e.Attempt,
 				MaxAttempts: e.MaxAttempts,
+				Detail:      e.Detail,
 			}); err != nil {
 				return agentcore.AssistantMessage{}, err
 			}

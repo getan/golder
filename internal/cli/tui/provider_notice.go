@@ -26,29 +26,40 @@ func providerNoticeText(ev agentcore.ProviderNoticeEvent, lang string) string {
 			progress = fmt.Sprintf(" (%d/%d)", ev.Attempt, ev.MaxAttempts)
 		}
 	}
+	// The watchdog's evidence ("12 keep-alives, last line: comment") is the
+	// difference between a gateway that holds the socket open and a dead
+	// connection, so the notice carries it when the guard counted anything.
+	detail := ""
+	if ev.Detail != "" {
+		if zh {
+			detail = "；" + ev.Detail
+		} else {
+			detail = "; " + ev.Detail
+		}
+	}
 
 	switch ev.Reason {
 	case provider.StreamCutIdle:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（%s 无数据），正在重试%s…", providerName, ev.Window, progress)
+			return fmt.Sprintf("provider %s 的流中断（%s 无数据%s），正在重试%s…", providerName, ev.Window, detail, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (no data for %s); retrying%s…", providerName, ev.Window, progress)
+		return fmt.Sprintf("provider %s: stream cut (no data for %s%s); retrying%s…", providerName, ev.Window, detail, progress)
 	case provider.StreamCutStall:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（%s 无输出），正在重试%s…", providerName, ev.Window, progress)
+			return fmt.Sprintf("provider %s 的流中断（%s 无输出%s），正在重试%s…", providerName, ev.Window, detail, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (no output for %s); retrying%s…", providerName, ev.Window, progress)
+		return fmt.Sprintf("provider %s: stream cut (no output for %s%s); retrying%s…", providerName, ev.Window, detail, progress)
 	case provider.StreamCutTruncated:
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（连接提前关闭），正在重试%s…", providerName, progress)
+			return fmt.Sprintf("provider %s 的流中断（连接提前关闭%s），正在重试%s…", providerName, detail, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (the connection closed early); retrying%s…", providerName, progress)
+		return fmt.Sprintf("provider %s: stream cut (the connection closed early%s); retrying%s…", providerName, detail, progress)
 	default:
 		// Silent: the stream ended without a final event. This is the case the
 		// wire fallback used to surface as a dead end, so name it plainly.
 		if zh {
-			return fmt.Sprintf("provider %s 的流中断（流在没有结束事件的情况下关闭），正在重试%s…", providerName, progress)
+			return fmt.Sprintf("provider %s 的流中断（流在没有结束事件的情况下关闭%s），正在重试%s…", providerName, detail, progress)
 		}
-		return fmt.Sprintf("provider %s: stream cut (the stream ended without a final event); retrying%s…", providerName, progress)
+		return fmt.Sprintf("provider %s: stream cut (the stream ended without a final event%s); retrying%s…", providerName, detail, progress)
 	}
 }

@@ -29,9 +29,11 @@ package provider
 // retry policy built on it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -44,6 +46,89 @@ const (
 	StreamCutTruncated = "truncated"
 	StreamCutSilent    = "silent"
 )
+
+// Watchdog phases: the two windows are different questions, and a person reading
+// the failure needs to know which one expired. "No answer started" means the
+// model never began (a long prefill, a queued request, a silent think); "output
+// stopped" means it began and then went quiet (a mid-stream hang).
+const (
+	StreamPhaseFirstToken = "first-token"
+	StreamPhaseStream     = "stream"
+)
+
+// StreamEvidence is what a watchdog saw while it waited. It is the difference
+// between "the gateway keeps the socket warm and says nothing" and "nothing
+// arrived at all": with keep-alives counted, the first is visible as bytes and
+// zero content frames.
+type StreamEvidence struct {
+	// Bytes is everything read from the body, keep-alives included.
+	Bytes int64
+	// Frames counts data payloads that reached the decoder.
+	Frames int
+	// KeepAlives counts SSE comment lines (": ping" and friends).
+	KeepAlives int
+	// LastFrame names the last line kind seen: "comment", "event", "blank",
+	// "data", or "none" when nothing arrived.
+	LastFrame string
+}
+
+// String renders the evidence as the clause a failure sentence appends.
+func (e StreamEvidence) String() string {
+	last := e.LastFrame
+	if last == "" {
+		last = "none"
+	}
+	if e.Bytes == 0 {
+		return "no bytes arrived"
+	}
+	return fmt.Sprintf("%d bytes, %d content frames, %d keep-alives, last line: %s",
+		e.Bytes, e.Frames, e.KeepAlives, last)
+}
+
+// StreamWatchdogError is a watchdog failure that carries its phase, window and
+// evidence. It wraps the idle/stall sentinel, so every existing classification
+// (isStreamCutErr, streamCutReason, the retry policy) keeps working unchanged.
+type StreamWatchdogError struct {
+	// Sink is errStreamIdle or errStreamStall.
+	Sink error
+	// Phase is StreamPhaseFirstToken or StreamPhaseStream.
+	Phase string
+	// Window is the budget that expired.
+	Window time.Duration
+	// Seen is what the guard observed.
+	Seen StreamEvidence
+}
+
+func (e *StreamWatchdogError) Error() string {
+	return fmt.Sprintf("%s (%s, %s)", e.Sink.Error(), e.Phase, e.Seen.String())
+}
+
+func (e *StreamWatchdogError) Unwrap() error { return e.Sink }
+
+// watchdogError builds a StreamWatchdogError for the phase and window that
+// expired.
+func watchdogError(sink error, phase string, window time.Duration, seen StreamEvidence) error {
+	return &StreamWatchdogError{Sink: sink, Phase: phase, Window: window, Seen: seen}
+}
+
+// streamCutEvidence returns the evidence clause for a watchdog failure, or "" for
+// any other error. The retry notice appends it so the waiting user can tell a
+// silent gateway from a dead one.
+func streamCutEvidence(err error) string {
+	var wd *StreamWatchdogError
+	if errors.As(err, &wd) {
+		return wd.Seen.String()
+	}
+	return ""
+}
+
+// streamCutIsFirstToken reports whether the failure happened before the model
+// produced anything. Two of those in a row mean the upstream is not answering at
+// all, which is a different situation from a stream that keeps breaking mid-answer.
+func streamCutIsFirstToken(err error) bool {
+	var wd *StreamWatchdogError
+	return errors.As(err, &wd) && wd.Phase == StreamPhaseFirstToken
+}
 
 // isTruncatedStreamErr reports a stream whose body ended before the response
 // finished. The sentinel is the reliable signal; the string match covers the SDK
@@ -91,6 +176,10 @@ func streamCutReason(err error) string {
 // cuts; zero for the others. A front-end prints it so the notice matches the
 // setting (GOLDER_STREAM_IDLE_TIMEOUT) the user can change.
 func streamCutWindow(err error) time.Duration {
+	var wd *StreamWatchdogError
+	if errors.As(err, &wd) {
+		return wd.Window
+	}
 	switch {
 	case errors.Is(err, errStreamIdle):
 		return idleTimeout()
@@ -140,6 +229,10 @@ func cutError(provider string, err error, remedy string) error {
 // underlying cause is rendered without the provider prefix the drivers already
 // put on it, so the gateway is not named twice in one sentence.
 func streamCutDetail(provider string, err error) string {
+	var wd *StreamWatchdogError
+	if errors.As(err, &wd) {
+		return watchdogDetail(wd)
+	}
 	switch {
 	case errors.Is(err, errStreamIdle):
 		return fmt.Sprintf("no data arrived for %s (the connection went quiet)", idleTimeout())
@@ -150,6 +243,73 @@ func streamCutDetail(provider string, err error) string {
 	default:
 		return fmt.Sprintf("the connection closed before the answer finished (%s)", cutCause(provider, err))
 	}
+}
+
+// watchdogDetail renders the phase-aware sentence for a watchdog failure: which
+// question expired, with which budget, and what the guard saw while waiting.
+func watchdogDetail(wd *StreamWatchdogError) string {
+	switch {
+	case wd.Phase == StreamPhaseFirstToken && errors.Is(wd.Sink, errStreamStall):
+		return fmt.Sprintf("no answer started within %s (the connection stayed open but produced nothing; %s)",
+			wd.Window, wd.Seen.String())
+	case wd.Phase == StreamPhaseFirstToken:
+		return fmt.Sprintf("no data arrived for %s (the connection went quiet; %s)", wd.Window, wd.Seen.String())
+	case errors.Is(wd.Sink, errStreamStall):
+		return fmt.Sprintf("output stopped for %s (the model stopped producing; %s)", wd.Window, wd.Seen.String())
+	default:
+		return fmt.Sprintf("no data arrived for %s (the connection went quiet; %s)", wd.Window, wd.Seen.String())
+	}
+}
+
+// streamCutUpstreamSilent is the sentence for a provider that produced nothing on
+// every attempt: the retry budget is not spent, it is pointless.
+func streamCutUpstreamSilent(provider string, err error, attempts int) error {
+	where := strings.TrimSpace(provider)
+	if where == "" {
+		where = "the provider"
+	} else {
+		where += ":"
+	}
+	return fmt.Errorf("%s no answer started on %d attempts — the connection stayed open and the model produced nothing; "+
+		"the gateway or the model is not answering, retry later (%s)",
+		where, attempts, streamCutEvidence(err))
+}
+
+// firstContentTimeout is the budget for the first content frame: the phase where
+// a long prefill or a silent think is legitimate. It widens with each retry, so a
+// genuinely slow request is not cut three times at the same mark, while a gateway
+// that answers nothing still ends the turn instead of hanging.
+func firstContentTimeout(ctx context.Context) time.Duration {
+	base := 3 * time.Minute
+	if v := os.Getenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			base = d
+		}
+	}
+	switch streamAttempt(ctx) {
+	case 0:
+		return base
+	case 1:
+		return base + time.Minute
+	default:
+		return base + 2*time.Minute
+	}
+}
+
+// streamAttemptKey carries the retry number into a provider call, so the watchdog
+// budgets widen per attempt without any shared mutable state (sub-agents stream
+// concurrently).
+type streamAttemptKey struct{}
+
+// withStreamAttempt tags ctx with the attempt number (0 = the first call).
+func withStreamAttempt(ctx context.Context, attempt int) context.Context {
+	return context.WithValue(ctx, streamAttemptKey{}, attempt)
+}
+
+// streamAttempt returns the attempt number carried by ctx, 0 when absent.
+func streamAttempt(ctx context.Context) int {
+	n, _ := ctx.Value(streamAttemptKey{}).(int)
+	return n
 }
 
 // cutCause is the reader's error as the user should read it: the drivers prefix

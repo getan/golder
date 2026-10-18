@@ -333,6 +333,43 @@ func TestStreamRetryLeavesRealFailuresAlone(t *testing.T) {
 
 // A stream that ends without any terminal event and without content is as cut as
 // a dropped connection, and worth the same single retry.
+// Two attempts that never start an answer mean the upstream is not answering at
+// all. The retry budget is not spent on a third and fourth identical wait; the
+// turn ends with a sentence that says what happened.
+func TestStreamRetryStopsAfterTwoFirstTokenTimeouts(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	firstTokenCut := func() AssistantMessageEvent {
+		return cutEvent(&StreamWatchdogError{
+			Sink:   errStreamStall,
+			Phase:  StreamPhaseFirstToken,
+			Window: 3 * time.Minute,
+			Seen:   StreamEvidence{Bytes: 412, KeepAlives: 12, LastFrame: "comment"},
+		})
+	}
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), firstTokenCut()},
+		{startEvent(), firstTokenCut()},
+		{startEvent(), textEvent("never reached"), doneEvent("never reached")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (the second first-token timeout stops the chain)", got)
+	}
+	if got := len(noticeEvents(events)); got != 1 {
+		t.Errorf("notices = %d, want 1 (the retry before the second attempt)", got)
+	}
+	got := errorMessage(events)
+	for _, want := range []string{"no answer started on 2 attempts", "12 keep-alives"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failure = %q, want %q", got, want)
+		}
+	}
+}
+
 func TestStreamRetryRetriesASilentlyEndedAttempt(t *testing.T) {
 	fastRetryBackoff(t)
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{

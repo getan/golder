@@ -106,7 +106,7 @@ func (p *streamRetryProvider) CurrentWire() Wire {
 // caller consumes. An attempt that was cut before showing anything never reaches
 // the caller: its events are held, then dropped.
 func (p *streamRetryProvider) StreamCompletion(ctx context.Context, req CompletionRequest) (*AssistantMessageEventStream, error) {
-	in, err := p.inner.StreamCompletion(ctx, req)
+	in, err := p.inner.StreamCompletion(withStreamAttempt(ctx, 0), req)
 	if err != nil {
 		return nil, err
 	}
@@ -120,8 +120,17 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 
 	max := streamMaxRetries()
 	retries := 0
+	// firstTokenCuts counts consecutive attempts that produced nothing at all. Two
+	// of those mean the upstream is not answering — widening the budget a third
+	// time only makes the user wait longer for the same silence.
+	firstTokenCuts := 0
 	for {
 		cut := p.forward(ctx, out, in)
+		if streamCutIsFirstToken(cut) {
+			firstTokenCuts++
+		} else if cut != nil {
+			firstTokenCuts = 0
+		}
 		switch {
 		case cut == nil:
 			return
@@ -137,6 +146,11 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 			// problem another request fixes, so say how many retries were made.
 			p.emitFailure(ctx, out, cut, retries)
 			return
+		case firstTokenCuts >= 2:
+			// Two attempts in a row never started an answer. Stop here and say so:
+			// the remaining budget would buy two more identical waits.
+			p.emitSilent(ctx, out, cut, firstTokenCuts)
+			return
 		}
 
 		retries++
@@ -150,6 +164,7 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 			Window:      streamCutWindow(cut),
 			Attempt:     retries,
 			MaxAttempts: max,
+			Detail:      streamCutEvidence(cut),
 		})
 		if !waitRetry(ctx, streamRetryBackoff(retries)) {
 			p.emitAborted(ctx, out)
@@ -158,7 +173,7 @@ func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, i
 		// The retry may re-resolve a wire (the wrapper sits above the wire
 		// fallback) and always builds a fresh request and decoder, so no state
 		// from the cut attempt is carried over.
-		next, err := p.inner.StreamCompletion(ctx, req)
+		next, err := p.inner.StreamCompletion(withStreamAttempt(ctx, retries), req)
 		if err != nil {
 			// The retry could not even start; the cut is still the failure the
 			// stream ended with, and the early error (a missing key, a bad flag)
@@ -260,6 +275,26 @@ func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMes
 	if retries > 0 {
 		sentence = streamCutRetriedError(p.Name(), err, retries)
 	}
+	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Provider:  p.Name(),
+	}})
+	_ = out.Emit(ctx, StreamErrorEvent{
+		Message: agentcore.AssistantMessage{
+			RoleField:    agentcore.RoleAssistant,
+			Provider:     p.Name(),
+			StopReason:   agentcore.StopReasonError,
+			ErrorMessage: sentence.Error(),
+		},
+		Err: err,
+	})
+}
+
+// emitSilent ends the stream after consecutive attempts that never started an
+// answer. The sentence says exactly that, so nobody waits for a retry that the
+// upstream has already refused twice.
+func (p *streamRetryProvider) emitSilent(ctx context.Context, out *AssistantMessageEventStream, err error, attempts int) {
+	sentence := streamCutUpstreamSilent(p.Name(), err, attempts)
 	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
 		RoleField: agentcore.RoleAssistant,
 		Provider:  p.Name(),

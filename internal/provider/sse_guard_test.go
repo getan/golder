@@ -155,7 +155,7 @@ func TestEmptySSEFrameFilterKeepsContent(t *testing.T) {
 		"data: {\"a\":1}\r\n\r\n",    // CRLF line endings
 	}
 	for _, body := range bodies {
-		got, err := io.ReadAll(newSSEStreamGuard(io.NopCloser(strings.NewReader(body))))
+		got, err := io.ReadAll(newSSEStreamGuard(context.Background(), io.NopCloser(strings.NewReader(body))))
 		if err != nil {
 			t.Fatalf("%q: read: %v", body, err)
 		}
@@ -172,7 +172,7 @@ func TestEmptySSEFrameFilterKeepsContent(t *testing.T) {
 func TestEmptySSEFrameFilterDropsOnlyEmptyFrames(t *testing.T) {
 	in := "\n\ndata: a\n\ndata: b\n\n\n"
 	want := "data: a\n\ndata: b\n\n"
-	got, err := io.ReadAll(newSSEStreamGuard(io.NopCloser(strings.NewReader(in))))
+	got, err := io.ReadAll(newSSEStreamGuard(context.Background(), io.NopCloser(strings.NewReader(in))))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

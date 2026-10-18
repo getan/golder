@@ -1429,6 +1429,25 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A long prefill is no longer cut like a mid-stream hang**: the stream guard
+  uses two different budgets now — a first-token window (3 minutes, widening to
+  4 and 5 minutes on the first two retries;
+  `GOLDER_STREAM_FIRST_CONTENT_TIMEOUT` overrides the base) and the inter-chunk
+  window (the existing idle × 1.2) once content has arrived. The single window
+  before this cut a genuinely slow request at the same mark it used for a stalled
+  answer, which is exactly the reported opencode-go case: three attempts, 108
+  seconds each, no token ever produced.
+- **A watchdog failure says what it saw**: the failure and the TUI retry notice
+  now carry the guard's evidence — `412 bytes, 0 content frames, 12 keep-alives,
+  last line: comment` — and name the phase (`no answer started within 3m0s`
+  versus `output stopped for 1m48s`). That distinguishes a gateway that holds the
+  socket open while producing nothing from a connection that went dead, which the
+  old "no output" wording could not.
+- **Two silent attempts end the turn instead of widening the wait**: when neither
+  the first attempt nor its retry ever starts an answer, the retry chain stops and
+  reports `no answer started on 2 attempts — the connection stayed open and the
+  model produced nothing`. Burning the remaining budget on identical waits was
+  what made the reported turn sit for four minutes before a manual interrupt.
 - **A model without a Responses endpoint falls back to Chat automatically**:
   when a pristine first request on the Responses wire is rejected with
   `400 ModelProtocolUnsupported` (the reported opencode-go/mimo-v2.6-flash
