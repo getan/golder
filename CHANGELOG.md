@@ -33,8 +33,10 @@ interactive REPL/TUI.
   auto-mode Allow carries its network; a remembered denial still wins, and ask
   mode is unchanged.
 - **Command Code stream endurance**: the `commandcode` provider gets its own
-  transport — no HTTP/2, no compression, no keep-alive reuse — so a proxy cannot
-  lose the tail of a long stream through a stale pooled connection. A cut after
+  transport — no compression, no keep-alive reuse — so a proxy cannot lose the
+  tail of a long stream through a stale pooled connection. HTTP/2 stays on; the
+  endpoint serves h2, and forcing HTTP/1.x made the client parse its SETTINGS
+  frame as a malformed HTTP response. A cut after
   visible text with no tool call is continued from the partial answer by
   default (up to two continuations; set `GOLDER_STREAM_RESUME=0`/`off` to keep
   every cut terminal). A tool-call turn still surfaces the cut.
@@ -1459,6 +1461,10 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Command Code's transport keeps HTTP/2**: the no-HTTP/2 tuning made the
+  client parse the endpoint's h2 SETTINGS frame as a malformed HTTP response;
+  the provider now leaves HTTP/2 enabled and keeps only the compression and
+  keep-alive tuning.
 - **The bare-run network fold now checks enforce, not RequireSandbox**: auto
   sets `RequireSandbox` because isolation is the default, but the envelope can
   still choose the host. A separate `Enforce` flag now gates the fold, so an

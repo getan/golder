@@ -1,7 +1,6 @@
 package provider
 
 import (
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -201,11 +200,11 @@ func clientForURL(name, rawURL string) *http.Client {
 }
 
 // transportForProvider gives streaming gateways their own transport when their
-// long-lived responses need it. Command Code's stream is the case: an HTTP/2
-// connection, a compression buffer, or a pooled keep-alive that the proxy has
-// already closed are all ways to lose the tail of a long answer. Disabling the
-// three removes those failure modes at the cost of one handshake per request,
-// which a chat turn pays once.
+// long-lived responses need it. Command Code's stream is the case: a compression
+// buffer or a pooled keep-alive that the proxy has already closed can lose the
+// tail of a long answer, so both are off. HTTP/2 stays on: forcing HTTP/1.x made
+// the client parse the endpoint's h2 SETTINGS frame as a malformed HTTP response
+// ("malformed HTTP response \x00\x00\x12\x04…"), because the endpoint serves h2.
 //
 // Every other provider keeps the shared direct transport's behavior.
 func transportForProvider(name string) *http.Transport {
@@ -213,8 +212,6 @@ func transportForProvider(name string) *http.Transport {
 	if !streamTunedProvider(name) {
 		return tr
 	}
-	tr.ForceAttemptHTTP2 = false
-	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	tr.DisableCompression = true
 	tr.DisableKeepAlives = true
 	return tr

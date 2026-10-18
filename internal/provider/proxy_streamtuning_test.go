@@ -14,11 +14,8 @@ func TestCommandCodeStreamTransportTuning(t *testing.T) {
 	if !ok {
 		t.Fatalf("commandcode transport = %T, want *http.Transport", c.Transport)
 	}
-	if tr.ForceAttemptHTTP2 {
-		t.Error("commandcode must not attempt HTTP/2")
-	}
-	if len(tr.TLSNextProto) != 0 {
-		t.Errorf("commandcode TLSNextProto = %d entries, want none", len(tr.TLSNextProto))
+	if !tr.ForceAttemptHTTP2 {
+		t.Error("commandcode must allow HTTP/2; the endpoint serves h2")
 	}
 	if !tr.DisableCompression {
 		t.Error("commandcode must not buffer a compressed stream")
