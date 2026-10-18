@@ -189,6 +189,43 @@ func TestResponsesDriverReportsATruncatedStreamVerbatim(t *testing.T) {
 	}
 }
 
+// A truncated body after response.completed is not a cut: that event is the
+// authoritative full response, so the turn ends normally instead of asking the
+// user to retry an answer that already arrived. This is the Responses-wire twin
+// of the Chat finish_reason case in transport_test.go.
+func TestResponsesDriverKeepsCompletedAnswerAfterATruncatedStream(t *testing.T) {
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return truncatedSSE(completedFrame("the whole answer", "resp_1", "gpt-4o", 10, 5)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion returned early error: %v", err)
+	}
+
+	var failure error
+	for ev := range stream.Events() {
+		if e, ok := ev.(StreamErrorEvent); ok {
+			failure = e.Err
+		}
+	}
+	msg, resErr := stream.Result(context.Background())
+	if resErr != nil {
+		t.Fatalf("stream result error: %v", resErr)
+	}
+	if failure != nil {
+		t.Fatalf("stream reported a cut over a completed response: %v", failure)
+	}
+	if got := textOf(msg); got != "the whole answer" {
+		t.Errorf("text = %q, want the completed answer", got)
+	}
+}
+
 // A body that stops producing without ever erroring must not hang the SDK
 // stream: the guard's idle watchdog ends it (see sse_guard.go). The window is
 // shortened through the same knob the transport reads.

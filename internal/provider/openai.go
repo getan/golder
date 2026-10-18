@@ -59,6 +59,16 @@ func NewOpenAIDecoder() *OpenAIDecoder {
 	return &OpenAIDecoder{toolCalls: make(map[int]*openaiToolCall)}
 }
 
+// Terminal reports whether the response's own end marker has been decoded: a
+// chunk carrying finish_reason. A transport error after that point lost HTTP
+// framing, not answer content, so the transport finishes the stream normally.
+func (d *OpenAIDecoder) Terminal() bool { return d.done || d.stopReason != "" }
+
+// DoneOnMarker reports that [DONE] ends the Chat wire. The SSE reader consumes
+// the marker before Decode, so the transport asks the decoder whether to end the
+// stream there instead of waiting for the server to close.
+func (d *OpenAIDecoder) DoneOnMarker() bool { return true }
+
 // openaiChunk is the streamed chat.completion.chunk envelope.
 type openaiChunk struct {
 	ID      string `json:"id"`

@@ -289,7 +289,14 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 		}
 	}
 	if err := sse.Err(); err != nil {
-		return agentcore.AssistantMessage{}, empty(), err
+		// response.completed is the authoritative full response: every output
+		// item of the turn is in it. A transport failure after that event lost
+		// only the HTTP framing (the server or a proxy closed the connection
+		// before the final chunk), so the answer is complete, not cut. A decode
+		// error is the wire's real answer, not a cut, and still surfaces.
+		if completed == nil || !isStreamCutErr(err) {
+			return agentcore.AssistantMessage{}, empty(), err
+		}
 	}
 
 	var msg agentcore.AssistantMessage

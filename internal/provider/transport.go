@@ -44,6 +44,32 @@ type Decoder interface {
 	Finish() ([]StreamEvent, error)
 }
 
+// terminalDecoder is implemented by decoders that can report the wire's own end
+// marker: a Chat finish_reason, an Anthropic message_delta stop_reason or
+// message_stop, a Gemini finishReason. A transport error after that marker lost
+// HTTP framing, not answer content, so the transport finishes the stream
+// normally instead of reporting a cut. A decoder that cannot tell stays silent
+// and keeps the old behaviour.
+type terminalDecoder interface {
+	Terminal() bool
+}
+
+// doneMarkerDecoder is implemented by wires whose stream ends with a
+// transport-level marker the decoder never receives: [DONE] on the Chat wire is
+// consumed by the SSE reader before Decode. Such a decoder opts into the
+// transport ending the stream at the marker instead of waiting for the server to
+// close the connection (a gateway that keeps the socket open after [DONE] would
+// otherwise trip the idle watchdog on a complete answer).
+type doneMarkerDecoder interface {
+	DoneOnMarker() bool
+}
+
+// decoderTerminal reports whether dec has decoded its wire's end marker.
+func decoderTerminal(dec Decoder) bool {
+	td, ok := dec.(terminalDecoder)
+	return ok && td.Terminal()
+}
+
 // defaultIdleTimeout is the watchdog idle window; GOLDER_STREAM_IDLE_TIMEOUT (a
 // Go duration string, e.g. "3m") overrides it. Ninety seconds is long enough for
 // a slow request to emit its first event and short enough that a silent gateway
@@ -264,32 +290,68 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 		})
 	}
 
-	// flushPayload flushes the accumulated data field and reports whether a
-	// payload was actually framed. Only a real payload may reset the stall
-	// window: an SSE keep-alive is a comment, and a blank line after only
-	// event:/id:/comment fields frames nothing — letting those reset the stall
-	// timer is how a gateway that says "I'm alive" forever without producing
-	// anything defeats the very watchdog meant to catch it.
-	flushPayload := func() (ok, produced bool) {
+	// sawDone records the Chat wire's transport-level terminator. It is not a
+	// payload, so the decoder never sees it; the loop ends the stream when the
+	// decoder says [DONE] ends its wire (see doneMarkerDecoder).
+	sawDone := false
+
+	// decodeBuffered flushes the accumulated data field into the decoder. It does
+	// not decide what a failure means: a malformed frame at an event boundary is
+	// the wire's real answer, while one left behind by a cut connection is just
+	// the unfinished tail (see the read-error branch).
+	decodeBuffered := func() (events []StreamEvent, produced bool, err error) {
 		if dataBuf.Len() == 0 {
-			return true, false
+			return nil, false, nil
 		}
 		payload := dataBuf.String()
 		dataBuf.Reset()
 		if payload == "[DONE]" {
-			return true, false
+			sawDone = true
+			return nil, false, nil
 		}
-		events, err := dec.Decode([]byte(payload))
+		events, err = dec.Decode([]byte(payload))
 		if err != nil {
-			fail("decode error: "+err.Error(), err)
-			return false, false
+			return nil, false, err
 		}
 		seen.Frames++
 		// The first framed payload ends the first-token phase; from here the
 		// inter-chunk window applies.
 		phase = StreamPhaseStream
 		resetTimer(contentTimer, stall)
-		return emit(events), true
+		return events, true, nil
+	}
+
+	// flushPayload is decodeBuffered with the normal failure handling: a payload
+	// the decoder rejects at a frame boundary ends the stream. Only a real
+	// payload may reset the stall window: an SSE keep-alive is a comment, and a
+	// blank line after only event:/id:/comment fields frames nothing — letting
+	// those reset the stall timer is how a gateway that says "I'm alive" forever
+	// without producing anything defeats the very watchdog meant to catch it.
+	flushPayload := func() (ok, produced bool) {
+		events, produced, err := decodeBuffered()
+		if err != nil {
+			fail("decode error: "+err.Error(), err)
+			return false, false
+		}
+		return emit(events), produced
+	}
+
+	// finishStream flushes the decoder's terminal event and ends the pump. A
+	// clean EOF and a transport failure that arrived after the wire's own end
+	// marker both leave through here.
+	finishStream := func() {
+		finalEvents, err := dec.Finish()
+		if err != nil {
+			fail("finish error: "+err.Error(), err)
+			return
+		}
+		emit(finalEvents)
+	}
+
+	// doneMarker reports whether [DONE] terminates this decoder's wire.
+	doneMarker := func() bool {
+		dm, ok := dec.(doneMarkerDecoder)
+		return ok && dm.DoneOnMarker()
 	}
 
 	for {
@@ -310,6 +372,19 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			return
 		case err := <-readErr:
 			if err != nil && !errors.Is(err, io.EOF) {
+				// A transport failure is only a cut when the answer was not
+				// already complete. The wire's end marker may sit in a payload
+				// whose blank-line terminator never arrived, so try the buffered
+				// data before deciding. A half-written trailing line is expected
+				// on this path and must not mask a complete answer.
+				events, _, derr := decodeBuffered()
+				if derr == nil && !emit(events) {
+					return
+				}
+				if decoderTerminal(dec) || (sawDone && doneMarker()) {
+					finishStream()
+					return
+				}
 				fail("read error: "+classifyTransportError(err).Error(), err)
 				return
 			}
@@ -317,12 +392,7 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 			if ok, _ := flushPayload(); !ok {
 				return
 			}
-			finalEvents, ferr := dec.Finish()
-			if ferr != nil {
-				fail("finish error: "+ferr.Error(), ferr)
-				return
-			}
-			emit(finalEvents)
+			finishStream()
 			return
 		case line, ok := <-lines:
 			if !ok {
@@ -340,6 +410,10 @@ func pump(ctx context.Context, stream *AssistantMessageEventStream, resp *http.R
 				// only a framed payload resets the content window, which
 				// flushPayload already did.
 				if ok, _ := flushPayload(); !ok {
+					return
+				}
+				if sawDone && doneMarker() {
+					finishStream()
 					return
 				}
 			case strings.HasPrefix(line, ":"):

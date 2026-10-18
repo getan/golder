@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,6 +59,161 @@ func sseServer(t *testing.T, body string) *httptest.Server {
 func newReqFn(url string) func(context.Context) (*http.Request, error) {
 	return func(ctx context.Context) (*http.Request, error) {
 		return http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader("{}"))
+	}
+}
+
+// transportStream runs a transport over a stubbed response so a test can hand it
+// a body that ends the way a cut connection does, without a socket.
+func transportStream(t *testing.T, ctx context.Context, body io.ReadCloser, dec Decoder) *AssistantMessageEventStream {
+	t.Helper()
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+		}, nil
+	})}
+	stream, err := StreamRequest(ctx, TransportConfig{
+		Client:     client,
+		NewRequest: newReqFn("http://golder.test/stream"),
+		Decoder:    dec,
+	})
+	if err != nil {
+		t.Fatalf("StreamRequest: %v", err)
+	}
+	return stream
+}
+
+// collectTransport drains a transport stream and returns its events and terminal
+// message.
+func collectTransport(t *testing.T, stream *AssistantMessageEventStream) ([]AssistantMessageEvent, agentcore.AssistantMessage) {
+	t.Helper()
+	var events []AssistantMessageEvent
+	for ev := range stream.Events() {
+		events = append(events, ev)
+	}
+	msg, _ := stream.Result(context.Background())
+	return events, msg
+}
+
+func transportErrorEvent(events []AssistantMessageEvent) *StreamErrorEvent {
+	for i := range events {
+		if se, ok := events[i].(StreamErrorEvent); ok {
+			return &se
+		}
+	}
+	return nil
+}
+
+// A transport error after the wire's own end marker is lost HTTP framing, not a
+// lost answer. Each wire says "the response is complete" in its own dialect —
+// Chat finish_reason, Anthropic message_delta stop_reason, Gemini finishReason —
+// and the driver must finish normally instead of reporting a cut.
+func TestTransportKeepsAnAnswerCompleteBeforeATransportError(t *testing.T) {
+	cases := []struct {
+		name string
+		dec  Decoder
+		body string
+	}{
+		{
+			name: "chat finish_reason",
+			dec:  NewOpenAIDecoder(),
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"the whole answer\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+		},
+		{
+			// The last frame is complete but its blank-line terminator never
+			// arrived: the buffered payload still carries the end marker.
+			name: "chat unterminated final frame",
+			dec:  NewOpenAIDecoder(),
+			body: "data: {\"choices\":[{\"delta\":{\"content\":\"the whole answer\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n",
+		},
+		{
+			name: "anthropic stop_reason",
+			dec:  NewAnthropicDecoder(),
+			body: "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"the whole answer\"}}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+		},
+		{
+			name: "gemini finishReason",
+			dec:  NewGeminiDecoder(),
+			body: "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"the whole answer\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &truncatedBody{data: []byte(tc.body)}
+			stream := transportStream(t, context.Background(), body, tc.dec)
+			events, msg := collectTransport(t, stream)
+
+			if se := transportErrorEvent(events); se != nil {
+				t.Fatalf("transport reported a cut over a complete answer: %v", se.Err)
+			}
+			if got := textOf(msg); got != "the whole answer" {
+				t.Errorf("text = %q, want the complete answer", got)
+			}
+			if msg.StopReason == agentcore.StopReasonError {
+				t.Errorf("stop reason = error, want a normal end")
+			}
+		})
+	}
+}
+
+// The counterpart: a cut before any end marker is a real cut and must stay one.
+// Losing this would turn every mid-answer drop into a silently truncated turn.
+func TestTransportStillReportsATransportErrorBeforeTheEndMarker(t *testing.T) {
+	body := &truncatedBody{data: []byte(
+		"data: {\"choices\":[{\"delta\":{\"content\":\"half an answer\"}}]}\n\n")}
+	stream := transportStream(t, context.Background(), body, NewOpenAIDecoder())
+	events, msg := collectTransport(t, stream)
+
+	se := transportErrorEvent(events)
+	if se == nil {
+		t.Fatal("a cut before finish_reason must still be reported")
+	}
+	if !isTruncatedStreamErr(se.Err) {
+		t.Errorf("failure = %v, want the reader's truncation", se.Err)
+	}
+	// The terminal error message starts empty: the front-end keeps what already
+	// streamed, which is what the text events carry.
+	var streamed string
+	for _, ev := range events {
+		if te, ok := ev.(StreamTextEvent); ok {
+			streamed = textOf(te.Partial)
+		}
+	}
+	if streamed != "half an answer" {
+		t.Errorf("streamed text = %q, want the partial answer kept", streamed)
+	}
+	if msg.StopReason != agentcore.StopReasonError {
+		t.Errorf("stop reason = %q, want error", msg.StopReason)
+	}
+}
+
+// [DONE] ends the Chat wire. A gateway that keeps the socket open afterwards
+// must not leave the turn waiting for a close (or an idle watchdog) on an answer
+// that is already complete.
+func TestTransportEndsAChatStreamAtDoneMarker(t *testing.T) {
+	pr, pw := io.Pipe()
+	frames := "data: {\"choices\":[{\"delta\":{\"content\":\"done already\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n"
+	go func() {
+		_, _ = pw.Write([]byte(frames)) // never closed: only [DONE] can end this stream
+	}()
+	defer pw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stream := transportStream(t, ctx, pr, NewOpenAIDecoder())
+	events, msg := collectTransport(t, stream)
+
+	if se := transportErrorEvent(events); se != nil {
+		t.Fatalf("stream did not end at [DONE]: %v", se.Err)
+	}
+	if got := textOf(msg); got != "done already" {
+		t.Errorf("text = %q, want the complete answer", got)
 	}
 }
 

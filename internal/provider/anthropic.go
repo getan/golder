@@ -172,6 +172,11 @@ func (d *AnthropicDecoder) Finish() ([]StreamEvent, error) {
 	return d.finishDone(), nil
 }
 
+// Terminal reports whether the wire's end marker has been decoded: message_delta
+// carries the final stop_reason, and message_stop ends the stream. A transport
+// error after either lost framing, not answer content.
+func (d *AnthropicDecoder) Terminal() bool { return d.done || d.stopReason != "" }
+
 func (d *AnthropicDecoder) onMessageStart(ev anthropicEvent) []StreamEvent {
 	if ev.Message != nil {
 		d.responseID = ev.Message.ID

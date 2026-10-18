@@ -353,6 +353,10 @@ func (d *GeminiDecoder) Finish() ([]StreamEvent, error) {
 	return []StreamEvent{StreamDoneEvent{Message: msg}}, nil
 }
 
+// Terminal reports whether a candidate carried finishReason. A transport error
+// after that point lost HTTP framing, not answer content.
+func (d *GeminiDecoder) Terminal() bool { return d.done || d.stop != "" }
+
 // partial materializes the accumulated state.
 func (d *GeminiDecoder) partial() agentcore.AssistantMessage {
 	msg := agentcore.AssistantMessage{
