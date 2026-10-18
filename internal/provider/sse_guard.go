@@ -118,7 +118,11 @@ type sseStreamGuard struct {
 	gotContent bool
 	first      time.Duration
 	phase      string
-	seen       StreamEvidence
+	// seen is written by the reader goroutine and read when a watchdog fires, so
+	// every access goes through seenMu: the counters are cheap, and a torn read
+	// here would put a wrong number in the failure sentence.
+	seenMu sync.Mutex
+	seen   StreamEvidence
 }
 
 func newSSEStreamGuard(ctx context.Context, r io.ReadCloser) *sseStreamGuard {
@@ -209,10 +213,13 @@ func (g *sseStreamGuard) timeout() error {
 	if !g.gotContent {
 		window = g.first
 	}
+	g.seenMu.Lock()
+	seen := g.seen
+	g.seenMu.Unlock()
 	if time.Since(g.lastByte) >= g.idle {
-		return watchdogError(errStreamIdle, g.phase, g.idle, g.seen)
+		return watchdogError(errStreamIdle, g.phase, g.idle, seen)
 	}
-	return watchdogError(errStreamStall, g.phase, window, g.seen)
+	return watchdogError(errStreamStall, g.phase, window, seen)
 }
 
 // stop closes done and the body so the reader goroutine unblocks and exits. It
@@ -238,6 +245,7 @@ func (g *sseStreamGuard) read() {
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
+			g.seenMu.Lock()
 			g.seen.Bytes += int64(len(line))
 			trimmed := bytes.TrimRight(line, "\r\n")
 			switch {
@@ -251,6 +259,7 @@ func (g *sseStreamGuard) read() {
 			default:
 				g.seen.LastFrame = "event"
 			}
+			g.seenMu.Unlock()
 			if keep, content := classifySSELine(line, &have); keep {
 				if !g.send(guardChunk{data: line, content: content}) {
 					return
