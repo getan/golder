@@ -57,8 +57,8 @@ func TestResolveNamedProviderWireVariant(t *testing.T) {
 	if name != "opencode-go" {
 		t.Errorf("provider name = %q, want opencode-go (the spec name, so decoration applies)", name)
 	}
-	if _, ok := p.(*anthropicCompatDriver); !ok {
-		t.Fatalf("driver = %T, want *anthropicCompatDriver (the Messages wire)", p)
+	if _, ok := UnwrapProvider(p).(*anthropicCompatDriver); !ok {
+		t.Fatalf("driver = %T, want *anthropicCompatDriver (the Messages wire)", UnwrapProvider(p))
 	}
 
 	stream, err := p.StreamCompletion(context.Background(), CompletionRequest{
@@ -190,8 +190,8 @@ func TestResolveProviderResponsesProtocol(t *testing.T) {
 	if err != nil || name != "openai" {
 		t.Fatalf("protocol=openai/resp_api = (%q, %v), want (openai, nil)", name, err)
 	}
-	if _, ok := p.(*responsesDriver); !ok {
-		t.Errorf("protocol=openai/resp_api built %T, want *responsesDriver", p)
+	if _, ok := UnwrapProvider(p).(*responsesDriver); !ok {
+		t.Errorf("protocol=openai/resp_api built %T, want *responsesDriver", UnwrapProvider(p))
 	}
 	// resp_api with no base-url errors, mirroring the openai requirement.
 	if _, _, err := ResolveProvider("any-model", "", "openai/resp_api", "", os.Getenv); err == nil {
@@ -202,7 +202,7 @@ func TestResolveProviderResponsesProtocol(t *testing.T) {
 	if err != nil || name != "openai" {
 		t.Fatalf("protocol=openai/chat = (%q, %v), want (openai, nil)", name, err)
 	}
-	if _, ok := p.(*responsesDriver); ok {
+	if _, ok := UnwrapProvider(p).(*responsesDriver); ok {
 		t.Error("protocol=openai/chat should build the Chat Completions driver, not *responsesDriver")
 	}
 	if _, _, err := ResolveProvider("any-model", "", "openai/chat", "", os.Getenv); err == nil {

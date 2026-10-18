@@ -184,6 +184,7 @@ func TestSpecialProvidersKeepRoutingIdentityAndBaseURLEnv(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			p = UnwrapProvider(p)
 			if p.Name() != name {
 				t.Fatalf("routing identity = %q, want %q", p.Name(), name)
 			}
