@@ -420,6 +420,12 @@ func (c toolCard) userShellCommand() (string, bool) {
 func (c toolCard) renderShellHeadline(theme Theme, width int, verb, cmd string) string {
 	spans := []hlSpan{{text: c.name + " ", color: colorToolName, bold: true}}
 	spans = append(spans, highlightShellCommand(cmd, syntaxDark())...)
+	if marker := c.envelopeMarker(); marker != "" {
+		// The envelope answers "did this run isolated"; it belongs on the
+		// command's own line. The generic title() path carries it for non-shell
+		// tools; shell cards build their own headline, so they need it here too.
+		spans = append(spans, hlSpan{text: " " + marker})
+	}
 	firstLimit := max(1, width-2-len(verb)-1)
 	lines := wrapHLSpans(spans, firstLimit, max(1, width-4))
 	var b strings.Builder

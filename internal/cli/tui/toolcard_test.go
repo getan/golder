@@ -683,6 +683,20 @@ func TestToolCardRunningRanTitle(t *testing.T) {
 	}
 }
 
+func TestShellCardShowsTheEnvelopeMarker(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{
+		{"sandbox", "·sandbox"},
+		{"bare", "·unconfined"},
+	} {
+		card := toolCard{name: "bash", input: map[string]any{"command": "ls"}, state: cardRunning}
+		card.complete(true, "ok", map[string]any{"envelope": tc.env})
+		out := stripTCardANSI(card.render(DefaultTheme(), 80))
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("envelope %q: card = %q, want %q", tc.env, out, tc.want)
+		}
+	}
+}
+
 // stripTCardANSI drops SGR escapes for verb assertions independent of color.
 func stripTCardANSI(s string) string { return ansi.Strip(s) }
 
