@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -172,8 +173,12 @@ func clientForURL(name, rawURL string) *http.Client {
 		return &http.Client{Transport: proxyConfigError{err}}
 	}
 	if !proxySelected(cfg, name, rawURL) {
-		return cachedClient("direct", func() *http.Client {
-			return &http.Client{Transport: directTransport}
+		key := "direct"
+		if streamTunedProvider(name) {
+			key = "direct:" + strings.ToLower(strings.TrimSpace(name))
+		}
+		return cachedClient(key, func() *http.Client {
+			return &http.Client{Transport: transportForProvider(name)}
 		})
 	}
 	raw := effectiveProxyURL(cfg)
@@ -183,10 +188,44 @@ func clientForURL(name, rawURL string) *http.Client {
 	if err := ValidateProxyURL(raw); err != nil {
 		return &http.Client{Transport: proxyConfigError{err}}
 	}
-	return cachedClient("proxy:"+raw, func() *http.Client {
+	key := "proxy:" + raw
+	if streamTunedProvider(name) {
+		key = "proxy:" + strings.ToLower(strings.TrimSpace(name)) + ":" + raw
+	}
+	return cachedClient(key, func() *http.Client {
 		u, _ := url.Parse(raw)
-		tr := directTransport.Clone()
+		tr := transportForProvider(name)
 		tr.Proxy = http.ProxyURL(u)
 		return &http.Client{Transport: tr}
 	})
+}
+
+// transportForProvider gives streaming gateways their own transport when their
+// long-lived responses need it. Command Code's stream is the case: an HTTP/2
+// connection, a compression buffer, or a pooled keep-alive that the proxy has
+// already closed are all ways to lose the tail of a long answer. Disabling the
+// three removes those failure modes at the cost of one handshake per request,
+// which a chat turn pays once.
+//
+// Every other provider keeps the shared direct transport's behavior.
+func transportForProvider(name string) *http.Transport {
+	tr := directTransport.Clone()
+	if !streamTunedProvider(name) {
+		return tr
+	}
+	tr.ForceAttemptHTTP2 = false
+	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	tr.DisableCompression = true
+	tr.DisableKeepAlives = true
+	return tr
+}
+
+// streamTunedProvider reports whether a provider's stream gets the transport
+// above. Keep the list short: each entry is a deliberate trade of connection
+// reuse for a stream that survives the proxy.
+func streamTunedProvider(name string) bool {
+	if spec, ok := LookupProviderSpec(name); ok {
+		name = spec.Name
+	}
+	return strings.EqualFold(strings.TrimSpace(name), "commandcode")
 }

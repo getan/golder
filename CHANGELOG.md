@@ -32,6 +32,12 @@ interactive REPL/TUI.
 - **`/network follow`**: an opt-in policy (persisted in `network.toml`) where an
   auto-mode Allow carries its network; a remembered denial still wins, and ask
   mode is unchanged.
+- **Command Code stream endurance**: the `commandcode` provider gets its own
+  transport — no HTTP/2, no compression, no keep-alive reuse — so a proxy cannot
+  lose the tail of a long stream through a stale pooled connection. With
+  `GOLDER_STREAM_RESUME=1`, a cut after visible text with no tool call is
+  continued from the partial answer (up to two continuations); the default
+  stays off, and a tool-call turn still surfaces the cut.
 - **`/usage` reports the remaining subscription quota**: three providers answer
   it with the same key the conversation uses — `opencode-go` (`{base}/usage`), the
   5h/weekly/monthly windows as percentages with their reset times; `commandcode`

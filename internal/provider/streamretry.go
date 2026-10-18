@@ -27,9 +27,11 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -42,7 +44,36 @@ const (
 	defaultStreamMaxRetries = 4
 	streamRetryBaseDelay    = 250 * time.Millisecond
 	streamRetryMaxDelay     = 5 * time.Second
+	// streamResumeMax bounds the continuations after a cut that already showed
+	// text. One or two, not the full retry budget: each continuation is a fresh
+	// chance to duplicate or contradict what the user has read.
+	streamResumeMax = 2
 )
+
+var (
+	errResumeNeeded    = errors.New("stream cut after text; a continuation is available")
+	errResumeExhausted = errors.New("the resumed stream was cut again")
+)
+
+// streamResumeEnabled is the opt-in for continuing a text answer that was cut
+// after it had been shown. It is deliberately off by default: a continuation is
+// a second model call that can repeat or contradict the first, and only the
+// person who reads the transcript can decide that trade is worth it.
+func streamResumeEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOLDER_STREAM_RESUME"))) {
+	case "1", "true", "on", "yes":
+		return true
+	}
+	return false
+}
+
+// forwardState is what the relay saw, so a cut can be described and (when the
+// policy allows) continued instead of thrown away.
+type forwardState struct {
+	partial  agentcore.AssistantMessage
+	toolCall bool
+	shown    bool
+}
 
 // streamMaxRetries resolves the retry budget. A malformed or out-of-range setting
 // falls back to the default rather than to no retries.
@@ -165,7 +196,14 @@ func (p *streamRetryProvider) pumpFrom(ctx context.Context, req CompletionReques
 	// time only makes the user wait longer for the same silence.
 	firstTokenCuts := 0
 	for {
-		cut := p.forward(ctx, out, in)
+		state := forwardState{
+			partial: agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Provider: p.Name()},
+		}
+		cut := p.forward(ctx, out, in, nil, false, &state)
+		if errors.Is(cut, errResumeNeeded) {
+			p.resume(ctx, req, out, state.partial, retries)
+			return
+		}
 		if streamCutIsFirstToken(cut) {
 			firstTokenCuts++
 		} else if cut != nil {
@@ -262,17 +300,29 @@ func waitRetry(ctx context.Context, d time.Duration) bool {
 // caller has seen a terminal event and the stream is over. A non-nil error means
 // the attempt was cut before anything was shown, and nothing was forwarded: the
 // caller may re-issue the request.
-func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream) error {
+func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream, prefix agentcore.ContentList, suppressStart bool, state *forwardState) error {
 	// The attempt's start event is held rather than forwarded. It is not
 	// something a person can see, and holding it is what lets a cut attempt
 	// disappear without a trace — a forwarded start would have to be taken back.
+	// A continuation suppresses it: the caller's stream already started, and a
+	// second start would reset the partial it is rendering.
 	var start *StreamStartEvent
-	shown := false
+	if state == nil {
+		state = &forwardState{}
+	}
 	emitStart := func() {
-		if start != nil {
-			_ = out.Emit(ctx, *start)
-			start = nil
+		if start == nil {
+			return
 		}
+		if suppressStart {
+			start = nil
+			return
+		}
+		if len(prefix) > 0 {
+			start.Partial = prefixContent(prefix, start.Partial)
+		}
+		_ = out.Emit(ctx, *start)
+		start = nil
 	}
 
 	for ev := range in.Events() {
@@ -281,9 +331,31 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 			if start == nil {
 				start = &e
 			}
+		case StreamTextEvent:
+			e.Partial = prefixContent(prefix, e.Partial)
+			state.partial = e.Partial
+			state.shown = true
+			emitStart()
+			_ = out.Emit(ctx, e)
+		case StreamThinkingEvent:
+			e.Partial = prefixContent(prefix, e.Partial)
+			state.partial = e.Partial
+			state.shown = true
+			emitStart()
+			_ = out.Emit(ctx, e)
+		case StreamToolCallEvent:
+			e.Partial = prefixContent(prefix, e.Partial)
+			state.partial = e.Partial
+			state.shown = true
+			state.toolCall = true
+			emitStart()
+			_ = out.Emit(ctx, e)
 		case StreamErrorEvent:
-			if !shown && isStreamCutErr(e.Err) {
+			if !state.shown && isStreamCutErr(e.Err) {
 				return e.Err
+			}
+			if isStreamCutErr(e.Err) && streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
+				return errResumeNeeded
 			}
 			if isStreamCutErr(e.Err) {
 				// A cut that landed after content cannot be retried without
@@ -291,17 +363,20 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 				// what happened instead of printing the reader's error.
 				e.Message.ErrorMessage = streamCutError(p.Name(), e.Err).Error()
 			}
+			e.Message = prefixContent(prefix, e.Message)
 			emitStart()
 			_ = out.Emit(ctx, e)
 			return nil
 		case StreamDoneEvent:
+			e.Message = prefixContent(prefix, e.Message)
+			state.partial = e.Message
+			state.shown = true
+			state.toolCall = len(e.Message.ToolCalls()) > 0
 			emitStart()
-			shown = true
 			_ = out.Emit(ctx, e)
 			return nil
 		default:
 			emitStart()
-			shown = true
 			_ = out.Emit(ctx, e)
 		}
 	}
@@ -309,19 +384,114 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 	// The attempt ended without a terminal event. With nothing produced that is
 	// as much a cut stream as a dropped connection; with content produced the
 	// caller has to be told the answer stops there.
-	if !shown {
+	if !state.shown {
 		return fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
 	}
+	if streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
+		return errResumeNeeded
+	}
 	emitStart()
+	msg := prefixContent(prefix, agentcore.AssistantMessage{
+		RoleField:  agentcore.RoleAssistant,
+		Provider:   p.Name(),
+		StopReason: agentcore.StopReasonError,
+	})
 	_ = out.Emit(ctx, StreamErrorEvent{
-		Message: agentcore.AssistantMessage{
-			RoleField:  agentcore.RoleAssistant,
-			Provider:   p.Name(),
-			StopReason: agentcore.StopReasonError,
-		},
-		Err: fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal),
+		Message: msg,
+		Err:     fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal),
 	})
 	return nil
+}
+
+// resume continues a text answer that was cut after it had been shown. The
+// partial text is replayed as the assistant's previous turn plus a short
+// "continue" request; every continuation event is merged with that prefix so the
+// caller's partial message never loses the text it already rendered.
+func (p *streamRetryProvider) resume(ctx context.Context, req CompletionRequest, out *AssistantMessageEventStream, partial agentcore.AssistantMessage, spent int) {
+	max := streamMaxRetries()
+	for attempt := 1; attempt <= streamResumeMax; attempt++ {
+		if ctx.Err() != nil {
+			p.emitAborted(ctx, out)
+			return
+		}
+		_ = out.Emit(ctx, StreamNoticeEvent{
+			Kind:        StreamNoticeRetry,
+			Provider:    p.Name(),
+			Reason:      StreamCutTruncated,
+			Attempt:     attempt,
+			MaxAttempts: streamResumeMax,
+			Detail:      "continuing the cut answer from where it stopped",
+		})
+		next, used, err := p.connect(ctx, resumeCompletion(req, partial), spent+attempt, max, nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				p.emitAborted(ctx, out)
+				return
+			}
+			p.emitFailure(ctx, out, connectOrCut(p.Name(), err, err), used)
+			return
+		}
+		cont := forwardState{
+			partial: agentcore.AssistantMessage{
+				RoleField: agentcore.RoleAssistant,
+				Provider:  p.Name(),
+				Content:   partial.Content,
+			},
+			shown: len(partial.Content) > 0,
+		}
+		cut := p.forward(ctx, out, next, partial.Content, true, &cont)
+		if cut == nil {
+			return
+		}
+		if errors.Is(cut, errResumeNeeded) {
+			partial = cont.partial
+			spent = used
+			continue
+		}
+		p.emitFailure(ctx, out, cut, used)
+		return
+	}
+	p.emitFailure(ctx, out, errResumeExhausted, spent)
+}
+
+// resumeCompletion builds the continuation request: the original shaped context,
+// the partial assistant text, and one short user instruction. The tools stay in
+// the context; the partial had no tool call, so replaying it is safe.
+func resumeCompletion(req CompletionRequest, partial agentcore.AssistantMessage) CompletionRequest {
+	out := req
+	msgs := make(agentcore.MessageList, 0, len(req.Context.Messages)+2)
+	msgs = append(msgs, req.Context.Messages...)
+	msgs = append(msgs, partial)
+	msgs = append(msgs, agentcore.UserMessage{
+		RoleField: agentcore.RoleUser,
+		Content: agentcore.ContentList{agentcore.NewTextContent(
+			"Continue exactly where you stopped. Do not repeat text you already wrote.")},
+	})
+	out.Context.Messages = msgs
+	return out
+}
+
+// prefixContent prepends the already-shown content to a continuation event.
+// The provider's partial messages describe only the new call, so without this a
+// resumed text event would replace the caller's rendered answer with its tail.
+func prefixContent(prefix agentcore.ContentList, msg agentcore.AssistantMessage) agentcore.AssistantMessage {
+	if len(prefix) == 0 {
+		return msg
+	}
+	msg.Content = append(append(agentcore.ContentList{}, prefix...), msg.Content...)
+	return msg
+}
+
+// hasText reports whether the partial holds visible text (not only thinking or
+// tool-call deltas). A continuation of a tool-call turn would be a guess about
+// what already executed, so it is not attempted.
+func hasText(msg agentcore.AssistantMessage) bool {
+	for _, c := range msg.Content {
+		if t, ok := c.(agentcore.TextContent); ok && strings.TrimSpace(t.Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // emitFailure ends the stream with a start and a terminal error, so the caller
