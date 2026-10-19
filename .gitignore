@@ -61,3 +61,6 @@ config.toml
 /release/
 .graph_state
 graph.html
+
+# scratch copies of other repos (site copy for reading, etc.)
+.site/
