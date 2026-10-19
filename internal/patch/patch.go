@@ -31,6 +31,10 @@ const (
 	LineAdd
 	// LineDelete is removed text ("-" prefix).
 	LineDelete
+	// LineUnknown is a line that arrived without a prefix. It only survives
+	// until repairUnknownLines decides what it must have been; a patch never
+	// applies one as-is.
+	LineUnknown
 )
 
 // Line is one chunk line.
@@ -83,6 +87,9 @@ type Op struct {
 	Body []string
 	// Chunks holds the hunks for an Update.
 	Chunks []Chunk
+	// Notes records repairs the parser made (a hunk line that arrived without a
+	// prefix and was unambiguous), so the tool result can say what was assumed.
+	Notes []string
 }
 
 // ParseError is a malformed patch; it carries the 1-based input line so the
@@ -219,6 +226,7 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf("expected %q to start a hunk, got %q", hunkPrefix, trimmed)}
 		}
 		chunk := Chunk{}
+		unknownAt := map[int]int{} // chunk line index → input line (1-based)
 		// One or more "@@" lines open the hunk. Codex lets a patch name a class
 		// and then a method with two of them; each is a literal line to seek,
 		// and a bare "@@" (no text) contributes nothing but still opens a hunk.
@@ -258,12 +266,26 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			}
 			kind, text, ok := splitChunkLine(raw)
 			if !ok {
-				return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf(
-					"unexpected line %q in hunk: every line must start with \" \" (context), %q (remove) or %q (add)",
-					raw, delLinePrefix, addLinePrefix)}
+				// A line without a prefix is almost always a forgotten "+" (or,
+				// more rarely, a forgotten space). Keep it and let the hunk's
+				// neighbours decide; the strict versions of this message cost a
+				// whole round trip for a typo.
+				unknownAt[len(chunk.Lines)] = i + 1
+				chunk.Lines = append(chunk.Lines, Line{Kind: LineUnknown, Text: raw})
+				i++
+				continue
 			}
 			chunk.Lines = append(chunk.Lines, Line{Kind: kind, Text: text})
 			i++
+		}
+		if len(unknownAt) > 0 {
+			note, rerr := repairUnknownLines(chunk.Lines, unknownAt)
+			if rerr != nil {
+				return Op{}, 0, rerr
+			}
+			if note != "" {
+				op.Notes = append(op.Notes, note)
+			}
 		}
 		// A blank line at the edge of a hunk is formatting, not an anchor.
 		// Models separate hunks with one, and a trailing blank also represents
@@ -297,6 +319,56 @@ func trimBlankContextEdges(lines []Line) []Line {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// repairUnknownLines assigns a kind to every unprefixed hunk line. It only
+// guesses when the neighbours leave one answer: a line surrounded by additions
+// is an addition, a line surrounded by context is context; anything else is
+// still a parse error, because choosing wrong would silently change the file.
+// The returned note says what was assumed, and the tool result carries it.
+func repairUnknownLines(lines []Line, at map[int]int) (string, error) {
+	added, contexted := 0, 0
+	for i := range lines {
+		if lines[i].Kind != LineUnknown {
+			continue
+		}
+		prev, hasPrev := neighbourKind(lines, i, -1)
+		next, hasNext := neighbourKind(lines, i, 1)
+		switch {
+		case hasPrev && prev == LineAdd && (!hasNext || next == LineAdd):
+			lines[i].Kind = LineAdd
+			added++
+		case (!hasPrev || prev == LineContext) && (!hasNext || next == LineContext):
+			lines[i].Kind = LineContext
+			contexted++
+		default:
+			return "", &ParseError{Line: at[i], Msg: fmt.Sprintf(
+				"line %q has no prefix and its neighbours disagree; prefix it with \" \" (context), %q (remove) or %q (add)",
+				lines[i].Text, delLinePrefix, addLinePrefix)}
+		}
+	}
+	switch {
+	case added > 0 && contexted > 0:
+		return fmt.Sprintf("%d line(s) without a prefix were read as additions and %d as context", added, contexted), nil
+	case added > 0:
+		return fmt.Sprintf("%d line(s) without a prefix were read as additions", added), nil
+	case contexted > 0:
+		return fmt.Sprintf("%d line(s) without a prefix were read as context", contexted), nil
+	}
+	return "", nil
+}
+
+// neighbourKind returns the nearest decided kind in direction step (-1 back,
+// +1 forward), skipping the other unknown lines so a small run of unprefixed
+// lines is judged by the text around it.
+func neighbourKind(lines []Line, from, step int) (LineKind, bool) {
+	for i := from + step; i >= 0 && i < len(lines); i += step {
+		if lines[i].Kind == LineUnknown {
+			continue
+		}
+		return lines[i].Kind, true
+	}
+	return 0, false
 }
 
 // splitChunkLine classifies one hunk line by its prefix. A line with no

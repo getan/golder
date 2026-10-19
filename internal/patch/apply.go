@@ -465,6 +465,10 @@ func hunkDiagnostic(lines, old []string) string {
 		}
 	}
 	if bestAt < 0 || bestHits == 0 {
+		if idx, text, ok := closestLine(lines, old); ok {
+			return fmt.Sprintf("; no context line matched. The closest line is %d: %q. Re-read the file and resend",
+				idx+1, strings.TrimSpace(text))
+		}
 		return "; no line in the file matches the hunk's context; re-read the file and resend"
 	}
 	for j := range old {
@@ -489,6 +493,51 @@ func hunkDiagnostic(lines, old []string) string {
 		return b.String()
 	}
 	return "; re-read the file and resend"
+}
+
+// closestLine finds the file line most similar to the first non-empty expected
+// line, for the case where not even one context line appears. A paraphrase or a
+// line that moved is the usual cause, and naming the nearest line lets the
+// model correct the hunk without another read.
+func closestLine(lines, old []string) (int, string, bool) {
+	want := ""
+	for _, o := range old {
+		if strings.TrimSpace(o) != "" {
+			want = o
+			break
+		}
+	}
+	if want == "" {
+		return 0, "", false
+	}
+	want = strings.TrimSpace(want)
+	bestAt, best := -1, 3
+	for i, line := range lines {
+		if s := lineSimilarity(strings.TrimSpace(line), want); s > best {
+			bestAt, best = i, s
+		}
+	}
+	if bestAt < 0 {
+		return 0, "", false
+	}
+	return bestAt, lines[bestAt], true
+}
+
+// lineSimilarity is the length of the common prefix plus the common suffix, a
+// cheap stand-in for edit distance that is enough to spot the line a hunk meant.
+func lineSimilarity(a, b string) int {
+	if a == "" || b == "" {
+		return 0
+	}
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	m := 0
+	for m < len(a)-n && m < len(b)-n && a[len(a)-1-m] == b[len(b)-1-m] {
+		m++
+	}
+	return n + m
 }
 
 // chunkOldLines returns the lines the matcher must locate: the chunk's context

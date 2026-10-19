@@ -40,6 +40,27 @@ func patchTree(t *testing.T) string {
 	return dir
 }
 
+// A stale argument from another tool must not cost a whole round trip: the key
+// is ignored, the patch applies, and the result says what was ignored.
+func TestApplyPatchIgnoresUnknownArguments(t *testing.T) {
+	tool := &ApplyPatchTool{Root: patchTree(t), Snap: NewFileSnapshotRecorder()}
+	args, _ := json.Marshal(map[string]string{
+		"patch":   "*** Begin Patch\n*** Update File: a.go\n@@\n-func old() {}\n+func new() {}\n*** End Patch\n",
+		"pattern": "stale",
+	})
+	res, err := tool.Execute(context.Background(), "call-1", args, nil)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	text := agentcore.ContentToText(res.Content)
+	if res.IsError {
+		t.Fatalf("unknown argument refused the call: %s", text)
+	}
+	if !strings.Contains(text, "ignored unknown argument(s): pattern") {
+		t.Errorf("result = %q, want the ignored key named", text)
+	}
+}
+
 // TestApplyPatchToolAllOps drives one patch that adds, updates, moves, and
 // deletes files, then verifies the tree, the summary, the diff metadata, and
 // the /rewind snapshots.

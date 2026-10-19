@@ -12,6 +12,14 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`apply_patch` recovers from the two typos that used to cost a round trip**:
+  an unprefixed hunk line is read as an addition when its neighbours are
+  additions (and as context when they are context), with the assumption named
+  in the result ("N line(s) without a prefix were read as additions"); an
+  unknown argument key is ignored and reported instead of refusing the call;
+  and when no context line matches at all, the error names the closest line in
+  the file. An unprefixed line whose neighbours disagree is still refused —
+  guessing there would silently change the file.
 - **`apply_patch` locates a hunk the way Codex does**: an `@@` line is now a
   literal anchor that moves the search forward (exact first, then containment,
   so `@@ func b()` finds `func b() {`), two `@@` lines are two nested anchors

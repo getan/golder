@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -72,7 +73,9 @@ func (t *ApplyPatchTool) Description() string {
 		"only when the remainder is unique in the file. Hunks are matched in " +
 		"order against the file as it is now: re-read a file that changed, and " +
 		"keep hunks non-overlapping. Use this instead of shelling out to patch " +
-		"utilities."
+		"utilities. Every hunk line starts with a space (context), '-' (remove) " +
+		"or '+' (add); a line without a prefix is read as an addition when its " +
+		"neighbours are additions, and refused when the reading is ambiguous."
 }
 
 // Schema implements AgentTool.
@@ -83,7 +86,7 @@ func (t *ApplyPatchTool) Schema() json.RawMessage {
     "patch": {"type": "string", "description": "The complete patch text, from \"*** Begin Patch\" through \"*** End Patch\"."}
   },
   "required": ["patch"],
-  "additionalProperties": false
+  "additionalProperties": true
 }`)
 }
 
@@ -164,6 +167,18 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
 	}
+	// Unknown argument keys are ignored rather than refused: a stale field from
+	// another tool costs a whole round trip otherwise, and it cannot change what
+	// this call does. The result says what was ignored.
+	var rawArgs map[string]json.RawMessage
+	_ = json.Unmarshal(args, &rawArgs)
+	var extra []string
+	for k := range rawArgs {
+		if k != "patch" {
+			extra = append(extra, k)
+		}
+	}
+	sort.Strings(extra)
 	changes, err := patch.Compute(ops, func(p string) (string, error) {
 		return t.resolveWrite(ctx, p)
 	})
@@ -208,10 +223,18 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	}
 
 	msg := fmt.Sprintf("Applied %d change(s):\n%s", len(changes), strings.Join(summaries, "\n"))
+	for _, op := range ops {
+		for _, n := range op.Notes {
+			msg += "\n  note: " + n
+		}
+	}
 	for _, ch := range changes {
 		if ch.Note != "" {
 			msg += "\n  note: " + ch.Note
 		}
+	}
+	if len(extra) > 0 {
+		msg += "\n  note: ignored unknown argument(s): " + strings.Join(extra, ", ")
 	}
 	if diff := diffs.String(); diff != "" {
 		msg += "\n" + diff

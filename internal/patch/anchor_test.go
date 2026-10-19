@@ -159,3 +159,69 @@ func TestTrailingBlankLineAtEOFIsNotContext(t *testing.T) {
 		t.Fatalf("NewContent = %q", got)
 	}
 }
+
+// A hunk line that arrives without a prefix is usually a forgotten "+". When
+// every neighbour is an addition the reading is unambiguous: apply it and say
+// so, instead of spending a round trip on a typo.
+func TestUnprefixedAdditionIsRepaired(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "a\nb\n")
+	ops, err := Parse(`*** Begin Patch
+*** Update File: a.go
+@@
+-a
++A
+second added line
+*** End Patch
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(ops) != 1 || len(ops[0].Notes) != 1 || !strings.Contains(ops[0].Notes[0], "additions") {
+		t.Fatalf("notes = %+v, want the repair reported", ops)
+	}
+	changes, err := Compute(ops, resolverFor(t, dir))
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if got := changes[0].NewContent; got != "A\nsecond added line\nb\n" {
+		t.Fatalf("NewContent = %q", got)
+	}
+}
+
+// When the neighbours disagree the reading is a guess, and guessing changes the
+// file: refuse, and name the fix.
+func TestUnprefixedAmbiguousLineIsRefused(t *testing.T) {
+	_, err := Parse(`*** Begin Patch
+*** Update File: a.go
+@@
+-a
++A
+bare line between an addition and a context line
+ b
+*** End Patch
+`)
+	if err == nil || !strings.Contains(err.Error(), "no prefix") {
+		t.Fatalf("err = %v, want the ambiguous-line refusal", err)
+	}
+}
+
+// With no context line matching at all, name the closest line rather than only
+// saying nothing matched.
+func TestDiagnosticNamesTheClosestLine(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "README.md", "# Title\n\n## Installation\n\nRun it.\n")
+	_, err := computeFor(t, dir, `*** Begin Patch
+*** Update File: README.md
+@@
+## Install
+ new text
+*** End Patch
+`)
+	if err == nil {
+		t.Fatal("expected a failure")
+	}
+	if !strings.Contains(err.Error(), "closest line is") || !strings.Contains(err.Error(), "Installation") {
+		t.Fatalf("error = %v, want the nearest line named", err)
+	}
+}

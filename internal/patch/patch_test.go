@@ -115,14 +115,16 @@ func TestParseEndOfFileMarker(t *testing.T) {
 
 func TestParseErrors(t *testing.T) {
 	for name, text := range map[string]string{
-		"missing begin":  "*** Add File: a\n+x\n*** End Patch\n",
-		"no ops":         "*** Begin Patch\n*** End Patch\n",
-		"unclosed":       "*** Begin Patch\n*** Add File: a\n+x\n",
-		"add no plus":    "*** Begin Patch\n*** Add File: a\nhello\n*** End Patch\n",
-		"add no body":    "*** Begin Patch\n*** Add File: a\n*** End Patch\n",
-		"bad op line":    "*** Begin Patch\nwat\n*** End Patch\n",
-		"update empty":   "*** Begin Patch\n*** Update File: a\n*** End Patch\n",
-		"bad chunk line": "*** Begin Patch\n*** Update File: a\n@@\nold without prefix\n*** End Patch\n",
+		"missing begin": "*** Add File: a\n+x\n*** End Patch\n",
+		"no ops":        "*** Begin Patch\n*** End Patch\n",
+		"unclosed":      "*** Begin Patch\n*** Add File: a\n+x\n",
+		"add no plus":   "*** Begin Patch\n*** Add File: a\nhello\n*** End Patch\n",
+		"add no body":   "*** Begin Patch\n*** Add File: a\n*** End Patch\n",
+		"bad op line":   "*** Begin Patch\nwat\n*** End Patch\n",
+		"update empty":  "*** Begin Patch\n*** Update File: a\n*** End Patch\n",
+		// A lone unprefixed line is now read as context (see anchor_test.go);
+		// the failure that remains is the ambiguous one.
+		"ambiguous chunk line": "*** Begin Patch\n*** Update File: a\n@@\n-a\n+A\nbare\n b\n*** End Patch\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := Parse(text); err == nil {
