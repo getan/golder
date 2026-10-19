@@ -36,6 +36,14 @@ type streamRenderTickMsg struct{}
 // an earlier drag (a new press bumps Model.selScrollGen and orphans them).
 type selScrollTickMsg struct{ gen int }
 
+// seedMoreMsg is one step of the lazy seed's continuation: a scroll into
+// deferred history materializes under a budget (lazySeedBudget), and when that
+// budget — not the end of the history — is what stopped the step, the model keeps
+// stepping on a short tick until a screen of fresh history sits above the
+// position the user stopped at. gen guards stale ticks from a superseded chain
+// (scrolling back to the live tail, a session switch, a fresh arm).
+type seedMoreMsg struct{ gen int }
+
 // statusRevealMsg advances the status bar's change reveal by one column: the
 // bounded pass a long value makes right after it changes, before it settles onto
 // its still, elided form. Nothing else on the bar schedules a timer.

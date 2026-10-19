@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -716,12 +717,14 @@ func TestLazySeedDefersHugeReplay(t *testing.T) {
 		}
 	}
 
-	// Stand at the top: the next older chunk materializes and the offset is
+	// Stand at the top: the next older chunk materializes — a screen of fresh
+	// history, which at one line per block is Height() blocks — and the offset is
 	// slid down by exactly the number of lines prepended.
 	tr.vp.GotoTop()
 	tr.update(nil)
-	if tr.matStart != total-lazySeedWindow*2 {
-		t.Fatalf("matStart = %d, want %d after one chunk", tr.matStart, total-lazySeedWindow*2)
+	const chunk = 12 // the viewport height set above, one line per block
+	if tr.matStart != total-lazySeedWindow-chunk {
+		t.Fatalf("matStart = %d, want %d after one chunk", tr.matStart, total-lazySeedWindow-chunk)
 	}
 	added := tr.prepended
 	if added == 0 {
@@ -737,8 +740,168 @@ func TestLazySeedDefersHugeReplay(t *testing.T) {
 		t.Fatalf("takePrepend = %d on the second call, want cleared", got)
 	}
 	body = strings.Join(tr.contentLines(), "\n")
-	if !strings.Contains(body, "line 172") || !strings.Contains(body, "line 235") {
+	if !strings.Contains(body, "line 224") || !strings.Contains(body, "line 235") {
 		t.Errorf("materialized chunk missing from content\nstart=%d", tr.matStart)
+	}
+}
+
+// pinSeedBudget sets the lazy seed's render budget for one test, so a step's
+// granularity is pinned: budget 0 makes every step materialize exactly one block,
+// which is the worst case a slow block can produce without the test having to
+// render something slow.
+func pinSeedBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := lazySeedBudget
+	lazySeedBudget = d
+	t.Cleanup(func() { lazySeedBudget = old })
+}
+
+// seedDeferred builds a model whose transcript holds a batch replay the lazy seed
+// defers, standing at the top of the materialized window (the position a scroll
+// into history leaves the user in).
+func seedDeferred(t *testing.T, blocks int) Model {
+	t.Helper()
+	m := apply(t, NewModel(Options{Model: "claude-opus", ProviderName: "commandcode"}), tea.WindowSizeMsg{Width: 60, Height: 24})
+	m.transcript.beginBatch()
+	for i := 0; i < blocks; i++ {
+		m.transcript.addSystem(fmt.Sprintf("line %d", i))
+	}
+	m.transcript.endBatch()
+	if m.transcript.matStart == 0 {
+		t.Fatalf("a replay of %d blocks must defer older history", blocks)
+	}
+	m.transcript.vp.GotoTop()
+	m.transcript.follow = false
+	return m
+}
+
+// TestLazySeedStepStopsAtTheBudget pins the contract that keeps a scroll event
+// cheap however expensive a block is: a materialize step renders at least one
+// block — so a caller looping on it always makes progress — and then stops at the
+// deadline rather than walking the rest of the chunk.
+func TestLazySeedStepStopsAtTheBudget(t *testing.T) {
+	pinSeedBudget(t, 0)
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(60, 12)
+	tr.beginBatch()
+	for i := 0; i < 300; i++ {
+		tr.addSystem(fmt.Sprintf("line %d", i))
+	}
+	tr.endBatch()
+	if tr.matStart == 0 {
+		t.Fatal("a replay of 300 blocks must defer older history")
+	}
+
+	before := tr.matStart
+	added := tr.materializeChunk(time.Now())
+	if added == 0 {
+		t.Fatal("a spent budget must still materialize one block, or a caller loops forever")
+	}
+	if tr.matStart != before-1 {
+		t.Fatalf("matStart = %d, want %d: a spent budget must render exactly one block", tr.matStart, before-1)
+	}
+}
+
+// TestSeedMoreContinuationFillsHistory covers the model half of the budgeted
+// seed: arming (once, not per event), stale ticks, stepping until the fill has
+// moved past the top of the materialized window, and the chain stopping itself
+// there so a settled screen keeps no timer.
+func TestSeedMoreContinuationFillsHistory(t *testing.T) {
+	pinSeedBudget(t, 0)
+	m := seedDeferred(t, 3000)
+
+	if cmd := m.armSeedMore(); cmd == nil {
+		t.Fatal("standing at the top of deferred history must arm the continuation")
+	}
+	if !m.seedMoreActive {
+		t.Fatal("arming must mark the chain live")
+	}
+	if cmd := m.armSeedMore(); cmd != nil {
+		t.Fatal("a live chain must not be armed twice")
+	}
+	if cmd := m.stepSeedMore(seedMoreMsg{gen: m.seedMoreGen - 1}); cmd != nil {
+		t.Fatal("a stale tick from a superseded chain must be dropped")
+	}
+
+	start := m.transcript.matStart
+	steps, blocks := 0, 0
+	for {
+		before := m.transcript.matStart
+		cmd := m.stepSeedMore(seedMoreMsg{gen: m.seedMoreGen})
+		if m.transcript.matStart < before {
+			steps++
+			blocks += before - m.transcript.matStart
+		}
+		if cmd == nil {
+			break
+		}
+		if steps > 1000 {
+			t.Fatalf("the continuation never stopped (matStart %d of %d blocks)", m.transcript.matStart, start)
+		}
+	}
+	if steps == 0 || blocks == 0 {
+		t.Fatal("the first step must materialize something")
+	}
+	if m.transcript.matStart >= start {
+		t.Fatalf("the continuation materialized nothing: matStart %d → %d", start, m.transcript.matStart)
+	}
+	if m.seedMoreActive {
+		t.Fatal("a stopped chain must clear its active flag")
+	}
+	if m.transcript.seedPending() {
+		t.Fatal("the chain stopped while there was still work at the position it fills from")
+	}
+	t.Logf("continuation took %d steps and materialized %d blocks", steps, blocks)
+}
+
+// TestWheelScrollArmsTheSeedContinuation is the glue a flick depends on: the
+// wheel path itself arms the fill, so a gesture that reaches the top of the
+// materialized window keeps filling history in without another event.
+func TestWheelScrollArmsTheSeedContinuation(t *testing.T) {
+	pinSeedBudget(t, 0)
+	m := seedDeferred(t, 3000)
+
+	before := m.transcript.matStart
+	m = apply(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.transcript.matStart >= before {
+		t.Fatalf("the scroll materialized nothing: matStart %d → %d", before, m.transcript.matStart)
+	}
+	if m.transcript.seedPending() && !m.seedMoreActive {
+		t.Fatal("a scroll that leaves history pending must arm the seed continuation")
+	}
+	if m.seedMoreActive && !m.transcript.seedPending() {
+		t.Fatal("the continuation must not be armed with nothing to fill")
+	}
+}
+
+// TestViewClosesARowThatLeavesAStyleOpen covers the guard writeRow carries: a
+// row whose render leaves a style open must be closed before the padding and the
+// scrollbar cell are written, or the style paints both. roleBanner is the block
+// kind that can produce such a row — its text is emitted verbatim — so it is the
+// one a test can build.
+func TestViewClosesARowThatLeavesAStyleOpen(t *testing.T) {
+	const open = "\x1b[31mopen style"
+	tr := newTranscript(DefaultTheme())
+	tr.setSize(20, 4)
+	tr.addBanner(open)
+	// Overflow, so a scrollbar cell follows every row: the reset has to land
+	// before it.
+	for i := 0; i < 8; i++ {
+		tr.addSystem(fmt.Sprintf("line %d", i))
+	}
+	if !tr.overflowing() {
+		t.Fatal("the fixture must overflow, or there is no bar cell to protect")
+	}
+	// The banner is the first block; scroll back to it so the row under test is
+	// the one the window shows.
+	tr.follow = false
+	tr.vp.GotoTop()
+	view := tr.view()
+	if !strings.Contains(view, open+"\x1b[m") {
+		t.Fatalf("the open style was not closed before the pad/bar:\n%q", view)
+	}
+	if strings.Contains(view, open+" ") {
+		t.Fatalf("the style is still open across the padding:\n%q", view)
 	}
 }
 

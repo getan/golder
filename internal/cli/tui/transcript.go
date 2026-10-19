@@ -2,10 +2,11 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
@@ -73,6 +74,22 @@ type transcriptBlock struct {
 	// something that did NOT happen (a compaction that failed), which renders in
 	// the error color and with the "✗ " marker instead of the warn color.
 	noticeFailure bool
+
+	// mdOut caches the rendered Markdown of an assistant block, keyed by the
+	// exact source it was rendered from (mdFor), the width it was wrapped to
+	// (mdWidth) and the palette generation (mdEpoch). Rendering one answer
+	// through glamour costs milliseconds — 3ms for a short one, 40ms for a long
+	// one — and a reflow does not mean the live block's text changed: scrolling
+	// into deferred history, a tool card starting or finishing, a status change
+	// that re-wraps — all of them re-render the tail. Without this the flick that
+	// scrolls up while an answer streams would pay a full glamour render per
+	// materialized step, which is precisely the stutter the scroll path is trying
+	// to avoid. The key is self-verifying (text + width + palette), so no
+	// invalidation hook can be forgotten.
+	mdOut   string
+	mdFor   string
+	mdWidth int
+	mdEpoch int
 }
 
 // transcript is the scrolling message log. It wraps a viewport.Model and keeps
@@ -607,33 +624,128 @@ func (t transcript) overflowing() bool {
 // bleed into (and hide) the bar column. When everything fits there is nothing to
 // scroll, so no bar is drawn and the viewport uses the full width (relayout
 // releases the reserved column in that case).
+//
+// The window is sliced straight out of the content lines instead of going
+// through viewport.View(): that call re-joins the visible lines and pushes them
+// through a width+height lipgloss style (a full cell buffer parse and re-emit of
+// every row) on every frame, and Bubble Tea asks for a frame after EVERY message
+// it dispatches — motion events included. Slicing and padding by hand was
+// verified byte-identical to what the two lipgloss passes produced, row for row,
+// across the widths, heights, scroll offsets and block kinds of a full
+// transcript, and costs a tenth of it (39µs against 422µs for a 40-row frame,
+// 219 allocations against 7731): that is what a fast two-finger flick on a
+// trackpad needs, because the event rate is far above the frame rate and every
+// event pays this.
 func (t transcript) view() string {
-	if !t.overflowing() {
+	h := t.vp.Height()
+	if h <= 0 {
+		// No rows to lay out (before the first size message): the viewport's own
+		// empty view is the honest answer.
 		return t.vp.View()
 	}
 
-	bar := strings.Split(t.scrollbar(), "\n")
-	body := strings.Split(t.vp.View(), "\n")
-
-	// Fit every body line to exactly t.width columns (ANSI-aware pad/truncate),
-	// terminating any open style so the bar cell renders on a clean slate.
-	fit := lipgloss.NewStyle().Width(t.width).MaxWidth(t.width)
+	var bar []string
+	if t.overflowing() {
+		bar = t.scrollbarRows()
+	} else if t.width <= 0 {
+		// Degenerate geometry: a frame with no content column and nothing to
+		// scroll. There is no row to pad and no bar to attach.
+		return t.vp.View()
+	}
+	lines := t.lines
+	off := t.vp.YOffset()
+	if off < 0 {
+		off = 0
+	}
+	if off > len(lines) {
+		off = len(lines)
+	}
 
 	var b strings.Builder
-	for i := 0; i < len(bar); i++ {
+	b.Grow(h * (t.width + 1))
+	for i := 0; i < h; i++ {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		line := ""
-		if i < len(body) {
-			line = body[i]
+		if j := off + i; j < len(lines) {
+			writeRow(&b, lines[j], t.width)
+		} else {
+			writePad(&b, t.width)
 		}
-		if t.width > 0 {
-			b.WriteString(fit.Render(line))
+		if bar != nil {
+			b.WriteString(bar[i])
 		}
-		b.WriteString(bar[i])
 	}
 	return b.String()
+}
+
+// writeRow writes one content line normalized to exactly width cells: an
+// ANSI-aware pad when it is short, a cell-boundary cut when it is long. A line
+// that is already exactly width cells is written through untouched, which is the
+// common case for a full-width row (a code block, a user bar) and the reason
+// this is not left to lipgloss: re-emitting a row through a style costs a cell
+// buffer parse for every row of every frame.
+//
+// A line that ends with a style still open is closed before the padding (and,
+// when the transcript overflows, before the scrollbar cell) is written: without
+// that the style would paint the pad and the bar, which is the dangling-SGR
+// symptom the old two-pass build closed by re-emitting every row through a
+// style. Every producer the transcript has (a role's theme style, glamour, a
+// card) closes its own runs, so this is a guard rather than a common path — the
+// banner, whose text is emitted verbatim, is the block kind that can reach it.
+func writeRow(b *strings.Builder, line string, width int) {
+	if width <= 0 {
+		// A zero-column frame has no cells to paint: emitting the row's escapes
+		// with no cells under them would write a dangling SGR into the frame.
+		return
+	}
+	if line == "" {
+		writePad(b, width)
+		return
+	}
+	w := ansi.StringWidth(line)
+	if w > width {
+		b.WriteString(ansi.Truncate(line, width, ""))
+		return
+	}
+	b.WriteString(line)
+	if leavesStyleOpen(line) {
+		b.WriteString(rowReset)
+	}
+	if w < width {
+		writePad(b, width-w)
+	}
+}
+
+// rowReset is the SGR reset written after a row that ends with a style still
+// open. It is the form lipgloss itself emits between runs, so a row closed this
+// way is byte-identical to what the old per-row style pass produced.
+const rowReset = "\x1b[m"
+
+// leavesStyleOpen reports whether line carries escapes and does not end with a
+// reset — i.e. whether whatever it painted would bleed into the next cells
+// written on the row.
+func leavesStyleOpen(line string) bool {
+	if strings.IndexByte(line, 0x1b) < 0 {
+		return false
+	}
+	return !strings.HasSuffix(line, rowReset) && !strings.HasSuffix(line, "\x1b[0m")
+}
+
+// rowSpaces is the padding writePad draws from, so padding a row does not
+// allocate a string per call. Widths above its length are covered in steps.
+const rowSpaces = "                                                                "
+
+// writePad writes n spaces.
+func writePad(b *strings.Builder, n int) {
+	for n > 0 {
+		k := n
+		if k > len(rowSpaces) {
+			k = len(rowSpaces)
+		}
+		b.WriteString(rowSpaces[:k])
+		n -= k
+	}
 }
 
 // scrollLines moves the viewport by n content lines (negative scrolls up)
@@ -667,9 +779,17 @@ func (t *transcript) scrollLines(n int) bool {
 // flat blob. When the content fits (no overflow) the capsule fills the full
 // height.
 func (t transcript) scrollbar() string {
+	return strings.Join(t.scrollbarRows(), "\n")
+}
+
+// scrollbarRows renders the bar as one cell per viewport row, which is the form
+// view() needs: the bar is appended to each row in the same pass that writes the
+// row, so neither side has to split a joined block apart again per frame. It
+// returns exactly Height() cells. See scrollbar for the shape.
+func (t transcript) scrollbarRows() []string {
 	h := t.vp.Height()
 	if h <= 0 {
-		return ""
+		return nil
 	}
 	total := t.vp.TotalLineCount()
 	thumb := h
@@ -694,23 +814,20 @@ func (t transcript) scrollbar() string {
 			pos = off * (h - thumb) / maxOff
 		}
 	}
-	var b strings.Builder
+	rows := make([]string, h)
 	for i := 0; i < h; i++ {
-		if i > 0 {
-			b.WriteByte('\n')
-		}
 		switch {
 		case i < pos || i >= pos+thumb:
-			b.WriteString(t.theme.ScrollTrack.Render("│"))
+			rows[i] = t.theme.ScrollTrack.Render("│")
 		case thumb >= 2 && i == pos:
-			b.WriteString(t.theme.ScrollThumb.Render("▄"))
+			rows[i] = t.theme.ScrollThumb.Render("▄")
 		case thumb >= 2 && i == pos+thumb-1:
-			b.WriteString(t.theme.ScrollThumb.Render("▀"))
+			rows[i] = t.theme.ScrollThumb.Render("▀")
 		default:
-			b.WriteString(t.theme.ScrollThumb.Render("█"))
+			rows[i] = t.theme.ScrollThumb.Render("█")
 		}
 	}
-	return b.String()
+	return rows
 }
 
 // reflow re-renders every block to the current width and pushes the joined
@@ -769,6 +886,22 @@ const (
 	lazySeedMaxChunks = 16  // chunks one extendSeed call materializes at most
 )
 
+// lazySeedBudget bounds the rendering ONE scroll event may spend materializing
+// deferred history. A chunk is otherwise as large as lazySeedWindow blocks, and a
+// block can cost milliseconds to render (an answer through glamour, a card with a
+// long body): materializing 64 of them in one step is the two-second freeze a
+// fast flick used to hit when it reached the top of the materialized window of a
+// resumed session. The budget cuts the step short instead, and the next scroll
+// event (or the seed continuation the model arms, see seedMoreMsg) picks up where
+// it left off — so history fills in as the user scrolls rather than blocking the
+// event loop in one lump. It is a budget, not a limit on what gets materialized:
+// at least one block always lands, so a loop over it always makes progress
+// whatever a single block costs.
+//
+// It is a variable so tests can pin it (zero cuts every step to a single block),
+// which is how the budget's contract is tested without making a test wait.
+var lazySeedBudget = 8 * time.Millisecond
+
 // commitStable folds every newly stable block into the prefix. The scan walks
 // from the current boundary and stops at the first still-active block (the
 // streaming assistant block or a running card), so an active block also pins
@@ -823,9 +956,10 @@ func (t *transcript) rebuildPrefix() {
 // of the materialized window: the next chunk of older blocks is rendered,
 // prepended, and the offset is slid down by the same amount so the content
 // under the cursor does not move. One call materializes enough to leave a
-// screen of fresh history above the user's position (usually a single chunk),
-// so scrolling up through a long resumed session stays smooth because each
-// step is bounded work.
+// screen of fresh history above the user's position, and never renders for
+// longer than lazySeedBudget — the remainder waits for the next scroll event,
+// so scrolling up through a long resumed session stays smooth instead of
+// freezing on one oversized chunk.
 func (t *transcript) extendSeed() {
 	if t.batchDepth > 0 || t.matStart == 0 || t.width <= 0 {
 		return
@@ -842,12 +976,16 @@ func (t *transcript) extendSeed() {
 	}
 	base := t.vp.YOffset()
 	margin := t.vp.Height()
+	deadline := time.Now().Add(lazySeedBudget)
 	added := 0
 	for i := 0; i < lazySeedMaxChunks && t.matStart > 0; i++ {
-		if base+added > margin {
+		// Stop as soon as a screen of fresh history sits above the position the
+		// user is looking at: base lines were already above them, added are the
+		// ones this call brought in.
+		if base+added >= margin {
 			break
 		}
-		n := t.materializeChunk()
+		n := t.materializeChunk(deadline)
 		if n == 0 {
 			break
 		}
@@ -869,31 +1007,49 @@ func (t *transcript) extendSeed() {
 	t.prepended += added
 }
 
-// materializeChunk renders the next deferred chunk of blocks above the
-// materialized window, prepends its lines (and per-block line counts) to the
-// prefix, and returns the number of lines added.
-func (t *transcript) materializeChunk() int {
+// materializeChunk renders the next deferred blocks above the materialized
+// window, prepends their lines (and per-block line counts) to the prefix, and
+// returns the number of lines added. It stops at whichever comes first: a screen
+// of added lines (enough fresh history to scroll through), lazySeedWindow blocks,
+// or the deadline the caller set — checking the clock between blocks so one
+// expensive block cannot push the step far past its budget. At least one block
+// is always rendered, so a caller looping on this makes progress.
+func (t *transcript) materializeChunk(deadline time.Time) int {
 	if t.matStart == 0 {
 		return 0
 	}
 	if !t.prefixValid || t.prefixWidth != t.width {
 		t.rebuildPrefix()
 	}
-	from := t.matStart - lazySeedWindow
-	if from < 0 {
-		from = 0
+	// Walk the deferred blocks newest-first — that is the direction the offset
+	// moves — collecting each block's lines on their own, then prepend them
+	// oldest-first.
+	screen := t.vp.Height()
+	from := t.matStart
+	var chunks [][]string
+	added := 0
+	for from > 0 && len(chunks) < lazySeedWindow && added < screen {
+		from--
+		block := t.appendBlockLines(nil, from)
+		chunks = append(chunks, block)
+		added += len(block)
+		if time.Now().After(deadline) {
+			break
+		}
 	}
-	var lines []string
-	var counts []int
-	for i := from; i < t.matStart; i++ {
-		before := len(lines)
-		lines = t.appendBlockLines(lines, i)
-		counts = append(counts, len(lines)-before)
+	if len(chunks) == 0 {
+		return 0
 	}
-	t.prefixLines = append(lines, t.prefixLines...)
+	counts := make([]int, 0, len(chunks))
+	var head []string
+	for i := len(chunks) - 1; i >= 0; i-- {
+		counts = append(counts, len(chunks[i]))
+		head = append(head, chunks[i]...)
+	}
+	t.prefixLines = append(head, t.prefixLines...)
 	t.prefixCounts = append(counts, t.prefixCounts...)
 	t.matStart = from
-	return len(lines)
+	return added
 }
 
 // takePrepend returns and clears the number of content lines the lazy seed
@@ -904,6 +1060,24 @@ func (t *transcript) takePrepend() int {
 	n := t.prepended
 	t.prepended = 0
 	return n
+}
+
+// seedPending reports whether a seed step would actually materialize something:
+// deferred history is left above the materialized window AND the viewport still
+// sits inside the top screen, which is where a step fills from (extendSeed stops
+// as soon as a screen of fresh history is above the position, so an offset at or
+// past the viewport height has nothing to gain from another step — the chain must
+// not spin on it). It is false while the transcript is pinned to the live tail —
+// reading history is what materializing is for — and before the first layout, so
+// an idle screen never keeps a tick chain alive.
+func (t transcript) seedPending() bool {
+	if t.matStart == 0 || t.width <= 0 || t.vp.Height() <= 0 {
+		return false
+	}
+	if t.follow && t.overflowing() {
+		return false
+	}
+	return t.vp.YOffset() < t.vp.Height()
 }
 
 // layoutAt lays the prefix + live tail out at width w and pushes the render
@@ -1040,7 +1214,7 @@ func (t *transcript) appendBlockLines(dst []string, i int) []string {
 	if blockLeadBlank(t.blocks, i) {
 		dst = append(dst, "")
 	}
-	return append(dst, strings.Split(t.renderBlock(t.blocks[i], i == t.activeAssistant), "\n")...)
+	return append(dst, strings.Split(t.renderBlock(i), "\n")...)
 }
 
 // blockLeadBlank reports whether block i renders with a leading blank
@@ -1121,11 +1295,15 @@ func stableBlock(blk transcriptBlock, streaming bool) bool {
 // WrapToWidth) before styling so ANSI escapes never confuse the width math and
 // no double-width rune is split. Assistant blocks render as Markdown in BOTH
 // phases (codex parity): the still-streaming block goes through the same
-// renderMarkdown as the finalized one, so colors appear incrementally and the
+// renderAssistant as the finalized one, so colors appear incrementally and the
 // turn-end render is a no-op instead of a plain→styled flash. Partial Markdown
 // (an unclosed fence or emphasis run) renders transiently and converges as more
 // text arrives; glamour tolerates the prefix without error.
-func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
+//
+// i is the block's index rather than a copy of it: the assistant path writes its
+// render back into the block (see renderAssistant), which needs the element.
+func (t *transcript) renderBlock(i int) string {
+	blk := t.blocks[i]
 	if blk.group != nil {
 		return blk.group.render(t.theme, t.width)
 	}
@@ -1149,8 +1327,32 @@ func (t *transcript) renderBlock(blk transcriptBlock, streaming bool) string {
 		// interrupt, which lands directly under the card it stopped.
 		return t.theme.System.Render(indentBlock(WrapToWidth(blk.text, contentWidth(t.width)), contentIndent))
 	default:
-		return renderMarkdown(blk.text, t.width)
+		return t.renderAssistant(i, blk)
 	}
+}
+
+// renderAssistant renders an assistant block as Markdown, reusing the previous
+// render when the source text, the wrap width and the palette generation are all
+// unchanged.
+//
+// This is the expensive render in the transcript — glamour with syntax
+// highlighting costs a few milliseconds for a short answer and tens of
+// milliseconds for a long one — and most reflows do not change the block they
+// re-render: scrolling into deferred history, a tool card starting or finishing,
+// an approval dialog opening, a resize that lands back on the same width. The
+// live block is the one case that genuinely changes per reflow, and there the
+// text key misses on purpose: the frame it produces is the point.
+func (t *transcript) renderAssistant(i int, blk transcriptBlock) string {
+	epoch := markdownEpoch()
+	if blk.mdOut != "" && blk.mdFor == blk.text && blk.mdWidth == t.width && blk.mdEpoch == epoch {
+		return blk.mdOut
+	}
+	out := renderMarkdown(blk.text, t.width)
+	t.blocks[i].mdOut = out
+	t.blocks[i].mdFor = blk.text
+	t.blocks[i].mdWidth = t.width
+	t.blocks[i].mdEpoch = epoch
+	return out
 }
 
 // contentIndent is the column the transcript's content starts at: one marker

@@ -33,7 +33,21 @@ var (
 	// the terminal's real background via SetMarkdownDark and never queried at
 	// render time — see the comment there.
 	mdDark = true
+	// mdEpoch counts palette changes. A transcript block caches its rendered
+	// Markdown (transcriptBlock.mdOut) keyed by source text, width and this
+	// generation: the text and the width can be unchanged while the palette
+	// changed under it — exactly what SetMarkdownDark does at startup, when the
+	// terminal answers the background-color query — and a stale render would
+	// then keep the old colors until that block happened to change again.
+	mdEpoch int
 )
+
+// markdownEpoch is the current palette generation, for the block-render cache.
+func markdownEpoch() int {
+	mdMu.Lock()
+	defer mdMu.Unlock()
+	return mdEpoch
+}
 
 // SetMarkdownDark records whether the terminal has a dark background and drops
 // the renderer cache so the next render rebuilds with the matching style.
@@ -55,6 +69,7 @@ func SetMarkdownDark(dark bool) {
 		return
 	}
 	mdDark = dark
+	mdEpoch++
 	mdCache = map[int]*glamour.TermRenderer{}
 }
 

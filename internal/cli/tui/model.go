@@ -317,6 +317,15 @@ type Model struct {
 	// unseenWatchGen invalidates ticks from a superseded chain (cleared watch,
 	// jump to bottom, or a fresh arm) so a stale tick cannot re-pop the toast.
 	unseenWatchGen int
+
+	// seedMoreActive is true while a seedMoreMsg tick chain is running: deferred
+	// history remains above the materialized window and the user is scrolled into
+	// the top of it. The chain stops itself when the history is exhausted or the
+	// viewport leaves the top, so a settled screen costs no wakeups.
+	seedMoreActive bool
+	// seedMoreGen invalidates ticks from a superseded chain (a fresh arm, a jump
+	// back to the live tail).
+	seedMoreGen int
 }
 
 // NewModel builds the root model from the assembled Options. It reads the
@@ -915,6 +924,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case unseenWatchMsg:
 		return m, m.stepUnseenWatch(msg)
 
+	case seedMoreMsg:
+		return m, m.stepSeedMore(msg)
+
 	case gitInfoMsg:
 		m.statusBar.SetGit(msg)
 		return m, nil
@@ -982,11 +994,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingGroupClick = nil
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
-			return m, tea.Batch(cmd, m.armUnseenWatch())
+			return m, tea.Batch(cmd, m.armUnseenWatch(), m.armSeedMore())
 		}
 		cmd := m.transcript.update(msg)
 		m.sel = selection{}
-		return m, tea.Batch(cmd, m.armUnseenWatch())
+		return m, tea.Batch(cmd, m.armUnseenWatch(), m.armSeedMore())
 
 	case tea.MouseClickMsg:
 		// A left press on the scrollbar column grabs the thumb (jump + drag). A left
@@ -1123,7 +1135,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selScrollDir = 0
 			return m, nil
 		}
-		return m, tea.Batch(selScrollTick(m.selScrollGen), m.armUnseenWatch())
+		return m, tea.Batch(selScrollTick(m.selScrollGen), m.armUnseenWatch(), m.armSeedMore())
 
 	case tea.PasteMsg:
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
@@ -1973,11 +1985,11 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// home / end) belong to the multi-line editor and are delegated below.
 		if m.sel.active && !m.sel.below {
 			cmd := m.transcript.update(msg)
-			return m, tea.Batch(cmd, m.armUnseenWatch())
+			return m, tea.Batch(cmd, m.armUnseenWatch(), m.armSeedMore())
 		}
 		m.sel = selection{}
 		cmd := m.transcript.update(msg)
-		return m, tea.Batch(cmd, m.armUnseenWatch())
+		return m, tea.Batch(cmd, m.armUnseenWatch(), m.armSeedMore())
 	case "ctrl+v":
 		// Explicit paste key: first try to pull an image off the clipboard (Claude
 		// Code-style image paste); the reply arrives as clipboardImageMsg and, when
@@ -3411,6 +3423,53 @@ const streamRenderInterval = 50 * time.Millisecond
 // streamed deltas (see Model.streamRenderArmed).
 func streamRenderTick() tea.Cmd {
 	return tea.Tick(streamRenderInterval, func(time.Time) tea.Msg { return streamRenderTickMsg{} })
+}
+
+// seedMoreInterval is how often the lazy seed's continuation steps while
+// deferred history is still filling in above the position the user scrolled to.
+// Each step renders for at most lazySeedBudget, so the interval is the pause
+// between budgeted steps: short enough to read as continuous filling, long
+// enough that the fill never owns the event loop — a flick still gets its wheels
+// and keys answered while history streams in above.
+const seedMoreInterval = 30 * time.Millisecond
+
+// seedMoreTick schedules the next step of the lazy seed's continuation.
+func seedMoreTick(gen int) tea.Cmd {
+	return tea.Tick(seedMoreInterval, func(time.Time) tea.Msg { return seedMoreMsg{gen: gen} })
+}
+
+// armSeedMore starts the lazy seed's continuation when a scroll left deferred
+// history above the materialized window and no chain is running. Scroll paths
+// call it unconditionally; it is a no-op for every other position, and a no-op
+// while a chain is already live (the chain re-checks its own condition each
+// step), so a burst of wheel events starts exactly one.
+func (m *Model) armSeedMore() tea.Cmd {
+	if m.seedMoreActive || !m.transcript.seedPending() {
+		return nil
+	}
+	m.seedMoreActive = true
+	m.seedMoreGen++
+	return seedMoreTick(m.seedMoreGen)
+}
+
+// stepSeedMore advances the continuation by one budgeted step and stops the
+// chain once there is nothing left to fill, so a settled screen costs no
+// wakeups. A step that finds the viewport away from the top (the user scrolled
+// back down) stops the chain the same way.
+func (m *Model) stepSeedMore(msg seedMoreMsg) tea.Cmd {
+	if msg.gen != m.seedMoreGen {
+		return nil
+	}
+	if !m.transcript.seedPending() {
+		m.seedMoreActive = false
+		return nil
+	}
+	m.transcript.extendSeed()
+	if !m.transcript.seedPending() {
+		m.seedMoreActive = false
+		return nil
+	}
+	return seedMoreTick(m.seedMoreGen)
 }
 
 // quitArmWindow is how long an armed quit stays live: a second idle Ctrl+C /
