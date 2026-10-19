@@ -217,7 +217,14 @@ const (
 // has to look for it. It is deliberately quiet — a tool that is always
 // contained reports nothing, and then there is nothing to say.
 func (c toolCard) envelopeMarker() string {
-	switch c.envelope {
+	return envMarkerFor(c.envelope)
+}
+
+// envMarkerFor is the one-word note for an envelope value. It is shared by the
+// shell card's headline, the generic headline and the exploring cell's rows, so
+// the same run of the program cannot end up described two ways.
+func envMarkerFor(value string) string {
+	switch value {
 	case envContained:
 		return "·sandbox"
 	case envUnconfined:

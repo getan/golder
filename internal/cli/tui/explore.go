@@ -94,19 +94,30 @@ func (g exploreGroup) render(theme Theme, width int) string {
 		}
 		return g.header(theme) + "\n" + strings.Join(parts, "\n")
 	}
-	lines := g.summaryLines()
-	if len(lines) == 0 {
-		return g.header(theme) + g.notes(theme, width)
+	rows := g.summaryRows()
+	groupMarker := g.collapseMarker()
+	if len(rows) == 0 {
+		return g.header(theme) + groupMarker + g.notes(theme, width)
 	}
 	var b strings.Builder
-	b.WriteString(g.header(theme))
+	b.WriteString(g.header(theme) + groupMarker)
 	indent := "    "
-	for i, ln := range lines {
+	for i, row := range rows {
+		line := row.text
+		if groupMarker == "" {
+			// A mixed group says nothing on the header, so each row carries its
+			// own answer rather than the group's: one marker that covered both
+			// a sandboxed read and an unconfined one would be a lie about one of
+			// them.
+			if m := envMarkerFor(row.env); m != "" {
+				line += " " + m
+			}
+		}
 		gutter := indent
 		if i == 0 {
 			gutter = "  └ "
 		}
-		wrapped := strings.Split(WrapToWidth(ln, max(1, width-len([]rune(gutter)))), "\n")
+		wrapped := strings.Split(WrapToWidth(line, max(1, width-len([]rune(gutter)))), "\n")
 		for j, w := range wrapped {
 			if j == 0 {
 				b.WriteString("\n" + theme.System.Render(gutter) + theme.ToolCmd.Render(w))
@@ -116,6 +127,30 @@ func (g exploreGroup) render(theme Theme, width int) string {
 		}
 	}
 	return b.String() + g.notes(theme, width)
+}
+
+// collapseMarker is the one word the collapsed header carries when every member
+// call ran under the same envelope — the answer to "was this exploration
+// isolated". It includes the leading space, and it is empty for a mixed group
+// (the rows say it instead) or for a group whose calls have not reported yet.
+func (g exploreGroup) collapseMarker() string {
+	env := ""
+	for _, c := range g.cards {
+		if c.envelope == "" {
+			continue
+		}
+		if env == "" {
+			env = c.envelope
+			continue
+		}
+		if env != c.envelope {
+			return ""
+		}
+	}
+	if m := envMarkerFor(env); m != "" {
+		return " " + m
+	}
+	return ""
 }
 
 // notes renders the gate verdicts attached to the group's member calls. A
@@ -159,16 +194,37 @@ func (g exploreGroup) header(theme Theme) string {
 // names deduped). Steps that name nothing (a call whose args never arrived)
 // are skipped rather than rendered as an empty line.
 func (g exploreGroup) summaryLines() []string {
+	rows := g.summaryRows()
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.text)
+	}
+	return out
+}
+
+// exploreStepRow is one summary line with the envelope of the calls it names, so
+// a mixed group can mark the rows instead of the header.
+type exploreStepRow struct {
+	text string
+	env  string
+}
+
+// summaryRows is summaryLines with each row's envelope attached. A run of reads
+// merges only while the reads share an envelope: one marker cannot describe two
+// different answers.
+func (g exploreGroup) summaryRows() []exploreStepRow {
 	var (
-		out      []string
+		out      []exploreStepRow
 		reads    []string
+		readEnv  string
 		seenRead = map[string]bool{}
 	)
 	flushReads := func() {
 		if len(reads) > 0 {
-			out = append(out, "Read "+strings.Join(reads, ", "))
+			out = append(out, exploreStepRow{text: "Read " + strings.Join(reads, ", "), env: readEnv})
 			reads = nil
 			seenRead = map[string]bool{}
+			readEnv = ""
 		}
 	}
 	for _, c := range g.cards {
@@ -177,18 +233,24 @@ func (g exploreGroup) summaryLines() []string {
 			continue
 		}
 		if verb == "Read" {
+			if len(reads) > 0 && c.envelope != "" && readEnv != "" && c.envelope != readEnv {
+				flushReads()
+			}
 			if !seenRead[detail] {
 				seenRead[detail] = true
 				reads = append(reads, detail)
 			}
+			if readEnv == "" {
+				readEnv = c.envelope
+			}
 			continue
 		}
 		flushReads()
-		if detail == "" {
-			out = append(out, verb)
-			continue
+		text := verb
+		if detail != "" {
+			text = verb + " " + detail
 		}
-		out = append(out, verb+" "+detail)
+		out = append(out, exploreStepRow{text: text, env: c.envelope})
 	}
 	flushReads()
 	return out
