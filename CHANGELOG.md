@@ -1496,6 +1496,16 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **The boundary gate asks about the side the call actually takes**: a shell
+  redirect outside the workspace (`echo hi > /outside/f`) used to raise a READ
+  question — so "allow reading <dir>" could authorize the write — and a write
+  verb's operands (`rm /outside/f`, `mv`, `cp`, `mkdir`, …) were not extracted
+  at all, leaving a bare (envelope) shell with no place question for its writes.
+  Each shell candidate is now classified by the command's own text
+  (`PathWritten`), read grants no longer silence write questions, and the
+  dialog/title name the write. The re-admit dialog also drops its "reads and
+  writes" row unless the command needed to write, and labels say when a grant
+  covers the folder and below.
 - **`/network follow` now ships on, and covers every approved level**: under
   auto an Allow, a Confirm approved on the spot, and a Contain all mean "this
   call may run", so the network rides that answer instead of raising a second

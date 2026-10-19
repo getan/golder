@@ -98,3 +98,18 @@ func InsideSystemReadRoots(p string) bool {
 	}
 	return false
 }
+
+// InsideSystemWriteRoots reports whether p is a place every run may write
+// without asking: the machine's temp root, which the sandbox already admits as
+// writable. The project root is deliberately absent — it differs per run, and
+// the boundary gate checks it separately.
+//
+// Without this, classifying shell writes (rm/mv/redirects) as write questions
+// would ask about `rm /tmp/build/x`, a write the sandbox allows anyway.
+func InsideSystemWriteRoots(p string) bool {
+	tmp := os.TempDir()
+	if tmp == "" || p == "" {
+		return false
+	}
+	return InsideResolved(tmp, p)
+}

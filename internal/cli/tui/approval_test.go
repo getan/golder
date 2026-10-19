@@ -674,7 +674,7 @@ func TestApprovalReAdmitWriteLeads(t *testing.T) {
 	if len(m.approval.rows) != 4 {
 		t.Fatalf("rows = %d, want four", len(m.approval.rows))
 	}
-	if got := m.approval.rows[0]; got.key != "w" || !strings.Contains(got.label, "reads and writes") {
+	if got := m.approval.rows[0]; got.key != "w" || !strings.Contains(got.label, "writing") {
 		t.Fatalf("first row = %+v, want the read+write grant leading a write need", got)
 	}
 	if got := m.approval.rows[1]; got.key != "a" {
@@ -708,8 +708,8 @@ func TestApprovalReAdmitRows(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)
 	m := NewModel(Options{})
 	m.openApproval(req, reply)
-	if len(m.approval.rows) != 4 {
-		t.Fatalf("rows = %d, want the two read lifetimes, the session write grant and deny", len(m.approval.rows))
+	if len(m.approval.rows) != 3 {
+		t.Fatalf("rows = %d, want the two read lifetimes and deny (a read denial needs no write grant)", len(m.approval.rows))
 	}
 	if got := m.approval.rows[0]; got.key != "a" || !strings.Contains(got.label, "this session") {
 		t.Fatalf("first row = %+v, want the session read grant on a", got)
@@ -717,23 +717,17 @@ func TestApprovalReAdmitRows(t *testing.T) {
 	if got := m.approval.rows[1]; got.key != "s" || !strings.Contains(got.label, "remembered") {
 		t.Fatalf("second row = %+v, want the remembered read grant on s", got)
 	}
-	if got := m.approval.rows[2]; got.key != "w" || !strings.Contains(got.label, "reads and writes") {
-		t.Fatalf("third row = %+v, want the read+write session grant on w", got)
+	if got := m.approval.rows[2]; got.key != "esc" {
+		t.Fatalf("third row = %+v, want deny; a read question must not offer a write grant", got)
 	}
-	if got := m.approval.rows[3]; got.key != "esc" {
-		t.Fatalf("last row = %+v, want deny", got)
+	for _, row := range m.approval.rows {
+		if row.key == "w" {
+			t.Errorf("write row offered for a read denial: %+v", row)
+		}
 	}
 	m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if ans := awaitAnswer(t, reply); !ans.Approve || ans.ReadRoot != path {
 		t.Fatalf("answer = %+v, want the read root set", ans)
-	}
-	// The write row answers with the path the gate registers as a writable root.
-	reply2 := make(chan judge.ApprovalAnswer, 1)
-	m2 := NewModel(Options{})
-	m2.openApproval(req, reply2)
-	m2.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
-	if ans := awaitAnswer(t, reply2); !ans.Approve || ans.WritableRoot != path {
-		t.Fatalf("answer = %+v, want the writable root set", ans)
 	}
 }
 

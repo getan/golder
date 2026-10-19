@@ -167,6 +167,10 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		// about reading.
 		op := boundaryOp(call.Name)
 		writing := op.Has(grants.Write)
+		shellCmd := ""
+		if shellTool(call.Name) {
+			shellCmd, _ = bashCommand(call.Arguments)
+		}
 		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
 		// A call may name several paths (a command line lists file operands).
 		// One question covers the call, so it offers the finest directory any
@@ -176,7 +180,10 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 		// came first — the coarse answer is a session grant, so it would
 		// outlive the call. A path whose offered directory holds another's is
 		// the coarser answer and loses to it; ties keep command order.
-		type question struct{ raw, target, candidate string }
+		type question struct {
+			raw, target, candidate string
+			writing                bool
+		}
 		var questions []question
 		for _, candidateRaw := range boundaryPaths(call.Name, call.Arguments) {
 			resolved, err := permissions.AbsAgainst(absRoot, candidateRaw)
@@ -187,7 +194,17 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// outside it, and a textual comparison would call that in-workspace
 			// and stay silent — the escape the tools' own guard missed too.
 			resolved = permissions.Canonical(resolved)
-			switch boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, op, opts.WritableAt) {
+			// A shell command's operand can be a write even though bash's table
+			// entry asks about reading: `echo hi > /outside/f` and `rm /outside/f`
+			// change that path, and a read grant says nothing about writing. The
+			// command's own text decides the side.
+			candOp := op
+			candWriting := writing
+			if !writing && shellCmd != "" && PathWritten(resolved, shellCmd) {
+				candOp |= grants.Write
+				candWriting = true
+			}
+			switch boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, candOp, opts.WritableAt) {
 			case boundarySilent:
 				continue
 			case boundaryRefused:
@@ -206,6 +223,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			questions = append(questions, question{
 				raw: candidateRaw, target: resolved,
 				candidate: permissions.BoundaryCandidate(resolved),
+				writing:   candWriting,
 			})
 		}
 		if len(questions) == 0 {
@@ -224,6 +242,7 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			}
 		}
 		raw, target := chosen.raw, chosen.target
+		writing = chosen.writing
 
 		candidate := chosen.candidate
 		// The dialog shows the path for a file tool and the command for a
@@ -462,6 +481,9 @@ func boundaryQuestion(raw, resolved, absRoot string, extraRoots []string, op gra
 		if WriteAllowed(resolved, writableAt) {
 			return boundarySilent
 		}
+		if permissions.InsideSystemWriteRoots(resolved) {
+			return boundarySilent
+		}
 		return boundaryAsk
 	}
 	if _, bad := credentialPathRead(raw); bad {
@@ -575,10 +597,10 @@ func promptBoundary(ctx context.Context, opts BoundaryOpts, target, candidate st
 			// The remembered rung is offered only where a driver can actually
 			// write it down: an option that silently forgets would be worse
 			// than one that is absent.
-			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s (this session)"+
-				"   [s] allow %s %s (remembered)   [N] deny\n", verb, gerund, candidate, gerund, candidate)
+			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s and below (this session)"+
+				"   [s] allow %s %s and below (remembered)   [N] deny\n", verb, gerund, candidate, gerund, candidate)
 		} else if canGrantDir {
-			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s (this session)   [N] deny\n",
+			fmt.Fprintf(out, "  [y] allow this %s once   [a] allow %s %s and below (this session)   [N] deny\n",
 				verb, gerund, candidate)
 		} else {
 			fmt.Fprintf(out, "  [y] allow this %s once   [N] deny\n", verb)

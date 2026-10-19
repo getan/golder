@@ -215,11 +215,11 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 			// than re-extracting from the summary — keeps the rows and the
 			// answer naming the same path the gate offered.
 			readRoot, root = p, p
-			readRow := approvalRow{"Allow reading " + displayPath(p) + " (this session)", "a", approveReadDir}
-			rememberedRow := approvalRow{"Always allow reading " + displayPath(p) + " (remembered)", "s", approveReadPersist}
-			writeRow := approvalRow{"Allow reads and writes to " + displayPath(p) + " (this session)", "w", approveWritable}
+			readRow := approvalRow{"Allow reading " + displayPath(p) + " (this folder, this session)", "a", approveReadDir}
+			rememberedRow := approvalRow{"Always allow reading " + displayPath(p) + " (this folder, remembered)", "s", approveReadPersist}
+			writeRow := approvalRow{"Allow writing " + displayPath(p) + " (this session; reading included)", "w", approveWritable}
 			denyRow := approvalRow{"Deny", "esc", approveDeny}
-			rows = []approvalRow{readRow, rememberedRow, writeRow, denyRow}
+			rows = []approvalRow{readRow, rememberedRow, denyRow}
 			if req.NeedsWrite {
 				// The command needed to write there, so the row that unblocks it
 				// leads: the first row is the one a reader who trusts the dialog
@@ -260,8 +260,8 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		// (EqualFold), so `a`/`A` cannot be told apart.
 		rows = []approvalRow{
 			{"Allow this read once", "y", approveOnce},
-			{"Allow reading " + displayPath(readRoot) + " (this session)", "a", approveReadDir},
-			{"Always allow reading " + displayPath(readRoot) + " (remembered)", "s", approveReadPersist},
+			{"Allow reading " + displayPath(readRoot) + " and below (this session)", "a", approveReadDir},
+			{"Always allow reading " + displayPath(readRoot) + " and below (remembered)", "s", approveReadPersist},
 			{"Deny", "esc", approveDeny},
 		}
 	}
@@ -272,8 +272,8 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		// grant differs: a directory allowed for reading is not thereby writable.
 		rows = []approvalRow{
 			{"Allow this write once", "y", approveOnce},
-			{"Allow writing " + displayPath(writeRoot) + " (this session)", "a", approveWriteDir},
-			{"Always allow writing " + displayPath(writeRoot) + " (remembered)", "s", approveWritePersist},
+			{"Allow writing " + displayPath(writeRoot) + " and below (this session)", "a", approveWriteDir},
+			{"Always allow writing " + displayPath(writeRoot) + " and below (remembered)", "s", approveWritePersist},
 			{"Deny", "esc", approveDeny},
 		}
 	}

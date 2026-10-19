@@ -13,6 +13,7 @@ package judge
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/getan/golder/internal/patch"
@@ -105,6 +106,39 @@ func commandPathsAt(cmd string, depth int) []string {
 	for _, c := range plan.AllCommands() {
 		for _, p := range commandCandidates(c, depth) {
 			add(p)
+		}
+		// A write verb's operands are places this command changes. They are not
+		// in fileOperandCommands (that list answers "does this program READ its
+		// argument"), so without this pass `rm /outside/f` and `mv /outside/a b`
+		// never reached the boundary gate at all — and a bare (envelope) shell
+		// has no sandbox left to catch them.
+		for _, p := range writeOperandCandidates(c) {
+			add(p)
+		}
+	}
+	return out
+}
+
+// writeOperandCandidates lists the operand paths of a command that writes them.
+// The verb set is the same one PathWriteNeed uses, so the question asked and the
+// grant recorded agree about what counts as a write.
+func writeOperandCandidates(cmd shellfacts.Command) []string {
+	i, ok := unwrapProgram(cmd.Argv)
+	if !ok {
+		return nil
+	}
+	prog := filepath.Base(cmd.Argv[i].Text)
+	writes := writeVerbs[prog]
+	if prog == "sed" || prog == "awk" || prog == "gawk" {
+		writes = inPlaceFlag(cmd.Args())
+	}
+	if !writes {
+		return nil
+	}
+	var out []string
+	for _, w := range cmd.Argv[i+1:] {
+		if v, ok := wordValue(w); ok && pathShapedWord(v) {
+			out = append(out, v)
 		}
 	}
 	return out

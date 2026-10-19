@@ -8,6 +8,7 @@ package judge
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,6 +174,101 @@ func TestBoundaryWriteHonoursTheWritableRegistry(t *testing.T) {
 	})
 	if dec := gate(context.Background(), patchCall(filepath.Join(outside, "notes.md"))); dec != nil {
 		t.Errorf("an already-writable path must not be gated, got %+v", dec)
+	}
+	if asked != 0 {
+		t.Errorf("no question should have been asked, got %d", asked)
+	}
+}
+
+// A shell redirect outside the workspace is a WRITE, not a read: asking the read
+// question let a "allow reading <dir>" answer authorize `echo hi > /outside/f`.
+func TestBoundaryGateShellRedirectAsksAboutAWrite(t *testing.T) {
+	workspace, outside, _, store := authFixture(t)
+	target := filepath.Join(outside, "out.txt")
+	var got ApprovalRequest
+	gate := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			got = req
+			return ApprovalAnswer{Answered: true} // deny: the side is what matters
+		},
+	})
+	if dec := gate(context.Background(), bashCall("echo hi > "+target)); dec == nil || !dec.Block {
+		t.Fatalf("a redirect outside the workspace must be gated, got %+v", dec)
+	}
+	if !got.BoundaryWrite {
+		t.Fatal("the redirect question must be about writing")
+	}
+
+	// A read grant must not settle it; a write grant must.
+	if _, err := store.Add(grants.Grant{Path: outside, Allow: grants.Read, Scope: grants.Subtree, Lifetime: grants.Session}); err != nil {
+		t.Fatal(err)
+	}
+	gate(context.Background(), bashCall("echo hi > "+target))
+	if !got.BoundaryWrite {
+		t.Fatal("a read grant must not turn the write question into a silent pass")
+	}
+	if _, err := store.Add(grants.Grant{Path: outside, Allow: grants.Write, Scope: grants.Subtree, Lifetime: grants.Session}); err != nil {
+		t.Fatal(err)
+	}
+	before := got
+	gate(context.Background(), bashCall("echo hi > "+target))
+	if got != before {
+		t.Error("a write grant must settle the write question without asking again")
+	}
+}
+
+// Write verbs name their targets as operands rather than redirects, and they
+// were never extracted at all. `rm` outside the workspace is the case a bare
+// (envelope) shell had no other gate for.
+func TestBoundaryGateShellWriteVerbsAskAboutAWrite(t *testing.T) {
+	workspace, outside, _ := readFixture(t)
+	target := filepath.Join(outside, "doomed.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got ApprovalRequest
+	gate := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(_ context.Context, req ApprovalRequest) ApprovalAnswer {
+			got = req
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gate(context.Background(), bashCall("rm -f "+target)); dec == nil || !dec.Block {
+		t.Fatalf("rm outside the workspace must be gated, got %+v", dec)
+	}
+	if !got.BoundaryWrite {
+		t.Fatal("rm asks about writing")
+	}
+
+	// The same path read is still a read question.
+	got = ApprovalRequest{}
+	gate(context.Background(), bashCall("cat "+target))
+	if got.BoundaryWrite {
+		t.Fatal("cat asks about reading")
+	}
+}
+
+// A write the sandbox already allows is not a consent question: the temp root
+// is writable by every run, so classifying shell writes must not turn
+// `rm /tmp/build/x` into a dialog.
+func TestBoundaryShellWriteInsideTempIsSilent(t *testing.T) {
+	workspace, _, _ := readFixture(t)
+	target := filepath.Join(os.TempDir(), "golder-boundary-probe.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Skipf("temp dir not writable: %v", err)
+	}
+	asked := 0
+	gate := BoundaryGate(BoundaryOpts{
+		WorkspaceRoot: workspace,
+		Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+			asked++
+			return ApprovalAnswer{Answered: true}
+		},
+	})
+	if dec := gate(context.Background(), bashCall("rm -f "+target)); dec != nil {
+		t.Errorf("a temp-dir write must not be gated, got %+v", dec)
 	}
 	if asked != 0 {
 		t.Errorf("no question should have been asked, got %d", asked)

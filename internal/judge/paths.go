@@ -364,6 +364,18 @@ func PathWriteNeed(path, summary string) bool {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return true
 	}
+	return PathWritten(path, summary)
+}
+
+// PathWritten reports whether the command's own text writes path: a redirect
+// target, a write verb's operand, or a flag value naming it. Unlike
+// PathWriteNeed it makes no guess from the path's absence, so it is the right
+// question for a gate deciding the SIDE of a question it is about to ask —
+// reading a file that does not exist is still a read.
+func PathWritten(path, summary string) bool {
+	if path == "" {
+		return false
+	}
 	plan := commandPlan(summary)
 	if !plan.Parsed {
 		return false
