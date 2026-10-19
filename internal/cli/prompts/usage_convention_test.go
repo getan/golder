@@ -99,6 +99,7 @@ func TestBuiltinUsageInventory(t *testing.T) {
 		"boundary":       "[list | readable [list|add|rm] <path> | writable [list|add|rm] <path>]",
 		"trust":          "[on|off|once|status]",
 		"grants":         "[list | add <path> <r|w|e> | rm <path>]",
+		"memory":         "[recall [on|off]]",
 		"fork":           "[n]",
 		"tree":           "[n]",
 		"rewind":         "[n]",

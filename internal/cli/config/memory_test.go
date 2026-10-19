@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // boolPtr / floatPtr are test helpers for the pointer-valued MemoryConfig fields.
@@ -18,6 +19,10 @@ func TestMemoryConfig_ResolveDefaults(t *testing.T) {
 		ReconcileOnSearch: true,
 		SearchScoreFloor:  0.15,
 		CCIndex:           false,
+		Recall:            false, // ships off
+		RecallMinUnits:    2,
+		RecallMinOverlap:  2,
+		RecallReconcile:   30 * time.Second,
 	}
 	if got != want {
 		t.Fatalf("Resolve() defaults = %+v, want %+v", got, want)
@@ -36,6 +41,10 @@ func TestMemoryConfig_ResolveOverrides(t *testing.T) {
 		ReconcileOnSearch: false,
 		SearchScoreFloor:  0.5,
 		CCIndex:           true,
+		Recall:            false,
+		RecallMinUnits:    2,
+		RecallMinOverlap:  2,
+		RecallReconcile:   30 * time.Second,
 	}
 	if got != want {
 		t.Fatalf("Resolve() overrides = %+v, want %+v", got, want)

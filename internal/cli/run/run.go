@@ -14,6 +14,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
@@ -400,8 +401,14 @@ func ToolRegistry(tools []agentcore.AgentTool) *agenttool.ToolRegistry {
 // stateless BudgetReminderProvider, which reads the run's budget state from the
 // context and reminds once per low-budget threshold crossing. Returns nil when
 // no provider applies (e.g. --no-tools), leaving injection disabled.
+//
+// The memory provider is wired with the [memory] recall policy: it ships
+// DISABLED (config.DefaultMemoryRecall), and when enabled it is guarded by a
+// minimum query size, a relevance overlap, and a throttled index reconcile —
+// see MemoryRecallSettings.
 func TodoReminders(tools []agentcore.AgentTool) *runtime.ReminderRegistry {
 	var providers []runtime.ReminderProvider
+	mem := config.ResolveMemoryRecall()
 	if len(tools) > 0 {
 		providers = append(providers,
 			&runtime.SearchRepeatReminderProvider{},
@@ -416,7 +423,13 @@ func TodoReminders(tools []agentcore.AgentTool) *runtime.ReminderRegistry {
 			}
 		case *agenttool.MemorySearchTool:
 			if tool.Store != nil {
-				providers = append(providers, &runtime.MemoryReminderProvider{Store: tool.Store})
+				providers = append(providers, &runtime.MemoryReminderProvider{
+					Store:             tool.Store,
+					Disabled:          !mem.Recall,
+					MinUnits:          mem.RecallMinUnits,
+					MinOverlap:        mem.RecallMinOverlap,
+					ReconcileInterval: mem.RecallReconcile,
+				})
 			}
 		}
 	}

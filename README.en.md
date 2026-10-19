@@ -200,6 +200,8 @@ Tools are rooted at the working directory; `--no-tools` disables them all, and `
 | `get_context_remaining` / `new_context` | Check the remaining context budget / request a fresh context window |
 | `schedule_create` / `schedule_list` / `schedule_delete` | Session-local reminders that return to the conversation when due (not persisted) |
 
+**Per-turn memory recall (off by default)**: besides the `memory_search` tool there is an automatic channel — the latest user message is used as a BM25 query, and a hit is injected as a `<system-reminder>` into that turn's request (request only: never history, never the transcript). It ships **off**, because an injection is a context cost paid on every turn: `/memory recall on|off` toggles it (writes `[memory] recall` in `config.toml`, effective immediately). When it is on, guards apply: the query needs at least 2 units (latin words / CJK bigrams — "继续" and "ok" do not count), a hit must share at least 2 of them, and the index reconcile runs at most every 30 seconds (`recall_reconcile_seconds`; `0` = every turn, negative = never), because that step walks every memory file. The `/memory` report shows the policy and the last decision (injected or skipped, the query, the matched files), so a sudden recall can be explained.
+
 During a `/goal` run, two extra goal-control tools (`goal_complete` / `goal_blocked`) are mounted, visible only inside the autonomous loop.
 
 ## Slash commands

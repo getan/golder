@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Built-in defaults for the [memory] table. Exposed so overlay and tests share
@@ -19,6 +20,16 @@ const (
 	DefaultMemoryReconcileOnSearch = true
 	DefaultMemorySearchScoreFloor  = 0.15
 	DefaultMemoryCCIndex           = false
+	// The per-turn recall (the memory reminder) ships on, but with guards: a
+	// query made of one unit ("继续", "ok") recalls nothing, and a hit has to
+	// share at least DefaultMemoryRecallMinOverlap of the query's units before
+	// it is injected. The relative score floor in the store keeps the top hit
+	// always, which is why the guards live here: "some hit exists" is not the
+	// same question as "this hit is relevant".
+	DefaultMemoryRecall              = false
+	DefaultMemoryRecallMinUnits      = 2
+	DefaultMemoryRecallMinOverlap    = 2
+	DefaultMemoryRecallReconcileSecs = 30
 )
 
 // DefaultCheckpointThresholds is the built-in compaction trigger ladder as
@@ -37,6 +48,20 @@ type MemoryConfig struct {
 	ReconcileOnSearch *bool    `toml:"reconcile_on_search"`
 	SearchScoreFloor  *float64 `toml:"search_score_floor"`
 	CCIndex           bool     `toml:"cc_index"`
+	// Recall is the per-turn memory reminder. Absent means on.
+	Recall *bool `toml:"recall"`
+	// RecallMinUnits is how many query units a reminder query must have before
+	// the store is even searched; a unit is a word or a CJK bigram, so one
+	// "继续"/"ok" is not a query.
+	RecallMinUnits *int `toml:"recall_min_units"`
+	// RecallMinOverlap is how many distinct query units a hit must contain to
+	// be injected.
+	RecallMinOverlap *int `toml:"recall_min_overlap"`
+	// RecallReconcileSeconds throttles the index reconcile the reminder runs:
+	// the walk is linear in the number of memory files and used to run on every
+	// turn. 0 reconciles every turn; negative disables it here (the tool path
+	// still reconciles on demand).
+	RecallReconcileSeconds *int `toml:"recall_reconcile_seconds"`
 }
 
 // ResolvedMemory is MemoryConfig with defaults applied and the score floor
@@ -46,17 +71,27 @@ type ResolvedMemory struct {
 	ReconcileOnSearch bool
 	SearchScoreFloor  float64
 	CCIndex           bool
+	Recall            bool
+	RecallMinUnits    int
+	RecallMinOverlap  int
+	RecallReconcile   time.Duration
 }
 
 // Resolve applies the [memory] defaults: absent keys fall back to
-// true/true/0.15/false; an explicit search_score_floor outside [0,1] is clamped
-// into range.
+// enabled=true, reconcile_on_search=true, score floor 0.15, cc_index=false, and
+// recall=OFF (the per-turn reminder is the one piece that ships dark: it costs a
+// prompt injection on every turn it fires, so it is opted into rather than out
+// of). An explicit search_score_floor outside [0,1] is clamped into range.
 func (m MemoryConfig) Resolve() ResolvedMemory {
 	r := ResolvedMemory{
 		Enabled:           DefaultMemoryEnabled,
 		ReconcileOnSearch: DefaultMemoryReconcileOnSearch,
 		SearchScoreFloor:  DefaultMemorySearchScoreFloor,
 		CCIndex:           m.CCIndex,
+		Recall:            DefaultMemoryRecall,
+		RecallMinUnits:    DefaultMemoryRecallMinUnits,
+		RecallMinOverlap:  DefaultMemoryRecallMinOverlap,
+		RecallReconcile:   time.Duration(DefaultMemoryRecallReconcileSecs) * time.Second,
 	}
 	if m.Enabled != nil {
 		r.Enabled = *m.Enabled
@@ -74,7 +109,35 @@ func (m MemoryConfig) Resolve() ResolvedMemory {
 		}
 		r.SearchScoreFloor = f
 	}
+	if m.Recall != nil {
+		r.Recall = *m.Recall
+	}
+	if m.RecallMinUnits != nil && *m.RecallMinUnits >= 0 {
+		r.RecallMinUnits = *m.RecallMinUnits
+	}
+	if m.RecallMinOverlap != nil && *m.RecallMinOverlap >= 0 {
+		r.RecallMinOverlap = *m.RecallMinOverlap
+	}
+	if m.RecallReconcileSeconds != nil {
+		// A negative value turns the reminder's reconcile off entirely; 0 means
+		// every turn (the pre-throttle behavior).
+		r.RecallReconcile = time.Duration(*m.RecallReconcileSeconds) * time.Second
+		if *m.RecallReconcileSeconds < 0 {
+			r.RecallReconcile = -1
+		}
+	}
 	return r
+}
+
+// ResolveMemoryRecall reads config.toml and resolves the [memory] policy. A
+// config that cannot be read falls back to the shipped defaults (recall off),
+// because an unreadable preference must not quietly turn on prompt injection.
+func ResolveMemoryRecall() ResolvedMemory {
+	fc, err := LoadFileConfig(FileConfigPath())
+	if err != nil {
+		return MemoryConfig{}.Resolve()
+	}
+	return fc.Memory.Resolve()
 }
 
 // IntOrString accepts either a TOML integer or string for the optional

@@ -2320,6 +2320,11 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		m.input.Clear()
 		m.menu.close()
 		var buf bytes.Buffer
+		if memstatus.RunMemoryRecall(&buf, strings.TrimSpace(strings.TrimPrefix(line, "/memory")), m.session.reminders) {
+			m.transcript.addSystem(strings.TrimRight(buf.String(), "\n"))
+			m.relayout()
+			return m, nil
+		}
 		var store *memory.Store
 		var memoryRoot, sessionID string
 		var msgs agentcore.MessageList

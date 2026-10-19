@@ -12,8 +12,11 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/memory"
@@ -58,6 +61,7 @@ func printStoreSection(out io.Writer, color bool, store *memory.Store, memoryRoo
 	fmt.Fprintf(out, "  %s %s\n",
 		ui.Colorize(color, ui.Dim, "status:"),
 		ui.Colorize(color, ui.Green, "enabled"))
+	printRecallSection(out, color)
 	if memoryRoot != "" {
 		fmt.Fprintf(out, "  %s %s\n", ui.Colorize(color, ui.Dim, "root:"), memoryRoot)
 	}
@@ -85,6 +89,105 @@ func printStoreSection(out io.Writer, color bool, store *memory.Store, memoryRoo
 		fmt.Fprintf(out, "    %s %d\n",
 			ui.Colorize(color, ui.Dim, string(scope)+":"), counts[scope])
 	}
+}
+
+// printRecallSection reports the per-turn recall policy and the last decision it
+// made. It exists because a sudden recall is otherwise invisible: the reminder
+// enters one turn's prompt and never the transcript, so "why did it remember
+// that?" has no answer without this line.
+func printRecallSection(out io.Writer, color bool) {
+	pol := config.ResolveMemoryRecall()
+	state := ui.Colorize(color, ui.Dim, "off (default)")
+	if pol.Recall {
+		state = ui.Colorize(color, ui.Green, "on")
+	}
+	fmt.Fprintf(out, "  %s %s  %s\n",
+		ui.Colorize(color, ui.Dim, "recall:"), state,
+		ui.Colorize(color, ui.Dim, fmt.Sprintf("(min %d units, overlap %d, reconcile %s)",
+			pol.RecallMinUnits, pol.RecallMinOverlap, recallIntervalLabel(pol.RecallReconcile))))
+	if !pol.Recall {
+		fmt.Fprintf(out, "    %s\n", ui.Colorize(color, ui.Dim,
+			"the memory_search tool still works; enable the per-turn reminder with /memory recall on"))
+		return
+	}
+	stats := runtime.MemoryRecallStats()
+	if stats.LastAt.IsZero() {
+		fmt.Fprintf(out, "    %s\n", ui.Colorize(color, ui.Dim, "no turn has consulted it yet in this process"))
+		return
+	}
+	verdict := ui.Colorize(color, ui.Dim, "skipped")
+	if stats.LastFired {
+		verdict = ui.Colorize(color, ui.Green, "injected")
+	}
+	fmt.Fprintf(out, "    %s %s — %s\n", ui.Colorize(color, ui.Dim, "last:"), verdict, stats.LastReason)
+	if q := oneLine(stats.LastQuery); q != "" {
+		fmt.Fprintf(out, "    %s %s\n", ui.Colorize(color, ui.Dim, "query:"), truncate(q, 100))
+	}
+	for _, p := range stats.LastPaths {
+		fmt.Fprintf(out, "      %s\n", ui.Colorize(color, ui.Dim, p))
+	}
+	fmt.Fprintf(out, "    %s %d injected, %d skipped\n",
+		ui.Colorize(color, ui.Dim, "this process:"), stats.Fires, stats.Skips)
+}
+
+func recallIntervalLabel(d time.Duration) string {
+	switch {
+	case d < 0:
+		return "never"
+	case d == 0:
+		return "every turn"
+	default:
+		return "every " + d.String()
+	}
+}
+
+// RunMemoryRecall handles `/memory recall [on|off]`. It reports the policy, or
+// persists a change to config.toml and applies it to the running session's
+// providers. handled is false when the argument is not a recall subcommand, so
+// the caller falls through to the full report.
+func RunMemoryRecall(out io.Writer, args string, reminders *runtime.ReminderRegistry) bool {
+	args = strings.TrimSpace(args)
+	if args != "recall" && !strings.HasPrefix(args, "recall ") {
+		return false
+	}
+	arg := strings.TrimSpace(strings.TrimPrefix(args, "recall"))
+	pol := config.ResolveMemoryRecall()
+	switch arg {
+	case "":
+		state := "off (default)"
+		if pol.Recall {
+			state = "on"
+		}
+		fmt.Fprintf(out, "memory recall: %s  (min %d units, overlap %d, reconcile %s)\n",
+			state, pol.RecallMinUnits, pol.RecallMinOverlap, recallIntervalLabel(pol.RecallReconcile))
+		fmt.Fprintf(out, "toggle with /memory recall on|off; the memory_search tool is unaffected\n")
+		return true
+	case "on", "off":
+		on := arg == "on"
+		if err := config.SetMemoryRecall(on); err != nil {
+			fmt.Fprintf(out, "memory recall: cannot save: %v\n", err)
+			return true
+		}
+		if reminders.SetMemoryRecall(on) {
+			fmt.Fprintf(out, "memory recall: %s (saved to config.toml; applies to this session)\n", arg)
+		} else {
+			fmt.Fprintf(out, "memory recall: %s (saved to config.toml; applies from the next session, this one has no memory provider)\n", arg)
+		}
+		return true
+	}
+	fmt.Fprintf(out, "usage: /memory recall [on|off]\n")
+	return true
+}
+
+// oneLine collapses runs of whitespace so a multi-line query stays on one row.
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // orderedScopes returns the scopes present in counts, listing the well-known

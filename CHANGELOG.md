@@ -923,6 +923,17 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The per-turn memory recall ships off, with guards and a throttle**: the
+  automatic `memory_search` channel (last user message → BM25 → injected as a
+  `<system-reminder>`) used to run on every turn. It is now off by default
+  (`[memory] recall`), and when enabled it skips one-unit queries ("继续",
+  "ok"), requires a hit to share two distinct query units, and reconciles the
+  index at most every 30 seconds — that reconcile is linear in the number of
+  memory files and used to run on every turn. Measured warm cost: 3ms at 50
+  files, 19ms at 500, 78ms at 2000. `/memory recall [on|off]` toggles it
+  (persisted to `config.toml`, live in the current session); `/memory` reports
+  the policy and the last decision, and the `memory_search` tool is unaffected
+  either way.
 - **The `sandbox` reviewer tier is now `contain`**: the tier names what the
   execution layer must do, not the mechanism. Custom reviewer prompts must
   return `contain` instead of `sandbox`; `allow`, `confirm`, and `deny` are

@@ -515,6 +515,9 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 			// Like /status it needs live state (the memory store, memory root,
 			// session id, and messages) that a string→string Action closure
 			// cannot reach, so it is intercepted here.
+			if memstatus.RunMemoryRecall(out, strings.TrimSpace(strings.TrimPrefix(line, "/memory")), deps.reminders) {
+				continue
+			}
 			memstatus.RunMemory(out, deps.memstore, deps.memoryRoot, deps.header.ID,
 				deps.agentCtx.Messages, deps.live.ContextWindow, deps.live.CompactionSettings())
 			continue

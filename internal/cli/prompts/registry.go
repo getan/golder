@@ -909,7 +909,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		{"import", "<path.jsonl>", "import a JSONL export as a new session", runtime.CategorySession},
 		{"resume", "[--all] [n|id]", "switch session (bare, it lists this project's recent sessions)", runtime.CategorySession},
 		{"status", "", "show session status (session, runtime config, context, credentials, environment)", runtime.CategoryGeneral},
-		{"memory", "", "show the persistent-memory report", runtime.CategoryMemory},
+		{"memory", "[recall [on|off]]", "show the persistent-memory report; toggle the per-turn recall", runtime.CategoryMemory},
 		{"dream", "[--dry-run]", "consolidate memory now (dedupe, merge, prune, distill)", runtime.CategoryMemory},
 		{"goal", "[--tokens N] <objective> | pause | resume | clear", "run autonomously toward a goal", runtime.CategoryModes},
 		{"btw", "[question]", "ask a quick side question without touching the main conversation (bare, it reopens the last one)", runtime.CategoryModes},

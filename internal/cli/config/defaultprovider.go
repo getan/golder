@@ -94,28 +94,33 @@ func SetDefaultProvider(name, model string) (bool, error) {
 	if out == text {
 		return rewroteModel, nil
 	}
+	return rewroteModel, writeConfigFile(path, out)
+}
+
+// writeConfigFile replaces config.toml atomically, keeping it 0600.
+func writeConfigFile(path, out string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return false, fmt.Errorf("cannot create the config directory")
+		return fmt.Errorf("cannot create the config directory")
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.toml")
 	if err != nil {
-		return false, fmt.Errorf("cannot create the config file")
+		return fmt.Errorf("cannot create the config file")
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.WriteString(out); err != nil {
 		tmp.Close()
-		return false, fmt.Errorf("cannot write the config file")
+		return fmt.Errorf("cannot write the config file")
 	}
 	if err := tmp.Close(); err != nil {
-		return false, fmt.Errorf("cannot close the config file")
+		return fmt.Errorf("cannot close the config file")
 	}
 	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
-		return false, fmt.Errorf("cannot protect the config file")
+		return fmt.Errorf("cannot protect the config file")
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return false, fmt.Errorf("cannot save the config file")
+		return fmt.Errorf("cannot save the config file")
 	}
-	return rewroteModel, nil
+	return nil
 }
 
 const (
