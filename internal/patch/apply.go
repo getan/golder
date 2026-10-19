@@ -54,6 +54,16 @@ type ApplyError struct {
 
 func (e *ApplyError) Error() string { return e.Msg }
 
+// Failure is one part of a patch that could not be applied. Compute collects
+// every failure in one pass, so a patch with two broken hunks costs one round
+// trip instead of two.
+type Failure struct {
+	Path string
+	// Hunk is the 1-based hunk number inside an Update; 0 for a file operation.
+	Hunk int
+	Err  error
+}
+
 func applyErrf(format string, args ...any) error {
 	return &ApplyError{Msg: fmt.Sprintf(format, args...)}
 }
@@ -99,54 +109,87 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 	}
 
 	var changes []Change
+	var failures []Failure
+	wouldApply := 0
+	files := map[string]bool{}
+	failedPaths := map[string]bool{}
+	record := func(path string, hunk int, err error) {
+		failures = append(failures, Failure{Path: path, Hunk: hunk, Err: err})
+		failedPaths[path] = true
+	}
 	for _, op := range ops {
+		if failedPaths[op.Path] {
+			// The file is already failing; computing later operations against its
+			// old content would only inflate the "would apply" count.
+			continue
+		}
 		full, err := resolve(op.Path)
 		if err != nil {
-			return nil, err
+			record(op.Path, 0, err)
+			continue
 		}
 		st, err := state(full)
 		if err != nil {
-			return nil, err
+			record(op.Path, 0, err)
+			continue
 		}
 
 		switch op.Kind {
 		case OpAdd:
 			if st.exists {
 				if st.isDir {
-					return nil, applyErrf("Add File Error: %s is a directory", op.Path)
+					record(op.Path, 0, applyErrf("Add File Error: %s is a directory", op.Path))
+					continue
 				}
-				return nil, applyErrf("Add File Error: file already exists: %s", op.Path)
+				record(op.Path, 0, applyErrf("Add File Error: file already exists: %s", op.Path))
+				continue
 			}
 			content := joinContent(op.Body, true)
 			st.exists, st.content = true, content
 			changes = append(changes, Change{Kind: ChangeAdd, Path: full, NewContent: content})
+			wouldApply++
+			files[full] = true
 
 		case OpDelete:
 			if !st.exists {
-				return nil, applyErrf("Delete File Error: file does not exist: %s", op.Path)
+				record(op.Path, 0, applyErrf("Delete File Error: file does not exist: %s", op.Path))
+				continue
 			}
 			if st.isDir {
-				return nil, applyErrf("Delete File Error: %s is a directory", op.Path)
+				record(op.Path, 0, applyErrf("Delete File Error: %s is a directory", op.Path))
+				continue
 			}
 			old := st.content
 			st.exists, st.content = false, ""
 			changes = append(changes, Change{Kind: ChangeDelete, Path: full, OldContent: old})
+			wouldApply++
+			files[full] = true
 
 		case OpUpdate:
 			if !st.exists {
-				return nil, applyErrf("Update File Error: file does not exist: %s", op.Path)
+				record(op.Path, 0, applyErrf("Update File Error: file does not exist: %s", op.Path))
+				continue
 			}
 			if st.isDir {
-				return nil, applyErrf("Update File Error: %s is a directory", op.Path)
+				record(op.Path, 0, applyErrf("Update File Error: %s is a directory", op.Path))
+				continue
 			}
 			old := st.content
 			lines, trailing := splitContent(old)
-			updated, notes, err := applyChunks(lines, op.Chunks)
-			if err != nil {
-				return nil, applyErrf("Invalid Context: %v in %s", err, op.Path)
+			updated, notes, chunkFailures := applyChunks(lines, op.Chunks)
+			if len(chunkFailures) > 0 {
+				// A dry run: the matched hunks were applied to the in-memory copy,
+				// which is what the report counts, but nothing is committed.
+				for _, cf := range chunkFailures {
+					record(op.Path, cf.Index, cf.Err)
+				}
+				wouldApply += len(op.Chunks) - len(chunkFailures)
+				continue
 			}
 			newContent := joinContent(updated, trailing)
 			st.content = newContent
+			wouldApply += len(op.Chunks)
+			files[full] = true
 			if op.MoveTo == "" {
 				// A hunk made entirely of context lines matches but changes
 				// nothing. Reporting it as a change would write an identical file
@@ -160,33 +203,76 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 			}
 			dst, err := resolve(op.MoveTo)
 			if err != nil {
-				return nil, err
+				record(op.Path, 0, err)
+				continue
 			}
 			dstState, err := state(dst)
 			if err != nil {
-				return nil, err
+				record(op.Path, 0, err)
+				continue
 			}
 			if dstState.exists {
-				return nil, applyErrf("Move Error: destination already exists: %s", op.MoveTo)
+				record(op.Path, 0, applyErrf("Move Error: destination already exists: %s", op.MoveTo))
+				continue
 			}
 			if dst == full {
-				return nil, applyErrf("Move Error: destination equals source: %s", op.MoveTo)
+				record(op.Path, 0, applyErrf("Move Error: destination equals source: %s", op.MoveTo))
+				continue
 			}
 			st.exists = false
 			dstState.exists, dstState.content = true, newContent
 			changes = append(changes, Change{Kind: ChangeMove, Path: dst, OldPath: full, OldContent: old, NewContent: newContent, Note: strings.Join(notes, "; ")})
+			files[dst] = true
 
 		default:
-			return nil, applyErrf("unknown patch operation %d", op.Kind)
+			record(op.Path, 0, applyErrf("unknown patch operation %d", op.Kind))
 		}
+	}
+	if len(failures) > 0 {
+		return nil, failuresError(failures, wouldApply, len(files))
 	}
 	return changes, nil
 }
 
+// failuresError reports every failure in one message, then how much of the patch
+// would have applied. The count is what makes the message actionable: the model
+// learns whether fixing the named hunk is the only work left, and the patch it
+// sends next can keep the parts that were already right.
+func failuresError(failures []Failure, wouldApply, files int) error {
+	first := failures[0]
+	var b strings.Builder
+	if first.Hunk > 0 {
+		fmt.Fprintf(&b, "Invalid Context: %v in %s", first.Err, first.Path)
+	} else {
+		b.WriteString(first.Err.Error())
+	}
+	for _, f := range failures[1:] {
+		if f.Hunk > 0 {
+			fmt.Fprintf(&b, "\n  also: %s hunk %d: %s", f.Path, f.Hunk, firstLine(f.Err))
+			continue
+		}
+		fmt.Fprintf(&b, "\n  also: %v", f.Err)
+	}
+	if wouldApply > 0 {
+		fmt.Fprintf(&b, "\n%d hunk(s)/change(s) across %d file(s) would apply; nothing was written. Fix the failing part and resend the patch — the rest can stay as it is.", wouldApply, files)
+	} else {
+		b.WriteString("\nNo other part of this patch applies either; nothing was written.")
+	}
+	return &ApplyError{Msg: b.String()}
+}
+
+// firstLine keeps an "also" entry to one line; the first failure carries the
+// full diagnostic block.
+func firstLine(err error) string {
+	line, _, _ := strings.Cut(err.Error(), "\n")
+	return line
+}
+
 // applyChunks walks the chunks in order, each searching from the end of the
 // previous match so hunks apply top-to-bottom without rescanning the file.
-func applyChunks(lines []string, chunks []Chunk) ([]string, []string, error) {
+func applyChunks(lines []string, chunks []Chunk) ([]string, []string, []chunkFailure) {
 	var notes []string
+	var failures []chunkFailure
 	cursor := 0
 	for i, ch := range chunks {
 		// Anchors first: each named line moves the search forward, so a hunk
@@ -222,9 +308,11 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, []string, error) {
 			}
 			if !ok {
 				if ch.Header != "" {
-					return nil, nil, fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))
+					failures = append(failures, chunkFailure{Index: i + 1, Err: fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))})
+				} else {
+					failures = append(failures, chunkFailure{Index: i + 1, Err: fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))})
 				}
-				return nil, nil, fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))
+				continue
 			}
 		}
 		old = chunkOldLines(used.Lines)
@@ -251,7 +339,13 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, []string, error) {
 		lines = merged
 		cursor = idx + len(replacement)
 	}
-	return lines, notes, nil
+	return lines, notes, failures
+}
+
+// chunkFailure is one hunk that could not be located. Index is 1-based.
+type chunkFailure struct {
+	Index int
+	Err   error
 }
 
 // seekAnchor locates a "@@" hint. An exact (fuzzy-whitespace) line match is

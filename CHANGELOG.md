@@ -23,6 +23,12 @@ interactive REPL/TUI.
   pretending it was exact. The failure message now shows the closest match with
   line numbers and the surrounding lines, so the model can resend the hunk
   without another read.
+- **A failed patch reports everything at once**: `Compute` keeps going after a
+  hunk fails — a dry run in memory, nothing is written — so one reply lists every
+  broken hunk (with the diagnostics above) and how much of the patch would have
+  applied ("3 hunk(s)/change(s) across 2 file(s) would apply; nothing was
+  written"). Fixing one hunk no longer costs a round trip per broken hunk, and
+  the model knows the rest can stay as it is.
 - **The approval envelope**: an approved bash command whose whole effect is
   enumerable (`git push`, `go test`, `ls`, …) now runs on the host instead of
   inside the file sandbox; variables, substitutions, interpreters, wrappers,
