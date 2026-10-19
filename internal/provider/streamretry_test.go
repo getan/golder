@@ -90,6 +90,15 @@ func textEvent(text string) AssistantMessageEvent {
 	}}
 }
 
+// thinkingEvent streams a reasoning partial: the model working, not an answer.
+// It is what a cut lands on when the connection dies before the answer starts.
+func thinkingEvent(thinking string) AssistantMessageEvent {
+	return StreamThinkingEvent{Partial: agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant,
+		Content:   agentcore.ContentList{agentcore.NewThinkingContent(thinking)},
+	}}
+}
+
 func doneEvent(text string) AssistantMessageEvent {
 	return StreamDoneEvent{Message: agentcore.AssistantMessage{
 		RoleField:  agentcore.RoleAssistant,
@@ -527,5 +536,81 @@ func TestResolvedProvidersCarryTheStreamRetry(t *testing.T) {
 	}
 	if UnwrapProvider(p) == nil {
 		t.Fatal("UnwrapProvider returned nil")
+	}
+}
+
+// The reported failure: a stream cut after only thinking, before any answer text
+// had started. Reasoning is transient — replaced wholesale when the answer
+// begins — so the attempt has produced nothing the user can keep and is re-issued
+// rather than ended with "stream cut … retry the turn". Before the fix, any
+// thinking counted as "shown", so this exact cut terminated the turn.
+func TestStreamRetryReissuesAThinkingOnlyCut(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), thinkingEvent("weighing the options"), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), thinkingEvent("weighing the options"), textEvent("the answer"), doneEvent("the answer")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (a thinking-only cut is re-issued)", got)
+	}
+	if got := countEvents[StreamErrorEvent](events); got != 0 {
+		t.Fatalf("error events = %d (%q), want none: the retry answered", got, errorMessage(events))
+	}
+	if got := lastText(events); got != "the answer" {
+		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || notices[0].Kind != StreamNoticeRetry {
+		t.Errorf("notices = %+v, want exactly one retry notice", notices)
+	}
+}
+
+// The same thinking-only cut without an explicit error event — the producer just
+// stops after reasoning — must be re-issued too. It is the no-terminal-event path
+// of the same bug: before the fix, a stream that produced only thinking was
+// "content produced", so the turn ended with the cut sentence instead of retrying.
+func TestStreamRetryReissuesAThinkingOnlySilentEnd(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), thinkingEvent("half a thought")}, // the producer ends with no terminal event
+		{startEvent(), thinkingEvent("half a thought"), textEvent("the answer"), doneEvent("the answer")},
+	}}
+	events := drainEvents(t, inner, context.Background())
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (a thinking-only silent end is re-issued)", got)
+	}
+	if got := lastText(events); got != "the answer" {
+		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have answered", got)
+	}
+}
+
+// A cut after a tool call is never replayed, even with no answer text: the tool
+// call is what commits the attempt, and re-issuing would be a guess about what
+// already ran. The fix that re-issues thinking-only cuts must leave this
+// terminal, so it stays a guard on the safety rule.
+func TestStreamRetryDoesNotReplayAToolCallCut(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), toolCallEvent(), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), textEvent("should not run"), doneEvent("should not run")},
+	}}
+	events := drainEvents(t, inner, context.Background())
+
+	if got := inner.attemptsRun(); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a tool-call cut is never replayed)", got)
+	}
+	if got := errorMessage(events); !strings.Contains(got, "stream cut") {
+		t.Errorf("failure = %q, want the cut named", got)
 	}
 }

@@ -10,10 +10,15 @@ package provider
 // be safe?
 //
 // The answer is exactly the one the drivers already use for an empty completion:
-// a retry is safe while nothing has been displayed, because another attempt can
-// neither duplicate nor contradict what the user has read. Once any text,
-// thinking or tool call has been forwarded the attempt is final, and the wrapper
-// only makes sure the failure is described in words a person can act on.
+// a retry is safe while nothing an answer could duplicate has been displayed,
+// because another attempt can neither duplicate nor contradict what the user has
+// read. Visible answer text and a tool call are what commit an attempt: once
+// either has been forwarded the attempt is final (text is continued, a tool call
+// is never replayed), and the wrapper only makes sure the failure is described in
+// words a person can act on. Thinking is the exception — reasoning streams as
+// transient scaffolding, is replaced wholesale when the answer starts, and is
+// worth nothing if the stream dies before that — so a cut that left only thinking
+// behind is re-issued rather than surfaced as a dead end.
 //
 // It wraps every resolved provider (see resolve.go), so the policy cannot vary
 // by wire, by provider entry, or by how the provider was selected.
@@ -69,11 +74,13 @@ func streamResumeEnabled() bool {
 }
 
 // forwardState is what the relay saw, so a cut can be described and (when the
-// policy allows) continued instead of thrown away.
+// policy allows) continued or re-issued instead of thrown away. It carries only
+// what commits an attempt: the partial answer and whether a tool call was seen.
+// Thinking is deliberately not tracked here — it never commits an attempt (see
+// replayableCut).
 type forwardState struct {
 	partial  agentcore.AssistantMessage
 	toolCall bool
-	shown    bool
 }
 
 // streamMaxRetries resolves the retry budget. A malformed or out-of-range setting
@@ -299,8 +306,8 @@ func waitRetry(ctx context.Context, d time.Duration) bool {
 
 // forward relays one attempt and reports how it ended. A nil return means the
 // caller has seen a terminal event and the stream is over. A non-nil error means
-// the attempt was cut before anything was shown, and nothing was forwarded: the
-// caller may re-issue the request.
+// the attempt was cut before anything an answer retry could duplicate — at most
+// transient thinking was forwarded — so the caller may re-issue the request.
 func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream, prefix agentcore.ContentList, suppressStart bool, state *forwardState) error {
 	// The attempt's start event is held rather than forwarded. It is not
 	// something a person can see, and holding it is what lets a cut attempt
@@ -335,33 +342,38 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 		case StreamTextEvent:
 			e.Partial = prefixContent(prefix, e.Partial)
 			state.partial = e.Partial
-			state.shown = true
 			emitStart()
 			_ = out.Emit(ctx, e)
 		case StreamThinkingEvent:
+			// Thinking is transient scaffolding, not an answer: it is forwarded so
+			// the user watches the model work, but it does NOT commit the attempt.
+			// A stream cut after only thinking is therefore re-issued (see
+			// replayableCut) rather than ending the turn.
 			e.Partial = prefixContent(prefix, e.Partial)
 			state.partial = e.Partial
-			state.shown = true
 			emitStart()
 			_ = out.Emit(ctx, e)
 		case StreamToolCallEvent:
 			e.Partial = prefixContent(prefix, e.Partial)
 			state.partial = e.Partial
-			state.shown = true
 			state.toolCall = true
 			emitStart()
 			_ = out.Emit(ctx, e)
 		case StreamErrorEvent:
-			if !state.shown && isStreamCutErr(e.Err) {
-				return e.Err
-			}
-			if isStreamCutErr(e.Err) && streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
-				return errResumeNeeded
-			}
 			if isStreamCutErr(e.Err) {
-				// A cut that landed after content cannot be retried without
-				// duplicating what the user already read; it must at least say
-				// what happened instead of printing the reader's error.
+				if replayableCut(state) {
+					// Nothing an answer retry could duplicate was shown — at most
+					// some transient thinking — so hand the raw cut back and let
+					// the loop re-issue the request.
+					return e.Err
+				}
+				if streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
+					return errResumeNeeded
+				}
+				// A cut after visible answer text or a tool call cannot be retried
+				// without duplicating or replaying what the user already read; it
+				// must at least say what happened instead of printing the reader's
+				// error.
 				e.Message.ErrorMessage = streamCutError(p.Name(), e.Err).Error()
 			}
 			e.Message = prefixContent(prefix, e.Message)
@@ -371,7 +383,6 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 		case StreamDoneEvent:
 			e.Message = prefixContent(prefix, e.Message)
 			state.partial = e.Message
-			state.shown = true
 			state.toolCall = len(e.Message.ToolCalls()) > 0
 			emitStart()
 			_ = out.Emit(ctx, e)
@@ -382,10 +393,11 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 		}
 	}
 
-	// The attempt ended without a terminal event. With nothing produced that is
-	// as much a cut stream as a dropped connection; with content produced the
-	// caller has to be told the answer stops there.
-	if !state.shown {
+	// The attempt ended without a terminal event. With nothing an answer retry
+	// could duplicate produced — at most transient thinking — that is as much a
+	// cut stream as a dropped connection; with answer content produced the caller
+	// has to be told the answer stops there.
+	if replayableCut(state) {
 		return fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
 	}
 	if streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
@@ -438,7 +450,6 @@ func (p *streamRetryProvider) resume(ctx context.Context, req CompletionRequest,
 				Provider:  p.Name(),
 				Content:   partial.Content,
 			},
-			shown: len(partial.Content) > 0,
 		}
 		cut := p.forward(ctx, out, next, partial.Content, true, &cont)
 		if cut == nil {
@@ -493,6 +504,18 @@ func hasText(msg agentcore.AssistantMessage) bool {
 		}
 	}
 	return false
+}
+
+// replayableCut reports whether a cut attempt may be re-issued as a fresh
+// request. It is true when the attempt produced nothing a retry could duplicate:
+// no tool call and no visible answer text. Thinking alone does not disqualify a
+// retry — reasoning is transient scaffolding the user reads as it streams, never
+// part of the answer, and a stream that died after only thinking left the turn
+// with nothing to keep, so ending it was a dead end reached from nothing. A
+// stream that showed answer text is continued instead (hasText), and one carrying
+// a tool call is never replayed (toolCall); both are excluded here.
+func replayableCut(state *forwardState) bool {
+	return !state.toolCall && !hasText(state.partial)
 }
 
 // emitFailure ends the stream with a start and a terminal error, so the caller
