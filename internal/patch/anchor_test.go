@@ -119,3 +119,43 @@ func TestAmbiguousReductionIsRefused(t *testing.T) {
 		t.Fatalf("error = %v, want the surrounding block", err)
 	}
 }
+
+// A blank line between hunks is formatting. Treating it as an empty context
+// line used to extend the pattern past the text the author meant, which is one
+// of the ways a patch that looks right failed to locate its hunk.
+func TestBlankLineBetweenHunksIsNotContext(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "one\ntwo\nthree\n")
+	changes := patch(t, dir, `*** Begin Patch
+*** Update File: a.go
+@@
+-one
++ONE
+
+@@
+-three
++THREE
+*** End Patch
+`)
+	if got := changes[0].NewContent; got != "ONE\ntwo\nTHREE\n" {
+		t.Fatalf("NewContent = %q", got)
+	}
+}
+
+// The same allowance at the end of a hunk that replaces the file's tail: the
+// trailing blank stands for the final newline, not for a line to find.
+func TestTrailingBlankLineAtEOFIsNotContext(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go", "a\nb\n")
+	changes := patch(t, dir, `*** Begin Patch
+*** Update File: a.go
+@@
+-b
++B
+
+*** End Patch
+`)
+	if got := changes[0].NewContent; got != "a\nB\n" {
+		t.Fatalf("NewContent = %q", got)
+	}
+}

@@ -265,6 +265,12 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			chunk.Lines = append(chunk.Lines, Line{Kind: kind, Text: text})
 			i++
 		}
+		// A blank line at the edge of a hunk is formatting, not an anchor.
+		// Models separate hunks with one, and a trailing blank also represents
+		// the newline at the end of a replaced region — either way, keeping it
+		// extends the pattern and is a common reason a hunk that would match
+		// fails (codex retries without exactly this line).
+		chunk.Lines = trimBlankContextEdges(chunk.Lines)
 		if len(chunk.Lines) == 0 {
 			return Op{}, 0, &ParseError{Line: i, Msg: "hunk has no lines"}
 		}
@@ -274,6 +280,23 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 		return Op{}, 0, &ParseError{Line: i, Msg: fmt.Sprintf("Update File %q has no hunks", path)}
 	}
 	return op, i, nil
+}
+
+// trimBlankContextEdges drops empty context lines at the start and end of a
+// hunk. An empty line between hunks, or right after the "@@" line, is
+// whitespace in the patch, not text to look for.
+func trimBlankContextEdges(lines []Line) []Line {
+	for len(lines) > 0 && lines[0].Kind == LineContext && strings.TrimSpace(lines[0].Text) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 {
+		last := lines[len(lines)-1]
+		if last.Kind != LineContext || strings.TrimSpace(last.Text) != "" {
+			break
+		}
+		lines = lines[:len(lines)-1]
+	}
+	return lines
 }
 
 // splitChunkLine classifies one hunk line by its prefix. A line with no
