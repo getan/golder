@@ -197,10 +197,15 @@ func (p *wireFallbackProvider) promote(w Wire, prov Provider) {
 	p.mu.Unlock()
 }
 
+// rememberWire records the wire this gateway just proved: a request of the
+// model's own turn was carried by it (or it answered with the model's own error
+// rather than a protocol rejection). That is the strongest answer the cache
+// holds — storeServedWire — and the only kind a probe's answer cannot outrank
+// and the shared family table cannot overrule (see cachedWireFor).
 func (p *wireFallbackProvider) rememberWire(w Wire) {
-	storeWire(p.Name(), p.model, w)
+	storeServedWire(p.Name(), p.model, w)
 	if fam := ModelFamily(p.model); fam != "" {
-		storeWire(p.Name(), "family:"+fam, w)
+		storeServedWire(p.Name(), "family:"+fam, w)
 	}
 }
 

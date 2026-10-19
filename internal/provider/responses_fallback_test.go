@@ -104,10 +104,10 @@ func TestModelProtocolUnsupportedFallsBackInPriorityOrder(t *testing.T) {
 			}
 		}
 	}
-	if w, ok := CachedWire("opencode-go", model); !ok || w != WireChat {
-		t.Errorf("cached wire = %q,%v, want chat,true", w, ok)
+	if w, served, ok := CachedWire("opencode-go", model); !ok || w != WireChat || !served {
+		t.Errorf("cached wire = %q,served=%v,%v, want chat,true,true: the fallback watched this wire carry the turn", w, served, ok)
 	}
-	if w, ok := CachedWire("opencode-go", "glm-5.2"); !ok || w != WireChat {
+	if w, _, ok := CachedWire("opencode-go", "glm-5.2"); !ok || w != WireChat {
 		t.Errorf("family cache = %q,%v, want chat,true", w, ok)
 	}
 }
@@ -285,8 +285,8 @@ func TestNonProtocolErrorIsNotMaskedByFallback(t *testing.T) {
 	if len(seen) != 1 || seen[0] != "/chat/completions" {
 		t.Errorf("attempted paths = %v, want only /chat/completions", seen)
 	}
-	if w, ok := CachedWire("opencode-go", model); !ok || w != WireChat {
-		t.Errorf("cached wire = %q,%v, want chat,true", w, ok)
+	if w, served, ok := CachedWire("opencode-go", model); !ok || w != WireChat || !served {
+		t.Errorf("cached wire = %q,served=%v,%v, want chat,true,true", w, served, ok)
 	}
 }
 

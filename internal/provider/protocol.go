@@ -88,13 +88,12 @@ func EffectiveProtocol(providerName, model, protocol string) string {
 		}
 		return canonical
 	}
-	// The lazy probe may already have confirmed the endpoint's real wire for
-	// this model; prefer that answer so the banner and the run agree.
+	// The wire cache may already hold an answer for this model — the endpoint's
+	// own, or one a real request proved. Prefer whatever is allowed to stand in
+	// (see cachedWireFor) so the banner and the run agree.
 	wire := SelectWire(spec, model)
-	if _, pinned := staticWire(spec, model); !pinned {
-		if confirmed, ok := CachedWire(spec.Name, model); ok && wireAllowed(spec, confirmed) {
-			wire = confirmed
-		}
+	if confirmed, ok := cachedWireFor(spec, model, wire); ok {
+		wire = confirmed
 	}
 	if canonical, ok := protocolForWire(wire); ok {
 		return canonical

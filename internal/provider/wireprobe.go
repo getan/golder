@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,13 @@ import (
 // probeInflight deduplicates background probes: one question per (provider,
 // model) at a time, so a re-resolution cannot stack a second request.
 var probeInflight sync.Map
+
+// wireProbeTimeout is how long one candidate gets to answer, and it is
+// deliberately generous: nothing waits on the probe — it runs in the background
+// of a resolution — while a real endpoint can need the time. The reported case
+// answered /responses in 12-19s (a 24KB response body through a relay), which
+// the old 5s budget read as "no Responses endpoint" and recorded as Chat.
+const wireProbeTimeout = 30 * time.Second
 
 // ProbeWire asks an endpoint which of the provider's declared wires it actually
 // serves for a model. It is the answer for the case the static tables cannot
@@ -25,22 +34,40 @@ var probeInflight sync.Map
 // answers unknown paths with 200 + HTML, which is how a root-level /messages
 // used to be mistaken for a working Anthropic endpoint.
 //
+// Only a rejection settles a question. A candidate that does not answer within
+// timeout has not been refused — it may be a working wire behind a slow relay —
+// so the probe stops there without an answer rather than letting a faster wire
+// behind it claim the model. The caller keeps its static choice, and a wire that
+// really is unsupported is discovered by the request itself (see fallback.go,
+// which records a wire only after that wire served a real request).
+//
+// client carries the routing the caller's own requests take (HTTPClientFor), so
+// the probe measures the endpoint the run will reach and not a second route. It
+// is copied before the probe's timeout is applied, because a client is shared
+// per route. Nil means a direct client — the explicit choice every provider
+// request makes, so an unproxied endpoint does not inherit the shell's
+// HTTP(S)_PROXY.
+//
 // The probe is deliberately tiny — a one-token completion, no tools — so the
 // cost is one cheap request per candidate. It is opt-in (see
 // selectWireWithProbe): golder only pays for it when GOLDER_WIRE_PROBE is set,
 // because a run that never needed the answer should not spend it.
-func ProbeWire(ctx context.Context, baseURL, apiKey, model string, candidates []Wire, timeout time.Duration) (Wire, error) {
+func ProbeWire(ctx context.Context, client *http.Client, baseURL, apiKey, model string, candidates []Wire, timeout time.Duration) (Wire, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if base == "" {
 		return "", fmt.Errorf("probe: no base URL")
 	}
 	if timeout <= 0 {
-		timeout = 5 * time.Second
+		timeout = wireProbeTimeout
 	}
 	if len(candidates) == 0 {
 		candidates = WirePriority
 	}
-	client := &http.Client{Timeout: timeout}
+	if client == nil {
+		client = &http.Client{Transport: directTransport}
+	}
+	probe := *client
+	probe.Timeout = timeout
 	var failures []string
 	for _, wire := range candidates {
 		path, body, headers := probeRequest(wire, model)
@@ -59,8 +86,18 @@ func ProbeWire(ctx context.Context, baseURL, apiKey, model string, candidates []
 		if apiKey != "" {
 			setProbeAuth(req, wire, apiKey)
 		}
-		resp, err := client.Do(req)
+		resp, err := probe.Do(req)
 		if err != nil {
+			if probeTimedOut(err) {
+				// The wire never answered, which proves nothing about it. Letting
+				// the next candidate speak for the model is exactly how a working
+				// Responses endpoint got recorded as Chat.
+				msg := fmt.Sprintf("probe: %s did not answer within %s for %q, so no wire could be settled", wire, timeout, model)
+				if len(failures) > 0 {
+					msg += " (after " + strings.Join(failures, "; ") + ")"
+				}
+				return "", errors.New(msg)
+			}
 			failures = append(failures, fmt.Sprintf("%s: %v", wire, err))
 			continue
 		}
@@ -77,6 +114,15 @@ func ProbeWire(ctx context.Context, baseURL, apiKey, model string, candidates []
 		}
 	}
 	return "", fmt.Errorf("probe: no wire answered for %q (%s)", model, strings.Join(failures, "; "))
+}
+
+// probeTimedOut reports whether a candidate failed for time rather than for what
+// it is. The probe's own timeout and a cancelled caller context say nothing
+// about the wire; a refused connection or a 404 does.
+func probeTimedOut(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
+		os.IsTimeout(err)
 }
 
 // probeAccepted reports whether a response really came from the wire that was
@@ -178,31 +224,61 @@ func wireProbeDisabled(env func(string) string) bool {
 	return false
 }
 
-// selectWireWithProbe is SelectWire plus a background probe, for every provider
-// alike: when the model's native wire differs from the provider's registered
-// wire, the static answer is a guess about how this endpoint routes the model.
-// The guess is returned immediately — resolution never waits on the network —
-// and the endpoint is asked in the background; its answer is stored per model
-// and per family (see wirecache.go), so the next resolution already knows. A
-// cached answer (one month) skips the question entirely, as do a provider that
-// serves a single wire and a model whose native wire is the registered one.
-// GOLDER_WIRE_PROBE=off disables new questions for offline runs; cached answers
-// still apply.
+// cachedWireFor returns the cached answer for a model when that answer is
+// allowed to stand in for the static wire.
+//
+// The shared family table (ModelWire) is a public rule, and a gateway's declared
+// ModelWireRules are its own word for a family — neither is a guess about an
+// endpoint, so neither is a probe's to overturn. Where one of them answers and
+// this endpoint serves that wire, only evidence may contradict it: an answer a
+// real request produced (served, see storeServedWire), which is how a gateway
+// that really diverges gets recorded — the adaptive fallback watches the wire
+// carry the model's own turn. A probe's answer may stand in only where the
+// question was genuinely open: an endpoint that does not serve the family's wire
+// at all, so the static pick is a translation (openrouter reaching Claude over
+// Chat).
+func cachedWireFor(spec ProviderSpec, model string, static Wire) (Wire, bool) {
+	confirmed, served, ok := CachedWire(spec.Name, model)
+	if !ok || !wireAllowed(spec, confirmed) {
+		return "", false
+	}
+	if served {
+		return confirmed, true
+	}
+	if _, pinned := staticWire(spec, model); pinned {
+		return "", false
+	}
+	if static == ModelWire(model) {
+		return "", false
+	}
+	return confirmed, true
+}
+
+// selectWireWithProbe is SelectWire plus a background probe — asked only where
+// the question is genuinely open. The family table is a public rule and a
+// gateway's declared rules are its own word, so where either answers and the
+// endpoint serves that wire, nothing is asked: probing there is what recorded a
+// slow /responses as a Chat endpoint. That leaves the case the probe exists for —
+// a model whose family wire this gateway does not serve, so the static choice is
+// a translation and another declared wire may carry it better. The static answer
+// is returned immediately (resolution never waits on the network) and the
+// endpoint is asked in the background; a settled answer is stored per model and
+// per family (see wirecache.go) for the next resolution, and a candidate that
+// timed out settles nothing (see ProbeWire). GOLDER_WIRE_PROBE=off disables new
+// questions for offline runs; cached answers still apply.
 func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(string) string) Wire {
 	wire := SelectWire(spec, model)
-	if _, pinned := staticWire(spec, model); pinned {
-		// A declared override is the answer for this family; a probe cannot
-		// improve on it, and a stale cache entry must not override it.
+	if confirmed, ok := cachedWireFor(spec, model, wire); ok {
+		return confirmed
+	}
+	// Nothing left to ask: a wire the gateway declares for the family, the
+	// family table's own wire that this endpoint serves, or an endpoint with only
+	// one wire to speak.
+	if _, pinned := staticWire(spec, model); pinned || wire == ModelWire(model) {
 		return wire
 	}
 	if len(ProviderWires(spec)) < 2 {
 		return wire
-	}
-	if ModelWire(model) == wireForProtocol(spec.Protocol) {
-		return wire
-	}
-	if confirmed, ok := CachedWire(spec.Name, model); ok && wireAllowed(spec, confirmed) {
-		return confirmed
 	}
 	if wireProbeDisabled(env) {
 		return wire
@@ -218,6 +294,11 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	if len(spec.EnvVars) > 0 && env != nil {
 		apiKey = env(spec.EnvVars[0])
 	}
+	// The question goes over the route this provider's own requests take, so the
+	// answer describes the endpoint the run will reach — proxy selection
+	// included — instead of a second route the probe picked for itself.
+	base := ResolveBaseURL(spec, baseURL, env)
+	client := HTTPClientFor(spec.Name, base)
 	// One probe per (provider, model) at a time: a re-resolution while the
 	// first question is still in flight must not spawn a second.
 	key := wireCacheKey(spec.Name, model)
@@ -226,7 +307,7 @@ func selectWireWithProbe(spec ProviderSpec, model, baseURL string, env func(stri
 	}
 	go func() {
 		defer probeInflight.Delete(key)
-		if probed, err := ProbeWire(context.Background(), ResolveBaseURL(spec, baseURL, env), apiKey, target, ProviderWires(spec), 5*time.Second); err == nil {
+		if probed, err := ProbeWire(context.Background(), client, base, apiKey, target, ProviderWires(spec), wireProbeTimeout); err == nil {
 			storeWire(spec.Name, model, probed)
 			if fam := ModelFamily(model); fam != "" {
 				storeWire(spec.Name, "family:"+fam, probed)

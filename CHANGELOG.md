@@ -948,6 +948,20 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **The family table is a rule, the probe is a question — and the two are no
+  longer mixed up**: the families a vendor publishes on a wire (GPT, Codex, the
+  o-series, Grok, Muse, DeepSeek on Responses; Claude on Messages) come from the
+  shared table (`ModelWire`), and a gateway declares only where it *diverges*
+  (`ModelWireRules`, e.g. opencode-go's MiMo on Chat) — nothing is copied
+  per provider. Where either answers and the endpoint serves that wire, the lazy
+  probe is not asked at all; it runs only where the question is genuinely open (a
+  gateway that does not serve the model's family wire, so the static choice is a
+  translation — OpenRouter reaching Claude over Chat). The wire cache now records
+  what each answer is worth: one a real request produced (the adaptive fallback
+  watched that wire carry the model's own turn) may stand in for the table, a
+  probe's 1-token greeting may not — and entries written before the distinction
+  existed read as the weaker kind, so an old mistyped answer re-learns itself
+  instead of ruling for a month.
 - **The per-turn memory recall ships off, with guards and a throttle**: the
   automatic `memory_search` channel (last user message → BM25 → injected as a
   `<system-reminder>`) used to run on every turn. It is now off by default
@@ -1504,6 +1518,17 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A wire probe no longer answers for a wire that never answered**: the probe
+  took the first candidate that replied within its budget, so a gateway whose
+  `/responses` answered a working 200 in 12-19s (a 24KB response body through a
+  relay) was recorded as a Chat endpoint for the model *and* its family for a
+  month. Only a rejection settles a question now: a candidate that times out ends
+  the probe with no answer, the run keeps its static choice, and a wire that
+  really is unsupported is still discovered by the request itself (the adaptive
+  fallback records a wire only after that wire served a real request). The budget
+  is 30s instead of 5s, and the probe asks over the route the run's own requests
+  take (`HTTPClientFor`) instead of a client of its own that ignored `/proxy`
+  selection and the provider's per-route transport.
 - **The boundary gate asks about the side the call actually takes**: a shell
   redirect outside the workspace (`echo hi > /outside/f`) used to raise a READ
   question — so "allow reading <dir>" could authorize the write — and a write
