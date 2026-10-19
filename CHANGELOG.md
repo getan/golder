@@ -12,6 +12,17 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **`apply_patch` locates a hunk the way Codex does**: an `@@` line is now a
+  literal anchor that moves the search forward (exact first, then containment,
+  so `@@ func b()` finds `func b() {`), two `@@` lines are two nested anchors
+  (codex's class-then-method shape, which the parser used to reject), and a
+  stale anchor no longer fails the hunk — it is a hint, not a promise. A hunk
+  whose edge context has drifted is retried with leading/trailing context
+  dropped, but only while the remainder is unique in the file, and the result
+  reports `note: hunk N applied with K context line(s) reduced` instead of
+  pretending it was exact. The failure message now shows the closest match with
+  line numbers and the surrounding lines, so the model can resend the hunk
+  without another read.
 - **The approval envelope**: an approved bash command whose whole effect is
   enumerable (`git push`, `go test`, `ls`, …) now runs on the host instead of
   inside the file sandbox; variables, substitutions, interpreters, wrappers,

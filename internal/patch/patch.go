@@ -42,8 +42,13 @@ type Line struct {
 // Chunk is one hunk of an update: the context/removal lines locate the region
 // (fuzzy-matched; see seek.go), and the additions replace it.
 type Chunk struct {
-	// Header is the text after "@@" when present (informational; it does not
-	// constrain the match, matching codex's parser).
+	// Anchors are the literal lines named after one or more "@@" markers, in
+	// order. They are hints with codex's meaning — the function or section the
+	// hunk belongs to — and the matcher seeks each one forward before looking
+	// for the hunk's own lines. A second "@@" is the further enclosing scope,
+	// exactly as codex's instructions describe it.
+	Anchors []string
+	// Header is the first non-empty anchor, kept for error messages.
 	Header string
 	// Lines are the chunk's context, add, and delete lines in file order.
 	Lines []Line
@@ -210,11 +215,23 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 			i++
 			continue
 		}
-		if !strings.HasPrefix(trimmed, hunkPrefix) {
+		if !strings.HasPrefix(strings.TrimRight(lines[i], " \t"), hunkPrefix) {
 			return Op{}, 0, &ParseError{Line: i + 1, Msg: fmt.Sprintf("expected %q to start a hunk, got %q", hunkPrefix, trimmed)}
 		}
-		chunk := Chunk{Header: strings.TrimSpace(strings.TrimPrefix(trimmed, hunkPrefix))}
-		i++
+		chunk := Chunk{}
+		// One or more "@@" lines open the hunk. Codex lets a patch name a class
+		// and then a method with two of them; each is a literal line to seek,
+		// and a bare "@@" (no text) contributes nothing but still opens a hunk.
+		for i < len(lines) && strings.HasPrefix(strings.TrimRight(lines[i], " \t"), hunkPrefix) {
+			anchor := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), hunkPrefix))
+			if anchor != "" {
+				chunk.Anchors = append(chunk.Anchors, anchor)
+				if chunk.Header == "" {
+					chunk.Header = anchor
+				}
+			}
+			i++
+		}
 		for i < len(lines) {
 			raw := lines[i]
 			if strings.TrimSpace(raw) == "" {

@@ -39,6 +39,10 @@ type Change struct {
 	OldContent string
 	// NewContent is the content after the change ("" for Delete).
 	NewContent string
+	// Note, when non-empty, says how a hunk was located when it was not a
+	// literal match (today: how many context lines were dropped). It is shown
+	// with the summary so a reduced match is never silent.
+	Note string
 }
 
 // ApplyError reports a patch that parsed but cannot be applied; the message is
@@ -137,7 +141,7 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 			}
 			old := st.content
 			lines, trailing := splitContent(old)
-			updated, err := applyChunks(lines, op.Chunks)
+			updated, notes, err := applyChunks(lines, op.Chunks)
 			if err != nil {
 				return nil, applyErrf("Invalid Context: %v in %s", err, op.Path)
 			}
@@ -151,7 +155,7 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 				if newContent == old {
 					break
 				}
-				changes = append(changes, Change{Kind: ChangeUpdate, Path: full, OldContent: old, NewContent: newContent})
+				changes = append(changes, Change{Kind: ChangeUpdate, Path: full, OldContent: old, NewContent: newContent, Note: strings.Join(notes, "; ")})
 				break
 			}
 			dst, err := resolve(op.MoveTo)
@@ -170,7 +174,7 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 			}
 			st.exists = false
 			dstState.exists, dstState.content = true, newContent
-			changes = append(changes, Change{Kind: ChangeMove, Path: dst, OldPath: full, OldContent: old, NewContent: newContent})
+			changes = append(changes, Change{Kind: ChangeMove, Path: dst, OldPath: full, OldContent: old, NewContent: newContent, Note: strings.Join(notes, "; ")})
 
 		default:
 			return nil, applyErrf("unknown patch operation %d", op.Kind)
@@ -181,29 +185,55 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 
 // applyChunks walks the chunks in order, each searching from the end of the
 // previous match so hunks apply top-to-bottom without rescanning the file.
-func applyChunks(lines []string, chunks []Chunk) ([]string, error) {
+func applyChunks(lines []string, chunks []Chunk) ([]string, []string, error) {
+	var notes []string
 	cursor := 0
 	for i, ch := range chunks {
+		// Anchors first: each named line moves the search forward, so a hunk
+		// whose context repeats elsewhere lands under the function the patch
+		// named instead of at the first copy in the file.
+		start := cursor
+		for _, anchor := range ch.Anchors {
+			if at, ok := seekAnchor(lines, anchor, start); ok {
+				start = at + 1
+			}
+		}
 		old := chunkOldLines(ch.Lines)
-		idx, ok := seekSequence(lines, old, cursor, ch.EOF)
+		idx, ok := seekSequence(lines, old, start, ch.EOF)
+		if !ok && start != cursor {
+			// A stale anchor must not make a locatable hunk fail: retry from
+			// the cursor, since the anchor is documentation, not a promise.
+			idx, ok = seekSequence(lines, old, cursor, ch.EOF)
+		}
+		used := ch
 		if !ok {
 			// A hunk listed out of file order (or shifted by an earlier hunk)
 			// still has a home: retry the whole file before failing. Sequential
 			// application stays the normal path, so a patch that could apply to
 			// an earlier duplicate does not silently move.
 			if idx, ok = seekSequence(lines, old, 0, ch.EOF); !ok {
-				if ch.Header != "" {
-					return nil, fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))
+				// Last resort: drop context lines from the edges, as git apply
+				// does, but only while the remainder is unique in the file — a
+				// guess between two identical blocks is not an improvement.
+				if shrunk, at, dropped, sok := shrinkChunk(lines, ch); sok {
+					used, idx, ok = shrunk, at, true
+					notes = append(notes, fmt.Sprintf("hunk %d applied with %d context line(s) reduced", i+1, dropped))
 				}
-				return nil, fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))
+			}
+			if !ok {
+				if ch.Header != "" {
+					return nil, nil, fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))
+				}
+				return nil, nil, fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))
 			}
 		}
+		old = chunkOldLines(used.Lines)
 		// Context lines keep the FILE's text (they only anchored the match),
 		// so a fuzzy hit never rewrites whitespace or punctuation; additions
 		// come from the patch, deletions disappear.
-		replacement := make([]string, 0, len(ch.Lines))
+		replacement := make([]string, 0, len(used.Lines))
 		at := 0
-		for _, ln := range ch.Lines {
+		for _, ln := range used.Lines {
 			switch ln.Kind {
 			case LineContext:
 				replacement = append(replacement, lines[idx+at])
@@ -221,7 +251,103 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, error) {
 		lines = merged
 		cursor = idx + len(replacement)
 	}
-	return lines, nil
+	return lines, notes, nil
+}
+
+// seekAnchor locates a "@@" hint. An exact (fuzzy-whitespace) line match is
+// tried first; failing that, a line that CONTAINS the hint — models write
+// "@@ func b()" for a line that reads "func b() {", and Codex's own examples
+// do the same with "class BaseClass" — so containment is the useful meaning
+// of an anchor. The hint only moves the search forward; it never fails a hunk.
+func seekAnchor(lines []string, anchor string, start int) (int, bool) {
+	anchor = strings.TrimSpace(anchor)
+	if anchor == "" {
+		return 0, false
+	}
+	if at, ok := seekSequence(lines, []string{anchor}, start, false); ok {
+		return at, true
+	}
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(lines); i++ {
+		if strings.Contains(strings.TrimSpace(lines[i]), anchor) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// shrinkChunk drops context lines from the edges of a hunk until what remains
+// matches exactly once in the file. It returns the trimmed chunk, the match
+// position, and how many lines were dropped. Deletions and additions are never
+// dropped — they are the edit — and a candidate that matches more than once is
+// rejected: reducing context must not become guessing which copy was meant.
+func shrinkChunk(lines []string, ch Chunk) (Chunk, int, int, bool) {
+	first, last := -1, -1
+	contexts := 0
+	for i, ln := range ch.Lines {
+		if ln.Kind == LineContext {
+			contexts++
+			continue
+		}
+		if first < 0 {
+			first = i
+		}
+		last = i
+	}
+	if first < 0 || contexts == 0 {
+		return Chunk{}, 0, 0, false
+	}
+	for total := 1; total <= contexts; total++ {
+		// Trailing context goes first: a prefix (a signature, a heading) usually
+		// identifies the region better than the lines that follow it.
+		for dropLead := 0; dropLead <= total; dropLead++ {
+			dropTail := total - dropLead
+			from, to := first-dropLead, last+dropTail
+			if from < 0 || to >= len(ch.Lines) {
+				continue
+			}
+			sub := ch
+			sub.Anchors = nil
+			sub.EOF = false
+			sub.Lines = append([]Line(nil), ch.Lines[from:to+1]...)
+			at, ok := uniqueMatch(lines, chunkOldLines(sub.Lines))
+			if ok {
+				return sub, at, total, true
+			}
+		}
+	}
+	return Chunk{}, 0, 0, false
+}
+
+// uniqueMatch finds the one position where pattern matches. It tries the exact
+// comparison first and the normalized one second; a pattern that matches in
+// more than one place at either strictness is ambiguous and refused.
+func uniqueMatch(lines, pattern []string) (int, bool) {
+	if len(pattern) == 0 || len(pattern) > len(lines) {
+		return 0, false
+	}
+	for _, pass := range []matchPass{matchExact, matchNormalized} {
+		count, at := 0, 0
+		for i := 0; i+len(pattern) <= len(lines); i++ {
+			if equalLines(lines[i:i+len(pattern)], pattern, pass) {
+				count++
+				at = i
+				if count > 1 {
+					break
+				}
+			}
+		}
+		if count == 1 {
+			return at, true
+		}
+		if count > 1 {
+			// Ambiguous at a stricter pass stays ambiguous at a looser one.
+			return 0, false
+		}
+	}
+	return 0, false
 }
 
 // hunkDiagnostic explains a failed match in the terms a patch author can act on:
@@ -251,8 +377,22 @@ func hunkDiagnostic(lines, old []string) string {
 		if equalLine(lines[bestAt+j], old[j], matchNormalized) {
 			continue
 		}
-		return fmt.Sprintf("; closest match at line %d (%d/%d lines match; expected %q, found %q); re-read the file and resend",
+		var b strings.Builder
+		fmt.Fprintf(&b, "; closest match at line %d (%d/%d context lines match; expected %q, found %q). The file there reads:",
 			bestAt+1, bestHits, len(old), old[j], lines[bestAt+j])
+		from := bestAt - 2
+		if from < 0 {
+			from = 0
+		}
+		to := bestAt + len(old) + 2
+		if to > len(lines) {
+			to = len(lines)
+		}
+		for k := from; k < to && k-from < 14; k++ {
+			fmt.Fprintf(&b, "\n  %4d | %s", k+1, lines[k])
+		}
+		b.WriteString("\n  re-read the file and resend")
+		return b.String()
 	}
 	return "; re-read the file and resend"
 }

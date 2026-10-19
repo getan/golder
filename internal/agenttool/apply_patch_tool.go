@@ -63,10 +63,16 @@ func (t *ApplyPatchTool) Name() string { return "apply_patch" }
 func (t *ApplyPatchTool) Description() string {
 	return "Edit files with one patch: add, update, move, or delete any number " +
 		"of files per call. The patch text uses the *** Begin Patch / *** End " +
-		"Patch format; update chunks are line-oriented diffs with optional " +
-		"@@ context and fuzzy matching. Hunks are matched in order against the " +
-		"file as it is now: re-read a file that changed, and keep hunks " +
-		"non-overlapping. Use this instead of shelling out to patch utilities."
+		"Patch format; update chunks are line-oriented diffs. Three or so lines " +
+		"of context on each side are enough; an optional @@ line names the " +
+		"function or section the hunk belongs to and is sought first, which " +
+		"disambiguates repeated context (a second @@ names a further enclosing " +
+		"scope). Matching is fuzzy on whitespace and typographic punctuation, " +
+		"and a hunk whose edges do not match is retried with reduced context " +
+		"only when the remainder is unique in the file. Hunks are matched in " +
+		"order against the file as it is now: re-read a file that changed, and " +
+		"keep hunks non-overlapping. Use this instead of shelling out to patch " +
+		"utilities."
 }
 
 // Schema implements AgentTool.
@@ -202,6 +208,11 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	}
 
 	msg := fmt.Sprintf("Applied %d change(s):\n%s", len(changes), strings.Join(summaries, "\n"))
+	for _, ch := range changes {
+		if ch.Note != "" {
+			msg += "\n  note: " + ch.Note
+		}
+	}
 	if diff := diffs.String(); diff != "" {
 		msg += "\n" + diff
 	}
