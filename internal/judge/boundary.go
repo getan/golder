@@ -200,9 +200,20 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 			// command's own text decides the side.
 			candOp := op
 			candWriting := writing
-			if !writing && shellCmd != "" && PathWritten(resolved, shellCmd) {
-				candOp |= grants.Write
-				candWriting = true
+			cloneDir := false
+			if !writing && shellCmd != "" {
+				// A git clone's destination is the write the command's own text
+				// does not describe anywhere else: PathWritten reads redirects,
+				// write verbs and path-taking flags, and the directory a clone
+				// creates is an operand of the clone SUBCOMMAND. Without this the
+				// question about `git clone <url> ../repo` is asked — and
+				// answered — as a read, so the grant it records keeps the very
+				// write the clone needs out of the sandbox.
+				cloneDir = cloneCreates(shellCmd, candidateRaw)
+				if cloneDir || PathWritten(resolved, shellCmd) {
+					candOp |= grants.Write
+					candWriting = true
+				}
 			}
 			switch boundaryQuestion(candidateRaw, resolved, absRoot, opts.Roots, candOp, opts.WritableAt) {
 			case boundarySilent:
@@ -220,9 +231,20 @@ func BoundaryGate(opts BoundaryOpts) agentcore.BeforeToolCallFunc {
 				})
 				return blockRefused(call, resolved, writing)
 			}
+			candidate := permissions.BoundaryCandidate(resolved)
+			if cloneDir {
+				// A clone destination is a directory the command is about to
+				// CREATE, so the narrow grant is that directory itself.
+				// BoundaryCandidate widens a path that does not exist to its
+				// parent — its rule for "there is nothing there yet for a grant
+				// to name" — and for a clone into a sibling of the workspace that
+				// parent holds every sibling there is: the whole tree, handed
+				// over to create one repository.
+				candidate = filepath.Clean(resolved)
+			}
 			questions = append(questions, question{
 				raw: candidateRaw, target: resolved,
-				candidate: permissions.BoundaryCandidate(resolved),
+				candidate: candidate,
 				writing:   candWriting,
 			})
 		}

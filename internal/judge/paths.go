@@ -197,7 +197,22 @@ func GrantablePathFromText(summary, justification, cwd string) string {
 	for _, raw := range candidates {
 		p, err := permissions.NormalizePath(raw)
 		if err != nil {
-			continue
+			// A candidate may be a RELATIVE spelling, and one of them is the
+			// everyday case this function exists for: `git clone <url> ../repo`
+			// names its destination one level above the workspace. NormalizePath
+			// refuses relatives by design — they resolve differently for every
+			// process — so the run's own directory, which is what the shell would
+			// resolve the word against, is applied here instead.
+			if cwd == "" {
+				continue
+			}
+			abs, aerr := permissions.AbsAgainst(cwd, raw)
+			if aerr != nil {
+				continue
+			}
+			if p, err = permissions.NormalizePath(abs); err != nil {
+				continue
+			}
 		}
 		if PlausibleWritableRoot(p, cwd) {
 			return p
@@ -225,6 +240,14 @@ func writeTargetPaths(s string) []string {
 	}
 	var out []string
 	for _, c := range plan.AllCommands() {
+		// git clone's destination is a write no verb table covers: the directory
+		// is created by the subcommand, and the target is the second positional
+		// word rather than an operand of the program (see gitclone.go).
+		for _, p := range cloneTargetPaths(c) {
+			if pathShapedWord(p) {
+				out = append(out, p)
+			}
+		}
 		prog, ok := c.Program()
 		if !ok {
 			continue

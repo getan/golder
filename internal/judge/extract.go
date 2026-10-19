@@ -128,14 +128,24 @@ func writeOperandCandidates(cmd shellfacts.Command) []string {
 		return nil
 	}
 	prog := filepath.Base(cmd.Argv[i].Text)
+	// git clone creates the directory it is handed, and that write belongs to the
+	// SUBCOMMAND rather than to the program: `git` is in neither table, and the
+	// destination is not an operand of git itself. It is collected before the verb
+	// test, because the answer for `git clone … ../repo` would otherwise be "this
+	// command writes nothing" — the gap gitclone.go documents at length.
+	var out []string
+	for _, p := range cloneTargetPaths(cmd) {
+		if pathShapedWord(p) {
+			out = append(out, p)
+		}
+	}
 	writes := writeVerbs[prog]
 	if prog == "sed" || prog == "awk" || prog == "gawk" {
 		writes = inPlaceFlag(cmd.Args())
 	}
 	if !writes {
-		return nil
+		return out
 	}
-	var out []string
 	for _, w := range cmd.Argv[i+1:] {
 		if v, ok := wordValue(w); ok && pathShapedWord(v) {
 			out = append(out, v)
