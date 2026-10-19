@@ -39,6 +39,41 @@ func TestContentToText(t *testing.T) {
 	}
 }
 
+// TestHasVisibleOutput pins what counts as an answer. Reasoning does not: a
+// turn carrying only a thinking block has said nothing, and treating it as
+// output is what let such a turn end in silence.
+func TestHasVisibleOutput(t *testing.T) {
+	cases := []struct {
+		name  string
+		msg   AssistantMessage
+		want  bool
+		think bool
+	}{
+		{"empty", AssistantMessage{}, false, false},
+		{"text", AssistantMessage{Content: ContentList{NewTextContent("done")}}, true, false},
+		{"blank text", AssistantMessage{Content: ContentList{NewTextContent("  \n")}}, false, false},
+		{"thinking only", AssistantMessage{Content: ContentList{NewThinkingContent("let me look at one more file")}}, false, true},
+		{"blank thinking", AssistantMessage{Content: ContentList{NewThinkingContent(" ")}}, false, false},
+		{"tool call", AssistantMessage{Content: ContentList{NewToolCallContent("c1", "read", json.RawMessage(`{}`))}}, true, false},
+		{"server tool call", AssistantMessage{Content: ContentList{NewServerToolCallContent("s1", "web_search", json.RawMessage(`{}`))}}, true, false},
+		{
+			"thinking beside text",
+			AssistantMessage{Content: ContentList{NewThinkingContent("hmm"), NewTextContent("here is the answer")}},
+			true, true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.msg.HasVisibleOutput(); got != tc.want {
+				t.Errorf("HasVisibleOutput = %v, want %v", got, tc.want)
+			}
+			if got := tc.msg.HasThinking(); got != tc.think {
+				t.Errorf("HasThinking = %v, want %v", got, tc.think)
+			}
+		})
+	}
+}
+
 func TestLastAssistantOf(t *testing.T) {
 	t.Run("nil when absent", func(t *testing.T) {
 		msgs := []AgentMessage{

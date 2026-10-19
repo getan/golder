@@ -83,9 +83,9 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 		OnText: func(delta string) {
 			ch <- textDeltaMsg{delta: delta}
 		},
-		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage) {
+		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage, stall runtime.TurnStall) {
 			accountOutput(msg)
-			ch <- turnEndMsg{msg: msg, results: results}
+			ch <- turnEndMsg{msg: msg, results: results, stall: stall}
 		},
 		OnEvent: func(ev agentcore.AgentEvent) {
 			// Deliver observer events (plugin notifier, SessionEnd/PreCompact hook)

@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // This file defines the tea.Msg types the event bridge (bridge.go) produces from
@@ -45,6 +46,11 @@ type statusRevealMsg struct{}
 type turnEndMsg struct {
 	msg     agentcore.AssistantMessage
 	results []agentcore.ToolResultMessage
+	// stall reports a turn that produced nothing the person can act on, and what
+	// the loop did about it (see runtime.TurnStall): a reasoning-only turn is
+	// silent, so the transcript has to say whether the run is carrying on by
+	// itself or has stopped.
+	stall runtime.TurnStall
 }
 
 // toolAnnounceMsg is emitted when a tool call first appears in a streaming

@@ -9,6 +9,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/getan/golder/internal/agentcore"
 )
@@ -24,11 +25,38 @@ type StreamHandler struct {
 	OnText func(delta string)
 	// OnTurnEnd fires once per completed turn, after the turn's text is fully
 	// flushed, carrying the final assistant message and the tool results produced
-	// during the turn. Consumers render tool activity here.
-	OnTurnEnd func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage)
+	// during the turn. Consumers render tool activity here, and use stall to say
+	// what happened when the turn produced nothing to show (see TurnStall).
+	OnTurnEnd func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage, stall TurnStall)
 	// OnEvent, when set, receives every raw event before the typed callbacks —
 	// used by the stream-json protocol driver, which serialises the whole event.
 	OnEvent func(ev agentcore.AgentEvent)
+}
+
+// TurnStall describes a turn that produced nothing the person can act on: the
+// model reasoned and then ended the turn without an answer and without a tool
+// call. It is not an error and not an interrupt — the run may be carrying on by
+// itself — but it is also not an answer, and a consumer that says nothing leaves
+// the person unable to tell "finished" from "stopped".
+type TurnStall struct {
+	// Count is the number of such turns in a row ending with this one; 0 for an
+	// ordinary turn.
+	Count int
+	// Limit is how many automatic continuations the loop makes. At or below it
+	// the loop has asked the model to carry on; above it the loop has stopped.
+	Limit int
+}
+
+// StallNote is the sentence a front-end shows for a stalled turn, in one place
+// so the line-based REPL, the TUI and the side runs cannot describe the same
+// event three ways.
+func StallNote(s TurnStall) string {
+	if s.Count <= s.Limit {
+		return fmt.Sprintf("note: the model ended this turn with reasoning only — no answer and no tool call; "+
+			"carrying on automatically (attempt %d of %d).", s.Count, s.Limit)
+	}
+	return fmt.Sprintf("note: the model ended %d turns in a row with reasoning only — no answer and no tool call; "+
+		"stopping here. Send another message to carry on.", s.Count)
 }
 
 // DrainStream consumes stream to completion, invoking h's callbacks, and returns
@@ -70,7 +98,7 @@ func DrainStream(ctx context.Context, stream *LoopEventStream, h StreamHandler) 
 			m := e.Message
 			lastTurn = &m
 			if h.OnTurnEnd != nil {
-				h.OnTurnEnd(e.Message, e.ToolResults)
+				h.OnTurnEnd(e.Message, e.ToolResults, TurnStall{Count: e.Stalled, Limit: e.StallLimit})
 			}
 		}
 	}

@@ -273,6 +273,15 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	}
 
 	for { // outer loop: pending / follow-up messages
+		// stalls counts consecutive turns that produced nothing the person can
+		// act on (no visible text, no tool call, reasoning only). It is the state
+		// behind stallContinueMax: a model that ends a turn that way has not
+		// finished the work, and the loop asks it to carry on rather than ending
+		// the run on a silent turn. It is per pass of the outer loop — each pass
+		// begins with new material for the model (a user message, a steering
+		// message, or the OnStop guidance), and a fresh nudge deserves a fresh
+		// budget — while "consecutive" is measured across the inner loop's turns.
+		stalls := 0
 		for { // inner loop: turns until no tool calls
 			if err := emit(agentcore.TurnStartEvent{}); err != nil {
 				finish()
@@ -323,17 +332,49 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			calls := toAgentToolCalls(assistant.ToolCalls())
 			server := serverToolCalls(assistant.ToolCalls())
 			if len(calls) == 0 && len(server) == 0 {
-				// Natural turn end: no tools to run.
-				if err := emit(agentcore.TurnEndEvent{Message: assistant}); err != nil {
+				// A turn that produced nothing the person can act on did not answer
+				// anything: reasoning alone is not output (HasVisibleOutput), and the
+				// shape is a model that spent its whole response thinking and then
+				// stopped. The loop used to treat that as a natural end, so the run
+				// simply stopped — the person saw the last tool card and nothing
+				// else, with no error to explain it. Now the model is asked to carry
+				// on, up to stallContinueMax times; after that the run stops with the
+				// reason said out loud rather than in silence.
+				stall := 0
+				if assistant.HasThinking() && !assistant.HasVisibleOutput() && ctx.Err() == nil {
+					stalls++
+					stall = stalls
+					if stalls <= stallContinueMax {
+						agentCtx.Messages = append(agentCtx.Messages, stallContinuation())
+						checkpoint(false)
+					}
+				} else {
+					stalls = 0
+				}
+				ev := agentcore.TurnEndEvent{Message: assistant}
+				if stall > 0 {
+					// The turn is reported as what it was, with the limit, so every
+					// front-end can say whether the run is carrying on by itself
+					// (Stalled <= StallLimit) or has stopped (Stalled > StallLimit).
+					ev.Stalled, ev.StallLimit = stall, stallContinueMax
+				}
+				if err := emit(ev); err != nil {
 					finish()
 					return
 				}
-				if afterTurn(ctx, agentCtx, &cfg, false, emit, tel) {
+				// hadToolExecution is true for a stall on purpose: the continuation
+				// message was just fed back, so this is the same "the model has new
+				// material" boundary at which steering messages are pulled.
+				if afterTurn(ctx, agentCtx, &cfg, stall > 0, emit, tel) {
 					finish()
 					return
+				}
+				if stall > 0 && stall <= stallContinueMax {
+					continue // carry on inside this run; the model was asked to finish
 				}
 				break // exit inner loop → consult follow-up messages
 			}
+			stalls = 0 // the model acted: whatever it was stuck on, it is not stuck now
 
 			// Inject the run-level emitter into the context so tools (notably the
 			// generic task tool) can retrieve it via ProgressEmitterFromContext and
@@ -660,6 +701,29 @@ func applyTurnUpdate(agentCtx *agentcore.AgentContext, cfg *RunConfig, upd *Turn
 	}
 	if upd.ThinkingLevel != nil {
 		cfg.ThinkingLevel = *upd.ThinkingLevel
+	}
+}
+
+// failToolCallsFromTruncatedMessage produces an error tool-result message for
+// stallContinueMax is how many times the loop asks a stalled model to carry on
+// before it stops the run. Two: the first continuation recovers the common shape
+// — a model that spent its whole response reasoning and then ended the turn — and
+// a second stall in a row says the model is not going to finish this turn, which
+// a third nudge would not change (the same reasoning as the provider's
+// empty-completion retry budget, and as streamResumeMax for a cut stream).
+const stallContinueMax = 2
+
+// stallContinuation is the message the loop feeds back when a turn produced only
+// reasoning. It says what was wrong with the previous turn, because the model
+// cannot see that its reasoning never became an answer — from its side the work
+// looked finished.
+func stallContinuation() agentcore.UserMessage {
+	return agentcore.UserMessage{
+		RoleField: agentcore.RoleUser,
+		Content: agentcore.ContentList{agentcore.NewTextContent(
+			"Continue exactly where you stopped. Your previous turn contained only reasoning — " +
+				"no answer and no tool call — so nothing reached the user. " +
+				"Answer the request, or make the next tool call, now.")},
 	}
 }
 

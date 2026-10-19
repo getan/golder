@@ -1235,13 +1235,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.transcript.addSystem(ui.InterruptNotice)
 			m.interruptNoticePrinted = true
 		default:
-			// A turn that ends cleanly (end_turn) but produced no text, no thinking,
-			// and no tool calls means the endpoint accepted the request but sent back
-			// nothing usable (e.g. a 200 whose body was not in the wire format this
-			// protocol expects). Note it instead of showing nothing.
-			if len(msg.msg.Content) == 0 && len(msg.results) == 0 {
-				m.transcript.addSystem("note: empty response from the model (no content). " +
-					"Check that --model, --base-url and --protocol match the same provider.")
+			// A turn that ends cleanly (end_turn) but produces nothing the person can
+			// act on has three shapes and they need different words. A stall comes
+			// first: the model reasoned without answering and the loop is already
+			// carrying on, so the transcript says that rather than telling the person
+			// to do it. Failing that, no content at all means the endpoint accepted
+			// the request and sent back nothing usable (e.g. a 200 whose body was not
+			// in the wire format this protocol expects), and reasoning with nothing
+			// else means the loop stopped after its continuation budget — testing "is
+			// there any content?" is what let both settle in silence.
+			switch {
+			case msg.stall.Count > 0:
+				m.transcript.addSystem(runtime.StallNote(msg.stall))
+			case len(msg.results) == 0 && !msg.msg.HasVisibleOutput():
+				if msg.msg.HasThinking() {
+					m.transcript.addSystem("note: the model ended this turn with reasoning only — " +
+						"no answer and no tool call. Send another message to have it carry on.")
+				} else {
+					m.transcript.addSystem("note: empty response from the model (no content). " +
+						"Check that --model, --base-url and --protocol match the same provider.")
+				}
 			}
 		}
 		return m, m.pumpNext()

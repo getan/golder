@@ -21,6 +21,39 @@ func ContentToText(list ContentList) string {
 }
 
 // LastAssistantOf returns a pointer to the last AssistantMessage in msgs, or nil.
+//
+// HasVisibleOutput reports whether an assistant turn says anything the person
+// can act on: non-blank text, or a tool call (local or provider-executed).
+//
+// Reasoning is deliberately NOT output. A message carrying only a thinking
+// block has answered nothing and asked for nothing — it is the shape a model
+// produces when it exhausts its response on reasoning and then ends the turn —
+// and both front-ends and the provider's empty-completion retry need that
+// distinction. Asking "is there any content at all?" instead is what let such a
+// turn settle in silence: a reasoning block IS content, so the turn looked
+// finished, printed nothing, and left the person staring at the last tool card
+// with no way to tell "done" from "stalled".
+func (m AssistantMessage) HasVisibleOutput() bool {
+	if strings.TrimSpace(ContentToText(m.Content)) != "" {
+		return true
+	}
+	return len(m.ToolCalls()) > 0
+}
+
+// HasThinking reports whether the turn carried a reasoning block. It exists to
+// name the reasoning-only turn when there is no visible output: the two shapes
+// (nothing at all, and reasoning with nothing else) need different words, since
+// only the first is a protocol mismatch worth checking --model/--base-url for.
+func (m AssistantMessage) HasThinking() bool {
+	for _, c := range m.Content {
+		if tc, ok := c.(ThinkingContent); ok && strings.TrimSpace(tc.Thinking) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// LastAssistantOf returns a pointer to the last AssistantMessage in msgs, or nil.
 func LastAssistantOf(msgs []AgentMessage) *AssistantMessage {
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if a, ok := msgs[i].(AssistantMessage); ok {

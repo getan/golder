@@ -11,6 +11,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/runtime"
 )
 
 // ansiRE strips SGR escape sequences so tests can inspect the raw text the
@@ -127,6 +128,72 @@ func TestTranscriptNotesEmptyResponse(t *testing.T) {
 	}
 	if !strings.Contains(sys, "empty response from the model") {
 		t.Errorf("empty response not flagged; system block = %q", sys)
+	}
+}
+
+// TestTranscriptNotesReasoningOnlyTurn covers the shape that used to settle in
+// silence: the model streamed reasoning, ended the turn, and produced no answer
+// and no tool call. The guard used to ask "is there any content?", and a
+// reasoning block is content — so a stalled run looked finished and the
+// transcript simply stopped after the last tool card, with no way for the person
+// to tell the two apart. Now the turn says which shape it was.
+func TestTranscriptNotesReasoningOnlyTurn(t *testing.T) {
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
+
+	m = apply(t, m, turnEndMsg{msg: agentcore.AssistantMessage{
+		StopReason: agentcore.StopReasonEndTurn,
+		Content:    agentcore.ContentList{agentcore.NewThinkingContent("one more file to read before I answer")},
+	}})
+
+	var sys string
+	for _, b := range m.transcript.blocks {
+		if b.role == roleSystem {
+			sys = b.text
+		}
+	}
+	if !strings.Contains(sys, "reasoning only") {
+		t.Errorf("reasoning-only turn not flagged; system block = %q", sys)
+	}
+	if strings.Contains(sys, "Check that --model") {
+		t.Errorf("reasoning-only turn got the protocol-mismatch hint, which is the other shape: %q", sys)
+	}
+}
+
+// TestTranscriptNotesStall: when the loop carries on by itself after a
+// reasoning-only turn, the transcript says so. Without it the person reads
+// "send another message" while the run is already continuing — and, when the
+// budget is spent, has no way to tell that the run stopped there.
+func TestTranscriptNotesStall(t *testing.T) {
+	turn := func(stall runtime.TurnStall) turnEndMsg {
+		return turnEndMsg{
+			msg: agentcore.AssistantMessage{
+				StopReason: agentcore.StopReasonEndTurn,
+				Content:    agentcore.ContentList{agentcore.NewThinkingContent("still thinking about it")},
+			},
+			stall: stall,
+		}
+	}
+	lastSystem := func(m Model) string {
+		var sys string
+		for _, b := range m.transcript.blocks {
+			if b.role == roleSystem {
+				sys = b.text
+			}
+		}
+		return sys
+	}
+
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
+	m = apply(t, m, turn(runtime.TurnStall{Count: 1, Limit: 2}))
+	if sys := lastSystem(m); !strings.Contains(sys, "carrying on automatically (attempt 1 of 2)") {
+		t.Errorf("stall note = %q, want the automatic continuation named", sys)
+	} else if strings.Contains(sys, "Send another message") {
+		t.Errorf("stall note = %q, want no instruction to do what the loop is already doing", sys)
+	}
+
+	m = apply(t, m, turn(runtime.TurnStall{Count: 3, Limit: 2}))
+	if sys := lastSystem(m); !strings.Contains(sys, "stopping here") {
+		t.Errorf("exhausted note = %q, want it to say the run stopped", sys)
 	}
 }
 

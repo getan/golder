@@ -771,7 +771,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 		OnText: func(delta string) {
 			reply.WriteString(delta)
 		},
-		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage) {
+		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage, stall runtime.TurnStall) {
 			flushReply()
 			for _, c := range msg.ToolCalls() {
 				fmt.Fprintf(out, "  %s %s\n", ui.Colorize(ui.Enabled(), ui.Green, "→ tool:"), ui.ToolCallLabel(c))
@@ -798,15 +798,27 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 				fmt.Fprintln(out, ui.InterruptNotice)
 				interruptNoticePrinted = true
 			default:
-				// A turn that ends cleanly (end_turn) but produced no text, no
-				// thinking, and no tool calls means the endpoint accepted the
-				// request but sent back nothing usable (e.g. a 200 whose body was
-				// not in the wire format this protocol expects). Say so instead of
-				// returning to the prompt with no output.
-				if len(msg.Content) == 0 && len(results) == 0 {
-					fmt.Fprintf(out, "%s empty response from the model (no content). "+
-						"Check that --model, --base-url and --protocol match the same provider.\n",
-						ui.Colorize(ui.Enabled(), ui.Yellow, "note:"))
+				// A turn that ends cleanly (end_turn) but produces nothing the
+				// person can act on has three shapes and they need different
+				// words. A stall comes first: the model reasoned without answering
+				// and the loop is already carrying on, so the line says that
+				// rather than telling the person to do it. Failing that, no
+				// content at all means the endpoint accepted the request but sent
+				// back nothing usable (e.g. a 200 whose body was not in the wire
+				// format this protocol expects), and reasoning with nothing else
+				// means the loop stopped after its continuation budget.
+				switch {
+				case stall.Count > 0:
+					fmt.Fprintln(out, runtime.StallNote(stall))
+				case len(results) == 0 && !msg.HasVisibleOutput():
+					note := ui.Colorize(ui.Enabled(), ui.Yellow, "note:")
+					if msg.HasThinking() {
+						fmt.Fprintf(out, "%s the model ended this turn with reasoning only — "+
+							"no answer and no tool call. Send another message to have it carry on.\n", note)
+					} else {
+						fmt.Fprintf(out, "%s empty response from the model (no content). "+
+							"Check that --model, --base-url and --protocol match the same provider.\n", note)
+					}
 				}
 			}
 		},

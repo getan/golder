@@ -67,6 +67,7 @@ func TestStreamHandlerConversion(t *testing.T) {
 	h.OnTurnEnd(
 		agentcore.AssistantMessage{Content: agentcore.ContentList{agentcore.NewTextContent("Hello world")}},
 		[]agentcore.ToolResultMessage{{ToolCallID: "call-1"}},
+		runtime.TurnStall{},
 	)
 	// Simulate drain-done: the pump appends runEndMsg after DrainStream returns.
 	ch <- runEndMsg{err: nil}
@@ -159,7 +160,7 @@ func TestSpinnerTurnEndFlush(t *testing.T) {
 	h.OnTurnEnd(agentcore.AssistantMessage{Content: agentcore.ContentList{
 		agentcore.NewThinkingContent("hello"),
 		agentcore.NewToolCallContent("c1", "bash", json.RawMessage(`{"x":1}`)),
-	}}, nil)
+	}}, nil, runtime.TurnStall{})
 	if got, want := tokenDeltas(drain(ch)), []int{5, 7}; !slices.Equal(got, want) {
 		t.Errorf("spinner deltas = %v, want %v", got, want)
 	}

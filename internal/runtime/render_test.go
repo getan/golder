@@ -101,7 +101,7 @@ func TestDrainStreamResetsPerTurn(t *testing.T) {
 	turns := 0
 	_, err := DrainStream(ctx, stream, StreamHandler{
 		OnText:    func(d string) { b.WriteString(d) },
-		OnTurnEnd: func(agentcore.AssistantMessage, []agentcore.ToolResultMessage) { turns++ },
+		OnTurnEnd: func(agentcore.AssistantMessage, []agentcore.ToolResultMessage, TurnStall) { turns++ },
 	})
 	if err != nil {
 		t.Fatalf("DrainStream: %v", err)
@@ -128,7 +128,9 @@ func TestDrainStreamOnTurnEndResults(t *testing.T) {
 
 	var gotResults int
 	_, err := DrainStream(ctx, stream, StreamHandler{
-		OnTurnEnd: func(_ agentcore.AssistantMessage, rs []agentcore.ToolResultMessage) { gotResults = len(rs) },
+		OnTurnEnd: func(_ agentcore.AssistantMessage, rs []agentcore.ToolResultMessage, _ TurnStall) {
+			gotResults = len(rs)
+		},
 	})
 	if err != nil {
 		t.Fatalf("DrainStream: %v", err)

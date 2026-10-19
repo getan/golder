@@ -54,6 +54,16 @@ type TurnStartEvent struct{}
 type TurnEndEvent struct {
 	Message     AssistantMessage
 	ToolResults []ToolResultMessage
+	// Stalled and StallLimit report that this turn produced nothing the person
+	// can act on — no visible text and no tool call, only reasoning — and what
+	// the loop did about it. Stalled is the number of such turns in a row ending
+	// with this one (0 for an ordinary turn); when it is at or below StallLimit
+	// the loop has asked the model to carry on, and above it the loop has given
+	// up and the run stops here. A consumer uses the pair to say which happened:
+	// the turn itself is silent, and a silent turn with no explanation is the
+	// failure this exists to remove (see AssistantMessage.HasVisibleOutput).
+	Stalled    int
+	StallLimit int
 }
 
 // MessageStartEvent is emitted when a message begins streaming.

@@ -279,7 +279,10 @@ func drainSideStream(ctx context.Context, out io.Writer, host cli.Host, stream *
 		OnText: func(delta string) {
 			reply.WriteString(delta)
 		},
-		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage) {
+		OnTurnEnd: func(msg agentcore.AssistantMessage, results []agentcore.ToolResultMessage, stall runtime.TurnStall) {
+			if stall.Count > 0 {
+				fmt.Fprintln(out, runtime.StallNote(stall))
+			}
 			flushReply()
 			for _, c := range msg.ToolCalls() {
 				fmt.Fprintf(out, "  %s %s\n", ui.Colorize(ui.Enabled(), ui.Green, "→ tool:"), ui.ToolCallLabel(c))

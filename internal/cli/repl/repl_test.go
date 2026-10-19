@@ -561,6 +561,61 @@ func TestREPLNotesEmptyResponse(t *testing.T) {
 	}
 }
 
+// reasoningOnlyProvider streams a clean end_turn whose only content is a
+// reasoning block: the model thought, ended its turn, and asked for nothing.
+type reasoningOnlyProvider struct{ calls int }
+
+func (p *reasoningOnlyProvider) Name() string { return "faux" }
+func (p *reasoningOnlyProvider) Models() []provider.Model {
+	return []provider.Model{{Provider: "faux", ID: "faux"}}
+}
+
+func (p *reasoningOnlyProvider) StreamCompletion(ctx context.Context, req provider.CompletionRequest) (*provider.AssistantMessageEventStream, error) {
+	p.calls++
+	partial := agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant}
+	final := agentcore.AssistantMessage{
+		RoleField:  agentcore.RoleAssistant,
+		Content:    agentcore.ContentList{agentcore.NewThinkingContent("one more file to read before I answer")},
+		StopReason: agentcore.StopReasonEndTurn,
+	}
+	s := provider.NewAssistantMessageEventStream(0)
+	go func() {
+		_ = s.Emit(ctx, provider.StreamStartEvent{Partial: partial})
+		_ = s.Emit(ctx, provider.StreamDoneEvent{Message: final})
+		s.Close()
+	}()
+	return s, nil
+}
+
+// TestREPLNotesReasoningOnlyTurn: a model that keeps ending its turn with
+// reasoning and nothing else no longer stops the run silently. The loop asks it
+// to carry on, up to its budget, and the REPL says which attempt it is on — so
+// the person can tell "it stalled and is retrying" from "it finished" — and
+// says so when the budget runs out. It is not a protocol mismatch, so it must
+// not send anyone hunting for a --model/--base-url mistake.
+func TestREPLNotesReasoningOnlyTurn(t *testing.T) {
+	p := &reasoningOnlyProvider{}
+	deps, _ := newTestDeps(t, p)
+	deps.live.Provider = p
+	var out bytes.Buffer
+	if err := runREPL(strings.NewReader("hello\n/exit\n"), &out, deps); err != nil {
+		t.Fatalf("runREPL: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "carrying on automatically (attempt 1 of 2)") {
+		t.Errorf("the first stall must say the run is carrying on, out=%q", got)
+	}
+	if !strings.Contains(got, "stopping here") {
+		t.Errorf("a model that never answers must end with a stated reason, out=%q", got)
+	}
+	if strings.Contains(got, "empty response from the model") {
+		t.Errorf("reasoning-only turn got the empty-response note, out=%q", got)
+	}
+	if p.calls != 3 {
+		t.Errorf("provider called %d times, want 3 (one turn plus the two-continuation budget)", p.calls)
+	}
+}
+
 // TestREPLExportImportRoundTrip drives /export and /import end to end over the
 // REPL: after a turn, "/export <path>" writes a JSONL file, then "/import
 // <path>" materializes it as a fresh session and switches to it (US-008, #124).
