@@ -1518,6 +1518,34 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A turn that ends with reasoning and nothing else no longer ends the run**:
+  the model could spend its whole response thinking, stop there, and leave the
+  task stopped mid-step — the last tool card stayed on screen and nothing
+  explained it, because the check that should have spoken up asked "is there any
+  content?", which a reasoning block satisfies. The loop and the front-ends now
+  tell an answer apart from reasoning: the loop asks the model to carry on (twice
+  at most), feeding back what the previous turn was missing, and stops after that
+  with the reason stated instead of going quiet; the REPL, the TUI and the side
+  runs say which attempt it is on ("carrying on automatically (attempt 1 of 2)")
+  or that the run stopped there. An empty completion is still the provider's own
+  retry, and a blank text turn is still an ordinary end.
+- **`git clone`'s destination is a path the gates can see**: the directory a
+  clone creates is an operand of the *subcommand*, and `git` is in neither table
+  that names paths (it neither opens a file operand it is handed nor counts as a
+  write verb), so `git clone https://…/repo.git ../repo` named no path at all —
+  the boundary gate had nothing to ask about, the sandbox had no writable root to
+  widen, and the escalation dialog had no directory to offer back inside the
+  sandbox. Two identical clones therefore came out differently: the one whose
+  reviewer granted the escape into `direct` ran, and the one whose reviewer did
+  not was blocked with advice naming nothing to grant. The destination is now
+  read from the shell parse — the second positional word after the clone
+  subcommand, with git's global `-c`/`-C` values and every clone option's value
+  stepped over, so a proxy URL, a config setting, a repository URL and an option
+  value are never the destination — `git -C` folds into a relative destination,
+  and the question about it is asked as a WRITE whose offered grant is the
+  destination directory itself, not the tree holding every sibling of the
+  workspace. No explicit destination, an unknown option, or a value the shell
+  computes yields no path at all.
 - **A wire probe no longer answers for a wire that never answered**: the probe
   took the first candidate that replied within its budget, so a gateway whose
   `/responses` answered a working 200 in 12-19s (a 24KB response body through a
