@@ -664,11 +664,16 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				}
 			}
 		}
-		// Opt-in: under auto an Allow has already settled the risk question, so
-		// the network capability may ride that answer instead of being asked
-		// again. A remembered denial returned above; ask mode, Confirm, Contain,
-		// Deny and a failed review keep their own paths.
-		if network && !v.Network && NetworkFollow() && optsIsAuto(state) && v.Level == Allow && !v.Failed {
+		// Under auto every level except Deny means "this call may run" — Allow
+		// outright, Confirm approved on the spot, Contain run isolated — so the
+		// network capability rides that answer instead of being asked again: the
+		// reviewer has already settled the risk, and a second question about the
+		// same call is the same decision asked twice. A remembered denial
+		// returned above, Deny still blocks, and a failed review still grants
+		// nothing. In ask mode the person is being asked anyway, so the question
+		// stays theirs.
+		if network && !v.Network && NetworkFollow() && optsIsAuto(state) && !v.Failed &&
+			(v.Level == Allow || v.Level == Confirm || v.Level == Contain) {
 			v.Network = true
 		}
 		// Do not offer a "network inside the sandbox" answer if the process

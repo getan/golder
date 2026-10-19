@@ -106,9 +106,7 @@ type Gates struct {
 func NewGates(opts GatesOpts) *Gates {
 	// The network policy is persisted beside config.toml; a parse/open failure
 	// leaves the safe default (off) rather than guessing.
-	if cfg, err := config.LoadNetworkConfig(); err == nil {
-		judge.SetNetworkFollow(cfg.Follow)
-	}
+	judge.SetNetworkFollow(config.NetworkFollowEnabled())
 	return &Gates{opts: opts}
 }
 

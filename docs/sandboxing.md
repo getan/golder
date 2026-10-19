@@ -46,7 +46,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 
 `GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
 
-网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。默认下 contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）把 auto 模式下**所有 Allow**（包括 contained）的网络一起带上；`/network add host|command|tool <key>` 可以预授权，`/network rm` 删除。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
+网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。`/network follow` **默认开**，把 auto 模式下**评审通过的调用**（allow / confirm / contain，含 contained）的网络一起带上——那次调用本身已经过审查，不再问第二遍；`/network follow off` 恢复每次单独问。`/network add host|command|tool <key>` 可以预授权（`ask` 档或想不经评审时仍有用），`/network rm` 删除。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
 
 ### `auto` 的审查器（就是会话模型）
 
@@ -131,11 +131,11 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 网络与 golder 自身状态
 
-**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。普通 `Allow/Confirm` 评级**不**等于联网许可（`/network follow on` 的可选例外见下：auto 的 Allow 直接携带网络；ask/Confirm 仍按次）；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
+**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。auto 档下被评审为 Allow 的调用直接携带网络（`/network follow`，默认开；`off` 恢复逐次询问），`ask` 与 Confirm 仍按次；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
-**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。默认下 contained 调用和 `GOLDER_SANDBOX=enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）让 auto 的 Allow（含 contained）一起携带网络；`/network add host|command|tool <key>` 预授权，`/network rm` 删除。
+**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。contained 调用同样随 auto 的 Allow 一起获得网络（`/network follow`，默认开）；`/network follow off` 恢复逐次询问，`/network add host|command|tool <key>` 预授权，`/network rm` 删除。
 
-**`/network` 的三种用法**：`/network add host|command|tool <key>` 预先记住"允许"（host 可带工具名）；`/network rm` 删除；`/network follow on|off` 切换"auto 的 Allow 直接携带网络"（默认关，保存在 `network.toml`，记住的拒绝仍优先，`ask` 不变）。复合命令的 command key 只有在这种形状才成立：每个部分要么是同一个可记住的程序，要么是非联网程序（`cd … && GOCACHE=… go test … | tail` → `go test`；`git push && curl evil` 不记）。
+**`/network` 的三种用法**：`/network add host|command|tool <key>` 预先记住"允许"（host 可带工具名）；`/network rm` 删除；`/network follow [on|off]` 切换"auto 的 Allow 直接携带网络"（**默认开**，保存在 `network.toml`；`off` 是明确选择"每次单独问"；记住的拒绝仍优先，`ask` 不变）。复合命令的 command key 只有在这种形状才成立：每个部分要么是同一个可记住的程序，要么是非联网程序（`cd … && GOCACHE=… go test … | tail` → `go test`；`git push && curl evil` 不记）。
 
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 

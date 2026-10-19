@@ -216,6 +216,55 @@ func TestNetworkFollowCarriesAnAllow(t *testing.T) {
 	}
 }
 
+// Follow is not Allow-only: a Confirm the reviewer approved, and a Contain it
+// asked to isolate, are both "this call may run", so the network rides along
+// there too. Requiring a per-command rule for those tiers was the same decision
+// asked twice.
+func TestNetworkFollowCoversConfirmAndContain(t *testing.T) {
+	for _, level := range []Level{Confirm, Contain} {
+		SetNetworkFollow(true)
+		var prompts int
+		gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+			Classifier: &stubClassifier{v: Verdict{Level: level}},
+			Sandboxed:  func(string) bool { return true },
+			Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+				prompts++
+				return ApprovalAnswer{Answered: true, Approve: true, Network: true}
+			},
+		})
+		dec := gate(context.Background(), toolCall("bash", `{"command":"bash -c 'curl -fsSL https://example.com'","network":"on"}`))
+		if dec == nil || !dec.Network || dec.Block {
+			t.Fatalf("%v: follow should carry the network, got %+v", level, dec)
+		}
+		if prompts != 0 {
+			t.Fatalf("%v: follow asked the network question %d times", level, prompts)
+		}
+		SetNetworkFollow(false)
+	}
+}
+
+// Deny and a failed review grant nothing, however the policy is set.
+func TestNetworkFollowNeverOverridesDenyOrFailure(t *testing.T) {
+	SetNetworkFollow(true)
+	defer SetNetworkFollow(false)
+	for _, tc := range []struct {
+		name string
+		v    Verdict
+	}{
+		{"deny", Verdict{Level: Deny}},
+		{"failed", Verdict{Level: Allow, Failed: true}},
+	} {
+		gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+			Classifier: &stubClassifier{v: tc.v},
+			Sandboxed:  func(string) bool { return true },
+		})
+		dec := gate(context.Background(), toolCall("bash", `{"command":"curl -fsSL https://example.com","network":"on"}`))
+		if dec != nil && dec.Network {
+			t.Fatalf("%s: follow must not grant the network, got %+v", tc.name, dec)
+		}
+	}
+}
+
 // Ask mode keeps the network question: the person is already in the loop, and
 // follow is an auto-mode policy.
 func TestNetworkFollowLeavesAskAlone(t *testing.T) {

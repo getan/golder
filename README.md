@@ -280,7 +280,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
 
-**网络授权**：默认每次单独问；`/network add host|command|tool <key>` 预授权、`/network follow on` 让 auto 的 Allow 直接携带网络（记住的拒绝仍优先，ask 不变）、`/network rm` 删除、`/network list` 查看；`follow` 持久化在 `network.toml`。
+**网络授权**：网络默认关闭，随调用一起授权。`/network follow`（默认**开**）让 auto 档下**评审通过的调用**（allow / confirm / contain）直接携带网络——那次调用本身已被审查过，不再单独问一遍；`/network follow off` 恢复每次单独问。`/network add host|command|tool <key>` 预授权（在 `ask` 档、或想完全不依赖评审时仍然有用）、`/network rm` 删除、`/network list` 查看；设置持久化在 `network.toml`。记住的拒绝始终优先，Deny 与评审失败不放行，`ask` 模式不受影响。
 
 ### 常用开关
 

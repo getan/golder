@@ -1468,6 +1468,14 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **`/network follow` now ships on, and covers every approved level**: under
+  auto an Allow, a Confirm approved on the spot, and a Contain all mean "this
+  call may run", so the network rides that answer instead of raising a second
+  question — the reviewer already settled the risk, and the prompt was the same
+  decision asked twice. `follow` is a tri-state in `network.toml`: an absent key
+  means on, `follow = false` is the explicit opt-out that restores per-call
+  asking. A remembered denial still wins, Deny and a failed review still grant
+  nothing, and ask mode is untouched.
 - **Command Code's transport keeps HTTP/2**: the no-HTTP/2 tuning made the
   client parse the endpoint's h2 SETTINGS frame as a malformed HTTP response;
   the provider now leaves HTTP/2 enabled and keeps only the compression and

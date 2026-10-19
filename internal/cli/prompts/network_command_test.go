@@ -61,18 +61,8 @@ func TestNetworkFollow(t *testing.T) {
 	judge.SetNetworkFollow(false)
 	defer judge.SetNetworkFollow(false)
 
-	if got := runNetworkFollow("on", "en"); !strings.Contains(got, "enabled") {
-		t.Fatalf("follow on = %q", got)
-	}
-	if !judge.NetworkFollow() {
-		t.Fatal("follow on did not reach the judge")
-	}
-	cfg, err := config.LoadNetworkConfig()
-	if err != nil || !cfg.Follow {
-		t.Fatalf("persisted config = %+v, %v", cfg, err)
-	}
-	if got := runNetworkFollow("show", "en"); !strings.Contains(got, "on") {
-		t.Fatalf("follow show = %q", got)
+	if got := runNetworkFollow("", "en"); !strings.Contains(got, "the default") {
+		t.Fatalf("follow show before any choice = %q, want it to name the default", got)
 	}
 	if got := runNetworkFollow("off", "en"); !strings.Contains(got, "disabled") {
 		t.Fatalf("follow off = %q", got)
@@ -80,8 +70,21 @@ func TestNetworkFollow(t *testing.T) {
 	if judge.NetworkFollow() {
 		t.Fatal("follow off did not reach the judge")
 	}
+	cfg, err := config.LoadNetworkConfig()
+	if err != nil || cfg.Follow == nil || *cfg.Follow {
+		t.Fatalf("persisted config = %+v, %v", cfg, err)
+	}
+	if got := runNetworkFollow("show", "en"); !strings.Contains(got, "opted out") {
+		t.Fatalf("follow show after off = %q", got)
+	}
+	if got := runNetworkFollow("on", "en"); !strings.Contains(got, "enabled") {
+		t.Fatalf("follow on = %q", got)
+	}
+	if !judge.NetworkFollow() {
+		t.Fatal("follow on did not reach the judge")
+	}
 	cfg, err = config.LoadNetworkConfig()
-	if err != nil || cfg.Follow {
-		t.Fatalf("persisted config after off = %+v, %v", cfg, err)
+	if err != nil || cfg.Follow == nil || !*cfg.Follow {
+		t.Fatalf("persisted config after on = %+v, %v", cfg, err)
 	}
 }

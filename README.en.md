@@ -266,7 +266,7 @@ The four modes decide *whether* a call may run; the envelope decides *where*. Th
 - Native file tools (`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`) executed by the one-shot `toolworker` sandbox carry `·sandbox` too; the in-process fallback (`full-access`/direct/no runner) carries `·unconfined`. Tools outside the OS sandbox (`todo`/`websearch`/`webfetch`) carry no marker.
 - `GOLDER_SANDBOX=enforce` still contains every call, ahead of the envelope; `full-access` is unchanged.
 
-Network is a separate dimension: a bare run is on the host, so its network is inherent; a bare allow or an auto-approved confirm no longer asks the network question separately (a remembered network denial still wins). By default a contained call and `enforce` still grant network per call, or remember it with `/network`; `/network follow on` (off by default) lets an auto-mode allow — contained included — carry its network; `/network add host|command|tool <key>` pre-authorizes. The envelope is not a network whitelist and not a persistent grant.
+Network is a separate dimension: a bare run is on the host, so its network is inherent; a bare allow or an auto-approved confirm no longer asks the network question separately (a remembered network denial still wins). `/network follow` (on by default) extends that to every call the reviewer approved under auto — allow, confirm, contain — so a reviewed call does not raise a second question; `/network follow off` restores the per-call question, and `/network add host|command|tool <key>` pre-authorizes (still the tool for ask mode, or when you want to settle it without a review). The envelope is not a network whitelist and not a persistent grant.
 
 ### Permission modes
 

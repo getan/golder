@@ -9,13 +9,19 @@ import (
 
 func TestNewGatesLoadsNetworkFollow(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
-	if err := config.SaveNetworkConfig(config.NetworkConfig{Follow: true}); err != nil {
-		t.Fatalf("save: %v", err)
+	// The shipped default is on.
+	judge.SetNetworkFollow(false)
+	NewGates(GatesOpts{})
+	if !judge.NetworkFollow() {
+		t.Fatal("NewGates should turn the policy on when config.toml says nothing")
 	}
 	judge.SetNetworkFollow(false)
 	defer judge.SetNetworkFollow(false)
+	if err := config.SetNetworkFollowEnabled(false); err != nil {
+		t.Fatalf("save: %v", err)
+	}
 	NewGates(GatesOpts{})
-	if !judge.NetworkFollow() {
-		t.Fatal("NewGates did not load the persisted follow policy")
+	if judge.NetworkFollow() {
+		t.Fatal("an explicit off should survive into the gates")
 	}
 }

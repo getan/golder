@@ -9,12 +9,38 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// NetworkConfig is the optional policy for the network capability. Follow is
-// off by default: the network stays a separate per-call decision. When it is on,
-// an auto-mode Allow carries the network bit with it instead of asking again;
-// a remembered denial still wins, and ask mode keeps its own question.
+// NetworkConfig is the optional policy for the network capability.
+//
+// Follow is ON by default, which is why it is a pointer: an absent key means
+// "the default", while `follow = false` is a decision the user made. Under the
+// default, an auto-mode Allow carries the network bit with it instead of asking
+// a second question — the call's own review already settled the risk; a
+// remembered denial still wins, and ask mode keeps its own question.
 type NetworkConfig struct {
-	Follow bool `toml:"follow"`
+	Follow *bool `toml:"follow"`
+}
+
+// NetworkFollowEnabled resolves the policy: unset means on, and an explicit
+// false means off. A config that cannot be read also means on — the setting is
+// a convenience, and failing to read a preference must not turn into a silent
+// change of how much gets asked.
+func NetworkFollowEnabled() bool {
+	cfg, err := LoadNetworkConfig()
+	if err != nil || cfg.Follow == nil {
+		return true
+	}
+	return *cfg.Follow
+}
+
+// SetNetworkFollowEnabled writes an explicit value, so "off" survives a restart.
+func SetNetworkFollowEnabled(on bool) error {
+	cfg, err := LoadNetworkConfig()
+	if err != nil {
+		return err
+	}
+	v := on
+	cfg.Follow = &v
+	return SaveNetworkConfig(cfg)
 }
 
 // NetworkConfigPath is the network policy file beside config.toml, kept

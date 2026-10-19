@@ -1301,38 +1301,37 @@ func addedNetworkText(g grants.NetworkGrant, l string) string {
 	return "added network rule: " + scope + " [" + life + "]"
 }
 
-// runNetworkFollow persists and applies the opt-in auto-allow network policy.
-// The default is off; turning it on never weakens a remembered denial, and it
-// does not touch ask mode.
+// runNetworkFollow reports or changes the auto-allow network policy. It ships
+// on: an auto-mode Allow already settled the risk of the call, so the network
+// rides with it instead of raising a second question. Turning it off restores
+// the per-call question, and neither setting weakens a remembered denial or
+// touches ask mode.
 func runNetworkFollow(arg, l string) string {
-	cfg, err := config.LoadNetworkConfig()
-	if err != nil {
-		return networkFollowError(err, l)
-	}
+	on := config.NetworkFollowEnabled()
 	switch arg {
 	case "", "show":
-		return networkFollowText(cfg.Follow, true, l)
+		return networkFollowText(on, true, l)
 	case "on":
-		cfg.Follow = true
+		on = true
 	case "off":
-		cfg.Follow = false
+		on = false
 	default:
 		return usageLineText(l, "/network follow [on|off]")
 	}
-	if err := config.SaveNetworkConfig(cfg); err != nil {
+	if err := config.SetNetworkFollowEnabled(on); err != nil {
 		return networkFollowError(err, l)
 	}
-	judge.SetNetworkFollow(cfg.Follow)
-	return networkFollowText(cfg.Follow, false, l)
+	judge.SetNetworkFollow(on)
+	return networkFollowText(on, false, l)
 }
 
 func networkFollowText(on, show bool, l string) string {
 	if l == "zh" {
 		if show {
 			if on {
-				return "网络跟随评审的 Allow：开（auto 的 Allow 不再单独问网络）"
+				return "网络跟随评审的 Allow：开（默认；auto 的 Allow 不再单独问网络）"
 			}
-			return "网络跟随评审的 Allow：关（网络是每次单独的问题）"
+			return "网络跟随评审的 Allow：关（关掉了默认：网络是每次单独的问题）"
 		}
 		if on {
 			return "已开启：auto 模式下 Allow 的调用直接携带网络（记住的拒绝仍优先；ask 不变）"
@@ -1341,9 +1340,9 @@ func networkFollowText(on, show bool, l string) string {
 	}
 	if show {
 		if on {
-			return "network follows an auto-mode allow: on"
+			return "network follows an auto-mode allow: on (the default)"
 		}
-		return "network follows an auto-mode allow: off"
+		return "network follows an auto-mode allow: off (opted out of the default)"
 	}
 	if on {
 		return "enabled: an auto-mode allow carries its network; a remembered denial still wins and ask is unchanged"
