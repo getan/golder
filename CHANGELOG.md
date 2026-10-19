@@ -1521,6 +1521,18 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **The model is told which sandbox envelope its command actually ran in**: a
+  `sandbox_permissions="require_escalated"` request is a request, and under auto
+  the gate can allow the call while re-containing it (judge's
+  `ApprovalEscalation`: only an explicit Direct grant runs bare). The person saw
+  that decision on the card (`·sandbox` / `·unconfined`) and in the gate's note,
+  but the model's context only carries the result text — so a contained retry
+  looked exactly like a granted escape, and the model went on reasoning about a
+  sandbox it was not in (and blamed the sandbox for unrelated behavior). Every
+  escalated call's result now ends with `[escape granted: …]` or
+  `[escape not granted: …]`, and the sandbox guide says to trust that line over
+  the request: asking is normal work, a refused shape is not repeated, and a
+  changed shape (a different path, a narrower command) may ask again.
 - **Scrolling stopped rebuilding the whole frame per event, and history stopped
   freezing the flick that reached it**: Bubble Tea asks for a frame after every
   message it dispatches, so one two-finger flick on a trackpad paid a full shell

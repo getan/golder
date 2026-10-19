@@ -17,6 +17,62 @@ import (
 	"github.com/getan/golder/internal/seatbelt"
 )
 
+// TestBashEscapeNoteTellsTheModelTheEnvelope locks the line that closes the
+// loop between the gate and the model: the result text — all the model ever
+// sees — must say which envelope the call actually ran in. The person already
+// sees it on the card and in the gate's note; before this, a request that was
+// re-contained looked exactly like a granted escape to the model.
+func TestBashEscapeNoteTellsTheModelTheEnvelope(t *testing.T) {
+	dir := t.TempDir()
+	args := map[string]any{
+		"command":             "echo hi",
+		"sandbox_permissions": "require_escalated",
+		"justification":       "needs a path outside the workspace",
+	}
+
+	// The gate contained the call: the escape was not granted, and the result
+	// says so instead of letting the model assume it is outside the sandbox.
+	runner := &stubRunner{}
+	tool := &BashTool{Dir: dir, Sandbox: runner}
+	res, err := runBashCtx(t, agentcore.WithSandboxRequest(context.Background()), tool, args, nil)
+	if err != nil {
+		t.Fatalf("contained run: %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("sandbox runs = %d, want the call contained", runner.calls)
+	}
+	if got := resultText(res); !strings.Contains(got, "escape not granted") {
+		t.Fatalf("contained escalation result must name the envelope, got %q", got)
+	}
+
+	// The gate granted the escape: the command runs as itself and the result
+	// says so, so a later "why is this blocked?" is not asked of the sandbox.
+	direct := &stubRunner{}
+	tool = &BashTool{Dir: dir, Sandbox: direct}
+	res, err = runBashCtx(t, agentcore.WithDirectGrant(context.Background()), tool, args, nil)
+	if err != nil {
+		t.Fatalf("direct run: %v", err)
+	}
+	if direct.calls != 0 {
+		t.Fatalf("a granted escape must not go through the runner, calls=%d", direct.calls)
+	}
+	if got := resultText(res); !strings.Contains(got, "escape granted") {
+		t.Fatalf("granted escalation result must name the envelope, got %q", got)
+	}
+
+	// An ordinary call carries no envelope noise: the line is about a request
+	// the model made, not about every command.
+	plain := &stubRunner{}
+	tool = &BashTool{Dir: dir, Sandbox: plain}
+	res, err = runBashCtx(t, context.Background(), tool, map[string]any{"command": "echo hi"}, nil)
+	if err != nil {
+		t.Fatalf("plain run: %v", err)
+	}
+	if got := resultText(res); strings.Contains(got, "escape") {
+		t.Fatalf("an ordinary call must not mention the escape, got %q", got)
+	}
+}
+
 // TestBashRequireEscalatedRunsDirect proves the request is not authorization:
 // without a Direct grant it cannot run. An explicit decision from the gate
 // permits a single direct invocation, without re-entering the sandbox.

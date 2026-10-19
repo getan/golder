@@ -536,6 +536,13 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}
 		return errorResult(msg), nil
 	}
+	// The model asked for an envelope and the gate decided: it may have granted
+	// the escape (bare) or re-contained the call. The person sees that decision
+	// on the card and in the gate's note, but the model's context only ever
+	// carries the result text — so the decision has to ride here too (see
+	// escapeNote). Without it, a re-contained request is indistinguishable from
+	// a granted one, and the model goes on reasoning about a sandbox it is not in.
+	note := escapeNote(a.SandboxPermissions, sandboxed)
 
 	var timeout time.Duration
 	if a.TimeoutMs > 0 {
@@ -636,6 +643,12 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		rgMissing = true
 		hint = rgMissingHint
 	}
+	// A failure no other hint explains still leaves the model guessing which
+	// envelope it got (a contained retry of an escape request fails exactly like
+	// a granted one would).
+	if hint == "" {
+		hint = note
+	}
 
 	// The sandbox denied a path this command needs. Offer it back to the person
 	// — the question is the refused-escape dialog's, asked at the moment the
@@ -686,6 +699,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}
 		text += fmt.Sprintf("[%s: running]\nUse write_stdin with bash_id %q to read more output; send chars \"%s\" (Ctrl-C) to interrupt.",
 			sess.ID, sess.ID, interruptHint)
+		text += note
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(text)},
 			Details: map[string]any{
@@ -697,7 +711,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 
 	if snap.TimedOut {
 		return agentcore.AgentToolResult{
-				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
+				Content: agentcore.ContentList{agentcore.NewTextContent(out + note)},
 				Details: map[string]any{"envelope": envelopeDetail(sandboxed)},
 			},
 			fmt.Errorf("bash: command timed out after %s\n%s", snap.Timeout, out)
@@ -718,7 +732,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			fmt.Errorf("bash: command exited with code %d\n%s%s", snap.ExitCode, out, hint)
 	}
 	return agentcore.AgentToolResult{
-		Content: agentcore.ContentList{agentcore.NewTextContent(out)},
+		Content: agentcore.ContentList{agentcore.NewTextContent(out + note)},
 		Details: map[string]any{"exitCode": 0, "envelope": envelopeDetail(sandboxed)},
 	}, nil
 }
@@ -732,4 +746,27 @@ func envelopeDetail(sandboxed bool) string {
 		return "sandbox"
 	}
 	return "bare"
+}
+
+// escapeNote is the line the model gets about the envelope it asked for. Empty
+// for an ordinary call: the envelope only matters here when the model requested
+// a different one.
+//
+// It exists because "the escape was approved" and "the command ran" are two
+// different facts, and under auto the gate can allow a call while re-containing
+// it (judge's ApprovalEscalation: only an explicit Direct grant runs bare,
+// anything less keeps the sandbox). The person sees that decision — the card's
+// envelope marker and the gate's note — but the model's context carries only the
+// result text, so without this line a contained retry reads exactly like a
+// granted escape. The model then reasons about a sandbox it is not in, and the
+// next thing it does is blame the sandbox for a tool's own behavior.
+func escapeNote(perms string, sandboxed bool) string {
+	if !strings.EqualFold(strings.TrimSpace(perms), sandboxPermissionEscalated) {
+		return ""
+	}
+	if sandboxed {
+		return "\n[escape not granted: this call ran inside the sandbox; repeating the same request will " +
+			"not change that]"
+	}
+	return "\n[escape granted: this call ran outside the sandbox]"
 }

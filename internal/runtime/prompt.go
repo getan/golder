@@ -309,27 +309,36 @@ const contextGuide = "The context window is finite. Check the remaining budget w
 // (the working directory and $TMPDIR), so commands do not fail on denied
 // writes to sibling or home directories — and delete operations outside those
 // roots do not turn into unverifiable half-successes. It also names the
-// escalation contract: one retry with require_escalated, then stop.
+// escalation contract. The rule it states is about REPEATING a request, not
+// about making one: asking for access the sandbox denies is ordinary work, and
+// the result now says which envelope the call actually ran in (bash_tool's
+// escapeNote), so the guide can tell the model to read that line instead of
+// assuming its request was granted.
 const sandboxGuide = "Shell commands may run inside an OS sandbox that confines file writes to the " +
 	"working directory and $TMPDIR and turns the network off. Create scratch and temporary files " +
 	"inside the working directory or $TMPDIR — never in sibling or home directories, where writes " +
 	"are denied and nothing can be cleaned up from inside the sandbox. If a command legitimately " +
-	"needs access the sandbox denies, retry it once with sandbox_permissions=\"require_escalated\" " +
-	"and a short justification. The approval mode decides who answers: the reviewer under auto, " +
-	"the user under ask. If that escalation is not granted (the command " +
-	"runs sandboxed again), stop retrying, tell the user what access the task needs, and continue " +
-	"with a sandbox-compatible approach."
+	"needs access the sandbox denies, ask for it with sandbox_permissions=\"require_escalated\" and a " +
+	"short justification; that is a normal request, not a failure. The approval mode decides who " +
+	"answers: the reviewer under auto, the user under ask. The result then says which envelope the " +
+	"call ran in — \"escape granted\" means it ran outside the sandbox, \"escape not granted\" means it " +
+	"stayed contained — and that line is the fact to reason from; your request is not the fact. When " +
+	"it says not granted, do not repeat the same request: narrow the command, re-admit the one path it " +
+	"needs (/boundary readable|writable add), or ask the user to switch /permissions to ask so the " +
+	"request reaches a person. A new request is fine once the shape changes (a different path, a " +
+	"narrower command); what must not repeat is the same one."
 
 // approvalGuide keeps capability approvals from becoming a retry loop. The
-// sandbox guide already says "one escalation then stop"; this adds the shapes
-// that actually caused repeated human dialogs: per-call network grants, path
-// consent raised by an absolute $HOME operand the call did not need, and PTY
-// allocation, which no escalation can grant.
+// sandbox guide already says "do not repeat the same request"; this adds the
+// shapes that actually caused repeated human dialogs: per-call network grants,
+// path consent raised by an absolute $HOME operand the call did not need, and
+// PTY allocation, which no escalation can grant.
 const approvalGuide = "Approvals are capability answers, not retries. " +
 	"Batch calls that need the same capability: one command for several downloads or network tests, " +
 	"one write to a known external path, one interactive run. " +
 	"After a sandbox escape, path grant or network request is refused, never repeat the same " +
-	"capability or the same path — change the approach or tell the user exactly what access is needed. " +
+	"capability or the same path — a result that says \"escape not granted\" is that refusal; change the " +
+	"approach or tell the user exactly what access is needed. " +
 	"When the sandbox reports that it cannot allocate a pseudo-terminal (PTY), do not retry with " +
 	"sandbox_permissions=\"require_escalated\"; use an in-process or unit test instead. " +
 	"Invoke installed programs by name rather than by an absolute $HOME path, so a read the call " +
