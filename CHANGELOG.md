@@ -64,7 +64,10 @@ interactive REPL/TUI.
   frame as a malformed HTTP response. A cut after
   visible text with no tool call is continued from the partial answer by
   default (up to two continuations; set `GOLDER_STREAM_RESUME=0`/`off` to keep
-  every cut terminal). A tool-call turn still surfaces the cut.
+  every cut terminal). A tool-call turn still surfaces the cut. A cut that
+  landed after only reasoning — no answer text, no tool call — is now re-issued
+  instead of ending the turn with "stream cut … retry the turn": thinking is
+  transient, so the retry had nothing of the user's to duplicate or lose.
 - **A default provider you can set from inside the session**: `/provider default
   <name>` writes the `provider` line of `config.toml` (show, or `off` to clear),
   rewriting the pinned `model` line to the new gateway's own default when one is
@@ -1518,6 +1521,22 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **Scrolling stopped rebuilding the whole frame per event, and history stopped
+  freezing the flick that reached it**: Bubble Tea asks for a frame after every
+  message it dispatches, so one two-finger flick on a trackpad paid a full shell
+  render per wheel event and per motion event — 484µs and 9,041 allocations per
+  frame, two thirds of it the per-row lipgloss pass the transcript ran over its
+  window. The transcript now slices that window out of its content lines and
+  pads them itself (39µs and 219 allocations for a 40-row frame, byte-identical
+  output), an assistant block reuses its rendered Markdown when neither its
+  text, the wrap width nor the palette changed (a glamour render costs 3ms for a
+  short answer and 42ms for a long one, and scrolling while an answer streamed
+  re-ran it at every step), and materializing deferred history is bounded by an
+  8ms render budget per scroll event instead of one 64-block chunk — which is
+  the two-second freeze a fast flick hit when it reached the top of a resumed
+  session's materialized window. The rest of that step fills in on a 30ms
+  continuation tick, so history streams in above the position the flick stopped
+  at rather than blocking the event loop in one lump.
 - **A turn that ends with reasoning and nothing else no longer ends the run**:
   the model could spend its whole response thinking, stop there, and leave the
   task stopped mid-step — the last tool card stayed on screen and nothing
