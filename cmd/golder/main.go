@@ -46,6 +46,7 @@ import (
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/redact"
 	"github.com/getan/golder/internal/selfupdate"
 	"github.com/getan/golder/internal/toolworker"
 	"github.com/getan/golder/internal/webhook"
@@ -163,6 +164,10 @@ type cliOptions struct {
 	// defaults applied. The interactive REPL consumes it to decide the startup
 	// background auto-consolidation (US-008). Like memory it has no CLI flags.
 	dreamCfg dream.Config
+	// redactCfg is the [redact] table: the embedded DLP layer. It has no CLI
+	// flags; applyFileConfig populates it and configureRedact installs the
+	// process redactor before any run starts.
+	redactCfg config.RedactConfig
 	// allowedTools and disallowedTools are the --allowed-tools/--disallowed-tools
 	// values: the tool-level admission boundary for the run, filling the gap
 	// between "all tools" and --no-tools. Each is repeatable and each value may be
@@ -308,6 +313,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", cfgErr)
 	} else {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
+	}
+	// Install the DLP layer before any run can build a request. A malformed
+	// mode or audit path disables redaction rather than aborting the CLI: the
+	// user asked to run the agent, and a startup failure would be a worse
+	// trade-off than a loud warning. The default (empty mode) is "redact".
+	if err := configureRedact(opts.redactCfg, opts.apiKey); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: redaction disabled: %v\n", err)
+		redact.SetDefault(nil)
 	}
 	// The unified authorization table: grants.json in the state root. On a first
 	// run it folds the older stores into it (trust.json, the retired managed
@@ -476,10 +489,56 @@ func applyFileConfig(opts *cliOptions, cfg config.FileConfig, changed func(strin
 	// are resolved (with defaults) and overlaid unconditionally — an absent set
 	// of tables yields the default-safe MemorySettings.
 	opts.memory = cfg.ResolveMemorySettings()
+	opts.redactCfg = cfg.Redact
 	// The [dream] table also has no CLI flags; normalize it (defaults applied when
 	// the table is absent) so the interactive startup trigger has a resolved
 	// Config. NewConfig treats a nil enabled as true, so dream is on by default.
 	opts.dreamCfg = dream.NewConfig(cfg.Dream.Enabled, cfg.Dream.IntervalDays, cfg.Dream.RecentSessions)
+}
+
+// configureRedact builds the process-wide redactor from the [redact] table and
+// seeds it with golder's own credentials, so "run env" cannot echo a provider
+// key whose shape the rule table does not know. The values are held in memory
+// only; the audit log records hashes and rule names, never plaintext.
+func configureRedact(cfg config.RedactConfig, apiKey string) error {
+	mode, err := redact.ParseMode(cfg.Mode)
+	if err != nil {
+		return err
+	}
+	if mode == redact.Off {
+		redact.SetDefault(nil)
+		return nil
+	}
+	audit := cfg.Audit
+	if audit == "" {
+		audit = golderhome.File("redact-audit.jsonl")
+	}
+	r, err := redact.New(redact.Config{
+		Mode:      mode,
+		Entropy:   cfg.Entropy,
+		Allow:     cfg.Allow,
+		AuditPath: audit,
+	})
+	if err != nil {
+		return err
+	}
+	if apiKey != "" {
+		r.AddKnown(apiKey)
+	}
+	for _, entry := range os.Environ() {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || len(value) < 8 {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(name, "_API_KEY"),
+			strings.HasSuffix(name, "_TOKEN"),
+			strings.HasSuffix(name, "_SECRET"):
+			r.AddKnown(value)
+		}
+	}
+	redact.SetDefault(r)
+	return nil
 }
 
 // dispatch runs the resolved command and returns a process exit code, writing

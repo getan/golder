@@ -9,6 +9,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/memory"
+	"github.com/getan/golder/internal/redact"
 )
 
 // defaultMemoryReminderMaxChars is the per-turn character budget for the
@@ -373,7 +374,11 @@ func (p *MemoryReminderProvider) buildBody(results []memory.SearchResult) string
 	if b.Len() <= len(heading) {
 		return ""
 	}
-	return b.String()
+	body := b.String()
+	if r := redact.Default(); r != nil {
+		body = r.Text(redact.SeamMemory, "", body)
+	}
+	return body
 }
 
 // memoryRank returns a sort key that floats MEMORY.md index files and free-type

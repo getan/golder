@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/redact"
 )
 
 // SchemaVersion is the current session file schema version. It is written into
@@ -427,6 +428,8 @@ func (s *Store) Save(header SessionHeader, messages agentcore.MessageList) error
 	if header.ID == "" {
 		return fmt.Errorf("session: header ID must not be empty")
 	}
+	redactHeader(&header)
+	messages = redactMessageList(redact.SeamSession, messages)
 	return s.atomicWrite(header.ID, func(w io.Writer) error {
 		return writeSession(w, header, messages)
 	})
@@ -442,6 +445,10 @@ func (s *Store) SaveEntries(header SessionHeader, entries []Entry) error {
 	header.Version = SchemaVersion
 	if header.ID == "" {
 		return fmt.Errorf("session: header ID must not be empty")
+	}
+	redactHeader(&header)
+	for i := range entries {
+		entries[i].Message = redactMessage(redact.SeamSession, entries[i].Message)
 	}
 	return s.atomicWrite(header.ID, func(w io.Writer) error {
 		return writeSessionEntries(w, header, entries)
@@ -546,7 +553,45 @@ func (s *Store) LoadEntries(id string) (SessionHeader, []Entry, error) {
 		return SessionHeader{}, nil, fmt.Errorf("session: open %s: %w", id, err)
 	}
 	defer f.Close()
-	return readSession(f)
+	header, entries, err := readSession(f)
+	if err != nil {
+		return SessionHeader{}, nil, err
+	}
+	redactHeader(&header)
+	for i := range entries {
+		entries[i].Message = redactMessage(redact.SeamSession, entries[i].Message)
+	}
+	return header, entries, nil
+}
+
+// redactHeader scrubs the user-authored/session-level text that bypasses the
+// message pipeline (the system prompt and the two instruction halves).
+func redactHeader(header *SessionHeader) {
+	r := redact.Default()
+	if r == nil || header == nil {
+		return
+	}
+	header.SystemPrompt = r.Text(redact.SeamSession, "", header.SystemPrompt)
+	header.BaseInstruction = r.Text(redact.SeamSession, "", header.BaseInstruction)
+	for i := range header.AppendInstructions {
+		header.AppendInstructions[i] = r.Text(redact.SeamSession, "", header.AppendInstructions[i])
+	}
+}
+
+func redactMessageList(seam redact.Seam, msgs agentcore.MessageList) agentcore.MessageList {
+	r := redact.Default()
+	if r == nil {
+		return msgs
+	}
+	return r.Messages(seam, msgs)
+}
+
+func redactMessage(seam redact.Seam, m agentcore.Message) agentcore.Message {
+	r := redact.Default()
+	if r == nil {
+		return m
+	}
+	return r.Message(seam, m)
 }
 
 // readSession decodes a session stream: header line first, then entries. For

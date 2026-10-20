@@ -15,6 +15,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/getan/golder/internal/redact"
 )
 
 // FileName is the history file inside the golder home directory.
@@ -49,6 +51,9 @@ type Entry struct {
 // maxBytes it is rewritten to keep the newest lines (trimRatio of the cap).
 // Appending to a path whose directory cannot be resolved fails.
 func Append(path string, e Entry) error {
+	if r := redact.Default(); r != nil {
+		e.Text = r.Text(redact.SeamUserPrompt, "", e.Text)
+	}
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err

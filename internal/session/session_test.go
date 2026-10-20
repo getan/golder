@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/redact"
 )
 
 // writeFile writes content to path (test helper for hand-crafted fixtures).
@@ -226,6 +227,68 @@ func TestLoadV1FileStillReadable(t *testing.T) {
 	}
 	if len(msgs) != 1 || msgs[0].Role() != agentcore.RoleUser {
 		t.Fatalf("messages: got %+v", msgs)
+	}
+}
+
+// TestSessionRedactsOnSaveAndLoad is the persistence leak-proofing test: the
+// system prompt and every message class are scrubbed before the JSONL hits
+// disk, and a pre-existing plaintext session is scrubbed again on load.
+func TestSessionRedactsOnSaveAndLoad(t *testing.T) {
+	r, err := redact.New(redact.Config{Mode: redact.Redact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redact.SetDefault(r)
+	defer redact.SetDefault(nil)
+
+	s := newStore(t)
+	const secret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+	now := time.Now().UTC()
+	header := SessionHeader{
+		ID:                 "redact-session",
+		CreatedAt:          now,
+		UpdatedAt:          now,
+		SystemPrompt:       "deploy with " + secret,
+		BaseInstruction:    "use " + secret,
+		AppendInstructions: []string{"also " + secret},
+	}
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser,
+			Content: agentcore.ContentList{agentcore.NewTextContent("token " + secret)}},
+		agentcore.ToolResultMessage{RoleField: agentcore.RoleToolResult, ToolCallID: "1", ToolName: "bash",
+			Content: agentcore.ContentList{agentcore.NewTextContent("env " + secret)}},
+	}
+	if err := s.Save(header, msgs); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(s.Dir(), FileName("redact-session")))
+	if err != nil {
+		t.Fatalf("read session: %v", err)
+	}
+	if strings.Contains(string(raw), secret) {
+		t.Fatalf("session file leaked the secret: %s", raw)
+	}
+
+	gotHeader, gotMsgs, err := s.Load("redact-session")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if strings.Contains(gotHeader.SystemPrompt, secret) ||
+		strings.Contains(gotHeader.BaseInstruction, secret) ||
+		strings.Contains(strings.Join(gotHeader.AppendInstructions, "\n"), secret) {
+		t.Fatalf("header leaked after load: %+v", gotHeader)
+	}
+	for _, m := range gotMsgs {
+		var content agentcore.ContentList
+		switch msg := m.(type) {
+		case agentcore.UserMessage:
+			content = msg.Content
+		case agentcore.ToolResultMessage:
+			content = msg.Content
+		}
+		if strings.Contains(agentcore.ContentToText(content), secret) {
+			t.Fatalf("message leaked after load: %+v", m)
+		}
 	}
 }
 

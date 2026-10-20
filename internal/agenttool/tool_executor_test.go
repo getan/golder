@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/redact"
 )
 
 // execTool is a configurable AgentTool for executor tests.
@@ -610,4 +611,106 @@ func allText(msg agentcore.ToolResultMessage) string {
 		}
 	}
 	return b.String()
+}
+
+const executorTestSecret = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+
+// TestExecutorRestoresWriteTokens proves a placeholder the model saw in tool
+// output is expanded only for the file-writing tools, so a config the model
+// edits keeps the real value.
+func TestExecutorRestoresWriteTokens(t *testing.T) {
+	r, err := redact.New(redact.Config{Mode: redact.Redact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := r.Text(redact.SeamToolOutput, "bash", executorTestSecret)
+	if !strings.Contains(token, "«SECRET:") {
+		t.Fatalf("expected a token, got %q", token)
+	}
+
+	schema := `{"type":"object","properties":{"content":{"type":"string"}},"required":["content"],"additionalProperties":false}`
+	var seen string
+	tool := execTool{name: "write", schema: schema, run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		var in struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(args, &in); err != nil {
+			return agentcore.AgentToolResult{}, err
+		}
+		seen = in.Content
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("written")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.Redactor = r
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{
+		ID: "1", Name: "write", Arguments: json.RawMessage(`{"content":"` + token + `"}`),
+	}, nil)
+	if msg.IsError {
+		t.Fatalf("write failed: %+v", msg)
+	}
+	if seen != executorTestSecret {
+		t.Fatalf("write saw %q, want the restored secret", seen)
+	}
+	if strings.Contains(allText(msg), executorTestSecret) {
+		t.Fatalf("write result leaked the secret: %q", allText(msg))
+	}
+}
+
+// TestExecutorDoesNotRestoreShellTokens keeps the restore oracle closed: a
+// placeholder in a shell command must stay a placeholder, not become the value.
+func TestExecutorDoesNotRestoreShellTokens(t *testing.T) {
+	r, err := redact.New(redact.Config{Mode: redact.Redact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := r.Text(redact.SeamToolOutput, "bash", executorTestSecret)
+	schema := `{"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false}`
+	var seen string
+	tool := execTool{name: "bash", schema: schema, run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		var in struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(args, &in); err != nil {
+			return agentcore.AgentToolResult{}, err
+		}
+		seen = in.Command
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("ok")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.Redactor = r
+	if msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{
+		ID: "1", Name: "bash", Arguments: json.RawMessage(`{"command":"echo ` + token + `"}`),
+	}, nil); msg.IsError {
+		t.Fatalf("bash failed: %+v", msg)
+	}
+	if strings.Contains(seen, executorTestSecret) {
+		t.Fatalf("shell command received the secret: %q", seen)
+	}
+	if !strings.Contains(seen, "«SECRET:") {
+		t.Fatalf("shell command lost the placeholder: %q", seen)
+	}
+}
+
+// TestExecutorRedactsToolResult checks the tool-output seam in isolation: the
+// result that leaves the executor no longer contains the credential.
+func TestExecutorRedactsToolResult(t *testing.T) {
+	r, err := redact.New(redact.Config{Mode: redact.Redact})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := execTool{name: "bash", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{
+			agentcore.NewTextContent("GITHUB_TOKEN=" + executorTestSecret),
+		}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.Redactor = r
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "bash"}, nil)
+	got := allText(msg)
+	if strings.Contains(got, executorTestSecret) {
+		t.Fatalf("tool result leaked: %q", got)
+	}
+	if !strings.Contains(got, "«SECRET:") {
+		t.Fatalf("tool result has no placeholder: %q", got)
+	}
 }

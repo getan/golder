@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/getan/golder/internal/redact"
 )
 
 // Result reports what a Reconcile pass changed: Indexed counts rows inserted or
@@ -209,6 +211,9 @@ func (s *Store) indexFile(loc *Locator, defaultType Type, isCc bool, oldFingerpr
 		return false, fmt.Errorf("memory: read %q: %w", loc.Path, err)
 	}
 	body := string(raw)
+	if r := redact.Default(); r != nil {
+		body = r.Text(redact.SeamMemory, "", body)
+	}
 
 	finalType := defaultType
 	if isCc {

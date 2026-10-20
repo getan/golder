@@ -21,37 +21,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/redact"
 )
 
 // redactPlaceholder replaces every credential-shaped match.
 const redactPlaceholder = "[REDACTED]"
 
-// redactionPatterns are the credential shapes stripped by default. Order
-// matters only for overlapping shapes; each pattern is applied globally.
-var redactionPatterns = []*regexp.Regexp{
-	// Generic API tokens: sk-…, sk-proj-…, and similar dashed tokens.
-	regexp.MustCompile(`sk-[A-Za-z0-9_-]{8,}`),
-	// GitHub tokens (classic PATs, OAuth, app, refresh).
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{16,}`),
-	// AWS access key ids.
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	// Slack tokens.
-	regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`),
-	// Env-shaped assignments: NAME_API_KEY=…, NAME_TOKEN=…, NAME_SECRET=….
-	regexp.MustCompile(`(?i)\b[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET)[A-Z0-9_]*\s*=\s*[^\s"']+`),
-}
-
-// RedactText strips credential-shaped substrings, returning shareable text.
+// RedactText strips credential-shaped substrings, returning shareable text. It
+// shares one rule table with the in-context redactor; the export marker is the
+// plain [REDACTED] rather than a reversible token.
 func RedactText(s string) string {
-	for _, re := range redactionPatterns {
-		s = re.ReplaceAllString(s, redactPlaceholder)
-	}
-	return s
+	return redact.ShareText(s)
 }
 
 // ShareOptions controls one shareable export.

@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/redact"
 )
 
 // toolResultMaxBytes is the executor-layer budget for a single tool result's
@@ -57,6 +58,17 @@ type ToolExecutorConfig struct {
 	// negative value disables retrying (a single attempt). Mirrors the
 	// MaxResultBytes sentinel convention.
 	MaxToolRetries int
+	// Redactor overrides the process-wide redactor (redact.Default()). Tests and
+	// embedders use it to pin one engine; nil means "use the process default".
+	Redactor *redact.Redactor
+}
+
+// redactor resolves the engine this executor should use.
+func (c ToolExecutorConfig) redactor() *redact.Redactor {
+	if c.Redactor != nil {
+		return c.Redactor
+	}
+	return redact.Default()
 }
 
 // executeToolCall runs one tool call through prepare → execute → finalize and
@@ -81,7 +93,20 @@ func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			return errorToolResult(call, "aborted before execution: "+err.Error()), false
 		}
 	}
-	result, isError := runToolWithRetry(execCtx, cfg, tool, call, args, emit)
+	// A write tool may be asked to persist a value the model only ever saw as a
+	// placeholder. Expand it here, after the start event (which must stay
+	// redacted), and only for the two file-writing tools: expanding a token in a
+	// shell command would turn the placeholder into an exfiltration oracle.
+	execArgs := args
+	if r := cfg.redactor(); r != nil && (call.Name == "write" || call.Name == "apply_patch") {
+		if restored, n := r.RestoreJSON(string(execArgs)); n > 0 {
+			execArgs = json.RawMessage(restored)
+		}
+	}
+	result, isError := runToolWithRetry(execCtx, cfg, tool, call, execArgs, emit)
+	if r := cfg.redactor(); r != nil {
+		result = r.ToolResult(call.Name, result)
+	}
 	if note := repairNoteFrom(execCtx); note != "" {
 		result.Content = append(result.Content, agentcore.NewTextContent("\n\nnote: "+note))
 	}

@@ -33,6 +33,7 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/redact"
 )
 
 // nowMillis returns the current Unix time in milliseconds, the timestamp unit
@@ -196,6 +197,10 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	// used to fail; heal it before the run and before startIdx, so the
 	// synthetic results count as history and get persisted with the next save.
 	healResumedContext(agentCtx)
+	// A resumed or caller-built context may predate the redactor. Sanitize it
+	// once before the run records its start index; every later append goes
+	// through the same helpers below.
+	agentCtx.Messages = redactMessages(redact.SeamUserPrompt, agentCtx.Messages)
 	// Adopt or create the run's budget state and publish it into the run
 	// context: the tools and the budget reminder read it back, so every surface
 	// sees the same live figures. The window and rollover capability follow this
@@ -439,8 +444,13 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			if len(calls) > 0 {
 				toolResults, allTerminate = agenttool.ExecuteToolCalls(toolCtx, cfg.Batch, calls, emitFrom)
 			}
-			for _, tr := range toolResults {
-				agentCtx.Messages = append(agentCtx.Messages, tr)
+			for i := range toolResults {
+				if r := redact.Default(); r != nil {
+					if m, ok := r.Message(redact.SeamToolOutput, toolResults[i]).(agentcore.ToolResultMessage); ok {
+						toolResults[i] = m
+					}
+				}
+				agentCtx.Messages = append(agentCtx.Messages, toolResults[i])
 			}
 			// Tool results are in the context: checkpoint so a crash after a long
 			// tool batch does not discard its output.
@@ -464,7 +474,7 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		// Inner loop settled: consult follow-up messages.
 		if cfg.GetFollowUpMessages != nil {
 			if follow := cfg.GetFollowUpMessages(ctx, agentCtx); len(follow) > 0 {
-				agentCtx.Messages = append(agentCtx.Messages, follow...)
+				agentCtx.Messages = append(agentCtx.Messages, redactMessages(redact.SeamUserPrompt, follow)...)
 				continue // outer loop with the follow-ups as new input
 			}
 		}
@@ -475,9 +485,13 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		if cfg.OnStop != nil {
 			if dec := cfg.OnStop(ctx, agentCtx); dec != nil && dec.Block {
 				if dec.Guidance != "" {
+					guidance := dec.Guidance
+					if r := redact.Default(); r != nil {
+						guidance = r.Text(redact.SeamUserPrompt, "", guidance)
+					}
 					agentCtx.Messages = append(agentCtx.Messages, agentcore.UserMessage{
 						RoleField: agentcore.RoleUser,
-						Content:   agentcore.ContentList{agentcore.NewTextContent(dec.Guidance)},
+						Content:   agentcore.ContentList{agentcore.NewTextContent(guidance)},
 					})
 				}
 				continue // outer loop: keep the run alive
@@ -497,7 +511,7 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 func afterTurn(ctx context.Context, agentCtx *agentcore.AgentContext, cfg *RunConfig, hadToolExecution bool, emit func(agentcore.AgentEvent) error, tel *telemetry) (stop bool) {
 	if hadToolExecution && cfg.GetSteeringMessages != nil {
 		if steer := cfg.GetSteeringMessages(ctx); len(steer) > 0 {
-			agentCtx.Messages = append(agentCtx.Messages, steer...)
+			agentCtx.Messages = append(agentCtx.Messages, redactMessages(redact.SeamUserPrompt, steer)...)
 		}
 	}
 	if cfg.PrepareNextTurn != nil {
@@ -645,7 +659,25 @@ func runCompaction(ctx context.Context, msgs agentcore.MessageList, cfg *RunConf
 		sid = processSessionID()
 	}
 	scfg.Extra = provider.WithSessionExtra(scfg.Extra, sid)
-	return compaction.Compact(ctx, stream, model, msgs, cfg.Compaction, cfg.ContextWindow, -1, nil, "", scfg)
+	res, err := compaction.Compact(ctx, stream, model, msgs, cfg.Compaction, cfg.ContextWindow, -1, nil, "", scfg)
+	if err != nil {
+		return nil, err
+	}
+	// The summarizer already reads a redacted context, but a model can still
+	// echo a credential. Scrub the summary before it becomes a checkpoint.
+	if r := redact.Default(); r != nil && res != nil {
+		res.Summary = r.Text(redact.SeamCompaction, "", res.Summary)
+	}
+	return res, nil
+}
+
+// redactMessages applies the process redactor to a message list. A nil
+// redactor (tests, redaction off) returns the list unchanged.
+func redactMessages(seam redact.Seam, msgs agentcore.MessageList) agentcore.MessageList {
+	if r := redact.Default(); r != nil {
+		return r.Messages(seam, msgs)
+	}
+	return msgs
 }
 
 // writeCompactionCheckpoint persists the just-produced compaction summary as a
@@ -688,10 +720,14 @@ func writeCompactionCheckpoint(ctx context.Context, msgs agentcore.MessageList, 
 // set field replaces the current context / config value for the next turn.
 func applyTurnUpdate(agentCtx *agentcore.AgentContext, cfg *RunConfig, upd *TurnUpdate) {
 	if upd.Messages != nil {
-		agentCtx.Messages = *upd.Messages
+		agentCtx.Messages = redactMessages(redact.SeamUserPrompt, *upd.Messages)
 	}
 	if upd.SystemPrompt != nil {
-		agentCtx.SystemPrompt = *upd.SystemPrompt
+		systemPrompt := *upd.SystemPrompt
+		if r := redact.Default(); r != nil {
+			systemPrompt = r.Text(redact.SeamSession, "", systemPrompt)
+		}
+		agentCtx.SystemPrompt = systemPrompt
 	}
 	if upd.Tools != nil {
 		agentCtx.Tools = *upd.Tools

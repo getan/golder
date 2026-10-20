@@ -11,6 +11,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/redact"
 )
 
 // LoopConfig holds the pluggable behavior of the agent loop. Every hook is
@@ -71,13 +72,23 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 	if cfg.TransformContext != nil {
 		msgs = cfg.TransformContext(ctx, msgs)
 	}
+	// Last-mile DLP: even if an ingestion seam was missed (a resumed session, a
+	// caller-built context, a compaction the runtime did not see), nothing
+	// credential-shaped reaches the provider. Clean text costs one linear scan.
+	if r := redact.Default(); r != nil {
+		msgs = r.Messages(redact.SeamUserPrompt, msgs)
+	}
 	// 2. convertToLlm (filter UI-only; default identity).
 	if cfg.ConvertToLlm != nil {
 		msgs = cfg.ConvertToLlm(msgs)
 	}
 	// 3. shape the LLM context.
+	systemPrompt := agentCtx.SystemPrompt
+	if r := redact.Default(); r != nil {
+		systemPrompt = r.Text(redact.SeamSession, "", systemPrompt)
+	}
 	llm := provider.LlmContext{
-		SystemPrompt: agentCtx.SystemPrompt,
+		SystemPrompt: systemPrompt,
 		Messages:     msgs,
 		Tools:        agentCtx.Tools,
 	}
@@ -150,17 +161,17 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 				return agentcore.AssistantMessage{}, err
 			}
 		case provider.StreamDoneEvent:
-			finalizeMessage(agentCtx, e.Message, &addedPartial)
-			if err := emit(ctx, agentcore.MessageEndEvent{Message: e.Message}); err != nil {
+			final := finalizeMessage(agentCtx, e.Message, &addedPartial)
+			if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
 				return agentcore.AssistantMessage{}, err
 			}
-			return e.Message, nil
+			return final, nil
 		case provider.StreamErrorEvent:
-			finalizeMessage(agentCtx, e.Message, &addedPartial)
-			if err := emit(ctx, agentcore.MessageEndEvent{Message: e.Message}); err != nil {
+			final := finalizeMessage(agentCtx, e.Message, &addedPartial)
+			if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
 				return agentcore.AssistantMessage{}, err
 			}
-			return e.Message, nil
+			return final, nil
 		}
 	}
 
@@ -169,7 +180,7 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 	if resErr != nil {
 		return terminalMessage(cfg, resErr), nil
 	}
-	finalizeMessage(agentCtx, final, &addedPartial)
+	final = finalizeMessage(agentCtx, final, &addedPartial)
 	if err := emit(ctx, agentcore.MessageEndEvent{Message: final}); err != nil {
 		return agentcore.AssistantMessage{}, err
 	}
@@ -177,14 +188,22 @@ func streamAssistantResponse(ctx context.Context, agentCtx *agentcore.AgentConte
 }
 
 // finalizeMessage replaces the placeholder partial with the final message, or
-// appends it if the provider sent done/error without a prior start.
-func finalizeMessage(agentCtx *agentcore.AgentContext, final agentcore.AssistantMessage, addedPartial *bool) {
+// appends it if the provider sent done/error without a prior start. The stored
+// copy is redacted: an assistant can echo a credential it read before the
+// redactor was enabled, and that echo must not enter the next request.
+func finalizeMessage(agentCtx *agentcore.AgentContext, final agentcore.AssistantMessage, addedPartial *bool) agentcore.AssistantMessage {
+	if r := redact.Default(); r != nil {
+		if m, ok := r.Message(redact.SeamAssistant, final).(agentcore.AssistantMessage); ok {
+			final = m
+		}
+	}
 	if *addedPartial {
 		agentCtx.Messages[len(agentCtx.Messages)-1] = final
 	} else {
 		agentCtx.Messages = append(agentCtx.Messages, final)
 		*addedPartial = true
 	}
+	return final
 }
 
 // terminalMessage builds the terminal assistant message for a failure that

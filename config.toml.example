@@ -121,3 +121,18 @@ no_skills = false
 # set it only to compact earlier than that, e.g. on a metered gateway or when
 # long-context quality drops off well before the window limit.
 # max_context = "300K"
+
+# [redact] controls the embedded credential redactor. It runs in-process before
+# text enters the model's context (tool output, prompts, compaction summaries,
+# memory) and has no proxy or network dependency.
+#
+# mode = "redact"    # off | observe | redact | block (default: redact)
+# entropy = 3.5      # minimum Shannon entropy for generic NAME=value matches
+# audit = "~/.golder/redact-audit.jsonl"
+# allow = ["AKIAIOSFODNN7EXAMPLE"]   # exact values that must stay readable
+#
+# "observe" logs and surfaces findings but leaves text untouched; "block"
+# replaces a tool result (or prompt) that contains a credential with a refusal
+# naming the rule. Placeholders look like «SECRET:github_pat:1a2b3c4d» and are
+# restored only when the model writes a file (write / apply_patch), never when
+# it runs a shell command.

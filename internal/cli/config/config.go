@@ -68,6 +68,23 @@ type FileConfig struct {
 	// internal/dream (Config). See tasks/spec-dream-memory-consolidation.md
 	// §3.3.
 	Dream DreamConfig `toml:"dream"`
+	// Redact is the [redact] table: golder's embedded DLP layer. It is applied
+	// in-process before text reaches the provider, so there is no proxy to run.
+	Redact RedactConfig `toml:"redact"`
+}
+
+// RedactConfig is the [redact] TOML table.
+type RedactConfig struct {
+	// Mode is off | observe | redact | block. Empty means redact (the safe
+	// default); observe records findings without changing text.
+	Mode string `toml:"mode"`
+	// Entropy is the minimum Shannon entropy for generic NAME=value matches.
+	// Zero means the engine default (3.5).
+	Entropy float64 `toml:"entropy"`
+	// Audit is the JSONL audit path. Empty means $GOLDER_HOME/redact-audit.jsonl.
+	Audit string `toml:"audit"`
+	// Allow lists exact values that must never be redacted.
+	Allow []string `toml:"allow"`
 }
 
 // DreamConfig is the [dream] TOML table for /dream memory consolidation.
