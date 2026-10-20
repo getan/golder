@@ -48,11 +48,8 @@ func TestTrustPickerFirstRun(t *testing.T) {
 	if m.session.hooksWired {
 		t.Fatal("hooks must stay deferred while the trust question is open")
 	}
-
-	got, _ := m.Update(trustPromptMsg{})
-	m = got.(Model)
 	if !m.approval.active || m.approval.kind != "trust" {
-		t.Fatalf("trust prompt should open the approval dialog, active=%v kind=%q", m.approval.active, m.approval.kind)
+		t.Fatalf("trust must be open before Init, active=%v kind=%q", m.approval.active, m.approval.kind)
 	}
 	if view := m.approvalView(100); !strings.Contains(view, "trust this folder") {
 		t.Errorf("dialog should ask the trust question:\n%s", view)
@@ -62,7 +59,7 @@ func TestTrustPickerFirstRun(t *testing.T) {
 	// the tool dialog uses for "this session": a key meaning "remember forever"
 	// in one dialog and "just for now" in another is a key people get wrong, so
 	// the ladder is now the same in both (y once, p session, s saved).
-	got, _ = m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	got, _ := m.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
 	m = got.(Model)
 
 	if !m.session.trusted {
@@ -83,6 +80,40 @@ func TestTrustPickerFirstRun(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "trust.json")); err != nil {
 		t.Errorf("trust.json should exist under GOLDER_HOME: %v", err)
+	}
+}
+
+// Reproduced in the visible Linux tuios pane: Down reached Update at 7.7ms,
+// trustPromptMsg at 8.4ms. The arrow was routed to the composer and the picker
+// then opened on row zero. No wall-clock assertions needed: deliver keys before
+// running any Init commands, exactly the ordering a real terminal can produce.
+func TestTrustOwnsKeysBeforeInitCommands(t *testing.T) {
+	withEmptyTrustStore(t)
+	m := newTrustTestModel(t)
+	initCmd := m.Init()
+	if !strings.Contains(m.View().Content, "Do you trust this folder?") {
+		t.Fatal("the first view must already contain the trust dialog")
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if m.input.Value() != "" {
+		t.Fatal("early text must not leak into the composer behind trust")
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.approval.selected != 1 {
+		t.Fatal("the first Down must select session trust, before Init commands finish")
+	}
+	m = apply(t, m, tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if m.approval.active || !m.session.trusted {
+		t.Fatal("an early session-trust answer must take effect")
+	}
+	// Commands already returned by Init must not later reopen/reset the dialog
+	// after the person has moved its selection or answered it.
+	if initCmd != nil {
+		for _, cmd := range initCmd().(tea.BatchMsg) {
+			if _, reopens := cmd().(trustPromptMsg); reopens {
+				t.Fatal("Init must not asynchronously reopen an already answered trust question")
+			}
+		}
 	}
 }
 

@@ -162,8 +162,8 @@ type Model struct {
 	// goal outcome is reported and the turn is persisted like a normal turn.
 	goalRun bool
 	// pendingTrust is set by withSession when the launch directory has no saved
-	// trust decision and --approve did not grant session trust. Init turns it
-	// into the first-run trust picker (codex-style "do you trust this folder").
+	// trust decision and --approve did not grant session trust. withSession arms
+	// the picker synchronously, before Bubble Tea starts reading any keys.
 	pendingTrust bool
 	// approval is the tool-call approval dialog (approval.go). While active it
 	// owns every key press, so a pending decision cannot be dismissed by
@@ -397,7 +397,7 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// watching) by starting at the resting frame.
 	//
 	// A first-run trust question also starts at the resting frame and never
-	// animates: the dialog opens in Init and owns the keyboard, so an entrance
+	// animates: the dialog owns the keyboard from construction, so an entrance
 	// that repaints the banner every 80ms was hiding the very question the
 	// person had to answer. The input box looked dead because it was waiting
 	// behind a dialog nobody could see.
@@ -414,6 +414,14 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// very first frame already shows how much of the window was carried over,
 	// instead of staying blank until the first run ends.
 	m.refreshContextUsage(history)
+	if m.pendingTrust {
+		// Init commands run asynchronously and race with terminal input. Opening
+		// this via a batched trustPromptMsg lost early arrows/typing to the
+		// composer, then reset the selection when the dialog finally opened.
+		// The first frame and the very first key must already belong to trust.
+		m.openTrustApproval()
+		m.relayout()
+	}
 	return m
 }
 
@@ -948,11 +956,6 @@ func (m Model) Init() tea.Cmd {
 	// first tick is scheduled here; the chain stops itself on the final frame.
 	if m.logoRunning {
 		cmds = append(cmds, m.tickLogo(1))
-	}
-	// An undecided launch directory asks the first-run trust question before
-	// anything else: the message opens the picker on the Update goroutine.
-	if m.pendingTrust {
-		cmds = append(cmds, func() tea.Msg { return trustPromptMsg{} })
 	}
 	return tea.Batch(cmds...)
 }

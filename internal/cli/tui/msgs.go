@@ -149,9 +149,9 @@ type compactionMsg struct {
 // harness notice so the wait has an explanation instead of only a spinner.
 type providerNoticeMsg struct{ ev agentcore.ProviderNoticeEvent }
 
-// trustPromptMsg asks the model to open the first-run trust picker. It is
-// emitted by Init when withSession saw an undecided launch directory, so the
-// dialog appears on the Update goroutine before the first prompt.
+// trustPromptMsg explicitly opens the trust picker on the Update goroutine.
+// Startup does not emit it: withSession must arm the initial dialog before
+// terminal input can race with asynchronous Init commands.
 type trustPromptMsg struct{}
 
 // runEndMsg is the final message: the run has fully drained. err is non-nil when

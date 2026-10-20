@@ -18,7 +18,11 @@ import (
 func sessionWithTurns(t *testing.T) (Model, *runSession) {
 	t.Helper()
 	store := newTestStore(t)
-	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	// These tests exercise commands after the launch decision, not the trust
+	// dialog. Make that precondition explicit rather than depending on the
+	// developer having a saved decision for the test's working directory.
+	opts := Options{Model: "m", ProviderName: "p", Approve: true}
+	s, _, err := newRunSessionWithStore(store, opts)
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}
@@ -31,7 +35,7 @@ func sessionWithTurns(t *testing.T) (Model, *runSession) {
 	if err := s.persist(); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
-	return NewModel(Options{}).withSession(s, nil), s
+	return NewModel(opts).withSession(s, nil), s
 }
 
 // TestTUIExportWritesSession drives /export <path>: the session file is written

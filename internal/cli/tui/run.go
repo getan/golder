@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"os"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/getan/golder/internal/cli/run"
@@ -13,10 +16,17 @@ import (
 // the View returned by the root Model, so a clean return here restores the
 // terminal to the user's prior scrollback.
 func Run(opts Options) error {
+	trace, traceErr := openTimingTrace(os.Getenv("GOLDER_TUI_TRACE"))
+	if traceErr != nil {
+		fmt.Fprintf(os.Stderr, "golder: TUI timing trace disabled: %v\n", traceErr)
+	}
+	defer trace.close()
+	trace.event("session begin")
 	// Assemble the session (store, resume-or-fresh context, live config) before
 	// entering the alt-screen, mirroring repl.Run: a store/resume failure is a
 	// clean pre-launch error rather than a broken interactive session.
 	s, history, err := newRunSession(opts)
+	trace.event("session end failed=%t", err != nil)
 	if err != nil {
 		return err
 	}
@@ -28,7 +38,14 @@ func Run(opts Options) error {
 	// here rather than at the three quit call sites because every path out of
 	// the program returns through this line.
 	defer s.hostClose()
-	p := tea.NewProgram(NewModel(opts).withSession(s, history))
+	trace.event("model begin")
+	m := NewModel(opts).withSession(s, history)
+	trace.event("model end trust_pending=%t logo_running=%t", m.pendingTrust, m.logoRunning)
+	model, programOpts := trace.program(m)
+	programOpts = append(programOpts, tea.WithFilter(filterUnchangedMotion))
+	p := tea.NewProgram(model, programOpts...)
+	trace.event("program begin")
 	_, err = p.Run()
+	trace.event("program end failed=%t", err != nil)
 	return err
 }
