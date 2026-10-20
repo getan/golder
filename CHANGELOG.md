@@ -951,6 +951,11 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Mouse reporting is back to cell motion (xterm 1002)**: click, release,
+  wheel and motion while a button is held are enough for the TUI, and the
+  1003 all-motion mode that fed the status bar's hover expansion sent an event
+  for every cell the pointer crossed — costly over SSH. A click now pins a
+  status segment open (a second click releases it); hover expansion is gone.
 - **The family table is a rule, the probe is a question — and the two are no
   longer mixed up**: the families a vendor publishes on a wire (GPT, Codex, the
   o-series, Grok, Muse, DeepSeek on Responses; Claude on Messages) come from the

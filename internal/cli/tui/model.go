@@ -237,8 +237,8 @@ type Model struct {
 
 	// selDragging is true between a left press (plain or shift) and its release.
 	// Only motion while dragging extends the selection: after release the cursor
-	// stays put so hover movement never collapses a finished selection out from
-	// under a follow-up shift+click.
+	// stays put so later pointer movement never collapses a finished selection out
+	// from under a follow-up shift+click.
 	selDragging bool
 
 	// selScrollDir is the edge-autoscroll direction while a text-selection drag
@@ -1144,9 +1144,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sel.cursor, m.sel.below = m.dragToSel(msg.X, msg.Y)
 			return m, m.updateSelAutoscroll()
 		}
-		// Otherwise the pointer is only hovering: it may be over the status bar's
-		// folded segments, which expand under it.
-		m.statusBar.hover = m.statusSegmentAt(msg.X, msg.Y)
+		// Cell-motion reporting only sends motion while a button is held, so any
+		// remaining event has nothing to extend. In particular it must not change
+		// the status bar's click-pinned segment.
 		return m, nil
 
 	case tea.MouseReleaseMsg:
@@ -3801,13 +3801,12 @@ func (m Model) View() tea.View {
 	// be reached via PgUp/PgDn; enabling it lets the wheel scroll the transcript
 	// and drives both scrollbar drag and mouse text selection.
 	//
-	// AllMotion (xterm 1003) is the same set plus motion with no button held,
-	// which is what the status bar's fold is driven by: a segment expands while
-	// the pointer rests on it, without a click. Terminals that report 1002 only
-	// simply deliver no motion events, and the fold stays reachable by clicking a
-	// segment instead. Everything the cell-motion mode gave us — click, release,
-	// wheel, drag — is a subset of this one.
-	v := tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeAllMotion}
+	// CellMotion (xterm 1002) carries click, release, wheel and motion while a
+	// button is held — everything the TUI acts on. AllMotion (1003) would add
+	// motion with no button held, only to expand a status segment on hover; that
+	// cost is not worth the event volume, especially over SSH, so a click pins the
+	// segment open instead.
+	v := tea.View{Content: content, AltScreen: true, MouseMode: tea.MouseModeCellMotion}
 	// Park the REAL terminal cursor on the input caret: this is the anchor the
 	// IME candidate window follows (the old virtual cursor hid the real one, so
 	// the candidate popup landed in the wrong place). inputRow counts the frame
@@ -4288,8 +4287,7 @@ func (m Model) statusSegmentAt(x, y int) segFocus {
 
 // pinnedAfterClick is the pin a press on the bar leaves behind: a press on a
 // segment pins it open, and a press on that same segment again — or on the bar's
-// background — releases it. This is the fold's fallback for a terminal whose
-// mouse reporting carries no motion events, where a hover can never happen.
+// background — releases it.
 func (m Model) pinnedAfterClick(x int) segFocus {
 	seg := m.statusBar.segmentAt(x, m.width)
 	if seg == 0 || seg == m.statusBar.pin {

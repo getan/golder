@@ -23,14 +23,14 @@ func newTestStatusBar() statusBar {
 	return s
 }
 
-// focusSegment returns s with the segment whose text starts with glyph expanded,
-// which is the state a hover (or a click that pinned it) puts the bar in. Tests
-// use it to assert a field's whole value under the fold.
+// focusSegment returns s with the segment whose text starts with glyph pinned
+// open, which is the state a click puts the bar in. Tests use it to assert a
+// field's whole value under the fold.
 func focusSegment(t *testing.T, s statusBar, glyph string) statusBar {
 	t.Helper()
 	for i, seg := range s.segments() {
 		if strings.HasPrefix(seg.text, glyph) {
-			s.hover = focusIndex(i)
+			s.pin = focusIndex(i)
 			return s
 		}
 	}
@@ -64,8 +64,7 @@ func TestStatusBarRendersAllFields(t *testing.T) {
 		t.Errorf("render width %d exceeds terminal width %d", w, width)
 	}
 
-	// Every other field is one hover away, and shows its whole value when it has
-	// the focus.
+	// Every other field is one click away, and shows its whole value when pinned.
 	for _, tc := range []struct{ glyph, want string }{
 		{glyphMode, "auto"},
 		{glyphModel, "claude-opus"},
@@ -293,10 +292,10 @@ func TestModelRevealRunsOnceThenStops(t *testing.T) {
 	m.statusBar.cwd = "~/work/harness/golder"
 	// Only a focused field is animated; focus the path so the narrow layout has
 	// something to slide.
-	m.statusBar.hover = focusIndex(len(m.statusBar.segments()) - 1) // the path is last in this fixture
+	m.statusBar.pin = focusIndex(len(m.statusBar.segments()) - 1) // the path is last in this fixture
 	for i, seg := range m.statusBar.segments() {
 		if strings.HasPrefix(seg.text, glyphCwd) {
-			m.statusBar.hover = focusIndex(i)
+			m.statusBar.pin = focusIndex(i)
 		}
 	}
 

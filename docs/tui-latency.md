@@ -15,8 +15,8 @@ printf 'Timing log: %s\n' "$trace_file"
 ```
 
 During the first few seconds, move the trust selection with ↑/↓, answer it, and
-type a short dummy string in the composer. Quit without submitting. Note roughly
-when each action happened. Repeat once with the mouse **outside** the terminal.
+type a short dummy string in the composer. Click a status-bar segment to pin and
+unpin it. Quit without submitting. Note roughly when each action happened.
 
 The trace is opt-in and appends to a file created with mode `0600`. It records
 relative and UTC timestamps, terminal environment/capabilities, input byte
@@ -91,12 +91,14 @@ negotiation did not reproduce a multi-second startup freeze. This does not
 exercise a real terminal emulator or the affected user's host configuration.
 
 A synthetic burst of 3000 mouse-motion events delayed a following key by about
-440ms on that container: the app requests all-motion reporting and Bubble Tea
-builds View after every dispatched event. Filtering motions that leave the
-model unchanged reduced that probe to about 16ms (other probes in the same run
-were 5–23ms). The filter preserves status-bar hover transitions, selections,
-scrollbar drags, all keys and terminal capability replies. This is an observed queueing cost,
-**not confirmation that mouse motion causes the reported startup stall**.
+440ms on that container under the former all-motion reporting, because Bubble
+Tea builds View after every dispatched event. That mode was requested only to
+expand a status segment on hover. The TUI now requests cell-motion reporting
+(xterm 1002) on every platform: click, release, wheel and motion while a button
+is held, but no motion without a button. A click pins a status segment open, so
+the hover state and its repaint filter were removed. This reduces event volume
+at the source; it is **not confirmation that mouse motion caused the reported
+startup stall**.
 
 ### Visible tuios and real SSH follow-up
 
@@ -121,6 +123,9 @@ The trace confirmed `SSH_TTY_set=true` and `SSH_CONNECTION_set=true`.
   trace started; it did not wait for the approximately 2.9-second animation.
 - The fixed trust dialog accepted an early Down at about 6.6ms, before its first
   terminal frame was written at about 22.7ms. `/status` also worked through SSH.
+- Those SSH traces still came from the all-motion build. Cell-motion reporting
+  is the follow-up change; its event-count reduction over the same SSH path has
+  not yet been measured.
 
 These are process-relative timings, **not network-latency measurements**. The
 SSH handshake is before `tui.Run`. No multi-second freeze was reproduced over
@@ -128,5 +133,6 @@ this local SSH connection. Different remote CPU load, shell/hooks, tmux, actual
 terminal replies and SSH client settings remain untested. Codex working on the
 same connection does not rule out terminal-protocol or event-queue differences.
 
-The affected environment still needs a timing capture. No speculative logo,
-color-profile or terminal-protocol change has been made as a claimed fix.
+The affected environment still needs a timing capture. The cell-motion change
+reduces event volume at the source but has not been shown to fix the reported
+stall; no logo or color-profile change is claimed as a fix.

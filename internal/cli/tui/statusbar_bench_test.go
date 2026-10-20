@@ -7,10 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Benchmarks for the fold's cost. Motion reporting (xterm 1003) sends an event
-// for every cell the pointer crosses, so the per-event path has to be cheap: the
-// hover update decides a segment from the same layout the renderer paints, and a
-// frame re-renders only when the decision changes.
+// Benchmarks for the fold's cost: the layout, the hit test a click runs, and the
+// frame that a change to the pinned segment re-renders.
 
 // benchModel is a model with a full transcript and a populated status bar, which
 // is what a motion event lands on in a real session.
@@ -41,43 +39,13 @@ func BenchmarkStatusBarRender(b *testing.B) {
 	}
 }
 
-// BenchmarkStatusBarSegmentAt is the hit test a hover runs: one layout pass and a
-// column lookup, no allocation intended.
+// BenchmarkStatusBarSegmentAt is the hit test a click runs: one layout pass and
+// a column lookup, no allocation intended.
 func BenchmarkStatusBarSegmentAt(b *testing.B) {
 	s := foldFixture()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_ = s.segmentAt(20, 120)
-	}
-}
-
-// BenchmarkModelStatusHoverMotion is what one motion event costs end to end: the
-// Update path that decides whether the pointer changed segment.
-func BenchmarkModelStatusHoverMotion(b *testing.B) {
-	m := benchModel(b)
-	msg := tea.MouseMotionMsg{X: 20, Y: m.height - 1}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		next, _ := m.Update(msg)
-		if _, ok := next.(Model); !ok {
-			b.Fatal("Update returned a foreign model")
-		}
-	}
-}
-
-// BenchmarkModelStatusHoverMotionOffBar is the same event when the pointer is
-// anywhere else: it must do nothing at all.
-func BenchmarkModelStatusHoverMotionOffBar(b *testing.B) {
-	m := benchModel(b)
-	msg := tea.MouseMotionMsg{X: 20, Y: 3}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		next, _ := m.Update(msg)
-		if _, ok := next.(Model); !ok {
-			b.Fatal("Update returned a foreign model")
-		}
 	}
 }
 

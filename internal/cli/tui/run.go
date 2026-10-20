@@ -42,7 +42,6 @@ func Run(opts Options) error {
 	m := NewModel(opts).withSession(s, history)
 	trace.event("model end trust_pending=%t logo_running=%t", m.pendingTrust, m.logoRunning)
 	model, programOpts := trace.program(m)
-	programOpts = append(programOpts, tea.WithFilter(filterUnchangedMotion))
 	p := tea.NewProgram(model, programOpts...)
 	trace.event("program begin")
 	_, err = p.Run()

@@ -200,11 +200,11 @@ func TestShiftClickExtendsSelection(t *testing.T) {
 	}
 }
 
-// TestHoverDoesNotClobberReleasedSelection is the shift+click follow-up guard:
+// TestMotionDoesNotClobberReleasedSelection is the shift+click follow-up guard:
 // motion after release (button up) must not move the cursor, otherwise a
-// finished selection collapses under hover and shift+click has nothing to
-// extend. Motion while the button is held still extends the drag.
-func TestHoverDoesNotClobberReleasedSelection(t *testing.T) {
+// finished selection collapses and shift+click has nothing to extend. Motion
+// while the button is held still extends the drag.
+func TestMotionDoesNotClobberReleasedSelection(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 40, Height: 12})
 	for i := 0; i < 10; i++ {
 		m.transcript.addUser("line")
@@ -218,12 +218,12 @@ func TestHoverDoesNotClobberReleasedSelection(t *testing.T) {
 		t.Fatalf("drag cursor = %+v, want %+v", m.sel.cursor, want)
 	}
 
-	// Release, then hover elsewhere: the cursor must stay put.
+	// Release, then move elsewhere: the cursor must stay put.
 	m = apply(t, m, tea.MouseReleaseMsg{X: 5, Y: 4, Button: tea.MouseLeft})
 	m = apply(t, m, tea.MouseMotionMsg{X: 0, Y: 0, Button: tea.MouseLeft})
 	m = apply(t, m, tea.MouseMotionMsg{X: 9, Y: 9, Button: tea.MouseLeft})
 	if want := (point{5, off + 4}); m.sel.cursor != want {
-		t.Errorf("hover moved cursor to %+v, want kept %+v", m.sel.cursor, want)
+		t.Errorf("motion moved cursor to %+v, want kept %+v", m.sel.cursor, want)
 	}
 	if m.sel.empty() {
 		t.Error("released selection should persist for shift+click / Ctrl+C")

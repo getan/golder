@@ -158,10 +158,9 @@ func BenchmarkScrollWheelDownEvent(b *testing.B) {
 	benchScrollEvent(b, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
 }
 
-// BenchmarkScrollMotionEvent is one mouse-motion event. MouseModeAllMotion makes
-// the terminal report motion with no button held, so moving the pointer across
-// the window (even just sliding a finger on the trackpad) pays this per cell
-// crossed.
+// BenchmarkScrollMotionEvent is one mouse-motion event. Cell-motion reporting
+// sends these while a button is held, so a drag across the window pays this per
+// cell crossed.
 func BenchmarkScrollMotionEvent(b *testing.B) {
 	benchScrollEvent(b, tea.MouseMotionMsg{X: 20, Y: 3})
 }

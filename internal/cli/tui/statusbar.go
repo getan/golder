@@ -86,11 +86,11 @@ type statusBar struct {
 	revealMax  int
 	scroll     int
 
-	// hover is the segment under the pointer and pin the one a click fixed open;
-	// the zero value of either means "none" (see segFocus). Both are interaction
-	// state the Model owns and sets; the layout reads them through foldLayout.
-	hover segFocus
-	pin   segFocus
+	// pin is the segment a click fixed open; the zero value means "none" (see
+	// segFocus). It is interaction state the Model owns and sets; the layout reads
+	// it through foldLayout. There is deliberately no hover state: motion without a
+	// button held needs xterm 1003, whose event volume is not worth the expansion.
+	pin segFocus
 
 	// protocol reports the wire the live provider is actually using, including a
 	// wire the adaptive fallback moved the model to mid-session. It is read on
@@ -99,7 +99,7 @@ type statusBar struct {
 	protocol func() string
 }
 
-// Fold: every field but the focused one is collapsed, and a hover expands it.
+// Fold: every field but the pinned one is collapsed.
 //
 // The bar carries more fields than a terminal has room for, and every one of them
 // is wanted (they come from the SPEC's own list). Collapsing is the compromise:
@@ -108,8 +108,8 @@ type statusBar struct {
 // sliver apiece. No field is privileged — the provider and the branch fold like
 // every other one — so a single rule explains the whole bar.
 //
-// The pointer expands one — hovering a segment, or clicking it, which pins it for
-// terminals whose mouse reporting carries no motion events. What is painted and
+// A click expands one: it pins the segment under the pointer, and a second click
+// on it — or a click on the bar's background — releases it. What is painted and
 // what the pointer hits come from the same layout (see statusBar.row), so the two
 // can never disagree.
 
@@ -370,8 +370,8 @@ type segment struct {
 	// value reduced to the glyph plus as much of the tail as its window affords.
 	folded bool
 	// id is the segment's stable focus value. It is assigned once in segments()
-	// and survives layout drops, so a hover or a pin still names the same field
-	// when a narrow terminal removes its neighbours.
+	// and survives layout drops, so a pin still names the same field when a narrow
+	// terminal removes its neighbours.
 	id segFocus
 }
 
@@ -548,9 +548,8 @@ func cellStyle(fg, bg string) lipgloss.Style {
 // focus when the column is bar background or outside the row.
 //
 // It walks the same fold layout row paints — the same separators, the same
-// windows — without building the cell row, because a motion event asks this on
-// every pointer move and a full canvas per answer would make a hover cost more
-// than a frame. TestStatusBarSegmentAtAgreesWithTheRow pins the two against each
+// windows — without building the cell row, so a click costs a layout pass rather
+// than a canvas. TestStatusBarSegmentAtAgreesWithTheRow pins the two against each
 // other, column by column.
 func (s statusBar) segmentAt(x, width int) segFocus {
 	if x < 0 || x >= width {
@@ -588,10 +587,9 @@ func (s statusBar) segmentAt(x, width int) segFocus {
 // them back toward the three-column minimum and then drops the lowest-priority
 // fields; a wide one shows them whole.
 //
-// The focused field — hover or pin — takes its natural width first, so the path
-// shows in full while the pointer rests on it, and the fields after it are the
-// ones that give the columns back. Only when even that cannot fit does the focus
-// itself get elided.
+// The pinned field takes its natural width first, so the path shows in full while
+// it is open, and the fields after it are the ones that give the columns back.
+// Only when even that cannot fit does the pin itself get elided.
 func (s statusBar) foldLayout(width int) []segment {
 	segs := s.segments()
 	if len(segs) == 0 || width <= 0 {
@@ -728,8 +726,8 @@ func (s statusBar) foldLayout(width int) []segment {
 }
 
 // dropCandidate is the field to give up when the row cannot fit: the lowest
-// priority, with the focused field pushed to the end of the queue so a hover does
-// not disappear under the pointer. Ties go to the wider field, which frees more.
+// priority, with the pinned field pushed to the end of the queue so it does not
+// disappear while open. Ties go to the wider field, which frees more.
 func dropCandidate(segs []segment, focusID segFocus) int {
 	best, bestKey, bestW := -1, 0, 0
 	for i, seg := range segs {
@@ -768,12 +766,8 @@ func shrinkCandidate(segs []segment, focusID segFocus) int {
 	return best
 }
 
-// focus is the segment currently expanded: the pointer wins over the pin, so
-// hovering reads as "show me this now" without losing the pinned one.
+// focus is the segment currently expanded: the one a click pinned, if any.
 func (s statusBar) focus(n int) int {
-	if s.hover.valid(n) {
-		return s.hover.index()
-	}
 	if s.pin.valid(n) {
 		return s.pin.index()
 	}
@@ -904,8 +898,8 @@ func (s statusBar) segments() []segment {
 	if s.task != "" {
 		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, plainFg: sbPlainTask, priority: prioTask})
 	}
-	// Stable ids: a layout drop removes segments, but hover and pin still have to
-	// name the same field they were set on.
+	// Stable ids: a layout drop removes segments, but the pin still has to name
+	// the same field it was set on.
 	for i := range segs {
 		segs[i].id = focusIndex(i)
 	}

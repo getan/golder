@@ -11,7 +11,7 @@ import (
 )
 
 // Tests for the status bar's fold: which segments stay whole, how the rest
-// collapse, and how the pointer and a click move the focus between them.
+// collapse, and how a click pins one open.
 
 // foldFixture is a bar with every foldable field populated, so a test can see the
 // lead, the slivers, and the one segment that expanded.
@@ -69,9 +69,9 @@ func TestStatusBarFoldsEveryField(t *testing.T) {
 	}
 }
 
-// TestStatusBarHoverRestoresEveryField: each field — the provider and the branch
-// included — comes back at full value when it is the focused one.
-func TestStatusBarHoverRestoresEveryField(t *testing.T) {
+// TestStatusBarPinnedFieldRestoresEveryValue: each field — the provider and the
+// branch included — comes back at full value when it is pinned.
+func TestStatusBarPinnedFieldRestoresEveryValue(t *testing.T) {
 	s := foldFixture()
 	for _, tc := range []struct{ glyph, want string }{
 		{"", "commandcode"},
@@ -89,7 +89,7 @@ func TestStatusBarHoverRestoresEveryField(t *testing.T) {
 		}
 		focused := s
 		if tc.glyph == "" {
-			focused.hover = focusIndex(0)
+			focused.pin = focusIndex(0)
 		} else {
 			focused = focusSegment(t, s, tc.glyph)
 		}
@@ -99,15 +99,15 @@ func TestStatusBarHoverRestoresEveryField(t *testing.T) {
 	}
 }
 
-// TestStatusBarHoverExpandsOnlyTheHoveredSegment: the focused field takes its
+// TestStatusBarPinExpandsOnlyThePinnedSegment: the pinned field takes its
 // whole width back, everything else stays folded, and the row is still exactly the
 // terminal's width.
-func TestStatusBarHoverExpandsOnlyTheHoveredSegment(t *testing.T) {
+func TestStatusBarPinExpandsOnlyThePinnedSegment(t *testing.T) {
 	s := focusSegment(t, foldFixture(), glyphModel)
 	out := stripANSI(s.Render(foldWidth))
 
 	if !strings.Contains(out, "claude-opus") {
-		t.Errorf("the hovered field should expand: %q", out)
+		t.Errorf("the pinned field should expand: %q", out)
 	}
 	if !strings.Contains(out, glyphTask) || strings.Contains(out, "running: Read") {
 		t.Errorf("the other fields should stay folded: %q", out)
@@ -117,22 +117,12 @@ func TestStatusBarHoverExpandsOnlyTheHoveredSegment(t *testing.T) {
 	}
 }
 
-// TestStatusBarPinExpandsWithoutHover: a click's pin keeps a field open, and a
-// hover takes precedence over it — one segment at a time, never two.
-func TestStatusBarPinExpandsWithoutHover(t *testing.T) {
+// TestStatusBarPinExpandsOneField: a click's pin keeps exactly one field open.
+func TestStatusBarPinExpandsOneField(t *testing.T) {
 	s := foldFixture()
 	s.pin = focusIndex(len(s.segments()) - 1) // the task, the last field
 	if out := stripANSI(s.Render(foldWidth)); !strings.Contains(out, "running: Read") {
-		t.Errorf("a pinned field should be expanded without any hover: %q", out)
-	}
-
-	s.hover = focusIndex(3) // the model
-	out := stripANSI(s.Render(foldWidth))
-	if !strings.Contains(out, "claude-opus") {
-		t.Errorf("the hovered field should expand: %q", out)
-	}
-	if strings.Contains(out, "running: Read") {
-		t.Errorf("a hover replaces the pin's expansion, so only one field is open: %q", out)
+		t.Errorf("the pinned field should expand: %q", out)
 	}
 }
 
@@ -225,16 +215,16 @@ func TestStatusBarFoldedFieldsUseTheWholeRow(t *testing.T) {
 	}
 }
 
-// TestStatusBarHoverShowsTheWholePath: the path is the field a person most often
-// needs in full, and a hover gives it its natural width before the other folded
-// fields take their share.
-func TestStatusBarHoverShowsTheWholePath(t *testing.T) {
+// TestStatusBarPinnedPathShowsWhole: the path is the field a person most often
+// needs in full, and pinning it gives it its natural width before the other
+// folded fields take their share.
+func TestStatusBarPinnedPathShowsWhole(t *testing.T) {
 	s := foldFixture()
 	s = focusSegment(t, s, glyphCwd)
 	const width = 120
 	out := stripANSI(s.Render(width))
 	if !strings.Contains(out, "~/work/harness/golder") {
-		t.Errorf("the hovered path should be shown whole: %q", out)
+		t.Errorf("the pinned path should be shown whole: %q", out)
 	}
 	if w := ui.Width(out); w != width {
 		t.Errorf("row width = %d, want %d: %q", w, width, out)
@@ -242,17 +232,16 @@ func TestStatusBarHoverShowsTheWholePath(t *testing.T) {
 }
 
 // TestStatusBarSegmentAtAgreesWithTheRow: the hit test walks the layout instead of
-// reading the painted row (a hover must not cost a canvas per pointer move), so the
-// two walks have to be pinned against each other — every column, both forms, with
-// and without a focused field. A drift here would put the pointer on a field other
-// than the one under it, which is exactly the kind of bug a person blames on the
-// mouse.
+// reading the painted row (a click must not cost a canvas), so the two walks have
+// to be pinned against each other — every column, both forms, with and without a
+// pinned field. A drift here would put the click on a field other than the one
+// under it, which is exactly the kind of bug a person blames on the mouse.
 func TestStatusBarSegmentAtAgreesWithTheRow(t *testing.T) {
 	for _, plain := range []bool{false, true} {
 		for _, focus := range []segFocus{0, focusIndex(3), focusIndex(5)} {
 			s := foldFixture()
 			s.plain = plain
-			s.hover = focus
+			s.pin = focus
 			for _, width := range []int{24, 60, 120} {
 				row := s.row(width)
 				for x := 0; x < width; x++ {
@@ -300,32 +289,7 @@ func TestStatusBarFoldHandlesWideRunes(t *testing.T) {
 	t.Fatal("the wide rune was not painted")
 }
 
-// TestModelStatusBarHoverFollowsThePointer drives the interaction through Update:
-// motion on the bar's row takes the hover, motion anywhere else drops it.
-func TestModelStatusBarHoverFollowsThePointer(t *testing.T) {
-	m := apply(t, NewModel(Options{Model: "claude-opus", ProviderName: "commandcode"}), tea.WindowSizeMsg{Width: 120, Height: 30})
-	m.statusBar.SetGit(gitInfoMsg{branch: "master", ok: true})
-	m.statusBar.SetTask("running: Read")
-
-	barRow := m.height - 1
-	col := glyphCol(m.statusBar, m.width, '⏵')
-	if col < 0 {
-		t.Fatal("the task sliver is not painted")
-	}
-
-	m = apply(t, m, tea.MouseMotionMsg{X: col, Y: barRow})
-	if m.statusBar.hover != focusIndex(len(m.statusBar.segments())-1) {
-		t.Fatalf("hover = %d, want the task segment", m.statusBar.hover.index())
-	}
-
-	m = apply(t, m, tea.MouseMotionMsg{X: 4, Y: barRow - 3})
-	if m.statusBar.hover != 0 {
-		t.Errorf("motion off the bar should drop the hover, got %d", m.statusBar.hover.index())
-	}
-}
-
-// TestModelStatusBarClickPinsAndUnpins: the click is the fold's fallback for a
-// terminal that reports no motion events. It pins the field under it, a second
+// TestModelStatusBarClickPinsAndUnpins: a click pins the field under it, a second
 // click on the same field releases it, a click on the bar's background clears it,
 // and none of them start a text selection on the bar.
 func TestModelStatusBarClickPinsAndUnpins(t *testing.T) {
@@ -360,10 +324,9 @@ func TestModelStatusBarClickPinsAndUnpins(t *testing.T) {
 	}
 }
 
-// TestModelStatusBarHoverLeavesADragAlone: a text selection dragged across the bar
-// keeps extending — the hover must not steal motion that belongs to the drag, or
-// selecting text past the last transcript line would snap the bar's focus around.
-func TestModelStatusBarHoverLeavesADragAlone(t *testing.T) {
+// TestModelStatusBarDragLeavesPinAlone: a text selection dragged across the bar
+// keeps extending, and the drag must not change which segment is pinned.
+func TestModelStatusBarDragLeavesPinAlone(t *testing.T) {
 	m := apply(t, NewModel(Options{Model: "claude-opus", ProviderName: "commandcode"}), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m.statusBar.SetTask("running: Read")
 	m.transcript.addSystem("first\nsecond\nthird")
@@ -376,8 +339,8 @@ func TestModelStatusBarHoverLeavesADragAlone(t *testing.T) {
 	barRow := m.height - 1
 	m = apply(t, m, tea.MouseMotionMsg{X: 4, Y: barRow, Button: tea.MouseLeft})
 
-	if m.statusBar.hover != 0 {
-		t.Errorf("a drag over the bar should not take the hover, got %d", m.statusBar.hover.index())
+	if m.statusBar.pin != 0 {
+		t.Errorf("a drag over the bar should not change the pin, got %d", m.statusBar.pin.index())
 	}
 	// The drag still belongs to the selection: a content-anchored drag that
 	// leaves the viewport clamps onto the last content line (that is the existing
@@ -391,11 +354,12 @@ func TestModelStatusBarHoverLeavesADragAlone(t *testing.T) {
 	}
 }
 
-// TestModelMouseModeIsAllMotion pins the terminal mode the fold depends on: motion
-// without a button held is xterm 1003, and without it a hover can never arrive.
-func TestModelMouseModeIsAllMotion(t *testing.T) {
+// TestModelMouseModeIsCellMotion pins the terminal mode: click/release/wheel and
+// motion while dragging are xterm 1002, which is all the TUI acts on. All-motion
+// reporting (1003) is deliberately not requested.
+func TestModelMouseModeIsCellMotion(t *testing.T) {
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 24})
-	if got := m.View().MouseMode; got != tea.MouseModeAllMotion {
-		t.Errorf("mouse mode = %v, want MouseModeAllMotion (1003)", got)
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Errorf("mouse mode = %v, want MouseModeCellMotion (1002)", got)
 	}
 }
