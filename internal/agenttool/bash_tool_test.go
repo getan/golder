@@ -14,6 +14,16 @@ import (
 	"github.com/getan/golder/internal/permissions"
 )
 
+func TestBashDescriptionPointsAtJustification(t *testing.T) {
+	desc := (&BashTool{}).Description()
+	if !strings.Contains(desc, `no "description" argument`) {
+		t.Errorf("bash description must reject the description field: %q", desc)
+	}
+	if !strings.Contains(desc, "justification") {
+		t.Errorf("bash description must name justification: %q", desc)
+	}
+}
+
 func runBash(t *testing.T, tool *BashTool, args map[string]any, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	t.Helper()
 	// Tests of the shell's stream, timeout and session mechanics run without

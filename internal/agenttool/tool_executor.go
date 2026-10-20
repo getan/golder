@@ -82,6 +82,9 @@ func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		}
 	}
 	result, isError := runToolWithRetry(execCtx, cfg, tool, call, args, emit)
+	if note := repairNoteFrom(execCtx); note != "" {
+		result.Content = append(result.Content, agentcore.NewTextContent("\n\nnote: "+note))
+	}
 
 	// 3. finalize: afterToolCall overrides.
 	return finalizeToolCall(ctx, cfg, call, result, isError, emit)
@@ -124,10 +127,18 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		args = prepared
 	}
 
-	// JSON Schema validation.
+	// JSON Schema validation. A call whose only problem is a harmless foreign
+	// metadata field is repaired once here instead of being bounced back to the
+	// model for a full round trip; the note rides with execCtx and is attached
+	// to the result so the rewrite stays visible.
 	if errs := cfg.Registry.Validate(call.Name, args); len(errs) > 0 {
-		r := ValidationErrorResult(call.Name, errs)
-		return nil, nil, ctx, &r, true
+		repaired, notes, ok := cfg.Registry.RepairUnknownFields(call.Name, args)
+		if !ok {
+			r := ValidationErrorResult(call.Name, errs)
+			return nil, nil, ctx, &r, true
+		}
+		args = repaired
+		execCtx = withRepairNote(execCtx, strings.Join(notes, "; "))
 	}
 
 	// beforeToolCall gate sees the final, already-validated arguments.
@@ -178,6 +189,21 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	}
 
 	return tool, args, execCtx, nil, false
+}
+
+// repairNoteKey carries the note a repaired call produces during prepare to
+// the result the model reads after execute. It lives on the execution context
+// rather than in the prepare signature because every early return in prepare
+// would otherwise have to thread it.
+type repairNoteKey struct{}
+
+func withRepairNote(ctx context.Context, note string) context.Context {
+	return context.WithValue(ctx, repairNoteKey{}, note)
+}
+
+func repairNoteFrom(ctx context.Context) string {
+	note, _ := ctx.Value(repairNoteKey{}).(string)
+	return note
 }
 
 // runToolWithRetry wraps runTool with the classified, bounded retry policy at

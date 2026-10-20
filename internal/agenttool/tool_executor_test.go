@@ -556,3 +556,58 @@ func TestExecutorRetrySuccessResultWithIsErrorNotRetried(t *testing.T) {
 		t.Fatalf("(result,nil) must not be retried: got %d attempts", got)
 	}
 }
+
+// TestExecutorRepairsMetadataField proves a call whose only schema problem is a
+// harmless foreign metadata field runs immediately, with the rewrite reported
+// in the result, instead of costing a round trip back to the model.
+func TestExecutorRepairsMetadataField(t *testing.T) {
+	schema := `{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"],"additionalProperties":false}`
+	var gotArgs string
+	tool := execTool{name: "need", schema: schema, run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		gotArgs = string(args)
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("ok")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{
+		ID: "1", Name: "need", Arguments: json.RawMessage(`{"n":1,"description":"x"}`),
+	}, nil)
+	if msg.IsError {
+		t.Fatalf("repaired call should execute: %+v", msg)
+	}
+	if strings.Contains(gotArgs, "description") {
+		t.Errorf("execute saw the unknown field: %s", gotArgs)
+	}
+	if got := allText(msg); !strings.Contains(got, `note: ignored unknown field "description"`) {
+		t.Errorf("result missing repair note: %q", got)
+	}
+}
+
+// TestExecutorDoesNotRepairSemanticUnknownField keeps the repair conservative:
+// dropping a field that could change behavior must stay a validation error.
+func TestExecutorDoesNotRepairSemanticUnknownField(t *testing.T) {
+	schema := `{"type":"object","properties":{"n":{"type":"integer"}},"required":["n"],"additionalProperties":false}`
+	tool := execTool{name: "need", schema: schema, run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		t.Fatal("execute must not run when the unknown field is semantic")
+		return agentcore.AgentToolResult{}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{
+		ID: "1", Name: "need", Arguments: json.RawMessage(`{"n":1,"cwd":"/tmp"}`),
+	}, nil)
+	if !msg.IsError {
+		t.Fatalf("semantic unknown field should be a validation error: %+v", msg)
+	}
+	if got := allText(msg); !strings.Contains(got, `unknown field "cwd"`) {
+		t.Errorf("result missing the field-level error: %q", got)
+	}
+}
+
+func allText(msg agentcore.ToolResultMessage) string {
+	var b strings.Builder
+	for _, c := range msg.Content {
+		if tc, ok := c.(agentcore.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}

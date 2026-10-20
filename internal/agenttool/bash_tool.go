@@ -281,7 +281,8 @@ func (t *BashTool) Description() string {
 		"access alone never requires " +
 		"running outside the sandbox. Set tty=true " +
 		"for interactive programs whose stdin must be written (a REPL, a pager, a " +
-		"prompt). A non-zero " +
+		"prompt). The tool has no \"description\" argument: put a short reason in " +
+		"justification. A non-zero " +
 		"exit code is reported as an error. On Windows the command runs under bash " +
 		"if available (Git Bash/WSL), else PowerShell, else cmd — prefer portable " +
 		"commands."
@@ -298,7 +299,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
     "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."},
 	    "sandbox_permissions": {"type": "string", "enum": ["use_default", "require_escalated"], "description": "Per-command file sandbox override. Defaults to use_default. Set require_escalated only if a legitimate call needs FILE access the sandbox denies (e.g. a build cache outside the project); it asks for a one-call sandbox escape, decided by the reviewer under auto and by the user under ask. For network use network=on instead."},
-    "justification": {"type": "string", "description": "User-facing reason for a require_escalated request; omit otherwise."}
+    "justification": {"type": "string", "description": "User-facing reason for a require_escalated request; omit otherwise. This tool has no 'description' field."}
   },
   "required": ["command"],
   "additionalProperties": false
