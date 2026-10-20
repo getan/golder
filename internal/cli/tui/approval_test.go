@@ -95,6 +95,40 @@ func TestApprovalDialogAnswers(t *testing.T) {
 	}
 }
 
+// TestApprovalReAdmitCombinesNetwork: a refused escape that also asked for
+// network must show both questions in one dialog and deliver one answer with
+// both grants. The old path asked only about the path, then the retry failed
+// the bash tool's network guard for a question nobody saw.
+func TestApprovalReAdmitCombinesNetwork(t *testing.T) {
+	m := NewModel(Options{})
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.openApproval(judge.ApprovalRequest{
+		Kind:           judge.ApprovalReAdmit,
+		Tool:           "bash",
+		Summary:        "git push",
+		ReadRoot:       "/tmp/repo",
+		NetworkRequest: true,
+		NetworkKey:     "github.com",
+	}, reply)
+	if !m.approval.combined {
+		t.Fatal("re-admission with a network request must combine both questions")
+	}
+	// Stage 0: allow reading the path for this session.
+	m.answerApproval(approveReadDir)
+	if m.approval.stage != 1 {
+		t.Fatalf("stage = %d, want the network stage", m.approval.stage)
+	}
+	// Stage 1: allow network for this call.
+	m.answerApproval(approveNetwork)
+	ans := awaitAnswer(t, reply)
+	if !ans.Approve || !ans.Network {
+		t.Fatalf("answer = %+v, want both path and network approved", ans)
+	}
+	if ans.ReadRoot != "/tmp/repo" {
+		t.Errorf("ReadRoot = %q, want the re-admitted path", ans.ReadRoot)
+	}
+}
+
 // A path+network request keeps one dialog open for both halves: the path answer
 // is recorded, the network question replaces the rows, and one combined answer
 // reaches the waiting gate.

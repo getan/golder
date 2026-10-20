@@ -456,7 +456,7 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			ans = g.opts.Confirm(ctx, req)
 		} else {
 			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
-			ans = judge.AskReAdmit(ctx, g.opts.In, g.opts.Out, g.opts.Mu, path, summary, lang)
+			ans = judge.AskReAdmit(ctx, g.opts.In, g.opts.Out, g.opts.Mu, path, summary, lang, "")
 		}
 		if !ans.Answered || !ans.Approve {
 			return agenttool.SandboxDenialRefused

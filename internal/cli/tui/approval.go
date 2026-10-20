@@ -278,17 +278,18 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		}
 	}
 	m.approval = approvalDialog{
-		active:              true,
-		kind:                "tool",
-		title:               approvalTitle(req),
-		detail:              approvalDetail(req),
-		rows:                rows,
-		writableRoot:        root,
-		readRoot:            readRoot,
-		writeRoot:           writeRoot,
-		trustDir:            req.TrustDir,
-		reply:               reply,
-		combined:            req.NetworkRequest && req.Kind == judge.ApprovalBoundary,
+		active:       true,
+		kind:         "tool",
+		title:        approvalTitle(req),
+		detail:       approvalDetail(req),
+		rows:         rows,
+		writableRoot: root,
+		readRoot:     readRoot,
+		writeRoot:    writeRoot,
+		trustDir:     req.TrustDir,
+		reply:        reply,
+		combined: req.NetworkRequest &&
+			(req.Kind == judge.ApprovalBoundary || req.Kind == judge.ApprovalReAdmit),
 		networkKey:          req.NetworkKey,
 		networkRememberable: req.NetworkRememberable,
 	}
@@ -575,6 +576,12 @@ func combinedPathAnswer(d approvalDialog) judge.ApprovalAnswer {
 		ans.Approve, ans.WriteRoot = true, d.writeRoot
 	case approveWritePersist:
 		ans.Approve, ans.WriteRoot, ans.Persisted = true, d.writeRoot, true
+	case approveWritable:
+		// The re-admission dialog's write row grants one path, not a boundary
+		// directory; d.writableRoot is that path.
+		ans.Approve, ans.WritableRoot = true, d.writableRoot
+	case approveWritablePersist:
+		ans.Approve, ans.WritableRoot, ans.Persisted = true, d.writableRoot, true
 	}
 	return ans
 }

@@ -14,7 +14,7 @@ import (
 // path for this session (contained), remember it, or skip. It exists so a REPL
 // user can unblock a command the sandbox just refused instead of being told to
 // run golder in another front-end.
-func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.Mutex, path, summary, lang string) ApprovalAnswer {
+func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.Mutex, path, summary, lang, networkKey string) ApprovalAnswer {
 	if in == nil || out == nil {
 		return ApprovalAnswer{}
 	}
@@ -63,6 +63,28 @@ func AskReAdmit(ctx context.Context, in *bufio.Reader, out io.Writer, mu *sync.M
 		ans.WritableRoot = path
 	} else {
 		ans.ReadRoot = path
+	}
+	if networkKey != "" {
+		fmt.Fprintf(out, "\nnetwork access for this call: [y] this call only   [a] this session for %s"+
+			"   [s] remember %s   [N] deny\n", networkKey, networkKey)
+		fmt.Fprint(out, "Network choice: ")
+		line, ok := readLineOrCancel(ctx, in)
+		if !ok {
+			return ApprovalAnswer{}
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			ans.Network = true
+		case "a", "session":
+			ans.Network, ans.NetworkSession = true, true
+		case "s", "save":
+			ans.Network, ans.NetworkRemember = true, true
+		default:
+			// The path half is not useful without the network half: the retry
+			// would run contained and fail at the same guard. Treat it as one
+			// combined refusal.
+			return ApprovalAnswer{Answered: true}
+		}
 	}
 	return ans
 }

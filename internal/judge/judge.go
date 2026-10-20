@@ -742,6 +742,19 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 				Rationale: firstReason(v), ReadRoot: root,
 				NeedsWrite: PathWriteNeed(root, riskSummary(call)),
 			}
+			// A refused escape may also have asked for network access. The
+			// re-admission dialog is the only approval this call still gets, so
+			// the network side has to be part of it — otherwise the retry runs
+			// contained without the grant and the bash tool refuses it with
+			// "network access was requested but was not authorized" for a
+			// question the person was never shown.
+			if NetworkRequested(call.Name, call.Arguments) {
+				req.NetworkRequest = true
+				if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
+					req.NetworkKey = key
+					req.NetworkRememberable = true
+				}
+			}
 			req.Origin = agentcore.OriginFromContext(ctx)
 			done := opts.promptNote(approvalQuestion(req.Tool, req.Summary))
 			defer done()
@@ -749,7 +762,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			if opts.Confirm != nil {
 				ans = opts.Confirm(ctx, req)
 			} else {
-				ans = AskReAdmit(ctx, opts.In, opts.Out, opts.Mu, root, riskSummary(call), lang)
+				ans = AskReAdmit(ctx, opts.In, opts.Out, opts.Mu, root, riskSummary(call), lang, req.NetworkKey)
 			}
 			if !ans.Answered || !ans.Approve {
 				return nil
@@ -774,7 +787,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 					"越界请求被拒；已把该路径放回沙箱，改为在沙箱内运行："+how,
 					"the escape was declined; the path is back inside the sandbox, so it runs contained: "+how),
 			})
-			return &agentcore.BeforeToolCallDecision{Sandbox: true}
+			return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: ans.Network}
 		}
 		// An escalation is a request, not an escape, and the mode decides who
 		// answers it. Auto answers by review alone: an explicit Direct grant from
