@@ -140,6 +140,13 @@ type slashMenu struct {
 	// pickModel is the stage-1 model kept pending while the stage-2 reasoning
 	// level picker is open (pickKind "model-level"); "" otherwise.
 	pickModel string
+	// pickHint is the persistent key legend rendered under the picker. A
+	// transcript line scrolls away; a hint that sits under the list is how a
+	// key nobody typed before is discoverable at the moment it matters.
+	pickHint string
+	// pickDefault is set while the level stage is choosing a DEFAULT level (the
+	// model picker's `d` key) rather than switching this session.
+	pickDefault bool
 }
 
 // pickItem is one picker row: Title renders first, Detail (dimmer context)
@@ -507,6 +514,9 @@ func (mn slashMenu) rows(width int) int {
 		if mn.selected >= 0 && mn.selected < len(mn.pick) {
 			n += len(mn.pick[mn.selected].Info)
 		}
+		if mn.pickHint != "" {
+			n++
+		}
 		return n
 	}
 	rows := mn.commandLayout()
@@ -558,6 +568,8 @@ func (mn *slashMenu) close() {
 	mn.pickMark = ""
 	mn.pickKind = ""
 	mn.pickModel = ""
+	mn.pickHint = ""
+	mn.pickDefault = false
 }
 
 // openPicker shows the menu as an item picker (arrow keys + Enter, Esc
@@ -578,6 +590,8 @@ func (mn *slashMenu) openPickerDetailed(items []pickItem, mark, kind string) {
 	mn.pickMark = mark
 	mn.pickKind = kind
 	mn.pickModel = ""
+	mn.pickHint = ""
+	mn.pickDefault = false
 	mn.active = len(items) > 0
 	mn.filtered = nil
 	mn.selected = mn.firstSelectable(0, 1)
@@ -603,11 +617,25 @@ func (mn slashMenu) firstSelectable(from, step int) int {
 // and cancels the switch entirely.
 func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLevel, mark agentcore.ThinkingLevel) {
 	items := make([]pickItem, 0, len(levels))
+	defaultLevel := prompts.DefaultThinkingLevelName()
 	for _, lvl := range levels {
-		items = append(items, pickItem{Title: string(lvl), Value: string(lvl)})
+		items = append(items, pickItem{
+			Title:   string(lvl),
+			Value:   string(lvl),
+			Default: string(lvl) == defaultLevel,
+		})
 	}
 	mn.openPickerDetailed(items, string(mark), "model-level")
 	mn.pickModel = model
+	mn.pickHint = "↑↓ select · Enter apply · d set default level · Esc cancel"
+}
+
+// openDefaultLevelPicker is openLevelPicker for the model picker's `d` key:
+// the chosen level is saved with the model instead of switching the session.
+func (mn *slashMenu) openDefaultLevelPicker(model string, levels []agentcore.ThinkingLevel, mark agentcore.ThinkingLevel) {
+	mn.openLevelPicker(model, levels, mark)
+	mn.pickDefault = true
+	mn.pickHint = "↑↓ select · Enter save as default · Esc cancel"
 }
 
 // picking reports whether the menu is in picker mode.
@@ -701,6 +729,9 @@ func (mn slashMenu) view(width int) string {
 			if i == mn.selected {
 				lines = append(lines, mn.pickInfoLines(rowWidth)...)
 			}
+		}
+		if mn.pickHint != "" {
+			lines = append(lines, ansi.Truncate(mn.theme.System.Render(mn.pickHint), rowWidth, "…"))
 		}
 		return strings.Join(lines, "\n")
 	}

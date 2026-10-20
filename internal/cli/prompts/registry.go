@@ -433,6 +433,73 @@ func DefaultProviderName() string {
 	return name
 }
 
+// DefaultModelName returns the config.toml default model, or "" when the file
+// does not set one. A read error reads as unset, like DefaultProviderName.
+func DefaultModelName() string {
+	model, err := config.DefaultModel()
+	if err != nil {
+		return ""
+	}
+	return model
+}
+
+// DefaultThinkingLevelName returns the config.toml default reasoning level, or
+// "" when the file does not set one.
+func DefaultThinkingLevelName() string {
+	level, err := config.DefaultThinkingLevel()
+	if err != nil {
+		return ""
+	}
+	return level
+}
+
+// SetDefaultModelText persists model, its reasoning level and the provider that
+// serves it, then reports. It is the text form of the model picker's `d` key and
+// the `/model default` command.
+func SetDefaultModelText(model string, level agentcore.ThinkingLevel, live *cli.LiveConfig) string {
+	if live == nil {
+		return "model: no active session"
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = live.Model
+	}
+	providerName := live.ProviderName
+	if model != provider.CanonicalizeModel(model) {
+		// A bare provider name is a jump, not a model on this gateway.
+		providerName = ""
+	}
+	if len(live.FetchedModels) > 0 && slices.Contains(live.FetchedModels, model) {
+		providerName = live.ProviderName
+	}
+	_, name, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, providerName, os.Getenv)
+	if err != nil {
+		return fmt.Sprintf("model: cannot set %q as the default: %v", model, err)
+	}
+	if err := config.SetDefaultModel(model, string(level), name); err != nil {
+		return "model: cannot save the default: " + err.Error()
+	}
+	msg := fmt.Sprintf("default model set to %s (provider: %s", model, name)
+	if level != "" {
+		msg += ", think: " + string(level)
+	}
+	msg += ")\nnew sessions start there; provider switches prefer it when it belongs to the new gateway"
+	return msg
+}
+
+// SetDefaultThinkingText persists only the reasoning level, leaving the model
+// and provider alone. It backs the level picker's `d` key and
+// `/model default think <level>`.
+func SetDefaultThinkingText(level agentcore.ThinkingLevel) string {
+	if level == "" {
+		return "think: no level selected"
+	}
+	if err := config.SetDefaultThinkingLevel(string(level)); err != nil {
+		return "think: cannot save the default: " + err.Error()
+	}
+	return "default reasoning level set to " + string(level) + "\nnew sessions and provider switches use it"
+}
+
 // SetDefaultProviderText persists name as the default provider and returns the
 // report. It is exported because the TUI's provider picker offers the same
 // action on a key, and both surfaces must say exactly the same thing.
@@ -449,7 +516,15 @@ func SetDefaultProviderText(name string, creds *provider.CredentialStore) string
 		return fmt.Sprintf("provider: %s is a decision model, not a conversation provider — it cannot be the default (route it with /proxy %s on).",
 			spec.Name, spec.Name)
 	}
-	rewrote, err := config.SetDefaultProvider(spec.Name, spec.DefaultModel)
+	// Keep a model the user already chose as the default for THIS provider;
+	// only a provider change should replace it with the provider's own default.
+	model := spec.DefaultModel
+	if current, _ := config.DefaultProvider(); current == spec.Name {
+		if def, _ := config.DefaultModel(); def != "" {
+			model = def
+		}
+	}
+	rewrote, err := config.SetDefaultProvider(spec.Name, model)
 	if err != nil {
 		return "provider: cannot save the default: " + err.Error()
 	}
@@ -636,6 +711,65 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		}
 		return modelSwitch(sel)
 	}
+	// modelDefaultAction sets what the NEXT session (and a provider switch)
+	// starts with, without moving this one. It is the text form of the model
+	// picker's `d` key, so both surfaces answer the same question.
+	modelDefaultAction := func(args string) string {
+		arg := strings.TrimSpace(args)
+		switch {
+		case arg == "":
+			model, err := config.DefaultModel()
+			if err != nil {
+				return "model: cannot read the default: " + err.Error()
+			}
+			if model == "" {
+				return "default model: unset (new sessions use the provider's default)\nset it with /model default <id|n> [level]"
+			}
+			level, _ := config.DefaultThinkingLevel()
+			name, _ := config.DefaultProvider()
+			msg := "default model: " + model
+			if name != "" {
+				msg += " (provider: " + name + ")"
+			}
+			if level != "" {
+				msg += ", think: " + level
+			}
+			return msg + "\nnew sessions and provider switches use it"
+		case arg == "off" || arg == "none" || arg == "unset":
+			if err := config.SetDefaultModel("", "", ""); err != nil {
+				return "model: cannot clear the default: " + err.Error()
+			}
+			return "default model cleared; new sessions use the provider's default"
+		case arg == "think" || strings.HasPrefix(arg, "think "):
+			lvl, ok := validThinkingLevel(strings.TrimSpace(strings.TrimPrefix(arg, "think")))
+			if !ok {
+				return "model: invalid reasoning level (want off|minimal|low|medium|high|xhigh|max)"
+			}
+			return SetDefaultThinkingText(lvl)
+		}
+		fields := strings.Fields(arg)
+		sel := fields[0]
+		level := live.ThinkingLevel
+		if len(fields) > 1 {
+			v, ok := validThinkingLevel(fields[1])
+			if !ok {
+				return fmt.Sprintf("model: invalid reasoning level %q (want off|minimal|low|medium|high|xhigh|max)", fields[1])
+			}
+			level = v
+		}
+		if n, err := strconv.Atoi(sel); err == nil {
+			ids, err := EnsureModelCatalog(live, creds)
+			if err != nil {
+				return fmt.Sprintf("model: list unavailable: %v\nset it directly with /model default <id>", err)
+			}
+			ids = provider.OrderModelIDs(ids)
+			if n < 1 || n > len(ids) {
+				return fmt.Sprintf("model: %d out of range (1-%d)", n, len(ids))
+			}
+			sel = ids[n-1]
+		}
+		return SetDefaultModelText(sel, level, live)
+	}
 	providerAction := func(args string) string {
 		arg := strings.TrimSpace(args)
 		// /provider default [name|off] sets the config.toml provider new
@@ -733,11 +867,20 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			return fmt.Sprintf("provider: %s is a decision model, not a conversation provider — it answers the reviewer's typed questions, so switching to it would break every turn.\nRoute its requests with /proxy %s on; the conversation model stays %s.",
 				spec.Name, spec.Name, live.ProviderName)
 		}
-		model := live.Model
-		note := ""
-		if spec.DefaultModel != "" {
+		// Prefer the model the user made the default for THIS gateway; fall back
+		// to the provider's own default. The previous behavior always used
+		// spec.DefaultModel, which silently discarded a `/model default` choice.
+		model := ""
+		if defProvider, _ := config.DefaultProvider(); defProvider == spec.Name {
+			if defModel, _ := config.DefaultModel(); defModel != "" {
+				model = defModel
+			}
+		}
+		if model == "" {
 			model = spec.DefaultModel
-		} else {
+		}
+		note := ""
+		if model == "" {
 			note = "\nno default model for this provider; set one with /model <id>"
 		}
 		// A provider switch targets the new provider's registry endpoint: a
@@ -754,6 +897,13 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.ProviderName = name
 		live.Provider = prov
 		live.RefreshContextWindow()
+		// A provider switch adopts the saved reasoning level too, so the new
+		// gateway starts from the same answer `/model default` recorded.
+		if defLevel, _ := config.DefaultThinkingLevel(); defLevel != "" {
+			if v, ok := validThinkingLevel(defLevel); ok {
+				live.ThinkingLevel = v
+			}
+		}
 		// The fetched catalog belongs to the previous gateway; drop it so the
 		// next bare /model lists (and disk-caches) the new provider's lineup.
 		live.FetchedModels = nil
@@ -773,10 +923,16 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "model",
 		Category:     runtime.CategoryModel,
-		Description:  "list and switch models on the current provider",
-		ArgumentHint: "[n|id [level]|think level]",
+		Description:  "list and switch models, or set the default for new sessions",
+		ArgumentHint: "[n|id [level]|think level|default [id|think level]]",
 		Action: func(args string) string {
 			arg := strings.TrimSpace(args)
+			// /model default [id|n] [level] persists what the next session and
+			// a provider switch start with; it is a different verb from the
+			// switch, resolved before it.
+			if arg == "default" || strings.HasPrefix(arg, "default ") {
+				return modelDefaultAction(strings.TrimSpace(strings.TrimPrefix(arg, "default")))
+			}
 			// /model think [level]: show or set the reasoning effort.
 			if arg == "think" || strings.HasPrefix(arg, "think ") {
 				return thinkAction(strings.TrimSpace(strings.TrimPrefix(arg, "think")))

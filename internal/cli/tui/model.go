@@ -459,7 +459,8 @@ func (m Model) openModelPicker() (tea.Model, tea.Cmd) {
 	}
 	if ids := prompts.CachedModelCatalog(m.live); len(ids) > 0 {
 		m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, ids), m.live.Model, "model")
-		m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
+		m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
+		m.transcript.addSystem("Select a model (↑↓ + Enter, d sets the default, Esc cancels):")
 		m.relayout()
 		return m, nil
 	}
@@ -496,7 +497,8 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 		current = m.live.Model
 	}
 	m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, msg.ids), current, "model")
-	m.transcript.addSystem("Select a model (↑↓ + Enter, Esc cancels):")
+	m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
+	m.transcript.addSystem("Select a model (↑↓ + Enter, d sets the default, Esc cancels):")
 	m.relayout()
 	return m, nil
 }
@@ -505,9 +507,10 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 // reasoning levels models.dev advertises for it (only when known, so the
 // fallback ladder never masquerades as catalog data).
 func modelPickItems(providerName string, ids []string) []pickItem {
+	defaultModel := prompts.DefaultModelName()
 	items := make([]pickItem, 0, len(ids))
 	for _, id := range provider.OrderModelIDs(ids) {
-		it := pickItem{Title: id, Value: id}
+		it := pickItem{Title: id, Value: id, Default: id == defaultModel}
 		var detail []string
 		// The catalog's context window, when it knows the model: the same
 		// number the status-bar percentage and auto-compaction are measured
@@ -589,6 +592,7 @@ func (m Model) openProviderPicker() (tea.Model, tea.Cmd) {
 		}
 	}
 	m.menu.openPickerDetailed(picks, m.live.ProviderName, "provider")
+	m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
 	m.transcript.addSystem("Select a provider (↑↓ + Enter, d makes it the default for new sessions, Esc cancels):")
 	m.relayout()
 	return m, nil
@@ -615,6 +619,56 @@ func (m Model) setPickerDefaultProvider() (tea.Model, tea.Cmd) {
 		// own reads as a lost selection.
 		for i, it := range nm.menu.pick {
 			if !it.Heading && it.Value == name {
+				nm.menu.selected = i
+				break
+			}
+		}
+		return nm, cmd
+	}
+	return next, cmd
+}
+
+// setPickerDefaultModel persists the highlighted model as the default for new
+// sessions. When the model advertises reasoning levels it opens the level stage
+// first, so the model and its level are saved as one answer; Enter there saves
+// both, and `d` on the level row saves only the level.
+func (m Model) setPickerDefaultModel() (tea.Model, tea.Cmd) {
+	model, ok := m.menu.pickCurrent()
+	if !ok || m.live == nil {
+		return m, nil
+	}
+	if levels := provider.ReasoningLevels(m.live.ProviderName, model); len(levels) > 0 {
+		m.menu.openDefaultLevelPicker(model, levels, m.live.ThinkingLevel)
+		m.transcript.addSystem(fmt.Sprintf("Default reasoning level for %s (↑↓ + Enter, Esc cancels):", model))
+		m.relayout()
+		return m, nil
+	}
+	m.transcript.addSystem(prompts.SetDefaultModelText(model, m.live.ThinkingLevel, m.live))
+	return m.reopenModelPickerKeeping(model)
+}
+
+// setPickerDefaultLevel persists the highlighted level as the default reasoning
+// level without changing the model or this session.
+func (m Model) setPickerDefaultLevel() (tea.Model, tea.Cmd) {
+	level, ok := m.menu.pickCurrent()
+	if !ok {
+		return m, nil
+	}
+	m.transcript.addSystem(prompts.SetDefaultThinkingText(agentcore.ThinkingLevel(level)))
+	for i := range m.menu.pick {
+		m.menu.pick[i].Default = m.menu.pick[i].Value == level
+	}
+	m.relayout()
+	return m, nil
+}
+
+// reopenModelPickerKeeping rebuilds the model picker and keeps the highlight on
+// the row the default action was about.
+func (m Model) reopenModelPickerKeeping(model string) (tea.Model, tea.Cmd) {
+	next, cmd := m.openModelPicker()
+	if nm, ok := next.(Model); ok {
+		for i, it := range nm.menu.pick {
+			if !it.Heading && it.Value == model {
 				nm.menu.selected = i
 				break
 			}
@@ -1793,12 +1847,19 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.relayout()
 			return m, nil
 		case "d":
-			// The provider picker's second verb: make the highlighted provider
-			// the default for NEW sessions. Guarded to that picker, because "d"
-			// is otherwise an ordinary character (it filters the command list);
-			// falling out of the switch leaves it for the composer.
-			if m.menu.picking() && m.menu.pickKind == "provider" {
-				return m.setPickerDefaultProvider()
+			// The pickers' second verb: make the highlighted row the default
+			// for NEW sessions. Guarded to picker mode, because "d" is otherwise
+			// an ordinary character (it filters the command list); falling out
+			// of the switch leaves it for the composer.
+			if m.menu.picking() {
+				switch m.menu.pickKind {
+				case "provider":
+					return m.setPickerDefaultProvider()
+				case "model":
+					return m.setPickerDefaultModel()
+				case "model-level":
+					return m.setPickerDefaultLevel()
+				}
 			}
 		case "esc", "ctrl+c":
 			// Ctrl+C is the shell's way out of a prompt, so with the popup or a
@@ -2216,7 +2277,7 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		if kind == "model" && ok && m.live != nil {
 			if levels := provider.ReasoningLevels(m.live.ProviderName, item); len(levels) > 0 {
 				m.menu.openLevelPicker(item, levels, m.live.ThinkingLevel)
-				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, Esc cancels):", item))
+				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, d sets the default, Esc cancels):", item))
 				m.relayout()
 				return m, nil
 			}
@@ -2224,6 +2285,14 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		// Stage 2: run the switch and the level as one /model <id> <level>.
 		if kind == "model-level" && ok {
 			model := m.menu.pickModel
+			if m.menu.pickDefault {
+				// The model picker's `d` flow: save model + level as the
+				// default without moving this session.
+				m.menu.close()
+				m.input.Clear()
+				m.transcript.addSystem(prompts.SetDefaultModelText(model, agentcore.ThinkingLevel(item), m.live))
+				return m.reopenModelPickerKeeping(model)
+			}
 			m.menu.close()
 			m.input.Clear()
 			m.relayout()

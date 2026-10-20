@@ -904,6 +904,95 @@ func TestModelPickerTwoStageConfirm(t *testing.T) {
 	}
 }
 
+// TestModelPickerDKeySavesDefault: `d` on a model opens the default-level
+// stage; Enter there persists model + level without switching this session.
+func TestModelPickerDKeySavesDefault(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.FetchedModels = []string{"m-a", "m-b"}
+	m.live.Model = "m-a"
+	m.live.ProviderName = "openai"
+	m.live.ThinkingLevel = agentcore.ThinkingHigh
+
+	got, _ := m.runSlash("/model")
+	gm := got.(Model)
+	if view := gm.menu.view(80); !strings.Contains(view, "d set default") {
+		t.Errorf("model picker missing the d-key hint:\n%s", view)
+	}
+	for i, it := range gm.menu.pick {
+		if it.Value == "m-b" {
+			gm.menu.selected = i
+			break
+		}
+	}
+	got2, _ := gm.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	gm2 := got2.(Model)
+	if !gm2.menu.picking() || gm2.menu.pickKind != "model-level" || !gm2.menu.pickDefault {
+		t.Fatalf("d should open the default-level stage: picking=%v kind=%q default=%v",
+			gm2.menu.picking(), gm2.menu.pickKind, gm2.menu.pickDefault)
+	}
+	for i, it := range gm2.menu.pick {
+		if it.Value == "high" {
+			gm2.menu.selected = i
+			break
+		}
+	}
+	got3, _ := gm2.submitSlashSelected()
+	gm3 := got3.(Model)
+	if prompts.DefaultModelName() != "m-b" {
+		t.Errorf("default model = %q, want m-b", prompts.DefaultModelName())
+	}
+	if prompts.DefaultThinkingLevelName() != "high" {
+		t.Errorf("default level = %q, want high", prompts.DefaultThinkingLevelName())
+	}
+	if gm3.live.Model != "m-a" || gm3.live.ThinkingLevel != agentcore.ThinkingHigh {
+		t.Errorf("setting the default moved the live session: model=%q level=%q",
+			gm3.live.Model, gm3.live.ThinkingLevel)
+	}
+}
+
+// TestLevelPickerDKeySavesDefaultLevel: `d` on a level row saves only the
+// default level; the model and the live session stay where they were.
+func TestLevelPickerDKeySavesDefaultLevel(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m := NewModel(Options{})
+	m.session = &runSession{}
+	m.live.FetchedModels = []string{"m-a", "m-b"}
+	m.live.Model = "m-a"
+	m.live.ProviderName = "openai"
+	m.live.ThinkingLevel = agentcore.ThinkingHigh
+
+	got, _ := m.runSlash("/model")
+	gm := got.(Model)
+	for i, it := range gm.menu.pick {
+		if it.Value == "m-b" {
+			gm.menu.selected = i
+			break
+		}
+	}
+	got2, _ := gm.submitSlashSelected()
+	gm2 := got2.(Model)
+	for i, it := range gm2.menu.pick {
+		if it.Value == "medium" {
+			gm2.menu.selected = i
+			break
+		}
+	}
+	got3, _ := gm2.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	gm3 := got3.(Model)
+	if prompts.DefaultThinkingLevelName() != "medium" {
+		t.Errorf("default level = %q, want medium", prompts.DefaultThinkingLevelName())
+	}
+	if prompts.DefaultModelName() != "" {
+		t.Errorf("setting the level must not set a model: %q", prompts.DefaultModelName())
+	}
+	if gm3.live.ThinkingLevel != agentcore.ThinkingHigh || gm3.live.Model != "m-a" {
+		t.Errorf("setting the default level moved the live session: model=%q level=%q",
+			gm3.live.Model, gm3.live.ThinkingLevel)
+	}
+}
+
 // TestCtrlCClosesThePicker: a picker holds focus with an empty composer — the
 // command that opened it was submitted, so the box is empty by then — and Ctrl+C
 // must get out of it, exactly like Esc. It used to fall through to the global
