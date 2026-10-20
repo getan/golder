@@ -50,6 +50,12 @@ golder
 
 ## 安装
 
+### Homebrew（macOS / Linux）
+
+```bash
+brew install getan/tap/golder
+```
+
 ### 一键安装（Linux / macOS）
 
 ```bash
