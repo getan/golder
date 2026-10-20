@@ -20,11 +20,13 @@ golder
 - **本地凭据脱敏**：tool output、prompt、compaction、memory 里的 key 在发给模型前替换；只有写文件时才还原占位符。
 
 <p align="center">
-  <img src="docs/assets/demo-splash.png" width="92%" alt="golder 全屏 TUI：启动画面与状态栏">
+  <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
+    <img src="docs/assets/demo.gif" width="92%" alt="golder 真实会话：go test 红 → 读码打补丁 → 全绿">
+  </a>
 </p>
 
 <p align="center">
-  <sub>真实会话、无剪辑造假：<code>go test</code> 红 → 模型自主读码打补丁 → 全绿（同一次会话见下图） · <a href="https://golder-cli.pages.dev">官网上有 26 秒录像</a></sub>
+  <sub>真实会话、无剪辑造假：<code>go test</code> 红 → 模型自主读码打补丁 → 全绿（14 秒 GIF，<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">完整 26 秒录像</a>）</sub>
 </p>
 
 <table>

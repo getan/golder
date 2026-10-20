@@ -20,11 +20,13 @@ golder
 - **In-process redaction.** Keys in tool output, prompts, compaction and memory are replaced before the provider sees them; placeholders are restored only for file writes.
 
 <p align="center">
-  <img src="docs/assets/demo-splash.png" width="92%" alt="golder's full-screen TUI: splash and status bar">
+  <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
+    <img src="docs/assets/demo.gif" width="92%" alt="golder in a real session: red go test → read, patch, re-run → all green">
+  </a>
 </p>
 
 <p align="center">
-  <sub>A real session, nothing staged: red <code>go test</code> → the model reads, patches, re-runs → all green (screenshots from the same run below) · <a href="https://golder-cli.pages.dev/en/">26-second video on the site</a></sub>
+  <sub>A real session, nothing staged: red <code>go test</code> → the model reads, patches, re-runs → all green (14-second GIF; <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">full 26-second video</a>)</sub>
 </p>
 
 <table>
