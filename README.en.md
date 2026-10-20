@@ -320,6 +320,10 @@ See `golder --help` for the complete list.
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |
 | `OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY` and other `<PROVIDER>_API_KEY` | Provider API keys (`opencode-go` uses `OPENCODE_API_KEY`; `opencode-zen` only `OPENCODE_ZEN_API_KEY`) |
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=getan/golder&type=Date)](https://star-history.com/#getan/golder&Date)
+
 ## License
 
 [MIT](LICENSE)
