@@ -1,6 +1,6 @@
 # golder
 
-[English](README.en.md) | **简体中文**
+[English](README.en.md) | **简体中文** | [官网](https://golder-cli.pages.dev/)
 
 [![CI](https://github.com/getan/golder/actions/workflows/ci.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/ci.yml)
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
