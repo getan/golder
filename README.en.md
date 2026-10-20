@@ -8,6 +8,17 @@
 
 A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. Starts in a full-screen TUI by default, with a line-based REPL and a headless mode for scripts.
 
+**One binary. Sandboxed by default. Secrets never reach the model.**
+
+```bash
+curl -fsSL https://golder-cli.pages.dev/install.sh | sh
+golder
+```
+
+- **Single binary, no runtime.** Go, no Node or Python; `go install` or one release tarball is the whole install.
+- **Sandbox first.** Approved shell calls run under `sandbox-exec` / `bubblewrap`; reads stay in the workspace and the network is off unless granted.
+- **In-process redaction.** Keys in tool output, prompts, compaction and memory are replaced before the provider sees them; placeholders are restored only for file writes.
+
 <p align="center">
   <img src="docs/assets/demo-splash.png" width="92%" alt="golder's full-screen TUI: splash and status bar">
 </p>
@@ -27,6 +38,7 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 
 - **TUI first**: run `golder` for the full-screen TUI (transcript, tool cards, status bar, arrow-key pickers); `--no-tui` falls back to the line-based REPL, and both front-ends share the exact same command surface; `golder -p "..."` runs headless for scripts and CI.
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
+- **Credential redaction**: tool output, prompts, assistant text, compaction summaries, memory and session files are scanned before they reach the provider; AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL rules, four modes (`off | observe | redact | block`), and an audit log that records rule names and hashes only.
 - **Many providers**: defaults to the OpenCode gateway, with 19 built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek, …) and any OpenAI-compatible endpoint.
 - **Sessions and branches**: `/resume` switches sessions (this project by default, `--all` for every project), `/fork` branches from any historical message, `/clone` duplicates the current session, `/tree` navigates the branch tree, `/export` `/import` round-trip session archives, and `/rewind` rolls back files and conversation together.
 - **Approvals and sandboxing**: four permission modes (read-only / ask / auto / full-access); sandbox-tier calls run isolated automatically — `sandbox-exec` on macOS, `bubblewrap` (bwrap) on Linux (must be installed). The sandbox is a whitelist: reads are limited to the workspace, the system runtime and two git config files (`~/.gitconfig`, `~/.config/git/*`), so everything else under `$HOME` (shell rc files, SSH/GPG keys, `~/.config/*`, credentials, history) is unreadable; writes default to the workspace, the temp dir, and explicitly granted write roots; the network is off by default. **A path grant can be remembered from the dialog**: reads answer to `a` (this session) / `s` (remembered); the write question raised by a patch outside the workspace answers to `y`/`a`/`s`; the write rows of the escalation and re-admission dialogs are `w` (this session) / `s` (remembered); the remembered form writes `~/.golder/grants.json`. The same file is inspected and maintained with `/boundary readable|writable list|add|rm`, and a machine that cannot edit a file (a script, a container) uses the `GOLDER_READABLE_ROOTS` environment variable instead. A toolchain living under `$HOME` is re-admitted with `GOLDER_SANDBOX_READABLE`. When a denial blocks a legitimate command the model can request escalation (`require_escalated`) with a justification. That is one more capability question inside the *same* review, not a second approval round: under auto the reviewer settles it — a granted escape runs the call outside the sandbox and says so, and anything less first puts the blocked path to you (`a` reading for the session, `s` reading remembered, `w` reads and writes for the session, Esc to decline; the title says which side was denied and the write row leads when the need is a write), then runs the command contained again; with no path to name it simply re-contains it and says so. Under ask the dialog puts the whole escape to you with containment as the default answer. A command the sandbox denies outright is offered its path the same way, once per path per run, and a yes re-runs it contained.

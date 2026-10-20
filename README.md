@@ -8,6 +8,17 @@
 
 用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认进入全屏 TUI，也支持行式 REPL 与无头脚本。
 
+**单二进制、默认沙箱、密钥不进入模型上下文。**
+
+```bash
+curl -fsSL https://golder-cli.pages.dev/install.sh | sh
+golder
+```
+
+- **单二进制，无运行时依赖**：Go 编译，不需要 Node/Python；`go install` 或一个 release 压缩包就是全部安装。
+- **默认沙箱**：获准的 shell 调用在 `sandbox-exec` / `bubblewrap` 内运行，读限工作区，网络默认关闭、按次授权。
+- **本地凭据脱敏**：tool output、prompt、compaction、memory 里的 key 在发给模型前替换；只有写文件时才还原占位符。
+
 <p align="center">
   <img src="docs/assets/demo-splash.png" width="92%" alt="golder 全屏 TUI：启动画面与状态栏">
 </p>
@@ -27,6 +38,7 @@
 
 - **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
+- **凭据脱敏**：tool output、用户 prompt、assistant 文本、compaction 摘要、memory 与 session 落盘前统一扫描；覆盖 AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL 等规则，支持 `off | observe | redact | block` 四档，审计只记规则名与 hash。
 - **多 Provider**：默认 OpenCode 网关，内置 19 个网关（OpenAI / Anthropic / OpenRouter / DeepSeek 等），也可指向任意 OpenAI 兼容端点。
 - **会话与分支**：`/resume` 切换历史会话（默认只看当前项目，`--all` 看全部），`/fork` 从任意历史消息分叉，`/clone` 复制当前会话，`/tree` 浏览分支树，`/export` `/import` 做会话存档往返，`/rewind` 把文件与对话一起回滚。
 - **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；**获准执行的 `bash` 调用一律在沙箱内跑**（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`，需已安装），与命令内容无关——原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）也由一次性沙箱 worker 执行。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的写根；**网络默认关闭，且按次授权**——需要联网的调用声明 `network:"on"`，授权门在同一次审批里决定（批了仍在文件沙箱内，不必脱离沙箱）。**路径授权可在弹窗里一键记住**：读授权按 `a`（本会话）/`s`（记住）；写确认弹窗（`apply_patch` 写工作区外）按 `y`/`a`/`s`；越界申请与重准入弹窗里的写行是 `w`（本会话）/`s`（记住）。记住档直接写入 `~/.golder/grants.json`。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。确实需要**文件**访问而沙箱挡不住时，模型可申请 `require_escalated`——这只是**同一次评审**里的又一个能力问题，不是第二轮审批：auto 下由评估器拍板（批了就在沙箱外跑并播报；不批则**当场弹窗**把被拒路径拿给你选：`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝——题面写明被拒的是读还是写，需要写时写行在首行，批准后命令**收容重跑**；没有路径可提时则静默收容并播报），ask 下弹窗问你（默认项是"收容重跑"，`e` 才是故意出沙箱），没人可问则收容或失败关闭。**命令被沙箱拒绝时同理**：只要命令或理由点得出路径，就当场问你要不要把它放回沙箱，批准后原命令在沙箱内自动重跑。
