@@ -314,4 +314,3 @@ func BenchmarkMarkdownGateCost(b *testing.B) {
 		_ = ui.Enabled()
 	}
 }
-
