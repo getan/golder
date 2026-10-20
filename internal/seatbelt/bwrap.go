@@ -171,7 +171,11 @@ func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy)
 				continue
 			}
 			if info.IsDir() {
-				argv = append(argv, "--tmpfs", spelling)
+				// A bare tmpfs hides the contents but is still writable: a
+				// command could create trust.json/credentials inside it and
+				// believe the write succeeded. Remount it read-only so reads
+				// see an empty directory and writes fail with EROFS.
+				argv = append(argv, "--tmpfs", spelling, "--remount-ro", spelling)
 			} else {
 				argv = append(argv, "--ro-bind", "/dev/null", spelling)
 			}

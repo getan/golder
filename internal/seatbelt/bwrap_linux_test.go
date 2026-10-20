@@ -15,13 +15,31 @@ import (
 
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/grants/grantstest"
+	"github.com/getan/golder/internal/permissions"
 )
 
 func TestBwrapRunnerEndToEnd(t *testing.T) {
 	if !Available() {
 		t.Skip("bubblewrap not available or unusable on this machine")
 	}
-	home := t.TempDir()
+	// Put HOME outside the system-readable roots where possible. t.TempDir()
+	// lands under /tmp on Linux, and /tmp is deliberately on the sandbox's
+	// system read whitelist, so a .zshrc probe there would test the whitelist
+	// rather than the credential masking.
+	realHome, err := os.UserHomeDir()
+	if err != nil {
+		realHome = ""
+	}
+	home := ""
+	if realHome != "" {
+		if dir, err := os.MkdirTemp(realHome, "golder-bwrap-home-"); err == nil {
+			home = dir
+			defer os.RemoveAll(home)
+		}
+	}
+	if home == "" {
+		home = t.TempDir()
+	}
 	t.Setenv("HOME", home)
 	golderHome := filepath.Join(home, "ghome")
 	if err := os.MkdirAll(golderHome, 0o755); err != nil {
@@ -33,14 +51,17 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The project IS $GOLDER_HOME: the writable project bind covers the trust
-	// store, so this setup proves the secret re-assert ordering.
+	// The project is deliberately separate from $GOLDER_HOME: the state root is
+	// denied wholesale, so a project rooted inside it would be entirely
+	// unwritable. This layout tests the realistic case — the project is
+	// writable, while the trust store next door is unreachable.
 	// TmpDir is pinned to its own directory (not os.TempDir()): the "outside"
 	// probe below lives under the process TMPDIR too, and binding all of it
 	// would make that probe meaningless.
-	r := &BwrapRunner{ProjectDir: golderHome, TmpDir: t.TempDir()}
+	project := t.TempDir()
+	r := &BwrapRunner{ProjectDir: project, TmpDir: t.TempDir()}
 	run := func(command string) (string, error) {
-		argv, cleanup, err := r.SandboxArgv("/bin/bash", "-c", command, golderHome)
+		argv, cleanup, err := r.SandboxArgv("/bin/bash", "-c", command, project)
 		if err != nil {
 			t.Fatalf("SandboxArgv: %v", err)
 		}
@@ -48,7 +69,7 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 			defer cleanup()
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Dir = golderHome
+		cmd.Dir = project
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}
@@ -64,7 +85,7 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 		t.Errorf("write outside the project must fail:\n%s", out)
 	}
 	if out, err := run("echo hacked > " + trust); err == nil {
-		t.Errorf("the trust store must stay read-only inside a writable tree:\n%s", out)
+		t.Errorf("the trust store must stay unreachable from a sandboxed command:\n%s", out)
 	}
 	// Reading secret material is denied too (codex parity): a masked tmpfs
 	// hides the file entirely, so `cat` fails and the content never appears.
@@ -80,14 +101,18 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 	// The read model is a whitelist: credential material under $HOME is not
 	// mounted at all, so it is unreachable; the git config files are mounted so
 	// that `git commit` can find an identity.
-	secret := filepath.Join(home, ".zshrc")
-	if err := os.WriteFile(secret, []byte("export API_KEY=leaked"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := run("cat " + secret); err == nil {
-		t.Errorf("reading $HOME/.zshrc must be denied inside the sandbox:\n%s", out)
-	} else if strings.Contains(out, "leaked") {
-		t.Errorf("shell rc content leaked out of the sandbox:\n%s", out)
+	if permissions.InsideSystemReadRoots(home) {
+		t.Logf("HOME %s is inside a system-readable root; skipping the .zshrc denial probe", home)
+	} else {
+		secret := filepath.Join(home, ".zshrc")
+		if err := os.WriteFile(secret, []byte("export API_KEY=leaked"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := run("cat " + secret); err == nil {
+			t.Errorf("reading $HOME/.zshrc must be denied inside the sandbox:\n%s", out)
+		} else if strings.Contains(out, "leaked") {
+			t.Errorf("shell rc content leaked out of the sandbox:\n%s", out)
+		}
 	}
 	gitconfig := filepath.Join(home, ".gitconfig")
 	if err := os.WriteFile(gitconfig, []byte("[user]\n\temail = probe@example.com\n"), 0o644); err != nil {

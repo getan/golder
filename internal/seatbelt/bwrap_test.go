@@ -108,9 +108,13 @@ func TestBwrapRunnerArgv(t *testing.T) {
 		t.Fatalf("SandboxArgv with existing golder state: %v", err)
 	}
 	stateAt := indexOfSeq(argv, "--tmpfs", golderHome)
+	roAt := indexOfSeq(argv, "--remount-ro", golderHome)
 	writable := indexOfSeq(argv, "--bind", project, project)
 	if stateAt < 0 {
 		t.Fatalf("argv missing the golder-state mask for %s: %v", golderHome, argv)
+	}
+	if roAt < 0 || roAt < stateAt {
+		t.Errorf("the golder-state tmpfs must be remounted read-only after it is mounted: %v", argv)
 	}
 	if stateAt < writable {
 		t.Errorf("the golder-state mask must come after the writable bind: %v", argv)
