@@ -854,6 +854,16 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			}
 			if interactive && opts.Confirm == nil {
 				ans := promptRisk(ctx, opts, mode.String(), call, v, ApprovalEscalation)
+				if ans.allow && NetworkRequested(call.Name, call.Arguments) && !v.Network {
+					// The stdin dialog is line-based, so the network half is a
+					// second question rather than a second stage. Asking it here
+					// keeps a contained approval from losing the grant.
+					netAns := promptRisk(ctx, opts, mode.String(), call, v, ApprovalNetwork)
+					if !netAns.allow {
+						return blockCall(call, v, "network access was not authorized; the call did not run")
+					}
+					v.Network = true
+				}
 				if ans.allow {
 					if ans.writableRoot != "" {
 						rationale := "contained in the sandbox; " + ans.writableRoot + " is writable for this session"
@@ -1079,7 +1089,8 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 		Authorization: authWord(v.Authorization, lang),
 		Rationale:     firstReason(v),
 	}
-	if kind == ApprovalNetwork {
+	if kind == ApprovalNetwork ||
+		(kind == ApprovalEscalation && NetworkRequested(call.Name, call.Arguments)) {
 		req.NetworkRequest = true
 		if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
 			req.NetworkKey = key
@@ -1106,6 +1117,12 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 			})
 		}
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer"), true
+	}
+	if kind == ApprovalEscalation && req.NetworkRequest && !ans.Network {
+		// The escalation dialog asked both halves; a network denial denies the
+		// call. Returning a contained decision without the grant would only make
+		// the retry fail at the bash tool's network guard.
+		return blockCall(call, v, "network access was declined in the same prompt; the call did not run"), true
 	}
 	if opts.Notify != nil {
 		approved := "approved by the user"
@@ -1135,13 +1152,13 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 		// "Keep it in the sandbox" — the escalation dialog's default answer, and
 		// an approval of the call rather than of the escape: the tool runs with
 		// the sandbox doing the enforcing.
-		return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
+		return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: ans.Network}, true
 	}
 	if strings.TrimSpace(ans.WritableRoot) != "" {
 		// The call ran into the sandbox (or could not be reviewed); with the
 		// path now writable, keeping it isolated is strictly safer than the
 		// unisolated approval it replaces.
-		return &agentcore.BeforeToolCallDecision{Sandbox: true}, true
+		return &agentcore.BeforeToolCallDecision{Sandbox: true, Network: ans.Network}, true
 	}
 	switch kind {
 	case ApprovalNetwork:

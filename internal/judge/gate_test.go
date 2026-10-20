@@ -23,6 +23,44 @@ type stubClassifier struct {
 	calls int
 }
 
+// TestAskApprovalEscalationCarriesNetwork: the escalation dialog asks both the
+// containment and the network question. A contained approval must carry the
+// network grant, and a network denial must deny the call rather than deliver a
+// containment whose retry fails the bash guard.
+func TestAskApprovalEscalationCarriesNetwork(t *testing.T) {
+	call := agentcore.AgentToolCall{
+		Name:      "bash",
+		Arguments: json.RawMessage(`{"command":"git push","network":"on"}`),
+	}
+	v := Verdict{Level: Contain, Reasons: []string{"sandbox escape requested"}}
+	cases := []struct {
+		name    string
+		ans     ApprovalAnswer
+		blocked bool
+		network bool
+	}{
+		{"contained with network", ApprovalAnswer{Answered: true, Approve: true, Contained: true, Network: true}, false, true},
+		{"network denied", ApprovalAnswer{Answered: true, Approve: true, Contained: true}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			opts := GateOpts{Confirm: func(context.Context, ApprovalRequest) ApprovalAnswer {
+				return c.ans
+			}}
+			dec, ok := askApproval(context.Background(), opts, "ask", call, v, ApprovalEscalation, "en")
+			if !ok || dec == nil {
+				t.Fatal("askApproval returned no decision")
+			}
+			if dec.Block != c.blocked {
+				t.Fatalf("blocked = %v, want %v", dec.Block, c.blocked)
+			}
+			if !c.blocked && (!dec.Sandbox || dec.Network != c.network) {
+				t.Errorf("decision = %+v, want sandbox with network=%v", dec, c.network)
+			}
+		})
+	}
+}
+
 func (s *stubClassifier) Classify(_ context.Context, _ string, _ json.RawMessage) Verdict {
 	s.calls++
 	return s.v

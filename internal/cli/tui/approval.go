@@ -289,7 +289,9 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		trustDir:     req.TrustDir,
 		reply:        reply,
 		combined: req.NetworkRequest &&
-			(req.Kind == judge.ApprovalBoundary || req.Kind == judge.ApprovalReAdmit),
+			(req.Kind == judge.ApprovalBoundary ||
+				req.Kind == judge.ApprovalReAdmit ||
+				req.Kind == judge.ApprovalEscalation),
 		networkKey:          req.NetworkKey,
 		networkRememberable: req.NetworkRememberable,
 	}
@@ -554,7 +556,11 @@ func (m *Model) answerCombinedApproval(d approvalDialog, value string) {
 	case approveNetworkRemember:
 		ans.Network, ans.NetworkRemember = true, true
 	default:
-		ans.Network = false
+		// The network half was denied. This is one combined decision: do not
+		// deliver a path/containment approval whose retry would fail the
+		// network guard.
+		m.deliverApproval(d, judge.ApprovalAnswer{Answered: true})
+		return
 	}
 	m.deliverApproval(d, ans)
 }
@@ -582,6 +588,10 @@ func combinedPathAnswer(d approvalDialog) judge.ApprovalAnswer {
 		ans.Approve, ans.WritableRoot = true, d.writableRoot
 	case approveWritablePersist:
 		ans.Approve, ans.WritableRoot, ans.Persisted = true, d.writableRoot, true
+	case approveContained:
+		ans.Approve, ans.Contained = true, true
+	case approveDirect:
+		ans.Approve = true
 	}
 	return ans
 }

@@ -129,6 +129,54 @@ func TestApprovalReAdmitCombinesNetwork(t *testing.T) {
 	}
 }
 
+// TestApprovalEscalationCombinesNetwork: a refused escape's containment row is
+// only useful with the network half; the dialog asks both and delivers one
+// answer.
+func TestApprovalEscalationCombinesNetwork(t *testing.T) {
+	m := NewModel(Options{})
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.openApproval(judge.ApprovalRequest{
+		Kind:           judge.ApprovalEscalation,
+		Tool:           "bash",
+		Summary:        "git push",
+		NetworkRequest: true,
+		NetworkKey:     "github.com",
+	}, reply)
+	if !m.approval.combined {
+		t.Fatal("escalation with a network request must combine both questions")
+	}
+	m.answerApproval(approveContained)
+	if m.approval.stage != 1 {
+		t.Fatalf("stage = %d, want the network stage", m.approval.stage)
+	}
+	m.answerApproval(approveNetwork)
+	ans := awaitAnswer(t, reply)
+	if !ans.Approve || !ans.Contained || !ans.Network {
+		t.Fatalf("answer = %+v, want contained + network", ans)
+	}
+}
+
+// TestApprovalCombinedNetworkDenialDeniesCall: the network half is part of the
+// same decision; denying it must not leave an approval whose retry fails the
+// network guard.
+func TestApprovalCombinedNetworkDenialDeniesCall(t *testing.T) {
+	m := NewModel(Options{})
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.openApproval(judge.ApprovalRequest{
+		Kind:           judge.ApprovalReAdmit,
+		Tool:           "bash",
+		ReadRoot:       "/tmp/repo",
+		NetworkRequest: true,
+		NetworkKey:     "github.com",
+	}, reply)
+	m.answerApproval(approveReadDir)
+	m.answerApproval(approveDeny)
+	ans := awaitAnswer(t, reply)
+	if ans.Approve {
+		t.Fatalf("network denial delivered an approval: %+v", ans)
+	}
+}
+
 // A path+network request keeps one dialog open for both halves: the path answer
 // is recorded, the network question replaces the rows, and one combined answer
 // reaches the waiting gate.
