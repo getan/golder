@@ -18,6 +18,20 @@ func resetClientCache() {
 	clientCacheMu.Unlock()
 }
 
+// TestProviderTransportsBoundTheHeaderWait: the SSE body guard only starts once
+// response headers exist, so a server that accepts the request and then never
+// answers is a gap the transport itself has to close. Both the shared transport
+// and commandcode's tuned clone must carry the first-token budget.
+func TestProviderTransportsBoundTheHeaderWait(t *testing.T) {
+	want := firstContentTimeout(context.Background())
+	if got := directTransport.ResponseHeaderTimeout; got != want {
+		t.Errorf("direct transport header timeout = %s, want %s", got, want)
+	}
+	if got := transportForProvider("commandcode").ResponseHeaderTimeout; got != want {
+		t.Errorf("commandcode transport header timeout = %s, want %s", got, want)
+	}
+}
+
 // One client is reused per resolved route so consecutive requests share a
 // transport and its connection pool; distinct routes stay isolated.
 func TestClientForURLReusesClientsPerRoute(t *testing.T) {

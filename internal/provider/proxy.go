@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -121,6 +122,11 @@ func ProxyStatus(name, baseURL string) string {
 var directTransport = func() *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil // Provider selection must not become a process-wide proxy.
+	// The body guard only starts once response headers exist, so a server that
+	// accepts the request and then never sends headers used to be unbounded.
+	// Bound that phase with the same first-token budget; a timeout here is a
+	// connect failure, which the stream retry already re-issues.
+	tr.ResponseHeaderTimeout = firstContentTimeout(context.Background())
 	return tr
 }()
 

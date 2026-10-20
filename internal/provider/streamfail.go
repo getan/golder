@@ -427,24 +427,20 @@ func streamCutUpstreamSilent(provider string, err error, attempts int) error {
 }
 
 // firstContentTimeout is the budget for the first content frame: the phase where
-// a long prefill or a silent think is legitimate. It widens with each retry, so a
-// genuinely slow request is not cut three times at the same mark, while a gateway
-// that answers nothing still ends the turn instead of hanging.
-func firstContentTimeout(ctx context.Context) time.Duration {
-	base := 3 * time.Minute
+// a long prefill or a silent think is legitimate. It deliberately does NOT widen
+// on retries: the point of the window is to re-issue a request that has produced
+// nothing, and widening made two silent attempts take 3m + 4m before the turn
+// ended. Two minutes is long enough for a cold prefill and short enough that a
+// gateway that never answers is replaced by a fresh request promptly.
+// GOLDER_STREAM_FIRST_CONTENT_TIMEOUT overrides it.
+func firstContentTimeout(context.Context) time.Duration {
+	base := 2 * time.Minute
 	if v := os.Getenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			base = d
 		}
 	}
-	switch streamAttempt(ctx) {
-	case 0:
-		return base
-	case 1:
-		return base + time.Minute
-	default:
-		return base + 2*time.Minute
-	}
+	return base
 }
 
 // streamAttemptKey carries the retry number into a provider call, so the watchdog

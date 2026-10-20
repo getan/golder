@@ -278,18 +278,17 @@ func TestSSEGuardStallWatchdogFiresOnKeepAlives(t *testing.T) {
 // stallingBody delivers nothing and never returns.
 type stallingBody struct{}
 
-// TestFirstContentTimeoutWidensPerAttempt: the first-token budget is not one
-// number repeated. A request that is genuinely slow gets more room on each retry,
-// so it is not cut three times at the same mark, while a later attempt still ends
-// the turn instead of hanging.
-func TestFirstContentTimeoutWidensPerAttempt(t *testing.T) {
+// TestFirstContentTimeoutIsStablePerAttempt: every attempt gets the same budget.
+// Widening it made two silent attempts take 3m + 4m before the turn ended, which
+// is exactly the wait the first-token watchdog exists to cut short.
+func TestFirstContentTimeoutIsStablePerAttempt(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "1m")
 	base := context.Background()
 	for attempt, want := range map[int]time.Duration{
 		0: time.Minute,
-		1: 2 * time.Minute,
-		2: 3 * time.Minute,
-		9: 3 * time.Minute,
+		1: time.Minute,
+		2: time.Minute,
+		9: time.Minute,
 	} {
 		if got := firstContentTimeout(withStreamAttempt(base, attempt)); got != want {
 			t.Errorf("attempt %d budget = %s, want %s", attempt, got, want)
@@ -297,8 +296,8 @@ func TestFirstContentTimeoutWidensPerAttempt(t *testing.T) {
 	}
 	// A malformed setting falls back to the default rather than to no budget.
 	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "soon")
-	if got := firstContentTimeout(base); got != 3*time.Minute {
-		t.Errorf("malformed setting = %s, want the 3m default", got)
+	if got := firstContentTimeout(base); got != 2*time.Minute {
+		t.Errorf("malformed setting = %s, want the 2m default", got)
 	}
 }
 

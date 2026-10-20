@@ -331,6 +331,8 @@ See `golder --help` for the complete list.
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
 | `GOLDER_SANDBOX` | Execution isolation: `off` / `auto` (default: approved bash calls are contained; a fully enumerable envelope runs bare) / `enforce` (all calls contained, and a runner is required) |
 | `GOLDER_STREAM_RESUME` | `0`/`false`/`off`: disable text continuation; on by default: continue a text answer cut after output when it has no tool call; `commandcode` also gets a no-compression, no-keep-alive transport (HTTP/2 stays on) |
+| `GOLDER_STREAM_FIRST_CONTENT_TIMEOUT` | budget for the first content frame (Go duration, default `2m`); a timeout re-issues the request and no longer widens per attempt |
+| `GOLDER_STREAM_IDLE_TIMEOUT` | window with no bytes at all (Go duration, default `90s`); SSE keep-alives do not count as content progress |
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |

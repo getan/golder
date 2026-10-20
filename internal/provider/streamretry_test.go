@@ -446,7 +446,7 @@ func TestStreamRetryStopsAfterTwoFirstTokenTimeouts(t *testing.T) {
 		return cutEvent(&StreamWatchdogError{
 			Sink:   errStreamStall,
 			Phase:  StreamPhaseFirstToken,
-			Window: 3 * time.Minute,
+			Window: 2 * time.Minute,
 			Seen:   StreamEvidence{Bytes: 412, KeepAlives: 12, LastFrame: "comment"},
 		})
 	}
