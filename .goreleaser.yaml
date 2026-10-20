@@ -85,3 +85,42 @@ release:
     name: golder
   draft: false
   prerelease: auto
+
+# Homebrew tap：每次正式发布重写 getan/homebrew-tap 的 Formula/golder.rb，
+# 用本次 release 的归档名与 sha256。因此 tap 里的 formula 是生成物——不要
+# 再手工编辑它，改这里，或在发布后修正并补一版。
+#
+# 需要仓库 secret HOMEBREW_TAP_TOKEN：一个 fine-grained PAT，仅授予
+# getan/homebrew-tap 的 Contents: Read and write。GITHUB_TOKEN 只覆盖本仓库，
+# 无法推送另一个仓库；secret 缺失时发布会在这一步失败。
+#
+# brews 只生成 macOS / Linux 的 formula（Windows 归档被忽略）。
+#
+# goreleaser v2.16 起把 brews 标记为 deprecated，推荐 homebrew_casks；但 Cask
+# 只支持 macOS，换过去 Linux 用户就只能用安装脚本。golder 的 README 承诺
+# `brew install getan/tap/golder` 在 macOS / Linux 都能用，所以这里保留
+# formula，并接受 `goreleaser check` 的弃用提示（它仍会在 v2 全系列工作）。
+# 将来 goreleaser v3 移除 brews 时，再决定是只保留 macOS Cask，还是自建
+# 一个小的 formula 发布步骤。
+brews:
+  - name: golder
+    repository:
+      owner: getan
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/getan/golder"
+    description: "Terminal AI coding agent in Go"
+    license: "MIT"
+    url_template: "https://github.com/getan/golder/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    install: |
+      bin.install "golder"
+    test: |
+      system "#{bin}/golder", "--version"
+    # 预发布（v2.0.0-rc1 之类）不动 tap，避免 brew 用户拿到 rc。
+    skip_upload: auto
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "golder {{ .Tag }}"

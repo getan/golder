@@ -23,6 +23,17 @@ jobs:
         with:
           go-version: stable
 
+      # 先验一次再构建：tap 推送需要跨仓库 PAT，缺了就在 30 秒内说清楚，
+      # 而不是等六份归档构建完、在 goreleaser 的 publish 阶段才报 401。
+      - name: Check Homebrew tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN 未配置。请创建 fine-grained PAT（仅 getan/homebrew-tap，Contents: Read and write），加到本仓库 Secrets。见 .goreleaser.yaml 顶部说明。"
+            exit 1
+          fi
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
@@ -31,6 +42,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 跨仓库推送 tap 用；fine-grained PAT，仅 homebrew-tap 的
+          # Contents: Read and write。未配置时本步骤失败，不会静默跳过。
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       # 发布成功后立刻作废站点 /api/latest 的缓存快照，让站点角标与
       # `golder update` 马上看到新版本。不这么做的话，端点靠
