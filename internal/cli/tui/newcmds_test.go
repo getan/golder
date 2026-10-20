@@ -309,7 +309,10 @@ func TestUsageLinesComeFromTheRegistry(t *testing.T) {
 func newTUICmdSession(t *testing.T, name, hint string) (*runSession, error) {
 	t.Helper()
 	store := newTestStore(t)
-	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	// The usage paths need a session, not the first-run trust question; approve
+	// explicitly so the test does not depend on a saved decision in the developer's
+	// real GOLDER_HOME (CI has none).
+	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p", Approve: true})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}

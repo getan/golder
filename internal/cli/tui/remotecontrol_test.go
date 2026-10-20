@@ -15,7 +15,10 @@ import (
 func newRemoteTestSession(t *testing.T) *runSession {
 	t.Helper()
 	store := newTestStore(t)
-	s, _, err := newRunSessionWithStore(store, Options{})
+	// These tests exercise remote control on an already-launched session. Approve
+	// so the eager first-run trust dialog cannot intercept their key paths in CI,
+	// where no trust decision exists for the checkout.
+	s, _, err := newRunSessionWithStore(store, Options{Approve: true})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}

@@ -1087,7 +1087,7 @@ func TestCtrlCClosesThePicker(t *testing.T) {
 func TestProviderSwitchDropsTheFetchedCatalog(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 	store := newTestStore(t)
-	s, _, err := newRunSessionWithStore(store, Options{Model: "glm-5.3", ProviderName: "opencode-go"})
+	s, _, err := newRunSessionWithStore(store, Options{Model: "glm-5.3", ProviderName: "opencode-go", Approve: true})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}

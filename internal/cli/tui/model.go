@@ -401,7 +401,12 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// that repaints the banner every 80ms was hiding the very question the
 	// person had to answer. The input box looked dead because it was waiting
 	// behind a dialog nobody could see.
-	m.pendingTrust = s.trust != nil && !m.opts.Approve &&
+	// Ask only when the session itself is still undecided. s.trusted already
+	// folds in --approve, a saved Trusted decision and a session-scoped grant, so
+	// testing the launch flag here made the question depend on which Options
+	// value a caller happened to pass to NewModel rather than on the session's
+	// actual trust.
+	m.pendingTrust = s.trust != nil && !s.trusted &&
 		!s.trust.NearestTrustDecision(m.cwd).Found
 	startFrame := 0
 	if len(history) > 0 || m.pendingTrust {

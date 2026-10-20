@@ -35,6 +35,7 @@ func TestStatusWithSessionRendersSections(t *testing.T) {
 		Model:         "status-model",
 		ProviderName:  "status-provider",
 		ThinkingLevel: agentcore.ThinkingLevel("low"),
+		Approve:       true,
 	})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
@@ -98,6 +99,7 @@ func TestStatusIncludesSessionSummary(t *testing.T) {
 	s, _, err := newRunSessionWithStore(store, Options{
 		Model:        "session-model",
 		ProviderName: "session-provider",
+		Approve:      true,
 	})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
@@ -134,7 +136,7 @@ func TestStatusIncludesSessionSummary(t *testing.T) {
 // and last-run telemetry blocks instead of "no telemetry yet".
 func TestTelemetryFoldingFeedsStatus(t *testing.T) {
 	store := newTestStore(t)
-	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p"})
+	s, _, err := newRunSessionWithStore(store, Options{Model: "m", ProviderName: "p", Approve: true})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}

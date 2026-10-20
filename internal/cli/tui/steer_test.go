@@ -314,7 +314,7 @@ func TestModelMidRunExitRefused(t *testing.T) {
 // path the gate now admits; under -race a read from the tea goroutine is reported
 // as the race it is.
 func TestMidRunCommandsDoNotReadRunOwnedContext(t *testing.T) {
-	s, _, err := newRunSessionWithStore(newTestStore(t), Options{})
+	s, _, err := newRunSessionWithStore(newTestStore(t), Options{Approve: true})
 	if err != nil {
 		t.Fatalf("newRunSessionWithStore: %v", err)
 	}
