@@ -42,6 +42,9 @@ func TestTrustPickerFirstRun(t *testing.T) {
 	if !m.pendingTrust {
 		t.Fatal("an undecided launch directory should mark the trust prompt pending")
 	}
+	if m.logoRunning {
+		t.Error("the trust question must not run the logo entrance; it hides the dialog")
+	}
 	if m.session.hooksWired {
 		t.Fatal("hooks must stay deferred while the trust question is open")
 	}
@@ -125,6 +128,9 @@ func TestTrustPromptSkippedWhenDecided(t *testing.T) {
 	if m.pendingTrust {
 		t.Error("a decided directory must not prompt")
 	}
+	if !m.logoRunning {
+		t.Error("a decided directory should still animate a fresh session")
+	}
 	if !m.session.trusted {
 		t.Error("a saved Trusted decision should mark the session trusted")
 	}
@@ -144,7 +150,27 @@ func TestTrustPromptSkippedWithApprove(t *testing.T) {
 	if m.pendingTrust {
 		t.Error("--approve must skip the trust prompt")
 	}
+	if !m.logoRunning {
+		t.Error("--approve should still animate a fresh session")
+	}
 	if !m.session.trusted || !m.session.hooksWired {
 		t.Error("--approve should grant session trust and wire hooks up front")
+	}
+}
+
+// TestTrustPickerSettlesARunningLogo: a dialog that opens while the entrance
+// is still armed (a resumed/resized model, or any future caller) must stop the
+// animation rather than repainting over the question.
+func TestTrustPickerSettlesARunningLogo(t *testing.T) {
+	withEmptyTrustStore(t)
+	m := newTrustTestModel(t)
+	m.logoRunning = true
+	got, _ := m.Update(trustPromptMsg{})
+	m = got.(Model)
+	if m.logoRunning {
+		t.Error("opening the trust dialog must settle the logo")
+	}
+	if !m.approval.active || m.approval.kind != "trust" {
+		t.Fatalf("trust prompt should be open, active=%v kind=%q", m.approval.active, m.approval.kind)
 	}
 }

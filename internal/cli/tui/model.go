@@ -395,22 +395,25 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	// A fresh session starts with the wordmark blank so it can type itself in;
 	// a resumed one shows the settled word (its banner is history nobody is
 	// watching) by starting at the resting frame.
+	//
+	// A first-run trust question also starts at the resting frame and never
+	// animates: the dialog opens in Init and owns the keyboard, so an entrance
+	// that repaints the banner every 80ms was hiding the very question the
+	// person had to answer. The input box looked dead because it was waiting
+	// behind a dialog nobody could see.
+	m.pendingTrust = s.trust != nil && !m.opts.Approve &&
+		!s.trust.NearestTrustDecision(m.cwd).Found
 	startFrame := 0
-	if len(history) > 0 {
+	if len(history) > 0 || m.pendingTrust {
 		startFrame = logoFrames
 	}
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, startFrame))
-	m.logoRunning = len(history) == 0
+	m.logoRunning = len(history) == 0 && !m.pendingTrust
 	seedTranscript(&m.transcript, history)
 	// Seed the context gauge with the resumed session's inherited context so the
 	// very first frame already shows how much of the window was carried over,
 	// instead of staying blank until the first run ends.
 	m.refreshContextUsage(history)
-	// First-run trust dialog (parity with the REPL and codex): an undecided
-	// launch directory gets asked before the first prompt. The picker opens in
-	// Init (tests that drive Update directly stay prompt-free).
-	m.pendingTrust = s.trust != nil && !m.opts.Approve &&
-		!s.trust.NearestTrustDecision(m.cwd).Found
 	return m
 }
 
@@ -778,6 +781,14 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 func (m Model) openTrustPicker() (tea.Model, tea.Cmd) {
 	if m.session == nil || m.session.trust == nil {
 		return m, nil
+	}
+	// A first-run question is not something to hide behind an entrance
+	// animation. Settle the wordmark before the dialog takes the screen; this
+	// also covers a caller that opened the picker from a resized/resumed model
+	// where the animation was still armed.
+	if m.logoRunning {
+		m.logoRunning = false
+		m.transcript.setBannerText(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
 	}
 	m.openTrustApproval()
 	m.relayout()
