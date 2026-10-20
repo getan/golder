@@ -279,6 +279,16 @@ func fetchModelCatalogIDs(live *cli.LiveConfig, creds *provider.CredentialStore)
 				return stale, nil
 			}
 		}
+		// First run on a restricted network: the endpoint timed out and there
+		// is no cache to fall back to. Serve the bundled snapshot for the few
+		// gateways we ship one for, and leave the disk cache untouched so the
+		// next attempt still asks the live endpoint.
+		if fallback := provider.FallbackModelCatalog(providerName); len(fallback) > 0 {
+			live.FetchedModels = fallback
+			live.FetchedAt = time.Now()
+			live.FetchedKey = key
+			return fallback, nil
+		}
 		if provider.NeedsProxy(providerName, baseURL) && provider.ProxyURL() == "" {
 			return nil, fmt.Errorf("%w (provider %q usually needs egress: export GOLDER_PROXY=http://127.0.0.1:7897 and retry)", err, providerName)
 		}
@@ -443,6 +453,17 @@ func DefaultModelName() string {
 	return model
 }
 
+// DefaultModelForProvider returns the default model saved for one provider, or
+// "" when that gateway has none. The picker uses it so a default set under
+// commandcode is not claimed by opencode.
+func DefaultModelForProvider(providerName string) string {
+	model, err := config.DefaultModelFor(providerName)
+	if err != nil {
+		return ""
+	}
+	return model
+}
+
 // DefaultThinkingLevelName returns the config.toml default reasoning level, or
 // "" when the file does not set one.
 func DefaultThinkingLevelName() string {
@@ -476,14 +497,14 @@ func SetDefaultModelText(model string, level agentcore.ThinkingLevel, live *cli.
 	if err != nil {
 		return fmt.Sprintf("model: cannot set %q as the default: %v", model, err)
 	}
-	if err := config.SetDefaultModel(model, string(level), name); err != nil {
+	if err := config.SetDefaultModelFor(name, model, string(level)); err != nil {
 		return "model: cannot save the default: " + err.Error()
 	}
 	msg := fmt.Sprintf("default model set to %s (provider: %s", model, name)
 	if level != "" {
 		msg += ", think: " + string(level)
 	}
-	msg += ")\nnew sessions start there; provider switches prefer it when it belongs to the new gateway"
+	msg += ")\nthis gateway now remembers it; new sessions start there"
 	return msg
 }
 
@@ -518,11 +539,9 @@ func SetDefaultProviderText(name string, creds *provider.CredentialStore) string
 	}
 	// Keep a model the user already chose as the default for THIS provider;
 	// only a provider change should replace it with the provider's own default.
-	model := spec.DefaultModel
-	if current, _ := config.DefaultProvider(); current == spec.Name {
-		if def, _ := config.DefaultModel(); def != "" {
-			model = def
-		}
+	model, _ := config.DefaultModelFor(spec.Name)
+	if model == "" {
+		model = spec.DefaultModel
 	}
 	rewrote, err := config.SetDefaultProvider(spec.Name, model)
 	if err != nil {
@@ -718,28 +737,24 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		arg := strings.TrimSpace(args)
 		switch {
 		case arg == "":
-			model, err := config.DefaultModel()
+			model, err := config.DefaultModelFor(live.ProviderName)
 			if err != nil {
 				return "model: cannot read the default: " + err.Error()
 			}
 			if model == "" {
-				return "default model: unset (new sessions use the provider's default)\nset it with /model default <id|n> [level]"
+				return "default model for " + live.ProviderName + ": unset\nset it with /model default <id|n> [level]"
 			}
 			level, _ := config.DefaultThinkingLevel()
-			name, _ := config.DefaultProvider()
-			msg := "default model: " + model
-			if name != "" {
-				msg += " (provider: " + name + ")"
-			}
+			msg := "default model for " + live.ProviderName + ": " + model
 			if level != "" {
 				msg += ", think: " + level
 			}
-			return msg + "\nnew sessions and provider switches use it"
+			return msg
 		case arg == "off" || arg == "none" || arg == "unset":
-			if err := config.SetDefaultModel("", "", ""); err != nil {
+			if err := config.SetDefaultModelFor(live.ProviderName, "", ""); err != nil {
 				return "model: cannot clear the default: " + err.Error()
 			}
-			return "default model cleared; new sessions use the provider's default"
+			return "default model for " + live.ProviderName + " cleared"
 		case arg == "think" || strings.HasPrefix(arg, "think "):
 			lvl, ok := validThinkingLevel(strings.TrimSpace(strings.TrimPrefix(arg, "think")))
 			if !ok {
@@ -870,12 +885,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		// Prefer the model the user made the default for THIS gateway; fall back
 		// to the provider's own default. The previous behavior always used
 		// spec.DefaultModel, which silently discarded a `/model default` choice.
-		model := ""
-		if defProvider, _ := config.DefaultProvider(); defProvider == spec.Name {
-			if defModel, _ := config.DefaultModel(); defModel != "" {
-				model = defModel
-			}
-		}
+		model, _ := config.DefaultModelFor(spec.Name)
 		if model == "" {
 			model = spec.DefaultModel
 		}

@@ -372,9 +372,11 @@ func TestModelListDegrades(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	live := &cli.LiveConfig{Model: "openrouter/free", ProviderName: "openai", BaseURL: srv.URL}
+	// openrouter has no bundled fallback, so this still exercises the
+	// degradation path; openai would now open the snapshot instead.
+	live := &cli.LiveConfig{Model: "openrouter/free", ProviderName: "openrouter", BaseURL: srv.URL}
 	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride("openai", "test-key")
+	creds.SetOverride("openrouter", "test-key")
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, live, creds)
 

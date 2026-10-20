@@ -99,3 +99,78 @@ func TestSetDefaultThinkingLevelLeavesTheModelAlone(t *testing.T) {
 		t.Errorf("setting the level touched the model/provider:\n%s", text)
 	}
 }
+
+func TestSetDefaultModelForKeepsPerProviderEntries(t *testing.T) {
+	path := writeConfig(t, "# my settings\n\n[dream]\nenabled = true\n")
+	if err := SetDefaultModelFor("commandcode", "deepseek/deepseek-v4.1-flash", "high"); err != nil {
+		t.Fatalf("set commandcode: %v", err)
+	}
+	if err := SetDefaultModelFor("opencode-go", "deepseek-v4.1-flash", "max"); err != nil {
+		t.Fatalf("set opencode: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		"[model_defaults]",
+		`commandcode = "deepseek/deepseek-v4.1-flash"`,
+		`opencode-go = "deepseek-v4.1-flash"`,
+		"# my settings",
+		"[dream]\nenabled = true",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q:\n%s", want, text)
+		}
+	}
+	if model, _ := DefaultModelFor("commandcode"); model != "deepseek/deepseek-v4.1-flash" {
+		t.Errorf("commandcode default = %q", model)
+	}
+	if model, _ := DefaultModelFor("opencode-go"); model != "deepseek-v4.1-flash" {
+		t.Errorf("opencode default = %q", model)
+	}
+	if model, _ := DefaultModelFor("deepseek"); model != "" {
+		t.Errorf("unset provider default = %q", model)
+	}
+	// The top-level pair follows the last set, so a new session starts there.
+	if model, _ := DefaultModel(); model != "deepseek-v4.1-flash" {
+		t.Errorf("top-level model = %q", model)
+	}
+	if provider, _ := DefaultProvider(); provider != "opencode-go" {
+		t.Errorf("top-level provider = %q", provider)
+	}
+}
+
+func TestDefaultModelForFallsBackToTheTopLevelPair(t *testing.T) {
+	writeConfig(t, "provider = \"commandcode\"\nmodel = \"legacy-model\"\n")
+	if model, _ := DefaultModelFor("commandcode"); model != "legacy-model" {
+		t.Errorf("legacy fallback = %q", model)
+	}
+	if model, _ := DefaultModelFor("opencode-go"); model != "" {
+		t.Errorf("another provider must not inherit the legacy default: %q", model)
+	}
+}
+
+func TestSetDefaultModelForClearsOnlyOneProvider(t *testing.T) {
+	writeConfig(t, "")
+	if err := SetDefaultModelFor("commandcode", "cc", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultModelFor("opencode-go", "oc", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultModelFor("commandcode", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if model, _ := DefaultModelFor("commandcode"); model != "" {
+		t.Errorf("commandcode still has %q", model)
+	}
+	if model, _ := DefaultModelFor("opencode-go"); model != "oc" {
+		t.Errorf("clearing commandcode dropped opencode: %q", model)
+	}
+	if model, _ := DefaultModel(); model != "oc" {
+		t.Errorf("top-level model changed while clearing another provider: %q", model)
+	}
+}

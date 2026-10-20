@@ -62,3 +62,27 @@ func TestSetDefaultProviderKeepsItsModel(t *testing.T) {
 		t.Errorf("re-setting the same provider dropped its default model: %q", DefaultModelName())
 	}
 }
+
+func TestSetDefaultModelTextKeepsPerProviderEntries(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	cc := &cli.LiveConfig{ProviderName: "commandcode", FetchedModels: []string{"cc-model"}}
+	oc := &cli.LiveConfig{ProviderName: "opencode-go", FetchedModels: []string{"oc-model"}}
+	if got := SetDefaultModelText("cc-model", agentcore.ThinkingHigh, cc); !strings.Contains(got, "commandcode") {
+		t.Fatalf("cc report = %q", got)
+	}
+	if got := SetDefaultModelText("oc-model", agentcore.ThinkingLow, oc); !strings.Contains(got, "opencode-go") {
+		t.Fatalf("oc report = %q", got)
+	}
+	if got := DefaultModelForProvider("commandcode"); got != "cc-model" {
+		t.Errorf("commandcode default = %q", got)
+	}
+	if got := DefaultModelForProvider("opencode-go"); got != "oc-model" {
+		t.Errorf("opencode default = %q", got)
+	}
+	if got := DefaultModelName(); got != "oc-model" {
+		t.Errorf("top-level model = %q, want the last set", got)
+	}
+	if got := DefaultProviderName(); got != "opencode-go" {
+		t.Errorf("top-level provider = %q, want the last set", got)
+	}
+}

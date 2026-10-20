@@ -12,6 +12,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/provider"
@@ -990,6 +991,35 @@ func TestLevelPickerDKeySavesDefaultLevel(t *testing.T) {
 	if gm3.live.ThinkingLevel != agentcore.ThinkingHigh || gm3.live.Model != "m-a" {
 		t.Errorf("setting the default level moved the live session: model=%q level=%q",
 			gm3.live.Model, gm3.live.ThinkingLevel)
+	}
+}
+
+// TestModelPickItemsMarksOnlyItsProviderDefault: a default saved under one
+// gateway must not mark the same-looking row under another. The two built-in
+// gateways spell the same DeepSeek model differently, which is what exposed the
+// old global comparison.
+func TestModelPickItemsMarksOnlyItsProviderDefault(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	if err := config.SetDefaultModelFor("commandcode", "cc-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetDefaultModelFor("opencode-go", "oc-model", ""); err != nil {
+		t.Fatal(err)
+	}
+	marked := func(providerName string, ids []string) map[string]bool {
+		out := map[string]bool{}
+		for _, it := range modelPickItems(providerName, ids) {
+			out[it.Value] = it.Default
+		}
+		return out
+	}
+	cc := marked("commandcode", []string{"cc-model", "oc-model"})
+	if !cc["cc-model"] || cc["oc-model"] {
+		t.Errorf("commandcode marks = %+v", cc)
+	}
+	oc := marked("opencode-go", []string{"cc-model", "oc-model"})
+	if oc["cc-model"] || !oc["oc-model"] {
+		t.Errorf("opencode marks = %+v", oc)
 	}
 }
 

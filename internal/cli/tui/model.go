@@ -507,7 +507,10 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 // reasoning levels models.dev advertises for it (only when known, so the
 // fallback ladder never masquerades as catalog data).
 func modelPickItems(providerName string, ids []string) []pickItem {
-	defaultModel := prompts.DefaultModelName()
+	// Scope the tag to the gateway that owns the default: commandcode's
+	// `deepseek/deepseek-v4.1-flash` and opencode's `deepseek-v4.1-flash` are
+	// different ids, and a global string comparison marked neither or both.
+	defaultModel := prompts.DefaultModelForProvider(providerName)
 	items := make([]pickItem, 0, len(ids))
 	for _, id := range provider.OrderModelIDs(ids) {
 		it := pickItem{Title: id, Value: id, Default: id == defaultModel}
