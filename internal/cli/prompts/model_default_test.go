@@ -86,3 +86,16 @@ func TestSetDefaultModelTextKeepsPerProviderEntries(t *testing.T) {
 		t.Errorf("top-level provider = %q, want the last set", got)
 	}
 }
+
+func TestDefaultModelForProviderFallsBackToTheBuiltIn(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	if got := DefaultModelForProvider("opencode-go"); got != "deepseek-v4.1-flash" {
+		t.Errorf("opencode built-in default = %q", got)
+	}
+	if got := DefaultModelForProvider("commandcode"); got != "deepseek/deepseek-v4.1-flash" {
+		t.Errorf("commandcode built-in default = %q", got)
+	}
+	if got := DefaultModelForProvider("not-a-provider"); got != "" {
+		t.Errorf("unknown provider = %q", got)
+	}
+}

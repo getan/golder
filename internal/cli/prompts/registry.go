@@ -453,15 +453,23 @@ func DefaultModelName() string {
 	return model
 }
 
-// DefaultModelForProvider returns the default model saved for one provider, or
-// "" when that gateway has none. The picker uses it so a default set under
-// commandcode is not claimed by opencode.
+// DefaultModelForProvider returns the effective default model for one provider:
+// the model the user saved for that gateway, or the gateway's own built-in
+// default when nothing was saved. The picker uses it so `(default)` describes
+// what a switch to this gateway will actually start with, not only what was
+// explicitly written to config.toml.
 func DefaultModelForProvider(providerName string) string {
 	model, err := config.DefaultModelFor(providerName)
 	if err != nil {
 		return ""
 	}
-	return model
+	if model != "" {
+		return model
+	}
+	if spec, ok := provider.LookupProviderSpec(providerName); ok {
+		return spec.DefaultModel
+	}
+	return ""
 }
 
 // DefaultThinkingLevelName returns the config.toml default reasoning level, or
@@ -737,15 +745,24 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		arg := strings.TrimSpace(args)
 		switch {
 		case arg == "":
-			model, err := config.DefaultModelFor(live.ProviderName)
+			saved, err := config.DefaultModelFor(live.ProviderName)
 			if err != nil {
 				return "model: cannot read the default: " + err.Error()
+			}
+			model := saved
+			if model == "" {
+				if spec, ok := provider.LookupProviderSpec(live.ProviderName); ok {
+					model = spec.DefaultModel
+				}
 			}
 			if model == "" {
 				return "default model for " + live.ProviderName + ": unset\nset it with /model default <id|n> [level]"
 			}
 			level, _ := config.DefaultThinkingLevel()
 			msg := "default model for " + live.ProviderName + ": " + model
+			if saved == "" {
+				msg += " (built-in)"
+			}
 			if level != "" {
 				msg += ", think: " + level
 			}

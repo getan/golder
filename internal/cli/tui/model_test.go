@@ -1023,6 +1023,27 @@ func TestModelPickItemsMarksOnlyItsProviderDefault(t *testing.T) {
 	}
 }
 
+// TestModelPickItemsMarksTheBuiltInDefault: before the user saves anything,
+// `(default)` still describes the model a switch to this gateway starts with.
+func TestModelPickItemsMarksTheBuiltInDefault(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	marked := func(providerName string, ids []string) map[string]bool {
+		out := map[string]bool{}
+		for _, it := range modelPickItems(providerName, ids) {
+			out[it.Value] = it.Default
+		}
+		return out
+	}
+	oc := marked("opencode-go", []string{"deepseek-v4.1-flash", "glm-5.3"})
+	if !oc["deepseek-v4.1-flash"] || oc["glm-5.3"] {
+		t.Errorf("opencode built-in marks = %+v", oc)
+	}
+	cc := marked("commandcode", []string{"deepseek/deepseek-v4.1-flash", "gpt-5.4"})
+	if !cc["deepseek/deepseek-v4.1-flash"] || cc["gpt-5.4"] {
+		t.Errorf("commandcode built-in marks = %+v", cc)
+	}
+}
+
 // TestCtrlCClosesThePicker: a picker holds focus with an empty composer — the
 // command that opened it was submitted, so the box is empty by then — and Ctrl+C
 // must get out of it, exactly like Esc. It used to fall through to the global
