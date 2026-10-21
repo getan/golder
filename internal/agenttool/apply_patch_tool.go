@@ -64,18 +64,21 @@ func (t *ApplyPatchTool) Name() string { return "apply_patch" }
 func (t *ApplyPatchTool) Description() string {
 	return "Edit files with one patch: add, update, move, or delete any number " +
 		"of files per call. The patch text uses the *** Begin Patch / *** End " +
-		"Patch format; update chunks are line-oriented diffs. Three or so lines " +
-		"of context on each side are enough; an optional @@ line names the " +
-		"function or section the hunk belongs to and is sought first, which " +
-		"disambiguates repeated context (a second @@ names a further enclosing " +
-		"scope). Matching is fuzzy on whitespace and typographic punctuation, " +
-		"and a hunk whose edges do not match is retried with reduced context " +
-		"only when the remainder is unique in the file. Hunks are matched in " +
-		"order against the file as it is now: re-read a file that changed, and " +
-		"keep hunks non-overlapping. Use this instead of shelling out to patch " +
-		"utilities. Every hunk line starts with a space (context), '-' (remove) " +
-		"or '+' (add); a line without a prefix is read as an addition when its " +
-		"neighbours are additions, and refused when the reading is ambiguous."
+		"Patch format; update chunks are line-oriented diffs. Before writing " +
+		"an update hunk, read the exact region and copy the context lines " +
+		"verbatim; never reconstruct them from memory. Use about three " +
+		"unchanged lines above and below each change. If that is not unique, " +
+		"add an @@ line naming the function or section (a second @@ names a " +
+		"nested scope). Matching tolerates whitespace and typographic " +
+		"punctuation, and a hunk whose edges do not match is retried with " +
+		"reduced context only when the remainder is unique in the file. It " +
+		"cannot invent a missing context line: a failed hunk writes nothing. " +
+		"Do not resend the same patch; read the closest region named in the " +
+		"error and rebuild only that hunk. Every hunk line starts with a space " +
+		"(context), '-' (remove) or '+' (add); a line without a prefix is read " +
+		"as an addition when its neighbours are additions, and refused when " +
+		"the reading is ambiguous. Use this instead of shelling out to patch " +
+		"utilities."
 }
 
 // Schema implements AgentTool.

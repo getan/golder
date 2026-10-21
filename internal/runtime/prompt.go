@@ -163,16 +163,20 @@ const patchGuide = "Edit files with the apply_patch tool: one call carries a pat
 	"+added line\n" +
 	"*** Delete File: path/gone.go\n" +
 	"*** End Patch\n\n" +
+	"Before writing an Update hunk, use read on the exact region and copy the context lines " +
+	"verbatim from the file. Do not reconstruct context from memory or from an earlier turn. " +
+	"Use about three unchanged lines above and three below each change; if the block is not " +
+	"unique, add an @@ anchor naming its function/class (a second @@ can name a nested scope). " +
 	"Every update hunk starts with @@ and carries at least one line prefixed by a space (context), " +
 	"\"-\" (remove), or \"+\" (add); put every hunk for the same file in that one Update section, " +
-	"one @@ each in file order. Include enough unchanged context lines for the hunk to locate " +
-	"uniquely, and add \"*** End of File\" to anchor a hunk at the end of a file. Hunks are matched " +
-	"against the file AS IT IS NOW: re-read a file in the same turn if an earlier patch or edit touched " +
-	"it, keep hunks non-overlapping, and never let one hunk's context include a line another hunk " +
-	"changes. Paths are workspace-relative. Context matching is fuzzy (whitespace and typographic " +
-	"punctuation differences still match), but a hunk that cannot be located fails the whole call " +
-	"before anything is written — do not resend the same patch; re-read the file and send a fresh one. " +
-	"Never create or edit files through shell redirection or heredocs; apply_patch is the only write path."
+	"one @@ each in file order. Add \"*** End of File\" to anchor a hunk at the end of a file. " +
+	"Hunks are matched against the file AS IT IS NOW: re-read a file in the same turn if an earlier " +
+	"patch or edit touched it, keep hunks non-overlapping, and never let one hunk's context include " +
+	"a line another hunk changes. Paths are workspace-relative. Context matching tolerates " +
+	"whitespace and typographic punctuation, but it cannot invent a line that is not there: a " +
+	"failed hunk writes nothing. Do not resend the same patch; read the closest region named in " +
+	"the error and rebuild only that hunk. Never create or edit files through shell redirection " +
+	"or heredocs; apply_patch is the only write path."
 
 // codeSearchGuide names the grep tool as THE way to search file contents — the
 // grep the model reaches for, so the reflex lands on a tool that respects the
