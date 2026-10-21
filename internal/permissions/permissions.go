@@ -4,16 +4,19 @@
 // the bash tool, the slash command) can read the mode without an import
 // cycle.
 //
-// The four modes mirror codex's approval presets, adapted to golder's gate:
+// The four modes are the whole authorization policy. Risk review is an input
+// to the mode, not a second permission system:
 //
-//   - read-only:   mutating tools (bash, apply_patch) are blocked outright.
-//   - ask:         the reviewer grades each mutating call; Allow runs, the
-//     rest asks the human (or is denied when no prompt exists).
-//   - auto:        the reviewer decides: Allow/Confirm run, Contain runs
-//     isolated, Deny is blocked — each non-trivial decision is announced
-//     with a one-line rationale.
-//   - full-access: no review and no sandbox; only the static hard-deny
-//     floor still applies.
+//   - read-only:   only in-workspace reads. Writes, network and escaping the
+//     sandbox are refused outright.
+//   - ask:         the reviewer filters routine calls; anything left, and every
+//     capability expansion (outside path, network, unconfined), is one human
+//     question covering the whole call.
+//   - auto:        the reviewer settles both risk and capability expansion.
+//     Allow/Confirm grant every capability the call asked for; Contain runs
+//     isolated; Deny blocks. No human prompt.
+//   - full-access: no review, no consent, no sandbox; only the static hard-deny
+//     floor remains.
 package permissions
 
 import (
@@ -121,24 +124,24 @@ func (m Mode) Description(lang string) string {
 	if lang == "zh" {
 		switch m {
 		case ReadOnly:
-			return "只读文件；bash、apply_patch 等改动型工具会被直接拒绝"
+			return "只允许工作区内读取；写入、联网和离开沙箱直接拒绝"
 		case Ask:
-			return "改动型调用先由模型审查：低风险直接放行，需隔离的进沙箱，其余询问你（无输入时拒绝）"
+			return "评审先过滤安全调用；其余调用所需的能力（外部路径、网络、沙箱外）合并成一次弹窗问你"
 		case FullAccess:
-			return "不做审查、不套沙箱；仅保留静态硬拒名单（sudo、rm -rf / 等）"
+			return "不审查、不询问、不套沙箱；仅保留静态硬拒名单（sudo、rm -rf / 等）"
 		default:
-			return "由当前模型审查每次改动型调用：低风险放行、需隔离的进沙箱、高危拒绝；只有工作区边界、联网、首次信任、被拒路径的重准入、无沙箱运行器或评审不可用时会问你"
+			return "评审（JEV/local 优先，必要时 LLM）同时决定风险与能力扩张；allow/confirm 自动授予全部所需能力，不打断人"
 		}
 	}
 	switch m {
 	case ReadOnly:
-		return "Read files only; bash and apply_patch are blocked"
+		return "In-workspace reads only; writes, network and sandbox escapes are blocked"
 	case Ask:
-		return "The model reviews changes first: low risk runs, sandbox-tier runs contained, the rest asks you"
+		return "The reviewer filters routine calls; all capabilities the rest need are one human prompt"
 	case FullAccess:
-		return "No review, no sandbox; only the hard blocklist applies"
+		return "No review, no prompts, no sandbox; only the hard blocklist applies"
 	default:
-		return "The model reviews every change: low risk runs, risky runs sandboxed, dangerous blocked; it asks you only for workspace boundaries, network, first-run trust, a blocked path it may re-admit, a missing sandbox runner, or when review is unavailable"
+		return "The reviewer (JEV/local first, LLM when needed) settles risk and capability expansion; allow/confirm grants every requested capability without interrupting"
 	}
 }
 

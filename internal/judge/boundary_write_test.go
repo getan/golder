@@ -213,7 +213,7 @@ func TestBoundaryGateShellRedirectAsksAboutAWrite(t *testing.T) {
 	}
 	before := got
 	gate(context.Background(), bashCall("echo hi > "+target))
-	if got != before {
+	if got.Kind != before.Kind || got.BoundaryWrite != before.BoundaryWrite || got.BoundaryDir != before.BoundaryDir {
 		t.Error("a write grant must settle the write question without asking again")
 	}
 }

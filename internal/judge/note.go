@@ -115,6 +115,8 @@ func DecisionLine(tool, mode string, level Level, disposition string) string {
 // explanation of what made this call an exception.
 func AskDisposition(kind ApprovalKind, lang string) string {
 	switch kind {
+	case ApprovalConsent:
+		return localized(lang, "由你决定 · 能力授权", "your call · capability grant")
 	case ApprovalEscalation:
 		return localized(lang, "由你决定 · 沙箱外请求", "your call · sandbox escape")
 	case ApprovalReAdmit:

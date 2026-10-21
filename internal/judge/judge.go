@@ -284,6 +284,11 @@ func approvalQuestion(tool, summary string) string {
 type ApprovalKind string
 
 const (
+	// ApprovalConsent is the unified capability question. Its Needs name every
+	// capability the call requires; the mode decides who answers, and one
+	// answer settles all of them. The old per-capability kinds below remain only
+	// for the legacy gates and the trust bootstrap path.
+	ApprovalConsent ApprovalKind = "consent"
 	// ApprovalConfirm: the reviewer graded the call Confirm and the mode is
 	// not auto.
 	ApprovalConfirm ApprovalKind = "confirm"
@@ -335,6 +340,12 @@ const (
 // reviewer's verdict, so the decision is informed rather than a bare yes/no.
 type ApprovalRequest struct {
 	Kind ApprovalKind
+	// Needs is the complete capability request for an ApprovalConsent. The
+	// dialog shows them together; an approval grants exactly this set.
+	Needs []Need
+	// CanContain reports that the call can be contained even when it also asks
+	// for an escape, so "stay in the sandbox" remains a meaningful answer.
+	CanContain bool
 	// UnconfineOffer marks a re-admission question that may also be answered
 	// with "run this one call outside the sandbox". It is set only by the
 	// sandbox-denial asker, where the command already ran (and was already
@@ -403,6 +414,11 @@ type ApprovalRequest struct {
 
 // ApprovalAnswer is the user's decision.
 type ApprovalAnswer struct {
+	// Scope, Needs and Exec are the capability answer. They are meaningful only
+	// for ApprovalConsent; the legacy fields below belong to the older gates.
+	Scope Scope
+	Needs []Need
+	Exec  ExecMode
 	// Unconfined, with Approve, means "run this one call outside the sandbox" —
 	// the answer to a denial question that offered it. It is a one-call
 	// decision: nothing is registered and nothing is remembered.

@@ -41,6 +41,12 @@ func (directReviewer) Classify(context.Context, string, json.RawMessage) judge.V
 	return judge.Verdict{Level: judge.Allow, Direct: true, Reasons: []string{"the user asked for this exact one-call escape"}}
 }
 
+type denyReviewer struct{}
+
+func (denyReviewer) Classify(context.Context, string, json.RawMessage) judge.Verdict {
+	return judge.Verdict{Level: judge.Deny, Reasons: []string{"the denied path is not needed for this task"}}
+}
+
 // gatesTrustStore builds an empty trust store for a test. The file lives in the
 // test's temp dir, so nothing reads the machine's real decisions.
 func gatesTrustStore(t *testing.T) *trust.Manager {
@@ -86,27 +92,20 @@ func TestChainAfterTrustSkipsOnlyTrust(t *testing.T) {
 	}
 }
 
-// TestSandboxDenialAskerAnswersUnconfined: the denial question may be answered
-// with "run this one command outside the sandbox". That answer is a one-call
-// decision, and it is announced — an unconfined run is never silent, the same
-// promise the escalation dialog's escape row keeps.
-func TestSandboxDenialAskerAnswersUnconfined(t *testing.T) {
+// The denial recovery is one capability question: it registers the refused
+// path and asks for a contained retry. It never opens a second escape dialog.
+func TestSandboxDenialAskerAsksOnceAndReAdmits(t *testing.T) {
 	grantstest.Install(t)
 	notes := NewReviewNotes()
 	var got []judge.Note
 	notes.Set(func(n judge.Note) { got = append(got, n) })
 	calls := 0
 	gates := NewGates(GatesOpts{
-		// Ask mode: the escape row is a request; the permission gate asks the
-		// person a second, narrower question before it becomes a Direct run.
 		Perms:      permissions.New(permissions.Ask),
 		Classifier: func() judge.Classifier { return allowReviewer{} },
 		Notes:      notes,
 		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
 			calls++
-			if calls == 1 {
-				return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
-			}
 			return judge.ApprovalAnswer{Approve: true, Answered: true}
 		},
 	})
@@ -114,36 +113,33 @@ func TestSandboxDenialAskerAnswersUnconfined(t *testing.T) {
 	if ask == nil {
 		t.Fatal("a wired dialog must produce an asker")
 	}
-	if answer := ask(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out"); answer != agenttool.SandboxDenialUnconfined {
-		t.Fatalf("answer = %v, want the unconfined one", answer)
+	if answer := ask(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out"); answer != agenttool.SandboxDenialReAdmitted {
+		t.Fatalf("answer = %v, want the contained retry", answer)
 	}
-	escaped := 0
-	for _, n := range got {
-		if n.Kind == judge.NoteEscaped {
-			escaped++
-		}
+	if !grants.Allows("/Volumes/KIOXIA/out", grants.Write) {
+		t.Error("the denied path was not registered for the retry")
 	}
-	if escaped != 1 {
-		t.Fatalf("notes = %+v, want one escape announcement", got)
-	}
-	if calls != 2 {
-		t.Errorf("approval prompts = %d, want 2 (denial question + gate's escape question)", calls)
+	if calls != 1 {
+		t.Errorf("approval prompts = %d, want exactly one", calls)
 	}
 }
 
-// The contained answers keep working: a grant registers the path and asks for
-// the same-command retry inside the sandbox.
-func TestSandboxDenialAskerAnswersReAdmitted(t *testing.T) {
+// Auto recovery is part of the reviewer's job. The reviewer's allow grants the
+// path for the retry, and the human channel is never touched.
+func TestSandboxDenialAskerAutoReAdmitsWithoutDialog(t *testing.T) {
 	grantstest.Install(t)
+	calls := 0
 	gates := NewGates(GatesOpts{
-		Perms: permissions.New(permissions.Auto),
+		Perms:      permissions.New(permissions.Auto),
+		Classifier: func() judge.Classifier { return allowReviewer{} },
 		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
-			return judge.ApprovalAnswer{Approve: true, ReadRoot: "/Volumes/KIOXIA/cache", Answered: true}
+			calls++
+			return judge.ApprovalAnswer{Answered: true}
 		},
 	})
 	ask := gates.SandboxDenialAsker()
 	if ask == nil {
-		t.Fatal("a wired dialog must produce an asker")
+		t.Fatal("auto mode must install the recovery reviewer")
 	}
 	if answer := ask(context.Background(), "/Volumes/KIOXIA/cache", "cp a /Volumes/KIOXIA/cache/b"); answer != agenttool.SandboxDenialReAdmitted {
 		t.Fatalf("answer = %v, want the contained retry", answer)
@@ -151,58 +147,43 @@ func TestSandboxDenialAskerAnswersReAdmitted(t *testing.T) {
 	if !grants.Allows("/Volumes/KIOXIA/cache", grants.Read) {
 		t.Error("the granted path was not registered")
 	}
+	if calls != 0 {
+		t.Errorf("auto recovery opened %d human dialogs, want 0", calls)
+	}
 }
 
-// A read-only run never ran the command, so the unconfined row is not offered.
-func TestSandboxDenialAskerOmitsUnconfinedInReadOnly(t *testing.T) {
+// A reviewer refusal is a normal result, not an interruption: the denial stays
+// in place and the model continues with the labelled failure.
+func TestSandboxDenialAskerAutoDenyStaysSilent(t *testing.T) {
 	grantstest.Install(t)
-	var seen judge.ApprovalRequest
+	calls := 0
 	gates := NewGates(GatesOpts{
-		Perms: permissions.New(permissions.ReadOnly),
-		Confirm: func(_ context.Context, req judge.ApprovalRequest) judge.ApprovalAnswer {
-			seen = req
-			return judge.ApprovalAnswer{Answered: true}
+		Perms:      permissions.New(permissions.Auto),
+		Classifier: func() judge.Classifier { return denyReviewer{} },
+		Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
+			calls++
+			return judge.ApprovalAnswer{Approve: true, Answered: true}
 		},
 	})
-	if ask := gates.SandboxDenialAsker(); ask != nil {
-		_ = ask(context.Background(), "/Volumes/KIOXIA/x", "rm -rf /Volumes/KIOXIA/x")
+	ask := gates.SandboxDenialAsker()
+	if ask == nil {
+		t.Fatal("auto mode must install the recovery reviewer")
 	}
-	if seen.UnconfineOffer {
-		t.Error("read-only mode must not offer an unconfined run")
+	if answer := ask(context.Background(), "/Volumes/KIOXIA/cache", "cp a /Volumes/KIOXIA/cache/b"); answer != agenttool.SandboxDenialRefused {
+		t.Fatalf("answer = %v, want refused", answer)
+	}
+	if calls != 0 {
+		t.Errorf("auto recovery opened %d human dialogs, want 0", calls)
 	}
 }
 
-// Auto mode: the escape row is a request the reviewer decides. A bare Allow is
-// not a Direct grant, so the command stays refused; a Direct verdict is what
-// makes the unconfined retry possible.
-func TestSandboxDenialAskerAutoUsesReviewerForEscape(t *testing.T) {
-	grantstest.Install(t)
-	for _, tc := range []struct {
-		name     string
-		reviewer judge.Classifier
-		want     agenttool.SandboxDenialAnswer
-	}{
-		{"allow is not direct", allowReviewer{}, agenttool.SandboxDenialRefused},
-		{"direct is", directReviewer{}, agenttool.SandboxDenialUnconfined},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			calls := 0
-			gates := NewGates(GatesOpts{
-				Perms:      permissions.New(permissions.Auto),
-				Classifier: func() judge.Classifier { return tc.reviewer },
-				Confirm: func(context.Context, judge.ApprovalRequest) judge.ApprovalAnswer {
-					calls++
-					return judge.ApprovalAnswer{Approve: true, Unconfined: true, Answered: true}
-				},
-			})
-			answer := gates.SandboxDenialAsker()(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out")
-			if answer != tc.want {
-				t.Fatalf("answer = %v, want %v", answer, tc.want)
-			}
-			if calls != 1 {
-				t.Errorf("dialogs = %d, want only the denial question (auto leaves the escape to review)", calls)
-			}
-		})
+// The modes that have no recovery question do not install one.
+func TestSandboxDenialAskerSkipsModesWithoutRecovery(t *testing.T) {
+	for _, mode := range []permissions.Mode{permissions.ReadOnly, permissions.FullAccess} {
+		gates := NewGates(GatesOpts{Perms: permissions.New(mode)})
+		if ask := gates.SandboxDenialAsker(); ask != nil {
+			t.Errorf("%s mode installed a recovery asker", mode)
+		}
 	}
 }
 

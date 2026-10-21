@@ -22,18 +22,30 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 
 > 对标 Codex 的 `/permissions` 预设与 guardian/auto-review：审批档位是显式的四档，`auto` 档由**当前会话的模型**审查每次调用并给出理由——不引入额外的分类服务或密钥，是"用正在用的 LLM"而不是再配一个模型。
 
-调用链是 `trust → permission gate → hooks`：trust 只认目录（信了不代表全放行），权限门按当前模式处理每次改动型调用，hooks 维持用户自定义。deny 赢，前面的 block 会短路后面的环节。
+调用链是 `trust → consent gate → hooks`：trust 只认目录（信了不代表全放行），consent gate 把边界、网络、沙箱外运行收成一个 `Needs` 列表并按当前模式一次裁决，hooks 维持用户自定义。deny 赢，前面的 block 会短路后面的环节。
+
+> 本节以下描述的是分系统弹窗时代的细节；当前实现已统一为一次能力请求，完整矩阵见 [permissions.md](permissions.md)。四档行为以下表为准。
 
 ### 四档模式
 
 | 模式 | 行为 | REPL（可交互） | TUI/headless（无 stdin） |
 |------|------|----------------|--------------------------|
-| `read-only` | 只读；改动型工具直接拒绝 | 拒绝 `bash`/`apply_patch`，只放行 read/图片/搜索/待办等 | 同左 |
-| `ask` | 低风险放行，其余询问 | 弹 `[y/N]`；可隔离的 Contain 档在有 runner 时直接进沙箱 | 无输入可问 → 拒绝（带理由卡片） |
-| `auto`（默认） | 模型审查后自动决定 | Confirm 放行、Contain 进沙箱、Deny 拒绝，各附一行理由 | 同左 |
-| `full-access` | 不审查、不套沙箱 | 直放；仅静态硬拒名单生效 | 同左 |
+| `read-only` | 只允许工作区内读取 | 外部路径、网络、沙箱外运行直接拒绝 | 同左 |
+| `ask` | 低风险调用不打扰人 | 其余调用把所有所需能力合并成一次弹窗 | 无输入可问 → 拒绝（带理由卡片） |
+| `auto`（默认） | 评审同时决定风险与能力扩张 | `allow`/`confirm` 自动授予全部所需能力，不弹窗 | 同左 |
+| `full-access` | 不审查、不询问、不套沙箱 | 直放；仅静态硬拒名单生效 | 同左 |
 
 切换方式：会话内 `/permissions`（TUI 是 ↑↓ + Enter 选择器，带每档说明），启动参数 `--permissions <mode>`，环境变量 `GOLDER_PERMISSIONS`（`GOLDER_JUDGE=off` 作为旧的逃生舱别名等价于 `full-access`）。模式是进程内实时状态：切换后**下一次工具调用**立刻生效，子 Agent 继承父会话的模式（进程隔离子 Agent 通过环境变量继承）。
+
+### 沙箱拒绝后的恢复（当前实现）
+
+命令跑完才发现沙箱拒绝时，不再重新走一遍完整审批，也不另开一套弹窗：
+
+- `auto`：`judge.ReviewRecovery` 把“是否补授这条被拒路径”交给同一个评审链。评审 `allow` 就补授并收容重跑；`deny`、`contain` 或评审失败保留原拒绝，把带原因的失败交回模型，流程继续。**不调用 `Confirm`、不读 stdin。**
+- `ask`：评审先挡掉明确的 `deny`；其余情况把同一个单条 `Need` 放进一次能力弹窗，批准后收容重跑。
+- `full-access`：没有沙箱，无需恢复；`read-only`：本来就不该运行。
+
+这条路与调用前的 `ConsentGate` 共用 `Gates.consentOpts()` 和同一套 `Capability` 语义，避免“事后补授”和“事前审批”漂移。
 
 ### 批准之后的信封（envelope）
 

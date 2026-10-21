@@ -22,9 +22,7 @@ package run
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"io"
-	"strings"
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -234,11 +232,6 @@ func (g *Gates) chain() agentcore.BeforeToolCallFunc {
 
 func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 	o := g.opts
-	// One coordinator per chain: a path question that also covers network
-	// records its answer here, and the permission gate consumes it without a
-	// second dialog. It is per-chain rather than package-global so a child run
-	// cannot read a parent call's answer.
-	askCoord := judge.NewAskCoord()
 	var gate agentcore.BeforeToolCallFunc
 	if includeTrust {
 		trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
@@ -251,46 +244,43 @@ func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 		gate = trust.Gate(trustOpts)
 	}
 
-	scopeOpts := judge.BoundaryOpts{
-		WorkspaceRoot: o.Cwd,
-		Roots:         o.ExtraRoots,
-		Notify:        o.Notes.Emit,
-		// The managed store lives in the config layer; the assembly point is
-		// where judge and the store meet.
-		Persist: PersistReadRoot,
-		// The write side's two callbacks, both shared with the escalation dialog
-		// so one answer means one thing: GrantWritable registers the sandbox root
-		// AND the table row, and WritableAt reads the registry the sandbox
-		// enforces with, so a directory a command may already write is not a
-		// question a patch gets asked again.
-		GrantWritable: GrantWritableRoot,
-		WritableAt:    WritableAt,
-	}
-	scopeOpts.In, scopeOpts.Out, scopeOpts.Mu, scopeOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
-	scopeOpts.OnPrompt = o.OnPrompt
-	scopeOpts.AskCoord = askCoord
-	if scopeGate := judge.BoundaryGate(scopeOpts); scopeGate != nil {
-		gate = judge.ChainGates(gate, scopeGate)
-	}
+	// From here on there is exactly one authorization question. Boundary,
+	// network and sandbox needs are collected into one ConsentRequest; the
+	// mode decides whether the reviewer, the person, or nobody answers.
+	return judge.ChainGates(gate, judge.ConsentGate(g.consentOpts()))
+}
 
-	permOpts := judge.GateOpts{
-		Classifier: g.classifier(),
-		Sandboxed:  o.Sandboxed,
-		// Isolation is the default only where this platform has an
-		// implementation. Hardcoding true would make every bash call on a
-		// platform that never had a sandbox (Windows) fail closed.
-		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
-		Enforce:        seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
-		Notify:         o.Notes.Emit,
-		// The stdin prompt's `w`/`s` answers need the sandbox's writable registry
-		// and the remembered row's spelling, both of which live here.
-		Cwd:           o.Cwd,
-		GrantWritable: GrantWritableRoot,
+// consentOpts is the one policy assembly used by the live chain and by the
+// post-execution sandbox-denial review. Keeping it in one method is what stops
+// the after-the-fact path from drifting from the before-the-call gate.
+func (g *Gates) consentOpts() judge.ConsentOpts {
+	o := g.opts
+	return judge.ConsentOpts{
+		Mode:            o.Perms,
+		Classifier:      g.classifier(),
+		Cwd:             o.Cwd,
+		ExtraRoots:      o.ExtraRoots,
+		Sandboxed:       o.Sandboxed,
+		RequireSandbox:  seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Enforce:         seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
+		Notify:          notesEmit(o.Notes),
+		Confirm:         judge.ConsentFromApproval(o.Confirm),
+		In:              o.In,
+		Out:             o.Out,
+		Mu:              o.Mu,
+		OnPrompt:        o.OnPrompt,
+		WritableAt:      WritableAt,
+		GrantWritable:   GrantWritableRoot,
+		PersistReadRoot: PersistReadRoot,
 	}
-	permOpts.In, permOpts.Out, permOpts.Mu, permOpts.Confirm = o.In, o.Out, o.Mu, o.Confirm
-	permOpts.OnPrompt = o.OnPrompt
-	permOpts.AskCoord = askCoord
-	return judge.ChainGates(gate, judge.PermissionGate(o.Perms, permOpts))
+}
+
+// notesEmit adapts the session's note sink without panicking on a nil one.
+func notesEmit(n *ReviewNotes) func(judge.Note) {
+	if n == nil {
+		return nil
+	}
+	return n.Emit
 }
 
 // classifier builds the reviewer for one chain, tolerating a nil factory (the
@@ -418,95 +408,90 @@ func WritableAt(path string) bool {
 	return grants.Allows(p, grants.Write)
 }
 
-// SandboxDenialAsker builds the question a sandbox denial puts to the person,
-// and applies the answer. It is the second trigger for the same question the
-// refused-escape dialog asks (Kind ApprovalReAdmit, the same rows, the same
-// registration), asked from the execution layer instead of the gate: the command
-// already ran and the sandbox refused the path it needed, so running it again
-// with that path admitted is the smaller fix — and the retry stays contained.
+// SandboxDenialAsker builds the post-execution capability review for a denied
+// path and applies an allow. It is deliberately NOT a second approval system:
 //
-// nil means there is nothing to ask with (no driver dialog): the denial keeps
-// its labeling for the model and nobody is interrupted.
+//   - auto: ReviewRecovery lets the reviewer decide whether to grant this one
+//     path. No Confirm and no stdin dialog is touched, so a denied command
+//     either retries contained or fails with a reason the model can act on;
+//   - ask: the same ReviewRecovery filters an outright reviewer denial and
+//     otherwise puts one capability question to the person;
+//   - read-only/full-access: no recovery question exists.
+//
+// nil means there is no mode that can answer (or, for ask, no dialog channel):
+// the denial keeps its labeling and the flow continues.
 func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary string) agenttool.SandboxDenialAnswer {
-	if g == nil || (g.opts.Confirm == nil && g.opts.In == nil) {
+	if g == nil {
+		return nil
+	}
+	mode := permissions.FullAccess
+	if g.opts.Perms != nil {
+		mode = g.opts.Perms.Mode()
+	}
+	if mode == permissions.ReadOnly || mode == permissions.FullAccess {
+		return nil
+	}
+	if mode == permissions.Ask && g.opts.Confirm == nil && g.opts.In == nil {
 		return nil
 	}
 	return func(ctx context.Context, path, summary string) agenttool.SandboxDenialAnswer {
-		mode := ""
-		if g.opts.Perms != nil {
-			mode = g.opts.Perms.Mode().String()
+		writing := judge.PathWriteNeed(path, summary)
+		cap := judge.CapReadOutside
+		if writing {
+			cap = judge.CapWriteOutside
 		}
-		req := judge.ApprovalRequest{
-			Kind: judge.ApprovalReAdmit, Mode: mode, Level: judge.Contain,
-			Tool: "bash", Summary: summary, ReadRoot: path,
-			Rationale: "the sandbox denied " + path,
-			// Which side was denied, so the dialog says it and leads with the
-			// row that unblocks the retry (see judge.PathWriteNeed).
-			NeedsWrite: judge.PathWriteNeed(path, summary),
-			// The command already ran, so it was already reviewed: what the
-			// sandbox refused is a path. Running it once unconfined is a
-			// decision the person can make here, and it is offered only when
-			// they are actually answering (the mode is not read-only, which
-			// would have refused the command before it ran).
-			UnconfineOffer: g.opts.Perms == nil || g.opts.Perms.Mode() != permissions.ReadOnly,
+		req := judge.ConsentRequest{
+			Tool: "bash", Summary: summary, Rationale: "the sandbox denied " + path,
+			Origin: agentcore.OriginFromContext(ctx),
+			Needs:  []judge.Need{{Cap: cap, Path: path, Dir: path}},
 		}
-		req.Origin = agentcore.OriginFromContext(ctx)
-		var ans judge.ApprovalAnswer
-		if g.opts.Confirm != nil {
-			ans = g.opts.Confirm(ctx, req)
-		} else {
-			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
-			ans = judge.AskReAdmit(ctx, g.opts.In, g.opts.Out, g.opts.Mu, path, summary, lang, "")
-		}
-		if !ans.Answered || !ans.Approve {
-			return agenttool.SandboxDenialRefused
-		}
-		if ans.Unconfined {
-			// The person asked to run this one command outside the sandbox. That
-			// is a request, not the approval: the permission gate decides it —
-			// the reviewer under auto, the person again under ask — exactly as
-			// it does for any other escape. Only a Direct verdict comes back
-			// here as an unconfined answer.
-			if !g.requestUnconfined(ctx, summary, path) {
-				return agenttool.SandboxDenialRefused
-			}
-			// The note is what keeps an unconfined run from being invisible;
-			// nothing is registered and nothing is remembered.
-			lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		ans := judge.ReviewRecovery(ctx, g.consentOpts(), req)
+		if !ans.Answered || !ans.Allow {
 			if g.opts.Notes != nil {
-				rationale := "the sandbox denied " + path + "; you approved one unconfined run of this command"
-				if lang == "zh" {
-					rationale = "沙箱拒绝了 " + path + "；你批准了本次在沙箱外运行这条命令"
+				lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+				reason := ans.Reason
+				if reason == "" {
+					reason = "the capability review declined the denied path"
+					if lang == "zh" {
+						reason = "能力复核未批准该路径"
+					}
 				}
 				g.opts.Notes.Emit(judge.Note{
-					Tool: "bash", Kind: judge.NoteEscaped, Level: judge.Allow, Lang: lang,
-					Summary: summary, Rationale: rationale,
+					Tool: "bash", Kind: judge.NoteDenied, Level: judge.Deny, Lang: lang,
+					Summary: summary, Rationale: reason,
 				})
 			}
-			return agenttool.SandboxDenialUnconfined
+			return agenttool.SandboxDenialRefused
 		}
-		// The write side's registration belongs here, where the callback that
-		// writes the table row and the sandbox's writable root lives — the same
-		// one the dialog's write rows use. ApplyReAdmittedPath then reports what
-		// the answer granted, for both sides.
-		if root := strings.TrimSpace(ans.WritableRoot); root != "" {
-			if made, _ := GrantWritableRoot(root, ans.Persisted); !made {
+		life := grants.Session
+		if ans.Scope == judge.ScopeRemembered {
+			life = grants.Remembered
+		}
+		if writing {
+			if made, _ := GrantWritableRoot(path, ans.Scope == judge.ScopeRemembered); !made {
+				return agenttool.SandboxDenialRefused
+			}
+		} else {
+			var err error
+			if ans.Scope == judge.ScopeOnce {
+				_, err = grants.Add(grants.Grant{Path: path, Allow: grants.Read, Scope: grants.Exact,
+					Lifetime: grants.Session, Source: "sandbox denial"})
+			} else {
+				_, err = grants.AddReadRoot(path, life, "sandbox denial")
+			}
+			if err != nil {
 				return agenttool.SandboxDenialRefused
 			}
 		}
 		lang := judge.ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
-		how, granted := judge.ApplyReAdmittedPath(ans, lang)
-		if !granted {
-			return agenttool.SandboxDenialRefused
-		}
 		if g.opts.Notes != nil {
-			rationale := "the sandbox denied that path; " + how + " — retrying the command contained"
+			rationale := "the sandbox denied that path; it is allowed for this retry, contained"
 			if lang == "zh" {
-				rationale = "沙箱拒绝了该路径；" + how + "，改为在沙箱内重跑"
+				rationale = "沙箱拒绝了该路径；已允许本次在沙箱内重跑"
 			}
-			// NoteSandboxed, the same kind the gate's own re-admission path
-			// emits: the outcome is "the call runs contained", and the
-			// rationale carries the granted path.
+			if ans.Reason != "" {
+				rationale += " (" + ans.Reason + ")"
+			}
 			g.opts.Notes.Emit(judge.Note{
 				Tool: "bash", Kind: judge.NoteSandboxed, Level: judge.Allow, Lang: lang,
 				Summary: summary, Rationale: rationale,
@@ -514,50 +499,6 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 		}
 		return agenttool.SandboxDenialReAdmitted
 	}
-}
-
-// requestUnconfined puts the denial dialog's escape request through the same
-// permission gate every other escape goes through. The command already ran once
-// under a normal approval, but "run it outside the sandbox" is a new decision:
-// under auto the reviewer sees it, under ask the person answers a second,
-// narrower question. A Direct verdict is the only yes.
-//
-// It builds the synthetic call rather than reusing the original arguments so the
-// gate sees exactly what is being requested: the same command with
-// sandbox_permissions=require_escalated and the denial as its justification.
-func (g *Gates) requestUnconfined(ctx context.Context, command, path string) bool {
-	if g == nil || g.opts.Perms == nil || g.opts.Perms.Mode() == permissions.ReadOnly {
-		return false
-	}
-	args, err := json.Marshal(map[string]string{
-		"command":             command,
-		"sandbox_permissions": "require_escalated",
-		"justification":       "the sandbox denied " + path + "; run this exact command once outside the sandbox",
-	})
-	if err != nil {
-		return false
-	}
-	gate := judge.PermissionGate(g.opts.Perms, judge.GateOpts{
-		Classifier:     g.classifier(),
-		Sandboxed:      g.opts.Sandboxed,
-		RequireSandbox: seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
-		Enforce:        seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
-		Notify:         g.opts.Notes.Emit,
-		Cwd:            g.opts.Cwd,
-		GrantWritable:  GrantWritableRoot,
-		In:             g.opts.In,
-		Out:            g.opts.Out,
-		Mu:             g.opts.Mu,
-		Confirm:        g.opts.Confirm,
-		OnPrompt:       g.opts.OnPrompt,
-		SkipReAdmit:    true,
-	})
-	dec := gate(ctx, agentcore.AgentToolCall{
-		ID:        "sandbox-denial-escape",
-		Name:      "bash",
-		Arguments: args,
-	})
-	return dec != nil && dec.Direct && !dec.Block
 }
 
 // GrantWritableRoot makes a directory writable inside the sandbox, for this

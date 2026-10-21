@@ -17,6 +17,7 @@ package tui
 // ends unanswered is released fail-closed, so a gate never waits forever.
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
@@ -70,6 +71,10 @@ const (
 	// choose "leave the sandbox" to get it.
 	approveContained = "contained"
 	approveDirect    = "direct"
+	// Consent answers: one decision grants the whole Needs set at this scope.
+	consentOnce     = "consent-once"
+	consentSession  = "consent-session"
+	consentRemember = "consent-remember"
 )
 
 // Trust-question values (the first-run dialog; the same three-way choice the
@@ -144,11 +149,28 @@ type approvalDialog struct {
 	// selected highlights a row, so ↑↓ and Enter work as well as the
 	// single-key shortcuts (the two input styles share one row model).
 	selected int
+	// consent is set for the unified capability dialog; consentNeeds is the
+	// exact set an approval grants.
+	consent      bool
+	consentNeeds []judge.Need
 }
 
 // openApproval arms the dialog for one tool request. The caller keeps the
 // reply channel; answering sends exactly one value.
 func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.ApprovalAnswer) {
+	if req.Kind == judge.ApprovalConsent {
+		m.approval = approvalDialog{
+			active:       true,
+			kind:         "tool",
+			consent:      true,
+			consentNeeds: req.Needs,
+			title:        approvalTitle(req),
+			detail:       approvalDetail(req),
+			rows:         consentApprovalRows(req.Needs),
+			reply:        reply,
+		}
+		return
+	}
 	root := inferWritableRoot(req, m.cwd)
 	rows := toolApprovalRows
 	if req.Kind == judge.ApprovalTrust {
@@ -344,6 +366,29 @@ func (m *Model) answerApproval(value string) {
 		return
 	}
 	d := m.approval
+	if d.consent {
+		m.approval = approvalDialog{}
+		if value == approveDeny || value == "" {
+			m.deliverApproval(d, judge.ApprovalAnswer{Answered: true})
+			return
+		}
+		ans := judge.ApprovalAnswer{Answered: true, Approve: true, Needs: d.consentNeeds}
+		switch value {
+		case consentSession:
+			ans.Scope = judge.ScopeSession
+		case consentRemember:
+			ans.Scope = judge.ScopeRemembered
+		default:
+			ans.Scope = judge.ScopeOnce
+		}
+		for _, n := range d.consentNeeds {
+			if n.Cap == judge.CapUnconfined {
+				ans.Exec = judge.ExecUnconfined
+			}
+		}
+		m.deliverApproval(d, ans)
+		return
+	}
 	if d.combined {
 		m.answerCombinedApproval(d, value)
 		return
@@ -523,6 +568,49 @@ func (m *Model) answerApproval(value string) {
 			}
 		}
 		m.deliverApproval(d, ans)
+	}
+}
+
+// consentApprovalRows is the single capability dialog. The keys describe the
+// lifetime, never an individual subsystem: one answer covers every Need shown.
+func consentApprovalRows(needs []judge.Need) []approvalRow {
+	if len(needs) == 0 {
+		return []approvalRow{
+			{"Approve this call once", "y", consentOnce},
+			{"Deny", "esc", approveDeny},
+		}
+	}
+	onlyOnce := false
+	for _, n := range needs {
+		if n.Cap == judge.CapUnconfined {
+			onlyOnce = true
+		}
+	}
+	rows := []approvalRow{{"Allow this call once", "y", consentOnce}}
+	if !onlyOnce {
+		rows = append(rows,
+			approvalRow{"Allow these scopes for this session", "a", consentSession},
+			approvalRow{"Remember these scopes", "s", consentRemember},
+		)
+	}
+	return append(rows, approvalRow{"Deny", "esc", approveDeny})
+}
+
+func consentNeedLabel(n judge.Need) string {
+	switch n.Cap {
+	case judge.CapReadOutside:
+		return "read " + displayPath(n.Path)
+	case judge.CapWriteOutside:
+		return "write " + displayPath(n.Path)
+	case judge.CapNetwork:
+		if n.Key != "" {
+			return "network " + n.Key
+		}
+		return "network access"
+	case judge.CapUnconfined:
+		return "run outside the sandbox"
+	default:
+		return "capability"
 	}
 }
 
@@ -791,6 +879,16 @@ func approvalTitle(req judge.ApprovalRequest) string {
 		tool = tool + " (from " + req.Origin + ")"
 	}
 	switch req.Kind {
+	case judge.ApprovalConsent:
+		n := len(req.Needs)
+		switch n {
+		case 0:
+			return tool + " needs approval"
+		case 1:
+			return tool + " needs 1 capability"
+		default:
+			return tool + " needs " + strconv.Itoa(n) + " capabilities"
+		}
 	case judge.ApprovalNoSandbox:
 		return tool + " cannot be sandboxed — approving runs it outside the sandbox"
 	case judge.ApprovalReviewFailed:
@@ -837,6 +935,11 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 	// printed above the command, in the same words the notes and /permissions
 	// use.
 	out := []string{judge.DecisionLine(req.Tool, req.Mode, req.Level, judge.AskDisposition(req.Kind, "en"))}
+	if req.Kind == judge.ApprovalConsent {
+		for _, n := range req.Needs {
+			out = append(out, "• "+consentNeedLabel(n))
+		}
+	}
 	if req.Origin != "" {
 		// Named before the preview, because the preview is a file tool's path or
 		// a shell command, and both read differently when a delegated child

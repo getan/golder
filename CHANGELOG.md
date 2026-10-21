@@ -951,6 +951,19 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Authorization is one capability decision per call**: boundary, network
+  and sandbox escape are collected as a `Needs` list and settled once. `ask`
+  shows one dialog for the whole list; `auto` lets the reviewer (local rules,
+  JEV, then the LLM only when needed) settle risk and expansion together, so
+  an `allow`/`confirm` grants every requested capability without a second
+  prompt; `full-access` has no prompts and keeps only the static hard-deny
+  floor. `read-only` allows in-workspace reads and refuses any expansion.
+- **Sandbox-denial recovery is reviewer-only under `auto`**: after the sandbox
+  names a refused path, the same `ReviewRecovery` policy asks the reviewer
+  whether to grant that one path for a contained retry. An allow retries, a
+  deny/contain/failure leaves the denial and returns a labelled failure to the
+  model — no human dialog. `ask` still shows one capability question; review
+  failure there falls through to the person.
 - **Mouse reporting is back to cell motion (xterm 1002)**: click, release,
   wheel and motion while a button is held are enough for the TUI, and the
   1003 all-motion mode that fed the status bar's hover expansion sent an event

@@ -295,14 +295,16 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 | 模式 | 行为 |
 |------|------|
-| `read-only` | 只读；改动型调用直接拒绝 |
-| `ask` | 改动型调用先经当前模型审查：低风险放行，需隔离的收容（contain），其余询问你（无输入时拒绝） |
-| `auto`（默认） | 模型审查每次改动型调用：低风险放行、需隔离的收容（contain）、高危拒绝，并给出一行理由 |
-| `full-access` | 不做审查、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
+| `read-only` | 只允许工作区内读取；写入、联网、沙箱外运行直接拒绝 |
+| `ask` | 评审先过滤安全调用；其余调用把所有所需能力（外部路径、网络、沙箱外）合并成一次弹窗问你 |
+| `auto`（默认） | 评审（JEV/local 优先，必要时 LLM）同时决定风险与能力扩张；`allow`/`confirm` 自动授予全部所需能力，包括沙箱拒绝后的路径补授，不打断 |
+| `full-access` | 不审查、不询问、不套沙箱；仅保留静态硬拒名单（`sudo`、`rm -rf /` 等） |
+
+边界、网络和沙箱不再各自弹窗：它们是同一次能力请求的不同维度。完整矩阵与实现见 [docs/permissions.md](docs/permissions.md)。旧版“边界任何档位都问、网络另问一次”的描述已被本表取代。
 
 首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
 
-**网络授权**：网络默认关闭，随调用一起授权。`/network follow`（默认**开**）让 auto 档下**评审通过的调用**（allow / confirm / contain）直接携带网络——那次调用本身已被审查过，不再单独问一遍；`/network follow off` 恢复每次单独问。`/network add host|command|tool <key>` 预授权（在 `ask` 档、或想完全不依赖评审时仍然有用）、`/network rm` 删除、`/network list` 查看；设置持久化在 `network.toml`。记住的拒绝始终优先，Deny 与评审失败不放行，`ask` 模式不受影响。
+**网络授权（统一能力模型）**：网络是能力请求的一维，不再单独弹第二次窗。`auto` 的 `allow`/`confirm` 直接授予本次调用声明的网络；`ask` 把它和外部路径、沙箱外运行合并进同一个弹窗；`read-only` 拒绝，`full-access` 不问。`/network add host|command|tool <key>` 仍可用于预授权和记住决定，`/network rm` 删除，`/network list` 查看；记住的拒绝始终优先。旧的 `/network follow` 开关只供旧 gate/兼容路径使用，新的 `consent` 链路不依赖它。
 
 ### 常用开关
 
