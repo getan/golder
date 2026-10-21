@@ -5,8 +5,10 @@ facade over a closed set of actions, not a generic verb bridge: every field is
 defined by the schema, the session is always the caller's own, and destructive
 actions require a full window id.
 
-The tool is registered only when `TUIOS_SOCKET` and `TUIOS_SESSION` are
-present. A normal terminal never sees it.
+The tool is registered only inside a real tuios pane: `TUIOS_ENV=1`,
+`TUIOS_SOCKET`, `TUIOS_SESSION` and `TUIOS_PANE_ID` must all be present. A
+normal terminal, or a shell where one of those variables was left behind, never
+sees it.
 
 | Action | Purpose | Class |
 |---|---|---|

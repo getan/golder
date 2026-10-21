@@ -8,6 +8,8 @@ import (
 func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 	t.Setenv("TUIOS_SOCKET", "")
 	t.Setenv("TUIOS_SESSION", "")
+	t.Setenv("TUIOS_ENV", "")
+	t.Setenv("TUIOS_PANE_ID", "")
 	for _, tool := range BuiltinTools(t.TempDir(), false) {
 		if tool.Name() == "tuios" {
 			t.Fatalf("tuios tool advertised outside tuios: %s", tool.Name())
@@ -16,6 +18,8 @@ func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 
 	t.Setenv("TUIOS_SOCKET", "/tmp/tuios.sock")
 	t.Setenv("TUIOS_SESSION", "work")
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_PANE_ID", "w1")
 	found := false
 	for _, tool := range BuiltinTools(t.TempDir(), false) {
 		if tool.Name() == "tuios" {
@@ -30,6 +34,8 @@ func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 func TestChildToolSetKeepsTuiosReadsButNotPaneWrites(t *testing.T) {
 	t.Setenv("TUIOS_SOCKET", "/tmp/tuios.sock")
 	t.Setenv("TUIOS_SESSION", "work")
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_PANE_ID", "w1")
 	read, write := false, false
 	for _, tool := range ChildToolSet(t.TempDir(), ToolPolicy{}) {
 		if tool.Name() != "tuios" {

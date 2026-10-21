@@ -113,6 +113,7 @@ func (f *tuiosFake) result(verb string) any {
 
 func useTuiosFake(t *testing.T, sock string) {
 	t.Helper()
+	t.Setenv("TUIOS_ENV", "1")
 	t.Setenv("TUIOS_SOCKET", sock)
 	t.Setenv("TUIOS_SESSION", "work")
 	t.Setenv("TUIOS_PANE_ID", "w1")

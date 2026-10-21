@@ -19,6 +19,8 @@ import (
 )
 
 const (
+	// EnvEnv marks a process started inside a tuios pane.
+	EnvEnv = "TUIOS_ENV"
 	// EnvSocket is the daemon socket a pane belongs to.
 	EnvSocket = "TUIOS_SOCKET"
 	// EnvSession is the pane's session name.
@@ -60,7 +62,8 @@ func FromEnv() Options {
 // exposes a daemon socket and session name.
 func Available() bool {
 	o := FromEnv()
-	return o.Socket != "" && o.Session != ""
+	return strings.TrimSpace(os.Getenv(EnvEnv)) == "1" &&
+		o.Socket != "" && o.Session != "" && o.PaneID != ""
 }
 
 // Error is a daemon-side verb error. It is separate from transport errors so a

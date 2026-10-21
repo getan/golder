@@ -116,6 +116,7 @@ func TestClientWaitTimeout(t *testing.T) {
 }
 
 func TestFromEnv(t *testing.T) {
+	t.Setenv(EnvEnv, "1")
 	t.Setenv(EnvSocket, "/tmp/t.sock")
 	t.Setenv(EnvSession, "work")
 	t.Setenv(EnvPaneID, "w1")
@@ -123,5 +124,24 @@ func TestFromEnv(t *testing.T) {
 	o := FromEnv()
 	if o.Socket != "/tmp/t.sock" || o.Session != "work" || o.PaneID != "w1" || o.Proof != "proof" {
 		t.Fatalf("opts = %+v", o)
+	}
+}
+
+func TestAvailableRequiresARealPane(t *testing.T) {
+	t.Setenv(EnvEnv, "1")
+	t.Setenv(EnvSocket, "/tmp/t.sock")
+	t.Setenv(EnvSession, "work")
+	t.Setenv(EnvPaneID, "w1")
+	if !Available() {
+		t.Fatal("a complete pane environment must be available")
+	}
+	t.Setenv(EnvPaneID, "")
+	if Available() {
+		t.Fatal("a missing pane id must not be enough")
+	}
+	t.Setenv(EnvPaneID, "w1")
+	t.Setenv(EnvEnv, "")
+	if Available() {
+		t.Fatal("a stale socket/session outside a tuios pane must not be enough")
 	}
 }
