@@ -41,8 +41,9 @@ func (c *Client) ListWindows(ctx context.Context) (WindowList, error) {
 	return out, err
 }
 
-// GetWindow returns one pane by exact id or name. The tools use it to validate
-// a destructive target before acting.
+// GetWindow returns one pane by exact id or name. It is not used to validate a
+// destructive target: an attached TUI may omit window_id from its response, so
+// callers use the authoritative ListWindows enumeration for that.
 func (c *Client) GetWindow(ctx context.Context, window string) (Window, error) {
 	var out Window
 	err := c.CallInto(ctx, "get-window", map[string]any{"session": c.opts.Session, "window": window}, &out)
@@ -66,7 +67,12 @@ func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowRes
 		params["command"] = p.Command
 	}
 	params["focus"] = p.Focus
-	params["close_on_exit"] = p.CloseOnExit
+	// close_on_exit is newer than some daemons. Sending false unconditionally
+	// makes an older daemon reject the whole new-window call as an unknown
+	// parameter, so only send it when it changes the default.
+	if p.CloseOnExit {
+		params["close_on_exit"] = true
+	}
 	var out NewWindowResult
 	err := c.CallInto(ctx, "new-window", params, &out)
 	return out, err
@@ -85,6 +91,76 @@ type NewWindowResult struct {
 	Type     string `json:"type"`
 	WindowID string `json:"window_id"`
 	Name     string `json:"name"`
+}
+
+// MoveResult reports where a pane went.
+type MoveResult struct {
+	Type             string `json:"type"`
+	WindowID         string `json:"window_id"`
+	FromWorkspace    int    `json:"from_workspace"`
+	Workspace        int    `json:"workspace"`
+	CurrentWorkspace int    `json:"current_workspace"`
+}
+
+// MoveWindow moves an existing pane to another workspace.
+func (c *Client) MoveWindow(ctx context.Context, window string, workspace int, follow bool) (MoveResult, error) {
+	params := map[string]any{"session": c.opts.Session, "window": window, "workspace": workspace}
+	if follow {
+		params["follow"] = true
+	}
+	var out MoveResult
+	err := c.CallInto(ctx, "move-window", params, &out)
+	return out, err
+}
+
+// ResizeResult is the PTY size after a resize.
+type ResizeResult struct {
+	Type   string `json:"type"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+// ResizeWindow changes one pane's PTY size.
+func (c *Client) ResizeWindow(ctx context.Context, window string, width, height int) (ResizeResult, error) {
+	params := map[string]any{
+		"session": c.opts.Session, "width": width, "height": height,
+	}
+	if window != "" {
+		params["window"] = window
+	}
+	var out ResizeResult
+	err := c.CallInto(ctx, "resize", params, &out)
+	return out, err
+}
+
+// RenameResult is the pane's name after set-window.
+type RenameResult struct {
+	Type        string `json:"type"`
+	WindowID    string `json:"window_id"`
+	DisplayName string `json:"display_name"`
+	Minimized   bool   `json:"minimized"`
+}
+
+// RenameWindow changes a pane's display name.
+func (c *Client) RenameWindow(ctx context.Context, window, name string) (RenameResult, error) {
+	params := map[string]any{"session": c.opts.Session, "name": name}
+	if window != "" {
+		params["window"] = window
+	}
+	var out RenameResult
+	err := c.CallInto(ctx, "set-window", params, &out)
+	return out, err
+}
+
+// SetMinimized minimizes or restores a pane without closing its process.
+func (c *Client) SetMinimized(ctx context.Context, window string, minimized bool) (RenameResult, error) {
+	params := map[string]any{"session": c.opts.Session, "minimized": minimized}
+	if window != "" {
+		params["window"] = window
+	}
+	var out RenameResult
+	err := c.CallInto(ctx, "set-window", params, &out)
+	return out, err
 }
 
 // FocusWindow moves focus to an exact window.

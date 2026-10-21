@@ -61,6 +61,31 @@ func TestApplyPatchIgnoresUnknownArguments(t *testing.T) {
 	}
 }
 
+func TestApplyPatchAcceptsInputAlias(t *testing.T) {
+	dir := patchTree(t)
+	tool := &ApplyPatchTool{Root: dir}
+	args, err := json.Marshal(map[string]string{
+		"input": "*** Begin Patch\n*** Update File: a.go\n@@\n-func old() {}\n+func new() {}\n*** End Patch\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := tool.Execute(context.Background(), "1", args, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("input alias failed: %s", agentcore.ContentToText(res.Content))
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "a.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "func new()") {
+		t.Fatalf("a.go = %s", data)
+	}
+}
+
 // A file whose content contains apply_patch markers must be addable. Before
 // this test, the parser split "+*** Update File:" into a new operation and the
 // tool reported a nonexistent nested file.

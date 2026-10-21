@@ -14,8 +14,13 @@ func TestTuiosReadOnlyIsActionAware(t *testing.T) {
 		{"capture", true},
 		{"wait", true},
 		{"run", false},
+		{"send", false},
 		{"new", false},
 		{"focus", false},
+		{"move", false},
+		{"resize", false},
+		{"rename", false},
+		{"minimize", false},
 		{"close", false},
 	} {
 		args, _ := json.Marshal(map[string]string{"action": tc.action})

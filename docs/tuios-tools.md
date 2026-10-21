@@ -16,14 +16,20 @@ sees it.
 | `capture` | one visible/recent snapshot | read |
 | `wait` | block on a tuios event | read |
 | `run` | type one shell command and return its result | control |
+| `send` | write literal text to a pane, optionally submit | control |
 | `new` | create a pane | control |
 | `focus` | focus an existing pane | control |
+| `move` | move a pane to another workspace | control |
+| `resize` | resize a pane's PTY | control |
+| `rename` | rename a pane | control |
+| `minimize` | minimize or restore a pane | control |
 | `close` | close an existing pane | control |
 
 The read actions are allowed under `/permissions read-only`; control actions
 are not. `run` is graded by the same JEV/local/LLM path as `bash`, so it is not
-a bypass. `close` is left to the contextual reviewer because it can kill a
-running task, and it refuses the pane golder itself runs in.
+a bypass. `send` is left to the contextual reviewer because it can type into a
+running program. `close` is left to the contextual reviewer because it can kill
+a running task, and it refuses the pane golder itself runs in.
 
 ## Event-driven, not polling
 
@@ -45,12 +51,18 @@ subscription; it returns as soon as the pane output matches:
 `window-exit`, `command-finished` and `agent-state`. `capture` is only a
 snapshot; it is never a poll loop.
 
+`action=send` writes text into an already-running program without waiting for
+the command-finished mark. Set `submit:true` to press Enter after a short paste
+wait; this is what a REPL or a yes/no prompt needs. Use `run` when the input is
+a complete shell command and you want its exit status and output.
+
 ## Existing panes
 
 The tool is not limited to panes golder created. `list` reports every pane in
-the current session, and capture/run/wait/focus/close accept any window id from
-that list. `close` requires the full id and does not resolve a short name or
-prefix.
+the current session, and all window actions accept any window id from that
+list. `close` and `move` require the full id and do not resolve a short name or
+prefix. `resize` and `rename` default to the focused pane when `window` is
+omitted.
 
 ## Context and sub-agents
 

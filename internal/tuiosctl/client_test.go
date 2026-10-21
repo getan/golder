@@ -115,6 +115,77 @@ func TestClientWaitTimeout(t *testing.T) {
 	}
 }
 
+// close_on_exit is newer than some daemons. Sending false unconditionally made
+// an older daemon reject every new-window call; the client must omit the field
+// unless it is true. The fake daemon records the actual params, which the
+// higher-level tool tests deliberately do not validate.
+func TestClientNewWindowOnlySendsCloseOnExitWhenTrue(t *testing.T) {
+	for _, want := range []bool{false, true} {
+		got := make(chan map[string]any, 1)
+		sock := fakeDaemon(t, func(verb string, params map[string]any) any {
+			switch verb {
+			case "hello":
+				return map[string]any{"type": "hello"}
+			case "new-window":
+				got <- params
+				return map[string]any{"type": "window_created", "window_id": "w1"}
+			default:
+				return map[string]any{"type": "ok"}
+			}
+		})
+		c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.NewWindow(context.Background(), NewWindowParams{
+			Name: "test", Focus: false, CloseOnExit: want,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		params := <-got
+		_, present := params["close_on_exit"]
+		if present != want {
+			t.Errorf("CloseOnExit=%v: close_on_exit present=%v, want %v (params=%v)",
+				want, present, want, params)
+		}
+		_ = c.Close()
+	}
+}
+
+func TestClientContextCancellationInterruptsABlockedRead(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	sock := fakeDaemon(t, func(verb string, _ map[string]any) any {
+		if verb == "hello" {
+			return map[string]any{"type": "hello"}
+		}
+		<-release
+		return map[string]any{"type": "ok"}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.ListWindows(ctx)
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("blocked call returned %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("context cancellation did not interrupt the blocked read")
+	}
+}
+
 func TestFromEnv(t *testing.T) {
 	t.Setenv(EnvEnv, "1")
 	t.Setenv(EnvSocket, "/tmp/t.sock")

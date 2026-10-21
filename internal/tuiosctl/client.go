@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -188,12 +189,25 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 	if c.conn == nil {
 		return nil, errors.New("tuios: connection is closed")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
 		deadline = time.Now().Add(defaultCallTTL)
 	}
-	_ = c.conn.SetDeadline(deadline)
-	defer c.conn.SetDeadline(time.Time{})
+	conn := c.conn
+	_ = conn.SetDeadline(deadline)
+	// A context cancellation must interrupt the blocking read. The deadline
+	// alone can be minutes away (a wait-for), which would leave the tool call
+	// holding its connection and its caller's goroutine after the pane closed.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer func() {
+		stop()
+		if ctx.Err() == nil {
+			_ = conn.SetDeadline(time.Time{})
+		}
+	}()
 
 	id := c.nextID + 1
 	c.nextID = id
@@ -207,7 +221,7 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 		return nil, fmt.Errorf("tuios: encode %s: %w", verb, err)
 	}
 	b = append(b, '\n')
-	if _, err := c.conn.Write(b); err != nil {
+	if err := writeAll(conn, b); err != nil {
 		_ = c.closeLocked()
 		return nil, fmt.Errorf("tuios: write %s: %w", verb, err)
 	}
@@ -215,6 +229,9 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 	line, err := c.reader.ReadBytes('\n')
 	if err != nil {
 		_ = c.closeLocked()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, fmt.Errorf("tuios: %s timed out", verb)
 		}
@@ -247,6 +264,23 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 		}
 	}
 	return resp.Result, nil
+}
+
+// writeAll hands every byte to the connection. A net.Conn is allowed to make a
+// short write; treating the first Write's nil error as success would truncate a
+// patch or command at exactly the size boundary.
+func writeAll(conn net.Conn, b []byte) error {
+	for len(b) > 0 {
+		n, err := conn.Write(b)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		b = b[n:]
+	}
+	return nil
 }
 
 // Restrict gives up authority on this connection. Read tools use own/read_only

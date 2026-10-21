@@ -55,3 +55,29 @@ func TestFirstPartyCloseNeedsReviewer(t *testing.T) {
 		t.Errorf("close verdict = %+v, want the reviewer's deny", v)
 	}
 }
+
+func TestFirstPartyPaneMutationsAreLocalConfirms(t *testing.T) {
+	for _, action := range []string{"move", "resize", "rename", "minimize"} {
+		spy := &firstPartySpy{}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios",
+			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
+		if spy.tool != "" {
+			t.Errorf("%s reached the next grader", action)
+		}
+		if v.Level != Confirm || v.Source != LocalSource {
+			t.Errorf("%s = %+v, want a local confirm", action, v)
+		}
+	}
+}
+
+func TestFirstPartySendNeedsTheNextGrader(t *testing.T) {
+	spy := &firstPartySpy{v: Verdict{Level: Deny, Source: "llm"}}
+	v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios",
+		json.RawMessage(`{"action":"send","text":"yes"}`))
+	if spy.tool != "tuios" {
+		t.Fatalf("next tool = %q, want tuios", spy.tool)
+	}
+	if v.Level != Deny {
+		t.Errorf("send verdict = %+v, want the reviewer's deny", v)
+	}
+}

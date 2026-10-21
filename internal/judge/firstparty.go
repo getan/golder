@@ -23,6 +23,8 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		var a struct {
 			Action  string   `json:"action"`
 			Command string   `json:"command"`
+			Text    string   `json:"text"`
+			Submit  bool     `json:"submit"`
 			Argv    []string `json:"argv"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -39,6 +41,11 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 				return f.failClosed("tuios run has no command")
 			}
 			return f.classifyShell(ctx, a.Command)
+		case "send":
+			if strings.TrimSpace(a.Text) == "" && !a.Submit {
+				return f.failClosed("tuios send has no text")
+			}
+			return f.next(ctx, tool, args)
 		case "new":
 			if len(a.Argv) == 0 {
 				return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
@@ -48,6 +55,9 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		case "focus":
 			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"focusing an existing pane"}}
+		case "move", "resize", "rename", "minimize":
+			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"changing an existing pane"}}
 		case "close":
 			// Closing a pane can kill a running task; leave that to the
 			// contextual reviewer rather than a fixed local allow.

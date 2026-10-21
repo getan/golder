@@ -55,6 +55,10 @@ type ApplyPatchTool struct {
 // newlines as \n.
 type applyPatchArgs struct {
 	Patch string `json:"patch"`
+	// Input is the Codex-style spelling some callers use for the freeform
+	// payload. The canonical key is patch; accepting this alias avoids losing a
+	// whole call at schema validation over a key name.
+	Input string `json:"input"`
 }
 
 // Name implements AgentTool.
@@ -86,9 +90,9 @@ func (t *ApplyPatchTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
   "type": "object",
   "properties": {
-    "patch": {"type": "string", "description": "The complete patch text, from \"*** Begin Patch\" through \"*** End Patch\"."}
+    "patch": {"type": "string", "description": "The complete patch text, from \"*** Begin Patch\" through \"*** End Patch\"."},
+    "input": {"type": "string", "description": "Alias for patch; prefer patch."}
   },
-  "required": ["patch"],
   "additionalProperties": true
 }`)
 }
@@ -163,10 +167,14 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	if bad != nil {
 		return *bad, nil
 	}
-	if strings.TrimSpace(a.Patch) == "" {
-		return errorResult("apply_patch: patch is required"), nil
+	patchText := a.Patch
+	if strings.TrimSpace(patchText) == "" {
+		patchText = a.Input
 	}
-	ops, err := patch.Parse(a.Patch)
+	if strings.TrimSpace(patchText) == "" {
+		return errorResult("apply_patch: patch is required (use patch; input is accepted as an alias)"), nil
+	}
+	ops, err := patch.Parse(patchText)
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
 	}
@@ -177,7 +185,7 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	_ = json.Unmarshal(args, &rawArgs)
 	var extra []string
 	for k := range rawArgs {
-		if k != "patch" {
+		if k != "patch" && k != "input" {
 			extra = append(extra, k)
 		}
 	}
