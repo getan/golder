@@ -59,6 +59,9 @@ type Theme struct {
 	Warn lipgloss.Style
 	// Success styles successful outcomes (green).
 	Success lipgloss.Style
+	// Approved styles an allow verdict line (near-white). An allow is a normal
+	// outcome, not a warning; the marker and wording stay as they are.
+	Approved lipgloss.Style
 	// ScrollThumb styles the transcript scrollbar thumb (medium gray block).
 	ScrollThumb lipgloss.Style
 	// ScrollTrack styles the transcript scrollbar track (dim shaded column).
@@ -156,6 +159,8 @@ func DefaultTheme() Theme {
 			Foreground(lipgloss.Color(colorWarn)),
 		Success: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorSuccess)),
+		Approved: lipgloss.NewStyle().
+			Foreground(lipgloss.Color(colorAssist)),
 		ScrollThumb: lipgloss.NewStyle().
 			Foreground(lipgloss.Color(colorScroll)),
 		ScrollTrack: lipgloss.NewStyle().

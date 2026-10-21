@@ -3,15 +3,11 @@ package judge
 // The tool table: what this package knows about one tool, in the two ways a
 // gate needs it.
 //
-// Every tool is reviewed. This table does NOT say which calls skip the reviewer,
-// because none do: the risk reviewer grades every call, and the decision model
-// is what makes that affordable (~0.78s per call measured against a fixed
-// route, against 2.16s for the previous reviewer). Deleting that exemption is
-// what let the rest of the design collapse — the read-only shell recognizer no
-// longer needs a kill switch, a credential-read guard inside itself, or an
-// escalation carve-out, because it no longer decides anything. It now only
-// answers a question about CONTAINMENT (should this run in the sandbox), which
-// is a fact about the command rather than a verdict about the call.
+// Every tool goes through the gate. Native file readers (readOnly + paths) are
+// settled by the routine grader's local rule before JEV/LLM, because a call
+// that can only read files should not spend a model round trip proving it; the
+// static floor and boundary still run around that verdict. Other tools are
+// graded by JEV/local and then the session reviewer as before.
 //
 // What remains is two facts, plus the extractor that reads a call's paths:
 //

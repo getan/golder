@@ -12,6 +12,15 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Verdict source is visible in the approval line**: `via local`, `via jev`,
+  `via llm` or `via static` sits beside the mode and grade, and the same source
+  is carried into notes and stdin prompts. No more inferring the judge from the
+  rationale's wording.
+- **Native file readers take the local fast path**: `read`, `grep`, `find`,
+  `ls` and `view_image` are settled as `local` read-only calls before JEV or the
+  LLM. The gate still runs the static credential floor and the workspace
+  boundary; this only removes the pointless model round trip for calls that
+  cannot mutate anything.
 - **`apply_patch` recovers from the two typos that used to cost a round trip**:
   an unprefixed hunk line is read as an addition when its neighbours are
   additions (and as context when they are context), with the assumption named
@@ -951,6 +960,9 @@ interactive REPL/TUI.
   it is the escape hatch the empty-list and out-of-range hints name.
 
 ### Changed
+- **Allow verdicts are white**: `NoteApproved` renders in the approved style in
+  both TUI and REPL, for every mode. Containment stays warning-colored and
+  denials stay error-colored; the `⚠`/`✗` markers and wording are unchanged.
 - **Authorization is one capability decision per call**: boundary, network
   and sandbox escape are collected as a `Needs` list and settled once. `ask`
   shows one dialog for the whole list; `auto` lets the reviewer (local rules,

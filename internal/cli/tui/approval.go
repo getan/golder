@@ -934,7 +934,7 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 	// theirs to answer under ask and already decided under auto — so it is
 	// printed above the command, in the same words the notes and /permissions
 	// use.
-	out := []string{judge.DecisionLine(req.Tool, req.Mode, req.Level, judge.AskDisposition(req.Kind, "en"))}
+	out := []string{judge.DecisionLineWithSource(req.Tool, req.Mode, req.Level, req.Source, judge.AskDisposition(req.Kind, "en"))}
 	if req.Kind == judge.ApprovalConsent {
 		for _, n := range req.Needs {
 			out = append(out, "• "+consentNeedLabel(n))

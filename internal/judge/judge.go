@@ -340,6 +340,10 @@ const (
 // reviewer's verdict, so the decision is informed rather than a bare yes/no.
 type ApprovalRequest struct {
 	Kind ApprovalKind
+	// Source names the layer that reached the verdict: jev, local, llm or
+	// static. The dialog prints it in the decision line so the reader does not
+	// have to infer the judge from the rationale's wording.
+	Source string
 	// Needs is the complete capability request for an ApprovalConsent. The
 	// dialog shows them together; an approval grants exactly this set.
 	Needs []Need
@@ -526,7 +530,10 @@ type Note struct {
 	Kind       NoteKind
 	Level      Level
 	// Summary is a short preview of the call (command/path), when available.
-	Summary       string
+	Summary string
+	// Source names the layer that reached the verdict (jev/local/llm/static).
+	// FormatNote prints it in the decision line.
+	Source        string
 	Risk          string
 	Authorization string
 	Rationale     string
@@ -752,7 +759,8 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 		readmitPath := func(root string) *agentcore.BeforeToolCallDecision {
 			req := ApprovalRequest{
 				Kind: ApprovalReAdmit, Mode: mode.String(), Level: v.Level,
-				Tool: call.Name, Summary: riskSummary(call),
+				Source: v.Source,
+				Tool:   call.Name, Summary: riskSummary(call),
 				Justification: escalationJustification(call),
 				Risk:          riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 				Rationale: firstReason(v), ReadRoot: root,
@@ -1096,6 +1104,7 @@ func askApproval(ctx context.Context, opts GateOpts, mode string, call agentcore
 	}
 	req := ApprovalRequest{
 		Kind:          kind,
+		Source:        v.Source,
 		Mode:          mode,
 		Level:         v.Level,
 		Tool:          call.Name,
@@ -1355,6 +1364,7 @@ func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string
 		ToolCallID:    call.ID,
 		Kind:          kind,
 		Level:         v.Level,
+		Source:        v.Source,
 		Summary:       riskSummary(call),
 		Risk:          v.Risk,
 		Authorization: v.Authorization,
@@ -1526,7 +1536,7 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 	if v.Risk != "" || v.Authorization != "" {
 		rating = fmt.Sprintf(" (risk: %s, authorization: %s)", riskWord(v.Risk, v.Lang), authWord(v.Authorization, v.Lang))
 	}
-	fmt.Fprintf(out, "\n%s%s%s\n", DecisionLine(call.Name, mode, v.Level, AskDisposition(kind, v.Lang)), rating, from)
+	fmt.Fprintf(out, "\n%s%s%s\n", DecisionLineWithSource(call.Name, mode, v.Level, v.Source, AskDisposition(kind, v.Lang)), rating, from)
 	n := len(v.Reasons)
 	if n > 3 {
 		n = 3

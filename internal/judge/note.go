@@ -93,6 +93,18 @@ func authWord(auth, lang string) string {
 // user's to settle, confirm under auto is the reviewer's. What follows the
 // arrow is plain language, since that is where the difference lands.
 func DecisionLine(tool, mode string, level Level, disposition string) string {
+	return DecisionLineWithSource(tool, mode, level, "", disposition)
+}
+
+// DecisionLineWithSource is DecisionLine plus the layer that reached the
+// verdict. The source is a canonical token (jev/local/llm/static), printed
+// after the grade:
+//
+//	bash · auto · allow · via local → approved
+//
+// It belongs on the same line as the mode and grade: "which judge decided
+// this" is as much a part of reading the decision as "which mode was active".
+func DecisionLineWithSource(tool, mode string, level Level, source, disposition string) string {
 	fields := make([]string, 0, 3)
 	if tool != "" {
 		fields = append(fields, tool)
@@ -101,6 +113,9 @@ func DecisionLine(tool, mode string, level Level, disposition string) string {
 		fields = append(fields, mode)
 	}
 	fields = append(fields, level.String())
+	if source != "" {
+		fields = append(fields, "via "+source)
+	}
 	line := strings.Join(fields, " · ")
 	if disposition != "" {
 		line += " → " + disposition
@@ -204,5 +219,5 @@ func FormatNote(n Note) string {
 	if n.Kind.Failure() {
 		marker = "✗ "
 	}
-	return origin + marker + DecisionLine(n.Tool, n.Mode, n.Level, dispositionFor(n)) + rating + ": " + rationale
+	return origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + rating + ": " + rationale
 }

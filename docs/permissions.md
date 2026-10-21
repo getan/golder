@@ -21,6 +21,29 @@ is static floor → local rules / JEV → the session LLM only for what remains.
 expansion is not shown to a person. Everything else produces one request with
 the complete `Needs` list.
 
+## Fast path for native readers
+
+`read`, `grep`, `find`, `ls` and `view_image` cannot mutate anything, so the
+routine grader settles them as `local` read-only calls before JEV or the LLM.
+This rule lives in `judge.LocalReadOnlyVerdict` and is called by BOTH the local
+grader and the JEV router, so a configured decision model does not turn every
+project read into a model call. It is not an outermost exemption: the static
+credential floor runs first, the workspace boundary still asks/records where the
+read lands, and the tools' own credential checks remain.
+
+## Reading the approval line
+
+An approval/decision line carries the judge that produced it:
+
+```text
+bash · auto · allow · via local → approved
+bash · ask  · confirm · via llm → your call
+```
+
+The source is one of `jev`, `local`, `llm`, `static`. An allow verdict renders
+white in every mode; containment stays warning-colored and denials/blocks stay
+red. The `⚠`/`✗` markers and the wording do not change with the color.
+
 ## The request
 
 A call becomes one `ConsentRequest`:

@@ -530,6 +530,14 @@ func TestFormatNoteLocalized(t *testing.T) {
 	}
 }
 
+func TestFormatNoteShowsTheVerdictSource(t *testing.T) {
+	got := FormatNote(Note{Tool: "read", Mode: "auto", Kind: NoteApproved,
+		Level: Allow, Source: LocalSource, Rationale: "reads only", Lang: "en"})
+	if !strings.Contains(got, "via local") {
+		t.Errorf("note = %q, want the verdict source in the decision line", got)
+	}
+}
+
 // TestFormatNoteNamesTheRefusedEscape: a denied call that asked to leave the
 // sandbox must say which of the two decisions went against it. Without that the
 // line reads "allow → denied" — a grade next to an outcome, with nothing

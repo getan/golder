@@ -11,7 +11,7 @@ func consentTUIRequest() judge.ApprovalRequest {
 	return judge.ApprovalRequest{
 		Kind: judge.ApprovalConsent,
 		Tool: "bash", Summary: "cat /tmp/out && curl example.com",
-		Mode: "ask", Level: judge.Confirm, Rationale: "needs your decision",
+		Mode: "ask", Level: judge.Confirm, Source: "local", Rationale: "needs your decision",
 		Needs: []judge.Need{
 			{Cap: judge.CapReadOutside, Path: "/tmp/out", Dir: "/tmp"},
 			{Cap: judge.CapNetwork, Key: "example.com"},
@@ -25,7 +25,7 @@ func TestConsentDialogShowsOneCombinedQuestion(t *testing.T) {
 	reply := make(chan judge.ApprovalAnswer, 1)
 	m.openApproval(consentTUIRequest(), reply)
 	view := m.approvalView(100)
-	for _, want := range []string{"needs 3 capabilities", "read /tmp/out", "network example.com", "outside the sandbox"} {
+	for _, want := range []string{"needs 3 capabilities", "via local", "read /tmp/out", "network example.com", "outside the sandbox"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dialog missing %q:\n%s", want, view)
 		}

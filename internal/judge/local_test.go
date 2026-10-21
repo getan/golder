@@ -146,16 +146,41 @@ func TestLocalDefersWithoutAReviewer(t *testing.T) {
 	}
 }
 
-// TestLocalIgnoresOtherTools pins the stage's scope: the table is about shell
-// commands, so a non-bash call is not its to grade.
+// TestLocalIgnoresOtherTools pins the stage's scope: a network tool is not a
+// file reader, so the local table leaves it to JEV/LLM.
 func TestLocalIgnoresOtherTools(t *testing.T) {
 	spy := &nextSpy{}
-	raw, err := json.Marshal(map[string]string{"path": "internal/x.go"})
+	raw, err := json.Marshal(map[string]string{"url": "https://example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v := (Local{Next: spy}).Classify(context.Background(), "read", raw); spy.called != 1 {
-		t.Errorf("read tool = %+v; the local stage must defer it", v)
+	if v := (Local{Next: spy}).Classify(context.Background(), "webfetch", raw); spy.called != 1 {
+		t.Errorf("webfetch = %+v; the local stage must defer it", v)
+	}
+}
+
+// Native file readers are positive cases the routine grader settles itself:
+// no JEV call, no LLM call, but the same tool table that marks them readOnly.
+func TestLocalReadsNativeFileReaders(t *testing.T) {
+	for _, c := range []struct {
+		tool, args string
+	}{
+		{"read", `{"path":"internal/x.go"}`},
+		{"grep", `{"pattern":"x","path":"."}`},
+		{"find", `{"glob":"*.go","path":"."}`},
+		{"ls", `{"path":"."}`},
+		{"view_image", `{"path":"shot.png"}`},
+	} {
+		t.Run(c.tool, func(t *testing.T) {
+			spy := &nextSpy{}
+			v := (Local{Next: spy}).Classify(context.Background(), c.tool, json.RawMessage(c.args))
+			if spy.called != 0 {
+				t.Fatalf("%s reached the next grader %d times", c.tool, spy.called)
+			}
+			if v.Level != Allow || v.Source != LocalSource {
+				t.Errorf("%s = %+v, want allow from %s", c.tool, v, LocalSource)
+			}
+		})
 	}
 }
 

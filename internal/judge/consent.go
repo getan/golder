@@ -69,6 +69,9 @@ type ConsentRequest struct {
 	Tool          string
 	Summary       string
 	Justification string
+	// Source names the layer that reached the verdict (jev/local/llm/static).
+	// The driver prints it in the decision line.
+	Source        string
 	Needs         []Need
 	Mode          string
 	Level         Level
@@ -238,6 +241,7 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 	v := classifyForGate(ctx, ConsentGateOptsToGate(opts), call)
 
 	req.Mode = mode.String()
+	req.Source = v.Source
 	req.Level = v.Level
 	req.Risk = riskWord(v.Risk, lang)
 	req.Authorization = authWord(v.Authorization, lang)
@@ -402,6 +406,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if v.Failed {
 		if len(needs) > 0 {
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteUnavailable, Level: v.Level, Lang: lang,
+				Source:  v.Source,
 				Summary: riskSummary(call), Rationale: localized(lang, "评审不可用；能力扩张未获授权", "review was unavailable; capability expansion was not authorized")})
 			return blockCall(call, v, "the reviewer could not decide the capability request; nothing was granted")
 		}
@@ -409,12 +414,14 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 			return &agentcore.BeforeToolCallDecision{Sandbox: true}
 		}
 		notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteUnavailable, Level: v.Level, Lang: lang,
+			Source:  v.Source,
 			Summary: riskSummary(call), Rationale: localized(lang, "评审不可用；无可收容路径", "review unavailable; no containment path")})
 		return blockCall(call, v, "the reviewer could not decide and the call cannot be contained")
 	}
 	if v.Level == Contain {
 		if len(needs) > 0 {
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: v.Level, Lang: lang,
+				Source:  v.Source,
 				Summary: riskSummary(call), Rationale: localized(lang, "评审要求收容，但调用需要额外能力", "review required containment, but the call needs extra capabilities")})
 			return blockCall(call, v, "the call needs a capability the reviewer did not grant")
 		}
@@ -446,6 +453,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 	}
 	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: v.Level, Lang: lang,
+		Source:  v.Source,
 		Summary: riskSummary(call), Risk: riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 		Rationale: consentRationale(v, needs, lang)})
 	return dec
@@ -466,7 +474,8 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	}
 	req := ConsentRequest{
 		Tool: call.Name, Summary: riskSummary(call), Justification: escalationJustification(call),
-		Needs: needs, Mode: mode.String(), Level: v.Level,
+		Source: v.Source,
+		Needs:  needs, Mode: mode.String(), Level: v.Level,
 		Risk: riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 		Rationale: firstReason(v), Origin: agentcore.OriginFromContext(ctx),
 		CanContain: opts.Sandboxed != nil && opts.Sandboxed(call.Name),
@@ -489,6 +498,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	}
 	if !ans.Answered || !ans.Allow {
 		notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
+			Source:  v.Source,
 			Summary: req.Summary, Rationale: localized(lang, "用户拒绝了本次请求", "denied by the user")})
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer")
 	}
@@ -506,6 +516,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		dec.Network = true
 	}
 	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+		Source:  v.Source,
 		Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
 		Rationale: consentRationale(v, ans.Needs, lang)})
 	return dec
@@ -691,6 +702,7 @@ func ConsentFromApproval(f func(context.Context, ApprovalRequest) ApprovalAnswer
 	return func(ctx context.Context, req ConsentRequest) ConsentAnswer {
 		legacy := ApprovalRequest{
 			Kind: ApprovalConsent, Tool: req.Tool, Summary: req.Summary,
+			Source:        req.Source,
 			Justification: req.Justification, Mode: req.Mode, Level: req.Level,
 			Risk: req.Risk, Authorization: req.Authorization, Rationale: req.Rationale,
 			Origin: req.Origin, Needs: req.Needs, CanContain: req.CanContain,

@@ -638,6 +638,9 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 				defer deps.confirmMu.Unlock()
 			}
 			tone := ui.Yellow
+			if n.Kind == judge.NoteApproved {
+				tone = ui.White
+			}
 			if n.Kind.Failure() {
 				tone = ui.Red
 			}

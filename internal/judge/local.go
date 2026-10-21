@@ -1,6 +1,7 @@
 package judge
 
-// The local rule table: the routine grader for a run that has no decision model.
+// The local rule table: the routine grader for a run that has no decision model,
+// plus the deterministic native-file-reader rule shared with the JEV route.
 //
 // # Why it exists
 //
@@ -182,6 +183,9 @@ type Local struct {
 // Classify implements Classifier: grade the command, decide the routine tiers,
 // defer the rest.
 func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
+	if v, ok := LocalReadOnlyVerdict(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
+		return v
+	}
 	if v, ok := localGradeOf(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
 		if NetworkRequested(tool, args) {
 			// The local table may approve network only for calls it has actually
@@ -203,6 +207,33 @@ func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) 
 		return v
 	}
 	return l.deferToNext(ctx, tool, args)
+}
+
+// LocalReadOnlyVerdict is the deterministic tier for native file readers. It
+// is shared by the local table and the JEV router: whichever routine grader is
+// active, a call that can only read files should not spend a model round trip
+// to discover that. "Read-only" here is a property of the tool table, not a
+// heuristic: the tool must be marked readOnly and must name paths (which
+// excludes the network tools and the in-memory tools), and shell tools are
+// excluded because their text is not a closed set of file operands.
+//
+// This is not an outermost allow: the gate still runs the static floor before
+// it, the workspace boundary still asks/records where the read lands, and the
+// read itself still enforces credential-path rejection. Source says "local" so
+// a dialog or note never claims JEV/LLM decided it.
+func LocalReadOnlyVerdict(tool string, _ json.RawMessage, lang string) (Verdict, bool) {
+	t, ok := toolLookup(tool)
+	if !ok || !t.readOnly || t.paths == nil || t.shell {
+		return Verdict{}, false
+	}
+	return Verdict{
+		Level:      Allow,
+		Source:     LocalSource,
+		Confidence: 1,
+		Risk:       "low",
+		Lang:       lang,
+		Reasons:    []string{localRationale(lang, "read_only")},
+	}, true
 }
 
 func (l Local) deferToNext(ctx context.Context, tool string, args json.RawMessage) Verdict {

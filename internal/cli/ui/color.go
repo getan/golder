@@ -17,6 +17,7 @@ const (
 	Green  = "\033[32m"
 	Red    = "\033[31m"
 	Yellow = "\033[33m"
+	White  = "\033[37m"
 )
 
 // StdoutIsTerminal reports whether stdout is an interactive terminal (not a

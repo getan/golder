@@ -81,10 +81,13 @@ func TestConsentAskCombinesNeedsIntoOnePrompt(t *testing.T) {
 	asked := 0
 	gate := ConsentGate(ConsentOpts{
 		Mode:       permissions.New(permissions.Ask),
-		Classifier: consentClassifier{v: Verdict{Level: Confirm, Reasons: []string{"needs a decision"}}},
+		Classifier: consentClassifier{v: Verdict{Level: Confirm, Source: LocalSource, Reasons: []string{"needs a decision"}}},
 		Cwd:        workspace,
 		Confirm: func(_ context.Context, req ConsentRequest) ConsentAnswer {
 			asked++
+			if req.Source != LocalSource {
+				t.Fatalf("consent source = %q, want %q", req.Source, LocalSource)
+			}
 			if len(req.Needs) != 3 {
 				t.Fatalf("one prompt should carry all needs, got %+v", req.Needs)
 			}

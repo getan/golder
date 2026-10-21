@@ -1044,10 +1044,9 @@ func TestSystemNoticeWrapRespectsTheIndent(t *testing.T) {
 	}
 }
 
-// TestNoticeAndNoteShareOneLine pins the property the auto-compaction
-// announcement was asked for: a session notice renders through the same function
-// as a gate verdict, so it carries the same warn color and the same marker
-// rather than a copy of them that can drift.
+// TestNoticeAndNoteShareOneLine pins the shared line shape. An allow verdict is
+// white (a normal outcome) while an informational notice stays warning-colored;
+// both keep the same marker and column.
 func TestNoticeAndNoteShareOneLine(t *testing.T) {
 	th := DefaultTheme()
 	const width = 80
@@ -1070,16 +1069,19 @@ func TestNoticeAndNoteShareOneLine(t *testing.T) {
 	}
 	warnOpen := sgrOpen(th.Warn.Render("  x"))
 	errorOpen := sgrOpen(th.Error.Render("  x"))
+	approvedOpen := sgrOpen(th.Approved.Render("  x"))
 
+	if got := sgrOpen(note); got != approvedOpen {
+		t.Errorf("allow note opens with %q, want the approved style %q", got, approvedOpen)
+	}
+	if got := sgrOpen(notice); got != warnOpen {
+		t.Errorf("notice opens with %q, want the warn style %q", got, warnOpen)
+	}
 	for name, line := range map[string]string{"note": note, "notice": notice} {
-		if got := sgrOpen(line); got != warnOpen {
-			t.Errorf("%s opens with %q, want the warn style %q", name, got, warnOpen)
-		}
 		if !strings.Contains(line, "  ⚠ ") {
 			t.Errorf("%s should carry the warn marker at the content column: %q", name, line)
 		}
 	}
-
 	// A failure swaps to the error style and the denial marker, for both.
 	failedNote := renderNoteLine(th, width, judge.Note{Tool: "read", Kind: judge.NoteDenied, Rationale: "no", Lang: "en"})
 	failedNotice := renderNoticeLine(th, width, "✗ context compaction failed: boom", true)

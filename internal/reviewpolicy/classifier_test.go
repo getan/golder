@@ -105,6 +105,23 @@ func TestDecidedCallDoesNotReachTheFallback(t *testing.T) {
 	}
 }
 
+// The JEV route also settles native file readers locally. A configured decision
+// model must not turn every `read`/`grep`/`find` into a model call; the gate's
+// static floor and boundary still run outside this classifier.
+func TestNativeReadersBypassJevAndFallback(t *testing.T) {
+	fb := &spyFallback{v: judge.Verdict{Level: judge.Allow, Source: "llm"}}
+	c := &Classifier{Fallback: fb}
+	for _, tool := range []string{"read", "grep", "find", "ls", "view_image"} {
+		v := c.Classify(context.Background(), tool, json.RawMessage(`{"path":"internal/x.go"}`))
+		if v.Level != judge.Allow || v.Source != judge.LocalSource {
+			t.Errorf("%s = %+v, want allow from %s", tool, v, judge.LocalSource)
+		}
+	}
+	if len(fb.calls) != 0 {
+		t.Errorf("native readers reached the fallback: %v", fb.calls)
+	}
+}
+
 func TestEscalationReachesTheFallbackWithTheSameCall(t *testing.T) {
 	// The arguments must travel intact: the fallback grades the SAME call, not
 	// a summary of it, or its verdict would be about something else.

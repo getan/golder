@@ -6,6 +6,7 @@ package reviewpolicy
 // interface — the permission gate, the sandbox router, the read-scope gate —
 // gets the cheap judge without changing. The chain it implements:
 //
+//	native readers → local read-only rule, no model call
 //	facts  → one parsed plan, or nil for a non-shell tool
 //	Jev    → one call, every question at once
 //	policy → decide, or escalate
@@ -143,6 +144,15 @@ type CallRecord struct {
 func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMessage) judge.Verdict {
 	start := c.now()
 	lang := c.language(ctx)
+
+	// Native file readers are settled by the same deterministic rule the local
+	// grader uses. This is the JEV route's entry, so a configured decision model
+	// does not turn `read`/`grep`/`find` into a model call. The gate still runs
+	// the static floor and boundary before/after this verdict.
+	if v, ok := judge.LocalReadOnlyVerdict(tool, args, lang); ok {
+		c.observe(CallRecord{Tool: tool, Routed: "decided", Level: v.Level})
+		return v
+	}
 
 	facts := c.factsFor(tool, args)
 

@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -1393,11 +1394,18 @@ func (t *transcript) renderReviewBlock(blk transcriptBlock) string {
 	return renderNoteLine(t.theme, t.width, *blk.note)
 }
 
-// renderNoteLine paints one gate verdict: a warn color for approvals and
-// containment (the call proceeds), an error color for denials and blocks. The
-// line wraps to the transcript width; the icon leads.
+// renderNoteLine paints one gate verdict: white for an allow (a normal
+// outcome), a warn color for containment, and an error color for denials and
+// blocks. The line wraps to the transcript width; the icon leads.
 func renderNoteLine(theme Theme, width int, n judge.Note) string {
-	return renderNoticeLine(theme, width, judge.FormatNote(n), n.Kind.Failure())
+	style := theme.Warn
+	if n.Kind == judge.NoteApproved {
+		style = theme.Approved
+	}
+	if n.Kind.Failure() {
+		style = theme.Error
+	}
+	return renderNoticeStyled(theme, width, judge.FormatNote(n), style)
 }
 
 // renderNoticeLine paints one harness/gate announcement: a warn color for
@@ -1414,6 +1422,10 @@ func renderNoticeLine(theme Theme, width int, text string, failure bool) string 
 	if failure {
 		style = theme.Error
 	}
+	return renderNoticeStyled(theme, width, text, style)
+}
+
+func renderNoticeStyled(theme Theme, width int, text string, style lipgloss.Style) string {
 	// A verdict belongs to the call it graded, so it sits in the same content
 	// column as that call's headline, body and gutter — a note flush against the
 	// margin read as unrelated to the card it was about.
