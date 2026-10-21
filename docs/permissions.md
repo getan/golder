@@ -37,6 +37,7 @@ An approval/decision line carries the judge that produced it:
 
 ```text
 bash · auto · allow · via local → approved (granted: read /outside/file)
+bash · ask  · confirm · via llm  → your call
 bash · ask  · deny  · via llm   → denied   (needs: write /outside/dir)
 ```
 
@@ -48,6 +49,12 @@ stay red. The `⚠`/`✗` markers and the wording do not change with the color.
 Ratings are concrete capabilities, not high/medium/low: `needs:` names what the
 call required, `granted:` names what the answer actually allowed. A simple call
 with no extra capability has neither suffix.
+
+`confirm` is a grade, not a capability: in `ask` it is the dialog line before
+the person answers (`→ your call`); after an approval the transcript note is an
+allow with `granted:` if anything was granted. In `auto` a `confirm` proceeds
+without a dialog, so its note is an allow/approved outcome as well. It does not
+mean "waiting for confirmation" in `auto`.
 
 ## The request
 
