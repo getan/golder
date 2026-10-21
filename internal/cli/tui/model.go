@@ -26,6 +26,7 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/history"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -1351,6 +1352,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A permission-gate decision (approval, sandbox routing, denial,
 		// read-only block) with its rationale; it renders right above the
 		// tool card it decided.
+		if msg.note.Kind == judge.NoteApproved && !ui.DebugEnabled() {
+			return m, m.pumpNext()
+		}
 		m.transcript.addReviewNote(msg.note)
 		m.relayout()
 		return m, m.pumpNext()

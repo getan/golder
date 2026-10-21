@@ -533,7 +533,13 @@ type Note struct {
 	Summary string
 	// Source names the layer that reached the verdict (jev/local/llm/static).
 	// FormatNote prints it in the decision line.
-	Source        string
+	Source string
+	// Needs names the capabilities the call required when it was not granted;
+	// Granted names what the answer actually gave. They replace the old
+	// high/medium/low risk and authorization words: a reader can act on
+	// "write /tmp/out, network github.com" but not on "risk: medium".
+	Needs         []Need
+	Granted       []Need
 	Risk          string
 	Authorization string
 	Rationale     string
@@ -1532,11 +1538,7 @@ func promptRisk(ctx context.Context, opts GateOpts, mode string, call agentcore.
 	// note: tool · mode · grade → who settles it. Stdin has no color and no
 	// layout to carry that context, so this line has to say the whole thing by
 	// itself — and "which mode am I in" is the first question a reader has.
-	rating := ""
-	if v.Risk != "" || v.Authorization != "" {
-		rating = fmt.Sprintf(" (risk: %s, authorization: %s)", riskWord(v.Risk, v.Lang), authWord(v.Authorization, v.Lang))
-	}
-	fmt.Fprintf(out, "\n%s%s%s\n", DecisionLineWithSource(call.Name, mode, v.Level, v.Source, AskDisposition(kind, v.Lang)), rating, from)
+	fmt.Fprintf(out, "\n%s%s\n", DecisionLineWithSource(call.Name, mode, v.Level, v.Source, AskDisposition(kind, v.Lang)), from)
 	n := len(v.Reasons)
 	if n > 3 {
 		n = 3

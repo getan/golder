@@ -88,6 +88,7 @@ func TestPermissionsSlashSwitches(t *testing.T) {
 // TestJudgeNoteMsgRenders verifies a gate note lands in the transcript with
 // its rationale.
 func TestJudgeNoteMsgRenders(t *testing.T) {
+	t.Setenv("GOLDER_DEBUG", "1")
 	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 20})
 	note := judge.Note{
 		Tool:          "bash",
@@ -107,6 +108,19 @@ func TestJudgeNoteMsgRenders(t *testing.T) {
 	// columns, so the full sentence is split across two rendered lines.
 	if !strings.Contains(view, "bash · auto · allow → 已批准") || !strings.Contains(view, "完全可") {
 		t.Errorf("view missing review note:\n%s", view)
+	}
+}
+
+// An allow is a normal outcome, so its verdict line is hidden unless the debug
+// rendering switch is on. Denials and containment are never hidden.
+func TestJudgeNoteHidesAllowWithoutDebug(t *testing.T) {
+	t.Setenv("GOLDER_DEBUG", "")
+	m := apply(t, NewModel(Options{}), tea.WindowSizeMsg{Width: 80, Height: 20})
+	note := judge.Note{Tool: "bash", Kind: judge.NoteApproved, Mode: "auto",
+		Rationale: "routine", Lang: "en"}
+	next, _ := m.Update(judgeNoteMsg{note: note})
+	if view := stripANSI(next.View().Content); strings.Contains(view, "approved") {
+		t.Errorf("an allow verdict rendered without --debug:\n%s", view)
 	}
 }
 

@@ -183,7 +183,9 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 
 		needs := collectNeeds(ctx, opts, call, v, mode, lang)
 		if v.Level == Deny {
-			notify(noteFor(call, v, NoteDenied, lang))
+			n := noteFor(call, v, NoteDenied, lang)
+			n.Needs = needs
+			notify(n)
 			return blockCall(call, v, DenyGuidance)
 		}
 		if mode == permissions.Auto {
@@ -406,7 +408,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if v.Failed {
 		if len(needs) > 0 {
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteUnavailable, Level: v.Level, Lang: lang,
-				Source:  v.Source,
+				Source: v.Source, Needs: needs,
 				Summary: riskSummary(call), Rationale: localized(lang, "评审不可用；能力扩张未获授权", "review was unavailable; capability expansion was not authorized")})
 			return blockCall(call, v, "the reviewer could not decide the capability request; nothing was granted")
 		}
@@ -421,7 +423,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if v.Level == Contain {
 		if len(needs) > 0 {
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: v.Level, Lang: lang,
-				Source:  v.Source,
+				Source: v.Source, Needs: needs,
 				Summary: riskSummary(call), Rationale: localized(lang, "评审要求收容，但调用需要额外能力", "review required containment, but the call needs extra capabilities")})
 			return blockCall(call, v, "the call needs a capability the reviewer did not grant")
 		}
@@ -453,8 +455,8 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 	}
 	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: v.Level, Lang: lang,
-		Source:  v.Source,
-		Summary: riskSummary(call), Risk: riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
+		Source: v.Source, Granted: needs,
+		Summary: riskSummary(call), Risk: v.Risk, Authorization: v.Authorization,
 		Rationale: consentRationale(v, needs, lang)})
 	return dec
 }
@@ -498,7 +500,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	}
 	if !ans.Answered || !ans.Allow {
 		notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
-			Source:  v.Source,
+			Source: v.Source, Needs: needs,
 			Summary: req.Summary, Rationale: localized(lang, "用户拒绝了本次请求", "denied by the user")})
 		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer")
 	}
@@ -515,9 +517,13 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	if NetworkRequested(call.Name, call.Arguments) {
 		dec.Network = true
 	}
+	granted := ans.Needs
+	if len(granted) == 0 {
+		granted = needs
+	}
 	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
-		Source:  v.Source,
-		Summary: req.Summary, Risk: req.Risk, Authorization: req.Authorization,
+		Source: v.Source, Granted: granted,
+		Summary: req.Summary, Risk: v.Risk, Authorization: v.Authorization,
 		Rationale: consentRationale(v, ans.Needs, lang)})
 	return dec
 }

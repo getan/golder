@@ -633,6 +633,9 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 	// mutex keeps the note from interleaving with a confirmation prompt.
 	if deps.notes != nil {
 		deps.notes.Set(func(n judge.Note) {
+			if n.Kind == judge.NoteApproved && !ui.DebugEnabled() {
+				return
+			}
 			if deps.confirmMu != nil {
 				deps.confirmMu.Lock()
 				defer deps.confirmMu.Unlock()

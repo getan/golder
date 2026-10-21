@@ -458,7 +458,7 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 				}
 				g.opts.Notes.Emit(judge.Note{
 					Tool: "bash", Kind: judge.NoteDenied, Level: judge.Deny, Lang: lang,
-					Summary: summary, Rationale: reason,
+					Summary: summary, Needs: req.Needs, Rationale: reason,
 				})
 			}
 			return agenttool.SandboxDenialRefused
@@ -494,7 +494,7 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 			}
 			g.opts.Notes.Emit(judge.Note{
 				Tool: "bash", Kind: judge.NoteSandboxed, Level: judge.Allow, Lang: lang,
-				Summary: summary, Rationale: rationale,
+				Summary: summary, Granted: req.Needs, Rationale: rationale,
 			})
 		}
 		return agenttool.SandboxDenialReAdmitted

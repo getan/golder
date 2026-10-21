@@ -145,6 +145,10 @@ type cliOptions struct {
 	// When set — or when stdout is not a TTY — the no-prompt path falls back to
 	// repl.Run rather than launching tui.Run.
 	noTUI bool
+	// debug enables diagnostic renderings that are hidden by default (currently
+	// allow verdicts). It sets GOLDER_DEBUG for the render layers, so the same
+	// switch also works for scripts that cannot pass a flag.
+	debug bool
 	// cwd, when non-empty, is the working directory golder switches to before doing
 	// anything else (matches the Claude Agent SDK's cwd option / git -C). Every
 	// cwd-derived resolution — built-in tool file roots, project trust, hooks
@@ -268,6 +272,7 @@ func main() {
 	flag.BoolVar(&opts.dream, "dream", false, "internal: run a memory-consolidation pass over the global/project memory scope, emit a Report JSON on stdout, and exit (SPEC §4.1)")
 	flag.BoolVar(&opts.dreamDryRun, "dream-dry-run", false, "internal: with --dream, analyze and report without writing files or updating dream state (SPEC §5.5)")
 	flag.BoolVar(&opts.noTUI, "no-tui", false, "use the line-based REPL instead of the full-screen TUI")
+	flag.BoolVar(&opts.debug, "debug", false, "render diagnostic approval lines that are hidden by default")
 	flag.StringVarP(&opts.cwd, "cwd", "C", "", "run as if golder was started in this directory (matches the Claude Agent SDK's cwd; like git -C): tool file access, trust, hooks, and project config all resolve against it")
 	flag.BoolVarP(&opts.showVersion, "version", "v", false, "print version information and exit")
 	// Extend the default pflag usage with a "Supported providers" block so
@@ -281,6 +286,10 @@ func main() {
 		cli.PrintProviderHelp(out)
 	}
 	flag.Parse()
+
+	if opts.debug {
+		_ = os.Setenv("GOLDER_DEBUG", "1")
+	}
 
 	// --cwd switches the process working directory before anything cwd-derived is
 	// resolved (tool roots, trust, hooks, project config, git info). Doing it here

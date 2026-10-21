@@ -520,12 +520,14 @@ func TestConversationLanguage(t *testing.T) {
 }
 
 func TestFormatNoteLocalized(t *testing.T) {
-	zh := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteApproved, Risk: "medium", Authorization: "high", Rationale: "常规操作", Lang: "zh"})
-	if !strings.Contains(zh, "bash · auto · allow → 已批准") || !strings.Contains(zh, "风险：中") || !strings.Contains(zh, "常规操作") {
+	zh := FormatNote(Note{Tool: "bash", Mode: "auto", Kind: NoteApproved,
+		Granted: []Need{{Cap: CapReadOutside, Path: "/tmp/out"}}, Rationale: "常规操作", Lang: "zh"})
+	if !strings.Contains(zh, "bash · auto · allow → 已批准") || !strings.Contains(zh, "已授权：读取 /tmp/out") || !strings.Contains(zh, "常规操作") {
 		t.Errorf("zh note = %q", zh)
 	}
-	en := FormatNote(Note{Tool: "bash", Mode: "ask", Kind: NoteDenied, Level: Deny, Risk: "high", Authorization: "low", Rationale: "dangerous", Lang: "en"})
-	if !strings.Contains(en, "✗ bash · ask · deny → denied") || !strings.Contains(en, "risk: high") {
+	en := FormatNote(Note{Tool: "bash", Mode: "ask", Kind: NoteDenied, Level: Deny,
+		Needs: []Need{{Cap: CapWriteOutside, Path: "/tmp/out"}}, Rationale: "dangerous", Lang: "en"})
+	if !strings.Contains(en, "✗ bash · ask · deny → denied") || !strings.Contains(en, "needs: write /tmp/out") {
 		t.Errorf("en note = %q", en)
 	}
 }

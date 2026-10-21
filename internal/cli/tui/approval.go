@@ -959,20 +959,11 @@ func approvalDetail(req judge.ApprovalRequest) []string {
 		out = append(out, "Reason: "+j)
 	}
 	if r := strings.TrimSpace(req.Rationale); r != "" {
-		// The (risk, auth) suffix is part of a reviewer's verdict. A consent
-		// question (read-scope, trust) has no verdict behind it, so it renders
-		// as its own sentence instead of "Reviewer:"; and since a suffix with
-		// no risk grade reads as punctuation without content, it is built from
-		// Risk alone.
-		rating := ""
-		if req.Risk != "" {
-			rating = " (" + req.Risk + ", auth: " + req.Authorization + ")"
-		}
 		switch req.Kind {
 		case judge.ApprovalBoundary, judge.ApprovalTrust:
-			out = append(out, r+rating)
+			out = append(out, r)
 		default:
-			out = append(out, "Reviewer: "+r+rating)
+			out = append(out, "Reviewer: "+r)
 		}
 	}
 	if req.NetworkRequest {

@@ -36,13 +36,18 @@ read lands, and the tools' own credential checks remain.
 An approval/decision line carries the judge that produced it:
 
 ```text
-bash · auto · allow · via local → approved
-bash · ask  · confirm · via llm → your call
+bash · auto · allow · via local → approved (granted: read /outside/file)
+bash · ask  · deny  · via llm   → denied   (needs: write /outside/dir)
 ```
 
 The source is one of `jev`, `local`, `llm`, `static`. An allow verdict renders
-white in every mode; containment stays warning-colored and denials/blocks stay
-red. The `⚠`/`✗` markers and the wording do not change with the color.
+white in every mode, but is hidden by default; set `GOLDER_DEBUG=1` or pass
+`--debug` to render it. Containment stays warning-colored and denials/blocks
+stay red. The `⚠`/`✗` markers and the wording do not change with the color.
+
+Ratings are concrete capabilities, not high/medium/low: `needs:` names what the
+call required, `granted:` names what the answer actually allowed. A simple call
+with no extra capability has neither suffix.
 
 ## The request
 

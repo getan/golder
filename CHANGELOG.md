@@ -21,6 +21,14 @@ interactive REPL/TUI.
   LLM. The gate still runs the static credential floor and the workspace
   boundary; this only removes the pointless model round trip for calls that
   cannot mutate anything.
+- **Allow verdicts are hidden unless debug is on**: `--debug` / `GOLDER_DEBUG=1`
+  enables the diagnostic line; the default transcript no longer prints an allow
+  verdict for every call. Denials, containment, and approval dialogs are never
+  hidden.
+- **Verdict lines name concrete capabilities**: `needs:` lists what the call
+  required (outside read/write, network, sandbox escape) and `granted:` lists
+  what the answer actually allowed. The old `risk: high` / `authorization:
+  medium` words are gone from the note and dialog lines.
 - **`apply_patch` recovers from the two typos that used to cost a round trip**:
   an unprefixed hunk line is read as an addition when its neighbours are
   additions (and as context when they are context), with the assumption named

@@ -1,13 +1,12 @@
 package judge
 
 // This file renders the user-facing verdict note (the codex-style approval
-// card line): one line stating the decision, the tool, the reviewer's risk /
-// authorization rating, and the rationale — written in the language the user
+// card line): one line stating the decision, the tool, the capability the call
+// needed or was granted, and the rationale — written in the language the user
 // is using, so the reason is always readable. Colors are applied by the UI
 // layer; this only produces plain text.
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -204,14 +203,7 @@ func FormatNote(n Note) string {
 	if n.Origin != "" {
 		origin = "[" + n.Origin + "] "
 	}
-	rating := ""
-	if n.Risk != "" {
-		if n.Lang == "zh" {
-			rating = fmt.Sprintf("（风险：%s，授权：%s）", riskWord(n.Risk, n.Lang), authWord(n.Authorization, n.Lang))
-		} else {
-			rating = fmt.Sprintf(" (risk: %s, authorization: %s)", riskWord(n.Risk, n.Lang), authWord(n.Authorization, n.Lang))
-		}
-	}
+	suffix := noteCapabilitySuffix(n)
 	// The marker leads, so a transcript's notices line up in one column and a
 	// denial is scannable without reading the words: Failure() owns which kinds
 	// are failures, so a new blocking kind cannot be painted as a warning.
@@ -219,5 +211,31 @@ func FormatNote(n Note) string {
 	if n.Kind.Failure() {
 		marker = "✗ "
 	}
-	return origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + rating + ": " + rationale
+	return origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + suffix + ": " + rationale
+}
+
+// noteCapabilitySuffix replaces the old risk/authorization words with the
+// concrete capabilities the call needed or received. "needs: write /tmp/out,
+// network github.com" tells the reader what is being asked; "granted: read
+// /tmp/out" tells them what the answer actually allowed.
+func noteCapabilitySuffix(n Note) string {
+	var parts []string
+	if len(n.Needs) > 0 {
+		parts = append(parts, localized(n.Lang, "需要：", "needs: ")+noteNeedLabels(n.Needs, n.Lang))
+	}
+	if len(n.Granted) > 0 {
+		parts = append(parts, localized(n.Lang, "已授权：", "granted: ")+noteNeedLabels(n.Granted, n.Lang))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, "; ") + ")"
+}
+
+func noteNeedLabels(needs []Need, lang string) string {
+	labels := make([]string, 0, len(needs))
+	for _, n := range needs {
+		labels = append(labels, needLabel(n, lang))
+	}
+	return strings.Join(labels, ", ")
 }
