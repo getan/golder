@@ -293,7 +293,13 @@ func runTool(ctx context.Context, tool agentcore.AgentTool, call agentcore.Agent
 
 	res, err := tool.Execute(ctx, call.ID, args, onUpdate)
 	if err != nil {
-		return errorResult(fmt.Sprintf("tool %q failed: %v", call.Name, err)), err, true
+		// A tool may return a shaped result together with an error: bash does
+		// exactly that for a failed command, carrying the envelope (sandbox vs
+		// bare) in Details so the card can still say where it ran. Keep that
+		// metadata while replacing the content with the established error text.
+		out := errorResult(fmt.Sprintf("tool %q failed: %v", call.Name, err))
+		out.Details = res.Details
+		return out, err, true
 	}
 	// A tool may report a failure through its result instead of an error (a
 	// refused command, a patch that did not apply). Carry that flag through:

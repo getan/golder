@@ -224,6 +224,27 @@ func TestExecutorToolError(t *testing.T) {
 	}
 }
 
+// A tool that returned a shaped failure result keeps its Details when the
+// executor turns the error into a message: this is how a failed bash card
+// still gets its ·sandbox / ·unconfined marker.
+func TestExecutorToolErrorKeepsResultDetails(t *testing.T) {
+	tool := execTool{name: "fail", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent("output")},
+			Details: map[string]any{"envelope": "sandbox"},
+		}, errors.New("exit 1")
+	}}
+	cfg := newExecCfg(t, tool)
+	msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "1", Name: "fail"}, nil)
+	details, ok := msg.Details.(map[string]any)
+	if !ok || details["envelope"] != "sandbox" {
+		t.Fatalf("details = %#v, want the envelope preserved", msg.Details)
+	}
+	if !strings.Contains(textOf(msg), "failed") {
+		t.Errorf("error text = %q, want the executor's failure message", textOf(msg))
+	}
+}
+
 func TestExecutorPanicRecovered(t *testing.T) {
 	tool := execTool{name: "panic", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 		panic("oops")

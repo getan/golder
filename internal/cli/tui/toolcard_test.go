@@ -697,6 +697,15 @@ func TestShellCardShowsTheEnvelopeMarker(t *testing.T) {
 	}
 }
 
+func TestFailedShellCardKeepsTheEnvelopeMarker(t *testing.T) {
+	card := toolCard{name: "bash", input: map[string]any{"command": "make test"}, state: cardRunning}
+	card.complete(false, "tool \"bash\" failed: exit 1", map[string]any{"envelope": "sandbox"})
+	out := stripTCardANSI(card.render(DefaultTheme(), 80))
+	if !strings.Contains(out, "·sandbox") {
+		t.Fatalf("failed card = %q, want ·sandbox", out)
+	}
+}
+
 func TestReadCardShowsTheEnvelopeMarker(t *testing.T) {
 	card := toolCard{name: "read", input: map[string]any{"path": "a.go"}, state: cardSuccess}
 	card.complete(true, "package a", map[string]any{"envelope": "sandbox"})
