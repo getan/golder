@@ -91,12 +91,15 @@ func (s *Session) Start(id string, resumeArgv []string) {
 	if s == nil {
 		return
 	}
-	s.Conversation(id, resumeArgv)
 	s.mu.Lock()
 	s.turn = false
 	s.open = 0
 	s.mu.Unlock()
-	s.rep.State(StateIdle, KindNone, "")
+	if !ValidSessionID(id) {
+		s.rep.State(StateIdle, KindNone, "")
+		return
+	}
+	s.rep.SessionState(id, resumeArgv, StateIdle, KindNone, "")
 }
 
 // TurnStart reports that golder took a prompt and is working on it.

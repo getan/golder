@@ -271,6 +271,23 @@ func (r *Reporter) Session(id string, argv []string) {
 	r.push(func(p *pending) { p.session = &ref })
 }
 
+// SessionState records the conversation and the state in one pending batch.
+// Start used to call Session then State; under a slow scheduler the sender
+// could drain the conversation alone between the two calls, leaving a
+// session-only report before the idle state and breaking the one-report
+// contract callers observe after Start.
+func (r *Reporter) SessionState(id string, argv []string, s State, kind Kind, message string) {
+	if r == nil || r.host == nil {
+		return
+	}
+	ref := SessionRef{ID: id, ResumeArgv: append([]string(nil), argv...)}
+	rep := Report{State: s, Kind: kind, Message: oneLine(message)}
+	r.push(func(p *pending) {
+		p.session = &ref
+		p.state = &rep
+	})
+}
+
 // Meta reports display metadata: model, context use, a one-line summary of the
 // task. A host without a field for it ignores the call.
 func (r *Reporter) Meta(kv map[string]string) {
