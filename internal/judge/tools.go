@@ -121,6 +121,14 @@ var tools = map[string]toolInfo{
 	// same, because ending a goal is a decision worth a second opinion.
 	"goal_complete": {readOnly: true},
 	"goal_blocked":  {readOnly: true},
+
+	// tuios pane tools. The read-only three may run under /permissions
+	// read-only; run/new/focus/close mutate the session or a pane and do not.
+	"tuios_list_windows": {readOnly: true},
+	"tuios_capture_pane": {readOnly: true},
+	"tuios_wait_for":     {readOnly: true},
+	"tuios_run":          {},
+	"tuios_window":       {},
 }
 
 // toolLookup normalizes a tool name and returns its entry.

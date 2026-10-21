@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 )
 
 // ToolPolicy is the user-declared tool boundary for a run: the --allowed-tools
@@ -210,5 +211,6 @@ func nameSet(names []string) map[string]struct{} {
 // model could dispatch a sub-agent and run bash there instead. Any future spawn
 // path must route through here for the same reason.
 func ChildToolSet(cwd string, policy ToolPolicy) []agentcore.AgentTool {
-	return ApplyToolPolicy(BuiltinToolsExcept(cwd, false, "task"), policy)
+	except := append([]string{"task"}, agenttool.TuiosParentOnlyToolNames()...)
+	return ApplyToolPolicy(BuiltinToolsExcept(cwd, false, except...), policy)
 }

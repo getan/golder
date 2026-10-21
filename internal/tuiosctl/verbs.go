@@ -1,0 +1,268 @@
+package tuiosctl
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Window is the compact pane description the tools expose. The daemon sends
+// more fields; only what a caller can act on is kept.
+type Window struct {
+	WindowID      string `json:"window_id"`
+	Title         string `json:"title"`
+	DisplayName   string `json:"display_name"`
+	Workspace     int    `json:"workspace"`
+	Focused       bool   `json:"focused"`
+	Width         int    `json:"width"`
+	Height        int    `json:"height"`
+	ForegroundCmd string `json:"foreground_cmd"`
+	AgentState    string `json:"agent_state"`
+	HistoryRows   int    `json:"history_rows"`
+	Revision      uint64 `json:"revision"`
+}
+
+// WindowList is one session's panes across every workspace.
+type WindowList struct {
+	Type             string   `json:"type"`
+	Total            int      `json:"total"`
+	FocusedWindowID  string   `json:"focused_window_id"`
+	CurrentWorkspace int      `json:"current_workspace"`
+	Windows          []Window `json:"windows"`
+}
+
+// ListWindows returns every pane in the caller's session.
+func (c *Client) ListWindows(ctx context.Context) (WindowList, error) {
+	var out WindowList
+	err := c.CallInto(ctx, "list-windows", map[string]any{"session": c.opts.Session}, &out)
+	return out, err
+}
+
+// GetWindow returns one pane by exact id or name. The tools use it to validate
+// a destructive target before acting.
+func (c *Client) GetWindow(ctx context.Context, window string) (Window, error) {
+	var out Window
+	err := c.CallInto(ctx, "get-window", map[string]any{"session": c.opts.Session, "window": window}, &out)
+	return out, err
+}
+
+// NewWindow creates a pane. command is an argv, never a shell string, so a
+// caller cannot smuggle shell syntax through this tool.
+func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowResult, error) {
+	params := map[string]any{"session": c.opts.Session}
+	if p.Name != "" {
+		params["name"] = p.Name
+	}
+	if p.Cwd != "" {
+		params["cwd"] = p.Cwd
+	}
+	if p.Workspace > 0 {
+		params["workspace"] = p.Workspace
+	}
+	if len(p.Command) > 0 {
+		params["command"] = p.Command
+	}
+	params["focus"] = p.Focus
+	params["close_on_exit"] = p.CloseOnExit
+	var out NewWindowResult
+	err := c.CallInto(ctx, "new-window", params, &out)
+	return out, err
+}
+
+type NewWindowParams struct {
+	Name        string
+	Cwd         string
+	Workspace   int
+	Command     []string
+	Focus       bool
+	CloseOnExit bool
+}
+
+type NewWindowResult struct {
+	Type     string `json:"type"`
+	WindowID string `json:"window_id"`
+	Name     string `json:"name"`
+}
+
+// FocusWindow moves focus to an exact window.
+func (c *Client) FocusWindow(ctx context.Context, window string) (string, error) {
+	var out struct {
+		FocusedWindowID string `json:"focused_window_id"`
+	}
+	err := c.CallInto(ctx, "focus-window", map[string]any{"session": c.opts.Session, "window": window}, &out)
+	if err != nil {
+		return "", err
+	}
+	return out.FocusedWindowID, nil
+}
+
+// CloseWindow closes an exact window. The tool layer guards the caller's own
+// pane; this method itself only forwards the id.
+func (c *Client) CloseWindow(ctx context.Context, window string) error {
+	_, err := c.Call(ctx, "close-window", map[string]any{"session": c.opts.Session, "window": window})
+	return err
+}
+
+// SendText writes literal text to a pane. submit adds the Enter path the
+// daemon uses for a harness prompt; a plain shell command should include a
+// trailing newline instead.
+func (c *Client) SendText(ctx context.Context, window, text string, submit bool) error {
+	params := map[string]any{"session": c.opts.Session, "text": text}
+	if window != "" {
+		params["window"] = window
+	}
+	if submit {
+		params["submit"] = true
+	}
+	_, err := c.Call(ctx, "send-text", params)
+	return err
+}
+
+// RunResult is one shell command's answer. Output is plain text from the
+// pane's OSC 133 command region.
+type RunResult struct {
+	Type       string `json:"type"`
+	Session    string `json:"session"`
+	Window     string `json:"window"`
+	Cmdline    string `json:"cmdline"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	CommandSeq uint64 `json:"command_seq"`
+	Output     string `json:"output"`
+	Truncated  bool   `json:"truncated"`
+}
+
+// Run types one command at a shell prompt, waits for its OSC 133 finish mark,
+// and returns its output. It is the no-poll path for "run and give me the
+// result".
+func (c *Client) Run(ctx context.Context, window, command string, timeout time.Duration, lines int) (RunResult, error) {
+	params := map[string]any{"session": c.opts.Session, "command": command}
+	if window != "" {
+		params["window"] = window
+	}
+	if timeout > 0 {
+		params["timeout"] = timeout.Milliseconds()
+	}
+	if lines > 0 {
+		params["lines"] = lines
+	}
+	var out RunResult
+	callCtx, cancel := withCallTimeout(ctx, timeout)
+	defer cancel()
+	err := c.CallInto(callCtx, "run", params, &out)
+	return out, err
+}
+
+// Capture is a pane snapshot. It is never used as a polling loop; callers use
+// WaitFor for that.
+type Capture struct {
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	Content     string `json:"content"`
+	HistoryRows int    `json:"history_rows"`
+	Revision    uint64 `json:"revision"`
+	BootID      string `json:"boot_id"`
+}
+
+// CapturePane takes one snapshot of a pane's visible content or recent
+// scrollback.
+func (c *Client) CapturePane(ctx context.Context, window, source string, lines int, styled bool) (Capture, error) {
+	params := map[string]any{"session": c.opts.Session}
+	if window != "" {
+		params["window"] = window
+	}
+	if source != "" {
+		params["source"] = source
+	}
+	if lines > 0 {
+		params["lines"] = lines
+	}
+	if styled {
+		params["styled"] = true
+	}
+	var out Capture
+	err := c.CallInto(ctx, "capture-pane", params, &out)
+	return out, err
+}
+
+// WaitResult is the successful answer to wait-for.
+type WaitResult struct {
+	Type       string `json:"type"`
+	Condition  string `json:"condition"`
+	Matched    bool   `json:"matched"`
+	Window     string `json:"window"`
+	Pattern    string `json:"pattern"`
+	State      string `json:"state"`
+	Cmdline    string `json:"cmdline"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	CommandSeq uint64 `json:"command_seq"`
+}
+
+// WaitParams selects one wait-for condition. It is deliberately a struct, not
+// a verb+params map: the tool schema and the daemon params stay one shape.
+type WaitParams struct {
+	Condition  string
+	Window     string
+	Pattern    string
+	Idle       time.Duration
+	Until      []string
+	CommandSeq uint64
+	Timeout    time.Duration
+}
+
+// WaitFor blocks on the daemon's event hub and returns as soon as the
+// condition matches. A daemon timeout is returned as a *Error with code
+// "timeout"; the tool turns that into a structured result for the model.
+func (c *Client) WaitFor(ctx context.Context, p WaitParams) (WaitResult, error) {
+	if p.Condition == "" {
+		return WaitResult{}, errors.New("tuios: wait condition is required")
+	}
+	params := map[string]any{"session": c.opts.Session, "condition": p.Condition}
+	if p.Window != "" {
+		params["window"] = p.Window
+	}
+	if p.Pattern != "" {
+		params["pattern"] = p.Pattern
+	}
+	if p.Idle > 0 {
+		params["idle"] = p.Idle.Milliseconds()
+	}
+	if len(p.Until) > 0 {
+		params["until"] = strings.Join(p.Until, ",")
+	}
+	if p.CommandSeq > 0 {
+		params["command_seq"] = p.CommandSeq
+	}
+	if p.Timeout > 0 {
+		params["timeout"] = p.Timeout.Milliseconds()
+	}
+	var out WaitResult
+	callCtx, cancel := withCallTimeout(ctx, p.Timeout)
+	defer cancel()
+	err := c.CallInto(callCtx, "wait-for", params, &out)
+	return out, err
+}
+
+func withCallTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	// A little slack lets the daemon's own timeout error arrive before the
+	// transport deadline, so the caller can distinguish timeout from a broken
+	// connection.
+	return context.WithTimeout(ctx, timeout+5*time.Second)
+}
+
+// Decode is for tests that need a typed result from a raw fixture.
+func Decode[T any](raw json.RawMessage) (T, error) {
+	var out T
+	err := json.Unmarshal(raw, &out)
+	if err != nil {
+		return out, fmt.Errorf("tuios: decode result: %w", err)
+	}
+	return out, nil
+}

@@ -339,6 +339,9 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		&agenttool.WebFetchTool{},
 		&agenttool.WebSearchTool{},
 	}
+	if agenttool.TuiosAvailable() {
+		tools = append(tools, agenttool.TuiosTools(cwd)...)
+	}
 	// Grade bash at the execution layer (sandbox-tier verdicts run under
 	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.
 	WireBashSandbox(tools, cwd)

@@ -108,7 +108,10 @@ func NewReviewer(model, providerName string, prov provider.Provider, creds *prov
 		check = ReviewCheck(model, providerName, provider.StreamFnFromProvider(prov), creds, sessionID)
 	}
 	llm := judge.NewLLMJudge(check, cwd, trusted)
-	return judge.Chain{Inner: routineGrader(llm, creds, cwd)}
+	// FirstParty runs before JEV/local: a fixed, closed set of golder tools is
+	// settled by meaning (a pane read is a read, a pane command is a shell
+	// command), while everything else keeps the normal routine grader.
+	return judge.Chain{Inner: judge.FirstParty{Next: routineGrader(llm, creds, cwd)}}
 }
 
 // routineGrader picks the layer that settles routine calls for this run: the

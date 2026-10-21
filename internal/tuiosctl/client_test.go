@@ -1,0 +1,127 @@
+package tuiosctl
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// fakeDaemon starts a Unix socket that answers one JSON line per request.
+func fakeDaemon(t *testing.T, answer func(verb string, params map[string]any) any) string {
+	t.Helper()
+	// Keep the path short: macOS caps Unix socket paths at 104 bytes, and a
+	// t.TempDir path is longer than that.
+	sock := filepath.Join("/tmp", fmt.Sprintf("golder-tuios-%d.sock", time.Now().UnixNano()))
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close(); _ = os.Remove(sock) })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go serveFake(t, conn, answer)
+		}
+	}()
+	return sock
+}
+
+func serveFake(t *testing.T, conn net.Conn, answer func(string, map[string]any) any) {
+	defer conn.Close()
+	sc := bufio.NewScanner(conn)
+	sc.Buffer(make([]byte, 64<<10), maxLineBytes)
+	for sc.Scan() {
+		var req struct {
+			ID     int            `json:"id"`
+			Verb   string         `json:"verb"`
+			Params map[string]any `json:"params"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &req); err != nil {
+			return
+		}
+		res := answer(req.Verb, req.Params)
+		resp := map[string]any{"id": req.ID}
+		if e, ok := res.(*Error); ok {
+			resp["error"] = e
+		} else {
+			resp["result"] = res
+		}
+		b, _ := json.Marshal(resp)
+		_, _ = conn.Write(append(b, '\n'))
+	}
+}
+
+func TestClientListWindowsAndRequestIDs(t *testing.T) {
+	var verbs []string
+	sock := fakeDaemon(t, func(verb string, params map[string]any) any {
+		verbs = append(verbs, verb)
+		if verb == "hello" {
+			return map[string]any{"type": "hello", "protocol": 1}
+		}
+		if params["session"] != "work" {
+			t.Errorf("session = %v, want work", params["session"])
+		}
+		return map[string]any{
+			"type": "window_list", "total": 1, "focused_window_id": "w1",
+			"windows": []map[string]any{{"window_id": "w1", "display_name": "golder", "focused": true}},
+		}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work", Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	wl, err := c.ListWindows(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wl.FocusedWindowID != "w1" || len(wl.Windows) != 1 {
+		t.Fatalf("list = %+v", wl)
+	}
+	if len(verbs) != 2 || verbs[0] != "hello" || verbs[1] != "list-windows" {
+		t.Fatalf("verbs = %v", verbs)
+	}
+}
+
+func TestClientWaitTimeout(t *testing.T) {
+	sock := fakeDaemon(t, func(verb string, _ map[string]any) any {
+		if verb == "hello" {
+			return map[string]any{"type": "hello"}
+		}
+		return &Error{Code: "timeout", Message: "no output"}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, err = c.WaitFor(context.Background(), WaitParams{
+		Condition: "window-output", Window: "w1", Pattern: "PASS", Timeout: 100 * time.Millisecond,
+	})
+	var de *Error
+	if !errors.As(err, &de) || de.Code != "timeout" {
+		t.Fatalf("wait err = %v, want timeout", err)
+	}
+}
+
+func TestFromEnv(t *testing.T) {
+	t.Setenv(EnvSocket, "/tmp/t.sock")
+	t.Setenv(EnvSession, "work")
+	t.Setenv(EnvPaneID, "w1")
+	t.Setenv(EnvPaneToken, "proof")
+	o := FromEnv()
+	if o.Socket != "/tmp/t.sock" || o.Session != "work" || o.PaneID != "w1" || o.Proof != "proof" {
+		t.Fatalf("opts = %+v", o)
+	}
+}

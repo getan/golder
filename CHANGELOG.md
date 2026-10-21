@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **tuios pane tools**: `tuios_list_windows`, `tuios_capture_pane`,
+  `tuios_wait_for`, `tuios_run`, and `tuios_window` are registered only inside
+  a tuios pane. They bind to the caller's session, cover existing panes as well
+  as new ones, and use tuios' event-driven `wait-for` instead of
+  `capture-pane` polling. Read-only tools take the local fast path
+  (`tuios_run` is graded as a shell command). Sub-agents inherit the read-only
+  three but not `tuios_run`/`tuios_window`, which mutate shared pane state.
 - **Verdict source is visible in the approval line**: `via local`, `via jev`,
   `via llm` or `via static` sits beside the mode and grade, and the same source
   is carried into notes and stdin prompts. No more inferring the judge from the
