@@ -172,8 +172,12 @@ func parseAdd(lines []string, i int) (Op, int, error) {
 	op := Op{Kind: OpAdd, Path: path}
 	i++
 	for i < len(lines) {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == endMarker || isSectionHeader(trimmed) {
+		raw := lines[i]
+		trimmed := strings.TrimSpace(raw)
+		// A section marker only counts when it is the whole line. A "+" line
+		// whose CONTENT looks like "*** Update File: nested.go" is data, not a
+		// new operation; models write such markers inside tests and docs.
+		if strings.HasPrefix(raw, "***") && (trimmed == endMarker || isSectionHeader(trimmed)) {
 			break
 		}
 		if trimmed == "" {
@@ -249,12 +253,13 @@ func parseUpdate(lines []string, i int) (Op, int, error) {
 				i++
 				continue
 			}
-			if strings.TrimSpace(raw) == eofMarker {
+			if strings.HasPrefix(raw, "***") && strings.TrimSpace(raw) == eofMarker {
 				chunk.EOF = true
 				i++
 				break
 			}
-			if isSectionHeader(strings.TrimSpace(raw)) || strings.TrimSpace(raw) == endMarker {
+			if strings.HasPrefix(raw, "***") &&
+				(isSectionHeader(strings.TrimSpace(raw)) || strings.TrimSpace(raw) == endMarker) {
 				break
 			}
 			if strings.HasPrefix(strings.TrimRight(raw, " \t"), hunkPrefix) {

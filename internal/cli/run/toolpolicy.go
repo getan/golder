@@ -211,6 +211,13 @@ func nameSet(names []string) map[string]struct{} {
 // model could dispatch a sub-agent and run bash there instead. Any future spawn
 // path must route through here for the same reason.
 func ChildToolSet(cwd string, policy ToolPolicy) []agentcore.AgentTool {
-	except := append([]string{"task"}, agenttool.TuiosParentOnlyToolNames()...)
-	return ApplyToolPolicy(BuiltinToolsExcept(cwd, false, except...), policy)
+	tools := BuiltinToolsExcept(cwd, false, "task")
+	// The child sees the same facade name and the same session, but only the
+	// read-only action set. Control actions mutate the person's shared panes.
+	for i, tool := range tools {
+		if tool.Name() == "tuios" {
+			tools[i] = agenttool.NewTuiosTool(cwd, false)
+		}
+	}
+	return ApplyToolPolicy(tools, policy)
 }

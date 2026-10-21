@@ -12,13 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
-- **tuios pane tools**: `tuios_list_windows`, `tuios_capture_pane`,
-  `tuios_wait_for`, `tuios_run`, and `tuios_window` are registered only inside
-  a tuios pane. They bind to the caller's session, cover existing panes as well
-  as new ones, and use tuios' event-driven `wait-for` instead of
-  `capture-pane` polling. Read-only tools take the local fast path
-  (`tuios_run` is graded as a shell command). Sub-agents inherit the read-only
-  three but not `tuios_run`/`tuios_window`, which mutate shared pane state.
+- **A single `tuios` facade**: one tool with fixed actions (`list`, `capture`,
+  `wait`, `run`, `new`, `focus`, `close`) replaces five near-identical tools.
+  It is registered only inside a tuios pane, binds to the caller's session, and
+  covers existing panes as well as new ones. Waits use tuios' event-driven
+  `wait-for` instead of `capture-pane` polling; `run` is graded as a shell
+  command. Sub-agents get a read-only schema (`list`/`capture`/`wait`) so they
+  cannot type into shared panes or steal focus by default.
 - **Verdict source is visible in the approval line**: `via local`, `via jev`,
   `via llm` or `via static` sits beside the mode and grade, and the same source
   is carried into notes and stdin prompts. No more inferring the judge from the
@@ -1566,6 +1566,13 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **`apply_patch` tolerates aligned whitespace and marker-like content**:
+  context lines whose internal whitespace runs differ from the file (models
+  often align struct fields or columns) now match on a final loose pass while
+  the file's original text is preserved. Added lines that begin with `***`
+  (tests or docs containing `*** Begin Patch` / `*** Update File:`) are data,
+  not new file sections; the parser no longer splits one operation into a
+  bogus nested file.
 - **The model is told which sandbox envelope its command actually ran in**: a
   `sandbox_permissions="require_escalated"` request is a request, and under auto
   the gate can allow the call while re-containing it (judge's

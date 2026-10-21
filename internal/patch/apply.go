@@ -422,7 +422,7 @@ func uniqueMatch(lines, pattern []string) (int, bool) {
 	if len(pattern) == 0 || len(pattern) > len(lines) {
 		return 0, false
 	}
-	for _, pass := range []matchPass{matchExact, matchNormalized} {
+	for _, pass := range []matchPass{matchExact, matchNormalized, matchWhitespace} {
 		count, at := 0, 0
 		for i := 0; i+len(pattern) <= len(lines); i++ {
 			if equalLines(lines[i:i+len(pattern)], pattern, pass) {
@@ -456,7 +456,7 @@ func hunkDiagnostic(lines, old []string) string {
 	for start := 0; start+len(old) <= len(lines); start++ {
 		hits := 0
 		for j := range old {
-			if equalLine(lines[start+j], old[j], matchNormalized) {
+			if equalLine(lines[start+j], old[j], matchWhitespace) {
 				hits++
 			}
 		}
@@ -472,7 +472,7 @@ func hunkDiagnostic(lines, old []string) string {
 		return "; no line in the file matches the hunk's context; re-read the file and resend"
 	}
 	for j := range old {
-		if equalLine(lines[bestAt+j], old[j], matchNormalized) {
+		if equalLine(lines[bestAt+j], old[j], matchWhitespace) {
 			continue
 		}
 		var b strings.Builder

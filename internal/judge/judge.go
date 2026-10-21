@@ -616,7 +616,7 @@ func PermissionGate(state *permissions.State, opts GateOpts) agentcore.BeforeToo
 			}
 			return nil
 		case permissions.ReadOnly:
-			if readOnlyAllowed(call.Name) {
+			if readOnlyAllowedCall(call.Name, call.Arguments) {
 				return nil
 			}
 			notify(Note{

@@ -122,13 +122,9 @@ var tools = map[string]toolInfo{
 	"goal_complete": {readOnly: true},
 	"goal_blocked":  {readOnly: true},
 
-	// tuios pane tools. The read-only three may run under /permissions
-	// read-only; run/new/focus/close mutate the session or a pane and do not.
-	"tuios_list_windows": {readOnly: true},
-	"tuios_capture_pane": {readOnly: true},
-	"tuios_wait_for":     {readOnly: true},
-	"tuios_run":          {},
-	"tuios_window":       {},
+	// The tuios facade decides read-only by ACTION, not by tool name; see
+	// readOnlyAllowedCall. The zero entry keeps the name known to the table.
+	"tuios": {},
 }
 
 // toolLookup normalizes a tool name and returns its entry.
@@ -144,6 +140,26 @@ func toolLookup(name string) (toolInfo, bool) {
 func readOnlyAllowed(name string) bool {
 	t, ok := toolLookup(name)
 	return ok && t.readOnly
+}
+
+// readOnlyAllowedCall is the action-aware form. The tuios facade carries both
+// read and control actions, so /permissions read-only must inspect its action
+// instead of treating the whole tool as writable.
+func readOnlyAllowedCall(name string, args json.RawMessage) bool {
+	if strings.EqualFold(strings.TrimSpace(name), "tuios") {
+		var a struct {
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return false
+		}
+		switch strings.ToLower(strings.TrimSpace(a.Action)) {
+		case "list", "capture", "wait":
+			return true
+		}
+		return false
+	}
+	return readOnlyAllowed(name)
 }
 
 // shellTool reports whether the tool's paths come from a command line.

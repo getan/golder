@@ -61,6 +61,34 @@ func TestApplyPatchIgnoresUnknownArguments(t *testing.T) {
 	}
 }
 
+// A file whose content contains apply_patch markers must be addable. Before
+// this test, the parser split "+*** Update File:" into a new operation and the
+// tool reported a nonexistent nested file.
+func TestApplyPatchCanAddMarkerText(t *testing.T) {
+	dir := t.TempDir()
+	tool := &ApplyPatchTool{Root: dir, Snap: NewFileSnapshotRecorder()}
+	text := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Add File: markers.md",
+		"+*** Begin Patch",
+		"+*** Update File: nested.go",
+		"+*** End Patch",
+		"*** End Patch",
+		"",
+	}, "\n")
+	res := runPatch(t, tool, text)
+	if res.IsError {
+		t.Fatalf("marker text refused: %s", agentcore.ContentToText(res.Content))
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "markers.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "*** Begin Patch\n*** Update File: nested.go\n*** End Patch\n" {
+		t.Fatalf("file = %q", got)
+	}
+}
+
 // TestApplyPatchToolAllOps drives one patch that adds, updates, moves, and
 // deletes files, then verifies the tree, the summary, the diff metadata, and
 // the /rewind snapshots.

@@ -9,7 +9,7 @@ func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 	t.Setenv("TUIOS_SOCKET", "")
 	t.Setenv("TUIOS_SESSION", "")
 	for _, tool := range BuiltinTools(t.TempDir(), false) {
-		if strings.HasPrefix(tool.Name(), "tuios_") {
+		if tool.Name() == "tuios" {
 			t.Fatalf("tuios tool advertised outside tuios: %s", tool.Name())
 		}
 	}
@@ -18,7 +18,7 @@ func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 	t.Setenv("TUIOS_SESSION", "work")
 	found := false
 	for _, tool := range BuiltinTools(t.TempDir(), false) {
-		if tool.Name() == "tuios_run" {
+		if tool.Name() == "tuios" {
 			found = true
 		}
 	}
@@ -32,17 +32,16 @@ func TestChildToolSetKeepsTuiosReadsButNotPaneWrites(t *testing.T) {
 	t.Setenv("TUIOS_SESSION", "work")
 	read, write := false, false
 	for _, tool := range ChildToolSet(t.TempDir(), ToolPolicy{}) {
-		switch tool.Name() {
-		case "tuios_list_windows", "tuios_capture_pane", "tuios_wait_for":
-			read = true
-		case "tuios_run", "tuios_window":
-			write = true
+		if tool.Name() != "tuios" {
+			continue
 		}
+		read = strings.Contains(string(tool.Schema()), `"capture"`)
+		write = strings.Contains(string(tool.Schema()), `"run"`)
 	}
 	if !read {
-		t.Fatal("child should inherit tuios read tools")
+		t.Fatal("child should inherit tuios read actions")
 	}
 	if write {
-		t.Fatal("child must not inherit tuios_run/tuios_window by default")
+		t.Fatal("child schema must not advertise control actions")
 	}
 }

@@ -166,10 +166,19 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			return dec
 		}
 
+		if mode == permissions.ReadOnly && !readOnlyAllowedCall(call.Name, call.Arguments) {
+			notify(Note{
+				Tool: call.Name, ToolCallID: call.ID, Kind: NoteReadOnly, Level: Deny, Lang: lang,
+				Summary:   riskSummary(call),
+				Rationale: localized(lang, "只读档位只允许工作区内读取", "read-only permits in-workspace reads only"),
+			})
+			return blockCall(call, Verdict{Level: Deny, Source: "static", Reasons: []string{"read-only permissions mode"}},
+				"switch with /permissions ask|auto|full-access to allow mutating tools")
+		}
 		v := classifyForGate(ctx, ConsentGateOptsToGate(opts), call)
 		if mode == permissions.ReadOnly {
 			needs := collectNeeds(ctx, opts, call, v, mode, lang)
-			if !readOnlyAllowed(call.Name) || len(needs) > 0 {
+			if len(needs) > 0 {
 				notify(Note{
 					Tool: call.Name, ToolCallID: call.ID, Kind: NoteReadOnly, Level: Deny, Lang: lang,
 					Summary:   riskSummary(call),

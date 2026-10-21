@@ -118,22 +118,16 @@ func useTuiosFake(t *testing.T, sock string) {
 	t.Setenv("TUIOS_PANE_ID", "w1")
 }
 
-func tuiosToolByName(t *testing.T, name string) agentcore.AgentTool {
+func newTuiosTool(t *testing.T, allowControl bool) agentcore.AgentTool {
 	t.Helper()
-	for _, tool := range TuiosTools(t.TempDir()) {
-		if tool.Name() == name {
-			return tool
-		}
-	}
-	t.Fatalf("tool %s not found", name)
-	return nil
+	return NewTuiosTool(t.TempDir(), allowControl)
 }
 
 func TestTuiosRunUsesEventWaitForExpect(t *testing.T) {
 	f, sock := startTuiosFake(t)
 	useTuiosFake(t, sock)
-	tool := tuiosToolByName(t, "tuios_run")
-	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"window":"w2","command":"make","expect":"WANT"}`), nil)
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"run","window":"w2","command":"make","expect":"WANT"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +149,8 @@ func TestTuiosRunUsesEventWaitForExpect(t *testing.T) {
 func TestTuiosListCoversExistingPanes(t *testing.T) {
 	_, sock := startTuiosFake(t)
 	useTuiosFake(t, sock)
-	tool := tuiosToolByName(t, "tuios_list_windows")
-	res, err := tool.Execute(context.Background(), "1", nil, nil)
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"list"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +163,7 @@ func TestTuiosListCoversExistingPanes(t *testing.T) {
 func TestTuiosWindowRefusesOwnPane(t *testing.T) {
 	f, sock := startTuiosFake(t)
 	useTuiosFake(t, sock)
-	tool := tuiosToolByName(t, "tuios_window")
+	tool := newTuiosTool(t, true)
 	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"close","window":"w1"}`), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -179,5 +173,21 @@ func TestTuiosWindowRefusesOwnPane(t *testing.T) {
 	}
 	if f.seen("close-window") {
 		t.Error("close-window must not be sent for golder's own pane")
+	}
+}
+
+func TestTuiosChildFacadeIsReadOnly(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := newTuiosTool(t, false)
+	if strings.Contains(string(tool.Schema()), `"run"`) {
+		t.Fatalf("child schema advertises control actions: %s", tool.Schema())
+	}
+	res, _ := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"run","command":"echo hi"}`), nil)
+	if !res.IsError {
+		t.Fatalf("child control action = %s, want refusal", agentcore.ContentToText(res.Content))
+	}
+	if f.seen("run") {
+		t.Error("child control action reached the daemon")
 	}
 }

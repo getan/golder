@@ -19,34 +19,32 @@ type FirstParty struct {
 
 func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
 	switch tool {
-	case "tuios_list_windows", "tuios_capture_pane", "tuios_wait_for":
-		return Verdict{
-			Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-			Reasons: []string{"tuios read-only tool"},
-		}
-	case "tuios_run":
-		var a struct {
-			Command string `json:"command"`
-		}
-		if err := json.Unmarshal(args, &a); err != nil || strings.TrimSpace(a.Command) == "" {
-			return f.failClosed("tuios_run has no command")
-		}
-		return f.classifyShell(ctx, a.Command)
-	case "tuios_window":
+	case "tuios":
 		var a struct {
 			Action  string   `json:"action"`
-			Command []string `json:"command"`
+			Command string   `json:"command"`
+			Argv    []string `json:"argv"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
-			return f.failClosed("tuios_window has no action")
+			return f.failClosed("tuios has no action")
 		}
 		switch a.Action {
+		case "list", "capture", "wait":
+			return Verdict{
+				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"tuios read-only action"},
+			}
+		case "run":
+			if strings.TrimSpace(a.Command) == "" {
+				return f.failClosed("tuios run has no command")
+			}
+			return f.classifyShell(ctx, a.Command)
 		case "new":
-			if len(a.Command) == 0 {
+			if len(a.Argv) == 0 {
 				return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
 					Reasons: []string{"opening a shell pane"}}
 			}
-			return f.classifyShell(ctx, strings.Join(a.Command, " "))
+			return f.classifyShell(ctx, strings.Join(a.Argv, " "))
 		case "focus":
 			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"focusing an existing pane"}}
@@ -55,7 +53,7 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			// contextual reviewer rather than a fixed local allow.
 			return f.next(ctx, tool, args)
 		}
-		return f.failClosed("unknown tuios_window action")
+		return f.failClosed("unknown tuios action")
 	}
 	return f.next(ctx, tool, args)
 }

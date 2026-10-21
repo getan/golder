@@ -340,7 +340,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 		&agenttool.WebSearchTool{},
 	}
 	if agenttool.TuiosAvailable() {
-		tools = append(tools, agenttool.TuiosTools(cwd)...)
+		tools = append(tools, agenttool.NewTuiosTool(cwd, true))
 	}
 	// Grade bash at the execution layer (sandbox-tier verdicts run under
 	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.

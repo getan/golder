@@ -47,7 +47,7 @@ func seekSequence(lines, pattern []string, start int, eof bool) (int, bool) {
 			return at, true
 		}
 	}
-	for pass := matchExact; pass <= matchNormalized; pass++ {
+	for pass := matchExact; pass <= matchWhitespace; pass++ {
 		for i := start; i <= maxStart; i++ {
 			if equalLines(lines[i:i+len(pattern)], pattern, pass) {
 				return i, true
@@ -65,6 +65,10 @@ const (
 	matchTrimRight
 	matchTrimSpace
 	matchNormalized
+	// matchWhitespace also collapses runs of internal spaces. A model often
+	// aligns struct fields or table columns in a hunk while the file uses one
+	// space; that is a whitespace-only difference, not a stale context.
+	matchWhitespace
 )
 
 // equalLines compares two equal-length line sequences at the given strictness.
@@ -86,9 +90,15 @@ func equalLine(got, want string, pass matchPass) bool {
 		return strings.TrimRight(got, " \t") == strings.TrimRight(want, " \t")
 	case matchTrimSpace:
 		return strings.TrimSpace(got) == strings.TrimSpace(want)
+	case matchWhitespace:
+		return collapseWhitespace(got) == collapseWhitespace(want)
 	default:
 		return normalizePunctuation(got) == normalizePunctuation(want)
 	}
+}
+
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // punctuationNorm maps typographic punctuation to its ASCII equivalent so a
