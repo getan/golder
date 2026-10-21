@@ -112,6 +112,7 @@ const tuiosControlSchema = `{
     "command":{"type":"string","description":"For run: one shell command line; newlines/control characters are rejected."},
     "text":{"type":"string","description":"For send: literal text written to the pane."},
     "submit":{"type":"boolean","description":"For send: submit the text with Enter after a short paste wait."},
+    "paste":{"type":"boolean","description":"For send: send as a paste so multi-line text is not executed line by line."},
     "expect":{"type":"string","description":"For run: return as soon as pane output matches this RE2 regex."},
     "name":{"type":"string","description":"For new: pane name; for rename: new pane name."},
     "cwd":{"type":"string","description":"For new: pane cwd; defaults to the golder workspace."},
@@ -140,6 +141,7 @@ type tuiosArgs struct {
 	Command     string   `json:"command,omitempty"`
 	Text        string   `json:"text,omitempty"`
 	Submit      bool     `json:"submit,omitempty"`
+	Paste       bool     `json:"paste,omitempty"`
 	Expect      string   `json:"expect,omitempty"`
 	Name        string   `json:"name,omitempty"`
 	Cwd         string   `json:"cwd,omitempty"`
@@ -518,11 +520,16 @@ func (t *TuiosTool) send(ctx context.Context, a tuiosArgs) (agentcore.AgentToolR
 	if err != nil {
 		return tuiosError(err), nil
 	}
-	if err := c.SendText(ctx, window, a.Text, a.Submit); err != nil {
+	if a.Paste {
+		err = c.PasteText(ctx, window, a.Text, a.Submit)
+	} else {
+		err = c.SendText(ctx, window, a.Text, a.Submit)
+	}
+	if err != nil {
 		return tuiosError(err), nil
 	}
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(
-		tuiosJSON(map[string]any{"sent": true, "window": window, "submit": a.Submit}))}}, nil
+		tuiosJSON(map[string]any{"sent": true, "window": window, "submit": a.Submit, "paste": a.Paste}))}}, nil
 }
 
 func validateRun(a tuiosArgs) error {

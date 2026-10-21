@@ -186,12 +186,25 @@ func (c *Client) CloseWindow(ctx context.Context, window string) error {
 // daemon uses for a harness prompt; a plain shell command should include a
 // trailing newline instead.
 func (c *Client) SendText(ctx context.Context, window, text string, submit bool) error {
+	return c.sendText(ctx, window, text, submit, false)
+}
+
+// PasteText sends text as a paste, so a multi-line payload is not executed
+// line by line by the receiving shell. submit presses Enter after the paste.
+func (c *Client) PasteText(ctx context.Context, window, text string, submit bool) error {
+	return c.sendText(ctx, window, text, submit, true)
+}
+
+func (c *Client) sendText(ctx context.Context, window, text string, submit, paste bool) error {
 	params := map[string]any{"session": c.opts.Session, "text": text}
 	if window != "" {
 		params["window"] = window
 	}
 	if submit {
 		params["submit"] = true
+	}
+	if paste {
+		params["paste"] = true
 	}
 	_, err := c.Call(ctx, "send-text", params)
 	return err

@@ -53,8 +53,10 @@ snapshot; it is never a poll loop.
 
 `action=send` writes text into an already-running program without waiting for
 the command-finished mark. Set `submit:true` to press Enter after a short paste
-wait; this is what a REPL or a yes/no prompt needs. Use `run` when the input is
-a complete shell command and you want its exit status and output.
+wait; this is what a REPL or a yes/no prompt needs. Set `paste:true` for a
+multi-line payload so the receiving shell does not execute each line as it
+arrives. Use `run` when the input is a complete shell command and you want its
+exit status and output.
 
 ## Existing panes
 

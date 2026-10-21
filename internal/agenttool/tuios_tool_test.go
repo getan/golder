@@ -205,7 +205,7 @@ func TestTuiosSendWritesText(t *testing.T) {
 	useTuiosFake(t, sock)
 	tool := newTuiosTool(t, true)
 	res, err := tool.Execute(context.Background(), "1",
-		json.RawMessage(`{"action":"send","window":"w2","text":"yes\n","submit":true}`), nil)
+		json.RawMessage(`{"action":"send","window":"w2","text":"yes\n","submit":true,"paste":true}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
