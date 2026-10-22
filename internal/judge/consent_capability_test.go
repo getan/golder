@@ -35,16 +35,15 @@ func TestConsentAutoContainCarriesTheReviewerNetworkGrant(t *testing.T) {
 	}
 }
 
-// A reviewer that answers direct:"allow" but grades the call contain does not
-// get a contradiction in the transcript: containment is final, and the decision
-// line says the escape was refused instead of letting the rationale promise it.
+// Contain is the level that keeps the call inside the sandbox: it never grants a
+// requested escape, and the decision line says so.
 func TestConsentAutoContainRefusesTheEscape(t *testing.T) {
 	grantstest.Install(t)
 	var notes []Note
 	gate := ConsentGate(ConsentOpts{
 		Mode: permissions.New(permissions.Auto),
 		Classifier: consentClassifier{v: Verdict{
-			Level: Contain, Direct: true, Source: "llm",
+			Level: Contain, Source: "llm",
 			Reasons: []string{"递归删除难以恢复，可允许单次越过沙箱清理。"},
 		}},
 		Cwd:       t.TempDir(),
@@ -68,52 +67,15 @@ func TestConsentAutoContainRefusesTheEscape(t *testing.T) {
 	}
 }
 
-// Auto's allow/confirm authorizes the command, not a sandbox escape the
-// reviewer never granted. A refused escape blocks the call — running it bare
-// because the level happened to be confirm is how a direct:deny became an
-// escape.
-func TestConsentAutoDeniedEscapeIsBlocked(t *testing.T) {
-	grantstest.Install(t)
-	var notes []Note
-	gate := ConsentGate(ConsentOpts{
-		Mode: permissions.New(permissions.Auto),
-		Classifier: consentClassifier{v: Verdict{
-			Level: Confirm, Direct: false, Source: "llm",
-			Reasons: []string{"命令本身可以运行，但沙箱外请求没有获准。"},
-		}},
-		Cwd:       t.TempDir(),
-		Sandboxed: func(string) bool { return true },
-		Notify:    func(n Note) { notes = append(notes, n) },
-	})
-	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "deny-escape", Name: "bash",
-		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
-	if dec == nil || !dec.Block {
-		t.Fatalf("a refused escape must block, got %+v", dec)
-	}
-	if dec.Direct {
-		t.Errorf("a refused escape ran unconfined: %+v", dec)
-	}
-	if len(notes) != 1 {
-		t.Fatalf("notes = %+v, want one denial", notes)
-	}
-	if !notes[0].Escalation {
-		t.Errorf("note = %+v, want the refused escape marked", notes[0])
-	}
-	got := FormatNote(notes[0])
-	if !strings.Contains(got, "denied · the sandbox escape was not granted") {
-		t.Errorf("note = %q, want the refused escape in the decision line", got)
-	}
-}
-
-// An escape the reviewer did grant is announced as such, not as an ordinary
-// approval: the user must be able to see that the call left the sandbox.
+// A confirm level on a call that asked to escape is the escape grant. It is
+// announced as such, not as an ordinary approval.
 func TestConsentAutoApprovedEscapeIsAnnounced(t *testing.T) {
 	grantstest.Install(t)
 	var notes []Note
 	gate := ConsentGate(ConsentOpts{
 		Mode: permissions.New(permissions.Auto),
 		Classifier: consentClassifier{v: Verdict{
-			Level: Confirm, Direct: true, Source: "llm",
+			Level: Confirm, Source: "llm",
 			Reasons: []string{"本次任务创建的临时截图目录，清理范围明确。"},
 		}},
 		Cwd:       t.TempDir(),
@@ -134,8 +96,8 @@ func TestConsentAutoApprovedEscapeIsAnnounced(t *testing.T) {
 	}
 }
 
-// Enforce mode is the strictest setting: every bash call is contained, so a
-// Direct grant cannot be honored. Saying "runs OUTSIDE" while the tool forces a
+// Enforce mode is the strictest setting: every bash call is contained, so the
+// level cannot grant an escape. Saying "runs OUTSIDE" while the tool forces a
 // sandbox is a lie about the one outcome that must never be misreported.
 func TestConsentAutoEnforceContainsTheEscape(t *testing.T) {
 	grantstest.Install(t)
@@ -143,7 +105,7 @@ func TestConsentAutoEnforceContainsTheEscape(t *testing.T) {
 	gate := ConsentGate(ConsentOpts{
 		Mode:       permissions.New(permissions.Auto),
 		Enforce:    true,
-		Classifier: consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"用户要求清理"}}},
+		Classifier: consentClassifier{v: Verdict{Level: Allow, Source: "llm", Reasons: []string{"用户要求清理"}}},
 		Cwd:        t.TempDir(),
 		Sandboxed:  func(string) bool { return true },
 		Notify:     func(n Note) { notes = append(notes, n) },
@@ -200,16 +162,16 @@ func TestConsentAskEnforceDoesNotOfferEscape(t *testing.T) {
 	}
 }
 
-// RequireSandbox is the default, not a veto: an explicit one-call Direct is
-// what the tool's own route honors before it checks for a runner. Enforce is
-// the exception; it stays fail-closed.
+// RequireSandbox is the default, not a veto: an allow level authorizes the
+// one-call Direct, which the tool's route honors before it checks for a runner.
+// Enforce is the exception; it stays fail-closed.
 func TestConsentAutoDirectOverridesRequireSandboxWithoutRunner(t *testing.T) {
 	grantstest.Install(t)
 	gate := ConsentGate(ConsentOpts{
 		Mode:           permissions.New(permissions.Auto),
 		RequireSandbox: true,
 		Sandboxed:      func(string) bool { return false },
-		Classifier:     consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"用户要求这个临时目录清理"}}},
+		Classifier:     consentClassifier{v: Verdict{Level: Allow, Source: "llm", Reasons: []string{"用户要求这个临时目录清理"}}},
 		Cwd:            t.TempDir(),
 	})
 	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "direct-no-runner", Name: "bash",
@@ -222,13 +184,14 @@ func TestConsentAutoDirectOverridesRequireSandboxWithoutRunner(t *testing.T) {
 	}
 }
 
-// Without a runner and without a Direct, a bash call cannot be contained at
-// all. The failure names that, not a refused escape the call never requested.
-func TestConsentAutoNoRunnerWithoutEscapeBlocks(t *testing.T) {
+// Enforce with no runner cannot contain and cannot escape. The failure names
+// the missing sandbox, not a refused escape the call never requested.
+func TestConsentAutoEnforceWithoutRunnerBlocks(t *testing.T) {
 	grantstest.Install(t)
 	var notes []Note
 	gate := ConsentGate(ConsentOpts{
 		Mode:           permissions.New(permissions.Auto),
+		Enforce:        true,
 		RequireSandbox: true,
 		Sandboxed:      func(string) bool { return false },
 		Classifier:     consentClassifier{v: Verdict{Level: Allow, Source: "llm", Reasons: []string{"read only"}}},
@@ -249,12 +212,12 @@ func TestConsentAutoNoRunnerWithoutEscapeBlocks(t *testing.T) {
 }
 
 // Only bash has an escape request. A native tool that happens to carry the
-// sandbox_permissions argument must not inherit the bash-only Direct bit.
+// sandbox_permissions argument must not inherit the bash-only escape.
 func TestConsentAutoNativeToolCannotEscape(t *testing.T) {
 	grantstest.Install(t)
 	gate := ConsentGate(ConsentOpts{
 		Mode:       permissions.New(permissions.Auto),
-		Classifier: consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"read only"}}},
+		Classifier: consentClassifier{v: Verdict{Level: Allow, Source: "llm", Reasons: []string{"read only"}}},
 		Cwd:        t.TempDir(),
 	})
 	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "native-escape", Name: "read",

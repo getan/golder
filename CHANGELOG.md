@@ -29,11 +29,22 @@ interactive REPL/TUI.
   gate cannot keep.
 
 ### Fixed
-- **Enforce mode no longer promises an escape it will not perform**: with
-  `GOLDER_SANDBOX=enforce`, an auto allow + `direct:"allow"` still ran contained
-  (the tool forces the sandbox) but the note said `runs OUTSIDE the sandbox`.
-  The gate now clears Direct/Bare under enforce, omits the escape from the ask
-  dialog, and reports containment instead.
+- **One level is the whole approval**: the reviewer no longer answers a separate
+  `direct` field. In `auto`, `allow`/`confirm` on a `require_escalated` call is
+  the escape grant, `contain` runs it isolated and never escapes, and `deny`
+  blocks; `ask` still lets the person decide, and `GOLDER_SANDBOX=enforce`
+  contains every bash call. This removes the contradictory states
+  (`contain` + `direct:"allow"`, `confirm` + `direct:"deny"`), and the note says
+  `runs OUTSIDE the sandbox` or `contained · the sandbox escape was not granted`
+  from the level alone. JEV's separate escape question is gone too.
+- **A bounded, explicitly requested effect is graded `confirm`**: a recursive
+  delete of a task-created scratch directory, a move to a literal destination,
+  a permission change on a named tree, a git reset of the task's own work, a
+  named package install/removal, a specific process or container removal, a
+  bulk edit of named files, or a deploy to a named target — when the transcript
+  shows the user asked for exactly that and the scope is bounded, `confirm` is
+  the right grade. `contain` is for a blast radius the text and transcript do
+  not establish.
 - **bash honors a one-call write grant**: the gate published `WriteGrant`, but
   only the worker-backed native tools consumed it; a bash call granted an exact
   write path still ran with that path unwritable and fell back to a sandbox
@@ -41,29 +52,6 @@ interactive REPL/TUI.
   (a directory as a subtree), so a bounded write stays contained. Removing the
   target itself still needs its parent writable (or an explicit escape); that is
   a parent-directory permission, not a missing grant.
-- **A `contain` grade no longer carries an escape it will not grant**: a
-  reviewer that answered `direct:"allow"` beside `level:"contain"` produced a
-  note whose rationale promised a one-call sandbox escape while the call ran
-  contained and then hit `Operation not permitted`. Contain is final: the escape
-  answer is dropped, the LLM reviewer's prompt states the rule, and the decision
-  line reads `contained · the sandbox escape was not granted`. The rationale
-  gains the same clause when a reviewer's prose contradicts its grade.
-- **A sandbox escape needs its own grant again**: `auto`'s `allow`/`confirm`
-  used to run a `require_escalated` call outside the sandbox regardless of the
-  reviewer's `direct` answer, so `direct:"deny"` still escaped. Only
-  `direct:"allow"` runs unconfined now; a refused escape blocks with
-  `denied · the sandbox escape was not granted`, and an approved one is
-  announced as `runs OUTSIDE the sandbox`. The reviewer prompt also treats a
-  recursive delete of a task-created scratch directory as `confirm` when the
-  transcript establishes the exact literal path and the cleanup was asked for,
-  so a bounded effect can be granted without weakening the `contain` tier for
-  user content. More generally, the reviewer is told to prefer `confirm` over
-  `contain` when the transcript shows the user asked for exactly this effect and
-  the command's scope is bounded — not just deletes, but moves, permission
-  changes, git resets of the task's own work, package installs/removals, a
-  specific process or container removal, bulk edits of named files, and deploys
-  to a named target. `contain` is for a blast radius the text and transcript do
-  not establish.
 - **The decision-model reviewer sees the user's request**: JEV's state carried
   only the command and parsed facts, so its intent question was a guess from
   the command text. The recent user messages (user words only — not tool

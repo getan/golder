@@ -168,8 +168,7 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 	}
 
 	network := judge.NetworkRequested(tool, args)
-	direct := judge.EscalationRequested(tool, args)
-	res, err := c.Client.Evaluate(ctx, c.state(ctx, tool, args, facts), QuestionsFor(network, direct))
+	res, err := c.Client.Evaluate(ctx, c.state(ctx, tool, args, facts), QuestionsFor(network))
 	rec := CallRecord{Tool: tool}
 	if res != nil {
 		rec.Attempts = res.Attempts
@@ -188,7 +187,7 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 		rec.Latency = c.now().Sub(start)
 	}
 
-	out := Decide(Request{Facts: facts, Answers: res.Answers, Config: c.Config, Lang: lang, NetworkRequested: network, DirectRequested: direct})
+	out := Decide(Request{Facts: facts, Answers: res.Answers, Config: c.Config, Lang: lang, NetworkRequested: network})
 	if out.Route == RouteEscalate {
 		rec.Routed, rec.Escalation = "escalated", out.Escalation
 		return c.escalate(ctx, tool, args, rec, lang)
@@ -199,7 +198,6 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 	return judge.Verdict{
 		Level:   out.Level,
 		Network: out.Network,
-		Direct:  out.Direct,
 		// The level came from the judge, so it is not a static verdict.
 		Source: Source,
 		// The rationale is the sentence the user reads. It is assembled from

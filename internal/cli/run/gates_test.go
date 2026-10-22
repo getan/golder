@@ -38,7 +38,7 @@ func (allowReviewer) Classify(context.Context, string, json.RawMessage) judge.Ve
 type directReviewer struct{}
 
 func (directReviewer) Classify(context.Context, string, json.RawMessage) judge.Verdict {
-	return judge.Verdict{Level: judge.Allow, Direct: true, Reasons: []string{"the user asked for this exact one-call escape"}}
+	return judge.Verdict{Level: judge.Allow, Reasons: []string{"the user asked for this exact one-call escape"}}
 }
 
 type denyReviewer struct{}

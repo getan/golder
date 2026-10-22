@@ -56,9 +56,9 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 - 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
 - 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
 
-`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封**和 Direct**：`auto` 的 allow + `direct:"allow"`、`ask` 的“沙箱外运行”都会被强制收容，并播报实际结果；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程在非 enforce 下保持不变。
+`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封**和档位**：`auto` 的 allow/confirm + `require_escalated`、`ask` 的“沙箱外运行”都会被强制收容，并播报实际结果；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、allow/confirm 授权的越界或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `require_escalated` 的越界在非 enforce 下由档位决定。
 
-**为什么原生文件工具不需要 `require_escalated`**：它们确实也走 worker，但 worker 是**每次调用新建的沙箱**，而调用参数（或 patch 文本）已经点名了它要碰的路径。`ReadGrant`/`WriteGrant` 只是把这一条路径加进本次 worker 的 `CallPolicy`（`ReadFiles`/`WriteFiles`，或目录根），沙箱其余部分照旧关闭——这是“在沙箱里开一个精确的小口”，不是 escape。bash 的**读取和网络同样走窄授权**；一次性写入授权现在也会进入 bash 本次调用的 `WriteFiles`/`WriteDirs`（目录是 subtree），所以“写这个命名路径”不需要 escape。只有写入范围无法从命令文本表达（变量、重定向、任意程序），或者删除目标本身需要父目录写权限时，才走会话级 writable root（仍在沙箱内）或 `require_escalated`（Direct，整个进程出沙箱）。`Direct` 是唯一让进程离开沙箱的位；`ReadGrant`/`WriteGrant` 都不是。
+**为什么原生文件工具不需要 `require_escalated`**：它们确实也走 worker，但 worker 是**每次调用新建的沙箱**，而调用参数（或 patch 文本）已经点名了它要碰的路径。`ReadGrant`/`WriteGrant` 只是把这一条路径加进本次 worker 的 `CallPolicy`（`ReadFiles`/`WriteFiles`，或目录根），沙箱其余部分照旧关闭——这是“在沙箱里开一个精确的小口”，不是 escape。bash 的**读取和网络同样走窄授权**；一次性写入授权现在也会进入 bash 本次调用的 `WriteFiles`/`WriteDirs`（目录是 subtree），所以“写这个命名路径”不需要 escape。只有写入范围无法从命令文本表达（变量、重定向、任意程序），或者删除目标本身需要父目录写权限时，才走会话级 writable root（仍在沙箱内）或 `require_escalated`（allow/confirm 档，整个进程出沙箱）。执行层只有一个 `Direct` 信封位，它由档位派生；`ReadGrant`/`WriteGrant` 都不是它。
 
 网络是另一个维度，并且**按次**决定：没有持久化的网络白名单，也没有单独的 `/network` 命令。需要联网的调用由模型声明 `network:"on`，这条能力请求和外部路径、沙箱外运行一起进入同一次决策。`auto` 下评审的 Allow/Confirm 直接携带声明的网络，Contain 只在评审同时授予网络时保留；`ask` 在同一个弹窗里问；`read-only` 拒绝；`full-access` 不问。信封只决定执行位置，不改变网络授权。
 
@@ -160,7 +160,7 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **命令被沙箱拒绝后的处理**：先按上述重准入问答一次（`a` / `s` / `w` / Esc）；当被拒路径无法通过授权解决时，还可以用 `e` 让这条命令在沙箱外跑一次。拒绝或无人可问时，命令的失败会带上明确说明（是凭据材料、还是被系统保护），提示改用一次不隔离运行或换一个可读的副本，而不是让你去授权一个批准了也没用的路径。
 
-评审明确给出 **Direct** 授权时才会真的在沙箱外跑，且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
+评审判 **allow/confirm** 时才会真的在沙箱外跑（`contain` 只收容，`deny` 不跑），且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
 
 **命令没有申请越界、却被沙箱拒绝**时同理（模型只是照常跑命令）：只要命令或理由里点得出路径，就当场弹同一个重准入窗，批准后原命令在沙箱内**自动重跑**；拒绝、或重跑后仍失败，则维持原结果与给模型的提示。
 

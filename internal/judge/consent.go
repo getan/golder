@@ -290,24 +290,26 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		needs = append(needs, need)
 	}
 	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") && !opts.Enforce {
-		// In auto the reviewer's Direct is the grant, and Contain means it chose
-		// containment; neither needs a human-shaped capability. An allow/confirm
-		// without Direct leaves the escape ungranted, and autoDecision blocks
-		// that call instead of running it bare. In ask the person still decides
-		// the escape. Enforce mode never offers one: it contains every bash call,
-		// so a CapUnconfined need would only block or ask for an impossible answer.
-		if mode == permissions.Ask || (mode == permissions.Auto && !v.Direct && v.Level != Contain) {
+		// In auto the level is the whole answer: allow/confirm authorize the
+		// escape, contain isolates, deny blocks. A failed review has no level to
+		// authorize it, so it fails closed. In ask the person decides. Enforce
+		// never offers one: it contains every bash call, so a CapUnconfined need
+		// would only block or ask for an impossible answer.
+		if mode == permissions.Ask || (mode == permissions.Auto && v.Failed) {
 			needs = append(needs, Need{Cap: CapUnconfined})
 		}
 	}
 	if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox &&
-		(opts.Sandboxed == nil || !opts.Sandboxed(call.Name)) &&
-		(!v.Direct || opts.Enforce) {
-		// RequireSandbox is a default, not an absolute: the tool's sandboxRoute
-		// honours an explicit one-call Direct before it checks for a runner (the
-		// comment on RequireSandbox says so). Enforce is the absolute setting and
-		// still fails closed without a runner.
-		needs = append(needs, Need{Cap: CapUnconfined})
+		(opts.Sandboxed == nil || !opts.Sandboxed(call.Name)) {
+		// RequireSandbox is a default: an allow/confirm level authorizes the
+		// one-call Direct, and the tool's sandboxRoute honors it before checking
+		// for a runner. Enforce and a failed review stay fail-closed; ask offers
+		// the escape to the person.
+		switch {
+		case opts.Enforce, v.Failed, mode == permissions.Ask,
+			mode == permissions.Auto && !directForLevel(v.Level):
+			needs = append(needs, Need{Cap: CapUnconfined})
+		}
 	}
 	return dedupeNeeds(needs)
 }
@@ -435,29 +437,17 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
-	// The sandbox escape is the one capability that does not ride the level: the
-	// reviewer answers it separately (Verdict.Direct). A refused escape is a
-	// need the gate cannot satisfy, and running the call bare because the level
-	// happened to be confirm is how a direct:deny became an escape.
+	// The only CapUnconfined need that survives to this point is a call that
+	// cannot be contained at all (enforce without a runner); failed reviews were
+	// handled above, and contain/deny never reach here. Block rather than run bare.
 	if hasNeed(needs, CapUnconfined) {
 		n := noteFor(call, v, NoteDenied, lang)
 		n.Needs = needs
-		guidance := ""
-		if escalationRequested(call.Arguments) {
-			n.Rationale = localized(lang,
-				"评审拒绝了沙箱外请求；命令未运行",
-				"the reviewer declined the sandbox escape; the call did not run")
-			guidance = "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask"
-		} else {
-			// The escape is not the reason: RequireSandbox found no runner, and
-			// the call cannot be contained at all.
-			n.Rationale = localized(lang,
-				"没有可用的 OS 沙箱，命令未运行",
-				"no OS sandbox runner is available; the call did not run")
-			guidance = "no OS sandbox is available and the call requires isolation; install the platform sandbox or use full-access"
-		}
+		n.Rationale = localized(lang,
+			"没有可用的 OS 沙箱，命令未运行",
+			"no OS sandbox runner is available; the call did not run")
 		notify(n)
-		return blockCall(call, v, guidance)
+		return blockCall(call, v, "no OS sandbox is available and the call requires isolation; install the platform sandbox or use full-access")
 	}
 	// Allow and Confirm are the reviewer's authorization in auto. The model (or
 	// the local/JEV layer standing in for it) has settled risk, so the call's
@@ -470,9 +460,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if NetworkRequested(call.Name, call.Arguments) {
 		dec.Network = true
 	}
-	if askedToEscape(call) && v.Direct {
-		// Only bash has an escape request. A native tool carrying the argument by
-		// accident (or injection) must not inherit the bash-only Direct bit.
+	if askedToEscape(call) && directForLevel(v.Level) && !v.Failed {
+		// The level is the whole authorization. Only bash has an escape request;
+		// a native tool carrying the argument must not inherit its bit.
 		dec.Direct = true
 	}
 	if len(needs) == 0 {

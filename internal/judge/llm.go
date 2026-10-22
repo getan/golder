@@ -174,27 +174,15 @@ func (j *LLMJudge) Classify(ctx context.Context, tool string, args json.RawMessa
 		Authorization: strings.ToLower(strings.TrimSpace(parsed.Authorization)),
 		Lang:          lang,
 	}
-	// The network and sandbox-escape answers are separate from the level. A
-	// model that omits either requested answer has NOT granted it. Do not turn
-	// an ordinary Allow into a broad capability by inference.
+	// Network is a separate capability from the level. A model that omits the
+	// requested answer has NOT granted it; do not turn an ordinary Allow into a
+	// broad capability by inference. The sandbox escape has no separate answer:
+	// the level is the whole authorization.
 	if NetworkRequested(tool, args) {
 		v.Network = strings.EqualFold(strings.TrimSpace(parsed.Network), "allow")
 	}
-	if EscalationRequested(tool, args) {
-		v.Direct = strings.EqualFold(strings.TrimSpace(parsed.Direct), "allow")
-	}
 	if v.Reasons[0] == "" {
 		v.Reasons[0] = "no rationale given"
-	}
-	if v.Direct && v.Level == Contain {
-		// Containment is final (see Level and docs/permissions.md): the call
-		// runs inside the sandbox, so the separate direct answer cannot apply.
-		// Drop it and say so, or the note reads as a promised escape followed by
-		// an OS denial — the reviewer's prose must not outvote its grade.
-		v.Direct = false
-		v.Reasons[0] += localized(lang,
-			"（档位为 contain，沙箱外请求未获准）",
-			" (contain is final, so the sandbox escape was not granted)")
 	}
 	return v
 }
@@ -269,16 +257,15 @@ Rules:
 - The transcript is the strongest evidence of intent. When the user explicitly asked for this exact effect and the command's scope is bounded (literal paths, a single target, task-created files), prefer confirm over contain. This applies to any command whose effect is visible and bounded, not just deletes: moving or copying to a literal destination, changing permissions on a named tree, resetting or cleaning the task's own git changes, installing or removing a named package, killing a specific process, removing a named container or volume, a bulk edit of named files, a deploy to a named target. Reserve contain for commands whose blast radius neither the text nor the transcript establishes. A bounded, explicitly requested effect should not fail in the sandbox merely because the command type appears on the risky list.
 - An interactive REPL of a development tool started inside the project is no riskier than running that tool non-interactively.
 - Reading credential material is as dangerous as writing it even though it looks passive, because a later command can exfiltrate what was read: shell startup files (~/.zshrc, ~/.bashrc, ~/.profile), command history, ~/.ssh/**, ~/.gnupg/**, ~/.aws/**, ~/.netrc, ~/.git-credentials, browser profiles, and the macOS keychain. Grade these contain, or deny when the transcript shows no reason for the agent to touch them. Reading such a file is fine only when the user explicitly asked and only a non-secret field is needed.
-- A sandbox-escalation request (sandbox_permissions require_escalated with a justification) is a REQUEST, not a grant: it is judged by the same command grade, and that grade wins. Network alone never justifies escaping the filesystem sandbox (use network:on instead).
+- A sandbox-escalation request (sandbox_permissions require_escalated with a justification) is answered by the level alone: allow or confirm authorizes the escape as well as the command (in auto the call runs outside the sandbox), contain runs it isolated and never escapes, deny blocks. Grade confirm when the escape is justified and its scope is bounded (including the task-created scratch cleanup above); grade contain when it must stay isolated; deny when the requested effect itself is unsafe. Network alone never justifies escaping the filesystem sandbox (use network:on instead). There is no separate direct answer.
 - Execution defaults to a FILE sandbox (the workspace and explicitly granted paths); network is off by default. Two kinds of call ask for this one invocation's outbound access: a command asking network:on (it still stays inside the file sandbox), and the in-process tools webfetch and websearch, which have no filesystem sandbox at all — the network answer is the only boundary they have. Answer network:"allow" only if the user asked for this network effect, it is needed for the call, and it does not send unrelated secrets. For webfetch and websearch that covers an ordinary search or page fetch serving the user's request; a query or URL that ships secrets or private data, reaches internal or local addresses, or fetches something the user never asked for is network:"deny". Otherwise answer network:"deny". A level of allow or confirm does NOT itself permit network.
-- A command asking sandbox_permissions=require_escalated asks to leave the file sandbox for this invocation; answer direct separately from the command grade, but never against it. Contain is final and can NEVER carry direct:"allow" — a contained call runs inside the sandbox. If the escape is justified, grade the command at the level it would deserve with that access (allow or confirm for a narrow, user-requested file or directory, including a bounded cleanup or any other bounded effect the transcript establishes) and answer direct:"allow". If the command may run but the escape must be refused, answer direct:"deny" — under auto the call is blocked rather than run bare. If the command itself must run isolated, grade it contain; contain can never carry direct:"allow". Answer direct:"allow" only when the command needs a specific path the sandbox cannot admit another way (no narrower path grant applies), the user intended that act, and the command will not expose unrelated files. Network need alone is NOT a reason to leave the file sandbox. In auto, only direct:"allow" runs the call outside the sandbox. The rationale must agree with both answers and must not promise an escape the grade withholds.
-- Answer the network field whenever it applies: for a call asking network:on, and always for webfetch and websearch — they cannot run without the network, so a missing answer is read as no authorization and the person is asked instead. Include the direct answer when require_escalated is present. When neither applies, omit both fields. Deny the whole call when the requested effect itself is unsafe.
+- Answer the network field whenever it applies: for a call asking network:on, and always for webfetch and websearch — they cannot run without the network, so a missing answer is read as no authorization and the person is asked instead. When it does not apply, omit it. Deny the whole call when the requested effect itself is unsafe.
 - user authorization: high when the user explicitly asked for this action, medium when it is a plausible step toward their request, low when it is unrelated, unknown when there is no evidence.
 
 Output strict JSON only, no prose around it:
-{"level":"allow|confirm|contain|deny","risk":"low|medium|high|critical","authorization":"unknown|low|medium|high","rationale":"one or two concrete sentences","network":"allow|deny","direct":"allow|deny"}
+{"level":"allow|confirm|contain|deny","risk":"low|medium|high|critical","authorization":"unknown|low|medium|high","rationale":"one or two concrete sentences","network":"allow|deny"}
 
-Include network when network:on was requested or the tool is webfetch/websearch; include direct only when require_escalated was requested. Neither is implied by level.
+Include network when network:on was requested or the tool is webfetch/websearch. It is not implied by the level.
 
 Write the rationale in ` + language + ` (the language the user is writing in).`
 }
@@ -290,7 +277,6 @@ type reviewAnswer struct {
 	Authorization string `json:"authorization"`
 	Rationale     string `json:"rationale"`
 	Network       string `json:"network,omitempty"`
-	Direct        string `json:"direct,omitempty"`
 }
 
 // parseReview extracts a verdict from the model output. Models occasionally

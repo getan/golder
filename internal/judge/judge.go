@@ -29,8 +29,9 @@ package judge
 // keeping the static floor. Sandbox execution lives in internal/seatbelt and is
 // injected by internal/cli/run: an approved bash call runs under the platform
 // sandbox by default, and the native file tools run through a one-call isolated
-// worker. Network access and a sandbox escape are SEPARATE per-call decisions
-// (Verdict.Network, Verdict.Direct): a risk level of Allow never implies either.
+// worker. Network is a separate per-call decision (Verdict.Network); a sandbox
+// escape is authorized by the level itself, not a second answer: allow/confirm
+// run the call, contain isolates it, deny blocks.
 import (
 	"bufio"
 	"context"
@@ -109,9 +110,6 @@ type Verdict struct {
 	// network tools (webfetch, websearch), which cannot run without it. A level
 	// of Allow/Confirm/Contain alone never implies it.
 	Network bool
-	// Direct is an explicit decision to waive the file sandbox for THIS call,
-	// independent of the four risk tiers. A bare Allow is not a direct grant.
-	Direct bool
 	// Failed marks a reviewer that could not decide (timeout, transport
 	// error, malformed answer). The gate must never treat it as an approval:
 	// it prompts, sandboxes, or blocks instead.
@@ -382,10 +380,11 @@ func askedToEscape(call agentcore.AgentToolCall) bool {
 	return strings.EqualFold(call.Name, "bash") && escalationRequested(call.Arguments)
 }
 
-// EscalationRequested is a request fact for the fast decision-model reviewer.
-// It does not authorize the escape; only the final Verdict.Direct does.
-func EscalationRequested(tool string, args json.RawMessage) bool {
-	return strings.EqualFold(tool, "bash") && escalationRequested(args)
+// directForLevel reports whether a level authorizes a requested sandbox escape:
+// allow and confirm run the call, contain isolates it and deny blocks. The level
+// is the whole answer; there is no separate direct grant.
+func directForLevel(level Level) bool {
+	return level == Allow || level == Confirm
 }
 
 // NetworkRequested reports whether a call reaches the network. Two shapes count:

@@ -13,15 +13,15 @@ second authorization system.
 | `full-access` | allow | allow | allow | allow | nobody; static hard-deny only |
 
 `auto` is deliberately non-interactive: once the reviewer returns `allow` or
-`confirm`, the call's ordinary capabilities (paths, network) ride that answer.
-A sandbox escape is the exception: it needs the reviewer's separate
-`direct:"allow"`, so `confirm` + `direct:"deny"` withholds the escape (the call
-is blocked rather than run bare), and `contain` keeps it inside the file
-sandbox regardless. `GOLDER_SANDBOX=enforce` overrides the escape too: every
-bash call is contained, and the note says so. A network answer the reviewer
-gave separately still applies inside a contained call, while any other
-un-granted need blocks it. `deny` blocks. The reviewer chain is static floor →
-local rules / JEV → the session LLM only for what remains.
+`confirm`, the call's capabilities (paths, network) ride that answer. A sandbox
+escape is decided by the same level: on a `require_escalated` call, `allow` or
+`confirm` runs it outside the sandbox, `contain` runs it isolated and never
+escapes, and `deny` blocks. There is no separate direct field.
+`GOLDER_SANDBOX=enforce` overrides the level too: every bash call is contained,
+and the note says so. A network answer the reviewer gave separately still
+applies inside a contained call, while any other un-granted need blocks it.
+`deny` blocks. The reviewer chain is static floor → local rules / JEV → the
+session LLM only for what remains.
 
 `ask` uses the same reviewer as a filter: a routine `allow` with no capability
 expansion is not shown to a person. Everything else produces one request with
@@ -53,13 +53,10 @@ white in every mode, but is hidden by default; set `GOLDER_DEBUG=1` or pass
 stay red. The `⚠`/`✗` markers and the wording do not change with the color.
 
 A call that asked to leave the sandbox (`sandbox_permissions=require_escalated`)
-but was contained prints `contained · the sandbox escape was not granted`.
-Containment is final, so a reviewer's separate `direct:"allow"` cannot turn the
-same note into a promise the gate will refuse.
-
-An escape the reviewer (or the person, under `ask`) granted prints
-`runs OUTSIDE the sandbox`, so an unconfined run is never mistaken for an
-ordinary approval.
+but was contained prints `contained · the sandbox escape was not granted`; an
+`allow`/`confirm` grade on the same request prints `runs OUTSIDE the sandbox`.
+The level is the whole answer, so the note cannot promise an escape the grade
+withholds, and an unconfined run is never mistaken for an ordinary approval.
 
 Ratings are concrete capabilities, not high/medium/low: `needs:` names what the
 call required, `granted:` names what the answer actually allowed. A simple call
