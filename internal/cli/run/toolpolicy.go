@@ -228,6 +228,10 @@ func ChildToolSet(cwd string, policy ToolPolicy) []agentcore.AgentTool {
 			// write artifacts the person did not ask for.
 			tools[i] = agenttool.NewVisualTool(cwd, false)
 		}
+		if tool.Name() == "workspace" {
+			// A child may read the session's panes, not rearrange them.
+			tools[i] = agenttool.NewWorkspaceTool(cwd, false)
+		}
 	}
 	return ApplyToolPolicy(tools, policy)
 }

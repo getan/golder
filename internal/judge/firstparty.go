@@ -128,6 +128,25 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			return f.next(ctx, tool, args)
 		}
 		return f.failClosed("unknown visual action")
+	case "workspace":
+		var a struct {
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return f.failClosed("workspace has no action")
+		}
+		switch a.Action {
+		case "list", "snapshot":
+			return Verdict{
+				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"workspace reads the arranged panes"},
+			}
+		case "create", "focus", "close":
+			// Starting commands, stealing focus and closing panes all change
+			// what the person is looking at. The reviewer decides.
+			return f.next(ctx, tool, args)
+		}
+		return f.failClosed("unknown workspace action")
 	}
 	return f.next(ctx, tool, args)
 }

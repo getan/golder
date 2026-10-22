@@ -341,6 +341,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	}
 	if agenttool.TuiosAvailable() {
 		tools = append(tools, agenttool.NewTuiosTool(cwd, true))
+		tools = append(tools, agenttool.NewWorkspaceTool(cwd, true))
 	}
 	if agenttool.BrowserAvailable() {
 		tools = append(tools, agenttool.NewBrowserTool(cwd, true))
