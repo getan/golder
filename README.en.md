@@ -10,14 +10,24 @@ A terminal AI coding assistant written in Go: read and write files, run commands
 
 **One binary. Sandboxed by default. Secrets never reach the model.**
 
+## Install
+
 ```bash
+brew install getan/tap/golder
+# or
 curl -fsSL https://golder-cli.pages.dev/install.sh | sh
-golder
 ```
 
-- **Single binary, no runtime.** Go, no Node or Python; `go install` or one release tarball is the whole install.
-- **Sandbox first.** Approved shell calls run under `sandbox-exec` / `bubblewrap`; reads stay in the workspace and the network is off unless granted.
-- **In-process redaction.** Keys in tool output, prompts, compaction and memory are replaced before the provider sees them; placeholders are restored only for file writes.
+One command on macOS / Linux, no Node or Python. On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases); mirrors, sha256 verification and building from source are in [Install details](#install-details).
+
+## Highlights
+
+- **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
+- **Lightweight like pi, with a real security boundary.** The same single-binary class, plus a per-call approval gate and an OS sandbox (`sandbox-exec` / `bubblewrap`): reads stay in the workspace, writes in the project and temp dirs, the network is off by default, and credentials are unreadable.
+- **Easier to customize than codex-cli.** Pure Go: one language, one binary, no Node/Python runtime. A new tool, provider or approval rule is one `go build` away.
+- **~50–100 MB resident.** Top tier for this class of agent, so it can stay open all day.
+- **Planned: tuios + kitty-browse.** Free-form agent control of windows and the browser; when you debug frontend and backend together, the model sees the terminal, editor and browser at once — the fullest context.
+- **Planned: MCP and a plugin ecosystem.** Bring external tools and data sources in without changing the core.
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
@@ -36,7 +46,7 @@ golder
 </tr>
 </table>
 
-## Features
+## More features
 
 - **TUI first**: run `golder` for the full-screen TUI (transcript, tool cards, status bar, arrow-key pickers); `--no-tui` falls back to the line-based REPL, and both front-ends share the exact same command surface; `golder -p "..."` runs headless for scripts and CI.
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
@@ -50,7 +60,7 @@ golder
 - **Skills and templates**: skills under `~/.agents/skills` are registered as `/commands` (none ship built-in; an absent directory means zero extra commands); prompt templates and project `AGENTS.md` load automatically.
 - **A first-class agent inside tuios / herdr**: run golder in a [tuios](https://github.com/Gaurav-Gosain/tuios) window or a [herdr](https://github.com/herdrdev/herdr) pane and it reports its own state, so it appears on the rail/sidebar (working / waiting on you / idle / done), its approvals and questions land in the Inbox, and a daemon restart brings the conversation back with `golder --resume <session>`. **Neither host has to change, and only one has to be told anything**: tuios needs a harness manifest, which `golder host-compat install` writes into `~/.config/tuios/harnesses/`; herdr needs nothing installed, because the report itself names the agent. tuios can also answer a prompt from the Inbox for you — that path reads the manifest's screen rules, so **a reworded approval dialog has to be matched by an edit to that manifest** (see `internal/hostcompat/README.md`). `golder host-compat status` says which host it found and what is missing; `GOLDER_HOST_REPORT=off` disables reporting.
 
-## Install
+## Install details
 
 ### Homebrew (macOS / Linux)
 

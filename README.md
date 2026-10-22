@@ -10,14 +10,24 @@
 
 **单二进制、默认沙箱、密钥不进入模型上下文。**
 
+## 安装
+
 ```bash
+brew install getan/tap/golder
+# 或
 curl -fsSL https://golder-cli.pages.dev/install.sh | sh
-golder
 ```
 
-- **单二进制，无运行时依赖**：Go 编译，不需要 Node/Python；`go install` 或一个 release 压缩包就是全部安装。
-- **默认沙箱**：获准的 shell 调用在 `sandbox-exec` / `bubblewrap` 内运行，读限工作区，网络默认关闭、按次授权。
-- **本地凭据脱敏**：tool output、prompt、compaction、memory 里的 key 在发给模型前替换；只有写文件时才还原占位符。
+macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip`；镜像、sha256 校验、从源码构建等细节见[安装细节](#安装细节)。
+
+## 亮点
+
+- **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。
+- **轻量 agent + 真正的安全边界**：和 pi 同一量级的单二进制，但多了逐调用审批门与 OS 沙箱（`sandbox-exec` / `bubblewrap`）——读限工作区、写限项目与临时目录、网络默认关闭；密钥和凭据路径读不到。
+- **比 codex-cli 更容易定制**：纯 Go，单语言、单二进制，没有 Node/Python 运行时；加一个工具、一个 provider 或一条审批规则，都在同一个 `go build` 里完成。
+- **常驻内存约 50–100 MB**：同类里的第一梯队，长时间挂着跑也不占机器。
+- **规划中：tuios + kitty-browse**：窗口与浏览器的自由 agent 操作；前后端同时 debug 时，模型能同时看到终端、编辑器、浏览器，上下文最充分。
+- **规划中：MCP 与插件生态**：把外部工具和数据源接进来，扩展不必改核心。
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
@@ -36,7 +46,7 @@ golder
 </tr>
 </table>
 
-## 特性
+## 更多特性
 
 - **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
@@ -51,7 +61,7 @@ golder
 - **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`（无内置技能，目录不存在时零命令）；提示词模板、项目级 `AGENTS.md` 自动装载。
 - **在 tuios / herdr 里就是一个 agent**：跑在 [tuios](https://github.com/Gaurav-Gosain/tuios) 窗口或 [herdr](https://github.com/herdrdev/herdr) pane 里时，golder 自己上报状态，于是它出现在 rail/sidebar 上（working / 等待你 / 空闲 / 完成），审批与提问进 Inbox，daemon 重启后会带着 `golder --resume <会话>` 回到原会话。**两个宿主都不用改、也都不用装**：tuios 需要一份 harness manifest，`golder host-compat install` 写进 `~/.config/tuios/harnesses/`；herdr 什么也不需要，自报即识别。在 tuios 的 Inbox 里可以直接按键替你批准/拒绝——那条路依赖 manifest 里的屏幕规则，所以**改了审批弹窗的文案要同步改那份 manifest**（见 `internal/hostcompat/README.md`）。`golder host-compat status` 说明当前宿主与缺什么；`GOLDER_HOST_REPORT=off` 一键关闭上报。
 
-## 安装
+## 安装细节
 
 ### Homebrew（macOS / Linux）
 
