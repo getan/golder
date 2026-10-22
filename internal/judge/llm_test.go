@@ -99,6 +99,7 @@ func TestReviewPromptStatesTheEscapeMatrix(t *testing.T) {
 		"only direct:\"allow\" runs the call outside",
 		"current task created for scratch data",
 		"prefer confirm over contain",
+		"not just deletes",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("review prompt does not contain %q", want)

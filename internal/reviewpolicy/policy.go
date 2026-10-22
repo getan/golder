@@ -105,7 +105,7 @@ const (
 // judge's own vocabulary so a caller can map it without a second table.
 var LevelOptions = map[string]any{
 	"allow":   "routine: a read, a build, a test run, an edit inside the workspace, nothing that leaves the machine or destroys work",
-	"contain": "risky and its scope is not established by the command text; run it isolated rather than trust a guess",
+	"contain": "risky and its scope is not established by the command text or the context; run it isolated rather than trust a guess",
 	"confirm": "the effect depends on the user's explicit request or the conversation; escalate to the session reviewer",
 	"deny":    "must not run: it destroys work, exfiltrates data, escalates privilege, or writes outside anything the user opened",
 }

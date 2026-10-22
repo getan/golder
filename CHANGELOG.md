@@ -44,11 +44,14 @@ interactive REPL/TUI.
   announced as `runs OUTSIDE the sandbox`. The reviewer prompt also treats a
   recursive delete of a task-created scratch directory as `confirm` when the
   transcript establishes the exact literal path and the cleanup was asked for,
-  so a bounded cleanup can be granted without weakening the `contain` tier for
+  so a bounded effect can be granted without weakening the `contain` tier for
   user content. More generally, the reviewer is told to prefer `confirm` over
   `contain` when the transcript shows the user asked for exactly this effect and
-  the command's scope is bounded; `contain` is for a blast radius the text and
-  transcript do not establish.
+  the command's scope is bounded — not just deletes, but moves, permission
+  changes, git resets of the task's own work, package installs/removals, a
+  specific process or container removal, bulk edits of named files, and deploys
+  to a named target. `contain` is for a blast radius the text and transcript do
+  not establish.
 - **The decision-model reviewer sees the user's request**: JEV's state carried
   only the command and parsed facts, so its intent question was a guess from
   the command text. The recent user messages (user words only — not tool
