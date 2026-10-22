@@ -36,7 +36,9 @@ func answers(level string, levelProbs map[string]float64, confidence float64, tw
 		QR:   score(1),
 		QRev: noul(0.01),
 		QSec: noul(0.01),
-		QInt: noul(0.95),
+		// Intent is opt-in in these fixtures: most cases test routing without a
+		// user request in play. A contain case that sets it high escalates.
+		QInt: noul(0.05),
 		QWhy: choice("read_only", map[string]float64{"read_only": 0.9, "unknown": 0.1}, 0.9),
 	}
 	for _, fn := range tweaks {
@@ -230,6 +232,35 @@ func TestContainDropsTheEscapeAnswer(t *testing.T) {
 	}
 	if out.Direct {
 		t.Errorf("Direct = true next to contain; the escape must be dropped")
+	}
+}
+
+// Contain is the safe default, but it is not the last word when the cheap judge
+// is confident the user asked for this effect: the session reviewer sees the
+// transcript and can grade a bounded, explicitly requested action as confirm.
+func TestContainWithExplicitIntentEscalates(t *testing.T) {
+	out := Decide(Request{
+		Answers: answers("contain", map[string]float64{"contain": 0.9, "allow": 0.05}, 0.85,
+			func(m map[string]jev.Answer) { m[QInt] = noul(0.9) }),
+		Config: cfg(),
+	})
+	if out.Route != RouteEscalate {
+		t.Fatalf("outcome = %+v, want escalation to the session reviewer", out)
+	}
+	if out.Escalation != EscalateIntent {
+		t.Errorf("escalation = %q, want %q", out.Escalation, EscalateIntent)
+	}
+}
+
+// The same contain verdict without an explicit request stays decided: there is
+// no context for the slow reviewer to weigh, and isolation is the safe answer.
+func TestContainWithoutIntentStaysDecided(t *testing.T) {
+	out := Decide(Request{
+		Answers: answers("contain", map[string]float64{"contain": 0.9, "allow": 0.05}, 0.85),
+		Config:  cfg(),
+	})
+	if out.Route != RouteDecided || out.Level != judge.Contain {
+		t.Fatalf("outcome = %+v, want a decided contain", out)
 	}
 }
 

@@ -169,7 +169,7 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 
 	network := judge.NetworkRequested(tool, args)
 	direct := judge.EscalationRequested(tool, args)
-	res, err := c.Client.Evaluate(ctx, c.state(tool, args, facts), QuestionsFor(network, direct))
+	res, err := c.Client.Evaluate(ctx, c.state(ctx, tool, args, facts), QuestionsFor(network, direct))
 	rec := CallRecord{Tool: tool}
 	if res != nil {
 		rec.Attempts = res.Attempts
@@ -258,6 +258,11 @@ func (c *Classifier) factsFor(tool string, args json.RawMessage) *shellfacts.Pla
 // it: what the judge sees decides what it can decide.
 type State struct {
 	Tool string `json:"tool"`
+	// Context is the recent user requests — the evidence the intent question
+	// needs. The decision model is a third-party call, so it carries user words
+	// only, not tool output: enough to tell an explicit request from a guess,
+	// without shipping the transcript.
+	Context string `json:"context,omitempty"`
 	// Command is the shell command text, unchanged. It is kept beside the
 	// parsed form because a parse can be wrong about a construct, and the
 	// original text is the tiebreaker a reader can check.
@@ -299,8 +304,9 @@ type State struct {
 	Outliving []string `json:"outliving,omitempty"`
 }
 
-func (c *Classifier) state(tool string, args json.RawMessage, facts *shellfacts.Plan) State {
+func (c *Classifier) state(ctx context.Context, tool string, args json.RawMessage, facts *shellfacts.Plan) State {
 	st := State{Tool: tool, Cwd: c.Cwd}
+	st.Context = judge.UserIntentSection(agentcore.MessageSnapshotFromContext(ctx))
 	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots, c.WritableAt)
 	st.Outliving = judge.OutlivingPaths(tool, args)
 	if facts != nil {

@@ -65,7 +65,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 分级链（`internal/judge`，叶包）：
 
 1. **StaticFloor**：不可逆硬拒（`sudo`、`rm -rf /`、`mkfs`、写 `~/.ssh`/`~/.gnupg`/`trust.json`、整环境导出 piped 到网络、敏感变量 echo 进网络等），只拒不放，其余全交模型。单半边合法（`echo $PATH` 调试、`curl` 正常下载、`env FOO=bar ./cmd` 传参）放行给审查器。它也是**唯一不经过模型就拒绝**的一层——正因如此，凭据读这类结论既不能被重试，也不能被提示词说服。
-2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|contain|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 按两个规则路由：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny/Contain 中等置信即接受，因为它们的失败模式只是多余的拦截或收容；Confirm 一律升级）。没有 TypeSafe 凭据时，这一层换成**本地规则表** `judge.Local`（同样每个调用都判，判不了的档上交会话模型），jev 整条路径不接。
+2. **决策模型（jev）→ 会话模型（LLM）**：每个调用都审，没有豁免。链路是 `reviewpolicy.Classifier` 包住的：先问 TypeSafe 的 System One（`internal/jev`，约 0.78s/次，实测固定线路下 p90 808ms），confident 就直接判，否则升级给会话模型的 `LLMJudge`（严格 JSON：`{level: allow|confirm|contain|deny, risk, authorization, rationale}`，`rationale` 用对话语言书写并直接显示给用户）。jev 的 state 里带着**最近几条用户请求**（只有用户文本，不带工具输出），所以“这个动作是否符合用户诉求”是从原话判断的，不是从命令名猜的。路由规则：**能决定，但不能便宜地决定**（Allow 要高置信 + 大差距 + 所有危险信号干净；Deny 中等置信即接受；Contain 中等置信即接受，**但决策模型同时高置信地认为用户明确要求了这个效果时，升级给会话模型**，由它看着转写判断范围；Confirm 一律升级）。没有 TypeSafe 凭据时，这一层换成**本地规则表** `judge.Local`（同样每个调用都判，判不了的档上交会话模型），jev 整条路径不接。
 3. **兜底**：审查超时（默认 30s，`GOLDER_REVIEW_TIMEOUT_MS` 可调）、网络错误、JSON 不可解析一律标记为失败，绝不故障放行——`auto` 下能隔离的（`bash`）进沙箱、不能隔离的拒绝；`ask` 下弹窗问人；无 prompt 的驱动直接拒绝。审查器缺失（理论上不会发生）同样按失败处理。
 
 **曾经有两条豁免，都已删除**（记录于此，因为它们的设计理由仍然成立，只是不再换来那点延迟）：

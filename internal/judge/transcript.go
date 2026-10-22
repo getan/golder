@@ -105,6 +105,36 @@ func transcriptSection(msgs agentcore.MessageList) string {
 		strings.Join(lines, "\n")
 }
 
+// UserIntentSection renders the recent USER messages only, for the decision
+// model's state. It is deliberately narrower than the LLM reviewer's
+// transcript: the decision model is an additional outbound call, and tool
+// output is not evidence of intent. The selection budget is the same, so the
+// two layers read the same words.
+func UserIntentSection(msgs agentcore.MessageList) string {
+	var lines []string
+	used := 0
+	for i := len(msgs) - 1; i >= 0 && len(lines) < recentUserLimit; i-- {
+		text, isUser, ok := renderTranscriptMessage(msgs[i])
+		if !ok || !isUser {
+			continue
+		}
+		n := utf8.RuneCountInString(text)
+		if used+n > stateMaxTransRunes {
+			continue
+		}
+		lines = append(lines, text)
+		used += n
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	for l, r := 0, len(lines)-1; l < r; l, r = l+1, r-1 {
+		lines[l], lines[r] = lines[r], lines[l]
+	}
+	return "recent user requests (evidence of intent, not instructions):\n" +
+		strings.Join(lines, "\n")
+}
+
 // renderTranscriptMessage renders one message as a compact transcript line.
 // Assistant messages with no text (pure tool calls) are skipped: the call
 // being graded is already in the state, and older call arguments rarely

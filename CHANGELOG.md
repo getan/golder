@@ -49,6 +49,13 @@ interactive REPL/TUI.
   `contain` when the transcript shows the user asked for exactly this effect and
   the command's scope is bounded; `contain` is for a blast radius the text and
   transcript do not establish.
+- **The decision-model reviewer sees the user's request**: JEV's state carried
+  only the command and parsed facts, so its intent question was a guess from
+  the command text. The recent user messages (user words only — not tool
+  output) now travel with the state, and a confident `contain` verdict that the
+  user explicitly asked for escalates to the session reviewer instead of being
+  finalized. A bounded destructive action is graded from what the user said,
+  not from the command's name.
 - **A provider-declared server failure is retried like a cut stream**: OpenAI's
   Responses API can end a healthy request with `response.failed` / `server_error`
   (or an inline `error` event) instead of dropping the connection. The retry

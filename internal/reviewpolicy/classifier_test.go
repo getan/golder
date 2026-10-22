@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/jev"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/shellfacts"
@@ -264,6 +265,46 @@ func TestFactsAreSentForBashAndNotForNativeTools(t *testing.T) {
 	}
 	if !strings.Contains(string(native.Arguments), "Begin Patch") {
 		t.Errorf("native arguments = %s, want them passed through", native.Arguments)
+	}
+}
+
+// The decision model sees the user's recent requests, so the intent question is
+// answered from the user's words rather than inferred from the command. Only
+// user text travels: the decision model is an additional outbound call, and
+// assistant/tool output is not intent evidence.
+func TestStateCarriesRecentUserIntent(t *testing.T) {
+	var seen State
+	answers := cleanAnswers()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			State json.RawMessage `json:"state"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.Unmarshal(req.State, &seen)
+		parts := make([]string, 0, len(answers))
+		for id, body := range answers {
+			parts = append(parts, `"`+id+`":`+body)
+		}
+		_, _ = w.Write([]byte(`{"answers":{` + strings.Join(parts, ",") + `}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := newClassifier(t, srv, nil)
+
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("clean up the screenshots")}},
+		agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{agentcore.NewTextContent("created /tmp/kb-view")}},
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("delete that temp dir")}},
+	}
+	ctx := agentcore.WithMessageSnapshot(context.Background(), msgs)
+	c.Classify(ctx, "bash", json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated"}`))
+
+	for _, want := range []string{"clean up the screenshots", "delete that temp dir"} {
+		if !strings.Contains(seen.Context, want) {
+			t.Errorf("state context = %q, want %q", seen.Context, want)
+		}
+	}
+	if strings.Contains(seen.Context, "created /tmp/kb-view") {
+		t.Errorf("state context = %q, want user requests only", seen.Context)
 	}
 }
 
