@@ -135,8 +135,8 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 沙箱内默认可写的只有两处：项目目录与 `TMPDIR`。需要写别处（编译缓存盘、`CARGO_TARGET_DIR=/Volumes/…`、`~/go/pkg/mod` 之类）时，有两条授权途径，它们汇入同一张授权表（`grants.json`；本会话行在进程内即刻生效，并发安全，下一个命令就看得见）：
 
 - **审批对话框**（四条相关路径；路径授权只影响**那一个路径**，批准不是"无沙箱放行"——命令始终收容执行）：
-  - **重准入**：越界申请被评审拒绝、或命令被沙箱拒绝时，弹窗把被拒路径拿给你选：`a` 只读/本会话、`s` 只读/记住；**只有命令本身需要写**时才额外给出 `w` 写/本会话（读写共用一个授权，标签写明"reading included"）。题面写明被拒的是读还是写（`denied writing` / `denied reading`），**需要写时写行在首行**；批准后命令**收容重跑**，同一路径每次运行只问一次。
-  - **请求本次不隔离运行**（命令被沙箱拒绝时才有）：`e`（REPL 里同键）**发起一次越界申请**，再由 permission gate 决定——`ask` 模式会再问一次很窄的确认，`auto` 模式交给 reviewer 重新看这个"在沙箱外跑"的请求；批准后才在沙箱外重跑一次。它只在没有任何路径授权能解决问题时才是答案——例如 macOS 用 `Operation not permitted` 报出的 SIP 保护文件（`/private/var/…`），或静态底线拒绝交出的一类凭据文件（`~/.ssh/known_hosts`）——因为这些路径不会被登记为可授权项。该决定只对这一次生效（不登记、不记忆），并在转写里作为"沙箱外运行"播报。read-only 模式下不提供该选项。
+  - **重准入**：命令被沙箱拒绝时，只要输出或理由点得出路径——`auto` 由评审自动决定是否补授（不弹窗），`ask` 弹窗把被拒路径拿给你选：`a` 只读/本会话、`s` 只读/记住；**只有命令本身需要写**时才额外给出 `w` 写/本会话（读写共用一个授权，标签写明"reading included"）。题面写明被拒的是读还是写（`denied writing` / `denied reading`），**需要写时写行在首行**；批准后命令**收容重跑**，同一路径每次运行只问一次。
+  - **请求本次不隔离运行**：模型在调用里声明 `sandbox_permissions: "require_escalated"` + `justification`。`ask` 把它作为 `run outside the sandbox` 一项能力放进同一次弹窗（与路径/网络一起由 `y`/`a`/`s` 批准）；`auto` 由档位决定——`allow`/`confirm` 即越界，`contain` 收容，`deny` 不跑；`enforce` 永远收容。它只在没有任何路径授权能解决问题时才是答案——例如 macOS 用 `Operation not permitted` 报出的 SIP 保护文件（`/private/var/…`），或静态底线拒绝交出的一类凭据文件（`~/.ssh/known_hosts`）——因为这些路径不会被登记为可授权项。该决定只对这一次生效（不登记、不记忆），并在转写里作为"沙箱外运行"播报。read-only 模式下不提供该选项。
   - **写确认**（`apply_patch` 写工作区外）：`y` 仅本次、`a` 写/本会话、`s` 写/记住。
   - **越界申请的写行**（ask 模式的 escalation 弹窗）：`w` 该路径可读写/本会话、`s` 记住。
 - **`/boundary writable add <path>`**：写入 `~/.golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）；`/permissions` 只负责审批模式，不再携带路径入口。
@@ -153,12 +153,12 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 **沙箱自动提权申请（对齐 codex 的 require_escalated）**：模型撞到沙箱拒绝（输出含 `operation not permitted` / `permission denied` / `read-only file system` / `sandbox` 等特征词）时，bash 结果里会附一行提示，告知可用 `sandbox_permissions: "require_escalated"` + `justification` 重试。权限路由的优先级是固定的：**enforce 模式与权限门要求的隔离永远优先于提权请求**（门在调用参数里能看到提权请求，判分时已把理由纳入考量）——提权只在本地 judge 路由这一层生效，并且审查器（LLM）对命令本身的判定依然照走，所以"申请提权"不等于绕过审查。
 
-当模型确实申请了提权、而审查器给的却是 **Contain** 档（该调用本应被收容）时，由**模式**决定谁裁决：
+当模型确实申请了提权时，**档位就是答案**：
 
-- **auto**：评审的话作数。若请求点名了路径，先把"要不要把该路径放回沙箱"问你——`a` 只读/本会话、`s` 只读/记住、`w` 读+写/本会话、Esc 拒绝；题面写明被拒的是读还是写（`denied writing` / `denied reading`），需要写时写行就在首行。批准后命令**收容重跑**（同一路径每次运行只问一次）；**没有可提的路径**时则静默重新收容并在转写里播报"越界请求被拒，改为在沙箱内运行"（越界是能力问题，不是风险问题）。
-- **ask**：把整个越界交给你（TUI 弹审批对话框，REPL 走 stdin 提示），默认项就是"收容重跑"，`e` 才是故意出沙箱——弹窗里还会多出 `Allow reads and writes to <path> (this session)`（按 `w`）等写行，把那个路径放进沙箱，比出沙箱更省事。
+- **auto**：`allow`/`confirm` 直接在沙箱外跑并播报；`contain` 收容；`deny` 不跑。没有单独的 `direct` 字段，所以不会出现"理由说可以、执行却收容"的矛盾。
+- **ask**：把整个越界交给你（TUI 弹审批对话框，REPL 走 stdin 提示），`run outside the sandbox` 与其他能力一起列出，选 `y`/`a`/`s` 即批准；`enforce` 永远收容。
 
-**命令被沙箱拒绝后的处理**：先按上述重准入问答一次（`a` / `s` / `w` / Esc）；当被拒路径无法通过授权解决时，还可以用 `e` 让这条命令在沙箱外跑一次。拒绝或无人可问时，命令的失败会带上明确说明（是凭据材料、还是被系统保护），提示改用一次不隔离运行或换一个可读的副本，而不是让你去授权一个批准了也没用的路径。
+**命令被沙箱拒绝后的处理**：`auto` 由评审自动决定是否补授该路径（不弹窗）；`ask` 按上述重准入问答一次（`a` / `s` / `w` / Esc），批准后命令**在沙箱内重跑**。路径无法通过授权解决（SIP 保护、凭据材料）时，模型需要重新发一次带 `require_escalated` 的调用，由上面的档位规则决定；拒绝或无人可问时，命令的失败会带上明确说明，提示改用一次不隔离运行或换一个可读的副本。
 
 评审判 **allow/confirm** 时才会真的在沙箱外跑（`contain` 只收容，`deny` 不跑），且无论批否都会播报。没有交互界面时按最安全的默认收容或失败关闭；bash 的结果里会给模型贴标签防死循环（auto 下还会点明"重试无用，要出沙箱得让用户切 `/permissions ask`"）。
 
