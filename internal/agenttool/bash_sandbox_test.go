@@ -249,3 +249,53 @@ func TestBashReadGrantRunsContained(t *testing.T) {
 		t.Fatalf("output = %q, want contained run", got)
 	}
 }
+
+// A one-call write grant is the write-side sibling of the read grant: the
+// command still runs in the sandbox, with exactly that path writable. Native
+// tools get this through the worker policy; bash must honor the same context
+// grant rather than requiring a whole-process escape.
+func TestBashWriteGrantRunsContained(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	granted := filepath.Join(t.TempDir(), "granted-dir")
+	if err := os.Mkdir(granted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := agentcore.WithWriteGrant(context.Background(), granted)
+	res, err := runBashCtx(t, ctx, tool, map[string]any{"command": "rm -r " + granted}, nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if runner.calls != 1 {
+		t.Fatalf("runner calls = %d, want 1: a one-call write grant must stay sandboxed", runner.calls)
+	}
+	if len(runner.policy.WriteDirs) != 1 || runner.policy.WriteDirs[0] != granted {
+		t.Fatalf("one-call write policy = %+v, want the granted directory", runner.policy)
+	}
+	if len(runner.policy.WriteFiles) != 0 {
+		t.Fatalf("a directory grant became a file grant: %+v", runner.policy)
+	}
+	if got := agentcore.ContentToText(res.Content); !strings.Contains(got, "sandboxed") {
+		t.Fatalf("output = %q, want contained run", got)
+	}
+}
+
+// The file form is exact: a granted file becomes WriteFiles, never a subtree.
+func TestBashWriteGrantFileIsExact(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	granted := filepath.Join(t.TempDir(), "granted.txt")
+	if err := os.WriteFile(granted, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := agentcore.WithWriteGrant(context.Background(), granted)
+	if _, err := runBashCtx(t, ctx, tool, map[string]any{"command": "rm " + granted}, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(runner.policy.WriteFiles) != 1 || runner.policy.WriteFiles[0] != granted {
+		t.Fatalf("one-call write policy = %+v, want the granted file", runner.policy)
+	}
+	if len(runner.policy.WriteDirs) != 0 {
+		t.Fatalf("a file grant became a directory grant: %+v", runner.policy)
+	}
+}

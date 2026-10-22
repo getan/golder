@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -224,6 +225,16 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 	seatbelt.RefusedPaths(&policy)
 	if p := agentcore.ReadGrantFromContext(ctx); p != "" {
 		policy.ReadFiles = []string{p}
+	}
+	if p := agentcore.WriteGrantFromContext(ctx); p != "" {
+		// A one-call write grant is still a sandbox allow, not an escape. A
+		// directory must be a subtree rule: allowing the directory literal would
+		// not permit removing or creating its children.
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			policy.WriteDirs = []string{p}
+		} else {
+			policy.WriteFiles = []string{p}
+		}
 	}
 	sa, cl, err := t.Sandbox.SandboxCall(argv, t.Dir, policy)
 	if err != nil {

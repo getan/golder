@@ -29,6 +29,13 @@ interactive REPL/TUI.
   gate cannot keep.
 
 ### Fixed
+- **bash honors a one-call write grant**: the gate published `WriteGrant`, but
+  only the worker-backed native tools consumed it; a bash call granted an exact
+  write path still ran with that path unwritable and fell back to a sandbox
+  denial. The shell sandbox now adds the granted file/dir to its per-call policy
+  (a directory as a subtree), so a bounded write stays contained. Removing the
+  target itself still needs its parent writable (or an explicit escape); that is
+  a parent-directory permission, not a missing grant.
 - **A `contain` grade no longer carries an escape it will not grant**: a
   reviewer that answered `direct:"allow"` beside `level:"contain"` produced a
   note whose rationale promised a one-call sandbox escape while the call ran
