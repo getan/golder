@@ -108,11 +108,10 @@ type BashTool struct {
 }
 
 // SandboxDenialAnswer is what came back from the question a sandbox denial puts
-// to the person. It is a choice, not a boolean, because "let it reach that path"
-// and "let it out of the box" are different decisions with different
-// consequences — and the second one exists because the command was already
-// reviewed and approved before it ran; what the sandbox refused is a path, not
-// the call.
+// to the person: re-admit the refused path (the command still runs contained),
+// or refuse. Leaving the sandbox is a different request — the model asks for it
+// with sandbox_permissions=require_escalated, and the level decides it — so the
+// denial recovery cannot smuggle an unconfined run in through a second answer.
 type SandboxDenialAnswer int
 
 const (
@@ -122,10 +121,6 @@ const (
 	// SandboxDenialReAdmitted: the refused path is registered, so re-running the
 	// command inside the sandbox can now reach it.
 	SandboxDenialReAdmitted
-	// SandboxDenialUnconfined: the permission gate approved one unconfined run
-	// of this command (the asker only forwards that verdict). The tool re-runs
-	// it once with a Direct grant; nothing about this is remembered.
-	SandboxDenialUnconfined
 )
 
 // SandboxRunner builds a sandboxed argv for one shell invocation: argv[0] is
@@ -181,7 +176,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 	if t.ForceSandbox {
 		return true, ""
 	}
-	if (agentcore.DirectGrantedFromContext(ctx) || unconfinedApproved(ctx)) && !agentcore.SandboxRequestedFromContext(ctx) {
+	if agentcore.DirectGrantedFromContext(ctx) && !agentcore.SandboxRequestedFromContext(ctx) {
 		return false, ""
 	}
 	// The gate's envelope: everything this command touches is readable from its
@@ -506,23 +501,6 @@ func sandboxRetryDone(ctx context.Context) bool {
 	return done
 }
 
-// unconfinedKey marks a command the person approved to re-run outside the
-// sandbox from the denial question (SandboxDenialUnconfined). It is the gate's
-// own answer travelling to the retry, exactly as agentcore.WithDirectGrant is
-// for a gate-approved escape — the difference is only which question produced
-// it: this one is asked at the moment the sandbox refused, with the command
-// already in front of the person.
-type unconfinedKey struct{}
-
-func withUnconfinedRun(ctx context.Context) context.Context {
-	return context.WithValue(ctx, unconfinedKey{}, true)
-}
-
-func unconfinedApproved(ctx context.Context) bool {
-	v, _ := ctx.Value(unconfinedKey{}).(bool)
-	return v
-}
-
 // Execute runs one command: sandboxed by default, direct only where the gate
 // granted a Direct decision. A sandbox denial that names a path is offered back
 // to the person before the failure is returned (see OnSandboxDenied).
@@ -535,8 +513,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		return errorResult("bash: command is required"), nil
 	}
 	if a.Network == "on" && (t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess) &&
-		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) &&
-		!unconfinedApproved(ctx) {
+		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) {
 		return errorResult("bash: network access was requested but was not authorized; the command was not run. Ask for a network approval, or keep the command local"), nil
 	}
 
@@ -685,12 +662,6 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			switch t.OnSandboxDenied(ctx, p, a.Command) {
 			case SandboxDenialReAdmitted:
 				return t.Execute(withSandboxRetry(ctx), id, args, onUpdate)
-			case SandboxDenialUnconfined:
-				// The person chose to run this one command outside the sandbox,
-				// at the moment the sandbox refused it. The retry flag keeps the
-				// denial question from being asked again if it fails for another
-				// reason; the unconfined flag is what sandboxRoute honours.
-				return t.Execute(withUnconfinedRun(withSandboxRetry(ctx)), id, args, onUpdate)
 			}
 		}
 	}

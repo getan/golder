@@ -27,6 +27,11 @@ interactive REPL/TUI.
   `network_grants.json`; the old files are no longer read and can be deleted.
   A network-only request now offers "this call" and "deny", not a lifetime the
   gate cannot keep.
+- **Denial recovery is path-only**: the exported `SandboxDenialUnconfined`
+  answer and its context plumbing are gone. A sandbox denial can re-admit the
+  refused path (still contained) or be refused; leaving the sandbox stays a
+  separate `require_escalated` request decided by the level. The README and the
+  sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
 - **One level is the whole approval**: the reviewer no longer answers a separate

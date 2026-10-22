@@ -7,8 +7,6 @@ package agenttool
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -291,42 +289,6 @@ func TestBashSandboxDenialOffersPathAndRetries(t *testing.T) {
 	runner, asked = probe(t, "make", func(string) SandboxDenialAnswer { return SandboxDenialReAdmitted })
 	if len(asked) != 0 || runner.runs != 1 {
 		t.Errorf("no path: asked = %v, runs = %d, want no question and one run", asked, runner.runs)
-	}
-}
-
-// TestBashSandboxDenialOffersUnconfinedRun: when the path cannot be granted —
-// a system-protected file, or credential material the floor refuses — the
-// person can answer "run this one command outside the sandbox". The retry runs
-// the command itself rather than through the runner, and the question is asked
-// once.
-func TestBashSandboxDenialOffersUnconfinedRun(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		t.Skip("no home directory")
-	}
-	refused := filepath.Join(home, "probe-unconfined", "out")
-	runner := &denialEchoRunner{line: "cp: cannot create regular file '" + refused + "': Operation not permitted"}
-	asked := 0
-	tool := &BashTool{
-		Dir: t.TempDir(), Sandbox: runner,
-		Permissions: permissions.New(permissions.Auto),
-		OnSandboxDenied: func(_ context.Context, path, _ string) SandboxDenialAnswer {
-			asked++
-			if path != refused {
-				t.Errorf("asked about %q, want %q", path, refused)
-			}
-			return SandboxDenialUnconfined
-		},
-	}
-	res, err := runBash(t, tool, map[string]any{"command": "echo ran-unconfined"}, nil)
-	if err != nil {
-		t.Fatalf("unconfined retry failed: %v", err)
-	}
-	if text := resultText(res); !strings.Contains(text, "ran-unconfined") {
-		t.Fatalf("result = %q, want the command's own output from the retry", text)
-	}
-	if asked != 1 {
-		t.Errorf("questions = %d, want exactly one", asked)
 	}
 }
 
