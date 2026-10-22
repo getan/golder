@@ -223,6 +223,11 @@ func ChildToolSet(cwd string, policy ToolPolicy) []agentcore.AgentTool {
 			// type into the person's page.
 			tools[i] = agenttool.NewBrowserTool(cwd, false)
 		}
+		if tool.Name() == "visual" {
+			// A child may chart data for itself; it must not open panes or
+			// write artifacts the person did not ask for.
+			tools[i] = agenttool.NewVisualTool(cwd, false)
+		}
 	}
 	return ApplyToolPolicy(tools, policy)
 }
