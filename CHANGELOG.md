@@ -29,6 +29,11 @@ interactive REPL/TUI.
   gate cannot keep.
 
 ### Fixed
+- **Enforce mode no longer promises an escape it will not perform**: with
+  `GOLDER_SANDBOX=enforce`, an auto allow + `direct:"allow"` still ran contained
+  (the tool forces the sandbox) but the note said `runs OUTSIDE the sandbox`.
+  The gate now clears Direct/Bare under enforce, omits the escape from the ask
+  dialog, and reports containment instead.
 - **bash honors a one-call write grant**: the gate published `WriteGrant`, but
   only the worker-backed native tools consumed it; a bash call granted an exact
   write path still ran with that path unwritable and fell back to a sandbox

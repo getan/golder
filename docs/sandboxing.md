@@ -56,7 +56,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 - 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
 - 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
 
-`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
+`GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封**和 Direct**：`auto` 的 allow + `direct:"allow"`、`ask` 的“沙箱外运行”都会被强制收容，并播报实际结果；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程在非 enforce 下保持不变。
 
 **为什么原生文件工具不需要 `require_escalated`**：它们确实也走 worker，但 worker 是**每次调用新建的沙箱**，而调用参数（或 patch 文本）已经点名了它要碰的路径。`ReadGrant`/`WriteGrant` 只是把这一条路径加进本次 worker 的 `CallPolicy`（`ReadFiles`/`WriteFiles`，或目录根），沙箱其余部分照旧关闭——这是“在沙箱里开一个精确的小口”，不是 escape。bash 的**读取和网络同样走窄授权**；一次性写入授权现在也会进入 bash 本次调用的 `WriteFiles`/`WriteDirs`（目录是 subtree），所以“写这个命名路径”不需要 escape。只有写入范围无法从命令文本表达（变量、重定向、任意程序），或者删除目标本身需要父目录写权限时，才走会话级 writable root（仍在沙箱内）或 `require_escalated`（Direct，整个进程出沙箱）。`Direct` 是唯一让进程离开沙箱的位；`ReadGrant`/`WriteGrant` 都不是。
 

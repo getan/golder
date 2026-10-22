@@ -17,10 +17,11 @@ second authorization system.
 A sandbox escape is the exception: it needs the reviewer's separate
 `direct:"allow"`, so `confirm` + `direct:"deny"` withholds the escape (the call
 is blocked rather than run bare), and `contain` keeps it inside the file
-sandbox regardless. A network answer the reviewer gave separately still applies
-inside a contained call, while any other un-granted need blocks it. `deny`
-blocks. The reviewer chain is static floor → local rules / JEV → the session
-LLM only for what remains.
+sandbox regardless. `GOLDER_SANDBOX=enforce` overrides the escape too: every
+bash call is contained, and the note says so. A network answer the reviewer
+gave separately still applies inside a contained call, while any other
+un-granted need blocks it. `deny` blocks. The reviewer chain is static floor →
+local rules / JEV → the session LLM only for what remains.
 
 `ask` uses the same reviewer as a filter: a routine `allow` with no capability
 expansion is not shown to a person. Everything else produces one request with

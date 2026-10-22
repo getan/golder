@@ -289,18 +289,24 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		needs = append(needs, need)
 	}
-	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") {
+	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") && !opts.Enforce {
 		// In auto the reviewer's Direct is the grant, and Contain means it chose
 		// containment; neither needs a human-shaped capability. An allow/confirm
 		// without Direct leaves the escape ungranted, and autoDecision blocks
 		// that call instead of running it bare. In ask the person still decides
-		// the escape.
+		// the escape. Enforce mode never offers one: it contains every bash call,
+		// so a CapUnconfined need would only block or ask for an impossible answer.
 		if mode == permissions.Ask || (mode == permissions.Auto && !v.Direct && v.Level != Contain) {
 			needs = append(needs, Need{Cap: CapUnconfined})
 		}
 	}
 	if strings.EqualFold(call.Name, "bash") && opts.RequireSandbox &&
-		(opts.Sandboxed == nil || !opts.Sandboxed(call.Name)) {
+		(opts.Sandboxed == nil || !opts.Sandboxed(call.Name)) &&
+		(!v.Direct || opts.Enforce) {
+		// RequireSandbox is a default, not an absolute: the tool's sandboxRoute
+		// honours an explicit one-call Direct before it checks for a runner (the
+		// comment on RequireSandbox says so). Enforce is the absolute setting and
+		// still fails closed without a runner.
 		needs = append(needs, Need{Cap: CapUnconfined})
 	}
 	return dedupeNeeds(needs)
@@ -436,11 +442,22 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if hasNeed(needs, CapUnconfined) {
 		n := noteFor(call, v, NoteDenied, lang)
 		n.Needs = needs
-		n.Rationale = localized(lang,
-			"评审拒绝了沙箱外请求；命令未运行",
-			"the reviewer declined the sandbox escape; the call did not run")
+		guidance := ""
+		if escalationRequested(call.Arguments) {
+			n.Rationale = localized(lang,
+				"评审拒绝了沙箱外请求；命令未运行",
+				"the reviewer declined the sandbox escape; the call did not run")
+			guidance = "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask"
+		} else {
+			// The escape is not the reason: RequireSandbox found no runner, and
+			// the call cannot be contained at all.
+			n.Rationale = localized(lang,
+				"没有可用的 OS 沙箱，命令未运行",
+				"no OS sandbox runner is available; the call did not run")
+			guidance = "no OS sandbox is available and the call requires isolation; install the platform sandbox or use full-access"
+		}
 		notify(n)
-		return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask")
+		return blockCall(call, v, guidance)
 	}
 	// Allow and Confirm are the reviewer's authorization in auto. The model (or
 	// the local/JEV layer standing in for it) has settled risk, so the call's
@@ -453,7 +470,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if NetworkRequested(call.Name, call.Arguments) {
 		dec.Network = true
 	}
-	if escalationRequested(call.Arguments) && v.Direct {
+	if askedToEscape(call) && v.Direct {
+		// Only bash has an escape request. A native tool carrying the argument by
+		// accident (or injection) must not inherit the bash-only Direct bit.
 		dec.Direct = true
 	}
 	if len(needs) == 0 {
@@ -461,16 +480,30 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 			dec.Bare, dec.BareReason = true, why
 		}
 	}
+	if opts.Enforce {
+		// Enforce is the strictest setting: the tool forces every bash call into
+		// the sandbox, so a Direct bit would be a promise it cannot keep. Clear
+		// the envelope bits and report what will actually happen.
+		dec.Direct = false
+		dec.Sandbox = true
+		dec.Bare, dec.BareReason = false, ""
+	}
 	kind := NoteApproved
-	if dec.Direct {
+	if opts.Enforce {
+		kind = NoteSandboxed
+	} else if dec.Direct {
 		// Running outside the sandbox must never be invisible; it is the one
 		// outcome a sandboxed session has to announce separately.
 		kind = NoteEscaped
 	}
-	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: v.Level, Lang: lang,
+	n := Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: v.Level, Lang: lang,
 		Source: v.Source, Granted: needs,
 		Summary: riskSummary(call), Risk: v.Risk, Authorization: v.Authorization,
-		Rationale: consentRationale(v, needs, lang)})
+		Rationale: consentRationale(v, needs, lang)}
+	if opts.Enforce && askedToEscape(call) {
+		n.Escalation = true
+	}
+	notify(n)
 	return dec
 }
 
@@ -527,9 +560,18 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	// fail on the very path the answer was meant to open. Containment is the
 	// default only when the answer did not choose otherwise.
 	unconfined := ans.Exec == ExecUnconfined && hasNeed(ans.Needs, CapUnconfined)
+	if opts.Enforce {
+		// The tool's ForceSandbox ignores the envelope; never report an escape
+		// the execution layer will not perform.
+		unconfined = false
+	}
 	if unconfined {
 		dec.Direct = true
 	} else if v.Level == Contain {
+		dec.Sandbox = true
+	}
+	if opts.Enforce {
+		dec.Direct = false
 		dec.Sandbox = true
 	}
 	// applyNeeds already carries a network need the person granted. The
@@ -544,15 +586,21 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		granted = needs
 	}
 	kind := NoteApproved
-	if unconfined {
+	if opts.Enforce {
+		kind = NoteSandboxed
+	} else if unconfined {
 		// The person chose to leave the sandbox; say so rather than folding it
 		// into an ordinary approval.
 		kind = NoteEscaped
 	}
-	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: Allow, Lang: lang,
+	n := Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: Allow, Lang: lang,
 		Source: v.Source, Granted: granted,
 		Summary: req.Summary, Risk: v.Risk, Authorization: v.Authorization,
-		Rationale: consentRationale(v, ans.Needs, lang)})
+		Rationale: consentRationale(v, ans.Needs, lang)}
+	if opts.Enforce && askedToEscape(call) {
+		n.Escalation = true
+	}
+	notify(n)
 	return dec
 }
 

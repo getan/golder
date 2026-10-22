@@ -134,6 +134,139 @@ func TestConsentAutoApprovedEscapeIsAnnounced(t *testing.T) {
 	}
 }
 
+// Enforce mode is the strictest setting: every bash call is contained, so a
+// Direct grant cannot be honored. Saying "runs OUTSIDE" while the tool forces a
+// sandbox is a lie about the one outcome that must never be misreported.
+func TestConsentAutoEnforceContainsTheEscape(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode:       permissions.New(permissions.Auto),
+		Enforce:    true,
+		Classifier: consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"用户要求清理"}}},
+		Cwd:        t.TempDir(),
+		Sandboxed:  func(string) bool { return true },
+		Notify:     func(n Note) { notes = append(notes, n) },
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "enforce-escape", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || dec.Block {
+		t.Fatalf("the contained call should run, got %+v", dec)
+	}
+	if !dec.Sandbox || dec.Direct {
+		t.Errorf("envelope = %+v, want enforce containment and no escape", dec)
+	}
+	if len(notes) != 1 || notes[0].Kind != NoteSandboxed || !notes[0].Escalation {
+		t.Fatalf("notes = %+v, want one contained-escape note", notes)
+	}
+	got := FormatNote(notes[0])
+	if !strings.Contains(got, "contained · the sandbox escape was not granted") {
+		t.Errorf("note = %q, want the refused escape named", got)
+	}
+	if strings.Contains(got, "runs OUTSIDE") {
+		t.Errorf("note = %q, want enforcement reflected", got)
+	}
+}
+
+// Ask cannot offer an escape enforcement will not perform. The need is omitted,
+// and a stale unconfined answer still lands contained.
+func TestConsentAskEnforceDoesNotOfferEscape(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode:       permissions.New(permissions.Ask),
+		Enforce:    true,
+		Classifier: consentClassifier{v: Verdict{Level: Confirm, Source: "llm", Reasons: []string{"需要确认"}}},
+		Cwd:        t.TempDir(),
+		Sandboxed:  func(string) bool { return true },
+		Notify:     func(n Note) { notes = append(notes, n) },
+		Confirm: func(_ context.Context, req ConsentRequest) ConsentAnswer {
+			if hasNeed(req.Needs, CapUnconfined) {
+				t.Fatalf("enforce offered an escape: %+v", req.Needs)
+			}
+			return ConsentAnswer{Allow: true, Answered: true, Scope: ScopeOnce, Needs: req.Needs, Exec: ExecUnconfined}
+		},
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "enforce-ask", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || dec.Block {
+		t.Fatalf("the approved call should run, got %+v", dec)
+	}
+	if !dec.Sandbox || dec.Direct {
+		t.Errorf("envelope = %+v, want enforce containment and no escape", dec)
+	}
+	if len(notes) != 1 || notes[0].Kind != NoteSandboxed {
+		t.Fatalf("notes = %+v, want one contained note", notes)
+	}
+}
+
+// RequireSandbox is the default, not a veto: an explicit one-call Direct is
+// what the tool's own route honors before it checks for a runner. Enforce is
+// the exception; it stays fail-closed.
+func TestConsentAutoDirectOverridesRequireSandboxWithoutRunner(t *testing.T) {
+	grantstest.Install(t)
+	gate := ConsentGate(ConsentOpts{
+		Mode:           permissions.New(permissions.Auto),
+		RequireSandbox: true,
+		Sandboxed:      func(string) bool { return false },
+		Classifier:     consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"用户要求这个临时目录清理"}}},
+		Cwd:            t.TempDir(),
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "direct-no-runner", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || dec.Block {
+		t.Fatalf("an explicit Direct should override the missing runner, got %+v", dec)
+	}
+	if !dec.Direct {
+		t.Errorf("decision = %+v, want the escape granted", dec)
+	}
+}
+
+// Without a runner and without a Direct, a bash call cannot be contained at
+// all. The failure names that, not a refused escape the call never requested.
+func TestConsentAutoNoRunnerWithoutEscapeBlocks(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode:           permissions.New(permissions.Auto),
+		RequireSandbox: true,
+		Sandboxed:      func(string) bool { return false },
+		Classifier:     consentClassifier{v: Verdict{Level: Allow, Source: "llm", Reasons: []string{"read only"}}},
+		Cwd:            t.TempDir(),
+		Notify:         func(n Note) { notes = append(notes, n) },
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "no-runner", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"ls"}`)})
+	if dec == nil || !dec.Block {
+		t.Fatalf("a call that cannot be contained must block, got %+v", dec)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want one denial", notes)
+	}
+	if got := FormatNote(notes[0]); !strings.Contains(got, "no OS sandbox") {
+		t.Errorf("note = %q, want the missing runner named", got)
+	}
+}
+
+// Only bash has an escape request. A native tool that happens to carry the
+// sandbox_permissions argument must not inherit the bash-only Direct bit.
+func TestConsentAutoNativeToolCannotEscape(t *testing.T) {
+	grantstest.Install(t)
+	gate := ConsentGate(ConsentOpts{
+		Mode:       permissions.New(permissions.Auto),
+		Classifier: consentClassifier{v: Verdict{Level: Allow, Direct: true, Source: "llm", Reasons: []string{"read only"}}},
+		Cwd:        t.TempDir(),
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "native-escape", Name: "read",
+		Arguments: json.RawMessage(`{"path":"x","sandbox_permissions":"require_escalated"}`)})
+	if dec == nil || dec.Block {
+		t.Fatalf("the read should run, got %+v", dec)
+	}
+	if dec.Direct {
+		t.Errorf("decision = %+v, want no Direct on a native tool", dec)
+	}
+}
+
 // Containment must not become a way around the network answer: a reviewer that
 // says network:deny leaves a capability need, and the call is blocked rather
 // than run into the bash tool's own guard.
