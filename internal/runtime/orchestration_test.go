@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
@@ -305,7 +306,8 @@ func TestValidateSkillName(t *testing.T) {
 	}
 }
 
-// TestValidateSkillDescription verifies description is required and bounded.
+// TestValidateSkillDescription verifies a description is required. Length is
+// not part of validation: over-long descriptions are truncated, not rejected.
 func TestValidateSkillDescription(t *testing.T) {
 	if err := validateSkillDescription("does a thing"); err != nil {
 		t.Errorf("valid description rejected: %v", err)
@@ -313,11 +315,58 @@ func TestValidateSkillDescription(t *testing.T) {
 	if err := validateSkillDescription("   "); err == nil {
 		t.Error("blank description must error")
 	}
-	if err := validateSkillDescription(strings.Repeat("x", 1025)); err == nil {
-		t.Error("over-long description must error")
+	if err := validateSkillDescription(strings.Repeat("x", maxSkillDescriptionLength+1)); err != nil {
+		t.Errorf("over-long description should be truncated, not rejected: %v", err)
 	}
-	if err := validateSkillDescription(strings.Repeat("x", 1024)); err != nil {
-		t.Errorf("1024-char description rejected: %v", err)
+}
+
+// TestTruncateSkillDescription verifies the limit counts characters (runes),
+// not bytes, and that an over-long description is cut at a rune boundary with
+// an ellipsis instead of being dropped.
+func TestTruncateSkillDescription(t *testing.T) {
+	atLimit := strings.Repeat("x", maxSkillDescriptionLength)
+	if got, note := truncateSkillDescription(atLimit); got != atLimit || note != "" {
+		t.Errorf("exactly-at-limit description changed (note %q)", note)
+	}
+
+	// 1024 Chinese characters are 3072 bytes; they still fit the character limit.
+	cjk := strings.Repeat("技", maxSkillDescriptionLength)
+	if got, note := truncateSkillDescription(cjk); got != cjk || note != "" {
+		t.Errorf("1024-character CJK description should fit (note %q)", note)
+	}
+
+	long := strings.Repeat("技", maxSkillDescriptionLength+10)
+	got, note := truncateSkillDescription(long)
+	if n := utf8.RuneCountInString(got); n != maxSkillDescriptionLength {
+		t.Errorf("truncated length = %d runes, want %d", n, maxSkillDescriptionLength)
+	}
+	if !utf8.ValidString(got) {
+		t.Error("truncation split a rune")
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("truncated description should end with an ellipsis: %q", got)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("技", maxSkillDescriptionLength-1)) {
+		t.Error("truncation should keep the leading characters")
+	}
+	if note == "" {
+		t.Error("truncation should return a warning note")
+	}
+}
+
+// TestParseSkillTruncatesLongDescription verifies an over-long description
+// keeps the skill usable and is recorded as a non-fatal warning.
+func TestParseSkillTruncatesLongDescription(t *testing.T) {
+	long := strings.Repeat("技", maxSkillDescriptionLength+100)
+	sk, err := ParseSkill("long.md", []byte("---\nname: long\ndescription: "+long+"\n---\nbody"))
+	if err != nil {
+		t.Fatalf("ParseSkill: %v", err)
+	}
+	if n := utf8.RuneCountInString(sk.Frontmatter.Description); n != maxSkillDescriptionLength {
+		t.Errorf("description length = %d runes, want %d", n, maxSkillDescriptionLength)
+	}
+	if len(sk.Warnings) != 1 || !strings.Contains(sk.Warnings[0], "truncated") {
+		t.Errorf("want one truncation warning, got %v", sk.Warnings)
 	}
 }
 
@@ -430,6 +479,25 @@ func TestLoadSkillsDir(t *testing.T) {
 	empty, err := LoadSkillsDir(filepath.Join(dir, "does-not-exist"))
 	if err != nil || empty != nil {
 		t.Errorf("missing dir should yield (nil, nil), got (%v, %v)", empty, err)
+	}
+}
+
+// TestLoadSkillsDirSurfacesTruncationWarning verifies a truncated description is
+// reported as a warning while the skill itself still loads (unlike an invalid
+// name, which skips the file).
+func TestLoadSkillsDirSurfacesTruncationWarning(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("技", maxSkillDescriptionLength+100)
+	if err := os.WriteFile(filepath.Join(dir, "long.md"), []byte("---\nname: long\ndescription: "+long+"\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skills, err := LoadSkillsDir(dir)
+	if err == nil || !strings.Contains(err.Error(), "warning: description truncated") {
+		t.Fatalf("want truncation warning, got %v", err)
+	}
+	if len(skills) != 1 || skills[0].Frontmatter.Name != "long" {
+		t.Fatalf("skill must still load, got %v", skills)
 	}
 }
 

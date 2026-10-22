@@ -1566,6 +1566,11 @@ interactive REPL/TUI.
   reviewed call is now graded on its own evidence.
 
 ### Fixed
+- **A skill description over the spec limit is shortened, not dropped**: the
+  1024 cap counts characters (runes) instead of UTF-8 bytes, so a Chinese
+  description no longer disappears at ~341 characters; an over-long one is cut
+  at a rune boundary with `…` and reported as a non-fatal warning while the
+  skill and its `/command` stay available.
 - **`apply_patch` tolerates aligned whitespace and marker-like content**:
   context lines whose internal whitespace runs differ from the file (models
   often align struct fields or columns) now match on a final loose pass while

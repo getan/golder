@@ -17,6 +17,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
 	"gopkg.in/yaml.v3"
@@ -46,7 +48,8 @@ type SkillFrontmatter struct {
 
 // Agent Skills spec limits (mirrors pi/agentskills.io): a skill name is a short
 // slug and a description is a single sentence, both bounded so they stay cheap
-// to inject into the system prompt.
+// to inject into the system prompt. A description that overruns the limit is
+// shortened rather than rejected: see truncateSkillDescription.
 const (
 	maxSkillNameLength        = 64
 	maxSkillDescriptionLength = 1024
@@ -75,24 +78,49 @@ func validateSkillName(name string) error {
 	return nil
 }
 
-// validateSkillDescription reports why description violates the spec, or nil
-// when it is valid: non-empty and at most maxSkillDescriptionLength characters.
+// validateSkillDescription reports why description cannot be used, or nil when
+// it is usable: non-empty. An over-long description is not an error — dropping
+// the skill would also drop every command it exposes — so truncateSkillDescription
+// shortens it instead.
 func validateSkillDescription(description string) error {
 	if strings.TrimSpace(description) == "" {
 		return errors.New("frontmatter missing required 'description'")
 	}
-	if len(description) > maxSkillDescriptionLength {
-		return fmt.Errorf("description exceeds %d characters (%d)", maxSkillDescriptionLength, len(description))
-	}
 	return nil
+}
+
+// truncateSkillDescription shortens description to maxSkillDescriptionLength
+// characters, appending an ellipsis to mark the cut. It returns the description
+// unchanged when it already fits, and a warning note when it does not.
+//
+// The limit counts runes, not bytes: the spec says "characters", and CJK text is
+// three bytes per character, so a byte check would reject a compliant
+// 1024-character description at roughly a third of its allowance. Cutting on a
+// rune boundary keeps the result valid UTF-8.
+func truncateSkillDescription(description string) (string, string) {
+	total := utf8.RuneCountInString(description)
+	if total <= maxSkillDescriptionLength {
+		return description, ""
+	}
+	// Reserve the final character for the ellipsis so the result itself stays
+	// within the limit.
+	runes := []rune(description)
+	truncated := strings.TrimRightFunc(string(runes[:maxSkillDescriptionLength-1]), unicode.IsSpace)
+	if truncated == "" {
+		truncated = string(runes[:maxSkillDescriptionLength-1])
+	}
+	truncated += "…"
+	note := fmt.Sprintf("description truncated from %d to %d characters (limit %d)",
+		total, utf8.RuneCountInString(truncated), maxSkillDescriptionLength)
+	return truncated, note
 }
 
 // stringList is a []string that unmarshals from either a YAML sequence
 // (- a\n- b) or a single scalar. A scalar is split on commas so the common
 // Claude Code form `allowed-tools: Bash(foo:*), Read` parses into two entries.
 // This tolerance matters: a strict []string field rejects the scalar form and,
-// because LoadSkillsDir aborts on the first parse error, one such skill would
-// hide every other skill in the directory.
+// because a rejected file is a skill the user silently loses, one unusual
+// spelling must not decide whether the skill exists at all.
 type stringList []string
 
 // UnmarshalYAML accepts a scalar or a sequence node.
@@ -134,6 +162,10 @@ type Skill struct {
 	Body string
 	// Path is the source file, retained for diagnostics.
 	Path string
+	// Warnings records non-fatal adjustments made while parsing (currently a
+	// description shortened to the spec limit), so LoadSkillsDir can report them
+	// without skipping the skill.
+	Warnings []string
 }
 
 // ParseSkill parses a skill's raw file content into a Skill. The file must open
@@ -159,7 +191,13 @@ func ParseSkill(path string, content []byte) (*Skill, error) {
 	if err := validateSkillDescription(meta.Description); err != nil {
 		return nil, fmt.Errorf("skill %s: %w", path, err)
 	}
-	return &Skill{Frontmatter: meta, Body: strings.TrimSpace(string(body)), Path: path}, nil
+	description, warning := truncateSkillDescription(meta.Description)
+	meta.Description = description
+	skill := &Skill{Frontmatter: meta, Body: strings.TrimSpace(string(body)), Path: path}
+	if warning != "" {
+		skill.Warnings = append(skill.Warnings, warning)
+	}
+	return skill, nil
 }
 
 // splitFrontmatter separates a leading "---"-delimited YAML block from the rest
@@ -201,8 +239,8 @@ func splitFrontmatter(content []byte) (frontmatter, body []byte, err error) {
 // error accumulated, so one bad skill cannot hide every other skill in the
 // directory (a real ~/.agents/skills holds 100+ skills authored to varying
 // conventions). The successfully parsed skills are always returned; the error,
-// when non-nil, joins every skip reason for the caller to surface as a
-// non-fatal warning.
+// when non-nil, joins every skip reason and non-fatal warning (a truncated
+// description, say) for the caller to surface.
 func LoadSkillsDir(dir string) ([]*Skill, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -237,6 +275,9 @@ func LoadSkillsDir(dir string) ([]*Skill, error) {
 		if parseErr != nil {
 			errs = append(errs, parseErr)
 			continue
+		}
+		for _, warning := range skill.Warnings {
+			errs = append(errs, fmt.Errorf("skill %s: warning: %s", path, warning))
 		}
 		skills = append(skills, skill)
 	}
