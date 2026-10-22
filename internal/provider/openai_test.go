@@ -126,6 +126,9 @@ func TestOpenAIDecoderInlineError(t *testing.T) {
 	if !strings.Contains(err.Error(), "rate_limit_exceeded") {
 		t.Errorf("error should name the type, got %v", err)
 	}
+	if !isStreamCutErr(err) {
+		t.Errorf("error = %v, want a retryable upstream cut", err)
+	}
 }
 
 // TestOpenAIDecoderMalformedPayload verifies invalid JSON is a returned error

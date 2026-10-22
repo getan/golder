@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/openai/openai-go/option"
@@ -405,6 +406,9 @@ func TestResponsesDriverInStreamErrorEvent(t *testing.T) {
 	}
 	if !strings.Contains(errEvent.Message.ErrorMessage, "boom") {
 		t.Errorf("error message = %q, want to contain %q", errEvent.Message.ErrorMessage, "boom")
+	}
+	if !isStreamCutErr(errEvent.Err) {
+		t.Errorf("error = %v, want a retryable upstream cut (the retry wrapper needs it)", errEvent.Err)
 	}
 	msg, _ := stream.Result(context.Background())
 	if msg.StopReason != agentcore.StopReasonError {
@@ -1367,5 +1371,105 @@ func TestResponsesDriverFailedEventCarriesServerError(t *testing.T) {
 		if !strings.Contains(errEvent.Message.ErrorMessage, want) {
 			t.Errorf("error message = %q, want to contain %q", errEvent.Message.ErrorMessage, want)
 		}
+	}
+	if !isStreamCutErr(errEvent.Err) {
+		t.Errorf("error = %v, want a retryable upstream cut (server_error is transient)", errEvent.Err)
+	}
+	if got := streamCutReason(errEvent.Err); got != StreamCutUpstream {
+		t.Errorf("reason = %q, want %q", got, StreamCutUpstream)
+	}
+}
+
+// The reported failure end to end: the first Responses attempt ends with
+// response.failed / server_error before any output, the retry completes, and
+// the caller sees only the recovered answer plus a notice naming the upstream
+// failure.
+func TestResponsesServerErrorIsRetriedBeforeContent(t *testing.T) {
+	fastRetryBackoff(t)
+	var calls int32
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return sseResponse(
+				`{"type":"response.failed","sequence_number":1,"response":{"id":"resp-1","error":{"code":"server_error","message":"An error occurred while processing your request."}}}`,
+			), nil
+		}
+		return sseResponse(completedFrame("recovered", "resp-2", "gpt-4o", 3, 4)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := withStreamRetry(d, WireResponses).StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+
+	var (
+		text    string
+		errText string
+		notices []StreamNoticeEvent
+	)
+	for ev := range stream.Events() {
+		switch e := ev.(type) {
+		case StreamDoneEvent:
+			text = agentcore.ContentToText(e.Message.Content)
+		case StreamErrorEvent:
+			errText = e.Message.ErrorMessage
+		case StreamNoticeEvent:
+			notices = append(notices, e)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("attempts = %d, want 2 (the failed response and one retry)", got)
+	}
+	if errText != "" {
+		t.Errorf("error = %q, want none: the retry answered", errText)
+	}
+	if text != "recovered" {
+		t.Errorf("text = %q, want the retry's answer", text)
+	}
+	if len(notices) != 1 {
+		t.Fatalf("notices = %d (%+v), want exactly 1", len(notices), notices)
+	}
+	if notices[0].Reason != StreamCutUpstream {
+		t.Errorf("notice reason = %q, want %q", notices[0].Reason, StreamCutUpstream)
+	}
+	if !strings.Contains(notices[0].Detail, "server_error") {
+		t.Errorf("notice detail = %q, want the server's code", notices[0].Detail)
+	}
+}
+
+// A deterministic failure code is not retryable: the wrapper must leave it
+// terminal even though response.failed is the same event the server_error path
+// uses.
+func TestResponsesFailedEventRejectionIsNotACut(t *testing.T) {
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return sseResponse(
+			`{"type":"response.failed","sequence_number":1,"response":{"id":"resp-3","error":{"code":"invalid_prompt","message":"the prompt was rejected"}}}`,
+		), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+
+	stream, err := d.StreamCompletion(context.Background(), CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	})
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+	var errEvent *StreamErrorEvent
+	for ev := range stream.Events() {
+		if se, ok := ev.(StreamErrorEvent); ok {
+			errEvent = &se
+		}
+	}
+	if errEvent == nil {
+		t.Fatal("expected the rejection as a terminal StreamErrorEvent")
+	}
+	if isStreamCutErr(errEvent.Err) {
+		t.Errorf("error = %v, want a non-retryable rejection", errEvent.Err)
 	}
 }

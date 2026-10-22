@@ -2,7 +2,7 @@ package provider
 
 // Stream failures: why this exists.
 //
-// A stream can end early in four ways, and every wire golder speaks reports them
+// A stream can end early in five ways, and every wire golder speaks reports them
 // as raw machinery:
 //
 //   - the connection dies mid-response. net/http reports io.ErrUnexpectedEOF,
@@ -21,8 +21,14 @@ package provider
 //     ("stream ended without a terminal event") — a sentence that names the
 //     symptom but is not recognized as a cut, so it was surfaced without the
 //     retry every other cut gets.
+//   - the provider declares the failure itself on a healthy stream: the
+//     Responses wire's response.failed / error events (server_error,
+//     rate_limit_exceeded), Anthropic's error event (overloaded_error,
+//     api_error), and the Chat wire's inline error object. The connection
+//     stayed up, so no transport watchdog fires; the stream ended with an error
+//     the user was told to fix, although the request itself was fine.
 //
-// None of the four is a configuration mistake, and all of them turn a turn that
+// None of the five is a configuration mistake, and all of them turn a turn that
 // had produced nothing into a dead end: they ended the stream instead of being
 // retried. This file is the shared vocabulary — one place that decides "this
 // stream was cut" and one sentence to say so — while streamretry.go owns the
@@ -52,7 +58,70 @@ const (
 	// request is the fix — but its own kind, because the sentence and the retry
 	// reason differ from a stream that died mid-answer.
 	StreamCutConnect = "connect"
+	// StreamCutUpstream is a failure the provider declared on a healthy stream:
+	// the server accepted the request (a response id may exist) and then ended it
+	// with an error event instead of an answer. It is a cut because nothing an
+	// answer could duplicate was produced, and it is its own kind because the
+	// connection was fine — the server behind it failed.
+	StreamCutUpstream = "upstream"
 )
+
+// errStreamUpstream is the sink for a provider-declared failure that is worth
+// re-issuing: OpenAI's response.failed/error events carry server_error and
+// rate_limit_exceeded, Anthropic's error event carries overloaded_error and
+// api_error, and the Chat wire can carry the same codes inline. None of them is
+// a transport cut, but all of them mean the request was right and the server
+// behind it failed — the case the retry loop exists for.
+var errStreamUpstream = errors.New("upstream failed the response")
+
+// upstreamStreamError is a failure the wire declared itself. Unlike a dropped
+// connection, its retryability is decided by the wire's error code: a
+// server_error is transient, an invalid_prompt or a rejected image is the
+// wire's real answer and must be surfaced instead of re-issued.
+type upstreamStreamError struct {
+	// code is the wire's error code ("server_error", "overloaded_error", …).
+	code string
+	// text is the sentence the wire's own fields render to; each driver keeps
+	// its established wording so the transcript names what actually happened.
+	text string
+}
+
+func (e *upstreamStreamError) Error() string { return e.text }
+
+// Is reports membership in the retryable-upstream class. It is conditional on
+// the code on purpose: errors.Is(err, errStreamUpstream) is the one question
+// isStreamCutErr asks, so a deterministic rejection must not answer yes.
+func (e *upstreamStreamError) Is(target error) bool {
+	return target == errStreamUpstream && retryableUpstreamCode(e.code)
+}
+
+// newUpstreamStreamError builds the typed failure. text is the complete
+// sentence the wire rendered; code decides retryability.
+func newUpstreamStreamError(code, text string) error {
+	if text == "" {
+		text = "upstream error"
+		if code != "" {
+			text += ": " + code
+		}
+	}
+	return &upstreamStreamError{code: strings.TrimSpace(code), text: text}
+}
+
+// retryableUpstreamCode reports whether a provider-declared code means "the
+// request was fine, the server or model behind it failed". Unknown codes stay
+// terminal: an unrecognized rejection is more likely deterministic than
+// transient, and re-issuing it would only delay the message the user needs.
+func retryableUpstreamCode(code string) bool {
+	switch strings.ToLower(strings.TrimSpace(code)) {
+	case "server_error", "internal_error", "internal_server_error",
+		"api_error", "overloaded_error", "overloaded",
+		"rate_limit_exceeded", "rate_limit_error",
+		"service_unavailable", "temporarily_unavailable", "unavailable",
+		"timeout", "vector_store_timeout":
+		return true
+	}
+	return false
+}
 
 // Watchdog phases: the two windows are different questions, and a person reading
 // the failure needs to know which one expired. "No answer started" means the
@@ -125,6 +194,12 @@ func streamCutEvidence(err error) string {
 	var wd *StreamWatchdogError
 	if errors.As(err, &wd) {
 		return wd.Seen.String()
+	}
+	var up *upstreamStreamError
+	if errors.As(err, &up) {
+		// The server's own code and message are the evidence: they name what
+		// failed and carry the provider's request id for support.
+		return up.text
 	}
 	if isConnectFailure(err) {
 		// A connect failure has no watchdog evidence; the transport's own text
@@ -253,6 +328,7 @@ func isStreamCutErr(err error) bool {
 		isConnectFailure(err) ||
 		errors.Is(err, errStreamIdle) ||
 		errors.Is(err, errStreamStall) ||
+		errors.Is(err, errStreamUpstream) ||
 		errors.Is(err, errStreamNoTerminal)
 }
 
@@ -260,6 +336,8 @@ func isStreamCutErr(err error) bool {
 // Call it only after isStreamCutErr says the error is a cut.
 func streamCutReason(err error) string {
 	switch {
+	case errors.Is(err, errStreamUpstream):
+		return StreamCutUpstream
 	case errors.Is(err, errStreamIdle):
 		return StreamCutIdle
 	case errors.Is(err, errStreamStall):
@@ -306,6 +384,9 @@ func streamCutRetriedError(provider string, err error, retries int) error {
 	times := "once"
 	if retries != 1 {
 		times = fmt.Sprintf("%d times", retries)
+	}
+	if errors.Is(err, errStreamUpstream) {
+		return cutError(provider, err, fmt.Sprintf("already retried %s, and the server failed the response again — retry the turn", times))
 	}
 	return cutError(provider, err, fmt.Sprintf("already retried %s, and the connection dropped again — retry the turn", times))
 }
@@ -387,6 +468,8 @@ func streamCutDetail(provider string, err error) string {
 		return fmt.Sprintf("no data arrived for %s (the connection went quiet)", idleTimeout())
 	case errors.Is(err, errStreamStall):
 		return fmt.Sprintf("no output arrived for %s (the model stopped producing)", stallTimeout())
+	case errors.Is(err, errStreamUpstream):
+		return "the server failed the response (" + cutCause(provider, err) + ")"
 	case errors.Is(err, errStreamNoTerminal):
 		return "the stream ended without a final event (the connection closed before the answer was complete)"
 	case isConnectFailure(err):

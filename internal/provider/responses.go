@@ -285,7 +285,7 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 		case responses.ResponseFailedEvent:
 			return agentcore.AssistantMessage{}, empty(), failedResponseError(variant.Response)
 		case responses.ResponseErrorEvent:
-			return agentcore.AssistantMessage{}, empty(), fmt.Errorf("%s", variant.Message)
+			return agentcore.AssistantMessage{}, empty(), responseErrorEventError(variant)
 		}
 	}
 	if err := sse.Err(); err != nil {
@@ -317,13 +317,35 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 // invalid parameters), and dropping them leaves only a bare "response failed"
 // that cannot be diagnosed. The response id is included for provider support.
 func failedResponseError(r responses.Response) error {
-	if r.Error.Message != "" {
-		if r.ID != "" {
-			return fmt.Errorf("response failed [%s]: %s: %s", r.ID, r.Error.Code, r.Error.Message)
-		}
-		return fmt.Errorf("response failed: %s: %s", r.Error.Code, r.Error.Message)
+	code := string(r.Error.Code)
+	if code == "" && r.Error.Message == "" {
+		return fmt.Errorf("response failed")
 	}
-	return fmt.Errorf("response failed")
+	text := "response failed"
+	if r.ID != "" {
+		text += " [" + r.ID + "]"
+	}
+	if code != "" {
+		text += ": " + code
+	}
+	if r.Error.Message != "" {
+		text += ": " + r.Error.Message
+	}
+	return newUpstreamStreamError(code, text)
+}
+
+// responseErrorEventError renders an in-band "error" event, which (unlike a
+// response.failed event) carries the code and message at the top level and no
+// response object. The code decides whether the failure is worth re-issuing.
+func responseErrorEventError(ev responses.ResponseErrorEvent) error {
+	text := "response error"
+	if ev.Code != "" {
+		text += ": " + ev.Code
+	}
+	if ev.Message != "" {
+		text += ": " + ev.Message
+	}
+	return newUpstreamStreamError(ev.Code, text)
 }
 
 // buildPartial assembles a cumulative snapshot message for a streaming partial:

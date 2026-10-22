@@ -147,7 +147,9 @@ func (d *AnthropicDecoder) Decode(payload []byte) ([]StreamEvent, error) {
 		return nil, nil
 	case "error":
 		msg := "anthropic stream error"
+		code := ""
 		if ev.Error != nil {
+			code = ev.Error.Type
 			if ev.Error.Type != "" {
 				msg = "anthropic " + ev.Error.Type
 			}
@@ -155,7 +157,7 @@ func (d *AnthropicDecoder) Decode(payload []byte) ([]StreamEvent, error) {
 				msg += ": " + ev.Error.Message
 			}
 		}
-		return nil, fmt.Errorf("%s", msg)
+		return nil, newUpstreamStreamError(code, msg)
 	default:
 		// Unknown event types are ignored (forward-compatible).
 		return nil, nil

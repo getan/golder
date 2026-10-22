@@ -44,6 +44,16 @@ func TestProviderNoticeText(t *testing.T) {
 			lang: "en",
 			want: []string{"provider commandcode", "without a final event", "retrying"},
 		},
+		{
+			name: "upstream zh",
+			ev: agentcore.ProviderNoticeEvent{
+				Provider: "openai",
+				Reason:   provider.StreamCutUpstream,
+				Detail:   "response failed: server_error: boom",
+			},
+			lang: "zh",
+			want: []string{"provider openai", "上游错误", "server_error", "正在重试"},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

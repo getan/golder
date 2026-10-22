@@ -29,6 +29,16 @@ interactive REPL/TUI.
   gate cannot keep.
 
 ### Fixed
+- **A provider-declared server failure is retried like a cut stream**: OpenAI's
+  Responses API can end a healthy request with `response.failed` / `server_error`
+  (or an inline `error` event) instead of dropping the connection. The retry
+  layer only recognized transport cuts, so the turn died with
+  `error: response failed [resp_…]: server_error: …` and no retry. A retryable
+  error code is now a cut of its own kind: it is re-issued while nothing visible
+  was shown, the notice says the server failed rather than the connection, and
+  deterministic codes (`invalid_prompt`, rejected images) are still surfaced
+  untouched. The same classification covers in-band Chat and Anthropic `error`
+  events.
 - **A contained call keeps the capabilities the reviewer granted**: `auto`'s
   `contain` branch returned a sandbox-only decision, dropping a reviewer's
   separate `network:"allow"`. The transcript announced "contained", then the

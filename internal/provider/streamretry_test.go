@@ -226,6 +226,66 @@ func TestStreamRetryReissuesACutAttempt(t *testing.T) {
 	}
 }
 
+// The reported OpenAI failure was not a dead socket: the stream was healthy and
+// the server ended it with response.failed / server_error. Nothing had been
+// shown, so it is as safe to re-issue as any other cut — and the notice says the
+// server failed, not the connection.
+func TestStreamRetryReissuesAnUpstreamServerError(t *testing.T) {
+	fastRetryBackoff(t)
+	serverErr := newUpstreamStreamError("server_error",
+		"response failed [resp-1]: server_error: An error occurred while processing your request.")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(serverErr)},
+		{startEvent(), textEvent("recovered"), doneEvent("recovered")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Errorf("attempts = %d, want 2 (the failed response and one retry)", got)
+	}
+	if got := countEvents[StreamErrorEvent](events); got != 0 {
+		t.Errorf("error events = %d (%q), want none: the retry answered", got, errorMessage(events))
+	}
+	if got := lastText(events); got != "recovered" {
+		t.Errorf("final text = %q, want the retry's answer", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 {
+		t.Fatalf("notices = %d (%+v), want exactly 1 before the retry", len(notices), notices)
+	}
+	if notices[0].Reason != StreamCutUpstream {
+		t.Errorf("notice reason = %q, want %q", notices[0].Reason, StreamCutUpstream)
+	}
+	if !strings.Contains(notices[0].Detail, "server_error") {
+		t.Errorf("notice detail = %q, want the server's code", notices[0].Detail)
+	}
+}
+
+// A provider-declared rejection is not transient: an invalid prompt or a
+// rejected image must be surfaced unchanged, without a second request.
+func TestStreamRetryLeavesAnUpstreamRejectionAlone(t *testing.T) {
+	rejection := newUpstreamStreamError("invalid_prompt",
+		"response failed: invalid_prompt: the prompt was rejected")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(rejection)},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a rejection is not retried)", got)
+	}
+	if got := errorMessage(events); !strings.Contains(got, "prompt was rejected") {
+		t.Errorf("failure = %q, want the wire's own answer untouched", got)
+	}
+	if got := len(noticeEvents(events)); got != 0 {
+		t.Errorf("notices = %d, want none for a rejection", got)
+	}
+}
+
 // A cut that lands after content cannot be retried: resending would duplicate
 // what the user already read. It must at least say what happened — the reader's
 // bare "unexpected EOF" names nothing.

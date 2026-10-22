@@ -95,6 +95,7 @@ type openaiChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 		Type    string `json:"type"`
+		Code    string `json:"code"`
 	} `json:"error"`
 }
 
@@ -122,7 +123,11 @@ func (d *OpenAIDecoder) Decode(payload []byte) ([]StreamEvent, error) {
 		if chunk.Error.Message != "" {
 			msg += ": " + chunk.Error.Message
 		}
-		return nil, fmt.Errorf("%s", msg)
+		code := chunk.Error.Code
+		if code == "" {
+			code = chunk.Error.Type
+		}
+		return nil, newUpstreamStreamError(code, msg)
 	}
 
 	if chunk.ID != "" {

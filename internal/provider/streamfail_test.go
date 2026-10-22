@@ -44,6 +44,67 @@ func TestIsStreamCutErr(t *testing.T) {
 	}
 }
 
+// A failure the provider declared on a healthy stream is judged by its code:
+// a server-side error is a cut worth re-issuing, a rejected prompt is the
+// wire's real answer and must stay terminal.
+func TestIsStreamCutErrClassifiesUpstreamFailuresByCode(t *testing.T) {
+	cases := []struct {
+		code string
+		want bool
+	}{
+		{"server_error", true},
+		{"rate_limit_exceeded", true},
+		{"overloaded_error", true},
+		{"invalid_prompt", false},
+		{"image_content_policy_violation", false},
+		{"unknown_rejection", false},
+	}
+	for _, c := range cases {
+		err := newUpstreamStreamError(c.code, "response failed: "+c.code)
+		if got := isStreamCutErr(err); got != c.want {
+			t.Errorf("isStreamCutErr(%s) = %v, want %v", c.code, got, c.want)
+		}
+	}
+}
+
+// The sentence for a retryable upstream failure must name the server as the
+// failing side and keep the wire's code/message (and response id) so the
+// failure can be diagnosed — the raw "response failed …" the user saw.
+func TestStreamCutErrorNamesAnUpstreamFailure(t *testing.T) {
+	err := fmt.Errorf("openai: %w", newUpstreamStreamError("server_error",
+		"response failed [resp-1]: server_error: upstream exploded"))
+	if got := streamCutReason(err); got != StreamCutUpstream {
+		t.Errorf("reason = %q, want %q", got, StreamCutUpstream)
+	}
+	got := streamCutError("openai", err).Error()
+	for _, want := range []string{
+		"openai: stream cut",
+		"the server failed the response",
+		"response failed [resp-1]: server_error: upstream exploded",
+		"retry the turn",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("streamCutError = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, "connection closed") {
+		t.Errorf("streamCutError = %q, want the connection not blamed", got)
+	}
+}
+
+// A retry that ends the same way must say the server failed again, not that
+// the connection dropped again.
+func TestStreamCutRetriedErrorNamesAnUpstreamFailure(t *testing.T) {
+	err := newUpstreamStreamError("server_error", "response failed: server_error: boom")
+	got := streamCutRetriedError("openai", err, 1).Error()
+	if !strings.Contains(got, "server failed the response again") {
+		t.Errorf("streamCutRetriedError = %q, want the upstream failure named", got)
+	}
+	if strings.Contains(got, "connection dropped again") {
+		t.Errorf("streamCutRetriedError = %q, want the connection not blamed", got)
+	}
+}
+
 // The sentence a person reads must say which failure it was, so the three cases
 // stay distinguishable — and leave every other error alone.
 func TestStreamCutErrorNamesEachCase(t *testing.T) {

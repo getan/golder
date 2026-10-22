@@ -54,6 +54,13 @@ func providerNoticeText(ev agentcore.ProviderNoticeEvent, lang string) string {
 			return fmt.Sprintf("provider %s 的流中断（连接提前关闭%s），正在重试%s…", providerName, detail, progress)
 		}
 		return fmt.Sprintf("provider %s: stream cut (the connection closed early%s); retrying%s…", providerName, detail, progress)
+	case provider.StreamCutUpstream:
+		// The connection was healthy; the server behind it failed the response.
+		// Saying "stream cut" here would blame the wrong side of the wire.
+		if zh {
+			return fmt.Sprintf("provider %s 上游错误%s，正在重试%s…", providerName, detail, progress)
+		}
+		return fmt.Sprintf("provider %s: upstream error%s; retrying%s…", providerName, detail, progress)
 	default:
 		// Silent: the stream ended without a final event. This is the case the
 		// wire fallback used to surface as a dead end, so name it plainly.
