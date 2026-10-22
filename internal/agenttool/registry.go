@@ -68,7 +68,7 @@ func (r *ToolRegistry) Register(tool agentcore.AgentTool) error {
 	if _, exists := r.tools[name]; exists {
 		return fmt.Errorf("registry: tool %q already registered", name)
 	}
-	if raw := tool.Schema(); len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if raw := validationSchemaOf(tool); len(bytes.TrimSpace(raw)) > 0 && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		sch, err := compileSchema(name, raw)
 		if err != nil {
 			return fmt.Errorf("registry: tool %q schema: %w", name, err)
@@ -254,6 +254,22 @@ func ValidationErrorResult(toolName string, errs []FieldError) agentcore.AgentTo
 		Content: agentcore.ContentList{agentcore.NewTextContent(strings.TrimRight(b.String(), "\n"))},
 		Details: errs,
 	}
+}
+
+// validationSchema is implemented by a tool whose advertised Schema() narrows
+// with the session's capabilities. The registry compiles this wider form, so a
+// call that only becomes possible later (a browser started by workspace create)
+// still passes argument validation.
+type validationSchema interface {
+	ValidationSchema() json.RawMessage
+}
+
+// validationSchemaOf picks the form the registry should compile.
+func validationSchemaOf(tool agentcore.AgentTool) json.RawMessage {
+	if v, ok := tool.(validationSchema); ok {
+		return v.ValidationSchema()
+	}
+	return tool.Schema()
 }
 
 // compileSchema compiles a raw JSON Schema document held in memory.

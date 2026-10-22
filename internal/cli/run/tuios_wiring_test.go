@@ -3,6 +3,8 @@ package run
 import (
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/agentcore"
 )
 
 func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
@@ -49,5 +51,29 @@ func TestChildToolSetKeepsTuiosReadsButNotPaneWrites(t *testing.T) {
 	}
 	if write {
 		t.Fatal("child schema must not advertise control actions")
+	}
+}
+
+// A pane can start a browser with workspace create, so the browser tool is
+// advertised there even before one exists; its schema offers only list until
+// the socket appears.
+func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
+	t.Setenv("TUIOS_SOCKET", "/tmp/tuios.sock")
+	t.Setenv("TUIOS_SESSION", "work")
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_PANE_ID", "w1")
+	t.Setenv("KITTY_BROWSE_SOCKET", "")
+
+	var browser agentcore.AgentTool
+	for _, tool := range BuiltinTools(t.TempDir(), false) {
+		if tool.Name() == "browser" {
+			browser = tool
+		}
+	}
+	if browser == nil {
+		t.Fatal("browser was not advertised inside a pane")
+	}
+	if schema := string(browser.Schema()); !strings.Contains(schema, `"enum":["list"]`) {
+		t.Errorf("browser schema = %s, want just list before a browser exists", schema)
 	}
 }

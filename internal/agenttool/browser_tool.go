@@ -28,14 +28,14 @@ import (
 const browserMaxTimeout = 120 * time.Second
 
 // BrowserAvailable reports whether this process should advertise the tool.
-func BrowserAvailable() bool { return browserctl.SocketFromEnv() != "" }
+func BrowserAvailable() bool { return browserSocket() != "" }
 
 // NewBrowserTool builds the facade. allowControl=false is the sub-agent shape:
 // the same socket and browser, but only the read-only actions.
 func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
 	return &BrowserTool{
 		newClient: func() (*browserctl.Client, error) {
-			return browserctl.Dial(browserctl.SocketFromEnv())
+			return browserctl.Dial(browserSocket())
 		},
 		cwd: cwd, allowControl: allowControl,
 	}
@@ -53,6 +53,10 @@ type BrowserTool struct {
 func (t *BrowserTool) Name() string { return "browser" }
 
 func (t *BrowserTool) Description() string {
+	if !t.available() {
+		return "No browser is running yet. Start one with kitty-browse -control-socket PATH " +
+			"and KITTY_BROWSE_SOCKET, or run workspace create, then call list."
+	}
 	if t.allowControl {
 		return "Drive the running kitty-browse pane: snapshot the accessibility tree, " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
@@ -62,9 +66,16 @@ func (t *BrowserTool) Description() string {
 		"read url/text/html, console and network errors, and screenshot."
 }
 
+// available reports whether a control socket is resolvable right now.
+func (t *BrowserTool) available() bool { return browserSocket() != "" }
+
 func (t *BrowserTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
 }
+
+// browserListAction is all that is advertised before a socket exists: it is the
+// one action whose failure explains how to start a browser.
+var browserListAction = []string{"list"}
 
 const browserReadSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
@@ -169,9 +180,44 @@ type browserArgs struct {
 
 func (t *BrowserTool) Schema() json.RawMessage {
 	if !t.allowControl {
+		if !t.available() {
+			return trimActionEnum(browserReadSchema, browserListAction)
+		}
+		return json.RawMessage(browserReadSchema)
+	}
+	if !t.available() {
+		return trimActionEnum(browserControlSchema, browserListAction)
+	}
+	return json.RawMessage(browserControlSchema)
+}
+
+// ValidationSchema is the widest form: the registry compiles it once, and a call
+// that becomes possible after workspace create must still validate.
+func (t *BrowserTool) ValidationSchema() json.RawMessage {
+	if !t.allowControl {
 		return json.RawMessage(browserReadSchema)
 	}
 	return json.RawMessage(browserControlSchema)
+}
+
+// trimActionEnum narrows the action enum of a schema literal without keeping a
+// second copy of it.
+func trimActionEnum(schema string, allowed []string) json.RawMessage {
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(schema), &doc); err != nil {
+		return json.RawMessage(schema)
+	}
+	props, _ := doc["properties"].(map[string]any)
+	action, _ := props["action"].(map[string]any)
+	if action == nil {
+		return json.RawMessage(schema)
+	}
+	action["enum"] = allowed
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return json.RawMessage(schema)
+	}
+	return out
 }
 
 // browserReadOnly reports whether an action only observes. It mirrors the

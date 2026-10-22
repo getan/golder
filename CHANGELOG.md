@@ -99,6 +99,16 @@ interactive REPL/TUI.
   first gate instead of silently re-containing the call.
 
 ### Added
+- **Tools advertise what the session can actually do**: `browser` now advertises
+  only `list`, with a "start one" description, until a control socket exists,
+  and grows to the full action set when `workspace create` starts a browser —
+  no `KITTY_BROWSE_SOCKET` export and no restart. `visual` advertises `chart`
+  alone until `tuios` is on `PATH`, then adds `diagram` and the dashboard
+  actions. Presence is decided once so the tool list stays stable; content is
+  recomputed per request and nothing polls, so the provider's prompt cache is
+  only invalidated when a capability really changed. The registry compiles the
+  wide schema (a new `ValidationSchema` hook), so a call that becomes possible
+  later still validates.
 - **A `browser` tool over kitty-browse's control socket**: `internal/browserctl`
   speaks the typed `/v1/info` and `/v1/actions` API on the browser's owner-only
   Unix socket. The tool pins the browser/tab/target ids from the same discovery

@@ -14,11 +14,31 @@ schema and its own permission shape; none of them is a generic verb bridge.
 
 - `tuios` and `workspace` appear only inside a real tuios pane (`TUIOS_ENV=1`,
   a socket, a session and a pane id).
-- `browser` appears when `KITTY_BROWSE_SOCKET` names a control socket. The
-  socket must be an owner-only Unix socket (`0600`) and not live in a
-  world-writable directory; otherwise the tool refuses it.
+- `browser` appears when `KITTY_BROWSE_SOCKET` names a control socket, or
+  inside a tuios pane, where `workspace create` can start one. The socket must
+  be an owner-only Unix socket (`0600`) and not live in a world-writable
+  directory; otherwise the tool refuses it.
 - `visual` is always present: `chart` is pure Go, and `diagram`/`dashboard`
   say what they need when it is missing.
+
+## Capabilities: presence is fixed, content follows the backend
+
+What a tool *advertises* changes with what the session can actually do, but the
+tool list itself does not flap:
+
+- **Presence** is decided once, when the tool set is built. A tool that is
+  registered stays registered for the session.
+- **Content** is recomputed per request. `browser` advertises only `list` (and a
+  "start one with workspace create" description) until a socket exists, then
+  grows to the full set. `visual` advertises `chart` alone until `tuios` is on
+  `PATH`, then adds `diagram` and the dashboard actions.
+- **No polling.** The one event that can create a capability mid-session is
+  `workspace create` starting a browser, and that is where the socket is
+  recorded. A background probe would flip the schema — and invalidate the
+  provider's prompt cache — for a change nobody asked for.
+- **Validation is wider than advertising.** The registry compiles the full
+  schema once, so a `click` or `diagram` that becomes possible after the tool
+  was registered still validates. Only the *advertised* enum narrows.
 
 ## Permissions
 

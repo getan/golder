@@ -42,6 +42,10 @@ type VisualTool struct {
 func (t *VisualTool) Name() string { return "visual" }
 
 func (t *VisualTool) Description() string {
+	if !hasTuiosBinary() {
+		return "Draw data as terminal charts (bar/line/sparkline/histogram/pie/gauge/heatmap) " +
+			"from inline JSON or a workspace file. Diagrams and dashboards need tuios installed."
+	}
 	if t.allowControl {
 		return "Draw data as terminal charts (bar/line/sparkline/histogram/pie/gauge/heatmap), " +
 			"render Mermaid diagrams through tuios, and keep a TML dashboard live in a pane. " +
@@ -122,6 +126,22 @@ type visualArgs struct {
 }
 
 func (t *VisualTool) Schema() json.RawMessage {
+	if !t.allowControl {
+		if !hasTuiosBinary() {
+			return trimActionEnum(visualReadSchema, []string{"chart"})
+		}
+		return json.RawMessage(visualReadSchema)
+	}
+	if !hasTuiosBinary() {
+		return trimActionEnum(visualControlSchema, []string{"chart"})
+	}
+	return json.RawMessage(visualControlSchema)
+}
+
+// ValidationSchema keeps the registry's validator at the widest form, so a
+// diagram or dashboard call validates even if tuios was installed after the
+// session started.
+func (t *VisualTool) ValidationSchema() json.RawMessage {
 	if !t.allowControl {
 		return json.RawMessage(visualReadSchema)
 	}

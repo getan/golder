@@ -190,6 +190,9 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 			// The browser creates the socket at startup; a snapshot that races
 			// it would report "not running" for a pane that is about to work.
 			waitForSocket(spec.Socket, 8*time.Second)
+			// Now that a browser exists, the browser tool can use it without the
+			// person exporting KITTY_BROWSE_SOCKET and restarting.
+			setBrowserSocket(spec.Socket)
 		}
 		t.mu.Lock()
 		t.panes[spec.Name] = pane
@@ -214,7 +217,7 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 	bin, binErr := exec.LookPath("kitty-browse")
 	browser := func(name string) (paneSpec, error) {
 		if binErr != nil {
-			return paneSpec{}, errors.New("kitty-browse is not installed; install it or omit the browser pane")
+			return paneSpec{}, fmt.Errorf("kitty-browse is not on PATH; %s", kittyBrowseHint())
 		}
 		dir := filepath.Join(t.cwd, ".golder", "browser")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -270,6 +273,24 @@ func waitForSocket(path string, d time.Duration) bool {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
+}
+
+// kittyBrowseHint points at a built binary the PATH missed, because the common
+// case is a checkout that was built but never linked.
+func kittyBrowseHint() string {
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".local", "bin", "kitty-browse"))
+	}
+	candidates = append(candidates,
+		filepath.Join("/usr/local/bin", "kitty-browse"),
+		filepath.Join("/opt/homebrew/bin", "kitty-browse"))
+	for _, p := range candidates {
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return fmt.Sprintf("found %s; add %s to PATH", p, filepath.Dir(p))
+		}
+	}
+	return "install it, or symlink its build output into a directory on PATH"
 }
 
 func (t *WorkspaceTool) list() agentcore.AgentToolResult {
