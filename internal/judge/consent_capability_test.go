@@ -3,6 +3,7 @@ package judge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -34,6 +35,105 @@ func TestConsentAutoContainCarriesTheReviewerNetworkGrant(t *testing.T) {
 	}
 }
 
+// A reviewer that answers direct:"allow" but grades the call contain does not
+// get a contradiction in the transcript: containment is final, and the decision
+// line says the escape was refused instead of letting the rationale promise it.
+func TestConsentAutoContainRefusesTheEscape(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode: permissions.New(permissions.Auto),
+		Classifier: consentClassifier{v: Verdict{
+			Level: Contain, Direct: true, Source: "llm",
+			Reasons: []string{"递归删除难以恢复，可允许单次越过沙箱清理。"},
+		}},
+		Cwd:       t.TempDir(),
+		Sandboxed: func(string) bool { return true },
+		Notify:    func(n Note) { notes = append(notes, n) },
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "contain-escape", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || dec.Block {
+		t.Fatalf("the contained call should run, got %+v", dec)
+	}
+	if !dec.Sandbox || dec.Direct {
+		t.Errorf("envelope = %+v, want containment and no escape", dec)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want one sandbox note", notes)
+	}
+	got := FormatNote(notes[0])
+	if !strings.Contains(got, "contained · the sandbox escape was not granted") {
+		t.Errorf("note = %q, want the refused escape in the decision line", got)
+	}
+}
+
+// Auto's allow/confirm authorizes the command, not a sandbox escape the
+// reviewer never granted. A refused escape blocks the call — running it bare
+// because the level happened to be confirm is how a direct:deny became an
+// escape.
+func TestConsentAutoDeniedEscapeIsBlocked(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode: permissions.New(permissions.Auto),
+		Classifier: consentClassifier{v: Verdict{
+			Level: Confirm, Direct: false, Source: "llm",
+			Reasons: []string{"命令本身可以运行，但沙箱外请求没有获准。"},
+		}},
+		Cwd:       t.TempDir(),
+		Sandboxed: func(string) bool { return true },
+		Notify:    func(n Note) { notes = append(notes, n) },
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "deny-escape", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || !dec.Block {
+		t.Fatalf("a refused escape must block, got %+v", dec)
+	}
+	if dec.Direct {
+		t.Errorf("a refused escape ran unconfined: %+v", dec)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("notes = %+v, want one denial", notes)
+	}
+	if !notes[0].Escalation {
+		t.Errorf("note = %+v, want the refused escape marked", notes[0])
+	}
+	got := FormatNote(notes[0])
+	if !strings.Contains(got, "denied · the sandbox escape was not granted") {
+		t.Errorf("note = %q, want the refused escape in the decision line", got)
+	}
+}
+
+// An escape the reviewer did grant is announced as such, not as an ordinary
+// approval: the user must be able to see that the call left the sandbox.
+func TestConsentAutoApprovedEscapeIsAnnounced(t *testing.T) {
+	grantstest.Install(t)
+	var notes []Note
+	gate := ConsentGate(ConsentOpts{
+		Mode: permissions.New(permissions.Auto),
+		Classifier: consentClassifier{v: Verdict{
+			Level: Confirm, Direct: true, Source: "llm",
+			Reasons: []string{"本次任务创建的临时截图目录，清理范围明确。"},
+		}},
+		Cwd:       t.TempDir(),
+		Sandboxed: func(string) bool { return true },
+		Notify:    func(n Note) { notes = append(notes, n) },
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "allow-escape", Name: "bash",
+		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	if dec == nil || dec.Block || !dec.Direct {
+		t.Fatalf("the granted escape should run unconfined, got %+v", dec)
+	}
+	if len(notes) != 1 || notes[0].Kind != NoteEscaped {
+		t.Fatalf("notes = %+v, want one NoteEscaped", notes)
+	}
+	got := FormatNote(notes[0])
+	if !strings.Contains(got, "runs OUTSIDE the sandbox") {
+		t.Errorf("note = %q, want the escape announced", got)
+	}
+}
+
 // Containment must not become a way around the network answer: a reviewer that
 // says network:deny leaves a capability need, and the call is blocked rather
 // than run into the bash tool's own guard.
@@ -58,11 +158,13 @@ func TestConsentAutoContainWithoutNetworkBlocks(t *testing.T) {
 // ignore the escape and run contained.
 func TestConsentAskUnconfinedAnswerWinsOverContain(t *testing.T) {
 	grantstest.Install(t)
+	var notes []Note
 	gate := ConsentGate(ConsentOpts{
 		Mode:       permissions.New(permissions.Ask),
 		Classifier: consentClassifier{v: Verdict{Level: Contain, Reasons: []string{"containable"}}},
 		Cwd:        t.TempDir(),
 		Sandboxed:  func(string) bool { return true },
+		Notify:     func(n Note) { notes = append(notes, n) },
 		Confirm: func(_ context.Context, req ConsentRequest) ConsentAnswer {
 			if !hasNeed(req.Needs, CapUnconfined) {
 				t.Fatalf("the escalation was not offered as a capability: %+v", req.Needs)
@@ -80,6 +182,9 @@ func TestConsentAskUnconfinedAnswerWinsOverContain(t *testing.T) {
 	}
 	if dec.Sandbox {
 		t.Errorf("the person's unconfined answer was overridden by containment: %+v", dec)
+	}
+	if len(notes) != 1 || notes[0].Kind != NoteEscaped {
+		t.Errorf("notes = %+v, want the unconfined answer announced as an escape", notes)
 	}
 }
 

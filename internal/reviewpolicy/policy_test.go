@@ -215,6 +215,24 @@ func TestDenyAndSandboxAcceptModerateConfidence(t *testing.T) {
 	}
 }
 
+// The separate escape answer cannot survive a containment decision: contain runs
+// the call inside the sandbox, so the verdict must not claim a direct grant the
+// gate will ignore.
+func TestContainDropsTheEscapeAnswer(t *testing.T) {
+	out := Decide(Request{
+		Answers: answers("contain", map[string]float64{"contain": 0.9, "allow": 0.05}, 0.85,
+			func(m map[string]jev.Answer) { m[QDir] = noul(0.99) }),
+		Config:          cfg(),
+		DirectRequested: true,
+	})
+	if out.Route != RouteDecided || out.Level != judge.Contain {
+		t.Fatalf("outcome = %+v, want a decided contain", out)
+	}
+	if out.Direct {
+		t.Errorf("Direct = true next to contain; the escape must be dropped")
+	}
+}
+
 func TestAllowNeedsMoreThanDenyOrSandbox(t *testing.T) {
 	// The asymmetry, stated as a test: the same confidence that settles a deny
 	// leaves an allow escalated.

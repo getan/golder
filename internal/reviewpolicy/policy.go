@@ -302,6 +302,10 @@ func Decide(req Request) Outcome {
 		// isolated and fails for lack of access, which is visible and fixable.
 		if danger >= DangerDeny || clearAnswer(level, cfg.DecideConfidence) {
 			out.Route, out.Level = RouteDecided, judge.Contain
+			// Contain is final: it never waives the sandbox, whatever the
+			// separate escape question answered. Keeping direct here produced
+			// verdicts whose rationale and execution disagreed.
+			out.Direct = false
 			return out
 		}
 		out.Route, out.Escalation = RouteEscalate, EscalateLowConfidence

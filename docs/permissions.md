@@ -13,11 +13,14 @@ second authorization system.
 | `full-access` | allow | allow | allow | allow | nobody; static hard-deny only |
 
 `auto` is deliberately non-interactive: once the reviewer returns `allow` or
-`confirm`, every capability the call asked for rides that answer. `contain`
-keeps the call inside the file sandbox and never grants an escape; a network
-answer the reviewer gave separately still applies inside that sandbox, while
-any other un-granted need blocks the call. `deny` blocks. The reviewer chain is
-static floor → local rules / JEV → the session LLM only for what remains.
+`confirm`, the call's ordinary capabilities (paths, network) ride that answer.
+A sandbox escape is the exception: it needs the reviewer's separate
+`direct:"allow"`, so `confirm` + `direct:"deny"` withholds the escape (the call
+is blocked rather than run bare), and `contain` keeps it inside the file
+sandbox regardless. A network answer the reviewer gave separately still applies
+inside a contained call, while any other un-granted need blocks it. `deny`
+blocks. The reviewer chain is static floor → local rules / JEV → the session
+LLM only for what remains.
 
 `ask` uses the same reviewer as a filter: a routine `allow` with no capability
 expansion is not shown to a person. Everything else produces one request with
@@ -47,6 +50,15 @@ The source is one of `jev`, `local`, `llm`, `static`. An allow verdict renders
 white in every mode, but is hidden by default; set `GOLDER_DEBUG=1` or pass
 `--debug` to render it. Containment stays warning-colored and denials/blocks
 stay red. The `⚠`/`✗` markers and the wording do not change with the color.
+
+A call that asked to leave the sandbox (`sandbox_permissions=require_escalated`)
+but was contained prints `contained · the sandbox escape was not granted`.
+Containment is final, so a reviewer's separate `direct:"allow"` cannot turn the
+same note into a promise the gate will refuse.
+
+An escape the reviewer (or the person, under `ask`) granted prints
+`runs OUTSIDE the sandbox`, so an unconfined run is never mistaken for an
+ordinary approval.
 
 Ratings are concrete capabilities, not high/medium/low: `needs:` names what the
 call required, `granted:` names what the answer actually allowed. A simple call

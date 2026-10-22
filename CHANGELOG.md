@@ -29,6 +29,26 @@ interactive REPL/TUI.
   gate cannot keep.
 
 ### Fixed
+- **A `contain` grade no longer carries an escape it will not grant**: a
+  reviewer that answered `direct:"allow"` beside `level:"contain"` produced a
+  note whose rationale promised a one-call sandbox escape while the call ran
+  contained and then hit `Operation not permitted`. Contain is final: the escape
+  answer is dropped, the LLM reviewer's prompt states the rule, and the decision
+  line reads `contained · the sandbox escape was not granted`. The rationale
+  gains the same clause when a reviewer's prose contradicts its grade.
+- **A sandbox escape needs its own grant again**: `auto`'s `allow`/`confirm`
+  used to run a `require_escalated` call outside the sandbox regardless of the
+  reviewer's `direct` answer, so `direct:"deny"` still escaped. Only
+  `direct:"allow"` runs unconfined now; a refused escape blocks with
+  `denied · the sandbox escape was not granted`, and an approved one is
+  announced as `runs OUTSIDE the sandbox`. The reviewer prompt also treats a
+  recursive delete of a task-created scratch directory as `confirm` when the
+  transcript establishes the exact literal path and the cleanup was asked for,
+  so a bounded cleanup can be granted without weakening the `contain` tier for
+  user content. More generally, the reviewer is told to prefer `confirm` over
+  `contain` when the transcript shows the user asked for exactly this effect and
+  the command's scope is bounded; `contain` is for a blast radius the text and
+  transcript do not establish.
 - **A provider-declared server failure is retried like a cut stream**: OpenAI's
   Responses API can end a healthy request with `response.failed` / `server_error`
   (or an inline `error` event) instead of dropping the connection. The retry

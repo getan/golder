@@ -49,8 +49,10 @@ func TestConsentAutoAllowGrantsEveryNeedWithoutPrompt(t *testing.T) {
 	outside := consentOutside(t)
 	asked := 0
 	gate := ConsentGate(ConsentOpts{
-		Mode:       permissions.New(permissions.Auto),
-		Classifier: consentClassifier{v: Verdict{Level: Allow, Reasons: []string{"safe"}}},
+		Mode: permissions.New(permissions.Auto),
+		// The call asks for the network and the sandbox escape; auto's allow is
+		// the authorization, and the escape still needs its separate Direct.
+		Classifier: consentClassifier{v: Verdict{Level: Allow, Direct: true, Reasons: []string{"safe"}}},
 		Cwd:        workspace,
 		Confirm: func(context.Context, ConsentRequest) ConsentAnswer {
 			asked++

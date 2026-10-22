@@ -148,6 +148,12 @@ func dispositionFor(n Note) string {
 	case NoteApproved:
 		return localized(n.Lang, "已批准", "approved")
 	case NoteSandboxed:
+		if n.Escalation {
+			// The call asked to leave the sandbox and was contained instead.
+			// Saying only "runs in the sandbox" leaves a rationale that promised
+			// the escape looking like a promise the gate broke.
+			return localized(n.Lang, "已收容 · 沙箱外请求未获准", "contained · the sandbox escape was not granted")
+		}
 		return localized(n.Lang, "已收容 · 沙箱内运行", "contained · runs in the sandbox")
 	case NoteEscaped:
 		return localized(n.Lang, "沙箱外运行", "runs OUTSIDE the sandbox")

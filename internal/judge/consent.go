@@ -291,8 +291,10 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	}
 	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") {
 		// In auto the reviewer's Direct is the grant, and Contain means it chose
-		// containment; neither needs a human-shaped capability. In ask the
-		// person still decides the escape.
+		// containment; neither needs a human-shaped capability. An allow/confirm
+		// without Direct leaves the escape ungranted, and autoDecision blocks
+		// that call instead of running it bare. In ask the person still decides
+		// the escape.
 		if mode == permissions.Ask || (mode == permissions.Auto && !v.Direct && v.Level != Contain) {
 			needs = append(needs, Need{Cap: CapUnconfined})
 		}
@@ -427,9 +429,23 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
+	// The sandbox escape is the one capability that does not ride the level: the
+	// reviewer answers it separately (Verdict.Direct). A refused escape is a
+	// need the gate cannot satisfy, and running the call bare because the level
+	// happened to be confirm is how a direct:deny became an escape.
+	if hasNeed(needs, CapUnconfined) {
+		n := noteFor(call, v, NoteDenied, lang)
+		n.Needs = needs
+		n.Rationale = localized(lang,
+			"评审拒绝了沙箱外请求；命令未运行",
+			"the reviewer declined the sandbox escape; the call did not run")
+		notify(n)
+		return blockCall(call, v, "sandbox escape declined: auto mode answers escapes by review alone — make the command work inside the sandbox, or ask the user to switch /permissions to ask")
+	}
 	// Allow and Confirm are the reviewer's authorization in auto. The model (or
-	// the local/JEV layer standing in for it) has settled risk, so all requested
-	// capabilities ride that one answer. This is the no-interruption promise.
+	// the local/JEV layer standing in for it) has settled risk, so the call's
+	// ordinary capabilities ride that one answer. This is the no-interruption
+	// promise.
 	dec := applyNeeds(call, opts, needs, ScopeOnce, lang)
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
@@ -440,15 +456,18 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if escalationRequested(call.Arguments) && v.Direct {
 		dec.Direct = true
 	}
-	if hasNeed(needs, CapUnconfined) {
-		dec.Direct = true
-	}
 	if len(needs) == 0 {
 		if bare, why := envelopeFor(call, lang); bare {
 			dec.Bare, dec.BareReason = true, why
 		}
 	}
-	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: v.Level, Lang: lang,
+	kind := NoteApproved
+	if dec.Direct {
+		// Running outside the sandbox must never be invisible; it is the one
+		// outcome a sandboxed session has to announce separately.
+		kind = NoteEscaped
+	}
+	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: v.Level, Lang: lang,
 		Source: v.Source, Granted: needs,
 		Summary: riskSummary(call), Risk: v.Risk, Authorization: v.Authorization,
 		Rationale: consentRationale(v, needs, lang)})
@@ -524,7 +543,13 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	if len(granted) == 0 {
 		granted = needs
 	}
-	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteApproved, Level: Allow, Lang: lang,
+	kind := NoteApproved
+	if unconfined {
+		// The person chose to leave the sandbox; say so rather than folding it
+		// into an ordinary approval.
+		kind = NoteEscaped
+	}
+	notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: Allow, Lang: lang,
 		Source: v.Source, Granted: granted,
 		Summary: req.Summary, Risk: v.Risk, Authorization: v.Authorization,
 		Rationale: consentRationale(v, ans.Needs, lang)})

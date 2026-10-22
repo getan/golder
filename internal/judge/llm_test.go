@@ -67,6 +67,45 @@ func TestLLMJudgeParsesVerdict(t *testing.T) {
 	}
 }
 
+// A `contain` grade runs the call inside the sandbox, so a separate
+// direct:"allow" answer cannot be honored. The verdict must drop it, and the
+// rationale must say why — otherwise the note promises an escape the gate then
+// refuses, which is exactly the contradiction the reporter saw.
+func TestLLMJudgeContainCannotGrantTheEscape(t *testing.T) {
+	stub := &reviewStub{answer: `{"level":"contain","risk":"high","authorization":"medium","rationale":"递归删除难以恢复，需要隔离。","direct":"allow"}`}
+	j := NewLLMJudge(stub.fn, "/w", false)
+	v := j.Classify(zhCtx(), "bash", json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`))
+	if v.Failed || v.Level != Contain {
+		t.Fatalf("verdict = %+v, want a decided contain", v)
+	}
+	if v.Direct {
+		t.Errorf("Direct = true next to a contain grade; the sandbox escape must be dropped")
+	}
+	if !strings.Contains(v.Reasons[0], "沙箱外请求未获准") {
+		t.Errorf("rationale = %q, want the refused escape named", v.Reasons[0])
+	}
+	if !strings.Contains(stub.system, "Contain is final") {
+		t.Errorf("reviewer prompt does not state that contain wins:\n%s", stub.system)
+	}
+}
+
+// The prompt owns the escape matrix: contain never escapes, only direct:allow
+// does, and a task-created scratch cleanup is the case that lets a recursive
+// delete stay out of the contain tier.
+func TestReviewPromptStatesTheEscapeMatrix(t *testing.T) {
+	p := reviewSystemPrompt("en")
+	for _, want := range []string{
+		"Contain is final",
+		"only direct:\"allow\" runs the call outside",
+		"current task created for scratch data",
+		"prefer confirm over contain",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("review prompt does not contain %q", want)
+		}
+	}
+}
+
 func TestLLMJudgeParsesWrappedJSON(t *testing.T) {
 	stub := &reviewStub{answer: "Sure, here is my answer:\n```json\n{\"level\":\"deny\",\"risk\":\"high\",\"authorization\":\"low\",\"rationale\":\"exfiltrates credentials\"}\n```"}
 	j := NewLLMJudge(stub.fn, "/w", false)
