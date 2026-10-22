@@ -438,7 +438,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {
 			notify(noteFor(call, v, NoteSandboxed, lang))
-			return &agentcore.BeforeToolCallDecision{Sandbox: true}
+			return containedDecision(call, v)
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
@@ -517,13 +517,22 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
-	if v.Level == Contain {
+	// The person's answer decides the envelope. Asking for an unconfined run
+	// and then forcing Sandbox would silently discard it: the executor ignores
+	// Direct whenever Sandbox is set, so the command would run contained and
+	// fail on the very path the answer was meant to open. Containment is the
+	// default only when the answer did not choose otherwise.
+	unconfined := ans.Exec == ExecUnconfined && hasNeed(ans.Needs, CapUnconfined)
+	if unconfined {
+		dec.Direct = true
+	} else if v.Level == Contain {
 		dec.Sandbox = true
 	}
-	if ans.Exec == ExecUnconfined && hasNeed(ans.Needs, CapUnconfined) {
-		dec.Direct = true
-	}
-	if NetworkRequested(call.Name, call.Arguments) {
+	// applyNeeds already carries a network need the person granted. The
+	// reviewer's own grant has no Need (it would have blocked the call
+	// otherwise), so carry that one here; never infer a grant from Approve
+	// alone when the answer omitted the capability.
+	if v.Network && NetworkRequested(call.Name, call.Arguments) {
 		dec.Network = true
 	}
 	granted := ans.Needs
@@ -534,6 +543,19 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		Source: v.Source, Granted: granted,
 		Summary: req.Summary, Risk: v.Risk, Authorization: v.Authorization,
 		Rationale: consentRationale(v, ans.Needs, lang)})
+	return dec
+}
+
+// containedDecision is the execution envelope for a call the reviewer asked to
+// contain. Containment is a filesystem boundary, not a veto on capabilities the
+// same review granted separately: a contained command may still have network
+// access (the grant applies inside the sandbox, not on the host). Dropping the
+// bit here made the executor refuse a call the reviewer had already authorized.
+func containedDecision(call agentcore.AgentToolCall, v Verdict) *agentcore.BeforeToolCallDecision {
+	dec := &agentcore.BeforeToolCallDecision{Sandbox: true}
+	if v.Network && NetworkRequested(call.Name, call.Arguments) {
+		dec.Network = true
+	}
 	return dec
 }
 

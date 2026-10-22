@@ -1447,7 +1447,7 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		// returns nil (the common case: a tool with no further opinion) would
 		// silently discard the user's decision — the read would be refused after
 		// they approved it.
-		if firstDec != nil && (firstDec.Sandbox || firstDec.Network || firstDec.Direct || firstDec.ReadGrant != "" || firstDec.WriteGrant != "") {
+		if firstDec != nil && (firstDec.Sandbox || firstDec.Network || firstDec.Direct || firstDec.Bare || firstDec.ReadGrant != "" || firstDec.WriteGrant != "") {
 			if dec == nil {
 				return firstDec
 			}
@@ -1455,6 +1455,13 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 			out.Sandbox = out.Sandbox || firstDec.Sandbox
 			out.Network = out.Network || firstDec.Network
 			out.Direct = (out.Direct || firstDec.Direct) && !out.Sandbox
+			// Bare is an envelope decision too: dropping it just because the
+			// second gate had no opinion would silently re-contain a call the
+			// first gate had already settled as host-safe.
+			out.Bare = out.Bare || (firstDec.Bare && !out.Sandbox)
+			if out.Bare && out.BareReason == "" {
+				out.BareReason = firstDec.BareReason
+			}
 			if out.ReadGrant == "" {
 				out.ReadGrant = firstDec.ReadGrant
 			}

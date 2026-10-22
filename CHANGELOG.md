@@ -11,6 +11,23 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Fixed
+- **A contained call keeps the capabilities the reviewer granted**: `auto`'s
+  `contain` branch returned a sandbox-only decision, dropping a reviewer's
+  separate `network:"allow"`. The transcript announced "contained", then the
+  bash tool refused the call with "network access was requested but was not
+  authorized" — an approval that never reached execution. The containment
+  envelope now carries the same one-call network grant.
+- **Ask mode no longer overrides an explicit unconfined answer**: when the
+  person chose "run outside the sandbox" on an escalation, `contain` also set
+  `Sandbox`; the executor ignores `Direct` beside it, so the command silently
+  ran contained. The person's envelope now wins, and containment is the default
+  only when the answer did not choose otherwise.
+- **Capabilities are granted from the answer, not inferred**: a bare approval
+  no longer turns a network request into a network grant when the answer
+  omitted that need, and `ChainGates` preserves a `Bare` envelope from the
+  first gate instead of silently re-containing the call.
+
 ### Added
 - **A single `tuios` facade**: one tool with fixed actions (`list`, `capture`,
   `wait`, `run`, `new`, `focus`, `close`) replaces five near-identical tools.

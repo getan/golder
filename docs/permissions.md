@@ -14,8 +14,10 @@ second authorization system.
 
 `auto` is deliberately non-interactive: once the reviewer returns `allow` or
 `confirm`, every capability the call asked for rides that answer. `contain`
-runs isolated and does not grant expansion; `deny` blocks. The reviewer chain
-is static floor → local rules / JEV → the session LLM only for what remains.
+keeps the call inside the file sandbox and never grants an escape; a network
+answer the reviewer gave separately still applies inside that sandbox, while
+any other un-granted need blocks the call. `deny` blocks. The reviewer chain is
+static floor → local rules / JEV → the session LLM only for what remains.
 
 `ask` uses the same reviewer as a filter: a routine `allow` with no capability
 expansion is not shown to a person. Everything else produces one request with
