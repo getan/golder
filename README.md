@@ -26,7 +26,7 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 - **轻量 agent + 真正的安全边界**：和 pi 同一量级的单二进制，但多了逐调用审批门与 OS 沙箱（`sandbox-exec` / `bubblewrap`）——读限工作区、写限项目与临时目录、网络默认关闭；密钥和凭据路径读不到。
 - **比 codex-cli 更容易定制**：纯 Go，单语言、单二进制，没有 Node/Python 运行时；加一个工具、一个 provider 或一条审批规则，都在同一个 `go build` 里完成。
 - **常驻内存约 50–100 MB**：同类里的第一梯队，长时间挂着跑也不占机器。
-- **规划中：tuios + kitty-browse**：窗口与浏览器的自由 agent 操作；前后端同时 debug 时，模型能同时看到终端、编辑器、浏览器，上下文最充分。
+- **终端 / 浏览器 / 图表在一个工作区**：`tuios` 管终端 pane，`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`visual` 画终端图表、Mermaid 图和实时 TML 面板，`workspace` 用预设（`debug-fullstack`、`data-analysis`、`diagram`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型——前后端同时 debug 时最充分。
 - **规划中：MCP 与插件生态**：把外部工具和数据源接进来，扩展不必改核心。
 
 <p align="center">

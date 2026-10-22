@@ -99,6 +99,31 @@ interactive REPL/TUI.
   first gate instead of silently re-containing the call.
 
 ### Added
+- **A `browser` tool over kitty-browse's control socket**: `internal/browserctl`
+  speaks the typed `/v1/info` and `/v1/actions` API on the browser's owner-only
+  Unix socket. The tool pins the browser/tab/target ids from the same discovery
+  call it acts on, offers read actions (`snapshot`, `find`, `get`, `is`, `wait`,
+  `dialog`, `console`, `errors`, `network`, `screenshot`) and control actions
+  (`navigate`, `click`, `fill`, `type`, `press`, `select`, `scroll`, tabs and
+  dialogs), and keeps screenshots under `.golder/artifacts`. `eval` and `upload`
+  are outside the schema. Read actions are local allows; control actions go to
+  the reviewer; sub-agents get the read shape only.
+- **A `visual` tool for data analysis**: `chart` renders terminal cells in pure
+  Go (bar, line, sparkline, histogram, pie, gauge, heatmap) from inline JSON or
+  a CSV/JSON file in the workspace; `diagram` renders Mermaid through the
+  installed tuios; `dashboard_open`/`patch`/`close` drive a live TML surface
+  through the daemon.
+- **A `workspace` tool with presets**: `debug-fullstack` (backend, frontend and
+  a kitty-browse pane with its own socket), `data-analysis`, `diagram` and
+  `review`, plus `snapshot`, which returns every pane as one context block:
+  terminal tails and the browser's page tree, console errors and requests.
+- **`tuios` gained `press`, `screenshot` and own-pane metadata**: `press` sends
+  named keys (`Enter`, `ctrl+c`, arrows) so interactive programs can be driven;
+  `screenshot` asks the daemon to render a pane to png/svg/html/ansi/txt under
+  `.golder/artifacts`; `list` marks the pane running the agent.
+- **The tuios `send` action survives an older daemon**: submit and paste are
+  retried without the field when a daemon predates them, with Enter pressed by
+  `send-keys`, and the result says which path ran.
 - **A single `tuios` facade**: one tool with fixed actions (`list`, `capture`,
   `wait`, `run`, `new`, `focus`, `close`) replaces five near-identical tools.
   It is registered only inside a tuios pane, binds to the caller's session, and

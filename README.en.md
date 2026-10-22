@@ -26,7 +26,7 @@ One command on macOS / Linux, no Node or Python. On Windows, download the `.zip`
 - **Lightweight like pi, with a real security boundary.** The same single-binary class, plus a per-call approval gate and an OS sandbox (`sandbox-exec` / `bubblewrap`): reads stay in the workspace, writes in the project and temp dirs, the network is off by default, and credentials are unreadable.
 - **Easier to customize than codex-cli.** Pure Go: one language, one binary, no Node/Python runtime. A new tool, provider or approval rule is one `go build` away.
 - **~50–100 MB resident.** Top tier for this class of agent, so it can stay open all day.
-- **Planned: tuios + kitty-browse.** Free-form agent control of windows and the browser; when you debug frontend and backend together, the model sees the terminal, editor and browser at once — the fullest context.
+- **Terminal, browser and charts in one workspace.** `tuios` drives terminal panes, `browser` drives a kitty-browse pane over its control socket (snapshot/click/fill/wait/console/network), `visual` draws terminal charts, Mermaid diagrams and live TML panels, and `workspace` starts a preset (`debug-fullstack`, `data-analysis`, `diagram`, `review`) and reads every pane back as one snapshot — the fullest context when you debug frontend and backend together.
 - **Planned: MCP and a plugin ecosystem.** Bring external tools and data sources in without changing the core.
 
 <p align="center">
