@@ -172,12 +172,11 @@ func TestBashPermissionModeReadOnlyBlocks(t *testing.T) {
 }
 
 // A reviewer-failure containment test used to live here, driving a judge held by
-// the bash tool. The containment is decided by the permission gate now
-// (judge.PermissionGate turns a failed review into a Sandbox request when a
-// runner exists and a block when it does not), and it is covered there by
-// TestPermissionGateReviewerFailure; the execution layer's half — honoring the
-// request, refusing when it cannot — is TestBashSandboxRequestRoutesToRunner and
-// TestBashSandboxRequestWithoutRunnerFailsClosed above.
+// the bash tool. The containment is decided by the consent gate now
+// (judge.ConsentGate turns a failed review into a Sandbox request when a runner
+// exists and a block when it does not); the execution layer's half — honoring
+// the request, refusing when it cannot — is TestBashSandboxRequestRoutesToRunner
+// and TestBashSandboxRequestWithoutRunnerFailsClosed above.
 
 // The policy no longer depends on whether a command is classified read-only.
 func TestBashOrdinaryReadIsContained(t *testing.T) {

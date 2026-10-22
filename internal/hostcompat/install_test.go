@@ -176,13 +176,12 @@ func TestShippedManifestIsUsable(t *testing.T) {
 		`id             = "golder"`,
 		`comm  = ["golder"]`,
 		`argv0 = ["golder"]`,
-		// The screens rules the Inbox needs to press a key for the person.
-		"Approve once",
-		"Approve for this session",
+		// The screen rules the Inbox needs to press a key for the person.
+		"Allow this call once",
+		"Allow these scopes for this session",
+		"Remember these scopes",
 		"Do you trust this folder?",
-		// The two prompts that came second: a read outside the workspace, and
-		// the trust question asked mid-run.
-		"Allow this read once",
+		// The trust question asked mid-run.
 		"untrusted folder",
 		"Allow all tools in this folder",
 		"[screen.rule.answers]",

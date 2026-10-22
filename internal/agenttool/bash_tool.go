@@ -755,8 +755,8 @@ func envelopeDetail(sandboxed bool) string {
 //
 // It exists because "the escape was approved" and "the command ran" are two
 // different facts, and under auto the gate can allow a call while re-containing
-// it (judge's ApprovalEscalation: only an explicit Direct grant runs bare,
-// anything less keeps the sandbox). The person sees that decision — the card's
+// it (judge's ConsentGate: only an explicit Direct decision runs bare, anything
+// less keeps the sandbox). The person sees that decision — the card's
 // envelope marker and the gate's note — but the model's context carries only the
 // result text, so without this line a contained retry reads exactly like a
 // granted escape. The model then reasons about a sandbox it is not in, and the

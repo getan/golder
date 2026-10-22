@@ -11,11 +11,11 @@ import (
 	"github.com/getan/golder/internal/permissions"
 )
 
-// TestWritablePathsPickerFlow covers the TUI surface end to end: bare
-// /permissions grows the writable row, selecting it opens the path picker,
-// Enter on a path revokes it (registry + managed store) and rebuilds the list,
-// and the Add row seeds the composer with the add command instead of running
-// it.
+// TestWritablePathsPickerFlow covers the TUI surface end to end: /boundary
+// writable opens the path picker, Enter on a path revokes it (registry +
+// managed store) and rebuilds the list, and the Add row seeds the composer with
+// the add command instead of running it. The picker is reached from /boundary,
+// not from /permissions: the mode picker no longer carries path grants.
 func TestWritablePathsPickerFlow(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GOLDER_HOME", dir)
@@ -31,18 +31,7 @@ func TestWritablePathsPickerFlow(t *testing.T) {
 	m := NewModel(Options{})
 	m.session = s
 	m.slash = s.slash
-	got, _ := m.runSlash("/permissions")
-	m = got.(Model)
-	last := m.menu.pick[len(m.menu.pick)-1]
-	if last.Value != "writable" || !strings.Contains(last.Title, "Sandbox writable paths") {
-		t.Fatalf("mode picker missing the writable row: %+v", last)
-	}
-
-	// Enter on that row runs /permissions writable, which opens the path
-	// picker (Enter on the Add row with the cursor still on the mode picker
-	// would otherwise switch modes).
-	m.menu.selected = len(m.menu.pick) - 1
-	got, _ = m.submitSlashSelected()
+	got, _ := m.runSlash("/boundary writable")
 	m = got.(Model)
 	if m.menu.pickKind != "boundary-writable" {
 		t.Fatalf("writable picker not open: kind=%q", m.menu.pickKind)

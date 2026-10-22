@@ -1,6 +1,6 @@
 # golder's harness manifest for tuios.
 #
-# golder-manifest-version: 4
+# golder-manifest-version: 5
 #
 # tuios reads this file to recognise a pane running golder and to read the
 # prompts golder draws. It is installed by `golder host-compat install`
@@ -43,45 +43,22 @@ fold_case = true
 # and five rows.
 lines = 16
 
-# A tool-call approval: the TUI's dialog, whose rows are the answer keys.
+# The one capability dialog: the consent gate's whole question, whose rows are
+# the answer keys.
 #
-#   bash needs approval
+#   bash needs 2 capabilities
 #   $ npm install
-#   ‹reviewer's sentence›
-#   › Approve once  (y)
-#     Approve for this session  (p)
+#   • read /tmp/out
+#   • network registry.npmjs.org
+#   › Allow this call once  (y)
+#     Allow these scopes for this session  (a)
+#     Remember these scopes  (s)
 #     Deny  (esc)
 #
-# "Approve once" is the row that makes this dialog what it is; "Deny" and the
-# key tags follow. A read-scope or escalation dialog has the same shape with
-# an extra row, so one rule reads them all.
-[[screen.rule]]
-state    = "needs_input"
-priority = 30
-kind     = "approval"
-message  = "Waits for approval of a tool call."
-region   = "bottom_non_empty_lines(12)"
-all      = ["Approve once"]
-any      = ["Deny", "Approve for this session"]
-
-# The answer keys, bound to the rows they belong to by nothing but this rule:
-# golder's dialog is not a numbered menu, so the keys are pressed directly.
-# Each key is the one the dialog itself prints, and the rule above is what
-# guarantees the dialog is the thing on screen.
-[screen.rule.answers]
-approve        = { keys = ["y"] }
-approve_always = { keys = ["p"] }
-deny           = { keys = ["esc"] }
-
-# A read outside the workspace, where the dialog names the directory it could
-# grant.
-#
-#   read wants to read outside the workspace
-#   /etc/hosts
-#   › Allow this read once  (y)
-#     Allow reading /etc (this session)  (a)
-#     Always allow reading /etc (remembered)  (s)
-#     Deny  (esc)
+# "Allow this call once" is the row that makes this dialog what it is. The
+# session/remember rows exist only when the request has something to grant for
+# longer than one call; an unconfined request offers only once/deny, so the
+# `any` list keeps Deny as the common row.
 #
 # approve_always is bound to the session grant (a), not to the remembered one
 # (s): the Inbox offers "approve and do not ask again" for the session, and a
@@ -92,38 +69,10 @@ deny           = { keys = ["esc"] }
 state    = "needs_input"
 priority = 30
 kind     = "approval"
-message  = "Asks to read outside the workspace."
+message  = "Waits for approval of a tool call."
 region   = "bottom_non_empty_lines(12)"
-all      = ["Allow this read once"]
-any      = ["Deny", "Always allow reading"]
-
-[screen.rule.answers]
-approve        = { keys = ["y"] }
-approve_always = { keys = ["a"] }
-deny           = { keys = ["esc"] }
-
-# A write outside the workspace: the same question as the read above, about the
-# one tool that writes rather than reads. The rows differ in one word — "write"
-# for "read" — and that word IS the grant, so the rule matches on it rather than
-# on the shape the two dialogs share.
-#
-#   apply_patch wants to write outside the workspace
-#   /elsewhere/notes.md
-#   › Allow this write once  (y)
-#     Allow writing /elsewhere (this session)  (a)
-#     Always allow writing /elsewhere (remembered)  (s)
-#     Deny  (esc)
-#
-# The read rule above comes first and matches the read wording; the two
-# predicates cannot both hold for one dialog, because the labels name the side.
-[[screen.rule]]
-state    = "needs_input"
-priority = 30
-kind     = "approval"
-message  = "Asks to write outside the workspace."
-region   = "bottom_non_empty_lines(12)"
-all      = ["Allow this write once"]
-any      = ["Deny", "Always allow writing"]
+all      = ["Allow this call once"]
+any      = ["Deny", "Allow these scopes for this session", "Remember these scopes"]
 
 [screen.rule.answers]
 approve        = { keys = ["y"] }

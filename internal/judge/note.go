@@ -131,18 +131,6 @@ func AskDisposition(kind ApprovalKind, lang string) string {
 	switch kind {
 	case ApprovalConsent:
 		return localized(lang, "由你决定 · 能力授权", "your call · capability grant")
-	case ApprovalEscalation:
-		return localized(lang, "由你决定 · 沙箱外请求", "your call · sandbox escape")
-	case ApprovalReAdmit:
-		return localized(lang, "由你决定 · 重准入被拒路径", "your call · re-admit the blocked path")
-	case ApprovalNetwork:
-		return localized(lang, "由你决定 · 联网", "your call · network")
-	case ApprovalBoundary:
-		return localized(lang, "由你决定 · 工作区外", "your call · outside the workspace")
-	case ApprovalNoSandbox:
-		return localized(lang, "由你决定 · 没有沙箱运行器", "your call · no sandbox runner")
-	case ApprovalReviewFailed:
-		return localized(lang, "由你决定 · 评审不可用", "your call · reviewer unavailable")
 	case ApprovalTrust:
 		return localized(lang, "首次信任 · 由你决定", "first-run trust · your call")
 	default:

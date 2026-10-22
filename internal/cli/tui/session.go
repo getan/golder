@@ -37,7 +37,6 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/dream"
-	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
@@ -423,9 +422,6 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// /boundary is per-session for the language reason only: the grants it
 	// reads live in the one table behind grants.Process().
 	prompts.RegisterBoundaryCommand(s.slash, func() string {
-		return s.lang()
-	})
-	prompts.RegisterNetworkCommand(s.slash, func() string {
 		return s.lang()
 	})
 
@@ -847,17 +843,6 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 		}
 		if denied {
 			return judge.ApprovalAnswer{Answered: true}
-		}
-	}
-	// A path the user already granted to the sandbox (a prior dialog, a
-	// manual /boundary writable, or config) settles an escalation without
-	// a dialog: the call is contained with the grant, which is exactly what
-	// the grant pre-decided. Without this, every retry would re-ask.
-	if root := escalationPathCandidate(req, s.cwd); root != "" {
-		for _, granted := range grants.WritableRoots() {
-			if coveredBy(root, granted) {
-				return judge.ApprovalAnswer{Approve: true, WritableRoot: root, Answered: true}
-			}
 		}
 	}
 	ch := s.approvalCh

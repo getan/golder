@@ -1,15 +1,12 @@
 package judge
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/golderhome"
-	"github.com/getan/golder/internal/grants/grantstest"
-	"github.com/getan/golder/internal/permissions"
 )
 
 // TestPathsFromDenialReadsTheRefusedPath: the OS message names the path it
@@ -151,30 +148,6 @@ func TestReportedCommandYieldsNoPath(t *testing.T) {
 		` 2>/dev/null | sed -E 's/(=|:)[[:space:]]*"[^"]*"/\1 "<redacted>"/g; s#(//)[^@]*@#\1<redacted>@#g' | head -20`
 	if got := GrantablePathFromText("command: "+command, "", cwd); got != "" {
 		t.Errorf("reported command = %q, want no path", got)
-	}
-}
-
-// TestPermissionGateEscalationWithNoGrantablePathAsksNothing: when the command
-// names no grantable path, the gate has nothing to offer — the question must
-// not open (a Deny-only dialog is noise), and the escape request fails closed.
-func TestPermissionGateEscalationWithNoGrantablePathAsksNothing(t *testing.T) {
-	grantstest.Install(t)
-	asked := 0
-	opts := escalationGateOpts(&noteRecorder{})
-	opts.Cwd = t.TempDir()
-	opts.Classifier = &stubClassifier{v: Verdict{Level: Allow, Risk: "low", Authorization: "unknown"}}
-	opts.Confirm = func(context.Context, ApprovalRequest) ApprovalAnswer {
-		asked++
-		return ApprovalAnswer{Answered: true}
-	}
-	gate := PermissionGate(permissions.New(permissions.Auto), opts)
-	call := toolCall("bash", `{"command":"sed -E 's#x#y#g; /g' f.txt","sandbox_permissions":"require_escalated","justification":"verify the path offer"}`)
-	dec := gate(context.Background(), call)
-	if dec == nil || !dec.Block {
-		t.Fatalf("an escape with nothing to re-admit must fail closed, got %+v", dec)
-	}
-	if asked != 0 {
-		t.Errorf("asked = %d, want no question for a command with no grantable path", asked)
 	}
 }
 

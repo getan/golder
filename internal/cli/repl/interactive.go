@@ -254,9 +254,6 @@ func Run(opts Options) error {
 	prompts.RegisterBoundaryCommand(slash, func() string {
 		return judge.ConversationLanguage(agentCtx.Messages)
 	})
-	prompts.RegisterNetworkCommand(slash, func() string {
-		return judge.ConversationLanguage(agentCtx.Messages)
-	})
 
 	// --approve grants the launch directory session trust up front (mirrors pi's
 	// --approve/-a), so the first-launch prompt is skipped and side-effect tools

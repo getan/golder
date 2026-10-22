@@ -810,11 +810,12 @@ func (m Model) openTrustPicker() (tea.Model, tea.Cmd) {
 }
 
 // openPermissionsPicker shows the four approval modes with their descriptions
-// (the codex permissions-preset parity), marking the active one, plus a final
-// row that opens the sandbox writable-path manager. The picker is
-// intentionally English-only — the canonical mode names and short preset
-// descriptions read the same for every user — while the verdict notes and the
-// slash-command status keep following the conversation language.
+// (the codex permissions-preset parity), marking the active one. Path grants
+// live under /boundary now: the mode picker answers "how are calls graded" and
+// nothing else, the same one-subject-per-command split the text commands use.
+// The picker is intentionally English-only — the canonical mode names and short
+// preset descriptions read the same for every user — while the verdict notes and
+// the slash-command status keep following the conversation language.
 func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 	if m.session == nil {
 		m.transcript.addSystem("No active session.")
@@ -829,12 +830,6 @@ func (m Model) openPermissionsPicker() (tea.Model, tea.Cmd) {
 	for _, mode := range modes {
 		picks = append(picks, pickItem{Title: mode.Label("en"), Detail: mode.Description("en"), Value: mode.String()})
 	}
-	grants, _ := cli.ListWritablePaths()
-	picks = append(picks, pickItem{
-		Title:  "Sandbox writable paths…",
-		Detail: fmt.Sprintf("%d granted; folders readable+writable inside the sandbox", len(grants)),
-		Value:  "writable",
-	})
 	m.menu.openPickerDetailed(picks, current, "permissions")
 	m.transcript.addSystem("Select a permission mode (↑↓ + Enter, Esc cancels):")
 	m.relayout()
@@ -877,7 +872,7 @@ func (m Model) reopenWritablePathsPicker(announce bool) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("Sandbox writable paths: ↑↓ + Enter removes one, \"Add path…\" starts /boundary writable add. Esc closes.")
 	}
 	for _, w := range warnings {
-		m.transcript.addSystem("permissions: " + w)
+		m.transcript.addSystem("boundary: " + w)
 	}
 	m.relayout()
 	return m, nil
@@ -2342,7 +2337,7 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			}
 			res, err := cli.RemoveWritablePath(item)
 			if err != nil {
-				m.transcript.addSystem("permissions: " + err.Error())
+				m.transcript.addSystem("boundary: " + err.Error())
 				return m.reopenWritablePathsPicker(false)
 			}
 			msg := "Revoked " + cli.DisplayHomePath(res.Path) + " for this session"
@@ -2422,10 +2417,12 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	if line == "/permissions" {
 		return m.openPermissionsPicker()
 	}
-	// /permissions writable opens the writable-path picker; its subcommands
-	// (/boundary writable add <path>, …) resolve through the registry
-	// below, whose text output is the same the REPL prints.
-	if line == "/permissions writable" {
+	// /boundary writable opens the path picker. It lives under /boundary, not
+	// under /permissions: the mode picker answers "how are calls graded", while
+	// this list is the path consent boundary. The subcommands
+	// (/boundary writable add <path>, …) resolve through the registry below,
+	// whose text output is the same the REPL prints.
+	if line == "/boundary writable" {
 		return m.openWritablePathsPicker()
 	}
 	// /memory is intercepted before registry resolution (like /compact): it

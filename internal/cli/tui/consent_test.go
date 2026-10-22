@@ -55,3 +55,21 @@ func TestConsentDialogOffersSessionWithoutEscape(t *testing.T) {
 		t.Fatalf("answer = %+v", ans)
 	}
 }
+
+// A network-only request has no lifetime to offer: the network is decided per
+// call, so the dialog must not imply that "remember" persists it.
+func TestConsentDialogNetworkOnlyIsOnce(t *testing.T) {
+	m := NewModel(Options{})
+	reply := make(chan judge.ApprovalAnswer, 1)
+	m.openApproval(judge.ApprovalRequest{
+		Kind: judge.ApprovalConsent, Tool: "webfetch", Summary: "https://example.com",
+		Mode: "ask", Level: judge.Confirm,
+		Needs: []judge.Need{{Cap: judge.CapNetwork, Key: "example.com"}},
+	}, reply)
+	if len(m.approval.rows) != 2 {
+		t.Fatalf("rows = %+v, want once/deny", m.approval.rows)
+	}
+	if got := m.approval.rows[0].value; got != consentOnce {
+		t.Fatalf("first row = %q, want once", got)
+	}
+}

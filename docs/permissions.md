@@ -118,6 +118,6 @@ directory is already trusted or `--approve` is used.
 - `internal/cli/tui/approval.go` — one capability dialog.
 - `internal/permissions/permissions.go` — the four mode presets.
 
-The older `BoundaryGate` / `PermissionGate` remain only for legacy tests;
-production drivers use `ConsentGate`, and even the sandbox-denial recovery now
+`ConsentGate` is the only gate. The older `BoundaryGate` / `PermissionGate` were
+removed once production drivers moved over; even the sandbox-denial recovery
 asks a single `ConsentRequest`.

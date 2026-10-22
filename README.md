@@ -336,7 +336,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 - 原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）由 `toolworker` 的一次性沙箱执行时也标 `·sandbox`；`full-access`/Direct/无 runner 退回进程内时标 `·unconfined`；`todo`/`websearch`/`webfetch` 等不走 OS 沙箱的工具没有标记；
 - `GOLDER_SANDBOX=enforce` 仍把每一条都收进沙箱，优先于信封；`full-access` 不变。
 
-网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。默认下 contained 调用和 `enforce` 仍按次授权，或由 `/network` 记住；`/network follow on`（默认关）让 auto 的 Allow（含 contained）直接携带网络；`/network add host|command|tool <key>` 可预授权。信封不是网络白名单，也不是持久授权。
+网络是另一个维度，并且**按次**决定：没有持久化的网络白名单，也没有单独的 `/network` 命令。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`；这条能力请求和外部路径、沙箱外运行一起进入同一次能力决策。`auto` 下评审的 Allow/Confirm 直接携带声明的网络，Contain 只在评审同时授予网络时保留；`ask` 在同一个弹窗里问；`read-only` 拒绝；`full-access` 不问。信封只决定执行位置，不改变网络授权。
 
 ### 权限模式
 
@@ -353,7 +353,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 
 首次在某个目录启动时会询问是否信任该目录；`--approve` 可为单次运行直接授权。未信任目录里也可以只放行读取（`read` / `grep` / `find` / `ls` / `view_image`，本会话 × 本目录）：TUI 弹窗选 `Allow reads in this folder (this session)`，REPL 按 `a`；命令与联网读取仍逐次询问，`/trust off` 会连读授权一起撤销。**首启信任弹窗的按键**：`s` 记住、`p` 本会话、`n` 记住不信任、Esc 取消（不落盘）；**运行中的信任问句**另一套键：`y` 仅这一次、`a` 本会话允许本目录的读取、`p` 本会话允许全部工具——运行中这一问不落盘，持久化是启动选择器的职责。需要操作系统级隔离时参见 [docs/sandboxing.md](docs/sandboxing.md)。
 
-**网络授权（统一能力模型）**：网络是能力请求的一维，不再单独弹第二次窗。`auto` 的 `allow`/`confirm` 直接授予本次调用声明的网络；`ask` 把它和外部路径、沙箱外运行合并进同一个弹窗；`read-only` 拒绝，`full-access` 不问。`/network add host|command|tool <key>` 仍可用于预授权和记住决定，`/network rm` 删除，`/network list` 查看；记住的拒绝始终优先。旧的 `/network follow` 开关只供旧 gate/兼容路径使用，新的 `consent` 链路不依赖它。
+**网络授权（统一能力模型）**：网络是能力请求的一维，不再单独弹第二次窗，也不再有“记住的 host/command 规则”。`auto` 的 `allow`/`confirm` 直接授予本次调用声明的网络；`ask` 把它和外部路径、沙箱外运行合并进同一个弹窗；`read-only` 拒绝，`full-access` 不问。一次批准只覆盖这一次调用；旧的 `network_grants.json` 与 `network.toml` 不再读取，可以删除。
 
 ### 常用开关
 

@@ -48,7 +48,8 @@ func TestEnvelopeBare(t *testing.T) {
 // carries the envelope on the decision, and a command that runs text this layer
 // cannot read keeps the default (contained) shape.
 func TestAutoApprovalCarriesTheBareEnvelope(t *testing.T) {
-	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
+	gate := ConsentGate(ConsentOpts{
+		Mode:       permissions.New(permissions.Auto),
 		Classifier: &stubClassifier{v: Verdict{Level: Allow}},
 		Sandboxed:  func(string) bool { return true },
 	})
@@ -59,7 +60,7 @@ func TestAutoApprovalCarriesTheBareEnvelope(t *testing.T) {
 	}
 
 	dec = gate(context.Background(), toolCall("bash", `{"command":"bash -c 'echo hi'"}`))
-	if dec != nil {
+	if dec != nil && dec.Bare {
 		t.Fatalf("a shell must stay contained, got %+v", dec)
 	}
 }

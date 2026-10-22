@@ -12,8 +12,6 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-
-	"github.com/getan/golder/internal/permissions"
 )
 
 // reviewerSpy counts how many calls actually reached the reviewer.
@@ -138,79 +136,5 @@ func TestChainSendsEscalationRequestsToTheReviewer(t *testing.T) {
 		if v.Source != "llm" {
 			t.Errorf("%q verdict = %+v, want the reviewer's", cmd, v)
 		}
-	}
-}
-
-// TestBareGraderStillGetsThePolicyPipeline pins what the gate's one-pass shape
-// buys: a grader that is NOT a Chain is wrapped in one, so the deterministic
-// floor runs for it too — a wiring mistake must not be able to drop the
-// credential denials.
-func TestBareGraderStillGetsThePolicyPipeline(t *testing.T) {
-	bare := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
-	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
-		Classifier: bare,
-		Sandboxed:  func(string) bool { return true },
-	})
-
-	// A credential read is refused by the floor, without asking the grader.
-	if dec := gate(context.Background(), bashCall("cat ~/.zshrc")); dec == nil || !dec.Block {
-		t.Fatalf("a bare grader let a credential read through the floor: %+v", dec)
-	}
-	if bare.calls != 0 {
-		t.Errorf("the grader was consulted %d times for a floor decision, want 0", bare.calls)
-	}
-
-	// A read-only command reaches the grader like everything else.
-	bare.calls = 0
-	if dec := gate(context.Background(), bashCall("ls -la internal")); !approvedToRun(dec) {
-		t.Errorf("an allowed read must run, got %+v", dec)
-	}
-	if bare.calls != 1 {
-		t.Errorf("the grader ran %d times for a read-only read, want 1", bare.calls)
-	}
-
-	// A mutating command does too.
-	bare.calls = 0
-	if dec := gate(context.Background(), bashCall("go test ./...")); !approvedToRun(dec) {
-		t.Errorf("an auto-approved confirm must run, got %+v", dec)
-	}
-	if bare.calls != 1 {
-		t.Errorf("the grader ran %d times for a mutating command, want 1", bare.calls)
-	}
-}
-
-// TestPermissionGateReviewsReadsToo drives the whole gate: in auto mode the
-// reviewer is consulted for an in-workspace read, and its allow is silent.
-func TestPermissionGateReviewsReadsToo(t *testing.T) {
-	spy := &reviewerSpy{v: Verdict{Level: Allow, Source: "llm"}}
-	rec := &noteRecorder{}
-	gate := PermissionGate(permissions.New(permissions.Auto), GateOpts{
-		Classifier: spy,
-		// bash has a sandbox runner here, which is what makes a Sandbox verdict
-		// contain the call rather than block it.
-		Sandboxed: func(name string) bool { return name == "bash" },
-		Notify:    rec.emit,
-	})
-	if dec := gate(context.Background(), bashCall("ls -la internal")); !approvedToRun(dec) {
-		t.Errorf("an allowed read must run, got %+v", dec)
-	}
-	if spy.calls != 1 {
-		t.Errorf("the reviewer ran %d times for a read-only command, want 1", spy.calls)
-	}
-	if len(rec.notes) != 0 {
-		t.Errorf("an allow is silent, got notes %+v", rec.notes)
-	}
-
-	// The same gate still routes a genuinely risky command through the reviewer.
-	spy.v = Verdict{Level: Contain, Source: "llm", Reasons: []string{"risky"}}
-	dec := gate(context.Background(), bashCall("rm -rf ./build"))
-	if spy.calls != 2 {
-		t.Errorf("the reviewer ran %d times in total, want 2", spy.calls)
-	}
-	if dec == nil || !dec.Sandbox {
-		t.Errorf("a sandbox-tier command must be contained, got %+v", dec)
-	}
-	if len(rec.notes) != 1 || rec.notes[0].Kind != NoteSandboxed {
-		t.Errorf("the containment must be announced, got %+v", rec.notes)
 	}
 }

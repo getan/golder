@@ -66,8 +66,9 @@ func AuthFacts(tool string, args json.RawMessage, workspaceRoot string, extraRoo
 	root := strings.TrimSpace(workspaceRoot)
 	if root == "" {
 		// The gate falls back to the process working directory when no root was
-		// given (BoundaryGate does the same), so the facts must too — otherwise
-		// the reviewer is told about a boundary the gate is not enforcing.
+		// given (ConsentGate does the same through filepath.Abs), so the facts
+		// must too — otherwise the reviewer is told about a boundary the gate is
+		// not enforcing.
 		if wd, err := os.Getwd(); err == nil {
 			root = wd
 		}

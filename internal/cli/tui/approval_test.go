@@ -6,8 +6,6 @@ package tui
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +14,6 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/run"
-	"github.com/getan/golder/internal/grants"
-	"github.com/getan/golder/internal/grants/grantstest"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -41,13 +37,17 @@ func trustGateForTest(session *runSession, rs *remoteSession) agentcore.BeforeTo
 
 func testApprovalRequest() judge.ApprovalRequest {
 	return judge.ApprovalRequest{
-		Kind:          judge.ApprovalConfirm,
+		Kind:          judge.ApprovalConsent,
 		Tool:          "bash",
 		Summary:       "npm install",
 		Justification: "needs the network",
-		Risk:          "medium",
-		Authorization: "high",
 		Rationale:     "installs dependencies",
+		Mode:          "ask",
+		Level:         judge.Confirm,
+		Needs: []judge.Need{
+			{Cap: judge.CapReadOutside, Path: "/tmp/out", Dir: "/tmp"},
+			{Cap: judge.CapNetwork, Key: "registry.npmjs.org"},
+		},
 	}
 }
 
@@ -69,11 +69,12 @@ func TestApprovalDialogAnswers(t *testing.T) {
 		name    string
 		key     tea.KeyPressMsg
 		approve bool
-		always  bool
+		scope   judge.Scope
 	}{
-		{"y approves once", tea.KeyPressMsg{Code: 'y', Text: "y"}, true, false},
-		{"p approves for the session", tea.KeyPressMsg{Code: 'p', Text: "p"}, true, true},
-		{"esc denies", tea.KeyPressMsg{Code: tea.KeyEscape}, false, false},
+		{"y approves once", tea.KeyPressMsg{Code: 'y', Text: "y"}, true, judge.ScopeOnce},
+		{"a approves for the session", tea.KeyPressMsg{Code: 'a', Text: "a"}, true, judge.ScopeSession},
+		{"s remembers", tea.KeyPressMsg{Code: 's', Text: "s"}, true, judge.ScopeRemembered},
+		{"esc denies", tea.KeyPressMsg{Code: tea.KeyEscape}, false, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -85,124 +86,13 @@ func TestApprovalDialogAnswers(t *testing.T) {
 			m = got.(Model)
 
 			ans := awaitAnswer(t, reply)
-			if !ans.Answered || ans.Approve != c.approve || ans.Always != c.always {
-				t.Fatalf("answer = %+v, want approve=%v always=%v", ans, c.approve, c.always)
+			if !ans.Answered || ans.Approve != c.approve || ans.Scope != c.scope {
+				t.Fatalf("answer = %+v, want approve=%v scope=%v", ans, c.approve, c.scope)
 			}
 			if m.approval.active {
 				t.Error("the dialog should close after answering")
 			}
 		})
-	}
-}
-
-// TestApprovalReAdmitCombinesNetwork: a refused escape that also asked for
-// network must show both questions in one dialog and deliver one answer with
-// both grants. The old path asked only about the path, then the retry failed
-// the bash tool's network guard for a question nobody saw.
-func TestApprovalReAdmitCombinesNetwork(t *testing.T) {
-	m := NewModel(Options{})
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m.openApproval(judge.ApprovalRequest{
-		Kind:           judge.ApprovalReAdmit,
-		Tool:           "bash",
-		Summary:        "git push",
-		ReadRoot:       "/tmp/repo",
-		NetworkRequest: true,
-		NetworkKey:     "github.com",
-	}, reply)
-	if !m.approval.combined {
-		t.Fatal("re-admission with a network request must combine both questions")
-	}
-	// Stage 0: allow reading the path for this session.
-	m.answerApproval(approveReadDir)
-	if m.approval.stage != 1 {
-		t.Fatalf("stage = %d, want the network stage", m.approval.stage)
-	}
-	// Stage 1: allow network for this call.
-	m.answerApproval(approveNetwork)
-	ans := awaitAnswer(t, reply)
-	if !ans.Approve || !ans.Network {
-		t.Fatalf("answer = %+v, want both path and network approved", ans)
-	}
-	if ans.ReadRoot != "/tmp/repo" {
-		t.Errorf("ReadRoot = %q, want the re-admitted path", ans.ReadRoot)
-	}
-}
-
-// TestApprovalEscalationCombinesNetwork: a refused escape's containment row is
-// only useful with the network half; the dialog asks both and delivers one
-// answer.
-func TestApprovalEscalationCombinesNetwork(t *testing.T) {
-	m := NewModel(Options{})
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m.openApproval(judge.ApprovalRequest{
-		Kind:           judge.ApprovalEscalation,
-		Tool:           "bash",
-		Summary:        "git push",
-		NetworkRequest: true,
-		NetworkKey:     "github.com",
-	}, reply)
-	if !m.approval.combined {
-		t.Fatal("escalation with a network request must combine both questions")
-	}
-	m.answerApproval(approveContained)
-	if m.approval.stage != 1 {
-		t.Fatalf("stage = %d, want the network stage", m.approval.stage)
-	}
-	m.answerApproval(approveNetwork)
-	ans := awaitAnswer(t, reply)
-	if !ans.Approve || !ans.Contained || !ans.Network {
-		t.Fatalf("answer = %+v, want contained + network", ans)
-	}
-}
-
-// TestApprovalCombinedNetworkDenialDeniesCall: the network half is part of the
-// same decision; denying it must not leave an approval whose retry fails the
-// network guard.
-func TestApprovalCombinedNetworkDenialDeniesCall(t *testing.T) {
-	m := NewModel(Options{})
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m.openApproval(judge.ApprovalRequest{
-		Kind:           judge.ApprovalReAdmit,
-		Tool:           "bash",
-		ReadRoot:       "/tmp/repo",
-		NetworkRequest: true,
-		NetworkKey:     "github.com",
-	}, reply)
-	m.answerApproval(approveReadDir)
-	m.answerApproval(approveDeny)
-	ans := awaitAnswer(t, reply)
-	if ans.Approve {
-		t.Fatalf("network denial delivered an approval: %+v", ans)
-	}
-}
-
-// A path+network request keeps one dialog open for both halves: the path answer
-// is recorded, the network question replaces the rows, and one combined answer
-// reaches the waiting gate.
-func TestApprovalCombinedPathAndNetworkStages(t *testing.T) {
-	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalBoundary, Tool: "bash",
-		Summary: "command: git push", BoundaryDir: "/tmp/example",
-		NetworkRequest: true, NetworkKey: "github.com", NetworkRememberable: true,
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	if !m.approval.combined || m.approval.stage != 0 {
-		t.Fatalf("combined dialog not armed: %+v", m.approval)
-	}
-	m.answerApproval(approveOnce)
-	if !m.approval.active || m.approval.stage != 1 {
-		t.Fatalf("dialog did not stay open for the network stage: %+v", m.approval)
-	}
-	if len(m.approval.rows) != 4 || m.approval.rows[0].value != approveNetwork {
-		t.Fatalf("network rows = %+v", m.approval.rows)
-	}
-	m.answerApproval(approveNetworkSession)
-	ans := awaitAnswer(t, reply)
-	if !ans.Approve || !ans.Network || !ans.NetworkSession {
-		t.Fatalf("combined answer = %+v", ans)
 	}
 }
 
@@ -449,7 +339,7 @@ func TestApprovalDialogArrowSelection(t *testing.T) {
 	}
 	got, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	m = got.(Model)
-	if m.approval.selected != len(toolApprovalRows)-1 {
+	if m.approval.selected != len(m.approval.rows)-1 {
 		t.Fatalf("up at the top should wrap to the last row, got %d", m.approval.selected)
 	}
 }
@@ -461,7 +351,7 @@ func TestApprovalViewShowsContext(t *testing.T) {
 	m := NewModel(Options{})
 	m.openApproval(testApprovalRequest(), reply)
 	view := m.approvalView(100)
-	for _, want := range []string{"needs approval", "npm install", "needs the network", "installs dependencies", "Approve once", "Approve for this session", "Deny"} {
+	for _, want := range []string{"needs 2 capabilities", "npm install", "needs the network", "installs dependencies", "Allow this call once", "Allow these scopes for this session", "Remember these scopes", "Deny"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("dialog missing %q:\n%s", want, view)
 		}
@@ -622,270 +512,6 @@ func TestTrustGateReadsAnswerGrantsReadsOnly(t *testing.T) {
 	}
 	if dec := <-bashDone; dec == nil || !dec.Block {
 		t.Errorf("denied command = %+v, want a block", dec)
-	}
-}
-
-// TestApprovalTitleEscalation pins the escalation-conflict headline: the
-// dialog must say the call wants out of the sandbox, not just "needs
-// approval".
-func TestApprovalTitleEscalation(t *testing.T) {
-	req := testApprovalRequest()
-	req.Kind = judge.ApprovalEscalation
-	title := approvalTitle(req)
-	if !strings.Contains(title, "outside the sandbox") || !strings.Contains(title, "sandbox") {
-		t.Errorf("escalation title = %q", title)
-	}
-}
-
-// TestApprovalDialogWritableRow: an escalation whose command names an outside
-// path offers the per-path grant, and choosing it registers the path and
-// answers with the containment grant (Approve + WritableRoot).
-func TestApprovalDialogWritableRow(t *testing.T) {
-	grantstest.Install(t)
-	t.Setenv("HOME", t.TempDir())
-	req := judge.ApprovalRequest{
-		Kind:          judge.ApprovalEscalation,
-		Tool:          "bash",
-		Summary:       "command: rm -rf /Volumes/KIOXIA/old-build",
-		Justification: "the sandbox denies writes to /Volumes/KIOXIA/old-build",
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	// Five rows: the contained answer (the default), the session write grant,
-	// its remembered twin, the deliberate escape, and deny.
-	if len(m.approval.rows) != 5 {
-		t.Fatalf("rows = %d, want 5 with both writable grants", len(m.approval.rows))
-	}
-	if first := m.approval.rows[0].label; !strings.Contains(first, "in the sandbox") {
-		t.Fatalf("escalation must lead with the contained answer, got %q", first)
-	}
-	label := m.approval.rows[1].label
-	if !strings.Contains(label, "/Volumes/KIOXIA/old-build") || !strings.Contains(label, "this session") {
-		t.Fatalf("writable row label = %q", label)
-	}
-	remembered := m.approval.rows[2].label
-	if !strings.Contains(remembered, "/Volumes/KIOXIA/old-build") || !strings.Contains(remembered, "remembered") {
-		t.Fatalf("remembered row label = %q", remembered)
-	}
-	got, _ := m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
-	_ = got
-	ans := awaitAnswer(t, reply)
-	if !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
-		t.Fatalf("answer = %+v", ans)
-	}
-	if roots := grants.WritableRoots(); len(roots) != 1 || roots[0] != "/Volumes/KIOXIA/old-build" {
-		t.Fatalf("registry = %v", roots)
-	}
-	// The path is granted now: the row disappears for the next request (and
-	// confirmApproval settles it without a dialog).
-	m2 := NewModel(Options{})
-	m2.openApproval(req, make(chan judge.ApprovalAnswer, 1))
-	if len(m2.approval.rows) != 3 || m2.approval.writableRoot != "" {
-		t.Fatalf("already-granted path must not offer the row: %+v", m2.approval.rows)
-	}
-	s := &runSession{cwd: t.TempDir()} // no approvalCh: a dialog would fail closed
-	if ans := s.confirmApproval(context.Background(), req); !ans.Approve || ans.WritableRoot != "/Volumes/KIOXIA/old-build" {
-		t.Fatalf("pre-granted escalation should be contained without a dialog, got %+v", ans)
-	}
-}
-
-// TestApprovalReAdmitWriteLeads: when the denied path was needed for writing, the
-// dialog says so and the row that grants it leads — the first row is the one a
-// reader who trusts the dialog takes, and a read grant would leave the retry
-// failing on the same path.
-// TestApprovalReAdmitOffersUnconfinedRun: the denial dialog can also answer "run
-// this one command outside the sandbox" — the answer that works when no grant
-// can (a system-protected path, credential material) — and the row appears only
-// when the asker offered it, never as the default and never last.
-func TestApprovalReAdmitOffersUnconfinedRun(t *testing.T) {
-	grantstest.Install(t)
-	const path = "/Volumes/KIOXIA/golder-probe-unconfined"
-	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Contain,
-		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true, UnconfineOffer: true,
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	escape := -1
-	for i, row := range m.approval.rows {
-		if row.key == "e" {
-			escape = i
-			if !strings.Contains(row.label, "outside the sandbox") {
-				t.Errorf("escape row = %q, want it to say what it does", row.label)
-			}
-		}
-	}
-	if escape < 0 {
-		t.Fatalf("no escape row: %+v", m.approval.rows)
-	}
-	if last := m.approval.rows[len(m.approval.rows)-1]; last.key != "esc" {
-		t.Errorf("last row = %+v, want Deny last", last)
-	}
-	m.answerApproval(approveUnconfined)
-	if ans := awaitAnswer(t, reply); !ans.Approve || !ans.Unconfined {
-		t.Fatalf("answer = %+v, want an unconfined approval", ans)
-	}
-
-	// Without the offer there is no row: the refused-escape dialog has its own
-	// escape answer, and two escape rows in one dialog would be a bug.
-	req.UnconfineOffer = false
-	m2 := NewModel(Options{})
-	m2.openApproval(req, make(chan judge.ApprovalAnswer, 1))
-	for _, row := range m2.approval.rows {
-		if row.key == "e" {
-			t.Fatalf("escape row offered without an offer: %+v", row)
-		}
-	}
-}
-
-func TestApprovalReAdmitWriteLeads(t *testing.T) {
-	grantstest.Install(t)
-	const path = "/Volumes/KIOXIA/golder-probe4"
-	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Contain,
-		Summary: "mkdir -p " + path, ReadRoot: path, NeedsWrite: true,
-	}
-	if title := approvalTitle(req); !strings.Contains(title, "writing") {
-		t.Errorf("title = %q, want the denied side named", title)
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	if len(m.approval.rows) != 4 {
-		t.Fatalf("rows = %d, want four", len(m.approval.rows))
-	}
-	if got := m.approval.rows[0]; got.key != "w" || !strings.Contains(got.label, "writing") {
-		t.Fatalf("first row = %+v, want the read+write grant leading a write need", got)
-	}
-	if got := m.approval.rows[1]; got.key != "a" {
-		t.Fatalf("second row = %+v, want the read grant next", got)
-	}
-	if got := m.approval.rows[3]; got.key != "esc" {
-		t.Fatalf("last row = %+v, want deny", got)
-	}
-	// The leading row answers the write grant, which is what the tool needs.
-	m.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
-	if ans := awaitAnswer(t, reply); !ans.Approve || ans.WritableRoot != path {
-		t.Fatalf("answer = %+v, want the writable root set", ans)
-	}
-}
-
-// TestApprovalReAdmitRows: the re-admission question offers bringing the blocked
-// path back inside the sandbox — reads at two lifetimes plus a session
-// read+write grant, since a toolchain cache needs both — and each row sets the
-// answer the gate registers. It never offers the escape: review already refused
-// it, and this dialog exists to replace it with something smaller.
-func TestApprovalReAdmitRows(t *testing.T) {
-	grantstest.Install(t)
-	const path = "/Volumes/KIOXIA/build/out"
-	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalReAdmit, Tool: "bash", Mode: "auto", Level: judge.Allow,
-		Summary: "command: go build -o " + path, ReadRoot: path,
-	}
-	if title := approvalTitle(req); !strings.Contains(title, "outside the sandbox") {
-		t.Errorf("title = %q, want the blocked path named", title)
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	if len(m.approval.rows) != 3 {
-		t.Fatalf("rows = %d, want the two read lifetimes and deny (a read denial needs no write grant)", len(m.approval.rows))
-	}
-	if got := m.approval.rows[0]; got.key != "a" || !strings.Contains(got.label, "this session") {
-		t.Fatalf("first row = %+v, want the session read grant on a", got)
-	}
-	if got := m.approval.rows[1]; got.key != "s" || !strings.Contains(got.label, "remembered") {
-		t.Fatalf("second row = %+v, want the remembered read grant on s", got)
-	}
-	if got := m.approval.rows[2]; got.key != "esc" {
-		t.Fatalf("third row = %+v, want deny; a read question must not offer a write grant", got)
-	}
-	for _, row := range m.approval.rows {
-		if row.key == "w" {
-			t.Errorf("write row offered for a read denial: %+v", row)
-		}
-	}
-	m.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	if ans := awaitAnswer(t, reply); !ans.Approve || ans.ReadRoot != path {
-		t.Fatalf("answer = %+v, want the read root set", ans)
-	}
-}
-
-// TestApprovalEscalationRows: the escalation dialog leads with containment, makes
-// the escape a deliberate second key, and prints the decision line — which mode
-// is asking, on what grade, and why it is asking at all.
-func TestApprovalEscalationRows(t *testing.T) {
-	req := judge.ApprovalRequest{
-		Kind: judge.ApprovalEscalation, Tool: "bash", Mode: "ask", Level: judge.Contain,
-		Summary: "command: ls /etc",
-	}
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m := NewModel(Options{})
-	m.openApproval(req, reply)
-	if got := m.approval.rows[0]; got.key != "y" || got.value != approveContained {
-		t.Fatalf("first row = %+v, want the contained answer on y", got)
-	}
-	if joined := strings.Join(m.approval.detail, "\n"); !strings.Contains(joined, "bash · ask · contain → your call · sandbox escape") {
-		t.Errorf("detail is missing the decision line:\n%s", joined)
-	}
-	m.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if ans := awaitAnswer(t, reply); !ans.Approve || !ans.Contained {
-		t.Fatalf("y must answer containment, got %+v", ans)
-	}
-
-	// 'e' is the escape, granted deliberately rather than by default.
-	reply2 := make(chan judge.ApprovalAnswer, 1)
-	m2 := NewModel(Options{})
-	m2.openApproval(req, reply2)
-	m2.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if ans := awaitAnswer(t, reply2); !ans.Approve || ans.Contained {
-		t.Fatalf("e must answer the escape, got %+v", ans)
-	}
-}
-
-// TestInferWritableRoot pins the candidate filter: only outside paths make the
-// row, and every ambiguous or already-writable candidate hides it.
-func TestInferWritableRoot(t *testing.T) {
-	grantstest.Install(t)
-	// A lexical home outside the OS temp dir: a t.TempDir() home would sit
-	// under os.TempDir() (which the filter rightly rejects) and mask the
-	// tilde expansion case.
-	home := "/golder-test-home"
-	t.Setenv("HOME", home)
-	cwd := filepath.Join(home, "work", "proj")
-	escalation := judge.ApprovalRequest{Kind: judge.ApprovalEscalation, Tool: "bash"}
-	cases := []struct {
-		name    string
-		summary string
-		just    string
-		want    string
-	}{
-		{"absolute flag path", "command: cargo build --target-dir /Volumes/KIOXIA/rust-target", "", "/Volumes/KIOXIA/rust-target"},
-		{"tilde path", "command: cp a ~/backup/dir", "", filepath.Join(home, "backup", "dir")},
-		{"justification only", "command: rm -rf build", "needs to clean /Volumes/KIOXIA/cache", "/Volumes/KIOXIA/cache"},
-		{"project path skipped", "command: ls " + cwd + "/sub", "", ""},
-		{"system path skipped", "command: cat /usr/share/foo", "", ""},
-		{"tmp skipped", "command: mkdir -p /tmp/work", "", ""},
-		{"bare home skipped", "command: rm -rf ~", "", ""},
-		{"no path", "command: git fetch origin", "needs the network", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			req := escalation
-			req.Summary, req.Justification = c.summary, c.just
-			if got := inferWritableRoot(req, cwd); got != c.want {
-				t.Fatalf("inferWritableRoot = %q, want %q", got, c.want)
-			}
-		})
-	}
-	// A confirm-tier request never grows the row, even with a path.
-	req := escalation
-	req.Kind = judge.ApprovalConfirm
-	req.Summary = "command: rm -rf /Volumes/KIOXIA/old-build"
-	if got := inferWritableRoot(req, cwd); got != "" {
-		t.Fatalf("confirm-tier request offered a path: %q", got)
 	}
 }
 
@@ -1086,103 +712,5 @@ func TestTrustGateDeniesWithoutAnswer(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("gate did not return after cancellation")
-	}
-}
-
-// TestApprovalReadGrantNoteIsUnambiguous pins the wording of the note printed
-// after a SESSION read grant. That answer is deliberately the non-durable one,
-// so the note must say the grant dies with the process and name the two ways to
-// keep it: the remembered row next time, or the command. The first shipped
-// version said "Persist it with: readable_roots in config.toml", which read as
-// a report that the grant WAS persisted.
-func TestApprovalReadGrantNoteIsUnambiguous(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("GOLDER_HOME", filepath.Join(home, "xdg"))
-
-	session := newRemoteTestSession(t)
-	m := NewModel(Options{}).withSession(session, nil)
-	m.approval = approvalDialog{
-		active:   true,
-		kind:     "tool",
-		readRoot: filepath.Join(home, "outside"),
-		reply:    make(chan judge.ApprovalAnswer, 1),
-		rows:     []approvalRow{{"Allow reading", "a", approveReadDir}},
-	}
-	m.answerApproval(approveReadDir)
-
-	var note strings.Builder
-	for _, b := range m.transcript.blocks {
-		if b.role == roleSystem {
-			note.WriteString(b.text)
-			note.WriteByte('\n')
-		}
-	}
-	got := note.String()
-
-	if !strings.Contains(got, "for this session only") {
-		t.Errorf("note must state the scope:\n%s", got)
-	}
-	if !strings.Contains(got, "/boundary readable add") {
-		t.Errorf("note must name the command that makes it permanent:\n%s", got)
-	}
-	if !strings.Contains(got, "remembered") {
-		t.Errorf("note must point at the remembered answer:\n%s", got)
-	}
-	if strings.Contains(got, "Persist it with") {
-		t.Errorf("the old phrasing read as a statement of fact:\n%s", got)
-	}
-}
-
-// TestApprovalReadRememberedPersists drives the remembered answer end to end:
-// it must write the managed store (so the grant survives), approve the call,
-// and mark the answer Persisted so the gate's own note does not call it
-// session-only.
-func TestApprovalReadRememberedPersists(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("GOLDER_HOME", filepath.Join(home, "xdg"))
-	grantstest.Install(t)
-	dir := filepath.Join(home, "outside")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _, _ = grants.RemoveCapability(dir, grants.Read) })
-
-	session := newRemoteTestSession(t)
-	m := NewModel(Options{}).withSession(session, nil)
-	reply := make(chan judge.ApprovalAnswer, 1)
-	m.approval = approvalDialog{
-		active:   true,
-		kind:     "tool",
-		readRoot: dir,
-		reply:    reply,
-		rows:     []approvalRow{{"Allow reading", "s", approveReadPersist}},
-	}
-	m.answerApproval(approveReadPersist)
-
-	ans := awaitAnswer(t, reply)
-	if !ans.Approve || ans.ReadRoot != dir {
-		t.Fatalf("answer = %+v, want approval of %s", ans, dir)
-	}
-	if !ans.Persisted {
-		t.Error("the remembered answer must be marked Persisted for the gate's note")
-	}
-	// The grant is live for this session AND written down.
-	if !grants.Allows(filepath.Join(dir, "a.go"), grants.Read) {
-		t.Error("the table did not take the grant")
-	}
-	if !grants.Allows(dir, grants.Read) {
-		t.Errorf("the table does not carry %s: %+v", dir, grants.Process().Entries().All())
-	}
-	var note strings.Builder
-	for _, b := range m.transcript.blocks {
-		if b.role == roleSystem {
-			note.WriteString(b.text)
-			note.WriteByte('\n')
-		}
-	}
-	if !strings.Contains(note.String(), "remembered across sessions") {
-		t.Errorf("note must confirm the durable grant:\n%s", note.String())
 	}
 }

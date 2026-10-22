@@ -175,7 +175,7 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			return blockCall(call, Verdict{Level: Deny, Source: "static", Reasons: []string{"read-only permissions mode"}},
 				"switch with /permissions ask|auto|full-access to allow mutating tools")
 		}
-		v := classifyForGate(ctx, ConsentGateOptsToGate(opts), call)
+		v := classifyForGate(ctx, opts.Classifier, call)
 		if mode == permissions.ReadOnly {
 			needs := collectNeeds(ctx, opts, call, v, mode, lang)
 			if len(needs) > 0 {
@@ -249,7 +249,7 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 	}
 	args, _ := json.Marshal(payload)
 	call := agentcore.AgentToolCall{ID: "sandbox-denial-recovery", Name: "bash", Arguments: args}
-	v := classifyForGate(ctx, ConsentGateOptsToGate(opts), call)
+	v := classifyForGate(ctx, opts.Classifier, call)
 
 	req.Mode = mode.String()
 	req.Source = v.Source
@@ -277,21 +277,6 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 	return promptConsent(ctx, opts.In, opts.Out, opts.Mu, req, lang)
 }
 
-// ConsentGateOptsToGate adapts the classifier inputs the shared helpers expect.
-// The legacy GateOpts is still the home of the classifier; keeping the adapter
-// local avoids duplicating classifyForGate's chain handling.
-func ConsentGateOptsToGate(o ConsentOpts) GateOpts {
-	return GateOpts{
-		Classifier:     o.Classifier,
-		Sandboxed:      o.Sandboxed,
-		RequireSandbox: o.RequireSandbox,
-		Enforce:        o.Enforce,
-		Notify:         o.Notify,
-		Cwd:            o.Cwd,
-		GrantWritable:  o.GrantWritable,
-	}
-}
-
 // collectNeeds asks each subsystem only what it would require, never whether
 // the person agrees. Boundary, network and sandbox are dimensions of one list.
 func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, mode permissions.Mode, lang string) []Need {
@@ -299,7 +284,7 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	needs = append(needs, boundaryNeeds(call, opts, mode, lang)...)
 	if NetworkRequested(call.Name, call.Arguments) && !v.Network {
 		need := Need{Cap: CapNetwork}
-		if _, key, ok := NetworkKey(call.Name, call.Arguments); ok {
+		if key, ok := NetworkKey(call.Name, call.Arguments); ok {
 			need.Key = key
 		}
 		needs = append(needs, need)
@@ -598,17 +583,6 @@ func applyNeeds(call agentcore.AgentToolCall, opts ConsentOpts, needs []Need, sc
 			}
 		case CapNetwork:
 			dec.Network = true
-			if scope != ScopeOnce {
-				life := grants.Session
-				if scope == ScopeRemembered {
-					life = grants.Remembered
-				}
-				kind, key, ok := NetworkKey(call.Name, call.Arguments)
-				if ok {
-					_, _ = grants.AddNetwork(grants.NetworkGrant{Kind: kind, Key: key, Tool: call.Name,
-						Allow: true, Lifetime: life, Source: "consent"})
-				}
-			}
 		case CapUnconfined:
 			// The caller decides the execution envelope; an escape is never
 			// remembered and never establishes a standing grant.
@@ -730,8 +704,9 @@ func PromptConsent(ctx context.Context, in *bufio.Reader, out io.Writer, mu *syn
 	return promptConsent(ctx, in, out, mu, req, lang)
 }
 
-// ConsentFromApproval adapts the legacy driver callback while the dialog is
-// migrated. It exists only at the boundary between drivers and the new gate.
+// ConsentFromApproval adapts the driver callback to the consent gate: the
+// driver speaks ApprovalRequest/ApprovalAnswer, the gate speaks
+// ConsentRequest/ConsentAnswer.
 func ConsentFromApproval(f func(context.Context, ApprovalRequest) ApprovalAnswer) ConsentConfirm {
 	if f == nil {
 		return nil
@@ -741,8 +716,7 @@ func ConsentFromApproval(f func(context.Context, ApprovalRequest) ApprovalAnswer
 			Kind: ApprovalConsent, Tool: req.Tool, Summary: req.Summary,
 			Source:        req.Source,
 			Justification: req.Justification, Mode: req.Mode, Level: req.Level,
-			Risk: req.Risk, Authorization: req.Authorization, Rationale: req.Rationale,
-			Origin: req.Origin, Needs: req.Needs, CanContain: req.CanContain,
+			Rationale: req.Rationale, Origin: req.Origin, Needs: req.Needs,
 		}
 		a := f(ctx, legacy)
 		needs := a.Needs
@@ -751,11 +725,7 @@ func ConsentFromApproval(f func(context.Context, ApprovalRequest) ApprovalAnswer
 			// the exact set they were shown and approved.
 			needs = req.Needs
 		}
-		exec := a.Exec
-		if a.Unconfined {
-			exec = ExecUnconfined
-		}
 		return ConsentAnswer{Allow: a.Approve, Answered: a.Answered, Scope: a.Scope,
-			Needs: needs, Exec: exec}
+			Needs: needs, Exec: a.Exec}
 	}
 }

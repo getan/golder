@@ -58,7 +58,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 
 `GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、Direct 授权或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `sandbox_permissions=require_escalated` 的 Direct 流程保持不变。
 
-网络是另一个维度：Bare 的命令跑在宿主上，网络是它的自然能力，所以 Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先）。`/network follow` **默认开**，把 auto 模式下**评审通过的调用**（allow / confirm / contain，含 contained）的网络一起带上——那次调用本身已经过审查，不再问第二遍；`/network follow off` 恢复每次单独问。`/network add host|command|tool <key>` 可以预授权（`ask` 档或想不经评审时仍有用），`/network rm` 删除。信封不是网络白名单，也不是持久授权；`ask` 里需要你拍板的 Confirm 仍会先问命令，再问网络。
+网络是另一个维度，并且**按次**决定：没有持久化的网络白名单，也没有单独的 `/network` 命令。需要联网的调用由模型声明 `network:"on`，这条能力请求和外部路径、沙箱外运行一起进入同一次决策。`auto` 下评审的 Allow/Confirm 直接携带声明的网络，Contain 只在评审同时授予网络时保留；`ask` 在同一个弹窗里问；`read-only` 拒绝；`full-access` 不问。信封只决定执行位置，不改变网络授权。
 
 ### `auto` 的审查器（就是会话模型）
 
@@ -137,17 +137,15 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
   - **请求本次不隔离运行**（命令被沙箱拒绝时才有）：`e`（REPL 里同键）**发起一次越界申请**，再由 permission gate 决定——`ask` 模式会再问一次很窄的确认，`auto` 模式交给 reviewer 重新看这个"在沙箱外跑"的请求；批准后才在沙箱外重跑一次。它只在没有任何路径授权能解决问题时才是答案——例如 macOS 用 `Operation not permitted` 报出的 SIP 保护文件（`/private/var/…`），或静态底线拒绝交出的一类凭据文件（`~/.ssh/known_hosts`）——因为这些路径不会被登记为可授权项。该决定只对这一次生效（不登记、不记忆），并在转写里作为"沙箱外运行"播报。read-only 模式下不提供该选项。
   - **写确认**（`apply_patch` 写工作区外）：`y` 仅本次、`a` 写/本会话、`s` 写/记住。
   - **越界申请的写行**（ask 模式的 escalation 弹窗）：`w` 该路径可读写/本会话、`s` 记住。
-- **`/boundary writable add <path>`**：写入 `~/.golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable`，或从 `/permissions` 菜单最后一行 `Sandbox writable paths…`，打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）。
+- **`/boundary writable add <path>`**：写入 `~/.golder/grants.json`（原子写），重启后仍生效；`rm` 撤销会话授权并删除持久化记录。`/boundary writable` 列出全部条目及来源（`grants.json` / 仅本会话），加 `warning:` 行报告读不出来的坏条目。TUI 里输入 `/boundary writable` 打开同一列表（↑↓ + Enter 删除，`Add path…` 把命令填回输入框）；`/permissions` 只负责审批模式，不再携带路径入口。
 
 可写路径**同时可读**（写规则与读白名单一起追加）。路径不要求预先存在（新编译缓存是常见场景），但必须是绝对路径或 `~/` 开头，相对路径直接拒绝并在启动时报警告。
 
 ### 网络与 golder 自身状态
 
-**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。auto 档下被评审为 Allow 的调用直接携带网络（`/network follow`，默认开；`off` 恢复逐次询问），`ask` 与 Confirm 仍按次；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
+**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。`auto` 的 Allow/Confirm 直接携带网络，Contain 只在评审授予网络时保留；`ask` 与 Confirm 在同一个弹窗里按次决定；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。一次批准只覆盖这一次调用：没有跨调用记住的网络规则。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
-**Bare 的例外**：已批准的 Bare 命令跑在宿主上，网络是自然能力；Bare 的 Allow 和自动批准的 Confirm 不再单独问网络（记住的网络拒绝规则仍优先），模型也不必再声明 `network:"on"`。contained 调用同样随 auto 的 Allow 一起获得网络（`/network follow`，默认开）；`/network follow off` 恢复逐次询问，`/network add host|command|tool <key>` 预授权，`/network rm` 删除。
-
-**`/network` 的三种用法**：`/network add host|command|tool <key>` 预先记住"允许"（host 可带工具名）；`/network rm` 删除；`/network follow [on|off]` 切换"auto 的 Allow 直接携带网络"（**默认开**，保存在 `network.toml`；`off` 是明确选择"每次单独问"；记住的拒绝仍优先，`ask` 不变）。复合命令的 command key 只有在这种形状才成立：每个部分要么是同一个可记住的程序，要么是非联网程序（`cd … && GOCACHE=… go test … | tail` → `go test`；`git push && curl evil` 不记）。
+**Bare 与网络无关**：已批准的 Bare 命令跑在宿主上，网络是它的自然能力；但一次 Bare 批准不等于一次网络授权——需要联网的容器/命令仍要在调用里声明网络意图，由同一次决策授予。contained 调用同理：评审的 Allow/Confirm 携带网络，Contain 以评审是否授予网络为准。
 
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 

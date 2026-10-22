@@ -54,7 +54,10 @@ const manifestMarker = "golder-manifest-version:"
 // refused outright with no consent path, so only the read question had a rule;
 // now the same three answers exist for a write, and the dialog says "write"
 // where it used to say "read".
-const ManifestVersion = 4
+// 5: the per-capability dialogs collapsed into one consent dialog. The old
+// tool/read/write rules matched rows that no longer exist; one rule now matches
+// the combined question (once / this session / remembered / deny).
+const ManifestVersion = 5
 
 // ManifestSource returns the manifest as golder ships it.
 func ManifestSource() string {

@@ -64,16 +64,19 @@ func dialogFrames(t *testing.T) map[string]string {
 
 	return map[string]string{
 		"tool approval": approval(judge.ApprovalRequest{
-			Kind: judge.ApprovalConfirm, Tool: "bash", Summary: "npm install",
-			Rationale: "installs dependencies",
+			Kind: judge.ApprovalConsent, Tool: "bash", Summary: "npm install",
+			Mode: "ask", Level: judge.Confirm, Rationale: "installs dependencies",
+			Needs: []judge.Need{{Cap: judge.CapNetwork, Key: "registry.npmjs.org"}},
 		}),
 		"read outside the workspace": approval(judge.ApprovalRequest{
-			Kind: judge.ApprovalBoundary, Tool: "read", Summary: "/etc/hosts",
-			BoundaryDir: "/etc",
+			Kind: judge.ApprovalConsent, Tool: "read", Summary: "/etc/hosts",
+			Mode: "ask", Level: judge.Confirm,
+			Needs: []judge.Need{{Cap: judge.CapReadOutside, Path: "/etc/hosts", Dir: "/etc"}},
 		}),
 		"write outside the workspace": approval(judge.ApprovalRequest{
-			Kind: judge.ApprovalBoundary, Tool: "apply_patch", Summary: "/elsewhere/notes.md",
-			BoundaryDir: "/elsewhere", BoundaryWrite: true,
+			Kind: judge.ApprovalConsent, Tool: "apply_patch", Summary: "/elsewhere/notes.md",
+			Mode: "ask", Level: judge.Confirm,
+			Needs: []judge.Need{{Cap: judge.CapWriteOutside, Path: "/elsewhere/notes.md", Dir: "/elsewhere"}},
 		}),
 		"mid-run trust, command": approval(judge.ApprovalRequest{
 			Kind: judge.ApprovalTrust, Tool: "bash", Summary: "rm -rf /tmp/x",

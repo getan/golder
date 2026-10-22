@@ -27,7 +27,6 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
-	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
@@ -102,9 +101,6 @@ type Gates struct {
 // is nil (an ungated run), which is what the callers previously expressed with
 // a nil BeforeToolCall.
 func NewGates(opts GatesOpts) *Gates {
-	// The network policy is persisted beside config.toml; a parse/open failure
-	// leaves the safe default (off) rather than guessing.
-	judge.SetNetworkFollow(config.NetworkFollowEnabled())
 	return &Gates{opts: opts}
 }
 
@@ -313,13 +309,6 @@ func (g *Gates) Authorization() agentcore.ToolAuth {
 		ReadRoots:     dedupePaths(grants.ReadRoots()),
 		WritableRoots: dedupePaths(grants.WritableRoots()),
 	}
-	if ns := grants.ProcessNetwork(); ns != nil {
-		for _, g := range ns.Entries().Session {
-			auth.NetworkRules = append(auth.NetworkRules, agentcore.NetworkRule{
-				Kind: string(g.Kind), Key: g.Key, Tool: g.Tool, Allow: g.Allow,
-			})
-		}
-	}
 	if g.opts.Trust == nil {
 		auth.SessionTrust = true
 		return auth
@@ -368,14 +357,6 @@ func (g *Gates) Seed(auth agentcore.ToolAuth) (refusedRoots int) {
 	// "may write /x" is also allowed to read back what it wrote.
 	for _, root := range auth.WritableRoots {
 		if _, err := grants.AddWritableRoot(root, grants.Session, "parent session"); err != nil {
-			refusedRoots++
-		}
-	}
-	for _, rule := range auth.NetworkRules {
-		if _, err := grants.AddNetwork(grants.NetworkGrant{
-			Kind: grants.NetworkKind(rule.Kind), Key: rule.Key, Tool: rule.Tool,
-			Allow: rule.Allow, Lifetime: grants.Session, Source: "parent session",
-		}); err != nil {
 			refusedRoots++
 		}
 	}

@@ -11,6 +11,23 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Changed
+- **One tool-approval pipeline**: `ConsentGate` is the only gate. The legacy
+  `BoundaryGate` / `PermissionGate`, their private helpers, and the
+  `ApprovalConfirm` / `ApprovalEscalation` / `ApprovalReAdmit` / ... request
+  kinds are gone, so ask mode and the TUI show the same combined capability
+  dialog as auto (plus the separate trust question). `ChainGates` and the
+  static credential floor are unchanged.
+- **`/permissions` is mode-only**: the sandbox writable-path picker lives under
+  `/boundary writable`; the mode picker no longer carries a path row, and the
+  `Sandbox writable paths…` entry is gone.
+- **Network is decided per call**: a call declares `network:"on"`, and the
+  reviewer (auto) or the person (ask) grants it for that call. There is no
+  persistent network rule, `/network` command, `network.toml`, or
+  `network_grants.json`; the old files are no longer read and can be deleted.
+  A network-only request now offers "this call" and "deny", not a lifetime the
+  gate cannot keep.
+
 ### Fixed
 - **A contained call keeps the capabilities the reviewer granted**: `auto`'s
   `contain` branch returned a sandbox-only decision, dropping a reviewer's
