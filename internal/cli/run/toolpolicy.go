@@ -218,6 +218,11 @@ func ChildToolSet(cwd string, policy ToolPolicy) []agentcore.AgentTool {
 		if tool.Name() == "tuios" {
 			tools[i] = agenttool.NewTuiosTool(cwd, false)
 		}
+		if tool.Name() == "browser" {
+			// Same browser and socket, read-only actions only: a child must not
+			// type into the person's page.
+			tools[i] = agenttool.NewBrowserTool(cwd, false)
+		}
 	}
 	return ApplyToolPolicy(tools, policy)
 }

@@ -12,15 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
-	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -696,17 +693,6 @@ func (t *TuiosTool) screenshot(ctx context.Context, a tuiosArgs) (agentcore.Agen
 // out, a timestamped name lands under .golder/artifacts/<kind>/, so a pane
 // screenshot never scatters files through the repository.
 func (t *TuiosTool) artifactPath(kind, out, format string) (string, error) {
-	root := strings.TrimSpace(t.cwd)
-	if root == "" {
-		var err error
-		if root, err = os.Getwd(); err != nil {
-			return "", fmt.Errorf("resolve workspace: %w", err)
-		}
-	}
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace: %w", err)
-	}
 	ext := strings.TrimSpace(format)
 	if ext == "" {
 		ext = "png"
@@ -716,21 +702,7 @@ func (t *TuiosTool) artifactPath(kind, out, format string) (string, error) {
 	} else {
 		return "", fmt.Errorf("unsupported format %q", format)
 	}
-	target := strings.TrimSpace(out)
-	if target == "" {
-		name := fmt.Sprintf("%s-%d.%s", kind, time.Now().UnixNano(), ext)
-		target = filepath.Join(root, ".golder", "artifacts", kind, name)
-	} else if !filepath.IsAbs(target) {
-		target = filepath.Join(root, target)
-	}
-	target = filepath.Clean(target)
-	if !permissions.Inside(root, target) {
-		return "", fmt.Errorf("%s must stay inside the workspace (%s)", target, root)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return "", fmt.Errorf("create artifact directory: %w", err)
-	}
-	return target, nil
+	return artifactPath(t.cwd, kind, out, ext)
 }
 
 func validateRun(a tuiosArgs) error {

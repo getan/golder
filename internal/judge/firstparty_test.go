@@ -81,3 +81,49 @@ func TestFirstPartySendNeedsTheNextGrader(t *testing.T) {
 		t.Errorf("send verdict = %+v, want the reviewer's deny", v)
 	}
 }
+
+// A browser read changes nothing, so it does not spend a reviewer round trip.
+func TestFirstPartyBrowserReadsAreLocalAllows(t *testing.T) {
+	for _, action := range []string{"list", "snapshot", "find", "get", "is", "wait", "console", "errors", "network"} {
+		spy := &firstPartySpy{}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "browser",
+			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
+		if spy.tool != "" {
+			t.Errorf("%s reached the next grader", action)
+		}
+		if v.Level != Allow || v.Source != LocalSource {
+			t.Errorf("%s = %+v, want a local allow", action, v)
+		}
+	}
+}
+
+// Typing into a real page is the reviewer's call, not a fixed table's.
+func TestFirstPartyBrowserWritesNeedTheNextGrader(t *testing.T) {
+	for _, action := range []string{"click", "fill", "type", "press", "navigate"} {
+		spy := &firstPartySpy{v: Verdict{Level: Contain, Source: "llm"}}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "browser",
+			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
+		if spy.tool != "browser" {
+			t.Fatalf("%s did not reach the next grader", action)
+		}
+		if v.Level != Contain {
+			t.Errorf("%s verdict = %+v, want the reviewer's", action, v)
+		}
+	}
+}
+
+// eval and upload are outside the tool's schema; a call carrying one is denied
+// without spending a reviewer round trip.
+func TestFirstPartyBrowserEvalIsDenied(t *testing.T) {
+	for _, action := range []string{"eval", "upload"} {
+		spy := &firstPartySpy{}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "browser",
+			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
+		if spy.tool != "" {
+			t.Errorf("%s reached the next grader", action)
+		}
+		if v.Level != Deny {
+			t.Errorf("%s = %+v, want deny", action, v)
+		}
+	}
+}

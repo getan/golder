@@ -64,6 +64,42 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			return f.next(ctx, tool, args)
 		}
 		return f.failClosed("unknown tuios action")
+	case "browser":
+		var a struct {
+			Action string `json:"action"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return f.failClosed("browser has no action")
+		}
+		switch a.Action {
+		case "list", "snapshot", "find", "get", "is", "wait", "dialog",
+			"console", "errors", "network":
+			// Observing a page changes nothing on the host or on the page.
+			return Verdict{
+				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"browser read-only action"},
+			}
+		case "screenshot":
+			// A picture is a new file in the workspace, but nothing on the page
+			// or the host changes state the user cares about.
+			return Verdict{
+				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"browser screenshot writes one file in the workspace"},
+			}
+		case "navigate", "click", "dblclick", "hover", "focus", "check", "uncheck",
+			"fill", "type", "select", "press", "insert", "scroll", "scroll_into_view",
+			"tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss":
+			// Typing into a real page can submit a form, delete an account or
+			// post a comment. The session reviewer sees the arguments and the
+			// conversation; a fixed table cannot.
+			return f.next(ctx, tool, args)
+		case "eval", "upload":
+			// Neither is in the tool schema. A call that carries one is either a
+			// mistake or an injection attempt, and neither is worth reviewing.
+			return Verdict{Level: Deny, Source: LocalSource, Confidence: 1, Risk: "high",
+				Reasons: []string{"browser eval/upload is not an available action"}}
+		}
+		return f.failClosed("unknown browser action")
 	}
 	return f.next(ctx, tool, args)
 }
