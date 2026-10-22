@@ -38,6 +38,28 @@ else
 	err "需要 curl 或 wget"
 fi
 
+case "$DL" in
+curl*) DL_KIND="curl" ;;
+*) DL_KIND="wget" ;;
+esac
+
+# api_get <url>：只用于 api.github.com。带 token 时请求头必须作为一个完整参数
+# 传下去——曾经写成 api_auth='-H Authorization:\ Bearer\ $TOKEN' 再不加引号展开，
+# 结果拆成 4 个参数：curl 把 token 当成 URL，认证失败，还把凭据送进了 DNS 查询。
+# 站点接口、镜像和归档下载都走 $DL / $DLO，永远不带凭据。
+api_get() {
+	url=$1
+	if [ -n "${GITHUB_TOKEN:-}" ]; then
+		if [ "$DL_KIND" = "curl" ]; then
+			curl -fsSL --connect-timeout 5 -H "Authorization: Bearer $GITHUB_TOKEN" "$url"
+		else
+			wget -q --timeout=20 --header="Authorization: Bearer $GITHUB_TOKEN" -O - "$url"
+		fi
+		return
+	fi
+	$DL "$url"
+}
+
 # 镜像回退列表：直连 GitHub 失败后按顺序尝试的公益加速前缀（gh-proxy 约定，
 # 前缀直接拼在原 URL 前）。与 Go 侧 internal/selfupdate 的默认列表保持一致。
 mirrors() {
@@ -179,13 +201,11 @@ esac
 
 # 4. 解析目标版本：优先 GOLDER_VERSION，否则查询最新 release 的 tag。
 VERSION="${GOLDER_VERSION:-}"
-api_auth=""
-[ -n "${GITHUB_TOKEN:-}" ] && api_auth="-H Authorization:\ Bearer\ $GITHUB_TOKEN"
 if [ -z "$VERSION" ]; then
 	info "查询最新 release ..."
 	# 首选站点镜像的版本接口（对大陆网络更友好），失败再回退 GitHub API。
 	latest_json=$($DL "https://golder-cli.pages.dev/api/latest" 2>/dev/null) || \
-		latest_json=$($DL "https://api.github.com/repos/$REPO/releases/latest" $api_auth 2>/dev/null) || \
+		latest_json=$(api_get "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null) || \
 		err "无法查询最新版本，请检查网络或用 GOLDER_VERSION 指定版本"
 	# 兼容两种响应格式："tag_name"（GitHub API）与 "tag"（站点 /api/latest）。
 	# 用 grep -oE + cut 而非 sed，避开 GNU/BSD sed 的方言差异。
