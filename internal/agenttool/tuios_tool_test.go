@@ -260,6 +260,159 @@ func TestTuiosSendWritesText(t *testing.T) {
 	}
 }
 
+// A daemon older than 0.8.3 has no submit parameter. The tool must still
+// submit: send the text without the field, then press Enter, and say so.
+func TestTuiosSendFallsBackWhenDaemonRejectsSubmit(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	var keys string
+	f.answer = func(verb string, params map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "send-text":
+			if _, ok := params["submit"]; ok {
+				return &tuiosctl.Error{Code: "invalid_params", Message: "verb send-text has no parameter submit"}
+			}
+			return map[string]any{"type": "ok"}
+		case "send-keys":
+			keys, _ = params["keys"].(string)
+			return map[string]any{"type": "ok"}
+		}
+		return map[string]any{"type": "ok"}
+	}
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"send","window":"w2","text":"go test ./...","submit":true}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("send failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if keys != "Enter" {
+		t.Fatalf("send-keys = %q, want Enter after the fallback", keys)
+	}
+	if text := agentcore.ContentToText(res.Content); !strings.Contains(text, "note") {
+		t.Fatalf("result = %s, want a note about the fallback", text)
+	}
+}
+
+// A daemon without bracketed paste still receives the text; only the paste
+// flag is dropped, and the result says so.
+func TestTuiosSendFallsBackWhenDaemonRejectsPaste(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	f.answer = func(verb string, params map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "send-text":
+			if _, ok := params["paste"]; ok {
+				return &tuiosctl.Error{Code: "invalid_params", Message: "verb send-text has no parameter paste"}
+			}
+			return map[string]any{"type": "ok"}
+		}
+		return map[string]any{"type": "ok"}
+	}
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"send","window":"w2","text":"line one\nline two","paste":true}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("send failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if text := agentcore.ContentToText(res.Content); !strings.Contains(text, "note") {
+		t.Fatalf("result = %s, want a note about the fallback", text)
+	}
+}
+
+// press is the keyboard action: named keys go through send-keys, never text.
+func TestTuiosPressSendsKeys(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"press","window":"w2","keys":"ctrl+c","repeat":2}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("press failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if !f.seen("send-keys") {
+		t.Fatalf("verbs = %v, want send-keys", f.verbs)
+	}
+	if f.seen("send-text") {
+		t.Error("press must not type the key name as text")
+	}
+}
+
+// screenshot asks the daemon to render the pane and returns a path the model
+// can view_image. The default path stays inside the workspace.
+func TestTuiosScreenshotStaysInWorkspace(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	var gotOut string
+	f.answer = func(verb string, params map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "screenshot":
+			gotOut, _ = params["out"].(string)
+			return map[string]any{"path": gotOut, "format": "png", "cols": 80, "rows": 24, "bytes": 1234}
+		}
+		return map[string]any{"type": "ok"}
+	}
+	root := t.TempDir()
+	tool := NewTuiosTool(root, true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"screenshot","window":"w2","format":"png"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("screenshot failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if !strings.HasPrefix(gotOut, filepath.Join(root, ".golder", "artifacts")) {
+		t.Fatalf("out = %q, want a path under the workspace artifacts directory", gotOut)
+	}
+}
+
+// A caller-chosen path outside the workspace is refused before the daemon
+// writes anything.
+func TestTuiosScreenshotRefusesOutsideWorkspace(t *testing.T) {
+	_, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := NewTuiosTool(t.TempDir(), true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"screenshot","window":"w2","format":"png","out":"/tmp/escape.png"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatalf("screenshot outside the workspace must be refused, got %s", agentcore.ContentToText(res.Content))
+	}
+}
+
+// The pane running the agent is reported as own, so the model can tell it
+// apart from the user's panes.
+func TestTuiosListMarksTheAgentsOwnPane(t *testing.T) {
+	_, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"list"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := agentcore.ContentToText(res.Content)
+	if !strings.Contains(text, `"own":true`) {
+		t.Fatalf("list = %s, want the agent's own pane marked", text)
+	}
+}
+
 func TestTuiosWaitStopsWhenPaneCloses(t *testing.T) {
 	f, sock := startTuiosFake(t)
 	useTuiosFake(t, sock)

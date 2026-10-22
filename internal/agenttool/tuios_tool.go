@@ -12,12 +12,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -99,7 +102,7 @@ const tuiosReadSchema = `{
 const tuiosControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["list","capture","wait","run","send","new","focus","move","resize","rename","minimize","close"]},
+    "action":{"type":"string","enum":["list","capture","wait","run","send","press","screenshot","new","focus","move","resize","rename","minimize","close"]},
     "window":{"type":"string","description":"Window id or name. close and move require the full id; omit for the focused pane where allowed."},
     "source":{"type":"string","enum":["visible","recent"],"description":"For capture: visible screen or recent scrollback."},
     "lines":{"type":"integer","minimum":1,"maximum":2000,"description":"For capture/run: last N rows; default 80."},
@@ -113,6 +116,14 @@ const tuiosControlSchema = `{
     "text":{"type":"string","description":"For send: literal text written to the pane."},
     "submit":{"type":"boolean","description":"For send: submit the text with Enter after a short paste wait."},
     "paste":{"type":"boolean","description":"For send: send as a paste so multi-line text is not executed line by line."},
+    "keys":{"type":"string","description":"For press: keys split on spaces or commas, e.g. \"Enter\" or \"ctrl+c\", \"Down Down\"."},
+    "repeat":{"type":"integer","minimum":1,"maximum":1000,"description":"For press: send the sequence this many times."},
+    "format":{"type":"string","enum":["png","svg","html","ansi","txt"],"description":"For screenshot: output format; default png."},
+    "frame":{"type":"string","enum":["window","plain","none"],"description":"For screenshot: window chrome, plain frame or none."},
+    "theme":{"type":"string","description":"For screenshot: render in this theme instead of the session's."},
+    "out":{"type":"string","description":"For screenshot: write here instead of a generated path. Relative paths resolve under the workspace."},
+    "scrollback":{"type":"boolean","description":"For screenshot: put the pane's history above the screen."},
+    "cursor":{"type":"boolean","description":"For screenshot: draw the cursor cell."},
     "expect":{"type":"string","description":"For run: return as soon as pane output matches this RE2 regex."},
     "name":{"type":"string","description":"For new: pane name; for rename: new pane name."},
     "cwd":{"type":"string","description":"For new: pane cwd; defaults to the golder workspace."},
@@ -142,6 +153,14 @@ type tuiosArgs struct {
 	Text        string   `json:"text,omitempty"`
 	Submit      bool     `json:"submit,omitempty"`
 	Paste       bool     `json:"paste,omitempty"`
+	Keys        string   `json:"keys,omitempty"`
+	Repeat      int      `json:"repeat,omitempty"`
+	Format      string   `json:"format,omitempty"`
+	Frame       string   `json:"frame,omitempty"`
+	Theme       string   `json:"theme,omitempty"`
+	Out         string   `json:"out,omitempty"`
+	Scrollback  bool     `json:"scrollback,omitempty"`
+	Cursor      bool     `json:"cursor,omitempty"`
 	Expect      string   `json:"expect,omitempty"`
 	Name        string   `json:"name,omitempty"`
 	Cwd         string   `json:"cwd,omitempty"`
@@ -183,6 +202,12 @@ func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, 
 		t.controlMu.Lock()
 		defer t.controlMu.Unlock()
 		return t.send(ctx, a)
+	case "press":
+		t.controlMu.Lock()
+		defer t.controlMu.Unlock()
+		return t.press(ctx, a)
+	case "screenshot":
+		return t.screenshot(ctx, a)
 	case "new":
 		t.controlMu.Lock()
 		defer t.controlMu.Unlock()
@@ -218,7 +243,7 @@ func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, 
 
 func tuiosIsControl(action string) bool {
 	switch action {
-	case "run", "send", "new", "focus", "move", "resize", "rename", "minimize", "close":
+	case "run", "send", "press", "screenshot", "new", "focus", "move", "resize", "rename", "minimize", "close":
 		return true
 	}
 	return false
@@ -298,9 +323,18 @@ func (t *TuiosTool) list(ctx context.Context) (agentcore.AgentToolResult, error)
 	if err != nil {
 		return tuiosError(err), nil
 	}
+	// Mark the pane this process runs in. Closing it would kill the agent, so
+	// the tool refuses that target, and the model can tell the user's panes
+	// from its own.
+	own := c.PaneID()
+	for i := range wl.Windows {
+		if own != "" && wl.Windows[i].WindowID == own {
+			wl.Windows[i].Own = true
+		}
+	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(wl))},
-		Details: map[string]any{"session": c.Session(), "windows": len(wl.Windows)},
+		Details: map[string]any{"session": c.Session(), "windows": len(wl.Windows), "pane": own},
 	}, nil
 }
 
@@ -482,7 +516,7 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 			return tuiosError(errors.New("expect pattern is already present in the pane; choose a pattern unique to this command")), nil
 		}
 	}
-	if err := c.SendText(ctx, a.Window, a.Command+"\n", false); err != nil {
+	if _, err := c.SendText(ctx, a.Window, a.Command+"\n", false); err != nil {
 		return tuiosError(err), nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
@@ -519,7 +553,7 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 func (t *TuiosTool) runWithoutMarks(ctx context.Context, c *tuiosctl.Client, a tuiosArgs, timeout time.Duration) (agentcore.AgentToolResult, error) {
 	marker := fmt.Sprintf("__GOLDER_DONE_%d__", time.Now().UnixNano())
 	command := a.Command + "\nprintf '\\n" + marker + ":%s\\n' \"$?\"\n"
-	if err := c.SendText(ctx, a.Window, command, false); err != nil {
+	if _, err := c.SendText(ctx, a.Window, command, false); err != nil {
 		return tuiosError(err), nil
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
@@ -570,16 +604,133 @@ func (t *TuiosTool) send(ctx context.Context, a tuiosArgs) (agentcore.AgentToolR
 	if err != nil {
 		return tuiosError(err), nil
 	}
+	var sendNote string
 	if a.Paste {
-		err = c.PasteText(ctx, window, a.Text, a.Submit)
+		sendNote, err = c.PasteText(ctx, window, a.Text, a.Submit)
 	} else {
-		err = c.SendText(ctx, window, a.Text, a.Submit)
+		sendNote, err = c.SendText(ctx, window, a.Text, a.Submit)
 	}
 	if err != nil {
 		return tuiosError(err), nil
 	}
+	out := map[string]any{"sent": true, "window": window, "submit": a.Submit, "paste": a.Paste}
+	if sendNote != "" {
+		out["note"] = sendNote
+	}
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(
-		tuiosJSON(map[string]any{"sent": true, "window": window, "submit": a.Submit, "paste": a.Paste}))}}, nil
+		tuiosJSON(out))}}, nil
+}
+
+// press sends named keys (Enter, Tab, ctrl+c, arrows) to a pane. It is the only
+// way to drive an interactive program: send writes text, not keystrokes.
+func (t *TuiosTool) press(ctx context.Context, a tuiosArgs) (agentcore.AgentToolResult, error) {
+	keys := strings.TrimSpace(a.Keys)
+	if keys == "" {
+		return tuiosError(errors.New("keys is required for press")), nil
+	}
+	c, err := t.newClient(ctx)
+	if err != nil {
+		return tuiosError(err), nil
+	}
+	defer c.Close()
+	window, err := resolveWindow(ctx, c, a.Window)
+	if err != nil {
+		return tuiosError(err), nil
+	}
+	repeat := a.Repeat
+	if repeat < 0 || repeat > 1000 {
+		return tuiosError(errors.New("repeat must be between 1 and 1000")), nil
+	}
+	if err := c.SendKeys(ctx, window, keys, repeat); err != nil {
+		return tuiosError(err), nil
+	}
+	return agentcore.AgentToolResult{
+		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+			"sent": true, "window": window, "keys": keys, "repeat": repeat,
+		}))},
+		Details: map[string]any{"window": window},
+	}, nil
+}
+
+// screenshot renders one pane to a file on the daemon's machine. The picture is
+// the pane's own cells, so the model can view_image it and see exactly what the
+// user sees. Relative out paths resolve under the workspace, and the returned
+// path is what the caller opens.
+func (t *TuiosTool) screenshot(ctx context.Context, a tuiosArgs) (agentcore.AgentToolResult, error) {
+	c, err := t.newClient(ctx)
+	if err != nil {
+		return tuiosError(err), nil
+	}
+	defer c.Close()
+	window, err := resolveWindow(ctx, c, a.Window)
+	if err != nil {
+		return tuiosError(err), nil
+	}
+	out, err := t.artifactPath("screenshots", a.Out, a.Format)
+	if err != nil {
+		return tuiosError(err), nil
+	}
+	res, err := c.Screenshot(ctx, tuiosctl.ScreenshotParams{
+		Window: window, Format: a.Format, Frame: a.Frame, Theme: a.Theme,
+		Out: out, Scrollback: a.Scrollback, Lines: a.Lines, Cursor: a.Cursor,
+	})
+	if err != nil {
+		var de *tuiosctl.Error
+		if errors.As(err, &de) && (de.Code == "invalid_verb" || de.Code == "unknown_verb") {
+			return tuiosError(fmt.Errorf("this tuios daemon has no screenshot verb; upgrade tuios (need 0.9 or newer): %w", err)), nil
+		}
+		return tuiosError(err), nil
+	}
+	return agentcore.AgentToolResult{
+		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+			"path": res.Path, "format": res.Format, "cols": res.Cols, "rows": res.Rows,
+			"bytes": res.Bytes, "warnings": res.Warnings,
+			"hint": "view_image this path to inspect the pane",
+		}))},
+		Details: map[string]any{"path": res.Path, "format": res.Format, "bytes": res.Bytes},
+	}, nil
+}
+
+// artifactPath resolves where a tool writes a picture or a document. A relative
+// path is under the workspace; an absolute one must still be inside it. With no
+// out, a timestamped name lands under .golder/artifacts/<kind>/, so a pane
+// screenshot never scatters files through the repository.
+func (t *TuiosTool) artifactPath(kind, out, format string) (string, error) {
+	root := strings.TrimSpace(t.cwd)
+	if root == "" {
+		var err error
+		if root, err = os.Getwd(); err != nil {
+			return "", fmt.Errorf("resolve workspace: %w", err)
+		}
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace: %w", err)
+	}
+	ext := strings.TrimSpace(format)
+	if ext == "" {
+		ext = "png"
+	}
+	if ext == "html" || ext == "ansi" || ext == "txt" || ext == "png" || ext == "svg" {
+		// keep the caller's format
+	} else {
+		return "", fmt.Errorf("unsupported format %q", format)
+	}
+	target := strings.TrimSpace(out)
+	if target == "" {
+		name := fmt.Sprintf("%s-%d.%s", kind, time.Now().UnixNano(), ext)
+		target = filepath.Join(root, ".golder", "artifacts", kind, name)
+	} else if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	target = filepath.Clean(target)
+	if !permissions.Inside(root, target) {
+		return "", fmt.Errorf("%s must stay inside the workspace (%s)", target, root)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create artifact directory: %w", err)
+	}
+	return target, nil
 }
 
 func validateRun(a tuiosArgs) error {

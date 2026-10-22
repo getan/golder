@@ -23,6 +23,9 @@ type Window struct {
 	AgentState    string `json:"agent_state"`
 	HistoryRows   int    `json:"history_rows"`
 	Revision      uint64 `json:"revision"`
+	// Own marks the pane running this golder process, when it is known. It is
+	// computed by the tool, not sent by the daemon.
+	Own bool `json:"own,omitempty"`
 }
 
 // WindowList is one session's panes across every workspace.
@@ -198,17 +201,20 @@ func (c *Client) CloseWindow(ctx context.Context, window string) error {
 // SendText writes literal text to a pane. submit adds the Enter path the
 // daemon uses for a harness prompt; a plain shell command should include a
 // trailing newline instead.
-func (c *Client) SendText(ctx context.Context, window, text string, submit bool) error {
+//
+// A daemon older than 0.8.3 has no submit parameter. The text is sent without
+// it and Enter is pressed with send-keys; the returned note says so.
+func (c *Client) SendText(ctx context.Context, window, text string, submit bool) (string, error) {
 	return c.sendText(ctx, window, text, submit, false)
 }
 
 // PasteText sends text as a paste, so a multi-line payload is not executed
 // line by line by the receiving shell. submit presses Enter after the paste.
-func (c *Client) PasteText(ctx context.Context, window, text string, submit bool) error {
+func (c *Client) PasteText(ctx context.Context, window, text string, submit bool) (string, error) {
 	return c.sendText(ctx, window, text, submit, true)
 }
 
-func (c *Client) sendText(ctx context.Context, window, text string, submit, paste bool) error {
+func (c *Client) sendText(ctx context.Context, window, text string, submit, paste bool) (string, error) {
 	params := map[string]any{"session": c.opts.Session, "text": text}
 	if window != "" {
 		params["window"] = window
@@ -220,7 +226,98 @@ func (c *Client) sendText(ctx context.Context, window, text string, submit, past
 		params["paste"] = true
 	}
 	_, err := c.Call(ctx, "send-text", params)
+	note := ""
+	needEnter := false
+	if err != nil && submit && missingParam(err, "submit") {
+		delete(params, "submit")
+		needEnter = true
+		note = "the daemon predates send-text submit; sent the text and pressed Enter separately"
+		_, err = c.Call(ctx, "send-text", params)
+	}
+	if err != nil && paste && missingParam(err, "paste") {
+		delete(params, "paste")
+		note = "the daemon does not support bracketed paste; sent the text without it"
+		_, err = c.Call(ctx, "send-text", params)
+	}
+	if err != nil {
+		return "", err
+	}
+	if needEnter {
+		if err := c.SendKeys(ctx, window, "Enter", 0); err != nil {
+			return "", fmt.Errorf("text was sent, but Enter failed: %w", err)
+		}
+	}
+	return note, nil
+}
+
+// SendKeys sends named keys to a pane, such as Enter, Tab or ctrl+c.
+func (c *Client) SendKeys(ctx context.Context, window, keys string, repeat int) error {
+	params := map[string]any{"session": c.opts.Session, "keys": keys}
+	if window != "" {
+		params["window"] = window
+	}
+	if repeat > 1 {
+		params["repeat"] = repeat
+	}
+	_, err := c.Call(ctx, "send-keys", params)
 	return err
+}
+
+// ScreenshotResult is where the daemon wrote a pane picture.
+type ScreenshotResult struct {
+	Path     string   `json:"path"`
+	Host     string   `json:"host"`
+	Format   string   `json:"format"`
+	Cols     int      `json:"cols"`
+	Rows     int      `json:"rows"`
+	Bytes    int      `json:"bytes"`
+	Warnings []string `json:"warnings"`
+}
+
+// ScreenshotParams asks the daemon to render a pane to a file.
+type ScreenshotParams struct {
+	Window     string
+	Format     string // png, svg, ansi, html, txt
+	Frame      string // window, plain, none
+	Theme      string
+	Out        string
+	Scrollback bool
+	Lines      int
+	Cursor     bool
+}
+
+// Screenshot renders one pane to a file on the daemon's machine and returns
+// its path. An older daemon without the verb fails with invalid_verb, which the
+// caller surfaces as "tuios is too old for screenshots".
+func (c *Client) Screenshot(ctx context.Context, p ScreenshotParams) (ScreenshotResult, error) {
+	params := map[string]any{"session": c.opts.Session}
+	if p.Window != "" {
+		params["window"] = p.Window
+	}
+	if p.Format != "" {
+		params["format"] = p.Format
+	}
+	if p.Frame != "" {
+		params["frame"] = p.Frame
+	}
+	if p.Theme != "" {
+		params["theme"] = p.Theme
+	}
+	if p.Out != "" {
+		params["out"] = p.Out
+	}
+	if p.Scrollback {
+		params["scrollback"] = true
+	}
+	if p.Lines > 0 {
+		params["lines"] = p.Lines
+	}
+	if p.Cursor {
+		params["cursor"] = true
+	}
+	var out ScreenshotResult
+	err := c.CallInto(ctx, "screenshot", params, &out)
+	return out, err
 }
 
 // RunResult is one shell command's answer. Output is plain text from the

@@ -67,6 +67,10 @@ func Available() bool {
 		o.Socket != "" && o.Session != "" && o.PaneID != ""
 }
 
+// PaneID is the pane this process runs in, or "" outside one. The tool layer
+// uses it to mark the pane it must never close.
+func (c *Client) PaneID() string { return c.opts.PaneID }
+
 // Error is a daemon-side verb error. It is separate from transport errors so a
 // caller can act on the stable code (for example timeout vs window_not_found)
 // without parsing prose.
