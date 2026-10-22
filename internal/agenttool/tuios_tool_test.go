@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/tuiosctl"
 )
 
 type tuiosFake struct {
@@ -75,7 +76,10 @@ func (f *tuiosFake) serve(conn net.Conn) {
 		f.mu.Unlock()
 		result := f.result(req.Verb, req.Params)
 		resp := map[string]any{"id": req.ID, "result": result}
-		if e, ok := result.(map[string]any)["error"].(map[string]any); ok {
+		if e, ok := result.(*tuiosctl.Error); ok {
+			resp["error"] = e
+			delete(resp, "result")
+		} else if e, ok := result.(map[string]any)["error"].(map[string]any); ok {
 			resp["error"] = e
 			delete(resp, "result")
 		}
@@ -160,6 +164,45 @@ func TestTuiosRunUsesEventWaitForExpect(t *testing.T) {
 	text := agentcore.ContentToText(res.Content)
 	if !strings.Contains(text, "READY") || !strings.Contains(text, "matched") {
 		t.Fatalf("result = %s", text)
+	}
+}
+
+func TestTuiosRunFallsBackWithoutShellIntegration(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	f.answer = func(verb string, params map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "run":
+			return &tuiosctl.Error{Code: "no_shell_integration", Message: "shell has no OSC 133 marks"}
+		case "wait-for":
+			if params["condition"] == "window-exit" {
+				return &tuiosctl.Error{Code: "timeout", Message: "not closed"}
+			}
+			return map[string]any{"type": "wait_result", "condition": "window-output", "matched": true}
+		case "capture-pane":
+			return map[string]any{"type": "pane_content", "source": "visible", "content": "FALLBACK OUTPUT"}
+		case "send-text":
+			return map[string]any{"type": "ok"}
+		}
+		return map[string]any{"type": "ok"}
+	}
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"run","window":"w2","command":"echo hi"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("fallback run failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if !f.seen("send-text") {
+		t.Fatal("fallback did not type the command")
+	}
+	d, _ := res.Details.(map[string]any)
+	if fallback, _ := d["fallback"].(bool); !fallback {
+		t.Fatalf("details = %#v, want fallback", res.Details)
 	}
 }
 

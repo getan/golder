@@ -75,7 +75,20 @@ func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowRes
 	}
 	var out NewWindowResult
 	err := c.CallInto(ctx, "new-window", params, &out)
+	// An older daemon rejects close_on_exit as an unknown parameter even when
+	// true. The pane still exists without it; retry once without the field
+	// rather than failing the whole creation.
+	if err != nil && p.CloseOnExit && missingParam(err, "close_on_exit") {
+		delete(params, "close_on_exit")
+		err = c.CallInto(ctx, "new-window", params, &out)
+	}
 	return out, err
+}
+
+func missingParam(err error, param string) bool {
+	var de *Error
+	return errors.As(err, &de) && de.Code == "invalid_params" &&
+		strings.Contains(de.Message, param)
 }
 
 type NewWindowParams struct {

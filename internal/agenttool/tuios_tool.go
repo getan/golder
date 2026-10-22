@@ -462,6 +462,10 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 	if a.Expect == "" {
 		res, err := c.Run(ctx, a.Window, a.Command, timeout, tuiosLines(a.Lines))
 		if err != nil {
+			var de *tuiosctl.Error
+			if errors.As(err, &de) && de.Code == "no_shell_integration" {
+				return t.runWithoutMarks(ctx, c, a, timeout)
+			}
 			return tuiosError(err), nil
 		}
 		return agentcore.AgentToolResult{
@@ -504,6 +508,52 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 			"matched": true, "pattern": wait.Pattern, "source": "visible", "tail": tuiosUntrusted(cap.Content),
 		}))},
 		Details: map[string]any{"untrusted": true, "revision": cap.Revision},
+	}, nil
+}
+
+// runWithoutMarks is the fallback for a shell that does not emit OSC 133
+// command marks. It types the command plus a unique sentinel that prints the
+// exit status, then waits for that sentinel on the event hub. It cannot know
+// the command's exact duration, but it returns output and distinguishes a
+// completed command from a timeout.
+func (t *TuiosTool) runWithoutMarks(ctx context.Context, c *tuiosctl.Client, a tuiosArgs, timeout time.Duration) (agentcore.AgentToolResult, error) {
+	marker := fmt.Sprintf("__GOLDER_DONE_%d__", time.Now().UnixNano())
+	command := a.Command + "\nprintf '\\n" + marker + ":%s\\n' \"$?\"\n"
+	if err := c.SendText(ctx, a.Window, command, false); err != nil {
+		return tuiosError(err), nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
+	defer cancel()
+	wait, err := t.waitPane(waitCtx, c, tuiosctl.WaitParams{
+		Condition: "window-output", Window: a.Window,
+		Pattern: regexp.QuoteMeta(marker) + `:(\d+)`, Timeout: timeout,
+	})
+	if err != nil {
+		var de *tuiosctl.Error
+		if errors.As(err, &de) && de.Code == "timeout" {
+			cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
+			return agentcore.AgentToolResult{
+				Content: agentcore.ContentList{agentcore.NewTextContent(
+					tuiosJSON(map[string]any{"timed_out": true, "tail": tuiosUntrusted(cap.Content)}))},
+				Details: map[string]any{"timed_out": true, "untrusted": true},
+			}, nil
+		}
+		return tuiosError(err), nil
+	}
+	cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
+	text := cap.Content
+	details := map[string]any{"untrusted": true, "window": wait.Window, "fallback": true}
+	if re, rerr := regexp.Compile(regexp.QuoteMeta(marker) + `:(\d+)`); rerr == nil {
+		if m := re.FindStringSubmatch(text); len(m) == 2 {
+			var exit int
+			if _, serr := fmt.Sscanf(m[1], "%d", &exit); serr == nil {
+				details["exit_code"] = exit
+			}
+		}
+	}
+	return agentcore.AgentToolResult{
+		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosTruncate(tuiosUntrusted(text)))},
+		Details: details,
 	}, nil
 }
 

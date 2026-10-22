@@ -152,6 +152,40 @@ func TestClientNewWindowOnlySendsCloseOnExitWhenTrue(t *testing.T) {
 	}
 }
 
+func TestClientNewWindowRetriesWithoutCloseOnExitOnOldDaemon(t *testing.T) {
+	var calls []map[string]any
+	sock := fakeDaemon(t, func(verb string, params map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "new-window":
+			calls = append(calls, params)
+			if _, ok := params["close_on_exit"]; ok {
+				return &Error{Code: "invalid_params", Message: "verb new-window has no parameter close_on_exit"}
+			}
+			return map[string]any{"type": "window_created", "window_id": "w1"}
+		default:
+			return map[string]any{"type": "ok"}
+		}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.NewWindow(context.Background(), NewWindowParams{
+		Name: "test", Focus: false, CloseOnExit: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("new-window calls = %d, want 2 (retry)", len(calls))
+	}
+	if _, ok := calls[1]["close_on_exit"]; ok {
+		t.Fatalf("retry still sent close_on_exit: %v", calls[1])
+	}
+}
+
 func TestClientContextCancellationInterruptsABlockedRead(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
