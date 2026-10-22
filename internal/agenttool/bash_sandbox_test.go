@@ -250,6 +250,27 @@ func TestBashReadGrantRunsContained(t *testing.T) {
 	}
 }
 
+// A one-call read grant on a directory is a subtree, matching the tool-level
+// check that already treats the directory's children as covered.
+func TestBashReadGrantDirectoryIsSubtree(t *testing.T) {
+	runner := &stubRunner{}
+	tool := &BashTool{Sandbox: runner}
+	granted := filepath.Join(t.TempDir(), "granted-dir")
+	if err := os.Mkdir(granted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := agentcore.WithReadGrant(context.Background(), granted)
+	if _, err := runBashCtx(t, ctx, tool, map[string]any{"command": "ls " + granted}, nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(runner.policy.ReadDirs) != 1 || runner.policy.ReadDirs[0] != granted {
+		t.Fatalf("one-call read policy = %+v, want the granted directory", runner.policy)
+	}
+	if len(runner.policy.ReadFiles) != 0 {
+		t.Fatalf("a directory grant became a file grant: %+v", runner.policy)
+	}
+}
+
 // A one-call write grant is the write-side sibling of the read grant: the
 // command still runs in the sandbox, with exactly that path writable. Native
 // tools get this through the worker policy; bash must honor the same context

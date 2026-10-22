@@ -219,7 +219,14 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 	policy := seatbelt.CallPolicy{Network: agentcore.NetworkGrantedFromContext(ctx)}
 	seatbelt.RefusedPaths(&policy)
 	if p := agentcore.ReadGrantFromContext(ctx); p != "" {
-		policy.ReadFiles = []string{p}
+		// A one-call read grant on a directory is a subtree: the tool-level
+		// check already treats children as covered, and a literal mount here
+		// would deny every one of them.
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			policy.ReadDirs = []string{p}
+		} else {
+			policy.ReadFiles = []string{p}
+		}
 	}
 	if p := agentcore.WriteGrantFromContext(ctx); p != "" {
 		// A one-call write grant is still a sandbox allow, not an escape. A

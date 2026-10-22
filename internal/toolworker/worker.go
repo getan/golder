@@ -255,14 +255,14 @@ func workerPolicy(req Request, extraRoots []string, bin string) (seatbelt.CallPo
 			if g.Scope == grants.Subtree {
 				policy.ReadDirs = append(policy.ReadDirs, g.Path)
 			} else {
-				policy.ReadFiles = append(policy.ReadFiles, g.Path)
+				mountGrant(&policy.ReadDirs, &policy.ReadFiles, g.Path)
 			}
 		}
 		if g.Allow.Has(grants.Write) && grants.Allows(g.Path, grants.Write) {
 			if g.Scope == grants.Subtree {
 				policy.WriteDirs = append(policy.WriteDirs, g.Path)
 			} else {
-				policy.WriteFiles = append(policy.WriteFiles, g.Path)
+				mountGrant(&policy.WriteDirs, &policy.WriteFiles, g.Path)
 			}
 		}
 	}
@@ -270,15 +270,28 @@ func workerPolicy(req Request, extraRoots []string, bin string) (seatbelt.CallPo
 		if !safeWorkerPath(req.ReadFile) {
 			return seatbelt.CallPolicy{}, fmt.Errorf("tool worker grant targets protected state or credential material")
 		}
-		policy.ReadFiles = append(policy.ReadFiles, req.ReadFile)
+		mountGrant(&policy.ReadDirs, &policy.ReadFiles, req.ReadFile)
 	}
 	if req.WriteFile != "" {
 		if !safeWorkerPath(req.WriteFile) {
 			return seatbelt.CallPolicy{}, fmt.Errorf("tool worker grant targets protected state or credential material")
 		}
-		policy.WriteFiles = append(policy.WriteFiles, req.WriteFile)
+		mountGrant(&policy.WriteDirs, &policy.WriteFiles, req.WriteFile)
 	}
 	return policy, nil
+}
+
+// mountGrant routes one granted path by what it actually is. A directory needs
+// a subtree rule — its children are the point of the grant — while a file needs
+// a literal. An exact one-call grant on a directory used to land in ReadFiles,
+// so the tool-level InsideResolved check passed while the OS profile denied
+// every child; that is the same class of bug as the one-call write grant.
+func mountGrant(dirs, files *[]string, p string) {
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		*dirs = append(*dirs, p)
+		return
+	}
+	*files = append(*files, p)
 }
 
 // safeWorkerPath reports whether p may be mounted into the worker. Protected
@@ -309,6 +322,9 @@ func failed(why string) (agentcore.AgentToolResult, error) {
 // one key; a call that failed before choosing a route gets nothing rather than
 // a guess.
 func withEnvelope(res agentcore.AgentToolResult, sandboxed bool) agentcore.AgentToolResult {
+	if sandboxed {
+		res = withSandboxRecoveryHint(res)
+	}
 	value := "bare"
 	if sandboxed {
 		value = "sandbox"
@@ -320,6 +336,19 @@ func withEnvelope(res agentcore.AgentToolResult, sandboxed bool) agentcore.Agent
 	case nil:
 		res.Details = map[string]any{"envelope": value}
 	}
+	return res
+}
+
+// sandboxRecoveryHint is the native-tool path out of a denial. The bash-only
+// sandbox_permissions field is not part of a file tool's schema: what a file
+// tool needs is a readable root, not a process escape.
+const sandboxRecoveryHint = "\n[sandboxed: this path is outside the sandbox's readable roots. Grant the directory with /boundary readable add <dir> (or GOLDER_READABLE_ROOTS=<dir>), then retry. sandbox_permissions is a bash-only field and is not accepted by file tools.]"
+
+func withSandboxRecoveryHint(res agentcore.AgentToolResult) agentcore.AgentToolResult {
+	if !judge.LooksSandboxDenied(agentcore.ContentToText(res.Content)) {
+		return res
+	}
+	res.Content = append(res.Content, agentcore.NewTextContent(sandboxRecoveryHint))
 	return res
 }
 

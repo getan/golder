@@ -34,6 +34,14 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **A one-call grant on a directory is a subtree**: `ReadGrant`/`WriteGrant`
+  carried one path, and the worker (and bash) mounted it as a literal file. A
+  granted directory therefore passed the tool-level check while the OS profile
+  denied every child — `grep` over a granted module directory returned
+  `Operation not permitted` per file. Grants are now routed by `os.Stat`: a
+  directory becomes `ReadDirs`/`WriteDirs`, a file stays literal. Native file
+  tools also explain a sandbox denial with `/boundary readable add` (or
+  `GOLDER_READABLE_ROOTS`) instead of the bash-only `sandbox_permissions`.
 - **One level is the whole approval**: the reviewer no longer answers a separate
   `direct` field. In `auto`, `allow`/`confirm` on a `require_escalated` call is
   the escape grant, `contain` runs it isolated and never escapes, and `deny`

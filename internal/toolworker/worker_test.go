@@ -116,6 +116,92 @@ func TestWorkerPolicyRefusesExplicitProtectedRead(t *testing.T) {
 	}
 }
 
+// A one-call grant that names a directory must be mounted as a subtree. As a
+// literal it let the tool-level InsideResolved check pass while the OS profile
+// denied every child — the reported grep EPERM on a granted module directory.
+func TestWorkerPolicyRoutesDirectoryGrantsAsSubtrees(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	policy, err := workerPolicy(Request{ReadFile: dir, WriteFile: dir}, nil, "/bin/true")
+	if err != nil {
+		t.Fatalf("workerPolicy: %v", err)
+	}
+	if !hasPath(policy.ReadDirs, dir) || hasPath(policy.ReadFiles, dir) {
+		t.Errorf("directory read grant = dirs %v files %v, want the directory in ReadDirs", policy.ReadDirs, policy.ReadFiles)
+	}
+	if !hasPath(policy.WriteDirs, dir) || hasPath(policy.WriteFiles, dir) {
+		t.Errorf("directory write grant = dirs %v files %v, want the directory in WriteDirs", policy.WriteDirs, policy.WriteFiles)
+	}
+
+	policy, err = workerPolicy(Request{ReadFile: file, WriteFile: file}, nil, "/bin/true")
+	if err != nil {
+		t.Fatalf("workerPolicy: %v", err)
+	}
+	if !hasPath(policy.ReadFiles, file) || hasPath(policy.ReadDirs, file) {
+		t.Errorf("file read grant = dirs %v files %v, want the file in ReadFiles", policy.ReadDirs, policy.ReadFiles)
+	}
+	if !hasPath(policy.WriteFiles, file) || hasPath(policy.WriteDirs, file) {
+		t.Errorf("file write grant = dirs %v files %v, want the file in WriteFiles", policy.WriteDirs, policy.WriteFiles)
+	}
+}
+
+// An exact grant recorded by an earlier "just this once" answer is the same
+// shape: a directory there is a subtree too.
+func TestWorkerPolicyRoutesExactDirectoryGrantAsSubtree(t *testing.T) {
+	dir := t.TempDir()
+	entries := grants.Entries{Session: []grants.Grant{
+		{Path: dir, Allow: grants.Read, Scope: grants.Exact, Lifetime: grants.Session},
+	}}
+	store, err := grants.FromSnapshot(entries)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	grants.SetProcess(store)
+	defer grants.SetProcess(nil)
+
+	policy, err := workerPolicy(Request{Grants: entries}, nil, "/bin/true")
+	if err != nil {
+		t.Fatalf("workerPolicy: %v", err)
+	}
+	if !hasPath(policy.ReadDirs, dir) || hasPath(policy.ReadFiles, dir) {
+		t.Errorf("exact directory grant = dirs %v files %v, want a subtree", policy.ReadDirs, policy.ReadFiles)
+	}
+}
+
+func hasPath(paths []string, want string) bool {
+	for _, p := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A native file tool cannot accept sandbox_permissions — that field is bash's.
+// A sandbox-shaped failure must point at the readable-root answer instead.
+func TestWithEnvelopeAddsNativeSandboxHint(t *testing.T) {
+	denied := agentcore.AgentToolResult{Content: agentcore.ContentList{
+		agentcore.NewTextContent("grep: chromedp/errors.go: Operation not permitted (os error 1)"),
+	}}
+	res := withEnvelope(denied, true)
+	text := agentcore.ContentToText(res.Content)
+	if !strings.Contains(text, "/boundary readable add") {
+		t.Errorf("sandboxed result = %q, want the readable-root hint", text)
+	}
+	if strings.Contains(text, "require_escalated") {
+		t.Errorf("sandboxed result = %q, want no bash-only escape advice", text)
+	}
+
+	bare := withEnvelope(denied, false)
+	if strings.Contains(agentcore.ContentToText(bare.Content), "/boundary readable add") {
+		t.Errorf("bare result got a sandbox hint: %q", agentcore.ContentToText(bare.Content))
+	}
+}
+
 func TestIsolatedFileToolsAndRewind(t *testing.T) {
 	if runtime.GOOS != "darwin" || !seatbelt.Available() {
 		t.Skip("integration test requires macOS sandbox-exec")
