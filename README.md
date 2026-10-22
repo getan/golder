@@ -182,6 +182,54 @@ thinking_level = "max"            # off | minimal | low | medium | high | xhigh 
 
 也可以用环境变量覆盖：`GOLDER_MODEL`、`GOLDER_PROVIDER`、`GOLDER_THINKING_LEVEL`、`GOLDER_PERMISSIONS`。命令行 flag 优先级最高。项目级还可以放一份 `.golder/config.json` 覆盖 `model` / `provider` / `thinkingLevel` / `hooks`——仅在目录被信任时加载。
 
+### tuios shell integration（zsh / bash，推荐）
+
+推荐在 tuios pane 里运行 golder。要完整使用 tuios 的窗口与命令管理，尤其是 `tuios run`、`wait-for command-finished`、`capture-pane --last-command`，pane 的 shell 必须发送 OSC 133 命令标记；否则这些操作会报 `no_shell_integration`，golder 内置 `tuios` 的 `run` 也只能走降级路径。只使用 `list`、`capture`、`wait`（如 `window-output` / `window-idle`）时不需要这些标记。
+
+把对应配置追加到 shell rc 文件末尾，并放在 Starship、Powerlevel10k、oh-my-zsh 等 prompt 初始化之后。
+
+#### zsh
+
+```zsh
+# ~/.zshrc: mark commands for tuios run (OSC 133)
+autoload -Uz add-zsh-hook
+_tuios_osc133_precmd()  { local s=$?; print -n "\e]133;D;$s\a\e]133;A\a"; }
+_tuios_osc133_preexec() { print -n "\e]133;C\a"; }
+add-zsh-hook precmd _tuios_osc133_precmd
+add-zsh-hook preexec _tuios_osc133_preexec
+PS1+=$'%{\e]133;B\a%}'
+```
+
+#### bash
+
+```bash
+# ~/.bashrc: mark commands for tuios run (OSC 133)
+# Needs bash 4.4 or newer. Older bash, such as macOS /bin/bash 3.2, ignores
+# PS0, so it marks prompts and never commands, and run refuses the pane.
+PROMPT_COMMAND='printf "\e]133;D;%s\a\e]133;A\a" "$?"'${PROMPT_COMMAND:+";$PROMPT_COMMAND"}
+PS0='\e]133;C\a'
+PS1+='\[\e]133;B\a\]'
+```
+
+macOS 自带的 `/bin/bash` 是 3.2，不支持这套 `PS0` 配置；请安装 bash 4.4+（例如 `brew install bash`）并把登录 shell 切到它，或直接用 zsh。
+
+新增的 tuios pane 会自动生效；已经打开的 pane 需要重载：
+
+```bash
+source ~/.zshrc      # zsh；也可以 exec zsh
+source ~/.bashrc     # bash
+```
+
+然后验证：
+
+```bash
+tuios doctor shell
+```
+
+对应当前 pane 的 `marks_commands` 应该是 `true`。旧 pane 在重载前通常是 `false`。
+
+这里的 shell integration 和 `golder host-compat install` 是两件事：前者让 tuios 能识别命令边界，后者把 golder 的状态、审批和提问写进 tuios 的 harness manifest，供 rail 与 Inbox 使用。推荐两者都配置。
+
 ### 其他 Provider
 
 可切换的内置网关都能用 `--provider <name> -m <model>` 选中，API Key 按 `<PROVIDER>_API_KEY` 约定从环境变量读取（如 `DEEPSEEK_API_KEY`、`ZAI_API_KEY`），完整列表见 `golder --help`（其中标注了唯一的例外：`typesafe` 是审查器用的决策模型，不接会话，只能用 `/proxy` 路由）。自定义端点直接指定协议与地址：

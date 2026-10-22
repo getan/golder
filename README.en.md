@@ -181,6 +181,54 @@ thinking_level = "max"            # off | minimal | low | medium | high | xhigh 
 
 Environment variables override file values: `GOLDER_MODEL`, `GOLDER_PROVIDER`, `GOLDER_THINKING_LEVEL`, `GOLDER_PERMISSIONS`; CLI flags take highest precedence. A project can also carry `.golder/config.json` overriding `model` / `provider` / `thinkingLevel` / `hooks` — loaded only when the directory is trusted.
 
+### tuios shell integration (zsh / bash, recommended)
+
+We recommend running golder inside a tuios pane. To use tuios's window and command management to the full extent — especially `tuios run`, `wait-for command-finished`, and `capture-pane --last-command` — the pane's shell must emit OSC 133 command marks. Without them those operations fail with `no_shell_integration`, and golder's built-in `tuios run` can only use its fallback path. The marks are not needed for `list`, `capture`, or `wait` conditions such as `window-output` / `window-idle`.
+
+Append the matching block to the end of your shell rc file, after prompt initialization such as Starship, Powerlevel10k, or oh-my-zsh.
+
+#### zsh
+
+```zsh
+# ~/.zshrc: mark commands for tuios run (OSC 133)
+autoload -Uz add-zsh-hook
+_tuios_osc133_precmd()  { local s=$?; print -n "\e]133;D;$s\a\e]133;A\a"; }
+_tuios_osc133_preexec() { print -n "\e]133;C\a"; }
+add-zsh-hook precmd _tuios_osc133_precmd
+add-zsh-hook preexec _tuios_osc133_preexec
+PS1+=$'%{\e]133;B\a%}'
+```
+
+#### bash
+
+```bash
+# ~/.bashrc: mark commands for tuios run (OSC 133)
+# Needs bash 4.4 or newer. Older bash, such as macOS /bin/bash 3.2, ignores
+# PS0, so it marks prompts and never commands, and run refuses the pane.
+PROMPT_COMMAND='printf "\e]133;D;%s\a\e]133;A\a" "$?"'${PROMPT_COMMAND:+";$PROMPT_COMMAND"}
+PS0='\e]133;C\a'
+PS1+='\[\e]133;B\a\]'
+```
+
+macOS's `/bin/bash` is 3.2 and ignores `PS0`; install bash 4.4+ (for example `brew install bash`) and use it as your login shell, or use zsh.
+
+New tuios panes pick this up automatically. An already-open pane must be reloaded:
+
+```bash
+source ~/.zshrc      # zsh; or exec zsh
+source ~/.bashrc     # bash
+```
+
+Then verify with:
+
+```bash
+tuios doctor shell
+```
+
+The current pane's `marks_commands` should be `true`; old panes remain `false` until reloaded.
+
+This shell integration is separate from `golder host-compat install`: the former lets tuios see command boundaries, while the latter writes golder's state, approvals, and questions into tuios's harness manifest for the rail and Inbox. Configure both for the best experience.
+
 ### Other providers
 
 Switch to any conversation gateway with `--provider <name> -m <model>`; API keys are read from the `<PROVIDER>_API_KEY` convention (e.g. `DEEPSEEK_API_KEY`, `ZAI_API_KEY`). The full list is in `golder --help`, which marks the one exception: `typesafe` is the reviewer's decision model, it does not carry a conversation, and it is routed with `/proxy` alone. For custom endpoints, specify protocol and address directly:
