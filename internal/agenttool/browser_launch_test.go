@@ -6,8 +6,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func browserSocketPath(root string) string {
@@ -91,5 +93,87 @@ func TestDiscoveryIgnoresANonSocket(t *testing.T) {
 	}
 	if d := discoverBrowsers(context.Background(), root, ""); len(d.Instances) != 0 {
 		t.Fatalf("discovery = %+v, want no instance", d)
+	}
+}
+
+func TestPruneBrowserProfilesKeepsCurrentAndFresh(t *testing.T) {
+	dir := t.TempDir()
+	makeProfile := func(name string, age time.Duration) string {
+		path := filepath.Join(dir, name+".profile")
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		when := time.Now().Add(-age)
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	keep := makeProfile("keep", 30*24*time.Hour)
+	stale := makeProfile("stale", 30*24*time.Hour)
+	fresh := makeProfile("fresh", time.Hour)
+
+	pruneBrowserProfiles(dir, "keep", time.Now())
+
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("current profile removed: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale profile survived: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("fresh profile removed: %v", err)
+	}
+}
+
+func TestStaleBrowserSocketDetectsClosedListener(t *testing.T) {
+	root := shortRoot(t)
+	sock := filepath.Join(root, "stale.sock")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Skipf("cannot bind a unix socket here: %v", err)
+	}
+	ln.SetUnlinkOnClose(false)
+	t.Cleanup(func() { _ = os.Remove(sock) })
+
+	if staleBrowserSocket(sock) {
+		t.Fatal("live socket reported stale")
+	}
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !staleBrowserSocket(sock) {
+		t.Fatal("closed socket was not detected as stale")
+	}
+}
+
+func TestBrowserPaneSpecReusesCanonicalAfterStaleSocket(t *testing.T) {
+	if _, err := exec.LookPath("kitty-browse"); err != nil {
+		t.Skip("kitty-browse is not installed")
+	}
+	root := shortRoot(t)
+	dir := filepath.Join(root, ".golder", "browser")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(dir, "browser.sock")
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Skipf("cannot bind a unix socket here: %v", err)
+	}
+	ln.SetUnlinkOnClose(false)
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	spec, err := browserPaneSpec(root, "browser", "https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Socket != sock {
+		t.Fatalf("socket = %q, want canonical %q", spec.Socket, sock)
+	}
+	if _, err := os.Lstat(sock); !os.IsNotExist(err) {
+		t.Fatalf("stale socket survived: %v", err)
 	}
 }

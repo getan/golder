@@ -9,15 +9,21 @@ package agenttool
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/tuiosctl"
 )
+
+const browserProfileMaxAge = 14 * 24 * time.Hour
 
 // KittyBrowseAvailable reports whether the binary is installed. A browser can
 // only be started where it can draw, so this is checked together with the pane.
@@ -38,15 +44,22 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return paneSpec{}, err
 	}
+	pruneBrowserProfiles(dir, name, time.Now())
 	socket := filepath.Join(dir, name+".sock")
 	if _, err := os.Lstat(socket); err == nil {
-		// Never unlink an endpoint on a failed health probe: it could belong to
-		// a live but busy browser. A fresh instance gets its own endpoint.
-		var suffix [4]byte
-		if _, err := rand.Read(suffix[:]); err != nil {
-			return paneSpec{}, err
+		if staleBrowserSocket(socket) {
+			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
+				return paneSpec{}, fmt.Errorf("remove stale browser socket: %w", err)
+			}
+		} else {
+			// A live (or unprobeable) endpoint keeps its path; give the new
+			// instance its own socket instead of unlinking a possibly busy one.
+			var suffix [4]byte
+			if _, err := rand.Read(suffix[:]); err != nil {
+				return paneSpec{}, err
+			}
+			socket = filepath.Join(dir, fmt.Sprintf("%s-%x.sock", name, suffix))
 		}
-		socket = filepath.Join(dir, fmt.Sprintf("%s-%x.sock", name, suffix))
 	} else if !os.IsNotExist(err) {
 		return paneSpec{}, err
 	}
@@ -55,6 +68,42 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 		Name: name, Kind: "browser", Socket: socket, URL: url,
 		Argv: []string{bin, "-profile-dir", profile, "-control-socket", socket, url},
 	}, nil
+}
+
+func staleBrowserSocket(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	conn, err := net.DialTimeout("unix", path, 200*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return false
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT)
+}
+
+// pruneBrowserProfiles removes profiles from browser names that have not been
+// used for a while. The active name is always kept: tests and ad-hoc debugging
+// otherwise leave one full Chromium profile per name under .golder/browser.
+func pruneBrowserProfiles(dir, keep string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".profile") {
+			continue
+		}
+		if entry.Name() == keep+".profile" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) < browserProfileMaxAge {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+	}
 }
 
 // startBrowserPane opens a pane running kitty-browse and adopts the socket it
