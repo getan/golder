@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -56,6 +57,12 @@ type BrowserTool struct {
 	newTuios     func(context.Context) (*tuiosctl.Client, error)
 	cwd          string
 	allowControl bool
+
+	// lastTab remembers the tab open created. kitty-browse keeps a blank anchor
+	// target in the background and can report it as active, so "no tab given"
+	// must not mean "whatever the browser says is active" right after open.
+	tabMu   sync.Mutex
+	lastTab string
 }
 
 func (t *BrowserTool) Name() string { return "browser" }
@@ -108,7 +115,6 @@ const browserReadSchema = `{
     "state":{"type":"string","description":"For wait: visible|hidden|domcontentloaded|load."},
     "url_pattern":{"type":"string","description":"For wait: URL substring, glob or exact pattern."},
     "timeout_ms":{"type":"integer","minimum":1,"maximum":120000,"description":"Wait budget; default 30000."},
-    "limit":{"type":"integer","minimum":1,"description":"For console/errors/network: last N entries."},
     "clear":{"type":"boolean","description":"For console/errors/network: clear the buffer after reading."},
     "format":{"type":"string","enum":["png"],"description":"For screenshot: png only."},
     "full_page":{"type":"boolean","description":"For screenshot: capture the whole page."},
@@ -138,7 +144,6 @@ const browserControlSchema = `{
     "state":{"type":"string","description":"For wait: visible|hidden|domcontentloaded|load."},
     "url_pattern":{"type":"string","description":"For wait: URL substring, glob or exact pattern."},
     "timeout_ms":{"type":"integer","minimum":1,"maximum":120000,"description":"Wait budget; default 30000."},
-    "limit":{"type":"integer","minimum":1,"description":"For console/errors/network: last N entries."},
     "clear":{"type":"boolean","description":"For console/errors/network: clear the buffer after reading."},
     "format":{"type":"string","enum":["png"],"description":"For screenshot: png only."},
     "full_page":{"type":"boolean","description":"For screenshot: capture the whole page."},
@@ -173,7 +178,6 @@ type browserArgs struct {
 	State       string  `json:"state,omitempty"`
 	URLPattern  string  `json:"url_pattern,omitempty"`
 	TimeoutMS   int     `json:"timeout_ms,omitempty"`
-	Limit       int     `json:"limit,omitempty"`
 	Clear       bool    `json:"clear,omitempty"`
 	Format      string  `json:"format,omitempty"`
 	FullPage    bool    `json:"full_page,omitempty"`
@@ -316,7 +320,7 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	if err != nil {
 		return browserError(err), nil
 	}
-	target, err := pinTab(info, a.Tab)
+	target, err := pinTab(info, t.tabChoice(a.Tab, info))
 	if err != nil {
 		return browserError(err), nil
 	}
@@ -366,6 +370,48 @@ func pinTab(info browserctl.Info, want string) (browserctl.Target, error) {
 		}
 	}
 	return browserctl.Target{}, fmt.Errorf("tab %q is not open; call list and use its id", want)
+}
+
+// tabChoice prefers an explicit tab, then the one open created, then the
+// browser's own active tab.
+func (t *BrowserTool) tabChoice(want string, info browserctl.Info) string {
+	if strings.TrimSpace(want) != "" {
+		return want
+	}
+	t.tabMu.Lock()
+	id := t.lastTab
+	t.tabMu.Unlock()
+	for _, tab := range info.Tabs {
+		if tab.ID == id {
+			return id
+		}
+	}
+	return ""
+}
+
+// rememberOpenedTab records the tab that now shows url, so the next action
+// without a tab does not land on the blank anchor.
+func (t *BrowserTool) rememberOpenedTab(socket, url string) {
+	c, err := browserctl.Dial(socket)
+	if err != nil {
+		return
+	}
+	want := strings.TrimSuffix(url, "/")
+	// The socket appears before the tab does, so give it a moment.
+	for i := 0; i < 15; i++ {
+		info, err := c.Info(context.Background())
+		if err == nil {
+			for _, tab := range info.Tabs {
+				if strings.TrimSuffix(tab.URL, "/") == want {
+					t.tabMu.Lock()
+					t.lastTab = tab.ID
+					t.tabMu.Unlock()
+					return
+				}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // browserActionParams maps the tool's flat arguments onto one kitty-browse
@@ -465,18 +511,12 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		return "dialog.status", map[string]any{}, nil
 	case "console", "errors":
 		p := map[string]any{}
-		if a.Limit > 0 {
-			p["limit"] = a.Limit
-		}
 		if a.Clear {
 			p["clear"] = true
 		}
 		return a.Action, p, nil
 	case "network":
 		p := map[string]any{}
-		if a.Limit > 0 {
-			p["limit"] = a.Limit
-		}
 		if a.Clear {
 			p["clear"] = true
 		}
@@ -559,6 +599,9 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 // idempotent: with a browser already running it reports the existing socket.
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
 	if socket := browserSocket(); socket != "" {
+		if url := strings.TrimSpace(a.URL); url != "" {
+			t.rememberOpenedTab(socket, url)
+		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 				"socket": socket, "started": false,
@@ -579,6 +622,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if err != nil {
 		return browserError(err), nil
 	}
+	t.rememberOpenedTab(socket, url)
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 			"socket": socket, "window_id": window, "url": url, "started": true,
