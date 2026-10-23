@@ -611,29 +611,29 @@ func (mn slashMenu) firstSelectable(from, step int) int {
 }
 
 // openLevelPicker shows the second stage of the /model flow: the reasoning
-// levels model advertises, with the current level marked. model stays pending
+// levels model advertises, with the current level marked and the level saved
+// for this provider/model pair tagged as the default. model stays pending
 // until the level is confirmed, so the confirm can run both steps as a single
 // /model <id> <level>. Esc closes the menu (close clears the pending model)
 // and cancels the switch entirely.
-func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLevel, mark agentcore.ThinkingLevel) {
+func (mn *slashMenu) openLevelPicker(model string, levels []agentcore.ThinkingLevel, mark, defaultLevel agentcore.ThinkingLevel) {
 	items := make([]pickItem, 0, len(levels))
-	defaultLevel := prompts.DefaultThinkingLevelName()
 	for _, lvl := range levels {
 		items = append(items, pickItem{
 			Title:   string(lvl),
 			Value:   string(lvl),
-			Default: string(lvl) == defaultLevel,
+			Default: lvl == defaultLevel,
 		})
 	}
 	mn.openPickerDetailed(items, string(mark), "model-level")
 	mn.pickModel = model
-	mn.pickHint = "↑↓ select · Enter apply · d set default level · Esc cancel"
+	mn.pickHint = "↑↓ select · Enter apply · d set default for this model · Esc cancel"
 }
 
 // openDefaultLevelPicker is openLevelPicker for the model picker's `d` key:
 // the chosen level is saved with the model instead of switching the session.
-func (mn *slashMenu) openDefaultLevelPicker(model string, levels []agentcore.ThinkingLevel, mark agentcore.ThinkingLevel) {
-	mn.openLevelPicker(model, levels, mark)
+func (mn *slashMenu) openDefaultLevelPicker(model string, levels []agentcore.ThinkingLevel, mark, defaultLevel agentcore.ThinkingLevel) {
+	mn.openLevelPicker(model, levels, mark, defaultLevel)
 	mn.pickDefault = true
 	mn.pickHint = "↑↓ select · Enter save as default · Esc cancel"
 }

@@ -174,3 +174,94 @@ func TestSetDefaultModelForClearsOnlyOneProvider(t *testing.T) {
 		t.Errorf("top-level model changed while clearing another provider: %q", model)
 	}
 }
+
+func TestSetDefaultModelForScopesThinkingLevelPerProviderModel(t *testing.T) {
+	path := writeConfig(t, "")
+	if err := SetDefaultModelFor("commandcode", "cc-model", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultModelFor("opencode-go", "oc-model", "max"); err != nil {
+		t.Fatal(err)
+	}
+	if level, _ := DefaultThinkingLevelFor("commandcode", "cc-model"); level != "high" {
+		t.Errorf("commandcode/cc-model level = %q, want high", level)
+	}
+	if level, _ := DefaultThinkingLevelFor("opencode-go", "oc-model"); level != "max" {
+		t.Errorf("opencode-go/oc-model level = %q, want max", level)
+	}
+	if level, _ := DefaultThinkingLevelFor("commandcode", "oc-model"); level != "" {
+		t.Errorf("a different model inherited a level: %q", level)
+	}
+
+	// Changing one pair must leave every other pair alone.
+	if err := SetDefaultThinkingLevelFor("commandcode", "cc-model", "low"); err != nil {
+		t.Fatal(err)
+	}
+	if level, _ := DefaultThinkingLevelFor("opencode-go", "oc-model"); level != "max" {
+		t.Errorf("changing one pair moved another: %q", level)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	if strings.Contains(text, "thinking_level") {
+		t.Errorf("per-model save wrote the shared thinking_level:\n%s", text)
+	}
+	for _, want := range []string{
+		"[thinking_defaults]",
+		`"commandcode/cc-model" = "low"`,
+		`"opencode-go/oc-model" = "max"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestSetDefaultModelForMigratesLegacyGlobalThinkingLevel(t *testing.T) {
+	path := writeConfig(t, `provider = "commandcode"
+model = "cc-model"
+thinking_level = "high"
+
+[model_defaults]
+commandcode = "cc-model"
+opencode-go = "oc-model"
+`)
+	if err := SetDefaultModelFor("commandcode", "cc-model", "low"); err != nil {
+		t.Fatal(err)
+	}
+	if level, _ := DefaultThinkingLevelFor("commandcode", "cc-model"); level != "low" {
+		t.Errorf("commandcode level = %q, want low", level)
+	}
+	if level, _ := DefaultThinkingLevelFor("opencode-go", "oc-model"); level != "high" {
+		t.Errorf("opencode level = %q, want the migrated high", level)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "thinking_level") {
+		t.Errorf("legacy thinking_level was not migrated:\n%s", got)
+	}
+}
+
+func TestSetDefaultThinkingLevelForClearsOnlyOnePair(t *testing.T) {
+	writeConfig(t, "")
+	if err := SetDefaultThinkingLevelFor("commandcode", "cc", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultThinkingLevelFor("opencode-go", "oc", "max"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDefaultThinkingLevelFor("commandcode", "cc", ""); err != nil {
+		t.Fatal(err)
+	}
+	if level, _ := DefaultThinkingLevelFor("commandcode", "cc"); level != "" {
+		t.Errorf("cleared pair still has %q", level)
+	}
+	if level, _ := DefaultThinkingLevelFor("opencode-go", "oc"); level != "max" {
+		t.Errorf("clearing one pair dropped another: %q", level)
+	}
+}

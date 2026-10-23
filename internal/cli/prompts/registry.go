@@ -481,6 +481,20 @@ func DefaultThinkingLevelName() string {
 	return level
 }
 
+// DefaultThinkingLevelForProviderModel returns the saved level for one
+// provider/model pair as a validated ThinkingLevel, or "" when none is saved.
+func DefaultThinkingLevelForProviderModel(providerName, model string) agentcore.ThinkingLevel {
+	level, err := config.DefaultThinkingLevelFor(providerName, model)
+	if err != nil {
+		return ""
+	}
+	v, ok := validThinkingLevel(level)
+	if !ok {
+		return ""
+	}
+	return v
+}
+
 // SetDefaultModelText persists model, its reasoning level and the provider that
 // serves it, then reports. It is the text form of the model picker's `d` key and
 // the `/model default` command.
@@ -515,17 +529,18 @@ func SetDefaultModelText(model string, level agentcore.ThinkingLevel, live *cli.
 	return msg
 }
 
-// SetDefaultThinkingText persists only the reasoning level, leaving the model
-// and provider alone. It backs the level picker's `d` key and
-// `/model default think <level>`.
-func SetDefaultThinkingText(level agentcore.ThinkingLevel) string {
+// SetDefaultThinkingText persists only the reasoning level for one
+// provider/model pair, leaving the model and provider alone. It backs the
+// level picker's `d` key and `/model default think <level>`.
+func SetDefaultThinkingText(providerName, model string, level agentcore.ThinkingLevel) string {
 	if level == "" {
 		return "think: no level selected"
 	}
-	if err := config.SetDefaultThinkingLevel(string(level)); err != nil {
+	if err := config.SetDefaultThinkingLevelFor(providerName, model, string(level)); err != nil {
 		return "think: cannot save the default: " + err.Error()
 	}
-	return "default reasoning level set to " + string(level) + "\nnew sessions and provider switches use it"
+	return fmt.Sprintf("default reasoning level for %s/%s set to %s\nnew sessions and switches to that model use it",
+		providerName, model, level)
 }
 
 // SetDefaultProviderText persists name as the default provider and returns the
@@ -757,13 +772,15 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			if model == "" {
 				return "default model for " + live.ProviderName + ": unset\nset it with /model default <id|n> [level]"
 			}
-			level, _ := config.DefaultThinkingLevel()
+			level, _ := config.DefaultThinkingLevelFor(live.ProviderName, model)
 			msg := "default model for " + live.ProviderName + ": " + model
 			if saved == "" {
 				msg += " (built-in)"
 			}
 			if level != "" {
 				msg += ", think: " + level
+			} else if global, _ := config.DefaultThinkingLevel(); global != "" {
+				msg += ", think: " + global + " (global)"
 			}
 			return msg
 		case arg == "off" || arg == "none" || arg == "unset":
@@ -776,7 +793,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 			if !ok {
 				return "model: invalid reasoning level (want off|minimal|low|medium|high|xhigh|max)"
 			}
-			return SetDefaultThinkingText(lvl)
+			return SetDefaultThinkingText(live.ProviderName, live.Model, lvl)
 		}
 		fields := strings.Fields(arg)
 		sel := fields[0]
@@ -923,12 +940,11 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.ProviderName = name
 		live.Provider = prov
 		live.RefreshContextWindow()
-		// A provider switch adopts the saved reasoning level too, so the new
-		// gateway starts from the same answer `/model default` recorded.
-		if defLevel, _ := config.DefaultThinkingLevel(); defLevel != "" {
-			if v, ok := validThinkingLevel(defLevel); ok {
-				live.ThinkingLevel = v
-			}
+		// A provider switch adopts the level saved for the new provider's
+		// default model, never the global `thinking_level` — a default saved
+		// for another gateway must not follow us here.
+		if defLevel := DefaultThinkingLevelForProviderModel(spec.Name, model); defLevel != "" {
+			live.ThinkingLevel = defLevel
 		}
 		// The fetched catalog belongs to the previous gateway; drop it so the
 		// next bare /model lists (and disk-caches) the new provider's lineup.
@@ -949,7 +965,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "model",
 		Category:     runtime.CategoryModel,
-		Description:  "list and switch models, or set the default for new sessions",
+		Description:  "list and switch models, or set per-model defaults for new sessions",
 		ArgumentHint: "[n|id [level]|think level|default [id|think level]]",
 		Action: func(args string) string {
 			arg := strings.TrimSpace(args)

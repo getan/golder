@@ -24,6 +24,12 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Reasoning-level defaults are scoped per provider/model**: `/model default`,
+  the TUI picker's `d` key and `/provider` switches now read and write
+  `[thinking_defaults]`, keyed by `provider/model`, so saving a default for one
+  gateway's model no longer changes another provider or a sibling model. The
+  legacy top-level `thinking_level` is migrated into per-pair rows for every
+  `[model_defaults]` entry on the first save, then removed.
 - **Browser discovery and workspace-stable helper panes**: `browser list` now
   finds live workspace instances even when the selected socket is stale;
   `attach` explicitly selects a verified browser id and clears old tab state.

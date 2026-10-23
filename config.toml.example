@@ -20,7 +20,8 @@ model = "deepseek-v4.1-flash"
 # (e.g. OPENCODE_API_KEY) instead of committing it to a config file.
 # api_key = "your-api-key-here"
 
-# Reasoning effort: off | minimal | low | medium | high | xhigh | max
+# Global fallback reasoning effort: off | minimal | low | medium | high | xhigh | max
+# Per-provider/per-model defaults live in [thinking_defaults] at the end of this file.
 # thinking_level = "max"
 
 # Output format: text | stream-json
@@ -136,3 +137,15 @@ no_skills = false
 # naming the rule. Placeholders look like «SECRET:github_pat:1a2b3c4d» and are
 # restored only when the model writes a file (write / apply_patch), never when
 # it runs a shell command.
+
+# --- Per-model reasoning defaults ---
+#
+# /model default and the picker's `d` key write [thinking_defaults] here,
+# keyed by "<provider>/<model>". An entry affects only that pair: setting a
+# default for one gateway/model never moves another. The top-level
+# `thinking_level` above is the global fallback; the first per-model save
+# migrates it into this table for every [model_defaults] entry and removes it.
+#
+# [thinking_defaults]
+# "opencode-go/deepseek-v4.1-flash" = "max"
+# "commandcode/deepseek/deepseek-v4.1-flash" = "high"

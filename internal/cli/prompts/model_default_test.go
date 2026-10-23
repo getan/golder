@@ -26,8 +26,8 @@ func TestSetDefaultModelTextPersistsModelLevelAndProvider(t *testing.T) {
 	if DefaultModelName() != "new-model" {
 		t.Errorf("DefaultModelName = %q", DefaultModelName())
 	}
-	if DefaultThinkingLevelName() != "high" {
-		t.Errorf("DefaultThinkingLevelName = %q", DefaultThinkingLevelName())
+	if level, _ := config.DefaultThinkingLevelFor("commandcode", "new-model"); level != "high" {
+		t.Errorf("scoped level = %q, want high", level)
 	}
 	if DefaultProviderName() != "commandcode" {
 		t.Errorf("DefaultProviderName = %q", DefaultProviderName())
@@ -39,16 +39,38 @@ func TestSetDefaultThinkingTextLeavesTheModel(t *testing.T) {
 	if err := config.SetDefaultModel("m", "low", "commandcode"); err != nil {
 		t.Fatal(err)
 	}
-	got := SetDefaultThinkingText(agentcore.ThinkingMax)
+	got := SetDefaultThinkingText("commandcode", "m", agentcore.ThinkingMax)
 	if !strings.Contains(got, "max") {
 		t.Errorf("report = %q", got)
 	}
-	if DefaultThinkingLevelName() != "max" {
-		t.Errorf("level = %q", DefaultThinkingLevelName())
+	if level, _ := config.DefaultThinkingLevelFor("commandcode", "m"); level != "max" {
+		t.Errorf("scoped level = %q, want max", level)
+	}
+	if level, _ := config.DefaultThinkingLevelFor("commandcode", "other"); level != "" {
+		t.Errorf("other model inherited level %q", level)
 	}
 	if DefaultModelName() != "m" || DefaultProviderName() != "commandcode" {
 		t.Errorf("setting the level changed the model/provider: %q / %q",
 			DefaultModelName(), DefaultProviderName())
+	}
+}
+
+func TestDefaultThinkingLevelForProviderModelIsScoped(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	if err := config.SetDefaultThinkingLevelFor("openai", "m-a", "high"); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetDefaultThinkingLevelFor("commandcode", "m-a", "low"); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultThinkingLevelForProviderModel("openai", "m-a"); got != agentcore.ThinkingHigh {
+		t.Errorf("openai/m-a = %q, want high", got)
+	}
+	if got := DefaultThinkingLevelForProviderModel("openai", "m-b"); got != "" {
+		t.Errorf("openai/m-b inherited %q", got)
+	}
+	if got := DefaultThinkingLevelForProviderModel("commandcode", "m-b"); got != "" {
+		t.Errorf("commandcode/m-b inherited %q", got)
 	}
 }
 

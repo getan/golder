@@ -221,6 +221,33 @@ func TestApplyFileConfig_EmptyConfigNoChange(t *testing.T) {
 	}
 }
 
+func TestStartupThinkingLevelPrefersScopedDefault(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_THINKING_LEVEL", "")
+	if err := config.SetDefaultThinkingLevelFor("openai", "gpt-6", "xhigh"); err != nil {
+		t.Fatal(err)
+	}
+	opts := cliOptions{thinkingLevel: "low"}
+
+	if got := startupThinkingLevel(opts, "openai", "gpt-6", changedSet()); got != "xhigh" {
+		t.Errorf("scoped level = %q, want xhigh", got)
+	}
+	if got := startupThinkingLevel(opts, "openai", "another-model", changedSet()); got != "low" {
+		t.Errorf("other model = %q, want the configured fallback low", got)
+	}
+	if got := startupThinkingLevel(opts, "commandcode", "gpt-6", changedSet()); got != "low" {
+		t.Errorf("other provider = %q, want the configured fallback low", got)
+	}
+	if got := startupThinkingLevel(opts, "openai", "gpt-6", changedSet("thinking-level")); got != "low" {
+		t.Errorf("explicit flag = %q, want low", got)
+	}
+
+	t.Setenv("GOLDER_THINKING_LEVEL", "medium")
+	if got := startupThinkingLevel(opts, "openai", "gpt-6", changedSet()); got != "" {
+		t.Errorf("env should defer to ResolveThinkingLevel, got %q", got)
+	}
+}
+
 func TestApplyFileConfigPrompts(t *testing.T) {
 	var opts cliOptions
 	cfg := config.FileConfig{Prompts: []string{"./my-prompts", "/abs/x.md"}}

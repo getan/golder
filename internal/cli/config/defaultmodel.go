@@ -14,6 +14,7 @@ import (
 
 const thinkingKey = "thinking_level"
 const modelDefaultsTable = "model_defaults"
+const thinkingDefaultsTable = "thinking_defaults"
 
 // DefaultModel returns the top-level `model` value, or "" when the file does not
 // set one.
@@ -21,6 +22,19 @@ func DefaultModel() (string, error) { return topLevelValue(modelKey) }
 
 // DefaultThinkingLevel returns the top-level `thinking_level` value, or "".
 func DefaultThinkingLevel() (string, error) { return topLevelValue(thinkingKey) }
+
+// DefaultThinkingLevelFor returns the reasoning level saved for one
+// provider/model pair, or "" when none is saved. Unlike DefaultThinkingLevel it
+// never falls back to the shared top-level value: a level set for one model
+// must not become another model's default.
+func DefaultThinkingLevelFor(providerName, model string) (string, error) {
+	providerName = strings.TrimSpace(providerName)
+	model = strings.TrimSpace(model)
+	if providerName == "" || model == "" {
+		return "", nil
+	}
+	return tableValue(thinkingDefaultsTable, thinkingDefaultKey(providerName, model))
+}
 
 // DefaultModelFor returns the default model saved for one provider. A config
 // written before the per-provider table existed still works: the top-level
@@ -123,11 +137,47 @@ func SetDefaultThinkingLevel(thinkingLevel string) error {
 	return writeConfigFile(path, out)
 }
 
+// SetDefaultThinkingLevelFor writes (or removes, when level is empty) the
+// reasoning level for one provider/model pair. The model, the provider and
+// every other pair's level stay untouched.
+func SetDefaultThinkingLevelFor(providerName, model, level string) error {
+	path := FileConfigPath()
+	if path == "" {
+		return fmt.Errorf("cannot locate the config directory")
+	}
+	providerName = strings.TrimSpace(providerName)
+	model = strings.TrimSpace(model)
+	if providerName == "" || model == "" {
+		return fmt.Errorf("cannot save a default reasoning level without a provider and model")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read config %s: %w", path, err)
+	}
+	text := string(data)
+	hadTrailingNewline := text == "" || strings.HasSuffix(text, "\n")
+	lines := strings.Split(strings.TrimSuffix(text, "\n"), "\n")
+	if text == "" {
+		lines = nil
+	}
+
+	lines = editThinkingDefault(lines, providerName, model, strings.TrimSpace(level))
+
+	out := strings.Join(lines, "\n")
+	if hadTrailingNewline && out != "" {
+		out += "\n"
+	}
+	if out == text {
+		return nil
+	}
+	return writeConfigFile(path, out)
+}
+
 // SetDefaultModelFor writes the per-provider default model and, for a non-empty
 // model, the top-level provider/model pair so a new session starts there. An
 // empty model removes only this provider's entry (and the top-level model when
-// it pointed at this provider). A non-empty level updates the shared default
-// reasoning level.
+// it pointed at this provider). A non-empty level is saved for this exact
+// provider/model pair, never as a shared default.
 func SetDefaultModelFor(providerName, model, thinkingLevel string) error {
 	path := FileConfigPath()
 	if path == "" {
@@ -156,8 +206,8 @@ func SetDefaultModelFor(providerName, model, thinkingLevel string) error {
 	} else if owner, _ := DefaultProvider(); strings.EqualFold(owner, providerName) {
 		lines = setTopLevel(lines, modelKey, "")
 	}
-	if thinkingLevel = strings.TrimSpace(thinkingLevel); thinkingLevel != "" {
-		lines = setTopLevel(lines, thinkingKey, thinkingLevel)
+	if thinkingLevel = strings.TrimSpace(thinkingLevel); thinkingLevel != "" && model != "" {
+		lines = editThinkingDefault(lines, providerName, model, thinkingLevel)
 	}
 
 	out := strings.Join(lines, "\n")
@@ -168,6 +218,43 @@ func SetDefaultModelFor(providerName, model, thinkingLevel string) error {
 		return nil
 	}
 	return writeConfigFile(path, out)
+}
+
+// editThinkingDefault writes or removes one [thinking_defaults] row. Before the
+// first row exists, the legacy top-level thinking_level is migrated to
+// per-pair rows for every saved default model, then removed.
+func editThinkingDefault(lines []string, providerName, model, level string) []string {
+	if strings.TrimSpace(level) != "" {
+		lines = migrateLegacyThinkingLevel(lines)
+	}
+	return setTableValue(lines, thinkingDefaultsTable, thinkingDefaultKey(providerName, model), level)
+}
+
+// migrateLegacyThinkingLevel converts the old global thinking_level into
+// per-model rows. It runs once: the presence of [thinking_defaults] means the
+// config has already moved to scoped levels.
+func migrateLegacyThinkingLevel(lines []string) []string {
+	if _, _, ok := findTOMLTable(lines, thinkingDefaultsTable); ok {
+		return lines
+	}
+	_, global, found := findTopLevelKeyLine(lines, thinkingKey)
+	if !found || strings.TrimSpace(global) == "" {
+		return lines
+	}
+	for _, entry := range tableEntries(lines, modelDefaultsTable) {
+		if entry.Key == "" || entry.Value == "" {
+			continue
+		}
+		lines = setTableValue(lines, thinkingDefaultsTable, thinkingDefaultKey(entry.Key, entry.Value), global)
+	}
+	return setTopLevel(lines, thinkingKey, "")
+}
+
+// thinkingDefaultKey names one row in [thinking_defaults]. Provider names come
+// from the built-in registry and never contain "/", while model ids may, so the
+// first slash is an unambiguous separator.
+func thinkingDefaultKey(providerName, model string) string {
+	return providerName + "/" + model
 }
 
 // setTopLevel replaces or inserts one top-level key. An empty value removes the
@@ -217,6 +304,38 @@ func tableValue(table, key string) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// tomlTableEntry is one key/value row of a table.
+type tomlTableEntry struct {
+	Key   string
+	Value string
+}
+
+// tableEntries reads a table's rows in file order. It is the multi-row
+// companion to tableValue, used by the one-time thinking-level migration.
+func tableEntries(lines []string, table string) []tomlTableEntry {
+	start, end, ok := findTOMLTable(lines, table)
+	if !ok {
+		return nil
+	}
+	var entries []tomlTableEntry
+	for i := start + 1; i < end; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key := strings.Trim(strings.TrimSpace(name), `"'`)
+		if key == "" {
+			continue
+		}
+		entries = append(entries, tomlTableEntry{Key: key, Value: unquoteTOMLString(value)})
+	}
+	return entries
 }
 
 // findTOMLTable locates a table header and the line where its body ends (the

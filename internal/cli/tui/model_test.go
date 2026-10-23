@@ -944,8 +944,8 @@ func TestModelPickerDKeySavesDefault(t *testing.T) {
 	if prompts.DefaultModelName() != "m-b" {
 		t.Errorf("default model = %q, want m-b", prompts.DefaultModelName())
 	}
-	if prompts.DefaultThinkingLevelName() != "high" {
-		t.Errorf("default level = %q, want high", prompts.DefaultThinkingLevelName())
+	if level, _ := config.DefaultThinkingLevelFor("openai", "m-b"); level != "high" {
+		t.Errorf("scoped default level = %q, want high", level)
 	}
 	if gm3.live.Model != "m-a" || gm3.live.ThinkingLevel != agentcore.ThinkingHigh {
 		t.Errorf("setting the default moved the live session: model=%q level=%q",
@@ -982,8 +982,11 @@ func TestLevelPickerDKeySavesDefaultLevel(t *testing.T) {
 	}
 	got3, _ := gm2.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	gm3 := got3.(Model)
-	if prompts.DefaultThinkingLevelName() != "medium" {
-		t.Errorf("default level = %q, want medium", prompts.DefaultThinkingLevelName())
+	if level, _ := config.DefaultThinkingLevelFor("openai", "m-b"); level != "medium" {
+		t.Errorf("scoped default level = %q, want medium", level)
+	}
+	if level, _ := config.DefaultThinkingLevelFor("commandcode", "m-b"); level != "" {
+		t.Errorf("another provider inherited level %q", level)
 	}
 	if prompts.DefaultModelName() != "" {
 		t.Errorf("setting the level must not set a model: %q", prompts.DefaultModelName())

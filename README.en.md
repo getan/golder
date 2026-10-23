@@ -183,7 +183,7 @@ The global config lives at `~/.golder/config.toml`, with keys mirroring the CLI 
 ```toml
 provider = "opencode-go"
 model = "deepseek-v4.1-flash"
-thinking_level = "max"            # off | minimal | low | medium | high | xhigh | max
+thinking_level = "max"            # global fallback; per-model defaults live in [thinking_defaults]
 # base_url = "https://..."        # override the provider's default endpoint
 # api_key = "..."                 # prefer an env var or a credential reference
 # credential = "my-key"           # references an entry in ~/.golder/.credentials.yaml
@@ -252,6 +252,16 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # local O
 ### Models and reasoning levels
 
 `/model` lists the current gateway's models and annotates the reasoning levels each supports; in the TUI, picking a model flows into a level picker (Esc cancels the whole switch), and `/model <n|id> <level>` does both in one step. To change only the level, use `/model think <level>` (bare, it reports the current one) — the level belongs to the model, so `/model` owns both.
+
+**Default levels are saved per provider + model**: `/model default <id|n> [level]` (and `d` on a level row in the TUI picker) writes `[thinking_defaults]` in `config.toml`, keyed by `provider/model`. A default set for one gateway's model therefore leaves its sibling models and every other provider alone; `/provider` adopts only the new gateway's default model's saved level (with none saved it keeps the current session's level), and the picker's `(default)` tag is scoped to the current provider+model.
+
+```toml
+[thinking_defaults]
+"opencode-go/deepseek-v4.1-flash" = "max"
+"commandcode/deepseek/deepseek-v4.1-flash" = "high"
+```
+
+The top-level `thinking_level` is still the global fallback when no per-model level is saved. The first per-model save migrates the old global value to every provider/model in `[model_defaults]`, then removes the top-level key. `--thinking-level` / `GOLDER_THINKING_LEVEL` still take precedence over configured defaults.
 
 `/provider` lists every built-in gateway with the environment variables it needs and whether one is already configured (ready ones first); `/provider <name>` switches to it using the gateway's default model. The reviewer's decision model (`typesafe`) is listed in its own final section and refuses the switch: it answers the reviewer's typed questions rather than carrying a conversation, and is routed with `/proxy`. In the TUI, `/provider` is an arrow-key picker that leaves the decision model out.
 

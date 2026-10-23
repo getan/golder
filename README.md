@@ -184,7 +184,7 @@ golder --provider openai
 ```toml
 provider = "opencode-go"
 model = "deepseek-v4.1-flash"
-thinking_level = "max"            # off | minimal | low | medium | high | xhigh | max
+thinking_level = "max"            # 全局回退；按 provider+model 的默认见 [thinking_defaults]
 # base_url = "https://..."        # 覆盖 Provider 默认端点
 # api_key = "..."                 # 建议改用环境变量或 credential 引用
 # credential = "my-key"           # 引用 ~/.golder/.credentials.yaml 中的条目
@@ -253,6 +253,16 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 ### 模型与推理档位
 
 交互式里 `/model` 列出当前网关的模型并标注每个模型支持的推理档位；TUI 中选中模型后会接着让你选档位（Esc 取消整次切换），也可用 `/model <序号|id> <档位>` 一步切换。只调当前档位用 `/model think <档位>`（不带参数则显示当前档位），因为档位属于模型，入口统一在 `/model` 下。
+
+**默认档位按 provider + model 保存**：`/model default <id|n> [档位]`（以及 TUI 选择器里在档位行按 `d`）把它写进 `config.toml` 的 `[thinking_defaults]`，键是 `provider/model`。给一个网关的某个模型设默认档位，不会改变同网关的其他模型，也不会影响其他 provider；`/provider` 切换只采用新网关默认模型自己的档位（没有保存过就保持当前会话档位），选择器里的 `(default)` 也只标记当前 provider+model 的这一项。
+
+```toml
+[thinking_defaults]
+"opencode-go/deepseek-v4.1-flash" = "max"
+"commandcode/deepseek/deepseek-v4.1-flash" = "high"
+```
+
+顶层的 `thinking_level` 仍作为未保存 per-model 档位时的全局回退；第一次保存 per-model 档位时，旧的全局值会迁移到 `[model_defaults]` 里每个已保存的 provider/model，然后删除顶层键。`--thinking-level` / `GOLDER_THINKING_LEVEL` 仍然优先于配置里的默认值。
 
 `/provider` 列出全部内置网关：每个网关需要哪些环境变量、当前有没有配好（已配好的排在最前），`/provider <名称>` 直接切换网关（自动用该网关的默认模型）。审查器的决策模型（`typesafe`）单独列在最后一节，并拒绝切换：它回答的是审查器的类型化提问，不是聊天模型，给它路由请用 `/proxy`。TUI 里 `/provider` 是方向键选择器，同样不包括决策模型。
 

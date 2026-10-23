@@ -495,6 +495,24 @@ func applyFileConfig(opts *cliOptions, cfg config.FileConfig, changed func(strin
 	opts.dreamCfg = dream.NewConfig(cfg.Dream.Enabled, cfg.Dream.IntervalDays, cfg.Dream.RecentSessions)
 }
 
+// startupThinkingLevel resolves the reasoning level a new session starts with.
+// An explicit --thinking-level always wins; GOLDER_THINKING_LEVEL is the next
+// most explicit layer (leave the argument empty so ResolveThinkingLevel reads
+// it). Otherwise the level saved for the resolved provider/model is used, and
+// finally the legacy top-level config.toml value.
+func startupThinkingLevel(opts cliOptions, providerName, model string, changed func(string) bool) string {
+	if changed("thinking-level") {
+		return opts.thinkingLevel
+	}
+	if os.Getenv("GOLDER_THINKING_LEVEL") != "" {
+		return ""
+	}
+	if level, err := config.DefaultThinkingLevelFor(providerName, model); err == nil && level != "" {
+		return level
+	}
+	return opts.thinkingLevel
+}
+
 // configureRedact builds the process-wide redactor from the [redact] table and
 // seeds it with golder's own credentials, so "run env" cannot echo a provider
 // key whose shape the rule table does not know. The values are held in memory
@@ -626,7 +644,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		if env.Memory != nil {
 			defer env.Memory.Close()
 		}
-		thinking, err := run.ResolveThinkingLevel(opts.thinkingLevel)
+		thinking, err := run.ResolveThinkingLevel(startupThinkingLevel(opts, env.ProviderName, opts.model, flag.CommandLine.Changed))
 		if err != nil {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
 			return 2
@@ -728,7 +746,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		Prompt:        opts.prompt,
 		Model:         opts.model,
 		APIKey:        opts.apiKey,
-		ThinkingLevel: opts.thinkingLevel,
+		ThinkingLevel: startupThinkingLevel(opts, env.ProviderName, opts.model, flag.CommandLine.Changed),
 		ResumeID:      resumeID,
 		MaxContext:    opts.memory.MaxContext,
 	}, out, errOut)

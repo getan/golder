@@ -662,7 +662,8 @@ func (m Model) setPickerDefaultModel() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if levels := provider.ReasoningLevels(m.live.ProviderName, model); len(levels) > 0 {
-		m.menu.openDefaultLevelPicker(model, levels, m.live.ThinkingLevel)
+		m.menu.openDefaultLevelPicker(model, levels, m.live.ThinkingLevel,
+			prompts.DefaultThinkingLevelForProviderModel(m.live.ProviderName, model))
 		m.transcript.addSystem(fmt.Sprintf("Default reasoning level for %s (↑↓ + Enter, Esc cancels):", model))
 		m.relayout()
 		return m, nil
@@ -675,10 +676,14 @@ func (m Model) setPickerDefaultModel() (tea.Model, tea.Cmd) {
 // level without changing the model or this session.
 func (m Model) setPickerDefaultLevel() (tea.Model, tea.Cmd) {
 	level, ok := m.menu.pickCurrent()
-	if !ok {
+	if !ok || m.live == nil {
 		return m, nil
 	}
-	m.transcript.addSystem(prompts.SetDefaultThinkingText(agentcore.ThinkingLevel(level)))
+	model := m.menu.pickModel
+	if model == "" {
+		model = m.live.Model
+	}
+	m.transcript.addSystem(prompts.SetDefaultThinkingText(m.live.ProviderName, model, agentcore.ThinkingLevel(level)))
 	for i := range m.menu.pick {
 		m.menu.pick[i].Default = m.menu.pick[i].Value == level
 	}
@@ -2314,7 +2319,8 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		// level picker leaves the live model untouched.
 		if kind == "model" && ok && m.live != nil {
 			if levels := provider.ReasoningLevels(m.live.ProviderName, item); len(levels) > 0 {
-				m.menu.openLevelPicker(item, levels, m.live.ThinkingLevel)
+				m.menu.openLevelPicker(item, levels, m.live.ThinkingLevel,
+					prompts.DefaultThinkingLevelForProviderModel(m.live.ProviderName, item))
 				m.transcript.addSystem(fmt.Sprintf("Select a reasoning level for %s (↑↓ + Enter, d sets the default, Esc cancels):", item))
 				m.relayout()
 				return m, nil
