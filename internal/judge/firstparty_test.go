@@ -127,3 +127,27 @@ func TestFirstPartyBrowserEvalIsDenied(t *testing.T) {
 		}
 	}
 }
+
+// press and screenshot were added to the tool after this table was written, so
+// they fell through to "unknown tuios action" and were blocked. A picture is a
+// local allow; a key press belongs to the reviewer.
+func TestFirstPartyTuiosPressAndScreenshot(t *testing.T) {
+	spy := &firstPartySpy{v: Verdict{Level: Allow, Source: "llm"}}
+	if v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios",
+		json.RawMessage(`{"action":"press","key":"Enter"}`)); v.Level != Allow {
+		t.Errorf("press = %+v, want the reviewer's allow", v)
+	}
+	if spy.tool != "tuios" {
+		t.Fatalf("press did not reach the next grader")
+	}
+
+	local := &firstPartySpy{}
+	v := (FirstParty{Next: local}).Classify(context.Background(), "tuios",
+		json.RawMessage(`{"action":"screenshot"}`))
+	if local.tool != "" {
+		t.Errorf("screenshot reached the next grader")
+	}
+	if v.Level != Allow || v.Source != LocalSource {
+		t.Errorf("screenshot = %+v, want a local allow", v)
+	}
+}

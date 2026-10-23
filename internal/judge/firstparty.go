@@ -46,6 +46,17 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 				return f.failClosed("tuios send has no text")
 			}
 			return f.next(ctx, tool, args)
+		case "press":
+			// Keys go into a pane that may be running anything; the reviewer
+			// sees which key and which pane.
+			return f.next(ctx, tool, args)
+		case "screenshot":
+			// A picture writes one file in the workspace and changes nothing in
+			// the pane, the same bargain as the browser's screenshot.
+			return Verdict{
+				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"tuios screenshot writes one file in the workspace"},
+			}
 		case "new":
 			if len(a.Argv) == 0 {
 				return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
