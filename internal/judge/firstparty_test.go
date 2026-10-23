@@ -99,7 +99,7 @@ func TestFirstPartyBrowserReadsAreLocalAllows(t *testing.T) {
 
 // Typing into a real page is the reviewer's call, not a fixed table's.
 func TestFirstPartyBrowserWritesNeedTheNextGrader(t *testing.T) {
-	for _, action := range []string{"click", "fill", "type", "press", "navigate"} {
+	for _, action := range []string{"open", "attach", "click", "fill", "type", "press", "navigate"} {
 		spy := &firstPartySpy{v: Verdict{Level: Contain, Source: "llm"}}
 		v := (FirstParty{Next: spy}).Classify(context.Background(), "browser",
 			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))

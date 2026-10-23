@@ -8,6 +8,7 @@ package agenttool
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,6 +39,17 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 		return paneSpec{}, err
 	}
 	socket := filepath.Join(dir, name+".sock")
+	if _, err := os.Lstat(socket); err == nil {
+		// Never unlink an endpoint on a failed health probe: it could belong to
+		// a live but busy browser. A fresh instance gets its own endpoint.
+		var suffix [4]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return paneSpec{}, err
+		}
+		socket = filepath.Join(dir, fmt.Sprintf("%s-%x.sock", name, suffix))
+	} else if !os.IsNotExist(err) {
+		return paneSpec{}, err
+	}
 	profile := filepath.Join(dir, name+".profile")
 	return paneSpec{
 		Name: name, Kind: "browser", Socket: socket, URL: url,
@@ -57,7 +69,7 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 		return "", "", err
 	}
 	defer c.Close()
-	res, err := c.NewWindow(ctx, tuiosctl.NewWindowParams{
+	res, err := c.NewWindowInCallerWorkspace(ctx, tuiosctl.NewWindowParams{
 		Name: spec.Name, Cwd: cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
 	})
 	if err != nil {
@@ -68,35 +80,22 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 			"kitty-browse is running in pane %s but %s did not appear; check that Chromium is installed",
 			res.WindowID, spec.Socket)
 	}
+	cBrowser, err := browserctl.Dial(spec.Socket)
+	if err != nil {
+		return "", res.WindowID, err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	defer cBrowser.CloseIdleConnections()
+	info, err := cBrowser.Info(probeCtx)
+	if err != nil {
+		return "", res.WindowID, fmt.Errorf("new browser control endpoint is not ready: %w", err)
+	}
+	if info.APIVersion != browserctl.APIVersion || info.BrowserID == "" {
+		return "", res.WindowID, fmt.Errorf("new control endpoint is not a compatible browser")
+	}
 	setBrowserSocket(spec.Socket)
 	return spec.Socket, res.WindowID, nil
-}
-
-// adoptExistingBrowser returns the default workspace socket when a browser is
-// already listening on it. A new golder process has no idea what the previous
-// one started, and kitty-browse refuses to start on a path that exists, so
-// without this a restart leaves a live browser nobody can reach and makes the
-// next open fail.
-//
-// A socket nobody answers on is stale: remove it, because the same refusal
-// would block the browser that is about to start.
-func adoptExistingBrowser(cwd string) string {
-	path := filepath.Join(cwd, ".golder", "browser", "browser.sock")
-	info, err := os.Stat(path)
-	if err != nil || info.Mode()&os.ModeSocket == 0 {
-		return ""
-	}
-	c, err := browserctl.Dial(path)
-	if err != nil {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if _, err := c.Info(ctx); err != nil {
-		_ = os.Remove(path)
-		return ""
-	}
-	return path
 }
 
 func waitForSocket(path string, d time.Duration) bool {

@@ -14,7 +14,8 @@ schema and its own permission shape; none of them is a generic verb bridge.
 
 - `tuios` and `workspace` appear only inside a real tuios pane (`TUIOS_ENV=1`,
   a socket, a session and a pane id).
-- `browser` appears when `KITTY_BROWSE_SOCKET` names a control socket, or
+- `browser` appears when `KITTY_BROWSE_SOCKET` names a control socket, when a
+  workspace browser socket is discoverable, or
   inside a tuios pane with kitty-browse on `PATH`, where `open` can start one.
   The socket must be an owner-only Unix socket (`0600`) and not live in a
   world-writable directory; otherwise the tool refuses it.
@@ -28,8 +29,8 @@ tool list itself does not flap:
 
 - **Presence** is decided once, when the tool set is built. A tool that is
   registered stays registered for the session.
-- **Content** is recomputed per request. `browser` advertises only `open` and
-  `list` (with a "call open" description) until a socket exists, then
+- **Content** is recomputed per request. `browser` advertises `open`, `list` and
+  `attach` until a socket is selected, then
   grows to the full set. `visual` advertises `chart` alone until `tuios` is on
   `PATH`, then adds `diagram` and the dashboard actions.
 - **No polling.** The one event that can create a capability mid-session is
@@ -51,13 +52,44 @@ directory, a control socket, and the URL. `browser open` supplies all three:
 
 Inside a tuios pane it starts kitty-browse in a new pane (profile and socket
 under `.golder/browser/`), waits for the socket, and adopts it for the session.
-The schema then grows from `open`/`list` to the full action set. Calling it
+New helper panes explicitly target the workspace containing golder's own pane,
+resolved by its pane id, never the user's focused workspace. They do not steal
+focus. `workspace create` uses the same rule for all its helper panes. If the
+agent pane cannot be located, creation fails rather than guessing. Reusing an
+existing browser does not create or move a pane; with multiple unselected
+instances, attach explicitly instead of guessing based on focus.
+The schema then grows from `open`/`list`/`attach` to the full action set. Calling it
 again while a browser is running returns the existing socket with
 `started: false`.
 
 Outside a tuios pane there is nowhere to draw a browser, so `open` says that
 instead of launching something that cannot render. A browser started elsewhere
 is still reachable: point `KITTY_BROWSE_SOCKET` at its socket.
+
+### Discovering and attaching existing panes
+
+`browser list` probes the configured endpoint plus socket files immediately in
+`.golder/` and `.golder/browser/`. It returns live `instances` (socket, browser
+identity and tabs), unavailable endpoints, and the current selection. Probes
+retain the owner-only socket checks and have a three-second total budget. They
+do not recurse into profiles, follow workspace symlinks outside the project,
+or unlink an endpoint on failure. `truncated: true` means the bounded inventory
+may be incomplete.
+
+Select an existing instance with its identity, not a filesystem path:
+
+```json
+{"action":"attach","browser":"browser-id-from-instances-info"}
+```
+
+Attachment re-probes the instance, clears the previous tab choice, and overrides
+the startup environment for this tool. The identity is pinned: reusing a socket
+path for a different browser requires explicit reattachment. `list` is read-only
+and never switches selection. `open` reuses a valid selection or a single live
+candidate; with multiple candidates and no valid selection it returns the list
+instead of choosing or launching another pane. Failed actions are never replayed
+on another browser. A failed selected connection does not mean every visible
+browser pane has exited. Sub-agents may list instances but cannot attach.
 
 ## Permissions
 
@@ -68,7 +100,7 @@ sorts their actions into fixed tiers:
 | Tool | Local allow | Reviewer decides |
 |---|---|---|
 | `tuios` | `list`, `capture`, `wait`, an empty `new` | `run` (graded as bash), `send`, `press`, `screenshot`, `new` with argv, `focus`/`move`/`resize`/`rename`/`minimize` (confirm), `close` |
-| `browser` | `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot` | `navigate`, `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select`, `press`, `insert`, `scroll`, `scroll_into_view`, `tab_*`, `dialog_accept`/`dialog_dismiss` |
+| `browser` | `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot` | `open`, `attach`, `navigate`, `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select`, `press`, `insert`, `scroll`, `scroll_into_view`, `tab_*`, `dialog_accept`/`dialog_dismiss` |
 | `visual` | `chart`, `diagram` | `dashboard_open`, `dashboard_patch`, `dashboard_close` |
 | `workspace` | `list`, `snapshot` | `create`, `focus`, `close` |
 

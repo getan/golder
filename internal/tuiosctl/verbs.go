@@ -88,6 +88,29 @@ func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowRes
 	return out, err
 }
 
+// NewWindowInCallerWorkspace creates a helper pane beside the agent's pane,
+// independent of whichever workspace the person is currently looking at.
+// Never fall back to current_workspace or focused_window_id: doing so recreates
+// the focus race this method exists to avoid. An explicitly moved agent pane
+// is followed on the next creation because we resolve its location afresh.
+func (c *Client) NewWindowInCallerWorkspace(ctx context.Context, p NewWindowParams) (NewWindowResult, error) {
+	if c.opts.PaneID == "" {
+		return NewWindowResult{}, errors.New("cannot locate caller workspace: no agent pane id")
+	}
+	list, err := c.ListWindows(ctx)
+	if err != nil {
+		return NewWindowResult{}, fmt.Errorf("locate agent pane workspace: %w", err)
+	}
+	for _, window := range list.Windows {
+		if window.WindowID == c.opts.PaneID && window.Workspace > 0 {
+			p.Workspace = window.Workspace
+			p.Focus = false // opening a helper must not steal focus back
+			return c.NewWindow(ctx, p)
+		}
+	}
+	return NewWindowResult{}, fmt.Errorf("agent pane %q has no known workspace; refusing to use the focused workspace", c.opts.PaneID)
+}
+
 func missingParam(err error, param string) bool {
 	var de *Error
 	return errors.As(err, &de) && de.Code == "invalid_params" &&

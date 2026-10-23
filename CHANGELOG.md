@@ -12,6 +12,15 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Changed
+- **Browser discovery and workspace-stable helper panes**: `browser list` now
+  finds live workspace instances even when the selected socket is stale;
+  `attach` explicitly selects a verified browser id and clears old tab state.
+  Multiple unselected instances are listed rather than silently switched, and
+  failed actions are never replayed on another browser. Discovery is bounded,
+  retains socket permission checks, and never deletes an unresponsive socket.
+  Browser and preset helper creation explicitly targets golder's own pane's
+  workspace, not the user's current focus, and leaves focus unchanged. A live
+  selection or single live candidate is reused instead of creating a duplicate.
 - **The agent opens the browser itself**: `browser` gained an `open` action that
   starts kitty-browse in a tuios pane with the profile and control socket under
   `.golder/browser/`, waits for the socket, and adopts it for the session. The

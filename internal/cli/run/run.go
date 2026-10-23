@@ -345,9 +345,9 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	}
 	// Inside a tuios pane the browser tool is advertised even before one exists:
 	// browser open (and workspace create) start kitty-browse in a pane, and the
-	// schema grows to the control actions once the socket appears. Outside a pane
-	// there is nowhere to draw one, so the env var is the only reason to register.
-	if agenttool.BrowserAvailable() || (agenttool.TuiosAvailable() && agenttool.KittyBrowseAvailable()) {
+	// schema grows to the control actions once the socket appears. Existing
+	// workspace instances can also be discovered without an exported path.
+	if agenttool.BrowserAvailable() || agenttool.BrowserWorkspaceAvailable(cwd) || (agenttool.TuiosAvailable() && agenttool.KittyBrowseAvailable()) {
 		tools = append(tools, agenttool.NewBrowserTool(cwd, true))
 	}
 	tools = append(tools, agenttool.NewVisualTool(cwd, true))

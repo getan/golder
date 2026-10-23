@@ -176,7 +176,7 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 	defer c.Close()
 	started := make([]workspacePane, 0, len(specs))
 	for _, spec := range specs {
-		res, err := c.NewWindow(ctx, tuiosctl.NewWindowParams{
+		res, err := c.NewWindowInCallerWorkspace(ctx, tuiosctl.NewWindowParams{
 			Name: spec.Name, Cwd: t.cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
 		})
 		if err != nil {

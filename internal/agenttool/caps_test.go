@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserctl"
 )
 
 // withBrowserSocket points the session at a socket for the duration of a test.
@@ -47,10 +48,10 @@ func TestBrowserSchemaShrinksWithoutASocket(t *testing.T) {
 	withBrowserSocket(t, "")
 	tool := NewBrowserTool(t.TempDir(), true)
 	got := schemaEnum(t, tool.Schema())
-	if len(got) != 2 || got[0] != "open" || got[1] != "list" {
-		t.Fatalf("schema actions = %v, want open and list", got)
+	if len(got) != 3 || got[0] != "open" || got[1] != "list" || got[2] != "attach" {
+		t.Fatalf("schema actions = %v, want open, list and attach", got)
 	}
-	if !strings.Contains(tool.Description(), "No browser is running") {
+	if !strings.Contains(tool.Description(), "No browser is selected") {
 		t.Errorf("description = %q, want the start hint", tool.Description())
 	}
 }
@@ -125,6 +126,9 @@ func TestVisualSchemaWidensWithTuios(t *testing.T) {
 func TestBrowserOpenIsIdempotentWithASocket(t *testing.T) {
 	withBrowserSocket(t, "/tmp/work.sock")
 	tool := NewBrowserTool(t.TempDir(), true)
+	tool.discover = func(context.Context) browserDiscovery {
+		return browserDiscovery{Instances: []browserInstance{{Socket: "/tmp/work.sock", Selected: true, Info: browserctl.Info{BrowserID: "b1"}}}}
+	}
 	res, err := tool.Execute(context.Background(), "1",
 		json.RawMessage(`{"action":"open"}`), nil)
 	if err != nil {

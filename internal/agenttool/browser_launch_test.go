@@ -1,6 +1,7 @@
 package agenttool
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -28,7 +29,7 @@ func shortRoot(t *testing.T) string {
 // A browser started by an earlier golder process is still reachable: the socket
 // is live, so a new session adopts it instead of starting a second pane (which
 // kitty-browse would refuse, since the path exists).
-func TestAdoptExistingBrowserTakesALiveSocket(t *testing.T) {
+func TestDiscoverExistingBrowserTakesALiveSocket(t *testing.T) {
 	root := shortRoot(t)
 	sock := browserSocketPath(root)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
@@ -48,36 +49,38 @@ func TestAdoptExistingBrowserTakesALiveSocket(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
-	if got := adoptExistingBrowser(root); got != sock {
-		t.Fatalf("adopt = %q, want %q", got, sock)
+	d := discoverBrowsers(context.Background(), root, "")
+	if len(d.Instances) != 1 || d.Instances[0].Socket != canonicalBrowserSocket(sock) {
+		t.Fatalf("discovery = %+v, want %q", d, sock)
 	}
 }
 
-// A socket nobody answers on is left over from a dead browser. It has to go, or
-// kitty-browse refuses to start on the same path.
-func TestAdoptExistingBrowserRemovesAStaleSocket(t *testing.T) {
+// An unresponsive socket must never be removed by discovery.
+func TestDiscoveryPreservesAStaleSocket(t *testing.T) {
 	root := shortRoot(t)
 	sock := browserSocketPath(root)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ln, err := net.Listen("unix", sock)
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		t.Skipf("cannot bind a unix socket here: %v", err)
 	}
 	_ = os.Chmod(sock, 0o600)
+	ln.SetUnlinkOnClose(false)
 	_ = ln.Close() // leaves the socket file behind, with nothing listening
 
-	if got := adoptExistingBrowser(root); got != "" {
-		t.Fatalf("adopt = %q, want no adoption", got)
+	d := discoverBrowsers(context.Background(), root, "")
+	if len(d.Instances) != 0 || len(d.Failures) != 1 {
+		t.Fatalf("discovery = %+v, want an unavailable endpoint", d)
 	}
-	if _, err := os.Stat(sock); !os.IsNotExist(err) {
-		t.Fatalf("stale socket still present: %v", err)
+	if _, err := os.Stat(sock); err != nil {
+		t.Fatalf("discovery removed an existing socket: %v", err)
 	}
 }
 
 // A regular file at the socket path is not a browser.
-func TestAdoptExistingBrowserIgnoresANonSocket(t *testing.T) {
+func TestDiscoveryIgnoresANonSocket(t *testing.T) {
 	root := shortRoot(t)
 	sock := browserSocketPath(root)
 	if err := os.MkdirAll(filepath.Dir(sock), 0o755); err != nil {
@@ -86,7 +89,7 @@ func TestAdoptExistingBrowserIgnoresANonSocket(t *testing.T) {
 	if err := os.WriteFile(sock, []byte("not a socket"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := adoptExistingBrowser(root); got != "" {
-		t.Fatalf("adopt = %q, want no adoption", got)
+	if d := discoverBrowsers(context.Background(), root, ""); len(d.Instances) != 0 {
+		t.Fatalf("discovery = %+v, want no instance", d)
 	}
 }

@@ -84,7 +84,7 @@ func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
 	if browser == nil {
 		t.Fatal("browser was not advertised inside a pane")
 	}
-	if schema := string(browser.Schema()); !strings.Contains(schema, `["open","list"]`) {
-		t.Errorf("browser schema = %s, want open and list before a browser exists", schema)
+	if schema := string(browser.Schema()); !strings.Contains(schema, `["open","list","attach"]`) {
+		t.Errorf("browser schema = %s, want open/list/attach before selection", schema)
 	}
 }

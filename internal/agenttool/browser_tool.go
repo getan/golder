@@ -38,15 +38,14 @@ func BrowserAvailable() bool { return browserSocket() != "" }
 // NewBrowserTool builds the facade. allowControl=false is the sub-agent shape:
 // the same socket and browser, but only the read-only actions.
 func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
-	return &BrowserTool{
-		newClient: func() (*browserctl.Client, error) {
-			return browserctl.Dial(browserSocket())
-		},
+	t := &BrowserTool{
 		newTuios: func(ctx context.Context) (*tuiosctl.Client, error) {
 			return tuiosctl.Dial(ctx, tuiosctl.FromEnv())
 		},
 		cwd: cwd, allowControl: allowControl,
 	}
+	t.newClient = func() (*browserctl.Client, error) { return browserctl.Dial(t.socketPath()) }
+	return t
 }
 
 // BrowserTool is the browser facade.
@@ -57,33 +56,39 @@ type BrowserTool struct {
 	newTuios     func(context.Context) (*tuiosctl.Client, error)
 	cwd          string
 	allowControl bool
+	discover     func(context.Context) browserDiscovery
 
 	// lastTab remembers the tab open created. kitty-browse keeps a blank anchor
 	// target in the background and can report it as active, so "no tab given"
 	// must not mean "whatever the browser says is active" right after open.
-	tabMu   sync.Mutex
-	lastTab string
+	tabMu        sync.Mutex
+	lastTab      string
+	boundSocket  string
+	boundBrowser string
 }
 
 func (t *BrowserTool) Name() string { return "browser" }
 
 func (t *BrowserTool) Description() string {
 	if !t.available() {
-		return "No browser is running yet. Call open with the url: it starts kitty-browse in a " +
-			"tuios pane, waits for the control socket, and adopts it for this session. " +
-			"Then snapshot/click/type work as usual."
+		if !t.allowControl {
+			return "List live workspace browsers and tabs. No browser is selected; ask the parent agent to attach one."
+		}
+		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
+			"Or call open with a URL to reuse a single live instance or start one in a tuios pane."
 	}
 	if t.allowControl {
 		return "Drive the running kitty-browse pane: snapshot the accessibility tree, " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
-			"and screenshot. Pin a tab by its id from list; refs are per document."
+			"and screenshot. list discovers instances; attach selects a browserId. " +
+			"Pin a tab by its id from list; refs are per document."
 	}
 	return "Read the running kitty-browse pane: list tabs, snapshot the accessibility tree, " +
 		"read url/text/html, console and network errors, and screenshot."
 }
 
 // available reports whether a control socket is resolvable right now.
-func (t *BrowserTool) available() bool { return browserSocket() != "" }
+func (t *BrowserTool) available() bool { return t.socketPath() != "" }
 
 func (t *BrowserTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
@@ -91,7 +96,7 @@ func (t *BrowserTool) ExecutionMode() agentcore.ToolExecutionMode {
 
 // browserIdleActions are what is advertised before a socket exists: open starts
 // one, list reports what is there. Everything else would fail the same way.
-var browserIdleActions = []string{"open", "list"}
+var browserIdleActions = []string{"open", "list", "attach"}
 
 const browserReadSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
@@ -125,7 +130,8 @@ const browserReadSchema = `{
 const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["open","list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
+    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
+    "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
@@ -160,6 +166,7 @@ const browserControlSchema = `{
 
 type browserArgs struct {
 	Action      string  `json:"action"`
+	Browser     string  `json:"browser,omitempty"`
 	Tab         string  `json:"tab,omitempty"`
 	Interactive bool    `json:"interactive,omitempty"`
 	Compact     bool    `json:"compact,omitempty"`
@@ -262,40 +269,31 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	if a.Action == "open" {
 		return t.open(ctx, a)
 	}
+	if a.Action == "attach" {
+		return t.attach(ctx, a.Browser)
+	}
+	if a.Action == "list" {
+		return t.listInstances(ctx), nil
+	}
 	c, err := t.newClient()
 	if err != nil {
 		// The dial's own error names an environment variable; inside a pane the
 		// answer is a tool call, so say that instead.
-		if browserSocket() == "" && tuiosctl.Available() {
+		if t.socketPath() == "" {
 			return browserError(errors.New(
-				"no browser is running; call open with the url first, and it will start one in a pane")), nil
+				"no browser is selected; call list to discover live instances, then attach, or call open")), nil
 		}
+		return browserError(err), nil
+	}
+	info, err := c.Info(ctx)
+	if err != nil {
+		return browserError(fmt.Errorf("selected socket %q: %w", t.socketPath(), err)), nil
+	}
+	if err := t.checkBinding(info); err != nil {
 		return browserError(err), nil
 	}
 
 	switch a.Action {
-	case "list":
-		info, err := c.Info(ctx)
-		if err != nil {
-			return browserError(err), nil
-		}
-		type tabView struct {
-			ID     string `json:"id"`
-			URL    string `json:"url"`
-			Title  string `json:"title"`
-			Index  int    `json:"index"`
-			Active bool   `json:"active"`
-		}
-		tabs := make([]tabView, 0, len(info.Tabs))
-		for _, tab := range info.Tabs {
-			tabs = append(tabs, tabView{ID: tab.ID, URL: tab.URL, Title: tab.Title, Index: tab.Index, Active: tab.Active})
-		}
-		return agentcore.AgentToolResult{
-			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
-				"browser": info.BrowserID, "backend": info.Backend, "tabs": tabs,
-			}))},
-			Details: map[string]any{"browser": info.BrowserID, "tabs": len(tabs)},
-		}, nil
 	case "screenshot":
 		png, err := c.Screenshot(ctx, a.FullPage)
 		if err != nil {
@@ -316,10 +314,6 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 		}, nil
 	}
 
-	info, err := c.Info(ctx)
-	if err != nil {
-		return browserError(err), nil
-	}
 	target, err := pinTab(info, t.tabChoice(a.Tab, info))
 	if err != nil {
 		return browserError(err), nil
@@ -617,24 +611,33 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 // session begins with one call instead of three shell commands. It is
 // idempotent: with a browser already running it reports the existing socket.
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
-	if socket := browserSocket(); socket != "" {
-		url := strings.TrimSpace(a.URL)
-		if url != "" {
-			if err := t.showURL(ctx, socket, url); err != nil {
+	d := t.discovery(ctx)
+	var selected *browserInstance
+	for i := range d.Instances {
+		if d.Instances[i].Selected {
+			selected = &d.Instances[i]
+			break
+		}
+	}
+	if selected == nil {
+		if len(d.Instances) > 1 || d.Truncated {
+			res := t.listInstancesResult(d)
+			res.IsError = true
+			res.Content = append(res.Content, agentcore.NewTextContent("No unambiguous live selection. Call attach with a browserId from these instances; no browser was switched or launched."))
+			return res, nil
+		}
+		if len(d.Instances) == 1 {
+			selected = &d.Instances[0]
+		}
+	}
+	if selected != nil {
+		if selected.Selected {
+			if err := t.checkBinding(selected.Info); err != nil {
 				return browserError(err), nil
 			}
 		}
-		return agentcore.AgentToolResult{
-			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
-				"socket": socket, "started": false,
-			}))},
-			Details: map[string]any{"socket": socket, "started": false},
-		}, nil
-	}
-	// A browser started by the previous golder process (or by hand with the
-	// documented socket path) is still ours to use.
-	if socket := adoptExistingBrowser(t.cwd); socket != "" {
-		setBrowserSocket(socket)
+		t.bind(*selected)
+		socket := selected.Socket
 		url := strings.TrimSpace(a.URL)
 		if url != "" {
 			if err := t.showURL(ctx, socket, url); err != nil {
@@ -661,6 +664,15 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if err != nil {
 		return browserError(err), nil
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	discovered := discoverBrowsers(probeCtx, t.cwd, socket)
+	cancel()
+	for _, instance := range discovered.Instances {
+		if instance.Socket == canonicalBrowserSocket(socket) {
+			t.bind(instance)
+			break
+		}
+	}
 	t.selectOpenedTab(socket, url)
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -680,6 +692,9 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	}
 	info, err := c.Info(ctx)
 	if err != nil {
+		return err
+	}
+	if err := t.checkBinding(info); err != nil {
 		return err
 	}
 	want := strings.TrimSuffix(url, "/")
@@ -709,7 +724,7 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 
 func browserError(err error) agentcore.AgentToolResult {
 	if browserctl.IsConnectionRefused(err) {
-		return errorResult("browser: the control socket is gone; the kitty-browse pane probably exited. Relaunch it, or use websearch/webfetch instead.")
+		return errorResult("browser: the selected control socket is unavailable; other browser panes may still be running. Call list to discover live instances, then attach using a browserId. No action was retried on another browser. Cause: " + err.Error())
 	}
 	var be *browserctl.Error
 	if errors.As(err, &be) {

@@ -43,6 +43,9 @@ type Client struct {
 	http   *http.Client
 }
 
+// CloseIdleConnections releases pooled connections after a discovery probe.
+func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
+
 // Dial validates the socket and returns a client. It does not call the
 // browser: a caller that wants to prove it is alive calls Info.
 func Dial(socket string) (*Client, error) {

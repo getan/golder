@@ -69,6 +69,14 @@ func newFakeBrowserTool(t *testing.T, allowControl bool, root string) *BrowserTo
 	tool.newClient = func() (*browserctl.Client, error) {
 		return browserctl.NewWithTransport("stub", f), nil
 	}
+	tool.discover = func(ctx context.Context) browserDiscovery {
+		c, _ := tool.newClient()
+		info, err := c.Info(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return browserDiscovery{Instances: []browserInstance{{Socket: "stub", Selected: true, Info: info}}}
+	}
 	t.Cleanup(func() {})
 	return tool
 }
