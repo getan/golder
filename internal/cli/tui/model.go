@@ -292,6 +292,10 @@ type Model struct {
 	// at view time (see pastepreview.go), so the draft, the caret and the submit
 	// path are all untouched by opening a preview.
 	pastePreview *pastePreview
+	// pasteEdit is the Ctrl+G editor for one collapsed paste, or nil. While set
+	// the composer holds the body and pastePreview is hidden; finishPasteEdit
+	// restores the draft and swaps the updated body back into pastes.
+	pasteEdit *pasteEdit
 
 	// images maps the id shown in an "[Image #N]" placeholder to the temp PNG a
 	// Ctrl+V / Cmd+V image paste was saved to. submit expands the placeholder to an
@@ -1806,6 +1810,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.histSearch != nil {
 		return m.handleHistorySearchKey(msg)
 	}
+	// Ctrl+G editing owns every key but the global suspend above: Enter/Ctrl+G
+	// save, Esc/Ctrl+C cancel, and everything else is ordinary textarea editing
+	// so the body can be changed with the same keys as the composer.
+	if m.pasteEdit != nil {
+		return m.handlePasteEditKey(msg)
+	}
 	// An open paste preview owns Esc and the scroll keys while it is up: Esc
 	// closes it (a second Esc reaches the interrupt/quit arm as usual), PgUp/PgDn
 	// page the body, and ↑/↓ move it a line at a time. Everything else — typing,
@@ -2037,6 +2047,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m, nil
+	case "ctrl+g":
+		// Edit the paste the caret/preview is on, or the newest one in the draft.
+		// Enter or a second Ctrl+G saves; Esc/Ctrl+C restores the draft.
+		return m.beginPasteEdit()
 	case "enter":
 		// Enter submits the composed buffer (FR-13); while a run is in flight it
 		// queues the message for mid-run delivery instead (see submit). Shift+Enter
@@ -2198,6 +2212,7 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil
+	m.pasteEdit = nil
 	m.transcript.addUser(prompt)
 	m.remoteEcho("\n> " + prompt + "\n")
 	m.input.Clear()
@@ -2224,6 +2239,7 @@ func (m Model) submitSlash(line string) (tea.Model, tea.Cmd) {
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil
+	m.pasteEdit = nil
 	return m.runSlash(line)
 }
 
@@ -2240,6 +2256,7 @@ func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil
+	m.pasteEdit = nil
 	if m.steerQ == nil {
 		m.steerQ = &steerQueue{}
 	}
@@ -3586,6 +3603,7 @@ func (m Model) clearDraft() Model {
 	m.pastes = make(map[int]string)
 	m.images = make(map[int]string)
 	m.pastePreview = nil
+	m.pasteEdit = nil
 	m.relayout()
 	return m
 }
@@ -3693,6 +3711,14 @@ var pastePlaceholderRe = regexp.MustCompile(`\[Pasted text #(\d+)[^\]]*\]`)
 func (m Model) handlePaste(content string) (tea.Model, tea.Cmd) {
 	if content == "" {
 		return m, nil
+	}
+	if m.pasteEdit != nil {
+		// Editing a paste body: a nested paste is literal text, not a new token.
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(tea.PasteMsg{Content: content})
+		m.menu.close()
+		m.relayout()
+		return m, tea.Batch(cmd, reassertKeyboardProtocol())
 	}
 	// Two shapes flood the composer and are collapsed: a multi-line paste (any
 	// number of lines — that is the long-standing rule) and a single line past

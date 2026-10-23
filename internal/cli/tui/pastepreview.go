@@ -14,7 +14,9 @@ package tui
 //     time), so every existing path — history, draft discard, expandPastes —
 //     keeps working unchanged.
 //
-// Ctrl+O is the only entry point. A mouse click was considered and skipped: the
+// Ctrl+O reads a collapsed paste. Ctrl+G edits it in place: the body moves into
+// the composer, Enter/Ctrl+G saves it back under the same token, and Esc/Ctrl+C
+// restores the original draft. A mouse click was considered and skipped: the
 // composer has no hit-testing today (the tool-card click path covers the
 // transcript only), and adding a column→offset mapping for a wrapped, styled
 // editor is real machinery for a gesture the key already covers.
@@ -61,6 +63,15 @@ type pastePreview struct {
 	// at render time, so a body that shrank (or a resize) cannot leave it in a
 	// dead zone.
 	top int
+}
+
+// pasteEdit is the Ctrl+G editing state for one collapsed paste. While it is
+// set the composer holds the paste body instead of the draft; draft is restored
+// on save or cancel, and preview is reopened if it was open when editing began.
+type pasteEdit struct {
+	id      int
+	draft   string
+	preview *pastePreview
 }
 
 // pastePlaceholder renders the token left in the composer for a collapsed
@@ -134,16 +145,39 @@ func (m Model) pasteHintLine(width int) string {
 	if m.pastePreview != nil && m.pasteInDraft(m.pastePreview.id) {
 		return ""
 	}
-	text := "ctrl+o previews it here"
+	text := "ctrl+o previews it here · ctrl+g edits"
 	if n := m.pasteTokenCount(); n > 1 {
-		text = fmt.Sprintf("ctrl+o previews the newest of %d pastes", n)
+		text = fmt.Sprintf("ctrl+o previews the newest of %d pastes · ctrl+g edits", n)
 	}
 	inner := width - 2
 	if inner < 1 {
 		return ""
 	}
 	if ui.Width(text) > inner {
-		text = "ctrl+o previews it"
+		text = "ctrl+o previews it · ctrl+g edits"
+	}
+	if ui.Width(text) > inner {
+		text = "ctrl+o preview · ctrl+g edit"
+	}
+	return m.theme.System.Render("  " + TruncateToWidth(text, inner))
+}
+
+// pasteEditHintLine teaches the two keys that leave edit mode. It occupies the
+// same composer row as the preview footer, so the layout never jumps.
+func (m Model) pasteEditHintLine(width int) string {
+	if m.pasteEdit == nil {
+		return ""
+	}
+	text := fmt.Sprintf("editing pasted text #%d · enter/ctrl+g saves · esc cancels", m.pasteEdit.id)
+	inner := width - 2
+	if inner < 1 {
+		return ""
+	}
+	if ui.Width(text) > inner {
+		text = "editing paste · enter saves · esc cancels"
+	}
+	if ui.Width(text) > inner {
+		text = "editing paste · enter saves"
 	}
 	return m.theme.System.Render("  " + TruncateToWidth(text, inner))
 }
@@ -153,6 +187,12 @@ func (m Model) pasteHintLine(width int) string {
 // exists. Both View and relayout call it, so the rows painted and the rows
 // reserved cannot disagree.
 func (m Model) composerExtraLines(width int) []string {
+	if m.pasteEdit != nil {
+		if hint := m.pasteEditHintLine(width); hint != "" {
+			return []string{hint}
+		}
+		return nil
+	}
 	if lines := m.pastePreviewLines(width); len(lines) > 0 {
 		return lines
 	}
@@ -237,6 +277,97 @@ func (m Model) togglePastePreview() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// beginPasteEdit is Ctrl+G: put the target paste's body into the composer and
+// remember the draft to restore. The target is the previewed paste, the token
+// at the caret, or the newest token — the same rule Ctrl+O uses.
+func (m Model) beginPasteEdit() (tea.Model, tea.Cmd) {
+	if m.running || !m.input.Focused() {
+		return m, nil
+	}
+	target := 0
+	if m.pastePreview != nil {
+		target = m.pastePreview.id
+	}
+	if target == 0 {
+		target = m.pasteAtCursor()
+	}
+	if target == 0 {
+		target = m.newestPasteInDraft()
+	}
+	body, ok := m.pastes[target]
+	if target == 0 || !ok || !m.pasteInDraft(target) {
+		return m, nil
+	}
+	m.pasteEdit = &pasteEdit{id: target, draft: m.input.Value(), preview: m.pastePreview}
+	m.pastePreview = nil
+	m.menu.close()
+	m.input.SetValue(body)
+	m.relayout()
+	return m, nil
+}
+
+// handlePasteEditKey owns the keyboard while Ctrl+G editing is active: Enter
+// and Ctrl+G save, Esc/Ctrl+C cancel, and every other key is normal textarea
+// editing (arrows, paging and history must not hijack the body).
+func (m Model) handlePasteEditKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "enter", "ctrl+g":
+		return m.finishPasteEdit(true)
+	case "esc", "ctrl+c":
+		return m.finishPasteEdit(false)
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.relayout()
+	return m, cmd
+}
+
+// finishPasteEdit commits or discards the body. Saving refreshes the token so
+// its line count and size stay truthful; an empty body removes the paste and
+// its token entirely.
+func (m Model) finishPasteEdit(save bool) (tea.Model, tea.Cmd) {
+	e := m.pasteEdit
+	if e == nil {
+		return m, nil
+	}
+	draft := e.draft
+	if save {
+		body := m.input.Value()
+		if strings.TrimSpace(body) == "" {
+			delete(m.pastes, e.id)
+			draft = rewritePasteToken(draft, e.id, "")
+		} else {
+			m.pastes[e.id] = body
+			draft = rewritePasteToken(draft, e.id, pastePlaceholder(e.id, body))
+		}
+	}
+	m.input.SetValue(draft)
+	m.pasteEdit = nil
+	if e.preview != nil {
+		if _, ok := m.pastes[e.id]; ok {
+			m.pastePreview = &pastePreview{id: e.id}
+		} else {
+			m.pastePreview = nil
+		}
+	}
+	m.menu.refresh(m.input.Value(), m.slash)
+	m.relayout()
+	return m, nil
+}
+
+// rewritePasteToken replaces the token for id, leaving other tokens and the
+// surrounding draft untouched. An empty replacement removes it.
+func rewritePasteToken(draft string, id int, replacement string) string {
+	target := strconv.Itoa(id)
+	return pastePlaceholderRe.ReplaceAllStringFunc(draft, func(tok string) string {
+		match := pastePlaceholderRe.FindStringSubmatch(tok)
+		if len(match) < 2 || match[1] != target {
+			return tok
+		}
+		return replacement
+	})
+}
+
 // scrollPastePreview moves the open preview by dir * step body lines: a page
 // for PgUp/PgDn, one line for the arrow keys. A step below 1 is treated as one
 // line, so a bad caller cannot freeze the view.
@@ -306,10 +437,10 @@ func (m Model) pastePreviewLines(width int) []string {
 	for _, line := range lines[top:end] {
 		out = append(out, m.theme.System.Render("  "+TruncateToWidth(line, inner)))
 	}
-	footer := fmt.Sprintf("lines %d–%d of %d · ↑↓ scroll · PgUp/PgDn page · ctrl+o collapse", top+1, end, len(lines))
+	footer := fmt.Sprintf("lines %d–%d of %d · ↑↓ · PgUp/PgDn · ctrl+o collapse · ctrl+g edit", top+1, end, len(lines))
 	if ui.Width(footer) > inner {
 		// Same information, packed for a narrow pane.
-		footer = fmt.Sprintf("%d–%d/%d · PgUp/PgDn · ctrl+o", top+1, end, len(lines))
+		footer = fmt.Sprintf("%d–%d/%d · PgUp/PgDn · ctrl+o · ctrl+g", top+1, end, len(lines))
 	}
 	out = append(out, m.theme.System.Render("  "+TruncateToWidth(footer, inner)))
 	return out
