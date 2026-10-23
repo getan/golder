@@ -1,10 +1,13 @@
 package agenttool
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // withBrowserSocket points the session at a socket for the duration of a test.
@@ -38,13 +41,14 @@ func schemaEnum(t *testing.T, raw json.RawMessage) []string {
 	return doc.Properties.Action.Enum
 }
 
-// Before a browser exists the tool advertises one action and says how to start
-// one; the other actions would only produce the same failure.
+// Before a browser exists the tool advertises open and list, and says how to
+// start one; the other actions would only produce the same failure.
 func TestBrowserSchemaShrinksWithoutASocket(t *testing.T) {
 	withBrowserSocket(t, "")
 	tool := NewBrowserTool(t.TempDir(), true)
-	if got := schemaEnum(t, tool.Schema()); len(got) != 1 || got[0] != "list" {
-		t.Fatalf("schema actions = %v, want just list", got)
+	got := schemaEnum(t, tool.Schema())
+	if len(got) != 2 || got[0] != "open" || got[1] != "list" {
+		t.Fatalf("schema actions = %v, want open and list", got)
 	}
 	if !strings.Contains(tool.Description(), "No browser is running") {
 		t.Errorf("description = %q, want the start hint", tool.Description())
@@ -113,5 +117,46 @@ func TestVisualSchemaWidensWithTuios(t *testing.T) {
 	tool := NewVisualTool(t.TempDir(), true)
 	if got := schemaEnum(t, tool.Schema()); len(got) < 3 {
 		t.Fatalf("schema actions = %v, want charts, diagrams and dashboards", got)
+	}
+}
+
+// open is the one call that replaces the three-command setup. With a browser
+// already running it says so instead of starting a second one.
+func TestBrowserOpenIsIdempotentWithASocket(t *testing.T) {
+	withBrowserSocket(t, "/tmp/work.sock")
+	tool := NewBrowserTool(t.TempDir(), true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"open","url":"https://example.com"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("open failed: %s", agentcore.ContentToText(res.Content))
+	}
+	text := agentcore.ContentToText(res.Content)
+	if !strings.Contains(text, `"started":false`) || !strings.Contains(text, "/tmp/work.sock") {
+		t.Errorf("open = %s, want the existing socket and started=false", text)
+	}
+}
+
+// Outside a tuios pane there is nowhere to draw a browser, so open explains
+// rather than launching something that cannot render.
+func TestBrowserOpenOutsideTuiosExplains(t *testing.T) {
+	withBrowserSocket(t, "")
+	t.Setenv("TUIOS_ENV", "")
+	t.Setenv("TUIOS_SOCKET", "")
+	t.Setenv("TUIOS_SESSION", "")
+	t.Setenv("TUIOS_PANE_ID", "")
+	tool := NewBrowserTool(t.TempDir(), true)
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"open","url":"https://example.com"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError {
+		t.Fatal("open outside a pane must fail")
+	}
+	if text := agentcore.ContentToText(res.Content); !strings.Contains(text, "tuios pane") {
+		t.Errorf("open error = %s, want the tuios explanation", text)
 	}
 }

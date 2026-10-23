@@ -12,6 +12,15 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Changed
+- **The agent opens the browser itself**: `browser` gained an `open` action that
+  starts kitty-browse in a tuios pane with the profile and control socket under
+  `.golder/browser/`, waits for the socket, and adopts it for the session. The
+  three-command setup (profile, socket, `KITTY_BROWSE_SOCKET`) is gone from the
+  normal path; `open` is idempotent and returns the running socket. The tool is
+  now advertised inside a pane when kitty-browse is installed, its idle schema
+  offers `open`/`list`, and the other actions say "call open first" instead of
+  naming an environment variable. `open` is graded by the reviewer like
+  `navigate`: it launches Chromium and a pane.
 - **The first move is a plan, and sub-agents are for real fan-out**: the base
   instruction now opens with "state what you are going to do and why" before
   the tool calls of a non-trivial task, and asks the one deciding question up

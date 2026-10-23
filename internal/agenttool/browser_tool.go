@@ -9,6 +9,9 @@ package agenttool
 // dialog.status, console, errors, network, screenshot. Control actions put
 // input into the page and are left to the reviewer. eval and upload are not
 // part of the schema at all.
+//
+// open is the setup step: it starts kitty-browse with the profile and socket it
+// needs, so nobody has to remember the three-command invocation.
 
 import (
 	"context"
@@ -23,6 +26,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/tuiosctl"
 )
 
 const browserMaxTimeout = 120 * time.Second
@@ -37,6 +41,9 @@ func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
 		newClient: func() (*browserctl.Client, error) {
 			return browserctl.Dial(browserSocket())
 		},
+		newTuios: func(ctx context.Context) (*tuiosctl.Client, error) {
+			return tuiosctl.Dial(ctx, tuiosctl.FromEnv())
+		},
 		cwd: cwd, allowControl: allowControl,
 	}
 }
@@ -46,6 +53,7 @@ type BrowserTool struct {
 	// newClient resolves the control socket. Tests replace it with a client
 	// backed by a stub transport, so no real Unix socket is needed.
 	newClient    func() (*browserctl.Client, error)
+	newTuios     func(context.Context) (*tuiosctl.Client, error)
 	cwd          string
 	allowControl bool
 }
@@ -54,8 +62,9 @@ func (t *BrowserTool) Name() string { return "browser" }
 
 func (t *BrowserTool) Description() string {
 	if !t.available() {
-		return "No browser is running yet. Start one with kitty-browse -control-socket PATH " +
-			"and KITTY_BROWSE_SOCKET, or run workspace create, then call list."
+		return "No browser is running yet. Call open with the url: it starts kitty-browse in a " +
+			"tuios pane, waits for the control socket, and adopts it for this session. " +
+			"Then snapshot/click/type work as usual."
 	}
 	if t.allowControl {
 		return "Drive the running kitty-browse pane: snapshot the accessibility tree, " +
@@ -73,9 +82,9 @@ func (t *BrowserTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionParallel
 }
 
-// browserListAction is all that is advertised before a socket exists: it is the
-// one action whose failure explains how to start a browser.
-var browserListAction = []string{"list"}
+// browserIdleActions are what is advertised before a socket exists: open starts
+// one, list reports what is there. Everything else would fail the same way.
+var browserIdleActions = []string{"open", "list"}
 
 const browserReadSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
@@ -110,7 +119,7 @@ const browserReadSchema = `{
 const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
+    "action":{"type":"string","enum":["open","list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
@@ -181,12 +190,12 @@ type browserArgs struct {
 func (t *BrowserTool) Schema() json.RawMessage {
 	if !t.allowControl {
 		if !t.available() {
-			return trimActionEnum(browserReadSchema, browserListAction)
+			return trimActionEnum(browserReadSchema, []string{"list"})
 		}
 		return json.RawMessage(browserReadSchema)
 	}
 	if !t.available() {
-		return trimActionEnum(browserControlSchema, browserListAction)
+		return trimActionEnum(browserControlSchema, browserIdleActions)
 	}
 	return json.RawMessage(browserControlSchema)
 }
@@ -244,8 +253,19 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	if !t.allowControl && !browserReadOnly(a.Action) {
 		return browserError(errors.New("browser control actions are not available to sub-agents")), nil
 	}
+	// open runs before the dial: its whole job is to create the socket the dial
+	// would need.
+	if a.Action == "open" {
+		return t.open(ctx, a)
+	}
 	c, err := t.newClient()
 	if err != nil {
+		// The dial's own error names an environment variable; inside a pane the
+		// answer is a tool call, so say that instead.
+		if browserSocket() == "" && tuiosctl.Available() {
+			return browserError(errors.New(
+				"no browser is running; call open with the url first, and it will start one in a pane")), nil
+		}
 		return browserError(err), nil
 	}
 
@@ -532,6 +552,39 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		return "dialog.dismiss", map[string]any{}, nil
 	}
 	return "", nil, fmt.Errorf("unknown action %q", a.Action)
+}
+
+// open starts kitty-browse in a tuios pane and adopts its control socket, so a
+// session begins with one call instead of three shell commands. It is
+// idempotent: with a browser already running it reports the existing socket.
+func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
+	if socket := browserSocket(); socket != "" {
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+				"socket": socket, "started": false,
+			}))},
+			Details: map[string]any{"socket": socket, "started": false},
+		}, nil
+	}
+	if !tuiosctl.Available() {
+		return browserError(errors.New(
+			"no browser is running and none can be opened here: kitty-browse draws into a terminal, " +
+				"so it needs a tuios pane. Start golder inside one; open starts the browser from there")), nil
+	}
+	url := strings.TrimSpace(a.URL)
+	if url == "" {
+		url = "http://localhost:3000"
+	}
+	socket, window, err := startBrowserPane(ctx, t.cwd, "browser", url, t.newTuios)
+	if err != nil {
+		return browserError(err), nil
+	}
+	return agentcore.AgentToolResult{
+		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+			"socket": socket, "window_id": window, "url": url, "started": true,
+		}))},
+		Details: map[string]any{"socket": socket, "window_id": window, "started": true},
+	}, nil
 }
 
 func browserError(err error) agentcore.AgentToolResult {

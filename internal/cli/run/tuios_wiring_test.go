@@ -1,6 +1,8 @@
 package run
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,6 +66,15 @@ func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
 	t.Setenv("TUIOS_PANE_ID", "w1")
 	t.Setenv("KITTY_BROWSE_SOCKET", "")
 
+	// The tool is only advertised where a browser can actually be started, so
+	// the test provides one on PATH instead of depending on the machine.
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "kitty-browse")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
 	var browser agentcore.AgentTool
 	for _, tool := range BuiltinTools(t.TempDir(), false) {
 		if tool.Name() == "browser" {
@@ -73,7 +84,7 @@ func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
 	if browser == nil {
 		t.Fatal("browser was not advertised inside a pane")
 	}
-	if schema := string(browser.Schema()); !strings.Contains(schema, `"enum":["list"]`) {
-		t.Errorf("browser schema = %s, want just list before a browser exists", schema)
+	if schema := string(browser.Schema()); !strings.Contains(schema, `["open","list"]`) {
+		t.Errorf("browser schema = %s, want open and list before a browser exists", schema)
 	}
 }

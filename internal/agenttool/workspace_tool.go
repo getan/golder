@@ -14,9 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -214,21 +211,8 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 	if url == "" {
 		url = "http://localhost:3000"
 	}
-	bin, binErr := exec.LookPath("kitty-browse")
 	browser := func(name string) (paneSpec, error) {
-		if binErr != nil {
-			return paneSpec{}, fmt.Errorf("kitty-browse is not on PATH; %s", kittyBrowseHint())
-		}
-		dir := filepath.Join(t.cwd, ".golder", "browser")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return paneSpec{}, err
-		}
-		socket := filepath.Join(dir, name+".sock")
-		profile := filepath.Join(dir, name+".profile")
-		return paneSpec{
-			Name: name, Kind: "browser", Socket: socket, URL: url,
-			Argv: []string{bin, "-profile-dir", profile, "-control-socket", socket, url},
-		}, nil
+		return browserPaneSpec(t.cwd, name, url)
 	}
 	shell := func(name, command string) paneSpec {
 		spec := paneSpec{Name: name, Kind: "terminal"}
@@ -262,35 +246,6 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 		return nil, errors.New("create needs a preset: debug-fullstack, data-analysis, diagram or review")
 	}
 	return nil, fmt.Errorf("unknown preset %q", a.Preset)
-}
-
-func waitForSocket(path string, d time.Duration) bool {
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return false
-}
-
-// kittyBrowseHint points at a built binary the PATH missed, because the common
-// case is a checkout that was built but never linked.
-func kittyBrowseHint() string {
-	var candidates []string
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates, filepath.Join(home, ".local", "bin", "kitty-browse"))
-	}
-	candidates = append(candidates,
-		filepath.Join("/usr/local/bin", "kitty-browse"),
-		filepath.Join("/opt/homebrew/bin", "kitty-browse"))
-	for _, p := range candidates {
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return fmt.Sprintf("found %s; add %s to PATH", p, filepath.Dir(p))
-		}
-	}
-	return "install it, or symlink its build output into a directory on PATH"
 }
 
 func (t *WorkspaceTool) list() agentcore.AgentToolResult {
