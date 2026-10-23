@@ -609,6 +609,20 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 			Details: map[string]any{"socket": socket, "started": false},
 		}, nil
 	}
+	// A browser started by the previous golder process (or by hand with the
+	// documented socket path) is still ours to use.
+	if socket := adoptExistingBrowser(t.cwd); socket != "" {
+		setBrowserSocket(socket)
+		if url := strings.TrimSpace(a.URL); url != "" {
+			t.rememberOpenedTab(socket, url)
+		}
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+				"socket": socket, "started": false, "adopted": true,
+			}))},
+			Details: map[string]any{"socket": socket, "started": false, "adopted": true},
+		}, nil
+	}
 	if !tuiosctl.Available() {
 		return browserError(errors.New(
 			"no browser is running and none can be opened here: kitty-browse draws into a terminal, " +

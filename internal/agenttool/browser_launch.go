@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -69,6 +70,33 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 	}
 	setBrowserSocket(spec.Socket)
 	return spec.Socket, res.WindowID, nil
+}
+
+// adoptExistingBrowser returns the default workspace socket when a browser is
+// already listening on it. A new golder process has no idea what the previous
+// one started, and kitty-browse refuses to start on a path that exists, so
+// without this a restart leaves a live browser nobody can reach and makes the
+// next open fail.
+//
+// A socket nobody answers on is stale: remove it, because the same refusal
+// would block the browser that is about to start.
+func adoptExistingBrowser(cwd string) string {
+	path := filepath.Join(cwd, ".golder", "browser", "browser.sock")
+	info, err := os.Stat(path)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return ""
+	}
+	c, err := browserctl.Dial(path)
+	if err != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := c.Info(ctx); err != nil {
+		_ = os.Remove(path)
+		return ""
+	}
+	return path
 }
 
 func waitForSocket(path string, d time.Duration) bool {
