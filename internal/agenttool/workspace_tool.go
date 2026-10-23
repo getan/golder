@@ -28,7 +28,6 @@ import (
 const (
 	PresetFullStack = "debug-fullstack"
 	PresetData      = "data-analysis"
-	PresetDiagram   = "diagram"
 	PresetReview    = "review"
 )
 
@@ -86,7 +85,7 @@ func (t *WorkspaceTool) Name() string { return "workspace" }
 
 func (t *WorkspaceTool) Description() string {
 	if t.allowControl {
-		return "Arrange the panes a session needs (debug-fullstack, data-analysis, diagram, review) " +
+		return "Arrange the panes a session needs (debug-fullstack, data-analysis, review) " +
 			"and read them back as one snapshot: terminal tails plus the browser's page, console and errors. " +
 			"create/list/snapshot/focus/close."
 	}
@@ -109,7 +108,7 @@ const workspaceControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["create","list","snapshot","focus","close"]},
-    "preset":{"type":"string","enum":["debug-fullstack","data-analysis","diagram","review"],"description":"For create."},
+    "preset":{"type":"string","enum":["debug-fullstack","data-analysis","review"],"description":"For create."},
     "name":{"type":"string","description":"For focus/close: the pane name from list."},
     "url":{"type":"string","description":"For create: the page the browser pane opens; default http://localhost:3000."},
     "backend":{"type":"string","description":"For create with debug-fullstack: the backend command."},
@@ -234,8 +233,6 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 		}, nil
 	case PresetData:
 		return []paneSpec{shell("analysis", "")}, nil
-	case PresetDiagram:
-		return []paneSpec{shell("diagram", "")}, nil
 	case PresetReview:
 		b, err := browser("browser")
 		if err != nil {
@@ -243,7 +240,7 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 		}
 		return []paneSpec{shell("tests", ""), b}, nil
 	case "":
-		return nil, errors.New("create needs a preset: debug-fullstack, data-analysis, diagram or review")
+		return nil, errors.New("create needs a preset: debug-fullstack, data-analysis or review")
 	}
 	return nil, fmt.Errorf("unknown preset %q", a.Preset)
 }

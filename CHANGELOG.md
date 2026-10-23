@@ -21,6 +21,7 @@ interactive REPL/TUI.
   and worked, but it did not justify keeping a tool whose other two thirds could
   not run. Restore it when a stable tuios release carries both, and probe the
   subcommand and the verb rather than the binary's presence.
+  The unused `diagram` workspace preset is removed with it.
 
 ### Changed
 - **Browser discovery and workspace-stable helper panes**: `browser list` now

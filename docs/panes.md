@@ -34,8 +34,8 @@ tool list itself does not flap:
   recorded. A background probe would flip the schema — and invalidate the
   provider's prompt cache — for a change nobody asked for.
 - **Validation is wider than advertising.** The registry compiles the full
-  schema once, so a `click` or `diagram` that becomes possible after the tool
-  was registered still validates. Only the *advertised* enum narrows.
+  schema once, so a `click` that becomes possible after the tool was registered
+  still validates. Only the *advertised* enum narrows.
 
 ## Opening a browser
 
@@ -128,7 +128,6 @@ capability.
 |---|---|
 | `debug-fullstack` | `backend`, `frontend`, `browser` (opens `url`, default `http://localhost:3000`) |
 | `data-analysis` | `analysis` |
-| `diagram` | `diagram` |
 | `review` | `tests`, `browser` |
 
 The browser pane runs kitty-browse with `-profile-dir` and `-control-socket`
