@@ -244,3 +244,23 @@ func TestBrowserTabActionsMapToTheHostAPI(t *testing.T) {
 		}
 	}
 }
+
+// Visible text is a locator: clicking a titled card should not require a ref
+// first. fill/type keep text as their value, and accept role/name locators.
+func TestBrowserTextLocatorAndFillTargets(t *testing.T) {
+	action, params, err := browserActionParams(browserArgs{Action: "click", Text: "Basic Line Chart"})
+	if err != nil || action != "click" || params["text"] != "Basic Line Chart" {
+		t.Errorf("click by text = %q %v %v, want a text locator", action, params, err)
+	}
+	action, params, err = browserActionParams(browserArgs{Action: "find", Text: "Revenue", Exact: true})
+	if err != nil || action != "find" || params["text"] != "Revenue" || params["exact"] != true {
+		t.Errorf("find by text = %q %v %v", action, params, err)
+	}
+	action, params, err = browserActionParams(browserArgs{Action: "fill", Role: "textbox", Name: "Search", Text: "revenue"})
+	if err != nil || action != "fill" || params["role"] != "textbox" || params["name"] != "Search" || params["text"] != "revenue" {
+		t.Errorf("fill with a role locator = %q %v %v", action, params, err)
+	}
+	if _, _, err := browserActionParams(browserArgs{Action: "fill", Text: "revenue"}); err == nil {
+		t.Error("fill with only a value has no target and must fail before the round trip")
+	}
+}

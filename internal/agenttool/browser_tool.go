@@ -430,10 +430,31 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if a.Name != "" {
 			m["name"] = a.Name
 		}
+		// Visible text is a locator, not only the value of fill/type. Without
+		// it, clicking a titled card ("Basic Line Chart") needed a ref first.
+		if a.Text != "" {
+			m["text"] = a.Text
+		}
+		return m
+	}
+	baseLocator := func() map[string]any {
+		m := map[string]any{}
+		if a.Ref != "" {
+			m["ref"] = a.Ref
+		}
+		if a.Selector != "" {
+			m["selector"] = a.Selector
+		}
+		if a.Role != "" {
+			m["role"] = a.Role
+		}
+		if a.Name != "" {
+			m["name"] = a.Name
+		}
 		return m
 	}
 	withText := func() map[string]any {
-		m := locator()
+		m := baseLocator()
 		if a.Text == "" {
 			return nil
 		}
@@ -462,7 +483,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 	case "find":
 		p := locator()
 		if len(p) == 0 {
-			return "", nil, errors.New("find needs selector, ref, role or name")
+			return "", nil, errors.New("find needs selector, ref, role, name or text")
 		}
 		if a.Exact {
 			p["exact"] = true
@@ -531,7 +552,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 	case "click", "dblclick", "hover", "focus", "check", "uncheck", "scroll_into_view":
 		p := locator()
 		if len(p) == 0 {
-			return "", nil, errors.New(a.Action + " needs selector, ref, role or name")
+			return "", nil, errors.New(a.Action + " needs selector, ref, role, name or text")
 		}
 		action := a.Action
 		if a.Action == "scroll_into_view" {
@@ -543,10 +564,9 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if p == nil {
 			return "", nil, errors.New(a.Action + " needs text")
 		}
-		if _, ok := p["ref"]; !ok {
-			if _, ok := p["selector"]; !ok {
-				return "", nil, errors.New(a.Action + " needs a locator")
-			}
+		// text is the value here, so it cannot also identify the element.
+		if len(baseLocator()) == 0 {
+			return "", nil, errors.New(a.Action + " needs a locator (ref, selector, role or name)")
 		}
 		return a.Action, p, nil
 	case "select":
