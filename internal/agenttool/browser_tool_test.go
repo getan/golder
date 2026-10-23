@@ -213,3 +213,26 @@ func TestBrowserStaleRefSaysResnapshot(t *testing.T) {
 		t.Fatalf("error = %q, want the stale-ref remedy", text)
 	}
 }
+
+// The tab actions are host-managed, and their names and parameters are not the
+// tool's own: a wrong name fails with unknown_action and a missing id selects
+// nothing.
+func TestBrowserTabActionsMapToTheHostAPI(t *testing.T) {
+	action, params, err := browserActionParams(browserArgs{Action: "tab_select", Tab: "t1"})
+	if err != nil || action != "tab.activate" || params["tabId"] != "t1" {
+		t.Errorf("tab_select = %q %v %v, want tab.activate with tabId", action, params, err)
+	}
+	action, params, err = browserActionParams(browserArgs{Action: "tab_close", Tab: "t2"})
+	if err != nil || action != "tab.close" || params["tabId"] != "t2" {
+		t.Errorf("tab_close = %q %v %v, want tab.close with tabId", action, params, err)
+	}
+	action, params, err = browserActionParams(browserArgs{Action: "tab_new", URL: "https://example.com"})
+	if err != nil || action != "tab.new" || params["url"] != "https://example.com" {
+		t.Errorf("tab_new = %q %v %v, want tab.new with the url", action, params, err)
+	}
+	for _, name := range []string{"tab_select", "tab_close"} {
+		if _, _, err := browserActionParams(browserArgs{Action: name}); err == nil {
+			t.Errorf("%s without a tab should fail before the round trip", name)
+		}
+	}
+}

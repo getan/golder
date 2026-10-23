@@ -389,9 +389,11 @@ func (t *BrowserTool) tabChoice(want string, info browserctl.Info) string {
 	return ""
 }
 
-// rememberOpenedTab records the tab that now shows url, so the next action
-// without a tab does not land on the blank anchor.
-func (t *BrowserTool) rememberOpenedTab(socket, url string) {
+// selectOpenedTab records and activates the tab that now shows url. Without the
+// activation the pane keeps showing whichever internal target Chromium opened
+// last — usually a blank page that never produces a frame, which is why the
+// first version of open left a black pane behind.
+func (t *BrowserTool) selectOpenedTab(socket, url string) {
 	c, err := browserctl.Dial(socket)
 	if err != nil {
 		return
@@ -406,6 +408,9 @@ func (t *BrowserTool) rememberOpenedTab(socket, url string) {
 					t.tabMu.Lock()
 					t.lastTab = tab.ID
 					t.tabMu.Unlock()
+					_, _, _ = c.Action(context.Background(), "tab.activate",
+						map[string]any{"tabId": tab.ID},
+						browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
 					return
 				}
 			}
@@ -577,11 +582,25 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		}
 		return "scroll", p, nil
 	case "tab_new":
-		return "tab.new", map[string]any{}, nil
+		p := map[string]any{}
+		if url := strings.TrimSpace(a.URL); url != "" {
+			p["url"] = url
+		}
+		return "tab.new", p, nil
 	case "tab_close":
-		return "tab.close", map[string]any{}, nil
+		id := strings.TrimSpace(a.Tab)
+		if id == "" {
+			return "", nil, errors.New("tab_close needs tab: the id from list")
+		}
+		return "tab.close", map[string]any{"tabId": id}, nil
 	case "tab_select":
-		return "tab.select", map[string]any{}, nil
+		// The action is tab.activate; tab.select does not exist, so every call
+		// used to fail with unknown_action and no id was sent.
+		id := strings.TrimSpace(a.Tab)
+		if id == "" {
+			return "", nil, errors.New("tab_select needs tab: the id from list")
+		}
+		return "tab.activate", map[string]any{"tabId": id}, nil
 	case "dialog_accept":
 		p := map[string]any{}
 		if a.PromptText != "" {
@@ -600,7 +619,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
 	if socket := browserSocket(); socket != "" {
 		if url := strings.TrimSpace(a.URL); url != "" {
-			t.rememberOpenedTab(socket, url)
+			t.selectOpenedTab(socket, url)
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -614,7 +633,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if socket := adoptExistingBrowser(t.cwd); socket != "" {
 		setBrowserSocket(socket)
 		if url := strings.TrimSpace(a.URL); url != "" {
-			t.rememberOpenedTab(socket, url)
+			t.selectOpenedTab(socket, url)
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -636,7 +655,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if err != nil {
 		return browserError(err), nil
 	}
-	t.rememberOpenedTab(socket, url)
+	t.selectOpenedTab(socket, url)
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 			"socket": socket, "window_id": window, "url": url, "started": true,
