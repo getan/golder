@@ -1,13 +1,12 @@
-# Panes: terminal, browser, charts and the workspace
+# Panes: terminal, browser and the workspace
 
-golder drives four kinds of pane through four narrow tools. Each has its own
+golder drives three kinds of pane through three narrow tools. Each has its own
 schema and its own permission shape; none of them is a generic verb bridge.
 
 | Tool | Backend | What it does |
 |---|---|---|
 | `tuios` | tuios daemon | terminal panes: `list`, `capture`, `wait`, `run`, `send`, `press`, `screenshot`, `new`, `focus`, `move`, `resize`, `rename`, `minimize`, `close` |
 | `browser` | kitty-browse control socket | page automation: `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot`, `navigate`, `click`, `fill`, `type`, `press`, `select`, `scroll`, tabs and dialogs |
-| `visual` | Go (charts), tuios (diagrams/TML) | `chart`, `diagram`, `dashboard_open`, `dashboard_patch`, `dashboard_close` |
 | `workspace` | tuios + browser | `create`, `list`, `snapshot`, `focus`, `close` |
 
 ## Registration
@@ -19,8 +18,6 @@ schema and its own permission shape; none of them is a generic verb bridge.
   inside a tuios pane with kitty-browse on `PATH`, where `open` can start one.
   The socket must be an owner-only Unix socket (`0600`) and not live in a
   world-writable directory; otherwise the tool refuses it.
-- `visual` is always present: `chart` is pure Go, and `diagram`/`dashboard`
-  say what they need when it is missing.
 
 ## Capabilities: presence is fixed, content follows the backend
 
@@ -31,8 +28,7 @@ tool list itself does not flap:
   registered stays registered for the session.
 - **Content** is recomputed per request. `browser` advertises `open`, `list` and
   `attach` until a socket is selected, then
-  grows to the full set. `visual` advertises `chart` alone until `tuios` is on
-  `PATH`, then adds `diagram` and the dashboard actions.
+  grows to the full set.
 - **No polling.** The one event that can create a capability mid-session is
   `workspace create` starting a browser, and that is where the socket is
   recorded. A background probe would flip the schema — and invalidate the
@@ -101,7 +97,6 @@ sorts their actions into fixed tiers:
 |---|---|---|
 | `tuios` | `list`, `capture`, `wait`, an empty `new` | `run` (graded as bash), `send`, `press`, `screenshot`, `new` with argv, `focus`/`move`/`resize`/`rename`/`minimize` (confirm), `close` |
 | `browser` | `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot` | `open`, `attach`, `navigate`, `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select`, `press`, `insert`, `scroll`, `scroll_into_view`, `tab_*`, `dialog_accept`/`dialog_dismiss` |
-| `visual` | `chart`, `diagram` | `dashboard_open`, `dashboard_patch`, `dashboard_close` |
 | `workspace` | `list`, `snapshot` | `create`, `focus`, `close` |
 
 `browser`'s `eval` and `upload` are not in the schema at all and are denied if a
@@ -109,41 +104,23 @@ call carries them. Sub-agents get the read shape of each tool:
 
 - `tuios`: `list`, `capture`, `wait`;
 - `browser`: the read actions above;
-- `visual`: `chart` only;
 - `workspace`: `list`, `snapshot`.
 
-## Charts
+## Why there is no `visual` tool
 
-`visual chart` renders terminal cells and returns them in the tool result, so
-the model reads the numbers immediately. Kinds: `bar`, `line`, `sparkline`,
-`histogram`, `pie`, `gauge`, `heatmap`. Data is inline JSON (an array of
-numbers, or an array of row objects) or a CSV/JSON file in the workspace:
+`visual` shipped with three action families and two of them could not work
+against any released tuios: `diagram` shelled out to `tuios mermaid`, and
+`dashboard_open`/`patch`/`close` called the daemon's `tml-open`/`tml-patch`/
+`tml-close` verbs. Both landed on tuios `main` after v0.10.1, and v0.10.1 is the
+latest release, so `hasTuiosBinary()` passed on a binary that had neither. The
+schema advertised the actions and every call failed at run time with
+`unknown command "mermaid"` or `unknown_verb`.
 
-```json
-{"action":"chart","kind":"line","file":"data/sales.csv","x":"month","y":"revenue,cost","title":"Revenue vs cost"}
-```
-
-`out` writes the text under `.golder/artifacts/charts/`; any path outside the
-workspace is refused.
-
-## Diagrams
-
-`visual diagram` writes the Mermaid source to the workspace and runs the
-installed `tuios mermaid` on it:
-
-```json
-{"action":"diagram","source":"graph TD; A-->B","format":"svg","out":"artifacts/flow.svg"}
-```
-
-`format` is `text` (the diagram in the result), `svg` or `png`. Without tuios the
-tool says so instead of failing obscurely.
-
-## Dashboards
-
-`dashboard_open` sends a TML document to the daemon (`target` is `pane` or
-`popup`) and returns a surface id. `dashboard_patch` applies an RFC 6902 JSON
-Patch to the surface's state, and `dashboard_close` closes it. TML is the live
-shape: a data-analysis panel can be patched as numbers change.
+`chart` was golder's own code and worked, but a chart-only tool did not earn a
+slot in the tool list while its siblings were dead weight. The whole tool is
+removed until a stable tuios ships both. When it is restored, probe the
+subcommand and the verb, not the binary's presence: a `LookPath` hit is not a
+capability.
 
 ## The workspace presets
 

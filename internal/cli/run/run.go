@@ -350,7 +350,11 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	if agenttool.BrowserAvailable() || agenttool.BrowserWorkspaceAvailable(cwd) || (agenttool.TuiosAvailable() && agenttool.KittyBrowseAvailable()) {
 		tools = append(tools, agenttool.NewBrowserTool(cwd, true))
 	}
-	tools = append(tools, agenttool.NewVisualTool(cwd, true))
+	// No visual tool: `diagram` ran `tuios mermaid` and `dashboard_*` called the
+	// daemon's `tml-*` verbs. Both exist on tuios main but in no released binary
+	// (0.10.1 is the latest), so the schema advertised actions that could only
+	// fail at run time; `chart` alone did not justify the surface. Re-add when a
+	// stable tuios carries both — see CHANGELOG, "Removed".
 	// Grade bash at the execution layer (sandbox-tier verdicts run under
 	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.
 	WireBashSandbox(tools, cwd)

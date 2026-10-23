@@ -3,7 +3,6 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -82,42 +81,6 @@ func TestBrowserValidationStaysWideWhenAdvertisedNarrow(t *testing.T) {
 	errs := reg.Validate("browser", json.RawMessage(`{"action":"click","ref":"@e1"}`))
 	if len(errs) != 0 {
 		t.Fatalf("click did not validate: %+v", errs)
-	}
-}
-
-// Diagram and dashboard need tuios; without it the schema offers chart alone.
-func TestVisualSchemaTrimsWithoutTuios(t *testing.T) {
-	old := tuiosLookPath
-	tuiosLookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { tuiosLookPath = old })
-
-	tool := NewVisualTool(t.TempDir(), true)
-	if got := schemaEnum(t, tool.Schema()); len(got) != 1 || got[0] != "chart" {
-		t.Fatalf("schema actions = %v, want just chart", got)
-	}
-	if !strings.Contains(tool.Description(), "need tuios installed") {
-		t.Errorf("description = %q, want the tuios hint", tool.Description())
-	}
-	// The validator keeps the wide form: installing tuios mid-session must not
-	// start rejecting a diagram the tool can now draw.
-	reg := NewToolRegistry()
-	if err := reg.Register(tool); err != nil {
-		t.Fatal(err)
-	}
-	if errs := reg.Validate("visual", json.RawMessage(`{"action":"diagram","source":"graph TD;A-->B"}`)); len(errs) != 0 {
-		t.Fatalf("diagram did not validate: %+v", errs)
-	}
-}
-
-// Once tuios is on PATH the schema offers every action again.
-func TestVisualSchemaWidensWithTuios(t *testing.T) {
-	old := tuiosLookPath
-	tuiosLookPath = func(string) (string, error) { return "/usr/local/bin/tuios", nil }
-	t.Cleanup(func() { tuiosLookPath = old })
-
-	tool := NewVisualTool(t.TempDir(), true)
-	if got := schemaEnum(t, tool.Schema()); len(got) < 3 {
-		t.Fatalf("schema actions = %v, want charts, diagrams and dashboards", got)
 	}
 }
 

@@ -1,7 +1,7 @@
 package agenttool
 
 // Capabilities are the session's live answer to "what can this agent actually
-// do right now": is a browser listening, is the tuios binary on PATH.
+// do right now": is a browser listening.
 //
 // Two rules keep the answer honest without making the tool list flap:
 //
@@ -17,7 +17,6 @@ package agenttool
 // provider's prompt cache) for a change nobody asked for.
 
 import (
-	"os/exec"
 	"sync"
 
 	"github.com/getan/golder/internal/browserctl"
@@ -29,8 +28,6 @@ var (
 	// session. The environment variable still wins: a person who exported it is
 	// pointing at the browser they chose.
 	browserSocketOverride string
-
-	tuiosLookPath = exec.LookPath
 )
 
 // browserSocket resolves the control socket for this process.
@@ -51,10 +48,3 @@ func setBrowserSocket(path string) {
 	browserSocketMu.Unlock()
 }
 
-// hasTuiosBinary reports whether diagrams and dashboards can work. LookPath is
-// a handful of stats along PATH; it is cheaper than caching and keeps a binary
-// installed mid-session from staying invisible.
-func hasTuiosBinary() bool {
-	_, err := tuiosLookPath("tuios")
-	return err == nil
-}

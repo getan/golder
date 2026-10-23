@@ -11,6 +11,17 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Removed
+- **The `visual` tool (charts, Mermaid diagrams, TML dashboards)**: `diagram`
+  ran `tuios mermaid` and `dashboard_open`/`patch`/`close` called the daemon's
+  `tml-*` verbs. Both exist on tuios `main` but in no released binary — v0.10.1
+  is the latest — so `hasTuiosBinary()` passed on a binary that had neither, the
+  schema advertised the actions, and every call failed at run time with
+  `unknown command "mermaid"` or `unknown_verb`. `chart` was golder's own code
+  and worked, but it did not justify keeping a tool whose other two thirds could
+  not run. Restore it when a stable tuios release carries both, and probe the
+  subcommand and the verb rather than the binary's presence.
+
 ### Changed
 - **Browser discovery and workspace-stable helper panes**: `browser list` now
   finds live workspace instances even when the selected socket is stale;

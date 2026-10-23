@@ -112,34 +112,6 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 				Reasons: []string{"browser eval/upload is not an available action"}}
 		}
 		return f.failClosed("unknown browser action")
-	case "visual":
-		var a struct {
-			Action string `json:"action"`
-		}
-		if err := json.Unmarshal(args, &a); err != nil {
-			return f.failClosed("visual has no action")
-		}
-		switch a.Action {
-		case "chart":
-			// A chart is computed here and written, at most, inside the
-			// workspace. Nothing external runs.
-			return Verdict{
-				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-				Reasons: []string{"visual chart renders local data only"},
-			}
-		case "diagram":
-			// It runs the installed tuios binary on our source, which is the
-			// renderer, not user code. The output stays in the workspace.
-			return Verdict{
-				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-				Reasons: []string{"visual diagram renders Mermaid through tuios"},
-			}
-		case "dashboard_open", "dashboard_patch", "dashboard_close":
-			// A TML surface can carry buttons and actions a person presses.
-			// The reviewer sees the document.
-			return f.next(ctx, tool, args)
-		}
-		return f.failClosed("unknown visual action")
 	case "workspace":
 		var a struct {
 			Action string `json:"action"`
