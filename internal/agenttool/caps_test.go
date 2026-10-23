@@ -126,7 +126,7 @@ func TestBrowserOpenIsIdempotentWithASocket(t *testing.T) {
 	withBrowserSocket(t, "/tmp/work.sock")
 	tool := NewBrowserTool(t.TempDir(), true)
 	res, err := tool.Execute(context.Background(), "1",
-		json.RawMessage(`{"action":"open","url":"https://example.com"}`), nil)
+		json.RawMessage(`{"action":"open"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

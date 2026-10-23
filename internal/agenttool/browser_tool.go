@@ -618,8 +618,11 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 // idempotent: with a browser already running it reports the existing socket.
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
 	if socket := browserSocket(); socket != "" {
-		if url := strings.TrimSpace(a.URL); url != "" {
-			t.selectOpenedTab(socket, url)
+		url := strings.TrimSpace(a.URL)
+		if url != "" {
+			if err := t.showURL(ctx, socket, url); err != nil {
+				return browserError(err), nil
+			}
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -632,8 +635,11 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	// documented socket path) is still ours to use.
 	if socket := adoptExistingBrowser(t.cwd); socket != "" {
 		setBrowserSocket(socket)
-		if url := strings.TrimSpace(a.URL); url != "" {
-			t.selectOpenedTab(socket, url)
+		url := strings.TrimSpace(a.URL)
+		if url != "" {
+			if err := t.showURL(ctx, socket, url); err != nil {
+				return browserError(err), nil
+			}
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -662,6 +668,43 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		}))},
 		Details: map[string]any{"socket": socket, "window_id": window, "started": true},
 	}, nil
+}
+
+// showURL makes url the page the person sees in an already-running browser:
+// select the tab that already shows it, or navigate the selected tab there.
+// Without this, open with a live socket reported success and changed nothing.
+func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
+	c, err := browserctl.Dial(socket)
+	if err != nil {
+		return err
+	}
+	info, err := c.Info(ctx)
+	if err != nil {
+		return err
+	}
+	want := strings.TrimSuffix(url, "/")
+	for _, tab := range info.Tabs {
+		if strings.TrimSuffix(tab.URL, "/") != want {
+			continue
+		}
+		t.tabMu.Lock()
+		t.lastTab = tab.ID
+		t.tabMu.Unlock()
+		_, _, err := c.Action(ctx, "tab.activate", map[string]any{"tabId": tab.ID},
+			browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
+		return err
+	}
+	target, err := pinTab(info, t.tabChoice("", info))
+	if err != nil {
+		return err
+	}
+	if _, _, err := c.Action(ctx, "navigate", map[string]any{"url": url}, target, 60*time.Second); err != nil {
+		return err
+	}
+	t.tabMu.Lock()
+	t.lastTab = target.TabID
+	t.tabMu.Unlock()
+	return nil
 }
 
 func browserError(err error) agentcore.AgentToolResult {
