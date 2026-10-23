@@ -70,6 +70,59 @@ func TestBuildSystemPromptAdvertisesTaskFanout(t *testing.T) {
 	}
 }
 
+// The guide must lead with the bar, not the mechanics: a model that reads only
+// the first sentence should come away thinking "not for one job".
+func TestBuildSystemPromptRestrainsTaskUse(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	lower := strings.ToLower(got)
+	for _, want := range []string{
+		"real parallelism, not for ordinary work",
+		"at least three independent workstreams",
+		"read-only analysis",
+	} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("prompt should restrain task use, missing %q:\n%s", want, got)
+		}
+	}
+	// The opening sentence of the guide is what models act on; keep the bar there.
+	if !strings.HasPrefix(taskGuide, "The task tool is for real parallelism") {
+		t.Errorf("taskGuide should open with the restraint, got: %s", taskGuide)
+	}
+}
+
+// A task without a stated plan is the complaint this guide answers: say the
+// approach first, then work, and ask before an expensive fork.
+func TestBuildSystemPromptOpensWithAPlan(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"Open with the plan",
+		"ask the one question that decides it",
+		"no narration after that",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt should state the opening plan rule, missing %q:\n%s", want, got)
+		}
+	}
+	// It belongs near the front: before the todo guide it qualifies.
+	if strings.Index(got, "Open with the plan") > strings.Index(got, "When a task has multiple steps") {
+		t.Error("the plan rule should precede the todo guide")
+	}
+}
+
 // TestBuildSystemPromptAdvertisesBatchedToolCalls: the base instruction must
 // teach the batch contract — independent calls in ONE message run in parallel
 // (the codex "parallelize tool calls" rule, adapted to golder's batch

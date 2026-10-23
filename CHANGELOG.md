@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Changed
+- **The first move is a plan, and sub-agents are for real fan-out**: the base
+  instruction now opens with "state what you are going to do and why" before
+  the tool calls of a non-trivial task, and asks the one deciding question up
+  front when the request leaves a genuine fork in approach (two plausible
+  designs, an ambiguous target, a costly-to-undo choice). The `task` guide and
+  the tool description now lead with the bar instead of the mechanics: three or
+  more independent, substantial workstreams that would otherwise run one after
+  another — read-only analysis is the best fit — because a single delegated job
+  starts with no context and returns only a report. The search guide no longer
+  says "without preamble narration", which read as a ban on the opening plan.
 - **One tool-approval pipeline**: `ConsentGate` is the only gate. The legacy
   `BoundaryGate` / `PermissionGate`, their private helpers, and the
   `ApprovalConfirm` / `ApprovalEscalation` / `ApprovalReAdmit` / ... request

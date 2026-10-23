@@ -24,6 +24,9 @@ const DefaultMaxSubagents = 4
 // taskDescription is advertised to the parent model so it knows when to delegate
 // work to a generic sub-agent.
 const taskDescription = "Dispatch a general-purpose sub-agent to autonomously complete a delegated task. " +
+	"Use it for fan-out — three or more independent, substantial workstreams, preferably read-only " +
+	"analysis — not for a single job you could finish here: the sub-agent starts with none of this " +
+	"conversation's context and returns only its report, so one task usually costs more than it saves. " +
 	"The sub-agent runs its own agent loop with a fresh context and the standard tool set, then returns its final report. " +
 	"Provide a complete, self-contained prompt since the sub-agent shares none of this conversation's context. " +
 	"To run independent tasks concurrently, emit ALL of their task calls in the SAME assistant message: " +
