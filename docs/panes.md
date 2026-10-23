@@ -87,6 +87,30 @@ instead of choosing or launching another pane. Failed actions are never replayed
 on another browser. A failed selected connection does not mean every visible
 browser pane has exited. Sub-agents may list instances but cannot attach.
 
+### Closing a browser pane
+
+For a pane whose foreground program is `kitty-browse`, `tuios close` first
+requests normal browser exit instead of immediately invoking tuios' hard
+`close-window`. `workspace close` uses the same path for its browser panes,
+including when the daemon omits the foreground label. A changed foreground
+program is not sent browser shortcuts based on the old workspace record.
+
+Golder sends Escape keys to leave browser input modes, then Ctrl+Q in a
+separate write after the terminal's Escape ambiguity window. It waits for
+the daemon's `window-exit` event (10 seconds by default,
+adjustable with `timeout_ms`). Only after process exit does it close any
+remaining pane; an automatically removed pane needs no second close. The
+result reports `close_mode` and the exit code when known, without claiming
+that a nonzero exit was graceful. Other terminal panes retain ordinary close
+behavior. Titles and the selected browser socket never choose a close target.
+
+If browser exit cannot be confirmed, the tool returns an error without a hard
+close. An explicit `force:true` permits the fallback, reported as
+`close_mode: forced`. Cancellation never triggers that fallback. This policy
+applies only to closes through golder, not tuios' own close key, daemon crashes
+or machine shutdown. It neither deletes persistent profiles nor prevents
+Chromium from downloading components into them.
+
 ## Permissions
 
 All four are host-control tools: they do not run inside the OS file sandbox, so

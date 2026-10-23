@@ -87,7 +87,7 @@ func (t *WorkspaceTool) Description() string {
 	if t.allowControl {
 		return "Arrange the panes a session needs (debug-fullstack, data-analysis, review) " +
 			"and read them back as one snapshot: terminal tails plus the browser's page, console and errors. " +
-			"create/list/snapshot/focus/close."
+			"create/list/snapshot/focus/close. Browser close requests normal exit first; force:true allows hard close on failure."
 	}
 	return "Read the arranged panes as one snapshot: terminal tails plus the browser's page, console and errors. list/snapshot only."
 }
@@ -113,18 +113,22 @@ const workspaceControlSchema = `{
     "url":{"type":"string","description":"For create: the page the browser pane opens; default http://localhost:3000."},
     "backend":{"type":"string","description":"For create with debug-fullstack: the backend command."},
     "frontend":{"type":"string","description":"For create with debug-fullstack: the frontend command."},
+    "force":{"type":"boolean","description":"For close: allow hard close if the browser does not confirm normal exit; default false."},
+    "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"For close: browser exit timeout; default 10000."},
     "lines":{"type":"integer","minimum":1,"maximum":500,"description":"For snapshot: terminal lines per pane; default 60."}
   }
 }`
 
 type workspaceArgs struct {
-	Action   string `json:"action"`
-	Preset   string `json:"preset,omitempty"`
-	Name     string `json:"name,omitempty"`
-	URL      string `json:"url,omitempty"`
-	Backend  string `json:"backend,omitempty"`
-	Frontend string `json:"frontend,omitempty"`
-	Lines    int    `json:"lines,omitempty"`
+	Action    string `json:"action"`
+	Preset    string `json:"preset,omitempty"`
+	Name      string `json:"name,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Backend   string `json:"backend,omitempty"`
+	Frontend  string `json:"frontend,omitempty"`
+	Lines     int    `json:"lines,omitempty"`
+	Force     bool   `json:"force,omitempty"`
+	TimeoutMS int    `json:"timeout_ms,omitempty"`
 }
 
 func (t *WorkspaceTool) Schema() json.RawMessage {
@@ -384,14 +388,20 @@ func (t *WorkspaceTool) control(ctx context.Context, a workspaceArgs) (agentcore
 	if own := c.PaneID(); own != "" && own == pane.WindowID {
 		return workspaceError(errors.New("refusing to close the pane this agent runs in")), nil
 	}
-	if err := c.CloseWindow(ctx, pane.WindowID); err != nil {
+	win, err := exactWindow(ctx, c, pane.WindowID)
+	if err != nil {
+		return workspaceError(err), nil
+	}
+	out, err := closePane(ctx, c, win, pane.Kind == "browser", a.Force, paneCloseTimeout(a.TimeoutMS))
+	if err != nil {
 		return workspaceError(err), nil
 	}
 	t.mu.Lock()
 	delete(t.panes, name)
 	t.mu.Unlock()
+	out["closed"] = name
 	return agentcore.AgentToolResult{
-		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{"closed": name}))},
+		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(out))},
 		Details: map[string]any{"window_id": pane.WindowID},
 	}, nil
 }

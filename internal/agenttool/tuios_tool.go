@@ -63,7 +63,8 @@ func (t *TuiosTool) Description() string {
 	if t.allowControl {
 		return "Manage panes in the current tuios session: list, capture, wait for output/events, " +
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
-			"daemon events, not polling. Close needs a full window id and refuses golder's own pane."
+			"daemon events, not polling. Close needs a full window id and refuses golder's own pane. " +
+			"Recognized kitty-browse panes quit normally before closing; force:true allows hard close on failure."
 	}
 	return "Read panes in the current tuios session: list, capture, wait for output/events. " +
 		"Control actions are not available to sub-agents."
@@ -107,7 +108,8 @@ const tuiosControlSchema = `{
     "pattern":{"type":"string","description":"For wait window-output: RE2 regex."},
     "idle_ms":{"type":"integer","minimum":50,"maximum":60000,"description":"For window-idle; default 500."},
     "command_seq":{"type":"integer","minimum":0,"description":"For command-finished: sequence before the command."},
-    "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"Default 30000, max 10 minutes."},
+    "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"Default 30000, or 10000 for browser close; max 10 minutes."},
+    "force":{"type":"boolean","description":"For close: allow hard close if kitty-browse does not confirm normal exit; default false."},
     "until":{"type":"array","items":{"type":"string"},"description":"agent-state names; default idle, done, needs_input."},
     "command":{"type":"string","description":"For run: one shell command line; newlines/control characters are rejected."},
     "text":{"type":"string","description":"For send: literal text written to the pane."},
@@ -169,6 +171,7 @@ type tuiosArgs struct {
 	Argv        []string `json:"argv,omitempty"`
 	Focus       *bool    `json:"focus,omitempty"`
 	CloseOnExit *bool    `json:"close_on_exit,omitempty"`
+	Force       bool     `json:"force,omitempty"`
 }
 
 func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
@@ -886,11 +889,13 @@ func (t *TuiosTool) close(ctx context.Context, a tuiosArgs) (agentcore.AgentTool
 	if win.WindowID == tuiosctl.FromEnv().PaneID {
 		return tuiosError(errors.New("refusing to close the pane golder is running in")), nil
 	}
-	if err := c.CloseWindow(ctx, win.WindowID); err != nil {
+	out, err := closePane(ctx, c, win, false, a.Force, paneCloseTimeout(a.TimeoutMS))
+	if err != nil {
 		return tuiosError(err), nil
 	}
+	out["closed"], out["title"] = win.WindowID, win.DisplayName
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(
-		tuiosJSON(map[string]any{"closed": win.WindowID, "title": win.DisplayName}))}}, nil
+		tuiosJSON(out))}}, nil
 }
 
 func exactWindow(ctx context.Context, c *tuiosctl.Client, id string) (tuiosctl.Window, error) {
