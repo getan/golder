@@ -11,23 +11,41 @@ import (
 
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/hostcompat"
+	"github.com/getan/golder/internal/privatepath"
 )
 
 // Where a workspace keeps its things, and what it is called.
 //
-// A workspace is about one project, so its files are too. Four of them:
+// A workspace is about one project and one session inside it. Five paths:
 //
 //	config  the per-project config.toml the workspace daemon reads
 //	state   the daemon's durable state (its session store and whatever follows)
 //	log     the daemon's own log
 //	socket  the control socket, which is runtime rather than durable
+//	root    the project's directory under the state root, which holds all of the
+//	        above except the socket
 //
-// The first three live under golder's one state root ($GOLDER_HOME, else
-// ~/.golder — internal/golderhome decides, and this package never invents a
-// second tree), in a directory named after the project's identity. The socket
-// lives somewhere short and private instead, because a Unix socket path is
-// limited to about a hundred bytes and a project directory is routinely deeper
-// than that; see RuntimeDir.
+// They live under golder's one state root ($GOLDER_HOME, else ~/.golder —
+// internal/golderhome decides, and this package never invents a second tree),
+// in a directory named after the project's identity. The socket lives somewhere
+// short and private instead, because a Unix socket path is limited to about a
+// hundred bytes and a project directory is routinely deeper than that; see
+// RuntimeDir.
+//
+// Two of them are scoped by session, not by project. The layout is:
+//
+//	<Home>/workspace/<project id>/config.toml                        project
+//	<Home>/workspace/<project id>/sessions/<session>/state/          session
+//	<Home>/workspace/<project id>/sessions/<session>/workspace.log   session
+//
+// The config describes the checkout and is one file for every session in it.
+// State and the log do not survive that treatment: a session store and a log of
+// what an agent did are per workspace instance, so two sessions of one project
+// asking for the same directory would append two agents' output to one log and
+// share one session store. The session name is validated (see validateSession),
+// so it is a safe path component, and it is grouped under "sessions/" so a
+// session cannot be named after a file this layout already put in the project
+// directory ("config.toml", say).
 //
 // The identity is a hash of the project's canonical path, for the reasons that
 // make a name a bad identity: two checkouts of the same repository are both
@@ -88,13 +106,27 @@ type Paths struct {
 	// <Home>/workspace/<ProjectID>.
 	ProjectDir string
 	// ConfigPath is the workspace's config file (--config, else config.toml
-	// in ProjectDir).
+	// in ProjectDir). It is project-scoped: every session of one checkout reads
+	// the same config.
 	ConfigPath string
-	// StateDir is the workspace's state directory (--state-dir, else state/
-	// in ProjectDir).
+	// SessionDir is this session's durable directory inside ProjectDir,
+	// <ProjectDir>/sessions/<session>. It holds the state directory and the log,
+	// and is where a backend should put anything else that belongs to one
+	// session instance (a pid file, a lock).
+	SessionDir string
+	// StateDir is the workspace's state directory: --state-dir when it was
+	// given, else state/ in SessionDir. The default is per session, so two
+	// sessions of one project never share a session store; --state-dir is the
+	// person's own decision, and two sessions given the same directory do share
+	// it, which is what StateDirExplicit records for a backend that has to
+	// arbitrate (its lock decides who owns it, not this package).
 	StateDir string
-	// LogFile is the workspace daemon's log, in ProjectDir. It is per project
-	// rather than per session: one project's history is one file to read.
+	// StateDirExplicit records that --state-dir named StateDir, so a backend can
+	// tell a per-session default from a directory the person deliberately shared
+	// between sessions.
+	StateDirExplicit bool
+	// LogFile is the workspace daemon's log, in SessionDir: one session's
+	// history is one file to read, and two sessions never append to one file.
 	LogFile string
 	// SocketDir is the private directory the default socket is created in, and
 	// "" when --socket named a path (a custom socket is used verbatim, and its
@@ -108,13 +140,13 @@ const (
 	// workspaceDirName groups every project's workspace files under the state
 	// root: <Home>/workspace/<project id>/.
 	workspaceDirName = "workspace"
-	// stateDirName is the per-project state directory inside ProjectDir.
+	// sessionsDirName groups one project's session directories, so a session
+	// name can never collide with the project's own files: <ProjectDir>/sessions/.
+	sessionsDirName = "sessions"
+	// stateDirName is the per-session state directory inside SessionDir.
 	stateDirName = "state"
-	// logFileName is the daemon's log inside ProjectDir.
+	// logFileName is the daemon's log inside SessionDir.
 	logFileName = "workspace.log"
-	// runtimeDirName is the private directory inside the runtime directory
-	// where default sockets live: <runtime>/golder/.
-	runtimeDirName = "golder"
 	// maxSocketPath is the longest socket path this command will hand a
 	// daemon. A Unix socket path must fit sockaddr_un.sun_path (104 bytes on
 	// macOS, 108 on Linux, including the terminator), so 100 is a limit that
@@ -156,22 +188,28 @@ func resolve(p parsed, deps Deps) (Options, error) {
 
 	id := projectID(cwd)
 	projectDir := filepath.Join(home, workspaceDirName, id)
-	opts.Paths = Paths{
-		Home:       home,
-		Project:    cwd,
-		ProjectID:  id,
-		ProjectDir: projectDir,
-		ConfigPath: joinIfSet(cwd, p.config, filepath.Join(projectDir, golderhome.ConfigFile)),
-		StateDir:   joinIfSet(cwd, p.stateDir, filepath.Join(projectDir, stateDirName)),
-		LogFile:    filepath.Join(projectDir, logFileName),
-	}
-
+	// The session is resolved before the paths because two of them are scoped by
+	// it: state and the log belong to one workspace instance, not to the project.
 	opts.Session = p.session
 	if opts.Session == "" {
 		opts.Session = defaultSession(cwd, id)
 	}
 	if err := validateSession(opts.Session); err != nil {
 		return Options{}, err
+	}
+	sessionDir := filepath.Join(projectDir, sessionsDirName, opts.Session)
+	opts.Paths = Paths{
+		Home:       home,
+		Project:    cwd,
+		ProjectID:  id,
+		ProjectDir: projectDir,
+		// The config describes the checkout, so every session in it reads the
+		// same file; --config still names one file for the whole project.
+		ConfigPath:       joinIfSet(cwd, p.config, filepath.Join(projectDir, golderhome.ConfigFile)),
+		SessionDir:       sessionDir,
+		StateDir:         joinIfSet(cwd, p.stateDir, filepath.Join(sessionDir, stateDirName)),
+		StateDirExplicit: p.stateDir != "",
+		LogFile:          filepath.Join(sessionDir, logFileName),
 	}
 
 	opts.Host = hostcompat.Resolve(deps.Getenv).Multiplexer
@@ -321,28 +359,20 @@ func sanitizeName(s string) string {
 }
 
 // RuntimeDir is the short, private directory default sockets live in:
-// $XDG_RUNTIME_DIR/golder, else $TMPDIR/golder, else /tmp/golder. It is exported
-// because a backend writing a pid file or a lock beside the socket should use
-// the same directory rather than guess at one.
+// $XDG_RUNTIME_DIR/golder, else $TMPDIR/golder-<uid>, else /tmp/golder-<uid>. It
+// is exported because a backend writing a pid file or a lock beside the socket
+// should use the same directory rather than guess at one.
 //
 // A socket path is limited by the kernel to about a hundred bytes, so this is
 // deliberately not under the state root: $GOLDER_HOME can be arbitrarily deep,
 // and a project directory is usually deeper still. Neither is it in the runtime
 // directory bare: a socket in a world-writable /tmp is a socket anyone can
 // connect to, so it sits one level down, in a directory this command creates
-// 0700 and keeps that way (see ensurePrivateDir).
-func RuntimeDir(getenv func(string) string) string {
-	if getenv == nil {
-		getenv = os.Getenv
-	}
-	for _, name := range []string{"XDG_RUNTIME_DIR", "TMPDIR", "TEMP"} {
-		dir := strings.TrimSpace(getenv(name))
-		if dir != "" && filepath.IsAbs(dir) {
-			return filepath.Join(dir, runtimeDirName)
-		}
-	}
-	return filepath.Join(os.TempDir(), runtimeDirName)
-}
+// 0700 and keeps that way (see ensurePrivateDir). Under a shared temp directory
+// the name carries the uid, so two accounts on one machine cannot contend for
+// the same socket directory, pid file or lock; see privatepath.RuntimeRoot,
+// which owns the rule.
+func RuntimeDir(getenv func(string) string) string { return privatepath.RuntimeRoot(getenv) }
 
 // socketPath returns the daemon socket for one workspace, and the private
 // directory it will be created in ("" when --socket named the path).
@@ -395,7 +425,7 @@ func socketPath(getenv func(string) string, cwd, id, session, custom string) (pa
 // keeps them that way. It runs for a start and not for status or stop: a
 // command that only reads or only stops must not leave a directory tree behind.
 func (o Options) ensureDirs() error {
-	for _, dir := range []string{o.ProjectDir, o.StateDir, filepath.Dir(o.LogFile), o.SocketDir} {
+	for _, dir := range []string{o.ProjectDir, o.SessionDir, o.StateDir, o.SocketDir} {
 		if dir == "" {
 			continue
 		}
@@ -416,26 +446,14 @@ func (o Options) ensureDirs() error {
 // should always have been — and a directory that cannot be tightened is an
 // error that names the mode, because silently writing private state into a
 // shared directory is the one outcome worth stopping for.
-func ensurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("inspect %s: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%s is not a directory", dir)
-	}
-	if info.Mode().Perm() == 0o700 {
-		return nil
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("%s is mode %04o and must be private (0700) for the session store, trust table and log it holds; %v",
-			dir, info.Mode().Perm(), err)
-	}
-	return nil
-}
+//
+// The work is privatepath's, so the same rules apply here and to the browser
+// tool's directories: nothing is created or tightened through a symlink, and a
+// directory another account owns is refused rather than adopted. That last rule
+// is what makes the uid-scoped runtime name more than a naming convention: if
+// someone else already created this account's runtime directory, the start
+// fails loudly instead of putting a control socket in it.
+func ensurePrivateDir(dir string) error { return privatepath.EnsureDir(dir) }
 
 // reporting applies what a backend reported back onto the options, so a
 // headless readiness document names the session and socket that actually exist

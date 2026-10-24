@@ -79,14 +79,18 @@ func managedBrowserPane(cwd, windowID string) (browserPaneRecord, bool) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".browser.json") {
+		// A record is read from a regular file only: a directory, a socket or a
+		// link named "*.browser.json" is not a record golder wrote.
+		if !entry.Type().IsRegular() || !strings.HasSuffix(name, ".browser.json") {
 			continue
 		}
 		meta, err := readBrowserMetadata(filepath.Join(dir, name))
 		if err != nil || meta.WindowID != windowID {
 			continue
 		}
-		if !validBrowserSocketLocation(cwd, meta.Socket) {
+		// The record is repository content: it has to name a browser, a socket and
+		// a profile golder could have created here before close acts on its name.
+		if checkBrowserRecord(cwd, meta) != nil {
 			continue
 		}
 		return browserPaneRecord{
@@ -118,6 +122,12 @@ func forgetBrowserPane(cwd, windowID string) {
 		record, inMemory = managedBrowserPane(cwd, windowID)
 	}
 	if !inMemory || strings.TrimSpace(cwd) == "" || record.Name == "" {
+		return
+	}
+	// The name came from this process or from a record a checkout could have
+	// written, and it becomes a file name below: a name that is not a plain file
+	// name must never reach a path this function removes.
+	if checkBrowserName(record.Name) != nil {
 		return
 	}
 	path := browserMetadataPath(cwd, record.Name)

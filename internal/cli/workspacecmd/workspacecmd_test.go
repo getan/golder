@@ -180,8 +180,10 @@ func TestDefaultStartsAVisibleWorkspace(t *testing.T) {
 			t.Errorf("%s = %q, want it under the state root %q", name, path, e.home)
 		}
 	}
-	if !strings.HasPrefix(got.Socket, filepath.Join(e.runtime, runtimeDirName)) {
-		t.Errorf("socket = %q, want it in the private runtime directory under %q", got.Socket, e.runtime)
+	// XDG_RUNTIME_DIR is set in this environment, so the private socket directory
+	// is the one RuntimeDir names under it.
+	if runtimeDir := RuntimeDir(e.deps().Getenv); !strings.HasPrefix(got.Socket, runtimeDir) {
+		t.Errorf("socket = %q, want it in the private runtime directory %q", got.Socket, runtimeDir)
 	}
 	if got.Session == "" || !strings.HasPrefix(got.Session, "golder-project-") {
 		t.Errorf("session = %q, want one derived from the project", got.Session)
@@ -626,7 +628,7 @@ func TestStatusAndStopCreateNothing(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(e.home, workspaceDirName)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s created the workspace directory tree", args[0])
 			}
-			if _, err := os.Stat(filepath.Join(e.runtime, runtimeDirName)); !errors.Is(err, os.ErrNotExist) {
+			if _, err := os.Stat(RuntimeDir(e.deps().Getenv)); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s created the runtime directory", args[0])
 			}
 		})

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/privatepath"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -131,20 +132,15 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 		return paneSpec{}, err
 	}
 	dir := browserStateDir(cwd)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return paneSpec{}, err
-	}
 	// The directory holds profiles with live sessions, so it is owner-only even
-	// when it already existed with a looser mode.
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return paneSpec{}, fmt.Errorf("browser state directory %s must be owner-only: %w", dir, err)
+	// when it already existed with a looser mode, and it is never reached through
+	// a symlink a checkout could contain (ensureBrowserDir).
+	if err := ensureBrowserDir(dir); err != nil {
+		return paneSpec{}, fmt.Errorf("browser state directory %s must be owner-only and real: %w", dir, err)
 	}
 	pruneBrowserProfiles(dir, name, time.Now())
 	profile := browserProfileDir(cwd, name)
-	if err := os.MkdirAll(profile, 0o700); err != nil {
-		return paneSpec{}, err
-	}
-	if err := os.Chmod(profile, 0o700); err != nil {
+	if err := privatepath.EnsureDir(profile); err != nil {
 		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
 	}
 	socket, err := browserControlSocketPath(cwd, name)

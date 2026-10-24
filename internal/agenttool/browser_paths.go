@@ -12,6 +12,24 @@ package agenttool
 // otherwise moves to a short, private, per-project runtime directory that
 // .golder/browser records in metadata — which is what discovery reads, so a
 // browser started by an earlier session is still found.
+//
+// Every one of those paths is more dangerous than it looks, because
+// .golder/browser is repository content and the runtime directory lives under a
+// shared temp directory:
+//
+//   - A checkout can contain ".golder" or ".golder/browser" as a symlink to
+//     anywhere, so neither is followed: state is written only into a real
+//     directory (see ensureBrowserDir), and the profile directory inside it is
+//     created the same way.
+//   - A runtime directory in a world-writable temp dir can be pre-created by
+//     another account, so its name is scoped by uid (privatepath.RuntimeRoot)
+//     and a directory owned by someone else is refused rather than used.
+//   - A metadata record can be a symlink to a private file elsewhere, so it is
+//     read only as a regular file this user owns, and the record itself is
+//     validated (checkBrowserRecord): a name that is not a plain file name, a
+//     socket golder could not have created here, or a profile that is not this
+//     browser's are all refused. That matters most for close, which deletes the
+//     record the name points at.
 
 import (
 	"crypto/sha256"
@@ -23,6 +41,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/getan/golder/internal/privatepath"
 )
 
 const (
@@ -52,6 +72,32 @@ func checkBrowserName(name string) error {
 // sockets that fit, and the metadata that makes a runtime socket discoverable.
 func browserStateDir(cwd string) string { return filepath.Join(cwd, ".golder", "browser") }
 
+// ensureBrowserDir creates dir — a .golder/browser state directory or a runtime
+// directory — as a real, owner-only directory, and refuses to reach it through
+// a symlink.
+//
+// Both components matter. ".golder" and ".golder/browser" are inside a checkout,
+// so a repository can contain either as a link to a private directory elsewhere;
+// writing a Chromium profile through that link would put the person's cookies
+// wherever the link points, and chmod through it would change a stranger's
+// directory mode. The parent of a runtime directory is checked for the same
+// reason: <tmp>/golder-<uid> is the one level a pre-created link could replace.
+func ensureBrowserDir(dir string) error {
+	for _, path := range []string{filepath.Dir(dir), dir} {
+		info, err := os.Lstat(path)
+		switch {
+		case err == nil && info.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("browser state %s is a symbolic link, and golder keeps no browser state through one", path)
+		case err != nil && !os.IsNotExist(err):
+			return fmt.Errorf("browser state %s: %w", path, err)
+		}
+	}
+	if err := privatepath.EnsureDir(dir); err != nil {
+		return fmt.Errorf("browser state directory: %w", err)
+	}
+	return nil
+}
+
 // browserProfileDir is the persistent Chromium profile for name.
 func browserProfileDir(cwd, name string) string {
 	return filepath.Join(browserStateDir(cwd), name+".profile")
@@ -80,33 +126,53 @@ type browserMetadata struct {
 }
 
 func readBrowserMetadata(path string) (browserMetadata, error) {
-	f, err := os.Open(path)
+	// A record is repository content, so it is read as a regular file this user
+	// owns that nobody else can read, and the check and the read are one open:
+	// a symlink here would otherwise hand a checkout the contents of any file on
+	// the machine.
+	raw, err := privatepath.ReadFile(path, privatepath.FileMode, maxBrowserMetadata)
 	if err != nil {
 		return browserMetadata{}, err
 	}
-	defer f.Close()
-	raw := make([]byte, maxBrowserMetadata)
-	n, err := f.Read(raw)
-	if err != nil && n == 0 {
-		return browserMetadata{}, err
-	}
 	var meta browserMetadata
-	if err := json.Unmarshal(raw[:n], &meta); err != nil {
+	if err := json.Unmarshal(raw, &meta); err != nil {
 		return browserMetadata{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return meta, nil
+}
+
+// checkBrowserRecord reports whether a decoded record is one golder could have
+// written for this workspace. Reading is not trust: the file is repository
+// content, so a record may claim any name, socket or profile it likes, and close
+// acts on the name. A record has to name a plain browser name, a socket in a
+// directory golder could have put one in, and — when it names a profile at all —
+// the profile golder gives that browser.
+func checkBrowserRecord(root string, meta browserMetadata) error {
+	if err := checkBrowserName(meta.Name); err != nil {
+		return fmt.Errorf("browser record names %q: %w", meta.Name, err)
+	}
+	if !validBrowserSocketLocation(root, meta.Socket) {
+		return fmt.Errorf("browser record %q names %q, which is not a socket golder could have created for this workspace", meta.Name, meta.Socket)
+	}
+	if meta.Profile != "" && canonicalBrowserSocket(meta.Profile) != canonicalBrowserSocket(browserProfileDir(root, meta.Name)) {
+		return fmt.Errorf("browser record %q names profile %q, which is not %q", meta.Name, meta.Profile, browserProfileDir(root, meta.Name))
+	}
+	return nil
 }
 
 // writeBrowserMetadata replaces one record atomically, so a reader never sees a
 // half-written identity. A failure is reported to the caller, which treats the
 // record as best effort: the pane still works, it is just harder to find later.
 func writeBrowserMetadata(path string, meta browserMetadata) error {
+	if err := checkBrowserName(meta.Name); err != nil {
+		return err
+	}
 	meta.UpdatedAt = time.Now().UTC()
 	raw, err := json.Marshal(meta)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := ensureBrowserDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".browser-metadata-*")
@@ -115,7 +181,7 @@ func writeBrowserMetadata(path string, meta browserMetadata) error {
 	}
 	name := tmp.Name()
 	defer os.Remove(name) // no-op after a successful rename
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := tmp.Chmod(privatepath.FileMode); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -132,24 +198,43 @@ func writeBrowserMetadata(path string, meta browserMetadata) error {
 // removeBrowserMetadata drops the record for a browser name, so a later
 // session does not probe an endpoint that is gone.
 func removeBrowserMetadata(cwd, name string) {
+	// The name usually came from a record this workspace did not write, so it is
+	// checked again here: "../../id_rsa.browser.json" must not delete anything
+	// outside the state directory.
+	if err := checkBrowserName(name); err != nil {
+		return
+	}
 	_ = os.Remove(browserMetadataPath(cwd, name))
 }
 
 // browserRuntimeCandidates lists the short private directories a project's
 // sockets may live in, in preference order. It touches nothing: a caller that
 // wants a directory creates it with ensureBrowserRuntimeDir.
+//
+// They are all under golder's per-user runtime root, so the directory name
+// carries the uid whenever the root is a shared temp directory: two accounts
+// never contend for one socket directory, and the ownership check in
+// ensureBrowserDir refuses a directory the other account pre-created. The
+// second candidate is the temp directory itself, used when $XDG_RUNTIME_DIR is
+// set but unusable (a full or stale mount); the project key keeps two projects
+// apart inside either.
 func browserRuntimeCandidates(cwd string) []string {
-	bases := make([]string, 0, 2)
-	if dir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); dir != "" {
-		bases = append(bases, dir)
-	}
-	bases = append(bases, os.TempDir())
-	out := make([]string, 0, len(bases))
-	for _, base := range bases {
-		if base == "" {
+	name := "browser-" + browserProjectKey(cwd)
+	var out []string
+	seen := map[string]bool{}
+	for _, root := range []string{
+		privatepath.RuntimeRoot(os.Getenv),
+		filepath.Join(os.TempDir(), privatepath.RuntimeName()),
+	} {
+		if root == "" {
 			continue
 		}
-		out = append(out, filepath.Join(base, "golder-browser-"+browserProjectKey(cwd)))
+		dir := filepath.Join(root, name)
+		if seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		out = append(out, dir)
 	}
 	return out
 }
@@ -171,23 +256,9 @@ func browserProjectKey(cwd string) string {
 
 // ensureBrowserRuntimeDir creates a private directory and refuses one that is
 // not private and ours. In a world-writable temp dir this is the check that
-// stops a pre-created directory from becoming the socket endpoint.
-func ensureBrowserRuntimeDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("browser runtime directory %s: %w", dir, err)
-	}
-	info, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("browser runtime directory %s: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("browser runtime directory %s is not a directory", dir)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("browser runtime directory %s is not private and cannot be made so: %w", dir, err)
-	}
-	return nil
-}
+// stops a pre-created directory — or a symlink to one — from becoming the
+// socket endpoint.
+func ensureBrowserRuntimeDir(dir string) error { return ensureBrowserDir(dir) }
 
 // browserControlSocketPath resolves the control socket for a browser named
 // name. It prefers .golder/browser so the workspace alone describes the
@@ -204,6 +275,7 @@ func browserControlSocketPath(cwd, name string) (string, error) {
 		return preferred, nil
 	}
 	var tried []string
+	var failed error
 	for _, dir := range browserRuntimeCandidates(cwd) {
 		path := filepath.Join(dir, file)
 		if len(path)+socketSuffixRoom > unixSocketPathLimit {
@@ -211,9 +283,16 @@ func browserControlSocketPath(cwd, name string) (string, error) {
 			continue
 		}
 		if err := ensureBrowserRuntimeDir(dir); err != nil {
-			return "", err
+			// An unusable runtime root (unwritable, a stale mount, a directory
+			// another account owns) is not a reason to give up while another
+			// short private directory is still available.
+			failed = err
+			continue
 		}
 		return path, nil
+	}
+	if failed != nil {
+		return "", fmt.Errorf("cannot create a private browser runtime directory: %w", failed)
 	}
 	return "", fmt.Errorf("cannot place a browser control socket: %s is %d bytes and %s is the most a Unix socket path allows on this system; "+
 		"shorten %q or move the workspace to a shorter path (golder will not open a pane whose control endpoint cannot bind)",

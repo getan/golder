@@ -1,12 +1,16 @@
 package workspacecmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/golderhome"
+	"github.com/getan/golder/internal/privatepath"
 )
 
 // resolved is the Options one invocation produces, or the error it refused with.
@@ -178,7 +182,7 @@ func TestSocketIsShortPrivateAndDistinct(t *testing.T) {
 		if err != nil {
 			t.Fatalf("socketPath(%q, %q): %v", tc.id, tc.session, err)
 		}
-		if want := filepath.Join("/r", runtimeDirName); dir != want {
+		if want := RuntimeDir(getenv); dir != want {
 			t.Errorf("dir = %q, want %q", dir, want)
 		}
 		if !strings.HasPrefix(path, dir+"/") {
@@ -375,16 +379,30 @@ func TestCwdMustExist(t *testing.T) {
 // $XDG_RUNTIME_DIR, falls back to $TMPDIR, and ignores a relative value in
 // either — a relative runtime directory would put the socket under whatever the
 // working directory happens to be.
+//
+// The fallback name carries the uid, which is the fix for a shared machine:
+// /tmp/golder used to be one directory for every account on it. $XDG_RUNTIME_DIR
+// is per-user by contract, so it needs no suffix.
 func TestRuntimeDirFollowsTheEnvironment(t *testing.T) {
+	scoped := privatepath.RuntimeName()
+	if !strings.HasPrefix(scoped, "golder") {
+		t.Fatalf("RuntimeName() = %q, want a name that says it is golder's", scoped)
+	}
+	if runtime.GOOS != "windows" && runtime.GOOS != "plan9" && runtime.GOOS != "js" {
+		if want := "golder-" + strconv.Itoa(os.Getuid()); scoped != want {
+			t.Errorf("RuntimeName() = %q, want %q: a shared temp directory must be scoped by uid", scoped, want)
+		}
+	}
 	cases := []struct {
 		name string
 		kv   map[string]string
 		want string
 	}{
 		{name: "XDG_RUNTIME_DIR wins", kv: map[string]string{"XDG_RUNTIME_DIR": "/run/user/1", "TMPDIR": "/tmp"}, want: "/run/user/1/golder"},
-		{name: "TMPDIR next", kv: map[string]string{"TMPDIR": "/var/tmp/u"}, want: "/var/tmp/u/golder"},
-		{name: "TEMP last", kv: map[string]string{"TEMP": "/tmp/u"}, want: "/tmp/u/golder"},
-		{name: "relative ignored", kv: map[string]string{"XDG_RUNTIME_DIR": "run", "TMPDIR": "/tmp/u"}, want: "/tmp/u/golder"},
+		{name: "TMPDIR next", kv: map[string]string{"TMPDIR": "/var/tmp/u"}, want: filepath.Join("/var/tmp/u", scoped)},
+		{name: "TEMP last", kv: map[string]string{"TEMP": "/tmp/u"}, want: filepath.Join("/tmp/u", scoped)},
+		{name: "relative ignored", kv: map[string]string{"XDG_RUNTIME_DIR": "run", "TMPDIR": "/tmp/u"}, want: filepath.Join("/tmp/u", scoped)},
+		{name: "relative XDG alone ignored", kv: map[string]string{"XDG_RUNTIME_DIR": "run"}, want: filepath.Join(os.TempDir(), scoped)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -393,5 +411,257 @@ func TestRuntimeDirFollowsTheEnvironment(t *testing.T) {
 				t.Errorf("RuntimeDir = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSessionStateLayout pins where one session's durable files go. The shape is
+// the contract a backend reads: config is per project, state and the log are per
+// session, and the session directory is the place for anything else that belongs
+// to one workspace instance.
+func TestSessionStateLayout(t *testing.T) {
+	e := newTestEnv(t)
+	got := mustResolve(t, e, "--session", "work")
+
+	projectDir := filepath.Join(e.home, workspaceDirName, got.ProjectID)
+	sessionDir := filepath.Join(projectDir, sessionsDirName, "work")
+	for name, pair := range map[string][2]string{
+		"project dir": {got.ProjectDir, projectDir},
+		"session dir": {got.SessionDir, sessionDir},
+		"state dir":   {got.StateDir, filepath.Join(sessionDir, stateDirName)},
+		"log":         {got.LogFile, filepath.Join(sessionDir, logFileName)},
+		"config":      {got.ConfigPath, filepath.Join(projectDir, golderhome.ConfigFile)},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("%s = %q, want %q", name, pair[0], pair[1])
+		}
+	}
+	for _, path := range []string{got.ProjectDir, got.SessionDir, got.StateDir, got.LogFile} {
+		if !strings.HasPrefix(path, e.home) {
+			t.Errorf("%q is outside the one state root %q", path, e.home)
+		}
+	}
+}
+
+// TestSessionsOfOneProjectKeepSeparateStateAndLog is the collision the session
+// directory exists to prevent. Two workspaces on one checkout are two daemons
+// with two session stores, and they used to write into one state directory and
+// append to one log; a person running both lost half the history of each. The
+// project itself — its identity and its config — is still shared, because that
+// is what "the same project" means.
+func TestSessionsOfOneProjectKeepSeparateStateAndLog(t *testing.T) {
+	e := newTestEnv(t)
+	work := mustResolve(t, e, "--session", "work")
+	personal := mustResolve(t, e, "--session", "personal")
+
+	for name, pair := range map[string][2]string{
+		"project id":  {work.ProjectID, personal.ProjectID},
+		"project dir": {work.ProjectDir, personal.ProjectDir},
+		"config":      {work.ConfigPath, personal.ConfigPath},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("two sessions of one project disagree about its %s: %q and %q", name, pair[0], pair[1])
+		}
+	}
+	for name, pair := range map[string][2]string{
+		"session dir": {work.SessionDir, personal.SessionDir},
+		"state dir":   {work.StateDir, personal.StateDir},
+		"log":         {work.LogFile, personal.LogFile},
+		"socket":      {work.Socket, personal.Socket},
+	} {
+		if pair[0] == pair[1] {
+			t.Errorf("two sessions of one project share a %s: %q", name, pair[0])
+		}
+	}
+	for _, opts := range []Options{work, personal} {
+		if filepath.Dir(opts.StateDir) != opts.SessionDir {
+			t.Errorf("state dir %q is not in its session directory %q", opts.StateDir, opts.SessionDir)
+		}
+		if filepath.Dir(opts.LogFile) != opts.SessionDir {
+			t.Errorf("log %q is not in its session directory %q", opts.LogFile, opts.SessionDir)
+		}
+		if !strings.HasPrefix(opts.SessionDir, opts.ProjectDir+string(filepath.Separator)) {
+			t.Errorf("session directory %q is outside the project directory %q", opts.SessionDir, opts.ProjectDir)
+		}
+	}
+}
+
+// TestOneSessionsLogIsNotTouchedByAnother is the same collision at the level a
+// person notices: a second start must not write into the first session's log,
+// and must not reuse its state directory.
+func TestOneSessionsLogIsNotTouchedByAnother(t *testing.T) {
+	e := newTestEnv(t)
+	first := &recorder{}
+	if _, stderr, code := e.run(t, first, "--session", "work"); code != ExitOK {
+		t.Fatalf("first start exit = %d, want 0 (stderr: %s)", code, stderr)
+	}
+	work := first.started[0]
+	marker := []byte("what the work session's agent did\n")
+	if err := os.WriteFile(work.LogFile, marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work.StateDir, "sessions.json"), []byte("work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second := &recorder{}
+	if _, stderr, code := e.run(t, second, "--session", "personal"); code != ExitOK {
+		t.Fatalf("second start exit = %d, want 0 (stderr: %s)", code, stderr)
+	}
+	personal := second.started[0]
+	if personal.LogFile == work.LogFile || personal.StateDir == work.StateDir {
+		t.Fatalf("the second session reused %q / %q", personal.LogFile, personal.StateDir)
+	}
+
+	got, err := os.ReadFile(work.LogFile)
+	if err != nil {
+		t.Fatalf("the first session's log is gone: %v", err)
+	}
+	if !bytes.Equal(got, marker) {
+		t.Errorf("the first session's log became %q, want %q", got, marker)
+	}
+	if _, err := os.Stat(filepath.Join(work.StateDir, "sessions.json")); err != nil {
+		t.Errorf("the first session's state was lost: %v", err)
+	}
+	for _, dir := range []string{personal.SessionDir, personal.StateDir} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("%s was not created: %v", dir, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Errorf("%s is mode %04o, want 0700", dir, perm)
+		}
+	}
+}
+
+// TestExplicitStateDirIsRecordedAndNamed: --state-dir is the person's decision,
+// so it is used as given for every session, and StateDirExplicit says so. Two
+// sessions given one directory therefore share it — the workspace daemon's own
+// lock decides who owns it, not this command — while their logs stay separate,
+// because a log is per session no matter where the state lives.
+func TestExplicitStateDirIsRecordedAndNamed(t *testing.T) {
+	e := newTestEnv(t)
+	if got := mustResolve(t, e); got.StateDirExplicit {
+		t.Errorf("the default state dir was reported as explicit: %q", got.StateDir)
+	}
+
+	work := mustResolve(t, e, "--session", "work", "--state-dir", "shared-state")
+	want := filepath.Join(e.project, "shared-state")
+	if work.StateDir != want {
+		t.Errorf("state dir = %q, want %q", work.StateDir, want)
+	}
+	if !work.StateDirExplicit {
+		t.Error("--state-dir was not recorded on the options")
+	}
+	personal := mustResolve(t, e, "--session", "personal", "--state-dir", want)
+	if personal.StateDir != work.StateDir {
+		t.Errorf("an explicitly shared state directory became %q and %q", work.StateDir, personal.StateDir)
+	}
+	if personal.LogFile == work.LogFile {
+		t.Errorf("two sessions sharing a state directory also share the log %q", work.LogFile)
+	}
+}
+
+// TestStartRefusesASymlinkedDirectory: a directory this command writes into is
+// reached without following a link. A checkout, or another account, can create
+// the state directory as a symlink to somewhere else; chmod through it would
+// change the mode of a directory golder does not own, and writing a session
+// store through it would put the person's history there.
+func TestStartRefusesASymlinkedDirectory(t *testing.T) {
+	e := newTestEnv(t)
+	opts := mustResolve(t, e)
+	target := filepath.Join(e.base, "elsewhere")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(opts.SessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, opts.StateDir); err != nil {
+		t.Skipf("this platform has no symlinks: %v", err)
+	}
+
+	rec := &recorder{}
+	stdout, stderr, code := e.run(t, rec)
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want 1 (stdout: %q stderr: %q)", code, stdout, stderr)
+	}
+	if rec.calls() != 0 {
+		t.Error("a start wrote into a symlinked state directory")
+	}
+	if !strings.Contains(stderr, "symbolic link") {
+		t.Errorf("stderr = %q, want it to say the directory is a link", stderr)
+	}
+	info, err := os.Lstat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o755 {
+		t.Errorf("the link's target is now mode %04o, want it untouched at 0755", perm)
+	}
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("the link's target gained %d entries, want none", len(entries))
+	}
+}
+
+// TestStartRefusesADirectoryAnotherUserOwns: on a machine with several accounts,
+// a directory another account created under this account's name is refused
+// rather than adopted — the runtime directory is uid-scoped so this should not
+// happen, and the check is what makes the scoping meaningful.
+func TestStartRefusesADirectoryAnotherUserOwns(t *testing.T) {
+	e := newTestEnv(t)
+	opts := mustResolve(t, e)
+	if err := os.MkdirAll(opts.StateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := os.Geteuid() + 1000
+	if err := os.Chown(opts.StateDir, other, other); err != nil {
+		t.Skipf("cannot hand a directory to another user here (%v); this check needs a multi-user filesystem", err)
+	}
+
+	rec := &recorder{}
+	_, stderr, code := e.run(t, rec)
+	if code != ExitFailure {
+		t.Fatalf("exit = %d, want 1 (stderr: %s)", code, stderr)
+	}
+	if rec.calls() != 0 {
+		t.Error("a start used another account's directory")
+	}
+	if !strings.Contains(stderr, "another user") && !strings.Contains(stderr, "another account") {
+		t.Errorf("stderr = %q, want it to say the directory is someone else's", stderr)
+	}
+	info, err := os.Lstat(opts.StateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o755 {
+		t.Errorf("the other account's directory is now mode %04o, want it untouched at 0755", perm)
+	}
+}
+
+// TestSocketFitsInAUidScopedRuntimeDir: naming the fallback runtime directory
+// after the uid costs a few bytes, and a socket path has a hard limit. A long
+// session name in a moderately deep temp directory must still produce a socket
+// the kernel can bind.
+func TestSocketFitsInAUidScopedRuntimeDir(t *testing.T) {
+	deep := "/" + strings.Repeat("t", 40)
+	getenv := func(k string) string {
+		if k == "TMPDIR" {
+			return deep
+		}
+		return ""
+	}
+	path, dir, err := socketPath(getenv, "/p", "aaaaaaaaaaaa", strings.Repeat("s", maxSessionName), "")
+	if err != nil {
+		t.Fatalf("socketPath: %v", err)
+	}
+	if !strings.HasPrefix(dir, filepath.Join(deep, privatepath.RuntimeName())) {
+		t.Errorf("dir = %q, want it under the per-user runtime root in %q", dir, deep)
+	}
+	if len(path) > maxSocketPath {
+		t.Errorf("socket %q is %d bytes, past the %d-byte limit", path, len(path), maxSocketPath)
 	}
 }
