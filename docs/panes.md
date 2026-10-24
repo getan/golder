@@ -95,6 +95,18 @@ requests normal browser exit instead of immediately invoking tuios' hard
 including when the daemon omits the foreground label. A changed foreground
 program is not sent browser shortcuts based on the old workspace record.
 
+Golder's own browser is not recognised by a program name. Its `browse` runs the
+`golder` binary, and that is also the name the daemon reports for every agent
+pane golder starts and for golder's own TUI, so the name proves nothing on its
+own. What makes a pane a browser is the record golder wrote when it launched
+one: the exact pane id, the control socket, and the browser id that endpoint
+reported. A recorded embedded browser is proved and asked to quit through that
+endpoint, exactly as an external one is. A pane with no record is an ordinary
+pane — whatever it runs — and close removes it with the daemon's exact
+`close-window`, sending no keys and no quit. An unrecorded `kitty-browse` is the
+one exception: that name belongs to no other program here, so close still
+refuses it without `force:true` rather than guessing which endpoint it owns.
+
 Golder sends Escape keys to leave browser input modes, then Ctrl+Q in a
 separate write after the terminal's Escape ambiguity window. It waits for
 the daemon's `window-exit` event (10 seconds by default,

@@ -92,19 +92,28 @@ func closePane(ctx context.Context, c paneCloseClient, win tuiosctl.Window, pane
 		return nil, fmt.Errorf("pane %s is not the browser pane %q golder started; nothing was closed", win.WindowID, pane.WindowID)
 	}
 	program := filepath.Base(strings.TrimSpace(win.ForegroundCmd))
-	// Golder's own browse reports the binary's name (golder), and the record
-	// keeps the exact base name used at launch so a versioned or renamed
-	// install still matches. Only the daemon's foreground program counts; a
-	// pane title or display name never identifies a browser here.
-	embedded := program == "golder" ||
-		(pane.Embedded && pane.Program != "" && program == filepath.Base(pane.Program))
+	// A golder browser is the pane golder recorded as one, and nothing else. The
+	// name "golder" is the binary every agent pane golder runs is called, this
+	// tool's own pane included, so the name alone proves nothing: an unrecorded
+	// pane that happens to run golder is a plain pane, and it is closed the way
+	// any other pane is. The record keeps the exact base name used at launch, so
+	// a versioned or renamed install still matches. Only the daemon's foreground
+	// program counts; a pane title or display name never identifies a browser
+	// here.
+	embedded := pane.Managed && pane.Embedded &&
+		(program == "golder" || (pane.Program != "" && program == filepath.Base(pane.Program)))
+	// An external kitty-browse is a name no other program here answers to, so an
+	// unrecorded one stays held to the verification below.
 	external := program == "kitty-browse" ||
 		(!pane.Embedded && pane.Program != "" && program == filepath.Base(pane.Program))
 	if !embedded && !external {
 		// A pane that is not (or is no longer) a browser. Nothing is sent into
 		// it: the daemon's foreground program decides, not the pane's title or
 		// display name.
-		if !pane.Managed {
+		if !pane.Managed && !pane.Embedded {
+			// The ordinary case, and the one the record settles: golder never
+			// started a browser here, so this is an exact pane close with no
+			// keys and no quit.
 			if err := c.CloseWindow(ctx, win.WindowID); err != nil {
 				return nil, err
 			}
@@ -115,7 +124,7 @@ func closePane(ctx context.Context, c paneCloseClient, win tuiosctl.Window, pane
 		}
 		return hardClose(ctx, c, win, pane, fmt.Sprintf("the pane no longer reports a browser (foreground %q)", win.ForegroundCmd))
 	}
-	if !pane.Managed || pane.Socket == "" || pane.BrowserID == "" || (embedded && !pane.Embedded) {
+	if !pane.Managed || pane.Socket == "" || pane.BrowserID == "" {
 		// golder cannot prove which endpoint belongs to this pane, so a quit or
 		// a keystroke could reach a different browser.
 		if !force {

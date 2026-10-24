@@ -245,21 +245,56 @@ func TestClosePaneRefusesAChangedPaneID(t *testing.T) {
 	}
 }
 
-// "golder" as a foreground program is not evidence by itself: without a record
-// there is no way to know which endpoint the pane owns.
-func TestClosePaneRefusesUnrecordedGolderPane(t *testing.T) {
+// "golder" as a foreground program is not evidence of a browser, and it is not
+// evidence against a plain close either: it is the name of the binary every agent
+// pane golder runs is called. A pane with no record is a plain pane, and close
+// closes the exact pane and sends nothing into it.
+func TestClosePaneClosesAnUnrecordedGolderPaneAsAPlainPane(t *testing.T) {
 	for _, force := range []bool{false, true} {
 		f := &paneCloseFake{}
 		out, err := closePane(context.Background(), f, embeddedBrowserWindow(), browserPane{}, force, time.Second)
-		if force {
-			if err != nil || out["close_mode"] != "forced" || !slices.Equal(f.calls, []string{"close:browser-id"}) {
-				t.Fatalf("force calls=%v out=%v err=%v", f.calls, out, err)
+		if err != nil || out["close_mode"] != "pane" || !slices.Equal(f.calls, []string{"close:browser-id"}) {
+			t.Fatalf("force=%v calls=%v out=%v err=%v", force, f.calls, out, err)
+		}
+	}
+}
+
+// An ordinary agent pane running golder is closed even when its foreground
+// program is a versioned build of golder's own binary, and no key or quit is sent
+// to it: nothing about the name makes it a browser.
+func TestClosePaneClosesAnUnrecordedVersionedGolderPane(t *testing.T) {
+	win := tuiosctl.Window{WindowID: "agent-pane", ForegroundCmd: "golder-1.5.0"}
+	out, err := closePane(context.Background(), &paneCloseFake{}, win, browserPane{}, false, time.Second)
+	if err != nil || out["close_mode"] != "pane" {
+		t.Fatalf("out=%v err=%v", out, err)
+	}
+}
+
+// closePane is reached by "close the pane you are running in" too, and that one
+// is refused before any record, program name or force flag is considered: neither
+// with a record, nor without one.
+func TestClosePaneNeverClosesItsOwnPane(t *testing.T) {
+	root := shortRoot(t)
+	ctl := newControlFake(t, filepath.Join(root, "browser.sock"), "browser-1", "quit")
+	recorded := managedPane(t, root, "own", ctl.path, "browser-1", true)
+	for _, tc := range []struct {
+		name string
+		pane browserPane
+	}{
+		{"a record that points at this pane", recorded},
+		{"no record at all", browserPane{}},
+	} {
+		for _, force := range []bool{false, true} {
+			f := &paneCloseFake{}
+			win := tuiosctl.Window{WindowID: "own", ForegroundCmd: "golder"}
+			_, err := closePane(context.Background(), f, win, tc.pane, force, time.Second)
+			if err == nil || !strings.Contains(err.Error(), "the pane golder is running in") || len(f.calls) != 0 {
+				t.Fatalf("%s force=%v calls=%v err=%v", tc.name, force, f.calls, err)
 			}
-			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), "no keys and no quit") || len(f.calls) != 0 {
-			t.Fatalf("calls=%v err=%v", f.calls, err)
-		}
+	}
+	if quits, _ := ctl.counts(); quits != 0 {
+		t.Fatal("quit sent to golder's own pane")
 	}
 }
 
@@ -491,6 +526,41 @@ func TestClosePaneDoesNotGuessBrowserFromTitle(t *testing.T) {
 	out, err := closePane(context.Background(), f, win, browserPane{}, false, time.Second)
 	if err != nil || out["close_mode"] != "pane" || !slices.Equal(f.calls, []string{"close:terminal"}) {
 		t.Fatalf("calls=%v out=%v err=%v", f.calls, out, err)
+	}
+}
+
+// The same thing through the tool the agent calls: an agent pane whose foreground
+// program is golder is an ordinary pane, so `tuios close` closes it with the
+// daemon's exact close-window and sends neither a key nor a quit.
+func TestTuiosCloseClosesAnAgentPaneRunningGolder(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	closeTarget := ""
+	f.answer = func(verb string, p map[string]any) any {
+		switch verb {
+		case "list-windows":
+			return map[string]any{"windows": []map[string]any{
+				{"window_id": "w1", "display_name": "golder", "foreground_cmd": "golder"},
+				{"window_id": "w2", "display_name": "api", "foreground_cmd": "golder"},
+			}}
+		case "close-window":
+			closeTarget, _ = p["window"].(string)
+		}
+		return map[string]any{"type": "ok"}
+	}
+	tool := newTuiosTool(t, true)
+	res, err := tool.Execute(context.Background(), "close", json.RawMessage(`{"action":"close","window":"w2"}`), nil)
+	if err != nil || res.IsError {
+		t.Fatalf("err=%v res=%s", err, agentcore.ContentToText(res.Content))
+	}
+	if closeTarget != "w2" {
+		t.Fatalf("close-window targeted %q, want w2", closeTarget)
+	}
+	if f.seen("send-keys") || f.seen("wait-for") {
+		t.Fatalf("verbs = %v, want only the check and close-window", f.verbs)
+	}
+	if !strings.Contains(agentcore.ContentToText(res.Content), `"close_mode":"pane"`) {
+		t.Fatalf("res=%s, want close_mode pane", agentcore.ContentToText(res.Content))
 	}
 }
 
