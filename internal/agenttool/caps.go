@@ -47,4 +47,3 @@ func setBrowserSocket(path string) {
 	browserSocketOverride = path
 	browserSocketMu.Unlock()
 }
-
