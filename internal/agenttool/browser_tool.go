@@ -1,16 +1,17 @@
 package agenttool
 
-// The browser tool drives one running kitty-browse through its typed control
-// socket. It is not a second browser: nothing here launches Chromium or speaks
-// CDP. The browser owns the page; this only asks for one action at a time, with
-// the tab pinned to the ids /v1/info reported.
+// The browser tool drives one running browser through its typed control socket
+// — golder's own `browse` pane or an external kitty-browse. It is not a second
+// browser: nothing here launches Chromium or speaks CDP. The browser owns the
+// page; this only asks for one action at a time, with the tab pinned to the ids
+// /v1/info reported.
 //
 // Read-only actions are safe to run alone: snapshot, find, get, is, wait,
 // dialog.status, console, errors, network, screenshot. Control actions put
 // input into the page and are left to the reviewer. eval and upload are not
 // part of the schema at all.
 //
-// open is the setup step: it starts kitty-browse with the profile and socket it
+// open is the setup step: it starts a browser with the profile and socket it
 // needs, so nobody has to remember the three-command invocation.
 
 import (
@@ -78,12 +79,12 @@ func (t *BrowserTool) Description() string {
 			"Or call open with a URL to reuse a single live instance or start one in a tuios pane."
 	}
 	if t.allowControl {
-		return "Drive the running kitty-browse pane: snapshot the accessibility tree, " +
+		return "Drive the running browser pane: snapshot the accessibility tree, " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
 			"Pin a tab by its id from list; refs are per document."
 	}
-	return "Read the running kitty-browse pane: list tabs, snapshot the accessibility tree, " +
+	return "Read the running browser pane: list tabs, snapshot the accessibility tree, " +
 		"read url/text/html, console and network errors, and screenshot."
 }
 
@@ -413,7 +414,7 @@ func (t *BrowserTool) selectOpenedTab(socket, url string) {
 	}
 }
 
-// browserActionParams maps the tool's flat arguments onto one kitty-browse
+// browserActionParams maps the tool's flat arguments onto one browser
 // action and its params. Unknown combinations fail before a round trip.
 func browserActionParams(a browserArgs) (string, map[string]any, error) {
 	locator := func() map[string]any {
@@ -627,7 +628,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 	return "", nil, fmt.Errorf("unknown action %q", a.Action)
 }
 
-// open starts kitty-browse in a tuios pane and adopts its control socket, so a
+// open starts a browser in a tuios pane and adopts its control socket, so a
 // session begins with one call instead of three shell commands. It is
 // idempotent: with a browser already running it reports the existing socket.
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
@@ -673,7 +674,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	}
 	if !tuiosctl.Available() {
 		return browserError(errors.New(
-			"no browser is running and none can be opened here: kitty-browse draws into a terminal, " +
+			"no browser is running and none can be opened here: a browser pane draws into a terminal, " +
 				"so it needs a tuios pane. Start golder inside one; open starts the browser from there")), nil
 	}
 	url := strings.TrimSpace(a.URL)

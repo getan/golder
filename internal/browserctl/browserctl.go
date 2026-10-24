@@ -1,7 +1,7 @@
-// Package browserctl talks to a running kitty-browse over its owner-only
+// Package browserctl talks to a running browser over its owner-only
 // Unix-domain control socket. It is the typed client the browser tool uses:
 // /v1/info for discovery, /v1/actions for one action, /v1/screenshot for a
-// picture.
+// picture, and /v1/quit for a graceful shutdown.
 //
 // The socket file's mode is the access control. A socket another user can
 // write is refused rather than used, because an action puts input into a real
@@ -28,6 +28,9 @@ const (
 	EnvSocket = "KITTY_BROWSE_SOCKET"
 	// APIVersion is the only contract this client speaks.
 	APIVersion = "v1"
+	// CapQuit is the advertised capability for /v1/quit. A browser that does
+	// not advertise it predates the endpoint; asking anyway would be a guess.
+	CapQuit = "quit"
 	// maxBody bounds one JSON reply.
 	maxBody = 16 << 20
 )
@@ -127,6 +130,18 @@ type Info struct {
 	Capabilities []Capability `json:"capabilities"`
 }
 
+// HasCapability reports whether the browser advertises one action. Callers use
+// it to decide whether an endpoint can do something at all, instead of sending
+// a request and interpreting "unknown_action".
+func (info Info) HasCapability(name string) bool {
+	for _, capability := range info.Capabilities {
+		if capability.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Target pins one tab. The browser refuses an action whose ids do not match.
 type Target struct {
 	BrowserID string `json:"browserId,omitempty"`
@@ -180,6 +195,23 @@ type actionResponse struct {
 	Meta   Meta            `json:"meta"`
 }
 
+// QuitResult is /v1/quit's result: the browser accepted the request and is
+// unwinding. It is not a promise that the process has exited yet, which is why
+// a close waits for window-exit as well.
+type QuitResult struct {
+	Quitting bool `json:"quitting"`
+}
+
+// The reply envelope is shared by every endpoint: apiVersion, the echoed id
+// (null when the request carried none), ok, and either result or error.
+type quitResponse struct {
+	APIVersion string          `json:"apiVersion"`
+	ID         json.RawMessage `json:"id"`
+	OK         bool            `json:"ok"`
+	Result     QuitResult      `json:"result"`
+	Error      *Error          `json:"error"`
+}
+
 // Info discovers the browser's identity, tabs and capabilities.
 func (c *Client) Info(ctx context.Context) (Info, error) {
 	var out Info
@@ -193,6 +225,51 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 		return Info{}, fmt.Errorf("browser backend is %q, want native-cdp", out.Backend)
 	}
 	return out, nil
+}
+
+// Quit asks the browser to shut down normally: it flushes its profile, closes
+// the page and removes its own control socket. It must only be called on an
+// endpoint the caller has already identified (see the pane close path), because
+// a quit aimed at the wrong browser is as destructive as a stray click.
+func (c *Client) Quit(ctx context.Context) error {
+	body, err := json.Marshal(map[string]string{
+		"apiVersion": APIVersion,
+		"id":         fmt.Sprintf("golder-quit-%d", time.Now().UnixNano()),
+	})
+	if err != nil {
+		return fmt.Errorf("encode quit: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://unix/v1/quit", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("browser: quit: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return fmt.Errorf("browser: quit: read reply: %w", err)
+	}
+	var qr quitResponse
+	if err := json.Unmarshal(raw, &qr); err != nil {
+		return fmt.Errorf("browser: quit: parse reply: %w (status %d)", err, resp.StatusCode)
+	}
+	if qr.APIVersion != APIVersion {
+		return fmt.Errorf("browser: quit: reply speaks apiVersion %q, want %q", qr.APIVersion, APIVersion)
+	}
+	if !qr.OK {
+		if qr.Error != nil {
+			return qr.Error
+		}
+		return fmt.Errorf("browser: quit failed (status %d)", resp.StatusCode)
+	}
+	if !qr.Result.Quitting {
+		return fmt.Errorf("browser: quit answered ok without reporting quitting (status %d)", resp.StatusCode)
+	}
+	return nil
 }
 
 // Action runs one typed action against one target tab.

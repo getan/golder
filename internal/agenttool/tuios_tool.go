@@ -64,7 +64,7 @@ func (t *TuiosTool) Description() string {
 		return "Manage panes in the current tuios session: list, capture, wait for output/events, " +
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
 			"daemon events, not polling. Close needs a full window id and refuses golder's own pane. " +
-			"Recognized kitty-browse panes quit normally before closing; force:true allows hard close on failure."
+			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure."
 	}
 	return "Read panes in the current tuios session: list, capture, wait for output/events. " +
 		"Control actions are not available to sub-agents."
@@ -109,7 +109,7 @@ const tuiosControlSchema = `{
     "idle_ms":{"type":"integer","minimum":50,"maximum":60000,"description":"For window-idle; default 500."},
     "command_seq":{"type":"integer","minimum":0,"description":"For command-finished: sequence before the command."},
     "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"Default 30000, or 10000 for browser close; max 10 minutes."},
-    "force":{"type":"boolean","description":"For close: allow hard close if kitty-browse does not confirm normal exit; default false."},
+    "force":{"type":"boolean","description":"For close: allow hard close if the browser does not confirm normal exit; default false."},
     "until":{"type":"array","items":{"type":"string"},"description":"agent-state names; default idle, done, needs_input."},
     "command":{"type":"string","description":"For run: one shell command line; newlines/control characters are rejected."},
     "text":{"type":"string","description":"For send: literal text written to the pane."},
@@ -889,7 +889,9 @@ func (t *TuiosTool) close(ctx context.Context, a tuiosArgs) (agentcore.AgentTool
 	if win.WindowID == tuiosctl.FromEnv().PaneID {
 		return tuiosError(errors.New("refusing to close the pane golder is running in")), nil
 	}
-	out, err := closePane(ctx, c, win, false, a.Force, paneCloseTimeout(a.TimeoutMS))
+	// A browser golder started is closed through the identity it recorded; any
+	// other pane is just a pane.
+	out, err := closePane(ctx, c, win, paneIdentity(t.cwd, win.WindowID), a.Force, paneCloseTimeout(a.TimeoutMS))
 	if err != nil {
 		return tuiosError(err), nil
 	}

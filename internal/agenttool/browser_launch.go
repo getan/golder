@@ -1,10 +1,17 @@
 package agenttool
 
-// Starting kitty-browse used to be three things a person had to remember: a
+// Starting a browser used to be three things a person had to remember: a
 // profile directory, a control socket under the workspace, and the export that
 // tells golder where the socket is. None of that is a decision — it is setup.
 // The agent runs it itself: inside a tuios pane it opens a pane with the right
-// argv, waits for the socket, and adopts it for the session.
+// argv, waits for the socket, adopts it for the session and records the pane's
+// identity so a later close can prove what it is closing.
+//
+// Two programs can be that pane. golder's own binary is the default once main
+// has told this package that `golder browse` exists (ConfigureEmbeddedBrowser);
+// an installed kitty-browse is the compatible fallback. This package never
+// guesses that some other executable understands "browse": the capability is
+// set by main, from the process that actually implements it.
 
 import (
 	"context"
@@ -15,7 +22,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,29 +32,125 @@ import (
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
-const browserProfileMaxAge = 14 * 24 * time.Hour
+const (
+	browserProfileMaxAge = 14 * 24 * time.Hour
+	// browserSocketWait bounds how long a new pane has to create its endpoint.
+	browserSocketWait = 25 * time.Second
+	// browserProbeTimeout bounds the identity probe that follows.
+	browserProbeTimeout = 5 * time.Second
+)
 
-// KittyBrowseAvailable reports whether the binary is installed. A browser can
-// only be started where it can draw, so this is checked together with the pane.
-func KittyBrowseAvailable() bool {
+var (
+	embeddedBrowserMu sync.RWMutex
+	// embeddedBrowserExecutable is this process's own binary, set only by main
+	// when it also wires `golder <exe> browse` to a real implementation.
+	embeddedBrowserExecutable string
+	// embeddedBrowserErr keeps a rejected configuration visible: a caller that
+	// asked for the built-in pane gets a reason, not a silent fallback.
+	embeddedBrowserErr error
+)
+
+// ConfigureEmbeddedBrowser tells the browser tool that this executable can
+// start a browser pane itself, with `"<exe>" browse -profile-dir DIR
+// -control-socket SOCKET URL`. main calls it once with its own
+// os.Executable(); nothing here assumes an arbitrary binary supports "browse".
+//
+// An empty executable disables the built-in pane again (kitty-browse remains
+// the fallback), which is also how tests restore the state they found. A
+// configuration that cannot work is refused immediately and left visible to
+// browserPaneSpec instead of being silently ignored.
+func ConfigureEmbeddedBrowser(executable string) error {
+	exe := strings.TrimSpace(executable)
+	embeddedBrowserMu.Lock()
+	defer embeddedBrowserMu.Unlock()
+	embeddedBrowserExecutable, embeddedBrowserErr = "", nil
+	if exe == "" {
+		return nil
+	}
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		embeddedBrowserErr = fmt.Errorf(
+			"golder cannot start its own browser pane on %s: the browser draws into a tuios pane, which needs a Unix terminal; install kitty-browse for that platform instead",
+			runtime.GOOS)
+		return embeddedBrowserErr
+	}
+	abs, err := filepath.Abs(exe)
+	if err != nil {
+		embeddedBrowserErr = fmt.Errorf("resolve %q as the browser executable: %w", exe, err)
+		return embeddedBrowserErr
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		embeddedBrowserErr = fmt.Errorf("browser executable %s: %w", abs, err)
+		return embeddedBrowserErr
+	}
+	if info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		embeddedBrowserErr = fmt.Errorf("browser executable %s is not an executable file", abs)
+		return embeddedBrowserErr
+	}
+	embeddedBrowserExecutable = abs
+	return nil
+}
+
+// embeddedBrowser returns the configured executable, "" when the built-in pane
+// is off, and the reason when the configuration was refused.
+func embeddedBrowser() (string, error) {
+	embeddedBrowserMu.RLock()
+	defer embeddedBrowserMu.RUnlock()
+	return embeddedBrowserExecutable, embeddedBrowserErr
+}
+
+// EmbeddedBrowserConfigured reports whether golder can start its own browser
+// pane right now.
+func EmbeddedBrowserConfigured() bool {
+	exe, err := embeddedBrowser()
+	return exe != "" && err == nil
+}
+
+// BrowserLaunchAvailable reports whether this process can start a browser pane
+// at all: its own `browse` when main configured one, or an external
+// kitty-browse. Registration uses it, so the tool appears without kitty-browse
+// on PATH once the built-in pane is configured.
+func BrowserLaunchAvailable() bool {
+	if EmbeddedBrowserConfigured() {
+		return true
+	}
 	_, err := exec.LookPath("kitty-browse")
 	return err == nil
 }
+
+// KittyBrowseAvailable keeps the name existing callers use. It now answers for
+// both launch programs, because "can a browser be started here" is the question
+// callers actually have.
+func KittyBrowseAvailable() bool { return BrowserLaunchAvailable() }
 
 // browserPaneSpec is the pane command for a browser named name, pointed at url.
 // The socket and profile live under the workspace: the profile keeps the login
 // state across restarts, and the socket path is discoverable without config.
 func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
-	bin, err := exec.LookPath("kitty-browse")
-	if err != nil {
-		return paneSpec{}, fmt.Errorf("kitty-browse is not on PATH; %s", kittyBrowseHint())
-	}
-	dir := filepath.Join(cwd, ".golder", "browser")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := checkBrowserName(name); err != nil {
 		return paneSpec{}, err
 	}
+	dir := browserStateDir(cwd)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return paneSpec{}, err
+	}
+	// The directory holds profiles with live sessions, so it is owner-only even
+	// when it already existed with a looser mode.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return paneSpec{}, fmt.Errorf("browser state directory %s must be owner-only: %w", dir, err)
+	}
 	pruneBrowserProfiles(dir, name, time.Now())
-	socket := filepath.Join(dir, name+".sock")
+	profile := browserProfileDir(cwd, name)
+	if err := os.MkdirAll(profile, 0o700); err != nil {
+		return paneSpec{}, err
+	}
+	if err := os.Chmod(profile, 0o700); err != nil {
+		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
+	}
+	socket, err := browserControlSocketPath(cwd, name)
+	if err != nil {
+		return paneSpec{}, err
+	}
 	if _, err := os.Lstat(socket); err == nil {
 		if staleBrowserSocket(socket) {
 			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
@@ -58,16 +163,38 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 			if _, err := rand.Read(suffix[:]); err != nil {
 				return paneSpec{}, err
 			}
-			socket = filepath.Join(dir, fmt.Sprintf("%s-%x.sock", name, suffix))
+			socket = strings.TrimSuffix(socket, ".sock") + fmt.Sprintf("-%x.sock", suffix)
+			if len(socket) > unixSocketPathLimit {
+				return paneSpec{}, fmt.Errorf("browser control socket %s would exceed the %d-byte Unix socket path limit; stop the browser already using %s or move the workspace to a shorter path",
+					socket, unixSocketPathLimit, dir)
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		return paneSpec{}, err
 	}
-	profile := filepath.Join(dir, name+".profile")
+	argv, err := browserPaneArgv(socket, profile, url)
+	if err != nil {
+		return paneSpec{}, err
+	}
 	return paneSpec{
 		Name: name, Kind: "browser", Socket: socket, URL: url,
-		Argv: []string{bin, "-profile-dir", profile, "-control-socket", socket, url},
+		Embedded: EmbeddedBrowserConfigured(), Argv: argv,
 	}, nil
+}
+
+// browserPaneArgv is the command line for one browser pane. golder's own binary
+// gets a subcommand; an external kitty-browse takes the same flags directly.
+func browserPaneArgv(socket, profile, url string) ([]string, error) {
+	if exe, err := embeddedBrowser(); err != nil {
+		return nil, err
+	} else if exe != "" {
+		return []string{exe, "browse", "-profile-dir", profile, "-control-socket", socket, url}, nil
+	}
+	bin, err := exec.LookPath("kitty-browse")
+	if err != nil {
+		return nil, fmt.Errorf("no browser can be started here: %s", kittyBrowseHint())
+	}
+	return []string{bin, "-profile-dir", profile, "-control-socket", socket, url}, nil
 }
 
 func staleBrowserSocket(path string) bool {
@@ -106,7 +233,7 @@ func pruneBrowserProfiles(dir, keep string, now time.Time) {
 	}
 }
 
-// startBrowserPane opens a pane running kitty-browse and adopts the socket it
+// startBrowserPane opens a pane running a browser and adopts the socket it
 // creates. It returns the socket and the pane id.
 func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(context.Context) (*tuiosctl.Client, error)) (string, string, error) {
 	spec, err := browserPaneSpec(cwd, name, url)
@@ -122,40 +249,80 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 		Name: spec.Name, Cwd: cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
 	})
 	if err != nil {
-		return "", "", fmt.Errorf("start kitty-browse: %w", err)
+		return "", "", fmt.Errorf("start %s: %w", spec.program(), err)
 	}
-	if !waitForSocket(spec.Socket, 25*time.Second) {
-		return "", res.WindowID, fmt.Errorf(
-			"kitty-browse is running in pane %s but %s did not appear; check that Chromium is installed",
-			res.WindowID, spec.Socket)
-	}
-	cBrowser, err := browserctl.Dial(spec.Socket)
-	if err != nil {
+	if _, err := adoptBrowserPane(ctx, cwd, spec, res.WindowID, browserSocketWait); err != nil {
 		return "", res.WindowID, err
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	defer cBrowser.CloseIdleConnections()
-	info, err := cBrowser.Info(probeCtx)
-	if err != nil {
-		return "", res.WindowID, fmt.Errorf("new browser control endpoint is not ready: %w", err)
-	}
-	if info.APIVersion != browserctl.APIVersion || info.BrowserID == "" {
-		return "", res.WindowID, fmt.Errorf("new control endpoint is not a compatible browser")
-	}
-	setBrowserSocket(spec.Socket)
 	return spec.Socket, res.WindowID, nil
 }
 
-func waitForSocket(path string, d time.Duration) bool {
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
-			return true
-		}
-		time.Sleep(100 * time.Millisecond)
+// adoptBrowserPane turns "a pane was created" into "a browser we can prove the
+// identity of". It waits for the control socket, proves the endpoint is a
+// compatible browser, and records the exact pane id and browserId, which is
+// what a later close needs before it sends a quit.
+func adoptBrowserPane(ctx context.Context, cwd string, spec paneSpec, windowID string, wait time.Duration) (browserPaneRecord, error) {
+	if err := waitForBrowserSocket(ctx, spec.Socket, wait); err != nil {
+		return browserPaneRecord{}, fmt.Errorf(
+			"%s is running in pane %s but %w; check the pane output and that Chromium is installed",
+			spec.program(), windowID, err)
 	}
-	return false
+	cBrowser, err := browserctl.Dial(spec.Socket)
+	if err != nil {
+		return browserPaneRecord{}, err
+	}
+	defer cBrowser.CloseIdleConnections()
+	probeCtx, cancel := context.WithTimeout(ctx, browserProbeTimeout)
+	defer cancel()
+	info, err := cBrowser.Info(probeCtx)
+	if err != nil {
+		return browserPaneRecord{}, fmt.Errorf("new browser control endpoint is not ready: %w", err)
+	}
+	if info.APIVersion != browserctl.APIVersion || info.BrowserID == "" {
+		return browserPaneRecord{}, fmt.Errorf("new control endpoint is not a compatible %s browser", browserctl.APIVersion)
+	}
+	record := browserPaneRecord{
+		Root: cwd, Name: spec.Name, WindowID: windowID, Socket: spec.Socket,
+		Program: spec.baseName(), BrowserID: info.BrowserID, Embedded: spec.Embedded,
+	}
+	rememberBrowserPane(record)
+	// The metadata is what discovery and a later session read. Losing it is not
+	// fatal for this session, so it does not fail the pane.
+	_ = writeBrowserMetadata(browserMetadataPath(cwd, spec.Name), browserMetadata{
+		Name: spec.Name, Socket: spec.Socket, Profile: browserProfileDir(cwd, spec.Name),
+		WindowID: windowID, Program: record.Program, BrowserID: info.BrowserID, Embedded: spec.Embedded,
+	})
+	setBrowserSocket(spec.Socket)
+	return record, nil
+}
+
+// waitForBrowserSocket waits for the control socket to appear, bounded by both
+// the budget and the caller's context. The pane command can exit immediately
+// (no Chromium, a bad flag), so a caller that is cancelled or has a shorter
+// deadline must not be held for the full budget.
+func waitForBrowserSocket(ctx context.Context, path string, d time.Duration) error {
+	if d <= 0 {
+		d = browserSocketWait
+	}
+	deadline := time.Now().Add(d)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("its control socket %s did not appear within %s", path, d)
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // kittyBrowseHint points at a built binary the PATH missed, because the common
