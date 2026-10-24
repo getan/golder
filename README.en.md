@@ -20,6 +20,20 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 One command on macOS / Linux, no Node or Python. On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases); mirrors, sha256 verification and building from source are in [Install details](#install-details).
 
+## Built-in terminal workspace
+
+```bash
+golder workspace                 # visible workspace; first pane runs this executable's agent
+golder workspace --shell         # use a shell as a new workspace's first pane
+golder workspace -- --model NAME # pass literal agent argv, not shell text
+golder workspace status
+golder workspace stop            # end this workspace and all its panes explicitly
+```
+
+On macOS / Linux, neither `tuios` nor `kitty-browse` needs to be installed. The default `Ctrl+b d` detaches the client while its daemon and panes keep running; run `golder workspace` again to attach. Ordinary golder inside external tuios/herdr is unchanged. Nesting is refused unless `--nested` is explicit.
+
+The agent, shell launcher and browser entry point use one golder binary, with a separate persistent daemon process. Browsing still requires installed Chromium and a terminal supporting its graphics protocol; Chromium is never downloaded automatically. `--headless` emits one JSON readiness line and keeps its daemon alive; it is not a visible workspace. State and the owned harness live under `$GOLDER_HOME/workspace/<project-id>/sessions/<session>/`, never the person's tuios config. See [M4 implementation and boundaries](docs/workspace-m4.md).
+
 ## Highlights
 
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.

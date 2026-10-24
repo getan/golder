@@ -65,3 +65,43 @@ Chromium execution, screenshot/render validation, and race coverage. Missing
 graphics or Chromium capabilities are reported as limitations, not passes.
 Local Linux-container testing remains suspended until explicitly re-enabled;
 Linux CI results must identify the actual run and commit.
+
+## Implemented boundaries and current validation
+
+The normal `golder` entry point is unchanged. `golder workspace` is explicit;
+`Ctrl+b d` detaches, and a later invocation attaches to the same live daemon.
+`workspace stop` ends its panes. A stop is not a promise to resurrect the old
+PTY processes on the next start; chat history remains golder's normal history.
+Use a persistent built/installed binary rather than `go run` for a daemon that
+must outlive its launching command. Repeat custom `--cwd`, `--session` and
+`--socket` identity flags when querying or stopping that workspace.
+
+The default embedded daemon now has a **local-only runtime profile**: no link,
+human-link or herdr listener, no federation/fleet/plugin/hook/push/transcript
+watcher, and no SSH/display following. It reads bundled harnesses plus golder's
+own generated manifest, never the person's tuios harness directory. That
+manifest also resumes through the absolute path of this golder executable.
+The binary protocol was physically extracted into the standard-library-only
+`internal/wire`; JSON control is separately importable without the renderer.
+
+This is not a claim that all standalone source left the binary. The retained
+renderer/session implementation still links product packages; the fork's
+`mini/imports_test.go` pins that graph with a negative control and
+`docs/M4.md` lists the remaining coupling and logger sites. Broad source-level
+pruning and further binary-size reduction remain separate from disabling
+unrequested services at runtime.
+
+Real macOS PTY tests exercised frame output, detach/re-attach, terminal reset,
+literal agent argv, pane identity/proof, strict/read-only control and authenticated
+stop. Real Chromium tests exercised viewport/full-page PNG capture, browserhost
+actions/quit and failure cleanup. Browserhost screenshot failure is now fatal
+when Chromium is available, not a logged pass. Native build/vet and CGO-free
+cross-builds are also checked. These are distinct from a manual graphical
+Kitty/Sixel terminal inspection, which has not been claimed here.
+
+**Release gate still open:** the fork branches are published, but the attempted
+remote Go-module resolution timed out and the narrowed download request was
+denied by the authorization gate. The root dependency pins/checksums and a clean
+`GOWORK=off` build must be completed before treating this branch as an M4
+release. Successful developer-workspace builds do not satisfy that gate. Final
+Linux CI/race results must likewise be attached to the actual final commit.

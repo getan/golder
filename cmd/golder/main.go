@@ -297,6 +297,9 @@ func main() {
 	flag.Usage = func() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintln(out, "  golder workspace [run|status|stop] [flags]  integrated terminal workspace")
+		fmt.Fprintln(out, "  golder browse [flags] [url]                built-in browser pane (Chromium required)")
+		fmt.Fprintln(out, "  golder workspace --help                   workspace options")
 		flag.PrintDefaults()
 		cli.PrintProviderHelp(out)
 	}

@@ -71,7 +71,15 @@ type ownerServer struct {
 func ownerPaths(opts workspacecmd.Options) (socket, record string) {
 	sum := sha256.Sum256([]byte(opts.Socket))
 	key := hex.EncodeToString(sum[:8])
-	socket = filepath.Join(filepath.Dir(opts.Socket), "o-"+key+".sock")
+	dir := filepath.Dir(opts.Socket)
+	name := "o-" + key + ".sock"
+	if room := 103 - len(dir) - 1; room < len(name) && room >= 12 {
+		// A valid short basename may still have a deep parent. Keep the
+		// endpoint in budget; the full hash remains in the private record and
+		// random proof, not the endpoint name, establishes ownership.
+		name = "o" + key[:min(len(key), room-1)]
+	}
+	socket = filepath.Join(dir, name)
 	record = filepath.Join(opts.SessionDir, "owner-"+key+".json")
 	return socket, record
 }

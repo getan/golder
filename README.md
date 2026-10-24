@@ -20,6 +20,20 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip`；镜像、sha256 校验、从源码构建等细节见[安装细节](#安装细节)。
 
+## 自带终端工作区
+
+```bash
+golder workspace                 # 可见工作区，第一个 pane 启动本 executable 的 agent
+golder workspace --shell         # 新工作区的第一个 pane 改为 shell
+golder workspace -- --model NAME # agent 参数原样传入，不拼成 shell 命令
+golder workspace status
+golder workspace stop            # 明确结束这个工作区及其所有 pane
+```
+
+macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱离客户端后，后台 daemon 与 pane 继续运行；再次运行 `golder workspace` 可重新连接。已有 tuios/herdr 中的普通 `golder` 行为不变；嵌套工作区默认拒绝，需要明确 `--nested`。
+
+agent、shell、浏览器入口都来自同一个 golder 二进制，但后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness 并持续运行 daemon，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/<项目标识>/sessions/<session>/`，不读写个人 tuios 配置。详见 [M4 实现与边界](docs/workspace-m4.md)。
+
 ## 亮点
 
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。

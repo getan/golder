@@ -83,6 +83,11 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 		lease.Close()
 		return workspacecmd.StartResult{}, err
 	}
+	harnessDir, err := b.writeHarness(opts.StateDir)
+	if err != nil {
+		lease.Close()
+		return workspacecmd.StartResult{}, err
+	}
 	width, height := 100, 30
 	if w, h, err := term.GetSize(out.Fd()); err == nil && w > 0 && h > 0 {
 		width, height = w, h
@@ -99,6 +104,7 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 		PaneEnv:         paneEnv,
 		PermissionsMode: "strict", Grants: []string{"read", "write", "fan"},
 		StopWhenEmpty: true,
+		HarnessDir:    harnessDir,
 	})
 	if err != nil {
 		cancel()
