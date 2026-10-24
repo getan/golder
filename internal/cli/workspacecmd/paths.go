@@ -149,9 +149,10 @@ const (
 	logFileName = "workspace.log"
 	// maxSocketPath is the longest socket path this command will hand a
 	// daemon. A Unix socket path must fit sockaddr_un.sun_path (104 bytes on
-	// macOS, 108 on Linux, including the terminator), so 100 is a limit that
-	// works on both with room to spare.
-	maxSocketPath = 100
+	// macOS, including the terminator). The retained daemon also opens the
+	// .link-human companion, so reserve its 11 bytes rather than validating
+	// only the primary socket and failing after startup has begun.
+	maxSocketPath = 92
 	// maxSessionName is the daemon's own limit on a session name, in bytes.
 	maxSessionName = 64
 )
@@ -184,6 +185,12 @@ func resolve(p parsed, deps Deps) (Options, error) {
 		// what is missing instead of writing somewhere else.
 		return Options{}, fmt.Errorf("cannot resolve golder's state root (%s is unset and the home directory is unknown); set %s",
 			golderhome.EnvHome, golderhome.EnvHome)
+	}
+	// A daemon is re-executed with Cwd set to the project. Resolve a relative
+	// GOLDER_HOME now so that child and parent do not name different roots.
+	home, err = filepath.Abs(home)
+	if err != nil {
+		return Options{}, fmt.Errorf("cannot resolve golder's state root: %w", err)
 	}
 
 	id := projectID(cwd)

@@ -31,6 +31,7 @@ import (
 
 	flag "github.com/spf13/pflag"
 
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/headless"
@@ -198,6 +199,20 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "workspace":
+			os.Exit(runWorkspace(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+		case "browse":
+			os.Exit(runBrowse(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+		}
+	}
+	// Only this entry point promises that the executable implements `browse`.
+	// Library/test callers keep the external-browser compatibility path unless
+	// they explicitly configure the capability themselves.
+	if executable, err := os.Executable(); err == nil {
+		_ = agenttool.ConfigureEmbeddedBrowser(executable)
 	}
 	// Session subcommands (golder session export|list, issue #570) dispatch early
 	// `golder session resume <id>` is sugar for `--resume <id>`: capture the id

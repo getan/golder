@@ -287,7 +287,7 @@ func writeReadiness(w io.Writer, opts Options) error {
 		Shell:     opts.Shell,
 		Nested:    opts.Nested,
 	}
-	body, err := json.MarshalIndent(doc, "", "  ")
+	body, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("encode the readiness document: %w", err)
 	}

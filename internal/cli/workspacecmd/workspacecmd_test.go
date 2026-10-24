@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -108,7 +109,14 @@ func newTestEnv(t *testing.T) *testEnv {
 // limit itself is tested directly in TestSocketTooLongFallsBackToAHash.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "gws")
+	// /var/folders and its canonical /private prefix can already consume most
+	// of the primary+companion socket budget on macOS. Use a genuinely short
+	// test root; the long-path cases below exercise the refusal explicitly.
+	base := ""
+	if runtime.GOOS != "windows" {
+		base = "/tmp"
+	}
+	dir, err := os.MkdirTemp(base, "gws")
 	if err != nil {
 		t.Fatalf("create a temporary directory: %v", err)
 	}
@@ -263,6 +271,9 @@ func TestHeadlessPrintsReadiness(t *testing.T) {
 	}
 	if !strings.HasSuffix(stdout, "\n") {
 		t.Errorf("readiness document does not end with a newline: %q", stdout)
+	}
+	if strings.Count(stdout, "\n") != 1 {
+		t.Fatal("readiness must be one complete JSON line for a pipe reader")
 	}
 	var doc readiness
 	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
