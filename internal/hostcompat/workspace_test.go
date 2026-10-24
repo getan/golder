@@ -33,6 +33,10 @@ type workspaceDaemon struct {
 	calls  []wsCall
 	conns  int
 	answer func(verb string, params map[string]any) any
+	// bound is the pane restrict-connection settled this connection into, as
+	// the real daemon keeps it: pane-grants reports it back, and a report that
+	// names another window is refused by the daemon rather than here.
+	bound string
 }
 
 // wsError is an answer the daemon refused: the request was understood and
@@ -93,10 +97,22 @@ func (d *workspaceDaemon) serve(conn net.Conn) {
 		answer := d.answer
 		d.mu.Unlock()
 
-		var res any = map[string]any{"applied": true}
+		var res any
 		if answer != nil {
-			if r := answer(req.Verb, req.Params); r != nil {
-				res = r
+			res = answer(req.Verb, req.Params)
+		}
+		if res == nil {
+			res = d.defaultAnswer(req.Verb, req.Params)
+		}
+		// Remember the pane the restrict-connection answer settled on, however
+		// that answer was produced.
+		if req.Verb == "restrict-connection" {
+			if m, ok := res.(map[string]any); ok {
+				if win, ok := m["window"].(string); ok && win != "" {
+					d.mu.Lock()
+					d.bound = win
+					d.mu.Unlock()
+				}
 			}
 		}
 		if _, hangUp := res.(wsHangUp); hangUp {
@@ -111,6 +127,25 @@ func (d *workspaceDaemon) serve(conn net.Conn) {
 		b, _ := json.Marshal(resp)
 		_, _ = conn.Write(append(b, '\n'))
 	}
+}
+
+// defaultAnswer is what the fake daemon says when a test does not decide: the
+// two verbs this host relies on answer the way the real daemon does, and
+// everything else is applied.
+func (d *workspaceDaemon) defaultAnswer(verb string, params map[string]any) any {
+	switch verb {
+	case "restrict-connection":
+		// The connection is settled into the pane it was given, by token.
+		win, _ := params["pane_id"].(string)
+		return map[string]any{"type": "connection_restricted", "scope": "own", "read_only": false, "window": win, "via": "token"}
+	case "pane-grants":
+		// The pane the connection was settled into, read back.
+		d.mu.Lock()
+		bound := d.bound
+		d.mu.Unlock()
+		return map[string]any{"type": "pane_grants", "pane": bound != "", "window": bound, "grants": []string{"read", "write", "fan"}}
+	}
+	return map[string]any{"applied": true}
 }
 
 // callsMatching returns the recorded calls for one verb, in order.
@@ -257,6 +292,12 @@ func TestWorkspaceReportsOverItsOwnSocket(t *testing.T) {
 			if call.params["session"] != "work" {
 				t.Errorf("session = %v, want work", call.params["session"])
 			}
+			// The report names the process that made it, so the daemon can tell
+			// this pane's agent from a nested run of it and let this process
+			// replace its own conversation.
+			if got := call.params["harness_pid"]; got != float64(os.Getpid()) {
+				t.Errorf("harness_pid = %v, want this process's pid %d", got, os.Getpid())
+			}
 			// A field that says nothing is left out, so a daemon that treats
 			// "kind" or "message" as meaningful never sees an empty one.
 			if _, ok := call.params["kind"]; ok && tc.kind == KindNone {
@@ -360,11 +401,12 @@ func TestWorkspaceReleaseClearsTheState(t *testing.T) {
 	}
 }
 
-// TestWorkspacePresentsItsPaneToken: the token proves which pane the connection
-// is, so a report cannot land on a neighbour's window where the kernel cannot
-// place the caller. It is presented once per connection, before the first
-// report.
-func TestWorkspacePresentsItsPaneToken(t *testing.T) {
+// TestWorkspaceBindsItsConnectionToItsOwnPane: before the first report the
+// connection gives up every right but its own pane, and it presents the pane
+// token in the same call. That single call is what keeps a report off a
+// neighbour's window where the kernel cannot place the caller, and what makes
+// a same-UID golder unable to report about anything but its own pane.
+func TestWorkspaceBindsItsConnectionToItsOwnPane(t *testing.T) {
 	d := startWorkspaceDaemon(t, nil)
 	rep := workspaceFor(t, d, newRecorder())
 	defer rep.Close()
@@ -376,22 +418,38 @@ func TestWorkspacePresentsItsPaneToken(t *testing.T) {
 	d.mu.Lock()
 	calls := append([]wsCall(nil), d.calls...)
 	d.mu.Unlock()
-	if len(calls) < 3 {
-		t.Fatalf("calls = %v, want hello, pane-grants, set-agent-state", calls)
+	if len(calls) < 4 {
+		t.Fatalf("calls = %v, want hello, restrict-connection, pane-grants, set-agent-state", calls)
 	}
-	order := []string{calls[0].verb, calls[1].verb, calls[2].verb}
-	if order[0] != "hello" || order[1] != "pane-grants" || order[2] != "set-agent-state" {
-		t.Fatalf("call order = %v, want hello, pane-grants, set-agent-state", order)
+	order := []string{calls[0].verb, calls[1].verb, calls[2].verb, calls[3].verb}
+	want := []string{"hello", "restrict-connection", "pane-grants", "set-agent-state"}
+	for i := range want {
+		if order[i] != want[i] {
+			t.Fatalf("call order = %v, want %v", order, want)
+		}
 	}
-	if calls[1].params["pane_id"] != "98db8226-1829-468e-89a8-41a2baa0ddab" ||
-		calls[1].params["pane_token"] != "proof-of-this-pane" {
-		t.Errorf("pane-grants params = %v", calls[1].params)
+	bind := calls[1].params
+	if bind["scope"] != "own" {
+		t.Errorf("restrict-connection scope = %v, want own", bind["scope"])
+	}
+	if bind["read_only"] != false {
+		t.Errorf("restrict-connection read_only = %v, want false", bind["read_only"])
+	}
+	if bind["pane_id"] != "98db8226-1829-468e-89a8-41a2baa0ddab" ||
+		bind["pane_token"] != "proof-of-this-pane" {
+		t.Errorf("restrict-connection params = %v", bind)
+	}
+	// The binding is followed by the question that proves the daemon settled
+	// this connection into the pane this process names.
+	if got := calls[2].params; len(got) != 0 {
+		t.Errorf("pane-grants was asked about a claim rather than the caller: %v", got)
 	}
 }
 
-// TestWorkspaceWithoutATokenSkipsTheProof: a workspace may start panes with no
-// token at all. The report still works, just without the placement proof.
-func TestWorkspaceWithoutATokenSkipsTheProof(t *testing.T) {
+// TestWorkspaceWithoutATokenStillRestrictsItsScope: a workspace may start panes
+// with no token at all. The connection is then placed by the kernel, and the
+// restriction still applies; without a token there is nothing to present.
+func TestWorkspaceWithoutATokenStillRestrictsItsScope(t *testing.T) {
 	d := startWorkspaceDaemon(t, nil)
 	kv := workspacePane()
 	kv["TUIOS_SOCKET"] = d.sock
@@ -406,8 +464,92 @@ func TestWorkspaceWithoutATokenSkipsTheProof(t *testing.T) {
 		t.Fatalf("Apply = %v", err)
 	}
 	d.waitForCall(t, "set-agent-state")
-	if got := d.callsMatching("pane-grants"); len(got) != 0 {
-		t.Errorf("pane-grants was sent without a token: %v", got)
+	binds := d.callsMatching("restrict-connection")
+	if len(binds) != 1 {
+		t.Fatalf("restrict-connection calls = %v, want one", binds)
+	}
+	if binds[0].params["scope"] != "own" {
+		t.Errorf("restrict-connection scope = %v, want own", binds[0].params["scope"])
+	}
+	if _, sent := binds[0].params["pane_token"]; sent {
+		t.Errorf("a pane token was sent without one: %v", binds[0].params)
+	}
+}
+
+// TestWorkspaceRefusesToReportUnbound is the fail-closed half. A daemon that
+// will not bind this connection to this pane — a stale or wrong token, or a
+// caller it can place nowhere — gets no report at all, rather than one sent
+// over an unrestricted connection that could name any window.
+func TestWorkspaceRefusesToReportUnbound(t *testing.T) {
+	cases := []struct {
+		name   string
+		answer func(verb string, params map[string]any) any
+		want   string
+	}{
+		{
+			name: "a refused restriction",
+			answer: func(verb string, _ map[string]any) any {
+				if verb == "restrict-connection" {
+					return wsError{Code: "forbidden", Message: "pane_token does not prove pane_id"}
+				}
+				return nil
+			},
+			want: "does not prove",
+		},
+		{
+			name: "a connection placed in another pane",
+			answer: func(verb string, _ map[string]any) any {
+				if verb == "restrict-connection" {
+					return map[string]any{"type": "connection_restricted", "scope": "own", "window": "11111111-2222-3333-4444-555555555555", "via": "pid"}
+				}
+				return nil
+			},
+			want: "not in the pane this process names",
+		},
+		{
+			name: "a daemon that does not know the verb",
+			answer: func(verb string, _ map[string]any) any {
+				if verb == "restrict-connection" {
+					return wsError{Code: "unknown_verb", Message: "no such verb"}
+				}
+				return nil
+			},
+			want: "unknown_verb",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := startWorkspaceDaemon(t, tc.answer)
+			rep := workspaceFor(t, d, newRecorder())
+			defer rep.Close()
+
+			err := rep.host.Apply(t.Context(), Report{State: StateWorking}, SessionRef{})
+			if err == nil {
+				t.Fatal("Apply over an unbound connection = nil, want a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
+			}
+			// Nothing was reported: the refusal is the whole point.
+			for _, verb := range []string{"set-agent-state", "set-agent-session", "set-agent-meta"} {
+				if got := d.callsMatching(verb); len(got) != 0 {
+					t.Errorf("%s was sent over an unbound connection: %v", verb, got)
+				}
+			}
+			// And the reporter logs it rather than dropping it silently.
+			var log syncBuffer
+			kv := workspacePane()
+			kv["TUIOS_SOCKET"] = d.sock
+			logged := Open(Options{Getenv: env(kv), Run: newRecorder().run, ErrLog: &log})
+			if logged == nil {
+				t.Fatal("Open returned nil inside a workspace pane")
+			}
+			logged.State(StateWorking, KindNone, "")
+			logged.Close()
+			if !strings.Contains(log.String(), "host report") {
+				t.Errorf("log = %q, want a line about the refused report", log.String())
+			}
+		})
 	}
 }
 

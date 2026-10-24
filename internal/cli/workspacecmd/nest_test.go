@@ -156,7 +156,10 @@ func TestHeadlessDoesNotNestByDefault(t *testing.T) {
 	if !rec.started[0].Headless {
 		t.Error("headless = false, and --headless was given")
 	}
-	if !strings.Contains(stdout, `"headless": true`) {
+	// The readiness document is one line of compact JSON, which is what
+	// writeReadiness promises a script reading it in a pipeline: no space after
+	// the colon.
+	if !strings.Contains(stdout, `"headless":true`) {
 		t.Errorf("stdout = %q, want a readiness document", stdout)
 	}
 }

@@ -2,7 +2,10 @@ package hostcompat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -43,6 +46,16 @@ const workspaceSource = "report"
 // tuios's own feed: a report stream that stops writing leaves nothing stale on
 // the rail.
 const workspaceMetaTTL = 90 * time.Second
+
+// harnessPID is the process every report names, which is this one. The daemon
+// keeps the pid a pane's conversation came from and refuses a report that would
+// replace it from a different known process mid-turn, so that a nested run — a
+// sub-agent golder a tool call started inside this pane — cannot take the pane's
+// conversation over. The guard is only as good as the pid the report carries:
+// without one the daemon cannot tell the pane's own agent from a child of it,
+// and it also refuses the pane's agent its own /resume or /clear while it is
+// working.
+func harnessPID() int { return os.Getpid() }
 
 // workspaceHost reports to golder's own workspace daemon over its JSON socket.
 type workspaceHost struct {
@@ -90,6 +103,7 @@ func (h *workspaceHost) Apply(ctx context.Context, r Report, sess SessionRef) er
 	params["state"] = state
 	params["source"] = workspaceSource
 	params["harness"] = Harness
+	params["harness_pid"] = harnessPID()
 	if r.Kind != KindNone {
 		params["kind"] = string(r.Kind)
 	}
@@ -112,6 +126,7 @@ func (h *workspaceHost) setSession(ctx context.Context, sess SessionRef) error {
 	params := h.paneParams()
 	params["harness"] = Harness
 	params["agent_session_id"] = sess.ID
+	params["harness_pid"] = harnessPID()
 	return h.call(ctx, "set-agent-session", params)
 }
 
@@ -142,6 +157,7 @@ func (h *workspaceHost) Release(ctx context.Context) error {
 	params["state"] = "none"
 	params["source"] = workspaceSource
 	params["harness"] = Harness
+	params["harness_pid"] = harnessPID()
 	return h.call(ctx, "set-agent-state", params)
 }
 
@@ -194,6 +210,22 @@ func (h *workspaceHost) call(ctx context.Context, verb string, params map[string
 }
 
 // connection returns the open client, dialing when there is none.
+//
+// Before a byte of report goes out, the connection gives up everything but its
+// own pane. That is what makes the pane named in TUIOS_PANE_ID the *only* pane
+// this process can speak about: the daemon holds a connection restricted to
+// scope own to the session of the pane it placed the caller in, and refuses
+// every other session and every other window. Without it, a golder that cannot
+// be placed in a pane — a wrapper, a nested shell, a process that left its
+// pane's tree — would be an ordinary same-UID connection with the person's own
+// rights, free to report "working" over a neighbour's window.
+//
+// The restriction fails closed. If the daemon will not bind this connection to
+// this pane, no report is sent and the connection is dropped instead of kept: a
+// report is bookkeeping for the terminal around the agent, and one that might
+// land on somebody else's pane is worse than none at all. So a workspace this
+// process cannot prove it is in reports nothing, rather than reporting with the
+// rights of whoever runs the connection.
 func (h *workspaceHost) connection(ctx context.Context) (*tuiosctl.Client, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -204,19 +236,64 @@ func (h *workspaceHost) connection(ctx context.Context) (*tuiosctl.Client, error
 	if err != nil {
 		return nil, err
 	}
-	// Present the pane token where the daemon takes one. It places this
-	// connection in the pane the report is about even where the kernel cannot
-	// (a wrapper, a nested shell), which is what keeps a report off a
-	// neighbour's window. A refused proof changes nothing: the daemon then
-	// holds the connection to what it can prove, and the report names the pane
-	// anyway.
-	if h.opts.Proof != "" {
-		_, _ = client.Call(ctx, "pane-grants", map[string]any{
-			"pane_id": h.opts.PaneID, "pane_token": h.opts.Proof,
-		})
+	// restrict-connection is where the pane token is presented: it places this
+	// connection in the pane the report is about where the kernel cannot (a
+	// wrapper, a nested shell, a sub-agent that is not in the pane's process
+	// tree), and it narrows the connection to that pane in the same call. Both
+	// halves matter, and both are refusals: a token that does not prove the
+	// claimed pane, or a caller the daemon can place in no pane at all, ends
+	// here rather than falling back to full authority.
+	if err := client.Restrict(ctx, false); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("hostcompat: bind this golder to workspace pane %q: %w", shortPane(h.opts.PaneID), err)
+	}
+	// The daemon answers which pane it settled on. A connection placed in
+	// another pane than the one this process names would report about a pane it
+	// is not, so it is refused here as well, even though the daemon's own
+	// window check would refuse each report later.
+	if got := restrictedWindow(ctx, client); got != "" && got != h.opts.PaneID {
+		_ = client.Close()
+		return nil, fmt.Errorf("hostcompat: the workspace placed this connection in pane %q, not in the pane this process names (%q); refusing to report",
+			shortPane(got), shortPane(h.opts.PaneID))
 	}
 	h.client = client
 	return client, nil
+}
+
+// restrictedWindow asks the daemon which pane this connection is held to, and
+// returns "" when it will not say. The answer is read from pane-grants, the one
+// verb a restricted connection may still call that describes it.
+func restrictedWindow(ctx context.Context, client *tuiosctl.Client) string {
+	// No pane_id: the question is about the caller, not about a claim, and a
+	// claim would have to be proved again.
+	raw, err := client.Call(ctx, "pane-grants", nil)
+	if err != nil {
+		return ""
+	}
+	var got struct {
+		Pane   bool   `json:"pane"`
+		Window string `json:"window"`
+	}
+	if json.Unmarshal(raw, &got) != nil {
+		return ""
+	}
+	if !got.Pane {
+		// The daemon placed this connection in no pane: it has no grants, and
+		// the restriction it just accepted reaches no session. Reports will be
+		// refused by the daemon; naming it here keeps the log readable.
+		return ""
+	}
+	return got.Window
+}
+
+// shortPane keeps a pane id readable in an error line without pretending to be
+// the whole id: a pane id is a uuid, and the first eight characters identify it
+// in the daemon's own log too.
+func shortPane(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // drop closes client if it is still the current one.
