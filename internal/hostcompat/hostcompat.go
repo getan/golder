@@ -1,10 +1,16 @@
 // Package hostcompat reports golder's state to a terminal multiplexer that
-// tracks coding agents — tuios and herdr — so golder shows up beside claude,
-// codex and the rest without either project shipping an integration for it.
+// tracks coding agents — golder's own workspace, tuios and herdr — so golder
+// shows up beside claude, codex and the rest without any of them shipping an
+// integration for it.
 //
-// Both hosts accept a report from the agent itself, through a small contract
-// neither project has to change:
+// Every host accepts a report from the agent itself, through a small contract
+// none of them has to change:
 //
+//   - golder's own workspace takes the same control-protocol verbs tuios does,
+//     over its own daemon socket, spoken directly (see workspace.go): a pane
+//     finds the daemon through TUIOS_SOCKET and names itself through
+//     TUIOS_PANE_ID. No other program is needed: that daemon is golder, and it
+//     already knows its own agent.
 //   - tuios takes `tuios set-agent-state`, an ordinary control-protocol verb.
 //     A pane finds the daemon through TUIOS_SOCKET and names itself through
 //     TUIOS_PANE_ID; the state names one of tuios's seven (none, working,
@@ -16,10 +22,15 @@
 //     names the agent, so it is identified by reporting. State is one of four
 //     (working, blocked, idle, unknown) and a resume command rides the report.
 //
-// The two vocabularies and the two command lines differ, so this package
-// speaks one neutral vocabulary (State) and translates per host. It is a leaf
-// package: standard library only, no golder imports, so a driver can hold a
-// *Reporter without dragging anything into the call graph.
+// The vocabularies and the command lines differ, so this package speaks one
+// neutral vocabulary (State) and translates per host. Every decision about
+// *which* host a process reports to is made once, by Resolve, so detection, the
+// reporter's own name and `golder host-compat status` cannot disagree.
+//
+// The package is a leaf: apart from internal/tuiosctl — itself standard
+// library only, and the owner of the wire protocol the workspace host speaks —
+// it imports no golder code, so a driver can hold a *Reporter without dragging
+// anything into the call graph.
 //
 // Everything is optional and silent. Outside a host pane Open returns nil, a
 // nil *Reporter answers every call as a no-op, and a report that fails (the
@@ -32,8 +43,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/getan/golder/internal/tuiosctl"
 )
 
 // State is the neutral state vocabulary the drivers report in. Each host
@@ -162,34 +176,180 @@ func (p *pending) empty() bool {
 	return p.state == nil && len(p.meta) == 0 && p.session == nil && !p.release
 }
 
-// Detect names the host multiplexer this process runs inside, or "" when it
-// runs in a plain terminal. It reads the environment only, so it is safe to
-// call from anywhere.
-//
-// A pane inside both is a tuios pane whose parent mentioned herdr (tuios does
-// not pass herdr's variables on, so this should not happen); tuios wins, and
-// GOLDER_HOST_REPORT can settle it by hand.
-func Detect(getenv func(string) string) string {
-	if getenv == nil {
-		return ""
-	}
-	if getenv("TUIOS_ENV") == "1" {
-		return "tuios"
-	}
-	if getenv("HERDR_ENV") == "1" {
-		return "herdr"
-	}
-	return ""
-}
+// The multiplexers this package knows by name. The three drivers are also host
+// names, because the host a report goes to is the multiplexer it is about: the
+// same string names the pane's environment, the reporter and the line
+// `golder host-compat status` prints.
+const (
+	// MuxNone is a plain terminal: no multiplexer around this process.
+	MuxNone = ""
+	// MuxGolder is a pane of golder's own workspace, started by golder itself.
+	MuxGolder = "golder-workspace"
+	// MuxTuios is a pane of an external tuios daemon.
+	MuxTuios = "tuios"
+	// MuxHerdr is a herdr pane.
+	MuxHerdr = "herdr"
+	// MuxTmux, MuxZellij and MuxScreen are multiplexers golder can recognise
+	// and cannot report to. They are named so a person is told which terminal
+	// they are in rather than only that nothing is reported.
+	MuxTmux   = "tmux"
+	MuxZellij = "zellij"
+	MuxScreen = "screen"
+)
 
 // EnvHostReport is the escape hatch: "off" disables reporting everywhere,
-// "tuios" or "herdr" forces one host (which is how a person works around a
-// pane that looks like both, or tests a host from inside another).
+// "golder-workspace", "tuios" or "herdr" forces one host (which is how a person
+// works around a pane that looks like two, or tests a host from inside
+// another). "golder" and "workspace" are accepted as names for golder's own.
 const EnvHostReport = "GOLDER_HOST_REPORT"
 
-// Open returns a reporter for the host this process runs in, or nil when it
-// runs in neither. name is Detect's answer, resolved through the environment
-// and GOLDER_HOST_REPORT.
+// EnvWorkspace marks a process started inside golder's own workspace. Unlike
+// TUIOS_ENV, which is tuios's published contract and therefore read strictly,
+// this marker is golder's own: anything that says "yes" enables it, and "0"
+// does not (see enabled).
+const EnvWorkspace = "GOLDER_WORKSPACE"
+
+// The variables each pane contract is found through. The workspace driver
+// plants the tuios names because the panes it starts run the same tooling
+// (internal/tuiosctl reads them), plus the marker that says whose daemon it is.
+const (
+	envTuiosEnv     = tuiosctl.EnvEnv
+	envTuiosSocket  = tuiosctl.EnvSocket
+	envTuiosSession = tuiosctl.EnvSession
+	envTuiosPaneID  = tuiosctl.EnvPaneID
+	envTuiosProof   = tuiosctl.EnvPaneToken
+
+	envHerdrEnv        = "HERDR_ENV"
+	envHerdrPaneID     = "HERDR_PANE_ID"
+	envHerdrBinPath    = "HERDR_BIN_PATH"
+	envHerdrSocketPath = "HERDR_SOCKET_PATH"
+)
+
+// requirements are the variables a host needs before it can report about a
+// pane, in the order a person reads them. A host missing one of these is not
+// opened: reporting from a pane golder cannot name would land on somebody
+// else's window, or nowhere.
+var requirements = map[string][]string{
+	MuxGolder: {envTuiosSocket, envTuiosPaneID},
+	MuxTuios:  {envTuiosPaneID},
+	MuxHerdr:  {envHerdrPaneID, envHerdrBinPath},
+}
+
+// Resolution is one decision about reporting, made from the environment: which
+// multiplexer is around this process, which host (if any) will report to it,
+// and what is missing when nothing will.
+type Resolution struct {
+	// Multiplexer is the multiplexer this process runs inside, whether or not
+	// this package can report to it. "" in a plain terminal.
+	Multiplexer string
+	// Host is the dialect that will report, "" when nothing will. It is the
+	// name Reporter.HostName returns and the name status prints.
+	Host string
+	// Candidate is the host Missing is about: the one Resolve would use if the
+	// environment were complete. It is the detected multiplexer, or the host
+	// GOLDER_HOST_REPORT forced, and it equals Host whenever Host is set.
+	Candidate string
+	// Forced is GOLDER_HOST_REPORT as the environment set it, "" when unset.
+	Forced string
+	// Off is set when GOLDER_HOST_REPORT turned reporting off.
+	Off bool
+	// Missing lists the variables the multiplexer's host needs and the
+	// environment does not set. It is empty when the host can report.
+	Missing []string
+}
+
+// Resolve decides what this process reports to. Detect, Open and `golder
+// host-compat status` all read it, so the three cannot drift apart: the host
+// named here is the host that is spoken to and the host that is printed.
+//
+// A pane can look like two hosts at once. golder's own workspace wins: a pane
+// it starts carries the tuios variables too (its daemon speaks the same
+// protocol), and reporting through an external `tuios` binary that is not
+// installed — or is a different daemon — would be wrong. Between the external
+// hosts, tuios wins over herdr, and GOLDER_HOST_REPORT settles either by hand.
+func Resolve(getenv func(string) string) Resolution {
+	res := Resolution{Multiplexer: MuxNone}
+	if getenv == nil {
+		return res
+	}
+	res.Multiplexer = detectMultiplexer(getenv)
+	res.Forced = strings.TrimSpace(getenv(EnvHostReport))
+
+	mux := res.Multiplexer
+	switch res.Forced {
+	case "golder", "workspace":
+		mux = MuxGolder
+	case MuxGolder, MuxTuios, MuxHerdr:
+		mux = res.Forced
+	case "off", "none", "0", "false":
+		res.Off = true
+		return res
+	}
+	need, ok := requirements[mux]
+	if !ok {
+		// Nothing detected, or a multiplexer with no driver: nothing is
+		// reported, and nothing is missing (see MuxTmux and the rest).
+		return res
+	}
+	res.Candidate = mux
+	res.Missing = missingVars(need, getenv)
+	if len(res.Missing) == 0 {
+		res.Host = mux
+	}
+	return res
+}
+
+// Detect names the host this process reports to, or "" when it reports
+// nowhere. It reads the environment only, so it is safe to call from anywhere.
+func Detect(getenv func(string) string) string { return Resolve(getenv).Host }
+
+// detectMultiplexer names the terminal multiplexer around this process, in
+// precedence order. golder's own workspace comes first because its panes carry
+// every other variable too; then the two external hosts this package speaks to;
+// then the multiplexers it can only recognise.
+func detectMultiplexer(getenv func(string) string) string {
+	switch {
+	case enabled(getenv(EnvWorkspace)):
+		return MuxGolder
+	case getenv(envTuiosEnv) == "1":
+		return MuxTuios
+	case getenv(envHerdrEnv) == "1":
+		return MuxHerdr
+	case getenv("TMUX") != "":
+		return MuxTmux
+	case getenv("ZELLIJ") != "" || getenv("ZELLIJ_SESSION_NAME") != "":
+		return MuxZellij
+	case getenv("STY") != "":
+		return MuxScreen
+	}
+	return MuxNone
+}
+
+// enabled reads a marker variable golder sets. "0" is not enabled: a wrapper
+// that exports GOLDER_WORKSPACE=0 means "no", and reporting into a workspace
+// that is not there would be worse than saying nothing.
+func enabled(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// missingVars lists the names in need the environment leaves empty.
+func missingVars(need []string, getenv func(string) string) []string {
+	var missing []string
+	for _, name := range need {
+		if strings.TrimSpace(getenv(name)) == "" {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
+// Open returns a reporter for the host this process runs in, or nil when
+// Resolve says nothing will report. OpenSession adds the lifecycle bookkeeping
+// on top of it, which is what a driver normally holds.
 func Open(opts Options) *Reporter {
 	if opts.Getenv == nil {
 		opts.Getenv = os.Getenv
@@ -204,19 +364,13 @@ func Open(opts Options) *Reporter {
 		opts.Timeout = DefaultTimeout
 	}
 
-	name := Detect(opts.Getenv)
-	switch forced := opts.Getenv(EnvHostReport); forced {
-	case "off", "none", "0", "false":
-		return nil
-	case "tuios", "herdr":
-		name = forced
-	}
-
 	var host Host
-	switch name {
-	case "tuios":
+	switch res := Resolve(opts.Getenv); res.Host {
+	case MuxGolder:
+		host = newWorkspace(opts)
+	case MuxTuios:
 		host = newTuios(opts)
-	case "herdr":
+	case MuxHerdr:
 		host = newHerdr(opts)
 	}
 	if host == nil {
@@ -318,6 +472,13 @@ func (r *Reporter) Release() {
 	})
 }
 
+// clientHost is a host that holds a connection to its multiplexer: the
+// workspace host speaks the protocol directly and keeps the socket open between
+// reports, and Close is where it gives that socket back.
+type clientHost interface {
+	Close() error
+}
+
 // Close flushes what is queued and stops the reporter. It is safe to call more
 // than once and safe on a nil reporter.
 //
@@ -329,9 +490,18 @@ func (r *Reporter) Close() {
 		return
 	}
 	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
 	r.closed = true
 	r.mu.Unlock()
 	r.wg.Wait()
+	// After the last report, never before it: the socket the release went over
+	// is this one.
+	if c, ok := r.host.(clientHost); ok {
+		_ = c.Close()
+	}
 }
 
 // push merges work into the pending slot and starts the sender when it is not

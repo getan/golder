@@ -253,6 +253,163 @@ func TestSubAgentProcessDefaultCall(t *testing.T) {
 	})
 }
 
+// TestSubAgentProcessEnvKeepsPaneIdentityOnly is the credential-hygiene
+// contract on the default transport, checked from the child's own side: a
+// spawned golder inherits the pane it runs in (so its states, its conversation
+// and its pane-side tools land where the parent's do) and nothing that could be
+// a credential — not the provider key, not a general token, not golder's own
+// settings.
+func TestSubAgentProcessEnvKeepsPaneIdentityOnly(t *testing.T) {
+	bin := buildSubAgentHelper(t)
+	cfg := SubAgentProcessConfig{Command: bin}
+
+	// The parent's environment: a golder workspace pane, plus the shapes that
+	// must never reach the child.
+	t.Setenv("GOLDER_WORKSPACE", "1")
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_SOCKET", "/run/user/1000/golder/workspace.sock")
+	t.Setenv("TUIOS_SESSION", "work")
+	t.Setenv("TUIOS_PANE_ID", "98db8226-1829-468e-89a8-41a2baa0ddab")
+	t.Setenv("TUIOS_PANE_TOKEN", "proof-of-this-pane")
+	t.Setenv("DEEPSEEK_API_KEY", "sk-parent-secret")
+	t.Setenv("GITHUB_TOKEN", "gh-parent-secret")
+	t.Setenv("GOLDER_HOME", "/home/person/.golder")
+	t.Setenv("GOLDER_HOST_REPORT", "tuios")
+
+	identity := []string{
+		"GOLDER_WORKSPACE",
+		"TUIOS_ENV",
+		"TUIOS_SOCKET",
+		"TUIOS_SESSION",
+		"TUIOS_PANE_ID",
+		"TUIOS_PANE_TOKEN",
+	}
+	secrets := []string{
+		"DEEPSEEK_API_KEY",
+		"GITHUB_TOKEN",
+		"GOLDER_HOME",
+		"GOLDER_HOST_REPORT",
+	}
+	asked := append(append([]string{}, identity...), secrets...)
+	asked = append(asked, "PATH")
+
+	text, err := defaultProcessCall(context.Background(), cfg, SubAgentRunParams{
+		Prompt: "env:" + strings.Join(asked, ","), Model: "faux",
+	})
+	if err != nil {
+		t.Fatalf("defaultProcessCall = %v", err)
+	}
+	seen := map[string]string{}
+	for _, pair := range strings.Split(text, ";") {
+		name, value, ok := strings.Cut(pair, "=")
+		if ok {
+			seen[name] = value
+		}
+	}
+
+	wantIdentity := map[string]string{
+		"GOLDER_WORKSPACE": "1",
+		"TUIOS_ENV":        "1",
+		"TUIOS_SOCKET":     "/run/user/1000/golder/workspace.sock",
+		"TUIOS_SESSION":    "work",
+		"TUIOS_PANE_ID":    "98db8226-1829-468e-89a8-41a2baa0ddab",
+		// The pane's own token is the one TOKEN that must survive: without it
+		// the child's connection is not provably in this pane.
+		"TUIOS_PANE_TOKEN": "proof-of-this-pane",
+	}
+	for name, want := range wantIdentity {
+		if got := seen[name]; got != want {
+			t.Errorf("child %s = %q, want %q (identity must be inherited)", name, got, want)
+		}
+	}
+	for _, name := range secrets {
+		if got := seen[name]; got != "<unset>" {
+			t.Errorf("child %s = %q, want it scrubbed", name, got)
+		}
+	}
+	// Ordinary environment is still inherited: the child is a normal process,
+	// not a stripped one.
+	if seen["PATH"] == "<unset>" || seen["PATH"] == "" {
+		t.Error("child PATH is empty: ordinary environment must still reach it")
+	}
+}
+
+// TestSubAgentProcessExplicitEnvIsUntouched: a caller that builds the child
+// environment itself keeps control of it, identity included - the default is a
+// default, not a policy the caller cannot override.
+func TestSubAgentProcessExplicitEnvIsUntouched(t *testing.T) {
+	bin := buildSubAgentHelper(t)
+	t.Setenv("TUIOS_PANE_ID", "the-parents-pane")
+
+	text, err := defaultProcessCall(context.Background(), SubAgentProcessConfig{
+		Command: bin,
+		Env:     []string{"PATH=/usr/bin:/bin", "TUIOS_PANE_ID=the-childs-pane"},
+	}, SubAgentRunParams{Prompt: "env:PATH,TUIOS_PANE_ID,HOME", Model: "faux"})
+	if err != nil {
+		t.Fatalf("defaultProcessCall = %v", err)
+	}
+	if !strings.Contains(text, "TUIOS_PANE_ID=the-childs-pane") {
+		t.Errorf("child env = %q, want exactly what the caller built", text)
+	}
+	if !strings.Contains(text, "HOME=<unset>") {
+		t.Errorf("child env = %q, want it built from the caller's list alone", text)
+	}
+}
+
+// TestSubAgentEnv pins the derived environment a spawned golder runs with,
+// without a subprocess: the pane's identity survives, every name appears once,
+// and nothing credential-shaped gets through.
+func TestSubAgentEnv(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=/home/person",
+		"GOLDER_WORKSPACE=1",
+		"TUIOS_ENV=1",
+		"TUIOS_SOCKET=/run/user/1000/golder/workspace.sock",
+		"TUIOS_SESSION=work",
+		"TUIOS_PANE_ID=pane-7",
+		"TUIOS_PANE_TOKEN=proof-of-pane-7",
+		"GOLDER_HOME=/home/person/.golder",
+		"GOLDER_HOST_REPORT=tuios",
+		"DEEPSEEK_API_KEY=sk-secret",
+		"ANTHROPIC_API_KEY=another-test-value",
+		"GITHUB_TOKEN=gh-secret",
+		"AWS_SECRET_ACCESS_KEY=aws-secret",
+		"MY_DB_PASSWORD=hunter2",
+		"malformed-entry",
+	}
+	env := subAgentEnv(parent)
+	got := map[string]string{}
+	seen := map[string]int{}
+	for _, entry := range env {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("derived env has a malformed entry: %q", entry)
+		}
+		seen[name]++
+		got[name] = value
+	}
+	for _, name := range []string{
+		"GOLDER_WORKSPACE", "TUIOS_ENV", "TUIOS_SOCKET", "TUIOS_SESSION",
+		"TUIOS_PANE_ID", "TUIOS_PANE_TOKEN", "PATH", "HOME",
+	} {
+		if seen[name] != 1 {
+			t.Errorf("%s appears %d times in %v, want once", name, seen[name], env)
+		}
+	}
+	for _, name := range []string{
+		"GOLDER_HOME", "GOLDER_HOST_REPORT", "DEEPSEEK_API_KEY",
+		"ANTHROPIC_API_KEY", "GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "MY_DB_PASSWORD",
+	} {
+		if _, ok := got[name]; ok {
+			t.Errorf("%s reached the child: %v", name, env)
+		}
+	}
+	if got["TUIOS_PANE_TOKEN"] != "proof-of-pane-7" || got["GOLDER_WORKSPACE"] != "1" {
+		t.Errorf("identity values = %v, want the parent's", got)
+	}
+}
+
 // buildSubAgentHelper compiles the sub-agent helper binary into a temp dir and
 // returns its path. The helper speaks the same JSON-RPC "subagent/run" wire
 // format as golder --subagent-rpc (decoded with plain encoding/json, no internal
@@ -286,6 +443,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 type params struct {
@@ -296,6 +454,22 @@ type request struct {
 	ID     *json.RawMessage ` + "`json:\"id\"`" + `
 	Method string           ` + "`json:\"method\"`" + `
 	Params params           ` + "`json:\"params\"`" + `
+}
+
+// envReport answers "env:A,B" with what this process actually sees for A and
+// B, so a test can ask the child about its own environment rather than reading
+// the parent's intent.
+func envReport(prompt string) string {
+	names := strings.Split(strings.TrimPrefix(prompt, "env:"), ",")
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		value := os.Getenv(name)
+		if value == "" {
+			value = "<unset>"
+		}
+		out = append(out, name+"="+value)
+	}
+	return strings.Join(out, ";")
 }
 
 func main() {
@@ -316,7 +490,11 @@ func main() {
 			// the parent's JSON-RPC reader sees EOF and fails the call.
 			os.Exit(1)
 		}
-		result, _ := json.Marshal(map[string]string{"text": "echo: " + r.Params.Prompt})
+		text := "echo: " + r.Params.Prompt
+		if strings.HasPrefix(r.Params.Prompt, "env:") {
+			text = envReport(r.Params.Prompt)
+		}
+		result, _ := json.Marshal(map[string]string{"text": text})
 		resp := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      r.ID,

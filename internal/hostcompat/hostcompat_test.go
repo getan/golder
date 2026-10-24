@@ -66,6 +66,20 @@ func tuiosPane() map[string]string {
 	}
 }
 
+// workspacePane is the environment of a pane golder's own workspace started:
+// the tuios variables that daemon plants, plus the marker that says whose
+// daemon it is.
+func workspacePane() map[string]string {
+	return map[string]string{
+		"GOLDER_WORKSPACE": "1",
+		"TUIOS_ENV":        "1",
+		"TUIOS_PANE_ID":    "98db8226-1829-468e-89a8-41a2baa0ddab",
+		"TUIOS_SESSION":    "work",
+		"TUIOS_SOCKET":     "/tmp/golder-workspace-test.sock",
+		"TUIOS_PANE_TOKEN": "proof-of-this-pane",
+	}
+}
+
 // herdrPane is the environment of a herdr pane running golder.
 func herdrPane() map[string]string {
 	return map[string]string{
@@ -110,21 +124,34 @@ func waitIdle(t *testing.T, rep *Reporter) {
 	}
 }
 
+// TestDetect names the host a report will actually reach: it is the name Open
+// opens, Reporter.HostName returns and `host-compat status` prints, so a pane
+// whose environment is incomplete says "nowhere" rather than naming a host it
+// cannot reach.
 func TestDetect(t *testing.T) {
+	both := tuiosPane()
+	both["HERDR_ENV"], both["HERDR_PANE_ID"], both["HERDR_BIN_PATH"] = "1", "w1:p2", "/bin/herdr"
+
 	cases := []struct {
 		name string
 		env  map[string]string
 		want string
 	}{
 		{"plain terminal", map[string]string{}, ""},
-		{"tuios", map[string]string{"TUIOS_ENV": "1"}, "tuios"},
-		{"herdr", map[string]string{"HERDR_ENV": "1"}, "herdr"},
+		{"tuios", tuiosPane(), MuxTuios},
+		{"herdr", herdrPane(), MuxHerdr},
+		{"golder's own workspace", workspacePane(), MuxGolder},
 		// Both set: tuios wins, because a herdr variable leaking into a tuios
 		// pane (or vice versa) must not send reports to the wrong host.
-		{"both", map[string]string{"TUIOS_ENV": "1", "HERDR_ENV": "1"}, "tuios"},
+		{"both", both, MuxTuios},
 		// A truthy-but-not-1 value is not the host's contract; both hosts
 		// document "1".
 		{"TUIOS_ENV=0", map[string]string{"TUIOS_ENV": "0"}, ""},
+		// A host variable without the pane it would report about is not a host
+		// this process can report to.
+		{"tuios without a pane", map[string]string{"TUIOS_ENV": "1"}, ""},
+		{"herdr without a pane", map[string]string{"HERDR_ENV": "1"}, ""},
+		{"workspace without a socket", map[string]string{"GOLDER_WORKSPACE": "1", "TUIOS_PANE_ID": "p"}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,6 +159,115 @@ func TestDetect(t *testing.T) {
 				t.Errorf("Detect = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDetectMultiplexer is the detection table a person reads: every terminal
+// golder recognises is named, and the ones with no driver report nowhere rather
+// than pretending (see OpenIsNilForAMultiplexerWithoutADriver).
+func TestDetectMultiplexer(t *testing.T) {
+	workspaceInTuios := workspacePane() // a workspace pane carries TUIOS_* too
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"plain terminal", map[string]string{}, MuxNone},
+		{"golder workspace", workspacePane(), MuxGolder},
+		{"tuios", tuiosPane(), MuxTuios},
+		{"herdr", herdrPane(), MuxHerdr},
+		// golder's own workspace wins over the tuios variables it also sets:
+		// the daemon behind them is golder, and the report goes to it directly.
+		{"golder workspace inside a tuios pane", workspaceInTuios, MuxGolder},
+		{"tmux", map[string]string{"TMUX": "/tmp/tmux-1000/default,42,0"}, MuxTmux},
+		{"zellij", map[string]string{"ZELLIJ": "0"}, MuxZellij},
+		{"zellij by session", map[string]string{"ZELLIJ_SESSION_NAME": "work"}, MuxZellij},
+		{"screen", map[string]string{"STY": "1234.pts-0.laptop"}, MuxScreen},
+		// A tuios pane nested in tmux is a tuios pane.
+		{"tuios inside tmux", map[string]string{"TUIOS_ENV": "1", "TMUX": "/tmp/tmux-1000/default,42,0"}, MuxTuios},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Resolve(env(tc.env)).Multiplexer; got != tc.want {
+				t.Errorf("Multiplexer = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkspaceMarkerValues: GOLDER_WORKSPACE is golder's own marker, so its
+// words are read rather than only "1" - but "0" is not enabled, and neither is
+// an empty value. A wrapper that exports GOLDER_WORKSPACE=0 must not send
+// reports to a workspace that is not there.
+func TestWorkspaceMarkerValues(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{"1", true}, {"true", true}, {"TRUE", true}, {"yes", true}, {"on", true}, {" 1 ", true},
+		{"", false}, {"0", false}, {"false", false}, {"no", false}, {"off", false}, {"banana", false},
+	} {
+		kv := workspacePane()
+		kv["GOLDER_WORKSPACE"] = tc.value
+		got := Resolve(env(kv)).Multiplexer == MuxGolder
+		if got != tc.want {
+			t.Errorf("GOLDER_WORKSPACE=%q enabled = %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}
+
+// TestResolveIsTheOneDecision: the host Detect names, the host Open opens and
+// the host a person is told about are one answer, which is what keeps the rail
+// and `host-compat status` from disagreeing.
+func TestResolveIsTheOneDecision(t *testing.T) {
+	for _, kv := range []map[string]string{
+		{},
+		tuiosPane(),
+		herdrPane(),
+		workspacePane(),
+		{"GOLDER_WORKSPACE": "1", "TUIOS_PANE_ID": "p"},
+		{"TMUX": "/tmp/tmux-1000/default,42,0"},
+		{"TUIOS_ENV": "1", "TUIOS_PANE_ID": "pane-1", EnvHostReport: "off"},
+	} {
+		res := Resolve(env(kv))
+		if got := Detect(env(kv)); got != res.Host {
+			t.Errorf("Detect = %q, Resolve().Host = %q: they must agree", got, res.Host)
+		}
+		rep := Open(Options{Getenv: env(kv), LookPath: fakeLookPath, Run: newRecorder().run})
+		if got := rep.HostName(); got != res.Host {
+			t.Errorf("Open inside %v opened %q, Resolve says %q", kv, got, res.Host)
+		}
+		if res.Host != "" && len(res.Missing) > 0 {
+			t.Errorf("Resolve reports host %q but also missing %v", res.Host, res.Missing)
+		}
+		if res.Host == "" && res.Multiplexer != "" && len(requirements[res.Multiplexer]) > 0 && len(res.Missing) == 0 && !res.Off {
+			t.Errorf("host %q: nothing reported and nothing missing", res.Multiplexer)
+		}
+	}
+}
+
+// TestOpenIsNilForAMultiplexerWithoutADriver: recognising tmux is not the same
+// as reporting to it. Nothing is sent, and status is what tells the person.
+func TestOpenIsNilForAMultiplexerWithoutADriver(t *testing.T) {
+	for name, kv := range map[string]map[string]string{
+		"tmux":   {"TMUX": "/tmp/tmux-1000/default,42,0"},
+		"zellij": {"ZELLIJ": "0"},
+		"screen": {"STY": "1234.pts-0.laptop"},
+	} {
+		rec := newRecorder()
+		if rep := Open(Options{Getenv: env(kv), LookPath: fakeLookPath, Run: rec.run}); rep != nil {
+			t.Errorf("%s: Open opened %q, want nil", name, rep.HostName())
+		}
+		if calls := rec.all(); len(calls) != 0 {
+			t.Errorf("%s: %d calls were sent to a multiplexer with no driver: %v", name, len(calls), calls)
+		}
+		res := Resolve(env(kv))
+		if res.Multiplexer == "" {
+			t.Errorf("%s: the multiplexer should still be named for status", name)
+		}
+		if res.Host != "" {
+			t.Errorf("%s: Resolve.Host = %q, want empty", name, res.Host)
+		}
 	}
 }
 

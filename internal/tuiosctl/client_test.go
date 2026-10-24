@@ -2,19 +2,35 @@ package tuiosctl
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 // fakeDaemon starts a Unix socket that answers one JSON line per request.
 func fakeDaemon(t *testing.T, answer func(verb string, params map[string]any) any) string {
+	t.Helper()
+	return fakeDaemonCounting(t, nil, answer)
+}
+
+// hangUpAnswer is the answer that hangs up instead of replying, which is what a
+// daemon restarting under a client looks like.
+type hangUpAnswer struct{}
+
+var fakeHangUp hangUpAnswer
+
+// fakeDaemonCounting is fakeDaemon that also counts the connections it
+// accepted, so a test can tell a reused connection from a fresh dial.
+func fakeDaemonCounting(t *testing.T, conns *int, answer func(verb string, params map[string]any) any) string {
 	t.Helper()
 	// Keep the path short: macOS caps Unix socket paths at 104 bytes, and a
 	// t.TempDir path is longer than that.
@@ -30,6 +46,9 @@ func fakeDaemon(t *testing.T, answer func(verb string, params map[string]any) an
 			conn, err := ln.Accept()
 			if err != nil {
 				return
+			}
+			if conns != nil {
+				*conns = *conns + 1
 			}
 			go serveFake(t, conn, answer)
 		}
@@ -51,6 +70,9 @@ func serveFake(t *testing.T, conn net.Conn, answer func(string, map[string]any) 
 			return
 		}
 		res := answer(req.Verb, req.Params)
+		if _, hangUp := res.(hangUpAnswer); hangUp {
+			return
+		}
 		resp := map[string]any{"id": req.ID}
 		if e, ok := res.(*Error); ok {
 			resp["error"] = e
@@ -248,5 +270,186 @@ func TestAvailableRequiresARealPane(t *testing.T) {
 	t.Setenv(EnvEnv, "")
 	if Available() {
 		t.Fatal("a stale socket/session outside a tuios pane must not be enough")
+	}
+}
+
+// TestReadLineStopsAtTheLimit is the fix for the unbounded read: the size was
+// checked on ReadBytes' result, which is after bufio grew its buffer to fit
+// whatever arrived. A peer that never sends a newline must cost at most the
+// limit, and a line that ends exactly at the limit is still a line.
+func TestReadLineStopsAtTheLimit(t *testing.T) {
+	const limit = 64
+
+	t.Run("exactly at the limit", func(t *testing.T) {
+		line := append(bytes.Repeat([]byte("x"), limit-1), '\n')
+		got, err := readLine(bufio.NewReaderSize(bytes.NewReader(line), 8), limit)
+		if err != nil {
+			t.Fatalf("readLine = %v, want the line", err)
+		}
+		if !bytes.Equal(got, line) {
+			t.Fatalf("readLine = %q, want %q", got, line)
+		}
+	})
+
+	t.Run("one byte past the limit", func(t *testing.T) {
+		line := append(bytes.Repeat([]byte("x"), limit), '\n')
+		if _, err := readLine(bufio.NewReaderSize(bytes.NewReader(line), 8), limit); !errors.Is(err, errLineTooLong) {
+			t.Fatalf("readLine = %v, want errLineTooLong", err)
+		}
+	})
+
+	t.Run("no newline ever arrives", func(t *testing.T) {
+		// Four times the limit, in fragments smaller than the reader's buffer,
+		// so the refusal comes from the limit and not from a single read.
+		endless := bytes.NewReader(bytes.Repeat([]byte("x"), limit*4))
+		if _, err := readLine(bufio.NewReaderSize(endless, 8), limit); !errors.Is(err, errLineTooLong) {
+			t.Fatalf("readLine = %v, want errLineTooLong", err)
+		}
+		// The reader is left where the refusal happened, so the rest of the
+		// wire is still readable; the client drops the connection rather than
+		// resync, which this only pins as "not silently consumed".
+		if endless.Len() == 0 {
+			t.Error("readLine consumed the whole stream before refusing")
+		}
+	})
+
+	t.Run("a line longer than the buffer", func(t *testing.T) {
+		body := bytes.Repeat([]byte("y"), limit/2)
+		got, err := readLine(bufio.NewReaderSize(bytes.NewReader(append(body, '\n')), 8), limit)
+		if err != nil {
+			t.Fatalf("readLine = %v, want the line assembled from fragments", err)
+		}
+		if !bytes.Equal(got, append(body, '\n')) {
+			t.Fatalf("readLine = %q, want %q", got, append(body, '\n'))
+		}
+	})
+
+	t.Run("end of stream mid-line", func(t *testing.T) {
+		// Half a response parsed as a whole one would be worse than none.
+		if _, err := readLine(bufio.NewReaderSize(bytes.NewReader([]byte(`{"id":1`)), 8), limit); !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("readLine = %v, want io.ErrUnexpectedEOF", err)
+		}
+	})
+}
+
+// shortConn is a net.Conn whose Write takes at most max bytes per call, which
+// is what a socket is allowed to do. Only Write is reached by writeAll.
+type shortConn struct {
+	net.Conn
+	max int
+	buf bytes.Buffer
+}
+
+func (c *shortConn) Write(p []byte) (int, error) {
+	if len(p) > c.max {
+		p = p[:c.max]
+	}
+	return c.buf.Write(p)
+}
+
+// TestWriteAllCompletesAShortWrite: net.Conn may accept part of a buffer, and
+// a caller that trusted the first nil error would send a truncated command.
+func TestWriteAllCompletesAShortWrite(t *testing.T) {
+	conn := &shortConn{max: 3}
+	want := []byte(`{"id":1,"verb":"list-windows"}` + "\n")
+	if err := writeAll(conn, want); err != nil {
+		t.Fatalf("writeAll = %v, want nil", err)
+	}
+	if got := conn.buf.Bytes(); !bytes.Equal(got, want) {
+		t.Fatalf("wrote %q, want %q", got, want)
+	}
+
+	// A connection that accepts nothing must be an error, never a silent
+	// success with the request lost.
+	if err := writeAll(&shortConn{max: 0}, want); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("writeAll over a stuck conn = %v, want io.ErrShortWrite", err)
+	}
+}
+
+// TestClientTimeoutIsADeadline: the caller distinguishes "the daemon was slow"
+// from "the connection broke", so a timeout has to be testable as a deadline
+// while its message stays readable.
+func TestClientTimeoutIsADeadline(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	sock := fakeDaemon(t, func(verb string, _ map[string]any) any {
+		if verb == "hello" {
+			return map[string]any{"type": "hello"}
+		}
+		<-block
+		return map[string]any{"type": "ok"}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err = c.ListWindows(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ListWindows = %v, want a deadline error", err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error %q does not say it timed out", err)
+	}
+	// The connection that timed out is dropped, so the next call dials a fresh
+	// one instead of reading the late reply as its own answer.
+	if !strings.Contains(err.Error(), "list-windows") {
+		t.Errorf("error %q does not name the verb", err)
+	}
+}
+
+// TestClientReconnectsAfterTheConnectionBreaks: a daemon restart (or a socket
+// that vanished) fails the call in flight but must not poison the client.
+func TestClientReconnectsAfterTheConnectionBreaks(t *testing.T) {
+	var conns int
+	sock := fakeDaemonCounting(t, &conns, func(verb string, _ map[string]any) any {
+		switch verb {
+		case "hello":
+			return map[string]any{"type": "hello"}
+		case "close-window":
+			// Hang up mid-call: the client sees EOF and drops the connection.
+			return fakeHangUp
+		default:
+			return map[string]any{"type": "window_list", "total": 0}
+		}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.CloseWindow(context.Background(), "w1"); err == nil {
+		t.Fatal("a hung-up call should fail")
+	}
+	if _, err := c.ListWindows(context.Background()); err != nil {
+		t.Fatalf("the call after a broken connection = %v, want a fresh dial", err)
+	}
+	if conns < 2 {
+		t.Errorf("connections = %d, want the second call to redial", conns)
+	}
+}
+
+// TestClientCancelledContextDoesNotDial: a cancelled call must not reach the
+// daemon, and must report the cancellation rather than a connection error.
+func TestClientCancelledContextDoesNotDial(t *testing.T) {
+	sock := fakeDaemon(t, func(verb string, _ map[string]any) any {
+		return map[string]any{"type": "hello"}
+	})
+	c, err := Dial(context.Background(), Options{Socket: sock, Session: "work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.ListWindows(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("ListWindows on a cancelled context = %v, want context.Canceled", err)
+	}
+	// The connection was never used, so it is still good.
+	if _, err := c.ListWindows(context.Background()); err != nil {
+		t.Fatalf("the next call = %v, want the existing connection", err)
 	}
 }

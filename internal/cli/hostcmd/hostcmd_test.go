@@ -15,8 +15,9 @@ func run(t *testing.T, env map[string]string, cmd string, args ...string) (stdou
 	home := t.TempDir()
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "XDG_CONFIG_HOME" || k == "TUIOS_HARNESS_DIR" || k == "TUIOS_ENV" ||
-			k == "TUIOS_PANE_ID" || k == "HERDR_ENV" || k == "HERDR_PANE_ID" || k == "GOLDER_HOST_REPORT" {
+		if k == "XDG_CONFIG_HOME" || k == "TUIOS_HARNESS_DIR" || strings.HasPrefix(k, "TUIOS_") ||
+			strings.HasPrefix(k, "HERDR_") || k == "GOLDER_HOST_REPORT" || k == "GOLDER_WORKSPACE" ||
+			k == "TMUX" || k == "ZELLIJ" || k == "ZELLIJ_SESSION_NAME" || k == "STY" {
 			t.Setenv(k, "")
 		}
 	}
@@ -85,6 +86,9 @@ func TestStatusInsideHerdr(t *testing.T) {
 
 // TestStatusSaysWhenReportingIsOff: the escape hatch is silent by design, so
 // the status command has to surface it or a person would chase a phantom.
+//
+// The name printed here is the name hostcompat.Resolve hands Open, so a person
+// reading it is reading what golder actually does.
 func TestStatusSaysWhenReportingIsOff(t *testing.T) {
 	out, _, code := run(t, map[string]string{
 		"TUIOS_ENV":          "1",
@@ -96,6 +100,98 @@ func TestStatusSaysWhenReportingIsOff(t *testing.T) {
 	}
 	if !strings.Contains(out, "OFF") {
 		t.Errorf("status = %q, want reporting reported as off", out)
+	}
+}
+
+// TestStatusInsideGolderWorkspace: a pane of golder's own workspace needs no
+// tuios binary and no manifest — the daemon is golder, and it reads the report
+// itself. The variables it reports through are still named, because a missing
+// one is the usual reason nothing shows up.
+func TestStatusInsideGolderWorkspace(t *testing.T) {
+	out, _, code := run(t, map[string]string{
+		"GOLDER_WORKSPACE": "1",
+		"TUIOS_ENV":        "1",
+		"TUIOS_SOCKET":     "/run/user/1000/golder/workspace.sock",
+		"TUIOS_SESSION":    "work",
+		"TUIOS_PANE_ID":    "pane-1",
+		"TUIOS_PANE_TOKEN": "proof",
+	}, "status")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	for _, want := range []string{
+		"host:        golder-workspace",
+		"TUIOS_SOCKET=/run/user/1000/golder/workspace.sock",
+		"TUIOS_PANE_ID=pane-1",
+		"TUIOS_PANE_TOKEN=proof",
+		"manifest:    not needed",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status = %q, want it to mention %q", out, want)
+		}
+	}
+	if strings.Contains(out, "golder host-compat install") {
+		t.Errorf("a workspace pane needs no manifest installed:\n%s", out)
+	}
+}
+
+// TestStatusInAWorkspaceMissingItsSocket: the workspace host reports over its
+// daemon's socket, so a pane without one says exactly that instead of naming a
+// host it cannot reach.
+func TestStatusInAWorkspaceMissingItsSocket(t *testing.T) {
+	out, _, code := run(t, map[string]string{
+		"GOLDER_WORKSPACE": "1",
+		"TUIOS_PANE_ID":    "pane-1",
+	}, "status")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(out, "this is a golder-workspace pane") || !strings.Contains(out, "TUIOS_SOCKET is not set") {
+		t.Errorf("status = %q, want it to name the missing socket", out)
+	}
+	if strings.Contains(out, "host:        golder-workspace") {
+		t.Errorf("status claims a host it cannot reach:\n%s", out)
+	}
+}
+
+// TestStatusInTmuxNamesTheTerminal: golder recognises tmux, zellij and screen
+// and has no driver for any of them. Saying which one it found is more useful
+// than a bare "none", and it must not pretend to report.
+func TestStatusInTmuxNamesTheTerminal(t *testing.T) {
+	for name, kv := range map[string]map[string]string{
+		"tmux":   {"TMUX": "/tmp/tmux-1000/default,42,0"},
+		"zellij": {"ZELLIJ": "0"},
+		"screen": {"STY": "1234.pts-0.laptop"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, _, code := run(t, kv, "status")
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0", code)
+			}
+			if !strings.Contains(out, "no driver for "+name) {
+				t.Errorf("status = %q, want it to say there is no %s driver", out, name)
+			}
+			if strings.Contains(out, "host:        "+name) {
+				t.Errorf("status claims to report to %s:\n%s", name, out)
+			}
+		})
+	}
+}
+
+// TestStatusForcedHostInAPlainTerminal: the escape hatch names a host the pane
+// cannot carry, so status says that and what is missing rather than claiming
+// the host is in use.
+func TestStatusForcedHostInAPlainTerminal(t *testing.T) {
+	out, _, code := run(t, map[string]string{
+		"GOLDER_HOST_REPORT": "tuios",
+	}, "status")
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	for _, want := range []string{"GOLDER_HOST_REPORT=tuios", "cannot reach", "TUIOS_PANE_ID is not set"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status = %q, want it to mention %q", out, want)
+		}
 	}
 }
 
