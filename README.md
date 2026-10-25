@@ -20,6 +20,10 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip`；镜像、sha256 校验、从源码构建等细节见[安装细节](#安装细节)。
 
+## 推荐终端
+
+推荐在 [Ghostty](https://github.com/ghostty-org/ghostty) 里使用 golder，TUI 也主要在 Ghostty 上测试，因此在那里的表现最接近日常开发时的样子。其他现代终端同样可以运行，但测试覆盖以 Ghostty 为主；内置浏览器 pane 仍需要终端支持相应的图形协议。
+
 ## 自带终端工作区
 
 ```bash

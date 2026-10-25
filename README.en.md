@@ -20,6 +20,10 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 One command on macOS / Linux, no Node or Python. On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases); mirrors, sha256 verification and building from source are in [Install details](#install-details).
 
+## Recommended terminal
+
+We recommend running golder in [Ghostty](https://github.com/ghostty-org/ghostty), where the TUI is mainly tested — that's the closest to the setup it is developed against. Other modern terminals work too, but Ghostty gets the most coverage; the built-in browser pane still needs a terminal that supports its graphics protocol.
+
 ## Built-in terminal workspace
 
 ```bash
