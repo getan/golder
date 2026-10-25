@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -246,30 +245,16 @@ func ResumeHiddenHint(store *session.Store, scope ResumeScope, shown int) string
 // falling back to the first assistant text. It is single-line and capped at
 // previewRunes runes so CJK titles survive; "" when the session has no text.
 func SessionPreview(store *session.Store, id string) string {
-	_, entries, err := store.LoadEntries(id)
+	text, err := store.Preview(id)
 	if err != nil {
 		return ""
 	}
-	fallback := ""
-	for _, e := range entries {
-		switch msg := e.Message.(type) {
-		case agentcore.UserMessage:
-			text := agentcore.ContentToText(msg.Content)
-			// A `!` passthrough record previews as the original "!cmd" line,
-			// not as the raw <user_shell_command> XML.
-			if d, ok := ParseUserShellRecord(text); ok {
-				text = "!" + d.Command
-			}
-			if t := previewText(text); t != "" {
-				return t
-			}
-		case agentcore.AssistantMessage:
-			if fallback == "" {
-				fallback = previewText(agentcore.ContentToText(msg.Content))
-			}
-		}
+	// A `!` passthrough record previews as the original "!cmd" line, not as
+	// the raw <user_shell_command> XML.
+	if d, ok := ParseUserShellRecord(text); ok {
+		text = "!" + d.Command
 	}
-	return fallback
+	return previewText(text)
 }
 
 // previewText collapses s to one line and caps it at previewRunes runes.
