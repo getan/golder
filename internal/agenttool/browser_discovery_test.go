@@ -92,6 +92,38 @@ func TestBrowserDiscoveryStaleSelectionAndExplicitAttach(t *testing.T) {
 	}
 }
 
+func TestBrowserListForgetsAMissingSelectedSocket(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("KITTY_BROWSE_SOCKET", "")
+	setBrowserSocket("")
+	t.Cleanup(func() { setBrowserSocket("") })
+
+	stale := filepath.Join(root, "gone.sock")
+	setBrowserSocket(stale)
+	tool := NewBrowserTool(root, true)
+	tool.boundSocket = stale
+	tool.boundBrowser = "browser-gone"
+	tool.lastTab = "tab-gone"
+
+	res := tool.listInstances(context.Background())
+	if res.IsError {
+		t.Fatalf("list failed: %s", agentcore.ContentToText(res.Content))
+	}
+	if tool.socketPath() != "" || browserSocket() != "" {
+		t.Fatalf("selection survived a missing socket: bound=%q override=%q", tool.socketPath(), browserSocket())
+	}
+	if tool.boundBrowser != "" || tool.lastTab != "" {
+		t.Fatalf("browser/tab binding survived: browser=%q tab=%q", tool.boundBrowser, tool.lastTab)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(agentcore.ContentToText(res.Content)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["selected_socket"] != "" {
+		t.Fatalf("list still reports a missing selected socket: %v", out["selected_socket"])
+	}
+}
+
 func TestBrowserAttachOverridesEnvAndRejectsUnknownID(t *testing.T) {
 	root := shortRoot(t)
 	withBrowserSocket(t, "")

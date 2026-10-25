@@ -175,6 +175,48 @@ func (t *BrowserTool) discovery(ctx context.Context) browserDiscovery {
 	return discoverBrowsers(ctx, t.cwd, t.socketPath())
 }
 
+// clearMissingSelection forgets a browser whose socket has disappeared. The
+// close path removes the socket and the on-disk record, but the tool's
+// session-local selection is memory: without this, list would keep advertising
+// a dead selected_socket until the next open or restart.
+//
+// It deliberately clears only golder's session selection. KITTY_BROWSE_SOCKET
+// is an explicit choice by the person launching the process, so a missing path
+// there is reported, never silently discarded.
+func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
+	// A list that discovered another live browser must not discard an explicit
+	// selection and silently switch: the person may be about to attach it.
+	// Clearing is for the case this was written for: the selected browser is
+	// gone and nothing else is live.
+	if len(d.Instances) != 0 || d.Truncated {
+		return
+	}
+	t.tabMu.Lock()
+	bound := t.boundSocket
+	if bound != "" {
+		if _, err := os.Stat(bound); os.IsNotExist(err) {
+			t.boundSocket, t.boundBrowser, t.lastTab = "", "", ""
+		}
+	}
+	t.tabMu.Unlock()
+
+	if browserctl.SocketFromEnv() != "" {
+		return
+	}
+	selected := browserSocket()
+	if selected == "" {
+		return
+	}
+	if _, err := os.Stat(selected); !os.IsNotExist(err) {
+		return
+	}
+	browserSocketMu.Lock()
+	if browserSocketOverride == selected {
+		browserSocketOverride = ""
+	}
+	browserSocketMu.Unlock()
+}
+
 func (t *BrowserTool) bind(instance browserInstance) {
 	t.tabMu.Lock()
 	t.boundSocket, t.boundBrowser = instance.Socket, instance.Info.BrowserID
@@ -194,6 +236,7 @@ func (t *BrowserTool) checkBinding(info browserctl.Info) error {
 
 func (t *BrowserTool) listInstances(ctx context.Context) agentcore.AgentToolResult {
 	d := t.discovery(ctx)
+	t.clearMissingSelection(d)
 	return t.listInstancesResult(d)
 }
 
