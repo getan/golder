@@ -22,8 +22,8 @@ import (
 const DefaultMaxSubagents = 4
 
 // taskDescription uses the same delegation policy as the main system prompt so
-// the tool description cannot retain a stale task-count or analysis-only rule.
-const taskDescription = "Dispatch a general-purpose sub-agent to autonomously complete a delegated task. " +
+// the tool description cannot retain a stale authorization rule.
+const taskDescription = "The task tool dispatches a general-purpose sub-agent for one concrete, bounded task. " +
 	taskGuide
 
 // taskSystemPrompt seeds every generic sub-agent's context. It is intentionally

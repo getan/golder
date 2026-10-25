@@ -24,6 +24,13 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Sub-agent delegation now needs an explicit request**: the `task` guide
+  follows codex's default — the user or applicable AGENTS.md or loaded skill
+  instructions must ask for sub-agents, delegation, or parallel agent work.
+  "Be thorough", research, investigation, or detailed analysis no longer count
+  as permission, and a single substantial job is no longer advertised as a
+  reason to spawn. Once authorized, the immediate blocking step stays local and
+  only concrete, bounded sidecar work is delegated.
 - **Reasoning-level defaults are scoped per provider/model**: `/model default`,
   the TUI picker's `d` key and `/provider` switches now read and write
   `[thinking_defaults]`, keyed by `provider/model`, so saving a default for one

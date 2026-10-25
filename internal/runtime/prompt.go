@@ -295,11 +295,15 @@ const batchGuide = "Batch independent tool calls in a single message: read, grep
 // taskGuide instructs the model on how to use the generic `task` tool (US-008,
 // #458). The task tool dispatches an independent sub-agent that runs its own
 // agent loop and returns its final report, so it is the mechanism for
-// delegation and fan-out. A fresh child gets the project brief but no parent
+// delegation and fan-out. The gate is explicit authorization: only a request
+// (from the user, AGENTS.md, or a loaded skill) for sub-agents, delegation, or
+// parallel agent work opens it; "be thorough" or "research this" does not.
+// Once authorized, the guide keeps the critical path local and delegates only
+// bounded sidecar work. A fresh child gets the project brief but no parent
 // conversation; a fork inherits both, which is the escape hatch for a task that
-// continues work already discussed. The key affordance advertised here is that
-// emitting MULTIPLE task calls in a single assistant message runs those
-// sub-agents in parallel, letting skills like /graph achieve real concurrency.
+// continues work already discussed. Emitting MULTIPLE task calls in a single
+// assistant message runs those sub-agents in parallel, letting skills like
+// /graph achieve real concurrency.
 // searchGuide disciplines web research so it terminates: batch independent
 // queries in one turn without preamble narration, open pages with webfetch
 // (never pass a URL back into search), never repeat a query or URL, and
@@ -311,21 +315,28 @@ const searchGuide = "For web research: issue searches immediately, without narra
 	"reuse the cited results. After two to three rounds, synthesize the answer from what is " +
 	"cited instead of searching again."
 
-const taskGuide = "Use the task tool when delegating well-scoped work will save time or keep substantial " +
-	"intermediate output out of the main conversation. Choose based on benefit, not a minimum task count: " +
-	"a single substantial task or two independent workstreams can be worthwhile. Sub-agents may analyze, " +
-	"implement, write tests or documentation, and review changes within their tool and permission limits. " +
-	"Handle quick lookups and small edits directly when delegation would add more overhead than value. " +
-	"Choose context=fresh for self-contained work needing little conversation history; it retains system " +
-	"instructions and a git-status brief. Choose context=fork for work that depends on prior findings or " +
-	"decisions in this conversation. Give each child a clear goal, relevant context, constraints, file " +
-	"ownership and acceptance checks. Both modes return only a final report. Batch independent task " +
-	"calls into a single message for parallel execution; a dependent task must wait for the result it " +
-	"needs. Children share the working tree and do not coordinate automatically: assign non-overlapping " +
-	"files for concurrent edits, and do not edit a child's assigned files yourself while it runs. If " +
-	"edits overlap, serialize them or explicitly arrange separate worktrees and integrate the results. " +
-	"Review and integrate each child's changes and test results before reporting completion. Neither " +
-	"context mode grants additional tools or permissions."
+const taskGuide = "Use the task tool only when the user or applicable AGENTS.md or loaded skill instructions " +
+	"explicitly ask for sub-agents, delegation, or parallel agent work — otherwise do not spawn one. " +
+	"Requests for depth, thoroughness, research, investigation, or detailed codebase analysis do not " +
+	"count as permission to spawn. If in doubt, do the work yourself. " +
+	"Before delegating, plan locally and identify the immediate next step that blocks progress: do that " +
+	"step yourself. Only delegate a concrete, bounded sidecar subtask that can run independently " +
+	"alongside useful local work; a whole job you could do yourself is not one, so continue locally. Do " +
+	"not delegate a blocking step, tightly coupled or urgent work, or a task you cannot state as a " +
+	"self-contained brief. Do not duplicate work between yourself and a child, and do not issue another " +
+	"task call on the same unresolved thread unless the new ask is genuinely different. Handle quick " +
+	"lookups and small edits directly when delegation would add more overhead than value. " +
+	"When you do delegate, give each child a clear goal, relevant context, constraints, file ownership " +
+	"and acceptance checks. Choose context=fresh for self-contained work needing little conversation " +
+	"history; it retains system instructions and a git-status brief. Choose context=fork for work that " +
+	"depends on prior findings or decisions in this conversation. Children share the working tree and do " +
+	"not coordinate automatically: assign non-overlapping files for concurrent edits, and do not edit a " +
+	"child's assigned files yourself while it runs. If edits overlap, serialize them or explicitly " +
+	"arrange separate worktrees and integrate the results. Batch independent task calls into a single " +
+	"message for parallel execution; a dependent task must wait for the result it needs. While a child " +
+	"runs, do meaningful non-overlapping work instead of waiting by reflex; do not redo its task. Both " +
+	"modes return only a final report. Review and integrate each child's changes and test results before " +
+	"reporting completion. Neither context mode grants additional tools or permissions."
 
 // contextGuide points at the context-budget tools: the model should size long
 // stretches of work to the room it actually has and roll into a fresh window
