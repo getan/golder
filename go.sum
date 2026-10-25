@@ -90,8 +90,12 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/getan/kitty-browse v0.2.2-0.20261025021454-f7a707f9237f h1:aEHKw3Qnz3ArSniO8k7jr94U4pbMOIy4nPJG4PBGs+A=
 github.com/getan/kitty-browse v0.2.2-0.20261025021454-f7a707f9237f/go.mod h1:x4ANgv0IEW7v7XGK2UR1Cz42rqRR+nkA1Ngsv12fV/Q=
+github.com/getan/kitty-browse v0.2.2-0.20261025031517-892fb92264e4 h1:IBvrYwV0Is0ZOYOX2qd1/EiWAb7dTO2lz70y/XVd+JY=
+github.com/getan/kitty-browse v0.2.2-0.20261025031517-892fb92264e4/go.mod h1:x4ANgv0IEW7v7XGK2UR1Cz42rqRR+nkA1Ngsv12fV/Q=
 github.com/getan/tuios-mini v0.10.2-0.20261025043820-ddaeef9098e6 h1:LcNJliDT1dQxgqOBHPU7P64l1/9r/Jw9pnHom3Cgp18=
 github.com/getan/tuios-mini v0.10.2-0.20261025043820-ddaeef9098e6/go.mod h1:TWBK9VjEurkvqoWswHWpU2zhVjBNefsf5YfhkQsIOaw=
+github.com/getan/tuios-mini v0.10.2-0.20261025102829-6c03ac9655b0 h1:CSHh1YLKlCQi5cmUmGKopitM5buGRg0NyE1+X1js4ZU=
+github.com/getan/tuios-mini v0.10.2-0.20261025102829-6c03ac9655b0/go.mod h1:TWBK9VjEurkvqoWswHWpU2zhVjBNefsf5YfhkQsIOaw=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=
