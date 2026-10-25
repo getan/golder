@@ -92,18 +92,18 @@ golder
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/demo.gif" width="92%" alt="golder 真实会话：go test 红 → 读码打补丁 → 全绿">
+    <img src="docs/assets/demo.gif" width="92%" alt="golder workspace 真实会话：左边 agent 改代码，右边 shell 里 go test 红 → 全绿">
   </a>
 </p>
 
 <p align="center">
-  <sub>真实会话、无剪辑造假：<code>go test</code> 红 → 模型自主读码打补丁 → 全绿（14 秒 GIF，<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">完整 26 秒录像</a>）</sub>
+  <sub>真实会话、无剪辑造假：左边 agent 自己读码打补丁，右边 shell 里 <code>go test</code> 从红到绿（12 秒 GIF，<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">完整 37 秒录像</a>）</sub>
 </p>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/demo-tools.png" alt="工具卡片：读文件、打补丁、跑测试，含真实 diff"></td>
-<td width="50%"><img src="docs/assets/demo-done.png" alt="收尾：go test 四个用例全绿，逐条给出验证结果"></td>
+<td width="50%"><img src="docs/assets/demo-tools.png" alt="分屏工作区：左 pane 的补丁 diff 卡片，右 pane 里红着的 go test"></td>
+<td width="50%"><img src="docs/assets/demo-done.png" alt="收尾：agent 逐条给出验证结果，shell 里复跑全绿"></td>
 </tr>
 </table>
 

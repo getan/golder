@@ -88,18 +88,18 @@ Do not nest `golder workspace` inside them; it refuses by default unless `--nest
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/demo.gif" width="92%" alt="golder in a real session: red go test → read, patch, re-run → all green">
+    <img src="docs/assets/demo.gif" width="92%" alt="golder workspace, a real session: the agent patches on the left while go test goes red to green in a shell pane on the right">
   </a>
 </p>
 
 <p align="center">
-  <sub>A real session, nothing staged: red <code>go test</code> → the model reads, patches, re-runs → all green (14-second GIF; <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">full 26-second video</a>)</sub>
+  <sub>A real session, nothing staged: the agent reads and patches on the left while <code>go test</code> goes red to green in a shell pane on the right (12-second GIF; <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">full 37-second video</a>)</sub>
 </p>
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/demo-tools.png" alt="Tool cards: reading files, applying a patch, running tests — with the real diff"></td>
-<td width="50%"><img src="docs/assets/demo-done.png" alt="The finish: all four tests green, with the verification steps spelled out"></td>
+<td width="50%"><img src="docs/assets/demo-tools.png" alt="The split workspace: a patch diff card in the agent pane, a failing go test in the shell pane"></td>
+<td width="50%"><img src="docs/assets/demo-done.png" alt="The finish: the agent spells out each verification step, and the shell re-run is green"></td>
 </tr>
 </table>
 
