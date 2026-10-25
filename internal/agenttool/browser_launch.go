@@ -336,5 +336,5 @@ func kittyBrowseHint() string {
 			return fmt.Sprintf("found %s; add %s to PATH", p, filepath.Dir(p))
 		}
 	}
-	return "install it with the release installer, or symlink it into a directory on PATH"
+	return "install kitty-browse with the release installer, or symlink it into a directory on PATH"
 }
