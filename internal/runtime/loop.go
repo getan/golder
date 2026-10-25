@@ -155,6 +155,10 @@ type RunConfig struct {
 	// survive across runs passes the session-scoped state it created once.
 	Budget *contextbudget.State
 
+	// Forks may inherit a history already at the compaction threshold. Compact
+	// before their first request, not only after a response has added more data.
+	compactBeforeFirstTurn bool
+
 	// EventBuffer is the buffer size of the emitted EventStream. 0 gives fully
 	// synchronous back-pressure (matching pi's awaited emit).
 	EventBuffer int
@@ -305,6 +309,11 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		finish()
 		return
 	}
+	if cfg.compactBeforeFirstTurn {
+		maybeAutoCompact(ctx, agentCtx, &cfg, emit, tel)
+		observeBudget(cfg.Budget, agentCtx)
+		startIdx = len(agentCtx.Messages)
+	}
 
 	for { // outer loop: pending / follow-up messages
 		// stalls counts consecutive turns that produced nothing the person can
@@ -426,6 +435,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// parent is running under. The snapshot is read-only and never
 			// changes after the batch starts.
 			toolCtx = agentcore.WithSystemPromptSnapshot(toolCtx, agentCtx.SystemPrompt)
+			// Use the model/provider and window active NOW, rather than the task
+			// factory's launch-time defaults, without sharing mutable run state.
+			toolCtx = withTaskRunConfig(toolCtx, cfg)
 			// Refresh the budget figure the tools see so get_context_remaining
 			// answers from this batch's context, not the previous turn's.
 			observeBudget(cfg.Budget, agentCtx)

@@ -333,6 +333,10 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 		}
 	}
 	runCfg := t.spec.NewRunConfig()
+	if t.spec.ProjectContext && contextMode == SubAgentContextFork {
+		inheritTaskRunConfig(ctx, &runCfg)
+		runCfg.compactBeforeFirstTurn = true
+	}
 	// Inherit the dispatching session's gates: the tool executor published the
 	// chain this call runs under (run.Gates.Install), so the child uses the very
 	// same trust / workspace-boundary / permission gates instead of whatever its
@@ -395,7 +399,7 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent(prompt)}},
 	}
 	if t.spec.ProjectContext {
-		systemPrompt = taskChildSystemPrompt(t.spec.SystemPrompt, agentcore.SystemPromptSnapshotFromContext(ctx), t.spec.ProjectDir, contextMode)
+		systemPrompt = taskChildSystemPrompt(ctx, t.spec.SystemPrompt, agentcore.SystemPromptSnapshotFromContext(ctx), t.spec.ProjectDir, contextMode)
 		var err error
 		messages, err = taskChildMessages(contextMode, agentcore.MessageSnapshotFromContext(ctx), prompt)
 		if err != nil {
@@ -472,13 +476,12 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 
 // taskChildSystemPrompt builds the system prompt for a task child.
 //
-// Fresh children keep the generic sub-agent instruction but receive the parent
-// session's project context (AGENTS.md, environment, skills) as an addendum:
-// they still do not see the conversation, but they no longer have to
-// rediscover the project from scratch. Fork children reuse the parent prompt
-// wholesale, exactly as Claude Code's fork does, because they are continuing
-// the same work under the same rules.
-func taskChildSystemPrompt(generic, parent, projectDir, contextMode string) string {
+// Both modes inherit the entire system prompt: it contains user-authored base
+// instructions as well as the guide, environment and project rules. Do not
+// recover those fields by slicing the rendered text at an Environment marker:
+// that silently drops a custom --system-prompt (which can contain that marker
+// itself). Fresh means no conversation history, not fewer user instructions.
+func taskChildSystemPrompt(ctx context.Context, generic, parent, projectDir, contextMode string) string {
 	if contextMode == SubAgentContextFork && strings.TrimSpace(parent) != "" {
 		// The parent guide tells the main agent to delegate with task; a fork
 		// cannot (the nesting guard removes that tool), so state the boundary
@@ -490,18 +493,10 @@ func taskChildSystemPrompt(generic, parent, projectDir, contextMode string) stri
 	}
 	out := generic
 	if strings.TrimSpace(parent) != "" {
-		// The parent's leading guide is written for the main agent (it tells the
-		// reader to delegate with task, which a child cannot do). Keep the part
-		// after the environment block: project instructions, environment facts,
-		// user appends and skills — the project context a fresh child lacks.
-		context := parent
-		if idx := strings.Index(parent, "\n\nEnvironment:\n"); idx >= 0 {
-			context = parent[idx+2:]
-		}
-		out += "\n\n# Project context (inherited from the dispatching session)\n\n" +
-			strings.TrimSpace(context)
+		out = parent + "\n\n# Sub-agent boundary\n\n" + generic +
+			" This is a fresh child: no parent conversation was inherited."
 	}
-	if brief := gitStatusBrief(projectDir); brief != "" {
+	if brief := gitStatusBrief(ctx, projectDir); brief != "" {
 		out += "\n\n# Working tree\n\n" + brief
 	}
 	return out

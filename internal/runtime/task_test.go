@@ -225,16 +225,19 @@ func TestTaskForkDropsSiblingPendingCalls(t *testing.T) {
 	}
 }
 
-func TestTaskFreshProjectContextOmitsParentGuide(t *testing.T) {
+func TestTaskFreshProjectContextKeepsParentInstructions(t *testing.T) {
 	parent := "MAIN AGENT GUIDE\n\nEnvironment:\n- Working directory: /repo\n\n# Project instructions (/repo/AGENTS.md)\n- use tabs"
-	got := taskChildSystemPrompt("generic sub-agent", parent, "", SubAgentContextFresh)
-	if strings.Contains(got, "MAIN AGENT GUIDE") {
-		t.Errorf("fresh child should not inherit the main agent guide:\n%s", got)
+	got := taskChildSystemPrompt(context.Background(), "generic sub-agent", parent, "", SubAgentContextFresh)
+	if !strings.HasPrefix(got, parent) {
+		t.Errorf("fresh child must preserve the parent instructions verbatim:\n%s", got)
 	}
 	if !strings.Contains(got, "use tabs") || !strings.Contains(got, "Working directory: /repo") {
 		t.Errorf("fresh child should inherit project context:\n%s", got)
 	}
-	if fork := taskChildSystemPrompt("generic sub-agent", parent, "", SubAgentContextFork); !strings.HasPrefix(fork, parent) {
+	if !strings.Contains(got, "# Sub-agent boundary\n\ngeneric sub-agent") {
+		t.Errorf("fresh child must get its own task boundary after the inherited rules:\n%s", got)
+	}
+	if fork := taskChildSystemPrompt(context.Background(), "generic sub-agent", parent, "", SubAgentContextFork); !strings.HasPrefix(fork, parent) {
 		t.Errorf("fork should inherit the full parent prompt, got:\n%s", fork)
 	}
 }
