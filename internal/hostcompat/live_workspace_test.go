@@ -148,7 +148,10 @@ func startLiveWorkspace(t *testing.T) *liveWorkspace {
 		// The pane writes down what the daemon gave it, then stays alive as a
 		// pane rather than exiting and closing.
 		PaneEnv: []string{"GWS_ENV_OUT=" + envOut},
-		Command: []string{"/bin/sh", "-c", `env > "$GWS_ENV_OUT"; exec sleep 120`},
+		// Write beside the destination and rename: the test reads this file as
+		// soon as it exists, and a direct redirect can be observed mid-write
+		// (a pane id with its tail missing) under a loaded CI runner.
+		Command: []string{"/bin/sh", "-c", `env > "$GWS_ENV_OUT.tmp" && mv "$GWS_ENV_OUT.tmp" "$GWS_ENV_OUT"; exec sleep 120`},
 		// The policy internal/workspace starts golder's own workspace with.
 		PermissionsMode: "strict",
 		Grants:          []string{"read", "write", "fan"},
