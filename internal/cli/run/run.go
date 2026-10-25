@@ -358,6 +358,17 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	// stable tuios carries both — see CHANGELOG, "Removed".
 	// Grade bash at the execution layer (sandbox-tier verdicts run under
 	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.
+	control := agenttool.NewControlGuard(cwd)
+	for _, tool := range tools {
+		switch t := tool.(type) {
+		case *agenttool.TuiosTool:
+			t.Control = control
+		case *agenttool.WorkspaceTool:
+			t.Control = control
+		case *agenttool.BrowserTool:
+			t.Control = control
+		}
+	}
 	WireBashSandbox(tools, cwd)
 	return tools
 }

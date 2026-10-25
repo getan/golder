@@ -74,6 +74,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/shellfacts"
 )
 
@@ -183,6 +184,11 @@ type Local struct {
 // Classify implements Classifier: grade the command, decide the routine tiers,
 // defer the rest.
 func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
+	// A broker is not a shell: keep its actual target and execution constraints
+	// in the contextual review, including requests for external host control.
+	if controlcap.Facade(tool) {
+		return l.deferToNext(ctx, tool, args)
+	}
 	if v, ok := LocalReadOnlyVerdict(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
 		return v
 	}

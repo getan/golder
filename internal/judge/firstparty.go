@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/getan/golder/internal/controlcap"
 )
 
 // FirstParty runs before the JEV/local routine grader. Tools it does not know
@@ -18,6 +20,13 @@ type FirstParty struct {
 }
 
 func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
+	// The floor applies even when this classifier is used without Chain.
+	if v, bad := staticDeny(tool, args); bad {
+		return v
+	}
+	if controlcap.Facade(tool) && controlcap.Parse(args).HostControl {
+		return f.next(ctx, tool, args)
+	}
 	switch tool {
 	case "tuios":
 		var a struct {
@@ -40,7 +49,8 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			if strings.TrimSpace(a.Command) == "" {
 				return f.failClosed("tuios run has no command")
 			}
-			return f.classifyShell(ctx, a.Command)
+			// Keep the real tool, target, cwd and capabilities visible to review.
+			return f.next(ctx, tool, args)
 		case "send":
 			if strings.TrimSpace(a.Text) == "" && !a.Submit {
 				return f.failClosed("tuios send has no text")
@@ -51,18 +61,12 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			// sees which key and which pane.
 			return f.next(ctx, tool, args)
 		case "screenshot":
-			// A picture writes one file in the workspace and changes nothing in
-			// the pane, the same bargain as the browser's screenshot.
-			return Verdict{
-				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-				Reasons: []string{"tuios screenshot writes one file in the workspace"},
-			}
+			// out can overwrite a project file; this is a write, not a pane read.
+			return f.next(ctx, tool, args)
 		case "new":
-			if len(a.Argv) == 0 {
-				return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-					Reasons: []string{"opening a shell pane"}}
-			}
-			return f.classifyShell(ctx, strings.Join(a.Argv, " "))
+			// Even an empty shell establishes a lasting cwd/network capability
+			// ceiling. It is not a read-only action or a local unconditional allow.
+			return f.next(ctx, tool, args)
 		case "focus":
 			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"focusing an existing pane"}}
@@ -91,12 +95,7 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 				Reasons: []string{"browser read-only action"},
 			}
 		case "screenshot":
-			// A picture is a new file in the workspace, but nothing on the page
-			// or the host changes state the user cares about.
-			return Verdict{
-				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
-				Reasons: []string{"browser screenshot writes one file in the workspace"},
-			}
+			return f.next(ctx, tool, args)
 		case "open", "attach", "navigate", "click", "dblclick", "hover", "focus", "check", "uncheck",
 			"fill", "type", "select", "press", "insert", "scroll", "scroll_into_view",
 			"tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss":
@@ -133,11 +132,6 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		return f.failClosed("unknown workspace action")
 	}
 	return f.next(ctx, tool, args)
-}
-
-func (f FirstParty) classifyShell(ctx context.Context, command string) Verdict {
-	raw, _ := json.Marshal(map[string]string{"command": command})
-	return f.next(ctx, "bash", raw)
 }
 
 func (f FirstParty) next(ctx context.Context, tool string, args json.RawMessage) Verdict {

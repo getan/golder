@@ -50,11 +50,12 @@ type workspacePane struct {
 
 // paneSpec is one line of a preset plan.
 type paneSpec struct {
-	Name   string
-	Kind   string
-	Argv   []string
-	Socket string
-	URL    string
+	Name    string
+	Kind    string
+	Argv    []string
+	Socket  string
+	URL     string
+	Profile string
 	// Embedded marks a browser pane started by golder's own binary rather than
 	// an external kitty-browse; close needs it to know which teardown applies.
 	Embedded bool
@@ -83,7 +84,8 @@ func (s paneSpec) baseName() string {
 func NewWorkspaceTool(cwd string, allowControl bool) *WorkspaceTool {
 	return &WorkspaceTool{
 		cwd: cwd, allowControl: allowControl,
-		panes: map[string]workspacePane{},
+		Control: NewControlGuard(cwd),
+		panes:   map[string]workspacePane{},
 		newClient: func(ctx context.Context) (*tuiosctl.Client, error) {
 			return tuiosctl.Dial(ctx, tuiosctl.FromEnv())
 		},
@@ -95,6 +97,7 @@ func NewWorkspaceTool(cwd string, allowControl bool) *WorkspaceTool {
 
 // WorkspaceTool arranges and reads several panes at once.
 type WorkspaceTool struct {
+	Control      *ControlGuard
 	cwd          string
 	allowControl bool
 
@@ -137,6 +140,7 @@ const workspaceControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["create","list","snapshot","focus","close"]},
+    "network":{"type":"string","enum":["off","on"],"description":"For terminal-only create: request network access. Browser presets require network automatically."},
     "preset":{"type":"string","enum":["debug-fullstack","data-analysis","review"],"description":"For create."},
     "name":{"type":"string","description":"For focus/close: the pane name from list."},
     "url":{"type":"string","description":"For create: the page the browser pane opens; default http://localhost:3000."},
@@ -149,6 +153,7 @@ const workspaceControlSchema = `{
 }`
 
 type workspaceArgs struct {
+	Network   string `json:"network,omitempty"`
 	Action    string `json:"action"`
 	Preset    string `json:"preset,omitempty"`
 	Name      string `json:"name,omitempty"`
@@ -168,6 +173,10 @@ func (t *WorkspaceTool) Schema() json.RawMessage {
 }
 
 func (t *WorkspaceTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+	if err := controlFloor(ctx, "workspace", raw); err != nil {
+		return workspaceError(err), nil
+	}
+	ctx = withControlGuard(ctx, t.Control)
 	var a workspaceArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -197,6 +206,9 @@ func (t *WorkspaceTool) Execute(ctx context.Context, _ string, raw json.RawMessa
 }
 
 func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.AgentToolResult, error) {
+	if t.Control == nil {
+		return workspaceError(errors.New("workspace control policy is not configured")), nil
+	}
 	specs, err := t.presetPlan(a)
 	if err != nil {
 		return workspaceError(err), nil
@@ -208,9 +220,9 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 	defer c.Close()
 	started := make([]workspacePane, 0, len(specs))
 	for _, spec := range specs {
-		res, err := c.NewWindowInCallerWorkspace(ctx, tuiosctl.NewWindowParams{
+		res, err := t.Control.launch(ctx, c, tuiosctl.NewWindowParams{
 			Name: spec.Name, Cwd: t.cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
-		})
+		}, a.Preset == PresetFullStack || spec.Kind == "browser" || a.Network == "on", spec.Kind == "browser", true)
 		if err != nil {
 			return workspaceError(fmt.Errorf("start pane %q: %w", spec.Name, err)), nil
 		}
@@ -248,12 +260,12 @@ func (t *WorkspaceTool) presetPlan(a workspaceArgs) ([]paneSpec, error) {
 		url = "http://localhost:3000"
 	}
 	browser := func(name string) (paneSpec, error) {
-		return browserPaneSpec(t.cwd, name, url)
+		return controlledBrowserSpec(t.Control, t.cwd, name, url)
 	}
 	shell := func(name, command string) paneSpec {
 		spec := paneSpec{Name: name, Kind: "terminal"}
 		if strings.TrimSpace(command) != "" {
-			spec.Argv = []string{"sh", "-lc", command}
+			spec.Argv = []string{"sh", "-c", command}
 		}
 		return spec
 	}
@@ -432,6 +444,7 @@ func (t *WorkspaceTool) control(ctx context.Context, a workspaceArgs) (agentcore
 	t.mu.Lock()
 	delete(t.panes, name)
 	t.mu.Unlock()
+	t.Control.release(pane.WindowID)
 	out["closed"] = name
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(out))},

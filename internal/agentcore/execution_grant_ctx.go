@@ -4,6 +4,16 @@ import "context"
 
 type networkGrantKey struct{}
 type directGrantKey struct{}
+type hostControlGrantKey struct{}
+
+func WithHostControlGrant(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hostControlGrantKey{}, true)
+}
+
+func HostControlGrantedFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(hostControlGrantKey{}).(bool)
+	return v
+}
 
 // WithNetworkGrant records the authorization gate's decision, not the tool's
 // request. The execution layer cannot infer this capability from arguments.

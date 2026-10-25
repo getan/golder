@@ -128,6 +128,10 @@ func KittyBrowseAvailable() bool { return BrowserLaunchAvailable() }
 // The socket and profile live under the workspace: the profile keeps the login
 // state across restarts, and the socket path is discoverable without config.
 func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
+	return browserPaneSpecFor(cwd, name, name, url)
+}
+
+func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
 	if err := checkBrowserName(name); err != nil {
 		return paneSpec{}, err
 	}
@@ -138,8 +142,8 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 	if err := ensureBrowserDir(dir); err != nil {
 		return paneSpec{}, fmt.Errorf("browser state directory %s must be owner-only and real: %w", dir, err)
 	}
-	pruneBrowserProfiles(dir, name, time.Now())
-	profile := browserProfileDir(cwd, name)
+	// A controlled launch must not reuse or prune another session's profile.
+	profile := browserProfileDir(cwd, profileName)
 	if err := privatepath.EnsureDir(profile); err != nil {
 		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
 	}
@@ -232,7 +236,8 @@ func pruneBrowserProfiles(dir, keep string, now time.Time) {
 // startBrowserPane opens a pane running a browser and adopts the socket it
 // creates. It returns the socket and the pane id.
 func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(context.Context) (*tuiosctl.Client, error)) (string, string, error) {
-	spec, err := browserPaneSpec(cwd, name, url)
+	g := controlGuardFrom(ctx)
+	spec, err := controlledBrowserSpec(g, cwd, name, url)
 	if err != nil {
 		return "", "", err
 	}
@@ -241,9 +246,9 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 		return "", "", err
 	}
 	defer c.Close()
-	res, err := c.NewWindowInCallerWorkspace(ctx, tuiosctl.NewWindowParams{
+	res, err := g.launch(ctx, c, tuiosctl.NewWindowParams{
 		Name: spec.Name, Cwd: cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
-	})
+	}, true, true, true)
 	if err != nil {
 		return "", "", fmt.Errorf("start %s: %w", spec.program(), err)
 	}
@@ -277,15 +282,22 @@ func adoptBrowserPane(ctx context.Context, cwd string, spec paneSpec, windowID s
 	if info.APIVersion != browserctl.APIVersion || info.BrowserID == "" {
 		return browserPaneRecord{}, fmt.Errorf("new control endpoint is not a compatible %s browser", browserctl.APIVersion)
 	}
+	recordName := spec.Name
+	if spec.Profile != "" {
+		recordName = strings.TrimSuffix(filepath.Base(spec.Profile), ".profile")
+	}
 	record := browserPaneRecord{
-		Root: cwd, Name: spec.Name, WindowID: windowID, Socket: spec.Socket,
+		Root: cwd, Name: recordName, WindowID: windowID, Socket: spec.Socket,
 		Program: spec.baseName(), BrowserID: info.BrowserID, Embedded: spec.Embedded,
 	}
 	rememberBrowserPane(record)
+	if g := controlGuardFrom(ctx); g != nil {
+		g.rememberBrowser(info.BrowserID, spec.Socket, windowID)
+	}
 	// The metadata is what discovery and a later session read. Losing it is not
 	// fatal for this session, so it does not fail the pane.
-	_ = writeBrowserMetadata(browserMetadataPath(cwd, spec.Name), browserMetadata{
-		Name: spec.Name, Socket: spec.Socket, Profile: browserProfileDir(cwd, spec.Name),
+	_ = writeBrowserMetadata(browserMetadataPath(cwd, recordName), browserMetadata{
+		Name: recordName, Socket: spec.Socket, Profile: spec.Profile,
 		WindowID: windowID, Program: record.Program, BrowserID: info.BrowserID, Embedded: spec.Embedded,
 	})
 	setBrowserSocket(spec.Socket)

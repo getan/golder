@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/grants"
 )
 
@@ -124,8 +125,27 @@ var tools = map[string]toolInfo{
 
 	// The tuios facade decides read-only by ACTION, not by tool name; see
 	// readOnlyAllowedCall. The zero entry keeps the name known to the table.
-	"tuios": {},
+	"tuios":     {paths: func(raw json.RawMessage) []string { return facadePaths("tuios", raw) }},
+	"workspace": {paths: func(raw json.RawMessage) []string { return facadePaths("workspace", raw) }},
 }
+
+func facadePaths(tool string, raw json.RawMessage) []string {
+	r := controlcap.Parse(raw)
+	var paths []string
+	if r.Action == "new" && r.Cwd != "" {
+		paths = append(paths, r.Cwd)
+	}
+	for _, cmd := range controlcap.Commands(tool, raw) {
+		if r.Cwd != "" {
+			cmd = "cd " + shellQuotePath(r.Cwd) + " && " + cmd
+		}
+		args, _ := json.Marshal(map[string]string{"command": cmd})
+		paths = append(paths, bashPaths(args)...)
+	}
+	return paths
+}
+
+func shellQuotePath(p string) string { return "'" + strings.ReplaceAll(p, "'", "'\\''") + "'" }
 
 // toolLookup normalizes a tool name and returns its entry.
 func toolLookup(name string) (toolInfo, bool) {

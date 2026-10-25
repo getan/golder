@@ -6,6 +6,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/patch"
 )
@@ -27,6 +28,25 @@ import (
 // rejects Root escapes; this is the extra secret-material floor above it.
 func staticDeny(tool string, args json.RawMessage) (Verdict, bool) {
 	name := strings.ToLower(strings.TrimSpace(tool))
+	if controlcap.Facade(name) {
+		for _, command := range controlcap.Commands(name, args) {
+			raw, _ := json.Marshal(map[string]string{"command": command})
+			if v, bad := staticDeny("bash", raw); bad {
+				return v, true
+			}
+		}
+		r := controlcap.Parse(args)
+		if r.Cwd != "" {
+			if reason, bad := credentialPathRead(r.Cwd); bad {
+				return Verdict{Level: Deny, Source: "static", Reasons: []string{reason}}, true
+			}
+		}
+		if name == "browser" || (name == "workspace" && r.Action == "create") {
+			if err := controlcap.BrowserURL(r.URL); err != nil {
+				return Verdict{Level: Deny, Source: "static", Reasons: []string{err.Error()}}, true
+			}
+		}
+	}
 	switch name {
 	case "bash":
 		if cmd, ok := bashCommand(args); ok {

@@ -76,6 +76,7 @@ func newFakeBrowserTool(t *testing.T, allowControl bool, root string) *BrowserTo
 	t.Helper()
 	f := &fakeBrowser{replies: map[string]string{}}
 	tool := NewBrowserTool(root, allowControl)
+	trustFakeControl(tool.Control)
 	tool.newClient = func() (*browserctl.Client, error) {
 		return browserctl.NewWithTransport("stub", f), nil
 	}
@@ -147,6 +148,7 @@ func TestBrowserSnapshotPinsTheActiveTab(t *testing.T) {
 func TestBrowserClickCarriesTheRef(t *testing.T) {
 	f := &fakeBrowser{replies: map[string]string{}}
 	tool := NewBrowserTool(t.TempDir(), true)
+	trustFakeControl(tool.Control)
 	tool.newClient = func() (*browserctl.Client, error) {
 		return browserctl.NewWithTransport("stub", f), nil
 	}

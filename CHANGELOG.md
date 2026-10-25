@@ -11,6 +11,18 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Security
+- **Terminal and browser brokers use the same authorization boundary as their
+  effects** (v1.5.5): terminal commands/argv and workspace preset commands retain
+  the static floor, outside-path checks and network consent. Controlled helpers
+  launch in an actual OS sandbox with scrubbed environments and no daemon-control
+  grants. Browser profiles are private to the agent; external pane/browser control
+  requires explicit one-call host authority. Targets are pinned before review,
+  approval-UI input is refused, and screenshots and empty shells no longer skip
+  contextual review. Auto remains automatic, without new human approval dialogs.
+  See [v1.5.5 release notes](docs/releases/v1.5.5.md) and
+  [broker permissions](docs/broker-permissions.md).
+
 ### Removed
 - **The `visual` tool (charts, Mermaid diagrams, TML dashboards)**: `diagram`
   ran `tuios mermaid` and `dashboard_open`/`patch`/`close` called the daemon's

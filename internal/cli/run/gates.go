@@ -230,7 +230,7 @@ func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 	o := g.opts
 	var gate agentcore.BeforeToolCallFunc
 	if includeTrust {
-		trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu}
+		trustOpts := trust.GateOpts{Manager: o.Trust, Cwd: o.Cwd, Mu: o.Mu, Mode: o.Perms}
 		trustOpts.In, trustOpts.Out = o.In, o.Out
 		trustOpts.Confirm = o.Confirm
 		if o.TrustConfirm != nil {

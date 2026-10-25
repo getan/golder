@@ -89,6 +89,7 @@ func TestBrowserValidationStaysWideWhenAdvertisedNarrow(t *testing.T) {
 func TestBrowserOpenIsIdempotentWithASocket(t *testing.T) {
 	withBrowserSocket(t, "/tmp/work.sock")
 	tool := NewBrowserTool(t.TempDir(), true)
+	trustFakeControl(tool.Control)
 	tool.discover = func(context.Context) browserDiscovery {
 		return browserDiscovery{Instances: []browserInstance{{Socket: "/tmp/work.sock", Selected: true, Info: browserctl.Info{BrowserID: "b1"}}}}
 	}
@@ -115,6 +116,7 @@ func TestBrowserOpenOutsideTuiosExplains(t *testing.T) {
 	t.Setenv("TUIOS_SESSION", "")
 	t.Setenv("TUIOS_PANE_ID", "")
 	tool := NewBrowserTool(t.TempDir(), true)
+	trustFakeControl(tool.Control)
 	res, err := tool.Execute(context.Background(), "1",
 		json.RawMessage(`{"action":"open","url":"https://example.com"}`), nil)
 	if err != nil {

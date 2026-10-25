@@ -31,9 +31,11 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -42,12 +44,15 @@ import (
 var errPromptInterrupt = errors.New("prompt interrupted")
 
 // SideEffectTools are the built-in tools with filesystem or process side
-// effects that trust always gates. apply_patch is the single write-path tool
-// (it replaced write/edit), so gating it gates every file mutation the model
-// can make.
+// effects that trust gates. Broker reads are distinguished by action in Gate;
+// their command, launch, screenshot and input actions cannot evade project trust
+// merely because they do not use bash or apply_patch.
 var SideEffectTools = map[string]bool{
 	"bash":        true,
 	"apply_patch": true,
+	"tuios":       true,
+	"workspace":   true,
+	"browser":     true,
 }
 
 // ReadTools are the data-ingestion tools (local file reads and network reads)
@@ -485,6 +490,9 @@ type GateOpts struct {
 	// Manager is the trust store. A nil manager disables the gate (Gate
 	// returns nil), matching the pre-existing "trust unavailable" behavior.
 	Manager *Manager
+	// Mode keeps automatic broker control from introducing a human trust
+	// prompt mid-call: missing project execution trust fails closed in auto.
+	Mode *permissions.State
 	// Cwd is the directory the trust decision is about; it is also the key the
 	// session grants are filed under, so every caller must pass the run's
 	// workspace rather than a tool argument.
@@ -543,6 +551,9 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 	}
 	cwd := strings.TrimSpace(o.Cwd)
 	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		if controlcap.ReadOnly(call.Name, call.Arguments) {
+			return nil
+		}
 		if !mgr.GatesTool(call.Name, cwd) {
 			return nil
 		}
@@ -568,6 +579,9 @@ func Gate(o GateOpts) agentcore.BeforeToolCallFunc {
 		// must not silently authorize execution.
 		if grants.Allows(cwd, grants.Execute) {
 			return nil
+		}
+		if controlcap.Facade(call.Name) && o.Mode != nil && o.Mode.Mode() == permissions.Auto {
+			return blockUntrusted(call, cwd, false)
 		}
 		var ans Answer
 		answered := false

@@ -74,6 +74,14 @@ func WirePermissionState(tools []agentcore.AgentTool, state *permissions.State) 
 		return
 	}
 	for _, t := range tools {
+		switch tool := t.(type) {
+		case *agenttool.TuiosTool:
+			tool.Control.Mode = state
+		case *agenttool.WorkspaceTool:
+			tool.Control.Mode = state
+		case *agenttool.BrowserTool:
+			tool.Control.Mode = state
+		}
 		if b, ok := t.(*agenttool.BashTool); ok {
 			b.Permissions = state
 		}
@@ -336,7 +344,7 @@ func SandboxGate() func(toolName string) bool {
 	}
 	return func(toolName string) bool {
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
-		case "bash", "read", "view_image", "grep", "find", "ls", "apply_patch":
+		case "bash", "read", "view_image", "grep", "find", "ls", "apply_patch", "tuios", "workspace", "browser":
 			return true
 		}
 		return false

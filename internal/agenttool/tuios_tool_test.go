@@ -90,7 +90,14 @@ func (f *tuiosFake) serve(conn net.Conn) {
 
 func (f *tuiosFake) result(verb string, params map[string]any) any {
 	if f.answer != nil {
-		return f.answer(verb, params)
+		res := f.answer(verb, params)
+		// Older protocol fixtures override only the action under test. Target
+		// validation now also enumerates panes; use the default list when that
+		// fixture returned a generic acknowledgement rather than a window list.
+		m, _ := res.(map[string]any)
+		if verb != "list-windows" || m["type"] != "ok" {
+			return res
+		}
 	}
 	switch verb {
 	case "hello":
@@ -141,7 +148,9 @@ func useTuiosFake(t *testing.T, sock string) {
 
 func newTuiosTool(t *testing.T, allowControl bool) agentcore.AgentTool {
 	t.Helper()
-	return NewTuiosTool(t.TempDir(), allowControl)
+	tool := NewTuiosTool(t.TempDir(), allowControl)
+	trustFakeControl(tool.Control)
+	return tool
 }
 
 func TestTuiosRunUsesEventWaitForExpect(t *testing.T) {

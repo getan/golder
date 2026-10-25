@@ -61,6 +61,7 @@ func TestBrowserDiscoveryStaleSelectionAndExplicitAttach(t *testing.T) {
 	secondPath := filepath.Join(root, ".golder", "browser", "second.sock")
 	b := serveDiscoveredBrowser(t, secondPath, "second")
 	tool := NewBrowserTool(root, true)
+	trustFakeControl(tool.Control)
 	tool.lastTab = "tab-from-dead-browser"
 	listed := runBrowserCall(t, tool, `{"action":"list"}`)
 	text := agentcore.ContentToText(listed.Content)
@@ -131,6 +132,7 @@ func TestBrowserAttachOverridesEnvAndRejectsUnknownID(t *testing.T) {
 	path := filepath.Join(root, ".golder", "live.sock")
 	serveDiscoveredBrowser(t, path, "live")
 	tool := NewBrowserTool(root, true)
+	trustFakeControl(tool.Control)
 	if res := runBrowserCall(t, tool, `{"action":"attach","browser":"unknown"}`); !res.IsError {
 		t.Fatal("accepted an arbitrary id")
 	}

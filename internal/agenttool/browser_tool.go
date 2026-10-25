@@ -28,6 +28,8 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/controlcap"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -44,6 +46,7 @@ func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
 			return tuiosctl.Dial(ctx, tuiosctl.FromEnv())
 		},
 		cwd: cwd, allowControl: allowControl,
+		Control: NewControlGuard(cwd),
 	}
 	t.newClient = func() (*browserctl.Client, error) { return browserctl.Dial(t.socketPath()) }
 	return t
@@ -51,6 +54,7 @@ func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
 
 // BrowserTool is the browser facade.
 type BrowserTool struct {
+	Control *ControlGuard
 	// newClient resolves the control socket. Tests replace it with a client
 	// backed by a stub transport, so no real Unix socket is needed.
 	newClient    func() (*browserctl.Client, error)
@@ -80,11 +84,12 @@ func (t *BrowserTool) Description() string {
 				browserToolUseHint
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse a single live instance or start one in a tuios pane." +
+			"Or call open with a URL to reuse an owned instance or start a sandboxed browser with a fresh profile. External control requires host_control:true and one-call authorization." +
 			browserToolUseHint
 	}
 	if t.allowControl {
 		return "Drive the running browser pane: snapshot the accessibility tree, " +
+			"with control limited to owned sandboxed browsers by default; host_control:true requests one-call external authority. " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
 			"Pin a tab by its id from list; refs are per document." +
@@ -110,6 +115,8 @@ const browserReadSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot"]},
+    "browser":{"type":"string","description":"Exact browser identity, pinned before review."},
+    "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
@@ -139,6 +146,9 @@ const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
+    "host_control":{"type":"boolean","description":"Request one-call access to a browser not created by this agent. Attaching does not grant later control."},
+    "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance."},
+    "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
@@ -173,6 +183,9 @@ const browserControlSchema = `{
 }`
 
 type browserArgs struct {
+	HostControl bool    `json:"host_control,omitempty"`
+	NewInstance bool    `json:"new_instance,omitempty"`
+	PageURL     string  `json:"page_url,omitempty"`
 	Action      string  `json:"action"`
 	Browser     string  `json:"browser,omitempty"`
 	Tab         string  `json:"tab,omitempty"`
@@ -260,6 +273,10 @@ func browserReadOnly(action string) bool {
 }
 
 func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+	if err := controlFloor(ctx, "browser", raw); err != nil {
+		return browserError(err), nil
+	}
+	ctx = withControlGuard(ctx, t.Control)
 	var a browserArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -272,12 +289,36 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	if !t.allowControl && !browserReadOnly(a.Action) {
 		return browserError(errors.New("browser control actions are not available to sub-agents")), nil
 	}
+	if err := controlcap.BrowserURL(a.URL); err != nil {
+		return browserError(err), nil
+	}
+	if t.Control == nil {
+		return browserError(errors.New("browser control policy is not configured")), nil
+	}
+	if a.Action == "screenshot" && (agentcore.SandboxRequestedFromContext(ctx) || (t.Control.Mode != nil && t.Control.Mode.Mode() == permissions.ReadOnly)) {
+		return browserError(errors.New("screenshot writes cannot satisfy read-only/required OS containment")), nil
+	}
+	if !browserReadOnly(a.Action) {
+		if t.Control.Mode != nil && t.Control.Mode.Mode() == permissions.ReadOnly {
+			return browserError(errors.New("read-only mode cannot control browsers")), nil
+		}
+		if controlcap.Network("browser", raw) && !t.Control.network(ctx) {
+			return browserError(errors.New("browser input/navigation requires reviewed network permission")), nil
+		}
+	}
 	// open runs before the dial: its whole job is to create the socket the dial
 	// would need.
 	if a.Action == "open" {
 		return t.open(ctx, a)
 	}
 	if a.Action == "attach" {
+		for _, instance := range t.discovery(ctx).Instances {
+			if instance.Info.BrowserID == a.Browser {
+				if err := t.Control.checkBrowser(ctx, a.Browser, instance.Socket, a.HostControl); err != nil {
+					return browserError(err), nil
+				}
+			}
+		}
 		return t.attach(ctx, a.Browser)
 	}
 	if a.Action == "list" {
@@ -299,6 +340,21 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	}
 	if err := t.checkBinding(info); err != nil {
 		return browserError(err), nil
+	}
+	if a.Browser != "" && a.Browser != info.BrowserID {
+		return browserError(errors.New("browser identity changed after review; nothing was sent")), nil
+	}
+	if a.Action == "screenshot" {
+		for _, tab := range info.Tabs {
+			if err := controlcap.BrowserURL(tab.URL); err != nil {
+				return browserError(err), nil
+			}
+		}
+	}
+	if !browserReadOnly(a.Action) || agentcore.SandboxRequestedFromContext(ctx) {
+		if err := t.Control.checkBrowser(ctx, info.BrowserID, t.socketPath(), a.HostControl); err != nil {
+			return browserError(err), nil
+		}
 	}
 
 	switch a.Action {
@@ -325,6 +381,16 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	target, err := pinTab(info, t.tabChoice(a.Tab, info))
 	if err != nil {
 		return browserError(err), nil
+	}
+	for _, tab := range info.Tabs {
+		if tab.ID == target.TabID {
+			if a.PageURL != "" && tab.URL != a.PageURL {
+				return browserError(errors.New("page URL changed after review; nothing was sent")), nil
+			}
+			if err := controlcap.BrowserURL(tab.URL); err != nil {
+				return browserError(err), nil
+			}
+		}
 	}
 	action, params, err := browserActionParams(a)
 	if err != nil {
@@ -640,6 +706,24 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 // idempotent: with a browser already running it reports the existing socket.
 func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentToolResult, error) {
 	d := t.discovery(ctx)
+	if a.NewInstance {
+		d.Instances = nil
+		d.Truncated = false
+	}
+	// Discovery is not authority. Never auto-adopt another session's profile.
+	filtered := d.Instances[:0]
+	for _, instance := range d.Instances {
+		if a.Browser != "" && instance.Info.BrowserID != a.Browser {
+			continue
+		}
+		if t.Control.checkBrowser(ctx, instance.Info.BrowserID, instance.Socket, a.HostControl) == nil {
+			filtered = append(filtered, instance)
+		}
+	}
+	d.Instances = filtered
+	if a.Browser != "" && len(filtered) == 0 {
+		return browserError(errors.New("the reviewed browser is unavailable or not authorized")), nil
+	}
 	var selected *browserInstance
 	for i := range d.Instances {
 		if d.Instances[i].Selected {
@@ -714,6 +798,9 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 // select the tab that already shows it, or navigate the selected tab there.
 // Without this, open with a live socket reported success and changed nothing.
 func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
+	if err := controlcap.BrowserURL(url); err != nil {
+		return err
+	}
 	c, err := browserctl.Dial(socket)
 	if err != nil {
 		return err

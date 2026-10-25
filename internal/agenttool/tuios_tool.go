@@ -43,6 +43,7 @@ func NewTuiosTool(cwd string, allowControl bool) *TuiosTool {
 		},
 		cwd:          cwd,
 		allowControl: allowControl,
+		Control:      NewControlGuard(cwd),
 	}
 }
 
@@ -51,6 +52,7 @@ type tuiosClientFactory func(context.Context) (*tuiosctl.Client, error)
 // TuiosTool is the one tuios tool. Control actions share a mutex so two
 // parallel calls in one batch cannot race focus/close.
 type TuiosTool struct {
+	Control      *ControlGuard
 	newClient    tuiosClientFactory
 	cwd          string
 	allowControl bool
@@ -62,6 +64,7 @@ func (t *TuiosTool) Name() string { return "tuios" }
 func (t *TuiosTool) Description() string {
 	if t.allowControl {
 		return "Manage panes in the current tuios session: list, capture, wait for output/events, " +
+			"with control limited to this agent's sandboxed helpers by default. External targets require host_control:true and one-call authorization. " +
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
 			"daemon events, not polling. Close needs a full window id and refuses golder's own pane. " +
 			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure."
@@ -101,6 +104,8 @@ const tuiosControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["list","capture","wait","run","send","press","screenshot","new","focus","move","resize","rename","minimize","close"]},
+    "host_control":{"type":"boolean","description":"Request one-call control of a non-owned pane. Never permits agent approval input."},
+    "network":{"type":"string","enum":["off","on"],"description":"For new: network capability of the pane; for input: request authorization to use a network-enabled pane."},
     "window":{"type":"string","description":"Window id or name. close and move require the full id; omit for the focused pane where allowed."},
     "source":{"type":"string","enum":["visible","recent"],"description":"For capture: visible screen or recent scrollback."},
     "lines":{"type":"integer","minimum":1,"maximum":2000,"description":"For capture/run: last N rows; default 80."},
@@ -138,6 +143,8 @@ const tuiosControlSchema = `{
 }`
 
 type tuiosArgs struct {
+	HostControl bool     `json:"host_control,omitempty"`
+	Network     string   `json:"network,omitempty"`
 	Action      string   `json:"action"`
 	Window      string   `json:"window,omitempty"`
 	Source      string   `json:"source,omitempty"`
@@ -175,6 +182,9 @@ type tuiosArgs struct {
 }
 
 func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+	if err := controlFloor(ctx, "tuios", raw); err != nil {
+		return tuiosError(err), nil
+	}
 	var a tuiosArgs
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &a); err != nil {
@@ -186,6 +196,9 @@ func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, 
 	}
 	if !t.allowControl && tuiosIsControl(a.Action) {
 		return tuiosError(errors.New("pane control actions are not available to sub-agents")), nil
+	}
+	if err := t.checkControl(ctx, &a); err != nil {
+		return tuiosError(err), nil
 	}
 	switch a.Action {
 	case "list":
@@ -746,10 +759,10 @@ func (t *TuiosTool) newWindow(ctx context.Context, a tuiosArgs) (agentcore.Agent
 			return tuiosError(errors.New("argv entries must not contain control characters")), nil
 		}
 	}
-	res, err := c.NewWindow(ctx, tuiosctl.NewWindowParams{
+	res, err := t.Control.launch(ctx, c, tuiosctl.NewWindowParams{
 		Name: a.Name, Cwd: cwd, Workspace: a.Workspace, Command: a.Argv,
 		Focus: focus, CloseOnExit: closeOnExit,
-	})
+	}, a.Network == "on", false, false)
 	if err != nil {
 		return tuiosError(err), nil
 	}
@@ -896,6 +909,7 @@ func (t *TuiosTool) close(ctx context.Context, a tuiosArgs) (agentcore.AgentTool
 		return tuiosError(err), nil
 	}
 	out["closed"], out["title"] = win.WindowID, win.DisplayName
+	t.Control.release(win.WindowID)
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(
 		tuiosJSON(out))}}, nil
 }

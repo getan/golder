@@ -166,6 +166,22 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		execCtx = withRepairNote(execCtx, strings.Join(notes, "; "))
 	}
 
+	// Pin broker targets before review. A focus/tab change must not redirect an
+	// approved action. Preparers may resolve identity, never perform the action.
+	if p, ok := tool.(interface {
+		PrepareCall(context.Context, json.RawMessage) (json.RawMessage, error)
+	}); ok {
+		prepared, err := p.PrepareCall(ctx, args)
+		if err != nil {
+			r := errorResult(err.Error())
+			return nil, nil, ctx, &r, true
+		}
+		if errs := cfg.Registry.Validate(call.Name, prepared); len(errs) > 0 {
+			r := ValidationErrorResult(call.Name, errs)
+			return nil, nil, ctx, &r, true
+		}
+		args = prepared
+	}
 	// beforeToolCall gate sees the final, already-validated arguments.
 	if cfg.BeforeToolCall != nil {
 		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args}); dec != nil {
@@ -189,6 +205,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			}
 			if dec.Network {
 				execCtx = agentcore.WithNetworkGrant(execCtx)
+			}
+			if dec.HostControl {
+				execCtx = agentcore.WithHostControlGrant(execCtx)
 			}
 			if dec.Direct {
 				execCtx = agentcore.WithDirectGrant(execCtx)

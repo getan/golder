@@ -90,6 +90,9 @@ type BeforeToolCallDecision struct {
 	// model's "network:on" argument is only a REQUEST; only the authorization
 	// gate can set this bit after a reviewer/user approved the capability.
 	Network bool
+	// HostControl authorizes this call's explicitly requested access to a pane
+	// or browser not created by this agent. It is never a standing grant.
+	HostControl bool
 	// Direct is a separate per-call escape decision from the authorization gate
 	// (reviewer in auto, person in ask/uncertain). An Allow alone cannot set it.
 	Direct bool

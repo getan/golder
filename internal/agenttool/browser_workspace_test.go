@@ -70,6 +70,7 @@ func TestBrowserOpenReusesLivePaneWithoutConsultingFocus(t *testing.T) {
 	path := filepath.Join(root, ".golder", "existing.sock")
 	posts := serveDiscoveredBrowser(t, path, "existing")
 	tool := NewBrowserTool(root, true)
+	trustFakeControl(tool.Control)
 	tool.newTuios = func(context.Context) (*tuiosctl.Client, error) {
 		t.Error("reusing a live browser must not create a pane or follow focus")
 		return nil, errors.New("unexpected pane creation")

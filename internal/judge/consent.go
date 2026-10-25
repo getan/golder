@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -33,6 +34,7 @@ const (
 	CapWriteOutside
 	CapNetwork
 	CapUnconfined
+	CapHostControl
 )
 
 // Need is one capability request with the exact scope it would cover.
@@ -281,6 +283,9 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 // the person agrees. Boundary, network and sandbox are dimensions of one list.
 func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, mode permissions.Mode, lang string) []Need {
 	var needs []Need
+	if controlcap.Facade(call.Name) && controlcap.Parse(call.Arguments).HostControl {
+		needs = append(needs, Need{Cap: CapHostControl})
+	}
 	needs = append(needs, boundaryNeeds(call, opts, mode, lang)...)
 	if NetworkRequested(call.Name, call.Arguments) && !v.Network {
 		need := Need{Cap: CapNetwork}
@@ -346,6 +351,9 @@ func boundaryNeeds(call agentcore.AgentToolCall, opts ConsentOpts, mode permissi
 	if shellTool(call.Name) {
 		shellCmd, _ = bashCommand(call.Arguments)
 	}
+	if controlcap.Facade(call.Name) {
+		shellCmd = strings.Join(controlcap.Commands(call.Name, call.Arguments), " ; ")
+	}
 	var needs []Need
 	for _, raw := range boundaryPaths(call.Name, call.Arguments) {
 		resolved, err := permissions.AbsAgainst(absRoot, raw)
@@ -401,8 +409,12 @@ func boundaryBlocked(call agentcore.AgentToolCall, opts ConsentOpts) *agentcore.
 			continue
 		}
 		resolved = permissions.Canonical(resolved)
-		if boundaryQuestion(raw, resolved, absRoot, opts.ExtraRoots, op, opts.WritableAt) == boundaryRefused {
-			return blockRefused(call, resolved, op.Has(grants.Write))
+		candOp := op
+		if controlcap.Facade(call.Name) && PathWritten(resolved, strings.Join(controlcap.Commands(call.Name, call.Arguments), " ; ")) {
+			candOp |= grants.Write
+		}
+		if boundaryQuestion(raw, resolved, absRoot, opts.ExtraRoots, candOp, opts.WritableAt) == boundaryRefused {
+			return blockRefused(call, resolved, candOp.Has(grants.Write))
 		}
 	}
 	return nil
@@ -646,6 +658,8 @@ func applyNeeds(call agentcore.AgentToolCall, opts ConsentOpts, needs []Need, sc
 			}
 		case CapNetwork:
 			dec.Network = true
+		case CapHostControl:
+			dec.HostControl = true
 		case CapUnconfined:
 			// The caller decides the execution envelope; an escape is never
 			// remembered and never establishes a standing grant.
@@ -699,6 +713,8 @@ func needLabel(n Need, lang string) string {
 		return localized(lang, "联网", "network")
 	case CapUnconfined:
 		return localized(lang, "沙箱外运行", "run outside the sandbox")
+	case CapHostControl:
+		return localized(lang, "控制非本会话创建的终端/浏览器（宿主权限）", "control an external terminal/browser with host authority")
 	default:
 		return "capability"
 	}

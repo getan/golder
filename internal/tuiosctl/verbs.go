@@ -69,6 +69,9 @@ func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowRes
 	if len(p.Command) > 0 {
 		params["command"] = p.Command
 	}
+	if len(p.Grants) > 0 {
+		params["grants"] = p.Grants
+	}
 	params["focus"] = p.Focus
 	// close_on_exit is newer than some daemons. Sending false unconditionally
 	// makes an older daemon reject the whole new-window call as an unknown
@@ -118,10 +121,13 @@ func missingParam(err error, param string) bool {
 }
 
 type NewWindowParams struct {
-	Name        string
-	Cwd         string
-	Workspace   int
-	Command     []string
+	Name      string
+	Cwd       string
+	Workspace int
+	Command   []string
+	// Broker-created helpers receive none, so raw daemon calls made by a
+	// shell/browser cannot escape the agent's tool authorization path.
+	Grants      []string
 	Focus       bool
 	CloseOnExit bool
 }
