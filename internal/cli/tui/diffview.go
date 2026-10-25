@@ -137,12 +137,14 @@ func diffTotals(diff string) (added, removed int) {
 	return added, removed
 }
 
-// renderDiff renders the card's unified diff for the given content width.
-// Headers are rendered only for a multi-file diff: with one file the card's
-// headline already carries the path and the counts (codex's rule), so a
-// second header line would just repeat it at a shallower indent.
-func renderDiff(theme Theme, diff string, inner int) string {
-	key := diffRenderKey(diff, inner, syntaxDark())
+// renderDiff renders the card's unified diff for the given card width — the
+// full column the card occupies, not the narrower text column its rows wrap
+// to (see renderDiffRow). Headers are rendered only for a multi-file diff:
+// with one file the card's headline already carries the path and the counts
+// (codex's rule), so a second header line would just repeat it at a shallower
+// indent.
+func renderDiff(theme Theme, diff string, width int) string {
+	key := diffRenderKey(diff, width, syntaxDark())
 	diffRenderMu.Lock()
 	cached, ok := diffRenderCache[key]
 	diffRenderMu.Unlock()
@@ -160,7 +162,7 @@ func renderDiff(theme Theme, diff string, inner int) string {
 			b.WriteString("\n" + renderDiffHeader(theme, sec))
 		}
 		for _, ln := range sec.lines {
-			b.WriteString("\n" + renderDiffRow(theme, sec.path, ln, inner))
+			b.WriteString("\n" + renderDiffRow(theme, sec.path, ln, width))
 		}
 	}
 	out := b.String()
@@ -199,10 +201,17 @@ func renderDiffHeader(theme Theme, sec diffSection) string {
 
 // renderDiffRow renders one diff line: hunk markers dim, context lines in the
 // body color, and changed lines with their syntax colors over the diff
-// background, padded to the full content width so the wash reads as one block
-// (codex does the same).
-func renderDiffRow(theme Theme, path string, ln diffLine, inner int) string {
+// background, padded to the card's full width so the wash reads as one block
+// (codex does the same, and so does the user turn's bar — a background that
+// stops short of the edge reads as a stray column of empty space rather than
+// as the row's own extent).
+//
+// The wash spans the full width; the text still wraps to the card body's
+// column, two cells clear of the right edge (renderUserBlock draws the same
+// split: a wrap budget narrower than the painted bar).
+func renderDiffRow(theme Theme, path string, ln diffLine, width int) string {
 	const indent = "    "
+	inner := max(1, width-len(contentIndent))
 	// Code indentation is the point of a diff row, so tabs are expanded to a
 	// fixed width and every rune is preserved (see wrapDiffSpans).
 	text := strings.ReplaceAll(ln.text, "\t", diffTab)
@@ -229,7 +238,7 @@ func renderDiffRow(theme Theme, path string, ln diffLine, inner int) string {
 	// first and continuation share one wrap budget.
 	limit := max(1, inner-len(indent)-1)
 	rows := wrapDiffSpans(highlightCodeLine(path, text, syntaxDark()), limit)
-	pad := lipgloss.NewStyle().Width(inner).Background(bg)
+	pad := lipgloss.NewStyle().Width(width).Background(bg)
 	var b strings.Builder
 	for i, row := range rows {
 		if i > 0 {

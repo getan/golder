@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"image/color"
+
+	"charm.land/lipgloss/v2"
 )
 
 // TestDiffRowBgPalettes pins both palettes' washes to codex's constants: the
@@ -106,5 +108,33 @@ func TestDiffRowsPreserveIndentation(t *testing.T) {
 	// Without the fix the body ran flush left: the old-line would read "-old()".
 	if strings.Contains(plain, "-old()") {
 		t.Errorf("indentation was stripped from the diff body\n%s", plain)
+	}
+}
+
+// TestDiffWashSpansCardWidth is the regression for the diff's washed rows
+// stopping two cells short of the card's right edge: the background must paint
+// the card's whole width, the way a user turn's bar does, even though the diff
+// text itself wraps to the narrower body column. Continuation rows of a
+// wrapped line are washed too, so they must reach the edge as well.
+func TestDiffWashSpansCardWidth(t *testing.T) {
+	const width = 64
+	long := strings.Repeat("wide() ", 40)
+	diff := "--- a/x.go\n+++ b/x.go\n@@ -0,0 +1,2 @@\n+new()\n+" + long + "\n"
+
+	out := stripTCardANSI(renderDiff(DefaultTheme(), diff, width))
+	washed := 0
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.TrimSpace(ln) == "" || strings.Contains(ln, "@@") {
+			continue // the hunk marker carries no wash
+		}
+		washed++
+		if got := lipgloss.Width(ln); got != width {
+			t.Errorf("washed row is %d cells, want the card's full %d: %q", got, width, ln)
+		}
+	}
+	// Two changed lines, the second wrapping onto continuation rows: without
+	// them the width check above would only cover single-row washes.
+	if washed < 3 {
+		t.Fatalf("counted %d washed rows, want the wrapped block", washed)
 	}
 }

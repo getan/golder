@@ -614,7 +614,7 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		// The diff replaces the response body: the tool's own text was the
 		// per-file summary, which the headline and the diff headers already
 		// carry (codex does the same — its header line IS the summary).
-		b.WriteString(renderDiff(theme, c.diff, inner))
+		b.WriteString(renderDiff(theme, c.diff, width))
 		wroteOutput = true
 	} else {
 		for i, n := range c.response {
