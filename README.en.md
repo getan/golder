@@ -20,6 +20,20 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 One command on macOS / Linux, no Node or Python. On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases); mirrors, sha256 verification and building from source are in [Install details](#install-details).
 
+## Built-in terminal workspace
+
+```bash
+golder workspace                 # visible workspace; first pane runs this executable's agent
+golder workspace --shell         # use a shell as a new workspace's first pane
+golder workspace -- --model NAME # pass literal agent argv, not shell text
+golder workspace status
+golder workspace stop            # end this workspace and all its panes explicitly
+```
+
+On macOS / Linux, neither `tuios` nor `kitty-browse` needs to be installed. The default `Ctrl+b d` detaches the client while its daemon and panes keep running; run `golder workspace` again to attach. Ordinary golder inside external tuios/herdr is unchanged. Nesting is refused unless `--nested` is explicit.
+
+The agent, shell launcher and browser entry point use one golder binary, with a separate persistent daemon process. Browsing still requires installed Chromium and a terminal supporting its graphics protocol; Chromium is never downloaded automatically. `--headless` emits one JSON readiness line and keeps its daemon alive; it is not a visible workspace. State and the owned harness live under `$GOLDER_HOME/workspace/<project-id>/sessions/<session>/`, never the person's tuios config. See [M4 implementation and boundaries](docs/workspace-m4.md).
+
 ## Highlights
 
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
@@ -398,7 +412,8 @@ See `golder --help` for the complete list.
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |
 | `GOLDER_PROXY` | Proxy address for selected providers; takes precedence over the `/proxy`-saved address |
 | `GOLDER_SANDBOX` | Execution isolation: `off` / `auto` (default: approved bash calls are contained; a fully enumerable envelope runs bare) / `enforce` (all calls contained, and a runner is required) |
-| `GOLDER_STREAM_RESUME` | `0`/`false`/`off`: disable text continuation; on by default: continue a text answer cut after output when it has no tool call; `commandcode` also gets a no-compression, no-keep-alive transport (HTTP/2 stays on) |
+| `GOLDER_STREAM_MAX_RETRIES` | Default `4` retries (`5` attempts total), shared by connection failures, idle/EOF cuts, text continuations and unexecuted local tool calls; `0` disables retrying |
+| `GOLDER_STREAM_RESUME` | `0`/`false`/`off`: disable continuation of already-shown text; on by default. Unfinished local tool calls may be regenerated and execute only after a complete response; provider-executed server tools are never automatically replayed |
 | `GOLDER_STREAM_FIRST_CONTENT_TIMEOUT` | budget for the first content frame (Go duration, default `2m`); a timeout re-issues the request and no longer widens per attempt |
 | `GOLDER_STREAM_IDLE_TIMEOUT` | window with no bytes at all (Go duration, default `90s`); SSE keep-alives do not count as content progress |
 | `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |

@@ -1,12 +1,15 @@
 package hostcompat
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/getan/golder/internal/tuiosctl"
 )
 
 // The live test: the one check that the reports this package sends are actually
@@ -16,7 +19,8 @@ import (
 //	GOLDER_HOSTCOMPAT_LIVE=1 go test ./internal/hostcompat/ -run TestLive
 //
 // Run it from inside a tuios window (or a herdr pane) whose manifest is
-// installed, and it will report a whole session cycle and then ask the host
+// installed, or inside a pane of golder's own workspace, and it will report a
+// whole session cycle and then ask the host
 // what it saw. Everything it sends is released at the end, so the person's rail
 // is left as it was.
 func TestLive(t *testing.T) {
@@ -25,7 +29,7 @@ func TestLive(t *testing.T) {
 	}
 	host := Detect(os.Getenv)
 	if host == "" {
-		t.Fatal("not inside a host pane: TUIOS_ENV and HERDR_ENV are both unset")
+		t.Fatal("not inside a host pane: GOLDER_WORKSPACE, TUIOS_ENV and HERDR_ENV do not say yes")
 	}
 	t.Logf("running inside a %s pane", host)
 
@@ -55,6 +59,8 @@ func TestLive(t *testing.T) {
 		assertTuiosSaw(t, sessionID)
 	case "herdr":
 		assertHerdrSaw(t)
+	case MuxGolder:
+		assertWorkspaceSaw(t, sessionID)
 	}
 
 	// Leave the pane as it was.
@@ -158,4 +164,60 @@ func tuiosJSON(t *testing.T, args ...string) string {
 		t.Fatalf("tuios %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
+}
+
+// assertWorkspaceSaw asks golder's own workspace daemon what it recorded. The
+// question goes over the same socket the reports went over and through the same
+// client, because a workspace pane has no `tuios` binary to ask with.
+func assertWorkspaceSaw(t *testing.T, sessionID string) {
+	t.Helper()
+	pane := os.Getenv("TUIOS_PANE_ID")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client, err := tuiosctl.Dial(ctx, tuiosctl.Options{
+		Socket:  os.Getenv("TUIOS_SOCKET"),
+		Session: os.Getenv("TUIOS_SESSION"),
+		PaneID:  pane,
+		Proof:   os.Getenv("TUIOS_PANE_TOKEN"),
+		Version: workspaceClientVersion,
+	})
+	if err != nil {
+		t.Fatalf("dial golder's workspace: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	var listed struct {
+		Agents []struct {
+			WindowID       string `json:"window_id"`
+			State          string `json:"state"`
+			HarnessID      string `json:"harness_id"`
+			AgentSessionID string `json:"agent_session_id"`
+			Source         string `json:"source"`
+		} `json:"agents"`
+	}
+	if err := client.CallInto(ctx, "list-agents", map[string]any{"session": os.Getenv("TUIOS_SESSION")}, &listed); err != nil {
+		t.Fatalf("list-agents on golder's workspace: %v", err)
+	}
+	for _, a := range listed.Agents {
+		if a.WindowID != pane {
+			continue
+		}
+		// The state reported at the end of the cycle: a finished turn.
+		if a.State != "done" {
+			t.Errorf("pane state = %q, want done (the last report was TurnEnd)", a.State)
+		}
+		if a.HarnessID != Harness {
+			t.Errorf("harness_id = %q, want %q", a.HarnessID, Harness)
+		}
+		if a.AgentSessionID != sessionID {
+			t.Errorf("agent_session_id = %q, want %q", a.AgentSessionID, sessionID)
+		}
+		if a.Source != workspaceSource {
+			t.Errorf("source = %q, want %q", a.Source, workspaceSource)
+		}
+		t.Logf("golder's workspace recorded %s for pane %s", Harness, pane)
+		return
+	}
+	t.Fatalf("list-agents does not show this pane (%s):\n%+v", pane, listed.Agents)
 }

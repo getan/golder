@@ -53,8 +53,8 @@ const herdrSource = Harness
 // environment is missing. Unlike tuios there is no PATH lookup: herdr names
 // the binary that owns the pane, which is also the binary that must answer.
 func newHerdr(opts Options) Host {
-	bin := opts.Getenv("HERDR_BIN_PATH")
-	pane := opts.Getenv("HERDR_PANE_ID")
+	bin := opts.Getenv(envHerdrBinPath)
+	pane := opts.Getenv(envHerdrPaneID)
 	if bin == "" || pane == "" {
 		return nil
 	}
@@ -67,7 +67,7 @@ func newHerdr(opts Options) Host {
 	}
 }
 
-func (h *herdrHost) Name() string { return "herdr" }
+func (h *herdrHost) Name() string { return MuxHerdr }
 
 // herdrStates maps the neutral vocabulary onto herdr's four. done and errored
 // become idle because that is what they are to herdr's model — the pane is not

@@ -47,8 +47,9 @@ func ResolveProvider(model, baseURL, protocol, providerName string, env func(str
 		return nil, "", err
 	}
 	// Whatever path resolved the provider, the stream it produces gets the same
-	// treatment: a stream cut before anything was shown is retried once, and a
-	// cut that cannot be retried is explained (streamretry.go). It is applied
+	// bounded recovery for connection failures, cut text and unexecuted local
+	// tool calls (streamretry.go). Provider-executed tools are never replayed.
+	// It is applied
 	// here, at the boundary, so no provider entry point can forget it.
 	return withStreamRetry(p, protocolWire(protocol)), name, nil
 }

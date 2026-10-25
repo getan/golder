@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/openai/openai-go/option"
 )
 
 // Tests for the cut-stream retry (streamretry.go). The provider under test is a
@@ -26,15 +29,19 @@ type scriptedProvider struct {
 	// the reported `Post "…": EOF` is reproduced.
 	connectErrs []error
 	attempts    int
+	// requests keeps every request the wrapper sent, so a test can look at what
+	// a retry actually replayed: the continuation context, or the original one.
+	requests []CompletionRequest
 }
 
 func (p *scriptedProvider) Name() string    { return "scripted" }
 func (p *scriptedProvider) Models() []Model { return nil }
 
-func (p *scriptedProvider) StreamCompletion(ctx context.Context, _ CompletionRequest) (*AssistantMessageEventStream, error) {
+func (p *scriptedProvider) StreamCompletion(ctx context.Context, req CompletionRequest) (*AssistantMessageEventStream, error) {
 	p.mu.Lock()
 	i := p.attempts
 	p.attempts++
+	p.requests = append(p.requests, req)
 	var connectErr error
 	if i < len(p.connectErrs) {
 		connectErr = p.connectErrs[i]
@@ -63,6 +70,16 @@ func (p *scriptedProvider) attemptsRun() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.attempts
+}
+
+// request returns the request attempt i was sent (0-based).
+func (p *scriptedProvider) request(i int) CompletionRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i >= len(p.requests) {
+		return CompletionRequest{}
+	}
+	return p.requests[i]
 }
 
 // cutEvent ends an attempt the way a dropped connection does, with the reader's
@@ -161,6 +178,34 @@ func noticeEvents(events []AssistantMessageEvent) []StreamNoticeEvent {
 		}
 	}
 	return out
+}
+
+// toolCallIDs lists every tool-call id the caller was shown, in order. The
+// wrapper holds tool-call deltas, so this is what the caller actually saw: the
+// calls of the terminal message, and never a fragment of a dropped attempt.
+func toolCallIDs(events []AssistantMessageEvent) []string {
+	var ids []string
+	for _, ev := range events {
+		if e, ok := ev.(StreamToolCallEvent); ok {
+			for _, c := range e.Partial.ToolCalls() {
+				ids = append(ids, c.ID)
+			}
+		}
+	}
+	return ids
+}
+
+// terminalMessage is the message the stream ended with.
+func terminalMessage(events []AssistantMessageEvent) agentcore.AssistantMessage {
+	for i := len(events) - 1; i >= 0; i-- {
+		switch e := events[i].(type) {
+		case StreamDoneEvent:
+			return e.Message
+		case StreamErrorEvent:
+			return e.Message
+		}
+	}
+	return agentcore.AssistantMessage{}
 }
 
 // fastRetryBackoff removes the production delay so a retry test runs instantly;
@@ -286,9 +331,10 @@ func TestStreamRetryLeavesAnUpstreamRejectionAlone(t *testing.T) {
 	}
 }
 
-// A cut that lands after content cannot be retried: resending would duplicate
-// what the user already read. It must at least say what happened — the reader's
-// bare "unexpected EOF" names nothing.
+// A cut that lands after content cannot be re-issued: resending would duplicate
+// what the user already read. With continuations switched off it must at least say
+// what happened — the reader's bare "unexpected EOF" names nothing — and how many
+// attempts were made, so nobody waits for a retry the turn never made.
 func TestStreamRetryKeepsContentAndNamesTheCut(t *testing.T) {
 	// The default-on resume is covered by streamresume_test.go; this test pins
 	// the terminal behavior with the opt-out.
@@ -315,6 +361,15 @@ func TestStreamRetryKeepsContentAndNamesTheCut(t *testing.T) {
 	}
 	if !strings.Contains(got, "closed before the answer finished") {
 		t.Errorf("failure = %q, want the cut described", got)
+	}
+	if !strings.Contains(got, "the turn stopped after 1 attempt (no retries)") {
+		t.Errorf("failure = %q, want the attempt count stated", got)
+	}
+	if !strings.Contains(got, "continuing a cut answer is disabled") {
+		t.Errorf("failure = %q, want it to say why the answer was not continued", got)
+	}
+	if txt := agentcore.ContentToText(terminalMessage(events).Content); txt != "half an answer" {
+		t.Errorf("terminal text = %q, want the shown answer kept in the transcript", txt)
 	}
 }
 
@@ -343,7 +398,7 @@ func TestStreamRetryGivesUpAfterASecondCut(t *testing.T) {
 	if got := errorMessage(events); !strings.Contains(got, "stream cut") {
 		t.Errorf("failure = %q, want the cut named even when the retry failed", got)
 	}
-	if got := errorMessage(events); !strings.Contains(got, "already retried once") {
+	if got := errorMessage(events); !strings.Contains(got, "the turn stopped after 2 attempts (1 retry)") {
 		t.Errorf("failure = %q, want it to say the retry was already made", got)
 	}
 }
@@ -371,7 +426,7 @@ func TestStreamRetryUsesTheConfiguredBudget(t *testing.T) {
 			t.Errorf("notice %d = %d/%d, want %d/3", i, n.Attempt, n.MaxAttempts, i+1)
 		}
 	}
-	if got := errorMessage(events); !strings.Contains(got, "already retried 3 times") {
+	if got := errorMessage(events); !strings.Contains(got, "the turn stopped after 4 attempts (3 retries)") {
 		t.Errorf("failure = %q, want the spent budget named", got)
 	}
 }
@@ -496,10 +551,13 @@ func TestStreamCompletionConnectFailureSentenceWhenBudgetSpent(t *testing.T) {
 	}
 }
 
-// Two attempts that never start an answer mean the upstream is not answering at
-// all. The retry budget is not spent on a third and fourth identical wait; the
-// turn ends with a sentence that says what happened.
-func TestStreamRetryStopsAfterTwoFirstTokenTimeouts(t *testing.T) {
+// A budget is a budget whatever the cut looks like. Attempts that never start an
+// answer are retried like every other cut, up to the configured count: the turn
+// that keeps dying on a bad network is exactly the one worth continuing, and the
+// evidence the guard counted travels in every notice so the wait is not a mystery.
+// (Stopping after two silent attempts — the old rule — is what left a turn with
+// three of its five attempts unspent.)
+func TestStreamRetrySpendsTheWholeBudgetOnSilentAttempts(t *testing.T) {
 	fastRetryBackoff(t)
 	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
 	firstTokenCut := func() AssistantMessageEvent {
@@ -513,20 +571,38 @@ func TestStreamRetryStopsAfterTwoFirstTokenTimeouts(t *testing.T) {
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), firstTokenCut()},
 		{startEvent(), firstTokenCut()},
-		{startEvent(), textEvent("never reached"), doneEvent("never reached")},
+		{startEvent(), firstTokenCut()},
+		{startEvent(), firstTokenCut()},
+		{startEvent(), firstTokenCut()},
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	events := drainEvents(t, inner, ctx)
 
-	if got := inner.attemptsRun(); got != 2 {
-		t.Errorf("attempts = %d, want 2 (the second first-token timeout stops the chain)", got)
+	if got := inner.attemptsRun(); got != 5 {
+		t.Errorf("attempts = %d, want 5 (the first attempt and four retries)", got)
 	}
-	if got := len(noticeEvents(events)); got != 1 {
-		t.Errorf("notices = %d, want 1 (the retry before the second attempt)", got)
+	notices := noticeEvents(events)
+	if len(notices) != 4 {
+		t.Fatalf("notices = %d, want 4 (one before each retry)", len(notices))
+	}
+	for i, n := range notices {
+		if n.Attempt != i+1 || n.MaxAttempts != 4 {
+			t.Errorf("notice %d = %d/%d, want %d/4", i, n.Attempt, n.MaxAttempts, i+1)
+		}
+		if n.Reason != StreamCutStall {
+			t.Errorf("notice %d reason = %q, want %q", i, n.Reason, StreamCutStall)
+		}
+		if !strings.Contains(n.Detail, "12 keep-alives") {
+			t.Errorf("notice %d detail = %q, want the guard's evidence", i, n.Detail)
+		}
 	}
 	got := errorMessage(events)
-	for _, want := range []string{"no answer started on 2 attempts", "12 keep-alives"} {
+	for _, want := range []string{
+		"no answer started within 2m0s",
+		"12 keep-alives",
+		"the turn stopped after 5 attempts (4 retries)",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("failure = %q, want %q", got, want)
 		}
@@ -654,23 +730,634 @@ func TestStreamRetryReissuesAThinkingOnlySilentEnd(t *testing.T) {
 	}
 }
 
-// A cut after a tool call is never replayed, even with no answer text: the tool
-// call is what commits the attempt, and re-issuing would be a guess about what
-// already ran. The fix that re-issues thinking-only cuts must leave this
-// terminal, so it stays a guard on the safety rule.
-func TestStreamRetryDoesNotReplayAToolCallCut(t *testing.T) {
+// The reported root cause: a cut that lands while the model is asking for a tool.
+// The old relay counted the first tool-call delta as "the tool committed the
+// attempt" and made every later cut terminal, spending none of the five attempts
+// — although the runtime executes calls only from a successful terminal message
+// (loop.go returns on StopReasonError before ExecuteToolCalls), so the call had
+// not run and could still be regenerated. Here the call is dropped with the cut
+// attempt and the request is re-issued; the caller sees only the retry's answer.
+func TestStreamRetryReplaysACutInALocalToolCall(t *testing.T) {
 	fastRetryBackoff(t)
 	t.Setenv("GOLDER_STREAM_RESUME", "1")
 	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
 		{startEvent(), toolCallEvent(), cutEvent(io.ErrUnexpectedEOF)},
-		{startEvent(), textEvent("should not run"), doneEvent("should not run")},
+		{startEvent(), textEvent("recovered"), doneEvent("recovered")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Fatalf("attempts = %d, want 2 (a cut in a local tool call is re-issued)", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have answered", got)
+	}
+	if got := lastText(events); got != "recovered" {
+		t.Errorf("text = %q, want the retry's answer", got)
+	}
+	if ids := toolCallIDs(events); len(ids) != 0 {
+		t.Errorf("tool calls shown = %v, want none: the cut attempt's call was dropped", ids)
+	}
+	if calls := terminalMessage(events).ToolCalls(); len(calls) != 0 {
+		t.Errorf("terminal message carries %d calls, want none", len(calls))
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || notices[0].Reason != StreamCutTruncated {
+		t.Fatalf("notices = %+v, want one truncated-cut retry", notices)
+	}
+}
+
+// The same cut mid-argument: the JSON is not even complete, so there is no call
+// to keep. The attempt is re-issued from the original request, and the caller is
+// shown no fragment of it.
+func TestStreamRetryReplaysACutInAnIncompleteToolCall(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "2")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), toolCallDeltaEvent(), cutEvent(errStreamIdle)},
+		{startEvent(), textEvent("recovered"), doneEvent("recovered")},
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+	if ids := toolCallIDs(events); len(ids) != 0 {
+		t.Errorf("tool calls shown = %v, want none (an unfinished call is not a call)", ids)
+	}
+	if got := lastText(events); got != "recovered" {
+		t.Errorf("text = %q, want the retry's answer", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || !strings.Contains(notices[0].Detail, "inside a tool call") {
+		t.Errorf("notices = %+v, want one naming the cut inside the call", notices)
+	}
+	// A re-issue, not a continuation: the retry replays the original context, so
+	// no half-built call and no "continue" instruction reach the wire.
+	if got := len(inner.request(1).Context.Messages); got != 0 {
+		t.Errorf("retry context = %d messages, want the original empty context", got)
+	}
+}
+
+// A provider-executed (hosted) tool call is the one thing that must never be
+// replayed: the provider already ran the tool — and billed for it — so a second
+// request runs it again. The cut stays terminal, with less text than an answer and
+// a sentence that says exactly why.
+func TestStreamRetryNeverReplaysAServerToolCallCut(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	for _, tc := range []struct {
+		name    string
+		script  []AssistantMessageEvent
+		wantTxt string
+	}{
+		{"no text", []AssistantMessageEvent{startEvent(), serverToolCallEvent(), cutEvent(io.ErrUnexpectedEOF)}, ""},
+		{"after text", []AssistantMessageEvent{startEvent(), textEvent("searching"), serverToolCallEvent(), cutEvent(io.ErrUnexpectedEOF)}, "searching"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+				tc.script,
+				{startEvent(), textEvent("must not run"), doneEvent("must not run")},
+			}}
+			events := drainEvents(t, inner, context.Background())
+
+			if got := inner.attemptsRun(); got != 1 {
+				t.Errorf("attempts = %d, want 1 (a provider-run tool call is never replayed)", got)
+			}
+			if got := len(noticeEvents(events)); got != 0 {
+				t.Errorf("notices = %d, want none: nothing was re-sent", got)
+			}
+			got := errorMessage(events)
+			for _, want := range []string{
+				"stream cut",
+				"the turn stopped after 1 attempt (no retries)",
+				"provider-side tool call",
+			} {
+				if !strings.Contains(got, want) {
+					t.Errorf("failure = %q, want %q", got, want)
+				}
+			}
+			if txt := agentcore.ContentToText(terminalMessage(events).Content); txt != tc.wantTxt {
+				t.Errorf("terminal text = %q, want %q", txt, tc.wantTxt)
+			}
+			if calls := terminalMessage(events).ToolCalls(); len(calls) != 0 {
+				t.Errorf("terminal message carries %d calls, want none", len(calls))
+			}
+		})
+	}
+}
+
+// The caller is shown completed calls once, with the terminal message, and never
+// as a delta it would have to take back: that is what makes a cut attempt
+// disappear without leaving a card for a call that will not run.
+func TestStreamRetryForwardsCompletedToolCallsOnce(t *testing.T) {
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), textEvent("working"), toolCallDeltaEvent(), toolCallEvent(), doneWithCall("working", "call-9", "bash", `{"cmd":"ls"}`)},
 	}}
 	events := drainEvents(t, inner, context.Background())
 
 	if got := inner.attemptsRun(); got != 1 {
-		t.Errorf("attempts = %d, want 1 (a tool-call cut is never replayed)", got)
+		t.Errorf("attempts = %d, want 1", got)
 	}
-	if got := errorMessage(events); !strings.Contains(got, "stream cut") {
-		t.Errorf("failure = %q, want the cut named", got)
+	ids := toolCallIDs(events)
+	if len(ids) != 1 || ids[0] != "call-9" {
+		t.Fatalf("tool calls shown = %v, want exactly the final call-9", ids)
+	}
+	var callAt, doneAt = -1, -1
+	for i, ev := range events {
+		switch ev.(type) {
+		case StreamToolCallEvent:
+			callAt = i
+		case StreamDoneEvent:
+			doneAt = i
+		}
+	}
+	if callAt < 0 || doneAt < 0 || callAt > doneAt {
+		t.Errorf("tool-call event at %d, done at %d: the call must precede the terminal message", callAt, doneAt)
+	}
+	if calls := terminalMessage(events).ToolCalls(); len(calls) != 1 || calls[0].ID != "call-9" {
+		t.Errorf("terminal calls = %+v, want the model's call", calls)
+	}
+}
+
+// One counter for the whole turn. A connection that dies before any response, an
+// idle stream mid-answer (the reported "no data arrived for 1m30s"), a stream that
+// closes with no terminal event, and a cut after visible text all draw on the same
+// budget — so a turn cannot collect a second allowance by being cut at the other
+// end of the request, and the four retries the user configured are the four they
+// get. The connect retry is silent (there is no stream to announce it on yet), so
+// it takes slot 1 and the notices start at 2/4.
+func TestStreamRetrySharesOneBudgetAcrossCutKinds(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	idle := &StreamWatchdogError{
+		Sink:   errStreamIdle,
+		Phase:  StreamPhaseStream,
+		Window: 90 * time.Second,
+		Seen:   StreamEvidence{Bytes: 392835, Frames: 78, KeepAlives: 46, LastFrame: "data"},
+	}
+	inner := &scriptedProvider{
+		connectErrs: []error{&url.Error{Op: "Post", URL: "https://api.openai.test/v1/responses", Err: io.EOF}},
+		scripts: [][]AssistantMessageEvent{
+			nil, // the connect failure: no stream at all
+			{startEvent(), thinkingEvent("reasoning"), cutEvent(idle)},
+			{startEvent()}, // closed with no terminal event
+			{startEvent(), textEvent("half "), cutEvent(io.ErrUnexpectedEOF)},
+			{startEvent(), textEvent("an answer"), doneEvent("an answer")},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 5 {
+		t.Fatalf("attempts = %d, want 5 (one attempt and the four shared retries)", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the last retry to have answered", got)
+	}
+	if got := lastText(events); got != "half an answer" {
+		t.Errorf("text = %q, want the shown prefix plus the continuation", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 3 {
+		t.Fatalf("notices = %d (%+v), want 3 (the silent connect retry announces nothing)", len(notices), notices)
+	}
+	wantReasons := []string{StreamCutIdle, StreamCutSilent, StreamCutTruncated}
+	for i, n := range notices {
+		if n.Reason != wantReasons[i] {
+			t.Errorf("notice %d reason = %q, want %q", i, n.Reason, wantReasons[i])
+		}
+		if n.Attempt != i+2 || n.MaxAttempts != 4 {
+			t.Errorf("notice %d = %d/%d, want %d/4", i, n.Attempt, n.MaxAttempts, i+2)
+		}
+	}
+	// The reported failure, verbatim in the notice: the window that expired and
+	// what the guard counted while it waited.
+	if notices[0].Window != 90*time.Second {
+		t.Errorf("idle notice window = %s, want 1m30s", notices[0].Window)
+	}
+	for _, want := range []string{"392835 bytes", "78 content frames", "46 keep-alives"} {
+		if !strings.Contains(notices[0].Detail, want) {
+			t.Errorf("idle notice detail = %q, want %q", notices[0].Detail, want)
+		}
+	}
+	// The last attempt continued the answer rather than re-issuing it, so the text
+	// the user already read is in its context — and the text of the first three
+	// attempts is not.
+	req := inner.request(4)
+	if got := len(req.Context.Messages); got != 2 {
+		t.Fatalf("continuation context = %d messages, want the partial text and the instruction", got)
+	}
+	if am, ok := req.Context.Messages[0].(agentcore.AssistantMessage); !ok || agentcore.ContentToText(am.Content) != "half " {
+		t.Errorf("continuation replays %v, want the visible text only", req.Context.Messages[0])
+	}
+}
+
+// GOLDER_STREAM_MAX_RETRIES=0 means no retries: the first cut ends the turn, and
+// the sentence says "no retries" so the user is not left wondering whether
+// anything was re-sent.
+func TestStreamRetryStopsImmediatelyWithNoBudget(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "0")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), textEvent("must not run"), doneEvent("must not run")},
+	}}
+	events := drainEvents(t, inner, context.Background())
+
+	if got := inner.attemptsRun(); got != 1 {
+		t.Errorf("attempts = %d, want 1 (a zero budget allows no retry)", got)
+	}
+	if got := len(noticeEvents(events)); got != 0 {
+		t.Errorf("notices = %d, want none", got)
+	}
+	got := errorMessage(events)
+	for _, want := range []string{"stream cut", "the turn stopped after 1 attempt (no retries)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failure = %q, want %q", got, want)
+		}
+	}
+}
+
+// A long answer that keeps getting cut continues as often as the budget allows.
+// The old limit of two continuations — and the separate allowance that came with
+// it — is gone: the setting the user chose is the number of attempts they get, and
+// every continuation keeps the text already on screen without repeating it.
+func TestStreamRetryContinuesTextUntilTheBudgetIsSpent(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	cut := func(text string) []AssistantMessageEvent {
+		return []AssistantMessageEvent{startEvent(), textEvent(text), cutEvent(io.ErrUnexpectedEOF)}
+	}
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		cut("a "), cut("b "), cut("c "), cut("d "), cut("e"),
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := drainEvents(t, inner, ctx)
+
+	if got := inner.attemptsRun(); got != 5 {
+		t.Errorf("attempts = %d, want 5 (the first attempt and four continuations)", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 4 {
+		t.Fatalf("notices = %d, want 4", len(notices))
+	}
+	for i, n := range notices {
+		if !strings.Contains(n.Detail, "continuing the cut answer") {
+			t.Errorf("notice %d detail = %q, want the continuation named", i, n.Detail)
+		}
+	}
+	if got := lastText(events); got != "a b c d e" {
+		t.Errorf("text = %q, want each piece appended once", got)
+	}
+	got := errorMessage(events)
+	if !strings.Contains(got, "the turn stopped after 5 attempts (4 retries)") {
+		t.Errorf("failure = %q, want the spent budget named", got)
+	}
+	if !strings.Contains(got, "closed before the answer finished") {
+		t.Errorf("failure = %q, want the cut described", got)
+	}
+	if txt := agentcore.ContentToText(terminalMessage(events).Content); txt != "a b c d e" {
+		t.Errorf("terminal text = %q, want the answer the user read kept in the transcript", txt)
+	}
+}
+
+// A continuation that is itself cut before its first token keeps continuing from
+// the same prefix rather than re-issuing the request: the text on the caller's
+// screen is the user's, and a re-issue would replace it with a fresh start. The
+// attempt still spends the shared budget.
+func TestStreamRetryKeepsContinuingAfterACutBeforeTheFirstToken(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "3")
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), textEvent("half "), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), cutEvent(errStreamIdle)}, // the continuation never produced a token
+		{startEvent(), textEvent("an answer"), doneEvent("an answer")},
+	}}
+	events := drainEvents(t, inner, context.Background())
+
+	if got := inner.attemptsRun(); got != 3 {
+		t.Fatalf("attempts = %d, want 3", got)
+	}
+	if got := countEvents[StreamStartEvent](events); got != 1 {
+		t.Errorf("start events = %d, want 1 (the answer is never restarted)", got)
+	}
+	for _, i := range []int{1, 2} {
+		req := inner.request(i)
+		if got := len(req.Context.Messages); got != 2 {
+			t.Fatalf("attempt %d context = %d messages, want the partial text and the instruction", i, got)
+		}
+		am, ok := req.Context.Messages[0].(agentcore.AssistantMessage)
+		if !ok || agentcore.ContentToText(am.Content) != "half " {
+			t.Errorf("attempt %d replays %v, want the text the user already read", i, req.Context.Messages[0])
+		}
+	}
+	if got := lastText(events); got != "half an answer" {
+		t.Errorf("text = %q, want the prefix plus the continuation", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the last continuation to have answered", got)
+	}
+}
+
+// A cancelled turn stops at once, with budget left: that interrupt is the user's
+// own, so it makes no further request and is reported as an abort rather than as a
+// provider failure with a retry count.
+func TestStreamRetryStopsOnCancellation(t *testing.T) {
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
+	old := streamRetryBackoff
+	// A long wait is what the interrupt has to break out of; the test cancels
+	// instead of waiting for it.
+	streamRetryBackoff = func(int) time.Duration { return time.Hour }
+	t.Cleanup(func() { streamRetryBackoff = old })
+
+	inner := &scriptedProvider{scripts: [][]AssistantMessageEvent{
+		{startEvent(), cutEvent(io.ErrUnexpectedEOF)},
+		{startEvent(), textEvent("must not run"), doneEvent("must not run")},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := withStreamRetry(inner, "").StreamCompletion(ctx, CompletionRequest{Model: "m"})
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+	notices := 0
+	for ev := range stream.Events() {
+		if _, ok := ev.(StreamNoticeEvent); ok {
+			notices++
+			cancel() // the user interrupts while the retry is backing off
+		}
+	}
+	if notices != 1 {
+		t.Errorf("notices = %d, want 1 (the retry that was announced)", notices)
+	}
+	if got := inner.attemptsRun(); got != 1 {
+		t.Errorf("attempts = %d, want 1: a cancelled turn makes no further request", got)
+	}
+}
+
+// The same policy over a real wire. The next three drive the Responses driver over
+// a stubbed transport — SSE frames in, net/http's own reader errors out — so the
+// exact shapes the user reported are exercised end to end: the wrapper, the
+// driver's decoder, and the body's failure.
+
+// drainWith runs a wrapped provider with a full request and reports everything the
+// caller saw.
+func drainWith(t *testing.T, p Provider, req CompletionRequest) []AssistantMessageEvent {
+	t.Helper()
+	stream, err := p.StreamCompletion(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StreamCompletion: %v", err)
+	}
+	var events []AssistantMessageEvent
+	for ev := range stream.Events() {
+		events = append(events, ev)
+	}
+	return events
+}
+
+// responsesRetryRequest is the request shape every wire test here sends.
+func responsesRetryRequest() CompletionRequest {
+	return CompletionRequest{
+		Model:   "gpt-4o",
+		Context: LlmContext{Messages: agentcore.MessageList{userMsg("hi")}},
+		Config:  StreamConfig{APIKey: "sk-test"},
+	}
+}
+
+// guardedResponsesDriver is newResponsesTestDriver with the SSE guard in front of
+// the transport — the client production builds (see guardSSEFrames) — so a body
+// that goes silent produces the watchdog error the user reported instead of
+// hanging on a read.
+func guardedResponsesDriver(baseURL string, rt roundTripFunc) *responsesDriver {
+	d := NewOpenAIResponsesProvider("openai", baseURL, nil)
+	d.clientOpts = []option.RequestOption{
+		option.WithHTTPClient(guardSSEFrames(&http.Client{Transport: rt})),
+	}
+	return d
+}
+
+// sseThenStall is a response body that delivers the given bytes and then goes
+// silent without closing: the reported "no data arrived for 1m30s (392835 bytes,
+// 78 content frames, 46 keep-alives)" — bytes and keep-alives were counted, then
+// nothing arrived, and the read never returned.
+type sseThenStall struct {
+	data []byte
+	done chan struct{}
+	once sync.Once
+}
+
+func (b *sseThenStall) Read(p []byte) (int, error) {
+	if len(b.data) > 0 {
+		n := copy(p, b.data)
+		b.data = b.data[n:]
+		return n, nil
+	}
+	<-b.done // the guard closes the body when its window expires
+	return 0, io.EOF
+}
+
+func (b *sseThenStall) Close() error {
+	b.once.Do(func() { close(b.done) })
+	return nil
+}
+
+// The reported first failure over a real SSE body: the socket stays open, some
+// keep-alives arrive, and then nothing — for longer than the idle window. The
+// guard turns that into a cut, and the turn is retried instead of ending after one
+// attempt with "retry the turn".
+func TestResponsesIdleStreamIsRetriedOverRealSSE(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_IDLE_TIMEOUT", "40ms")
+	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "2")
+	var calls int32
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body: &sseThenStall{
+					data: []byte(": keep-alive\n\n: keep-alive\n\n"),
+					done: make(chan struct{}),
+				},
+			}, nil
+		}
+		return sseResponse(
+			deltaFrame("recovered"),
+			completedFrame("recovered", "resp_2", "gpt-4o", 3, 4),
+		), nil
+	})
+	d := guardedResponsesDriver("https://api.openai.test/v1", rt)
+	events := drainWith(t, withStreamRetry(d, WireResponses), responsesRetryRequest())
+
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("attempts = %d, want 2 (the idle stream and one retry)", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have answered", got)
+	}
+	if got := lastText(events); got != "recovered" {
+		t.Errorf("text = %q, want the retry's answer", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 {
+		t.Fatalf("notices = %d (%+v), want 1", len(notices), notices)
+	}
+	if notices[0].Reason != StreamCutIdle {
+		t.Errorf("notice reason = %q, want %q", notices[0].Reason, StreamCutIdle)
+	}
+	if notices[0].Window != 40*time.Millisecond {
+		t.Errorf("notice window = %s, want the configured 40ms", notices[0].Window)
+	}
+	if !strings.Contains(notices[0].Detail, "keep-alives") {
+		t.Errorf("notice detail = %q, want the guard's evidence", notices[0].Detail)
+	}
+}
+
+// The reported second failure over a real SSE body: the response ends before the
+// answer does (net/http's io.ErrUnexpectedEOF). With text already on screen the
+// answer is continued, and the continuation's request carries that text — and no
+// tool call, so the history stays replayable.
+func TestResponsesTruncatedStreamIsContinuedOverRealSSE(t *testing.T) {
+	fastRetryBackoff(t)
+	t.Setenv("GOLDER_STREAM_RESUME", "1")
+	var calls int32
+	var mu sync.Mutex
+	var bodies []string
+	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Body != nil {
+			if b, err := io.ReadAll(r.Body); err == nil {
+				mu.Lock()
+				bodies = append(bodies, string(b))
+				mu.Unlock()
+			}
+		}
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &truncatedBody{data: []byte("data: " + deltaFrame("half an answer") + "\n\n")},
+			}, nil
+		}
+		return sseResponse(
+			deltaFrame(" and the rest"),
+			completedFrame(" and the rest", "resp_2", "gpt-4o", 3, 4),
+		), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+	events := drainWith(t, withStreamRetry(d, WireResponses), responsesRetryRequest())
+
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("attempts = %d, want 2 (the cut answer and its continuation)", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the continuation to have answered", got)
+	}
+	if got := lastText(events); got != "half an answer and the rest" {
+		t.Errorf("text = %q, want the shown prefix plus the continuation", got)
+	}
+	notices := noticeEvents(events)
+	if len(notices) != 1 || notices[0].Reason != StreamCutTruncated {
+		t.Fatalf("notices = %+v, want one truncated-cut retry", notices)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) != 2 {
+		t.Fatalf("request bodies = %d, want 2", len(bodies))
+	}
+	for _, want := range []string{"half an answer", "Continue exactly where you stopped"} {
+		if !strings.Contains(bodies[1], want) {
+			t.Errorf("continuation body = %s, want %q replayed", bodies[1], want)
+		}
+	}
+	if strings.Contains(bodies[1], "function_call") {
+		t.Errorf("continuation body replayed a tool call: %s", bodies[1])
+	}
+}
+
+// The tool-call twin over a real wire: the model's function_call is complete on the
+// wire, then the body dies. The call never ran (the runtime executes calls only
+// from a successful terminal message), so the request is re-issued and the caller
+// is handed exactly one call — the retry's — which is what the runtime runs once.
+func TestResponsesToolCallCutIsReissuedOverRealSSE(t *testing.T) {
+	fastRetryBackoff(t)
+	var calls int32
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			frame := functionCallDoneFrame("call_1", "bash", `{"cmd":"ls"}`)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &truncatedBody{data: []byte("data: " + frame + "\n\n")},
+			}, nil
+		}
+		return sseResponse(
+			completedToolFrame("resp_2", "gpt-4o", "call_2", "bash", `{"cmd":"ls"}`),
+		), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+	events := drainWith(t, withStreamRetry(d, WireResponses), responsesRetryRequest())
+
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("attempts = %d, want 2 (a cut in a local tool call is re-issued)", got)
+	}
+	if got := errorMessage(events); got != "" {
+		t.Errorf("failure = %q, want the retry to have answered", got)
+	}
+	if ids := toolCallIDs(events); len(ids) != 1 || ids[0] != "call_2" {
+		t.Errorf("tool calls shown = %v, want exactly the retry's call_2", ids)
+	}
+	msg := terminalMessage(events)
+	calls2 := msg.ToolCalls()
+	if len(calls2) != 1 || calls2[0].ID != "call_2" || calls2[0].IsServer() {
+		t.Errorf("terminal calls = %+v, want the one local call the retry asked for", calls2)
+	}
+}
+
+// And the one cut that stays terminal over a real wire: a hosted (provider-run)
+// call was in flight when the body died, so re-issuing would run it a second time
+// at the provider. The turn stops after one attempt and says why.
+func TestResponsesHostedToolCallCutIsNotReplayedOverRealSSE(t *testing.T) {
+	fastRetryBackoff(t)
+	var calls int32
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			frame := webSearchCallFrame("ws_1", "news")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &truncatedBody{data: []byte("data: " + frame + "\n\n")},
+			}, nil
+		}
+		return sseResponse(completedFrame("must not run", "resp_2", "gpt-4o", 3, 4)), nil
+	})
+	d := newResponsesTestDriver("https://api.openai.test/v1", rt)
+	events := drainWith(t, withStreamRetry(d, WireResponses), responsesRetryRequest())
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("attempts = %d, want 1 (a provider-run tool call is never replayed)", got)
+	}
+	if got := len(noticeEvents(events)); got != 0 {
+		t.Errorf("notices = %d, want none: nothing was re-sent", got)
+	}
+	got := errorMessage(events)
+	for _, want := range []string{
+		"stream cut",
+		"the turn stopped after 1 attempt (no retries)",
+		"provider-side tool call",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failure = %q, want %q", got, want)
+		}
+	}
+	if calls := terminalMessage(events).ToolCalls(); len(calls) != 0 {
+		t.Errorf("terminal message carries %d calls, want none", len(calls))
 	}
 }

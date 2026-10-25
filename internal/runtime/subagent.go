@@ -31,6 +31,7 @@ import (
 	"os"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/jsonrpc"
 	"github.com/getan/golder/internal/provider"
 )
@@ -483,6 +484,34 @@ func (t *SubAgentTool) executeProcess(ctx context.Context, prompt string) (agent
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(text)}}, nil
 }
 
+// subAgentEnv derives a spawned golder's environment from its parent's: the
+// credential scrub of issue #568, plus the one exception that scrub gets wrong
+// for a child that is the same agent in the same pane.
+//
+// Pane identity (hostcompat.IdentityEnv) says which multiplexer, socket, session
+// and pane this process belongs to. Most of those names the scrub leaves alone
+// anyway, but two of them it removes: the workspace marker, for its GOLDER_
+// prefix, and the pane's own token, for the word in its name. A child without
+// them believes it runs in no multiplexer at all — its states and its
+// conversation would go nowhere, and a pane-side tool would stop recognising its
+// own pane — so they are handed back through the allow list.
+//
+// The allow list is filtered to what the scrub would actually remove: re-
+// injecting a name that survived would put the same variable in the child's
+// environment twice. Nothing else is allowed through — no provider key, no API
+// token, no other GOLDER_* setting — and the tool and read-only restrictions
+// this child runs under are untouched, because they travel in the spec and the
+// request rather than the environment.
+func subAgentEnv(parent []string) []string {
+	allow := hostcompat.IdentityEnv(parent)
+	for name := range allow {
+		if !provider.ScrubsCredentialVar(name) {
+			delete(allow, name)
+		}
+	}
+	return provider.ScrubEnv(parent, allow)
+}
+
 // defaultProcessCall is the production subprocess transport: it launches the
 // golder binary (or cfg.Command) with the subagent-rpc flag, sends a single
 // "subagent/run" JSON-RPC request over the child's stdin, and returns the
@@ -506,7 +535,7 @@ func defaultProcessCall(ctx context.Context, cfg SubAgentProcessConfig, params S
 	// provider.ScrubEnv with an allow entry.
 	env := cfg.Env
 	if env == nil {
-		env = provider.ScrubEnv(os.Environ(), nil)
+		env = subAgentEnv(os.Environ())
 	}
 	client, err := jsonrpc.NewClient(jsonrpc.Config{
 		Command: command,

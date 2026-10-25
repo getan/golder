@@ -20,6 +20,20 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip`；镜像、sha256 校验、从源码构建等细节见[安装细节](#安装细节)。
 
+## 自带终端工作区
+
+```bash
+golder workspace                 # 可见工作区，第一个 pane 启动本 executable 的 agent
+golder workspace --shell         # 新工作区的第一个 pane 改为 shell
+golder workspace -- --model NAME # agent 参数原样传入，不拼成 shell 命令
+golder workspace status
+golder workspace stop            # 明确结束这个工作区及其所有 pane
+```
+
+macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱离客户端后，后台 daemon 与 pane 继续运行；再次运行 `golder workspace` 可重新连接。已有 tuios/herdr 中的普通 `golder` 行为不变；嵌套工作区默认拒绝，需要明确 `--nested`。
+
+agent、shell、浏览器入口都来自同一个 golder 二进制，但后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness 并持续运行 daemon，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/<项目标识>/sessions/<session>/`，不读写个人 tuios 配置。详见 [M4 实现与边界](docs/workspace-m4.md)。
+
 ## 亮点
 
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。
@@ -404,7 +418,8 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_SKILLS_DIR` | 覆盖技能发现目录（默认 `~/.agents/skills`） |
 | `GOLDER_PROXY` | 为选中的 provider 提供代理地址，优先于 `/proxy` 保存的地址 |
 | `GOLDER_SANDBOX` | 执行隔离：`off`（不启用）/ `auto`（默认，获准的 bash 默认收容；可完整枚举的信封直接跑）/ `enforce`（全部收容，且强制要求 runner） |
-| `GOLDER_STREAM_RESUME` | `0`/`false`/`off`：关闭文本续写；默认开：流在已输出文本且无工具调用时被切断，自动从断点续写；`commandcode` 另用禁用压缩和连接复用的传输（HTTP/2 保留） |
+| `GOLDER_STREAM_MAX_RETRIES` | 默认 `4` 次重试（共 `5` 次尝试），连接失败、idle/EOF、文本续写和未执行的本地工具调用共用预算；`0` 禁用重试 |
+| `GOLDER_STREAM_RESUME` | `0`/`false`/`off`：关闭已输出文本的续写；默认开。未完成的本地工具调用可安全重发，只在完整响应后执行一次；已由 provider 执行的服务端工具不自动重放 |
 | `GOLDER_STREAM_FIRST_CONTENT_TIMEOUT` | 首个内容帧的等待预算（Go duration，默认 `2m`）；超时即重试，不再随尝试次数放宽 |
 | `GOLDER_STREAM_IDLE_TIMEOUT` | 连续无任何字节的空闲窗口（Go duration，默认 `90s`）；SSE keep-alive 不计入内容进度 |
 | `GOLDER_SANDBOX_READABLE` | 追加沙箱读白名单（冒号/逗号分隔的绝对路径），如 `/Volumes/KIOXIA:$HOME/miniconda3` |

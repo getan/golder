@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +30,10 @@ const (
 	PresetFullStack = "debug-fullstack"
 	PresetData      = "data-analysis"
 	PresetReview    = "review"
+
+	// workspaceBrowserWait bounds how long create waits for a browser pane's
+	// control socket before reporting the pane with a warning instead.
+	workspaceBrowserWait = 8 * time.Second
 )
 
 // workspacePane is one pane the tool started.
@@ -38,6 +43,9 @@ type workspacePane struct {
 	WindowID string `json:"window_id"`
 	Socket   string `json:"socket,omitempty"`
 	URL      string `json:"url,omitempty"`
+	// Warning reports a browser pane that was created but whose control
+	// endpoint could not be adopted yet; snapshot will show the same gap.
+	Warning string `json:"warning,omitempty"`
 }
 
 // paneSpec is one line of a preset plan.
@@ -47,6 +55,26 @@ type paneSpec struct {
 	Argv   []string
 	Socket string
 	URL    string
+	// Embedded marks a browser pane started by golder's own binary rather than
+	// an external kitty-browse; close needs it to know which teardown applies.
+	Embedded bool
+}
+
+// program names the launch command in a message the person can act on.
+func (s paneSpec) program() string {
+	if s.Embedded {
+		return "golder's built-in browser"
+	}
+	return "kitty-browse"
+}
+
+// baseName is the executable name the pane will report as its foreground
+// program, which is what close matches against the pane record.
+func (s paneSpec) baseName() string {
+	if len(s.Argv) == 0 {
+		return ""
+	}
+	return filepath.Base(s.Argv[0])
 }
 
 // NewWorkspaceTool builds the facade. allowControl=false keeps list and
@@ -87,7 +115,8 @@ func (t *WorkspaceTool) Description() string {
 	if t.allowControl {
 		return "Arrange the panes a session needs (debug-fullstack, data-analysis, review) " +
 			"and read them back as one snapshot: terminal tails plus the browser's page, console and errors. " +
-			"create/list/snapshot/focus/close. Browser close requests normal exit first; force:true allows hard close on failure."
+			"create/list/snapshot/focus/close. Browser close asks the browser golder started to quit " +
+			"and confirms its exit first; force:true allows a hard close on failure."
 	}
 	return "Read the arranged panes as one snapshot: terminal tails plus the browser's page, console and errors. list/snapshot only."
 }
@@ -189,10 +218,14 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 		if spec.Socket != "" {
 			// The browser creates the socket at startup; a snapshot that races
 			// it would report "not running" for a pane that is about to work.
-			waitForSocket(spec.Socket, 8*time.Second)
-			// Now that a browser exists, the browser tool can use it without the
-			// person exporting KITTY_BROWSE_SOCKET and restarting.
-			setBrowserSocket(spec.Socket)
+			// Adoption also records the pane id and browserId that close needs,
+			// and points the browser tool at the socket without the person
+			// exporting KITTY_BROWSE_SOCKET and restarting.
+			if _, err := adoptBrowserPane(ctx, t.cwd, spec, res.WindowID, workspaceBrowserWait); err != nil {
+				// The pane exists; the rest of the layout is still useful, so
+				// this is reported per pane instead of aborting create.
+				pane.Warning = err.Error()
+			}
 		}
 		t.mu.Lock()
 		t.panes[spec.Name] = pane
@@ -392,7 +425,7 @@ func (t *WorkspaceTool) control(ctx context.Context, a workspaceArgs) (agentcore
 	if err != nil {
 		return workspaceError(err), nil
 	}
-	out, err := closePane(ctx, c, win, pane.Kind == "browser", a.Force, paneCloseTimeout(a.TimeoutMS))
+	out, err := closePane(ctx, c, win, t.paneBrowserIdentity(pane), a.Force, paneCloseTimeout(a.TimeoutMS))
 	if err != nil {
 		return workspaceError(err), nil
 	}
@@ -404,6 +437,18 @@ func (t *WorkspaceTool) control(ctx context.Context, a workspaceArgs) (agentcore
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(out))},
 		Details: map[string]any{"window_id": pane.WindowID},
 	}, nil
+}
+
+// paneBrowserIdentity is the identity close needs for one arranged pane. The
+// registry record is authoritative; the workspace's own record is only a
+// fallback so the refusal names the right pane, and an incomplete fallback still
+// cannot send keys or a quit.
+func (t *WorkspaceTool) paneBrowserIdentity(p workspacePane) browserPane {
+	identity := paneIdentity(t.cwd, p.WindowID)
+	if p.Kind != "browser" || identity.Managed {
+		return identity
+	}
+	return browserPane{Root: t.cwd, Name: p.Name, Managed: true, Socket: p.Socket}
 }
 
 func workspaceError(err error) agentcore.AgentToolResult {

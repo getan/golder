@@ -28,8 +28,14 @@ func TestWorkspacePresetFullStack(t *testing.T) {
 	if specs[0].Name != "backend" || specs[1].Name != "frontend" || specs[2].Kind != "browser" {
 		t.Errorf("plan = %+v, want backend, frontend, browser", specs)
 	}
-	if !strings.Contains(specs[2].Socket, ".golder/browser/") || specs[2].URL != "http://localhost:5173" {
-		t.Errorf("browser pane = %+v, want a workspace socket and the url", specs[2])
+	// The socket lives in the workspace when the path fits there, and in the
+	// project's private runtime directory when it does not (a long t.TempDir
+	// name is exactly that case); both are discoverable from .golder/browser.
+	if !validBrowserSocketLocation(root, specs[2].Socket) || specs[2].URL != "http://localhost:5173" {
+		t.Errorf("browser pane = %+v, want a discoverable control socket and the url", specs[2])
+	}
+	if len(specs[2].Socket) > unixSocketPathLimit {
+		t.Errorf("browser socket %q is %d bytes", specs[2].Socket, len(specs[2].Socket))
 	}
 }
 

@@ -33,7 +33,7 @@ type tuiosHost struct {
 // newTuios returns the tuios host for this process, or nil when the pane's
 // environment or the binary is missing.
 func newTuios(opts Options) Host {
-	pane := opts.Getenv("TUIOS_PANE_ID")
+	pane := opts.Getenv(envTuiosPaneID)
 	if pane == "" {
 		// A pane always has an id. Without one this is a tuios client process
 		// rather than a pane's own shell, which is not a place to report from.
@@ -46,7 +46,7 @@ func newTuios(opts Options) Host {
 	return &tuiosHost{bin: bin, pane: pane, runner: opts.Run}
 }
 
-func (h *tuiosHost) Name() string { return "tuios" }
+func (h *tuiosHost) Name() string { return MuxTuios }
 
 // tuiosStates maps the neutral vocabulary onto tuios's own. Every state is
 // expressible, so this is a plain rename.

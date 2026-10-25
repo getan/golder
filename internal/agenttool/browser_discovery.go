@@ -49,6 +49,11 @@ func canonicalBrowserSocket(path string) string {
 // Discover only two shallow workspace directories, not profile directories or
 // arbitrary machine-wide sockets. The explicitly configured endpoint is also
 // included (it may deliberately live outside the workspace).
+//
+// A browser whose socket had to move out of the workspace (see browser_paths.go)
+// is found through the small metadata record .golder/browser keeps for it, and
+// only when that record names a socket golder could have created for this
+// workspace — a repository cannot redirect discovery elsewhere.
 func browserCandidatePaths(cwd, selected string) ([]string, bool) {
 	paths := make([]string, 0, maxBrowserCandidates)
 	seen := map[string]bool{}
@@ -89,13 +94,25 @@ func browserCandidatePaths(cwd, selected string) ([]string, bool) {
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {
-			if !strings.HasSuffix(entry.Name(), ".sock") || entry.Type()&os.ModeSocket == 0 {
-				continue // never follow a symlink or probe a regular file
+			switch {
+			case strings.HasSuffix(entry.Name(), ".sock"):
+				if entry.Type()&os.ModeSocket == 0 {
+					continue // never follow a symlink or probe a regular file
+				}
+				if len(paths) == maxBrowserCandidates {
+					return paths, true
+				}
+				add(filepath.Join(real, entry.Name()))
+			case strings.HasSuffix(entry.Name(), ".browser.json"):
+				meta, err := readBrowserMetadata(filepath.Join(real, entry.Name()))
+				if err != nil || !validBrowserSocketLocation(root, meta.Socket) {
+					continue
+				}
+				if len(paths) == maxBrowserCandidates {
+					return paths, true
+				}
+				add(meta.Socket)
 			}
-			if len(paths) == maxBrowserCandidates {
-				return paths, true
-			}
-			add(filepath.Join(real, entry.Name()))
 		}
 	}
 	return paths, truncated
@@ -127,7 +144,7 @@ func discoverBrowsers(ctx context.Context, cwd, selected string) browserDiscover
 			stop()
 			c.CloseIdleConnections()
 			if err == nil && (info.APIVersion != browserctl.APIVersion || info.BrowserID == "") {
-				err = fmt.Errorf("endpoint is not a kitty-browse %s instance", browserctl.APIVersion)
+				err = fmt.Errorf("endpoint is not a compatible %s browser", browserctl.APIVersion)
 			}
 			if err == nil {
 				// Capability schemas are not needed in an instance/tab listing.

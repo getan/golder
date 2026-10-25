@@ -45,48 +45,37 @@ const usage = "usage: golder host-compat status | install [--print] | uninstall"
 // runStatus prints what the multiplexer around this process knows and what it
 // would need to know more. It is the command a person runs when their rail
 // does not show golder.
+//
+// Every line comes from hostcompat.Resolve, the same decision Open makes, so
+// what this command says is what golder actually does: the host it names is the
+// host a report goes to, and a host it calls unreachable is one no report
+// reaches.
 func runStatus(out, errOut io.Writer) int {
 	getenv := os.Getenv
-	detected := hostcompat.Detect(getenv)
-	forced := strings.TrimSpace(getenv(hostcompat.EnvHostReport))
+	res := hostcompat.Resolve(getenv)
 
 	fmt.Fprintf(out, "golder %s, reporting as %q\n", Version, hostcompat.Harness)
-	switch {
-	case detected == "" && forced == "":
-		fmt.Fprintln(out, "host:        none — this is not a tuios or herdr pane, so nothing is reported.")
-		fmt.Fprintln(out, "             Start golder inside a tuios window or a herdr pane to see it on the rail.")
-	case detected == "" && forced != "":
-		fmt.Fprintf(out, "host:        %s (forced by %s, though this pane looks like no host)\n",
-			forced, hostcompat.EnvHostReport)
-	case forced == "off" || forced == "none" || forced == "0" || forced == "false":
-		fmt.Fprintf(out, "host:        %s, but reporting is OFF (%s=%s)\n", detected, hostcompat.EnvHostReport, forced)
-	default:
-		fmt.Fprintf(out, "host:        %s\n", detected)
-		if forced != "" {
-			fmt.Fprintf(out, "             forced by %s=%s\n", hostcompat.EnvHostReport, forced)
-		}
-	}
+	printHost(out, res)
+	printHostVars(out, res)
 
-	// The pane and socket each host reports through. Naming them makes a
-	// silently missing variable obvious, which is the usual reason nothing
-	// shows up.
-	switch {
-	case detected == "tuios" || forced == "tuios":
-		printVar(out, "TUIOS_PANE_ID")
-		printVar(out, "TUIOS_SOCKET")
-		printVar(out, "TUIOS_PANE_TOKEN")
-	case detected == "herdr" || forced == "herdr":
-		printVar(out, "HERDR_PANE_ID")
-		printVar(out, "HERDR_BIN_PATH")
-		printVar(out, "HERDR_SOCKET_PATH")
-	}
-
-	// tuios needs a manifest to recognise a golder pane and to read the prompts
-	// it draws; herdr needs nothing at all. So the manifest half is reported
-	// only where it applies.
-	if detected == "herdr" {
+	// A manifest is what makes an external tuios daemon recognise a golder pane
+	// and read the prompts it draws. golder's own workspace and herdr learn the
+	// agent from the report, so the manifest half is reported only where it
+	// applies.
+	switch res.Host {
+	case hostcompat.MuxGolder:
+		fmt.Fprintln(out, "manifest:    not needed — golder's own workspace reads the report itself.")
+		return 0
+	case hostcompat.MuxHerdr:
 		fmt.Fprintln(out, "manifest:    not needed — herdr learns the agent from the report itself.")
 		return 0
+	case "":
+		if res.Multiplexer == hostcompat.MuxGolder || res.Multiplexer == hostcompat.MuxHerdr {
+			// A workspace or herdr pane with something missing: no manifest
+			// would fix it, so pointing at one would send the person down the
+			// wrong path.
+			return 0
+		}
 	}
 	state, path, err := hostcompat.ManifestStatus(getenv)
 	if err != nil {
@@ -105,6 +94,83 @@ func runStatus(out, errOut io.Writer) int {
 		fmt.Fprintln(out, "             Move it aside to install golder's, or keep it and report state only.")
 	}
 	return 0
+}
+
+// printHost says which host golder reports to, or why it reports to none. It is
+// the one line a person reads first, so each case says what is wrong and what
+// would fix it, and names the terminal golder found even when it cannot report
+// to it.
+func printHost(out io.Writer, res hostcompat.Resolution) {
+	switch {
+	case res.Off:
+		fmt.Fprintf(out, "host:        %s, but reporting is OFF (%s=%s)\n",
+			nameOr(res.Multiplexer, "none"), hostcompat.EnvHostReport, res.Forced)
+		return
+	case res.Host != "":
+		fmt.Fprintf(out, "host:        %s\n", res.Host)
+	case res.Multiplexer == hostcompat.MuxNone && res.Forced != "":
+		// A host was forced from a pane that is not one: say so, and say what
+		// the environment still lacks.
+		fmt.Fprintf(out, "host:        none — %s=%s names %s, which this pane cannot reach.\n",
+			hostcompat.EnvHostReport, res.Forced, nameOr(res.Candidate, res.Forced))
+		if len(res.Missing) > 0 {
+			fmt.Fprintf(out, "             %s %s not set.\n", strings.Join(res.Missing, " and "), plural(len(res.Missing)))
+		}
+		return
+	case res.Multiplexer == hostcompat.MuxTmux || res.Multiplexer == hostcompat.MuxZellij || res.Multiplexer == hostcompat.MuxScreen:
+		fmt.Fprintf(out, "host:        none — this is a %s pane, and golder has no driver for %s: nothing is reported.\n",
+			res.Multiplexer, res.Multiplexer)
+		return
+	case len(res.Missing) > 0:
+		fmt.Fprintf(out, "host:        none — this is a %s pane, but %s %s not set.\n",
+			res.Multiplexer, strings.Join(res.Missing, " and "), plural(len(res.Missing)))
+		return
+	default:
+		fmt.Fprintln(out, "host:        none — this is not a golder workspace, tuios or herdr pane, so nothing is reported.")
+		fmt.Fprintf(out, "             Start golder inside a %s window, a %s pane or golder's own workspace to see it on the rail.\n",
+			hostcompat.MuxTuios, hostcompat.MuxHerdr)
+		return
+	}
+	if res.Forced != "" {
+		fmt.Fprintf(out, "             forced by %s=%s\n", hostcompat.EnvHostReport, res.Forced)
+	}
+}
+
+// printHostVars names the variables golder reads for the terminal it found.
+// Naming them makes a silently missing one obvious, which is the usual reason
+// nothing shows up.
+func printHostVars(out io.Writer, res hostcompat.Resolution) {
+	switch res.Candidate {
+	case hostcompat.MuxGolder:
+		printVar(out, "TUIOS_SOCKET")
+		printVar(out, "TUIOS_SESSION")
+		printVar(out, "TUIOS_PANE_ID")
+		printVar(out, "TUIOS_PANE_TOKEN")
+	case hostcompat.MuxTuios:
+		printVar(out, "TUIOS_PANE_ID")
+		printVar(out, "TUIOS_SOCKET")
+		printVar(out, "TUIOS_PANE_TOKEN")
+	case hostcompat.MuxHerdr:
+		printVar(out, "HERDR_PANE_ID")
+		printVar(out, "HERDR_BIN_PATH")
+		printVar(out, "HERDR_SOCKET_PATH")
+	}
+}
+
+// nameOr is name, or fallback when name is empty.
+func nameOr(name, fallback string) string {
+	if name == "" {
+		return fallback
+	}
+	return name
+}
+
+// plural picks the verb for a count of missing variables.
+func plural(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
 }
 
 // printVar reports one environment variable, saying plainly when it is missing:

@@ -1,34 +1,61 @@
 package provider
 
-// Retries for a stream cut before anything was shown.
+// Retries for a stream that was cut.
 //
 // This is where the policy for streamfail.go's vocabulary lives, and it lives
 // here — above the drivers, below the loop — because "the stream was cut" is
 // wire-independent. The Responses wire detects it in the SDK's reader, the Chat
 // and Messages wires in the transport's read loop, and both reach this wrapper
-// with the same question: was anything shown, and would re-issuing the request
-// be safe?
+// with the same question: what did this attempt produce, and what may be done
+// about it?
 //
-// The answer is exactly the one the drivers already use for an empty completion:
-// a retry is safe while nothing an answer could duplicate has been displayed,
-// because another attempt can neither duplicate nor contradict what the user has
-// read. Visible answer text and a tool call are what commit an attempt: once
-// either has been forwarded the attempt is final (text is continued, a tool call
-// is never replayed), and the wrapper only makes sure the failure is described in
-// words a person can act on. Thinking is the exception — reasoning streams as
-// transient scaffolding, is replaced wholesale when the answer starts, and is
-// worth nothing if the stream dies before that — so a cut that left only thinking
-// behind is re-issued rather than surfaced as a dead end.
+// One budget, shared by every recovery. A turn attempts the request once and may
+// re-issue or continue it defaultStreamMaxRetries times (four retries, five
+// attempts in all), whatever the shape of the cut: a connection that never
+// opened, an idle watchdog ("no data arrived for 1m30s"), a content stall, a body
+// that ended early ("unexpected EOF"), a stream that closed without a terminal
+// event, a cut before the answer started, and a cut after part of it was already
+// on screen. A cut in the middle of the answer and a cut on the continuation of
+// that answer spend the same counter, so no phase of a turn gets a private
+// allowance and no recovery can jump the queue.
+// GOLDER_STREAM_MAX_RETRIES overrides the budget, and 0 disables retries
+// entirely: the first cut then ends the turn. A cancelled turn stops immediately
+// in every case — that is the user's own interrupt, not the upstream's failure.
+//
+// What may be recovered is decided by what the attempt produced, not by which
+// wire produced it:
+//
+//   - Nothing visible, or reasoning only: the request is re-issued unchanged.
+//     Reasoning streams as transient scaffolding, is replaced wholesale when the
+//     answer starts, and is worth nothing if the stream dies before that, so a
+//     cut that left only thinking behind left nothing to keep.
+//   - Visible answer text: the answer is continued from where it stopped — the
+//     partial text is replayed as the assistant's previous turn plus one short
+//     instruction. A re-issued request would have to re-render text the user has
+//     already read (or take it back off the screen); a continuation appends.
+//   - A local tool call: the call does NOT commit the attempt. The runtime
+//     executes calls only from a successful terminal message (loop.go returns on
+//     StopReasonError before it reaches ExecuteToolCalls), so a cut anywhere in a
+//     local call leaves it unexecuted and re-issuing costs nothing but a request.
+//     The call's deltas are therefore held back and dropped when the attempt is
+//     cut (see forward), and the complete call arrives exactly once, with the
+//     terminal message the runtime executes. Nothing incomplete reaches the
+//     caller, and no half-built call is spliced into a continuation's prefix,
+//     where it would be an unpaired tool call the next request is rejected for.
+//   - A provider-executed (server) tool call: never replayed, never continued.
+//     The provider ran that tool itself — hosted search, code interpreter — and
+//     may have billed for it, so a second request runs it a second time. This is
+//     the one cut that stays terminal, and the sentence says exactly that.
 //
 // It wraps every resolved provider (see resolve.go), so the policy cannot vary
 // by wire, by provider entry, or by how the provider was selected.
 //
-// The budget is deliberately larger than one: a long-running turn is expensive to
-// lose, and a reconnect usually succeeds within a few attempts. Each attempt is
-// separated by an exponential backoff (250ms, 500ms, 1s, … capped at 5s), so a
-// gateway that is briefly down is not hammered, and the user sees a notice with
-// the attempt number while it happens. GOLDER_STREAM_MAX_RETRIES overrides the
-// budget (0 disables retries).
+// Each attempt is separated by an exponential backoff (250ms, 500ms, 1s, …
+// capped at 5s), so a gateway that is briefly down is not hammered, and the user
+// sees a notice carrying the original cause, the watchdog window that expired
+// and the attempt number while it happens. When the loop stops it names how many
+// attempts were made and why it stopped, instead of inviting a retry that may
+// already have run five times.
 
 import (
 	"context"
@@ -43,28 +70,32 @@ import (
 )
 
 const (
-	// defaultStreamMaxRetries is four retries (five attempts) for a cut stream.
-	// Codex reconnects several times before giving up; a turn that has produced
-	// nothing is exactly as safe to re-issue as it was on the first attempt.
+	// defaultStreamMaxRetries is the retry budget for one turn: four retries,
+	// five attempts in all, shared by every kind of cut — the connection, the
+	// watchdogs, a body that ended early, a stream with no terminal event, a cut
+	// before the answer started, and a cut after part of it was on screen. Codex
+	// reconnects several times before giving up, and losing a long turn to a bad
+	// network is the most expensive failure there is: a turn that keeps trying is
+	// what the user asked for.
 	defaultStreamMaxRetries = 4
 	streamRetryBaseDelay    = 250 * time.Millisecond
 	streamRetryMaxDelay     = 5 * time.Second
-	// streamResumeMax bounds the continuations after a cut that already showed
-	// text. One or two, not the full retry budget: each continuation is a fresh
-	// chance to duplicate or contradict what the user has read.
-	streamResumeMax = 2
 )
 
-var (
-	errResumeNeeded    = errors.New("stream cut after text; a continuation is available")
-	errResumeExhausted = errors.New("the resumed stream was cut again")
+// Why a cut the loop could recover in principle was left terminal anyway. The
+// sentence names it: "retry the turn" alone would invite the very thing the loop
+// just refused to do, and say nothing about what it declined to do and why.
+const (
+	stopServerTool = "the response had already run a provider-side tool call, which is never replayed automatically"
+	stopResumeOff  = "continuing a cut answer is disabled (GOLDER_STREAM_RESUME=0)"
 )
 
 // streamResumeEnabled lets a text answer that was cut after it had been shown
-// continue from the partial text. It is on by default because a lost turn is
-// the more common cost; set it to 0/false/off to keep every cut terminal. A
-// continuation is still bounded to text-only turns (see forward), so a tool
-// call is never replayed.
+// continue from the partial text instead of ending the turn. It is on by default
+// because a lost turn is the more common cost; set it to 0/false/off to keep a
+// cut after visible text terminal. It governs continuations only: a cut with
+// nothing (or only thinking) on screen is re-issued whatever this says, because
+// re-issuing repeats nothing the caller has seen.
 func streamResumeEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("GOLDER_STREAM_RESUME"))) {
 	case "0", "false", "off", "no":
@@ -73,14 +104,45 @@ func streamResumeEnabled() bool {
 	return true
 }
 
-// forwardState is what the relay saw, so a cut can be described and (when the
-// policy allows) continued or re-issued instead of thrown away. It carries only
-// what commits an attempt: the partial answer and whether a tool call was seen.
-// Thinking is deliberately not tracked here — it never commits an attempt (see
-// replayableCut).
+// forwardState is what the relay saw in one attempt. It carries exactly the three
+// things that decide how a cut may be recovered: the partial the caller has
+// already rendered, whether the model asked for a call golder would run itself,
+// and whether the provider ran one of its own.
 type forwardState struct {
-	partial  agentcore.AssistantMessage
-	toolCall bool
+	// partial is the last partial forwarded to the caller: the answer text and
+	// reasoning already on screen. Held tool-call deltas are deliberately not
+	// folded in (see forward).
+	partial agentcore.AssistantMessage
+	// localCall is set when the model asked for a golder tool. It does not commit
+	// the attempt: the runtime runs calls only from a successful terminal message
+	// (loop.go returns on StopReasonError before ExecuteToolCalls), so a cut
+	// leaves the call unexecuted and the request safe to re-issue.
+	localCall bool
+	// serverCall is set when the provider executed a hosted tool itself. That
+	// call may already have run and been billed, so the attempt must never be
+	// replayed or continued — the one cut that stays terminal.
+	serverCall bool
+}
+
+func (s *forwardState) observeCalls(msg agentcore.AssistantMessage) {
+	for _, call := range msg.ToolCalls() {
+		if call.IsServer() {
+			s.serverCall = true
+		} else {
+			s.localCall = true
+		}
+	}
+}
+
+func withoutToolCalls(msg agentcore.AssistantMessage) agentcore.AssistantMessage {
+	content := make(agentcore.ContentList, 0, len(msg.Content))
+	for _, block := range msg.Content {
+		if _, tool := block.(agentcore.ToolCallContent); !tool {
+			content = append(content, block)
+		}
+	}
+	msg.Content = content
+	return msg
 }
 
 // streamMaxRetries resolves the retry budget. A malformed or out-of-range setting
@@ -141,14 +203,16 @@ func (p *streamRetryProvider) CurrentWire() Wire {
 	return p.wire
 }
 
-// StreamCompletion starts the relay pump and returns the single stream the
-// caller consumes. An attempt that was cut before showing anything never reaches
-// the caller: its events are held, then dropped.
+// StreamCompletion starts the relay pump and returns the single stream the caller
+// consumes. From then on the wrapper is the only writer: an attempt that was cut
+// is either dropped (its start, and any tool-call delta it held) or continued, so
+// the caller sees one assistant message however many requests it took.
 //
 // The first call is retried here, before any stream exists, when it fails at the
-// connection level: a POST that dies with EOF has produced nothing, and the
-// caller has no stream to report it on. The retry is silent because there is no
-// stream to announce it on yet; the pump's later retries do announce theirs.
+// connection level: a POST that dies with EOF has produced nothing, and the caller
+// has no stream to report it on. That retry is silent because there is no stream to
+// announce it on yet — and it spends the same budget as every later one, so the
+// turn cannot get a second allowance by failing before the stream starts.
 func (p *streamRetryProvider) StreamCompletion(ctx context.Context, req CompletionRequest) (*AssistantMessageEventStream, error) {
 	max := streamMaxRetries()
 	in, spent, err := p.connect(ctx, req, 0, max, nil)
@@ -161,10 +225,10 @@ func (p *streamRetryProvider) StreamCompletion(ctx context.Context, req Completi
 }
 
 // connect issues one attempt and retries a connection-level failure until the
-// shared budget is spent. start is the retry number the call carries (the
-// watchdog budgets widen with it); onRetry, when set, is told about each retry
-// before it is made — the pump emits a notice there, while the very first call
-// has no stream to notify on yet.
+// shared budget is spent. start is the retry number the attempt carries (the
+// watchdogs read it, though the first-token window deliberately does not widen with
+// it); onRetry, when set, is told about each retry before it is made — the pump
+// emits a notice there, while the very first call has no stream to notify on yet.
 //
 // It returns the stream, the attempt number the next call should use, and the
 // error when the attempt could not be started at all.
@@ -188,61 +252,84 @@ func (p *streamRetryProvider) connect(ctx context.Context, req CompletionRequest
 	}
 }
 
-func (p *streamRetryProvider) pump(ctx context.Context, req CompletionRequest, in *AssistantMessageEventStream, out *AssistantMessageEventStream) {
-	p.pumpFrom(ctx, req, in, out, 0)
-}
-
-// pumpFrom is pump with the number of connection retries already spent, so the
-// budget covers the whole turn rather than resetting after the first call.
+// pumpFrom relays attempts until one of them ends the turn. spent is the number
+// of retries the connection phase already used, so the budget covers the whole
+// turn instead of resetting after the first call.
+//
+// One loop, one counter. A cut before the answer, a cut in the middle of it and a
+// cut on the continuation of it all spend the same budget: the previous shape ran
+// text continuations on a separate allowance of two and abandoned the turn after
+// two silent attempts even with budget left, which is why a turn cut mid-answer
+// could see one retry where the setting promised four.
 func (p *streamRetryProvider) pumpFrom(ctx context.Context, req CompletionRequest, in *AssistantMessageEventStream, out *AssistantMessageEventStream, spent int) {
 	defer out.Close()
 
 	max := streamMaxRetries()
 	retries := spent
-	// firstTokenCuts counts consecutive attempts that produced nothing at all. Two
-	// of those mean the upstream is not answering — widening the budget a third
-	// time only makes the user wait longer for the same silence.
-	firstTokenCuts := 0
+	// prefix is the answer text the caller has already rendered. When it is set
+	// the next attempt continues that answer instead of re-issuing the request,
+	// so nothing shown is repeated or lost: every continuation event is merged
+	// with it (prefixContent) and its start event is suppressed, because the
+	// caller's stream already started and a second start would reset the partial
+	// it is rendering.
+	var prefix agentcore.ContentList
+
 	for {
-		state := forwardState{
-			partial: agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Provider: p.Name()},
+		state := forwardState{partial: agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Provider:  p.Name(),
+		}}
+		cut := p.forward(ctx, out, in, prefix, len(prefix) > 0, &state)
+		if cut == nil {
+			return // a terminal event of the attempt's own reached the caller
 		}
-		cut := p.forward(ctx, out, in, nil, false, &state)
-		if errors.Is(cut, errResumeNeeded) {
-			p.resume(ctx, req, out, state.partial, retries)
-			return
-		}
-		if streamCutIsFirstToken(cut) {
-			firstTokenCuts++
-		} else if cut != nil {
-			firstTokenCuts = 0
-		}
-		switch {
-		case cut == nil:
-			return
-		case ctx.Err() != nil:
+		if ctx.Err() != nil {
 			// The turn was cancelled while the cut was being handled: this is the
 			// user's own interrupt, and every front-end prints its own notice for
 			// an abort. Filing it as a provider failure is the wording bug that
-			// once made Ctrl+C read as a malfunction.
+			// once made Ctrl+C read as a malfunction. Cancellation is also the one
+			// thing that stops a turn with budget left.
 			p.emitAborted(ctx, out)
 			return
-		case retries >= max:
-			// The budget is spent: a connection that drops this often is not a
-			// problem another request fixes, so say how many retries were made.
-			p.emitFailure(ctx, out, cut, retries)
-			return
-		case firstTokenCuts >= 2:
-			// Two attempts in a row never started an answer. Stop here and say so:
-			// the remaining budget would buy two more identical waits.
-			p.emitSilent(ctx, out, cut, firstTokenCuts)
+		}
+
+		// What the attempt produced decides how the cut may be recovered, and an
+		// empty why means "recoverable". Once answer text is on the caller's screen
+		// the turn keeps continuing: a continuation that arrived at nothing may not
+		// fall back to re-issuing, because a start event would take back text the
+		// user has already read.
+		continuing := len(prefix) > 0 || hasText(state.partial)
+		why := ""
+		switch {
+		case state.serverCall:
+			why = stopServerTool
+		case continuing && !streamResumeEnabled():
+			why = stopResumeOff
+		}
+		if why != "" || retries >= max {
+			// Terminal: either it must not be recovered, or the budget is spent —
+			// and with GOLDER_STREAM_MAX_RETRIES=0 that is the first cut, so the
+			// turn stops before it makes a second request.
+			p.emitStopped(ctx, out, cut, shownContent(&state, prefix), retries, why)
 			return
 		}
 
 		retries++
-		// Tell the front-end before the next attempt starts. The first
-		// attempt's start event was held, so without this the interface shows
-		// only the spinner and the user cannot tell a retry from a hang.
+		// Tell the front-end before the next attempt starts. The attempt's start
+		// event was held, so without this the interface shows only the spinner and
+		// the user cannot tell a retry from a hang. The notice keeps the original
+		// cause and the watchdog window that expired, whatever the recovery is:
+		// a continuation is still the same cut.
+		detail := streamCutEvidence(cut)
+		switch {
+		case continuing:
+			detail = joinDetail(detail, "continuing the cut answer from where it stopped")
+		case state.localCall:
+			// The cut landed inside a tool call, and the call was withheld: the
+			// notice says so, because the card the model was about to raise will
+			// not appear until the re-issued attempt asks for it again.
+			detail = joinDetail(detail, "the cut landed inside a tool call that had not run yet")
+		}
 		_ = out.Emit(ctx, StreamNoticeEvent{
 			Kind:        StreamNoticeRetry,
 			Provider:    p.Name(),
@@ -250,16 +337,37 @@ func (p *streamRetryProvider) pumpFrom(ctx context.Context, req CompletionReques
 			Window:      streamCutWindow(cut),
 			Attempt:     retries,
 			MaxAttempts: max,
-			Detail:      streamCutEvidence(cut),
+			Detail:      detail,
 		})
 		if !waitRetry(ctx, streamRetryBackoff(retries)) {
 			p.emitAborted(ctx, out)
 			return
 		}
+
+		nextReq := req
+		if continuing {
+			// Continue the answer: the partial text becomes the assistant's
+			// previous turn, and the caller's rendering keeps it as a prefix. The
+			// events of this attempt already carry the earlier prefix (prefixContent),
+			// so when the attempt produced no text at all — it was cut before its
+			// first token — the prefix is what continues.
+			partial := textOnly(state.partial)
+			if len(partial.Content) == 0 {
+				partial.Content = prefix
+			}
+			prefix = partial.Content
+			nextReq = continuationRequest(req, partial)
+		} else {
+			// Re-issue: nothing visible is kept. Anything the cut attempt rendered
+			// (reasoning, or the start of a call whose deltas were held) is
+			// replaced by the retry's own start event, so no partial from a
+			// dropped attempt survives into the caller's message or its history.
+			prefix = nil
+		}
 		// The retry may re-resolve a wire (the wrapper sits above the wire
 		// fallback) and always builds a fresh request and decoder, so no state
 		// from the cut attempt is carried over.
-		next, used, err := p.connect(ctx, req, retries, max, func(attempt int, cerr error) {
+		next, used, err := p.connect(ctx, nextReq, retries, max, func(attempt int, cerr error) {
 			// A retry that cannot connect is the same failure the loop exists
 			// for, so it is announced the same way instead of ending the turn
 			// with a raw transport error.
@@ -282,7 +390,7 @@ func (p *streamRetryProvider) pumpFrom(ctx context.Context, req CompletionReques
 			// this loop is for, so it is reported with the connect sentence; a
 			// configuration error (a missing key, a bad flag) keeps its own
 			// wording, which is what the caller needs to fix it.
-			p.emitFailure(ctx, out, connectOrCut(p.Name(), err, cut), retries)
+			p.emitStopped(ctx, out, connectOrCut(p.Name(), err, cut), shownContent(&state, prefix), retries, "")
 			return
 		}
 		in = next
@@ -305,9 +413,10 @@ func waitRetry(ctx context.Context, d time.Duration) bool {
 }
 
 // forward relays one attempt and reports how it ended. A nil return means the
-// caller has seen a terminal event and the stream is over. A non-nil error means
-// the attempt was cut before anything an answer retry could duplicate — at most
-// transient thinking was forwarded — so the caller may re-issue the request.
+// attempt ended the turn itself (a done message, or the wire's own failure, both
+// already emitted). A non-nil error is the reason the attempt was cut; whether
+// that may be re-issued, continued or must end the turn is one policy and it
+// lives in pumpFrom.
 func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream, prefix agentcore.ContentList, suppressStart bool, state *forwardState) error {
 	// The attempt's start event is held rather than forwarded. It is not
 	// something a person can see, and holding it is what lets a cut attempt
@@ -336,45 +445,51 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 	for ev := range in.Events() {
 		switch e := ev.(type) {
 		case StreamStartEvent:
+			state.observeCalls(e.Partial)
+			e.Partial = withoutToolCalls(e.Partial)
 			if start == nil {
 				start = &e
 			}
 		case StreamTextEvent:
+			state.observeCalls(e.Partial)
+			e.Partial = withoutToolCalls(e.Partial)
 			e.Partial = prefixContent(prefix, e.Partial)
 			state.partial = e.Partial
 			emitStart()
 			_ = out.Emit(ctx, e)
 		case StreamThinkingEvent:
+			state.observeCalls(e.Partial)
+			e.Partial = withoutToolCalls(e.Partial)
 			// Thinking is transient scaffolding, not an answer: it is forwarded so
 			// the user watches the model work, but it does NOT commit the attempt.
-			// A stream cut after only thinking is therefore re-issued (see
-			// replayableCut) rather than ending the turn.
+			// A stream cut after only thinking is therefore re-issued rather than
+			// ending the turn.
 			e.Partial = prefixContent(prefix, e.Partial)
 			state.partial = e.Partial
 			emitStart()
 			_ = out.Emit(ctx, e)
 		case StreamToolCallEvent:
-			e.Partial = prefixContent(prefix, e.Partial)
-			state.partial = e.Partial
-			state.toolCall = true
-			emitStart()
-			_ = out.Emit(ctx, e)
+			// A tool-call delta is HELD, not forwarded, and this is the fix that
+			// makes a cut in a tool call recoverable. The call the model is
+			// building is worth nothing on its own: a local call has not run
+			// (the runtime executes calls only from a successful terminal
+			// message), and a half-written arguments JSON is not even a call. If
+			// it were forwarded, a cut would leave a call on screen and in the
+			// caller's partial that will never execute — and, once spliced into a
+			// continuation's prefix, an assistant tool call the next request
+			// cannot pair with a result, which every wire rejects. So the delta is
+			// recorded (which kind it is decides whether the attempt may be
+			// replayed) and dropped; the complete calls arrive once, with the
+			// terminal message the runtime executes.
+			state.observeCalls(e.Partial)
 		case StreamErrorEvent:
+			state.observeCalls(e.Message)
 			if isStreamCutErr(e.Err) {
-				if replayableCut(state) {
-					// Nothing an answer retry could duplicate was shown — at most
-					// some transient thinking — so hand the raw cut back and let
-					// the loop re-issue the request.
-					return e.Err
-				}
-				if streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
-					return errResumeNeeded
-				}
-				// A cut after visible answer text or a tool call cannot be retried
-				// without duplicating or replaying what the user already read; it
-				// must at least say what happened instead of printing the reader's
-				// error.
-				e.Message.ErrorMessage = streamCutError(p.Name(), e.Err).Error()
+				// Hand the raw cut back: the caller decides, and it has the state
+				// that says what this attempt produced. Describing the cut here
+				// is what used to make a cut after a tool call terminal with the
+				// whole retry budget unspent.
+				return e.Err
 			}
 			e.Message = prefixContent(prefix, e.Message)
 			emitStart()
@@ -383,8 +498,14 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 		case StreamDoneEvent:
 			e.Message = prefixContent(prefix, e.Message)
 			state.partial = e.Message
-			state.toolCall = len(e.Message.ToolCalls()) > 0
 			emitStart()
+			if len(e.Message.ToolCalls()) > 0 {
+				// The held call deltas reach the caller here, complete and exactly
+				// once: the terminal message is authoritative, so a front-end that
+				// opens a card per partial opens exactly the cards the runtime is
+				// about to execute.
+				_ = out.Emit(ctx, StreamToolCallEvent{Partial: e.Message})
+			}
 			_ = out.Emit(ctx, e)
 			return nil
 		default:
@@ -393,83 +514,19 @@ func (p *streamRetryProvider) forward(ctx context.Context, out *AssistantMessage
 		}
 	}
 
-	// The attempt ended without a terminal event. With nothing an answer retry
-	// could duplicate produced — at most transient thinking — that is as much a
-	// cut stream as a dropped connection; with answer content produced the caller
-	// has to be told the answer stops there.
-	if replayableCut(state) {
-		return fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
-	}
-	if streamResumeEnabled() && !state.toolCall && hasText(state.partial) {
-		return errResumeNeeded
-	}
-	emitStart()
-	msg := prefixContent(prefix, agentcore.AssistantMessage{
-		RoleField:  agentcore.RoleAssistant,
-		Provider:   p.Name(),
-		StopReason: agentcore.StopReasonError,
-	})
-	_ = out.Emit(ctx, StreamErrorEvent{
-		Message: msg,
-		Err:     fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal),
-	})
-	return nil
+	// The attempt ended without a terminal event: the stream simply closed on the
+	// caller. That is a cut like any other — the wire fallback calls it "stream
+	// ended without a terminal event" — so it takes the same path as the rest.
+	return fmt.Errorf("%s: %w", p.Name(), errStreamNoTerminal)
 }
 
-// resume continues a text answer that was cut after it had been shown. The
-// partial text is replayed as the assistant's previous turn plus a short
-// "continue" request; every continuation event is merged with that prefix so the
-// caller's partial message never loses the text it already rendered.
-func (p *streamRetryProvider) resume(ctx context.Context, req CompletionRequest, out *AssistantMessageEventStream, partial agentcore.AssistantMessage, spent int) {
-	max := streamMaxRetries()
-	for attempt := 1; attempt <= streamResumeMax; attempt++ {
-		if ctx.Err() != nil {
-			p.emitAborted(ctx, out)
-			return
-		}
-		_ = out.Emit(ctx, StreamNoticeEvent{
-			Kind:        StreamNoticeRetry,
-			Provider:    p.Name(),
-			Reason:      StreamCutTruncated,
-			Attempt:     attempt,
-			MaxAttempts: streamResumeMax,
-			Detail:      "continuing the cut answer from where it stopped",
-		})
-		next, used, err := p.connect(ctx, resumeCompletion(req, partial), spent+attempt, max, nil)
-		if err != nil {
-			if ctx.Err() != nil {
-				p.emitAborted(ctx, out)
-				return
-			}
-			p.emitFailure(ctx, out, connectOrCut(p.Name(), err, err), used)
-			return
-		}
-		cont := forwardState{
-			partial: agentcore.AssistantMessage{
-				RoleField: agentcore.RoleAssistant,
-				Provider:  p.Name(),
-				Content:   partial.Content,
-			},
-		}
-		cut := p.forward(ctx, out, next, partial.Content, true, &cont)
-		if cut == nil {
-			return
-		}
-		if errors.Is(cut, errResumeNeeded) {
-			partial = cont.partial
-			spent = used
-			continue
-		}
-		p.emitFailure(ctx, out, cut, used)
-		return
-	}
-	p.emitFailure(ctx, out, errResumeExhausted, spent)
-}
-
-// resumeCompletion builds the continuation request: the original shaped context,
-// the partial assistant text, and one short user instruction. The tools stay in
-// the context; the partial had no tool call, so replaying it is safe.
-func resumeCompletion(req CompletionRequest, partial agentcore.AssistantMessage) CompletionRequest {
+// continuationRequest builds the request that continues a cut answer: the shaped
+// context of the original turn, the partial answer text as the assistant's
+// previous turn, and one short instruction. That context already holds the
+// earlier turns and their completed tool results, and the caller has not yet
+// written the cut attempt into it, so nothing from the dropped attempt is replayed
+// except the text the user can already see. partial must be text-only (textOnly).
+func continuationRequest(req CompletionRequest, partial agentcore.AssistantMessage) CompletionRequest {
 	out := req
 	msgs := make(agentcore.MessageList, 0, len(req.Context.Messages)+2)
 	msgs = append(msgs, req.Context.Messages...)
@@ -480,6 +537,23 @@ func resumeCompletion(req CompletionRequest, partial agentcore.AssistantMessage)
 			"Continue exactly where you stopped. Do not repeat text you already wrote.")},
 	})
 	out.Context.Messages = msgs
+	return out
+}
+
+// textOnly keeps the answer text of a partial and drops everything else, because
+// only text may be replayed into a continuation. A local tool call there would be
+// an assistant call with no result to pair it — OpenAI and Anthropic both reject
+// that history outright — and a partial reasoning block carries a signature taken
+// from the middle of the response it belonged to: replaying that either fails the
+// request or poisons the provider's cache for the conversation.
+func textOnly(msg agentcore.AssistantMessage) agentcore.AssistantMessage {
+	out := msg
+	out.Content = nil
+	for _, c := range msg.Content {
+		if t, ok := c.(agentcore.TextContent); ok && strings.TrimSpace(t.Text) != "" {
+			out.Content = append(out.Content, t)
+		}
+	}
 	return out
 }
 
@@ -494,9 +568,10 @@ func prefixContent(prefix agentcore.ContentList, msg agentcore.AssistantMessage)
 	return msg
 }
 
-// hasText reports whether the partial holds visible text (not only thinking or
-// tool-call deltas). A continuation of a tool-call turn would be a guess about
-// what already executed, so it is not attempted.
+// hasText reports whether the partial holds visible answer text (not only
+// thinking). It is what separates "continue this answer" from "re-issue the
+// request": text on screen must not be repeated, and nothing on screen is free to
+// redo.
 func hasText(msg agentcore.AssistantMessage) bool {
 	for _, c := range msg.Content {
 		if t, ok := c.(agentcore.TextContent); ok && strings.TrimSpace(t.Text) != "" {
@@ -506,66 +581,113 @@ func hasText(msg agentcore.AssistantMessage) bool {
 	return false
 }
 
-// replayableCut reports whether a cut attempt may be re-issued as a fresh
-// request. It is true when the attempt produced nothing a retry could duplicate:
-// no tool call and no visible answer text. Thinking alone does not disqualify a
-// retry — reasoning is transient scaffolding the user reads as it streams, never
-// part of the answer, and a stream that died after only thinking left the turn
-// with nothing to keep, so ending it was a dead end reached from nothing. A
-// stream that showed answer text is continued instead (hasText), and one carrying
-// a tool call is never replayed (toolCall); both are excluded here.
-func replayableCut(state *forwardState) bool {
-	return !state.toolCall && !hasText(state.partial)
-}
-
-// emitFailure ends the stream with a start and a terminal error, so the caller
-// sees a normal stream rather than one that closed on it. afterRetry selects the
-// sentence: a cut that happened before any retry invites one, and a cut that
-// survived one says so.
-func (p *streamRetryProvider) emitFailure(ctx context.Context, out *AssistantMessageEventStream, err error, retries int) {
-	// A connection failure gets the "never reached a response" sentence, which
-	// counts the attempts; a stream cut keeps the cut sentence, which names
-	// which window expired.
-	sentence := streamConnectError(p.Name(), err, retries+1)
-	if !isConnectFailure(err) {
-		sentence = streamCutError(p.Name(), err)
-		if retries > 0 {
-			sentence = streamCutRetriedError(p.Name(), err, retries)
-		}
+// shownContent is what the caller has rendered, for the terminal message: the
+// attempt's own partial when it says anything, and otherwise the answer prefix the
+// caller is still displaying (an attempt cut before its first token produces no
+// partial of its own, and the text already on screen is still part of the
+// transcript).
+func shownContent(state *forwardState, prefix agentcore.ContentList) agentcore.AssistantMessage {
+	if hasText(state.partial) || len(prefix) == 0 {
+		return state.partial
 	}
-	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
-		RoleField: agentcore.RoleAssistant,
-		Provider:  p.Name(),
-	}})
-	_ = out.Emit(ctx, StreamErrorEvent{
-		Message: agentcore.AssistantMessage{
-			RoleField:    agentcore.RoleAssistant,
-			Provider:     p.Name(),
-			StopReason:   agentcore.StopReasonError,
-			ErrorMessage: sentence.Error(),
-		},
-		Err: err,
-	})
+	out := state.partial
+	out.Content = prefix
+	return out
 }
 
-// emitSilent ends the stream after consecutive attempts that never started an
-// answer. The sentence says exactly that, so nobody waits for a retry that the
-// upstream has already refused twice.
-func (p *streamRetryProvider) emitSilent(ctx context.Context, out *AssistantMessageEventStream, err error, attempts int) {
-	sentence := streamCutUpstreamSilent(p.Name(), err, attempts)
-	_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
-		RoleField: agentcore.RoleAssistant,
-		Provider:  p.Name(),
-	}})
-	_ = out.Emit(ctx, StreamErrorEvent{
-		Message: agentcore.AssistantMessage{
-			RoleField:    agentcore.RoleAssistant,
-			Provider:     p.Name(),
-			StopReason:   agentcore.StopReasonError,
-			ErrorMessage: sentence.Error(),
-		},
-		Err: err,
-	})
+// joinDetail appends one clause to a notice's detail, keeping the evidence first:
+// what the guard saw is why the user is waiting, and what the retry is doing comes
+// after it.
+func joinDetail(detail, clause string) string {
+	switch detail {
+	case "":
+		return clause
+	default:
+		return detail + "; " + clause
+	}
+}
+
+// emitStopped ends the turn with the cut and the number of attempts named, so the
+// caller always gets a terminal message — and a message that says what was tried,
+// not the bare "retry the turn" that reads as if nothing had been. shown is what
+// the caller has already rendered; its answer text is kept in the terminal
+// message, because the reply the user read is part of the transcript even when the
+// stream that carried it died. Everything else in shown is dropped: a terminal
+// error message must not carry a tool call (no result pairs with it, and the
+// runtime would either run it twice or be rejected by the next request) or a
+// partial reasoning signature.
+func (p *streamRetryProvider) emitStopped(ctx context.Context, out *AssistantMessageEventStream, cut error, shown agentcore.AssistantMessage, retries int, why string) {
+	sentence := cut
+	switch {
+	case isConnectFailure(cut):
+		// A connection failure gets the "never reached a response" sentence, which
+		// counts the attempts and keeps the transport's own text.
+		sentence = streamConnectError(p.Name(), cut, retries+1)
+	case isStreamCutErr(cut):
+		sentence = streamCutStoppedError(p.Name(), cut, retries+1, retries, why)
+	}
+	final := textOnly(shown)
+	if len(shown.Content) == 0 {
+		// Nothing was rendered, so the message has to be opened first: a caller
+		// that receives only an error would otherwise have to synthesize the start
+		// of the assistant message itself.
+		_ = out.Emit(ctx, StreamStartEvent{Partial: agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant,
+			Provider:  p.Name(),
+		}})
+	}
+	final.RoleField = agentcore.RoleAssistant
+	final.Provider = p.Name()
+	final.StopReason = agentcore.StopReasonError
+	final.ErrorMessage = sentence.Error()
+	_ = out.Emit(ctx, StreamErrorEvent{Message: final, Err: cut})
+}
+
+// streamCutStoppedError is the sentence for a cut the loop could not recover: what
+// happened (with the watchdog's window and the evidence it counted), how many
+// attempts were made, and — when the loop stopped with budget left — why it did.
+// It names the attempt count because "retry the turn" is exactly wrong here: the
+// turn was retried, and the user needs to know that before deciding to wait.
+// Anything that is not a cut is returned unchanged, so a configuration error keeps
+// its own wording.
+func streamCutStoppedError(provider string, err error, attempts, retries int, why string) error {
+	if !isStreamCutErr(err) {
+		return err
+	}
+	where := strings.TrimSpace(provider)
+	if where == "" {
+		where = "the provider"
+	} else {
+		where += ":"
+	}
+	sentence := fmt.Sprintf("%s stream cut — %s; the turn stopped after %s (%s)",
+		where, streamCutDetail(provider, err), attemptsPhrase(attempts), retriesPhrase(retries))
+	if why != "" {
+		sentence += ": " + why
+	}
+	return errors.New(sentence)
+}
+
+// attemptsPhrase renders how many requests the turn made in all.
+func attemptsPhrase(attempts int) string {
+	if attempts <= 1 {
+		return "1 attempt"
+	}
+	return fmt.Sprintf("%d attempts", attempts)
+}
+
+// retriesPhrase renders how many of those attempts were retries, including the
+// zero that GOLDER_STREAM_MAX_RETRIES=0 allows: "no retries" is the fact the user
+// needs to see when nothing was re-sent.
+func retriesPhrase(retries int) string {
+	switch {
+	case retries <= 0:
+		return "no retries"
+	case retries == 1:
+		return "1 retry"
+	default:
+		return fmt.Sprintf("%d retries", retries)
+	}
 }
 
 // emitAborted ends a cancelled turn: the front-end prints its own interrupt

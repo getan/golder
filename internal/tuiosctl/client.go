@@ -91,8 +91,12 @@ func (e *Error) Error() string {
 }
 
 // Client is one reusable JSON connection. Calls are serialized because the
-// protocol processes one request per connection at a time. A call that times
-// out closes the connection so the next call starts from a clean hello.
+// protocol processes one request per connection at a time. A call that fails at
+// the transport level — a timeout, a broken write, a reply that cannot be read
+// or that answers another request's id — closes the connection, so the next
+// call starts from a clean hello rather than reading a late reply as its own
+// answer. A daemon restart therefore costs the call in flight, never the
+// client; a verb the daemon declined leaves the connection in step and usable.
 type Client struct {
 	mu     sync.Mutex
 	opts   Options
@@ -227,23 +231,32 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 	b = append(b, '\n')
 	if err := writeAll(conn, b); err != nil {
 		_ = c.closeLocked()
+		// A cancelled or expired context is the reason the write failed, and it
+		// is what the caller can act on: the deadline alone may be minutes away
+		// (a wait-for), so reporting the raw socket error would hide the cause.
+		if ctxErr := ctxError(ctx, verb); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("tuios: write %s: %w", verb, err)
 	}
 
-	line, err := c.reader.ReadBytes('\n')
+	line, err := readLine(c.reader, maxLineBytes)
 	if err != nil {
 		_ = c.closeLocked()
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := ctxError(ctx, verb); ctxErr != nil {
 			return nil, ctxErr
 		}
+		if errors.Is(err, errLineTooLong) {
+			// The bytes of that line are still on the wire and the connection
+			// is one line out of step, so it is dropped rather than reused.
+			return nil, fmt.Errorf("tuios: %s response exceeds %d bytes", verb, maxLineBytes)
+		}
 		if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("tuios: %s timed out", verb)
+			// Wrapped so a caller can test for a deadline with errors.Is while
+			// the message stays what a person reads.
+			return nil, fmt.Errorf("tuios: %s timed out: %w", verb, context.DeadlineExceeded)
 		}
 		return nil, fmt.Errorf("tuios: read %s: %w", verb, err)
-	}
-	if len(line) > maxLineBytes {
-		_ = c.closeLocked()
-		return nil, fmt.Errorf("tuios: %s response exceeds %d bytes", verb, maxLineBytes)
 	}
 	line = bytes.TrimSpace(line)
 	var resp struct {
@@ -270,6 +283,21 @@ func (c *Client) callLocked(ctx context.Context, verb string, params any, out an
 	return resp.Result, nil
 }
 
+// ctxError is the error a call that failed because its context ended reports.
+// A deadline keeps the "timed out" wording a person reads while staying
+// testable with errors.Is; a cancellation is returned as it is, because the
+// caller cancelled rather than the daemon being slow.
+func ctxError(ctx context.Context, verb string) error {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("tuios: %s timed out: %w", verb, err)
+	}
+	return err
+}
+
 // writeAll hands every byte to the connection. A net.Conn is allowed to make a
 // short write; treating the first Write's nil error as success would truncate a
 // patch or command at exactly the size boundary.
@@ -285,6 +313,48 @@ func writeAll(conn net.Conn, b []byte) error {
 		b = b[n:]
 	}
 	return nil
+}
+
+// errLineTooLong is readLine's refusal of a line past the caller's limit. It is
+// separate from the other read errors because the caller's connection is one
+// line out of step after it, not merely broken.
+var errLineTooLong = errors.New("tuios: response line exceeds the limit")
+
+// readLine reads one newline-terminated line, refusing to buffer more than
+// limit bytes.
+//
+// bufio.Reader.ReadBytes grows its buffer until the delimiter arrives, so a
+// check on the result runs only after the allocation has already happened: a
+// daemon (or a socket that is not the daemon) that never sends a newline could
+// make this client allocate without bound. ReadSlice hands back the bytes it
+// has and lets this loop stop at the limit.
+//
+// A line that ends exactly at limit is accepted; one byte more is refused.
+func readLine(r *bufio.Reader, limit int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := r.ReadSlice('\n')
+		if len(line)+len(frag) > limit {
+			return nil, errLineTooLong
+		}
+		line = append(line, frag...)
+		if err == nil {
+			return line, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			// The delimiter is still coming; the limit above bounds the wait.
+			continue
+		}
+		// A partial line with a real error is not a line: the caller treats
+		// every other error as a broken connection, and half a response parsed
+		// as a whole one would be worse than no response.
+		if errors.Is(err, io.EOF) && len(line) > 0 {
+			// The daemon went away mid-reply, which says more than a bare EOF:
+			// a bug or a restart, rather than a request it never answered.
+			return nil, io.ErrUnexpectedEOF
+		}
+		return nil, err
+	}
 }
 
 // Restrict gives up authority on this connection. Read tools use own/read_only

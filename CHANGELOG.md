@@ -143,6 +143,32 @@ interactive REPL/TUI.
   no longer turns a network request into a network grant when the answer
   omitted that need, and `ChainGates` preserves a `Bare` envelope from the
   first gate instead of silently re-containing the call.
+- **A workspace installed under a path tuios cannot type keeps its harness
+  manifest**: the manifest a workspace installs for itself resumed through the
+  absolute path of its own executable, and tuios validates a manifest as one
+  file — a `[resume]` token holding a space, a quote or a non-ASCII byte was
+  refused, and the refusal took the whole file with it, detection and the five
+  screen rules and their answers included. Those rules are what lets tuios'
+  Inbox answer golder's prompts, so an optional command was costing the part
+  that matters. A path every shell reads unquoted is still installed as itself;
+  one that is not now ships an empty `[resume]` (a harness that cannot be
+  resumed, which is the truth here) and says so in `resume.source`, naming the
+  executable and that every other block is unaffected. There is no fall back to
+  a bare `golder` on PATH, no quoting, and no refusing the workspace over a
+  command nobody asked for. A test starts the daemon golder embeds over the
+  written file and asks it for golder's screen rules, so the file is proved to
+  load rather than decoded by the test that wrote it.
+- **An agent pane running golder can be closed again**: `tuios close` treated
+  any pane whose foreground program was `golder` as its embedded browser, and a
+  browser is only ever the pane golder recorded, so every ordinary agent pane
+  running golder — the pane golder's own TUI runs in, the pane a nested golder
+  runs in — was refused with "golder did not start it, no keys and no quit were
+  sent" and could not be closed at all. Only a recorded embedded pane is a
+  browser now; a pane with no record is an ordinary pane, closed with the
+  daemon's exact `close-window` and no keys. A recorded embedded browser is
+  still proved by socket and browser id and asked to quit gracefully, an
+  external `kitty-browse` with no record is still refused without `force:true`,
+  and the pane golder itself runs is still never closed.
 
 ### Added
 - **Tools advertise what the session can actually do**: `browser` now advertises
