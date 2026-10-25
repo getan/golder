@@ -202,6 +202,34 @@ func TestClosePaneEmbeddedQuitsRecordedEndpointThenConfirmsExit(t *testing.T) {
 	}
 }
 
+// A workspace daemon may omit foreground_cmd for a command pane. The recorded
+// pane id, socket and browserId are still sufficient proof, so this must use the
+// normal quit path rather than rejecting the pane.
+func TestClosePaneEmbeddedWithEmptyForegroundQuitsRecordedEndpoint(t *testing.T) {
+	root := shortRoot(t)
+	ctl := newControlFake(t, filepath.Join(root, "browser.sock"), "browser-1", "quit", "snapshot")
+	pane := managedPane(t, root, "browser-id", ctl.path, "browser-1", true)
+	win := embeddedBrowserWindow()
+	win.ForegroundCmd = ""
+	zero := 0
+	f := &paneCloseFake{windows: []tuiosctl.Window{win}, result: tuiosctl.WaitResult{Matched: true, ExitCode: &zero}}
+	out, err := closePane(context.Background(), f, win, pane, false, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quits, _ := ctl.counts()
+	want := []string{"wait:browser-id:window-exit", "list", "close:browser-id"}
+	if !slices.Equal(f.calls, want) || quits != 1 {
+		t.Fatalf("calls=%v quits=%d, want %v and one quit", f.calls, quits, want)
+	}
+	if out["close_mode"] != "browser-quit" || out["browser_id"] != "browser-1" {
+		t.Fatalf("out=%v", out)
+	}
+	if _, ok := managedBrowserPane(root, "browser-id"); ok {
+		t.Fatal("closed pane kept its record")
+	}
+}
+
 // The same socket can later serve a different browser. The pane id and the
 // foreground program both still look right, so only the recorded browserId can
 // tell the difference — and a quit must not be sent to the newcomer.

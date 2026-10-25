@@ -91,7 +91,13 @@ func closePane(ctx context.Context, c paneCloseClient, win tuiosctl.Window, pane
 	if pane.Managed && pane.WindowID != "" && pane.WindowID != win.WindowID {
 		return nil, fmt.Errorf("pane %s is not the browser pane %q golder started; nothing was closed", win.WindowID, pane.WindowID)
 	}
-	program := filepath.Base(strings.TrimSpace(win.ForegroundCmd))
+	// Some workspace daemons report an empty foreground command for a command
+	// pane. Treat that as "unknown", not as the path component ".".
+	rawProgram := strings.TrimSpace(win.ForegroundCmd)
+	program := ""
+	if rawProgram != "" {
+		program = filepath.Base(rawProgram)
+	}
 	// A golder browser is the pane golder recorded as one, and nothing else. The
 	// name "golder" is the binary every agent pane golder runs is called, this
 	// tool's own pane included, so the name alone proves nothing: an unrecorded
@@ -100,8 +106,13 @@ func closePane(ctx context.Context, c paneCloseClient, win tuiosctl.Window, pane
 	// a versioned or renamed install still matches. Only the daemon's foreground
 	// program counts; a pane title or display name never identifies a browser
 	// here.
-	embedded := pane.Managed && pane.Embedded &&
-		(program == "golder" || (pane.Program != "" && program == filepath.Base(pane.Program)))
+	//
+	// An empty foreground is not a mismatch for an embedded browser: the exact
+	// pane id was already checked above, and the endpoint below is still proved
+	// against the recorded socket and browserId before any quit is sent.
+	recordedEmbedded := pane.Managed && pane.Embedded && pane.WindowID == win.WindowID
+	embedded := recordedEmbedded &&
+		(rawProgram == "" || program == "golder" || (pane.Program != "" && program == filepath.Base(pane.Program)))
 	// An external kitty-browse is a name no other program here answers to, so an
 	// unrecorded one stays held to the verification below.
 	external := program == "kitty-browse" ||
@@ -128,7 +139,7 @@ func closePane(ctx context.Context, c paneCloseClient, win tuiosctl.Window, pane
 		// golder cannot prove which endpoint belongs to this pane, so a quit or
 		// a keystroke could reach a different browser.
 		if !force {
-			return nil, fmt.Errorf("pane %s runs %s, but golder did not start it (or has no complete record of it) and cannot prove which control endpoint belongs to it; no keys and no quit were sent. Inspect the pane, or use force:true", win.WindowID, program)
+			return nil, fmt.Errorf("pane %s runs %q, but golder did not start it (or has no complete record of it) and cannot prove which control endpoint belongs to it; no keys and no quit were sent. Inspect the pane, or use force:true", win.WindowID, win.ForegroundCmd)
 		}
 		return hardClose(ctx, c, win, pane, fmt.Sprintf("pane %s is an unverified %s pane", win.WindowID, program))
 	}
