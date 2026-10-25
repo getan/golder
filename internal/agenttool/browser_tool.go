@@ -70,22 +70,29 @@ type BrowserTool struct {
 
 func (t *BrowserTool) Name() string { return "browser" }
 
+const browserToolUseHint = " Use this tool rather than launching `golder browse` or `kitty-browse` through bash: " +
+	"the browser tool owns the pane identity, control socket and cleanup."
+
 func (t *BrowserTool) Description() string {
 	if !t.available() {
 		if !t.allowControl {
-			return "List live workspace browsers and tabs. No browser is selected; ask the parent agent to attach one."
+			return "List live workspace browsers and tabs. No browser is selected; ask the parent agent to attach one." +
+				browserToolUseHint
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse a single live instance or start one in a tuios pane."
+			"Or call open with a URL to reuse a single live instance or start one in a tuios pane." +
+			browserToolUseHint
 	}
 	if t.allowControl {
 		return "Drive the running browser pane: snapshot the accessibility tree, " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
-			"Pin a tab by its id from list; refs are per document."
+			"Pin a tab by its id from list; refs are per document." +
+			browserToolUseHint
 	}
 	return "Read the running browser pane: list tabs, snapshot the accessibility tree, " +
-		"read url/text/html, console and network errors, and screenshot."
+		"read url/text/html, console and network errors, and screenshot." +
+		browserToolUseHint
 }
 
 // available reports whether a control socket is resolvable right now.

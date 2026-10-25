@@ -205,6 +205,10 @@ func main() {
 		case "workspace":
 			os.Exit(runWorkspace(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		case "browse":
+			// Internal pane entry point, launched by the browser tool's
+			// open action. It is intentionally not advertised in usage:
+			// people and agents should use the browser tool, which owns the
+			// pane identity, socket selection and cleanup.
 			os.Exit(runBrowse(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		}
 	}
@@ -298,7 +302,6 @@ func main() {
 		out := flag.CommandLine.Output()
 		fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintln(out, "  golder workspace [run|status|stop] [flags]  integrated terminal workspace")
-		fmt.Fprintln(out, "  golder browse [flags] [url]                built-in browser pane (Chromium required)")
 		fmt.Fprintln(out, "  golder workspace --help                   workspace options")
 		flag.PrintDefaults()
 		cli.PrintProviderHelp(out)

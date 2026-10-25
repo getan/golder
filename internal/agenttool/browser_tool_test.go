@@ -15,6 +15,16 @@ import (
 	"github.com/getan/golder/internal/browserctl"
 )
 
+func TestBrowserToolDescriptionKeepsBrowserInTheTool(t *testing.T) {
+	tool := &BrowserTool{cwd: t.TempDir(), allowControl: true}
+	desc := strings.ToLower(tool.Description())
+	for _, want := range []string{"rather than launching", "golder browse", "kitty-browse", "owns the pane identity", "socket", "cleanup"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("browser description is missing %q:\n%s", want, tool.Description())
+		}
+	}
+}
+
 // fakeBrowser serves the kitty-browse control API over a stub transport. The
 // tool only speaks HTTP, so no real Unix socket is needed to test it.
 type fakeBrowser struct {
