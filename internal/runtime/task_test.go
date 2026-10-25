@@ -43,17 +43,27 @@ func TestTaskToolContract(t *testing.T) {
 		Properties struct {
 			Description json.RawMessage `json:"description"`
 			Prompt      json.RawMessage `json:"prompt"`
+			Context     json.RawMessage `json:"context"`
 		} `json:"properties"`
 		Required []string `json:"required"`
 	}
 	if err := json.Unmarshal(tool.Schema(), &schema); err != nil {
 		t.Fatalf("schema is not valid JSON: %v", err)
 	}
-	if len(schema.Properties.Prompt) == 0 || len(schema.Properties.Description) == 0 {
-		t.Errorf("schema must declare both prompt and description properties")
+	if len(schema.Properties.Prompt) == 0 || len(schema.Properties.Description) == 0 || len(schema.Properties.Context) == 0 {
+		t.Errorf("schema must declare prompt, description and context properties")
 	}
 	if len(schema.Required) != 1 || schema.Required[0] != "prompt" {
 		t.Errorf("required = %v, want [prompt]", schema.Required)
+	}
+	var contextSchema struct {
+		Enum []string `json:"enum"`
+	}
+	if err := json.Unmarshal(schema.Properties.Context, &contextSchema); err != nil {
+		t.Fatalf("context schema is not valid JSON: %v", err)
+	}
+	if got := strings.Join(contextSchema.Enum, ","); got != "fresh,fork" {
+		t.Errorf("context enum = %q, want fresh,fork", got)
 	}
 }
 
@@ -81,6 +91,176 @@ func TestTaskReturnsChildText(t *testing.T) {
 	}
 	if child.callCount() != 1 {
 		t.Errorf("child provider calls = %d, want 1", child.callCount())
+	}
+}
+
+// TestTaskFreshContextIsSelfContained pins the default: the child gets the
+// delegated prompt and the project brief, not the parent conversation.
+func TestTaskFreshContextIsSelfContained(t *testing.T) {
+	var gotPrompt string
+	var gotMessages agentcore.MessageList
+	child := &fauxProvider{
+		name:   "faux-child",
+		models: []provider.Model{{Provider: "faux-child", ID: "child"}},
+		turns:  []fauxTurn{textTurn("done")},
+	}
+	factory := func() RunConfig {
+		return RunConfig{
+			LoopConfig: LoopConfig{Model: "child", Stream: provider.StreamFnFromProvider(child)},
+			Batch:      agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: agenttool.NewToolRegistry()}},
+		}
+	}
+	tool := NewTaskTool(factory, nil)
+	ctx := agentcore.WithMessageSnapshot(context.Background(), agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("secret parent history")}},
+	})
+	ctx = agentcore.WithSystemPromptSnapshot(ctx, "parent project rules")
+	res, err := tool.Execute(ctx, "id", json.RawMessage(`{"prompt":"find the bug"}`), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if agentcore.ContentToText(res.Content) != "done" {
+		t.Fatalf("result = %q", agentcore.ContentToText(res.Content))
+	}
+	gotMessages = child.requestAt(0).Context.Messages
+	if len(gotMessages) != 1 {
+		t.Fatalf("fresh child messages = %d, want only the delegated prompt", len(gotMessages))
+	}
+	first, ok := gotMessages[0].(agentcore.UserMessage)
+	if !ok {
+		t.Fatalf("fresh child message = %T, want UserMessage", gotMessages[0])
+	}
+	if text := agentcore.ContentToText(first.Content); text != "find the bug" {
+		t.Errorf("fresh child prompt = %q, want the delegated prompt", text)
+	}
+	gotPrompt = child.requestAt(0).Context.SystemPrompt
+	if !strings.Contains(gotPrompt, "parent project rules") {
+		t.Errorf("fresh child must get the parent project context, got:\n%s", gotPrompt)
+	}
+	if strings.Contains(gotPrompt, "secret parent history") {
+		t.Error("fresh child must not inherit parent conversation")
+	}
+}
+
+// TestTaskForkInheritsParentAndDropsItsOwnCall pins fork semantics: parent
+// history and system prompt are inherited, except the task tool-call that is
+// still executing (its result does not exist yet).
+func TestTaskForkInheritsParentAndDropsItsOwnCall(t *testing.T) {
+	child := &fauxProvider{
+		name:   "faux-child",
+		models: []provider.Model{{Provider: "faux-child", ID: "child"}},
+		turns:  []fauxTurn{textTurn("fork done")},
+	}
+	factory := func() RunConfig {
+		return RunConfig{
+			LoopConfig: LoopConfig{Model: "child", Stream: provider.StreamFnFromProvider(child)},
+			Batch:      agenttool.BatchConfig{ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: agenttool.NewToolRegistry()}},
+		}
+	}
+	tool := NewTaskTool(factory, nil)
+	parentCall := agentcore.NewToolCallContent("task-call", "task", json.RawMessage(`{"prompt":"continue"}`))
+	parent := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("parent question")}},
+		agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonToolUse, Content: agentcore.ContentList{parentCall}},
+	}
+	ctx := agentcore.WithMessageSnapshot(context.Background(), parent)
+	ctx = agentcore.WithSystemPromptSnapshot(ctx, "parent system prompt")
+	_, err := tool.Execute(ctx, "task-call", json.RawMessage(`{"prompt":"continue the work","context":"fork"}`), nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	req := child.requestAt(0)
+	if !strings.HasPrefix(req.Context.SystemPrompt, "parent system prompt") {
+		t.Errorf("fork system prompt = %q, want the parent prompt", req.Context.SystemPrompt)
+	}
+	if !strings.Contains(req.Context.SystemPrompt, "cannot spawn further") {
+		t.Errorf("fork system prompt should state the sub-agent boundary, got:\n%s", req.Context.SystemPrompt)
+	}
+	if len(req.Context.Messages) != 2 {
+		t.Fatalf("fork messages = %d, want parent user turn + delegated prompt", len(req.Context.Messages))
+	}
+	first, ok := req.Context.Messages[0].(agentcore.UserMessage)
+	if !ok {
+		t.Fatalf("fork first message = %T, want UserMessage", req.Context.Messages[0])
+	}
+	if text := agentcore.ContentToText(first.Content); text != "parent question" {
+		t.Errorf("fork first message = %q, want parent history", text)
+	}
+	delegated, ok := req.Context.Messages[1].(agentcore.UserMessage)
+	if !ok {
+		t.Fatalf("fork delegated message = %T, want UserMessage", req.Context.Messages[1])
+	}
+	if text := agentcore.ContentToText(delegated.Content); text != "continue the work" {
+		t.Errorf("fork delegated prompt = %q", text)
+	}
+	for _, msg := range req.Context.Messages {
+		if asst, ok := msg.(agentcore.AssistantMessage); ok {
+			for _, c := range asst.ToolCalls() {
+				if c.ID == "task-call" {
+					t.Error("fork must drop the task call that spawned it")
+				}
+			}
+		}
+	}
+}
+
+func TestTaskForkDropsSiblingPendingCalls(t *testing.T) {
+	first := agentcore.NewToolCallContent("task-a", "task", json.RawMessage(`{"prompt":"a"}`))
+	second := agentcore.NewToolCallContent("task-b", "task", json.RawMessage(`{"prompt":"b"}`))
+	parent := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("parent")}},
+		agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonToolUse, Content: agentcore.ContentList{first, second}},
+	}
+	got, err := taskChildMessages(SubAgentContextFork, parent, "continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("fork messages = %d, want parent user turn + delegated prompt", len(got))
+	}
+	for _, msg := range got {
+		if asst, ok := msg.(agentcore.AssistantMessage); ok && len(asst.ToolCalls()) > 0 {
+			t.Fatalf("fork retained an unanswered sibling call: %+v", asst.ToolCalls())
+		}
+	}
+}
+
+func TestTaskFreshProjectContextOmitsParentGuide(t *testing.T) {
+	parent := "MAIN AGENT GUIDE\n\nEnvironment:\n- Working directory: /repo\n\n# Project instructions (/repo/AGENTS.md)\n- use tabs"
+	got := taskChildSystemPrompt("generic sub-agent", parent, "", SubAgentContextFresh)
+	if strings.Contains(got, "MAIN AGENT GUIDE") {
+		t.Errorf("fresh child should not inherit the main agent guide:\n%s", got)
+	}
+	if !strings.Contains(got, "use tabs") || !strings.Contains(got, "Working directory: /repo") {
+		t.Errorf("fresh child should inherit project context:\n%s", got)
+	}
+	if fork := taskChildSystemPrompt("generic sub-agent", parent, "", SubAgentContextFork); !strings.HasPrefix(fork, parent) {
+		t.Errorf("fork should inherit the full parent prompt, got:\n%s", fork)
+	}
+}
+
+func TestNormalizeSubAgentContext(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+		bad  bool
+	}{
+		{"", SubAgentContextFresh, false},
+		{"fresh", SubAgentContextFresh, false},
+		{"FORK", SubAgentContextFork, false},
+		{"fork", SubAgentContextFork, false},
+		{"side", "", true},
+	} {
+		got, err := normalizeSubAgentContext(tc.in)
+		if tc.bad {
+			if err == nil {
+				t.Errorf("normalizeSubAgentContext(%q) should fail", tc.in)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("normalizeSubAgentContext(%q) = (%q, %v), want %q", tc.in, got, err, tc.want)
+		}
 	}
 }
 

@@ -326,10 +326,12 @@ Tools are rooted at the working directory; `--no-tools` disables them all, and `
 | `write_stdin` | Poll a bash session, write input, or send an interrupt (`\u0003`) |
 | `todo` | Structured task list (pending / in_progress / completed) |
 | `webfetch` / `websearch` | Fetch a page as Markdown / search the web (backend auto-selected: Tavily / Exa / DuckDuckGo) |
-| `task` | Dispatch a sub-agent (inherits the parent's tool boundary) |
+| `task` | Dispatch a sub-agent; `context=fresh` (default: project rules and git status, no parent conversation) or `context=fork` (inherits the parent conversation and system prompt); the tool boundary still comes from the parent |
 | `memory_search` | Search persistent memory (BM25 full-text index) |
 | `get_context_remaining` / `new_context` | Check the remaining context budget / request a fresh context window |
 | `schedule_create` / `schedule_list` / `schedule_delete` | Session-local reminders that return to the conversation when due (not persisted) |
+
+The agent chooses `task`'s `context`: `fresh` for independent fan-out, `fork` to continue work already discussed in the parent. Both share the cwd, file tree, model/provider and parent authorization boundary; even a fork returns only its final report.
 
 **Per-turn memory recall (off by default)**: besides the `memory_search` tool there is an automatic channel — the latest user message is used as a BM25 query, and a hit is injected as a `<system-reminder>` into that turn's request (request only: never history, never the transcript). It ships **off**, because an injection is a context cost paid on every turn: `/memory recall on|off` toggles it (writes `[memory] recall` in `config.toml`, effective immediately). When it is on, guards apply: the query needs at least 2 units (latin words / CJK bigrams — "继续" and "ok" do not count), a hit must share at least 2 of them, and the index reconcile runs at most every 30 seconds (`recall_reconcile_seconds`; `0` = every turn, negative = never), because that step walks every memory file. The `/memory` report shows the policy and the last decision (injected or skipped, the query, the matched files), so a sudden recall can be explained.
 

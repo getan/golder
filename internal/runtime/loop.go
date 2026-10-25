@@ -421,6 +421,11 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 			// recent history. The snapshot is a slice header; later appends write
 			// past the captured length, so the view stays stable.
 			toolCtx = agentcore.WithMessageSnapshot(toolCtx, agentCtx.Messages)
+			// A task child that inherits the parent's system prompt also needs
+			// the project instructions, environment and skill guidance the
+			// parent is running under. The snapshot is read-only and never
+			// changes after the batch starts.
+			toolCtx = agentcore.WithSystemPromptSnapshot(toolCtx, agentCtx.SystemPrompt)
 			// Refresh the budget figure the tools see so get_context_remaining
 			// answers from this batch's context, not the previous turn's.
 			observeBudget(cfg.Budget, agentCtx)

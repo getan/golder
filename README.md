@@ -327,10 +327,12 @@ golder -m ollama/qwen2.5-coder -u http://localhost:11434/v1 -p "..."   # 本地 
 | `write_stdin` | 轮询 bash 会话输出、写入输入或发送中断（`\u0003`） |
 | `todo` | 结构化任务清单（pending / in_progress / completed） |
 | `webfetch` / `websearch` | 抓取网页转 Markdown / 联网搜索（按凭证自动选择后端：Tavily / Exa / DuckDuckGo） |
-| `task` | 派发子 Agent（继承父级工具边界） |
+| `task` | 派发子 Agent；`context=fresh`（默认，带项目规则/git status 但不带父对话）或 `context=fork`（继承父对话与系统提示）；工具边界仍继承父级 |
 | `memory_search` | 检索持久化记忆（BM25 全文索引） |
 | `get_context_remaining` / `new_context` | 查看剩余上下文预算 / 主动开启新上下文窗口 |
 | `schedule_create` / `schedule_list` / `schedule_delete` | 会话内定时提醒：到点后作为新消息回到对话（不持久化） |
+
+`task` 的 `context` 由 agent 根据任务自行选择：独立 fan-out 用 `fresh`，继续父会话已经讨论过的工作用 `fork`。两者共享 cwd、文件树、model/provider 和父级授权边界；fork 仍只把最终报告带回父会话。
 
 **持久记忆的每轮自动召回（默认关）**：除 `memory_search` 工具外，还有一条自动通道——把最近一条用户消息当查询做 BM25，命中就以 `<system-reminder>` 注入当轮请求（只进请求，不进历史、不上转写）。它默认**关闭**，因为注入是每轮都付的上下文成本：`/memory recall on|off` 开关（写 `config.toml` 的 `[memory] recall`，当前会话立即生效）。打开后有守卫：查询至少 2 个单元（英文词 / 中文二字组——"继续""ok"不算），命中至少共享 2 个单元；索引对账默认最多每 30 秒一次（`recall_reconcile_seconds`，`0` 为每轮、负数关闭），因为那一步是线性遍历记忆文件。`/memory` 报告会显示策略和最近一次决定（是否注入、查询原文、命中的文件），"为什么突然想起这个"因此有据可查。
 

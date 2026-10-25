@@ -27,8 +27,11 @@ const taskDescription = "Dispatch a general-purpose sub-agent to autonomously co
 	"Use it for fan-out — three or more independent, substantial workstreams, preferably read-only " +
 	"analysis — not for a single job you could finish here: the sub-agent starts with none of this " +
 	"conversation's context and returns only its report, so one task usually costs more than it saves. " +
-	"The sub-agent runs its own agent loop with a fresh context and the standard tool set, then returns its final report. " +
-	"Provide a complete, self-contained prompt since the sub-agent shares none of this conversation's context. " +
+	"By default (context=fresh) it gets the project instructions, git status and a standard tool set, " +
+	"but none of this conversation; use context=fork when the task must continue work already discussed " +
+	"here, since a fork inherits this conversation and system prompt. The sub-agent runs its own agent " +
+	"loop, then returns its final report. Provide a complete prompt: even a fork starts as a delegated " +
+	"task and only its final report comes back. " +
 	"To run independent tasks concurrently, emit ALL of their task calls in the SAME assistant message: " +
 	"calls in one message execute in parallel, while a task dispatched in a later message waits for the previous batch to finish."
 
@@ -37,7 +40,7 @@ const taskDescription = "Dispatch a general-purpose sub-agent to autonomously co
 // parent agent's operating posture so a delegated task is carried out the same
 // way the parent would.
 const taskSystemPrompt = "You are a focused sub-agent working on one delegated task. " +
-	"You have your own fresh context and the standard tool set, but you cannot spawn further sub-agents. " +
+	"You have your own context and the standard tool set, but you cannot spawn further sub-agents. " +
 	"Complete the task fully using the tools available, then respond with a concise final report of what you did and any key findings. " +
 	"Your final message is returned verbatim to the agent that dispatched you, so make it self-contained."
 
@@ -52,7 +55,12 @@ var taskSchema = json.RawMessage(`{
     },
     "prompt": {
       "type": "string",
-      "description": "The full task for the sub-agent to perform. It must be self-contained since the sub-agent runs with a fresh context and shares none of this conversation."
+      "description": "The full task for the sub-agent to perform. Even a fork needs a complete delegated task statement."
+    },
+    "context": {
+      "type": "string",
+      "enum": ["fresh", "fork"],
+      "description": "Context mode. fresh (default) starts a clean child with the project instructions and git status but none of this conversation; use it for independent fan-out. fork inherits this conversation and system prompt; use it when the task continues work already discussed here."
     }
   },
   "required": ["prompt"],
@@ -66,14 +74,36 @@ var taskSchema = json.RawMessage(`{
 // The child prompt comes from the call arguments at runtime, so a single generic
 // spec serves every delegated task.
 func NewTaskTool(factory func() RunConfig, sem chan struct{}) *SubAgentTool {
-	return NewSubAgentTool(SubAgentSpec{
-		Name:         "task",
-		Description:  taskDescription,
-		SystemPrompt: taskSystemPrompt,
-		Schema:       taskSchema,
-		NewRunConfig: factory,
-		Sem:          sem,
-	})
+	return NewTaskToolWithOptions(factory, sem)
+}
+
+// TaskOption customizes the generic task tool. It exists so the common two-
+// argument constructor stays source-compatible for tests and embedders while
+// the CLI can supply the project directory used for the fresh/fork brief.
+type TaskOption func(*SubAgentSpec)
+
+// WithTaskProjectDir names the working directory whose git status is included
+// in a task child's project brief.
+func WithTaskProjectDir(dir string) TaskOption {
+	return func(spec *SubAgentSpec) { spec.ProjectDir = dir }
+}
+
+// NewTaskToolWithOptions builds the generic task tool with optional project
+// context wiring.
+func NewTaskToolWithOptions(factory func() RunConfig, sem chan struct{}, opts ...TaskOption) *SubAgentTool {
+	spec := SubAgentSpec{
+		Name:           "task",
+		Description:    taskDescription,
+		SystemPrompt:   taskSystemPrompt,
+		Schema:         taskSchema,
+		NewRunConfig:   factory,
+		Sem:            sem,
+		ProjectContext: true,
+	}
+	for _, opt := range opts {
+		opt(&spec)
+	}
+	return NewSubAgentTool(spec)
 }
 
 // MaxSubagents resolves the concurrency cap for task sub-agents from

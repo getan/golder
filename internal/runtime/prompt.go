@@ -294,9 +294,11 @@ const batchGuide = "Batch independent tool calls in a single message: read, grep
 
 // taskGuide instructs the model on how to use the generic `task` tool (US-008,
 // #458). The task tool dispatches an independent sub-agent that runs its own
-// agent loop with a fresh context and returns its final report, so it is the
-// mechanism for delegation and fan-out. The key affordance advertised here is
-// that emitting MULTIPLE task calls in a single assistant message runs those
+// agent loop and returns its final report, so it is the mechanism for
+// delegation and fan-out. A fresh child gets the project brief but no parent
+// conversation; a fork inherits both, which is the escape hatch for a task that
+// continues work already discussed. The key affordance advertised here is that
+// emitting MULTIPLE task calls in a single assistant message runs those
 // sub-agents in parallel, letting skills like /graph achieve real concurrency.
 // searchGuide disciplines web research so it terminates: batch independent
 // queries in one turn without preamble narration, open pages with webfetch
@@ -312,13 +314,13 @@ const searchGuide = "For web research: issue searches immediately, without narra
 const taskGuide = "The task tool is for real parallelism, not for ordinary work. Use it only when at " +
 	"least three independent workstreams can run at once and each is substantial enough to justify a " +
 	"fresh context — read-only analysis (search, reading, comparing, verifying) is the best fit, " +
-	"because sub-agents that edit cannot see each other's changes or coordinate. One delegated job is " +
-	"slower than doing it here: the child starts with none of this conversation and returns only a " +
-	"report, so a single task usually costs more than it saves. When you do fan out, each task call " +
-	"dispatches an independent sub-agent that returns its final report; emit MULTIPLE task calls in a " +
-	"single message — they run in parallel, while dispatching one only after the previous returns " +
-	"serializes them. Give each a complete, self-contained prompt, since a sub-agent shares none of " +
-	"this conversation's context. Do the work directly for a single, sequential, or trivial task."
+	"because sub-agents that edit cannot see each other's changes or coordinate. A fresh child starts " +
+	"with the project instructions and git status but none of this conversation; use context=fork when " +
+	"the task continues work already discussed here, since a fork inherits this conversation and system " +
+	"prompt. A fresh child is usually slower than doing a single job here, and even a fork returns only " +
+	"its final report. When you do fan out, emit MULTIPLE task calls in a single message — they run in " +
+	"parallel, while dispatching one only after the previous returns serializes them. Give each a " +
+	"complete, self-contained prompt. Do the work directly for a single, sequential, or trivial task."
 
 // contextGuide points at the context-budget tools: the model should size long
 // stretches of work to the room it actually has and roll into a fresh window

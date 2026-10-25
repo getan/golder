@@ -187,7 +187,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 			childGates.Install(&cfg, nil, HookDeps{})
 			return cfg
 		}
-		tools = append(tools, runtime.NewTaskTool(factory, sem))
+		tools = append(tools, runtime.NewTaskToolWithOptions(factory, sem, runtime.WithTaskProjectDir(cwd)))
 	}
 	// Wire the session-local reminder scheduler (issue #565) unless tools are
 	// disabled: three schedule_* tools over one in-memory store, whose due

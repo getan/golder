@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/hostcompat"
@@ -170,6 +171,34 @@ type SubAgentSpec struct {
 	// blocks (queues) the acquire rather than erroring. nil disables limiting, so
 	// existing sub-agent specs run unbounded exactly as before.
 	Sem chan struct{}
+	// ProjectContext opts this sub-agent into the parent session's project
+	// context: the parent system prompt (project instructions, environment,
+	// skills) and a git-status brief. The generic task tool sets it; specialized
+	// skill sub-agents keep their own focused system prompt.
+	ProjectContext bool
+	// ProjectDir is the working directory whose git status is added to the
+	// project brief. Empty omits the git probe.
+	ProjectDir string
+}
+
+const (
+	// SubAgentContextFresh starts the child with only the delegated task (plus
+	// project instructions) — the default, used for independent fan-out.
+	SubAgentContextFresh = "fresh"
+	// SubAgentContextFork inherits the parent conversation and system prompt,
+	// used when the task continues work already discussed in the parent.
+	SubAgentContextFork = "fork"
+)
+
+func normalizeSubAgentContext(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", SubAgentContextFresh:
+		return SubAgentContextFresh, nil
+	case SubAgentContextFork:
+		return SubAgentContextFork, nil
+	default:
+		return "", fmt.Errorf("sub-agent context must be %q or %q, got %q", SubAgentContextFresh, SubAgentContextFork, mode)
+	}
 }
 
 // subAgentArgs is the JSON argument shape for a sub-agent tool call: a
@@ -179,6 +208,9 @@ type SubAgentSpec struct {
 type subAgentArgs struct {
 	Prompt      string `json:"prompt"`
 	Description string `json:"description,omitempty"`
+	// Context is "fresh" (default) or "fork". It is only advertised by the
+	// generic task schema; other sub-agent schemas leave it empty.
+	Context string `json:"context,omitempty"`
 }
 
 // subAgentSchema is the JSON Schema validating a sub-agent invocation.
@@ -254,14 +286,21 @@ func (t *SubAgentTool) Execute(ctx context.Context, id string, args json.RawMess
 	if a.Prompt == "" {
 		return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q: empty prompt", t.spec.Name)
 	}
+	contextMode, err := normalizeSubAgentContext(a.Context)
+	if err != nil {
+		return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q: %w", t.spec.Name, err)
+	}
 
 	if t.spec.Isolation == SubAgentIsolationProcess {
+		if contextMode == SubAgentContextFork {
+			return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q: context=fork is unavailable in process isolation", t.spec.Name)
+		}
 		// Process mode returns only the child's final text (the JSON-RPC protocol
 		// does not stream partial updates), so onUpdate is intentionally not
 		// forwarded here; a caller supplying a sink gets no deltas in this mode.
 		return t.executeProcess(ctx, a.Prompt)
 	}
-	return t.executeGoroutine(ctx, id, a.Prompt, a.Description, onUpdate)
+	return t.executeGoroutine(ctx, id, a.Prompt, a.Description, contextMode, onUpdate)
 }
 
 // executeGoroutine runs the child agent loop in-process and returns its final
@@ -275,7 +314,7 @@ func (t *SubAgentTool) Execute(ctx context.Context, id string, args json.RawMess
 // SubAgentProgressEvent and surfaced up the parent stream; when no emitter is
 // present (e.g. the tool is called directly in a unit test) progress reporting is
 // silently skipped.
-func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, description string, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, description, contextMode string, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	// Every question this child's gates put to the person is labeled with the
 	// agent that asked. Stamped before the run starts so the label travels with
 	// the child's whole turn, and appending rather than replacing, so a nested
@@ -351,12 +390,22 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 	// kills them once its loop settles; without this they would leak until
 	// process exit.
 	defer stopOwnedSessions(tools)
+	systemPrompt := t.spec.SystemPrompt
+	messages := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent(prompt)}},
+	}
+	if t.spec.ProjectContext {
+		systemPrompt = taskChildSystemPrompt(t.spec.SystemPrompt, agentcore.SystemPromptSnapshotFromContext(ctx), t.spec.ProjectDir, contextMode)
+		var err error
+		messages, err = taskChildMessages(contextMode, agentcore.MessageSnapshotFromContext(ctx), prompt)
+		if err != nil {
+			return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q: %w", t.spec.Name, err)
+		}
+	}
 	childCtx := &agentcore.AgentContext{
-		SystemPrompt: t.spec.SystemPrompt,
-		Messages: agentcore.MessageList{
-			agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent(prompt)}},
-		},
-		Tools: tools,
+		SystemPrompt: systemPrompt,
+		Messages:     messages,
+		Tools:        tools,
 	}
 
 	stream := StartRun(ctx, childCtx, runCfg)
@@ -419,6 +468,122 @@ func (t *SubAgentTool) executeGoroutine(ctx context.Context, id, prompt, descrip
 		return agentcore.AgentToolResult{}, fmt.Errorf("sub-agent %q failed (%s): %s", t.spec.Name, final.StopReason, text)
 	}
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(text)}}, nil
+}
+
+// taskChildSystemPrompt builds the system prompt for a task child.
+//
+// Fresh children keep the generic sub-agent instruction but receive the parent
+// session's project context (AGENTS.md, environment, skills) as an addendum:
+// they still do not see the conversation, but they no longer have to
+// rediscover the project from scratch. Fork children reuse the parent prompt
+// wholesale, exactly as Claude Code's fork does, because they are continuing
+// the same work under the same rules.
+func taskChildSystemPrompt(generic, parent, projectDir, contextMode string) string {
+	if contextMode == SubAgentContextFork && strings.TrimSpace(parent) != "" {
+		// The parent guide tells the main agent to delegate with task; a fork
+		// cannot (the nesting guard removes that tool), so state the boundary
+		// explicitly instead of leaving the model to discover it from an
+		// "unknown tool" error.
+		return parent + "\n\n# Sub-agent boundary\n\n" +
+			"You are a forked sub-agent continuing the parent's work. You cannot spawn further " +
+			"sub-agents; complete the delegated task yourself and return a concise final report."
+	}
+	out := generic
+	if strings.TrimSpace(parent) != "" {
+		// The parent's leading guide is written for the main agent (it tells the
+		// reader to delegate with task, which a child cannot do). Keep the part
+		// after the environment block: project instructions, environment facts,
+		// user appends and skills — the project context a fresh child lacks.
+		context := parent
+		if idx := strings.Index(parent, "\n\nEnvironment:\n"); idx >= 0 {
+			context = parent[idx+2:]
+		}
+		out += "\n\n# Project context (inherited from the dispatching session)\n\n" +
+			strings.TrimSpace(context)
+	}
+	if brief := gitStatusBrief(projectDir); brief != "" {
+		out += "\n\n# Working tree\n\n" + brief
+	}
+	return out
+}
+
+// taskChildMessages builds the child conversation.
+//
+// fresh: only the delegated task; the child has no parent history.
+// fork: the parent conversation plus the task. The parent's own task tool-call
+// is removed because the child is that call: leaving it in would present an
+// unanswered tool call to the provider, and its result does not exist yet. The
+// delegated prompt is appended as a user turn, matching every forked-subagent
+// implementation (Claude Code, LangChain Deep Agents).
+func taskChildMessages(contextMode string, parent agentcore.MessageList, prompt string) (agentcore.MessageList, error) {
+	delegated := agentcore.UserMessage{
+		RoleField: agentcore.RoleUser,
+		Content:   agentcore.ContentList{agentcore.NewTextContent(prompt)},
+	}
+	if contextMode != SubAgentContextFork {
+		return agentcore.MessageList{delegated}, nil
+	}
+	if len(parent) == 0 {
+		return nil, fmt.Errorf("context=fork needs a parent conversation, but none was available")
+	}
+	answered := answeredToolCallIDs(parent)
+	out := make(agentcore.MessageList, 0, len(parent)+1)
+	for _, msg := range parent {
+		if asst, ok := msg.(agentcore.AssistantMessage); ok {
+			trimmed := stripUnansweredToolCalls(asst, answered)
+			if trimmed == nil {
+				continue
+			}
+			out = append(out, *trimmed)
+			continue
+		}
+		out = append(out, msg)
+	}
+	out = append(out, delegated)
+	return out, nil
+}
+
+// answeredToolCallIDs indexes the tool calls that already have a result in the
+// parent snapshot. A forked child is dispatched from the middle of a turn, so
+// every call in the spawning assistant message (its own and any sibling task
+// calls in the same batch) is still unanswered; leaving one behind would hand
+// the provider an assistant tool call with no matching tool result.
+func answeredToolCallIDs(msgs agentcore.MessageList) map[string]struct{} {
+	answered := make(map[string]struct{})
+	for _, msg := range msgs {
+		if tr, ok := msg.(agentcore.ToolResultMessage); ok && tr.ToolCallID != "" {
+			answered[tr.ToolCallID] = struct{}{}
+		}
+	}
+	return answered
+}
+
+// stripUnansweredToolCalls removes tool calls that have no result yet. It
+// returns nil when the assistant message consisted only of those calls, so the
+// child does not inherit an empty assistant turn.
+func stripUnansweredToolCalls(msg agentcore.AssistantMessage, answered map[string]struct{}) *agentcore.AssistantMessage {
+	filtered := make(agentcore.ContentList, 0, len(msg.Content))
+	removed := false
+	for _, block := range msg.Content {
+		if call, ok := block.(agentcore.ToolCallContent); ok {
+			if _, hasResult := answered[call.ID]; !hasResult {
+				removed = true
+				continue
+			}
+		}
+		filtered = append(filtered, block)
+	}
+	if !removed {
+		return &msg
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	msg.Content = filtered
+	if len(msg.ToolCalls()) == 0 && msg.StopReason == agentcore.StopReasonToolUse {
+		msg.StopReason = agentcore.StopReasonEndTurn
+	}
+	return &msg
 }
 
 // sessionStopper is implemented by tools that own OS processes which must not
