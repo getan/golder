@@ -25,12 +25,16 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 ```bash
 golder workspace                 # 可见工作区，第一个 pane 启动本 executable 的 agent
 golder workspace --shell         # 新工作区的第一个 pane 改为 shell
-golder workspace -- --model NAME # agent 参数原样传入，不拼成 shell 命令
+golder workspace -- --model NAME  # 给新工作区的首个 agent 指定模型
 golder workspace status
 golder workspace stop            # 明确结束这个工作区及其所有 pane
 ```
 
 macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱离客户端后，后台 daemon 与 pane 继续运行；再次运行 `golder workspace` 可重新连接。已有 tuios/herdr 中的普通 `golder` 行为不变；嵌套工作区默认拒绝，需要明确 `--nested`。
+
+工作区采用**焦点即输入**：点击或切换到 pane 后直接输入，不需要在“窗口管理模式”和“终端模式”之间切换。`Ctrl+b` 后接方向键切换 pane，接 `c` 新建 pane、`P` 打开命令面板、`?` 查看帮助；命令执行后即可继续输入。普通 `Esc`、`Tab`、`Ctrl+c` 和字母交给 pane 内的程序；前缀等待期间的 `Esc` / `Ctrl+c` 只取消命令，不透传给 shell。
+
+拖动标题栏移动 pane，拖动边框/分隔线调整大小；普通内容拖动始终选文字，原有的 `Alt` / `Ctrl` 拖动移动手势仍然可用。界面升级后，先脱离旧客户端，再用新版 `golder workspace` 重新连接即可使用新交互，无需为了升级界面而结束已有 pane。
 
 agent、shell、浏览器入口都来自同一个 golder 二进制，但后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness 并持续运行 daemon，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/<项目标识>/sessions/<session>/`，不读写个人 tuios 配置。详见 [M4 实现与边界](docs/workspace-m4.md)。
 
