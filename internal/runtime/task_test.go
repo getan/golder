@@ -36,7 +36,7 @@ func TestTaskToolContract(t *testing.T) {
 	// independent task calls batched into one assistant message. This is the
 	// wording that prevents the "tasks ran one after another" behavior (a task
 	// dispatched in a later message waits for the previous one to return).
-	if desc := strings.ToLower(tool.Description()); !strings.Contains(desc, "same assistant message") {
+	if desc := strings.ToLower(tool.Description()); !strings.Contains(desc, "single message") {
 		t.Errorf("description should instruct batching independent calls into one message, got: %q", tool.Description())
 	}
 	var schema struct {

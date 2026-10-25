@@ -21,19 +21,10 @@ import (
 // cannot overwhelm the provider rate limit.
 const DefaultMaxSubagents = 4
 
-// taskDescription is advertised to the parent model so it knows when to delegate
-// work to a generic sub-agent.
+// taskDescription uses the same delegation policy as the main system prompt so
+// the tool description cannot retain a stale task-count or analysis-only rule.
 const taskDescription = "Dispatch a general-purpose sub-agent to autonomously complete a delegated task. " +
-	"Use it for fan-out — three or more independent, substantial workstreams, preferably read-only " +
-	"analysis — not for a single job you could finish here: the sub-agent starts with none of this " +
-	"conversation's context and returns only its report, so one task usually costs more than it saves. " +
-	"By default (context=fresh) it gets the project instructions, git status and a standard tool set, " +
-	"but none of this conversation; use context=fork when the task must continue work already discussed " +
-	"here, since a fork inherits this conversation and system prompt. The sub-agent runs its own agent " +
-	"loop, then returns its final report. Provide a complete prompt: even a fork starts as a delegated " +
-	"task and only its final report comes back. " +
-	"To run independent tasks concurrently, emit ALL of their task calls in the SAME assistant message: " +
-	"calls in one message execute in parallel, while a task dispatched in a later message waits for the previous batch to finish."
+	taskGuide
 
 // taskSystemPrompt seeds every generic sub-agent's context. It is intentionally
 // generic (the actual work arrives as the runtime prompt) and mirrors the
@@ -41,7 +32,11 @@ const taskDescription = "Dispatch a general-purpose sub-agent to autonomously co
 // way the parent would.
 const taskSystemPrompt = "You are a focused sub-agent working on one delegated task. " +
 	"You have your own context and the standard tool set, but you cannot spawn further sub-agents. " +
-	"Complete the task fully using the tools available, then respond with a concise final report of what you did and any key findings. " +
+	"Follow the inherited instructions and the delegated task's constraints. When editing, stay within " +
+	"your assigned files, re-read their current contents, and preserve unrelated changes made by others. " +
+	"Complete and validate the task using the tools available; report blockers rather than silently " +
+	"expanding your scope. Respond with a concise final report of your findings, changed files, tests " +
+	"run and any remaining issues. " +
 	"Your final message is returned verbatim to the agent that dispatched you, so make it self-contained."
 
 // taskSchema is the JSON Schema for a task invocation: a required self-contained
@@ -55,7 +50,7 @@ var taskSchema = json.RawMessage(`{
     },
     "prompt": {
       "type": "string",
-      "description": "The full task for the sub-agent to perform. Even a fork needs a complete delegated task statement."
+      "description": "The delegated task: goal, relevant context, constraints, file ownership if editing, and acceptance checks. Even a fork needs a clear task statement."
     },
     "context": {
       "type": "string",

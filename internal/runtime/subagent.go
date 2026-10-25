@@ -487,9 +487,8 @@ func taskChildSystemPrompt(ctx context.Context, generic, parent, projectDir, con
 		// cannot (the nesting guard removes that tool), so state the boundary
 		// explicitly instead of leaving the model to discover it from an
 		// "unknown tool" error.
-		return parent + "\n\n# Sub-agent boundary\n\n" +
-			"You are a forked sub-agent continuing the parent's work. You cannot spawn further " +
-			"sub-agents; complete the delegated task yourself and return a concise final report."
+		return parent + "\n\n# Sub-agent boundary\n\n" + generic +
+			" This is a forked child: use the inherited conversation as background and perform only the delegated task."
 	}
 	out := generic
 	if strings.TrimSpace(parent) != "" {

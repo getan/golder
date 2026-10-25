@@ -70,9 +70,9 @@ func TestBuildSystemPromptAdvertisesTaskFanout(t *testing.T) {
 	}
 }
 
-// The guide must lead with the bar, not the mechanics: a model that reads only
-// the first sentence should come away thinking "not for one job".
-func TestBuildSystemPromptRestrainsTaskUse(t *testing.T) {
+// Delegate based on benefit, not an arbitrary task count or an analysis-only
+// preference. Keep the cost check and shared-worktree editing safeguards.
+func TestBuildSystemPromptGuidesTaskDelegation(t *testing.T) {
 	got, err := BuildSystemPrompt(PromptConfig{
 		WorkingDir: "/work/proj",
 		Now:        fixedTime,
@@ -83,17 +83,37 @@ func TestBuildSystemPromptRestrainsTaskUse(t *testing.T) {
 	}
 	lower := strings.ToLower(got)
 	for _, want := range []string{
-		"real parallelism, not for ordinary work",
-		"at least three independent workstreams",
-		"read-only analysis",
+		"save time",
+		"single substantial task",
+		"two independent workstreams",
+		"implement, write tests or documentation",
+		"quick lookups and small edits directly",
+		"context=fresh",
+		"context=fork",
+		"file ownership and acceptance checks",
+		"non-overlapping files",
+		"separate worktrees",
+		"review and integrate",
+		"neither context mode grants additional tools or permissions",
 	} {
 		if !strings.Contains(lower, strings.ToLower(want)) {
-			t.Errorf("prompt should restrain task use, missing %q:\n%s", want, got)
+			t.Errorf("prompt should guide task delegation, missing %q:\n%s", want, got)
 		}
 	}
-	// The opening sentence of the guide is what models act on; keep the bar there.
-	if !strings.HasPrefix(taskGuide, "The task tool is for real parallelism") {
-		t.Errorf("taskGuide should open with the restraint, got: %s", taskGuide)
+	for name, guidance := range map[string]string{"system guide": taskGuide, "tool description": taskDescription} {
+		for _, obsolete := range []string{"at least three", "three or more", "preferably read-only", "read-only analysis", "not for a single job"} {
+			if strings.Contains(strings.ToLower(guidance), obsolete) {
+				t.Errorf("%s still contains the obsolete restriction %q", name, obsolete)
+			}
+		}
+	}
+	if !strings.Contains(taskDescription, taskGuide) {
+		t.Error("tool description and system prompt must use the same delegation policy")
+	}
+	for _, want := range []string{"assigned files", "preserve unrelated changes", "validate the task", "report blockers", "tests run", "cannot spawn further sub-agents"} {
+		if !strings.Contains(taskSystemPrompt, want) {
+			t.Errorf("child instructions are missing %q", want)
+		}
 	}
 }
 

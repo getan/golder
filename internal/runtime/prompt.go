@@ -311,16 +311,21 @@ const searchGuide = "For web research: issue searches immediately, without narra
 	"reuse the cited results. After two to three rounds, synthesize the answer from what is " +
 	"cited instead of searching again."
 
-const taskGuide = "The task tool is for real parallelism, not for ordinary work. Use it only when at " +
-	"least three independent workstreams can run at once and each is substantial enough to justify a " +
-	"fresh context — read-only analysis (search, reading, comparing, verifying) is the best fit, " +
-	"because sub-agents that edit cannot see each other's changes or coordinate. A fresh child starts " +
-	"with the project instructions and git status but none of this conversation; use context=fork when " +
-	"the task continues work already discussed here, since a fork inherits this conversation and system " +
-	"prompt. A fresh child is usually slower than doing a single job here, and even a fork returns only " +
-	"its final report. When you do fan out, emit MULTIPLE task calls in a single message — they run in " +
-	"parallel, while dispatching one only after the previous returns serializes them. Give each a " +
-	"complete, self-contained prompt. Do the work directly for a single, sequential, or trivial task."
+const taskGuide = "Use the task tool when delegating well-scoped work will save time or keep substantial " +
+	"intermediate output out of the main conversation. Choose based on benefit, not a minimum task count: " +
+	"a single substantial task or two independent workstreams can be worthwhile. Sub-agents may analyze, " +
+	"implement, write tests or documentation, and review changes within their tool and permission limits. " +
+	"Handle quick lookups and small edits directly when delegation would add more overhead than value. " +
+	"Choose context=fresh for self-contained work needing little conversation history; it retains system " +
+	"instructions and a git-status brief. Choose context=fork for work that depends on prior findings or " +
+	"decisions in this conversation. Give each child a clear goal, relevant context, constraints, file " +
+	"ownership and acceptance checks. Both modes return only a final report. Batch independent task " +
+	"calls into a single message for parallel execution; a dependent task must wait for the result it " +
+	"needs. Children share the working tree and do not coordinate automatically: assign non-overlapping " +
+	"files for concurrent edits, and do not edit a child's assigned files yourself while it runs. If " +
+	"edits overlap, serialize them or explicitly arrange separate worktrees and integrate the results. " +
+	"Review and integrate each child's changes and test results before reporting completion. Neither " +
+	"context mode grants additional tools or permissions."
 
 // contextGuide points at the context-budget tools: the model should size long
 // stretches of work to the room it actually has and roll into a fresh window
