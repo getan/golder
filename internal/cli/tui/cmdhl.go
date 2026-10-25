@@ -39,11 +39,16 @@ type hlSpan struct {
 	literal bool
 }
 
-const cmdHLCacheMax = 256
+const (
+	cmdHLCacheMax   = 256
+	cmdHLCacheBytes = 2 << 20
+	lexerCacheMax   = 1024
+)
 
 var (
-	cmdHLMu    sync.Mutex
-	cmdHLCache = map[string][]hlSpan{}
+	cmdHLMu          sync.Mutex
+	cmdHLCache       = map[string][]hlSpan{}
+	cmdHLCachedBytes int
 	// lexerMatchCache memoizes file basename → chroma lexer name ("" = no
 	// lexer). lexers.Match globs every registered lexer's patterns on each
 	// call, and diff rows resolve a lexer per line; the profiler showed that
@@ -101,7 +106,12 @@ func lexerNameForFile(base string) string {
 		name = lexer.Config().Name
 	}
 	cmdHLMu.Lock()
-	lexerMatchCache[base] = name
+	if len(base) <= 256 {
+		if len(lexerMatchCache) >= lexerCacheMax {
+			clear(lexerMatchCache)
+		}
+		lexerMatchCache[strings.Clone(base)] = name
+	}
 	cmdHLMu.Unlock()
 	return name
 }
@@ -122,14 +132,26 @@ func highlightCached(lexerName, text string, dark bool) []hlSpan {
 	}
 	cmdHLMu.Unlock()
 
-	spans := tokenise(lexers.Get(lexerName), text, dark)
+	// A diff line can be a substring of a multi-megabyte tool result. Tokens
+	// cached globally must refer to our owned key, not pin that whole result.
+	ownedText := key[len(key)-len(text):]
+	spans := tokenise(lexers.Get(lexerName), ownedText, dark)
 
 	cmdHLMu.Lock()
-	if len(cmdHLCache) >= cmdHLCacheMax {
-		cmdHLCache = map[string][]hlSpan{}
+	defer cmdHLMu.Unlock()
+	if cached, ok := cmdHLCache[key]; ok {
+		return cached
 	}
-	cmdHLCache[key] = spans
-	cmdHLMu.Unlock()
+	// Include the key, token text and a conservative span-header allowance.
+	cost := len(key) + len(text) + 64*len(spans)
+	if cost <= cmdHLCacheBytes {
+		if len(cmdHLCache) >= cmdHLCacheMax || cmdHLCachedBytes+cost > cmdHLCacheBytes {
+			clear(cmdHLCache)
+			cmdHLCachedBytes = 0
+		}
+		cmdHLCache[key] = spans
+		cmdHLCachedBytes += cost
+	}
 	return spans
 }
 

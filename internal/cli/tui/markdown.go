@@ -81,6 +81,9 @@ func SetMarkdownDark(dark bool) {
 func rendererFor(width int) *glamour.TermRenderer {
 	mdMu.Lock()
 	defer mdMu.Unlock()
+	if width < 0 {
+		width = 0
+	}
 	if r, ok := mdCache[width]; ok {
 		return r
 	}
@@ -94,6 +97,11 @@ func rendererFor(width int) *glamour.TermRenderer {
 	)
 	if err != nil {
 		return nil
+	}
+	// Pane/sidebar resizing can visit hundreds of widths in a long session.
+	// Only a handful need to stay warm (content width and scrollbar width).
+	if len(mdCache) >= 4 {
+		clear(mdCache)
 	}
 	mdCache[width] = r
 	return r

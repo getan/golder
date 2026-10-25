@@ -923,6 +923,7 @@ func (t *transcript) commitStable() {
 		// back up.
 		t.matStart = k - lazySeedWindow
 		t.matEnd = t.matStart
+		clear(t.prefixLines)
 		t.prefixLines = t.prefixLines[:0]
 		t.prefixCounts = t.prefixCounts[:0]
 		t.prefixValid = true
@@ -942,6 +943,10 @@ func (t *transcript) commitStable() {
 // current content width. It runs on a width change (resize, scrollbar column
 // handoff) and on in-place edits inside the committed region.
 func (t *transcript) rebuildPrefix() {
+	// Reslicing does not release string references in the old backing array.
+	// A collapsed card can replace tens of thousands of lines with three;
+	// stale entries would otherwise keep its entire expanded render alive.
+	clear(t.prefixLines)
 	t.prefixLines = t.prefixLines[:0]
 	t.prefixCounts = t.prefixCounts[:0]
 	for i := t.matStart; i < t.matEnd; i++ {
@@ -949,6 +954,7 @@ func (t *transcript) rebuildPrefix() {
 		t.prefixLines = t.appendBlockLines(t.prefixLines, i)
 		t.prefixCounts = append(t.prefixCounts, len(t.prefixLines)-before)
 	}
+	t.prefixLines = compactRenderLines(t.prefixLines)
 	t.prefixValid = true
 	t.prefixWidth = t.width
 }
@@ -1176,7 +1182,19 @@ func (t *transcript) renderContent() []string {
 		t.recordSpan(i, cursor, len(lines)-1)
 		cursor = len(lines)
 	}
-	t.lines = lines
+	if len(lines) < len(t.lines) {
+		clear(t.lines[len(lines):])
+	}
+	t.lines = compactRenderLines(lines)
+	return t.lines
+}
+
+// Keep ordinary frame reuse cheap, but do not retain a huge pointer array
+// after a large output/expanded card shrinks. No source/history is removed.
+func compactRenderLines(lines []string) []string {
+	if cap(lines) > 4096 && len(lines) < cap(lines)/4 {
+		return append([]string(nil), lines...)
+	}
 	return lines
 }
 

@@ -111,11 +111,16 @@ func diffRowBg(kind diffLineKind) color.Color {
 // Tool cards are re-rendered on every reflow — and a streaming turn reflows
 // on every delta — so without this a large diff would re-tokenize its lines
 // continuously.
-const diffRenderCacheMax = 64
+const (
+	diffRenderCacheMax   = 64
+	diffRenderCacheBytes = 4 << 20
+	maxCachedDiffBytes   = 1 << 20
+)
 
 var (
 	diffRenderMu    sync.Mutex
 	diffRenderCache = map[string]string{}
+	diffCachedBytes int
 )
 
 func diffRenderKey(diff string, inner int, dark bool) string {
@@ -161,11 +166,22 @@ func renderDiff(theme Theme, diff string, inner int) string {
 	out := b.String()
 
 	diffRenderMu.Lock()
-	if len(diffRenderCache) >= diffRenderCacheMax {
-		diffRenderCache = map[string]string{}
+	defer diffRenderMu.Unlock()
+	if cached, ok := diffRenderCache[key]; ok {
+		return cached
 	}
-	diffRenderCache[key] = out
-	diffRenderMu.Unlock()
+	cost := len(key) + len(out)
+	// Entry counts alone are not a memory budget: 64 wide, multi-file diffs
+	// can retain tens of megabytes. Oversized diffs still render in full, but
+	// their transcript prefix, not this global cache, owns that large result.
+	if cost <= maxCachedDiffBytes {
+		if len(diffRenderCache) >= diffRenderCacheMax || diffCachedBytes+cost > diffRenderCacheBytes {
+			clear(diffRenderCache)
+			diffCachedBytes = 0
+		}
+		diffRenderCache[key] = out
+		diffCachedBytes += cost
+	}
 	return out
 }
 
