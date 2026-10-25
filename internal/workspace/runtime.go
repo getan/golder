@@ -49,6 +49,9 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 	if err := ctx.Err(); err != nil {
 		return workspacecmd.StartResult{}, err
 	}
+	if opts.Legacy && opts.Command != workspacecmd.CommandAttach {
+		return workspacecmd.StartResult{}, errors.New("workspace: legacy sessions support attach, status and stop only")
+	}
 	if !opts.Headless {
 		return b.startVisible(ctx, opts)
 	}
@@ -56,6 +59,36 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 	defer b.mu.Unlock()
 	if b.server != nil || b.visible {
 		return workspacecmd.StartResult{}, errors.New("workspace: this backend already owns a daemon")
+	}
+	if opts.Command == workspacecmd.CommandAttach {
+		return workspacecmd.StartResult{}, errors.New("workspace: attach requires a visible client")
+	}
+	var nameLease *stateLease
+	if opts.ManifestPath != "" {
+		var running bool
+		var err error
+		opts, nameLease, running, err = reserveStart(ctx, opts)
+		if err != nil {
+			return workspacecmd.StartResult{}, err
+		}
+		if running {
+			r, err := readOwner(opts)
+			return ownerResult(r, false), err
+		}
+		// The name lease is transferred to the daemon's cleanup goroutine only
+		// after all startup steps, including publication of session.json, succeed.
+		defer func() { nameLease.Close() }()
+		if _, _, running, err := probeOwner(ctx, opts); err != nil {
+			return workspacecmd.StartResult{}, err
+		} else if running {
+			return workspacecmd.StartResult{}, errors.New("workspace: a live owner exists without its session lease; refusing to replace it")
+		}
+		if err := workspacecmd.EnsureIdentityDirs(opts); err != nil {
+			return workspacecmd.StartResult{}, err
+		}
+	}
+	if st, err := os.Stat(opts.Cwd); err != nil || !st.IsDir() {
+		return workspacecmd.StartResult{}, fmt.Errorf("workspace: saved start directory %q is unavailable; use -C/--cwd to select a directory", opts.Cwd)
 	}
 	out := b.Output
 	if out == nil {
@@ -93,7 +126,14 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 		width, height = w, h
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	paneEnv := []string{"GOLDER_WORKSPACE=1", "GOLDER_PROJECT=" + opts.Cwd}
+	paneEnv := []string{"GOLDER_WORKSPACE=1"}
+	// A named session may contain panes in many projects. Never advertise its
+	// initial cwd as a daemon-wide project or use it to widen agent permissions.
+	if opts.ManifestPath == "" {
+		paneEnv = append(paneEnv, "GOLDER_PROJECT="+opts.Cwd)
+	} else {
+		paneEnv = append(paneEnv, "GOLDER_PROJECT=")
+	}
 	if opts.Home != "" {
 		paneEnv = append(paneEnv, "GOLDER_HOME="+opts.Home)
 	}
@@ -118,16 +158,36 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 		lease.Close()
 		return workspacecmd.StartResult{}, err
 	}
+	if opts.ManifestPath != "" {
+		if err := workspacecmd.SaveSession(opts); err != nil {
+			cancel()
+			srv.Stop()
+			owner.Close()
+			lease.Close()
+			return workspacecmd.StartResult{}, err
+		}
+	}
 	b.server, b.owner, b.lease, b.cancel = srv, owner, lease, cancel
 	b.done = make(chan struct{})
+	heldNameLease := nameLease
+	nameLease = nil
 	go func() {
 		<-srv.Done()
 		owner.Close()
 		lease.Close()
+		heldNameLease.Close()
 		close(b.done)
 	}()
-	result := workspacecmd.StartResult{Socket: srv.Socket(), Session: srv.Session()}
+	result := ownerResult(owner.record, true)
 	return result, nil
+}
+
+func ownerResult(r ownerRecord, created bool) workspacecmd.StartResult {
+	return workspacecmd.StartResult{
+		Session: r.Session, Socket: r.Socket, Cwd: r.Project,
+		Config: r.ConfigPath, StateDir: r.StateDir, Log: r.LogFile,
+		Created: created, Instance: r.Instance,
+	}
 }
 
 func (b *Backend) version() string {
@@ -195,19 +255,18 @@ func (b *Backend) Close() {
 // the ordinary control protocol for this session's panes. No executable names,
 // stale pid files or focused panes are used as identity evidence.
 func (b *Backend) Status(ctx context.Context, opts workspacecmd.Options) ([]byte, error) {
-	record, err := readOwner(opts)
-	if errors.Is(err, os.ErrNotExist) {
-		if _, socketErr := os.Lstat(opts.Socket); errors.Is(socketErr, os.ErrNotExist) {
-			return json.Marshal(map[string]any{"running": false, "session": opts.Session, "socket": opts.Socket})
-		}
-		return nil, errors.New("workspace: a control socket exists without this workspace's ownership record; refusing to adopt an unrelated daemon")
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	record, info, running, err := probeOwner(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	info, err := callOwner(ctx, record, "status")
-	if err != nil {
-		return nil, fmt.Errorf("workspace: owner endpoint is not reachable: %w", err)
+	if !running {
+		if err := requireIdle(opts); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]any{"running": false, "session": opts.Session, "socket": opts.Socket, "cwd": opts.Cwd, "legacy": opts.Legacy})
 	}
 	client, err := control.Dial(ctx, opts.Socket)
 	if err != nil {
@@ -220,7 +279,7 @@ func (b *Backend) Status(ctx context.Context, opts workspacecmd.Options) ([]byte
 	}
 	return json.Marshal(map[string]any{
 		"running": true, "pid": info.PID, "version": info.Version, "instance": info.Instance,
-		"session": opts.Session, "socket": opts.Socket, "cwd": opts.Cwd,
+		"session": opts.Session, "socket": opts.Socket, "cwd": record.Project, "legacy": opts.Legacy,
 		"config": record.ConfigPath, "state_dir": record.StateDir, "log": record.LogFile,
 		"panes": json.RawMessage(windows),
 	})
@@ -229,15 +288,15 @@ func (b *Backend) Status(ctx context.Context, opts workspacecmd.Options) ([]byte
 // Stop asks the exact workspace owner to cancel its own context. The token is
 // read from an owner-only record, never returned in status/readiness or logged.
 func (b *Backend) Stop(ctx context.Context, opts workspacecmd.Options) error {
-	record, err := readOwner(opts)
-	if errors.Is(err, os.ErrNotExist) {
-		if _, socketErr := os.Lstat(opts.Socket); errors.Is(socketErr, os.ErrNotExist) {
-			return nil
-		}
-		return errors.New("workspace: no ownership record for this socket; refusing to stop an unrelated daemon")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	record, _, running, err := probeOwner(ctx, opts)
 	if err != nil {
 		return err
+	}
+	if !running {
+		return requireIdle(opts)
 	}
 	if _, err := callOwner(ctx, record, "stop"); err != nil {
 		return err
@@ -248,7 +307,10 @@ func (b *Backend) Stop(ctx context.Context, opts workspacecmd.Options) error {
 	defer budget.Stop()
 	for {
 		if _, err := os.Lstat(opts.Socket); errors.Is(err, os.ErrNotExist) {
-			return nil
+			_, file := ownerPaths(opts)
+			if _, err := os.Lstat(file); errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 		} else if err != nil {
 			return err
 		}

@@ -1,13 +1,13 @@
 // Package workspacecmd implements `golder workspace`: the command line that
-// starts, inspects and stops golder's own workspace around a project.
+// manages global named terminal sessions, each with an independent daemon.
 //
 //	golder workspace [run] [flags] [-- <agent args>...]   start it, and attach
 //	golder workspace status [flags]                       one JSON status document
 //	golder workspace stop [flags]                         shut it down
 //
 // The package is the argv-and-identity half of the command and nothing more.
-// It parses the flags, decides which project this workspace belongs to, where
-// its config, state, log and socket live, and whether starting one here would
+// It parses the flags, resolves a global name and its config/state/log/socket
+// paths, and decides whether starting one here would
 // nest it inside another multiplexer; then it hands one resolved Options value
 // to a Backend, which owns the daemon. That split is why this file has no
 // os.Exit, no process-wide chdir, no environment mutation, no signal
@@ -25,11 +25,9 @@
 //     workspace hosts as tokens, never joined into a string and never re-parsed
 //     by a shell. `golder workspace -- --model opus` passes two arguments, and
 //     `golder workspace -- 'a; rm -rf b'` passes one literal one.
-//   - The project, not the working directory, owns the files. Config, state and
-//     log live under one durable directory derived from the project's canonical
-//     path (symlinks resolved where they resolve) and a hash of it, so two
-//     checkouts of the same name never share them, and neither does the same
-//     checkout reached through a link.
+//   - Names, not invocation directories, select a session. Config, state, log
+//     and ownership proof are per name under GOLDER_HOME; cwd is only the saved
+//     directory where its initial process starts.
 package workspacecmd
 
 import (
@@ -40,6 +38,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"sync"
+	"text/tabwriter"
+	"time"
+	"unicode"
 )
 
 // Exit codes Run returns. They are exported because the dispatcher in
@@ -69,10 +72,18 @@ const (
 	// CommandRun starts a workspace: visible and attached unless
 	// Options.Headless, which starts the daemon alone.
 	CommandRun Command = "run"
+	// CommandNew starts a workspace only if the named session does not exist.
+	CommandNew Command = "new"
+	// CommandAttach connects to a running session and never starts one.
+	CommandAttach Command = "attach"
+	// CommandList reports every named session on this machine.
+	CommandList Command = "list"
 	// CommandStatus reports a running workspace as one JSON document.
 	CommandStatus Command = "status"
 	// CommandStop stops a running workspace.
 	CommandStop Command = "stop"
+	// CommandRemove deletes a stopped session's record and directories.
+	CommandRemove Command = "rm"
 )
 
 // Appearance is the small subset of the workspace's display settings the
@@ -95,10 +106,18 @@ type Appearance struct {
 type StartResult struct {
 	// Session is the session the workspace is running under. Empty keeps the
 	// name the options asked for.
-	Session string
+	Session string `json:"session"`
 	// Socket is the daemon socket the workspace listens on. Empty keeps the
 	// path the options named.
-	Socket string
+	Socket   string `json:"socket"`
+	Cwd      string `json:"cwd"`
+	Config   string `json:"config"`
+	StateDir string `json:"state_dir"`
+	Log      string `json:"log"`
+	// Created and Instance distinguish the daemon this call started from an
+	// existing owner. A failed client may clean up only its own new instance.
+	Created  bool   `json:"created"`
+	Instance string `json:"instance"`
 }
 
 // Backend is the workspace implementation behind the command: the daemon, its
@@ -187,10 +206,14 @@ func RunWith(ctx context.Context, args []string, stdout, stderr io.Writer, backe
 	}
 
 	switch p.command {
+	case CommandList:
+		return runList(ctx, opts, stdout, stderr, backend)
 	case CommandStatus:
 		return runStatus(ctx, opts, stdout, stderr, backend)
 	case CommandStop:
 		return runStop(ctx, opts, stdout, stderr, backend)
+	case CommandRemove:
+		return runRemove(ctx, opts, stdout, stderr, backend)
 	default:
 		return runStart(ctx, opts, stdout, stderr, backend)
 	}
@@ -201,21 +224,167 @@ func RunWith(ctx context.Context, args []string, stdout, stderr io.Writer, backe
 // workspace itself, and a line typed before the client attaches would land in
 // the middle of the screen the person is about to look at.
 func runStart(ctx context.Context, opts Options, stdout, stderr io.Writer, backend Backend) int {
-	if err := opts.ensureDirs(); err != nil {
-		return fail(stderr, CommandRun, err)
-	}
 	res, err := backend.Start(ctx, opts)
 	if err != nil {
-		return backendFail(ctx, stderr, CommandRun, err)
+		return backendFail(ctx, stderr, opts.Command, err)
 	}
 	started := opts.reporting(res)
 	if !started.Headless {
 		return ExitOK
 	}
-	if err := writeReadiness(stdout, started); err != nil {
+	if err := writeReadiness(stdout, started, res); err != nil {
 		return fail(stderr, CommandRun, err)
 	}
 	return ExitOK
+}
+
+// Remover is the optional backend operation `workspace rm` needs. Keeping it
+// outside Backend lets a test or another backend omit removal without growing a
+// no-op method.
+type Remover interface {
+	Remove(context.Context, Options) error
+}
+
+// runRemove deletes a stopped session's record and directories. It is
+// destructive, so the backend proves the daemon is stopped before anything is
+// deleted.
+func runRemove(ctx context.Context, opts Options, stdout, stderr io.Writer, backend Backend) int {
+	remover, ok := backend.(Remover)
+	if !ok {
+		return fail(stderr, CommandRemove, errors.New("this workspace backend cannot remove sessions"))
+	}
+	if err := remover.Remove(ctx, opts); err != nil {
+		return backendFail(ctx, stderr, CommandRemove, err)
+	}
+	_, _ = fmt.Fprintf(stdout, "removed workspace %q\n", opts.Session)
+	return ExitOK
+}
+
+// listedSession is one row of `workspace list` and one object of its --json
+// document. The JSON names are the contract: name, default, legacy, running,
+// state, panes, cwd and error.
+type listedSession struct {
+	Name     string `json:"name"`
+	Selector string `json:"selector"`
+	Default  bool   `json:"default"`
+	Legacy   bool   `json:"legacy"`
+	Running  *bool  `json:"running,omitempty"`
+	State    string `json:"state"`
+	Panes    *int   `json:"panes,omitempty"`
+	Cwd      string `json:"cwd,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// runList reports every session under the state root. It never starts a daemon
+// and never treats an unreachable endpoint as a stopped one: those are
+// different answers, and a script acting on "stopped" would start a second
+// daemon over a live one.
+func runList(ctx context.Context, opts Options, stdout, stderr io.Writer, backend Backend) int {
+	sessions, err := Discover(opts.Home)
+	if err != nil {
+		return fail(stderr, CommandList, err)
+	}
+	rows := make([]listedSession, len(sessions))
+	jobs := make(chan int, len(sessions))
+	for i := range sessions {
+		jobs <- i
+	}
+	close(jobs)
+	var wg sync.WaitGroup
+	for range min(4, len(sessions)) {
+		wg.Go(func() {
+			for i := range jobs {
+				rows[i] = listRow(ctx, sessions[i], backend)
+			}
+		})
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return interrupted(stderr, ctx.Err())
+	}
+	if opts.JSON {
+		body, err := json.MarshalIndent(struct {
+			Sessions []listedSession `json:"sessions"`
+		}{Sessions: rows}, "", "  ")
+		if err != nil {
+			return fail(stderr, CommandList, err)
+		}
+		body = append(body, '\n')
+		if _, err := stdout.Write(body); err != nil {
+			return fail(stderr, CommandList, err)
+		}
+		return ExitOK
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "NAME\tSTATE\tPANES\tSTART DIR")
+	for _, row := range rows {
+		name := row.Selector
+		if row.Legacy {
+			name += " (legacy)"
+		}
+		panes := "-"
+		if row.Panes != nil {
+			panes = fmt.Sprint(*row.Panes)
+		}
+		dir := row.Cwd
+		if strings.TrimSpace(dir) == "" {
+			dir = "-"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", listCell(name), row.State, panes, listCell(dir))
+	}
+	if err := tw.Flush(); err != nil {
+		return fail(stderr, CommandList, err)
+	}
+	return ExitOK
+}
+
+func listRow(ctx context.Context, session Options, backend Backend) listedSession {
+	row := listedSession{Name: session.Session, Selector: session.Selector(),
+		Default: session.Session == defaultSessionName && !session.Legacy,
+		Legacy:  session.Legacy, Cwd: session.Cwd, State: "unreachable"}
+	if session.DiscoveryError != "" {
+		row.Error = session.DiscoveryError
+		return row
+	}
+	probe, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	doc, err := backend.Status(probe, session)
+	if err != nil {
+		row.Error = err.Error()
+		return row
+	}
+	var status struct {
+		Running *bool  `json:"running"`
+		Cwd     string `json:"cwd"`
+		Panes   struct {
+			Windows []json.RawMessage `json:"windows"`
+		} `json:"panes"`
+	}
+	if json.Unmarshal(doc, &status) != nil || status.Running == nil {
+		row.Error = "invalid status document: expected a running boolean"
+		return row
+	}
+	row.Running = status.Running
+	if status.Cwd != "" {
+		row.Cwd = status.Cwd
+	}
+	if *status.Running {
+		row.State = "running"
+		count := len(status.Panes.Windows)
+		row.Panes = &count
+	} else {
+		row.State = "stopped"
+	}
+	return row
+}
+
+func listCell(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, s)
 }
 
 // runStatus forwards the backend's status document. The command re-indents it
@@ -262,32 +431,40 @@ type readiness struct {
 	Socket    string `json:"socket"`
 	Cwd       string `json:"cwd"`
 	Project   string `json:"project"`
-	ProjectID string `json:"project_id"`
+	ProjectID string `json:"project_id,omitempty"`
+	Manifest  string `json:"manifest,omitempty"`
 	Config    string `json:"config"`
 	StateDir  string `json:"state_dir"`
 	Log       string `json:"log"`
 	Headless  bool   `json:"headless"`
 	Shell     bool   `json:"shell"`
 	Nested    bool   `json:"nested,omitempty"`
+	Legacy    bool   `json:"legacy,omitempty"`
 }
 
 // writeReadiness prints the readiness document for opts: one JSON object and a
 // newline, so it composes in a pipeline.
-func writeReadiness(w io.Writer, opts Options) error {
+func writeReadiness(w io.Writer, opts Options, result StartResult) error {
 	doc := readiness{
 		Session:   opts.Session,
 		Socket:    opts.Socket,
 		Cwd:       opts.Cwd,
 		Project:   opts.Project,
 		ProjectID: opts.ProjectID,
+		Manifest:  opts.ManifestPath,
 		Config:    opts.ConfigPath,
 		StateDir:  opts.StateDir,
 		Log:       opts.LogFile,
 		Headless:  opts.Headless,
 		Shell:     opts.Shell,
 		Nested:    opts.Nested,
+		Legacy:    opts.Legacy,
 	}
-	body, err := json.Marshal(doc)
+	body, err := json.Marshal(struct {
+		readiness
+		Created  bool   `json:"created"`
+		Instance string `json:"instance,omitempty"`
+	}{readiness: doc, Created: result.Created, Instance: result.Instance})
 	if err != nil {
 		return fmt.Errorf("encode the readiness document: %w", err)
 	}
@@ -344,32 +521,41 @@ const usageHint = "run 'golder workspace --help' for usage\n"
 
 // usage is the help text. It is also the contract: every flag in it is parsed
 // by parse, and the two must not drift.
-const usage = `usage: golder workspace [run] [flags] [-- <agent args>...]
-       golder workspace status [flags]
-       golder workspace stop [flags]
+const usage = `usage: golder workspace [run] [-s <name>] [flags] [-- <agent args>...]
+       golder workspace new <name> [flags] [-- <agent args>...]
+       golder workspace attach [<name>] [appearance flags]
+       golder workspace list [--json]
+       golder workspace status [<name>]
+       golder workspace stop [<name>]
+       golder workspace rm [<name>]
+       golder workspace attach|status|stop --legacy <project-id>/<session>
 
-Starts golder's own workspace around a project: agent panes beside a shell and a
-browser, in a daemon this command owns. With no subcommand it starts one and
-attaches to it; 'status' reports what a running workspace is doing and 'stop'
-shuts it down. All three find a workspace the same way, so pass 'status' and
-'stop' the --cwd and --session the workspace was started with.
+Sessions are global and independent: a name selects one daemon, while the
+directory only selects where that session's first agent starts. The default
+name is "default". With no subcommand the command starts the named session if
+needed and attaches to it. 'new' refuses an existing name, 'attach' never
+starts one, 'list' reports every session, and 'rm' deletes a stopped one.
 
 Flags:
-  -C, --cwd <dir>        project directory to open (default: the current one)
-      --session <name>   workspace session name (default: golder-<project>-<id>)
-      --socket <path>    daemon socket (default: a private path under the
-                         runtime directory, at most 100 bytes)
+  -s, --session <name>   named session (default: default)
+  -C, --cwd <dir>        start directory for a new session (default: the
+                         current one); on a stopped session it updates the
+                         saved directory
+      --socket <path>    daemon socket recorded with a new session (default: a
+                         private path under the runtime directory)
       --headless         start the daemon only and print one readiness JSON
                          document instead of attaching
       --shell            start with a shell pane and no agent
       --nested           start even inside another multiplexer (golder's own
                          workspace, tuios, herdr, tmux, zellij or screen)
-      --config <path>    per-project config file (default: in the state root,
-                         under workspace/<project-id>/)
-      --state-dir <dir>  per-project state directory (default: beside the config)
+      --config <path>    per-session config file (default: in the session
+                         directory under the state root)
+      --state-dir <dir>  per-session state directory (default: beside the config)
       --ascii-only       draw panes without Nerd Font glyphs
       --no-animations    disable UI animations
       --theme <name>     colour theme
+      --json             machine-readable output for 'list'
+      --legacy <spec>    address an old <project-id>/<session> workspace
   -h, --help             print this help and exit
 
 Arguments after -- are passed to the golder agent as an argv, never joined into

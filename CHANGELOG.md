@@ -24,6 +24,14 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Workspace sessions are globally named, with an independent daemon per
+  name**: `golder workspace` opens `default` from any directory; `-s/--session`
+  selects another. Added `new`, strict `attach`, `list [--json]` and stopped-only
+  `rm`; status/stop accept a name. The saved startup cwd is no longer identity,
+  records preserve endpoints across runtime-directory changes, and stable name
+  leases arbitrate concurrent starts/removal. Existing project-scoped daemons
+  remain discoverable and addressable with `--legacy <project-id>/<session>`;
+  no running state is moved or silently adopted as default.
 - **Sub-agent delegation now needs an explicit request**: the `task` guide
   follows codex's default — the user or applicable AGENTS.md or loaded skill
   instructions must ask for sub-agents, delegation, or parallel agent work.

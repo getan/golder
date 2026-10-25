@@ -23,11 +23,17 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 ## 自带终端工作区
 
 ```bash
-golder workspace                 # 可见工作区，第一个 pane 启动本 executable 的 agent
-golder workspace --shell         # 新工作区的第一个 pane 改为 shell
-golder workspace -- --model NAME  # 给新工作区的首个 agent 指定模型
-golder workspace status
-golder workspace stop            # 明确结束这个工作区及其所有 pane
+golder workspace                         # 打开全局 default；没有运行则启动
+golder workspace -s coding               # 打开另一套命名会话
+golder workspace new trading -C ~/trade  # 严格新建，名字已存在就报错
+golder workspace attach coding          # 只连接正在运行的会话，不创建
+golder workspace list                    # 全局列表，与当前目录无关
+golder workspace list --json
+golder workspace status coding
+golder workspace stop coding            # 结束这套 daemon 和所有 pane，保留记录
+golder workspace rm coding              # 删除已停止会话的记录和默认状态目录
+golder workspace --shell                 # 启动时首个 pane 改为 shell
+golder workspace -- --model NAME         # 启动时给首个 agent 指定模型
 ```
 
 macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱离客户端后，后台 daemon 与 pane 继续运行；再次运行 `golder workspace` 可重新连接。已有 tuios/herdr 中的普通 `golder` 行为不变；嵌套工作区默认拒绝，需要明确 `--nested`。
@@ -36,7 +42,11 @@ macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱
 
 拖动标题栏移动 pane，拖动边框/分隔线调整大小；普通内容拖动始终选文字，原有的 `Alt` / `Ctrl` 拖动移动手势仍然可用。界面升级后，先脱离旧客户端，再用新版 `golder workspace` 重新连接即可使用新交互，无需为了升级界面而结束已有 pane。
 
-agent、shell、浏览器入口都来自同一个 golder 二进制，但后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness 并持续运行 daemon，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/<项目标识>/sessions/<session>/`，不读写个人 tuios 配置。详见 [M4 实现与边界](docs/workspace-m4.md)。
+**名字选会话，目录只决定进程从哪里启动。** 同一用户、同一个 `GOLDER_HOME` 下，在不同目录运行 `golder workspace` 都进入 `default`；`coding`、`trading` 各有独立 daemon、配置、状态和日志。首次启动使用当前目录（可用 `-C/--cwd` 指定）；已停止会话重启使用保存的启动目录，`-C` 可显式更新。正在运行时 `-C`、`--shell` 和 agent 参数会报错，不能借 attach 修改现有 pane。连接、查询、停止不要求原项目目录仍存在。会话名使用小写字母、数字、`-`、`_`，以字母或数字开头，最多 64 字节。
+
+agent、shell、浏览器入口都来自同一个 golder 二进制，但**每个命名会话**的后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness；新启动时持续运行 daemon，已有 daemon 时仅报告 readiness 并退出，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/sessions/<name>/`，不读写个人 tuios 配置。`stop` 不会恢复运行中的任务；下次启动是新进程，不自动复活旧 PTY。`rm` 只删除该命名目录，不删除外置的 `--state-dir`/`--config`，也不删除项目或聊天历史。工作区中的 pane 仍按各自 cwd 确定项目和 agent 权限；命名会话不提供 git/worktree 隔离。详见 [命名会话与兼容规则](docs/workspace-sessions.md)。
+
+旧的项目级会话不会自动搬家或被认领为 `default`。`list` 将其标为 `legacy`，显示 `<project-id>/<session>`；用 `golder workspace attach --legacy <project-id>/<session>` 连接，`status`/`stop` 同样支持该参数。没有旧 owner 记录的会话无法可靠确定 endpoint，会显示 `unreachable`，不会猜测或启动替代进程。
 
 ### 进程与连接关系
 
@@ -52,7 +62,7 @@ workspace daemon（后台常驻，拥有 pane）
 ```
 
 - `golder workspace` 默认启动 daemon，再在前台 attach 一个 client。`Ctrl+b d` 只断开 client，daemon 和 pane 继续运行；再次 `golder workspace` 是 attach 回同一个 daemon，不是启动新 agent。`golder workspace stop` 才会结束 daemon 和所有 pane；`--headless` 只启动 daemon，不 attach client。
-- 同一个 daemon 可以同时挂多个 client。比如 Mac 上开着 workspace，iPad SSH 到同一台 Mac、同一用户后执行 `golder workspace --cwd <项目目录>`，就是再挂一个 client，两边看到并操作同一组 pane；如果启动时用了自定义 `--session` 或 `--socket`，这里也要带上。Unix socket 是本机的，换机器或换用户连不到。
+- 同一个 daemon 可以同时挂多个 client。比如 Mac 上开着 `coding`，iPad SSH 到同一台 Mac、同一用户和 `GOLDER_HOME` 后执行 `golder workspace attach coding`，就是再挂一个 client，两边看到并操作同一组 pane；无需重复项目路径或自定义 socket，endpoint 已保存在会话记录里。Unix socket 是本机的，换机器或换用户连不到。
 - agent pane 里的 `golder` 是普通 agent 进程，负责模型调用、工具执行和会话持久化；daemon 负责 pane 生命周期和终端 I/O，client 负责画面与输入。
 - 不带 workspace 的直接 `golder` 不创建 daemon/client，它就是当前终端里的一个普通 agent 进程。没有外层复用器时，终端断开，进程就结束。
 

@@ -161,7 +161,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 	// A client that is killed leaves the daemon it spawned running, which is
 	// what a detached workspace is; a test that fails before its stop step must
 	// not leave that behind either.
-	t.Cleanup(func() { stopQuietly(bin, dir, env, args...) })
+	t.Cleanup(func() { stopQuietly(bin, dir, env, "--session", "visible") })
 
 	firstTerm := newTerminal(t)
 
@@ -179,7 +179,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 	first.waitForOutput(t, "visible-2-ok", 30*time.Second, "the pane to run what was typed at it")
 
 	// The daemon behind the client, found the way a script finds it.
-	stdout, stderr, code := runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, stderr, code := runCLI(t, bin, dir, env, "workspace", "status", "visible")
 	if code != 0 {
 		t.Fatalf("status exited %d: %s", code, stderr)
 	}
@@ -208,7 +208,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 	}
 
 	// The daemon and its pane survived the detach.
-	stdout, _, code = runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, _, code = runCLI(t, bin, dir, env, "workspace", "status", "visible")
 	if code != 0 {
 		t.Fatalf("status after detach exited %d", code)
 	}
@@ -228,7 +228,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 
 	// Re-attach: no --shell and no agent arguments, which is what attaching to a
 	// running workspace means. The pane that was left is the pane drawn.
-	second := newTerminal(t).start(t, bin, dir, env, append([]string{"workspace"}, args...)...)
+	second := newTerminal(t).start(t, bin, dir, env, "workspace", "attach", "visible")
 	second.waitForOutput(t, "\x1b[?1049h", 60*time.Second, "the re-attached client to take the screen")
 	second.typeKeys(t, "echo again-$((2+2))-ok\r")
 	second.waitForOutput(t, "again-4-ok", 30*time.Second, "the re-attached pane to run a command")
@@ -244,7 +244,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 	}
 
 	// An explicit stop ends the daemon, the panes and the socket.
-	stdout, stderr, code = runCLI(t, bin, dir, env, append([]string{"workspace", "stop"}, args...)...)
+	stdout, stderr, code = runCLI(t, bin, dir, env, "workspace", "stop", "visible")
 	if code != 0 {
 		t.Fatalf("stop exited %d: %s", code, stderr)
 	}
@@ -255,7 +255,7 @@ func TestE2EVisibleWorkspaceDetachReattachAndStop(t *testing.T) {
 	if _, err := os.Lstat(socket); !os.IsNotExist(err) {
 		t.Errorf("stop left the socket behind: %v", err)
 	}
-	stdout, _, code = runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, _, code = runCLI(t, bin, dir, env, "workspace", "status", "visible")
 	if code != 0 {
 		t.Fatalf("status after stop exited %d", code)
 	}

@@ -30,6 +30,7 @@ type ownerRecord struct {
 	Control       string `json:"control"`
 	Session       string `json:"session"`
 	Project       string `json:"project"`
+	SessionDir    string `json:"session_dir,omitempty"`
 	Instance      string `json:"instance"`
 	Token         string `json:"token"`
 	Version       string `json:"version"`
@@ -131,6 +132,9 @@ func startOwner(ctx context.Context, opts workspacecmd.Options, version string, 
 		Version: version, PID: os.Getpid(),
 		ConfigPath: opts.ConfigPath, StateDir: opts.StateDir, LogFile: opts.LogFile,
 	}
+	if opts.ManifestPath != "" {
+		record.SessionDir = opts.SessionDir
+	}
 	if err := writeOwner(file, record); err != nil {
 		_ = ln.Close()
 		return nil, err
@@ -184,8 +188,12 @@ func readOwner(opts workspacecmd.Options) (ownerRecord, error) {
 	if err := json.Unmarshal(data, &record); err != nil {
 		return ownerRecord{}, fmt.Errorf("workspace: invalid ownership record: %w", err)
 	}
-	if record.Socket != opts.Socket || record.Control != socket || record.Session != opts.Session || record.Project != opts.Cwd || len(record.Token) != 64 || len(record.Instance) != 32 {
-		return ownerRecord{}, errors.New("workspace: ownership record does not match this project, session and socket")
+	identityMatches := record.Project == opts.Cwd
+	if opts.ManifestPath != "" {
+		identityMatches = record.SessionDir == opts.SessionDir
+	}
+	if record.Socket != opts.Socket || record.Control != socket || record.Session != opts.Session || !identityMatches || len(record.Token) != 64 || len(record.Instance) != 32 {
+		return ownerRecord{}, errors.New("workspace: ownership record does not match this session identity and socket")
 	}
 	return record, nil
 }

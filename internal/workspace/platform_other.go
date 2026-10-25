@@ -4,6 +4,7 @@ package workspace
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 )
 
@@ -13,8 +14,14 @@ func supported() error {
 
 type stateLease struct{}
 
-func lockState(string) (*stateLease, error) { return nil, supported() }
-func (*stateLease) Close()                  {}
-func refusedSocket(error) bool              { return false }
+var errLeaseBusy = errors.New("workspace lease is in use")
+
+func lockPath(string) (*stateLease, error)        { return nil, supported() }
+func openLease(string, bool) (*stateLease, error) { return nil, supported() }
+func lockState(string) (*stateLease, error)       { return nil, supported() }
+func (*stateLease) Close()                        {}
+func refusedSocket(error) bool                    { return false }
 
 func detachCommand(*exec.Cmd) {}
+
+func openLog(string) (*os.File, error) { return nil, supported() }

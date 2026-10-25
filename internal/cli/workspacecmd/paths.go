@@ -3,6 +3,7 @@ package workspacecmd
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,46 +15,17 @@ import (
 	"github.com/getan/golder/internal/privatepath"
 )
 
-// Where a workspace keeps its things, and what it is called.
+// Names are global within golder's one canonical state root. The layout is:
 //
-// A workspace is about one project and one session inside it. Five paths:
+//	<Home>/workspace/sessions/<name>/session.json
+//	<Home>/workspace/sessions/<name>/config.toml
+//	<Home>/workspace/sessions/<name>/state/
+//	<Home>/workspace/sessions/<name>/workspace.log
 //
-//	config  the per-project config.toml the workspace daemon reads
-//	state   the daemon's durable state (its session store and whatever follows)
-//	log     the daemon's own log
-//	socket  the control socket, which is runtime rather than durable
-//	root    the project's directory under the state root, which holds all of the
-//	        above except the socket
-//
-// They live under golder's one state root ($GOLDER_HOME, else ~/.golder —
-// internal/golderhome decides, and this package never invents a second tree),
-// in a directory named after the project's identity. The socket lives somewhere
-// short and private instead, because a Unix socket path is limited to about a
-// hundred bytes and a project directory is routinely deeper than that; see
-// RuntimeDir.
-//
-// Two of them are scoped by session, not by project. The layout is:
-//
-//	<Home>/workspace/<project id>/config.toml                        project
-//	<Home>/workspace/<project id>/sessions/<session>/state/          session
-//	<Home>/workspace/<project id>/sessions/<session>/workspace.log   session
-//
-// The config describes the checkout and is one file for every session in it.
-// State and the log do not survive that treatment: a session store and a log of
-// what an agent did are per workspace instance, so two sessions of one project
-// asking for the same directory would append two agents' output to one log and
-// share one session store. The session name is validated (see validateSession),
-// so it is a safe path component, and it is grouped under "sessions/" so a
-// session cannot be named after a file this layout already put in the project
-// directory ("config.toml", say).
-//
-// The identity is a hash of the project's canonical path, for the reasons that
-// make a name a bad identity: two checkouts of the same repository are both
-// called "api", a path can be reached through a symlink that spells it
-// differently, and a name is not injective under any sanitisation. Canonical
-// path first (absolute, symlinks resolved where they resolve), then sha256, so
-// the same project always lands in the same directory and two projects never
-// share one.
+// Cwd is a saved startup property, not an identity. Socket names hash Home and
+// the session name, but live under a short private runtime directory to fit
+// Unix-domain limits. The pre-global project layout is read-only through
+// --legacy; it is never silently moved or adopted as a named session.
 
 // Options is one resolved `golder workspace` invocation: everything a backend
 // needs, and nothing it has to derive for itself.
@@ -63,12 +35,40 @@ type Options struct {
 	// Paths is where this workspace keeps its files. It is embedded, so
 	// opts.StateDir reads as one field and opts.Paths reads as the whole set.
 	Paths
-	// Cwd is the project directory the workspace's panes start in: absolute,
-	// with symlinks resolved where they resolve.
+	// Cwd is the session's saved initial pane directory, or an explicit update
+	// for a stopped session. It need not exist to query or attach a live owner.
 	Cwd string
-	// Session is the workspace session name: --session, or one derived from
-	// the project. It is also a file name component, so it is validated.
+	// Session is the name (-s/--session, default "default").
 	Session string
+	// ManifestPath is where this session's record lives. Empty for a legacy
+	// workspace, which predates the record.
+	ManifestPath string
+	// Exists reports that a session record (or a legacy session directory) is
+	// already on disk. It is what distinguishes "run this stopped session" from
+	// "create it".
+	Exists bool
+	// Legacy marks a session in the pre-global layout. It can be attached,
+	// inspected and stopped, but never created or removed through the new
+	// commands.
+	Legacy bool
+	// CwdExplicit records that -C/--cwd was given. On an existing session it
+	// is an update to the saved start directory, not a lookup key.
+	CwdExplicit bool
+	// SocketExplicit records that --socket was given for a session that is
+	// being created. An existing session keeps its recorded endpoint.
+	SocketExplicit bool
+	// ConfigExplicit records that --config was given for a new session.
+	ConfigExplicit bool
+	// StateDirExplicit records that --state-dir named StateDir.
+	StateDirExplicit bool
+	// CreatedAt is the first time this session was created, carried through
+	// saves so a rewritten record does not claim to be new.
+	CreatedAt string
+	// JSON asks list for its machine-readable document.
+	JSON bool
+	// DiscoveryError keeps a broken record visible in list without probing an
+	// endpoint taken from untrusted/incomplete metadata.
+	DiscoveryError string
 	// Socket is the daemon's control socket, absolute.
 	Socket string
 	// Headless asks for the daemon alone: no client is attached, and Start
@@ -96,23 +96,16 @@ type Options struct {
 type Paths struct {
 	// Home is golder's state root: $GOLDER_HOME, else ~/.golder.
 	Home string
-	// Project is the project's canonical path: absolute, symlinks resolved
-	// where they resolve. It is what ProjectID hashes and what Cwd is.
+	// Project is the legacy reporting alias of Cwd, not an ownership boundary.
 	Project string
-	// ProjectID is the stable identity of Project: the first 12 hex
-	// characters of its sha256. Two projects never share it.
+	// ProjectID is populated only for a pre-global legacy session.
 	ProjectID string
-	// ProjectDir is the project's durable directory:
-	// <Home>/workspace/<ProjectID>.
+	// ProjectDir is the old project directory for legacy sessions and the
+	// identity directory (SessionDir) for new named sessions.
 	ProjectDir string
-	// ConfigPath is the workspace's config file (--config, else config.toml
-	// in ProjectDir). It is project-scoped: every session of one checkout reads
-	// the same config.
+	// ConfigPath is per named session; an explicit override is recorded.
 	ConfigPath string
-	// SessionDir is this session's durable directory inside ProjectDir,
-	// <ProjectDir>/sessions/<session>. It holds the state directory and the log,
-	// and is where a backend should put anything else that belongs to one
-	// session instance (a pid file, a lock).
+	// SessionDir holds this session's record, log, owner proofs and default state.
 	SessionDir string
 	// StateDir is the workspace's state directory: --state-dir when it was
 	// given, else state/ in SessionDir. The default is per session, so two
@@ -121,10 +114,6 @@ type Paths struct {
 	// it, which is what StateDirExplicit records for a backend that has to
 	// arbitrate (its lock decides who owns it, not this package).
 	StateDir string
-	// StateDirExplicit records that --state-dir named StateDir, so a backend can
-	// tell a per-session default from a directory the person deliberately shared
-	// between sessions.
-	StateDirExplicit bool
 	// LogFile is the workspace daemon's log, in SessionDir: one session's
 	// history is one file to read, and two sessions never append to one file.
 	LogFile string
@@ -137,12 +126,17 @@ type Paths struct {
 // Names this package writes under the state root. They are constants so the
 // audit question "what does a workspace write" is answered in one place.
 const (
-	// workspaceDirName groups every project's workspace files under the state
-	// root: <Home>/workspace/<project id>/.
+	// workspaceDirName groups all workspace state under golder's home.
 	workspaceDirName = "workspace"
-	// sessionsDirName groups one project's session directories, so a session
-	// name can never collide with the project's own files: <ProjectDir>/sessions/.
-	sessionsDirName = "sessions"
+	// defaultSessionName is the session `golder workspace` addresses when no
+	// name is given. Its directory is not special: every named session has the
+	// same shape.
+	defaultSessionName = "default"
+	// sessionsDirName is used by both the old and new layout.
+	sessionsDirName       = "sessions"
+	globalSessionsDirName = sessionsDirName
+	// manifestFileName is one session's identity record inside SessionDir.
+	manifestFileName = "session.json"
 	// stateDirName is the per-session state directory inside SessionDir.
 	stateDirName = "state"
 	// logFileName is the daemon's log inside SessionDir.
@@ -161,81 +155,261 @@ const (
 // backend acts on. It is the only place the environment, the working directory
 // and the filesystem are read, which is what makes the rest of the package
 // testable without any of them.
+//
+// The identity of a named session is its name under the one golder state root,
+// not the directory the command was typed in. A session record is therefore
+// readable before the working directory is consulted, and attach/status/stop do
+// not require the saved start directory to still exist.
 func resolve(p parsed, deps Deps) (Options, error) {
 	opts := Options{
-		Command:    p.command,
-		Headless:   p.headless,
-		Shell:      p.shell,
-		Nested:     p.nested,
-		AgentArgs:  p.agentArgs,
-		Appearance: p.appear,
+		Command:          p.command,
+		Headless:         p.headless,
+		Shell:            p.shell,
+		Nested:           p.nested,
+		AgentArgs:        p.agentArgs,
+		Appearance:       p.appear,
+		JSON:             p.json,
+		CwdExplicit:      p.cwd != "",
+		SocketExplicit:   p.socket != "",
+		ConfigExplicit:   p.config != "",
+		StateDirExplicit: p.stateDir != "",
 	}
-
-	cwd, err := projectPath(p.cwd, deps)
+	home, err := stateRoot(deps)
 	if err != nil {
 		return Options{}, err
 	}
-	opts.Cwd = cwd
+	opts.Home = home
+	opts.Host = hostcompat.Resolve(deps.Getenv).Multiplexer
+	if p.command == CommandList {
+		return opts, nil
+	}
 
+	if p.legacy != "" {
+		return resolveLegacy(p, opts)
+	}
+
+	opts.Session = p.session
+	if opts.Session == "" {
+		opts.Session = defaultSessionName
+	}
+	if err := validateName(opts.Session); err != nil {
+		return Options{}, err
+	}
+	sessionDir := filepath.Join(home, workspaceDirName, globalSessionsDirName, opts.Session)
+	opts.Paths = Paths{
+		Home:       home,
+		ProjectDir: sessionDir,
+		ConfigPath: filepath.Join(sessionDir, golderhome.ConfigFile),
+		SessionDir: sessionDir,
+		StateDir:   filepath.Join(sessionDir, stateDirName),
+		LogFile:    filepath.Join(sessionDir, logFileName),
+	}
+	opts.ManifestPath = filepath.Join(sessionDir, manifestFileName)
+
+	// The record is read first. It carries the endpoint and the saved start
+	// directory, neither of which may depend on where this command runs.
+	record, exists, err := loadRecord(opts)
+	if err != nil {
+		return Options{}, err
+	}
+	if exists {
+		opts.Exists = true
+		opts.CreatedAt = record.CreatedAt
+		if !opts.SocketExplicit && record.Socket != "" {
+			opts.Socket = record.Socket
+			opts.SocketDir = record.SocketDir
+		}
+		if !opts.ConfigExplicit && record.Config != "" {
+			opts.ConfigPath = record.Config
+		}
+		if !opts.StateDirExplicit && record.StateDir != "" {
+			opts.StateDir = record.StateDir
+		}
+		if record.Log != "" {
+			opts.LogFile = record.Log
+		}
+		if !opts.CwdExplicit {
+			opts.Cwd = record.Cwd
+		}
+	}
+
+	// Only creating a session needs the working directory. Lookups must work
+	// from anywhere, including after the start directory has been moved.
+	if opts.CwdExplicit {
+		cwd, err := projectPath(p.cwd, deps)
+		if err != nil {
+			return Options{}, err
+		}
+		opts.Cwd = cwd
+	} else if !opts.Exists && (opts.Command == CommandRun || opts.Command == CommandNew) {
+		cwd, err := projectPath("", deps)
+		if err != nil {
+			return Options{}, err
+		}
+		opts.Cwd = cwd
+	}
+	opts.Project = opts.Cwd
+
+	// Explicit path flags are only accepted on run/new (see parse), where the
+	// cwd is known. On an existing session they may update the record only if
+	// they agree with it; the backend decides that under its session lock.
+	if opts.Cwd != "" {
+		if p.config != "" {
+			opts.ConfigPath = joinIfSet(opts.Cwd, p.config, opts.ConfigPath)
+		}
+		if p.stateDir != "" {
+			opts.StateDir = joinIfSet(opts.Cwd, p.stateDir, opts.StateDir)
+		}
+		if p.socket != "" {
+			opts.Socket, opts.SocketDir, err = namedSocketPath(deps.Getenv, home, opts.Session, p.socket, opts.Cwd)
+			if err != nil {
+				return Options{}, err
+			}
+		}
+	}
+	if opts.Socket == "" && (opts.Command == CommandRun || opts.Command == CommandNew) {
+		opts.Socket, opts.SocketDir, err = namedSocketPath(deps.Getenv, home, opts.Session, "", "")
+		if err != nil {
+			return Options{}, err
+		}
+	}
+
+	// A recorded session keeps its endpoint, config and state. Repeating a
+	// different value would silently address a different daemon.
+	if exists {
+		for flag, pair := range map[string][2]string{
+			"--socket":    {opts.Socket, record.Socket},
+			"--config":    {opts.ConfigPath, record.Config},
+			"--state-dir": {opts.StateDir, record.StateDir},
+		} {
+			if pair[1] != "" && pair[0] != pair[1] {
+				return Options{}, usagef("session %q is recorded with %s %q; %s cannot retarget it", opts.Session, flag, pair[1], pair[0])
+			}
+		}
+	}
+
+	// Starting a workspace inside another multiplexer nests one terminal in
+	// another, which is almost never what someone typing the command meant;
+	// --nested says they did. Everything else talks to a session over a socket
+	// and is perfectly sensible from inside one.
+	if (opts.Command == CommandRun || opts.Command == CommandNew || opts.Command == CommandAttach) && !opts.Nested {
+		if err := refuseNesting(opts.Host); err != nil {
+			return Options{}, err
+		}
+	}
+
+	return opts, nil
+}
+
+// stateRoot resolves golder's one durable root. It is read without the working
+// directory on purpose: a session must not move because a command was typed
+// elsewhere.
+func stateRoot(deps Deps) (string, error) {
 	home := strings.TrimSpace(golderhome.DirFrom(deps.Getenv))
 	if home == "" {
 		// golderhome returns "" rather than falling back to the working
 		// directory, where a state file would be a surprise in the person's
 		// repository. A workspace cannot run without a state root, so it says
 		// what is missing instead of writing somewhere else.
-		return Options{}, fmt.Errorf("cannot resolve golder's state root (%s is unset and the home directory is unknown); set %s",
+		return "", fmt.Errorf("cannot resolve golder's state root (%s is unset and the home directory is unknown); set %s",
 			golderhome.EnvHome, golderhome.EnvHome)
 	}
-	// A daemon is re-executed with Cwd set to the project. Resolve a relative
-	// GOLDER_HOME now so that child and parent do not name different roots.
-	home, err = filepath.Abs(home)
+	abs, err := filepath.Abs(home)
 	if err != nil {
-		return Options{}, fmt.Errorf("cannot resolve golder's state root: %w", err)
+		return "", fmt.Errorf("cannot resolve golder's state root: %w", err)
 	}
+	// Canonicalise the existing prefix even on first use, when the final state
+	// directory does not exist yet. A home reached through /var vs /private/var
+	// must not become two socket identities after the directory is created.
+	return canonicalRoot(abs), nil
+}
 
-	id := projectID(cwd)
-	projectDir := filepath.Join(home, workspaceDirName, id)
-	// The session is resolved before the paths because two of them are scoped by
-	// it: state and the log belong to one workspace instance, not to the project.
-	opts.Session = p.session
-	if opts.Session == "" {
-		opts.Session = defaultSession(cwd, id)
+func canonicalRoot(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
 	}
-	if err := validateSession(opts.Session); err != nil {
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	return filepath.Join(canonicalRoot(parent), filepath.Base(path))
+}
+
+// resolveLegacy addresses a session in the pre-global project layout. It is
+// deliberately lookup-only: the old records do not carry enough identity to
+// create a replacement safely, and a name must never select an arbitrary old
+// project.
+func resolveLegacy(p parsed, opts Options) (Options, error) {
+	id, session, err := legacySpec(p.legacy)
+	if err != nil {
 		return Options{}, err
 	}
-	sessionDir := filepath.Join(projectDir, sessionsDirName, opts.Session)
+	projectDir := filepath.Join(opts.Home, workspaceDirName, id)
+	sessionDir := filepath.Join(projectDir, sessionsDirName, session)
+	opts.Session = session
+	opts.Legacy = true
 	opts.Paths = Paths{
-		Home:       home,
-		Project:    cwd,
+		Home:       opts.Home,
 		ProjectID:  id,
 		ProjectDir: projectDir,
-		// The config describes the checkout, so every session in it reads the
-		// same file; --config still names one file for the whole project.
-		ConfigPath:       joinIfSet(cwd, p.config, filepath.Join(projectDir, golderhome.ConfigFile)),
-		SessionDir:       sessionDir,
-		StateDir:         joinIfSet(cwd, p.stateDir, filepath.Join(sessionDir, stateDirName)),
-		StateDirExplicit: p.stateDir != "",
-		LogFile:          filepath.Join(sessionDir, logFileName),
+		ConfigPath: filepath.Join(projectDir, golderhome.ConfigFile),
+		SessionDir: sessionDir,
+		StateDir:   filepath.Join(sessionDir, stateDirName),
+		LogFile:    filepath.Join(sessionDir, logFileName),
 	}
-
-	opts.Host = hostcompat.Resolve(deps.Getenv).Multiplexer
-	// Starting a workspace inside another multiplexer nests one terminal in
-	// another, which is almost never what someone typing the command meant;
-	// --nested says they did. status and stop are exempt: they talk to a
-	// workspace over a socket and are perfectly sensible from inside one.
-	if opts.Command == CommandRun && !opts.Nested {
+	if err := checkDirectories(opts.Home, sessionDir); err != nil {
+		return Options{}, err
+	}
+	if _, statErr := os.Stat(sessionDir); statErr == nil {
+		opts.Exists = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return Options{}, fmt.Errorf("legacy workspace %q: %w", p.legacy, statErr)
+	}
+	record, found, err := findLegacyOwner(sessionDir, session)
+	if err != nil {
+		return Options{}, err
+	}
+	if found {
+		opts.Exists = true
+		opts.Cwd = record.Project
+		opts.Socket = record.Socket
+		opts.ConfigPath = record.Config
+		opts.StateDir = record.StateDir
+		opts.LogFile = record.Log
+	}
+	opts.Project = opts.Cwd
+	if opts.Socket == "" {
+		opts.DiscoveryError = "legacy session has no ownership record; its old endpoint is unknown"
+	}
+	if opts.Command == CommandAttach && !opts.Nested {
 		if err := refuseNesting(opts.Host); err != nil {
 			return Options{}, err
 		}
 	}
-
-	opts.Socket, opts.SocketDir, err = socketPath(deps.Getenv, cwd, id, opts.Session, p.socket)
-	if err != nil {
-		return Options{}, err
-	}
-
 	return opts, nil
+}
+
+// legacySpec parses the one spelling that addresses an old session:
+// <project-id>/<session>. The id is the 12-hex directory name the old layout
+// used, so it can be copied from the old state root.
+func legacySpec(spec string) (id, session string, err error) {
+	parts := strings.Split(strings.TrimSpace(spec), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", usagef("--legacy wants <project-id>/<session>, not %q", spec)
+	}
+	id, session = parts[0], parts[1]
+	if len(id) != 12 {
+		return "", "", usagef("--legacy project id %q must be the 12-character directory name from the old state root", id)
+	}
+	for _, r := range id {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return "", "", usagef("--legacy project id %q is not 12 lowercase hex characters", id)
+		}
+	}
+	if err := validateSession(session); err != nil {
+		return "", "", err
+	}
+	return id, session, nil
 }
 
 // projectPath resolves the project directory: --cwd when it was given, else the
@@ -298,25 +472,6 @@ func joinIfSet(cwd, abs, fallback string) string {
 	return filepath.Join(cwd, abs)
 }
 
-// defaultSession names a workspace nobody named: golder-<project>-<id>, where
-// the id is short for the project's identity. It is stable across runs and
-// distinct between two checkouts that are both called "api", which is the whole
-// point — a session name is what the daemon's own session store keys on, so a
-// name shared by two projects would share their history.
-func defaultSession(project, id string) string {
-	base := sanitizeName(filepath.Base(project))
-	// Keep the whole name inside the daemon's limit with room for the prefix,
-	// the id and a dash either side.
-	const maxBase = maxSessionName - len("golder-") - len("-123456") - 4
-	if len(base) > maxBase {
-		base = strings.Trim(base[:maxBase], "-._")
-	}
-	if base == "" {
-		base = "project"
-	}
-	return "golder-" + base + "-" + id[:6]
-}
-
 // validateSession applies the daemon's session-name rules, because this package
 // also uses the name as a file name component: no slash, no backslash, no
 // control character, at most 64 bytes. "." and ".." are refused for the same
@@ -338,6 +493,32 @@ func validateSession(name string) error {
 			return usagef("--session %q contains a backslash, which the workspace daemon does not allow", name)
 		case unicode.IsControl(r):
 			return usagef("--session %q contains a control character", name)
+		}
+	}
+	return nil
+}
+
+// validateName is the rule for a new global session name. It is stricter than
+// the daemon's because the name is also a directory under the state root on
+// case-insensitive filesystems: lowercase ASCII avoids "Work" and "work"
+// becoming the same directory without admitting it.
+func validateName(name string) error {
+	if err := validateSession(name); err != nil {
+		return err
+	}
+	switch {
+	case name == "":
+		return usagef("a session name is required")
+	case len(name) > maxSessionName:
+		return usagef("session name %q is %d bytes; the workspace daemon allows at most %d", name, len(name), maxSessionName)
+	}
+	for i, r := range name {
+		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if i > 0 {
+			ok = ok || r == '-' || r == '_'
+		}
+		if !ok {
+			return usagef("session name %q may use lowercase letters, digits, '-' and '_', and must start with a letter or digit", name)
 		}
 	}
 	return nil
@@ -428,6 +609,17 @@ func socketPath(getenv func(string) string, cwd, id, session, custom string) (pa
 		dir, maxSocketPath, "TMPDIR")
 }
 
+// namedSocketPath is the global-session rule: the socket is keyed by the state
+// root and the session name, never by the directory the command runs in. A
+// record keeps the path it was created with, so a changed TMPDIR cannot hide a
+// running daemon from status or attach.
+func namedSocketPath(getenv func(string) string, home, session, custom, cwd string) (path, dir string, err error) {
+	if custom != "" && !filepath.IsAbs(custom) && cwd == "" {
+		return "", "", usagef("--socket %q is relative and this session has no start directory to resolve it against", custom)
+	}
+	return socketPath(getenv, cwd, home, session, custom)
+}
+
 // ensureDirs creates the directories this workspace writes into, 0700, and
 // keeps them that way. It runs for a start and not for status or stop: a
 // command that only reads or only stops must not leave a directory tree behind.
@@ -471,6 +663,18 @@ func (o Options) reporting(res StartResult) Options {
 	}
 	if s := strings.TrimSpace(res.Socket); s != "" {
 		o.Socket = s
+	}
+	if res.Cwd != "" {
+		o.Cwd, o.Project = res.Cwd, res.Cwd
+	}
+	if res.Config != "" {
+		o.ConfigPath = res.Config
+	}
+	if res.StateDir != "" {
+		o.StateDir = res.StateDir
+	}
+	if res.Log != "" {
+		o.LogFile = res.Log
 	}
 	return o
 }

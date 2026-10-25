@@ -92,7 +92,7 @@ func TestE2EHeadlessReadinessStatusAndStop(t *testing.T) {
 
 	// status: the same workspace, found the same way, reported as one JSON
 	// document. The daemon is the process the readiness came from.
-	stdout, stderr, code := runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, stderr, code := runCLI(t, bin, dir, env, "workspace", "status", "e2e")
 	if code != 0 {
 		t.Fatalf("status exited %d: %s", code, stderr)
 	}
@@ -122,7 +122,7 @@ func TestE2EHeadlessReadinessStatusAndStop(t *testing.T) {
 	panes := status.windowIDs()
 
 	// stop: explicit, authenticated, and it says which workspace it stopped.
-	stdout, stderr, code = runCLI(t, bin, dir, env, append([]string{"workspace", "stop"}, args...)...)
+	stdout, stderr, code = runCLI(t, bin, dir, env, "workspace", "stop", "e2e")
 	if code != 0 {
 		t.Fatalf("stop exited %d: %s", code, stderr)
 	}
@@ -138,14 +138,14 @@ func TestE2EHeadlessReadinessStatusAndStop(t *testing.T) {
 	}
 	// A stopped workspace reports itself stopped rather than failing, and a
 	// second stop is not an error.
-	stdout, _, code = runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, _, code = runCLI(t, bin, dir, env, "workspace", "status", "e2e")
 	if code != 0 {
 		t.Fatalf("status after stop exited %d", code)
 	}
 	if stopped := parseStatus(t, stdout); stopped.Running {
 		t.Errorf("status after stop = %s, want running false", stdout)
 	}
-	if _, stderr, code = runCLI(t, bin, dir, env, append([]string{"workspace", "stop"}, args...)...); code != 0 {
+	if _, stderr, code = runCLI(t, bin, dir, env, "workspace", "stop", "e2e"); code != 0 {
 		t.Errorf("a second stop exited %d: %s", code, stderr)
 	}
 	// The panes went with the daemon: no pane survives its session.
@@ -176,18 +176,18 @@ func TestE2EHeadlessSecondStartRefusesAndTheFirstIsUntouched(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("a second start was accepted: stdout %q", stdout)
 	}
-	if !strings.Contains(stderr, "in use") {
-		t.Errorf("the refusal does not name the state directory: %s", stderr)
+	if !strings.Contains(stderr, "cannot retarget") {
+		t.Errorf("the refusal does not protect the recorded endpoint: %s", stderr)
 	}
 	// The first daemon is untouched and still serving its pane.
-	stdout, _, code = runCLI(t, bin, dir, env, append([]string{"workspace", "status"}, args...)...)
+	stdout, _, code = runCLI(t, bin, dir, env, "workspace", "status", "e2e")
 	if code != 0 {
 		t.Fatalf("status exited %d", code)
 	}
 	if status := parseStatus(t, stdout); !status.Running || status.Panes.Total != 1 {
 		t.Errorf("the first workspace was damaged: %s", stdout)
 	}
-	if _, _, code := runCLI(t, bin, dir, env, append([]string{"workspace", "stop"}, args...)...); code != 0 {
+	if _, _, code := runCLI(t, bin, dir, env, "workspace", "stop", "e2e"); code != 0 {
 		t.Fatalf("stop exited %d", code)
 	}
 	if err := first.wait(t, 15*time.Second); err != nil {

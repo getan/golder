@@ -43,19 +43,16 @@ func TestProjectIdentityIsStable(t *testing.T) {
 	if first.Paths != second.Paths || first.Session != second.Session || first.Socket != second.Socket {
 		t.Errorf("the same project resolved differently:\nfirst: %+v\nsecond: %+v", first.Paths, second.Paths)
 	}
-	if len(first.ProjectID) != 12 {
-		t.Errorf("project id = %q, want 12 hex characters", first.ProjectID)
+	if first.ProjectID != "" || first.Session != "default" {
+		t.Errorf("global session retained project identity: %+v", first)
 	}
-	if want := filepath.Join(e.home, workspaceDirName, first.ProjectID); first.ProjectDir != want {
+	if want := filepath.Join(e.home, workspaceDirName, sessionsDirName, "default"); first.ProjectDir != want {
 		t.Errorf("project dir = %q, want %q", first.ProjectDir, want)
 	}
 }
 
-// TestTwoProjectsNeverShareAnything is the collision the identity exists to
-// prevent: two checkouts that are both called "project" — the common case for
-// anyone with two clones of one repository — must not share a session name, a
-// state directory or a log, or one project's history would appear in the other.
-func TestTwoProjectsNeverShareAnything(t *testing.T) {
+// A name, not the invocation directory, selects the same daemon everywhere.
+func TestTwoDirectoriesResolveTheSameNamedSession(t *testing.T) {
 	e := newTestEnv(t)
 	other := filepath.Join(e.base, "elsewhere", "project")
 	if err := os.MkdirAll(other, 0o700); err != nil {
@@ -65,8 +62,8 @@ func TestTwoProjectsNeverShareAnything(t *testing.T) {
 	one := mustResolve(t, e)
 	two := mustResolve(t, e, "--cwd", other)
 
-	if one.ProjectID == two.ProjectID {
-		t.Errorf("two projects share the identity %q", one.ProjectID)
+	if one.Cwd == two.Cwd {
+		t.Error("explicit -C was not retained as a start directory")
 	}
 	for name, pair := range map[string][2]string{
 		"project dir": {one.ProjectDir, two.ProjectDir},
@@ -76,8 +73,8 @@ func TestTwoProjectsNeverShareAnything(t *testing.T) {
 		"socket":      {one.Socket, two.Socket},
 		"session":     {one.Session, two.Session},
 	} {
-		if pair[0] == pair[1] {
-			t.Errorf("two projects share a %s: %q", name, pair[0])
+		if pair[0] != pair[1] {
+			t.Errorf("directory changed a session's %s: %q vs %q", name, pair[0], pair[1])
 		}
 	}
 }
@@ -348,8 +345,8 @@ func TestDefaultSessionFitsTheDaemonLimit(t *testing.T) {
 	if len(got.Session) > maxSessionName {
 		t.Errorf("session %q is %d bytes, past the daemon's %d", got.Session, len(got.Session), maxSessionName)
 	}
-	if !strings.HasPrefix(got.Session, "golder-") {
-		t.Errorf("session = %q, want it to say it is golder's", got.Session)
+	if got.Session != "default" {
+		t.Errorf("session = %q, want default regardless of the directory name", got.Session)
 	}
 	if err := validateSession(got.Session); err != nil {
 		t.Errorf("the derived session name is not one the daemon would accept: %v", err)
@@ -422,14 +419,14 @@ func TestSessionStateLayout(t *testing.T) {
 	e := newTestEnv(t)
 	got := mustResolve(t, e, "--session", "work")
 
-	projectDir := filepath.Join(e.home, workspaceDirName, got.ProjectID)
-	sessionDir := filepath.Join(projectDir, sessionsDirName, "work")
+	sessionDir := filepath.Join(e.home, workspaceDirName, sessionsDirName, "work")
 	for name, pair := range map[string][2]string{
-		"project dir": {got.ProjectDir, projectDir},
-		"session dir": {got.SessionDir, sessionDir},
-		"state dir":   {got.StateDir, filepath.Join(sessionDir, stateDirName)},
-		"log":         {got.LogFile, filepath.Join(sessionDir, logFileName)},
-		"config":      {got.ConfigPath, filepath.Join(projectDir, golderhome.ConfigFile)},
+		"identity dir": {got.ProjectDir, sessionDir},
+		"session dir":  {got.SessionDir, sessionDir},
+		"state dir":    {got.StateDir, filepath.Join(sessionDir, stateDirName)},
+		"log":          {got.LogFile, filepath.Join(sessionDir, logFileName)},
+		"config":       {got.ConfigPath, filepath.Join(sessionDir, golderhome.ConfigFile)},
+		"record":       {got.ManifestPath, filepath.Join(sessionDir, "session.json")},
 	} {
 		if pair[0] != pair[1] {
 			t.Errorf("%s = %q, want %q", name, pair[0], pair[1])
@@ -454,16 +451,8 @@ func TestSessionsOfOneProjectKeepSeparateStateAndLog(t *testing.T) {
 	personal := mustResolve(t, e, "--session", "personal")
 
 	for name, pair := range map[string][2]string{
-		"project id":  {work.ProjectID, personal.ProjectID},
-		"project dir": {work.ProjectDir, personal.ProjectDir},
-		"config":      {work.ConfigPath, personal.ConfigPath},
-	} {
-		if pair[0] != pair[1] {
-			t.Errorf("two sessions of one project disagree about its %s: %q and %q", name, pair[0], pair[1])
-		}
-	}
-	for name, pair := range map[string][2]string{
 		"session dir": {work.SessionDir, personal.SessionDir},
+		"config":      {work.ConfigPath, personal.ConfigPath},
 		"state dir":   {work.StateDir, personal.StateDir},
 		"log":         {work.LogFile, personal.LogFile},
 		"socket":      {work.Socket, personal.Socket},
@@ -479,8 +468,8 @@ func TestSessionsOfOneProjectKeepSeparateStateAndLog(t *testing.T) {
 		if filepath.Dir(opts.LogFile) != opts.SessionDir {
 			t.Errorf("log %q is not in its session directory %q", opts.LogFile, opts.SessionDir)
 		}
-		if !strings.HasPrefix(opts.SessionDir, opts.ProjectDir+string(filepath.Separator)) {
-			t.Errorf("session directory %q is outside the project directory %q", opts.SessionDir, opts.ProjectDir)
+		if opts.ProjectID != "" || opts.ProjectDir != opts.SessionDir {
+			t.Errorf("named session retained a project-scoped identity: %+v", opts)
 		}
 	}
 }
@@ -495,6 +484,9 @@ func TestOneSessionsLogIsNotTouchedByAnother(t *testing.T) {
 		t.Fatalf("first start exit = %d, want 0 (stderr: %s)", code, stderr)
 	}
 	work := first.started[0]
+	if err := work.ensureDirs(); err != nil {
+		t.Fatal(err)
+	}
 	marker := []byte("what the work session's agent did\n")
 	if err := os.WriteFile(work.LogFile, marker, 0o600); err != nil {
 		t.Fatal(err)
@@ -508,6 +500,9 @@ func TestOneSessionsLogIsNotTouchedByAnother(t *testing.T) {
 		t.Fatalf("second start exit = %d, want 0 (stderr: %s)", code, stderr)
 	}
 	personal := second.started[0]
+	if err := personal.ensureDirs(); err != nil {
+		t.Fatal(err)
+	}
 	if personal.LogFile == work.LogFile || personal.StateDir == work.StateDir {
 		t.Fatalf("the second session reused %q / %q", personal.LogFile, personal.StateDir)
 	}
@@ -580,16 +575,8 @@ func TestStartRefusesASymlinkedDirectory(t *testing.T) {
 		t.Skipf("this platform has no symlinks: %v", err)
 	}
 
-	rec := &recorder{}
-	stdout, stderr, code := e.run(t, rec)
-	if code != ExitFailure {
-		t.Fatalf("exit = %d, want 1 (stdout: %q stderr: %q)", code, stdout, stderr)
-	}
-	if rec.calls() != 0 {
-		t.Error("a start wrote into a symlinked state directory")
-	}
-	if !strings.Contains(stderr, "symbolic link") {
-		t.Errorf("stderr = %q, want it to say the directory is a link", stderr)
+	if err := opts.ensureDirs(); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("directory preparation should refuse the symlink: %v", err)
 	}
 	info, err := os.Lstat(target)
 	if err != nil {
@@ -622,16 +609,8 @@ func TestStartRefusesADirectoryAnotherUserOwns(t *testing.T) {
 		t.Skipf("cannot hand a directory to another user here (%v); this check needs a multi-user filesystem", err)
 	}
 
-	rec := &recorder{}
-	_, stderr, code := e.run(t, rec)
-	if code != ExitFailure {
-		t.Fatalf("exit = %d, want 1 (stderr: %s)", code, stderr)
-	}
-	if rec.calls() != 0 {
-		t.Error("a start used another account's directory")
-	}
-	if !strings.Contains(stderr, "another user") && !strings.Contains(stderr, "another account") {
-		t.Errorf("stderr = %q, want it to say the directory is someone else's", stderr)
+	if err := opts.ensureDirs(); err == nil || (!strings.Contains(err.Error(), "another user") && !strings.Contains(err.Error(), "another account")) {
+		t.Fatalf("directory preparation should refuse another owner: %v", err)
 	}
 	info, err := os.Lstat(opts.StateDir)
 	if err != nil {

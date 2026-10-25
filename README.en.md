@@ -23,16 +23,26 @@ One command on macOS / Linux, no Node or Python. On Windows, download the `.zip`
 ## Built-in terminal workspace
 
 ```bash
-golder workspace                 # visible workspace; first pane runs this executable's agent
-golder workspace --shell         # use a shell as a new workspace's first pane
-golder workspace -- --model NAME # pass literal agent argv, not shell text
-golder workspace status
-golder workspace stop            # end this workspace and all its panes explicitly
+golder workspace                         # open global default; start it if not running
+golder workspace -s coding               # open another named session
+golder workspace new trading -C ~/trade  # strict create; an existing name is an error
+golder workspace attach coding          # connect only; never create a session
+golder workspace list                    # global list, independent of cwd
+golder workspace list --json
+golder workspace status coding
+golder workspace stop coding            # end its daemon/panes, retain the record
+golder workspace rm coding              # remove a stopped session's record/default state
+golder workspace --shell                 # start with a shell as the first pane
+golder workspace -- --model NAME         # startup agent argv, not shell text
 ```
 
 On macOS / Linux, neither `tuios` nor `kitty-browse` needs to be installed. The default `Ctrl+b d` detaches the client while its daemon and panes keep running; run `golder workspace` again to attach. Ordinary golder inside external tuios/herdr is unchanged. Nesting is refused unless `--nested` is explicit.
 
-The agent, shell launcher and browser entry point use one golder binary, with a separate persistent daemon process. Browsing still requires installed Chromium and a terminal supporting its graphics protocol; Chromium is never downloaded automatically. `--headless` emits one JSON readiness line and keeps its daemon alive; it is not a visible workspace. State and the owned harness live under `$GOLDER_HOME/workspace/<project-id>/sessions/<session>/`, never the person's tuios config. See [M4 implementation and boundaries](docs/workspace-m4.md).
+**Names select sessions; directories only select where processes start.** For the same user and `GOLDER_HOME`, `golder workspace` opens `default` from any directory. `coding` and `trading` each have their own daemon, config, state and log. First creation uses the invocation cwd or `-C/--cwd`; restarting a stopped session uses its saved directory, which `-C` can explicitly update. On a running session, `-C`, `--shell` and agent arguments are rejected rather than silently ignored. Attach/status/stop do not require the original directory to exist. Names use lowercase letters, digits, `-` and `_`, start with a letter or digit, and are at most 64 bytes.
+
+The agent, shell launcher and browser entry point use one golder binary, with an independent daemon **per named session**. Browsing still requires installed Chromium and a terminal supporting its graphics protocol; Chromium is never downloaded automatically. `--headless` emits one readiness JSON line: a newly started daemon stays alive, while a call finding an existing daemon reports readiness and exits. State and the owned harness live under `$GOLDER_HOME/workspace/sessions/<name>/`, never the person's tuios config. Stopping ends processes; restarting does not resurrect old PTYs or in-flight tasks. `rm` deletes only the named directory, not external `--state-dir`/`--config` overrides, project files or chat history. Agent project/permission boundaries still follow each pane's own cwd, and sessions do not provide git/worktree isolation. See [named sessions and compatibility](docs/workspace-sessions.md).
+
+Old project-scoped sessions are never moved or silently adopted as `default`. `list` labels them `legacy` with a `<project-id>/<session>` selector; use `golder workspace attach --legacy <project-id>/<session>` (or `status`/`stop`). A legacy session without an owner record has an unknown endpoint and is reported as `unreachable`, never guessed or restarted.
 
 ### Processes and connections
 
@@ -48,7 +58,7 @@ workspace daemon (persistent, owns the panes)
 ```
 
 - `golder workspace` starts the daemon and attaches one foreground client. `Ctrl+b d` detaches only the client; the daemon and panes keep running. Running `golder workspace` again re-attaches to the same daemon; it does not start a second agent. `golder workspace stop` ends the daemon and all its panes; `--headless` starts the daemon without attaching a client.
-- One daemon can serve multiple clients. For example, with a workspace running on a Mac, an iPad SSH session to the same Mac and user can run `golder workspace --cwd <project>` to attach another client and see and operate the same panes. Add the same `--session` or `--socket` if the workspace was started with either. The Unix socket is local: another machine or user cannot reach it.
+- One daemon can serve multiple clients. For example, with `coding` running on a Mac, an iPad SSH session to the same Mac, user and `GOLDER_HOME` can run `golder workspace attach coding` to see and operate the same panes. No project path or socket override needs repeating: the endpoint is recorded. The Unix socket is local: another machine or user cannot reach it.
 - The `golder` in the agent pane is an ordinary agent process: it owns model calls, tool execution and session persistence. The daemon owns pane lifetime and terminal I/O; the client owns rendering and input.
 - Plain `golder`, without workspace, starts no daemon or client: it is one agent process in the current terminal. Without an outer multiplexer, if that terminal goes away, the process goes with it.
 

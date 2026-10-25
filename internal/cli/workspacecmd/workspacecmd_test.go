@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/getan/golder/internal/golderhome"
@@ -18,6 +19,7 @@ import (
 // the test set. It is why none of these tests need a daemon, a terminal or a
 // binary on PATH: the command is asked for its decisions, not for its effects.
 type recorder struct {
+	mu     sync.Mutex
 	start  func(context.Context, Options) (StartResult, error)
 	status func(context.Context, Options) ([]byte, error)
 	stop   func(context.Context, Options) error
@@ -36,7 +38,9 @@ func (r *recorder) Start(ctx context.Context, o Options) (StartResult, error) {
 }
 
 func (r *recorder) Status(ctx context.Context, o Options) ([]byte, error) {
+	r.mu.Lock()
 	r.statused = append(r.statused, o)
+	r.mu.Unlock()
 	if r.status != nil {
 		return r.status(ctx, o)
 	}
@@ -193,8 +197,8 @@ func TestDefaultStartsAVisibleWorkspace(t *testing.T) {
 	if runtimeDir := RuntimeDir(e.deps().Getenv); !strings.HasPrefix(got.Socket, runtimeDir) {
 		t.Errorf("socket = %q, want it in the private runtime directory %q", got.Socket, runtimeDir)
 	}
-	if got.Session == "" || !strings.HasPrefix(got.Session, "golder-project-") {
-		t.Errorf("session = %q, want one derived from the project", got.Session)
+	if got.Session != "default" {
+		t.Errorf("session = %q, want the global default", got.Session)
 	}
 	if len(got.AgentArgs) != 0 {
 		t.Errorf("agent args = %q, want none", got.AgentArgs)
@@ -436,7 +440,7 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		want string
 	}{
 		{name: "unknown flag", args: []string{"--bogus"}, want: "--bogus"},
-		{name: "unknown command", args: []string{"attach"}, want: "unknown command"},
+		{name: "unknown command", args: []string{"wat"}, want: "unknown command"},
 		{name: "missing value", args: []string{"--session"}, want: "needs a value"},
 		{name: "extra argument", args: []string{"run", "extra"}, want: "unexpected argument"},
 		{name: "agent args on status", args: []string{"status", "--", "x"}, want: "no agent arguments"},
@@ -575,9 +579,8 @@ func TestNilBackendSaysSo(t *testing.T) {
 	}
 }
 
-// TestStartCreatesPrivateDirectories: the directories a workspace writes into
-// are created by the command, 0700, and tightened if they already exist wider —
-// they hold a session store, a trust table and a log of what the agent did.
+// Directory preparation belongs to the backend, after its terminal/owner/lock
+// checks. The argv layer alone must not create any start/attach directories.
 func TestStartCreatesPrivateDirectories(t *testing.T) {
 	e := newTestEnv(t)
 	rec := &recorder{}
@@ -585,6 +588,14 @@ func TestStartCreatesPrivateDirectories(t *testing.T) {
 		t.Fatalf("exit = %d, want 0 (stderr: %s)", code, stderr)
 	}
 	got := rec.started[0]
+	for _, dir := range []string{got.SessionDir, got.StateDir, got.SocketDir} {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("argv layer created %s before backend validation", dir)
+		}
+	}
+	if err := got.ensureDirs(); err != nil {
+		t.Fatal(err)
+	}
 	for _, dir := range []string{got.ProjectDir, got.StateDir, got.SocketDir} {
 		info, err := os.Stat(dir)
 		if err != nil {
@@ -610,12 +621,18 @@ func TestStartTightensAnExistingDirectory(t *testing.T) {
 		t.Fatal("first start failed")
 	}
 	dir := rec.started[0].StateDir
+	if err := rec.started[0].ensureDirs(); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	rec = &recorder{}
 	if _, stderr, code := e.run(t, rec); code != ExitOK {
 		t.Fatalf("second start exit = %d, want 0 (stderr: %s)", code, stderr)
+	}
+	if err := rec.started[0].ensureDirs(); err != nil {
+		t.Fatal(err)
 	}
 	info, err := os.Stat(dir)
 	if err != nil {
@@ -735,7 +752,7 @@ func TestUnusableStateRootIsAFailure(t *testing.T) {
 	if rec.calls() != 0 {
 		t.Error("a start with nowhere to keep its state reached the backend")
 	}
-	if !strings.Contains(stderr, "create") {
-		t.Errorf("stderr = %q, want it to say what could not be created", stderr)
+	if !strings.Contains(stderr, "not a directory") {
+		t.Errorf("stderr = %q, want it to name the invalid state path", stderr)
 	}
 }

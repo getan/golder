@@ -51,32 +51,58 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 	defer cancel()
 
 	started := false
-	record, err := readOwner(opts)
+	var record ownerRecord
 	defer func() {
 		if started && runErr != nil && !errors.Is(runErr, context.Canceled) && record.Token != "" {
 			stopNewOwner(record)
 		}
 	}()
-	if err == nil {
-		_, err = callOwner(runCtx, record, "status")
-	}
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) && !refusedSocket(err) {
-			return workspacecmd.StartResult{}, fmt.Errorf("workspace: existing owner could not be verified: %w", err)
-		}
-		if err := b.spawnOwner(runCtx, opts); err != nil {
+	if opts.ManifestPath != "" {
+		var err error
+		opts, err = workspacecmd.ReloadSession(opts)
+		if err != nil {
 			return workspacecmd.StartResult{}, err
 		}
-		started = true
+	}
+	if opts.Command == workspacecmd.CommandNew && opts.Exists {
+		return workspacecmd.StartResult{}, nameExists(opts.Session)
+	}
+	record, _, running, err := probeOwner(runCtx, opts)
+	if err != nil {
+		return workspacecmd.StartResult{}, err
+	}
+	if !running {
+		if opts.Command == workspacecmd.CommandAttach || opts.Legacy {
+			return workspacecmd.StartResult{}, fmt.Errorf("workspace: session %q is not running; attach never creates a session", opts.Session)
+		}
+		res, err := b.spawnOwner(runCtx, opts)
+		if err != nil {
+			return workspacecmd.StartResult{}, err
+		}
+		if opts.ManifestPath != "" {
+			opts, err = workspacecmd.ReloadSession(opts)
+			if err != nil {
+				return workspacecmd.StartResult{}, err
+			}
+		}
 		record, err = readOwner(opts)
 		if err != nil {
 			return workspacecmd.StartResult{}, err
 		}
+		if res.Instance != record.Instance {
+			return workspacecmd.StartResult{}, errors.New("workspace: daemon readiness and owner name different instances")
+		}
+		started = res.Created
 		if _, err := callOwner(runCtx, record, "status"); err != nil {
 			return workspacecmd.StartResult{}, err
 		}
-	} else if len(opts.AgentArgs) != 0 || opts.Shell {
-		return workspacecmd.StartResult{}, errors.New("workspace: this session is already running; omit --shell and agent arguments to attach, or choose another --session")
+	} else {
+		if opts.Command == workspacecmd.CommandNew {
+			return workspacecmd.StartResult{}, nameExists(opts.Session)
+		}
+		if err := rejectStartOverrides(opts); err != nil {
+			return workspacecmd.StartResult{}, err
+		}
 	}
 	if err := runCtx.Err(); err != nil {
 		if started {
@@ -88,7 +114,7 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 	err = workspaceui.Run(runCtx, workspaceui.Options{
 		Socket: opts.Socket, Session: opts.Session, Version: b.version(),
 		ConfigPath: record.ConfigPath, StateDir: filepath.Join(record.StateDir, "client"),
-		Cwd: opts.Cwd, Input: in, Output: out,
+		Cwd: record.Project, Input: in, Output: out,
 		DisableSignalHandling: true, StartInTerminalMode: true,
 		ASCIIOnly: opts.Appearance.ASCIIOnly, NoAnimations: opts.Appearance.NoAnimations,
 		Theme: opts.Appearance.Theme,
@@ -115,22 +141,46 @@ func stopNewOwner(record ownerRecord) {
 	_, _ = callOwner(ctx, record, "stop")
 }
 
-func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) error {
+func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) (workspacecmd.StartResult, error) {
 	executable := b.Executable
 	if executable == "" {
 		var err error
 		executable, err = os.Executable()
 		if err != nil {
-			return err
+			return workspacecmd.StartResult{}, err
 		}
 	}
 	executable, err := filepath.Abs(executable)
 	if err != nil {
-		return err
+		return workspacecmd.StartResult{}, err
 	}
-	args := []string{
-		"workspace", "run", "--headless", "--cwd", opts.Cwd, "--session", opts.Session,
-		"--socket", opts.Socket, "--state-dir", opts.StateDir, "--config", opts.ConfigPath,
+	if st, err := os.Stat(opts.Cwd); err != nil || !st.IsDir() {
+		return workspacecmd.StartResult{}, fmt.Errorf("workspace: saved start directory %q is unavailable; use -C/--cwd", opts.Cwd)
+	}
+	if opts.ManifestPath != "" {
+		if err := workspacecmd.EnsureIdentityDirs(opts); err != nil {
+			return workspacecmd.StartResult{}, err
+		}
+	}
+	command := "run"
+	if opts.Command == workspacecmd.CommandNew {
+		command = "new"
+	}
+	args := []string{"workspace", command, "--headless", "--session", opts.Session}
+	// Do not turn the parent's defaults into explicit overrides. A concurrent
+	// default run is allowed to attach to the winner without pretending it
+	// requested a different start directory or initial command.
+	if opts.CwdExplicit {
+		args = append(args, "--cwd", opts.Cwd)
+	}
+	if opts.SocketExplicit {
+		args = append(args, "--socket", opts.Socket)
+	}
+	if opts.ConfigExplicit {
+		args = append(args, "--config", opts.ConfigPath)
+	}
+	if opts.StateDirExplicit {
+		args = append(args, "--state-dir", opts.StateDir)
 	}
 	if opts.Nested {
 		args = append(args, "--nested")
@@ -140,9 +190,9 @@ func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) err
 	} else if len(opts.AgentArgs) > 0 {
 		args = append(append(args, "--"), opts.AgentArgs...)
 	}
-	logFile, err := os.OpenFile(opts.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	logFile, err := openLog(opts.LogFile)
 	if err != nil {
-		return err
+		return workspacecmd.StartResult{}, err
 	}
 	defer logFile.Close()
 	// Not CommandContext: after readiness, cancelling a UI must leave the
@@ -154,18 +204,18 @@ func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) err
 	detachCommand(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return workspacecmd.StartResult{}, err
 	}
 	defer stdout.Close()
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("workspace: start own daemon: %w", err)
+		return workspacecmd.StartResult{}, fmt.Errorf("workspace: start own daemon: %w", err)
 	}
 	ready := make(chan error, 1)
+	var result workspacecmd.StartResult
 	go func() {
-		var res workspacecmd.StartResult
-		err := json.NewDecoder(io.LimitReader(stdout, 64<<10)).Decode(&res)
-		if err == nil && (res.Socket != opts.Socket || res.Session != opts.Session) {
-			err = errors.New("daemon readiness named a different socket or session")
+		err := json.NewDecoder(io.LimitReader(stdout, 64<<10)).Decode(&result)
+		if err == nil && (result.Session != opts.Session || result.Socket == "" || result.Instance == "") {
+			err = errors.New("daemon readiness named a different session or no instance")
 		}
 		ready <- err
 	}()
@@ -184,13 +234,13 @@ func (b *Backend) spawnOwner(ctx context.Context, opts workspacecmd.Options) err
 		_ = cmd.Process.Kill() // the exact child just started, never a pid-file target
 		_ = stdout.Close()
 		go func() { _ = cmd.Wait() }()
-		return fmt.Errorf("workspace: %w; diagnostics: %s", startupErr, opts.LogFile)
+		return workspacecmd.StartResult{}, fmt.Errorf("workspace: %w; diagnostics: %s", startupErr, opts.LogFile)
 	}
 	// Wait closes StdoutPipe, so it must not race the readiness read. Reap the
 	// child only after that read; a detached daemon is adopted if the UI exits.
 	_ = stdout.Close()
 	go func() { _ = cmd.Wait() }()
-	return nil
+	return result, nil
 }
 
 func withHome(env []string, home string) []string {

@@ -29,7 +29,8 @@ are bookkeeping; no stage is complete merely because a headless command exists.
 ## Invariants
 
 1. A workspace never reads, cleans, restores, or overwrites a user's tuios
-   state or configuration. Two workspaces may have the same session name.
+   state or configuration. Named sessions are unique within GOLDER_HOME; old
+   project-scoped sessions remain qualified legacy targets.
 2. Socket and state directories are private. Runtime socket paths fit the
    platform's Unix-domain limit; persistent state is not kept in a cache tree.
 3. Workspace identity is per pane, not a process-wide environment mutation.
@@ -49,7 +50,7 @@ are bookkeeping; no stage is complete merely because a headless command exists.
 ## Work packages and acceptance
 
 - **Core safety:** daemon-owned state/logs, explicit pane policy/env, short
-  project-scoped sockets, cancellation/stop, reliable bounded JSON control.
+  session-scoped sockets, cancellation/stop, reliable bounded JSON control.
 - **Visible workspace:** importable retained TUI, explicit socket/config path,
   a self-hosted agent pane, terminal restoration, and `golder workspace`.
 - **Browser:** importable retained renderer, `golder browse`, the existing
@@ -73,8 +74,11 @@ The normal `golder` entry point is unchanged. `golder workspace` is explicit;
 `workspace stop` ends its panes. A stop is not a promise to resurrect the old
 PTY processes on the next start; chat history remains golder's normal history.
 Use a persistent built/installed binary rather than `go run` for a daemon that
-must outlive its launching command. Repeat custom `--cwd`, `--session` and
-`--socket` identity flags when querying or stopping that workspace.
+must outlive its launching command. Names now select independent daemons from
+any cwd; endpoints and the initial cwd are recorded per session. Query, attach
+or stop by name without repeating `--cwd` or `--socket`. See
+[global named sessions](workspace-sessions.md) for the command contract and
+read-only legacy discovery/attach compatibility.
 
 The default embedded daemon now has a **local-only runtime profile**: no link,
 human-link or herdr listener, no federation/fleet/plugin/hook/push/transcript
