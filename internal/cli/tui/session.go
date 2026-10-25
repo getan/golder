@@ -35,6 +35,7 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/hooks"
@@ -570,10 +571,11 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 				Registry: s.reg,
 			},
 		},
-		Reminders:  s.reminders,
-		Budget:     s.budget,
-		SessionID:  s.header.ID,
-		MemoryRoot: s.memoryRoot,
+		Reminders:     s.reminders,
+		Budget:        s.budget,
+		SessionID:     s.header.ID,
+		MemoryRoot:    s.memoryRoot,
+		CompactionLog: compactionlog.Log,
 	}
 	// The session's gates and the per-turn hook seams, from the one assembly
 	// point (see trustgate.go and run.Gates): the interactive chain with the

@@ -199,11 +199,15 @@ func TestAutoCompactionFailureIsNonFatal(t *testing.T) {
 	})
 	cfg := newRunCfg(main)
 	// Summary stream that fails to build: forces compaction.Compact to error.
+	attempts := 0
 	cfg.SummaryStream = func(ctx context.Context, model string, llm provider.LlmContext, c provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+		attempts++
 		return nil, errors.New("summarizer down")
 	}
 	cfg.ContextWindow = 2000
 	cfg.Compaction = compaction.CompactionSettings{Enabled: true, ReserveTokens: 500, KeepRecentTokens: 100}
+	var logged []CompactionAttempt
+	cfg.CompactionLog = func(a CompactionAttempt) { logged = append(logged, a) }
 
 	agentCtx := &agentcore.AgentContext{Messages: bigUserMessages(12, 800)}
 
@@ -215,6 +219,12 @@ func TestAutoCompactionFailureIsNonFatal(t *testing.T) {
 	if ce.ErrorMessage == "" {
 		t.Errorf("failed compaction must carry an ErrorMessage")
 	}
+	if attempts != 2 {
+		t.Errorf("compaction attempts = %d, want 2 (the first failure must be retried once)", attempts)
+	}
+	if len(logged) != 2 || logged[0].Error == "" || logged[1].Error == "" {
+		t.Fatalf("compaction log = %+v, want both failed attempts recorded", logged)
+	}
 	if ce.TokensAfter != ce.TokensBefore {
 		t.Errorf("on failure tokens must be unchanged: before=%d after=%d", ce.TokensBefore, ce.TokensAfter)
 	}
@@ -225,5 +235,65 @@ func TestAutoCompactionFailureIsNonFatal(t *testing.T) {
 	// No compaction checkpoint should have been inserted.
 	if len(agentCtx.Messages) > 0 && agentCtx.Messages[0].Role() == agentcore.RoleCompaction {
 		t.Errorf("failed compaction must not insert a checkpoint")
+	}
+}
+
+func TestAutoCompactionRetriesTransientFailureOnce(t *testing.T) {
+	main := scriptedStream([]agentcore.AssistantMessage{
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn, Content: agentcore.ContentList{agentcore.NewTextContent("ok")}},
+	})
+	cfg := newRunCfg(main)
+	attempts := 0
+	base := summaryStream("## Goal\ncompacted")
+	cfg.SummaryStream = func(ctx context.Context, model string, llm provider.LlmContext, c provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
+		attempts++
+		if attempts == 1 {
+			return nil, errors.New("temporary stream cut")
+		}
+		return base(ctx, model, llm, c)
+	}
+	cfg.ContextWindow = 2000
+	cfg.Compaction = compaction.CompactionSettings{Enabled: true, ReserveTokens: 500, KeepRecentTokens: 100}
+	var logged []CompactionAttempt
+	cfg.CompactionLog = func(a CompactionAttempt) { logged = append(logged, a) }
+
+	agentCtx := &agentcore.AgentContext{Messages: bigUserMessages(12, 800)}
+	events := collectEvents(t, agentLoop(context.Background(), agentCtx, cfg))
+
+	if attempts != 2 {
+		t.Fatalf("compaction attempts = %d, want 2", attempts)
+	}
+	ce := findCompaction(events)
+	if ce == nil {
+		t.Fatal("expected a successful CompactionEvent after the retry")
+	}
+	if ce.ErrorMessage != "" {
+		t.Fatalf("retry should have succeeded, got error %q", ce.ErrorMessage)
+	}
+	if len(logged) != 2 {
+		t.Fatalf("logged attempts = %d, want 2: %+v", len(logged), logged)
+	}
+	if logged[0].Attempt != 1 || logged[0].Error == "" {
+		t.Errorf("first attempt = %+v, want attempt 1 with an error", logged[0])
+	}
+	if logged[1].Attempt != 2 || logged[1].Error != "" {
+		t.Errorf("retry attempt = %+v, want attempt 2 with no error", logged[1])
+	}
+	if logged[1].TokensAfter >= logged[1].TokensBefore {
+		t.Errorf("retry should have shrunk the context: before=%d after=%d", logged[1].TokensBefore, logged[1].TokensAfter)
+	}
+}
+
+func TestShouldRetryCompaction(t *testing.T) {
+	if !shouldRetryCompaction(context.Background(), errors.New("temporary")) {
+		t.Error("a normal error should be retryable")
+	}
+	if shouldRetryCompaction(context.Background(), context.Canceled) {
+		t.Error("a cancelled compaction must not be retried")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if shouldRetryCompaction(ctx, errors.New("temporary")) {
+		t.Error("a cancelled run must not retry compaction")
 	}
 }

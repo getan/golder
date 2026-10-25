@@ -34,6 +34,7 @@ import (
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/hooks"
@@ -686,10 +687,11 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 				Registry: deps.reg,
 			},
 		},
-		Reminders:  deps.reminders,
-		Budget:     deps.budget,
-		SessionID:  deps.header.ID,
-		MemoryRoot: deps.memoryRoot,
+		Reminders:     deps.reminders,
+		Budget:        deps.budget,
+		SessionID:     deps.header.ID,
+		MemoryRoot:    deps.memoryRoot,
+		CompactionLog: compactionlog.Log,
 	}
 	// The session's gates and the per-turn hook seams, from the one assembly
 	// point (cli.HostGates): the interactive chain (with the browser bridge

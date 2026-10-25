@@ -16,6 +16,7 @@ import (
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/golderhome"
@@ -694,8 +695,9 @@ func NewConfig(model, providerName string, thinking agentcore.ThinkingLevel, pro
 		Batch: agenttool.BatchConfig{
 			ToolExecutorConfig: agenttool.ToolExecutorConfig{Registry: reg},
 		},
-		Reminders: reminders,
-		Budget:    budget,
+		Reminders:     reminders,
+		Budget:        budget,
+		CompactionLog: compactionlog.Log,
 	}
 	// Due session-local reminders ride the follow-up seam (issue #565): when the
 	// run is about to settle, the loop consults the scheduler and queues each due

@@ -34,6 +34,7 @@ import (
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
@@ -228,8 +229,9 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 				Registry: host.Registry(),
 			},
 		},
-		Reminders: host.Reminders(),
-		SessionID: host.HookDeps().SessionID,
+		Reminders:     host.Reminders(),
+		SessionID:     host.HookDeps().SessionID,
+		CompactionLog: compactionlog.Log,
 	}
 	// The session's gates and hook seams, from the one assembly point (see
 	// cli.HostGates): a side thread is a second run, not a second rulebook.

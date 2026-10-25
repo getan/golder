@@ -22,6 +22,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -68,6 +69,28 @@ type StopDecision struct {
 	Guidance string
 }
 
+// CompactionAttempt is one auto-compaction attempt, successful or not. The
+// loop produces one record per try (including a retry) so a transient failure
+// that disappears on the next attempt is still diagnosable after the process
+// exits. Timestamp, DurationMS and Error are filled by the loop; the remaining
+// fields describe what was compacted and which model did it.
+type CompactionAttempt struct {
+	Timestamp     time.Time `json:"ts"`
+	Attempt       int       `json:"attempt"`
+	Reason        string    `json:"reason"`
+	SessionID     string    `json:"sessionId,omitempty"`
+	Model         string    `json:"model,omitempty"`
+	Provider      string    `json:"provider,omitempty"`
+	ContextWindow int       `json:"contextWindow,omitempty"`
+	TokensBefore  int       `json:"tokensBefore"`
+	TokensAfter   int       `json:"tokensAfter"`
+	Summarized    int       `json:"summarized,omitempty"`
+	Kept          int       `json:"kept"`
+	DurationMS    int64     `json:"durationMs"`
+	Error         string    `json:"error,omitempty"`
+	Skipped       bool      `json:"skipped,omitempty"`
+}
+
 // RunConfig is the full configuration for a loop run: the per-turn streaming
 // config (embedded LoopConfig), the batch tool-execution config, and the four
 // loop-level hooks. Every hook is optional (nil = default behavior).
@@ -112,6 +135,12 @@ type RunConfig struct {
 	// critical path, so implementations should keep it fast and never block on
 	// user input. nil disables checkpointing.
 	Checkpoint func(ctx context.Context, agentCtx *agentcore.AgentContext, compacted bool)
+
+	// CompactionLog, when set, receives one record per auto-compaction attempt,
+	// including an attempt that failed before a successful retry. It is a
+	// diagnostic seam: an implementation should append a line and return; the
+	// loop runs it on the turn critical path. nil disables logging.
+	CompactionLog func(CompactionAttempt)
 
 	// Reminders holds the per-turn system-reminder providers (US-002, FR-1/FR-2).
 	// When non-empty, ephemeral <system-reminder> messages are injected into each
@@ -584,21 +613,51 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 	// Signal the start so a front-end can show an in-progress indicator while the
 	// summarization request (an LLM call that blocks the loop) is in flight.
 	_ = emit(agentcore.CompactionStartEvent{Reason: reason, TokensBefore: before})
-	res, err := runCompaction(ctx, agentCtx.Messages, cfg)
-	kept := len(agentCtx.Messages)
-	if err != nil {
-		_ = emit(agentcore.CompactionEvent{
-			Reason:       reason,
-			TokensBefore: before,
-			TokensAfter:  before,
-			KeptCount:    kept,
-			ErrorMessage: err.Error(),
-		})
-		return
-	}
-	if res == nil {
-		// Nothing to summarize (cut point left no prefix); leave context as-is.
-		return
+	beforeCount := len(agentCtx.Messages)
+	var (
+		res      *compaction.CompactionResult
+		firstErr error
+		attempt  int
+		elapsed  time.Duration
+	)
+	// A summarization request is a provider call, and a transient stream cut or
+	// empty completion can make the first one fail. Retry once in place before
+	// telling the user compaction failed: the next turn boundary used to be the
+	// only retry, which surfaced a scary failure and then a success moments
+	// later. Both attempts are logged; only the final outcome reaches the UI.
+	for attempt < 2 {
+		attempt++
+		started := time.Now()
+		var err error
+		res, err = runCompaction(ctx, agentCtx.Messages, cfg)
+		elapsed = time.Since(started)
+		if err != nil {
+			logCompactionAttempt(cfg, compactionAttemptRecord(cfg, attempt, reason, before, before, 0, beforeCount, elapsed, err))
+			if attempt == 1 && shouldRetryCompaction(ctx, err) {
+				firstErr = err
+				continue
+			}
+			message := err.Error()
+			if firstErr != nil && firstErr.Error() != message {
+				message = firstErr.Error() + "; retry: " + message
+			}
+			_ = emit(agentcore.CompactionEvent{
+				Reason:       reason,
+				TokensBefore: before,
+				TokensAfter:  before,
+				KeptCount:    beforeCount,
+				ErrorMessage: message,
+			})
+			return
+		}
+		if res == nil {
+			// Nothing to summarize (cut point left no prefix); leave context as-is.
+			rec := compactionAttemptRecord(cfg, attempt, reason, before, before, 0, beforeCount, elapsed, nil)
+			rec.Skipped = true
+			logCompactionAttempt(cfg, rec)
+			return
+		}
+		break
 	}
 	// Persist a checkpoint of the collapsed prefix before rewriting the context so
 	// a later run can reload it (infinite context, #480/#481). It reuses the
@@ -616,6 +675,7 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 		cfg.Checkpoint(ctx, agentCtx, true)
 	}
 	after := compaction.EstimateContextTokens(rebuilt).Tokens
+	logCompactionAttempt(cfg, compactionAttemptRecord(cfg, attempt, reason, before, after, summarized, len(rebuilt)-1, elapsed, nil))
 	_ = emit(agentcore.CompactionEvent{
 		Reason:          reason,
 		TokensBefore:    before,
@@ -623,6 +683,48 @@ func maybeAutoCompact(ctx context.Context, agentCtx *agentcore.AgentContext, cfg
 		SummarizedCount: summarized,
 		KeptCount:       len(rebuilt) - 1,
 	})
+}
+
+// shouldRetryCompaction reports whether a failed auto-compaction attempt is
+// worth one immediate retry. A cancelled run is never retried: the user asked to
+// stop, and the failure is the cancellation. Everything else is retried once,
+// because the summary is a provider call whose failures (stream cut, timeout,
+// empty completion) are commonly transient; a deterministic failure simply logs
+// two attempts and reports the second one.
+func shouldRetryCompaction(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled)
+}
+
+// compactionAttemptRecord fills the fields shared by the success and failure
+// records. Error is nil on success (and on a skipped compaction).
+func compactionAttemptRecord(cfg *RunConfig, attempt int, reason string, before, after, summarized, kept int, elapsed time.Duration, err error) CompactionAttempt {
+	rec := CompactionAttempt{
+		Timestamp:     time.Now().UTC(),
+		Attempt:       attempt,
+		Reason:        reason,
+		SessionID:     cfg.SessionID,
+		Model:         cfg.Model,
+		Provider:      cfg.Provider,
+		ContextWindow: cfg.ContextWindow,
+		TokensBefore:  before,
+		TokensAfter:   after,
+		Summarized:    summarized,
+		Kept:          kept,
+		DurationMS:    elapsed.Milliseconds(),
+	}
+	if err != nil {
+		rec.Error = err.Error()
+	}
+	return rec
+}
+
+func logCompactionAttempt(cfg *RunConfig, attempt CompactionAttempt) {
+	if cfg.CompactionLog != nil {
+		cfg.CompactionLog(attempt)
+	}
 }
 
 // runCompaction invokes compaction.Compact with the loop's summarization config,
