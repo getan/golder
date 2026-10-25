@@ -34,6 +34,35 @@ macOS / Linux 上不必另装 `tuios` 或 `kitty-browse`。默认 `Ctrl+b d` 脱
 
 agent、shell、浏览器入口都来自同一个 golder 二进制，但后台 daemon 是独立进程。浏览器仍需本机 Chromium 和支持相应图形协议的终端，不会自动下载 Chromium。`--headless` 输出一行 JSON readiness 并持续运行 daemon，不等同于可见工作区。状态与自有 harness 放在 `$GOLDER_HOME/workspace/<项目标识>/sessions/<session>/`，不读写个人 tuios 配置。详见 [M4 实现与边界](docs/workspace-m4.md)。
 
+### 进程与连接关系
+
+`golder workspace` 不是把 agent 跑在客户端里，而是三层：
+
+```text
+终端 client（golder workspace）
+        │ Unix socket
+workspace daemon（后台常驻，拥有 pane）
+        ├─ agent pane：普通 golder 进程
+        ├─ shell pane
+        └─ browser pane
+```
+
+- `golder workspace` 默认启动 daemon，再在前台 attach 一个 client。`Ctrl+b d` 只断开 client，daemon 和 pane 继续运行；再次 `golder workspace` 是 attach 回同一个 daemon，不是启动新 agent。`golder workspace stop` 才会结束 daemon 和所有 pane；`--headless` 只启动 daemon，不 attach client。
+- 同一个 daemon 可以同时挂多个 client。比如 Mac 上开着 workspace，iPad SSH 到同一台 Mac、同一用户后执行 `golder workspace --cwd <项目目录>`，就是再挂一个 client，两边看到并操作同一组 pane；如果启动时用了自定义 `--session` 或 `--socket`，这里也要带上。Unix socket 是本机的，换机器或换用户连不到。
+- agent pane 里的 `golder` 是普通 agent 进程，负责模型调用、工具执行和会话持久化；daemon 负责 pane 生命周期和终端 I/O，client 负责画面与输入。
+- 不带 workspace 的直接 `golder` 不创建 daemon/client，它就是当前终端里的一个普通 agent 进程。没有外层复用器时，终端断开，进程就结束。
+
+### 已经用 tuios / herdr / tmux 时
+
+这些终端复用器已经提供了自己的 server/client 或 detach/reattach，直接在它们的 pane/window 里跑普通 `golder` 即可：
+
+```bash
+# 在 tuios / herdr pane，或 tmux / zellij / screen window 里
+golder
+```
+
+不需要再套一层 `golder workspace`；检测到已经在这些宿主里时，`golder workspace` 默认会拒绝嵌套，除非显式 `--nested`，而通常没有这个必要。保持/恢复会话交给宿主：tmux detach、tuios/herdr 的 pane 常驻，重新 attach 后普通 `golder` 还在；这和外层 `golder workspace` 通常二选一。tuios/herdr 的 rail/Inbox 状态上报属于 host-compat，和 workspace 的 daemon/client 是两套独立机制，按需配置即可。
+
 ## 亮点
 
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。

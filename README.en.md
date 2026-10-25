@@ -34,6 +34,35 @@ On macOS / Linux, neither `tuios` nor `kitty-browse` needs to be installed. The 
 
 The agent, shell launcher and browser entry point use one golder binary, with a separate persistent daemon process. Browsing still requires installed Chromium and a terminal supporting its graphics protocol; Chromium is never downloaded automatically. `--headless` emits one JSON readiness line and keeps its daemon alive; it is not a visible workspace. State and the owned harness live under `$GOLDER_HOME/workspace/<project-id>/sessions/<session>/`, never the person's tuios config. See [M4 implementation and boundaries](docs/workspace-m4.md).
 
+### Processes and connections
+
+`golder workspace` does not run the agent inside the client. It has three layers:
+
+```text
+terminal client (`golder workspace`)
+        │ Unix socket
+workspace daemon (persistent, owns the panes)
+        ├─ agent pane: an ordinary `golder` process
+        ├─ shell pane
+        └─ browser pane
+```
+
+- `golder workspace` starts the daemon and attaches one foreground client. `Ctrl+b d` detaches only the client; the daemon and panes keep running. Running `golder workspace` again re-attaches to the same daemon; it does not start a second agent. `golder workspace stop` ends the daemon and all its panes; `--headless` starts the daemon without attaching a client.
+- One daemon can serve multiple clients. For example, with a workspace running on a Mac, an iPad SSH session to the same Mac and user can run `golder workspace --cwd <project>` to attach another client and see and operate the same panes. Add the same `--session` or `--socket` if the workspace was started with either. The Unix socket is local: another machine or user cannot reach it.
+- The `golder` in the agent pane is an ordinary agent process: it owns model calls, tool execution and session persistence. The daemon owns pane lifetime and terminal I/O; the client owns rendering and input.
+- Plain `golder`, without workspace, starts no daemon or client: it is one agent process in the current terminal. Without an outer multiplexer, if that terminal goes away, the process goes with it.
+
+### Already using tuios / herdr / tmux
+
+Those multiplexers already provide their own server/client or detach/reattach behavior, so run plain `golder` in their pane or window:
+
+```bash
+# In a tuios / herdr pane, or a tmux / zellij / screen window
+golder
+```
+
+Do not nest `golder workspace` inside them; it refuses by default unless `--nested`, and that is usually unnecessary. The host owns keep-alive and re-attach: a tmux detach, or a tuios/herdr pane that stays alive, keeps the plain `golder` process. This and an outer `golder workspace` are usually alternatives. tuios/herdr rail/Inbox reporting comes from host-compat, separate from the workspace daemon/client; configure it as needed.
+
 ## Highlights
 
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
