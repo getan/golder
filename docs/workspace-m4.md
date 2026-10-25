@@ -80,7 +80,10 @@ The default embedded daemon now has a **local-only runtime profile**: no link,
 human-link or herdr listener, no federation/fleet/plugin/hook/push/transcript
 watcher, and no SSH/display following. It reads bundled harnesses plus golder's
 own generated manifest, never the person's tuios harness directory. That
-manifest also resumes through the absolute path of this golder executable.
+manifest also resumes through the absolute path of this golder executable when
+the path fits the daemon's shell-safe token rule. Otherwise only resume is
+disabled (with a reason in `resume.source`); detection and approval screen rules
+remain loaded. No PATH-dependent executable fallback is introduced.
 The binary protocol was physically extracted into the standard-library-only
 `internal/wire`; JSON control is separately importable without the renderer.
 
@@ -99,9 +102,14 @@ when Chromium is available, not a logged pass. Native build/vet and CGO-free
 cross-builds are also checked. These are distinct from a manual graphical
 Kitty/Sixel terminal inspection, which has not been claimed here.
 
-**Release gate still open:** the fork branches are published, but the attempted
-remote Go-module resolution timed out and the narrowed download request was
-denied by the authorization gate. The root dependency pins/checksums and a clean
-`GOWORK=off` build must be completed before treating this branch as an M4
-release. Successful developer-workspace builds do not satisfy that gate. Final
-Linux CI/race results must likewise be attached to the actual final commit.
+The maintained fork commits are pinned in `go.mod` with their `go.sum`
+checksums, resolved through the local proxy against the official Go proxy and
+checksum database. Builds and tests use `GOWORK=off`; neither an ignored source
+tree nor a local `replace` is a release prerequisite. The final PR carries the
+exact CI result. Linux container preflight remains suspended; Linux CI is a
+separate validation, never inferred from a macOS pass.
+
+Local-only pane control is bounded to six own-session operations (create,
+close, focus, move-workspace, rename/minimize and resize) under the write grant.
+It does not grant admin, reach another session, move a window to another
+session, or bypass read-only restrictions. Standalone daemon policy is unchanged.

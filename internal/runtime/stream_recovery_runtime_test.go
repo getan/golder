@@ -72,8 +72,9 @@ const (
 
 // sseAttempt is one scripted response: the frames it sends, then its ending.
 type sseAttempt struct {
-	frames []string
-	end    sseEnding
+	frames      []string
+	end         sseEnding
+	afterFrames func()
 }
 
 // fakeSSEEndpoint is a real HTTP server speaking the OpenAI Chat Completions SSE
@@ -123,6 +124,9 @@ func (f *fakeSSEEndpoint) serve(w http.ResponseWriter, r *http.Request) {
 		if flusher != nil {
 			flusher.Flush()
 		}
+	}
+	if script.afterFrames != nil {
+		script.afterFrames()
 	}
 	switch script.end {
 	case sseIdle:
@@ -671,7 +675,7 @@ func TestStreamRecoveryRuntimeStopsAfterTheRetryBudgetWithoutRunningTheCutTool(t
 }
 
 // TestStreamRecoveryRuntimeDoesNotRunACutToolCallAfterCancel pins the interrupt:
-// a user who cancels while the cut attempt's tool call is on screen gets an
+// a user who cancels while the cut attempt's tool call is arriving gets an
 // aborted turn with no tool run and no phantom result — and no retry storm.
 func TestStreamRecoveryRuntimeDoesNotRunACutToolCallAfterCancel(t *testing.T) {
 	// The attempt would idle forever; the cut that matters is the user's cancel.
@@ -679,32 +683,24 @@ func TestStreamRecoveryRuntimeDoesNotRunACutToolCallAfterCancel(t *testing.T) {
 	t.Setenv("GOLDER_STREAM_FIRST_CONTENT_TIMEOUT", "10s")
 	t.Setenv("GOLDER_STREAM_MAX_RETRIES", "4")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cut := cutToolAttempt(sseIdle, recoveryCallCut, "record", recoveryCutArgs)
+	// Tool deltas are intentionally buffered until a successful terminal.
+	// Cancel at the wire boundary, not on a UI event that must never appear.
+	cut.afterFrames = cancel
 	endpoint := newFakeSSEEndpoint(t,
 		completeToolAttempt(recoveryCallFirst, "record", `{"step":"one"}`),
-		cutToolAttempt(sseIdle, recoveryCallCut, "record", recoveryCutArgs),
+		cut,
 	)
 	tool := newRecoveryRecordingTool("record")
 	cfg := newRecoveryRunConfig(t, endpoint, tool)
 	agentCtx := newRecoveryAgentCtx(tool)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	stream := StartRun(ctx, agentCtx, cfg)
 	var events []agentcore.AgentEvent
 	for ev := range stream.Events() {
 		events = append(events, ev)
-		// Interrupt exactly when the cut attempt's call has reached the user: the
-		// tool card is on screen and the stream behind it is dead.
-		if u, ok := ev.(agentcore.MessageUpdateEvent); ok {
-			if a, ok := u.Message.(agentcore.AssistantMessage); ok {
-				for _, c := range a.ToolCalls() {
-					if c.ID == recoveryCallCut {
-						cancel()
-					}
-				}
-			}
-		}
 	}
 	if _, err := stream.Result(context.Background()); err != nil {
 		t.Fatalf("stream result: %v", err)
@@ -734,7 +730,10 @@ func TestStreamRecoveryRuntimeDoesNotRunACutToolCallAfterCancel(t *testing.T) {
 		t.Fatal("no assistant message in history")
 	}
 	last := finals[len(finals)-1]
-	if last.StopReason != agentcore.StopReasonAborted {
+	// Cancellation may precede the new assistant's first visible event, in
+	// which case there is no new message to persist. If one was finalized it
+	// must describe an interrupt, never a provider failure.
+	if len(finals) > 1 && last.StopReason != agentcore.StopReasonAborted {
 		t.Errorf("final stop reason = %q, want %q", last.StopReason, agentcore.StopReasonAborted)
 	}
 	// A dangling call is healed before the next request (healResumedContext), so
