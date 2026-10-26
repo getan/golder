@@ -187,9 +187,6 @@ func dispositionFor(n Note) string {
 // conversation, since the reviewer wrote the rationale that way.
 func FormatNote(n Note) string {
 	rationale := n.Rationale
-	if rationale == "" {
-		rationale = "-"
-	}
 	// A question a sub-agent asked is labeled as such: the sink is shared, and a
 	// line that reads as coming from the conversation when a delegated child
 	// asked it is a line about a call the person never saw.
@@ -198,6 +195,16 @@ func FormatNote(n Note) string {
 		origin = "[" + n.Origin + "] "
 	}
 	suffix := noteCapabilitySuffix(n)
+	// consentRationale falls back to the same granted-capability list that the
+	// suffix already carries. Showing both made the line end in
+	// "(granted: read /x): granted: read /x". Keep the suffix (it is structured
+	// and localized) and suppress only the duplicate rationale.
+	if suffix != "" && strings.HasPrefix(strings.TrimSpace(rationale), localized(n.Lang, "已授权：", "granted: ")) {
+		rationale = ""
+	}
+	if rationale == "" && suffix == "" {
+		rationale = "-"
+	}
 	// The marker leads, so a transcript's notices line up in one column and a
 	// denial is scannable without reading the words: Failure() owns which kinds
 	// are failures, so a new blocking kind cannot be painted as a warning.
@@ -205,7 +212,11 @@ func FormatNote(n Note) string {
 	if n.Kind.Failure() {
 		marker = "✗ "
 	}
-	return origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + suffix + ": " + rationale
+	line := origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + suffix
+	if rationale != "" {
+		line += ": " + rationale
+	}
+	return line
 }
 
 // noteCapabilitySuffix replaces the old risk/authorization words with the
