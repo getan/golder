@@ -32,6 +32,8 @@ We recommend running golder in [Ghostty](https://github.com/ghostty-org/ghostty)
 
 `golder workspace --no-animations` controls the outer workspace UI. To disable the first agent's animations as well, start with `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations` or `golder workspace --no-animations -- --no-animations`. Re-attaching does not change an already-running agent's settings.
 
+When mouse/color and other terminal replies arrive in fragments over a slow link, the input decoder retains their protocol frames instead of turning tails such as `65;59M` or `rgb:…` into typing after a short timeout. Re-attach the workspace client after upgrading; an already-running inner golder must also be restarted/resumed to load its new decoder. Intentionally typed or pasted lookalike text is not filtered. See [terminal input and recovery limits](docs/terminal-input.md).
+
 ## Quickstart: golder workspace
 
 For most people this is the first command: `golder workspace` opens a split-pane terminal with the agent in the first pane; `Ctrl+b c` adds a shell, and the browser is one keystroke away. `Ctrl+b d` detaches the client while the daemon and its panes keep running.

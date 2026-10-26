@@ -104,3 +104,7 @@ require (
 	tuios.dev/swatch v0.1.0 // indirect
 	tuios.dev/vt v0.2.0 // indirect
 )
+
+// One input decoder for the workspace client, agent TUI and embedded browser.
+// See third_party/ultraviolet/GOLDER_PATCHES.md for provenance and removal criteria.
+replace github.com/charmbracelet/ultraviolet => ./third_party/ultraviolet

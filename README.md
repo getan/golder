@@ -32,6 +32,8 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 
 `golder workspace --no-animations` 控制外层工作区动画；要同时关闭首个 agent 的动画，可用 `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations`，或启动时传 `golder workspace --no-animations -- --no-animations`。已运行的 agent 不会因重新 attach 改变设置。
 
+终端鼠标/颜色等回包在慢链路上分段到达时，输入解码器会保留完整协议帧，不再因短超时把 `65;59M`、`rgb:…` 等尾部当成输入。升级后需重新连接 workspace 客户端；已运行的内层 golder 也需重启/恢复会话才能载入新解码器。正常输入或粘贴的同样文本不会被过滤。详见[终端输入与恢复边界](docs/terminal-input.md)。
+
 ## 快速开始：golder workspace
 
 普通用户第一条命令就是它：`golder workspace` 打开一个自带的分屏终端，第一格是 agent；`Ctrl+b c` 再加一个 shell，浏览器按需。`Ctrl+b d` 只断开客户端，daemon 和 pane 继续在后台跑。
