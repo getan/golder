@@ -6,7 +6,7 @@
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. Starts in a full-screen TUI by default, with a line-based REPL and a headless mode for scripts.
+A terminal AI coding assistant written in Go: read and write files, run commands, search code, and fetch web pages — closing the loop from understanding a request to shipping the change. The default entry point is `golder workspace`: a built-in split-pane terminal with the agent, a shell and the browser in one panel. If you already live in a terminal multiplexer, run the single-agent `golder` in its pane instead. A line-based REPL and a headless mode are also available.
 
 **One binary. Sandboxed by default. Secrets never reach the model.**
 
@@ -24,7 +24,9 @@ One command on macOS / Linux, no Node or Python. On Windows, download the `.zip`
 
 We recommend running golder in [Ghostty](https://github.com/ghostty-org/ghostty), where the TUI is mainly tested — that's the closest to the setup it is developed against. Other modern terminals work too, but Ghostty gets the most coverage; the built-in browser pane still needs a terminal that supports its graphics protocol.
 
-## Built-in terminal workspace
+## Quickstart: golder workspace
+
+For most people this is the first command: `golder workspace` opens a split-pane terminal with the agent in the first pane; `Ctrl+b c` adds a shell, and the browser is one keystroke away. `Ctrl+b d` detaches the client while the daemon and its panes keep running.
 
 ```bash
 golder workspace                         # open global default; start it if not running
@@ -48,6 +50,17 @@ The agent, shell launcher and browser entry point use one golder binary, with an
 
 Old project-scoped sessions are never moved or silently adopted as `default`. `list` labels them `legacy` with a `<project-id>/<session>` selector; use `golder workspace attach --legacy <project-id>/<session>` (or `status`/`stop`). A legacy session without an owner record has an unknown endpoint and is reported as `unreachable`, never guessed or restarted.
 
+### Already used to a terminal multiplexer (tuios / herdr / tmux / zellij / screen)
+
+Those multiplexers already provide their own server/client and detach/reattach, **and that is when plain, single-agent `golder` is the right call**: run it in their pane or window and let the host own keep-alive and re-attach — no extra workspace layer.
+
+```bash
+# In a tuios / herdr pane, or a tmux / zellij / screen window
+golder
+```
+
+Inside those hosts `golder workspace` refuses to nest by default (unless `--nested` is explicit, which is usually unnecessary). tuios/herdr rail/Inbox reporting comes from host-compat, separate from the workspace daemon/client; configure it as needed.
+
 ### Processes and connections
 
 `golder workspace` does not run the agent inside the client. It has three layers:
@@ -66,24 +79,13 @@ workspace daemon (persistent, owns the panes)
 - The `golder` in the agent pane is an ordinary agent process: it owns model calls, tool execution and session persistence. The daemon owns pane lifetime and terminal I/O; the client owns rendering and input.
 - Plain `golder`, without workspace, starts no daemon or client: it is one agent process in the current terminal. Without an outer multiplexer, if that terminal goes away, the process goes with it.
 
-### Already using tuios / herdr / tmux
-
-Those multiplexers already provide their own server/client or detach/reattach behavior, so run plain `golder` in their pane or window:
-
-```bash
-# In a tuios / herdr pane, or a tmux / zellij / screen window
-golder
-```
-
-Do not nest `golder workspace` inside them; it refuses by default unless `--nested`, and that is usually unnecessary. The host owns keep-alive and re-attach: a tmux detach, or a tuios/herdr pane that stays alive, keeps the plain `golder` process. This and an outer `golder workspace` are usually alternatives. tuios/herdr rail/Inbox reporting comes from host-compat, separate from the workspace daemon/client; configure it as needed.
-
 ## Highlights
 
+- **The default is the built-in terminal workspace.** `golder workspace` runs the agent, a shell and the browser in one panel — the agent patches on the left while the shell runs tests on the right, and focus is input. The browser drives pages over kitty-browse's control socket (snapshot/click/fill/wait/console/network); presets (`debug-fullstack`, `data-analysis`, `review`) start backend, frontend and browser together, and `snapshot` hands the model every pane's context at once. The `visual` tool (charts / Mermaid / TML) was removed; see CHANGELOG.
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
 - **Lightweight like pi, with a real security boundary.** The same single-binary class, plus a per-call approval gate and an OS sandbox (`sandbox-exec` / `bubblewrap`): reads stay in the workspace, writes in the project and temp dirs, the network is off by default, and credentials are unreadable.
 - **Easier to customize than codex-cli.** Pure Go: one language, one binary, no Node/Python runtime. A new tool, provider or approval rule is one `go build` away.
 - **~50–100 MB resident.** Top tier for this class of agent, so it can stay open all day.
-- **Terminal, browser and workspace in one pane.** `tuios` drives terminal panes, `browser` drives a kitty-browse pane over its control socket (snapshot/click/fill/wait/console/network), and `workspace` starts a preset (`debug-fullstack`, `data-analysis`, `review`) and reads every pane back as one snapshot — the fullest context when you debug frontend and backend together. The `visual` tool (charts / Mermaid / TML) was removed; see CHANGELOG.
 - **Planned: MCP and a plugin ecosystem.** Bring external tools and data sources in without changing the core.
 
 <p align="center">
@@ -105,7 +107,7 @@ Do not nest `golder workspace` inside them; it refuses by default unless `--nest
 
 ## More features
 
-- **TUI first**: run `golder` for the full-screen TUI (transcript, tool cards, status bar, arrow-key pickers); `--no-tui` falls back to the line-based REPL, and both front-ends share the exact same command surface; `golder -p "..."` runs headless for scripts and CI.
+- **Workspace first, full agent either way**: `golder workspace` opens the built-in split-pane terminal (agent / shell / browser); if you already have a multiplexer, plain `golder` gives the same full-screen TUI (transcript, tool cards, status bar, arrow-key pickers). `--no-tui` falls back to the line-based REPL, and `golder -p "..."` runs headless for scripts and CI.
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Credential redaction**: tool output, prompts, assistant text, compaction summaries, memory and session files are scanned before they reach the provider; AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL rules, four modes (`off | observe | redact | block`), and an audit log that records rule names and hashes only.
 - **Many providers**: defaults to the OpenCode gateway, with 19 built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek, …) and any OpenAI-compatible endpoint.
@@ -381,7 +383,11 @@ Notes:
 ## Usage
 
 ```bash
-# Interactive TUI (no -p and stdout is a terminal)
+# Recommended: the built-in split-pane workspace (agent / shell / browser; Ctrl+b d detaches)
+golder workspace
+
+# Already used to a terminal multiplexer (tuios / herdr / tmux / zellij / screen):
+# run the single agent in its pane instead of nesting a workspace
 golder
 
 # Headless: print only the final answer text

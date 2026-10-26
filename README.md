@@ -6,7 +6,7 @@
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认进入全屏 TUI，也支持行式 REPL 与无头脚本。
+用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认用 `golder workspace`：自带分屏终端，agent、shell 和浏览器在同一个面板里；已经有习惯的终端复用器时，直接在它的 pane/window 里跑单 agent 的 `golder`。也支持行式 REPL 与无头脚本。
 
 **单二进制、默认沙箱、密钥不进入模型上下文。**
 
@@ -24,7 +24,9 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 
 推荐在 [Ghostty](https://github.com/ghostty-org/ghostty) 里使用 golder，TUI 也主要在 Ghostty 上测试，因此在那里的表现最接近日常开发时的样子。其他现代终端同样可以运行，但测试覆盖以 Ghostty 为主；内置浏览器 pane 仍需要终端支持相应的图形协议。
 
-## 自带终端工作区
+## 快速开始：golder workspace
+
+普通用户第一条命令就是它：`golder workspace` 打开一个自带的分屏终端，第一格是 agent；`Ctrl+b c` 再加一个 shell，浏览器按需。`Ctrl+b d` 只断开客户端，daemon 和 pane 继续在后台跑。
 
 ```bash
 golder workspace                         # 打开全局 default；没有运行则启动
@@ -52,6 +54,17 @@ agent、shell、浏览器入口都来自同一个 golder 二进制，但**每个
 
 旧的项目级会话不会自动搬家或被认领为 `default`。`list` 将其标为 `legacy`，显示 `<project-id>/<session>`；用 `golder workspace attach --legacy <project-id>/<session>` 连接，`status`/`stop` 同样支持该参数。没有旧 owner 记录的会话无法可靠确定 endpoint，会显示 `unreachable`，不会猜测或启动替代进程。
 
+### 已经有习惯的终端复用器时（tuios / herdr / tmux / zellij / screen）
+
+这些复用器已经提供了自己的 server/client 与 detach/reattach，**这时才推荐直接用单 agent 的 `golder`**：在它们的 pane/window 里跑普通 `golder`，保持/恢复会话交给宿主，不必再套一层 workspace。
+
+```bash
+# 在 tuios / herdr pane，或 tmux / zellij / screen window 里
+golder
+```
+
+检测到已经在这些宿主里时，`golder workspace` 默认会拒绝嵌套（除非显式 `--nested`，通常没有这个必要）。tuios/herdr 的 rail/Inbox 状态上报属于 host-compat，和 workspace 的 daemon/client 是两套独立机制，按需配置即可。
+
 ### 进程与连接关系
 
 `golder workspace` 不是把 agent 跑在客户端里，而是三层：
@@ -70,24 +83,13 @@ workspace daemon（后台常驻，拥有 pane）
 - agent pane 里的 `golder` 是普通 agent 进程，负责模型调用、工具执行和会话持久化；daemon 负责 pane 生命周期和终端 I/O，client 负责画面与输入。
 - 不带 workspace 的直接 `golder` 不创建 daemon/client，它就是当前终端里的一个普通 agent 进程。没有外层复用器时，终端断开，进程就结束。
 
-### 已经用 tuios / herdr / tmux 时
-
-这些终端复用器已经提供了自己的 server/client 或 detach/reattach，直接在它们的 pane/window 里跑普通 `golder` 即可：
-
-```bash
-# 在 tuios / herdr pane，或 tmux / zellij / screen window 里
-golder
-```
-
-不需要再套一层 `golder workspace`；检测到已经在这些宿主里时，`golder workspace` 默认会拒绝嵌套，除非显式 `--nested`，而通常没有这个必要。保持/恢复会话交给宿主：tmux detach、tuios/herdr 的 pane 常驻，重新 attach 后普通 `golder` 还在；这和外层 `golder workspace` 通常二选一。tuios/herdr 的 rail/Inbox 状态上报属于 host-compat，和 workspace 的 daemon/client 是两套独立机制，按需配置即可。
-
 ## 亮点
 
+- **默认用法是自带终端工作区**：`golder workspace` 一个面板里跑 agent、shell 和浏览器——左边 agent 改代码，右边 shell 跑测试，焦点即输入；`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`workspace` 预设（`debug-fullstack`、`data-analysis`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型。`visual`（图表 / Mermaid / TML 面板）已下架，原因见 CHANGELOG 的 Removed 一节。
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。
 - **轻量 agent + 真正的安全边界**：和 pi 同一量级的单二进制，但多了逐调用审批门与 OS 沙箱（`sandbox-exec` / `bubblewrap`）——读限工作区、写限项目与临时目录、网络默认关闭；密钥和凭据路径读不到。
 - **比 codex-cli 更容易定制**：纯 Go，单语言、单二进制，没有 Node/Python 运行时；加一个工具、一个 provider 或一条审批规则，都在同一个 `go build` 里完成。
 - **常驻内存约 50–100 MB**：同类里的第一梯队，长时间挂着跑也不占机器。
-- **终端 / 浏览器 / 工作区在一个面板里**：`tuios` 管终端 pane，`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`workspace` 用预设（`debug-fullstack`、`data-analysis`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型——前后端同时 debug 时最充分。`visual`（图表 / Mermaid / TML 面板）已下架，原因见 CHANGELOG 的 Removed 一节。
 - **规划中：MCP 与插件生态**：把外部工具和数据源接进来，扩展不必改核心。
 
 <p align="center">
@@ -109,7 +111,7 @@ golder
 
 ## 更多特性
 
-- **TUI 优先**：直接 `golder` 进入全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）；`--no-tui` 切回行式 REPL，两端命令与行为完全对齐；`golder -p "..."` 无头执行，适合脚本与 CI。
+- **工作区优先，单 agent 也完整**：`golder workspace` 打开自带分屏终端（agent / shell / 浏览器）；已经有习惯的复用器时直接跑 `golder`，全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）一样完整；`--no-tui` 切回行式 REPL，`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **tuios pane 工具**：在 tuios pane 内额外提供一个 `tuios` facade（`list` / `capture` / `wait` / `run` / `new` / `focus` / `close`），可管理当前 session 的所有 pane，等待走 daemon 事件而非轮询；见 [docs/tuios-tools.md](docs/tuios-tools.md)。
 - **凭据脱敏**：tool output、用户 prompt、assistant 文本、compaction 摘要、memory 与 session 落盘前统一扫描；覆盖 AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL 等规则，支持 `off | observe | redact | block` 四档，审计只记规则名与 hash。
@@ -386,7 +388,11 @@ TUI 输入 `/` 会按下面的分类弹出菜单（↑↓ 选择）；`/help` �
 ## 使用
 
 ```bash
-# 交互式 TUI（不带 -p 且 stdout 为终端时自动进入）
+# 推荐：自带分屏终端工作区（agent / shell / 浏览器，Ctrl+b d 断开后继续跑）
+golder workspace
+
+# 已经有习惯的终端复用器（tuios / herdr / tmux / zellij / screen）：
+# 直接在它的 pane/window 里跑单 agent，不必再套 workspace
 golder
 
 # 无头模式：只输出最终回答文本
