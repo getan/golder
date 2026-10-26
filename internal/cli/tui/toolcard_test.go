@@ -471,6 +471,7 @@ func TestModelToolCardFlow(t *testing.T) {
 // Diff section whose lines carry the per-line theme colors: red removals,
 // green additions, cyan @@ markers, dim headers and context (#560).
 func TestToolCardDiffSection(t *testing.T) {
+	clearMotionEnv(t)
 	theme := DefaultTheme()
 	diff := "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n"
 	card := toolCard{

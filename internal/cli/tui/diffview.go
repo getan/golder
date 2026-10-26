@@ -89,8 +89,12 @@ func diffHeaderPath(line string) string {
 
 // diffRowBg is codex's row background for a changed line: a dark green/red
 // wash on dark terminals (its DARK_TC_* constants), GitHub's light tints on
-// light ones. Context and hunk rows get none.
+// light ones. SSH sessions omit only the wash: sign foregrounds and code syntax
+// highlighting are unchanged. Context and hunk rows always get none.
 func diffRowBg(kind diffLineKind) color.Color {
+	if isSSHSession() {
+		return nil
+	}
 	dark := syntaxDark()
 	switch kind {
 	case diffAdd:
@@ -107,7 +111,7 @@ func diffRowBg(kind diffLineKind) color.Color {
 	return nil
 }
 
-// diffRenderCache memoizes a rendered diff per (content, width, palette).
+// diffRenderCache memoizes a rendered diff per (content, width, palette, SSH).
 // Tool cards are re-rendered on every reflow — and a streaming turn reflows
 // on every delta — so without this a large diff would re-tokenize its lines
 // continuously.
@@ -125,7 +129,7 @@ var (
 
 func diffRenderKey(diff string, inner int, dark bool) string {
 	sum := sha256.Sum256([]byte(diff))
-	return fmt.Sprintf("%d|%v|%s", inner, dark, hex.EncodeToString(sum[:]))
+	return fmt.Sprintf("%d|%v|%v|%s", inner, dark, isSSHSession(), hex.EncodeToString(sum[:]))
 }
 
 // diffTotals sums a diff's change counts across its files.

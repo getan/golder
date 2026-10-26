@@ -14,6 +14,7 @@ import (
 // ones, with context rows unwashed. The colors follow the terminal background
 // the Markdown renderer already tracks (SetMarkdownDark).
 func TestDiffRowBgPalettes(t *testing.T) {
+	clearMotionEnv(t)
 	toRGBA := func(c color.Color) (uint8, uint8, uint8) {
 		r, g, b, _ := c.RGBA()
 		return uint8(r >> 8), uint8(g >> 8), uint8(b >> 8)
