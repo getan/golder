@@ -32,8 +32,11 @@ import (
 // response body is read (protects the model's context and memory from huge
 // pages). webFetchMaxMarkdown caps the rendered Markdown length.
 const (
-	webFetchTimeout     = 30 * time.Second
-	webFetchMaxBytes    = 5 * 1024 * 1024
+	webFetchTimeout = 30 * time.Second
+	// The body cap is a real read limit, not a display truncation: HTML parsing
+	// and Markdown conversion should never see more than this. The extra byte is
+	// read only to distinguish an exactly-full page from a truncated one.
+	webFetchMaxBytes    = 2 * 1024 * 1024
 	webFetchMaxMarkdown = 100 * 1024
 )
 
@@ -165,9 +168,13 @@ func (t *WebFetchTool) Execute(ctx context.Context, id string, args json.RawMess
 		return errorResult(fmt.Sprintf("webfetch: %s returned HTTP %d %s", target, resp.StatusCode, http.StatusText(resp.StatusCode))), nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxBytes+1))
 	if err != nil {
 		return errorResult(fmt.Sprintf("webfetch: reading response body: %v", err)), nil
+	}
+	bodyTruncated := len(body) > webFetchMaxBytes
+	if bodyTruncated {
+		body = body[:webFetchMaxBytes]
 	}
 
 	ctype := resp.Header.Get("Content-Type")
@@ -178,7 +185,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, id string, args json.RawMess
 		text = string(body)
 	}
 	text = strings.TrimSpace(text)
-	truncated := false
+	truncated := bodyTruncated
 	if len(text) > webFetchMaxMarkdown {
 		text = text[:webFetchMaxMarkdown]
 		truncated = true
@@ -197,7 +204,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, id string, args json.RawMess
 
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(b.String())},
-		Details: map[string]any{"url": target, "status": resp.StatusCode, "truncated": truncated},
+		Details: map[string]any{
+			"url": target, "status": resp.StatusCode,
+			"truncated": truncated, "bodyTruncated": bodyTruncated, "bodyBytes": len(body),
+		},
 	}, nil
 }
 

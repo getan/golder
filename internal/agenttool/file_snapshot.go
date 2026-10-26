@@ -22,6 +22,15 @@ import (
 // rather than clobbering it with stale bytes.
 const snapshotMaxBytes = 16 * 1024 * 1024
 
+// snapshotTurnMaxBytes bounds the content the in-memory rewind journal holds for
+// one turn. Individual files are capped above; without a turn-wide cap a patch
+// touching hundreds of files can still retain hundreds of MiB in snapshots. A
+// file that would exceed the remaining budget is recorded as TooLarge (rewind
+// reports it as skipped) instead of being read. apply_patch additionally checks
+// its estimate before writing so a large patch is rejected as a whole rather
+// than leaving only a partial journal.
+const snapshotTurnMaxBytes = 64 * 1024 * 1024
+
 // fileSnapshot is the pre-mutation state of a single file: its content before the
 // first write/edit of a turn, or a marker that it did not yet exist (so rewind
 // deletes it). TooLarge marks a file that exceeded snapshotMaxBytes, whose
@@ -78,7 +87,17 @@ func (r *FileSnapshotRecorder) ImportWorkerBaseline(snaps []SnapshotTransfer) {
 		if _, seen := r.pending[s.Path]; seen {
 			continue
 		}
-		r.pending[s.Path] = fileSnapshot{Path: s.Path, Existed: s.Existed, TooLarge: s.TooLarge, Content: append([]byte(nil), s.Content...)}
+		content := append([]byte(nil), s.Content...)
+		if int64(len(content)) > snapshotTurnMaxBytes-r.pendingBytes {
+			// A worker's baseline arrives after the child has computed it. Keep
+			// the parent's journal within its own turn budget; the path still
+			// records that it changed and rewind reports the skipped content.
+			content = nil
+			s.TooLarge = true
+		} else {
+			r.pendingBytes += int64(len(content))
+		}
+		r.pending[s.Path] = fileSnapshot{Path: s.Path, Existed: s.Existed, TooLarge: s.TooLarge, Content: content}
 		r.order = append(r.order, s.Path)
 	}
 }
@@ -103,12 +122,38 @@ type FileSnapshotRecorder struct {
 	order   []string                // first-touch order within the turn
 	points  []RestorePoint
 	nextSeq int
+	// pendingBytes is the retained content size of pending snapshots. It is
+	// reset when Commit seals the turn.
+	pendingBytes int64
 }
 
 // NewFileSnapshotRecorder returns an empty recorder ready to record the first
 // turn's mutations.
 func NewFileSnapshotRecorder() *FileSnapshotRecorder {
 	return &FileSnapshotRecorder{pending: map[string]fileSnapshot{}, nextSeq: 1}
+}
+
+// PendingBytes reports the content size currently retained by the turn's
+// uncommitted snapshots. Paths and metadata are not counted.
+func (r *FileSnapshotRecorder) PendingBytes() int64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.pendingBytes
+}
+
+// CanRecord reports whether n more content bytes fit in the turn's snapshot
+// budget. It lets a writer reject an oversized batch before recording or
+// writing any of it.
+func (r *FileSnapshotRecorder) CanRecord(n int64) bool {
+	if r == nil {
+		return true
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return n <= snapshotTurnMaxBytes-r.pendingBytes
 }
 
 // Record captures the current on-disk state of absPath before it is mutated. Only
@@ -139,6 +184,11 @@ func (r *FileSnapshotRecorder) Record(absPath string) {
 	case info.Size() > snapshotMaxBytes:
 		snap.Existed = true
 		snap.TooLarge = true
+	case int64(info.Size()) > snapshotTurnMaxBytes-r.pendingBytes:
+		// Keep the journal bounded across a large multi-file turn. The path is
+		// still recorded so rewind knows it changed and reports the skip.
+		snap.Existed = true
+		snap.TooLarge = true
 	default:
 		data, readErr := os.ReadFile(absPath)
 		if readErr != nil {
@@ -147,6 +197,7 @@ func (r *FileSnapshotRecorder) Record(absPath string) {
 		} else {
 			snap.Existed = true
 			snap.Content = data
+			r.pendingBytes += int64(len(data))
 		}
 	}
 	r.pending[absPath] = snap
@@ -181,6 +232,7 @@ func (r *FileSnapshotRecorder) Commit(leafID, label string) bool {
 	r.nextSeq++
 	r.pending = map[string]fileSnapshot{}
 	r.order = nil
+	r.pendingBytes = 0
 	return true
 }
 

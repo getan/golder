@@ -21,6 +21,14 @@ const diffContextLines = 3
 // Unchanged lines beyond the context are elided. It returns "" when the
 // contents are equal.
 func unifiedDiff(path, oldContent, newContent string) string {
+	return unifiedDiffLimited(path, oldContent, newContent, 0)
+}
+
+// unifiedDiffLimited is unifiedDiff with an output cap. maxBytes <= 0 keeps the
+// full diff. A capped diff ends with a truncation marker so a caller can tell a
+// short changed region from a diff that was cut off; the input contents are
+// still bounded by the caller's own budget.
+func unifiedDiffLimited(path, oldContent, newContent string, maxBytes int) string {
 	oldLines := splitLinesKeep(oldContent)
 	newLines := splitLinesKeep(newContent)
 
@@ -32,17 +40,40 @@ func unifiedDiff(path, oldContent, newContent string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", path, path)
+	write := func(s string) bool {
+		if maxBytes > 0 {
+			remaining := maxBytes - b.Len()
+			if remaining <= 0 {
+				return false
+			}
+			if len(s) > remaining {
+				b.WriteString(s[:remaining])
+				b.WriteString("\n... (diff truncated; details carry the full change list)\n")
+				return false
+			}
+		}
+		b.WriteString(s)
+		return true
+	}
+	if !write(fmt.Sprintf("--- a/%s\n+++ b/%s\n", path, path)) {
+		return b.String()
+	}
 	for _, h := range hunks {
-		fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", h.oldStart, h.oldCount, h.newStart, h.newCount)
+		if !write(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", h.oldStart, h.oldCount, h.newStart, h.newCount)) {
+			return b.String()
+		}
 		for _, op := range h.ops {
+			var line string
 			switch op.kind {
 			case diffEqual:
-				fmt.Fprintf(&b, " %s\n", op.text)
+				line = " " + op.text + "\n"
 			case diffDelete:
-				fmt.Fprintf(&b, "-%s\n", op.text)
+				line = "-" + op.text + "\n"
 			case diffInsert:
-				fmt.Fprintf(&b, "+%s\n", op.text)
+				line = "+" + op.text + "\n"
+			}
+			if !write(line) {
+				return b.String()
 			}
 		}
 	}

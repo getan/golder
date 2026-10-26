@@ -70,12 +70,27 @@ func applyErrf(format string, args ...any) error {
 
 // Compute resolves a parsed patch against the working tree and returns the
 // changes it would make, in operation order, without touching the filesystem.
-// Existence checks and content reads happen here, so every failure (missing
-// file for an update, an existing file for an add, a poor context match)
-// surfaces before the first byte is written. Operations are applied over an
-// in-memory overlay, so a patch that touches the same file twice sees its own
-// earlier change.
+// It has no byte budget; callers that accept model-generated patches should use
+// ComputeLimited so one oversized call cannot retain an unbounded working set.
 func Compute(ops []Op, resolve Resolver) ([]Change, error) {
+	return ComputeLimited(ops, resolve, 0)
+}
+
+// ComputeLimited is Compute with a cap on the file content it retains while
+// resolving the patch. The cap covers content read from disk plus content
+// synthesized by updates/moves; a patch that would exceed it fails before any
+// write, naming the budget instead of exhausting memory first. maxBytes <= 0
+// keeps Compute's unbounded behavior (used by direct library callers/tests).
+func ComputeLimited(ops []Op, resolve Resolver, maxBytes int64) ([]Change, error) {
+	charged := int64(0)
+	charge := func(n int) error {
+		charged += int64(n)
+		if maxBytes > 0 && charged > maxBytes {
+			return applyErrf("patch exceeds the %d-byte content budget while resolving (%d bytes read or synthesized); nothing was written. Split it into smaller apply_patch calls", maxBytes, charged)
+		}
+		return nil
+	}
+
 	// overlay caches each resolved path's current working-tree content, so
 	// repeated operations on one file compose instead of racing the disk.
 	type fileState struct {
@@ -97,6 +112,9 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 			data, readErr := os.ReadFile(full)
 			if readErr != nil {
 				return nil, applyErrf("cannot read %s: %v", full, readErr)
+			}
+			if err := charge(len(data)); err != nil {
+				return nil, err
 			}
 			st.exists, st.content = true, string(data)
 		case os.IsNotExist(err):
@@ -145,6 +163,9 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 				continue
 			}
 			content := joinContent(op.Body, true)
+			if err := charge(len(content)); err != nil {
+				return nil, err
+			}
 			st.exists, st.content = true, content
 			changes = append(changes, Change{Kind: ChangeAdd, Path: full, NewContent: content})
 			wouldApply++
@@ -187,6 +208,9 @@ func Compute(ops []Op, resolve Resolver) ([]Change, error) {
 				continue
 			}
 			newContent := joinContent(updated, trailing)
+			if err := charge(len(newContent)); err != nil {
+				return nil, err
+			}
 			st.content = newContent
 			wouldApply += len(op.Chunks)
 			files[full] = true

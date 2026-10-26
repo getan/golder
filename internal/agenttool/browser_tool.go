@@ -15,16 +15,20 @@ package agenttool
 // needs, so nobody has to remember the three-command invocation.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	_ "image/png"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
@@ -34,6 +38,12 @@ import (
 )
 
 const browserMaxTimeout = 120 * time.Second
+
+// A full-page PNG can be tiny on disk and enormous once decoded. The browser
+// client already caps transport bytes; this cap covers the display-side decode
+// and the artifact's downstream view_image use. A screenshot that fails to
+// decode is left to the browser's own contract (the client only returns 2xx).
+const browserScreenshotMaxPixels = 16_000_000
 
 // BrowserAvailable reports whether this process should advertise the tool.
 func BrowserAvailable() bool { return browserSocket() != "" }
@@ -362,6 +372,13 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 		png, err := c.Screenshot(ctx, a.FullPage)
 		if err != nil {
 			return browserError(err), nil
+		}
+		if cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(png)); cfgErr == nil {
+			if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > browserScreenshotMaxPixels {
+				return browserError(fmt.Errorf(
+					"screenshot is %dx%d (%d pixels), over the %d-pixel decode limit; use a viewport-sized capture",
+					cfg.Width, cfg.Height, int64(cfg.Width)*int64(cfg.Height), browserScreenshotMaxPixels)), nil
+			}
 		}
 		out, err := artifactPath(t.cwd, "screenshots", a.Out, "png")
 		if err != nil {

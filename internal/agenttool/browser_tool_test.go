@@ -1,6 +1,7 @@
 package agenttool
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -31,6 +32,9 @@ type fakeBrowser struct {
 	mu      sync.Mutex
 	actions []map[string]any
 	replies map[string]string
+	// screenshot, when set, replaces the tiny invalid PNG the default fake
+	// returns. Tests that need a decodable/large image set this.
+	screenshot []byte
 }
 
 func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -43,10 +47,14 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 				{"id":"tab-2","targetId":"t2","url":"http://localhost:3000/login","title":"Login","index":2,"active":true}
 			],"capabilities":[]}`
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/screenshot":
+		png := f.screenshot
+		if png == nil {
+			png = []byte("\x89PNG\r\n\x1a\nfake")
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"image/png"}},
-			Body:       io.NopCloser(strings.NewReader("\x89PNG\r\n\x1a\nfake")),
+			Body:       io.NopCloser(bytes.NewReader(png)),
 		}, nil
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/actions":
 		raw, _ := io.ReadAll(r.Body)
@@ -90,6 +98,40 @@ func newFakeBrowserTool(t *testing.T, allowControl bool, root string) *BrowserTo
 	}
 	t.Cleanup(func() {})
 	return tool
+}
+
+func newFakeBrowserToolWith(t *testing.T, root string, f *fakeBrowser) *BrowserTool {
+	t.Helper()
+	tool := NewBrowserTool(root, true)
+	trustFakeControl(tool.Control)
+	tool.newClient = func() (*browserctl.Client, error) {
+		return browserctl.NewWithTransport("stub", f), nil
+	}
+	tool.discover = func(ctx context.Context) browserDiscovery {
+		c, _ := tool.newClient()
+		info, err := c.Info(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return browserDiscovery{Instances: []browserInstance{{Socket: "stub", Selected: true, Info: info}}}
+	}
+	return tool
+}
+
+func TestBrowserScreenshotRejectsOversizedPixels(t *testing.T) {
+	root := t.TempDir()
+	f := &fakeBrowser{replies: map[string]string{}, screenshot: pngWithDimensions(5000, 5000)}
+	tool := newFakeBrowserToolWith(t, root, f)
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"screenshot"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(agentcore.ContentToText(res.Content), "pixel") {
+		t.Fatalf("screenshot result = %q, want a pixel-budget refusal", agentcore.ContentToText(res.Content))
+	}
+	if _, err := os.Stat(filepath.Join(root, ".golder", "artifacts")); err == nil {
+		t.Fatal("a refused screenshot must not write an artifact")
+	}
 }
 
 func fakeBrowserOf(t *testing.T, tool *BrowserTool) *fakeBrowser {

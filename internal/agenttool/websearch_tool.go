@@ -27,6 +27,11 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 )
 
+const (
+	webSearchSnippetMax = 4 << 10
+	webSearchResultMax  = 64 << 10
+)
+
 // webSearchTimeout bounds a single search request. webSearchDefaultCount is used
 // when the caller omits count; webSearchMaxCount caps it so a run cannot pull an
 // unbounded result set into the model's context.
@@ -147,6 +152,11 @@ func (t *WebSearchTool) Execute(ctx context.Context, id string, args json.RawMes
 	if len(results) > count {
 		results = results[:count]
 	}
+	for i := range results {
+		if len(results[i].Snippet) > webSearchSnippetMax {
+			results[i].Snippet = results[i].Snippet[:webSearchSnippetMax]
+		}
+	}
 
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(renderSearchResults(query, backend.name(), results))},
@@ -164,10 +174,22 @@ func renderSearchResults(query, backend string, results []searchResult) string {
 		return b.String()
 	}
 	for i, r := range results {
-		fmt.Fprintf(&b, "\n%d. %s\n   %s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.URL))
+		var entry strings.Builder
+		fmt.Fprintf(&entry, "\n%d. %s\n   %s\n", i+1, strings.TrimSpace(r.Title), strings.TrimSpace(r.URL))
 		if s := strings.TrimSpace(r.Snippet); s != "" {
-			fmt.Fprintf(&b, "   %s\n", s)
+			fmt.Fprintf(&entry, "   %s\n", s)
 		}
+		remaining := webSearchResultMax - b.Len()
+		if remaining <= 0 {
+			fmt.Fprintf(&b, "\n… (search results truncated at %d bytes)", webSearchResultMax)
+			break
+		}
+		if entry.Len() > remaining {
+			b.WriteString(entry.String()[:remaining])
+			fmt.Fprintf(&b, "\n… (search results truncated at %d bytes)", webSearchResultMax)
+			break
+		}
+		b.WriteString(entry.String())
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

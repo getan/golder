@@ -7,15 +7,22 @@
 package agenttool
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
 	"net/http"
 	"os"
 	"strings"
 
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+
 	"github.com/getan/golder/internal/agentcore"
+	_ "golang.org/x/image/webp"
 )
 
 // viewImageMaxBytes caps how large a file view_image will read. A tool result
@@ -24,6 +31,18 @@ import (
 // single view bounded. Callers that need the full asset can inspect it with
 // external tooling.
 const viewImageMaxBytes = 8 << 20 // 8 MiB
+
+// viewImageMaxPixels bounds the dimensions a returned image may have. The tool
+// streams the file's bytes to the provider, but the attached image is also
+// decoded by downstream display/transport layers; a tiny compressed file can
+// expand to a huge RGBA buffer. 16 MP covers 4K/5K screenshots while keeping a
+// decoded frame in the tens of MiB rather than hundreds.
+const viewImageMaxPixels = 16_000_000
+
+// viewImageSlot keeps image inspection to one call at a time. It is separate
+// from the worker pool's image lane (which bounds worker subprocesses) and also
+// covers in-process calls made with full access.
+var viewImageSlot = make(chan struct{}, 1)
 
 // ViewImageTool reads an image under Root (or ExtraRoots) and returns it as a
 // tool result. It never mutates anything.
@@ -90,6 +109,12 @@ func (t *ViewImageTool) Execute(ctx context.Context, id string, args json.RawMes
 	if a.Detail != "" && a.Detail != "high" && a.Detail != "original" {
 		return errorResult(`view_image: detail must be "high" or "original"`), nil
 	}
+	select {
+	case viewImageSlot <- struct{}{}:
+		defer func() { <-viewImageSlot }()
+	case <-ctx.Done():
+		return errorResult("view_image: cancelled while waiting for another image: " + ctx.Err().Error()), nil
+	}
 	full, err := t.resolvePath(ctx, a.Path)
 	if err != nil {
 		return errorResult("view_image: " + err.Error()), nil
@@ -121,6 +146,16 @@ func (t *ViewImageTool) Execute(ctx context.Context, id string, args json.RawMes
 	if !strings.HasPrefix(mime, "image/") {
 		return errorResult(fmt.Sprintf(
 			"view_image: %q is not a recognized image (detected %q)", a.Path, mime)), nil
+	}
+	// Only raster formats expose dimensions this way; an unknown/corrupt image
+	// keeps the existing content-sniffing behavior rather than becoming a new
+	// refusal reason. When dimensions are known, reject before base64 expansion.
+	if cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(data)); cfgErr == nil {
+		if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > viewImageMaxPixels {
+			return errorResult(fmt.Sprintf(
+				"view_image: %q is %dx%d (%d pixels), over the %d-pixel decode limit; resize or crop it first",
+				a.Path, cfg.Width, cfg.Height, int64(cfg.Width)*int64(cfg.Height), viewImageMaxPixels)), nil
+		}
 	}
 
 	detail := a.Detail

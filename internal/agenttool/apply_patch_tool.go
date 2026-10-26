@@ -174,6 +174,15 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 	if strings.TrimSpace(patchText) == "" {
 		return errorResult("apply_patch: patch is required (use patch; input is accepted as an alias)"), nil
 	}
+	if len(patchText) > applyPatchMaxInputBytes {
+		return errorResult(fmt.Sprintf(
+			"apply_patch: patch text is %d bytes, over the %d-byte input limit; nothing was written. Split it into smaller apply_patch calls",
+			len(patchText), applyPatchMaxInputBytes)), nil
+	}
+	if err := acquireApplyPatch(ctx); err != nil {
+		return errorResult("apply_patch: cancelled while waiting for another patch to finish: " + err.Error()), nil
+	}
+	defer releaseApplyPatch()
 	ops, err := patch.Parse(patchText)
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
@@ -190,9 +199,10 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 		}
 	}
 	sort.Strings(extra)
-	changes, err := patch.Compute(ops, func(p string) (string, error) {
+	remaining := int64(applyPatchMaxWorkingBytes) - int64(len(patchText))
+	changes, err := patch.ComputeLimited(ops, func(p string) (string, error) {
 		return t.resolveWrite(ctx, p)
-	})
+	}, remaining)
 	if err != nil {
 		return errorResult("apply_patch: " + err.Error()), nil
 	}
@@ -207,6 +217,20 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 					"(a patch of context lines only). Nothing was written; send a patch with +/- lines.")},
 			Details: map[string]any{"changes": 0, "files": []string{}, "diff": ""},
 		}, nil
+	}
+	if len(changes) > applyPatchMaxFiles {
+		return errorResult(fmt.Sprintf(
+			"apply_patch: this patch touches %d files, over the %d-file limit; nothing was written. Split it into smaller apply_patch calls",
+			len(changes), applyPatchMaxFiles)), nil
+	}
+	budget := estimatePatchBudget(patchText, changes)
+	if budget.total > applyPatchMaxWorkingBytes {
+		return errorResult(patchBudgetError(budget)), nil
+	}
+	if t.Snap != nil && !t.Snap.CanRecord(budget.snapshot) {
+		return errorResult(fmt.Sprintf(
+			"apply_patch: this patch's %d-byte rewind snapshot would exceed the %d-byte turn budget (%d already retained); nothing was written. Split it into smaller apply_patch calls or start a new turn",
+			budget.snapshot, snapshotTurnMaxBytes, t.Snap.PendingBytes())), nil
 	}
 	if t.BeforePersist != nil {
 		if err := t.BeforePersist(changes); err != nil {
@@ -228,8 +252,11 @@ func (t *ApplyPatchTool) Execute(ctx context.Context, id string, args json.RawMe
 		} else {
 			summaries = append(summaries, summarizeChange(ch, label))
 		}
-		if diff := unifiedDiff(label, ch.OldContent, ch.NewContent); diff != "" {
-			diffs.WriteString(diff)
+		remainingDiff := applyPatchMaxDiffBytes - diffs.Len()
+		if remainingDiff > 0 {
+			if diff := unifiedDiffLimited(label, ch.OldContent, ch.NewContent, remainingDiff); diff != "" {
+				diffs.WriteString(diff)
+			}
 		}
 	}
 

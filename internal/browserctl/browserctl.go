@@ -31,8 +31,11 @@ const (
 	// CapQuit is the advertised capability for /v1/quit. A browser that does
 	// not advertise it predates the endpoint; asking anyway would be a guess.
 	CapQuit = "quit"
-	// maxBody bounds one JSON reply.
-	maxBody = 16 << 20
+	// maxBody bounds one JSON reply or screenshot. The browser tool's own
+	// per-action caps (screenshot pixels, snapshot result size) are stricter;
+	// this is the transport-level ceiling that keeps a bad daemon from making the
+	// agent retain an unbounded response.
+	maxBody = 8 << 20
 )
 
 // SocketFromEnv returns the configured control socket, or "".
@@ -337,7 +340,14 @@ func (c *Client) Screenshot(ctx context.Context, fullPage bool) ([]byte, error) 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("browser: screenshot status %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxBody {
+		return nil, fmt.Errorf("browser: screenshot exceeds %d-byte limit", maxBody)
+	}
+	return raw, nil
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {

@@ -167,6 +167,14 @@ func (t *Tool) Execute(ctx context.Context, id string, args json.RawMessage, _ a
 	if cleanup != nil {
 		defer cleanup()
 	}
+	// apply_patch/view_image also take a class lane (single write / single image);
+	// every worker consumes the same global pool. bash and sub-agents never enter
+	// this path.
+	release, err := acquireWorkerSlot(ctx, t.Name())
+	if err != nil {
+		return failed(err.Error())
+	}
+	defer release()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = t.Root
 	cmd.Env = workerEnv()

@@ -37,8 +37,10 @@ func selectSearchBackend(getenv func(string) string) searchBackend {
 	return duckDuckGoBackend{}
 }
 
-// searchBodyLimit caps how much of a backend response body is read.
-const searchBodyLimit = 4 * 1024 * 1024
+// searchBodyLimit caps how much of a backend response body is read. Search
+// replies contain snippets, not page content; a smaller cap keeps a misbehaving
+// backend from making the tool retain a multi-megabyte JSON document.
+const searchBodyLimit = 1 * 1024 * 1024
 
 // --- Tavily ---------------------------------------------------------------
 
