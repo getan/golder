@@ -293,6 +293,7 @@ func TestStatusBarFoldHandlesWideRunes(t *testing.T) {
 // click on the same field releases it, a click on the bar's background clears it,
 // and none of them start a text selection on the bar.
 func TestModelStatusBarClickPinsAndUnpins(t *testing.T) {
+	clearMotionEnv(t) // this test specifically exercises the local ribbon glyphs
 	m := apply(t, NewModel(Options{Model: "claude-opus", ProviderName: "commandcode"}), tea.WindowSizeMsg{Width: 120, Height: 30})
 	m.statusBar.SetGit(gitInfoMsg{branch: "master", ok: true})
 	m.statusBar.SetTask("running: Read")

@@ -106,19 +106,34 @@ existing TUI input/output/Update/View timings are unchanged, except that their
 The clock starts at package initialization, so CLI configuration, tool/sandbox
 setup and skill discovery are inside the window; the `tui` stage begins at
 `tui.Run`. When stdin is redirected, Bubble Tea retains its own `/dev/tty`
-fallback; that input read is not wrapped, so input byte counts are unavailable
-on that path.
-The `io` line records which path was wrapped. `init begin` occurs after Bubble
-Tea sets up its input reader. `input begin`/`input read` instrument the actual
-file read, **not** the epoll/kqueue wait before it and not the physical keypress.
-Thus a gap with no input lines does not by itself prove that SSH or the terminal
-sent the bytes late: input polling or scheduling can also be delayed. Correlate
-it with the initialization stages and the user's action times.
+fallback. The `io` line identifies the direct-file wrapper; the additional
+metadata-only Ultraviolet observer also covers the fallback reader.
+
+With tracing enabled, the `input` stage now separates
+`cancel_reader.init.begin/end`, `reader.init.begin/end`, `stream.begin/end`,
+`poll.begin/end` (the Unix epoll/kqueue/read wait), `decode.begin/end`, and
+`deliver.begin/end` (queue delivery). Existing `tui input begin/read` lines
+measure the underlying file read, not the preceding poll. `first view`,
+`first window`, `first input read` and `first key event` mark the early timeline.
+None of these contains input bytes or key text. A long `poll` span by itself is
+normal while idle, not proof of a slow network or reader; correlate it with the
+user's action times, decode/delivery spans and Update timestamps.
+
+Interrupt actions log only booleans: running, approval, selection, nonempty
+draft, session operation and menu state. `interrupt cancel requested`,
+`run cancel invoked`, `run end received` and approval open/close events separate
+key routing from cancellation settlement. `reflow`, `context_estimate`,
+`initial_context_estimate`, `replay_blocks` and `persist` have begin/end spans;
+the persist span includes waiting for its serialization lock. Existing
+selection-copy/draft-clear/cancel ordering is unchanged. A cancelled run's
+approval still settles with its real run-end event, not a speculative reset.
 
 ## Color differences are capability differences
 
 The status bar uses filled segments at ANSI256/TrueColor, and colored text below
-256 colors. This is not a Linux/macOS switch. Common examples:
+256 colors **locally**. SSH intentionally uses ASCII decorations and colored
+text at every profile to avoid font-dependent filled blocks. This is not a
+Linux/macOS switch. Common local examples:
 
 | Terminal environment | Typical detection | Status bar |
 | --- | --- | --- |
@@ -187,6 +202,34 @@ same connection does not rule out terminal-protocol or event-queue differences.
 The affected environment still needs a timing capture. The cell-motion change
 reduces event volume at the source but has not been shown to fix the reported
 stall; no logo or color-profile change is claimed as a fix.
+
+### Query-free SSH startup and bounded resume
+
+The later affected-host capture separated startup assembly, expensive resume
+layout, delayed protocol replies and a still-unexplained first-read gap. The
+ordinary agent TUI now suppresses automatic startup color/Kitty/device/mode
+queries on SSH, or with `GOLDER_NO_TERMINAL_QUERIES=1`. Local negotiation is
+unchanged, including local `--no-animations`. An output-only allowlisted shim
+is necessary for Bubble Tea v2.0.8's unconditional Kitty query: it preserves
+split-write boundaries, tty identity, output modes and explicit clipboard
+requests. It never filters or reads stdin, and adds no input timeout.
+
+SSH omits the splash and uses a plain ASCII-decorated status bar. A resumed
+transcript retains all source blocks but does no Markdown rendering before the
+first real geometry. Its first layout renders the newest block; existing
+budgeted seed messages fill a short screen and materialize older history when
+scrolled. Initial context usage is cached during session assembly. Individual
+oversized blocks are not preempted or truncated. Persistence is still serialized
+for durability; its new spans distinguish real disk/lock stalls before any
+asynchronous-save redesign.
+
+Regression probes use the real Bubble Tea renderer plus an OS input pipe, and
+392 synthetic messages. They verify no automatic queries reach output, early
+input is accepted, and all older history remains scrollable. They are **not** a
+retest of the affected SSH client or its original session. The new reader/queue
+and interrupt stages are needed to locate any remaining first-read/cancel gap;
+no forced run-reset watchdog or changed Ctrl+C semantics is claimed as a fix.
+The query switch applies to the ordinary agent, not the outer workspace client.
 
 ## Streaming repaint reduction
 

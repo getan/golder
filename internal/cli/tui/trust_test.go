@@ -108,11 +108,9 @@ func TestTrustOwnsKeysBeforeInitCommands(t *testing.T) {
 	}
 	// Commands already returned by Init must not later reopen/reset the dialog
 	// after the person has moved its selection or answered it.
-	if initCmd != nil {
-		for _, cmd := range initCmd().(tea.BatchMsg) {
-			if _, reopens := cmd().(trustPromptMsg); reopens {
-				t.Fatal("Init must not asynchronously reopen an already answered trust question")
-			}
+	for _, msg := range commandResults(initCmd) {
+		if _, reopens := msg.(trustPromptMsg); reopens {
+			t.Fatal("Init must not asynchronously reopen an already answered trust question")
 		}
 	}
 }

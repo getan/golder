@@ -28,7 +28,9 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 
 推荐在 [Ghostty](https://github.com/ghostty-org/ghostty) 里使用 golder，TUI 也主要在 Ghostty 上测试，因此在那里的表现最接近日常开发时的样子。其他现代终端同样可以运行，但测试覆盖以 Ghostty 为主；内置浏览器 pane 仍需要终端支持相应的图形协议。
 
-**SSH / 低带宽终端**：普通 agent TUI 检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时默认使用静态 logo、关闭状态栏滚动与工作指示器动画（耗时统计仍每秒更新），减少装饰性重绘。本地也可用 `golder --no-animations` 或 `GOLDER_NO_ANIMATIONS=1 golder`；保留动画时，第一个按键或粘贴会立即结束 logo 入场动画，该次输入照常处理，不会被吞掉。
+**SSH / 低带宽终端**：普通 agent TUI 检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时省略大 logo，使用 ASCII 装饰的纯文本状态栏，关闭状态栏滚动与工作指示器动画（耗时统计仍每秒更新）。同时不发送启动时的颜色／Kitty 能力查询，Markdown 使用默认暗色配色，避免终端回包握手拖住早期输入。恢复会话先绘制最新一块内容，再按预算补齐首屏；旧消息保留，滚动时继续加载。
+
+本地仍保留原有 logo、颜色与键盘能力协商；可用 `golder --no-animations` 或 `GOLDER_NO_ANIMATIONS=1 golder` 单独关闭动画，用 `GOLDER_NO_TERMINAL_QUERIES=1 golder` 单独关闭自动查询。保留动画时，第一个按键或粘贴会立即结束 logo 入场动画，该次输入照常处理，不会被吞掉。显式剪贴板操作、真实光标与中文输入法定位不受查询开关影响。
 
 流式 token 计数和耗时只在 spinner 定时 tick 时发布，不再被每个 token 带着刷新。SSH／禁用动画时，正文增量按 150ms 合并显示（本地普通模式为 50ms），减少终端写入；输入、审批和最终结果不等待这个合并定时器。真实光标仍保留，供中文输入法定位。排查方法见 [TUI 延迟与刷新](docs/tui-latency.md)。
 
@@ -499,6 +501,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_DEBUG` | `1`/`true`/`on`：打开诊断 UI；当前用于显示默认隐藏的 allow 审批行 |
 | `GOLDER_TUI_TRACE` / `GOLDER_STARTUP_TRACE` | 诊断 trace 文件路径（opt-in）。覆盖进程启动与 TUI、单一时钟、0600；只记录阶段/计数/耗时，不记录输入、路径或凭据。见 [TUI 延迟诊断](docs/tui-latency.md#startup-trace) |
 | `GOLDER_NO_ANIMATIONS` | `1`/`true`/`yes`/`on`：关闭普通 TUI 装饰动画；检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时也默认关闭 |
+| `GOLDER_NO_TERMINAL_QUERIES` | `1`/`true`/`yes`/`on`：关闭普通 agent TUI 的自动颜色／键盘能力查询；SSH 默认关闭。显式剪贴板请求仍保留，外层 workspace client 不由此开关控制 |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |

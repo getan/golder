@@ -125,6 +125,11 @@ type runSession struct {
 	// project-layer hooks load exactly when trust is granted and SessionStart
 	// fires exactly once.
 	hooksWired bool
+	// Calculated during session assembly, before Bubble Tea owns input. The
+	// initial model consumes this snapshot instead of estimating a large
+	// inherited context again while constructing its first frame.
+	initialContextTokens int
+	initialContextKnown  bool
 	// onEvent is the observer chain delivered to every run: the plugin notifier
 	// (US-017) with the SessionEnd/PreCompact hook notifier chained after it.
 	onEvent func(agentcore.AgentEvent)
@@ -449,6 +454,12 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		s.wireHooks(opts)
 	} else if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
 		s.onEvent = n.Handle
+	}
+	if len(history) > 0 && live.ContextWindow > 0 {
+		finish := diagtrace.Span("session", "initial_context_estimate")
+		s.initialContextTokens = compaction.EstimateContextTokens(history).Tokens
+		s.initialContextKnown = true
+		finish()
 	}
 	return s, history, nil
 }
@@ -911,6 +922,7 @@ func approvalKey(req judge.ApprovalRequest) string {
 // by withSession so pressing Esc / Ctrl+C while running stops the current run
 // instead of quitting the program (FR-14). Safe to call when no run is active.
 func (s *runSession) interrupt() {
+	diagtrace.Event("run", "cancel invoked active=%t", s.cancelRun != nil)
 	if s.cancelRun != nil {
 		s.cancelRun()
 	}
@@ -973,6 +985,7 @@ func (s *runSession) startGoalRun(label string) (chan tea.Msg, tea.Cmd) {
 // switches) and from the loop goroutine (mid-run checkpoints via
 // checkpointMidRun); persistMu serializes the two.
 func (s *runSession) persist() error {
+	defer diagtrace.Span("session", "persist")()
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
 	return s.persistLocked()
@@ -1063,6 +1076,7 @@ func (s *runSession) checkpointMidRun(_ context.Context, _ *agentcore.AgentConte
 // (apply_patch expanded, reads folded), so a resumed transcript reads like the
 // session it continues.
 func seedTranscript(t *transcript, history []agentcore.Message) {
+	defer diagtrace.Span("session", "replay_blocks")()
 	// A long session replays hundreds of blocks (and thousands of rendered
 	// lines): suspend reflow while appending so the replay pays for one layout
 	// pass instead of re-laying the growing history per message, which is

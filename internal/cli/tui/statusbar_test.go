@@ -614,6 +614,7 @@ func TestStatusBarPlainModeWidth(t *testing.T) {
 // hand it to the bar (a bar that never hears about the profile draws its ribbon on
 // a 16-color terminal, which is the bug this closes).
 func TestModelColorProfileSelectsBarForm(t *testing.T) {
+	clearMotionEnv(t) // SSH intentionally stays plain even with TrueColor
 	base := NewModel(Options{Model: "sonnet-4"})
 	if base.statusBar.plain {
 		t.Fatal("the initial bar should assume the ribbon (256 colors) until told otherwise")

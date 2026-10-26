@@ -43,8 +43,16 @@ func TestTUIMotionPolicy(t *testing.T) {
 				t.Fatalf("disabled=%v logoRunning=%v; want disabled=%v", m.opts.NoAnimations, m.logoRunning, tc.disabled)
 			}
 			if tc.disabled {
-				want := renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames)
-				assertSettledBanner(t, m, want)
+				if m.remoteTerminal {
+					for _, b := range m.transcript.blocks {
+						if b.role == roleBanner {
+							t.Fatal("SSH must omit the static splash as well as its animation")
+						}
+					}
+				} else {
+					want := renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames)
+					assertSettledBanner(t, m, want)
+				}
 				got, cmd := m.Update(logoFrameMsg{frame: 1})
 				if cmd != nil || got.(Model).logoRunning {
 					t.Fatal("disabled logo must not arm a tick")

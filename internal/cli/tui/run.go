@@ -2,9 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/diagtrace"
@@ -24,6 +26,12 @@ func Run(opts Options) error {
 	}
 	trace := newTimingTrace(diagtrace.Process())
 	defer trace.close()
+	if trace != nil {
+		restore := uv.SetInputObserver(func(e uv.InputObservation) {
+			diagtrace.Event("input", "%s bytes=%d events=%d consumed=%d type=%s failed=%t duration=%s", e.Phase, e.Bytes, e.Events, e.Consumed, e.Type, e.Failed, e.Duration)
+		})
+		defer restore()
+	}
 	trace.event("session begin")
 	// Assemble the session (store, resume-or-fresh context, live config) before
 	// entering the alt-screen, mirroring repl.Run: a store/resume failure is a
@@ -41,11 +49,22 @@ func Run(opts Options) error {
 	// here rather than at the three quit call sites because every path out of
 	// the program returns through this line.
 	defer s.hostClose()
+	prepareTerminalPalette(startupQueriesDisabled())
 	trace.event("model begin")
 	m := NewModel(opts).withSession(s, history)
 	trace.event("model end trust_pending=%t logo_running=%t", m.pendingTrust, m.logoRunning)
 	model, programOpts := trace.program(m)
+	if m.noTerminalQueries {
+		var sink io.Writer = os.Stdout
+		if trace != nil {
+			sink = timingOutput{File: os.Stdout, trace: trace}
+		}
+		filtered := &queryOutput{File: os.Stdout, sink: sink}
+		programOpts = append(programOpts, tea.WithOutput(filtered))
+		defer func() { trace.event("query output flush failed=%t", filtered.Flush() != nil) }()
+	}
 	p := tea.NewProgram(model, programOpts...)
+	trace.event("program constructed")
 	trace.event("program begin")
 	_, err = p.Run()
 	trace.event("program end failed=%t", err != nil)

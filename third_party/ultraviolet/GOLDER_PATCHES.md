@@ -21,6 +21,12 @@ Local changes:
   indexing it as a six-byte seven-bit report (a fuzz-reproduced panic).
 - Regression tests exercise all split positions, delayed reads, malformed and
   oversized reports, literal mouse-looking text, paste, and real workspace input.
+- `input_observer.go`, `cancelreader_other.go`, `terminal_reader.go`: opt-in,
+  metadata-only `SetInputObserver` seam for reader construction, Unix poll/read,
+  decode and queue-delivery timing. The default path leaves the original reader
+  intact and reads no diagnostic clock; observations expose counts/types only,
+  never input bytes, key text, errors or file identity. No framing or timeout
+  policy changes are part of this diagnostic addition.
 
 A bare Esc keeps the upstream 50ms behavior. The seven-bit two-byte introducers
 also encode Alt+[ / Alt+] / Alt+O etc.; they get a separate one-second ambiguity

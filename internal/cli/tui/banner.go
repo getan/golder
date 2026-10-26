@@ -23,6 +23,14 @@ func renderBanner(theme Theme, opts Options, cwd string) string {
 	return renderBannerFrame(theme, opts, cwd, logoFrames)
 }
 
+// SSH starts with the composer/status bar, not a block-font splash. Keep the
+// original banner for local sessions, including local --no-animations.
+func (m *Model) addSessionBanner(frame int) {
+	if !m.remoteTerminal {
+		m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, frame))
+	}
+}
+
 // renderBannerFrame paints one wordmark frame beside a config panel showing the
 // session basics. Its only I/O is a single cheap read of the local update-check
 // cache (no network — CachedLatest); it never panics, so it is safe to build

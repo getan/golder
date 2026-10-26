@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/trust"
 )
@@ -114,6 +115,7 @@ type approvalDialog struct {
 // openApproval arms the dialog for one tool request. The caller keeps the
 // reply channel; answering sends exactly one value.
 func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.ApprovalAnswer) {
+	diagtrace.Event("approval", "open trust=false running=%t", m.running)
 	m.menu.close()
 	d := approvalDialog{
 		active: true,
@@ -161,6 +163,7 @@ func trustGateRows(tool string) []approvalRow {
 // launch prompt and a mid-run approval look and behave the same. The chosen
 // value is applied by applyTrustChoice.
 func (m *Model) openTrustApproval() {
+	diagtrace.Event("approval", "open trust=true running=%t", m.running)
 	m.menu.close()
 	m.approval = approvalDialog{
 		active: true,
@@ -180,6 +183,7 @@ func (m *Model) answerApproval(value string) {
 	if !m.approval.active {
 		return
 	}
+	diagtrace.Event("approval", "close reason=answer trust=%t", m.approval.kind == "trust")
 	d := m.approval
 	if d.consent {
 		m.approval = approvalDialog{}

@@ -167,6 +167,21 @@ func Event(stage, format string, args ...any) {
 	Process().Event(stage, format, args...)
 }
 
+// Span records a content-free begin/end pair, including time blocked inside
+// phase. The disabled path reads no clock and allocates nothing. Use constant
+// stage/phase names, never errors, commands, paths or input text.
+func Span(stage, phase string) func() {
+	t := Process()
+	if t == nil {
+		return noopSpan
+	}
+	t.Event(stage, "%s begin", phase)
+	start := time.Now()
+	return func() { t.Event(stage, "%s end duration=%s", phase, time.Since(start)) }
+}
+
+func noopSpan() {}
+
 // Close closes the process trace. It is safe to call more than once.
 func Close() {
 	processMu.Lock()

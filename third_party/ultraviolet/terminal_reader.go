@@ -30,6 +30,7 @@ const DefaultEscTimeout = 50 * time.Millisecond
 // reading escape sequences, mouse events, and bracketed paste mode.
 type TerminalReader struct {
 	EventDecoder
+	observer *inputObserver
 
 	// MouseMode determines whether mouse events are enabled or not. This is a
 	// platform-specific feature and is only available on Windows. When this is
@@ -93,7 +94,14 @@ type TerminalReader struct {
 //	go sc.StreamEvents(ctx, evc)
 //	```
 func NewTerminalReader(r io.Reader, termType string) *TerminalReader {
+	o := inputObserverState.Load()
+	var observedStart time.Time
+	if o != nil {
+		o.emit(InputObservation{Phase: "reader.init.begin"})
+		observedStart = time.Now()
+	}
 	d := &TerminalReader{
+		observer:   o,
 		EscTimeout: DefaultEscTimeout,
 		r:          r,
 		term:       termType,
@@ -109,6 +117,9 @@ func NewTerminalReader(r io.Reader, termType string) *TerminalReader {
 	evs.lookup = d.lookup
 	evs.setLogger(d.logger)
 	d.eventScanner = evs
+	if o != nil {
+		o.emit(InputObservation{Phase: "reader.init.end", Duration: time.Since(observedStart)})
+	}
 	return d
 }
 
@@ -137,6 +148,8 @@ func (d *TerminalReader) sendBytes(ctx context.Context, readc chan []byte) error
 // StreamEvents sends events to the provided channel. It stops when the context
 // is closed or when an error occurs.
 func (d *TerminalReader) StreamEvents(ctx context.Context, eventc chan<- Event) error {
+	d.observer.emit(InputObservation{Phase: "stream.begin"})
+	defer d.observer.emit(InputObservation{Phase: "stream.end"})
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var buf bytes.Buffer
@@ -202,10 +215,25 @@ func (d *TerminalReader) SetLogger(logger Logger) {
 }
 
 func (d *TerminalReader) sendEvents(ctx context.Context, eventc chan<- Event, buf []byte, expired bool) int {
+	var observedStart time.Time
+	if d.observer != nil {
+		d.observer.emit(InputObservation{Phase: "decode.begin", Bytes: len(buf)})
+		observedStart = time.Now()
+	}
 	n, events := d.eventScanner.scanEvents(buf, expired)
+	if d.observer != nil {
+		d.observer.emit(InputObservation{Phase: "decode.end", Bytes: len(buf), Events: len(events), Consumed: n, Duration: time.Since(observedStart)})
+	}
 	for _, event := range events {
+		if d.observer != nil {
+			observedStart = time.Now()
+			d.observer.emit(InputObservation{Phase: "deliver.begin", Type: fmt.Sprintf("%T", event)})
+		}
 		select {
 		case eventc <- event:
+			if d.observer != nil {
+				d.observer.emit(InputObservation{Phase: "deliver.end", Type: fmt.Sprintf("%T", event), Duration: time.Since(observedStart)})
+			}
 		case <-ctx.Done():
 			return n
 		}

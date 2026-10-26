@@ -25,6 +25,7 @@ import (
 	"github.com/getan/golder/internal/cli/status"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
@@ -42,8 +43,10 @@ import (
 // session/run assembly (#392); the Init/Update/View contract and the alt-screen
 // + quit-key handling stay stable.
 type Model struct {
-	opts  Options
-	theme Theme
+	opts              Options
+	theme             Theme
+	remoteTerminal    bool
+	noTerminalQueries bool
 
 	// width and height track the terminal size reported by tea.WindowSizeMsg.
 	// They are zero until the first size message arrives; View degrades to a
@@ -356,21 +359,28 @@ func NewModel(opts Options) Model {
 		ThinkingLevel: opts.ThinkingLevel,
 		ContextWindow: cli.ResolveContextWindow(opts.ProviderName, opts.Model),
 	}
+	remote := isSSHSession()
+	bar := newStatusBar(theme, opts, cwd)
+	if remote {
+		bar.ascii, bar.plain = true, true
+	}
 	return Model{
-		opts:         opts,
-		theme:        theme,
-		transcript:   newTranscript(theme),
-		input:        newInput(),
-		cwd:          cwd,
-		statusBar:    newStatusBar(theme, opts, cwd),
-		toolCards:    make(map[string]*toolCard),
-		slash:        newSlashRegistry(opts, live),
-		live:         live,
-		menu:         newSlashMenu(theme),
-		spinner:      newSpinner(theme),
-		pastes:       make(map[int]string),
-		images:       make(map[int]string),
-		bashSessions: make(map[string]string),
+		opts:              opts,
+		theme:             theme,
+		transcript:        newTranscript(theme),
+		input:             newInput(),
+		cwd:               cwd,
+		statusBar:         bar,
+		toolCards:         make(map[string]*toolCard),
+		slash:             newSlashRegistry(opts, live),
+		live:              live,
+		remoteTerminal:    remote,
+		noTerminalQueries: startupQueriesDisabled(),
+		menu:              newSlashMenu(theme),
+		spinner:           newSpinner(theme),
+		pastes:            make(map[int]string),
+		images:            make(map[int]string),
+		bashSessions:      make(map[string]string),
 		// A model built without a session (tests, pure construction) still gets
 		// a live queue so mid-run input can be typed and previewed; withSession
 		// rebinds this to the session's queue, which the loop seams drain.
@@ -418,13 +428,18 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	if len(history) > 0 || m.pendingTrust || m.opts.NoAnimations {
 		startFrame = logoFrames
 	}
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, startFrame))
-	m.logoRunning = startFrame == 0
+	m.addSessionBanner(startFrame)
+	m.logoRunning = !m.remoteTerminal && startFrame == 0
+	m.transcript.fastStart = m.remoteTerminal
 	seedTranscript(&m.transcript, history)
 	// Seed the context gauge with the resumed session's inherited context so the
 	// very first frame already shows how much of the window was carried over,
 	// instead of staying blank until the first run ends.
-	m.refreshContextUsage(history)
+	if s.initialContextKnown {
+		m.setContextUsage(s.initialContextTokens)
+	} else {
+		m.refreshContextUsage(history)
+	}
 	if m.pendingTrust {
 		// Init commands run asynchronously and race with terminal input. Opening
 		// this via a batched trustPromptMsg lost early arrows/typing to the
@@ -947,7 +962,7 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 	m.syncLiveDisplay()
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
+	m.addSessionBanner(logoFrames)
 	seedTranscript(&m.transcript, msgs)
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
@@ -960,9 +975,11 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 // can show the branch/dirty state as soon as it resolves; the alt-screen is
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus(), func() tea.Msg {
-		return tea.RequestBackgroundColor()
-	}}
+	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus()}
+	if !m.noTerminalQueries {
+		cmds = append(cmds, func() tea.Msg { return tea.RequestBackgroundColor() })
+	}
+	diagtrace.Event("tui", "terminal policy minimal=%t automatic_queries_disabled=%t", m.remoteTerminal, m.noTerminalQueries)
 	// The wordmark's entrance is armed by withSession before Init runs, so the
 	// first tick is scheduled here; the chain stops itself on the final frame.
 	if m.logoRunning {
@@ -994,7 +1011,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The first frame — and any resize — can leave a long value elided: give it
 		// one pass of motion so the whole thing is seen once.
 		watch, reveal := m.armUnseenWatch(), m.startStatusReveal()
-		return m, tea.Batch(watch, reveal)
+		return m, tea.Batch(watch, reveal, m.armSeedMore())
 
 	case tea.ResumeMsg:
 		// The program just came back from a Ctrl+Z suspension: the terminal may
@@ -1041,6 +1058,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.applyModelsFetched(msg)
 
 	case tea.BackgroundColorMsg:
+		if m.noTerminalQueries {
+			return m, nil // ignore stale unsolicited replies; keep the fallback palette
+		}
 		// Feed the terminal's real background to the Markdown renderer so glamour
 		// picks a matching light/dark palette WITHOUT issuing its own terminal
 		// query (which would leak its reply into the input — see SetMarkdownDark).
@@ -1628,6 +1648,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case runEndMsg:
+		diagtrace.Event("run", "end received failed=%t cancelled=%t interrupt_requested=%t", msg.err != nil, errors.Is(msg.err, context.Canceled), m.interruptRequested)
 		// Capture before the reset: the settlement below reports an interrupt
 		// differently depending on whether the press already announced it, and
 		// whether the aborted-turn event survived the cancellation race.
@@ -1646,6 +1667,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// not outlive the call it was asking about. The run goroutine is gone,
 		// so no reply is delivered. Queued requests go with it, released
 		// fail-closed: their gates were cancelled too.
+		if m.approval.active {
+			diagtrace.Event("approval", "close reason=run_end")
+		}
 		m.approval = approvalDialog{}
 		m.dismissApprovalQueue()
 		// The run is over: any still-open sub-agent rows are stale (their tasks ended
@@ -1793,6 +1817,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // newline) to the input editor while idle. Keys are matched via KeyPressMsg
 // .String() so the mapping is terminal-independent.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" || msg.String() == "esc" {
+		// Record action/state only, never the key text or draft/selection content.
+		diagtrace.Event("interrupt", "received running=%t approval=%t selection=%t draft=%t session_op=%t menu=%t", m.running, m.approval.active, !m.sel.empty(), m.input.Value() != "", m.sessionOpCancel != nil, m.menu.active)
+	}
 	// Ctrl+Z suspends the whole program into the shell's job control (fg brings
 	// it back), exactly like codex and every other terminal UI: bubbletea
 	// releases the terminal, raises SIGTSTP, and repaints on resume. It works in
@@ -3015,7 +3043,7 @@ func (m Model) runRewind(line string) (tea.Model, tea.Cmd) {
 	}
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
+	m.addSessionBanner(logoFrames)
 	seedTranscript(&m.transcript, msgs)
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(notice)
@@ -3158,7 +3186,7 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 func (m *Model) reseedTranscript(notice string) {
 	m.transcript.reset()
 	m.clearSelection()
-	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
+	m.addSessionBanner(logoFrames)
 	seedTranscript(&m.transcript, m.session.agentCtx.Messages)
 	m.syncLiveDisplay()
 	m.transcript.addSystem(notice)
@@ -3200,7 +3228,15 @@ func (m *Model) refreshContextUsage(msgs []agentcore.Message) {
 	if m.live == nil || m.live.ContextWindow <= 0 {
 		return
 	}
+	defer diagtrace.Span("tui", "context_estimate")()
 	tokens := compaction.EstimateContextTokens(msgs).Tokens
+	m.setContextUsage(tokens)
+}
+
+func (m *Model) setContextUsage(tokens int) {
+	if m.live == nil || m.live.ContextWindow <= 0 {
+		return
+	}
 	if tokens <= 0 {
 		m.statusBar.SetTelemetry(telemetryEventView{window: 0})
 		return
@@ -3649,6 +3685,7 @@ func (m Model) clearDraft() Model {
 // "(interrupting…)" line and read the pair as "the key did nothing".
 func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 	if m.running {
+		diagtrace.Event("interrupt", "cancel requested session_op=%t run_cancel=%t already_requested=%t", m.sessionOpCancel != nil, m.interruptFn != nil, m.interruptRequested)
 		// A session op (/compact, /dream) has no run ctx of its own; cancel it
 		// first so the interrupt reaches whatever is actually in flight.
 		if m.sessionOpCancel != nil {

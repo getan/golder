@@ -9,6 +9,7 @@ package tui
 
 import (
 	"os"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -19,6 +20,7 @@ import (
 
 type timingTrace struct {
 	trace *diagtrace.Trace
+	first sync.Map
 }
 
 // newTimingTrace adapts the process trace for the TUI. The returned value is
@@ -33,6 +35,14 @@ func newTimingTrace(tr *diagtrace.Trace) *timingTrace {
 func (t *timingTrace) event(format string, args ...any) {
 	if t != nil {
 		t.trace.Event("tui", format, args...)
+	}
+}
+
+func (t *timingTrace) once(phase string) {
+	if t != nil {
+		if _, seen := t.first.LoadOrStore(phase, true); !seen {
+			t.event("first %s", phase)
+		}
 	}
 }
 
@@ -68,6 +78,9 @@ func (r timingInput) Read(p []byte) (int, error) {
 	r.trace.event("input begin")
 	start := time.Now()
 	n, err := r.File.Read(p)
+	if n > 0 {
+		r.trace.once("input read")
+	}
 	r.trace.event("input read bytes=%d duration=%s failed=%t", n, time.Since(start), err != nil)
 	return n, err
 }
@@ -103,7 +116,10 @@ func (m timingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.trace.event("update begin type=%T", msg)
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.trace.once("window")
 		m.trace.event("window width=%d height=%d", msg.Width, msg.Height)
+	case tea.KeyPressMsg:
+		m.trace.once("key event")
 	case tea.ColorProfileMsg:
 		m.trace.event("color profile=%s", msg.Profile)
 	case tea.ModeReportMsg:
@@ -119,6 +135,7 @@ func (m timingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m timingModel) View() tea.View {
+	m.trace.once("view")
 	m.trace.event("view begin")
 	start := time.Now()
 	v := m.Model.View()

@@ -75,6 +75,7 @@ type statusBar struct {
 	// same shade with the separators between them invisible. Fewer colors means
 	// less to draw with, not a worse version of the same picture.
 	plain bool
+	ascii bool // SSH uses simple glyphs/separators, never PUA or filled blocks
 
 	// revealLeft / revealMax / scroll carry the one-pass motion a long value gets
 	// right after it changes: while revealLeft > 0 the elided fields slide from
@@ -205,7 +206,7 @@ func (s *statusBar) SetGit(g gitInfoMsg) { s.git = g }
 // between them invisible; below 256 the bar therefore drops the blocks and colors
 // the text.
 func (s *statusBar) SetColorProfile(p colorprofile.Profile) {
-	s.plain = p < colorprofile.ANSI256
+	s.plain = s.ascii || p < colorprofile.ANSI256
 }
 
 // SetProvider updates the displayed provider (gateway) name. The value is live
@@ -340,6 +341,20 @@ const (
 // drawn in a block's own color — it needs no second color to be visible.
 const sepPlain = " · "
 
+func (s statusBar) plainSeparator() string {
+	if s.ascii {
+		return " | "
+	}
+	return sepPlain
+}
+
+func (s statusBar) glyph(normal, ascii string) string {
+	if s.ascii {
+		return ascii
+	}
+	return normal
+}
+
 // segment is one labelled field of the bar together with its colors and
 // truncation priority. bg == "" means the segment sits on the bar background;
 // a non-empty bg gives it a filled powerline block. Higher priority survives
@@ -458,7 +473,7 @@ func (s statusBar) drawSeparator(cells []statusCell, segs []segment, i, x int) i
 	case i == 0:
 		return x
 	case s.plain:
-		return drawStatusText(cells, x, sepPlain, colorGray, "", 0)
+		return drawStatusText(cells, x, s.plainSeparator(), colorGray, "", 0)
 	default:
 		return drawStatusText(cells, x, sepArrow, s.blockBg(segs[i-1]), s.blockBg(segs[i]), 0)
 	}
@@ -562,7 +577,7 @@ func (s statusBar) segmentAt(x, width int) segFocus {
 		switch {
 		case i == 0:
 		case s.plain:
-			pos += ui.Width(sepPlain)
+			pos += ui.Width(s.plainSeparator())
 		default:
 			pos += ui.Width(sepArrow)
 		}
@@ -607,7 +622,7 @@ func (s statusBar) foldLayout(width int) []segment {
 	}
 
 	pad := 0
-	sep := ui.Width(sepPlain)
+	sep := ui.Width(s.plainSeparator())
 	closing := 0
 	if !s.plain {
 		pad = 2
@@ -862,10 +877,10 @@ func (s statusBar) segments() []segment {
 		if s.mode == permissions.FullAccess.String() {
 			fg, bg, plainFg = sbModeWarnFg, sbModeWarnBg, sbPlainWarn
 		}
-		segs = append(segs, segment{text: glyphMode + " " + s.mode, fg: fg, bg: bg, plainFg: plainFg, priority: prioGit})
+		segs = append(segs, segment{text: s.glyph(glyphMode, "!") + " " + s.mode, fg: fg, bg: bg, plainFg: plainFg, priority: prioGit})
 	}
 	if s.model != "" {
-		segs = append(segs, segment{text: glyphModel + " " + s.model, scrollable: true, fg: sbModelFg, bg: sbModelBg, plainFg: sbPlainModel, priority: prioModel})
+		segs = append(segs, segment{text: s.glyph(glyphModel, "*") + " " + s.model, scrollable: true, fg: sbModelFg, bg: sbModelBg, plainFg: sbPlainModel, priority: prioModel})
 	}
 	// The protocol sits immediately after the model: which API dialect the model
 	// is actually reached over right now. The provider can move a model between
@@ -873,17 +888,17 @@ func (s statusBar) segments() []segment {
 	// state, so the segment follows the move rather than repeating the launch flag.
 	if s.protocol != nil {
 		if name := strings.TrimSpace(s.protocol()); name != "" {
-			segs = append(segs, segment{text: glyphProto + " " + name, fg: sbProtoFg, bg: sbProtoBg, plainFg: sbPlainProto, priority: prioModel})
+			segs = append(segs, segment{text: s.glyph(glyphProto, "=") + " " + name, fg: sbProtoFg, bg: sbProtoBg, plainFg: sbPlainProto, priority: prioModel})
 		}
 	}
 	if s.thinking != "" {
 		// Thinking rides with the model priority — it is cheap and contextual.
-		segs = append(segs, segment{text: glyphThink + " " + s.thinking, fg: sbThinkFg, bg: sbThinkBg, plainFg: sbPlainThink, priority: prioModel})
+		segs = append(segs, segment{text: s.glyph(glyphThink, "~") + " " + s.thinking, fg: sbThinkFg, bg: sbThinkBg, plainFg: sbPlainThink, priority: prioModel})
 	}
 	if s.cwd != "" {
 		segs = append(segs, segment{
-			text:       glyphCwd + " " + s.cwd,
-			short:      glyphCwd + " " + shortenPath(s.cwd),
+			text:       s.glyph(glyphCwd, ">") + " " + s.cwd,
+			short:      s.glyph(glyphCwd, ">") + " " + shortenPath(s.cwd),
 			scrollable: true,
 			fg:         sbCwdFg,
 			bg:         sbCwdBg,
@@ -896,7 +911,7 @@ func (s statusBar) segments() []segment {
 		segs = append(segs, segment{text: s.ctxText(), fg: sbCtxFg, bg: sbCtxBg, plainFg: sbPlainCtx, priority: prioToken})
 	}
 	if s.task != "" {
-		segs = append(segs, segment{text: glyphTask + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, plainFg: sbPlainTask, priority: prioTask})
+		segs = append(segs, segment{text: s.glyph(glyphTask, ">") + " " + s.task, fg: sbTaskFg, bg: sbTaskBg, plainFg: sbPlainTask, priority: prioTask})
 	}
 	// Stable ids: a layout drop removes segments, but the pin still has to name
 	// the same field it was set on.
@@ -910,12 +925,12 @@ func (s statusBar) segments() []segment {
 // N dirty entries and "⇡N" for N commits ahead, each shown only when non-zero.
 func (s statusBar) gitText() string {
 	var b strings.Builder
-	b.WriteString(glyphGit + " " + s.git.branch)
+	b.WriteString(s.glyph(glyphGit, "g") + " " + s.git.branch)
 	if s.git.dirty > 0 {
-		fmt.Fprintf(&b, " %s%d", glyphDirty, s.git.dirty)
+		fmt.Fprintf(&b, " %s%d", s.glyph(glyphDirty, "*"), s.git.dirty)
 	}
 	if s.git.ahead > 0 {
-		fmt.Fprintf(&b, " %s%d", glyphAhead, s.git.ahead)
+		fmt.Fprintf(&b, " %s%d", s.glyph(glyphAhead, "^"), s.git.ahead)
 	}
 	return b.String()
 }
@@ -924,9 +939,9 @@ func (s statusBar) gitText() string {
 // count is known, or "◔ 46%" before the first token count arrives.
 func (s statusBar) ctxText() string {
 	if s.tokens > 0 {
-		return fmt.Sprintf("%s %s (%d%%)", glyphCtx, humanizeInt(s.tokens), s.contextPct)
+		return fmt.Sprintf("%s %s (%d%%)", s.glyph(glyphCtx, "%"), humanizeInt(s.tokens), s.contextPct)
 	}
-	return fmt.Sprintf("%s %d%%", glyphCtx, s.contextPct)
+	return fmt.Sprintf("%s %d%%", s.glyph(glyphCtx, "%"), s.contextPct)
 }
 
 // humanizeInt renders n with thousands separators, e.g. 90866 → "90,866".

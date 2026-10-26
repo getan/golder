@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/judge"
 )
 
@@ -100,6 +101,10 @@ type transcriptBlock struct {
 type transcript struct {
 	vp    viewport.Model
 	theme Theme
+	// SSH replays retain source blocks without rendering at width zero, then
+	// materialize only the latest block on the first size event. Existing
+	// budgeted seed continuations fill the screen and scroll older history.
+	fastStart bool
 
 	// totalWidth is the full width the transcript may occupy (terminal columns
 	// minus any chrome the model reserves). width (below) is the content width
@@ -232,7 +237,7 @@ func newTranscript(theme Theme) transcript {
 // terminal geometry. Callers re-add the banner and seed history after.
 func (t *transcript) reset() {
 	vp, theme, totalWidth, width := t.vp, t.theme, t.totalWidth, t.width
-	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, prefixValid: true, follow: true}
+	*t = transcript{vp: vp, theme: theme, totalWidth: totalWidth, width: width, activeAssistant: -1, prefixValid: true, follow: true, fastStart: t.fastStart}
 }
 
 // toggleCardExpanded flips a card's expand state and drops the stored wrap when
@@ -850,6 +855,10 @@ func (t *transcript) reflow() {
 	if t.batchDepth > 0 {
 		return
 	}
+	if t.fastStart && (t.totalWidth <= 0 || t.vp.Height() <= 0) {
+		return // never render a resumed history at a provisional width
+	}
+	defer diagtrace.Span("tui", "reflow")()
 	// Fold everything stable into the prefix first: the layout below then only
 	// re-renders the live tail on top of one reused string.
 	t.commitStable()
@@ -915,13 +924,17 @@ func (t *transcript) commitStable() {
 	if k == t.matEnd {
 		return
 	}
-	if k-t.matEnd > lazySeedTrigger {
+	if k-t.matEnd > lazySeedTrigger || t.fastStart && t.matEnd == 0 && k > 1 {
 		// A replay landed in one pass: keep only its newest window and defer
 		// the rest. The scan just proved [matEnd, k) stable, so deferring part
 		// of it is safe; a previously materialized window (if any) is dropped
 		// too and re-materialized from its source blocks when the user scrolls
 		// back up.
-		t.matStart = k - lazySeedWindow
+		window := lazySeedWindow
+		if t.fastStart {
+			window = 1
+		}
+		t.matStart = max(0, k-window)
 		t.matEnd = t.matStart
 		clear(t.prefixLines)
 		t.prefixLines = t.prefixLines[:0]
