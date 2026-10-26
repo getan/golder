@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -42,6 +43,11 @@ func BuildDispatcher(set hooks.HookSet, deps HookDeps) *hooks.Dispatcher {
 	if warn == nil {
 		warn = os.Stderr
 	}
+	total := 0
+	for _, configured := range set {
+		total += len(configured)
+	}
+	diagtrace.Event("hooks", "dispatcher hooks=%d", total)
 	return hooks.NewDispatcher(set, deps.ProjectDir, warn)
 }
 

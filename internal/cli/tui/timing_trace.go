@@ -1,64 +1,45 @@
 package tui
 
 // Opt-in latency diagnostics. TEA_TRACE logs the raw terminal stream, including
-// prompts and keystrokes; this trace records only byte counts, message TYPES,
-// terminal capabilities and timing. It can safely distinguish a late input read
-// from a blocked Update/View or a slow terminal write without recording what the
-// person typed. Disabled by default; use a local file (e.g. /tmp), not NFS.
+// prompts and keystrokes; this trace records only byte counts, message TYPES and
+// timing. It can safely distinguish a late input read from a blocked Update/View
+// or a slow terminal write without recording what the person typed. The file,
+// clock, switch and privacy rules live in internal/diagtrace, shared with main,
+// run assembly, plugins and hooks so startup and TUI share one timeline.
 
 import (
-	"fmt"
-	"io"
-	"log"
 	"os"
-	"runtime"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/term"
+
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 type timingTrace struct {
-	log   *log.Logger
-	file  io.Closer
-	start time.Time
+	trace *diagtrace.Trace
 }
 
-func openTimingTrace(path string) (*timingTrace, error) {
-	if path == "" {
-		return nil, nil
+// newTimingTrace adapts the process trace for the TUI. The returned value is
+// nil when diagnostics are disabled; every method is nil-safe.
+func newTimingTrace(tr *diagtrace.Trace) *timingTrace {
+	if tr == nil {
+		return nil
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	t := &timingTrace{
-		log:  log.New(f, fmt.Sprintf("pid=%d ", os.Getpid()), log.Ldate|log.Ltime|log.Lmicroseconds|log.LUTC),
-		file: f, start: time.Now(),
-	}
-	t.event("start os=%s arch=%s go=%s", runtime.GOOS, runtime.GOARCH, runtime.Version())
-	// Deliberately not os.Environ(): it contains credentials. These names only
-	// describe the terminal. Presence (not values) is enough for host variables.
-	for _, key := range []string{"TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "CLICOLOR", "CLICOLOR_FORCE"} {
-		t.event("env %s=%q", key, os.Getenv(key))
-	}
-	for _, key := range []string{"NO_COLOR", "TMUX", "STY", "SSH_TTY", "SSH_CONNECTION", "WT_SESSION"} {
-		_, set := os.LookupEnv(key)
-		t.event("env %s_set=%t", key, set)
-	}
-	return t, nil
+	return &timingTrace{trace: tr}
 }
 
 func (t *timingTrace) event(format string, args ...any) {
 	if t != nil {
-		t.log.Printf("+%.3fms %s", float64(time.Since(t.start))/float64(time.Millisecond), fmt.Sprintf(format, args...))
+		t.trace.Event("tui", format, args...)
 	}
 }
 
 func (t *timingTrace) close() {
 	if t != nil {
-		t.event("trace end")
-		_ = t.file.Close()
+		// The process trace owns the file and writes "diag trace end" on exit.
+		t.event("tui end")
 	}
 }
 

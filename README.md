@@ -497,6 +497,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |
 | `GOLDER_HOST_REPORT` | 宿主上报开关：`off` 关闭；`tuios` / `herdr` 强制指定（默认按 pane 环境自动判断，不在宿主里则不上报） |
 | `GOLDER_DEBUG` | `1`/`true`/`on`：打开诊断 UI；当前用于显示默认隐藏的 allow 审批行 |
+| `GOLDER_TUI_TRACE` / `GOLDER_STARTUP_TRACE` | 诊断 trace 文件路径（opt-in）。覆盖进程启动与 TUI、单一时钟、0600；只记录阶段/计数/耗时，不记录输入、路径或凭据。见 [TUI 延迟诊断](docs/tui-latency.md#startup-trace) |
 | `GOLDER_NO_ANIMATIONS` | `1`/`true`/`yes`/`on`：关闭普通 TUI 装饰动画；检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时也默认关闭 |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |

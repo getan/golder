@@ -41,6 +41,7 @@ import (
 	"github.com/getan/golder/internal/cli/sessioncmd"
 	"github.com/getan/golder/internal/cli/tui"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
@@ -192,26 +193,37 @@ type cliOptions struct {
 }
 
 func main() {
+	// Start the one diagnostic clock before any startup work (config,
+	// credentials, plugins, sandbox probes). Without GOLDER_TUI_TRACE or the
+	// GOLDER_STARTUP_TRACE alias, every diagtrace call is a no-op.
+	if err := diagtrace.InitFromEnv(); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: trace disabled: %v\n", err)
+	}
+	diagtrace.Event("main", "begin args=%d", len(os.Args))
 	// Run a one-call file tool in the sandbox before reading config, credentials,
 	// grants.json or CLI flags. The request and its authorization snapshot arrive
 	// over stdin from the parent, which already ran the three gates.
 	if len(os.Args) > 1 && os.Args[1] == toolworker.Flag {
+		diagtrace.Event("main", "mode toolworker")
 		if err := toolworker.Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "golder: tool worker:", err)
-			os.Exit(1)
+			exit(1)
 		}
+		exit(0)
 		return
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "workspace":
-			os.Exit(runWorkspace(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+			diagtrace.Event("main", "mode workspace")
+			exit(runWorkspace(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		case "browse":
 			// Internal pane entry point, launched by the browser tool's
 			// open action. It is intentionally not advertised in usage:
 			// people and agents should use the browser tool, which owns the
 			// pane identity, socket selection and cleanup.
-			os.Exit(runBrowse(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+			diagtrace.Event("main", "mode browse")
+			exit(runBrowse(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		}
 	}
 	// Only this entry point promises that the executable implements `browse`.
@@ -232,9 +244,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "session" {
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: golder session export <session-id> [flags] | golder session list | golder session resume <session-id>")
-			os.Exit(2)
+			exit(2)
 		}
-		os.Exit(sessioncmd.Run(os.Args[2], os.Args[3:], os.Stdout, os.Stderr))
+		diagtrace.Event("main", "mode session")
+		exit(sessioncmd.Run(os.Args[2], os.Args[3:], os.Stdout, os.Stderr))
 	}
 
 	// `golder host-compat` reports what the terminal multiplexer around this
@@ -244,6 +257,7 @@ func main() {
 	// deliberately usable outside a multiplexer: that is where a person checks
 	// why nothing shows up on the rail.
 	if len(os.Args) > 1 && os.Args[1] == "host-compat" {
+		diagtrace.Event("main", "mode host-compat")
 		hostcmd.Version = version
 		var sub string
 		if len(os.Args) > 2 {
@@ -253,14 +267,15 @@ func main() {
 		if len(os.Args) > 3 {
 			rest = os.Args[3:]
 		}
-		os.Exit(hostcmd.Run(sub, rest, os.Stdout, os.Stderr))
+		exit(hostcmd.Run(sub, rest, os.Stdout, os.Stderr))
 	}
 
 	// `golder update` is binary self-update (#466: download the latest release
 	// and replace this binary). It is positional and distinct from the
 	// flag-driven agent modes, so peel it off before pflag parsing.
 	if len(os.Args) > 1 && os.Args[1] == "update" {
-		os.Exit(selfupdate.Run(context.Background(), version, os.Stdout, os.Stderr))
+		diagtrace.Event("main", "mode update")
+		exit(selfupdate.Run(context.Background(), version, os.Stdout, os.Stderr))
 	}
 
 	var opts cliOptions
@@ -310,6 +325,7 @@ func main() {
 		cli.PrintProviderHelp(out)
 	}
 	flag.Parse()
+	diagtrace.Event("main", "flags parsed changed=%d", flag.CommandLine.NFlag())
 
 	if opts.debug {
 		_ = os.Setenv("GOLDER_DEBUG", "1")
@@ -322,9 +338,10 @@ func main() {
 	// launched there. A bad path is a usage error (exit 2) rather than a silent
 	// fall-through to the original directory.
 	if opts.cwd != "" {
+		diagtrace.Event("main", "cwd set=true")
 		if err := os.Chdir(opts.cwd); err != nil {
 			fmt.Fprintf(os.Stderr, "golder: --cwd: %v\n", err)
-			os.Exit(2)
+			exit(2)
 		}
 	}
 
@@ -336,12 +353,14 @@ func main() {
 	golderhome.MigrateLegacy(os.Getenv, func(msg string) {
 		fmt.Fprintf(os.Stderr, "golder: %s\n", msg)
 	})
+	diagtrace.Event("main", "home migrate")
 
 	// Overlay config.toml from the state root: file values replace built-in
 	// defaults, but any flag the user set on the command line still wins
 	// (CLI > file > default). A malformed file warns but does not abort —
 	// defaults apply.
 	cfg, cfgErr := config.LoadFileConfig(config.FileConfigPath())
+	diagtrace.Event("main", "config loaded failed=%t", cfgErr != nil)
 	if cfgErr != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", cfgErr)
 	} else {
@@ -351,22 +370,26 @@ func main() {
 	// mode or audit path disables redaction rather than aborting the CLI: the
 	// user asked to run the agent, and a startup failure would be a worse
 	// trade-off than a loud warning. The default (empty mode) is "redact".
-	if err := configureRedact(opts.redactCfg, opts.apiKey); err != nil {
-		fmt.Fprintf(os.Stderr, "golder: redaction disabled: %v\n", err)
+	redactErr := configureRedact(opts.redactCfg, opts.apiKey)
+	if redactErr != nil {
+		fmt.Fprintf(os.Stderr, "golder: redaction disabled: %v\n", redactErr)
 		redact.SetDefault(nil)
 	}
+	diagtrace.Event("main", "redact configured failed=%t", redactErr != nil)
 	// The unified authorization table: grants.json in the state root. On a first
 	// run it folds the older stores into it (trust.json, the retired managed
 	// permissions.toml). Warnings are printed once here rather than surfacing
 	// later as a tool error: a legacy file that cannot be read costs an old
 	// grant, which is an inconvenience, while refusing to start is not.
-	if warnings, err := grants.Open(os.Getenv); err != nil {
-		fmt.Fprintf(os.Stderr, "golder: %v\n", err)
+	warnings, grantsErr := grants.Open(os.Getenv)
+	if grantsErr != nil {
+		fmt.Fprintf(os.Stderr, "golder: %v\n", grantsErr)
 	} else {
 		for _, w := range warnings {
 			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
 		}
 	}
+	diagtrace.Event("main", "grants open failed=%t", grantsErr != nil)
 	// After the table is open: the environment's read grants are rows in it.
 	applyReadableRootsFromEnv()
 	// A bare provider name ("zai", "deepseek") means that provider's default
@@ -405,7 +428,7 @@ func main() {
 	// --version is a standalone action: print build metadata and exit.
 	if opts.showVersion {
 		fmt.Printf("golder %s (commit %s, built %s)\n", version, commit, date)
-		os.Exit(0)
+		exit(0)
 	}
 
 	// A prompt may also be supplied as positional args.
@@ -418,7 +441,16 @@ func main() {
 		opts.resumeID = sessionResumeID
 	}
 
-	os.Exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
+	diagtrace.Event("main", "dispatch begin")
+	exit(dispatch(context.Background(), opts, os.Stdout, os.Stderr))
+}
+
+// exit closes the diagnostic trace before leaving: os.Exit skips defers, and a
+// trace file missing its end line is indistinguishable from a crash.
+func exit(code int) {
+	diagtrace.Event("main", "exit code=%d", code)
+	diagtrace.Close()
+	os.Exit(code)
 }
 
 // applyReadableRootsFromEnv records GOLDER_READABLE_ROOTS in the authorization
@@ -948,7 +980,7 @@ func peelSessionResumeID(argv *[]string) string {
 	}
 	if len(a) == 3 && a[1] == "session" && a[2] == "resume" {
 		fmt.Fprintln(os.Stderr, "usage: golder session resume <session-id>")
-		os.Exit(2)
+		exit(2)
 	}
 	return ""
 }

@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 // Manager owns a set of loaded plugins and their aggregated tools. It is not safe
@@ -27,6 +29,7 @@ type Manager struct {
 // error — it yields an empty Manager. pluginStderr, when non-nil, receives every
 // plugin's stderr.
 func Discover(dir string, warnLog, pluginStderr io.Writer) (*Manager, error) {
+	start := time.Now()
 	m := &Manager{}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -47,7 +50,10 @@ func Discover(dir string, warnLog, pluginStderr io.Writer) (*Manager, error) {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
+		step := time.Now()
 		p, err := Load(path, nil, pluginStderr)
+		// Basename only: a plugin path can name a person's home directory.
+		diagtrace.Event("plugin", "load name=%s ok=%t duration=%s", e.Name(), err == nil, time.Since(step))
 		if err != nil {
 			if warnLog != nil {
 				fmt.Fprintf(warnLog, "golder: plugin %q failed to load: %v\n", e.Name(), err)
@@ -56,6 +62,7 @@ func Discover(dir string, warnLog, pluginStderr io.Writer) (*Manager, error) {
 		}
 		m.plugins = append(m.plugins, p)
 	}
+	diagtrace.Event("plugin", "discover loaded=%d duration=%s", len(m.plugins), time.Since(start))
 	return m, nil
 }
 

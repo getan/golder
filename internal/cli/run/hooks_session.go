@@ -19,7 +19,9 @@ package run
 
 import (
 	"context"
+	"time"
 
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -36,12 +38,16 @@ func DispatchSessionStart(ctx context.Context, d *hooks.Dispatcher, cfg *runtime
 	if d == nil {
 		return
 	}
+	start := time.Now()
 	dec := d.Dispatch(ctx, "SessionStart", "", hooks.HookInput{
 		EventType:  "SessionStart",
 		SessionID:  deps.SessionID,
 		ProjectDir: deps.ProjectDir,
 		Source:     source,
 	})
+	// Synchronous by design: a slow SessionStart hook delays the first frame, so
+	// its duration belongs on the startup timeline.
+	diagtrace.Event("hooks", "SessionStart source=%s duration=%s", source, time.Since(start))
 	if dec.AdditionalContext != "" && cfg != nil {
 		if cfg.Reminders == nil {
 			cfg.Reminders = runtime.NewReminderRegistry()

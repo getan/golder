@@ -14,17 +14,23 @@ GOLDER_TUI_TRACE="$trace_file" golder
 printf 'Timing log: %s\n' "$trace_file"
 ```
 
+`GOLDER_STARTUP_TRACE` is an alias for the same file. One file now covers both
+process start and the full-screen TUI (see [Startup trace](#startup-trace)); it
+is appended, created (or tightened) to mode `0600`, and opened at most once per
+process.
+
 During the first few seconds, move the trust selection with ↑/↓, answer it, and
 type a short dummy string in the composer. Click a status-bar segment to pin and
 unpin it. Quit without submitting. Note roughly when each action happened.
 
 The trace is opt-in and appends to a file created with mode `0600`. It records
 relative and UTC timestamps, terminal environment/capabilities, input byte
-counts, event **types**, and timings for Update, View and terminal writes. It
-does **not** record keys, paste contents, prompts, responses, session IDs,
-working-directory paths or credentials. Use a local path such as `/tmp`; a slow
-network filesystem can itself distort the measurement. Existing trace files
-keep their permissions. Remove the file when finished.
+counts, event **types**, phase stages, counts, and timings for startup, Update,
+View and terminal writes. It does **not** record keys, paste contents, prompts,
+responses, session IDs, working-directory paths or credentials. Use a local path
+such as `/tmp`; a slow network filesystem can itself distort the measurement.
+An existing trace file's permissions are tightened to `0600`. Remove the file
+when finished.
 
 Tracing adds formatting and file-I/O overhead even though operation durations
 exclude the diagnostic's begin/end writes; compare with an untraced run too.
@@ -53,10 +59,55 @@ inspecting it for private content.
   multiplexer/SSH transport and synchronized-update handling. A successful
   write only means the OS accepted bytes, not that the terminal displayed them.
 
-The trace starts at `tui.Run`, not process launch; earlier CLI configuration,
-tool/sandbox setup and skill discovery are outside its timing window. When
-stdin is redirected, Bubble Tea retains its own `/dev/tty` fallback; that input
-read is not wrapped, so input byte counts are unavailable on that path.
+## Startup trace
+
+The trace's clock starts in `internal/diagtrace` at package initialization, not
+at `tui.Run`. Every line therefore shares one timeline and carries a stage tag
+after the elapsed milliseconds:
+
+| Stage | What it covers |
+| --- | --- |
+| `diag` | process capabilities; terminal environment whitelist |
+| `main` | argument count, flag/config/redaction/grant phases, dispatch, exit code |
+| `setup` | provider resolution, tool set, memory, plugins, skills, prompt build; the one-time sandbox runner probe (bwrap on Linux) |
+| `plugin` | each executable's basename, load success and handshake duration; aggregate count |
+| `hooks` | dispatcher size and synchronous `SessionStart` duration |
+| `session` | session store open, resumed message count, trust store, host reporting, hook wiring |
+| `tui` | session/model/program phases, input/output, Update/View, git probe |
+
+The file is opt-in; with no path every stage is a no-op. Privacy rules are
+enforced by convention at each call site: stages, counts, booleans and
+durations only. No prompts, keystrokes, clipboard contents, file paths,
+environment values, session IDs or credentials. Plugin discovery records an
+executable's basename, because that is the only way to identify which handshake
+stalled; it never records the plugin directory.
+
+### Locating a slow SSH/Linux start
+
+1. Find the last event before the long gap. A gap between `main dispatch begin`
+   and `setup begin` is command-line/config work; one after `setup begin` is
+   assembly.
+2. `plugin load name=... duration=...` uses the handshake's 10s ceiling. A
+   single line near that ceiling names the plugin without exposing its path.
+3. `hooks SessionStart source=... duration=...` is synchronous by design; a
+   slow hook delays the first frame. The per-hook timeout is 60s.
+4. `setup sandbox runner=... duration=...` includes the one-time bwrap namespace
+   probe. A 5s value on Linux means the sandbox probe, not rendering.
+5. `session resume loaded messages=... duration=...` separates session replay
+   from network/model setup.
+6. The first `program begin` → `window` → `view end` isolates the terminal
+   handshake from Update/View cost.
+
+`tui end` is written when the TUI returns; `diag trace end` when the process
+exits. A trace ending without `diag trace end` was killed or crashed. The
+existing TUI input/output/Update/View timings are unchanged, except that their
+`+Nms` values are now process-relative rather than relative to `tui.Run`.
+
+The clock starts at package initialization, so CLI configuration, tool/sandbox
+setup and skill discovery are inside the window; the `tui` stage begins at
+`tui.Run`. When stdin is redirected, Bubble Tea retains its own `/dev/tty`
+fallback; that input read is not wrapped, so input byte counts are unavailable
+on that path.
 The `io` line records which path was wrapped. `init begin` occurs after Bubble
 Tea sets up its input reader. `input begin`/`input read` instrument the actual
 file read, **not** the epoll/kqueue wait before it and not the physical keypress.

@@ -36,6 +36,14 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **One diagnostic trace now covers process startup and the TUI** (v1.5.8):
+  `internal/diagtrace` owns the file, process-start clock and privacy rules used
+  by `main`, run assembly, plugin discovery, hooks and the TUI. Set
+  `GOLDER_TUI_TRACE` (alias `GOLDER_STARTUP_TRACE`) to append a 0600 log with
+  `diag`/`main`/`setup`/`plugin`/`hooks`/`session`/`tui` stages, counts and
+  durations. This closes the blind spot before `tui.Run` where plugin
+  handshakes, the bwrap probe, hooks and session resume previously left no
+  evidence. See [v1.5.8 release notes](docs/releases/v1.5.8.md).
 - **Lower-overhead SSH display and Linux setup** (v1.5.7): SSH or
   `--no-animations` skips the logo animation, keeps the working indicator
   static, and coalesces body updates at 150ms. Linux installation checks the

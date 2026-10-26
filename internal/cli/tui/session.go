@@ -37,6 +37,7 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/hostcompat"
@@ -282,10 +283,12 @@ func (q *steerQueue) snapshot() []string {
 // It is the production entry; newRunSessionWithStore holds the store-agnostic
 // core so tests can drive it against a temp-dir store.
 func newRunSession(opts Options) (*runSession, []agentcore.Message, error) {
+	start := time.Now()
 	store, err := headless.SessionStore()
 	if err != nil {
 		return nil, nil, err
 	}
+	diagtrace.Event("session", "store open failed=%t duration=%s", err != nil, time.Since(start))
 	return newRunSessionWithStore(store, opts)
 }
 
@@ -309,10 +312,12 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		curLeaf  string
 	)
 	if opts.ResumeID != "" {
+		step := time.Now()
 		h, entries, err := store.LoadEntries(opts.ResumeID)
 		if err != nil {
 			return nil, nil, err
 		}
+		diagtrace.Event("session", "resume loaded messages=%d duration=%s", len(entries), time.Since(step))
 		msgs := make(agentcore.MessageList, len(entries))
 		for i, e := range entries {
 			msgs[i] = e.Message
@@ -363,6 +368,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// cwd) is non-fatal: trust is disabled (mgr stays nil) and the TUI still
 	// runs — the store is surfaced rather than silently overwritten.
 	mgr, mgrErr := trust.NewManager(trust.DefaultPath())
+	diagtrace.Event("session", "trust open failed=%t", mgrErr != nil)
 	if mgrErr != nil {
 		fmt.Fprintf(os.Stderr, "golder: trust store unavailable, trust disabled: %v\n", mgrErr)
 		mgr = nil
@@ -432,6 +438,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// two finds the id already reported. It has to run after hookDeps, because
 	// that is where the session id lives.
 	s.hostStart()
+	diagtrace.Event("session", "host start done")
 	// Wire hooks now when the trust decision is already known (--approve or a
 	// saved decision). In an undecided directory the TUI asks first via the
 	// first-run trust picker (Model.withSession); wireHooks then runs when the
@@ -459,11 +466,13 @@ func (s *runSession) wireHooks(opts Options) {
 		return
 	}
 	s.hooksWired = true
+	start := time.Now()
 	var baseOnEvent func(agentcore.AgentEvent)
 	if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
 		baseOnEvent = n.Handle
 	}
 	if set, err := run.ResolveHookSet(s.hookDeps.ProjectDir, s.trusted); err != nil {
+		diagtrace.Event("session", "hooks resolve failed=true duration=%s", time.Since(start))
 		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", err)
 		s.onEvent = baseOnEvent
 		return
@@ -474,6 +483,7 @@ func (s *runSession) wireHooks(opts Options) {
 		}
 		ssCfg := runtime.RunConfig{Reminders: s.reminders}
 		run.DispatchSessionStart(context.Background(), d, &ssCfg, s.hookDeps, sessionStartSource(opts))
+		diagtrace.Event("session", "hooks wired duration=%s", time.Since(start))
 		s.reminders = ssCfg.Reminders
 		n := hooks.NewHookNotifier(d, s.hookDeps.SessionID, s.hookDeps.ProjectDir)
 		s.onEvent = chainTUIEvent(baseOnEvent, n.Handle)

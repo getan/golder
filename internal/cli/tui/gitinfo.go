@@ -3,8 +3,11 @@ package tui
 import (
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 // gitInfoMsg is the result of an async git probe (fetchGitCmd). It is defined
@@ -33,10 +36,12 @@ type gitInfoMsg struct {
 // collapses to gitInfoMsg{ok:false}, which the status bar renders as "no git".
 func fetchGitCmd(cwd string) tea.Cmd {
 	return func() tea.Msg {
+		start := time.Now()
 		// One porcelain call with the branch header gives us branch name, ahead
 		// count, and every dirty/untracked entry in a single stable, parseable
 		// format (-z would drop the header line, so we keep the newline form).
 		out, err := runGit(cwd, "status", "--porcelain", "-b")
+		diagtrace.Event("tui", "git probe ok=%t duration=%s", err == nil, time.Since(start))
 		if err != nil {
 			return gitInfoMsg{ok: false}
 		}

@@ -486,6 +486,7 @@ See `golder --help` for the complete list.
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |
 | `GOLDER_HOST_REPORT` | Host reporting: `off` disables it; `tuios` / `herdr` forces one (default detects the pane's environment; outside a host nothing is reported) |
+| `GOLDER_TUI_TRACE` / `GOLDER_STARTUP_TRACE` | Opt-in diagnostic trace path. Covers process start and the TUI on one clock, mode 0600, recording stages/counts/durations only — never input, paths or credentials. See [TUI latency diagnostics](docs/tui-latency.md#startup-trace) |
 | `GOLDER_NO_ANIMATIONS` | `1`/`true`/`yes`/`on`: disable decorative agent-TUI animations; also enabled automatically by `SSH_TTY` or `SSH_CONNECTION` |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |

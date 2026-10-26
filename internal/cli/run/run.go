@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
@@ -18,6 +19,7 @@ import (
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/hooks"
@@ -106,15 +108,21 @@ type Env struct {
 // error rather than a silently ineffective boundary. It returns an error rather
 // than exiting so the caller owns exit-code mapping.
 func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, noSkills bool, systemPrompt string, appendSystemPrompt []string, memEnabled bool, policy ToolPolicy) (Env, error) {
+	start := time.Now()
+	diagtrace.Event("setup", "begin")
 	cwd, _ := os.Getwd()
+	step := time.Now()
 	prov, resolvedName, err := provider.ResolveProvider(model, baseURL, protocol, providerName, os.Getenv)
 	if err != nil {
 		return Env{}, err
 	}
+	diagtrace.Event("setup", "provider name=%s duration=%s", resolvedName, time.Since(step))
+	step = time.Now()
 	appends, err := resolveAppendInstructions(appendSystemPrompt)
 	if err != nil {
 		return Env{}, err
 	}
+	diagtrace.Event("setup", "append instructions count=%d duration=%s", len(appends), time.Since(step))
 	// The approval mode is process-wide live state: tools and gates read it on
 	// every call, so a /permissions switch applies immediately. The default is
 	// auto; GOLDER_PERMISSIONS (or the legacy GOLDER_JUDGE=off) overrides, and the
@@ -125,7 +133,9 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	}
 	notes := NewReviewNotes()
 	budget := contextbudget.New()
+	step = time.Now()
 	tools := BuiltinTools(cwd, noTools)
+	diagtrace.Event("setup", "tools built count=%d duration=%s", len(tools), time.Since(step))
 	WirePermissionState(tools, permState)
 	// Open the persistent memory store once (issue #481) and expose it as the
 	// memory_search tool so the agent can recall earlier context. Memory is a
@@ -134,12 +144,14 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	// the "fall back to file-based auto-memory" contract.
 	var memStore *memory.Store
 	if !noTools {
+		step = time.Now()
 		if store, err := OpenMemoryStore(memEnabled); err != nil {
 			fmt.Fprintf(os.Stderr, "golder: memory disabled: %v\n", err)
 		} else if store != nil {
 			memStore = store
 			tools = append(tools, &agenttool.MemorySearchTool{Store: store})
 		}
+		diagtrace.Event("setup", "memory enabled=%t duration=%s", memStore != nil, time.Since(step))
 	}
 	// Wire the generic task tool (US-002, #454) unless tools are disabled. It
 	// dispatches general-purpose sub-agents that reuse the resolved provider
@@ -204,12 +216,18 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	// disabling tools (--no-tools) skips plugin discovery entirely.
 	var mgr *plugin.Manager
 	if !noTools {
+		step = time.Now()
 		if m, err := plugin.Discover(PluginsDir(), os.Stderr, os.Stderr); err == nil {
 			tools = append(tools, m.Tools()...)
 			mgr = m
 		} else {
 			fmt.Fprintf(os.Stderr, "golder: plugin discovery failed: %v\n", err)
 		}
+		pluginsLoaded := 0
+		if mgr != nil {
+			pluginsLoaded = len(mgr.Plugins())
+		}
+		diagtrace.Event("setup", "plugins loaded=%d duration=%s", pluginsLoaded, time.Since(step))
 	}
 	// Enforce the --allowed-tools/--disallowed-tools boundary now that the set is
 	// complete. Validation must happen here rather than at flag-parse time: plugin
@@ -235,10 +253,12 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	// Load skills once (shared between prompt injection and /skill-name
 	// registration). A partial parse error still yields the skills that DID load,
 	// so one malformed file is a non-fatal warning rather than a hard failure.
+	step = time.Now()
 	skills, err := LoadSkills(noSkills)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "golder: skills: %v\n", err)
 	}
+	diagtrace.Event("setup", "skills count=%d failed=%t duration=%s", len(skills), err != nil, time.Since(step))
 	// The model can only load a skill's body when the read tool is present, so
 	// advertise skills in the prompt only then (mirrors pi's selectedTools check).
 	prompt := runtime.PromptInputs{
@@ -248,10 +268,13 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		Skills:     skills,
 		Tools:      tools,
 	}
+	step = time.Now()
 	sysPrompt, err := prompt.Build()
 	if err != nil {
 		return Env{}, err
 	}
+	diagtrace.Event("setup", "prompt bytes=%d duration=%s", len(sysPrompt), time.Since(step))
+	diagtrace.Event("setup", "end tools=%d duration=%s", len(tools), time.Since(start))
 	return Env{
 		Cwd:          cwd,
 		Tools:        tools,
@@ -312,9 +335,13 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	extra := ReadableExtraRoots()
 	var fileRunner seatbelt.CallRunner
 	if seatbelt.ModeFromEnv() != seatbelt.ModeOff {
+		sandboxStart := time.Now()
 		if runner := seatbelt.New(cwd); runner != nil {
 			fileRunner = runner
 		}
+		// On Linux this includes the one-time bwrap namespace probe, which can
+		// block for seconds on a host whose sandbox is unusable.
+		diagtrace.Event("setup", "sandbox runner=%t duration=%s", fileRunner != nil, time.Since(sandboxStart))
 	}
 	isolated := func(t agentcore.AgentTool) agentcore.AgentTool {
 		return &toolworker.Tool{Original: t, Root: cwd, ExtraRoots: extra, Snap: snap, Runner: fileRunner}

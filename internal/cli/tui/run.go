@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 // Run starts the full-screen TUI and blocks until the user quits (Ctrl+C /
@@ -16,10 +17,12 @@ import (
 // the View returned by the root Model, so a clean return here restores the
 // terminal to the user's prior scrollback.
 func Run(opts Options) error {
-	trace, traceErr := openTimingTrace(os.Getenv("GOLDER_TUI_TRACE"))
-	if traceErr != nil {
-		fmt.Fprintf(os.Stderr, "golder: TUI timing trace disabled: %v\n", traceErr)
+	// main initializes this before any startup work. Calling it again here is
+	// idempotent and keeps direct tui.Run callers (tests, embedders) working.
+	if err := diagtrace.InitFromEnv(); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: TUI timing trace disabled: %v\n", err)
 	}
+	trace := newTimingTrace(diagtrace.Process())
 	defer trace.close()
 	trace.event("session begin")
 	// Assemble the session (store, resume-or-fresh context, live config) before

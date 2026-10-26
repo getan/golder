@@ -10,6 +10,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 type timingTestModel struct{ updates int }
@@ -22,10 +24,7 @@ func (m timingTestModel) Update(tea.Msg) (tea.Model, tea.Cmd) {
 func (timingTestModel) View() tea.View { return tea.NewView("private assistant output") }
 
 func TestTimingTraceDisabled(t *testing.T) {
-	trace, err := openTimingTrace("")
-	if trace != nil || err != nil {
-		t.Fatalf("disabled trace = %v, %v", trace, err)
-	}
+	trace := newTimingTrace(nil)
 	base := timingTestModel{}
 	m, opts := trace.program(base)
 	if m != base || len(opts) != 0 {
@@ -41,10 +40,11 @@ func TestTimingTraceDoesNotRecordContent(t *testing.T) {
 	t.Setenv("COLORTERM", "")
 	t.Setenv("SSH_CONNECTION", "private remote address")
 	t.Setenv("GOLDER_TRACE_TEST_CREDENTIAL", "private credential")
-	trace, err := openTimingTrace(path)
+	raw, err := diagtrace.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	trace := newTimingTrace(raw)
 	m := timingModel{Model: timingTestModel{}, trace: trace}
 	if cmd := m.Init(); cmd == nil || cmd() != "init command" {
 		t.Fatal("tracing must preserve Init commands")
@@ -71,6 +71,7 @@ func TestTimingTraceDoesNotRecordContent(t *testing.T) {
 		t.Fatalf("tracing changed View: %q", got)
 	}
 	trace.close()
+	raw.Close()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +97,11 @@ func TestTimingTraceDoesNotRecordContent(t *testing.T) {
 func TestTimingTraceFileIO(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "trace.log")
-	trace, err := openTimingTrace(path)
+	raw, err := diagtrace.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	trace := newTimingTrace(raw)
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +136,7 @@ func TestTimingTraceFileIO(t *testing.T) {
 	}
 	_ = f.Close()
 	trace.close()
+	raw.Close()
 	out, _ := os.ReadFile(outPath)
 	if string(out) != "private output" {
 		t.Fatalf("tracing changed output: %q", out)
@@ -150,7 +153,7 @@ func TestTimingTraceFileIO(t *testing.T) {
 }
 
 func TestTimingTraceBadPath(t *testing.T) {
-	trace, err := openTimingTrace(filepath.Join(t.TempDir(), "missing", "trace.log"))
+	trace, err := diagtrace.Open(filepath.Join(t.TempDir(), "missing", "trace.log"))
 	if trace != nil || err == nil {
 		t.Fatalf("bad path trace = %v, %v", trace, err)
 	}
