@@ -30,6 +30,8 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 
 **SSH / 低带宽终端**：普通 agent TUI 检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时默认使用静态 logo、关闭状态栏滚动与工作指示器动画（耗时统计仍每秒更新），减少装饰性重绘。本地也可用 `golder --no-animations` 或 `GOLDER_NO_ANIMATIONS=1 golder`；保留动画时，第一个按键或粘贴会立即结束 logo 入场动画，该次输入照常处理，不会被吞掉。
 
+流式 token 计数和耗时只在 spinner 定时 tick 时发布，不再被每个 token 带着刷新。SSH／禁用动画时，正文增量按 150ms 合并显示（本地普通模式为 50ms），减少终端写入；输入、审批和最终结果不等待这个合并定时器。真实光标仍保留，供中文输入法定位。排查方法见 [TUI 延迟与刷新](docs/tui-latency.md)。
+
 `golder workspace --no-animations` 控制外层工作区动画；要同时关闭首个 agent 的动画，可用 `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations`，或启动时传 `golder workspace --no-animations -- --no-animations`。已运行的 agent 不会因重新 attach 改变设置。
 
 终端鼠标/颜色等回包在慢链路上分段到达时，输入解码器会保留完整协议帧，不再因短超时把 `65;59M`、`rgb:…` 等尾部当成输入。升级后需重新连接 workspace 客户端；已运行的内层 golder 也需重启/恢复会话才能载入新解码器。正常输入或粘贴的同样文本不会被过滤。详见[终端输入与恢复边界](docs/terminal-input.md)。

@@ -114,6 +114,7 @@ type approvalDialog struct {
 // openApproval arms the dialog for one tool request. The caller keeps the
 // reply channel; answering sends exactly one value.
 func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.ApprovalAnswer) {
+	m.menu.close()
 	d := approvalDialog{
 		active: true,
 		kind:   "tool",
@@ -160,6 +161,7 @@ func trustGateRows(tool string) []approvalRow {
 // launch prompt and a mid-run approval look and behave the same. The chosen
 // value is applied by applyTrustChoice.
 func (m *Model) openTrustApproval() {
+	m.menu.close()
 	m.approval = approvalDialog{
 		active: true,
 		kind:   "trust",
@@ -408,20 +410,20 @@ func (m Model) approvalView(width int) string {
 		rowWidth = width
 	}
 	dim := func(s string) string {
-		return m.theme.System.Render("  " + TruncateToWidth(s, rowWidth))
+		return TruncateToWidth(m.theme.System.Render("  "+TruncateToWidth(s, rowWidth)), width)
 	}
 	var lines []string
-	lines = append(lines, m.theme.MenuHeader.Render("  "+TruncateToWidth(m.approval.title, rowWidth)))
+	lines = append(lines, TruncateToWidth(m.theme.MenuHeader.Render("  "+TruncateToWidth(m.approval.title, rowWidth)), width))
 	for _, d := range m.approval.detail {
 		lines = append(lines, dim(d))
 	}
 	for i, row := range m.approval.rows {
-		line := TruncateToWidth(row.label, rowWidth-2)
 		tag := "  (" + row.key + ")"
+		line := TruncateToWidth(row.label, max(0, width-2-len(tag)))
 		if i == m.approval.selected {
-			lines = append(lines, m.theme.Accent.Render("› "+line)+m.theme.System.Render(tag))
+			lines = append(lines, TruncateToWidth(m.theme.Accent.Render("› "+line)+m.theme.System.Render(tag), width))
 		} else {
-			lines = append(lines, m.theme.System.Render("  "+line)+m.theme.System.Render(tag))
+			lines = append(lines, TruncateToWidth(m.theme.System.Render("  "+line)+m.theme.System.Render(tag), width))
 		}
 	}
 	return strings.Join(lines, "\n")

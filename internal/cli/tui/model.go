@@ -1255,9 +1255,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.running {
 			return m, nil
 		}
-		if !m.opts.NoAnimations {
-			m.spinner.advance()
-		}
+		m.spinner.tick(time.Time(msg), !m.opts.NoAnimations)
 		return m, m.tickSpinner()
 
 	case userShellTickMsg:
@@ -1305,7 +1303,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpNext()
 		}
 		m.streamRenderArmed = true
-		return m, tea.Batch(m.pumpNext(), streamRenderTick())
+		return m, tea.Batch(m.pumpNext(), m.streamRenderTick())
 
 	case tokenDeltaMsg:
 		// Spinner-only accounting: reasoning text and tool-call argument JSON
@@ -3547,10 +3545,22 @@ func (m Model) tickSpinner() tea.Cmd {
 // loop answering keys (Ctrl+C included) while the reply still streams.
 const streamRenderInterval = 50 * time.Millisecond
 
+// Reduced motion is automatic over SSH. Coalesce the BODY as well as the
+// spinner there: ~7 frames/s rather than ~20, without delaying any key/approval
+// handling or dropping a token. Turn/tool completion still flushes immediately.
+const reducedMotionStreamRenderInterval = 150 * time.Millisecond
+
+func (m Model) streamRenderDelay() time.Duration {
+	if m.opts.NoAnimations {
+		return reducedMotionStreamRenderInterval
+	}
+	return streamRenderInterval
+}
+
 // streamRenderTick schedules the coalescing reflow that follows a burst of
 // streamed deltas (see Model.streamRenderArmed).
-func streamRenderTick() tea.Cmd {
-	return tea.Tick(streamRenderInterval, func(time.Time) tea.Msg { return streamRenderTickMsg{} })
+func (m Model) streamRenderTick() tea.Cmd {
+	return tea.Tick(m.streamRenderDelay(), func(time.Time) tea.Msg { return streamRenderTickMsg{} })
 }
 
 // seedMoreInterval is how often the lazy seed's continuation steps while
@@ -3932,7 +3942,7 @@ func (m Model) renderContent() (string, int) {
 	// sub-agent status panel, when any `task` sub-agents are live, renders on the
 	// rows just ABOVE the spinner: one line each, elapsed refreshed every tick.
 	if m.running {
-		if panel := m.subagents.view(m.theme, width, time.Now()); panel != "" {
+		if panel := m.subagents.view(m.theme, width, m.spinner.start.Add(m.spinner.elapsed)); panel != "" {
 			b.WriteString(panel)
 			b.WriteByte('\n')
 			inputRow += countRows(panel)
@@ -4000,21 +4010,24 @@ func (m Model) queuedPreviewLines(width int) []string {
 	}
 	const indent = "  "
 	header := fmt.Sprintf("%sMessages to be submitted after the next tool call (%d):", indent, len(texts))
-	lines := []string{m.theme.System.Render(header)}
+	lines := []string{m.theme.System.Render(TruncateToWidth(header, width))}
 	for _, text := range texts {
-		segments := wrapToWidth("↳ "+ui.OneLine(text), width-len(indent))
+		// Both the first row's arrow and the continuation indent use two
+		// columns. Reserve them BEFORE wrapping rather than adding them after.
+		segments := wrapToWidth(ui.OneLine(text), max(1, width-len(indent)-2))
 		for i, segment := range segments {
-			if i > 0 {
-				segment = "  " + segment
+			prefix := indent + "  "
+			if i == 0 {
+				prefix = indent + "↳ "
 			}
-			lines = append(lines, m.theme.ToolBody.Render(indent+segment))
+			lines = append(lines, m.theme.ToolBody.Render(TruncateToWidth(prefix+segment, width)))
 		}
 		if len(lines) > queuedPreviewMaxLines {
 			break
 		}
 	}
 	if len(lines) > queuedPreviewMaxLines {
-		lines = append(lines[:queuedPreviewMaxLines-1], m.theme.ToolBody.Render(indent+"↳ …"))
+		lines = append(lines[:queuedPreviewMaxLines-1], m.theme.ToolBody.Render(TruncateToWidth(indent+"↳ …", width)))
 	}
 	return lines
 }
@@ -4284,8 +4297,14 @@ func (m *Model) relayout() {
 	if m.pastePreview != nil && (m.running || !m.pasteInDraft(m.pastePreview.id)) {
 		m.pastePreview = nil
 	}
+	// Match renderContent's mutually exclusive overlay slot. A hidden menu
+	// must not reserve rows behind an approval dialog.
+	overlayRows := m.approvalRowsHeight()
+	if overlayRows == 0 {
+		overlayRows = m.menu.rows(m.width)
+	}
 	rows := m.height - 1 - m.input.Height() - len(m.composerExtraLines(m.width)) -
-		m.menu.rows(m.width) - m.approvalRowsHeight() - m.histSearchRows()
+		overlayRows - m.histSearchRows()
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the

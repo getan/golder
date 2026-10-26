@@ -33,18 +33,20 @@ const verbRerollFrames = 40
 var spinnerFrames = []string{"·", "✢", "✳", "∗", "✺", "✻", "✽", "✻", "✺", "∗", "✳", "✢"}
 
 // spinner is the animated working indicator. It is a plain value held by the
-// Model: begin() arms it at run start, advance() steps the frame on each tick,
-// addTokens()/addTokenChars() grow the streamed-token estimate, and view()
-// renders the line.
+// Model: begin() arms it at run start, tick() publishes a display snapshot,
+// addTokens()/addTokenChars() only accumulate pending accounting, and view()
+// renders that snapshot. View is called after every message, not only ticks.
 type spinner struct {
-	theme    Theme
-	running  bool
-	frame    int
-	verb     string
-	start    time.Time
-	chars    int    // output runes streamed this run (the estimate divides this)
-	thinking string // thinking-effort label, e.g. "medium"; "" hides that stat
-	pinned   string // when set, overrides the random verb and stops re-rolling
+	theme        Theme
+	running      bool
+	frame        int
+	verb         string
+	start        time.Time
+	elapsed      time.Duration // sampled on ticks, never from View's wall clock
+	chars        int           // displayed output runes (the estimate divides this)
+	pendingChars int           // accumulated without repainting the display
+	thinking     string        // thinking-effort label, e.g. "medium"; "" hides that stat
+	pinned       string        // when set, overrides the random verb and stops re-rolling
 }
 
 // newSpinner builds an idle spinner bound to the theme.
@@ -60,6 +62,8 @@ func (s *spinner) begin(now time.Time, thinking string) {
 	s.frame = 0
 	s.start = now
 	s.chars = 0
+	s.pendingChars = 0
+	s.elapsed = 0
 	s.thinking = thinking
 	s.verb = randomVerb()
 	s.pinned = ""
@@ -98,7 +102,19 @@ func (s *spinner) addTokens(delta string) {
 // produces anything at all. It is an activity gauge, not an accounting meter:
 // exact usage lives in the status bar's context reading.
 func (s *spinner) addTokenChars(n int) {
-	s.chars += n
+	s.pendingChars += n
+}
+
+// tick publishes pending stats even in reduced-motion mode. Keeping both the
+// count and clock out of view() prevents token/key messages from repainting a
+// nominally timer-driven line. Animation is independent from live accounting.
+func (s *spinner) tick(now time.Time, animate bool) {
+	s.chars += s.pendingChars
+	s.pendingChars = 0
+	s.elapsed = now.Sub(s.start)
+	if animate {
+		s.advance()
+	}
 }
 
 // view renders the spinner line, e.g. "✻ Whirring… (1m 54s · ↓ 242 tokens ·
@@ -116,7 +132,7 @@ func (s spinner) view(width int) string {
 	head := s.theme.Spinner.Render(glyph + " " + verb + "…")
 
 	var stats strings.Builder
-	fmt.Fprintf(&stats, "%s", formatElapsed(time.Since(s.start)))
+	fmt.Fprintf(&stats, "%s", formatElapsed(s.elapsed))
 	if tokens := s.chars / 4; tokens > 0 {
 		fmt.Fprintf(&stats, " · ↓ %s tokens", humanizeInt(tokens))
 	}

@@ -30,6 +30,8 @@ We recommend running golder in [Ghostty](https://github.com/ghostty-org/ghostty)
 
 **SSH / low-bandwidth terminals:** the ordinary agent TUI automatically uses a static logo and disables status-bar scrolling and working-indicator animation when `SSH_TTY` or `SSH_CONNECTION` is set (elapsed stats still update once per second). Locally, use `golder --no-animations` or `GOLDER_NO_ANIMATIONS=1 golder`. When animations are enabled, the first key press or paste immediately settles the logo without discarding that input.
 
+Streaming token counts and elapsed time are published only on spinner ticks, not on every token. SSH/reduced-motion mode coalesces body deltas every 150ms (50ms in ordinary local mode), reducing terminal writes without delaying input, approvals, or final results. The real cursor remains available for IME positioning. See [TUI latency and refresh diagnostics](docs/tui-latency.md).
+
 `golder workspace --no-animations` controls the outer workspace UI. To disable the first agent's animations as well, start with `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations` or `golder workspace --no-animations -- --no-animations`. Re-attaching does not change an already-running agent's settings.
 
 When mouse/color and other terminal replies arrive in fragments over a slow link, the input decoder retains their protocol frames instead of turning tails such as `65;59M` or `rgb:…` into typing after a short timeout. Re-attach the workspace client after upgrading; an already-running inner golder must also be restarted/resumed to load its new decoder. Intentionally typed or pasted lookalike text is not filtered. See [terminal input and recovery limits](docs/terminal-input.md).

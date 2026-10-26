@@ -136,3 +136,42 @@ same connection does not rule out terminal-protocol or event-queue differences.
 The affected environment still needs a timing capture. The cell-motion change
 reduces event volume at the source but has not been shown to fix the reported
 stall; no logo or color-profile change is claimed as a fix.
+
+## Streaming repaint reduction
+
+The token-refresh issue was reproduced independently of network latency. Before
+the fix, 100 `textDeltaMsg` or accounting-only `tokenDeltaMsg` messages changed
+the frame 100 times, even without a spinner or body-render tick. Updating a
+spinner's accounting state was enough: Bubble Tea calls View after every
+message, and View read the new count immediately. Reading the wall clock in
+View could also change elapsed stats between ticks.
+
+The display is now a timer-published snapshot:
+
+- Deltas accumulate `pendingChars`; spinner ticks publish the count and elapsed
+  time. The sub-agent panel uses the same sampled clock. Ordinary animation
+  remains at 120ms; SSH / `--no-animations` keeps a static glyph and publishes
+  stats once per second. No per-token count changes leak through other frames.
+- Body reflow stays coalesced at 50ms locally. Reduced-motion mode (automatic
+  when `SSH_TTY` or `SSH_CONNECTION` is set) uses 150ms, about 7 body updates/s
+  instead of 20. This is display batching, not a delay in reading provider
+  events or handling keys. Tool/turn completion still renders immediately.
+- An approval closes a hidden slash menu and reserves only the overlay that is
+  actually drawn. Queued previews and approval shortcut tags fit the terminal
+  width, preventing an implicit terminal wrap from creating extra frame rows.
+
+Regression checks cover identical frames throughout token bursts, correct tick
+accounting (including reduced motion), immediate typing/completion, and narrow
+layout. A real Bubble Tea renderer probe also feeds 16 accounting deltas spaced
+beyond its frame interval: **zero terminal bytes** are emitted between ticks;
+one explicit stats tick publishes the accumulated count with at most one
+cursor hide/show pair. No provider is called by this probe.
+
+The real terminal cursor is intentionally retained for IME candidate anchoring.
+Bubble Tea v2 wraps changed frames with hide/show on terminals without confirmed
+synchronized output; unchanged frames do not need those writes. This change
+reduces the number of changed frames rather than hiding the caret permanently,
+forcing an unsupported terminal capability, or forking Bubble Tea's renderer.
+Font-missing glyph boxes and the moving scrollbar thumb are separate from this
+repaint problem. The checks above are local model/renderer tests, not a claim
+that the affected remote SSH link's end-to-end latency has been measured.

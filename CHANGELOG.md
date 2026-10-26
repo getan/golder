@@ -36,6 +36,12 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Lower-overhead SSH display and Linux setup** (v1.5.7): SSH or
+  `--no-animations` skips the logo animation, keeps the working indicator
+  static, and coalesces body updates at 150ms. Linux installation checks the
+  required bubblewrap package, explains root/sudo versus manual installation,
+  and supports common distribution package managers. See
+  [v1.5.7 release notes](docs/releases/v1.5.7.md).
 - **Embedded workspace dependencies refreshed** (v1.5.6): pin tuios-mini
   `v0.10.5` and kitty-browse `v0.2.2` to their latest default-branch commits.
   The sidebar gains native file previews and file-scoped staged/unstaged
@@ -112,6 +118,19 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Per-token repainting and narrow-panel layout** (v1.5.7): token counts and
+  elapsed stats publish only on spinner ticks; accounting messages no longer
+  repaint the spinner between ticks. Approvals close hidden slash menus and
+  reserve only their visible rows. Queued previews and approval shortcut tags
+  stay within the terminal width.
+- **Fragmented terminal reports becoming typing** (v1.5.7): retain a patched
+  Ultraviolet decoder shared by the workspace client and agent TUI. Partial
+  mouse/query/color/clipboard reports, control strings, paste markers and UTF-8
+  wait for their continuation rather than expiring into ordinary keys. Include
+  bounds, recovery and fuzz-discovered decoder safety fixes.
+- **First-use `/dev/null` write grants on Linux** (v1.5.7): null redirections no
+  longer create an outside-file grant; bwrap also tolerates an explicit null
+  grant without trying to bind a host character device as a regular file.
 - **A one-call grant on a directory is a subtree**: `ReadGrant`/`WriteGrant`
   carried one path, and the worker (and bash) mounted it as a literal file. A
   granted directory therefore passed the tool-level check while the OS profile

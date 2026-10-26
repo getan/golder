@@ -34,8 +34,10 @@ func TestFormatElapsed(t *testing.T) {
 // renders nothing.
 func TestSpinnerViewStats(t *testing.T) {
 	s := newSpinner(DefaultTheme())
-	s.begin(time.Now().Add(-114*time.Second), "medium")
-	s.chars = 968 // 968/4 = 242 estimated tokens
+	start := time.Now()
+	s.begin(start, "medium")
+	s.addTokenChars(968) // 968/4 = 242 estimated tokens
+	s.tick(start.Add(114*time.Second), false)
 
 	view := stripANSI(s.view(120))
 	if !strings.Contains(view, s.verb+"…") {
