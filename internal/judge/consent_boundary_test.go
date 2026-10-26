@@ -28,6 +28,29 @@ func boundaryNeedFor(t *testing.T, opts ConsentOpts, call agentcore.AgentToolCal
 	return boundaryNeeds(call, opts, permissions.Auto, "en")
 }
 
+func TestConsentBoundaryDevNullRedirectNeedsNoGrant(t *testing.T) {
+	workspace, _, target := readFixture(t)
+	opts := boundaryOpts(workspace)
+	for _, command := range []string{
+		`ls . 2>/dev/null || echo "no partial dir"`,
+		`printf hi >/dev/null`,
+		`printf hi >>"/dev/null"`,
+		`cat </dev/null`,
+	} {
+		// Both calls must be silent: no first-call failure followed by a
+		// session grant that happens to make the next call work.
+		for range 2 {
+			if needs := boundaryNeedFor(t, opts, bashCall(command)); len(needs) != 0 {
+				t.Errorf("%q needs = %+v, want no boundary grant", command, needs)
+			}
+		}
+	}
+	needs := boundaryNeedFor(t, opts, bashCall("cat "+target+" 2>/dev/null"))
+	if len(needs) != 1 || needs[0].Cap != CapReadOutside || needs[0].Path != target {
+		t.Fatalf("real outside read must still need its grant: %+v", needs)
+	}
+}
+
 // TestConsentBoundaryReadNeeds pins the silent half: in-workspace, system and
 // advertised roots are not questions; an outside file is one, scoped to its
 // containing directory; credential material is never offered at all.

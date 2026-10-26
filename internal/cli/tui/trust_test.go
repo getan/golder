@@ -141,6 +141,7 @@ func TestTrustPickerEscLeavesUntrusted(t *testing.T) {
 }
 
 func TestTrustPromptSkippedWhenDecided(t *testing.T) {
+	clearMotionEnv(t)
 	withEmptyTrustStore(t)
 	// Save a decision for the launch directory before the session is built.
 	cwd, err := os.Getwd()
@@ -171,6 +172,7 @@ func TestTrustPromptSkippedWhenDecided(t *testing.T) {
 }
 
 func TestTrustPromptSkippedWithApprove(t *testing.T) {
+	clearMotionEnv(t)
 	withEmptyTrustStore(t)
 	store := newTestStore(t)
 	s, _, err := newRunSessionWithStore(store, Options{Approve: true})

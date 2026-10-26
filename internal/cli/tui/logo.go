@@ -250,3 +250,12 @@ func logoWordWidth() int {
 func (m Model) tickLogo(frame int) tea.Cmd {
 	return tea.Tick(logoFrameTick, func(time.Time) tea.Msg { return logoFrameMsg{frame: frame} })
 }
+
+// settleLogo disarms the tick chain; an already queued frame becomes a no-op.
+func (m *Model) settleLogo() {
+	if !m.logoRunning {
+		return
+	}
+	m.logoRunning = false
+	m.transcript.setBannerText(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, logoFrames))
+}

@@ -146,6 +146,8 @@ type cliOptions struct {
 	// When set — or when stdout is not a TTY — the no-prompt path falls back to
 	// repl.Run rather than launching tui.Run.
 	noTUI bool
+	// noAnimations disables cosmetic motion in the ordinary agent TUI.
+	noAnimations bool
 	// debug enables diagnostic renderings that are hidden by default (currently
 	// allow verdicts). It sets GOLDER_DEBUG for the render layers, so the same
 	// switch also works for scripts that cannot pass a flag.
@@ -291,6 +293,7 @@ func main() {
 	flag.BoolVar(&opts.dream, "dream", false, "internal: run a memory-consolidation pass over the global/project memory scope, emit a Report JSON on stdout, and exit (SPEC §4.1)")
 	flag.BoolVar(&opts.dreamDryRun, "dream-dry-run", false, "internal: with --dream, analyze and report without writing files or updating dream state (SPEC §5.5)")
 	flag.BoolVar(&opts.noTUI, "no-tui", false, "use the line-based REPL instead of the full-screen TUI")
+	flag.BoolVar(&opts.noAnimations, "no-animations", false, "disable TUI animations (also GOLDER_NO_ANIMATIONS=1; automatic over SSH)")
 	flag.BoolVar(&opts.debug, "debug", false, "render diagnostic approval lines that are hidden by default")
 	flag.StringVarP(&opts.cwd, "cwd", "C", "", "run as if golder was started in this directory (matches the Claude Agent SDK's cwd; like git -C): tool file access, trust, hooks, and project config all resolve against it")
 	flag.BoolVarP(&opts.showVersion, "version", "v", false, "print version information and exit")
@@ -705,6 +708,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Budget:            env.Budget,
 				MaxContext:        opts.memory.MaxContext,
 				HistoryPath:       promptHistoryPath(),
+				NoAnimations:      opts.noAnimations,
 			}); err != nil {
 				fmt.Fprintf(errOut, "golder: %v\n", err)
 				return 1

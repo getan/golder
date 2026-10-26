@@ -341,6 +341,7 @@ type Model struct {
 // derived from Options; withSession rebinds it to the session's live config so a
 // /model switch reaches the run loop.
 func NewModel(opts Options) Model {
+	opts.NoAnimations = opts.NoAnimations || noAnimationsFromEnv()
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = ""
@@ -414,11 +415,11 @@ func (m Model) withSession(s *runSession, history []agentcore.Message) Model {
 	m.pendingTrust = s.trust != nil && !s.trusted &&
 		!s.trust.NearestTrustDecision(m.cwd).Found
 	startFrame := 0
-	if len(history) > 0 || m.pendingTrust {
+	if len(history) > 0 || m.pendingTrust || m.opts.NoAnimations {
 		startFrame = logoFrames
 	}
 	m.transcript.addBanner(renderBannerFrame(m.theme, m.bannerOptions(), m.cwd, startFrame))
-	m.logoRunning = len(history) == 0 && !m.pendingTrust
+	m.logoRunning = startFrame == 0
 	seedTranscript(&m.transcript, history)
 	// Seed the context gauge with the resumed session's inherited context so the
 	// very first frame already shows how much of the window was carried over,
@@ -1194,7 +1195,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusRevealMsg:
 		// One step of the pass a changed value makes. It ends by itself: the tick
 		// is re-armed only while the reveal is still running.
-		if m.statusBar.AdvanceReveal() {
+		if !m.opts.NoAnimations && m.statusBar.AdvanceReveal() {
 			return m, statusRevealTick()
 		}
 		return m, nil
@@ -1219,6 +1220,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(selScrollTick(m.selScrollGen), m.armUnseenWatch(), m.armSeedMore())
 
 	case tea.PasteMsg:
+		m.settleLogo()
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
 		// the whole clipboard payload as one message. A multi-line paste is
 		// collapsed to a compact placeholder (expanded at submit); a single-line
@@ -1241,6 +1243,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ReadClipboard
 
 	case tea.KeyPressMsg:
+		// Never spend another entrance frame once the person starts interacting.
+		// Keep handling this same key: stopping the animation must not eat input.
+		m.settleLogo()
 		return m.handleKey(msg)
 
 	case spinnerTickMsg:
@@ -1250,7 +1255,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.running {
 			return m, nil
 		}
-		m.spinner.advance()
+		if !m.opts.NoAnimations {
+			m.spinner.advance()
+		}
 		return m, m.tickSpinner()
 
 	case userShellTickMsg:
@@ -3523,7 +3530,13 @@ func taskDescription(input map[string]any) string {
 // on each spinnerTickMsg while running, so the animation self-sustains until the
 // run ends (the tick is simply not re-issued once idle).
 func (m Model) tickSpinner() tea.Cmd {
-	return tea.Tick(spinnerInterval, func(t time.Time) tea.Msg {
+	interval := spinnerInterval
+	if m.opts.NoAnimations {
+		// Retain elapsed-time updates without the high-frequency sparkle/verb
+		// animation, especially on a high-latency SSH link.
+		interval = time.Second
+	}
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return spinnerTickMsg(t)
 	})
 }
@@ -4241,7 +4254,7 @@ func statusRevealTick() tea.Cmd {
 // adopted, the first frame at the new width — and it returns nil when nothing on
 // the bar is elided, so an ordinary switch costs no timer at all.
 func (m *Model) startStatusReveal() tea.Cmd {
-	if m.width <= 0 {
+	if m.opts.NoAnimations || m.width <= 0 {
 		return nil
 	}
 	m.statusBar.StartReveal(m.width)

@@ -58,6 +58,14 @@ func TestBashPathCandidates(t *testing.T) {
 		{"pipeline segment", "cat " + out + "/src/a.go | wc -l", []string{out + "/src/a.go"}},
 		{"and segment", "grep -c . " + out + "/src/a.go && echo done", []string{out + "/src/a.go"}},
 		{"input redirect", "cat < " + out + "/src/a.go", []string{out + "/src/a.go"}},
+		{"null stderr", `ls . 2>/dev/null || echo "no partial dir"`, nil},
+		{"quoted null", `printf hi > '/dev/null'`, nil},
+		{"append null", `printf hi >>/dev/null`, nil},
+		{"null input", `cat </dev/null`, nil},
+		{"nested null", `sh -c 'ls . 2>/dev/null'`, nil},
+		{"null does not hide outside read", "cat " + out + "/src/a.go 2>/dev/null", []string{out + "/src/a.go"}},
+		{"null does not hide outside write", "echo hi > " + out + "/out.txt 2>/dev/null", []string{out + "/out.txt"}},
+		{"other device still needs a grant", `echo hi >/dev/zero`, []string{"/dev/zero"}},
 		// cd's operand is where everything after it reads from, so it is a
 		// boundary question in its own right: without it the dominant shape of a
 		// real command line carried no path the scanner could see.

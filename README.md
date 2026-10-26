@@ -20,9 +20,17 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases](https://github.com/getan/golder/releases) 下载 `.zip`；镜像、sha256 校验、从源码构建等细节见[安装细节](#安装细节)。
 
+**Linux 强依赖 bubblewrap（`bwrap`）来提供默认沙箱**；macOS 使用系统自带的 `sandbox-exec`。安装脚本发现 Linux 缺少 `bwrap` 时，会用 root 或 `sudo` 调用系统包管理器安装，支持 Debian/Ubuntu（apt）、Fedora/RHEL/Rocky/AlmaLinux（dnf/yum，需软件源提供该包）、Arch/Manjaro（pacman）、openSUSE（zypper）和 Alpine（apk）。已有 `bwrap` 则直接复用；没有权限、包不可用或发行版不支持时，会中止并提示手动安装，不会静默跳过依赖。直接下载二进制或从源码构建也需自行安装，例如 `sudo apt-get install bubblewrap`。
+
+安装了包不等于沙箱可用：Linux 还需允许创建相应的 namespace；容器或 AppArmor 等宿主策略可能阻止它。golder 会在运行时探测，安装脚本不会替你放宽宿主安全策略。
+
 ## 推荐终端
 
 推荐在 [Ghostty](https://github.com/ghostty-org/ghostty) 里使用 golder，TUI 也主要在 Ghostty 上测试，因此在那里的表现最接近日常开发时的样子。其他现代终端同样可以运行，但测试覆盖以 Ghostty 为主；内置浏览器 pane 仍需要终端支持相应的图形协议。
+
+**SSH / 低带宽终端**：普通 agent TUI 检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时默认使用静态 logo、关闭状态栏滚动与工作指示器动画（耗时统计仍每秒更新），减少装饰性重绘。本地也可用 `golder --no-animations` 或 `GOLDER_NO_ANIMATIONS=1 golder`；保留动画时，第一个按键或粘贴会立即结束 logo 入场动画，该次输入照常处理，不会被吞掉。
+
+`golder workspace --no-animations` 控制外层工作区动画；要同时关闭首个 agent 的动画，可用 `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations`，或启动时传 `golder workspace --no-animations -- --no-animations`。已运行的 agent 不会因重新 attach 改变设置。
 
 ## 快速开始：golder workspace
 
@@ -457,6 +465,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `--no-tools`、`--allowed-tools`、`--disallowed-tools` | 工具级准入控制 |
 | `--no-skills`、`--no-prompt-templates` | 关闭技能 / 提示词模板发现 |
 | `--no-tui` | 交互模式下改用行式 REPL（不使用全屏 TUI） |
+| `--no-animations` | 关闭普通 TUI 的装饰动画；SSH 下默认关闭 |
 | `--debug` / `GOLDER_DEBUG=1` | 打开诊断渲染（当前包括默认隐藏的 allow 审批行） |
 
 完整参数见 `golder --help`。
@@ -484,6 +493,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | `GOLDER_MIRROR` | 自更新 / 安装脚本的下载镜像：空格分隔的 URL 前缀，或 `off` 禁用（默认直连 GitHub 失败后回退公益镜像） |
 | `GOLDER_HOST_REPORT` | 宿主上报开关：`off` 关闭；`tuios` / `herdr` 强制指定（默认按 pane 环境自动判断，不在宿主里则不上报） |
 | `GOLDER_DEBUG` | `1`/`true`/`on`：打开诊断 UI；当前用于显示默认隐藏的 allow 审批行 |
+| `GOLDER_NO_ANIMATIONS` | `1`/`true`/`yes`/`on`：关闭普通 TUI 装饰动画；检测到 `SSH_TTY` 或 `SSH_CONNECTION` 时也默认关闭 |
 | `OPENAI_BASE_URL` 等 `<PROVIDER>_BASE_URL` | 覆盖该 provider 的聊天和模型列表 API 地址 |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | 联网搜索后端凭证（Tavily / Exa） |
 | `~/.golder/model-catalog.json`、`reasoning-catalog.json` | 模型列表 / 推理档位的 24h 缓存 |

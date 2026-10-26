@@ -20,9 +20,17 @@ curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 
 One command on macOS / Linux, no Node or Python. On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases); mirrors, sha256 verification and building from source are in [Install details](#install-details).
 
+**Linux requires bubblewrap (`bwrap`) for the default sandbox**; macOS uses the built-in `sandbox-exec`. If `bwrap` is missing on Linux, the installer uses root or `sudo` with the system package manager: Debian/Ubuntu (apt), Fedora/RHEL/Rocky/AlmaLinux (dnf/yum, with a repository providing the package), Arch/Manjaro (pacman), openSUSE (zypper), or Alpine (apk). An existing `bwrap` is reused. Missing privileges, unavailable packages, or unsupported package managers stop installation with manual instructions rather than silently skipping the dependency. Binary downloads and source builds also require installing it yourself, e.g. `sudo apt-get install bubblewrap`.
+
+The package alone is not enough: Linux must permit the required namespaces. Container restrictions or host policies such as AppArmor can block them. golder probes sandbox availability at runtime; the installer never relaxes host security policies.
+
 ## Recommended terminal
 
 We recommend running golder in [Ghostty](https://github.com/ghostty-org/ghostty), where the TUI is mainly tested — that's the closest to the setup it is developed against. Other modern terminals work too, but Ghostty gets the most coverage; the built-in browser pane still needs a terminal that supports its graphics protocol.
+
+**SSH / low-bandwidth terminals:** the ordinary agent TUI automatically uses a static logo and disables status-bar scrolling and working-indicator animation when `SSH_TTY` or `SSH_CONNECTION` is set (elapsed stats still update once per second). Locally, use `golder --no-animations` or `GOLDER_NO_ANIMATIONS=1 golder`. When animations are enabled, the first key press or paste immediately settles the logo without discarding that input.
+
+`golder workspace --no-animations` controls the outer workspace UI. To disable the first agent's animations as well, start with `GOLDER_NO_ANIMATIONS=1 golder workspace --no-animations` or `golder workspace --no-animations -- --no-animations`. Re-attaching does not change an already-running agent's settings.
 
 ## Quickstart: golder workspace
 
@@ -449,6 +457,7 @@ The first launch in a directory asks whether to trust it; `--approve` grants one
 | `--no-tools`, `--allowed-tools`, `--disallowed-tools` | Tool-level admission control |
 | `--no-skills`, `--no-prompt-templates` | Disable skill / prompt-template discovery |
 | `--no-tui` | Use the line-based REPL instead of the full-screen TUI |
+| `--no-animations` | Disable decorative agent-TUI animations; automatic over SSH |
 
 See `golder --help` for the complete list.
 
@@ -473,6 +482,7 @@ See `golder --help` for the complete list.
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |
 | `GOLDER_HOST_REPORT` | Host reporting: `off` disables it; `tuios` / `herdr` forces one (default detects the pane's environment; outside a host nothing is reported) |
+| `GOLDER_NO_ANIMATIONS` | `1`/`true`/`yes`/`on`: disable decorative agent-TUI animations; also enabled automatically by `SSH_TTY` or `SSH_CONNECTION` |
 | `OPENAI_BASE_URL` and other `<PROVIDER>_BASE_URL` | Override a provider's chat and model-listing endpoint |
 | `TAVILY_API_KEY` / `EXA_API_KEY` | Web-search backend credentials (Tavily / Exa) |
 | `~/.golder/model-catalog.json`, `reasoning-catalog.json` | 24h caches of the model list / reasoning levels |

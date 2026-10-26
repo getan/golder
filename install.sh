@@ -6,6 +6,11 @@
 #   curl -fsSL https://golder-cli.pages.dev/install.sh | sh
 #   （镜像：https://raw.githubusercontent.com/getan/golder/master/install.sh 亦可）
 #
+# Linux 依赖说明：默认沙箱强依赖 bubblewrap（bwrap）。可先自行用发行版包管理器
+# 安装（如 sudo apt-get install bubblewrap），再运行本脚本；检测到已有 bwrap
+# 时直接复用，不需要 sudo。缺少时本脚本尝试用 root/sudo 安装。
+# 安装系统依赖通常需要管理员权限；golder 可安装到 ~/.local/bin，日常运行不需要 sudo。
+#
 # 可用环境变量覆盖默认行为：
 #   GOLDER_VERSION   指定版本（形如 v0.2.0），默认取最新 release
 #   GOLDER_INSTALL_DIR  安装目录，默认 /usr/local/bin（无写权限时回退到 ~/.local/bin）
@@ -23,6 +28,55 @@ info() { printf '%s\n' "golder-install: $*" >&2; }
 err()  { printf '%s\n' "golder-install: error: $*" >&2; exit 1; }
 
 need() { command -v "$1" >/dev/null 2>&1 || err "缺少依赖命令: $1"; }
+
+# Linux 沙箱的强依赖。只使用发行版包管理器，不下载第三方 bwrap 二进制，
+# 也不修改 user namespace / AppArmor 等宿主安全设置。
+as_root() {
+	if [ "$(id -u)" = "0" ]; then
+		"$@" </dev/null
+	else
+		sudo "$@" </dev/null
+	fi
+}
+
+ensure_bubblewrap() {
+	[ "$OS" = "Linux" ] || return 0
+	info "Linux 默认沙箱强依赖 bubblewrap（bwrap）；运行 golder 本身不需要 sudo。"
+	if command -v bwrap >/dev/null 2>&1; then
+		info "已检测到 bwrap，复用已有安装（无需 sudo）。"
+		bwrap --version || err "已有 bwrap 无法执行，请重新安装 bubblewrap"
+		return 0
+	fi
+
+	# 按本机包管理器检测发行版家族；衍生版（如 Mint / Rocky）同样适用。
+	if command -v apt-get >/dev/null 2>&1; then
+		set -- apt-get install -y --no-install-recommends bubblewrap
+	elif command -v dnf >/dev/null 2>&1; then
+		set -- dnf install -y bubblewrap
+	elif command -v yum >/dev/null 2>&1; then
+		set -- yum install -y bubblewrap
+	elif command -v pacman >/dev/null 2>&1; then
+		set -- pacman -S --needed --noconfirm bubblewrap
+	elif command -v zypper >/dev/null 2>&1; then
+		set -- zypper --non-interactive install bubblewrap
+	elif command -v apk >/dev/null 2>&1; then
+		set -- apk add bubblewrap
+	else
+		err "Linux 必须安装 bubblewrap（bwrap）；未识别包管理器，请手动安装后重试"
+	fi
+	info "也可先自行安装 bubblewrap，再运行本脚本；安装命令（需 root 或加 sudo）: $*"
+	info "只有安装系统依赖需要管理员权限；golder 可安装到 ~/.local/bin。"
+	if [ "$(id -u)" != "0" ] && ! command -v sudo >/dev/null 2>&1; then
+		err "Linux 必须安装 bubblewrap（bwrap）；请让管理员执行: $*，然后重试"
+	fi
+	info "Linux 缺少 bubblewrap，将使用 root/sudo 安装: $*"
+	if [ "$1" = "apt-get" ]; then
+		as_root apt-get update || err "apt-get update 失败；请手动安装 bubblewrap 后重试"
+	fi
+	as_root "$@" || err "bubblewrap 安装失败；请检查软件源/权限，手动执行 $* 后重试"
+	command -v bwrap >/dev/null 2>&1 || err "安装后仍找不到 bwrap，请检查 PATH"
+	bwrap --version || err "安装后的 bwrap 无法执行，请检查 bubblewrap 安装"
+}
 
 # 1. 检测下载器（curl 或 wget）。$DLO 负责带超时防护的单次取文件：连接超时 5s，
 # 平均速度低于 50KB/s 持续 15s 即判死（与 Go 侧 internal/selfupdate 的速率
@@ -198,6 +252,9 @@ case "$arch_raw" in
 	i386 | i686) ARCH="i386" ;;
 	*) err "不支持的架构: $arch_raw" ;;
 esac
+
+# 在下载或替换 golder 前确认 Linux 的沙箱依赖，失败时保留已有安装。
+ensure_bubblewrap
 
 # 4. 解析目标版本：优先 GOLDER_VERSION，否则查询最新 release 的 tag。
 VERSION="${GOLDER_VERSION:-}"

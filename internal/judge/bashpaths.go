@@ -299,7 +299,9 @@ func commandCandidates(cmd shellfacts.Command, depth int) []string {
 		if r.Dup || r.Heredoc {
 			continue
 		}
-		if v, ok := wordValue(r.Target); ok && pathShapedWord(v) {
+		// The sandbox supplies /dev/null itself. Discarding a stream needs no
+		// host-file grant (and must not record one for this character device).
+		if v, ok := wordValue(r.Target); ok && pathShapedWord(v) && !isDevNull(v) {
 			out = append(out, v)
 		}
 	}

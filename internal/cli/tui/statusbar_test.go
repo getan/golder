@@ -288,6 +288,7 @@ func TestStatusBarRevealRunsOnceAndSettles(t *testing.T) {
 // spent the bar schedules nothing more — while a width that fits everything arms
 // nothing at all.
 func TestModelRevealRunsOnceThenStops(t *testing.T) {
+	clearMotionEnv(t)
 	m := NewModel(Options{Model: "claude-haiku-5-5", ProviderName: "opencode-go"})
 	m.statusBar.cwd = "~/work/harness/golder"
 	// Only a focused field is animated; focus the path so the narrow layout has

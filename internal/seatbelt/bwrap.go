@@ -109,6 +109,9 @@ func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy)
 	slices.SortStableFunc(roots, func(a, b string) int { return len(a) - len(b) })
 	madeDirs := map[string]bool{}
 	for _, root := range roots {
+		if root == "/dev/null" {
+			continue // --dev /dev supplies the sandbox's own null device
+		}
 		if _, err := os.Stat(root); err != nil {
 			continue
 		}
@@ -146,6 +149,9 @@ func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy)
 		}
 		for _, file := range policy.WriteFiles {
 			for _, p := range canonicals(file) {
+				if p == "/dev/null" {
+					continue // already writable via --dev /dev; never bind a host device
+				}
 				info, err := os.Stat(p)
 				if err != nil || !info.Mode().IsRegular() {
 					// bubblewrap can bind an existing file exactly, but cannot bind
