@@ -15,8 +15,8 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
-	github.com/getan/kitty-browse v0.2.2-0.20261025031517-892fb92264e4
-	github.com/getan/tuios-mini v0.10.3-0.20261025123651-3acee0b2ddb9
+	github.com/getan/kitty-browse v0.2.2
+	github.com/getan/tuios-mini v0.10.5
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/muesli/termenv v0.16.0
 	github.com/openai/openai-go v1.12.0

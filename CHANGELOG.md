@@ -36,6 +36,11 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Embedded workspace dependencies refreshed** (v1.5.6): pin tuios-mini
+  `v0.10.5` and kitty-browse `v0.2.2` to their latest default-branch commits.
+  The sidebar gains native file previews and file-scoped staged/unstaged
+  reviews with the original comment workflow; asynchronous saves preserve
+  newer edits. See [v1.5.6 release notes](docs/releases/v1.5.6.md).
 - **Workspace sessions are globally named, with an independent daemon per
   name**: `golder workspace` opens `default` from any directory; `-s/--session`
   selects another. Added `new`, strict `attach`, `list [--json]` and stopped-only
