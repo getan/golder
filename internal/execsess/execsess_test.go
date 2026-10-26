@@ -118,6 +118,23 @@ func TestSessionExitCode(t *testing.T) {
 	}
 }
 
+func TestSessionSignalExitPreservesError(t *testing.T) {
+	requireShell(t)
+	m := NewManager()
+	t.Cleanup(m.KillAll)
+	s, err := m.Start(StartRequest{Command: "kill -KILL $$", Argv: bashArgv("kill -KILL $$")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Wait(context.Background(), 5*time.Second, WaitExit) {
+		t.Fatal("signal-terminated session did not exit")
+	}
+	snap := s.Snapshot()
+	if snap.Status != StatusExited || snap.ExitCode >= 0 || !strings.Contains(snap.Err, "signal: killed") || snap.TimedOut {
+		t.Fatalf("signal reason was lost or misclassified: %+v", snap)
+	}
+}
+
 func TestSessionObserver(t *testing.T) {
 	requireShell(t)
 	m := NewManager()

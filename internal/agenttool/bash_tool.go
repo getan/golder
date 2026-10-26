@@ -709,17 +709,24 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if snap.ExitCode != 0 {
 		details := map[string]any{"exitCode": snap.ExitCode}
 		details["envelope"] = envelopeDetail(sandboxed)
+		if snap.Err != "" {
+			details["processError"] = snap.Err
+		}
 		if sandboxDenied {
 			details["sandboxDenied"] = true
 		}
 		if rgMissing {
 			details["rgMissing"] = true
 		}
+		description := "exited with " + processExitReason(snap)
+		if snap.ExitCode < 0 && snap.Err != "" {
+			description = "terminated: " + processExitReason(snap)
+		}
 		return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(out)},
 				Details: details,
 			},
-			fmt.Errorf("bash: command exited with code %d\n%s%s", snap.ExitCode, out, hint)
+			fmt.Errorf("bash: command %s\n%s%s", description, out, hint)
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(out + note)},

@@ -66,8 +66,8 @@ func TestBashToolNonZeroExitIsError(t *testing.T) {
 	if gerr == nil {
 		t.Fatalf("expected go error for non-zero exit, got nil")
 	}
-	if !strings.Contains(gerr.Error(), "code 3") {
-		t.Errorf("error = %q, want to mention code 3", gerr.Error())
+	if !strings.HasPrefix(gerr.Error(), "bash: command exited with code 3\n") || strings.Contains(gerr.Error(), "exit status 3") {
+		t.Errorf("ordinary exit wording changed: %q", gerr.Error())
 	}
 	// The captured output must ride along.
 	if !strings.Contains(gerr.Error(), "oops") {
@@ -76,6 +76,9 @@ func TestBashToolNonZeroExitIsError(t *testing.T) {
 	details, ok := res.Details.(map[string]any)
 	if !ok || details["exitCode"] != 3 {
 		t.Errorf("expected exitCode 3, details = %+v", res.Details)
+	}
+	if details["processError"] != "exit status 3" {
+		t.Errorf("raw Wait error missing from details: %+v", details)
 	}
 }
 

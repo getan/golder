@@ -121,7 +121,7 @@ func isInterruptChars(chars string) bool {
 }
 
 // sessionStatusLine renders one session's state as a single bracketed line,
-// e.g. "[bash_2: running]" or "[bash_3: exited code 1: signal: killed]".
+// e.g. "[bash_2: running]" or "[bash_3: exited: signal: killed]".
 func sessionStatusLine(s execsess.Snapshot) string {
 	switch {
 	case s.Status == execsess.StatusRunning:
@@ -131,11 +131,11 @@ func sessionStatusLine(s execsess.Snapshot) string {
 	case s.Err != "":
 		if s.ExitCode < 0 {
 			// A signal death has no meaningful exit code; report the signal.
-			return fmt.Sprintf("[%s: exited: %s]", s.ID, s.Err)
+			return fmt.Sprintf("[%s: exited: %s]", s.ID, processExitReason(s))
 		}
-		return fmt.Sprintf("[%s: exited code %d: %s]", s.ID, s.ExitCode, s.Err)
+		return fmt.Sprintf("[%s: exited %s: %s]", s.ID, processExitReason(s), s.Err)
 	default:
-		return fmt.Sprintf("[%s: exited code %d]", s.ID, s.ExitCode)
+		return fmt.Sprintf("[%s: exited %s]", s.ID, processExitReason(s))
 	}
 }
 
@@ -191,6 +191,9 @@ func (t *WriteStdinTool) Execute(ctx context.Context, id string, args json.RawMe
 	details := map[string]any{"bash_id": snap.ID, "status": string(snap.Status)}
 	if snap.Status == execsess.StatusExited {
 		details["exitCode"] = snap.ExitCode
+		if snap.Err != "" {
+			details["processError"] = snap.Err
+		}
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(text)},
