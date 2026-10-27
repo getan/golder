@@ -36,13 +36,24 @@ func buildAho(rules []*rule) *automaton {
 				}
 				state = next
 			}
-			a.nodes[state].out = append(a.nodes[state].out, ri)
+			a.nodes[state].out = appendUniqueRule(a.nodes[state].out, ri)
 		}
 	}
 
 	// Breadth-first fail links, the standard Aho-Corasick construction.
+	//
+	// A letter's two case edges point at the same node, so the node map holds
+	// the same child twice. Processing it twice enqueued every descendant twice
+	// and appended the failure outputs again on each visit; one node's output
+	// list grew to thousands of copies of the same rule. seen makes a node's
+	// fail link and output merge happen once, whatever edge reached it.
+	seen := make([]bool, len(a.nodes))
 	var queue []int
 	for _, n := range a.nodes[0].next {
+		if seen[n] {
+			continue
+		}
+		seen[n] = true
 		a.nodes[n].fail = 0
 		queue = append(queue, n)
 	}
@@ -50,6 +61,9 @@ func buildAho(rules []*rule) *automaton {
 		s := queue[0]
 		queue = queue[1:]
 		for b, n := range a.nodes[s].next {
+			if seen[n] {
+				continue
+			}
 			f := a.nodes[s].fail
 			for f != 0 {
 				if _, ok := a.nodes[f].next[b]; ok {
@@ -62,11 +76,26 @@ func buildAho(rules []*rule) *automaton {
 			} else {
 				a.nodes[n].fail = 0
 			}
-			a.nodes[n].out = append(a.nodes[n].out, a.nodes[a.nodes[n].fail].out...)
+			for _, ri := range a.nodes[a.nodes[n].fail].out {
+				a.nodes[n].out = appendUniqueRule(a.nodes[n].out, ri)
+			}
+			seen[n] = true
 			queue = append(queue, n)
 		}
 	}
 	return a
+}
+
+// appendUniqueRule adds ri only when the list does not already hold it. Rule
+// order is kept: the anchors' own rules come first, in table order, and the
+// failure links add what they contribute in BFS order.
+func appendUniqueRule(out []int, ri int) []int {
+	for _, have := range out {
+		if have == ri {
+			return out
+		}
+	}
+	return append(out, ri)
 }
 
 // step advances one byte. A missing transition falls back through fail links.

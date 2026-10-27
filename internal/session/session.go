@@ -442,14 +442,22 @@ func (s *Store) Save(header SessionHeader, messages agentcore.MessageList) error
 // needs: it copies a path of existing entries into a new session file without
 // disturbing their identifiers. The header's Version is forced to SchemaVersion.
 func (s *Store) SaveEntries(header SessionHeader, entries []Entry) error {
+	for i := range entries {
+		entries[i].Message = redactMessage(redact.SeamSession, entries[i].Message)
+	}
+	return s.writeEntries(header, entries)
+}
+
+// writeEntries is the write half of SaveEntries: the schema stamp, the header
+// redaction and the atomic rewrite. The caller owns message redaction, which is
+// what lets AppendBranch skip the entries it just loaded (LoadEntries already
+// redacted them) instead of scanning the whole history a second time.
+func (s *Store) writeEntries(header SessionHeader, entries []Entry) error {
 	header.Version = SchemaVersion
 	if header.ID == "" {
 		return fmt.Errorf("session: header ID must not be empty")
 	}
 	redactHeader(&header)
-	for i := range entries {
-		entries[i].Message = redactMessage(redact.SeamSession, entries[i].Message)
-	}
 	return s.atomicWrite(header.ID, func(w io.Writer) error {
 		return writeSessionEntries(w, header, entries)
 	})
@@ -752,12 +760,18 @@ func (s *Store) AppendBranch(header SessionHeader, parentLeafID string, messages
 	parent := parentLeafID
 	leaf := parentLeafID
 	for _, m := range messages {
-		e := Entry{ID: newEntryID(), ParentID: parent, Timestamp: now, Message: m}
+		// The entries LoadEntries returned are already redacted; only the new
+		// messages need the scan. Redacting them all again here was the second
+		// full-history pass in an append.
+		e := Entry{
+			ID: newEntryID(), ParentID: parent, Timestamp: now,
+			Message: redactMessage(redact.SeamSession, m),
+		}
 		entries = append(entries, e)
 		parent = e.ID
 		leaf = e.ID
 	}
-	if err := s.SaveEntries(header, entries); err != nil {
+	if err := s.writeEntries(header, entries); err != nil {
 		return "", err
 	}
 	return leaf, nil
@@ -799,7 +813,8 @@ func (s *Store) Fork(sourceID, leafID string, now time.Time) (SessionHeader, []E
 		AppendInstructions: srcHeader.AppendInstructions,
 		ParentSession:      sourceID,
 	}
-	if err := s.SaveEntries(newHeader, path); err != nil {
+	// path comes from LoadEntries, so its messages are already redacted.
+	if err := s.writeEntries(newHeader, path); err != nil {
 		return SessionHeader{}, nil, err
 	}
 	return newHeader, path, nil
