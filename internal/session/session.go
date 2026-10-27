@@ -54,6 +54,19 @@ const (
 	sessionScanBufMax  = 16 * 1024 * 1024
 )
 
+// SessionMaxLoadBytes is the largest session file LoadEntries will read. A
+// session above it is refused before a line is scanned, because the whole
+// history and its redaction would otherwise occupy memory for minutes. The
+// repair command streams such a file without loading it.
+const SessionMaxLoadBytes = 256 << 20
+
+// ErrSessionTooLarge reports a session file above SessionMaxLoadBytes.
+var ErrSessionTooLarge = errors.New("session file is above the load limit")
+
+// ErrSessionLineTooLong reports a line above the scanner's 16 MiB cap, which is
+// what a single very large tool result looks like on disk.
+var ErrSessionLineTooLong = errors.New("session has a line longer than 16 MiB")
+
 // SessionHeader is the first line of a session file: schema version plus the
 // metadata needed to list and resume a session without reading its messages.
 type SessionHeader struct {
@@ -561,8 +574,14 @@ func (s *Store) LoadEntries(id string) (SessionHeader, []Entry, error) {
 		return SessionHeader{}, nil, fmt.Errorf("session: open %s: %w", id, err)
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() > SessionMaxLoadBytes {
+		return SessionHeader{}, nil, fmt.Errorf("session %s: %w (%d bytes); run golder session repair %s", id, ErrSessionTooLarge, fi.Size(), id)
+	}
 	header, entries, err := readSession(f)
 	if err != nil {
+		if errors.Is(err, ErrSessionLineTooLong) {
+			return SessionHeader{}, nil, fmt.Errorf("session %s: %w; run golder session repair %s", id, err, id)
+		}
 		return SessionHeader{}, nil, err
 	}
 	redactHeader(&header)
@@ -614,6 +633,9 @@ func readSession(r io.Reader) (SessionHeader, []Entry, error) {
 
 	if !sc.Scan() {
 		if err := sc.Err(); err != nil {
+			if errors.Is(err, bufio.ErrTooLong) {
+				return SessionHeader{}, nil, fmt.Errorf("session: read header: %w", ErrSessionLineTooLong)
+			}
 			return SessionHeader{}, nil, fmt.Errorf("session: read header: %w", err)
 		}
 		return SessionHeader{}, nil, fmt.Errorf("session: empty file (no header)")
@@ -659,6 +681,9 @@ func readSession(r io.Reader) (SessionHeader, []Entry, error) {
 		parentID = e.ID
 	}
 	if err := sc.Err(); err != nil {
+		if errors.Is(err, bufio.ErrTooLong) {
+			return SessionHeader{}, nil, fmt.Errorf("session: %w", ErrSessionLineTooLong)
+		}
 		return SessionHeader{}, nil, fmt.Errorf("session: scan: %w", err)
 	}
 	return header, entries, nil

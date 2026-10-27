@@ -243,7 +243,7 @@ func main() {
 	// surface.
 	if len(os.Args) > 1 && os.Args[1] == "session" {
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: golder session export <session-id> [flags] | golder session list | golder session resume <session-id>")
+			fmt.Fprintln(os.Stderr, "usage: golder session export <session-id> [flags] | golder session list | golder session repair <session-id> | golder session resume <session-id>")
 			exit(2)
 		}
 		diagtrace.Event("main", "mode session")

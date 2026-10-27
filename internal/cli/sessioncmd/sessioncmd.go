@@ -5,6 +5,7 @@
 //
 //	golder session export <id> [--format md|json|html] [--output path]
 //	                         [--no-redact] [--include-system-prompt]
+//	golder session repair <id>
 //
 // The Markdown format is the shareable default: credential-shaped strings are
 // redacted (default on) and the system prompt is dropped (opt-in with
@@ -31,10 +32,35 @@ func Run(cmd string, args []string, out, errOut io.Writer) int {
 		return runExport(args, out, errOut)
 	case "list":
 		return runList(out, errOut)
+	case "repair":
+		return runRepair(args, out, errOut)
 	default:
-		fmt.Fprintf(errOut, "golder session: unknown command %q (want export, list, or resume)\n", cmd)
+		fmt.Fprintf(errOut, "golder session: unknown command %q (want export, list, repair, or resume)\n", cmd)
 		return 2
 	}
+}
+
+// runRepair implements `golder session repair <id>`: replace each line over the
+// scanner's cap with a placeholder, keeping the entry's tree ids, after copying
+// the original to <id>.jsonl.pre-repair.
+func runRepair(args []string, out, errOut io.Writer) int {
+	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(errOut, "usage: golder session repair <session-id>")
+		return 2
+	}
+	store, err := headless.SessionStore()
+	if err != nil {
+		fmt.Fprintf(errOut, "golder session repair: %v\n", err)
+		return 1
+	}
+	report, err := store.RepairOversized(args[0])
+	if err != nil {
+		fmt.Fprintf(errOut, "golder session repair: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(out, "repaired %s: %d entries, %d oversized message(s) replaced\nbackup: %s\n",
+		args[0], report.Lines, report.Omitted, report.Backup)
+	return 0
 }
 
 // runList mirrors golder --list-sessions under the session subcommand.
