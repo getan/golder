@@ -11,6 +11,7 @@ import (
 
 	"github.com/getan/kitty-browse/browsepane"
 
+	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/cli/workspacecmd"
 	workspacehost "github.com/getan/golder/internal/workspace"
 )
@@ -41,13 +42,28 @@ func runWorkspace(args []string, in, out *os.File, stderr io.Writer) int {
 func runBrowse(args []string, in *os.File, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	err := browsepane.Run(ctx, browsepane.Options{
+	reportPath := ""
+	if len(args) >= 2 && args[0] == "-golder-startup-report" {
+		reportPath, args = args[1], args[2:]
+	}
+	reporter, err := browserstartup.New(reportPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "golder browse: startup diagnostics:", err)
+		return 1
+	}
+	err = browsepane.Run(ctx, browsepane.Options{
 		Args: args, Stdin: in, Stdout: stdout, Stderr: stderr, Name: "golder browse",
-		Version: fmt.Sprintf("golder browse %s (commit %s, built %s)", version, commit, date),
+		Version:       fmt.Sprintf("golder browse %s (commit %s, built %s)", version, commit, date),
+		StartupOutput: reporter, StartupPhase: reporter.Phase, RequireChromiumSandbox: true,
 	})
 	if err == nil || errors.Is(err, context.Canceled) {
 		return 0
 	}
-	fmt.Fprintln(stderr, "golder browse:", err)
+	reporter.Fail(err, 1)
+	if report := reporter.Snapshot(); report.State == "ready" {
+		fmt.Fprintln(stderr, "golder browse:", reporter.ErrorText(err))
+	} else {
+		fmt.Fprintln(stderr, "golder browse:", report.Message())
+	}
 	return 1
 }

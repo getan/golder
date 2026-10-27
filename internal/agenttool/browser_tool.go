@@ -94,12 +94,12 @@ func (t *BrowserTool) Description() string {
 				browserToolUseHint
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse an owned instance or start a sandboxed browser with a fresh profile. External control requires host_control:true and one-call authorization." +
+			"Or call open with a URL to reuse an owned instance or start a controlled browser with a fresh profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. External control requires host_control:true and one-call authorization." +
 			browserToolUseHint
 	}
 	if t.allowControl {
 		return "Drive the running browser pane: snapshot the accessibility tree, " +
-			"with control limited to owned sandboxed browsers by default; host_control:true requests one-call external authority. " +
+			"with control limited to owned controlled browsers by default; host_control:true requests one-call external authority. " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
 			"Pin a tab by its id from list; refs are per document." +

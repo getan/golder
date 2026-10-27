@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 
 	"github.com/getan/golder/internal/controlcap"
 )
@@ -108,5 +109,11 @@ func controlledBrowserSpec(g *ControlGuard, cwd, name, url string) (paneSpec, er
 	}
 	spec.Profile = browserProfileDir(cwd, profileName)
 	spec.Name = name
+	if spec.Embedded {
+		spec.StartupReport = filepath.Join(spec.Profile, ".startup-"+rand.Text()[:12]+".json")
+		argv := append([]string{}, spec.Argv[:2]...)
+		argv = append(argv, "-golder-startup-report", spec.StartupReport)
+		spec.Argv = append(argv, spec.Argv[2:]...)
+	}
 	return spec, nil
 }

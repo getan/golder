@@ -35,6 +35,7 @@ const (
 	CapNetwork
 	CapUnconfined
 	CapHostControl
+	CapBrowserRuntime
 )
 
 // Need is one capability request with the exact scope it would cover.
@@ -104,22 +105,25 @@ type ConsentConfirm func(ctx context.Context, req ConsentRequest) ConsentAnswer
 
 // ConsentOpts configures the unified gate.
 type ConsentOpts struct {
-	Mode            *permissions.State
-	Classifier      Classifier
-	Cwd             string
-	ExtraRoots      []string
-	Sandboxed       func(tool string) bool
-	RequireSandbox  bool
-	Enforce         bool
-	Notify          func(Note)
-	Confirm         ConsentConfirm
-	In              *bufio.Reader
-	Out             io.Writer
-	Mu              *sync.Mutex
-	OnPrompt        func(question string) func()
-	WritableAt      func(path string) bool
-	GrantWritable   func(root string, persist bool) (bool, string)
-	PersistReadRoot func(dir string) (bool, string)
+	Mode           *permissions.State
+	Classifier     Classifier
+	Cwd            string
+	ExtraRoots     []string
+	Sandboxed      func(tool string) bool
+	RequireSandbox bool
+	Enforce        bool
+	// BrowserRuntimeOutside is host policy for macOS Chromium, whose child
+	// sandbox cannot initialize beneath an inherited Seatbelt profile.
+	BrowserRuntimeOutside bool
+	Notify                func(Note)
+	Confirm               ConsentConfirm
+	In                    *bufio.Reader
+	Out                   io.Writer
+	Mu                    *sync.Mutex
+	OnPrompt              func(question string) func()
+	WritableAt            func(path string) bool
+	GrantWritable         func(root string, persist bool) (bool, string)
+	PersistReadRoot       func(dir string) (bool, string)
 }
 
 // ConsentGate builds the single gate production drivers install after trust.
@@ -193,6 +197,9 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 		}
 
 		needs := collectNeeds(ctx, opts, call, v, mode, lang)
+		if opts.Enforce && hasNeed(needs, CapBrowserRuntime) {
+			return blockCall(call, v, "sandbox enforce cannot grant the macOS browser runtime exception; Chromium's own sandbox cannot initialize inside Seatbelt")
+		}
 		if v.Level == Deny {
 			n := noteFor(call, v, NoteDenied, lang)
 			n.Needs = needs
@@ -283,6 +290,9 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 // the person agrees. Boundary, network and sandbox are dimensions of one list.
 func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, mode permissions.Mode, lang string) []Need {
 	var needs []Need
+	if opts.BrowserRuntimeOutside && controlcap.BrowserLaunch(call.Name, call.Arguments) {
+		needs = append(needs, Need{Cap: CapBrowserRuntime})
+	}
 	if controlcap.Facade(call.Name) && controlcap.Parse(call.Arguments).HostControl {
 		needs = append(needs, Need{Cap: CapHostControl})
 	}
@@ -528,7 +538,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		Needs:  needs, Mode: mode.String(), Level: v.Level,
 		Risk: riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 		Rationale: firstReason(v), Origin: agentcore.OriginFromContext(ctx),
-		CanContain: opts.Sandboxed != nil && opts.Sandboxed(call.Name),
+		CanContain: opts.Sandboxed != nil && opts.Sandboxed(call.Name) && !hasNeed(needs, CapBrowserRuntime),
 	}
 	if req.Rationale == "" {
 		req.Rationale = consentRationale(v, needs, lang)
@@ -569,11 +579,12 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	}
 	if unconfined {
 		dec.Direct = true
-	} else if v.Level == Contain {
+	} else if v.Level == Contain && !dec.BrowserRuntime {
 		dec.Sandbox = true
 	}
 	if opts.Enforce {
 		dec.Direct = false
+		dec.BrowserRuntime = false
 		dec.Sandbox = true
 	}
 	// applyNeeds already carries a network need the person granted. The
@@ -660,6 +671,8 @@ func applyNeeds(call agentcore.AgentToolCall, opts ConsentOpts, needs []Need, sc
 			dec.Network = true
 		case CapHostControl:
 			dec.HostControl = true
+		case CapBrowserRuntime:
+			dec.BrowserRuntime = true // one invocation, never a standing path/Direct grant
 		case CapUnconfined:
 			// The caller decides the execution envelope; an escape is never
 			// remembered and never establishes a standing grant.
@@ -715,6 +728,8 @@ func needLabel(n Need, lang string) string {
 		return localized(lang, "沙箱外运行", "run outside the sandbox")
 	case CapHostControl:
 		return localized(lang, "控制非本会话创建的终端/浏览器（宿主权限）", "control an external terminal/browser with host authority")
+	case CapBrowserRuntime:
+		return localized(lang, "仅浏览器在外层 Seatbelt 之外运行（保留 Chromium 自身沙箱与独立 profile）", "browser-only runtime outside Seatbelt (Chromium sandbox and separate profile retained)")
 	default:
 		return "capability"
 	}

@@ -36,6 +36,14 @@ func Parse(raw json.RawMessage) Request {
 	return r
 }
 
+// BrowserLaunch is the host-defined operation that may start a browser. No
+// model-supplied sandbox flag or arbitrary tuios argv can create this ability.
+func BrowserLaunch(tool string, raw json.RawMessage) bool {
+	r := Parse(raw)
+	return tool == "browser" && r.Action == "open" ||
+		tool == "workspace" && r.Action == "create" && (r.Preset == "review" || r.Preset == "debug-fullstack")
+}
+
 // Commands preserves argv boundaries, including a shell's entire -c argument.
 // send is potential shell input, not a harmless string write.
 func Commands(tool string, raw json.RawMessage) []string {

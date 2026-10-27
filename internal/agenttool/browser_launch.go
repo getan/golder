@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/privatepath"
 	"github.com/getan/golder/internal/tuiosctl"
 )
@@ -247,12 +248,12 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 	}
 	defer c.Close()
 	res, err := g.launch(ctx, c, tuiosctl.NewWindowParams{
-		Name: spec.Name, Cwd: cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
+		Name: spec.Name, Cwd: cwd, Command: spec.Argv, Focus: false, KeepOpen: true,
 	}, true, true, true)
 	if err != nil {
 		return "", "", fmt.Errorf("start %s: %w", spec.program(), err)
 	}
-	if _, err := adoptBrowserPane(ctx, cwd, spec, res.WindowID, browserSocketWait); err != nil {
+	if _, err := waitAndAdoptBrowserPane(ctx, c, cwd, spec, res.WindowID, browserSocketWait); err != nil {
 		return "", res.WindowID, err
 	}
 	return spec.Socket, res.WindowID, nil
@@ -263,10 +264,57 @@ func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(cont
 // compatible browser, and records the exact pane id and browserId, which is
 // what a later close needs before it sends a quit.
 func adoptBrowserPane(ctx context.Context, cwd string, spec paneSpec, windowID string, wait time.Duration) (browserPaneRecord, error) {
-	if err := waitForBrowserSocket(ctx, spec.Socket, wait); err != nil {
-		return browserPaneRecord{}, fmt.Errorf(
-			"%s is running in pane %s but %w; check the pane output and that Chromium is installed",
-			spec.program(), windowID, err)
+	return adoptBrowserPaneWithExit(ctx, cwd, spec, windowID, wait, nil)
+}
+
+type browserPaneExit struct {
+	code *int
+	err  error
+}
+
+func waitAndAdoptBrowserPane(ctx context.Context, c *tuiosctl.Client, cwd string, spec paneSpec, windowID string, wait time.Duration) (browserPaneRecord, error) {
+	wctx, cancel := context.WithCancel(ctx)
+	exit := make(chan browserPaneExit, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		res, err := c.WaitFor(wctx, tuiosctl.WaitParams{Window: windowID, Condition: "window-exit", Timeout: wait})
+		if err == nil && !res.Matched {
+			err = errors.New("daemon did not report a matching browser exit event")
+		}
+		exit <- browserPaneExit{code: res.ExitCode, err: err}
+	}()
+	record, err := adoptBrowserPaneWithExit(ctx, cwd, spec, windowID, wait, exit)
+	cancel()
+	<-done
+	if err != nil {
+		// keep_open preserved the failure screen. Snapshot it before cleanup;
+		// never describe a process that already exited as still running.
+		if spec.StartupReport == "" {
+			captureCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			if screen, e := c.CapturePane(captureCtx, windowID, "recent", 40, false); e == nil && screen.Content != "" {
+				if r, makeErr := browserstartup.New(""); makeErr == nil {
+					_, _ = r.Write([]byte(screen.Content))
+					r.Fail(err, 1)
+					err = errors.New(r.Snapshot().Message())
+				}
+			}
+			stop()
+		}
+		closeCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		if e := c.CloseWindow(closeCtx, windowID); e == nil {
+			if g := controlGuardFrom(ctx); g != nil {
+				g.release(windowID)
+			}
+		}
+		stop()
+	}
+	return record, err
+}
+
+func adoptBrowserPaneWithExit(ctx context.Context, cwd string, spec paneSpec, windowID string, wait time.Duration, exited <-chan browserPaneExit) (browserPaneRecord, error) {
+	if err := waitForBrowserStartup(ctx, spec, wait, exited); err != nil {
+		return browserPaneRecord{}, fmt.Errorf("%s in pane %s: %w", spec.program(), windowID, err)
 	}
 	cBrowser, err := browserctl.Dial(spec.Socket)
 	if err != nil {
@@ -302,6 +350,54 @@ func adoptBrowserPane(ctx context.Context, cwd string, spec paneSpec, windowID s
 	})
 	setBrowserSocket(spec.Socket)
 	return record, nil
+}
+
+// Wait on readiness, bounded startup status, and the daemon's actual exit
+// event together. An unsupported legacy wait verb disables only that signal;
+// the startup report still reports errors promptly.
+func waitForBrowserStartup(ctx context.Context, spec paneSpec, d time.Duration, exited <-chan browserPaneExit) error {
+	if d <= 0 {
+		d = browserSocketWait
+	}
+	deadline := time.NewTimer(d)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	lastPhase := "starting"
+	for {
+		if spec.StartupReport != "" {
+			if r, err := browserstartup.Read(spec.StartupReport); err == nil {
+				lastPhase = r.Phase
+				if r.State == "failed" {
+					return errors.New(r.Message())
+				}
+			}
+		}
+		if info, err := os.Stat(spec.Socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case e := <-exited:
+			if e.err != nil {
+				exited = nil
+				continue
+			}
+			if spec.StartupReport != "" {
+				if r, err := browserstartup.Read(spec.StartupReport); err == nil && r.State == "failed" {
+					return errors.New(r.Message())
+				}
+			}
+			if e.code != nil {
+				return fmt.Errorf("browser pane exited before its control interface was ready (exit code %d, phase=%s)", *e.code, lastPhase)
+			}
+			return fmt.Errorf("browser pane exited before its control interface was ready (phase=%s)", lastPhase)
+		case <-deadline.C:
+			return fmt.Errorf("browser readiness timed out after %s (last phase=%s, control socket=%s); this is not evidence that Chromium is missing", d, lastPhase, spec.Socket)
+		case <-tick.C:
+		}
+	}
 }
 
 // waitForBrowserSocket waits for the control socket to appear, bounded by both

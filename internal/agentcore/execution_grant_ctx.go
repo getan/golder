@@ -6,6 +6,17 @@ type networkGrantKey struct{}
 type directGrantKey struct{}
 type hostControlGrantKey struct{}
 
+type browserRuntimeGrantKey struct{}
+
+func WithBrowserRuntimeGrant(ctx context.Context) context.Context {
+	return context.WithValue(ctx, browserRuntimeGrantKey{}, true)
+}
+
+func BrowserRuntimeGrantedFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(browserRuntimeGrantKey{}).(bool)
+	return v
+}
+
 func WithHostControlGrant(ctx context.Context) context.Context {
 	return context.WithValue(ctx, hostControlGrantKey{}, true)
 }

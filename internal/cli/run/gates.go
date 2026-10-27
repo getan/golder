@@ -23,6 +23,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	goruntime "runtime"
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -252,22 +253,23 @@ func (g *Gates) chainWithTrust(includeTrust bool) agentcore.BeforeToolCallFunc {
 func (g *Gates) consentOpts() judge.ConsentOpts {
 	o := g.opts
 	return judge.ConsentOpts{
-		Mode:            o.Perms,
-		Classifier:      g.classifier(),
-		Cwd:             o.Cwd,
-		ExtraRoots:      o.ExtraRoots,
-		Sandboxed:       o.Sandboxed,
-		RequireSandbox:  seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
-		Enforce:         seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
-		Notify:          notesEmit(o.Notes),
-		Confirm:         judge.ConsentFromApproval(o.Confirm),
-		In:              o.In,
-		Out:             o.Out,
-		Mu:              o.Mu,
-		OnPrompt:        o.OnPrompt,
-		WritableAt:      WritableAt,
-		GrantWritable:   GrantWritableRoot,
-		PersistReadRoot: PersistReadRoot,
+		Mode:                  o.Perms,
+		Classifier:            g.classifier(),
+		Cwd:                   o.Cwd,
+		ExtraRoots:            o.ExtraRoots,
+		Sandboxed:             o.Sandboxed,
+		RequireSandbox:        seatbelt.Supported() && seatbelt.ModeFromEnv() != seatbelt.ModeOff,
+		Enforce:               seatbelt.ModeFromEnv() == seatbelt.ModeEnforce,
+		BrowserRuntimeOutside: goruntime.GOOS == "darwin",
+		Notify:                notesEmit(o.Notes),
+		Confirm:               judge.ConsentFromApproval(o.Confirm),
+		In:                    o.In,
+		Out:                   o.Out,
+		Mu:                    o.Mu,
+		OnPrompt:              o.OnPrompt,
+		WritableAt:            WritableAt,
+		GrantWritable:         GrantWritableRoot,
+		PersistReadRoot:       PersistReadRoot,
 	}
 }
 

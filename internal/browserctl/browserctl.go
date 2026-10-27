@@ -338,7 +338,8 @@ func (c *Client) Screenshot(ctx context.Context, fullPage bool) ([]byte, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("browser: screenshot status %d", resp.StatusCode)
+		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("browser: screenshot status %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {

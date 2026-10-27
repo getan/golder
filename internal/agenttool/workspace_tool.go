@@ -50,12 +50,13 @@ type workspacePane struct {
 
 // paneSpec is one line of a preset plan.
 type paneSpec struct {
-	Name    string
-	Kind    string
-	Argv    []string
-	Socket  string
-	URL     string
-	Profile string
+	Name          string
+	Kind          string
+	Argv          []string
+	Socket        string
+	URL           string
+	Profile       string
+	StartupReport string
 	// Embedded marks a browser pane started by golder's own binary rather than
 	// an external kitty-browse; close needs it to know which teardown applies.
 	Embedded bool
@@ -221,7 +222,7 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 	started := make([]workspacePane, 0, len(specs))
 	for _, spec := range specs {
 		res, err := t.Control.launch(ctx, c, tuiosctl.NewWindowParams{
-			Name: spec.Name, Cwd: t.cwd, Command: spec.Argv, Focus: false, CloseOnExit: true,
+			Name: spec.Name, Cwd: t.cwd, Command: spec.Argv, Focus: false, CloseOnExit: spec.Kind != "browser", KeepOpen: spec.Kind == "browser",
 		}, a.Preset == PresetFullStack || spec.Kind == "browser" || a.Network == "on", spec.Kind == "browser", true)
 		if err != nil {
 			return workspaceError(fmt.Errorf("start pane %q: %w", spec.Name, err)), nil
@@ -233,7 +234,7 @@ func (t *WorkspaceTool) create(ctx context.Context, a workspaceArgs) (agentcore.
 			// Adoption also records the pane id and browserId that close needs,
 			// and points the browser tool at the socket without the person
 			// exporting KITTY_BROWSE_SOCKET and restarting.
-			if _, err := adoptBrowserPane(ctx, t.cwd, spec, res.WindowID, workspaceBrowserWait); err != nil {
+			if _, err := waitAndAdoptBrowserPane(ctx, c, t.cwd, spec, res.WindowID, workspaceBrowserWait); err != nil {
 				// The pane exists; the rest of the layout is still useful, so
 				// this is reported per pane instead of aborting create.
 				pane.Warning = err.Error()

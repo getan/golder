@@ -212,6 +212,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			if dec.Direct {
 				execCtx = agentcore.WithDirectGrant(execCtx)
 			}
+			if dec.BrowserRuntime && !dec.Sandbox {
+				execCtx = agentcore.WithBrowserRuntimeGrant(execCtx)
+			}
 			// The gate's envelope decision: this call's whole effect is readable
 			// from its text, so it may run outside the OS sandbox. Never set
 			// beside Sandbox — a gate that asked for containment gets it.

@@ -96,6 +96,9 @@ type BeforeToolCallDecision struct {
 	// Direct is a separate per-call escape decision from the authorization gate
 	// (reviewer in auto, person in ask/uncertain). An Allow alone cannot set it.
 	Direct bool
+	// BrowserRuntime permits only the trusted browser launcher to omit the
+	// outer macOS Seatbelt layer. It is not a Direct grant to bash or workers.
+	BrowserRuntime bool
 	// ReadGrant, when non-empty, allows this one call to read the given path
 	// outside the workspace. The executor publishes it into the context the
 	// tool executes with (ReadGrantFromContext). It carries a single path

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -35,20 +36,22 @@ type ControlGuard struct {
 }
 
 type controlledPane struct {
-	cwd      string
-	network  bool
-	isolated bool
-	browser  bool
-	sealed   bool
-	policy   [32]byte
-	cleanup  func()
+	cwd            string
+	network        bool
+	isolated       bool
+	browser        bool
+	browserRuntime bool
+	sealed         bool
+	policy         [32]byte
+	cleanup        func()
 }
 
 type controlledBrowser struct {
-	socket   string
-	window   string
-	isolated bool
-	policy   [32]byte
+	socket         string
+	window         string
+	isolated       bool
+	browserRuntime bool
+	policy         [32]byte
 }
 
 func NewControlGuard(root string) *ControlGuard {
@@ -118,7 +121,7 @@ func (g *ControlGuard) checkBrowser(ctx context.Context, id, socket string, host
 	g.mu.Lock()
 	want, ok := g.browsers[id]
 	g.mu.Unlock()
-	if ok && want.socket == canonicalBrowserSocket(socket) && (want.isolated || (g.full() && !agentcore.SandboxRequestedFromContext(ctx))) {
+	if ok && want.socket == canonicalBrowserSocket(socket) && (want.isolated || ((want.browserRuntime || g.full()) && !agentcore.SandboxRequestedFromContext(ctx) && seatbelt.ModeFromEnv() != seatbelt.ModeEnforce)) {
 		if want.policy != controlPolicyStamp() {
 			return errors.New("browser sandbox policy changed; open a new controlled browser")
 		}
@@ -134,7 +137,7 @@ func (g *ControlGuard) rememberBrowser(id, socket, window string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	p := g.panes[window]
-	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, isolated: p.isolated, policy: p.policy}
+	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
 }
 
 func (g *ControlGuard) release(id string) {
@@ -156,6 +159,10 @@ func (g *ControlGuard) release(id string) {
 // It never silently falls back to bare execution. The environment is an allow
 // list: a daemon's inherited provider tokens must not become pane environment.
 func (g *ControlGuard) launchArgv(ctx context.Context, argv []string, cwd string, network bool, runtimeFiles ...string) ([]string, func(), bool, error) {
+	return g.launchArgvFor(ctx, argv, cwd, network, false, runtimeFiles...)
+}
+
+func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd string, network, browser bool, runtimeFiles ...string) ([]string, func(), bool, error) {
 	if g.Mode != nil && g.Mode.Mode() == permissions.ReadOnly {
 		return nil, nil, false, errors.New("read-only mode cannot launch panes")
 	}
@@ -165,10 +172,19 @@ func (g *ControlGuard) launchArgv(ctx context.Context, argv []string, cwd string
 	if len(argv) == 0 {
 		argv = []string{"bash", "--noprofile", "--norc"}
 	}
-	if g.full() && !agentcore.SandboxRequestedFromContext(ctx) {
+	if g.full() && !browser && !agentcore.SandboxRequestedFromContext(ctx) {
 		return argv, func() {}, false, nil
 	}
-	if g.Runner == nil {
+	browserOutside := browser && (g.full() || runtime.GOOS == "darwin" && agentcore.BrowserRuntimeGrantedFromContext(ctx))
+	if browser && runtime.GOOS == "darwin" {
+		if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+			return nil, nil, false, errors.New("Chromium's own sandbox cannot initialize beneath macOS Seatbelt; sandbox enforce refuses a browser runtime exception")
+		}
+		if !browserOutside {
+			return nil, nil, false, errors.New("controlled macOS browser launch needs a one-call browser-runtime decision from the approval gate; Chromium's own sandbox stays enabled")
+		}
+	}
+	if !browserOutside && g.Runner == nil {
 		return nil, nil, false, errors.New("no OS sandbox is available for controlled panes; nothing was launched")
 	}
 	home, err := os.MkdirTemp("", "golder-pane-home-")
@@ -182,7 +198,13 @@ func (g *ControlGuard) launchArgv(ctx context.Context, argv []string, cwd string
 		return nil, nil, false, err
 	}
 	clean := []string{env, "-i", "PATH=" + os.Getenv("PATH"), "HOME=" + home, "TERM=xterm-256color", "TMPDIR=" + os.TempDir()}
+	if browser {
+		clean = append(clean, "CFFIXED_USER_HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"), "XDG_CACHE_HOME="+filepath.Join(home, "cache"))
+	}
 	clean = append(clean, argv...)
+	if browserOutside {
+		return clean, cleanHome, false, nil
+	}
 	policy := seatbelt.CallPolicy{Network: network, ReadDirs: []string{home}, WriteDirs: []string{home}}
 	policy.ReadFiles = append(policy.ReadFiles, runtimeFiles...)
 	seatbelt.RefusedPaths(&policy)
@@ -231,7 +253,7 @@ func (g *ControlGuard) launch(ctx context.Context, c *tuiosctl.Client, p tuiosct
 	if browser && len(p.Command) > 0 {
 		runtimeFiles = []string{p.Command[0]}
 	}
-	argv, cleanup, isolated, err := g.launchArgv(ctx, p.Command, p.Cwd, network, runtimeFiles...)
+	argv, cleanup, isolated, err := g.launchArgvFor(ctx, p.Command, p.Cwd, network, browser, runtimeFiles...)
 	if err != nil {
 		return tuiosctl.NewWindowResult{}, err
 	}
@@ -252,7 +274,8 @@ func (g *ControlGuard) launch(ctx context.Context, c *tuiosctl.Client, p tuiosct
 	}
 	g.mu.Lock()
 	g.panes[res.WindowID] = controlledPane{cwd: p.Cwd, network: network, isolated: isolated, browser: browser, cleanup: cleanup,
-		sealed: agentcore.ReadGrantFromContext(ctx) != "" || agentcore.WriteGrantFromContext(ctx) != "", policy: controlPolicyStamp()}
+		browserRuntime: browser && !isolated && (g.full() || runtime.GOOS == "darwin" && agentcore.BrowserRuntimeGrantedFromContext(ctx)),
+		sealed:         agentcore.ReadGrantFromContext(ctx) != "" || agentcore.WriteGrantFromContext(ctx) != "", policy: controlPolicyStamp()}
 	g.mu.Unlock()
 	return res, nil
 }

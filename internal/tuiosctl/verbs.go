@@ -79,6 +79,9 @@ func (c *Client) NewWindow(ctx context.Context, p NewWindowParams) (NewWindowRes
 	if p.CloseOnExit {
 		params["close_on_exit"] = true
 	}
+	if p.KeepOpen {
+		params["keep_open"] = true
+	}
 	var out NewWindowResult
 	err := c.CallInto(ctx, "new-window", params, &out)
 	// An older daemon rejects close_on_exit as an unknown parameter even when
@@ -130,6 +133,7 @@ type NewWindowParams struct {
 	Grants      []string
 	Focus       bool
 	CloseOnExit bool
+	KeepOpen    bool
 }
 
 type NewWindowResult struct {
