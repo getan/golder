@@ -186,16 +186,33 @@ func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
 // browserPaneArgv is the command line for one browser pane. golder's own binary
 // gets a subcommand; an external kitty-browse takes the same flags directly.
 func browserPaneArgv(socket, profile, url string) ([]string, error) {
+	var argv []string
 	if exe, err := embeddedBrowser(); err != nil {
 		return nil, err
 	} else if exe != "" {
-		return []string{exe, "browse", "-profile-dir", profile, "-control-socket", socket, url}, nil
+		argv = []string{exe, "browse"}
+	} else {
+		bin, err := exec.LookPath("kitty-browse")
+		if err != nil {
+			return nil, fmt.Errorf("no browser can be started here: %s", kittyBrowseHint())
+		}
+		argv = []string{bin}
 	}
-	bin, err := exec.LookPath("kitty-browse")
-	if err != nil {
-		return nil, fmt.Errorf("no browser can be started here: %s", kittyBrowseHint())
+	// The documented host setting must survive the scrubbed child environment.
+	// Resolve it in the trusted launcher as one literal flag argument, not by
+	// forwarding an ambient environment or accepting arbitrary tool argv.
+	if chrome := strings.TrimSpace(os.Getenv("KITTY_BROWSE_CHROME")); chrome != "" {
+		bin, err := exec.LookPath(chrome)
+		if err != nil {
+			return nil, fmt.Errorf("KITTY_BROWSE_CHROME %q: %w", chrome, err)
+		}
+		abs, err := filepath.Abs(bin)
+		if err != nil {
+			return nil, fmt.Errorf("KITTY_BROWSE_CHROME: %w", err)
+		}
+		argv = append(argv, "-chrome", abs)
 	}
-	return []string{bin, "-profile-dir", profile, "-control-socket", socket, url}, nil
+	return append(argv, "-profile-dir", profile, "-control-socket", socket, url), nil
 }
 
 func staleBrowserSocket(path string) bool {

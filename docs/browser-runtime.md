@@ -40,12 +40,51 @@ browser crashes, and terminal/renderer initialization. A readiness timeout is
 not presented as proof that Chromium is missing or still running.
 
 CDP readiness, terminal initialization and rendering are different milestones.
-On this development Mac, installed Chromium 150 successfully connected to CDP,
-read about:blank DOM and navigated to a synthetic local page outside Seatbelt.
-Its `Page.captureScreenshot` still timed out after 10 seconds, with no matching
-Seatbelt denial observed. This **post-CDP screenshot acceptance remains open**;
-the opt-in `TestBrowserRuntimeChromium` retains the check rather than treating
-HTTP 500 as success. No disabling of Chromium's sandbox is a workaround.
+The follow-up comparison on this development Mac used fresh profiles and
+the same scrubbed environment, outside Seatbelt but with Chromium's own sandbox
+required in every arm:
+
+| Runtime | CLI / bare CDP screenshot | Controlled host |
+|---|---|---|
+| Installed Chromium 150.0.7854.0 | Times out, including stock-feature repeats | DOM/navigation work; capture times out |
+| Official full Chrome for Testing 150.0.7871.46 | Times out; stock-feature runs sometimes succeed but are not reliable | Not accepted as a reliable capture runtime |
+| Official chrome-headless-shell 150.0.7871.46 | CLI and bare CDP decode valid PNGs | Three fresh sessions pass viewport, full-page, repeated viewport and normal quit |
+
+The successful host check decodes actual PNGs, verifies 1280x800 / 1280x1600
+dimensions and the fixture's opaque `#115599` pixel. It does not accept an empty
+image or a blank fallback. Focus/layout preparation and `CDPScreenshotNewSurface`
+did not make full Chrome reliable. An initial successful stock-feature run
+suggested `MacAppCodeSignClone`, but repetition disproved it as a sufficient
+fix. **No default feature or sandbox flags were weakened based on that result.**
+The exact upstream compositor defect remains unproven; the failing native CLI
+and bare CDP arms show that the failure does not require golder's control API.
+Related upstream reports: [agent-browser #1437](https://github.com/vercel-labs/agent-browser/issues/1437)
+and [the proposed runtime workaround #1189](https://github.com/vercel-labs/agent-browser/pull/1189).
+
+### Explicit runtime selection
+
+For an affected machine, a dedicated headless runtime can be selected using the
+existing host setting, without replacing `/Applications/Chromium.app`:
+
+```sh
+KITTY_BROWSE_CHROME="/absolute/path/to/chrome-headless-shell" /path/to/new/golder
+```
+
+The controlled launcher resolves this setting to one literal `-chrome` argument
+before scrubbing the child environment. Previously the setting was silently
+lost, so a requested engine could fall back to the problematic full browser.
+An invalid explicit setting now fails rather than silently choosing another
+engine. Neither ambient credentials nor arbitrary tool-supplied argv are
+forwarded. The default browser selection remains unchanged; there is no
+automatic download, installation or runtime switch.
+
+Tests accept `GOLDER_TEST_CHROMIUM_EXECUTABLE` to compare an explicit binary.
+`GOLDER_TEST_CHROMIUM_RUNTIME=1` runs full capture/quit acceptance;
+`GOLDER_TEST_SCREENSHOT_LAYERS=1` runs CLI/bare-CDP comparison, with optional
+`GOLDER_TEST_SCREENSHOT_MODES=cdp-stock,cdp-no-clone` for the feature A/B test.
+The default installed-browser failure remains reproducible; configuring the
+verified headless runtime is an operational workaround, not a claim that full
+Chrome itself has been fixed. No Chromium sandbox disablement is a workaround.
 
 ## Separate Toggle admin / descriptor issue
 

@@ -1,7 +1,10 @@
 package agenttool
 
 import (
+	"bytes"
 	"context"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,7 +66,11 @@ func TestBrowserRuntimeChromium(t *testing.T) {
 		root := os.Getenv("GOLDER_CHROMIUM_TEST_ROOT")
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
-		h, err := browserhost.Start(ctx, browserhost.Options{URL: "about:blank", Chrome: "/Applications/Chromium.app/Contents/MacOS/Chromium",
+		chrome := os.Getenv("GOLDER_TEST_CHROMIUM_EXECUTABLE")
+		if chrome == "" {
+			chrome = "/Applications/Chromium.app/Contents/MacOS/Chromium"
+		}
+		h, err := browserhost.Start(ctx, browserhost.Options{URL: "about:blank", Chrome: chrome,
 			ProfileDir: filepath.Join(root, "profile"), Socket: filepath.Join(root, "c.sock"), RequireSandbox: true, LoadTimeout: 10 * time.Second})
 		if err != nil {
 			t.Fatal(err)
@@ -82,15 +89,29 @@ func TestBrowserRuntimeChromium(t *testing.T) {
 			t.Fatal(err)
 		}
 		page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte("<!doctype html><html><head><title>controlled smoke</title></head><body>smoke page</body></html>"))
+			_, _ = w.Write([]byte("<!doctype html><html><head><title>controlled smoke</title><style>html,body{margin:0}body{min-height:1600px;background:#115599}</style></head><body>smoke page</body></html>"))
 		}))
 		defer page.Close()
 		if _, _, err := c.Action(ctx, "navigate", map[string]any{"url": page.URL}, browserctl.Target{}, 5*time.Second); err != nil {
 			t.Fatal(err)
 		}
-		png, err := c.Screenshot(ctx, false)
-		if err != nil || len(png) < 8 {
-			t.Errorf("screenshot bytes=%d err=%v", len(png), err)
+		shot, err := c.Screenshot(ctx, false)
+		if err != nil {
+			t.Errorf("viewport screenshot: %v", err)
+		} else {
+			assertBrowserFixturePNG(t, shot, 1280, 800)
+			full, err := c.Screenshot(ctx, true)
+			if err != nil {
+				t.Errorf("full-page screenshot: %v", err)
+			} else {
+				assertBrowserFixturePNG(t, full, 1280, 1600)
+			}
+			again, err := c.Screenshot(ctx, false)
+			if err != nil {
+				t.Errorf("viewport after full-page capture: %v", err)
+			} else {
+				assertBrowserFixturePNG(t, again, 1280, 800)
+			}
 		}
 		if err := c.Quit(ctx); err != nil {
 			t.Fatal(err)
@@ -113,7 +134,7 @@ func TestBrowserRuntimeChromium(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	child := []string{"/usr/bin/env", "GOLDER_CHROMIUM_RUNTIME_CHILD=1", "GOLDER_CHROMIUM_TEST_ROOT=" + root, exe, "-test.run=^TestBrowserRuntimeChromium$", "-test.count=1", "-test.v"}
+	child := []string{"/usr/bin/env", "GOLDER_CHROMIUM_RUNTIME_CHILD=1", "GOLDER_CHROMIUM_TEST_ROOT=" + root, "GOLDER_TEST_CHROMIUM_EXECUTABLE=" + os.Getenv("GOLDER_TEST_CHROMIUM_EXECUTABLE"), exe, "-test.run=^TestBrowserRuntimeChromium$", "-test.count=1", "-test.v"}
 	argv, cleanup, isolated, err := g.launchArgvFor(ctx, child, root, true, true)
 	if err != nil {
 		t.Fatal(err)
@@ -131,4 +152,23 @@ func TestBrowserRuntimeChromium(t *testing.T) {
 	} else {
 		t.Logf("%s", out)
 	}
+}
+
+func assertBrowserFixturePNG(t *testing.T, raw []byte, width, height int) {
+	t.Helper()
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Errorf("invalid screenshot PNG (%d bytes): %v", len(raw), err)
+		return
+	}
+	if img.Bounds().Dx() != width || img.Bounds().Dy() != height {
+		t.Errorf("screenshot bounds=%v, want %dx%d", img.Bounds(), width, height)
+		return
+	}
+	pixel := color.NRGBAModel.Convert(img.At(width/2, height/2)).(color.NRGBA)
+	if pixel != (color.NRGBA{R: 0x11, G: 0x55, B: 0x99, A: 0xff}) {
+		t.Errorf("fixture pixel=%v, want opaque #115599 (not a blank fallback)", pixel)
+		return
+	}
+	t.Logf("verified PNG: %dx%d, %d bytes, fixture pixel #115599", width, height, len(raw))
 }
