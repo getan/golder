@@ -604,7 +604,7 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 					// the headline names the targets.
 					continue
 				}
-				kv := k + ": " + fmt.Sprintf("%v", c.input[k])
+				kv := clipRenderLine(k + ": " + fmt.Sprintf("%v", c.input[k]))
 				b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine("  │ ", kv, inner)))
 			}
 		}
@@ -619,7 +619,7 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 	} else {
 		for i, n := range c.response {
 			indent := strings.Repeat("  ", n.depth)
-			text := indent + n.text
+			text := indent + clipRenderLine(n.text)
 			if i == 0 {
 				b.WriteString("\n" + theme.ToolBody.Render(wrapBodyLine("  └ ", text, inner)))
 			} else {

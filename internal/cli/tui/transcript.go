@@ -1470,6 +1470,7 @@ func renderNoticeStyled(theme Theme, width int, text string, style lipgloss.Styl
 // vertical padding above and below makes the bar breathe instead of hugging the
 // text, while assistant text stays bar-free.
 func renderUserBlock(theme Theme, text string, width int) string {
+	text = clipRenderText(text)
 	avail := width - 2
 	if avail < 1 {
 		avail = 1

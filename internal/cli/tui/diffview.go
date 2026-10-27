@@ -148,6 +148,7 @@ func diffTotals(diff string) (added, removed int) {
 // (codex's rule), so a second header line would just repeat it at a shallower
 // indent.
 func renderDiff(theme Theme, diff string, width int) string {
+	diff = clipRenderText(diff)
 	key := diffRenderKey(diff, width, syntaxDark())
 	diffRenderMu.Lock()
 	cached, ok := diffRenderCache[key]

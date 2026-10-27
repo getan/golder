@@ -149,6 +149,7 @@ func mdStrPtr(s string) *string { return &s }
 // trailing newline glamour appends is trimmed so the block joins cleanly with
 // its neighbors in the transcript.
 func renderMarkdown(src string, width int) string {
+	src = clipRenderText(src)
 	if !ui.Enabled() {
 		return src
 	}
