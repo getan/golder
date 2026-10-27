@@ -24,6 +24,7 @@ type resumeLoadedMsg struct {
 	id      string
 	header  session.SessionHeader
 	entries []session.Entry
+	skipped int
 	err     error
 }
 
@@ -54,8 +55,8 @@ func (m Model) startResume(id string) (tea.Model, tea.Cmd) {
 	m.resume.id = id
 	store := m.session.store
 	return m, func() tea.Msg {
-		h, entries, err := store.LoadEntries(id)
-		return resumeLoadedMsg{gen: gen, id: id, header: h, entries: entries, err: err}
+		h, entries, skipped, err := store.LoadEntriesLenient(id)
+		return resumeLoadedMsg{gen: gen, id: id, header: h, entries: entries, skipped: skipped, err: err}
 	}
 }
 
@@ -85,6 +86,11 @@ func (m Model) finishResume(msg resumeLoadedMsg) (tea.Model, tea.Cmd) {
 	seedTranscript(&m.transcript, msgs)
 	m.refreshContextUsage(msgs)
 	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", msg.id, m.live.Model))
+	if msg.skipped > 0 {
+		m.transcript.addSystem(fmt.Sprintf(
+			"Skipped %d oversized message(s) while loading; the file was not changed. Run `golder session repair %s` to compact it.",
+			msg.skipped, msg.id))
+	}
 	m.logoRunning = false
 	m.relayout()
 	return m, m.startStatusReveal()

@@ -109,3 +109,19 @@ func TestResumePendingBlocksSending(t *testing.T) {
 		t.Fatal("the held submit was not explained")
 	}
 }
+
+func TestResumeReportsSkippedOversizedMessages(t *testing.T) {
+	m, _, idB := resumeTestModel(t)
+	mm, cmd := m.resumeSession(idB)
+	m = mm.(Model)
+	msg := cmd().(resumeLoadedMsg)
+	msg.skipped = 2
+	m = apply(t, m, msg)
+	joined := strings.Join(blockTexts(m.transcript), "\n")
+	if !strings.Contains(joined, "Skipped 2 oversized message(s)") {
+		t.Fatalf("no skip notice:\n%s", joined)
+	}
+	if !strings.Contains(joined, "file was not changed") {
+		t.Fatalf("skip notice does not say the file is untouched:\n%s", joined)
+	}
+}

@@ -98,3 +98,66 @@ func TestLoadEntriesRefusesAnOversizedFile(t *testing.T) {
 		t.Fatalf("LoadEntries error = %v, want ErrSessionTooLarge", err)
 	}
 }
+
+func TestLoadEntriesLenientSkipsOversizedLine(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	header := SessionHeader{Version: SchemaVersion, ID: "big", CreatedAt: now, UpdatedAt: now}
+	hraw, _ := json.Marshal(header)
+	normal := Entry{
+		ID: "e1", Timestamp: now,
+		Message: agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hi")}},
+	}
+	nraw, _ := json.Marshal(normal)
+	huge := Entry{
+		ID: "e2", ParentID: "e1", Timestamp: now,
+		Message: agentcore.UserMessage{
+			RoleField: agentcore.RoleUser,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(strings.Repeat("x", sessionScanBufMax+1024))},
+		},
+	}
+	hrawBig, _ := json.Marshal(huge)
+	path := writeSessionLines(t, store.Dir(), "big", hraw, nraw, hrawBig)
+	before, _ := os.Stat(path)
+
+	_, entries, skipped, err := store.LoadEntriesLenient("big")
+	if err != nil {
+		t.Fatalf("LoadEntriesLenient: %v", err)
+	}
+	if skipped != 1 || len(entries) != 2 {
+		t.Fatalf("skipped=%d entries=%d", skipped, len(entries))
+	}
+	if entries[1].ID != "e2" || entries[1].ParentID != "e1" {
+		t.Fatalf("tree fields = %+v", entries[1])
+	}
+	after, _ := os.Stat(path)
+	if before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatal("the lenient load rewrote the session")
+	}
+}
+
+func TestLoadEntriesLenientStreamsAFileOverTheLoadLimit(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := SessionHeader{Version: SchemaVersion, ID: "huge", CreatedAt: time.Now().UTC()}
+	raw, _ := json.Marshal(header)
+	path := writeSessionLines(t, store.Dir(), "huge", raw)
+	if err := os.Truncate(path, SessionMaxLoadBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.LoadEntries("huge"); !errors.Is(err, ErrSessionTooLarge) {
+		t.Fatalf("strict LoadEntries = %v, want ErrSessionTooLarge", err)
+	}
+	_, entries, skipped, err := store.LoadEntriesLenient("huge")
+	if err != nil {
+		t.Fatalf("LoadEntriesLenient: %v", err)
+	}
+	if skipped != 1 || len(entries) != 1 {
+		t.Fatalf("skipped=%d entries=%d", skipped, len(entries))
+	}
+}
