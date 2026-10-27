@@ -197,7 +197,8 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		cleanHome()
 		return nil, nil, false, err
 	}
-	clean := []string{env, "-i", "PATH=" + os.Getenv("PATH"), "HOME=" + home, "TERM=xterm-256color", "TMPDIR=" + os.TempDir()}
+	clean := []string{env, "-i", "PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + os.TempDir()}
+	clean = append(clean, presentationEnv()...)
 	if browser {
 		clean = append(clean, "CFFIXED_USER_HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"), "XDG_CACHE_HOME="+filepath.Join(home, "cache"))
 	}
@@ -234,6 +235,39 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		}
 		cleanHome()
 	}, true, nil
+}
+
+// presentationEnv carries the display identity the pane's terminal declared.
+// It is presentation, not authority: it never carries credentials or grants.
+// The values are validated so a pane environment cannot inject another
+// assignment or a control sequence into the scrubbed child.
+func presentationEnv() []string {
+	var out []string
+	term := false
+	for _, name := range []string{"TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"} {
+		value, ok := os.LookupEnv(name)
+		if !ok || !safePresentationValue(value) {
+			continue
+		}
+		out = append(out, name+"="+value)
+		term = term || name == "TERM"
+	}
+	if !term {
+		out = append(out, "TERM=xterm-256color")
+	}
+	return out
+}
+
+func safePresentationValue(value string) bool {
+	if value == "" || len(value) > 128 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *ControlGuard) launch(ctx context.Context, c *tuiosctl.Client, p tuiosctl.NewWindowParams, network, browser, beside bool) (tuiosctl.NewWindowResult, error) {
