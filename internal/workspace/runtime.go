@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -142,7 +143,7 @@ func (b *Backend) Start(ctx context.Context, opts workspacecmd.Options) (workspa
 		StateDir: opts.StateDir, LogFile: opts.LogFile, Version: b.version(),
 		Width: width, Height: height, Command: command,
 		PaneEnv:         paneEnv,
-		PermissionsMode: "strict", Grants: []string{"read", "write", "fan"},
+		PermissionsMode: "strict", Grants: workspacePaneGrants(),
 		StopWhenEmpty: true,
 		HarnessDir:    harnessDir,
 	})
@@ -195,6 +196,36 @@ func (b *Backend) version() string {
 		return b.Version
 	}
 	return "golder-dev"
+}
+
+// workspacePaneGrants is what this workspace's panes hold when a pane starts
+// with no grants of its own. The strict default is the folder-scoped set: a
+// pane without admin may only start windows inside the folder it started in
+// (a cd does not count, because the daemon fixes the folder at creation), which
+// is why `tuios new --cwd <another project>` is refused from an agent pane.
+//
+// GOLDER_WORKSPACE_PANE_GRANTS replaces the set for a person who works across
+// projects from one pane. Adding "admin" lifts that folder bound for every pane
+// in the workspace, so it is an explicit opt-in and never the default. Names are
+// validated by the daemon: an unknown one fails startup with the allowed list
+// rather than being dropped silently. The daemon inherits this process's
+// environment, so it must be set when the workspace (daemon) starts.
+func workspacePaneGrants() []string {
+	base := []string{"read", "write", "fan"}
+	raw := strings.TrimSpace(os.Getenv("GOLDER_WORKSPACE_PANE_GRANTS"))
+	if raw == "" {
+		return base
+	}
+	out := make([]string, 0, 4)
+	for _, name := range strings.Split(raw, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return base
+	}
+	return out
 }
 
 func (b *Backend) initialCommand(opts workspacecmd.Options) ([]string, error) {
