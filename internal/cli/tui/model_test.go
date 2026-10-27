@@ -1334,8 +1334,12 @@ func TestResumePickerSelectSwitches(t *testing.T) {
 	if !ok || item != "sess-b" {
 		t.Fatalf("initial pick = (%q, %v), want newest sess-b", item, ok)
 	}
-	got2, _ := gm.submitSlashSelected()
+	got2, load := gm.submitSlashSelected()
 	gm2 := got2.(Model)
+	if load == nil {
+		t.Fatal("resume returned no background load")
+	}
+	gm2 = apply(t, gm2, load())
 	if gm2.session.header.ID != "sess-b" {
 		t.Errorf("header.ID = %q, want sess-b", gm2.session.header.ID)
 	}

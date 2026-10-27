@@ -45,8 +45,12 @@ func TestResumeKeepsLiveConfigEverywhere(t *testing.T) {
 		live:     live,
 	}
 
-	got, _ := m.runSlash("/resume " + target)
+	got, load := m.runSlash("/resume " + target)
 	gm := got.(Model)
+	if load == nil {
+		t.Fatal("resume returned no background load")
+	}
+	gm = apply(t, gm, load())
 
 	if gm.live.ProviderName != "anthropic" || gm.live.Model != "claude-sonnet-4-5" {
 		t.Fatalf("live = (%q, %q), want it untouched at (anthropic, claude-sonnet-4-5)", gm.live.ProviderName, gm.live.Model)

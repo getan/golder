@@ -84,6 +84,10 @@ type Model struct {
 	// running is true while an agent run is draining through runCh. A submit
 	// while it is set queues the message instead of starting a second run.
 	running bool
+	// resume is the in-flight /resume load: its generation, target id and
+	// whether a prompt must wait until it lands or is canceled. See
+	// resume_async.go.
+	resume resumeState
 	// runCh is the bridge channel for the in-flight run, or nil when idle. Update
 	// re-issues waitForEvent(runCh) after every bridged msg except runEndMsg.
 	runCh chan tea.Msg
@@ -954,21 +958,7 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
 		return m, nil
 	}
-	msgs, err := m.session.switchTo(id)
-	if err != nil {
-		m.transcript.addSystem(fmt.Sprintf("resume: %v", err))
-		return m, nil
-	}
-	m.syncLiveDisplay()
-	m.transcript.reset()
-	m.clearSelection()
-	m.addSessionBanner(logoFrames)
-	seedTranscript(&m.transcript, msgs)
-	m.refreshContextUsage(msgs)
-	m.transcript.addSystem(fmt.Sprintf("Resumed session %s (%s).", id, m.live.Model))
-	m.logoRunning = false
-	cmd := m.startStatusReveal()
-	return m, cmd
+	return m.startResume(id)
 }
 
 // Init implements tea.Model. It kicks off the async git probe so the status bar
@@ -1266,7 +1256,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Never spend another entrance frame once the person starts interacting.
 		// Keep handling this same key: stopping the animation must not eat input.
 		m.settleLogo()
+		if m.resume.pending && msg.String() == "esc" {
+			return m.cancelResume(), nil
+		}
 		return m.handleKey(msg)
+
+	case resumeLoadedMsg:
+		return m.finishResume(msg)
 
 	case spinnerTickMsg:
 		// Advance the working animation and schedule the next frame, but only while
@@ -3509,6 +3505,11 @@ func (m *Model) beginRun(ch chan tea.Msg) {
 // pre-#392 system note and stays idle. It is shared by a plain submit and by a
 // slash prompt/skill command.
 func (m Model) startPrompt(prompt string) (tea.Model, tea.Cmd) {
+	if m.resume.pending {
+		m.transcript.addSystem("Still resuming; esc cancels the load before sending.")
+		m.relayout()
+		return m, nil
+	}
 	if m.startRunFn == nil {
 		m.transcript.addSystem("(run not wired up: see session assembly in #392)")
 		return m, nil
