@@ -57,3 +57,20 @@ GOWORK=off go -C third_party/ultraviolet test -run '^$' \
 The workspace tests use isolated real PTYs: one checks what a plain shell reads,
 the other captures the actual inner golder composer after delayed mouse, color,
 cursor, focus, device-attribute and graphics reports. No model call is made.
+
+## Cursor consistency during synchronized redraws
+
+The workspace compositor pairs a cursor snapshot (position, visibility, shape,
+blink and color) with the terminal body it sampled under the pane I/O lock.
+While DEC 2026 is open, and on cached/skipped Views, both body and cursor stay
+on the last displayed frame. With no complete frame yet the cursor is hidden;
+the cell loop must not replace it with a fake mid-body cursor. The existing
+bounded sync timeout still releases a guest that never closes its transaction.
+
+Golder's retained Ultraviolet renderer also hides the cursor while painting,
+even inside a synchronized transaction. Only the final visible View cursor is
+shown again, after its final position is emitted and before 2026l. This is a
+defense for older multiplexers, not a replacement for compositor consistency.
+The CJK/wide-glyph erase-and-repaint path is preserved. Restart the inner agent
+to load the renderer defense; detach/reattach a new workspace client to load
+the compositor fix. Updating a binary does not replace already-running code.

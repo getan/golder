@@ -281,6 +281,10 @@ func (s *TerminalScreen) Flush() error {
 			// and other visual artifacts that can occur when multiple updates are sent
 			// separately.
 			buf.WriteString(ansi.SetModeSynchronizedOutput)
+			// Defensive for multiplexers that hold cells but sample the parser's
+			// live cursor: do not expose intermediate painting positions. The
+			// final cursor visibility is restored before closing the transaction.
+			buf.WriteString(ansi.HideCursor)
 		} else if s.cursor != nil && !s.cursor.Hidden {
 			buf.Grow(len(ansi.HideCursor) + len(ansi.ShowCursor))
 
@@ -290,9 +294,18 @@ func (s *TerminalScreen) Flush() error {
 			buf.WriteString(ansi.HideCursor)
 		}
 
-		buf.Write(s.buf.Bytes())
+		if s.syncUpdates {
+			// A cursor setter may have queued ShowCursor before the body. Defer
+			// every such show until the final MoveTo above has been emitted.
+			buf.Write(bytes.ReplaceAll(s.buf.Bytes(), []byte(ansi.ShowCursor), nil))
+		} else {
+			buf.Write(s.buf.Bytes())
+		}
 
 		if s.syncUpdates {
+			if s.cursor != nil && !s.cursor.Hidden {
+				buf.WriteString(ansi.ShowCursor)
+			}
 			buf.WriteString(ansi.ResetModeSynchronizedOutput)
 		} else if s.cursor != nil && !s.cursor.Hidden {
 			buf.WriteString(ansi.ShowCursor)

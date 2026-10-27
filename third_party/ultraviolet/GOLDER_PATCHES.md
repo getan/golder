@@ -1,7 +1,7 @@
-# Golder's retained input-decoder patch
+# Golder's retained terminal patches
 
 This is an unmodified module snapshot of `github.com/charmbracelet/ultraviolet`
-at `v0.0.0-20260812204455-68fa937c71be` (MIT), with the narrowly scoped input
+at `v0.0.0-20260812204455-68fa937c71be` (MIT), with the narrowly scoped terminal
 changes listed below. The upstream LICENSE, sources and tests are retained.
 The root `go.mod` replaces the module so the workspace client, ordinary agent
 TUI, and embedded browser all use **the same** corrected decoder. There is no
@@ -28,6 +28,13 @@ Local changes:
   never input bytes, key text, errors or file identity. No framing or timeout
   policy changes are part of this diagnostic addition.
 
+- `terminal_screen.go`: hide the painting cursor inside DEC 2026 transactions,
+  defer queued ShowCursor sequences until painting and the final MoveTo are
+  complete, and restore visibility only for a non-nil visible final cursor.
+  This defends against multiplexers that sample intermediate cursor positions
+  while holding cells. `terminal_screen_sync_cursor_test.go` covers visible,
+  hidden and nil final cursors. CJK/wide-cell repaint correctness is unchanged.
+
 A bare Esc keeps the upstream 50ms behavior. The seven-bit two-byte introducers
 also encode Alt+[ / Alt+] / Alt+O etc.; they get a separate one-second ambiguity
 window. Once a payload byte identifies a report it is retained until completion
@@ -45,6 +52,7 @@ GOWORK=off go test github.com/charmbracelet/ultraviolet/...
 GOWORK=off go test ./internal/workspace ./internal/cli/tui
 ```
 
-When upstream provides equivalent framing, remove the root replacement and this
-snapshot only after the split-input and workspace regressions pass against the
-new version. Do not edit unrelated rendering/layout code when updating it.
+When upstream provides equivalent framing and sync-cursor protection, remove
+the root replacement and this snapshot only after the split-input, sync-cursor
+and workspace regressions pass against the new version. Do not edit unrelated
+rendering/layout code when updating it.
