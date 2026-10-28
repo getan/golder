@@ -198,9 +198,15 @@ func FormatNote(n Note) string {
 	// consentRationale falls back to the same granted-capability list that the
 	// suffix already carries. Showing both made the line end in
 	// "(granted: read /x): granted: read /x". Keep the suffix (it is structured
-	// and localized) and suppress only the duplicate rationale.
-	if suffix != "" && strings.HasPrefix(strings.TrimSpace(rationale), localized(n.Lang, "已授权：", "granted: ")) {
-		rationale = ""
+	// and localized) and suppress only an exact duplicate. A reviewer's prose
+	// can start with "granted:" too; that must not erase its explanation.
+	if suffix != "" && len(n.Granted) > 0 {
+		trimmed := strings.TrimSpace(rationale)
+		fallback := consentRationale(Verdict{}, n.Granted, n.Lang)
+		labels := localized(n.Lang, "已授权：", "granted: ") + noteNeedLabels(n.Granted, n.Lang)
+		if trimmed == fallback || trimmed == labels {
+			rationale = ""
+		}
 	}
 	if rationale == "" && suffix == "" {
 		rationale = "-"

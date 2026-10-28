@@ -700,10 +700,15 @@ func hasPathNeed(needs []Need) bool {
 }
 
 func consentRationale(v Verdict, needs []Need, lang string) string {
-	if len(needs) == 0 {
-		if len(v.Reasons) > 0 {
-			return v.Reasons[0]
+	// Capabilities describe WHAT was granted, not WHY. Notes already carry
+	// Granted separately; do not replace the reviewer's explanation when a
+	// call also asks for network, outside paths or another capability.
+	for _, reason := range v.Reasons {
+		if reason = strings.TrimSpace(reason); reason != "" {
+			return reason
 		}
+	}
+	if len(needs) == 0 {
 		return localized(lang, "无需额外能力", "no extra capabilities were needed")
 	}
 	parts := make([]string, 0, len(needs))

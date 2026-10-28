@@ -53,7 +53,9 @@ func fetchGitCmd(cwd string) tea.Cmd {
 // argument list is always caller-controlled constants (see fetchGitCmd), never
 // user input.
 func runGit(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	// git status may otherwise take index.lock to refresh its stat cache.
+	// A background observer must not compete with staging or committing.
+	cmd := exec.Command("git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {

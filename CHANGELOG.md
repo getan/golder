@@ -126,6 +126,16 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Git tab previews no longer contend for the real index lock** (v1.5.15):
+  tuios-mini `v0.10.15` writes trees through unique index snapshots, preserving
+  staged data and linked/split/sparse-index semantics without touching a
+  writer's `index.lock`. Background Git status probes disable optional locks.
+  A real embedded-daemon wire regression reads both staged and unstaged diffs
+  while a fixture writer lock remains held. See [v1.5.15](docs/releases/v1.5.15.md).
+- **Capability approvals retain the reviewer's explanation** (v1.5.15): a
+  network or outside-path grant no longer replaces the LLM rationale with a
+  capability list. The note renders both, and deduplication only removes an
+  exact repeated list rather than any prose beginning with “granted:”.
 - **Per-token repainting and narrow-panel layout** (v1.5.7): token counts and
   elapsed stats publish only on spinner ticks; accounting messages no longer
   repaint the spinner between ticks. Approvals close hidden slash menus and
@@ -230,6 +240,13 @@ interactive REPL/TUI.
   and the pane golder itself runs is still never closed.
 
 ### Added
+- **Unified extension management** (v1.5.15): `/extensions` groups CLI tools,
+  standard MCP services, legacy RPC plugins and existing Skills with distinct
+  lifecycles. Public Go extension types/SDK, explicit source trust, session-only
+  admission, controlled processes, catalog refresh, CLI administration and
+  Prompt/Resource previews share the existing authorization boundary. MCP uses
+  the official Go SDK; no Node runtime or Feishu integration is introduced.
+  See [the extension guide](docs/extensions-usage.md).
 - **Tools advertise what the session can actually do**: `browser` now advertises
   only `list`, with a "start one" description, until a control socket exists,
   and grows to the full action set when `workspace create` starts a browser —
