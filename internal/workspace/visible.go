@@ -17,6 +17,7 @@ import (
 
 	"github.com/getan/golder/internal/cli/workspacecmd"
 	"github.com/getan/golder/internal/diagtrace"
+	"github.com/getan/golder/internal/terminalstate"
 )
 
 // A visible client is not the lifetime of its panes. Start the daemon using the
@@ -33,6 +34,11 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 	if !term.IsTerminal(in.Fd()) || !term.IsTerminal(out.Fd()) {
 		return workspacecmd.StartResult{}, errors.New("workspace: the visible workspace needs terminal input and output; use --headless for a daemon without a display")
 	}
+	terminal, err := terminalstate.Capture(in, out)
+	if err != nil {
+		return workspacecmd.StartResult{}, err
+	}
+	defer func() { runErr = errors.Join(runErr, terminal.Restore()) }()
 	if name := strings.TrimSpace(os.Getenv("TERM")); name == "" || name == "dumb" {
 		return workspacecmd.StartResult{}, errors.New("workspace: TERM must describe a terminal capable of the visible workspace; use --headless otherwise")
 	}

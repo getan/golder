@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/diagtrace"
+	"github.com/getan/golder/internal/terminalstate"
 )
 
 // Run starts the full-screen TUI and blocks until the user quits (Ctrl+C /
@@ -18,7 +20,7 @@ import (
 // maps its error to the process exit code. The alt-screen is entered/left via
 // the View returned by the root Model, so a clean return here restores the
 // terminal to the user's prior scrollback.
-func Run(opts Options) error {
+func Run(opts Options) (runErr error) {
 	// main initializes this before any startup work. Calling it again here is
 	// idempotent and keeps direct tui.Run callers (tests, embedders) working.
 	if err := diagtrace.InitFromEnv(); err != nil {
@@ -26,6 +28,11 @@ func Run(opts Options) error {
 	}
 	trace := newTimingTrace(diagtrace.Process())
 	defer trace.close()
+	terminal, err := terminalstate.Capture(os.Stdin, os.Stdout)
+	if err != nil {
+		return err
+	}
+	defer func() { runErr = errors.Join(runErr, terminal.Restore()) }()
 	if trace != nil {
 		defer trace.trace.Recover("tui.run")
 		restore := uv.SetInputObserver(func(e uv.InputObservation) {

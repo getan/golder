@@ -41,6 +41,11 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **SSH workspace rendering is deliberately reduced** (v1.5.17): tuios-mini
+  uses ASCII chrome/file marks, a short plain welcome, no decorative motion,
+  gradients or periodic dock jobs, and a 10 Hz background pane-output cap.
+  Input, pane text/colours, scrolling and application-requested mouse motion
+  remain available. See [the measurement and debugging guide](docs/ssh-workspace-rendering.md).
 - **Safe SSH and Responses continuation diagnostics** (v1.5.16): the opt-in
   trace records control-key classes, completion boundaries, exit intent,
   classified I/O/program failures, safe panic frames, and reasoning capture/
@@ -138,6 +143,12 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Early TUI startup errors restore borrowed kernel terminal state**
+  (v1.5.17): independent TUI and visible workspace keep a pre-run termios
+  snapshot as a backstop when the framework fails after entering raw mode.
+  A real-PTY descriptor-pressure regression covers the error path. No extra
+  input reader, signal handler or blanket protocol reset is added; this cannot
+  restore a terminal over an already broken SSH connection.
 - **Responses reasoning survives finalized-item streams and model aliases**
   (v1.5.16): preserve original `output_item.done` reasoning even when omitted
   or reduced to an empty shell by the terminal response; recover order without
