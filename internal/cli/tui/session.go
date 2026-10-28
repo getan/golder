@@ -39,6 +39,7 @@ import (
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
@@ -58,14 +59,15 @@ import (
 // (curLeaf / persisted) so each turn is persisted as a branch rather than a
 // flattening rewrite.
 type runSession struct {
-	store     *session.Store
-	header    session.SessionHeader
-	agentCtx  *agentcore.AgentContext
-	live      *cli.LiveConfig
-	reg       *agenttool.ToolRegistry
-	reminders *runtime.ReminderRegistry
-	schedule  *agenttool.Schedule
-	creds     *provider.CredentialStore
+	store      *session.Store
+	header     session.SessionHeader
+	agentCtx   *agentcore.AgentContext
+	live       *cli.LiveConfig
+	reg        *agenttool.ToolRegistry
+	extensions *extensions.Manager
+	reminders  *runtime.ReminderRegistry
+	schedule   *agenttool.Schedule
+	creds      *provider.CredentialStore
 	// snap is the shared file-snapshot recorder backing /rewind (nil when the
 	// file tools are disabled). Each completed turn commits a restore point so
 	// /rewind can roll files and the conversation back together.
@@ -384,6 +386,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	}
 
 	s := &runSession{
+		extensions: opts.Extensions,
 		store:      store,
 		header:     header,
 		agentCtx:   agentCtx,
@@ -598,6 +601,7 @@ func (s *runSession) buildConfig(ch chan tea.Msg) runtime.RunConfig {
 		MemoryRoot:    s.memoryRoot,
 		CompactionLog: compactionlog.Log,
 	}
+	run.InstallExtensions(&cfg, s.extensions, s.prompt)
 	// The session's gates and the per-turn hook seams, from the one assembly
 	// point (see trustgate.go and run.Gates): the interactive chain with the
 	// TUI's answer channels, the PreToolUse/PostToolUse/Stop hook seams (a nil

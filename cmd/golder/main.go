@@ -34,6 +34,7 @@ import (
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/cli/extensioncmd"
 	"github.com/getan/golder/internal/cli/headless"
 	"github.com/getan/golder/internal/cli/hostcmd"
 	"github.com/getan/golder/internal/cli/repl"
@@ -214,6 +215,9 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "extensions", "plugin", "mcp":
+			exit(extensioncmd.Run(os.Args[1], os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+			return
 		case "workspace":
 			diagtrace.Event("main", "mode workspace")
 			exit(runWorkspace(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
@@ -321,6 +325,9 @@ func main() {
 		fmt.Fprintf(out, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintln(out, "  golder workspace [run|status|stop] [flags]  integrated terminal workspace")
 		fmt.Fprintln(out, "  golder workspace --help                   workspace options")
+		fmt.Fprintln(out, "  golder extensions list|doctor             extension and Skills overview")
+		fmt.Fprintln(out, "  golder plugin --help                      CLI and legacy plugin management")
+		fmt.Fprintln(out, "  golder mcp --help                         MCP service management")
 		flag.PrintDefaults()
 		cli.PrintProviderHelp(out)
 	}
@@ -697,6 +704,9 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		if env.Plugins != nil {
 			defer env.Plugins.Close()
 		}
+		if env.Extensions != nil {
+			defer env.Extensions.Close()
+		}
 		if env.Memory != nil {
 			defer env.Memory.Close()
 		}
@@ -732,6 +742,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Approve:           opts.approve,
 				Skills:            env.Skills,
 				Plugins:           env.Plugins,
+				Extensions:        env.Extensions,
 				ConfigPrompts:     opts.configPrompts,
 				CliPrompts:        opts.promptTemplates,
 				NoPromptTemplates: opts.noPromptTemplates,
@@ -762,6 +773,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			Approve:           opts.approve,
 			Skills:            env.Skills,
 			Plugins:           env.Plugins,
+			Extensions:        env.Extensions,
 			ConfigPrompts:     opts.configPrompts,
 			CliPrompts:        opts.promptTemplates,
 			NoPromptTemplates: opts.noPromptTemplates,
@@ -793,6 +805,9 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 	}
 	if env.Plugins != nil {
 		defer env.Plugins.Close()
+	}
+	if env.Extensions != nil {
+		defer env.Extensions.Close()
 	}
 	if env.Memory != nil {
 		defer env.Memory.Close()
@@ -861,6 +876,9 @@ func runGitHubReview(ctx context.Context, opts cliOptions, errOut io.Writer) int
 	}
 	if env.Plugins != nil {
 		defer env.Plugins.Close()
+	}
+	if env.Extensions != nil {
+		defer env.Extensions.Close()
 	}
 	if env.Memory != nil {
 		defer env.Memory.Close()

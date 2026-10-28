@@ -5,6 +5,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -59,6 +60,7 @@ func New(opts ...Option) (*Session, error) {
 	env, err := run.SetupEnv(
 		c.model, c.baseURL, c.protocol, c.provider, c.apiKey,
 		c.noTools, !c.skills, c.systemPrompt, c.appendSystemPrompt, c.memory, policy,
+		run.SetupOptions{NoExtensions: !c.extensions},
 	)
 	if err != nil {
 		return nil, err
@@ -66,6 +68,9 @@ func New(opts ...Option) (*Session, error) {
 
 	allTools, err := adaptCustomTools(c.customTools, env.Tools)
 	if err != nil {
+		if env.Extensions != nil {
+			_ = env.Extensions.Close()
+		}
 		if env.Plugins != nil {
 			_ = env.Plugins.Close()
 		}
@@ -88,6 +93,16 @@ func New(opts ...Option) (*Session, error) {
 		c.model, env.ProviderName, thinking, env.Provider, creds,
 		run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget,
 	)
+	run.InstallExtensions(&runCfg, env.Extensions, env.Prompt)
+	if c.extensions {
+		gates := run.NewGates(run.GatesOpts{Cwd: env.Cwd, Perms: env.Permissions,
+			Sandboxed: run.SandboxGate(), ExtraRoots: run.ReadableExtraRoots(),
+			Classifier: func() judge.Classifier {
+				return run.NewReviewer(c.model, env.ProviderName, env.Provider, creds, "", env.Cwd, false)
+			},
+		})
+		gates.Install(&runCfg, nil, run.HookDeps{})
+	}
 
 	return &Session{
 		env:    env,
@@ -183,6 +198,9 @@ func (s *Session) Provider() string { return s.env.ProviderName }
 // session must not be used again.
 func (s *Session) Close() error {
 	var firstErr error
+	if s.env.Extensions != nil {
+		firstErr = s.env.Extensions.Close()
+	}
 	if s.env.Plugins != nil {
 		if err := s.env.Plugins.Close(); err != nil && firstErr == nil {
 			firstErr = err

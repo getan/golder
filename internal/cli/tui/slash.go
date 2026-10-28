@@ -107,9 +107,10 @@ func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(opts.ProviderName, opts.APIKey)
 	reg, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, opts.Plugins, prompts.PromptTemplateSources{
-		Settings: opts.ConfigPrompts,
-		CLI:      opts.CliPrompts,
-		Disable:  opts.NoPromptTemplates,
+		Extensions: opts.Extensions,
+		Settings:   opts.ConfigPrompts,
+		CLI:        opts.CliPrompts,
+		Disable:    opts.NoPromptTemplates,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "golder: slash-commands: %v\n", err)

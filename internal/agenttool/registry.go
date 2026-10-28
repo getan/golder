@@ -80,6 +80,21 @@ func (r *ToolRegistry) Register(tool agentcore.AgentTool) error {
 	return nil
 }
 
+// ReplaceAll compiles the entire proposed catalog before publishing it. A bad
+// schema or duplicate leaves the current catalog intact.
+func (r *ToolRegistry) ReplaceAll(tools []agentcore.AgentTool) error {
+	next := NewToolRegistry()
+	for _, t := range tools {
+		if err := next.Register(t); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	r.tools, r.compiled, r.shapes = next.tools, next.compiled, next.shapes
+	r.mu.Unlock()
+	return nil
+}
+
 // Get returns the tool registered under name and whether it was found.
 func (r *ToolRegistry) Get(name string) (agentcore.AgentTool, bool) {
 	r.mu.RLock()
@@ -116,6 +131,7 @@ func (r *ToolRegistry) Validate(name string, args json.RawMessage) []FieldError 
 	r.mu.RLock()
 	_, known := r.tools[name]
 	sch, hasSchema := r.compiled[name]
+	shape := r.shapes[name]
 	r.mu.RUnlock()
 
 	if !known {
@@ -138,7 +154,6 @@ func (r *ToolRegistry) Validate(name string, args json.RawMessage) []FieldError 
 			verr = as
 		}
 		if verr != nil {
-			shape := r.shapes[name]
 			return flattenValidationError(verr, name, shape)
 		}
 		return []FieldError{{Field: "", Message: err.Error()}}

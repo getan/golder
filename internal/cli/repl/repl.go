@@ -37,6 +37,7 @@ import (
 	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
@@ -53,11 +54,12 @@ import (
 // replDeps bundles the collaborators a REPL run needs. They are assembled once
 // by Run and reused across every prompt in the session.
 type replDeps struct {
-	store    *session.Store
-	header   session.SessionHeader
-	agentCtx *agentcore.AgentContext
-	live     *cli.LiveConfig
-	reg      *agenttool.ToolRegistry
+	store      *session.Store
+	header     session.SessionHeader
+	agentCtx   *agentcore.AgentContext
+	live       *cli.LiveConfig
+	reg        *agenttool.ToolRegistry
+	extensions *extensions.Manager
 	// reminders holds the per-turn system-reminder providers (US-002). It is nil
 	// when no todo tool is present; when set, streamRun wires it so ephemeral
 	// <system-reminder> context is injected into each turn's request.
@@ -693,6 +695,7 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 		MemoryRoot:    deps.memoryRoot,
 		CompactionLog: compactionlog.Log,
 	}
+	run.InstallExtensions(&cfg, deps.extensions, deps.prompt)
 	// The session's gates and the per-turn hook seams, from the one assembly
 	// point (cli.HostGates): the interactive chain (with the browser bridge
 	// wrapped around it while remote control is on), the PreToolUse/PostToolUse/

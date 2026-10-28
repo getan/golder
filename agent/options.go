@@ -19,6 +19,7 @@ type config struct {
 	customTools        []Tool
 	skills             bool
 	memory             bool
+	extensions         bool
 }
 
 // Option configures a Session at construction time. Options are applied in the
@@ -27,6 +28,12 @@ type config struct {
 // through the With* constructors below — which keeps the public surface free of
 // internal types.
 type Option func(*config)
+
+// WithExtensions opts in to already-approved user-configured CLI, MCP and
+// legacy sources. Calls use golder's non-interactive authorization chain;
+// missing credentials or unavailable review fail closed. New source trust
+// must be granted through the CLI/TUI, not by a model or this option.
+func WithExtensions() Option { return func(c *config) { c.extensions = true } }
 
 // WithModel sets the model id, which also selects the provider the way the golder
 // CLI does (e.g. "claude-opus-4-8" → Anthropic, "openrouter/free" → OpenRouter).

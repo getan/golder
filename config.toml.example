@@ -149,3 +149,29 @@ no_skills = false
 # [thinking_defaults]
 # "opencode-go/deepseek-v4.1-flash" = "max"
 # "commandcode/deepseek/deepseek-v4.1-flash" = "high"
+
+# --- Extensions (CLI, legacy RPC, and MCP) ---
+# Registration is data-only. Approve with `golder mcp enable NAME` or the
+# /extensions review picker; enabled=true alone is NOT a trust grant.
+# See docs/extensions-usage.md. No Node runtime or automatic installers.
+#
+# [plugins.local-tools]
+# enabled = false
+# runtime = "cli"
+# manifest = "/absolute/path/to/golder-plugin.toml"
+#
+# [mcp.servers.demo]
+# enabled = false
+# transport = "stdio"
+# command = "/absolute/path/to/demo-mcp"
+# args = []
+# network = false
+# call_timeout = "60s"
+# allowed_tools = ["echo"]
+#
+# [mcp.servers.remote]
+# enabled = false
+# transport = "http"
+# url = "https://example.com/mcp"
+# [mcp.servers.remote.headers]
+# Authorization = "${credential:remote-auth-header}"

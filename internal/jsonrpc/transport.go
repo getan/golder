@@ -42,7 +42,8 @@ type Client struct {
 	closed   bool
 	closeErr error
 
-	done chan struct{} // closed when the reader goroutine exits
+	done      chan struct{} // closed when the reader goroutine exits
+	closeOnce sync.Once
 }
 
 // res carries a decoded response (or a transport-level error) to a waiter.
@@ -53,6 +54,9 @@ type res struct {
 
 // Config describes the subprocess to launch.
 type Config struct {
+	// Process optionally supplies a host-prepared, not-yet-started command,
+	// including its sandbox, context cancellation and process-group policy.
+	Process *exec.Cmd
 	// Command is the executable path.
 	Command string
 	// Args are the process arguments (excluding the command itself).
@@ -70,13 +74,16 @@ type Config struct {
 // NewClient starts the subprocess and begins reading its stdout. The caller must
 // Close the client to terminate the child and release resources.
 func NewClient(cfg Config) (*Client, error) {
-	if cfg.Command == "" {
+	if cfg.Command == "" && cfg.Process == nil {
 		return nil, errors.New("jsonrpc: empty command")
 	}
-	cmd := exec.Command(cfg.Command, cfg.Args...)
-	cmd.Env = cfg.Env
-	cmd.Dir = cfg.Dir
-	cmd.Stderr = cfg.Stderr
+	cmd := cfg.Process
+	if cmd == nil {
+		cmd = exec.Command(cfg.Command, cfg.Args...)
+		cmd.Env = cfg.Env
+		cmd.Dir = cfg.Dir
+		cmd.Stderr = cfg.Stderr
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -167,6 +174,9 @@ func (c *Client) failAll(err error) {
 // decoded Result on success, the server Error as error on an error response, or
 // a transport/context error. Call is safe for concurrent use.
 func (c *Client) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	id := NumID(c.nextID.Add(1))
 	req, err := newRequest(&id, method, params)
 	if err != nil {
@@ -182,11 +192,22 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	c.pending[id.String()] = ch
 	c.mu.Unlock()
 
-	if err := c.write(req); err != nil {
-		c.mu.Lock()
-		delete(c.pending, id.String())
-		c.mu.Unlock()
-		return nil, err
+	written := make(chan error, 1)
+	go func() { written <- c.write(req) }()
+	select {
+	case err := <-written:
+		if err != nil {
+			c.mu.Lock()
+			delete(c.pending, id.String())
+			c.mu.Unlock()
+			return nil, err
+		}
+	case <-ctx.Done():
+		// A child that stopped reading must not hang the caller in a pipe
+		// write. Closing the pipe releases the writer and invalidates transport.
+		_ = c.stdin.Close()
+		c.failAll(ctx.Err())
+		return nil, ctx.Err()
 	}
 
 	select {
@@ -248,46 +269,27 @@ func (c *Client) closedErr() error {
 // Close closes the child's stdin (signalling graceful shutdown), waits briefly
 // for the process to exit, and kills it if it does not. It is idempotent.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
+	c.closeOnce.Do(func() {
+		// EOF marks the transport closed, not necessarily the process exited.
+		// Reap exactly once even when readLoop has already failed all calls.
+		c.failAll(ErrClosed)
+		_ = c.stdin.Close()
+		wait := make(chan error, 1)
+		go func() { wait <- c.cmd.Wait() }()
+		timer := time.NewTimer(closeGrace)
+		defer timer.Stop()
+		select {
+		case <-wait:
+		case <-timer.C:
+			if c.cmd.Cancel != nil {
+				_ = c.cmd.Cancel()
+			} else {
+				_ = c.cmd.Process.Kill()
+			}
+			<-wait
+		}
+		_ = c.stdout.Close()
 		<-c.done
-		return nil
-	}
-	c.closed = true
-	if c.closeErr == nil {
-		c.closeErr = ErrClosed
-	}
-	c.mu.Unlock()
-
-	// Closing stdin lets a well-behaved child exit on its own.
-	_ = c.stdin.Close()
-
-	// Wait for the child; kill if it doesn't stop promptly. The grace timer
-	// bounds Close so a child that ignores stdin EOF and keeps stdout open
-	// (a hung plugin/server) cannot block us forever.
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- c.cmd.Wait() }()
-
-	grace := time.NewTimer(closeGrace)
-	defer grace.Stop()
-
-	select {
-	case <-waitErr:
-		<-c.done
-		return nil
-	case <-c.done:
-		// reader saw EOF; give Wait a brief moment, then force kill.
-	case <-grace.C:
-		// child hasn't exited within the grace period; force it.
-	}
-
-	select {
-	case <-waitErr:
-	default:
-		_ = c.cmd.Process.Kill()
-		<-waitErr
-	}
-	<-c.done
+	})
 	return nil
 }

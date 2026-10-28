@@ -99,6 +99,11 @@ type RunConfig struct {
 	// Batch holds the tool registry and the prepare/before/after hooks used to
 	// execute each assistant message's tool calls.
 	Batch agenttool.BatchConfig
+	// SyncTools runs on the loop goroutine before a new model request. It may
+	// atomically publish a catalog, never during an in-flight tool batch.
+	SyncTools func(context.Context, *agentcore.AgentContext)
+	// ObserveEvent is non-blocking metadata delivery for host extensions.
+	ObserveEvent func(agentcore.AgentEvent)
 
 	// GetFollowUpMessages is consulted after the inner loop settles (an assistant
 	// message with no tool calls). Returning messages continues the outer loop
@@ -263,6 +268,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	}
 	emit := func(ev agentcore.AgentEvent) error {
 		tel.observe(ev)
+		if cfg.ObserveEvent != nil {
+			cfg.ObserveEvent(ev)
+		}
 		return stream.Emit(ctx, ev)
 	}
 	// emitFrom wraps the raw stream.Emit callback handed to streamAssistantResponse
@@ -270,6 +278,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 	// tool_execution_*) too, without changing their signatures.
 	emitFrom := func(c context.Context, ev agentcore.AgentEvent) error {
 		tel.observe(ev)
+		if cfg.ObserveEvent != nil {
+			cfg.ObserveEvent(ev)
+		}
 		return stream.Emit(c, ev)
 	}
 
@@ -326,6 +337,9 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 		// budget — while "consecutive" is measured across the inner loop's turns.
 		stalls := 0
 		for { // inner loop: turns until no tool calls
+			if cfg.SyncTools != nil {
+				cfg.SyncTools(ctx, agentCtx)
+			}
 			if err := emit(agentcore.TurnStartEvent{}); err != nil {
 				finish()
 				return

@@ -427,6 +427,16 @@ func (r *SlashRegistry) List() []SlashCommand {
 	return out
 }
 
+// RemoveSkills only removes skill-owned commands; controls and user templates
+// are never removed by an extension catalog update.
+func (r *SlashRegistry) RemoveSkills() {
+	for name, c := range r.commands {
+		if c.Source == SourceSkill {
+			delete(r.commands, name)
+		}
+	}
+}
+
 // Resolve parses a raw input line and, if it is a slash-command invocation,
 // expands it to the prompt text the agent should run. It returns (prompt, true)
 // when input begins with "/" and names a known PROMPT command; (input, false)

@@ -23,6 +23,7 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/dream"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
@@ -82,7 +83,8 @@ type Options struct {
 
 	// Plugins holds the loaded plugin manager so the REPL can deliver lifecycle
 	// events to subscribed plugins (US-017, #133). It may be nil (no plugins).
-	Plugins *plugin.Manager
+	Plugins    *plugin.Manager
+	Extensions *extensions.Manager
 
 	// ConfigPrompts holds prompt-template paths from the config.toml `prompts`
 	// array (settings tier); each is a file or dir loaded non-recursively.
@@ -228,6 +230,7 @@ func Run(opts Options) error {
 	// built-ins. Instance built-ins that need live state (/model, /help) are
 	// registered against `live`.
 	slash, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, opts.Plugins, prompts.PromptTemplateSources{
+		Extensions:     opts.Extensions,
 		Settings:       opts.ConfigPrompts,
 		CLI:            opts.CliPrompts,
 		Disable:        opts.NoPromptTemplates,
@@ -299,6 +302,7 @@ func Run(opts Options) error {
 		snap:       run.SnapshotRecorderFromTools(opts.Tools),
 		sessions:   run.ExecSessionsFromTools(opts.Tools),
 		notifier:   plugin.NewEventNotifier(opts.Plugins, os.Stderr),
+		extensions: opts.Extensions,
 		goal:       agenttool.NewGoalState(),
 		telemetry:  cli.NewTelemetryHolder(),
 		perms:      permState,

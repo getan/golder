@@ -402,6 +402,11 @@ func NetworkRequested(tool string, args json.RawMessage) bool {
 	if facadeNetworkRequested(tool, args) {
 		return true
 	}
+	// External sources are conservatively reviewed as outbound-capable. The
+	// adapter still enforces its independently approved launch ceiling.
+	if strings.HasPrefix(tool, "mcp__") || strings.HasPrefix(tool, "plg__") {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(tool)) {
 	case "bash":
 		var a struct {

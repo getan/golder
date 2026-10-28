@@ -233,6 +233,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				execCtx = agentcore.WithWriteGrant(execCtx, dec.WriteGrant)
 			}
 		}
+		execCtx = agentcore.WithExternalToolAuthorization(execCtx)
 	}
 
 	return tool, args, execCtx, nil, false

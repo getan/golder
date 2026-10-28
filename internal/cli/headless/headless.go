@@ -94,6 +94,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(env.ProviderName, p.APIKey)
 	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget)
+	run.InstallExtensions(&runCfg, env.Extensions, env.Prompt)
 	// Resolve the window from the models.dev catalog when it knows the model,
 	// falling back to the REPL/TUI default. This keeps auto-compaction, the
 	// context-budget tools, and the low-budget reminder live for `golder -p`

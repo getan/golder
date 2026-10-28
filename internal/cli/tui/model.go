@@ -126,7 +126,8 @@ type Model struct {
 	// (so no second op starts and submits queue) but has no agent context;
 	// without this, Ctrl+C could not stop it and the UI stayed locked in the
 	// running state until the op finished. nil when no op is in flight.
-	sessionOpCancel context.CancelFunc
+	sessionOpCancel  context.CancelFunc
+	extensionPreview string
 
 	// steerQ is the mid-run input queue: messages submitted while a run is in
 	// flight wait here and the run loop's steering seams deliver them (after
@@ -988,6 +989,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// it points at before this event reads or moves its endpoints.
 	m.syncSeedShift()
 	switch msg := msg.(type) {
+	case extensionDoneMsg:
+		return m.extensionDone(msg)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -2326,6 +2329,9 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			kind = "model"
 		}
 		item, ok := m.menu.pickCurrent()
+		if kind == "extensions" && ok {
+			return m.chooseExtension(item)
+		}
 		if kind == "proxy" && ok {
 			m.menu.close()
 			m.input.Clear()
@@ -2447,6 +2453,14 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// in-flight run is never torn down.
 	if line == "/resume" || strings.HasPrefix(line, "/resume ") {
 		return m.resumeSession(strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
+	}
+	if extensionCommand(line) {
+		kind := strings.TrimPrefix(commandToken(line), "/")
+		args := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, commandToken(line))))
+		if len(args) == 0 {
+			return m.openExtensions(kind)
+		}
+		return m.runExtension(kind, args)
 	}
 	// Bare /model opens the interactive model picker (arrow keys + Enter)
 	// instead of printing a text list; /model <n|id|think…> still resolves

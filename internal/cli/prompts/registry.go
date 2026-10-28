@@ -23,7 +23,9 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/cli/extensioncmd"
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
@@ -38,8 +40,9 @@ import (
 // --prompt-template flag list (TierCLI, wired in #339). Each entry is a file or
 // directory (loaded non-recursively). Missing paths are warned and skipped.
 type PromptTemplateSources struct {
-	Settings []string
-	CLI      []string
+	Extensions *extensions.Manager
+	Settings   []string
+	CLI        []string
 	// Disable (--no-prompt-templates) turns off all prompt-template discovery
 	// (global, project, settings, CLI); built-ins and skills are unaffected.
 	Disable bool
@@ -98,6 +101,7 @@ func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, s
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, live, creds)
 	RegisterPluginCommands(reg, mgr)
+	RegisterExtensionCommands(reg, srcs.Extensions)
 	// --no-prompt-templates disables all prompt-template discovery (global,
 	// settings, CLI); built-in slash commands and skills are unaffected.
 	if !srcs.Disable {
@@ -148,7 +152,12 @@ func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, s
 	// prompt-injection side filters the disabled ones. Under --no-skills the set
 	// is empty, so nothing is registered.
 	for _, s := range skills {
-		reg.AddSkill(s.SlashCommand())
+		if srcs.Extensions == nil {
+			reg.AddSkill(s.SlashCommand())
+		}
+	}
+	if srcs.Extensions != nil {
+		SyncExtensionSkills(reg, srcs.Extensions)
 	}
 	if sh := reg.Shadowed(); len(sh) > 0 {
 		parts := make([]string, len(sh))
@@ -158,6 +167,45 @@ func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, s
 		fmt.Fprintf(os.Stderr, "golder: commands shadowed by higher-priority source (rename to use): %v\n", parts)
 	}
 	return reg, nil
+}
+
+// SyncExtensionSkills removes stale skill entries, but never a builtin or user
+// template that won a name collision. Expansion rechecks admission too.
+func SyncExtensionSkills(reg *runtime.SlashRegistry, m *extensions.Manager) {
+	if m == nil {
+		return
+	}
+	reg.RemoveSkills()
+	for _, s := range m.Skills() {
+		name := s.Frontmatter.Name
+		cmd := s.SlashCommand()
+		cmd.Expand = func(args string) string {
+			if current := m.Skill(name); current != nil {
+				return current.SlashCommand().Expand(args)
+			}
+			return "Skill " + name + " is disabled or unavailable; do not execute its workflow."
+		}
+		reg.AddSkill(cmd)
+	}
+}
+
+func RegisterExtensionCommands(reg *runtime.SlashRegistry, m *extensions.Manager) {
+	for _, kind := range []string{"extensions", "plugin", "mcp", "skills"} {
+		reg.AddBuiltin(runtime.SlashCommand{Name: kind, Category: runtime.CategoryExtensions,
+			Description:  "Manage " + kind + " (sources and Skills have separate lifecycles)",
+			ArgumentHint: "[list|inspect|tools|connect|disable] [id]",
+			Run: func(args string) (string, string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				r, err := extensioncmd.Execute(ctx, m, kind, strings.Fields(args))
+				if err != nil {
+					return err.Error(), ""
+				}
+				SyncExtensionSkills(reg, m)
+				return extensions.DisplayText(r.Text, 16000), r.Prompt
+			},
+		})
+	}
 }
 
 // RegisterPluginCommands installs each plugin-declared slash command

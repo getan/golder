@@ -5,6 +5,7 @@ import (
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
@@ -60,7 +61,8 @@ type Options struct {
 
 	// Plugins holds the loaded plugin manager so the TUI can deliver lifecycle
 	// events to subscribed plugins (US-017, #133). It may be nil (no plugins).
-	Plugins *plugin.Manager
+	Plugins    *plugin.Manager
+	Extensions *extensions.Manager
 
 	// ConfigPrompts holds prompt-template paths from the config.toml `prompts`
 	// array (settings tier); each is a file or dir loaded non-recursively.

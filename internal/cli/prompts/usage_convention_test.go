@@ -110,6 +110,10 @@ func TestBuiltinUsageInventory(t *testing.T) {
 		"goal":           "[--tokens N] <objective> | pause | resume | clear",
 		"btw":            "[question]",
 		"remote-control": "[stop|status]",
+		"extensions":     "[list|inspect|tools|connect|disable] [id]",
+		"plugin":         "[list|inspect|tools|connect|disable] [id]",
+		"mcp":            "[list|inspect|tools|connect|disable] [id]",
+		"skills":         "[list|inspect|tools|connect|disable] [id]",
 	}
 	reg := builtinRegistry(t)
 	got := map[string]string{}

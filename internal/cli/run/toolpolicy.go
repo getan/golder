@@ -29,6 +29,26 @@ func NewToolPolicy(allowed, disallowed []string) ToolPolicy {
 // IsZero reports whether the policy constrains nothing.
 func (p ToolPolicy) IsZero() bool { return len(p.Allow) == 0 && len(p.Deny) == 0 }
 
+// AllowsName also applies to tools discovered after startup. A new catalog
+// cannot widen the operator's allow/deny boundary.
+func (p ToolPolicy) AllowsName(name string) bool {
+	name = normalizeToolName(name)
+	for _, n := range p.Deny {
+		if n == name {
+			return false
+		}
+	}
+	if len(p.Allow) == 0 {
+		return true
+	}
+	for _, n := range p.Allow {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // SplitToolNames normalizes raw --allowed-tools / --disallowed-tools values into
 // a flat list of tool names. Each value may itself be a comma-separated list, so
 // `--allowed-tools "read,grep"` and `--allowed-tools read --allowed-tools grep`

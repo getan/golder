@@ -21,6 +21,7 @@ import (
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
@@ -59,6 +60,9 @@ type Env struct {
 	// Plugins holds any loaded external plugins so the caller can Close them when
 	// the run ends. It is nil when no plugins were discovered.
 	Plugins *plugin.Manager
+	// Extensions owns managed CLI/MCP/legacy sources. Discovery never starts
+	// third-party code. The caller closes it when the session ends.
+	Extensions *extensions.Manager
 
 	// Memory is the persistent memory store opened once for the run (issue #481),
 	// or nil when persistent memory is disabled (memory.enabled=false), tools are
@@ -107,7 +111,7 @@ type Env struct {
 // fully assembled tool set and then applied, so an unknown tool name is a usage
 // error rather than a silently ineffective boundary. It returns an error rather
 // than exiting so the caller owns exit-code mapping.
-func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, noSkills bool, systemPrompt string, appendSystemPrompt []string, memEnabled bool, policy ToolPolicy) (Env, error) {
+func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, noSkills bool, systemPrompt string, appendSystemPrompt []string, memEnabled bool, policy ToolPolicy, setup ...SetupOptions) (Env, error) {
 	start := time.Now()
 	diagtrace.Event("setup", "begin")
 	cwd, _ := os.Getwd()
@@ -211,24 +215,27 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		sched = agenttool.NewSchedule()
 		tools = append(tools, agenttool.ScheduleTools(sched)...)
 	}
-	// Discover external plugins (US-016) and append their tools. Plugin loading
-	// is fault-tolerant: a plugin that fails to start is logged and skipped, and
-	// disabling tools (--no-tools) skips plugin discovery entirely.
-	var mgr *plugin.Manager
-	if !noTools {
-		step = time.Now()
-		if m, err := plugin.Discover(PluginsDir(), os.Stderr, os.Stderr); err == nil {
-			tools = append(tools, m.Tools()...)
-			mgr = m
-		} else {
-			fmt.Fprintf(os.Stderr, "golder: plugin discovery failed: %v\n", err)
+	// Managed discovery is data-only, including legacy executables. In particular
+	// it must not run code before the front-end's first workspace trust question.
+	ignoreExtensions := len(setup) > 0 && setup[0].NoExtensions
+	ext, err := extensions.New(extensions.Options{Cwd: cwd, NoTools: noTools, IgnoreSources: ignoreExtensions,
+		Permissions: permState, Allow: policy.AllowsName})
+	if err != nil {
+		if memStore != nil {
+			_ = memStore.Close()
 		}
-		pluginsLoaded := 0
-		if mgr != nil {
-			pluginsLoaded = len(mgr.Plugins())
-		}
-		diagtrace.Event("setup", "plugins loaded=%d duration=%s", pluginsLoaded, time.Since(step))
+		return Env{}, err
 	}
+	setupOK := false
+	defer func() {
+		if !setupOK {
+			_ = ext.Close()
+			if memStore != nil {
+				_ = memStore.Close()
+			}
+		}
+	}()
+	tools = append(tools, ext.Tools()...)
 	// Enforce the --allowed-tools/--disallowed-tools boundary now that the set is
 	// complete. Validation must happen here rather than at flag-parse time: plugin
 	// and memory tool names only exist at runtime, so an earlier check would reject
@@ -236,7 +243,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	// BeforeToolCall confirmation gate — is what makes the boundary structural: a
 	// removed tool is never advertised and never dispatchable, so --approve cannot
 	// widen it.
-	if err := ValidateToolPolicy(tools, policy); err != nil {
+	if err := ValidateToolPolicy(append(append([]agentcore.AgentTool{}, tools...), ext.KnownTools()...), policy); err != nil {
 		return Env{}, err
 	}
 	tools = ApplyToolPolicy(tools, policy)
@@ -258,6 +265,8 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "golder: skills: %v\n", err)
 	}
+	ext.SetSkills(skills, noSkills)
+	skills = ext.Skills()
 	diagtrace.Event("setup", "skills count=%d failed=%t duration=%s", len(skills), err != nil, time.Since(step))
 	// The model can only load a skill's body when the read tool is present, so
 	// advertise skills in the prompt only then (mirrors pi's selectedTools check).
@@ -275,6 +284,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	}
 	diagtrace.Event("setup", "prompt bytes=%d duration=%s", len(sysPrompt), time.Since(step))
 	diagtrace.Event("setup", "end tools=%d duration=%s", len(tools), time.Since(start))
+	setupOK = true
 	return Env{
 		Cwd:          cwd,
 		Tools:        tools,
@@ -283,7 +293,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		SysPrompt:    sysPrompt,
 		Prompt:       prompt,
 		Skills:       skills,
-		Plugins:      mgr,
+		Extensions:   ext,
 		Memory:       memStore,
 		Schedule:     sched,
 		Permissions:  permState,
@@ -442,7 +452,9 @@ func ReadableExtraRoots() []string {
 func ToolRegistry(tools []agentcore.AgentTool) *agenttool.ToolRegistry {
 	reg := agenttool.NewToolRegistry()
 	for _, t := range tools {
-		_ = reg.Register(t)
+		if err := reg.Register(t); err != nil {
+			fmt.Fprintf(os.Stderr, "golder: tool registration failed: %v\n", err)
+		}
 	}
 	return reg
 }
