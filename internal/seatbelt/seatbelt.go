@@ -166,6 +166,10 @@ type Runner interface {
 // ReadFiles and WriteFiles are one-call, exact-file grants, not directory roots.
 type CallPolicy struct {
 	Network bool
+	// OwnTerminal authorizes normal terminal operations only on the child's
+	// allocated PTY. Darwin binds the device after allocation, before exec;
+	// Linux uses bubblewrap's private /dev/devpts. It is never a caller path.
+	OwnTerminal bool
 	// ExtensionState is minted by the extension manager from an operator source
 	// declaration. Unlike ReadDirs/WriteDirs it can expose one protected HOME.
 	ExtensionState *ExtensionState

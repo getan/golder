@@ -50,6 +50,7 @@ import (
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/redact"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/selfupdate"
 	"github.com/getan/golder/internal/toolworker"
 	"github.com/getan/golder/internal/webhook"
@@ -194,6 +195,19 @@ type cliOptions struct {
 }
 
 func main() {
+	// The daemon has allocated this child's PTY, but no user program has run.
+	// Bind only that device before entering Seatbelt, without reading config,
+	// credentials, authorization state, or startup trace destinations.
+	if len(os.Args) > 1 && os.Args[1] == seatbelt.TerminalBootstrapFlag {
+		if err := seatbelt.ExecTerminalSandbox(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "golder: terminal sandbox:", err)
+			exit(1)
+		}
+		return
+	}
+	if executable, err := os.Executable(); err == nil {
+		_ = seatbelt.ConfigureTerminalLauncher(executable)
+	}
 	// Start the one diagnostic clock before any startup work (config,
 	// credentials, plugins, sandbox probes). Without GOLDER_TUI_TRACE or the
 	// GOLDER_STARTUP_TRACE alias, every diagtrace call is a no-op.

@@ -210,7 +210,7 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 	if browserOutside {
 		return clean, cleanHome, false, nil
 	}
-	policy := seatbelt.CallPolicy{Network: network, ReadDirs: []string{home}, WriteDirs: []string{home}, ExtensionState: g.extensionState}
+	policy := seatbelt.CallPolicy{Network: network, OwnTerminal: !browser, ReadDirs: []string{home}, WriteDirs: []string{home}, ExtensionState: g.extensionState}
 	policy.ReadFiles = append(policy.ReadFiles, runtimeFiles...)
 	seatbelt.RefusedPaths(&policy)
 	// One-call directory/file grants are decided by consent, never by arguments.

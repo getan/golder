@@ -47,6 +47,14 @@ func (r *SeatbeltRunner) SandboxCall(argv []string, _ string, policy CallPolicy)
 		return nil, nil, err
 	}
 	cleanup := func() { _ = os.Remove(profile) }
+	if policy.OwnTerminal {
+		wrapped, err := terminalSandboxArgv(profile, argv)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		return wrapped, cleanup, nil
+	}
 	return append([]string{"sandbox-exec", "-f", profile}, argv...), cleanup, nil
 }
 
@@ -193,6 +201,9 @@ func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	b.WriteString("(allow sysctl-read)\n")
 	b.WriteString(readRule + "\n")
 	b.WriteString(metaRule)
+	if policy.OwnTerminal {
+		b.WriteString(ownTerminalProfile())
+	}
 	if len(policy.ReadFiles)+len(policy.WriteFiles) > 0 {
 		paths := append(append([]string{}, policy.ReadFiles...), policy.WriteFiles...)
 		fmt.Fprintf(&b, "(allow file-read* %s)\n", literalAll(canonicalsAll(paths)))
