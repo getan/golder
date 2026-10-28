@@ -2086,6 +2086,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+d":
 		// Ctrl+D quits only when idle; mid-run it is ignored so a run is never
 		// dropped by a stray EOF key.
+		m.traceExit("ctrl_d", !m.running)
 		if !m.running {
 			m.shutdownRemote()
 			m.quitting = true
@@ -2316,13 +2317,17 @@ func (m Model) queueMidRun(prompt string) (tea.Model, tea.Cmd) {
 // user can go on to type arguments; the trailing space ends name-completion, so
 // the refresh closes the popup. It is the Tab action while the menu is open.
 func (m Model) completeSlash() Model {
+	m.traceCompletion("begin")
 	if m.menu.picking() {
+		m.traceCompletion("skip_picker")
 		return m
 	}
 	if c, ok := m.menu.current(); ok {
+		m.traceCompletion("apply")
 		m.input.SetValue("/" + c.Name + " ")
 		m.menu.refresh(m.input.Value(), m.slash)
 	}
+	m.traceCompletion("end")
 	return m
 }
 
@@ -2447,6 +2452,7 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		// settles, not before, so the in-flight answer would be lost — the same
 		// reason Ctrl+D is ignored while running. Esc/Ctrl+C settles the run and
 		// saves it, and a second press quits.
+		m.traceExit("slash_exit", !m.running)
 		if m.running {
 			m.transcript.addSystem("Interrupt the current run first, then /exit.")
 			m.relayout()
@@ -3745,11 +3751,13 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !m.quitArmedAt.IsZero() && time.Since(m.quitArmedAt) < quitArmWindow {
+		m.traceExit("double_interrupt", true)
 		m.shutdownRemote()
 		m.quitting = true
 		return m, tea.Quit
 	}
 	m.quitArmedAt = time.Now()
+	diagtrace.Event("tui", "exit armed source=interrupt")
 	m.transcript.addSystem(ui.QuitArmedNotice)
 	return m, nil
 }

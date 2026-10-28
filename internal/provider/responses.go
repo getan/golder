@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go"
@@ -139,9 +140,15 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 	// the retry, so a gateway that rejects the hosted tool stayed broken.
 	retriedEmpty := false
 	for attempt := 0; ; attempt++ {
-		params := buildResponsesParams(d.name, req, useHosted)
-		msg, empty, err := d.runOnce(ctx, stream, client, params, seen)
+		traceID := nextResponsesTrace()
+		traceID.event("attempt=%d hosted_search=%t", attempt, useHosted)
+		params := buildResponsesParamsTraced(d.name, req, useHosted, traceID)
+		msg, empty, err := d.runOnce(ctx, stream, client, params, seen, traceID)
+		traceID.result(err, empty)
 		if err == nil {
+			// Bind opaque state to the requested model, not a gateway's resolved
+			// backend label (kept separately in ResponseModel for diagnostics).
+			msg.Model = req.Model
 			// An empty completion is useless, and it is not always the user's
 			// configuration: a gateway occasionally closes a stream with a
 			// response.completed event whose output the client cannot use — no
@@ -155,6 +162,7 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 			// because a model that keeps ending its turn with nothing is a
 			// problem retrying cannot fix.
 			if !retriedEmpty && len(msg.Content) == 0 {
+				traceID.event("retry reason=empty_completion")
 				retriedEmpty = true
 				continue
 			}
@@ -164,6 +172,7 @@ func (d *responsesDriver) pump(ctx context.Context, stream *AssistantMessageEven
 		// Retry only a pristine first attempt: any accumulated content means
 		// the failure came mid-stream, where resending would duplicate output.
 		if attempt == 0 && useHosted && empty && isHostedSearchUnsupportedErr(err) {
+			traceID.event("retry reason=hosted_search_unsupported")
 			markHostedSearchUnsupported(d.name, req.Model)
 			useHosted = false
 			continue
@@ -220,7 +229,7 @@ func wireMismatchText(text string) bool {
 // runOnce consumes one Responses SSE stream, emitting text/thinking/tool-call
 // partials as they arrive, and returns the terminal message (from the
 // authoritative response.completed payload) or the failure.
-func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageEventStream, client *openai.Client, params responses.ResponseNewParams, seen map[string]bool) (agentcore.AssistantMessage, bool, error) {
+func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageEventStream, client *openai.Client, params responses.ResponseNewParams, seen map[string]bool, traceID responsesTraceID) (agentcore.AssistantMessage, bool, error) {
 	sse := client.Responses.NewStreaming(ctx, params)
 	defer sse.Close()
 
@@ -228,8 +237,13 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 	var thinking strings.Builder
 	var toolCalls []agentcore.ToolCallContent
 	var completed *responses.Response
+	var responseID, responseModel string
+	finalizedReasoning := make(map[int64]json.RawMessage)
+	defer func() {
+		traceID.event("stream.end completed=%t finalized_reasoning=%d tool_calls=%d", completed != nil, len(finalizedReasoning), len(toolCalls))
+	}()
 	empty := func() bool {
-		return text.Len() == 0 && thinking.Len() == 0 && len(toolCalls) == 0 && completed == nil
+		return text.Len() == 0 && thinking.Len() == 0 && len(toolCalls) == 0 && len(finalizedReasoning) == 0 && completed == nil
 	}
 	emitPartial := func() error {
 		partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
@@ -243,6 +257,9 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 			return agentcore.AssistantMessage{}, empty(), ctx.Err()
 		}
 		switch variant := sse.Current().AsAny().(type) {
+		case responses.ResponseCreatedEvent:
+			responseID = variant.Response.ID
+			responseModel = string(variant.Response.Model)
 		case responses.ResponseTextDeltaEvent:
 			text.WriteString(variant.Delta)
 			partial := d.buildPartial(thinking.String(), text.String(), toolCalls)
@@ -259,6 +276,12 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 				return agentcore.AssistantMessage{}, empty(), err
 			}
 		case responses.ResponseOutputItemDoneEvent:
+			// Some gateways do not repeat finalized reasoning in completed.output.
+			// Keep its original wire JSON now; summary deltas cannot replace the
+			// signed/opaque protocol state when a tool result is sent next turn.
+			if raw := json.RawMessage(variant.Item.RawJSON()); reasoningItem(raw) {
+				finalizedReasoning[variant.OutputIndex] = raw
+			}
 			// A finalized function_call item carries the model's tool request
 			// (name + arguments + call_id); a web_search_call item records a
 			// hosted search as a server-executed call (display + native replay,
@@ -308,6 +331,29 @@ func (d *responsesDriver) runOnce(ctx context.Context, stream *AssistantMessageE
 		if len(toolCalls) > 0 {
 			msg.StopReason = agentcore.StopReasonToolUse
 		}
+	}
+	if msg.ResponseID == "" {
+		msg.ResponseID = responseID
+	}
+	if msg.ResponseModel == "" {
+		msg.ResponseModel = responseModel
+	}
+	indices := make([]int64, 0, len(finalizedReasoning))
+	for index := range finalizedReasoning {
+		indices = append(indices, index)
+	}
+	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	finalized := make([]json.RawMessage, 0, len(indices))
+	for _, index := range indices {
+		finalized = append(finalized, finalizedReasoning[index])
+	}
+	terminalReasoning := len(msg.ReasoningItems)
+	msg.ReasoningItems = mergeFinalizedReasoning(msg.ReasoningItems, finalized)
+	traceID.capture(msg.ReasoningItems, terminalReasoning, len(finalized), completed != nil, msg.ResponseModel != "" && msg.ResponseModel != string(params.Model))
+	// An item_done-only stream may have no summary deltas. Its reasoning still
+	// belongs in protocol state and may be rendered without reconstructing it.
+	if thinkingText := reasoningItemsText(msg.ReasoningItems); thinkingText != "" && !hasThinkingContent(msg.Content) {
+		msg.Content = append(agentcore.ContentList{agentcore.NewThinkingContent(thinkingText)}, msg.Content...)
 	}
 	return msg, empty(), nil
 }
@@ -461,27 +507,15 @@ func toolCallContent(fc responses.ResponseFunctionToolCall) agentcore.ToolCallCo
 	return agentcore.NewToolCallContent(fc.CallID, fc.Name, json.RawMessage(fc.Arguments))
 }
 
-// reasoningText renders the available reasoning for the transcript. DeepSeek
-// Responses emits content[].reasoning_text rather than OpenAI's summary parts;
-// read the raw item for that provider-specific field so the UI can see it too.
+// reasoningText renders available reasoning for the transcript. Gateways may
+// return reasoning_text/text or thinking/thinking content, while OpenAI uses
+// summary parts. Read the raw item without rewriting its opaque replay fields.
 // The replay path uses ReasoningItems (original JSON), never this display text.
 func reasoningText(resp *responses.Response) string {
 	var b strings.Builder
 	for _, item := range resp.Output {
 		if r := item.AsReasoning(); r.Type == "reasoning" {
-			var raw struct {
-				Content []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"content"`
-			}
-			if json.Unmarshal([]byte(item.RawJSON()), &raw) == nil {
-				for _, c := range raw.Content {
-					if c.Type == "reasoning_text" {
-						b.WriteString(c.Text)
-					}
-				}
-			}
+			b.WriteString(reasoningItemText(json.RawMessage(item.RawJSON())))
 			for _, s := range r.Summary {
 				b.WriteString(s.Text)
 			}
@@ -509,6 +543,10 @@ func appendToolCalls(content agentcore.ContentList, calls []agentcore.ToolCallCo
 // results are function_call_output items, and text (plus any images) is a
 // role-tagged message.
 func buildResponsesParams(providerName string, req CompletionRequest, useHostedSearch bool) responses.ResponseNewParams {
+	return buildResponsesParamsTraced(providerName, req, useHostedSearch, 0)
+}
+
+func buildResponsesParamsTraced(providerName string, req CompletionRequest, useHostedSearch bool, traceID responsesTraceID) responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 	}
@@ -557,8 +595,9 @@ func buildResponsesParams(providerName string, req CompletionRequest, useHostedS
 	// explicit placeholder. Backends differ in how strictly they check that
 	// shape, not in what they accept — see appendInputItems.
 	items := make(responses.ResponseInputParam, 0, len(req.Context.Messages))
-	for _, m := range req.Context.Messages {
-		items = appendInputItems(items, m, useHostedSearch, providerName, req.Model, thinkingOn)
+	traceID.event("request.start messages=%d tools=%d thinking_on=%t", len(req.Context.Messages), len(params.Tools), thinkingOn)
+	for index, m := range req.Context.Messages {
+		items = appendInputItemsTraced(items, m, useHostedSearch, providerName, req.Model, thinkingOn, traceID, index)
 	}
 	params.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: items}
 	return params
@@ -620,6 +659,10 @@ func buildResponsesTools(tools []agentcore.AgentTool, includeHosted bool) []resp
 // (400 "No tool output found for tool call …", naming a call whose output is
 // present). So the head goes before the calls, never between them.
 func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool, providerName, model string, thinkingOn bool) responses.ResponseInputParam {
+	return appendInputItemsTraced(items, m, hostedSearch, providerName, model, thinkingOn, 0, 0)
+}
+
+func appendInputItemsTraced(items responses.ResponseInputParam, m agentcore.Message, hostedSearch bool, providerName, model string, thinkingOn bool, traceID responsesTraceID, step int) responses.ResponseInputParam {
 	switch msg := m.(type) {
 	case agentcore.ToolResultMessage:
 		// A tool result is backfilled against the model's call_id so the model
@@ -633,7 +676,11 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 		// Reasoning is protocol state, not a transcript summary: replay the
 		// original items verbatim, and only to the model that produced them —
 		// they may carry opaque backend-specific fields no other model accepts.
-		sameModel := msg.Provider == providerName && msg.ResponseModel == model
+		originModel := msg.Model
+		if originModel == "" {
+			originModel = msg.ResponseModel // sessions recorded before request-model provenance
+		}
+		sameModel := msg.Provider == providerName && originModel == model
 		var reasoning []json.RawMessage
 		if sameModel {
 			for _, raw := range msg.ReasoningItems {
@@ -654,7 +701,9 @@ func appendInputItems(items responses.ResponseInputParam, m agentcore.Message, h
 		// the check — it is replayed BESIDE them, never instead of them, and
 		// always before the text and the calls, so nothing lands inside the
 		// call run. A text-only step needs no head at all.
-		if thinkingOn && hasLocalCall(calls) && !reasoningHasText(reasoning) {
+		placeholder := thinkingOn && hasLocalCall(calls) && !reasoningHasText(reasoning)
+		traceID.replay(step, msg, reasoning, calls, msg.Provider == providerName, sameModel, thinkingOn, placeholder)
+		if placeholder {
 			items = append(items, missingReasoningItem())
 		}
 		text := contentText(msg.Content)
@@ -724,28 +773,14 @@ func reasoningItem(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &probe) == nil && probe.Type == "reasoning"
 }
 
-// reasoningHasText reports whether a step's captured reasoning carries a
-// NON-EMPTY reasoning_text part. Presence is not enough: an empty part is what
-// the old per-call marker sent, and both DeepSeek endpoints read it as missing
-// and answer 400 (probed live with an empty-text item carrying a real id and
-// encrypted_content, and with a summary-only item). The OpenAI relay accepts
-// either. This is the only place the replay inspects an item's content; the
-// items themselves are replayed verbatim.
+// reasoningHasText recognizes non-empty original reasoning content in either
+// gateway spelling. An empty part or display-only summary is not sufficient.
+// The predicate only selects the missing-state safety net; raw items themselves
+// are replayed verbatim, including signatures and backend-specific fields.
 func reasoningHasText(items []json.RawMessage) bool {
 	for _, raw := range items {
-		var item struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if json.Unmarshal(raw, &item) != nil {
-			continue
-		}
-		for _, part := range item.Content {
-			if part.Type == "reasoning_text" && strings.TrimSpace(part.Text) != "" {
-				return true
-			}
+		if strings.TrimSpace(reasoningItemText(raw)) != "" {
+			return true
 		}
 	}
 	return false

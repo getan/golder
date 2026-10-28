@@ -12,6 +12,11 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Security
+- **Controlled macOS helpers can configure only their own allocated PTY**
+  (v1.5.16): the sandbox bootstrap binds terminal ioctls to the child terminal
+  and its verified controlling-terminal alias, not every host terminal.
+  Input injection and line-discipline mutation remain denied. See
+  [terminal control](docs/workspace-pane-terminal-control.md).
 - **Terminal and browser brokers use the same authorization boundary as their
   effects** (v1.5.5): terminal commands/argv and workspace preset commands retain
   the static floor, outside-path checks and network consent. Controlled helpers
@@ -36,6 +41,13 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **Safe SSH and Responses continuation diagnostics** (v1.5.16): the opt-in
+  trace records control-key classes, completion boundaries, exit intent,
+  classified I/O/program failures, safe panic frames, and reasoning capture/
+  replay counts without recording user text or opaque protocol contents.
+  The [field debugging guide](docs/debug-ssh-tab-exit.md) includes private
+  collection commands, signal-level follow-up and a handoff checklist.
+  The reported SSH Tab logout remains under investigation, not declared fixed.
 - **One diagnostic trace now covers process startup and the TUI** (v1.5.8):
   `internal/diagtrace` owns the file, process-start clock and privacy rules used
   by `main`, run assembly, plugin discovery, hooks and the TUI. Set
@@ -126,6 +138,14 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Responses reasoning survives finalized-item streams and model aliases**
+  (v1.5.16): preserve original `output_item.done` reasoning even when omitted
+  or reduced to an empty shell by the terminal response; recover order without
+  duplicate items. Bind replay to the requested model rather than a gateway's
+  resolved alias and recognize `thinking/thinking` as well as
+  `reasoning_text/text`. Cross-provider/model isolation remains in place;
+  lost original state in old history cannot be reconstructed. See
+  [v1.5.16](docs/releases/v1.5.16.md).
 - **Workspace welcome stays responsive during config discovery**: pin
   tuios-mini `v0.10.16`, which probes optional home-directory keybind hints
   off the UI goroutine and rejects non-regular config files without blocking.

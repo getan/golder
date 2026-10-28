@@ -81,7 +81,7 @@ func (r timingInput) Read(p []byte) (int, error) {
 	if n > 0 {
 		r.trace.once("input read")
 	}
-	r.trace.event("input read bytes=%d duration=%s failed=%t", n, time.Since(start), err != nil)
+	r.trace.event("input read bytes=%d duration=%s failed=%t error_class=%s", n, time.Since(start), err != nil, diagtrace.ErrorClass(err))
 	return n, err
 }
 
@@ -94,7 +94,7 @@ func (w timingOutput) Write(p []byte) (int, error) {
 	w.trace.event("output begin bytes=%d", len(p))
 	start := time.Now()
 	n, err := w.File.Write(p)
-	w.trace.event("output end bytes=%d duration=%s failed=%t", n, time.Since(start), err != nil)
+	w.trace.event("output end bytes=%d duration=%s failed=%t error_class=%s", n, time.Since(start), err != nil, diagtrace.ErrorClass(err))
 	return n, err
 }
 
@@ -104,6 +104,7 @@ type timingModel struct {
 }
 
 func (m timingModel) Init() tea.Cmd {
+	defer m.trace.trace.Recover("tui.init")
 	m.trace.event("init begin")
 	start := time.Now()
 	cmd := m.Model.Init()
@@ -112,6 +113,7 @@ func (m timingModel) Init() tea.Cmd {
 }
 
 func (m timingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.trace.trace.Recover("tui.update")
 	// No msg.String() or %+v here: a KeyPressMsg/PasteMsg contains user input.
 	m.trace.event("update begin type=%T", msg)
 	switch msg := msg.(type) {
@@ -120,6 +122,9 @@ func (m timingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.trace.event("window width=%d height=%d", msg.Width, msg.Height)
 	case tea.KeyPressMsg:
 		m.trace.once("key event")
+		if control := traceControlKey(msg); control != "" {
+			m.trace.event("control key=%s shift=%t alt=%t ctrl=%t", control, msg.Mod.Contains(tea.ModShift), msg.Mod.Contains(tea.ModAlt), msg.Mod.Contains(tea.ModCtrl))
+		}
 	case tea.ColorProfileMsg:
 		m.trace.event("color profile=%s", msg.Profile)
 	case tea.ModeReportMsg:
@@ -135,6 +140,7 @@ func (m timingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m timingModel) View() tea.View {
+	defer m.trace.trace.Recover("tui.view")
 	m.trace.once("view")
 	m.trace.event("view begin")
 	start := time.Now()

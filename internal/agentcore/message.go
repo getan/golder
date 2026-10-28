@@ -74,9 +74,10 @@ type AssistantMessage struct {
 	ResponseID    string `json:"responseId,omitempty"`
 	// ReasoningItems preserves the provider's opaque Responses reasoning items
 	// for a stateless continuation. OpenCode Go/DeepSeek requires its original
-	// reasoning_text before replayed function calls; the UI's ThinkingContent is
+	// reasoning/thinking before replayed function calls; the UI's ThinkingContent is
 	// NOT a replacement for this protocol data. Only the Responses driver reads
-	// these items, and only when replaying to the same provider and model.
+	// these items, and only when replaying to the same provider and requested
+	// model (the gateway's ResponseModel diagnostic may be a different alias).
 	ReasoningItems []json.RawMessage `json:"reasoningItems,omitempty"`
 }
 

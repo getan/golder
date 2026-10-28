@@ -27,6 +27,7 @@ func Run(opts Options) error {
 	trace := newTimingTrace(diagtrace.Process())
 	defer trace.close()
 	if trace != nil {
+		defer trace.trace.Recover("tui.run")
 		restore := uv.SetInputObserver(func(e uv.InputObservation) {
 			diagtrace.Event("input", "%s bytes=%d events=%d consumed=%d type=%s failed=%t duration=%s", e.Phase, e.Bytes, e.Events, e.Consumed, e.Type, e.Failed, e.Duration)
 		})
@@ -67,6 +68,6 @@ func Run(opts Options) error {
 	trace.event("program constructed")
 	trace.event("program begin")
 	_, err = p.Run()
-	trace.event("program end failed=%t", err != nil)
+	trace.event("program end failed=%t error_class=%s", err != nil, programErrorClass(err))
 	return err
 }

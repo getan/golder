@@ -9,9 +9,9 @@
 //
 //	pid=4242 2026/10/26 12:00:00.000000 +12.345ms setup provider name=... duration=...
 //
-// Privacy: callers record phases, counts, booleans and durations only. Never
-// pass prompts, keystrokes, clipboard contents, file paths, env values, session
-// ids or credentials as event text. The one environment dump below is a
+// Privacy: callers record phases, counts, booleans, durations and fixed control-
+// key classes only. Never pass prompts, typed text, clipboard contents, file
+// paths, env values, session ids or credentials as event text. The one dump is a
 // terminal-capability whitelist; everything else records presence, not values.
 // Plugin discovery may record an executable's basename, nothing else.
 package diagtrace
