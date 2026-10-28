@@ -1,9 +1,9 @@
 # SSH workspace startup/input delay investigation
 
 Status: one outer-welcome UI blocking defect has been reproduced and fixed in
-the local tuios-mini working copy. Its correspondence to the reported Linux
-server's minute-long wait is **not yet established**, and no released tag/pin
-has been changed for this investigation.
+released tuios-mini `v0.10.16`, now pinned by golder. Its correspondence to the
+reported Linux server's minute-long wait is **not yet established**; the
+updated dependency enables testing that correspondence on the server.
 
 ## Reported shape
 
@@ -71,25 +71,19 @@ Unix opens are nonblocking to reject a FIFO even if a file-type check races a
 replacement. Symlinked regular dotfiles and the last configured tmux leader
 are preserved, and learning a hint never applies a preset.
 
-The dependency fix is local commit `771f2b9` in
-`.build/tuios-mini-index-fix-src`; it has not been pushed or tagged. Local
-integration verification uses `.build/git-index-validation.work`. Ordinary
-`GOWORK=off` still selects released v0.10.15 until a dependency release and pin
-update are explicitly performed. Do not call the checked-out release fixed on
-the strength of local override tests alone.
-
-The dependency-specific FIFO acceptance test is temporarily opt-in, so a
-diagnostics-only golder commit does not knowingly break its unchanged release
-pin's normal CI. Run it against the patched working copy with:
+The dependency fix is commit `771f2b9b2262ea5b731dd21a31b3caf6ddedd0a3`,
+published as tuios-mini `v0.10.16`. Golder's go.mod/go.sum now pin that release;
+`GOWORK=off` selects its downloaded module, not the local working copy.
+The FIFO regression no longer has an extra build tag and runs by default:
 
 ```sh
-GOWORK="$PWD/.build/git-index-validation.work" go test -race \
-  -tags=tuios_welcome_io_fix ./internal/workspace \
+GOWORK=off go test -race ./internal/workspace \
   -run '^TestE2ESSHWorkspaceWelcomeDoesNotOpenPipeConfig$' -count=1
 ```
 
-Remove this extra build tag when the fixed dependency is released and pinned;
-until then a green default golder CI does not validate the welcome I/O fix.
+Rebuild/install golder from this pin update and start a new visible workspace
+client to exercise the fixed welcome code. A pre-existing client does not
+hot-reload its binary. The background daemon is not where the welcome UI runs.
 
 ## Capturing the server-side wait
 

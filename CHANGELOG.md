@@ -126,6 +126,10 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Workspace welcome stays responsive during config discovery**: pin
+  tuios-mini `v0.10.16`, which probes optional home-directory keybind hints
+  off the UI goroutine and rejects non-regular config files without blocking.
+  The real-PTY FIFO welcome regression now runs in the default test suite.
 - **Linux extension cleanup no longer panics**: bubblewrap legitimately returns
   no sandbox-profile cleanup callback. The shared CLI/RPC/MCP stdio process
   cleanup now accepts that nil callback and still removes the private extension

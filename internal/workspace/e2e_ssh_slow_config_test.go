@@ -1,4 +1,4 @@
-//go:build (darwin || linux) && tuios_welcome_io_fix
+//go:build darwin || linux
 
 package workspace
 
@@ -12,8 +12,6 @@ import (
 
 // A home-directory preset hint is optional UI decoration, not permission to
 // block the welcome screen's render/input goroutine on an external file.
-// Enable with -tags=tuios_welcome_io_fix against the patched dependency.
-// Remove the extra build tag once go.mod pins a release containing that fix.
 func TestE2ESSHWorkspaceWelcomeDoesNotOpenPipeConfig(t *testing.T) {
 	bin := golderBinary(t)
 	root := tempRoot(t)
