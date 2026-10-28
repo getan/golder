@@ -16,6 +16,7 @@ import (
 	workspaceui "github.com/getan/tuios-mini/workspace"
 
 	"github.com/getan/golder/internal/cli/workspacecmd"
+	"github.com/getan/golder/internal/diagtrace"
 )
 
 // A visible client is not the lifetime of its panes. Start the daemon using the
@@ -67,7 +68,9 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 	if opts.Command == workspacecmd.CommandNew && opts.Exists {
 		return workspacecmd.StartResult{}, nameExists(opts.Session)
 	}
+	probeDone := diagtrace.Span("workspace", "owner.probe")
 	record, _, running, err := probeOwner(runCtx, opts)
+	probeDone()
 	if err != nil {
 		return workspacecmd.StartResult{}, err
 	}
@@ -75,7 +78,9 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 		if opts.Command == workspacecmd.CommandAttach || opts.Legacy {
 			return workspacecmd.StartResult{}, fmt.Errorf("workspace: session %q is not running; attach never creates a session", opts.Session)
 		}
+		spawnDone := diagtrace.Span("workspace", "owner.spawn")
 		res, err := b.spawnOwner(runCtx, opts)
+		spawnDone()
 		if err != nil {
 			return workspacecmd.StartResult{}, err
 		}
@@ -111,6 +116,9 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 		return workspacecmd.StartResult{}, err
 	}
 
+	defer observeWorkspaceInput(diagtrace.Process())()
+	defer traceWorkspaceStall(diagtrace.Process())()
+	clientDone := diagtrace.Span("workspace", "client.run")
 	err = workspaceui.Run(runCtx, workspaceui.Options{
 		Socket: opts.Socket, Session: opts.Session, Version: b.version(),
 		ConfigPath: record.ConfigPath, StateDir: filepath.Join(record.StateDir, "client"),
@@ -119,6 +127,7 @@ func (b *Backend) startVisible(ctx context.Context, opts workspacecmd.Options) (
 		ASCIIOnly: opts.Appearance.ASCIIOnly, NoAnimations: opts.Appearance.NoAnimations,
 		Theme: opts.Appearance.Theme,
 	})
+	clientDone()
 	var ended *workspaceui.ExitError
 	if errors.As(err, &ended) && ended.Reason == "session-killed" {
 		err = nil // deleting the last session intentionally ends this workspace
