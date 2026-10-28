@@ -126,6 +126,10 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **Linux extension cleanup no longer panics**: bubblewrap legitimately returns
+  no sandbox-profile cleanup callback. The shared CLI/RPC/MCP stdio process
+  cleanup now accepts that nil callback and still removes the private extension
+  home. A platform-independent regression covers both nil and non-nil callbacks.
 - **Git tab previews no longer contend for the real index lock** (v1.5.15):
   tuios-mini `v0.10.15` writes trees through unique index snapshots, preserving
   staged data and linked/split/sparse-index semantics without touching a

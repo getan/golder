@@ -242,5 +242,15 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 	cmd.Stderr = logs
 	cmd.WaitDelay = time.Second
 	configureProcess(cmd)
-	return cmd, func() { killProcess(cmd); release(); cleanup() }, nil
+	return cmd, func() { cleanupCommand(cmd, release, cleanup) }, nil
+}
+
+func cleanupCommand(cmd *exec.Cmd, release, cleanup func()) {
+	killProcess(cmd)
+	// bubblewrap creates no profile, so its successful SandboxCall returns
+	// a nil release callback. Temporary extension state still needs cleanup.
+	if release != nil {
+		release()
+	}
+	cleanup()
 }
