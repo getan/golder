@@ -268,3 +268,11 @@ Skills 的目录、frontmatter、按需读取和 `/skill-name` 行为保持兼�
 模型工具名发生字符变形或截断时会带稳定 hash；精确允许列表以 `tools` 输出中的
 `model_name` 为准，不从展示名猜测 wire name。完整操作示例见
 [extensions-usage.md](extensions-usage.md)。
+
+### 后续设计：持久状态、显式授权与 Lark 业务扩展
+
+2026-10-28 的讨论确认 `state_dir` / `setup` 的通用设计方向，具体契约见
+[extensions-state-setup.md](extensions-state-setup.md)。它们仍待实现，不改变上表当前状态；
+尤其不是 MCP 自动 OAuth 或新 runtime。浏览器只由宿主在用户发起授权时打开。
+业务方案见 [lark-cli-plugin.md](lark-cli-plugin.md)：标准 MCP 包装 `lark-cli` 与飞书项目 `meegle`，
+支持高频薄包装和受控长尾入口。Skill 正文按需加载不代表现有宿主已实现工具 Schema 按意图隐藏/展开。
