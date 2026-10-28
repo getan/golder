@@ -321,6 +321,9 @@ func (b *mcpBackend) Call(ctx context.Context, c extension.Call, report func(ext
 	b.mu.Unlock()
 	defer func() { b.mu.Lock(); delete(b.progress, c.ID); b.mu.Unlock() }()
 	p := &mcp.CallToolParams{Name: c.Tool, Arguments: c.Arguments}
+	if c.OperatorConfirmed {
+		p.Meta = mcp.Meta{extension.OperatorConfirmedMeta: true}
+	}
 	p.SetProgressToken(c.ID)
 	r, e := b.session.CallTool(ctx, p)
 	if e != nil {

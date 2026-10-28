@@ -166,6 +166,9 @@ type Runner interface {
 // ReadFiles and WriteFiles are one-call, exact-file grants, not directory roots.
 type CallPolicy struct {
 	Network bool
+	// ExtensionState is minted by the extension manager from an operator source
+	// declaration. Unlike ReadDirs/WriteDirs it can expose one protected HOME.
+	ExtensionState *ExtensionState
 	// ReadOnlyFilesystem is for native read/search workers. They may create no
 	// files, including inside the workspace and temp directory. Bash and patch
 	// workers leave this false: their writes remain confined to permitted roots.

@@ -151,6 +151,9 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			notify(noteFor(call, v, NoteDenied, lang))
 			return blockCall(call, v, DenyGuidance)
 		}
+		if call.RequireOperatorConfirmation && mode != permissions.Ask {
+			return blockCall(call, Verdict{Level: Deny, Source: "operator-policy"}, "this operation requires a person's exact-call confirmation; switch /permissions to ask")
+		}
 		if mode == permissions.FullAccess {
 			// Full access is a real mode: no review, no consent, no sandbox.
 			// Only the static floor above survives.
@@ -522,7 +525,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, needs []Need, mode permissions.Mode, lang string, notify func(Note)) *agentcore.BeforeToolCallDecision {
 	// A clearly safe call with no expansion is the JEV/local fast path: it never
 	// reaches a person. This is what keeps `ask` usable for routine work.
-	if v.Level == Allow && len(needs) == 0 && !v.Failed {
+	if v.Level == Allow && len(needs) == 0 && !v.Failed && !call.RequireOperatorConfirmation {
 		dec := &agentcore.BeforeToolCallDecision{}
 		if NetworkRequested(call.Name, call.Arguments) {
 			dec.Network = true
@@ -566,6 +569,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
+	dec.OperatorConfirmed = call.RequireOperatorConfirmation
 	// The person's answer decides the envelope. Asking for an unconfined run
 	// and then forcing Sandbox would silently discard it: the executor ignores
 	// Direct whenever Sandbox is set, so the command would run contained and

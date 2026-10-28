@@ -183,8 +183,12 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		args = prepared
 	}
 	// beforeToolCall gate sees the final, already-validated arguments.
+	requireOperator := false
+	if t, ok := tool.(interface{ RequiresOperatorConfirmation() bool }); ok {
+		requireOperator = t.RequiresOperatorConfirmation()
+	}
 	if cfg.BeforeToolCall != nil {
-		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args}); dec != nil {
+		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator}); dec != nil {
 			if dec.Block {
 				r := agentcore.AgentToolResult{}
 				if dec.Content != nil {
@@ -205,6 +209,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			}
 			if dec.Network {
 				execCtx = agentcore.WithNetworkGrant(execCtx)
+			}
+			if dec.OperatorConfirmed {
+				execCtx = agentcore.WithOperatorConfirmation(execCtx, call.ID, call.Name, args)
 			}
 			if dec.HostControl {
 				execCtx = agentcore.WithHostControlGrant(execCtx)
@@ -234,6 +241,10 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			}
 		}
 		execCtx = agentcore.WithExternalToolAuthorization(execCtx)
+	}
+	if requireOperator && !agentcore.OperatorConfirmedFor(execCtx, call.ID, call.Name, args) {
+		r := errorResult("this tool requires an exact operator confirmation; not executed")
+		return nil, nil, ctx, &r, true
 	}
 
 	return tool, args, execCtx, nil, false

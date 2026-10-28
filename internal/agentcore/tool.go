@@ -46,6 +46,9 @@ type AgentToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	// RequireOperatorConfirmation is set by the tool registry, never decoded
+	// from model output. It forces an exact, interactive one-call approval.
+	RequireOperatorConfirmation bool `json:"-"`
 }
 
 // AgentToolResult is the outcome of executing a tool.

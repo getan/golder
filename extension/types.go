@@ -32,7 +32,13 @@ type Call struct {
 	ID        string          `json:"id"`
 	Tool      string          `json:"tool"`
 	Arguments json.RawMessage `json:"arguments"`
+	// OperatorConfirmed is host-only state. MCP transports may attach the
+	// namespaced metadata marker, never a field in model-controlled arguments.
+	OperatorConfirmed bool `json:"-"`
 }
+
+const OperatorConfirmedMeta = "io.golder/operator-confirmed"
+const ExecutablePathsEnv = "GOLDER_EXTENSION_EXECUTABLES"
 
 // ContentBlock is data, never a request to execute or to change host policy.
 type ContentBlock struct {

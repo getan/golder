@@ -41,22 +41,23 @@ type ToolView struct {
 	Reason    string             `json:"reason,omitempty"`
 }
 type Snapshot struct {
-	Ref            SourceRef  `json:"source"`
-	Type           string     `json:"type"`
-	Enabled        bool       `json:"enabled"`
-	Trust          string     `json:"trust"`
-	State          string     `json:"state"`
-	Authentication string     `json:"authentication"`
-	Endpoint       string     `json:"endpoint,omitempty"`
-	Version        string     `json:"version,omitempty"`
-	Protocol       string     `json:"protocol,omitempty"`
-	LastError      string     `json:"last_error,omitempty"`
-	Tools          []ToolView `json:"tools"`
-	Commands       []Item     `json:"commands,omitempty"`
-	Events         []string   `json:"events,omitempty"`
-	Prompts        []Item     `json:"prompts,omitempty"`
-	Resources      []Item     `json:"resources,omitempty"`
-	Revision       uint64     `json:"revision"`
+	Ref            SourceRef      `json:"source"`
+	Type           string         `json:"type"`
+	Enabled        bool           `json:"enabled"`
+	Trust          string         `json:"trust"`
+	State          string         `json:"state"`
+	Authentication string         `json:"authentication"`
+	Endpoint       string         `json:"endpoint,omitempty"`
+	Version        string         `json:"version,omitempty"`
+	Protocol       string         `json:"protocol,omitempty"`
+	LastError      string         `json:"last_error,omitempty"`
+	Tools          []ToolView     `json:"tools"`
+	Commands       []Item         `json:"commands,omitempty"`
+	Events         []string       `json:"events,omitempty"`
+	Prompts        []Item         `json:"prompts,omitempty"`
+	Resources      []Item         `json:"resources,omitempty"`
+	Revision       uint64         `json:"revision"`
+	Capabilities   map[string]any `json:"capabilities,omitempty"`
 }
 type persisted struct {
 	Approval    string  `json:"approval"`
@@ -135,6 +136,9 @@ func New(opts Options) (*Manager, error) {
 		_ = json.Unmarshal(b, &saved)
 	}
 	add := func(ref SourceRef, c SourceConfig) {
+		if c.StateDir {
+			c.stateHome = sourceHome(ref)
+		}
 		s := &source{ref: ref, cfg: c, state: "disconnected", auth: "not-required"}
 		s.enabled.Store(c.Enabled && !opts.NoTools)
 		var fp string
@@ -479,7 +483,7 @@ func (m *Manager) views(s *source) []ToolView {
 		} else if _, e := compileSchema(spec.InputSchema); e != nil {
 			v.State = "invalid"
 			v.Reason = clean(e.Error(), 512)
-		} else if !allowed(s.cfg, spec.Name) || (m.opts.Allow != nil && !m.opts.Allow(v.ModelName)) {
+		} else if !m.toolAllowed(s, spec.Name) {
 			v.State = "blocked"
 			v.Reason = "tool policy"
 		} else if !s.enabled.Load() {
@@ -516,7 +520,16 @@ func (m *Manager) publish(s *source) {
 	if version == "" {
 		version = s.version
 	}
-	s.snapshot.Store(&Snapshot{Ref: s.ref, Type: typ, Enabled: s.enabled.Load(), Trust: trust, State: s.state, Authentication: s.auth, Endpoint: clean(endpoint, 512), Version: clean(version, 128), Protocol: clean(s.catalog.Protocol, 128), LastError: s.lastError, Tools: m.views(s), Commands: s.catalog.Commands, Events: s.catalog.Events, Prompts: s.catalog.Prompts, Resources: s.catalog.Resources, Revision: m.revision.Load()})
+	capabilities := map[string]any{"state_dir": s.cfg.StateDir, "executables": s.cfg.Executables, "skills": s.cfg.Skills, "setup_origins": s.cfg.SetupOrigins, "confirm_tools": s.cfg.ConfirmTools, "aggregate_tools": s.cfg.AggregateTools}
+	if len(s.cfg.Setup) > 0 {
+		capabilities["setup"] = clean(strings.Join(s.cfg.Setup, " "), 2048)
+	}
+	variants := make(map[string]string, len(s.cfg.SetupVariants))
+	for name, argv := range s.cfg.SetupVariants {
+		variants[name] = clean(strings.Join(argv, " "), 2048)
+	}
+	capabilities["setup_variants"] = variants
+	s.snapshot.Store(&Snapshot{Ref: s.ref, Type: typ, Enabled: s.enabled.Load(), Trust: trust, State: s.state, Authentication: s.auth, Endpoint: clean(endpoint, 512), Version: clean(version, 128), Protocol: clean(s.catalog.Protocol, 128), LastError: s.lastError, Tools: m.views(s), Commands: s.catalog.Commands, Events: s.catalog.Events, Prompts: s.catalog.Prompts, Resources: s.catalog.Resources, Revision: m.revision.Load(), Capabilities: capabilities})
 }
 func (m *Manager) List() []Snapshot {
 	m.mu.RLock()
@@ -564,6 +577,12 @@ func (m *Manager) PackageSkills() map[string]string {
 			continue
 		}
 		s, _ := m.get(snap.Ref)
+		if s.cfg.Skills != "" {
+			if fp, err := fingerprint(s.ref, s.cfg, m.opts.Cwd); err == nil && fp == s.approval {
+				out[snap.Ref.String()] = expandPath(s.cfg.Skills)
+			}
+			continue
+		}
 		if s.cfg.Manifest == "" {
 			continue
 		}

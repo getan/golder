@@ -25,14 +25,15 @@ import (
 // ControlGuard is session-local authority, shared only by the three broker
 // tools in one registry. Repository metadata and pane titles cannot grant it.
 type ControlGuard struct {
-	Root     string
-	Mode     *permissions.State
-	Runner   seatbelt.CallRunner
-	mu       sync.Mutex
-	launchMu sync.Mutex
-	panes    map[string]controlledPane
-	browsers map[string]controlledBrowser
-	id       string
+	Root           string
+	Mode           *permissions.State
+	Runner         seatbelt.CallRunner
+	mu             sync.Mutex
+	launchMu       sync.Mutex
+	panes          map[string]controlledPane
+	browsers       map[string]controlledBrowser
+	id             string
+	extensionState *seatbelt.ExtensionState // operator-only offline auth viewer
 }
 
 type controlledPane struct {
@@ -86,6 +87,9 @@ func (g *ControlGuard) pane(id string) (controlledPane, bool) {
 }
 
 func (g *ControlGuard) checkPane(ctx context.Context, win tuiosctl.Window, own string, host, input bool) error {
+	if sensitivePane(win) {
+		return errors.New("authorization panes are operator-only; agent control is refused")
+	}
 	if win.WindowID == own && input {
 		return errors.New("refusing agent input into its own pane or approval UI")
 	}
@@ -206,7 +210,7 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 	if browserOutside {
 		return clean, cleanHome, false, nil
 	}
-	policy := seatbelt.CallPolicy{Network: network, ReadDirs: []string{home}, WriteDirs: []string{home}}
+	policy := seatbelt.CallPolicy{Network: network, ReadDirs: []string{home}, WriteDirs: []string{home}, ExtensionState: g.extensionState}
 	policy.ReadFiles = append(policy.ReadFiles, runtimeFiles...)
 	seatbelt.RefusedPaths(&policy)
 	// One-call directory/file grants are decided by consent, never by arguments.

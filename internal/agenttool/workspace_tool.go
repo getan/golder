@@ -365,6 +365,9 @@ func (t *WorkspaceTool) terminalTail(ctx context.Context, window string, lines i
 		return "", err
 	}
 	defer c.Close()
+	if err = refuseSensitivePane(ctx, c, window); err != nil {
+		return "", err
+	}
 	cap, err := c.CapturePane(ctx, window, "recent", lines, false)
 	if err != nil {
 		return "", err

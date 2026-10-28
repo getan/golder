@@ -181,7 +181,20 @@ func (r *BwrapRunner) SandboxCall(command []string, _ string, policy CallPolicy)
 				// command could create trust.json/credentials inside it and
 				// believe the write succeeded. Remount it read-only so reads
 				// see an empty directory and writes fail with EROFS.
-				argv = append(argv, "--tmpfs", spelling, "--remount-ro", spelling)
+				argv = append(argv, "--tmpfs", spelling)
+				if home := policy.ExtensionState.Path(); home != "" && pathWithin(spelling, home) {
+					// Empty parents expose no sibling stores. Mount before making
+					// the masking tmpfs read-only; the child bind remains writable.
+					for _, dir := range missingAncestors(home, []string{spelling}) {
+						argv = append(argv, "--dir", dir)
+					}
+					mode := "--bind"
+					if policy.ReadOnlyFilesystem {
+						mode = "--ro-bind"
+					}
+					argv = append(argv, "--dir", home, mode, home, home)
+				}
+				argv = append(argv, "--remount-ro", spelling)
 			} else {
 				argv = append(argv, "--ro-bind", "/dev/null", spelling)
 			}

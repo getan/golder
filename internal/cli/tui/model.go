@@ -126,8 +126,10 @@ type Model struct {
 	// (so no second op starts and submits queue) but has no agent context;
 	// without this, Ctrl+C could not stop it and the UI stayed locked in the
 	// running state until the op finished. nil when no op is in flight.
-	sessionOpCancel  context.CancelFunc
-	extensionPreview string
+	sessionOpCancel     context.CancelFunc
+	extensionPreview    string
+	extensionSetupText  string // transient operator UI; never persisted or sent to the model
+	extensionSetupEpoch uint64
 
 	// steerQ is the mid-run input queue: messages submitted while a run is in
 	// flight wait here and the run loop's steering seams deliver them (after
@@ -991,6 +993,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case extensionDoneMsg:
 		return m.extensionDone(msg)
+	case extensionSetupProgressMsg:
+		if msg.epoch != m.extensionSetupEpoch {
+			return m, nil
+		}
+		m.extensionSetupText = msg.text
+		return m, waitExtensionSetup(msg.next, msg.epoch)
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -3904,6 +3912,9 @@ func (m Model) pumpNext() tea.Cmd {
 func (m Model) View() tea.View {
 	if m.quitting {
 		return tea.View{AltScreen: true}
+	}
+	if m.extensionSetupText != "" {
+		return tea.View{Content: "Extension authorization · operator-only\n\n" + m.extensionSetupText + "\n\nCtrl+C cancels. Authorization content is not sent to the model or session history.", AltScreen: true}
 	}
 
 	content, inputRow := m.renderContent()

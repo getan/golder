@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,9 +14,10 @@ import (
 )
 
 type extensionDoneMsg struct {
-	response extensioncmd.Response
-	err      error
-	preview  bool
+	response   extensioncmd.Response
+	err        error
+	preview    bool
+	setupEpoch uint64
 }
 
 func extensionCommand(line string) bool {
@@ -100,6 +102,24 @@ func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
 			add("Refresh catalog", "refresh")
 			add("Disconnect", "disconnect")
 		}
+		if c, err := m.opts.Extensions.Config(ref); err == nil {
+			if s.Enabled && s.Trust == "approved" {
+				if len(c.Setup) > 0 {
+					add("Configure / authorize…", "setup")
+				}
+				variants := make([]string, 0, len(c.SetupVariants))
+				for name := range c.SetupVariants {
+					variants = append(variants, name)
+				}
+				sort.Strings(variants)
+				for _, name := range variants {
+					rows = append(rows, pickItem{Title: "Authorize: " + name + "…", Value: extensionValue("action", ref.Kind, "setup", ref.ID, name), Info: info})
+				}
+			}
+			if c.StateDir {
+				rows = append(rows, pickItem{Title: "Clear local login state…", Value: extensionValue("confirm-reset", ref.Kind, ref.ID), Info: info})
+			}
+		}
 		add("View logs", "logs")
 		add("Disable for this session", "disable")
 		rows = append(rows, pickItem{Title: "Disable and save", Value: extensionValue("action", ref.Kind, "disable", ref.ID, "--save"), Info: info})
@@ -155,6 +175,8 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		}
 		args, _ := json.Marshal(c.Args)
 		info := []pickInfoLine{{Label: "Source", Value: ref.String()}, {Label: "Executable", Value: c.Command}, {Label: "Arguments", Value: extensions.DisplayText(string(args), 2048)}, {Label: "Manifest", Value: c.Manifest}, {Label: "Endpoint", Value: c.URL}, {Label: "Network ceiling", Value: fmt.Sprint(c.Network || c.Transport == "http")}, {Label: "Authority", Value: "enable source only; business calls still require approval"}}
+		capabilities, _ := json.Marshal(map[string]any{"state_dir": c.StateDir, "setup": c.Setup, "setup_variants": c.SetupVariants, "setup_origins": c.SetupOrigins, "executables": c.Executables, "skills": c.Skills, "confirm_tools": c.ConfirmTools, "aggregate_tools": c.AggregateTools})
+		info = append(info, pickInfoLine{Label: "Local capabilities", Value: extensions.DisplayText(string(capabilities), 4096)})
 		m.menu.openPickerDetailed([]pickItem{{Title: "Cancel", Value: extensionValue("detail", ref.Kind, ref.ID), Info: info}, {Title: "Approve and enable for this session", Status: "runs third-party code when used", StatusTone: pickWarn, Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes"), Info: info}, {Title: "Approve, enable and save", Value: extensionValue("action", ref.Kind, "enable", ref.ID, "--yes", "--save"), Info: info}}, "", "extensions")
 		m.relayout()
 		return m, nil
@@ -168,6 +190,12 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		if len(v) >= 4 {
 			return m.runExtension(v[1], v[2:])
 		}
+	case "confirm-reset":
+		if len(v) == 3 {
+			m.menu.openPickerDetailed([]pickItem{{Title: "Cancel", Value: extensionValue("detail", v[1], v[2])}, {Title: "Delete this source's local login state (not server-side consent)", StatusTone: pickWarn, Value: extensionValue("action", v[1], "reset", v[2], "--yes")}}, "", "extensions")
+			m.relayout()
+		}
+		return m, nil
 	case "fill":
 		if len(v) == 2 {
 			m.menu.close()
@@ -248,6 +276,9 @@ func (m Model) runExtension(kind string, args []string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
+	if op == "setup" {
+		return m.startExtensionSetup(kind, args)
+	}
 	line := "/" + kind + " " + strings.Join(args, " ")
 	return m.startSessionOp(line, "Extensions: "+op, func(ctx context.Context) tea.Cmd {
 		return func() tea.Msg {
@@ -258,6 +289,10 @@ func (m Model) runExtension(kind string, args []string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) extensionDone(msg extensionDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.setupEpoch != 0 && msg.setupEpoch != m.extensionSetupEpoch {
+		return m, nil
+	}
+	m.extensionSetupText = ""
 	if m.sessionOpCancel != nil {
 		m.sessionOpCancel()
 	}

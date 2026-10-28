@@ -341,6 +341,9 @@ func (t *TuiosTool) list(ctx context.Context) (agentcore.AgentToolResult, error)
 	// from its own.
 	own := c.PaneID()
 	for i := range wl.Windows {
+		if sensitivePane(wl.Windows[i]) {
+			wl.Windows[i].Title, wl.Windows[i].DisplayName = "Authorization (operator-only)", "Authorization (operator-only)"
+		}
 		if own != "" && wl.Windows[i].WindowID == own {
 			wl.Windows[i].Own = true
 		}
@@ -366,6 +369,9 @@ func (t *TuiosTool) capture(ctx context.Context, a tuiosArgs) (agentcore.AgentTo
 	defer c.Close()
 	window, err := resolveWindow(ctx, c, a.Window)
 	if err != nil {
+		return tuiosError(err), nil
+	}
+	if err = refuseSensitivePane(ctx, c, window); err != nil {
 		return tuiosError(err), nil
 	}
 	cap, err := c.CapturePane(ctx, window, source, tuiosLines(a.Lines), false)
@@ -398,6 +404,11 @@ func (t *TuiosTool) wait(ctx context.Context, a tuiosArgs) (agentcore.AgentToolR
 	}
 	if a.Condition == "agent-state" && len(a.Until) == 0 {
 		a.Until = []string{"idle", "done", "needs_input"}
+	}
+	if a.Window != "" {
+		if err = refuseSensitivePane(ctx, c, a.Window); err != nil {
+			return tuiosError(err), nil
+		}
 	}
 	res, err := t.waitPane(ctx, c, tuiosctl.WaitParams{
 		Condition: a.Condition, Window: a.Window, Pattern: a.Pattern,
@@ -677,6 +688,9 @@ func (t *TuiosTool) screenshot(ctx context.Context, a tuiosArgs) (agentcore.Agen
 	defer c.Close()
 	window, err := resolveWindow(ctx, c, a.Window)
 	if err != nil {
+		return tuiosError(err), nil
+	}
+	if err = refuseSensitivePane(ctx, c, window); err != nil {
 		return tuiosError(err), nil
 	}
 	out, err := t.artifactPath("screenshots", a.Out, a.Format)

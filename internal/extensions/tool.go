@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/getan/golder/extension"
@@ -21,6 +22,18 @@ type tool struct {
 
 func (t *tool) ManagedExtension() {}
 func (t *tool) Name() string      { return t.name }
+func (t *tool) RequiresOperatorConfirmation() bool {
+	s, err := t.manager.get(t.ref)
+	if err != nil {
+		return true
+	}
+	for _, pattern := range s.cfg.ConfirmTools {
+		if match, _ := filepath.Match(pattern, t.spec.Name); match {
+			return true
+		}
+	}
+	return false
+}
 func (t *tool) Description() string {
 	return fmt.Sprintf("[%s / %s; external, hints are not authorization] %s", t.ref, t.spec.Name, t.spec.Description)
 }
@@ -33,6 +46,9 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 	m := t.manager
 	if !agentcore.ExternalToolAuthorized(ctx) {
 		return fail("external tool requires the host authorization chain; not executed")
+	}
+	if t.RequiresOperatorConfirmation() && !agentcore.OperatorConfirmedFor(ctx, id, t.name, args) {
+		return fail("operation requires an exact operator confirmation; not executed")
 	}
 	s, e := m.get(t.ref)
 	if e != nil {
@@ -69,7 +85,7 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 	if current == nil || !sameSchema(current.InputSchema, t.spec.InputSchema) {
 		return fail("extension tool definition changed; not executed; refresh the catalog before retrying")
 	}
-	if !allowed(s.cfg, t.spec.Name) || (m.opts.Allow != nil && !m.opts.Allow(t.name)) {
+	if !m.toolAllowed(s, t.spec.Name) {
 		return fail("extension tool blocked by policy; not executed")
 	}
 	sch, e := compileSchema(t.spec.InputSchema)
@@ -88,7 +104,7 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 		last = time.Now()
 		update(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(clean(p.Message, 1024))}})
 	}
-	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args}, report)
+	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args, OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args)}, report)
 	if e != nil {
 		s.lastError = clean(e.Error(), 2048)
 		s.state = "failed"

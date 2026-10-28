@@ -1,9 +1,25 @@
 # 用标准 MCP 插件接入飞书协作与飞书项目，并通过内置浏览器扫码授权
 
-Status: Updated proposal; state_dir / setup direction accepted; implementation pending
+Status: Implemented locally; real-account and Linux runtime acceptance pending
 Last updated: 2026-10-28
 Discussion: 本次设计讨论；用户确认工单指飞书项目工作项，默认用户身份，不自动安装，优先内置浏览器扫码。
 Related: [extensions-mcp.md](extensions-mcp.md), [extensions-state-setup.md](extensions-state-setup.md)
+
+## 实现记录（优先于下文原始提案细节）
+
+代码集中在 [`plugins/lark/`](../plugins/lark/README.md)，入口为
+`plugins/lark/cmd/golder-lark`；宿主通用能力仍在现有 extensions/seatbelt/gate/UI 包。
+已提供 22 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
+精确人类确认与命令长尾限制。实际配置以 `golder-lark print-config` 生成结果为准。
+
+根据用户已有应用的情况，首版只复用应用，以 `--app-secret-stdin` 配置，不执行 `--new`。
+默认授权协作，`setup lark project` 单独授权项目。内置浏览器显示宿主生成的离线二维码页，
+不创建浏览器控制 socket；扫码后在手机的官方页面授权。这替代原提案的通用桌面 OAuth 登录页，
+避免桌面页面重定向、cookies 与模型控制的隔离难题。不可启动浏览器时显示同一 URL/终端二维码。
+`skills` 是统一来源的可选本地目录声明，纳入指纹，不要求另行手动注册独立 Skill。
+
+已用本地 fixture 验证协议和认证编排；没有使用真实账号扫码，也没有改远端业务数据。
+下文保留需求与设计依据；与上述收敛有差异时，以实现 README 为准。
 
 ## Abstract / 摘要
 

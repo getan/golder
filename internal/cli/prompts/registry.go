@@ -193,9 +193,13 @@ func RegisterExtensionCommands(reg *runtime.SlashRegistry, m *extensions.Manager
 	for _, kind := range []string{"extensions", "plugin", "mcp", "skills"} {
 		reg.AddBuiltin(runtime.SlashCommand{Name: kind, Category: runtime.CategoryExtensions,
 			Description:  "Manage " + kind + " (sources and Skills have separate lifecycles)",
-			ArgumentHint: "[list|inspect|tools|connect|disable] [id]",
+			ArgumentHint: "[list|inspect|tools|connect|setup|reset|disable] [id]",
 			Run: func(args string) (string, string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				duration := 30 * time.Second
+				if strings.HasPrefix(strings.TrimSpace(args), "setup ") {
+					duration = 10 * time.Minute
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), duration)
 				defer cancel()
 				r, err := extensioncmd.Execute(ctx, m, kind, strings.Fields(args))
 				if err != nil {

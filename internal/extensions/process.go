@@ -2,6 +2,7 @@ package extensions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/getan/golder/extension"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/redact"
 	"github.com/getan/golder/internal/seatbelt"
@@ -159,10 +161,22 @@ func processEnv(c SourceConfig, home string) ([]string, error) {
 		allow[name] = v
 	}
 	allow["HOME"] = home
+	allow["CFFIXED_USER_HOME"] = home
 	allow["TMPDIR"] = home
 	allow["XDG_CONFIG_HOME"] = filepath.Join(home, "config")
+	allow["XDG_DATA_HOME"] = filepath.Join(home, "data")
 	allow["XDG_CACHE_HOME"] = filepath.Join(home, "cache")
 	allow["XDG_STATE_HOME"] = filepath.Join(home, "state")
+	paths := make([]string, 0, len(c.Executables))
+	for _, raw := range c.Executables {
+		p := expandPath(raw)
+		if canonical, err := filepath.EvalSymlinks(p); err == nil {
+			p = canonical
+		}
+		paths = append(paths, p)
+	}
+	encoded, _ := json.Marshal(paths)
+	allow[extension.ExecutablePathsEnv] = string(encoded) // host-owned; operator env cannot inject GOLDER_*
 	return provider.ScrubEnv(os.Environ(), allow), nil
 }
 
@@ -179,6 +193,31 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 		return nil, nil, e
 	}
 	cleanup := func() { _ = os.RemoveAll(tmp) }
+	home := tmp
+	var state *seatbelt.ExtensionState
+	if c.StateDir {
+		if c.stateHome == "" {
+			cleanup()
+			return nil, nil, errors.New("persistent HOME has no source identity")
+		}
+		state, e = seatbelt.NewExtensionState(c.stateHome)
+		if e != nil {
+			cleanup()
+			return nil, nil, e
+		}
+		if e = privateHome(c.stateHome); e != nil {
+			cleanup()
+			return nil, nil, e
+		}
+		unlock, err := lockState(filepath.Join(filepath.Dir(c.stateHome), ".lock"))
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		removeTemp := cleanup
+		cleanup = func() { unlock(); removeTemp() }
+		home = c.stateHome
+	}
 	// The state root is intentionally unreadable to children. Stage only the
 	// approved executable, never its directory (which also contains secrets).
 	for _, root := range seatbelt.ProtectedGolderPaths() {
@@ -211,10 +250,15 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 			break
 		}
 	}
-	env, e := processEnv(c, tmp)
+	env, e := processEnv(c, home)
 	if e != nil {
 		cleanup()
 		return nil, nil, e
+	}
+	for i, value := range env {
+		if strings.HasPrefix(value, "TMPDIR=") {
+			env[i] = "TMPDIR=" + tmp
+		}
 	}
 	dir := cwd
 	if c.Dir != "" {
@@ -229,7 +273,25 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 		cleanup()
 		return nil, nil, errors.New("extension sandbox unavailable; refusing bare execution")
 	}
-	policy := seatbelt.CallPolicy{Network: c.Network, ReadFiles: []string{program}, WriteDirs: []string{tmp}}
+	policy := seatbelt.CallPolicy{Network: c.Network, ReadFiles: []string{program}, WriteDirs: []string{tmp}, ExtensionState: state}
+	for _, dependency := range c.Executables {
+		if _, err := os.Stat(expandPath(dependency)); os.IsNotExist(err) {
+			continue
+		}
+		p, err := resolvedProgram(dependency)
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		for _, root := range seatbelt.ProtectedGolderPaths() {
+			rel, _ := filepath.Rel(root, p)
+			if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				cleanup()
+				return nil, nil, errors.New("install dependency executables outside the protected state root")
+			}
+		}
+		policy.ReadFiles = append(policy.ReadFiles, p)
+	}
 	seatbelt.RefusedPaths(&policy)
 	wrapped, release, e := runner.SandboxCall(append([]string{program}, argv[1:]...), dir, policy)
 	if e != nil {
@@ -242,7 +304,8 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 	cmd.Stderr = logs
 	cmd.WaitDelay = time.Second
 	configureProcess(cmd)
-	return cmd, func() { cleanupCommand(cmd, release, cleanup) }, nil
+	var once sync.Once
+	return cmd, func() { once.Do(func() { cleanupCommand(cmd, release, cleanup) }) }, nil
 }
 
 func cleanupCommand(cmd *exec.Cmd, release, cleanup func()) {

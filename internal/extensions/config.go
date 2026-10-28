@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -29,22 +30,31 @@ type SourceRef = extension.SourceRef
 // SourceConfig is an operator declaration, never a model argument. Network is
 // the immutable launch ceiling of a local process, not a per-call grant.
 type SourceConfig struct {
-	Enabled         bool              `toml:"enabled" json:"enabled"`
-	Runtime         string            `toml:"runtime,omitempty" json:"runtime,omitempty"`
-	Manifest        string            `toml:"manifest,omitempty" json:"manifest,omitempty"`
-	Transport       string            `toml:"transport,omitempty" json:"transport,omitempty"`
-	Command         string            `toml:"command,omitempty" json:"command,omitempty"`
-	Args            []string          `toml:"args,omitempty" json:"args,omitempty"`
-	URL             string            `toml:"url,omitempty" json:"url,omitempty"`
-	Dir             string            `toml:"dir,omitempty" json:"dir,omitempty"`
-	Env             map[string]string `toml:"env,omitempty" json:"env,omitempty"`
-	EnvPassthrough  []string          `toml:"env_passthrough,omitempty" json:"env_passthrough,omitempty"`
-	Headers         map[string]string `toml:"headers,omitempty" json:"headers,omitempty"`
-	AllowedTools    []string          `toml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	DisallowedTools []string          `toml:"disallowed_tools,omitempty" json:"disallowed_tools,omitempty"`
-	StartupTimeout  string            `toml:"startup_timeout,omitempty" json:"startup_timeout,omitempty"`
-	CallTimeout     string            `toml:"call_timeout,omitempty" json:"call_timeout,omitempty"`
-	Network         bool              `toml:"network,omitempty" json:"network,omitempty"`
+	Enabled         bool                `toml:"enabled" json:"enabled"`
+	Runtime         string              `toml:"runtime,omitempty" json:"runtime,omitempty"`
+	Manifest        string              `toml:"manifest,omitempty" json:"manifest,omitempty"`
+	Transport       string              `toml:"transport,omitempty" json:"transport,omitempty"`
+	Command         string              `toml:"command,omitempty" json:"command,omitempty"`
+	Args            []string            `toml:"args,omitempty" json:"args,omitempty"`
+	URL             string              `toml:"url,omitempty" json:"url,omitempty"`
+	Dir             string              `toml:"dir,omitempty" json:"dir,omitempty"`
+	Env             map[string]string   `toml:"env,omitempty" json:"env,omitempty"`
+	EnvPassthrough  []string            `toml:"env_passthrough,omitempty" json:"env_passthrough,omitempty"`
+	Headers         map[string]string   `toml:"headers,omitempty" json:"headers,omitempty"`
+	AllowedTools    []string            `toml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	DisallowedTools []string            `toml:"disallowed_tools,omitempty" json:"disallowed_tools,omitempty"`
+	StartupTimeout  string              `toml:"startup_timeout,omitempty" json:"startup_timeout,omitempty"`
+	CallTimeout     string              `toml:"call_timeout,omitempty" json:"call_timeout,omitempty"`
+	Network         bool                `toml:"network,omitempty" json:"network,omitempty"`
+	StateDir        bool                `toml:"state_dir,omitempty" json:"state_dir,omitempty"`
+	Setup           []string            `toml:"setup,omitempty" json:"setup,omitempty"`
+	SetupVariants   map[string][]string `toml:"setup_variants,omitempty" json:"setup_variants,omitempty"`
+	SetupOrigins    []string            `toml:"setup_origins,omitempty" json:"setup_origins,omitempty"`
+	Executables     []string            `toml:"executables,omitempty" json:"executables,omitempty"`
+	Skills          string              `toml:"skills,omitempty" json:"skills,omitempty"`
+	ConfirmTools    []string            `toml:"confirm_tools,omitempty" json:"confirm_tools,omitempty"`
+	AggregateTools  []string            `toml:"aggregate_tools,omitempty" json:"aggregate_tools,omitempty"`
+	stateHome       string
 }
 
 type Config struct {
@@ -83,6 +93,9 @@ func validateConfig(ref SourceRef, c SourceConfig) error {
 	if !idPattern.MatchString(ref.ID) || (ref.Kind != "plugin" && ref.Kind != "mcp") {
 		return errors.New("invalid extension kind or id")
 	}
+	if err := validateLocalCapabilities(c); err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
 	for _, raw := range []string{c.StartupTimeout, c.CallTimeout} {
 		if raw != "" {
 			d, err := time.ParseDuration(raw)
@@ -91,7 +104,7 @@ func validateConfig(ref SourceRef, c SourceConfig) error {
 			}
 		}
 	}
-	for _, p := range append(append([]string{}, c.AllowedTools...), c.DisallowedTools...) {
+	for _, p := range append(append(append(append([]string{}, c.AllowedTools...), c.DisallowedTools...), c.ConfirmTools...), c.AggregateTools...) {
 		if _, err := filepath.Match(p, "tool"); err != nil {
 			return fmt.Errorf("%s: invalid tool filter", ref)
 		}
@@ -329,6 +342,37 @@ func fingerprint(ref SourceRef, c SourceConfig, cwd string) (string, error) {
 	} else if c.Command != "" {
 		if e := hashProgram(h, c.Command); e != nil {
 			return "", e
+		}
+	}
+	if len(c.Setup) > 0 {
+		if e := hashProgram(h, c.Setup[0]); e != nil {
+			return "", e
+		}
+	}
+	// Config JSON already includes variant names/argv deterministically. Hash
+	// each executable in stable name order as well as the default setup program.
+	variantNames := make([]string, 0, len(c.SetupVariants))
+	for name := range c.SetupVariants {
+		variantNames = append(variantNames, name)
+	}
+	slices.Sort(variantNames)
+	for _, name := range variantNames {
+		if e := hashProgram(h, c.SetupVariants[name][0]); e != nil {
+			return "", e
+		}
+	}
+	for _, dependency := range c.Executables {
+		if _, err := os.Stat(expandPath(dependency)); os.IsNotExist(err) {
+			io.WriteString(h, "missing:"+dependency)
+			continue
+		}
+		if err := hashProgram(h, dependency); err != nil {
+			return "", err
+		}
+	}
+	if c.Skills != "" {
+		if err := hashSkills(h, c.Skills); err != nil {
+			return "", err
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

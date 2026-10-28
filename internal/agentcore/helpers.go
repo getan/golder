@@ -80,6 +80,9 @@ type BeforeToolCallDecision struct {
 	Block   bool
 	Content *ContentList
 	Details *any
+	// OperatorConfirmed records a person's exact-call answer. It cannot be
+	// supplied by tool arguments or the automatic reviewer.
+	OperatorConfirmed bool
 	// Sandbox asks the execution layer to run this call under OS-level
 	// isolation (e.g. a permission gate graded the command into a sandbox
 	// tier). The executor publishes the request into the context the tool

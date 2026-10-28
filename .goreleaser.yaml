@@ -31,6 +31,20 @@ builds:
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
 
+  - id: golder-lark
+    main: ./plugins/lark/cmd/golder-lark
+    binary: golder-lark
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
 archives:
   - id: golder
     ids:
@@ -53,6 +67,15 @@ archives:
       - README.en.md
       - LICENSE
       - THIRD_PARTY_LICENSES.md
+
+  - id: golder-lark
+    ids:
+      - golder-lark
+    name_template: "golder-lark_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - plugins/lark/README.md
+      - plugins/lark/skills/**
 
 checksum:
   name_template: "checksums.txt"
@@ -105,6 +128,8 @@ release:
 # 一个小的 formula 发布步骤。
 brews:
   - name: golder
+    ids:
+      - golder
     repository:
       owner: getan
       name: homebrew-tap

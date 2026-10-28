@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/getan/golder/internal/extensions"
@@ -132,6 +134,20 @@ func Execute(ctx context.Context, m *extensions.Manager, kind string, args []str
 	}
 	var err error
 	switch op {
+	case "setup":
+		variant := ""
+		if len(args) > 2 {
+			variant = args[2]
+		}
+		if len(args) > 3 {
+			return Response{}, errors.New("setup accepts only a declared variant name, not executable arguments")
+		}
+		err = runSetup(ctx, m, ref, variant)
+	case "reset":
+		if !contains(args[2:], "--yes") {
+			return Response{}, errors.New("reset deletes this source's local login state; confirm with reset <id> --yes")
+		}
+		err = m.Reset(ref)
 	case "enable":
 		if !contains(args[2:], "--yes") {
 			return Response{}, errors.New("enable requires explicit approval: inspect the source, then enable <id> --yes")
@@ -231,7 +247,8 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 				fmt.Fprintln(out, "  list | doctor           data-only source and Skills overview")
 			} else {
 				fmt.Fprintln(out, "  list | inspect | tools | logs | prompts | resources")
-				fmt.Fprintln(out, "  enable | disable | remove | test <id>")
+				fmt.Fprintln(out, "  enable | disable | remove | test | reset <id>")
+				fmt.Fprintln(out, "  setup <id> [variant]     explicit user authorization; private browser QR or terminal fallback")
 				if kind == "mcp" {
 					fmt.Fprintln(out, "  add <id> --transport stdio -- <program> [args...]")
 					fmt.Fprintln(out, "  add <id> --transport http --url <url>")
@@ -390,8 +407,25 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 		fmt.Fprintln(out, r.Text)
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	duration := 30 * time.Second
+	if op == "setup" {
+		duration = 10 * time.Minute
+	}
+	if op == "reset" {
+		if !yes {
+			fmt.Fprintln(errOut, "Delete this source's local login state (not server-side consent)? Type yes to confirm:")
+			line, _ := bufio.NewReader(in).ReadString('\n')
+			if strings.TrimSpace(line) != "yes" {
+				return fail(errors.New("reset not confirmed"))
+			}
+		}
+		pos = append(pos, "--yes")
+	}
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancel := context.WithTimeout(signalCtx, duration)
 	defer cancel()
+	ctx = WithSetupDisplay(ctx, func(text string) { fmt.Fprintln(errOut, text) })
 	r, e := Execute(ctx, m, kind, pos)
 	if e != nil {
 		return fail(e)

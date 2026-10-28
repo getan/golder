@@ -1,9 +1,20 @@
 # 为现有扩展增加私有持久状态与用户授权入口
 
-Status: Design direction accepted; implementation pending
+Status: Implemented locally; Linux runtime and provider acceptance pending
 Last updated: 2026-10-28
 Discussion: 用户确认接受 state_dir / setup；要求插件遵守现有规范、默认用户身份、优先内置浏览器扫码授权。
 Related: [extensions-mcp.md](extensions-mcp.md), [lark-cli-plugin.md](lark-cli-plugin.md)
+
+## 实现记录
+
+现有 SourceConfig 已支持 opt-in state_dir、setup、setup_variants、setup_origins、executables、
+skills、confirm_tools、aggregate_tools；CLI/TUI 提供显式 setup/reset。持久 HOME 有跨进程锁，
+沙箱通过来源专属 typed capability 暴露它，不能用普通目录 grant 重开整个 protected root。
+真实子进程 fixture 覆盖私有 HOME 可写、宿主/兄弟状态不可读、重启留存及 reset 边界。
+
+浏览器实现收敛为宿主生成的**离线二维码显示页**：没有控制 socket、远端页面、cookies 或桌面
+OAuth 跳转，手机访问已校验的官方 verification URL。Mac 仍需浏览器运行时例外，Linux 仍受沙箱。
+它替代下文 §5 的通用敏感 OAuth 浏览器实例；真实服务验收仍需用户参与，Linux 容器测试仍暂停。
 
 ## Abstract / 摘要
 

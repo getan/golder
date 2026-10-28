@@ -388,6 +388,9 @@ func waitForBrowserStartup(ctx context.Context, spec paneSpec, d time.Duration, 
 				if r.State == "failed" {
 					return errors.New(r.Message())
 				}
+				if spec.Socket == "" && r.State == "ready" {
+					return nil
+				} // display-only operator viewer
 			}
 		}
 		if info, err := os.Stat(spec.Socket); err == nil && info.Mode()&os.ModeSocket != 0 {

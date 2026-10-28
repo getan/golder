@@ -130,6 +130,9 @@ func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	readRoots = append(readRoots, WritableRoots()...)
 	readRoots = append(readRoots, policy.ReadDirs...)
 	readRoots = append(readRoots, policy.WriteDirs...)
+	if home := policy.ExtensionState.Path(); home != "" {
+		readRoots = append(readRoots, home)
+	}
 	// A one-call grant is exact: add it as a literal below, NOT to readRoots
 	// (which are subpath rules covering an entire directory).
 	readRule := fmt.Sprintf("(allow file-read* (literal \"/\") %s)", quoteAll(canonicalsAll(readRoots)))
@@ -166,6 +169,17 @@ func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 	denyGolder := ""
 	if protected := ProtectedGolderPaths(); len(protected) > 0 {
 		denyGolder = fmt.Sprintf("(deny file-read* file-write* %s)\n", quoteAll(canonicalsAll(protected)))
+		if home := policy.ExtensionState.Path(); home != "" {
+			// Keep siblings and the parent store sealed. Only metadata traversal
+			// through the ancestors of this one HOME is exempted from the deny.
+			denyGolder = ""
+			for _, root := range canonicalsAll(protected) {
+				exclude := quoteAll(canonicals(home))
+				denyGolder += fmt.Sprintf("(deny file-read-data file-write* (require-all (subpath %s) (require-not (require-any %s))))\n", quote(root), exclude)
+				meta := literalAll(ancestorChain(home))
+				denyGolder += fmt.Sprintf("(deny file-read-metadata (require-all (subpath %s) (require-not (require-any %s %s))))\n", quote(root), exclude, meta)
+			}
+		}
 	}
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
@@ -191,6 +205,9 @@ func (r *SeatbeltRunner) writeCallProfile(policy CallPolicy) (string, error) {
 		}
 		for _, root := range policy.WriteDirs {
 			writeRoots = append(writeRoots, canonicals(root)...)
+		}
+		if home := policy.ExtensionState.Path(); home != "" {
+			writeRoots = append(writeRoots, canonicals(home)...)
 		}
 	}
 	fmt.Fprintf(&b, "(allow file-write* %s (literal \"/dev/null\") (literal \"/dev/tty\"))\n",
