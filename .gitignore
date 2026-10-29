@@ -64,3 +64,8 @@ graph.html
 
 # scratch copies of other repos (site copy for reading, etc.)
 .site/
+
+# Private investigation material: repo copies pulled for reading, probe
+# scripts and checkpoints referenced by docs (e.g. ssh_workspace_probe.py).
+# Never built and never published, so a checkout here must not look dirty.
+/.scratch/
