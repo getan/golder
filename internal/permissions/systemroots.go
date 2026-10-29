@@ -9,16 +9,18 @@ package permissions
 
 import (
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 )
 
-// SystemReadRoots returns the directories a run may always read: the system
-// runtime, the package-manager trees, and the temp roots a shell needs. It is
-// deliberately short — $HOME is NOT here, because the point of the whitelist is
-// that credential material inside $HOME is excluded by construction rather than
-// by an ever-growing blacklist. A user whose toolchain lives under $HOME
-// (conda, pyenv, nvm) adds it via [sandbox] readable or GOLDER_SANDBOX_READABLE.
+// SystemReadRoots returns the paths a run may always read: the system runtime,
+// the package-manager trees, the temp roots a shell needs, and the libc resolver
+// config when it is symlinked out of /etc. It is deliberately short — $HOME is
+// NOT here, because the point of the whitelist is that credential material inside
+// $HOME is excluded by construction rather than by an ever-growing blacklist. A
+// user whose toolchain lives under $HOME (conda, pyenv, nvm) adds it via
+// [sandbox] readable or GOLDER_SANDBOX_READABLE.
 func SystemReadRoots() []string {
 	roots := []string{
 		// System runtime and libraries: exec, dyld, homebrew.
@@ -45,6 +47,52 @@ func SystemReadRoots() []string {
 	roots = append(roots, "/dev", "/proc")
 	if tmp := os.TempDir(); tmp != "" {
 		roots = append(roots, tmp)
+	}
+	// /etc/resolv.conf is a symlink on systemd-resolved, NetworkManager and
+	// networkd hosts, pointing into /run — a tree the sandbox does not bind.
+	// Admitting only the resolved file keeps the link alive inside the sandbox
+	// (and with it every getaddrinfo call) without exposing its directory.
+	roots = appendResolverConfigTargets(roots, "/etc/resolv.conf")
+	return roots
+}
+
+// resolverConfigTargets returns the resolved location of the libc's
+// name-service config when the configured path is a symlink to a regular file.
+// /etc/resolv.conf is a symlink on systemd-resolved, NetworkManager and networkd
+// hosts, pointing into /run — which a Linux sandbox's mount whitelist does not
+// carry. The link then exists but dangles, so every getaddrinfo inside the
+// sandbox fails with "Name or service not known" while the host resolves fine.
+// Only the file is admitted, never its directory: /run/systemd/resolve also
+// holds the io.systemd.Resolve Varlink sockets, and binding the directory would
+// hand a sandboxed process the host resolver's control interface.
+func resolverConfigTargets(path string) []string {
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil || real == path {
+		return nil // a regular file is already covered by its parent root
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	return []string{real}
+}
+
+// appendResolverConfigTargets appends the resolved resolver config to roots
+// unless an existing root already covers it. It takes roots explicitly rather
+// than calling InsideSystemReadRoots: that would re-enter SystemReadRoots, the
+// one definition this append belongs to, and recurse forever.
+func appendResolverConfigTargets(roots []string, path string) []string {
+	for _, f := range resolverConfigTargets(path) {
+		covered := false
+		for _, r := range roots {
+			if Inside(r, f) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			roots = append(roots, f)
+		}
 	}
 	return roots
 }

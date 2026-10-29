@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,6 +38,59 @@ func TestSystemReadRootsIncludeTheShellSelector(t *testing.T) {
 		}
 	}
 	t.Error("/private/var/select missing from SystemReadRoots")
+}
+
+// TestResolverConfigTargets covers the resolver-config allowance: only a
+// symlink that escapes the system roots is admitted, and only the file it
+// resolves to. A regular config is already covered by /etc, a dangling link
+// names nothing to bind, and a link that lands inside an existing root must not
+// duplicate that root.
+func TestResolverConfigTargets(t *testing.T) {
+	base := Canonical(t.TempDir())
+	inside := filepath.Join(base, "inside")
+	outside := filepath.Join(base, "outside")
+	for _, dir := range []string{inside, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outsideFile := filepath.Join(outside, "resolv.conf")
+	insideFile := filepath.Join(inside, "resolv.conf")
+	for _, f := range []string{outsideFile, insideFile} {
+		if err := os.WriteFile(f, []byte("nameserver 127.0.0.53\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := func(name, target string) string {
+		t.Helper()
+		p := filepath.Join(base, name)
+		if err := os.Symlink(target, p); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		return p
+	}
+	regular := filepath.Join(outside, "plain.conf")
+	if err := os.WriteFile(regular, []byte("nameserver 127.0.0.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		path  string
+		roots []string
+		want  []string
+	}{
+		{"symlink outside the roots admits its target", link("escapes", outsideFile), nil, []string{outsideFile}},
+		{"a regular file needs nothing", regular, nil, nil},
+		{"a dangling link names nothing", link("dangling", filepath.Join(outside, "gone.conf")), nil, nil},
+		{"a link already inside a root is not duplicated", link("covered", insideFile), []string{inside}, nil},
+	}
+	for _, c := range cases {
+		got := appendResolverConfigTargets(slices.Clone(c.roots), c.path)
+		want := append(slices.Clone(c.roots), c.want...)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, want)
+		}
+	}
 }
 
 func TestInside(t *testing.T) {

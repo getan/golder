@@ -80,6 +80,14 @@ func TestBwrapRunnerEndToEnd(t *testing.T) {
 	if _, err := run("cat /etc/hostname"); err != nil {
 		t.Errorf("reads outside the project must stay allowed: %v", err)
 	}
+	// The libc resolver config must survive the mount whitelist. On
+	// systemd-resolved hosts /etc/resolv.conf is a symlink into /run; if the
+	// target is not bound, the link dangles and every getaddrinfo fails.
+	if out, err := run("cat /etc/resolv.conf"); err != nil {
+		t.Errorf("the resolver config must be readable inside the sandbox: %v\n%s", err, out)
+	} else if strings.TrimSpace(out) == "" {
+		t.Error("/etc/resolv.conf must not be empty inside the sandbox")
+	}
 	outside := t.TempDir()
 	if out, err := run("echo x > " + filepath.Join(outside, "x")); err == nil {
 		t.Errorf("write outside the project must fail:\n%s", out)
@@ -170,6 +178,42 @@ func TestBwrapRunnerNetworkOff(t *testing.T) {
 	}
 	if !strings.Contains(out, "BLOCKED") {
 		t.Errorf("network should be off inside the sandbox, got:\n%s", out)
+	}
+}
+
+// TestBwrapArgvBindsResolverConfigByFile guards the DNS fix at the argv level:
+// the resolved resolver config may be bound as an exact file, but its directory
+// must never be. /run/systemd/resolve also contains the world-accessible
+// io.systemd.Resolve control sockets, so a directory bind would hand the sandbox
+// the host resolver's control interface.
+func TestBwrapArgvBindsResolverConfigByFile(t *testing.T) {
+	grantstest.Install(t)
+	t.Setenv("GOLDER_SANDBOX_READABLE", "")
+	t.Setenv("GOLDER_HOME", filepath.Join(t.TempDir(), "ghome"))
+	project := t.TempDir()
+	argv, _, err := (&BwrapRunner{ProjectDir: project, TmpDir: t.TempDir()}).SandboxArgv("/bin/bash", "-c", "true", project)
+	if err != nil {
+		t.Fatalf("SandboxArgv: %v", err)
+	}
+	for _, dir := range []string{"/run", "/run/systemd", "/run/systemd/resolve"} {
+		for _, flag := range []string{"--ro-bind", "--bind", "--bind-try"} {
+			if indexOfSeq(argv, flag, dir, dir) >= 0 {
+				t.Errorf("%s must never bind the resolver directory %s: %v", flag, dir, argv)
+			}
+		}
+	}
+	// Positive half: when /etc/resolv.conf is a symlink to a regular file, the
+	// argv must carry an exact read-only bind for the target, not just its
+	// ancestors.
+	target, err := filepath.EvalSymlinks("/etc/resolv.conf")
+	if err != nil || target == "/etc/resolv.conf" {
+		return
+	}
+	if info, err := os.Stat(target); err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	if indexOfSeq(argv, "--ro-bind", target, target) < 0 {
+		t.Errorf("argv must bind the resolved resolver config %s: %v", target, argv)
 	}
 }
 
