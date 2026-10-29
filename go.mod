@@ -18,8 +18,8 @@ require (
 	github.com/chromedp/chromedp v0.20.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
-	github.com/getan/kitty-browse v0.2.3
-	github.com/getan/tuios-mini v0.10.17
+	github.com/getan/kitty-browse v0.2.4
+	github.com/getan/tuios-mini v0.10.19
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/termenv v0.16.0

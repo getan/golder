@@ -123,6 +123,19 @@ func frameInput(b []byte) inputFrame {
 			}
 			continue
 		}
+		if isUTF8TextLead(c) || c == 0x7f {
+			// A CSI/SS3 frame is ASCII: parameters (0x30-0x3f), intermediates
+			// (0x20-0x2f) and one final byte (0x40-0x7e). A valid UTF-8 lead
+			// byte (CJK, emoji, ...) can only be typed text, so the frame ends
+			// before it and those bytes decode as input. Treating them as
+			// payload swallowed every CJK character typed after a split "ESC [":
+			// no UTF-8 byte is a CSI final byte, and no idle timer runs while a
+			// frame is pending. Invalid bytes such as 0xff stay in the malformed
+			// frame so their tail is never typed. DEL cannot appear in a frame.
+			// X10's three raw payload bytes are consumed above, before this.
+			f.end, f.cancel = i, true
+			return f
+		}
 		if c >= 0x40 && c <= 0x7e {
 			f.end, f.complete = i+1, true
 			// X10: CSI M is followed by three raw bytes, not three keys.
@@ -159,12 +172,24 @@ func discardInput(b []byte, kind inputFrameKind) (n int, done bool) {
 			if c >= 0x40 && c <= 0x7e {
 				return i + 1, true
 			}
+			// Recovery must not swallow typed text: a valid UTF-8 lead byte or
+			// DEL cannot belong to an ASCII frame, so return to ordinary
+			// decoding. Invalid bytes remain part of the discarded frame.
+			if isUTF8TextLead(c) || c == 0x7f {
+				return i, true
+			}
 		} else if c == 0x9c || c == 0x07 && kind == inputOSC {
 			return i + 1, true
 		}
 	}
 	return len(b), false
 }
+
+// isUTF8TextLead reports whether b starts a well-formed multi-byte UTF-8
+// sequence, excluding the continuation bytes (0x80-0xbf), the invalid 0xC0/0xC1
+// and the out-of-range 0xF5-0xff. Those belong to a malformed escape frame and
+// must never be released as typing.
+func isUTF8TextLead(b byte) bool { return b >= 0xC2 && b <= 0xF4 }
 
 var pasteEndMarkers = [][]byte{[]byte("\x1b[201~"), []byte("\x9b201~")}
 

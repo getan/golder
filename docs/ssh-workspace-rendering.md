@@ -83,7 +83,9 @@ Golder 现增加借用终端的状态快照/恢复兜底，应用于独立 TUI �
 ## 当前集成/验证边界
 
 测量阶段通过私有开发 workspace 构建 `.build/golder-linux-ssh-lite`，执行上面的真实 SSH
-对照。实现现已发布为 tuios-mini **v0.10.17**，Golder 的公开 go.mod 已改为该 tag；kitty-browse
+对照。实现首次发布为 tuios-mini **v0.10.17**；完整 Linux race 复跑发现额外的 popup 退出状态
+发布竞争后追加 **v0.10.18**，再按确认方案修正 VT fuzz 契约检查为 **v0.10.19**。
+Golder 使用这个最新 tag；kitty-browse
 没有新改动，继续使用其最新 tag **v0.2.3**。不提交任何本地 replace 或 go.work 路径。
 
 依赖的完整 root-module race 套件已在 941 秒内通过；此前 4/6 分钟预算不足以完成穷举
@@ -101,3 +103,10 @@ build/vet/tidy/格式，以及 Linux arm64、Windows amd64 交叉构建。Python
 回复等问题。修复与负对照见依赖的
 [CI 取证报告](https://github.com/getan/tuios-mini/blob/v0.10.17/docs/CI_2026_10_28.md)。
 原失败 run 保留供对照，修复提交已重新触发 Fuzz 与包含 race 的 Go unit tests。
+
+追加修复的 [Go unit tests 复跑](https://github.com/getan/tuios-mini/actions/runs/40738061505)
+已全部通过，包括 Linux 完整 race（21 分 25 秒）和 Windows。后续 Fuzz 另发现 VT 子模块
+`FuzzKittyHeader` 对私有 PNG 前缀状态的 nil/空 slice 比较问题，已在 mini 自有测试包修正
+等价检查，保留失败样本和全部有效协议断言，不改独立 VT 库的运行时代码、模块路径或 pin。
+26 个公开控制字段逐项变异保护通过；本地 60 秒 fuzz 通过 526 万次变异。
+详情和验证边界见 [v1.5.18 说明](releases/v1.5.18.md)。

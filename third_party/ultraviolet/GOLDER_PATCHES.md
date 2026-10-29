@@ -12,6 +12,10 @@ Local changes:
 - `input_frame.go`: frame CSI/SS3/X10/OSC/DCS/APC/PM/SOS before event decoding;
   keep incomplete frames across reads and the ordinary Esc timeout; bound
   oversized reports and recover at terminators, new ESC, or interrupt keys.
+  A valid UTF-8 lead byte (0xC2-0xF4) ends a CSI/SS3 frame: those frames are
+  ASCII, so without this a split `ESC [` swallowed every following CJK or emoji
+  character typed through an IME until an ASCII final byte arrived. Invalid
+  bytes (e.g. 0xff) still stay inside the malformed frame and are never typed.
 - `terminal_reader.go`: apply framing, preserve opaque bracketed paste and
   incomplete UTF-8, stop idle retry timers for protocol continuations, deliver
   bytes returned alongside EOF, and respect cancellation while sending events.
@@ -20,7 +24,8 @@ Local changes:
 - `decoder.go`: accept the shorter eight-bit CSI X10 mouse prefix rather than
   indexing it as a six-byte seven-bit report (a fuzz-reproduced panic).
 - Regression tests exercise all split positions, delayed reads, malformed and
-  oversized reports, literal mouse-looking text, paste, and real workspace input.
+  oversized reports, literal mouse-looking text, paste, real workspace input,
+  and CJK/emoji typed immediately after a split CSI or SS3 introducer.
 - `input_observer.go`, `cancelreader_other.go`, `terminal_reader.go`: opt-in,
   metadata-only `SetInputObserver` seam for reader construction, Unix poll/read,
   decode and queue-delivery timing. The default path leaves the original reader

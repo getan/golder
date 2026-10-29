@@ -143,6 +143,19 @@ interactive REPL/TUI.
   sandboxing guide now describe that flow instead of the removed `e` row.
 
 ### Fixed
+- **CJK and emoji input after a split escape prefix** (v1.5.18): the vendored
+  input framer treated every byte after `ESC [` or `ESC O` as frame payload
+  until an ASCII final byte arrived. UTF-8 lead bytes never terminate those
+  ASCII frames, so Chinese typed through an IME was buffered instead of shown.
+  A valid UTF-8 lead byte now ends the frame and decodes as typed text; invalid
+  bytes still stay in the malformed frame, and X10 mouse payloads are unchanged.
+- **Follow-up CI and race-suite repairs** (v1.5.18): pin tuios-mini `v0.10.19`
+  so `new-window --wait` reads a retained exit signal only after publication.
+  The vendored input-reader fixture now tests cancellable polling, transfers
+  results through a channel, and never continues after an unfinished worker.
+  The VT differential fuzz campaign compares public controls rather than
+  private PNG payload-prefix state, retaining its corpus and protocol checks.
+  No production input semantics, VT module path or sandbox permissions change.
 - **Early TUI startup errors restore borrowed kernel terminal state**
   (v1.5.17): independent TUI and visible workspace keep a pre-run termios
   snapshot as a backstop when the framework fails after entering raw mode.
