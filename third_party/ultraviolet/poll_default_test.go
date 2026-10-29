@@ -12,57 +12,67 @@ import (
 func TestReader(t *testing.T) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		t.Errorf("expected no error, but got %s", err)
+		t.Fatal(err)
 	}
 	defer pw.Close()
 	defer pr.Close()
 
-	pollReader, err := newPollReader(pr)
+	first, err := newPollReader(pr)
 	if err != nil {
-		t.Errorf("expected no error, but got %s", err)
+		t.Fatal(err)
 	}
+	defer first.Close()
 
-	// Don't write anything to the pipe yet so the read below blocks and
-	// cannot complete before the cancellation.
-	done := make(chan struct{})
-	var n int
-	go func() {
-		defer close(done)
-		p := make([]byte, 1)
-		n, err = pollReader.Read(p)
-	}()
+	// Native backends cancel Poll, not an underlying syscall Read which
+	// already passed its canceled check. Exercise the same Poll-then-Read
+	// contract as the input loop. No input is written until polling ends.
+	type pollResult struct {
+		ready bool
+		err   error
+	}
+	done := make(chan pollResult, 1)
+	go func(reader pollReader) {
+		ready, err := reader.Poll(-1)
+		done <- pollResult{ready, err}
+	}(first)
 
-	if !pollReader.Cancel() {
-		t.Errorf("expected cancellation to be success")
+	if !first.Cancel() {
+		t.Fatal("expected cancellation to be success")
 	}
 
 	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Errorf("expected cancellation to unblock reader")
+	case got := <-done:
+		if got.ready || got.err != ErrCanceled {
+			t.Fatalf("canceled poll = %t, %v; want false, ErrCanceled", got.ready, got.err)
+		}
+	case <-time.After(time.Second):
+		// Never continue with an unfinished worker: the old test reassigned
+		// its captured reader/n/err here, raced it and lost a byte to it.
+		t.Fatal("expected cancellation to unblock poll")
 	}
-	if n != 0 {
-		t.Errorf("expected 0 bytes read but got %d", n)
-	}
-	if err != ErrCanceled {
-		t.Errorf("expected cancel error but got %s", err)
+	if n, err := first.Read(make([]byte, 1)); n != 0 || err != ErrCanceled {
+		t.Fatalf("read after cancel = %d, %v; want 0, ErrCanceled", n, err)
 	}
 
-	// Test that read is still possible after cancellation.
-	pollReader, err = newPollReader(pr)
+	// A new reader can still use the borrowed pipe after cancellation.
+	reader, err := newPollReader(pr)
 	if err != nil {
-		t.Errorf("expected no error, but got %s", err)
+		t.Fatal(err)
 	}
+	defer reader.Close()
 	msg := "hello"
-	n, err = pw.Write([]byte(msg))
+	n, err := pw.Write([]byte(msg))
 	if n != 5 {
 		t.Errorf("expected 5 bytes written but got %d", n)
 	}
 	if err != nil {
-		t.Errorf("expected no error, but got %s", err)
+		t.Fatal(err)
+	}
+	if ready, err := reader.Poll(time.Second); !ready || err != nil {
+		t.Fatalf("poll after write = %t, %v; want true, nil", ready, err)
 	}
 	p := make([]byte, 5)
-	n, err = pollReader.Read(p)
+	n, err = reader.Read(p)
 	if n != 5 {
 		t.Errorf("expected 5 bytes written but got %d", n)
 	}
