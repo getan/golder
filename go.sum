@@ -108,6 +108,8 @@ github.com/getan/tuios-mini v0.10.27 h1:DvMnXo+QSw28+CYmPsEYNMdxRHtOX6i0389ffezJ
 github.com/getan/tuios-mini v0.10.27/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
 github.com/getan/tuios-mini v0.10.28 h1:hltCsh9gMuTGrRPbGlMbwxkKOwL0hgM9bF2GFMU1Qj8=
 github.com/getan/tuios-mini v0.10.28/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
+github.com/getan/tuios-mini v0.10.29 h1:syAXhyc35H/10fowCmhS1H1Kn0Ad5WIJpM9+Eo5ojAY=
+github.com/getan/tuios-mini v0.10.29/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=
