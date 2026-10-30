@@ -11,6 +11,14 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Fixed
+- **v1.5.35 rolls back the v1.5.34 SSH input regression**: v1.5.34 depended on
+  tuios-mini v0.10.37, which suppressed the Kitty keyboard capability query and
+  left interactive input unreliable over SSH. v1.5.35 depends on tuios-mini
+  v0.10.38, a rollback patch equivalent to v0.10.36 for the affected code.
+  Do not use v1.5.34 or tuios-mini v0.10.37. See
+  [v1.5.35 release notes](docs/releases/v1.5.35.md).
+
 ### Security
 - **Controlled macOS helpers can configure only their own allocated PTY**
   (v1.5.16): the sandbox bootstrap binds terminal ioctls to the child terminal
