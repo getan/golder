@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and community discussion
+    url: https://github.com/getan/golder/discussions
+    about: Ask questions, share workflows, and discuss ideas before implementation.

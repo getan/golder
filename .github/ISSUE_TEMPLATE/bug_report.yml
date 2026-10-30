@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible problem with golder.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, search existing issues. Never include API keys, credentials, private prompts, or session files.
+  - type: input
+    id: version
+    attributes:
+      label: golder version
+      description: Run `golder --version`.
+      placeholder: v1.5.x
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS/version, terminal, and whether this is local or over SSH.
+      placeholder: macOS 15, Ghostty, local
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the exact error text if possible. Remove secrets and private data.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ...
+        2. Enter ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true

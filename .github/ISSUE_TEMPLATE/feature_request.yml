@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a user-facing improvement.
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a substantial proposal, start a discussion first. Focus on the user problem and intended outcome rather than prescribing an implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the workflow and who is affected.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and trade-offs
+      description: What do you use today? What should golder avoid doing?
+    validations:
+      required: false

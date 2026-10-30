@@ -61,9 +61,9 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w -X main.version=${version} -X main.commit=${commit} -X main.date=${date}" \
             -o release/staging/golder ./cmd/golder
-          cp README.md README.en.md LICENSE THIRD_PARTY_LICENSES.md release/staging/
+          cp README.md README.zh-CN.md LICENSE THIRD_PARTY_LICENSES.md release/staging/
           tar -czf "release/golder_${version}_${osname}_${archname}.tar.gz" \
-            -C release/staging golder README.md README.en.md LICENSE THIRD_PARTY_LICENSES.md
+            -C release/staging golder README.md README.zh-CN.md LICENSE THIRD_PARTY_LICENSES.md
           rm -rf release/staging
           ls -l release/
 
