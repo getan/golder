@@ -64,7 +64,7 @@ archives:
           - zip
     files:
       - README.md
-      - README.en.md
+      - README.zh-CN.md
       - LICENSE
       - THIRD_PARTY_LICENSES.md
 
