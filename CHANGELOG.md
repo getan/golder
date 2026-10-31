@@ -12,6 +12,11 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Fixed
+- **A browser pane seeds its first visible page image immediately**: kitty-browse
+  v0.2.5 starts the bounded PNG fallback on the first UI tick when no image has
+  reached the terminal yet. A static page no longer opens as a black pane until
+  the person clicks `Go` or waits for the ordinary idle-page throttle; failed
+  captures still keep the same bounded retry cadence.
 - **v1.5.35 rolls back the v1.5.34 SSH input regression**: v1.5.34 depended on
   tuios-mini v0.10.37, which suppressed the Kitty keyboard capability query and
   left interactive input unreliable over SSH. v1.5.35 depends on tuios-mini
