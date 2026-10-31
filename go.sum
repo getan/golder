@@ -88,8 +88,8 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/getan/kitty-browse v0.2.6 h1:pNXBz3hhyZrB7CnujfD1nrH8ERcmJFNrzSZnZsOVGJY=
 github.com/getan/kitty-browse v0.2.6/go.mod h1:x4ANgv0IEW7v7XGK2UR1Cz42rqRR+nkA1Ngsv12fV/Q=
-github.com/getan/tuios-mini v0.10.38 h1:44q99aetHZr2f1XWw4Yk80uzAqeZSxW0oCiyHN2e6Z0=
-github.com/getan/tuios-mini v0.10.38/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
+github.com/getan/tuios-mini v0.10.39 h1:iCn+H/3pWzaMft6ACjxmRybQKQbxR+iNHHekMenamOs=
+github.com/getan/tuios-mini v0.10.39/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=

@@ -21,6 +21,16 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Git history details open correctly** (v1.5.40): tuios-mini v0.10.39 registers
+  the detail kinds and `ref` parameter used by commit, graph, branch, tag,
+  stash, remote and file-history drawers. Git navigation uses clickable
+  back/close controls and the mouse wheel without displaying shortcut legends.
+- **Workspace popups stay above browser images** (v1.5.40): Git drawers,
+  pane/session/workspace rename dialogs, context menus and other opaque panels
+  share the same image-suppression gate. Browser frames cannot paint through
+  an open popup, and the resident image returns immediately when the last
+  popup closes. Screenshot selection and dock-only key hints keep the picture
+  visible. See [v1.5.40 release notes](docs/releases/v1.5.40.md).
 - **`tuios` now identifies and retains the helpers it creates**: `list` marks
   broker-created panes as `controlled`, so an agent can distinguish them from
   external panes and request `host_control:true` on the first call only when it

@@ -797,7 +797,10 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 	if address == "" {
 		address = "not configured"
 	}
-	picks := []pickItem{{Title: "Proxy address", Detail: address + " · Enter to edit", Value: "url"}}
+	picks := []pickItem{
+		{Title: "Proxy address", Detail: address + " · Enter to edit", Value: "url"},
+		{Heading: true, Title: "Browser pane (Chromium)"},
+	}
 	selected := 0
 	browserMark, browserAction := "[ ] ", " on"
 	if cfg.Browser {
@@ -810,6 +813,7 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 		Title: browserMark + "browser", Value: "browser" + browserAction,
 		Detail: provider.BrowserProxyStatus() + " · Chromium panes · applies on next launch",
 	})
+	picks = append(picks, pickItem{Heading: true, Title: "Providers (chat and model discovery)"})
 	for _, spec := range prompts.ProxyProvidersSelectedFirst(cfg.Providers) {
 		mark, action := "[ ] ", " on"
 		if slices.Contains(cfg.Providers, spec.Name) {
@@ -825,6 +829,7 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 	}
 	m.menu.openPickerDetailed(picks, "", "proxy")
 	m.menu.selected = selected
+	m.menu.pickHint = "↑↓ select · Enter toggle and save · browser applies on the next launch · Esc close"
 	if announce {
 		m.transcript.addSystem("Proxy: ↑↓ + Enter toggles and saves; Esc closes. Provider changes apply to the next request; browser changes to the next browser launch.")
 	}

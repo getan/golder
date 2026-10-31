@@ -238,7 +238,7 @@ golder -m muse-spark-1.3-contributor
 
 代理地址、browser 开关与 provider 选择相互独立。`GOLDER_PROXY` 优先于保存的地址，但不会自动让所有 provider 或 browser 走代理；未选中的路由直接连接，不继承 `HTTP_PROXY` / `HTTPS_PROXY`。provider 开关从下一次请求生效；browser 开关从下一次打开 browser pane 生效，因此切换后要关闭并重开已有 pane。代理地址会作为显式参数交给 Chromium，不从环境继承；browser 路由拒绝带凭据或路径的代理 URL。尚未保存 provider 选择时，仍保留 OpenCode 的历史默认行为：设置地址才走代理。
 
-选择保存在 `~/.golder/proxy.toml`，立即用于后续聊天和模型列表请求，重启后继续有效。例如：
+选择保存在 `~/.golder/proxy.toml`，重启后继续有效。provider 开关从下一次请求生效；browser 开关从下一次打开 browser pane 生效。例如：
 
 ```toml
 url = "http://127.0.0.1:7897"
@@ -484,7 +484,7 @@ golder host-compat uninstall   # 只删 golder 自己写的那份
 | 路径 / 变量 | 用途 |
 |-------------|------|
 | `~/.golder/config.toml` | 全局配置（`provider`/`model` 可用 `/provider default <名称>` 写入） |
-| `~/.golder/proxy.toml` | `/proxy` 保存的代理地址和 provider 选择 |
+| `~/.golder/proxy.toml` | `/proxy` 保存的代理地址、provider 选择和 browser 开关 |
 | `~/.golder/grants.json` | 唯一授权表（信任决定与路径读写授权） |
 | `~/.golder/sessions` | 会话存储（JSONL） |
 | `~/.golder/.credentials.yaml` | 命名的 API Key 凭据（建议 0600 权限） |
