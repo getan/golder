@@ -230,7 +230,7 @@ golder -m muse-spark-1.3-contributor
 
 The proxy address, browser switch and provider selection are independent. `GOLDER_PROXY` overrides the saved address but does not proxy every provider or browser automatically; unchecked routes connect directly and never inherit `HTTP_PROXY` / `HTTPS_PROXY`. Provider changes apply to the next request. Browser changes apply when a browser pane is next opened, so close and reopen an existing pane after toggling it. Browser proxy URLs are passed explicitly to Chromium, never through ambient environment; credentials and URL paths are refused. Until the first explicit provider selection is saved, OpenCode's historical default holds: a configured address routes the OpenCode gateways.
 
-The selection is saved in `~/.golder/proxy.toml`, applies immediately to chat and model-listing requests, and survives restarts:
+The selection is saved in `~/.golder/proxy.toml` and survives restarts. Provider changes apply to the next request; the browser switch applies the next time a browser pane opens:
 
 ```toml
 url = "http://127.0.0.1:7897"
@@ -472,7 +472,7 @@ See `golder --help` for the complete list.
 | Path / variable | Purpose |
 |-----------------|---------|
 | `~/.golder/config.toml` | Global configuration |
-| `~/.golder/proxy.toml` | Proxy address and provider selection saved by `/proxy` |
+| `~/.golder/proxy.toml` | Proxy address, provider selection and browser switch saved by `/proxy` |
 | `~/.golder/sessions` | Session storage (JSONL) |
 | `~/.golder/.credentials.yaml` | Named API-key credentials (0600 recommended) |
 | `~/.agents/skills` | Skills directory (registered as `/commands`; absent means no extension commands) |

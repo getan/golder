@@ -17,6 +17,16 @@ func TestProxyPickerToggleAndAddress(t *testing.T) {
 	if m.menu.pickKind != "proxy" {
 		t.Fatal("proxy picker did not open")
 	}
+	view := m.menu.view(120)
+	for _, want := range []string{
+		"Browser pane (Chromium)",
+		"Providers (chat and model discovery)",
+		"browser applies on the next launch",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("proxy picker missing %q:\n%s", want, view)
+		}
+	}
 	for i, item := range m.menu.pick {
 		if item.Value == "browser on" {
 			m.menu.selected = i
