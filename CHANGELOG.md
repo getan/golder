@@ -11,6 +11,15 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Added
+- **Explicit proxy routing for browser panes**: `/proxy browser on|off` shares
+  the saved `/proxy url` address with Chromium while remaining independent of
+  provider selection. The interactive picker exposes the browser row; changes
+  apply on the next browser launch. kitty-browse v0.2.6 adds the explicit
+  `-proxy-server` flag, normalizes HTTP(S)/SOCKS5 addresses and refuses browser
+  proxy credentials or URL paths instead of leaking them through argv. Ambient
+  `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
+
 ### Fixed
 - **`tuios` now identifies and retains the helpers it creates**: `list` marks
   broker-created panes as `controlled`, so an agent can distinguish them from

@@ -107,6 +107,18 @@ func controlledBrowserSpec(g *ControlGuard, cwd, name, url string) (paneSpec, er
 	if err != nil {
 		return paneSpec{}, err
 	}
+	if g.BrowserProxy != nil {
+		proxy, err := g.BrowserProxy()
+		if err != nil {
+			return paneSpec{}, err
+		}
+		if proxy != "" {
+			last := len(spec.Argv) - 1 // the single positional URL is always last
+			argv := append([]string{}, spec.Argv[:last]...)
+			argv = append(argv, "-proxy-server", proxy, spec.Argv[last])
+			spec.Argv = argv
+		}
+	}
 	spec.Profile = browserProfileDir(cwd, profileName)
 	spec.Name = name
 	if spec.Embedded {

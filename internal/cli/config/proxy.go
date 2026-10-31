@@ -14,6 +14,7 @@ import (
 // legacy routing; an explicit empty list means no providers use the proxy.
 type ProxyConfig struct {
 	URL       string   `toml:"url"`
+	Browser   bool     `toml:"browser"`
 	Providers []string `toml:"providers"`
 }
 
@@ -48,9 +49,6 @@ func SaveProxyConfig(cfg ProxyConfig) error {
 	path := ProxyConfigPath()
 	if path == "" {
 		return fmt.Errorf("cannot locate proxy settings directory")
-	}
-	if cfg.Providers == nil {
-		cfg.Providers = []string{}
 	}
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {

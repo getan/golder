@@ -94,7 +94,7 @@ func (t *BrowserTool) Description() string {
 				browserToolUseHint
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse an owned instance or start a controlled browser with a fresh profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. External control requires host_control:true and one-call authorization." +
+			"Or call open with a URL to reuse an owned instance or start a controlled browser with a fresh profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. Ambient proxy variables are ignored; the person's saved /proxy browser setting is applied on launch. External control requires host_control:true and one-call authorization." +
 			browserToolUseHint
 	}
 	if t.allowControl {

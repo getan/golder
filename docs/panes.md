@@ -58,6 +58,13 @@ The schema then grows from `open`/`list`/`attach` to the full action set. Callin
 again while a browser is running returns the existing socket with
 `started: false`.
 
+Browser processes never inherit ambient `HTTP_PROXY` / `HTTPS_PROXY`. The person
+can save one explicit address with `/proxy url <url>` and opt browser panes in
+with `/proxy browser on`; the picker exposes the same switch. It is passed as
+kitty-browse's `-proxy-server` argument on the next launch, independently of
+provider routing. Close and reopen an existing pane after changing it. Browser
+proxy credentials and URL paths are refused so they never enter argv.
+
 Outside a tuios pane there is nowhere to draw a browser, so `open` says that
 instead of launching something that cannot render. A browser started elsewhere
 is still reachable: point `KITTY_BROWSE_SOCKET` at its socket.

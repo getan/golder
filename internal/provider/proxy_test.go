@@ -165,6 +165,35 @@ func TestProxyURLPrecedenceAndDisplay(t *testing.T) {
 	}
 }
 
+func TestBrowserProxyServerIsExplicitAndCredentialFree(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "")
+	if err := config.SaveProxyConfig(config.ProxyConfig{
+		URL: "socks5h://127.0.0.1:7897", Browser: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := BrowserProxyServer(); err != nil || got != "socks5://127.0.0.1:7897" {
+		t.Fatalf("BrowserProxyServer = %q, %v", got, err)
+	}
+	if got := BrowserProxyStatus(); got != "proxy on next launch" {
+		t.Fatalf("BrowserProxyStatus = %q", got)
+	}
+
+	t.Setenv("GOLDER_PROXY", "http://user:secret@127.0.0.1:7897")
+	if got, err := BrowserProxyServer(); err == nil || got != "" || !strings.Contains(err.Error(), "credentials") {
+		t.Fatalf("authenticated browser proxy = %q, %v", got, err)
+	}
+
+	t.Setenv("GOLDER_PROXY", "")
+	if err := config.SaveProxyConfig(config.ProxyConfig{URL: "http://127.0.0.1:7897"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := BrowserProxyServer(); err != nil || got != "" {
+		t.Fatalf("disabled browser proxy = %q, %v", got, err)
+	}
+}
+
 func TestSpecialProvidersKeepRoutingIdentityAndBaseURLEnv(t *testing.T) {
 	params := map[string]string{
 		"AZURE_OPENAI_API_KEY": "test-key", "AWS_BEARER_TOKEN_BEDROCK": "test-key",

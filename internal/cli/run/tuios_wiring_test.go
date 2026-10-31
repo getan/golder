@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 )
 
 func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
@@ -86,5 +87,8 @@ func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
 	}
 	if schema := string(browser.Schema()); !strings.Contains(schema, `["open","list","attach"]`) {
 		t.Errorf("browser schema = %s, want open/list/attach before selection", schema)
+	}
+	if tool, ok := browser.(*agenttool.BrowserTool); !ok || tool.Control.BrowserProxy == nil {
+		t.Fatal("browser tool was not wired to the live /proxy browser setting")
 	}
 }

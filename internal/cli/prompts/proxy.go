@@ -69,15 +69,15 @@ func ProxyProvidersSelectedFirst(selected []string) []provider.ProviderSpec {
 // what the reader got wrong. Declared together so the two spellings of the
 // provider form cannot drift.
 const (
-	proxyProviderGrammar = "<provider> on|off"
+	proxyTargetGrammar = "<provider>|browser on|off"
 )
 
 func registerProxyCommand(reg *runtime.SlashRegistry) {
 	reg.AddBuiltin(runtime.SlashCommand{
 		Name:         "proxy",
 		Category:     runtime.CategoryModel,
-		Description:  "choose which providers use the proxy",
-		ArgumentHint: "[<provider> on|off | url <url>]",
+		Description:  "choose which providers and browser panes use the proxy",
+		ArgumentHint: "[<provider>|browser on|off | url <url>]",
 		Action: func(args string) string {
 			cfg, err := provider.ProxySettings()
 			if err != nil {
@@ -91,6 +91,11 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 				}
 				var b strings.Builder
 				fmt.Fprintf(&b, "proxy address: %s\n", address)
+				browserMark := " "
+				if cfg.Browser {
+					browserMark = "x"
+				}
+				fmt.Fprintf(&b, "\n[%s] browser (Chromium; applies on next launch)", browserMark)
 				for _, spec := range ProxyProvidersSelectedFirst(cfg.Providers) {
 					mark := " "
 					if slices.Contains(cfg.Providers, spec.Name) {
@@ -98,7 +103,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 					}
 					fmt.Fprintf(&b, "\n[%s] %s", mark, spec.Name)
 				}
-				fmt.Fprintf(&b, "\n\n/proxy <provider> on|off · /proxy url <url>\nSaved in %s; applies to chat and model discovery. GOLDER_PROXY overrides the saved address.", config.ProxyConfigPath())
+				fmt.Fprintf(&b, "\n\n/proxy <provider>|browser on|off · /proxy url <url>\nSaved in %s; providers apply on the next request, browser routing on the next browser launch. GOLDER_PROXY overrides the saved address.", config.ProxyConfigPath())
 				return b.String()
 			}
 			if len(fields) != 2 {
@@ -114,10 +119,29 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 				if strings.Contains(fields[1], "@") {
 					return "proxy: use GOLDER_PROXY for an authenticated proxy URL"
 				}
-				cfg.URL = fields[1]
+				saved, err := config.LoadProxyConfig()
+				if err != nil {
+					return "proxy: " + err.Error()
+				}
+				saved.URL = fields[1]
+				cfg = saved // changing the address must not select or clear routes
 				message = "proxy address saved: " + provider.DisplayURL(cfg.URL)
 				if strings.TrimSpace(os.Getenv("GOLDER_PROXY")) != "" {
 					message += " (GOLDER_PROXY currently overrides this address)"
+				}
+			} else if fields[0] == "browser" {
+				if fields[1] != "on" && fields[1] != "off" {
+					return usageLineFor("proxy", proxyTargetGrammar, false)
+				}
+				saved, err := config.LoadProxyConfig()
+				if err != nil {
+					return "proxy: " + err.Error()
+				}
+				saved.Browser = fields[1] == "on"
+				cfg = saved // browser and provider selections are independent
+				message = "proxy: browser " + fields[1]
+				if cfg.Browser && provider.ProxyURL() == "" {
+					message += "; set an address with /proxy url http://127.0.0.1:7897"
 				}
 			} else {
 				spec, ok := provider.LookupProviderSpec(fields[0])
@@ -125,7 +149,7 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 					return fmt.Sprintf("proxy: unknown provider %q", fields[0])
 				}
 				if fields[1] != "on" && fields[1] != "off" {
-					return usageLineFor("proxy", proxyProviderGrammar, false)
+					return usageLineFor("proxy", proxyTargetGrammar, false)
 				}
 				cfg.Providers = slices.DeleteFunc(cfg.Providers, func(name string) bool { return name == spec.Name })
 				if fields[1] == "on" {
@@ -138,6 +162,9 @@ func registerProxyCommand(reg *runtime.SlashRegistry) {
 			}
 			if err := config.SaveProxyConfig(cfg); err != nil {
 				return "proxy: " + err.Error()
+			}
+			if fields[0] == "browser" {
+				return message + "\nSaved; close and reopen existing browser panes to apply."
 			}
 			return message + "\nSaved; applies to the next request."
 		},

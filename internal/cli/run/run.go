@@ -396,6 +396,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	// Grade bash at the execution layer (sandbox-tier verdicts run under
 	// sandbox-exec) alongside the BeforeToolCall gate each driver installs.
 	control := agenttool.NewControlGuard(cwd)
+	control.BrowserProxy = provider.BrowserProxyServer
 	for _, tool := range tools {
 		switch t := tool.(type) {
 		case *agenttool.TuiosTool:

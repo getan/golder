@@ -18,7 +18,7 @@ func TestProxyPickerToggleAndAddress(t *testing.T) {
 		t.Fatal("proxy picker did not open")
 	}
 	for i, item := range m.menu.pick {
-		if item.Value == "openai on" {
+		if item.Value == "browser on" {
 			m.menu.selected = i
 			break
 		}
@@ -26,6 +26,21 @@ func TestProxyPickerToggleAndAddress(t *testing.T) {
 	got, _ = m.submitSlashSelected()
 	m = got.(Model)
 	cfg, err := config.LoadProxyConfig()
+	if err != nil || !cfg.Browser {
+		t.Fatalf("browser proxy selection not persisted: %v", err)
+	}
+	if m.menu.pickKind != "proxy" || m.menu.pick[m.menu.selected].Value != "browser off" {
+		t.Fatal("browser row should stay selected and switch to off")
+	}
+	for i, item := range m.menu.pick {
+		if item.Value == "openai on" {
+			m.menu.selected = i
+			break
+		}
+	}
+	got, _ = m.submitSlashSelected()
+	m = got.(Model)
+	cfg, err = config.LoadProxyConfig()
 	if err != nil || !slices.Contains(cfg.Providers, "openai") {
 		t.Fatalf("selection not persisted: %v", err)
 	}

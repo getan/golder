@@ -799,6 +799,17 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 	}
 	picks := []pickItem{{Title: "Proxy address", Detail: address + " · Enter to edit", Value: "url"}}
 	selected := 0
+	browserMark, browserAction := "[ ] ", " on"
+	if cfg.Browser {
+		browserMark, browserAction = "[x] ", " off"
+	}
+	if focus == "browser" {
+		selected = len(picks)
+	}
+	picks = append(picks, pickItem{
+		Title: browserMark + "browser", Value: "browser" + browserAction,
+		Detail: provider.BrowserProxyStatus() + " · Chromium panes · applies on next launch",
+	})
 	for _, spec := range prompts.ProxyProvidersSelectedFirst(cfg.Providers) {
 		mark, action := "[ ] ", " on"
 		if slices.Contains(cfg.Providers, spec.Name) {
@@ -815,7 +826,7 @@ func (m Model) reopenProxyPicker(focus string, announce bool) (tea.Model, tea.Cm
 	m.menu.openPickerDetailed(picks, "", "proxy")
 	m.menu.selected = selected
 	if announce {
-		m.transcript.addSystem("Proxy: ↑↓ + Enter toggles and saves; Esc closes. Unchecked providers connect directly.")
+		m.transcript.addSystem("Proxy: ↑↓ + Enter toggles and saves; Esc closes. Provider changes apply to the next request; browser changes to the next browser launch.")
 	}
 	m.relayout()
 	return m, nil

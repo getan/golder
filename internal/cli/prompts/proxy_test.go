@@ -20,14 +20,14 @@ func TestProxyCommandPersistsSelection(t *testing.T) {
 	t.Setenv("GOLDER_PROXY", "")
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, &cli.LiveConfig{}, nil)
-	for _, command := range []string{"/proxy url http://127.0.0.1:7897", "/proxy openai on", "/proxy opencode off"} {
+	for _, command := range []string{"/proxy url http://127.0.0.1:7897", "/proxy browser on", "/proxy openai on", "/proxy opencode off"} {
 		out, err := reg.ResolveOutcome(command)
 		if err != nil || !strings.Contains(out.Message, "Saved") {
 			t.Fatalf("%s: %v %s", command, err, out.Message)
 		}
 	}
 	cfg, err := config.LoadProxyConfig()
-	if err != nil || cfg.URL != "http://127.0.0.1:7897" ||
+	if err != nil || cfg.URL != "http://127.0.0.1:7897" || !cfg.Browser ||
 		!slices.Contains(cfg.Providers, "openai") || slices.Contains(cfg.Providers, "opencode-zen") {
 		t.Fatalf("saved selection incorrect: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestProxyCommandPersistsSelection(t *testing.T) {
 		t.Fatal("proxy file must have private permissions")
 	}
 	before, _ := os.ReadFile(config.ProxyConfigPath())
-	for _, command := range []string{"/proxy openai maybe", "/proxy unknown on", "/proxy url invalid"} {
+	for _, command := range []string{"/proxy openai maybe", "/proxy browser maybe", "/proxy unknown on", "/proxy url invalid"} {
 		reg.ResolveOutcome(command)
 		after, _ := os.ReadFile(config.ProxyConfigPath())
 		if string(before) != string(after) {
@@ -44,8 +44,29 @@ func TestProxyCommandPersistsSelection(t *testing.T) {
 		}
 	}
 	out, _ := reg.ResolveOutcome("/proxy")
-	if !strings.Contains(out.Message, "[x] openai") || !strings.Contains(out.Message, "[ ] deepseek") {
+	if !strings.Contains(out.Message, "[x] browser") || !strings.Contains(out.Message, "[x] openai") || !strings.Contains(out.Message, "[ ] deepseek") {
 		t.Fatal("listing does not reflect saved selections")
+	}
+}
+
+func TestProxyAddressAndBrowserPreserveLegacyProviderSelection(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "")
+	reg := runtime.NewSlashRegistry()
+	RegisterLiveCommands(reg, &cli.LiveConfig{}, nil)
+	for _, command := range []string{"/proxy browser on", "/proxy url http://127.0.0.1:7897"} {
+		out, err := reg.ResolveOutcome(command)
+		if err != nil || !strings.Contains(out.Message, "Saved") {
+			t.Fatalf("%s: %v %s", command, err, out.Message)
+		}
+	}
+	raw, err := config.LoadProxyConfig()
+	if err != nil || !raw.Browser || raw.URL != "http://127.0.0.1:7897" || raw.Providers != nil {
+		t.Fatalf("address/browser changed provider selection: cfg=%+v err=%v", raw, err)
+	}
+	settings, err := provider.ProxySettings()
+	if err != nil || len(settings.Providers) == 0 {
+		t.Fatalf("legacy ForceProxy defaults were not retained: cfg=%+v err=%v", settings, err)
 	}
 }
 

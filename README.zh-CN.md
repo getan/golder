@@ -135,7 +135,7 @@ workspace daemon（后台常驻，拥有 pane）
 - **审批与沙箱**：四档权限模式（只读 / 每次询问 / 自动审批 / 完全放行）；**获准执行的 `bash` 调用一律在沙箱内跑**（macOS 用 `sandbox-exec`，Linux 用 `bubblewrap`，需已安装），与命令内容无关——原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）也由一次性沙箱 worker 执行。沙箱走**白名单**：可读仅限项目 + 系统运行时 + 两个 git 配置（`~/.gitconfig`、`~/.config/git/*`），`$HOME` 其余内容（shell rc、SSH/GPG 密钥、`~/.config/*`、凭据、历史）一律读不到；写默认限项目、临时目录与显式授权的写根；**网络默认关闭，且按次授权**——需要联网的调用声明 `network:"on"`，授权门在同一次审批里决定（批了仍在文件沙箱内，不必脱离沙箱）。**路径授权可在弹窗里一键记住**：读授权按 `a`（本会话）/`s`（记住）；写确认弹窗（`apply_patch` 写工作区外）按 `y`/`a`/`s`；越界申请与重准入弹窗里的写行是 `w`（本会话）/`s`（记住）。记住档直接写入 `~/.golder/grants.json`。同一份文件可用 `/boundary readable|writable list|add|rm` 查看与维护，无法编辑文件的机器（脚本、容器）用 `GOLDER_READABLE_ROOTS` 环境变量。工具链在 `$HOME` 内时用 `GOLDER_SANDBOX_READABLE` 追加读白名单。确实需要**文件**访问而沙箱挡不住时，模型可申请 `require_escalated`——这只是**同一次评审**里的又一个能力问题，不是第二轮审批：**`auto` 下档位就是全部答案**——`allow`/`confirm` 直接在沙箱外跑并播报，`contain` 收容，`deny` 不跑；`ask` 下弹窗把 `run outside the sandbox` 与其他能力一起列给你，`y`/`a`/`s` 即批准；`enforce` 永远收容，没人可问则收容或失败关闭。**命令被沙箱拒绝时**：只要输出或理由点得出路径，`auto` 由评审自动决定是否补授（不弹窗），`ask` 弹一次路径授权，批准后原命令在沙箱内自动重跑。
 - **长任务支持**：`/compact` 上下文压缩、上下文预算工具、`/goal` 自主目标循环、`/btw` 侧线问答、子 Agent 派发、持久记忆与 `/dream` 记忆整理。
 - **工作区外读取需确认**：读取类工具（`read` / `grep` / `find` / `ls` / `view_image`，以及 `bash` 命令里能识别出的文件操作数）默认只读工作区，越界会先问你——弹窗可选「只读这一次」「本会话允许读该目录」或「记住（跨会话，写入 `grants.json`）」；没有可问的人时失败关闭，并在消息里给出路径与配置办法；TUI/REPL 里的子 agent 会把问题送进同一个弹窗，标题标出 `(from task)` 之类的来源——人就坐在那儿看着，唯一真正问不到人的是 headless 与进程隔离的子 agent。这一步**不受权限模式影响**（完全放行关掉的是审查与沙箱，不是知情同意）。常用目录可预授权：`GOLDER_READABLE_ROOTS` 环境变量，或 `/boundary readable add <路径>`（写入 `grants.json`，重启后仍生效；同时放宽沙箱读白名单）；凭据路径（`~/.ssh`、`~/.zshrc` 等）永远不可授权。
-- **按 Provider 的代理路由**：`/proxy` 单独选择哪些 provider 走代理，互不影响；未选中的 provider 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
+- **选择性代理路由**：`/proxy` 可分别选择 provider，并用 `browser on` 控制 Chromium pane；未选中的 provider 和 browser 直连，且不继承 shell 的 `HTTP_PROXY` / `HTTPS_PROXY`。
 - **技能与模板**：`~/.agents/skills` 下的技能注册为 `/命令`（无内置技能，目录不存在时零命令）；提示词模板、项目级 `AGENTS.md` 自动装载。
 - **在 tuios / herdr 里就是一个 agent**：跑在 [tuios](https://github.com/Gaurav-Gosain/tuios) 窗口或 [herdr](https://github.com/herdrdev/herdr) pane 里时，golder 自己上报状态，于是它出现在 rail/sidebar 上（working / 等待你 / 空闲 / 完成），审批与提问进 Inbox，daemon 重启后会带着 `golder --resume <会话>` 回到原会话。**两个宿主都不用改、也都不用装**：tuios 需要一份 harness manifest，`golder host-compat install` 写进 `~/.config/tuios/harnesses/`；herdr 什么也不需要，自报即识别。在 tuios 的 Inbox 里可以直接按键替你批准/拒绝——那条路依赖 manifest 里的屏幕规则，所以**改了审批弹窗的文案要同步改那份 manifest**（见 `internal/hostcompat/README.md`）。`golder host-compat status` 说明当前宿主与缺什么；`GOLDER_HOST_REPORT=off` 一键关闭上报。
 
@@ -226,21 +226,23 @@ golder -m muse-spark-1.3-contributor
 
 ### 代理路由（/proxy）
 
-`/proxy` 打开代理选择器：方向键选择 provider，Enter 开关并自动保存，Esc 退出。也可以直接输入：
+`/proxy` 打开代理选择器：方向键选择 provider 或 `browser`，Enter 开关并自动保存，Esc 退出。也可以直接输入：
 
 ```text
 /proxy url http://127.0.0.1:7897
+/proxy browser on
 /proxy openai on
 /proxy anthropic on
 /proxy deepseek off
 ```
 
-代理地址与 provider 选择相互独立。`GOLDER_PROXY` 优先于保存的地址，但不会让所有 provider 走代理；未选中的 provider 直接连接，不继承 `HTTP_PROXY` / `HTTPS_PROXY`。显式启用代理却未设置地址时，会提示配置地址。尚未保存选择时保留 OpenCode 的历史默认行为：设置地址才走代理。
+代理地址、browser 开关与 provider 选择相互独立。`GOLDER_PROXY` 优先于保存的地址，但不会自动让所有 provider 或 browser 走代理；未选中的路由直接连接，不继承 `HTTP_PROXY` / `HTTPS_PROXY`。provider 开关从下一次请求生效；browser 开关从下一次打开 browser pane 生效，因此切换后要关闭并重开已有 pane。代理地址会作为显式参数交给 Chromium，不从环境继承；browser 路由拒绝带凭据或路径的代理 URL。尚未保存 provider 选择时，仍保留 OpenCode 的历史默认行为：设置地址才走代理。
 
 选择保存在 `~/.golder/proxy.toml`，立即用于后续聊天和模型列表请求，重启后继续有效。例如：
 
 ```toml
 url = "http://127.0.0.1:7897"
+browser = true
 providers = ["openai", "anthropic"]
 ```
 

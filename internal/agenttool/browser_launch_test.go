@@ -240,6 +240,23 @@ func TestEmbeddedBrowserPaneSpecUsesOwnBrowseArgvWithEmptyPath(t *testing.T) {
 	}
 }
 
+func TestControlledBrowserPaneCarriesExplicitProxyFlag(t *testing.T) {
+	self := selfExecutable(t)
+	withEmbeddedBrowser(t, self)
+	root := shortRoot(t)
+	guard := NewControlGuard(root)
+	guard.BrowserProxy = func() (string, error) { return "http://127.0.0.1:7897", nil }
+
+	spec, err := controlledBrowserSpec(guard, root, "browser", "https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTail := []string{"-proxy-server", "http://127.0.0.1:7897", "https://example.com"}
+	if len(spec.Argv) < len(wantTail) || !slices.Equal(spec.Argv[len(spec.Argv)-len(wantTail):], wantTail) {
+		t.Fatalf("browser argv = %q, want tail %q", spec.Argv, wantTail)
+	}
+}
+
 // Registration asks "can a browser be started here". With the built-in pane
 // configured that is true even when kitty-browse is nowhere on PATH.
 func TestBrowserToolRegistrationWorksWithoutKittyBrowse(t *testing.T) {

@@ -25,9 +25,12 @@ import (
 // ControlGuard is session-local authority, shared only by the three broker
 // tools in one registry. Repository metadata and pane titles cannot grant it.
 type ControlGuard struct {
-	Root           string
-	Mode           *permissions.State
-	Runner         seatbelt.CallRunner
+	Root   string
+	Mode   *permissions.State
+	Runner seatbelt.CallRunner
+	// BrowserProxy resolves the person's explicit browser route at launch time.
+	// It is wired by the CLI assembly layer; nil keeps library/tests direct.
+	BrowserProxy   func() (string, error)
 	mu             sync.Mutex
 	launchMu       sync.Mutex
 	panes          map[string]controlledPane

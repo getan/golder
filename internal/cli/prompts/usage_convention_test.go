@@ -92,7 +92,7 @@ func TestBuiltinHintsAreUsageShape(t *testing.T) {
 // its arguments). Commands absent from this map are pinned as argument-less.
 func TestBuiltinUsageInventory(t *testing.T) {
 	want := map[string]string{
-		"proxy":          "[<provider> on|off | url <url>]",
+		"proxy":          "[<provider>|browser on|off | url <url>]",
 		"model":          "[n|id [level]|think level|default [id|think level]]",
 		"provider":       "[name | default [name|off]]",
 		"permissions":    "[list | read-only|ask|auto|full-access]",
@@ -241,12 +241,12 @@ func TestSubcommandVerbsAreAccepted(t *testing.T) {
 			t.Errorf("/boundary hint %q no longer names %q", bd.ArgumentHint, verb)
 		}
 	}
-	// /proxy's provider form: both verbs, and the address form, are accepted.
+	// /proxy's provider/browser forms, both verbs, and the address form are accepted.
 	proxy, ok := reg.Lookup("proxy")
 	if !ok {
 		t.Fatal("/proxy not registered")
 	}
-	for _, arg := range []string{"url http://127.0.0.1:9", "openai on", "openai off"} {
+	for _, arg := range []string{"url http://127.0.0.1:9", "browser on", "browser off", "openai on", "openai off"} {
 		if msg := proxy.Action(arg); strings.Contains(msg, "usage:") {
 			t.Errorf("/proxy %s was answered with usage:\n%s", arg, msg)
 		}

@@ -46,6 +46,53 @@ func ProxyURL() string {
 	return effectiveProxyURL(cfg)
 }
 
+// BrowserProxyServer returns the explicit Chromium proxy when the person
+// enabled browser routing with /proxy browser on. Unlike provider transports,
+// Chromium receives the address in argv: credentials and URL paths are refused
+// so they cannot leak through process listings or become ambiguous flags.
+func BrowserProxyServer() (string, error) {
+	cfg, err := ProxySettings()
+	if err != nil {
+		return "", err
+	}
+	if !cfg.Browser {
+		return "", nil
+	}
+	raw := effectiveProxyURL(cfg)
+	if raw == "" {
+		return "", fmt.Errorf("browser proxy is on but no address is configured; use /proxy url <url> or /proxy browser off")
+	}
+	if err := ValidateProxyURL(raw); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(raw)
+	if u.User != nil {
+		return "", fmt.Errorf("browser proxy cannot include credentials; use an unauthenticated local proxy")
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", fmt.Errorf("browser proxy URL must not contain a path")
+	}
+	if strings.EqualFold(u.Scheme, "socks5h") {
+		u.Scheme = "socks5"
+	}
+	u.Path, u.RawPath, u.RawQuery, u.Fragment = "", "", "", ""
+	return u.String(), nil
+}
+
+func BrowserProxyStatus() string {
+	cfg, err := ProxySettings()
+	if err != nil {
+		return "proxy: settings error"
+	}
+	if !cfg.Browser {
+		return "direct"
+	}
+	if _, err := BrowserProxyServer(); err != nil {
+		return "proxy selected; check /proxy url"
+	}
+	return "proxy on next launch"
+}
+
 // HTTPClientFor returns the client a request to name/baseURL should use: the
 // user's proxy when this provider is selected for proxying, a direct client
 // otherwise. It exists so a caller outside this package — the decision-model
