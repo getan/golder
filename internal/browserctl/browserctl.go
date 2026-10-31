@@ -127,6 +127,7 @@ type Capability struct {
 type Info struct {
 	APIVersion   string       `json:"apiVersion"`
 	BrowserID    string       `json:"browserId"`
+	LoginProfile string       `json:"loginProfile,omitempty"`
 	ActiveTabID  string       `json:"activeTabId"`
 	Backend      string       `json:"backend"`
 	Tabs         []Tab        `json:"tabs"`

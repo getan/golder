@@ -85,7 +85,7 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 		return r.Action == "list" || r.Action == "snapshot"
 	case "browser":
 		switch r.Action {
-		case "list", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network":
+		case "list", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "status":
 			return true
 		}
 	}
@@ -102,7 +102,7 @@ func Network(tool string, raw json.RawMessage) bool {
 	}
 	if tool == "browser" {
 		switch r.Action {
-		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot":
+		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "status", "pause", "resume":
 			return false
 		default:
 			return true // page input can submit forms and trigger requests

@@ -40,6 +40,8 @@ func TestBrowserManualInputPTY(t *testing.T) {
 <input id="plain" style="position:absolute;left:20px;top:20px;width:300px;height:60px">
 <div id="host" style="position:absolute;left:20px;top:120px"></div>
 <output id="result" style="position:absolute;top:250px"></output>
+<button id="toggle" style="position:absolute;left:20px;top:220px;width:300px;height:60px" onclick="const g=document.querySelector('#gate');g.hidden=!g.hidden">toggle fixture verification</button>
+<div id="gate" role="dialog" hidden style="position:absolute;left:20px;top:330px">操作过快，请慢一点[5014][502]</div>
 <script>
 document.querySelector('#host').attachShadow({mode:'open'}).innerHTML =
   '<input style="width:300px;height:60px">';
@@ -146,6 +148,64 @@ document.addEventListener('input', e => {
 			assertResult(t, strings.TrimSuffix(tc.text, "文"))
 		})
 	}
+	t.Run("manual-verification-and-resume", func(t *testing.T) {
+		waitPaused := func(want bool) {
+			t.Helper()
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				raw, _, err := c.Action(ctx, "interaction.status", map[string]any{}, browserctl.Target{}, time.Second)
+				var state struct {
+					Paused bool `json:"paused"`
+				}
+				if err == nil && json.Unmarshal(raw, &state) == nil && state.Paused == want {
+					return
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("pause state did not become %v: %v", want, err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		}
+		clickToggle := func() {
+			t.Helper()
+			if _, err := io.WriteString(terminal, "\x1b[<0;9;15M\x1b[<0;9;15m"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		blocked := func() {
+			t.Helper()
+			_, _, err := c.Action(ctx, "focus", map[string]any{"selector": "#plain"}, browserctl.Target{}, time.Second)
+			if err == nil || !strings.Contains(err.Error(), "browser_paused") {
+				t.Fatalf("automatic page action was not paused: %v", err)
+			}
+		}
+		clickToggle()
+		waitPaused(true)
+		blocked()
+		// Manual pointer input still works while automatic actions are paused.
+		clickToggle()
+		// Wait until the actual page says the manually hidden dialog is hidden.
+		deadline := time.Now().Add(3 * time.Second)
+		for {
+			raw, _, err := c.Action(ctx, "is", map[string]any{"kind": "visible", "selector": "#gate"}, browserctl.Target{}, time.Second)
+			if err == nil && string(raw) == "false" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("manual input could not dismiss the fixture challenge")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		waitPaused(true)
+		blocked()
+		if _, err := terminal.Write([]byte{0x07}); err != nil {
+			t.Fatal(err)
+		}
+		waitPaused(false)
+		if _, _, err := c.Action(ctx, "focus", map[string]any{"selector": "#plain"}, browserctl.Target{}, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	})
 	if err := c.Quit(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -23,6 +23,9 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 	if err := controlcap.BrowserURL(a.URL); err != nil {
 		return nil, err
 	}
+	if a.Profile != "" && (a.Action != "open" || !browserProfileName.MatchString(a.Profile)) {
+		return nil, errors.New("profile is a validated name supported only by open")
+	}
 	if a.Action == "open" {
 		if a.NewInstance {
 			a.Browser = ""
@@ -34,9 +37,13 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 				continue
 			}
 			t.Control.mu.Lock()
-			_, owned := t.Control.browsers[instance.Info.BrowserID]
+			ownedBrowser, owned := t.Control.browsers[instance.Info.BrowserID]
 			t.Control.mu.Unlock()
-			if owned || a.HostControl || t.Control.full() {
+			profileMatch := a.Profile != "" && instance.Info.LoginProfile == browserProjectKey(t.cwd)+"/"+a.Profile
+			if a.Profile != "" && !profileMatch && (!owned || ownedBrowser.profile != a.Profile) {
+				continue
+			}
+			if owned || profileMatch || a.HostControl || t.Control.full() {
 				candidates = append(candidates, instance)
 			}
 		}
@@ -93,17 +100,24 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 }
 
 func controlledBrowserSpec(g *ControlGuard, cwd, name, url string) (paneSpec, error) {
+	return controlledBrowserSpecWithProfile(g, cwd, name, url, "")
+}
+
+func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persistent string) (paneSpec, error) {
 	if err := controlcap.BrowserURL(url); err != nil {
 		return paneSpec{}, err
 	}
 	if g == nil {
 		return paneSpec{}, errors.New("browser control policy is not configured")
 	}
+	if persistent != "" && !g.profileAllowed(persistent) {
+		return paneSpec{}, errors.New("saved browser logins have not been authorized for this agent session")
+	}
 	profileName := name
-	if !g.full() {
+	if !g.full() || persistent != "" {
 		profileName += "-" + g.id + "-" + rand.Text()[:8]
 	}
-	spec, err := browserPaneSpecFor(cwd, name, profileName, url)
+	spec, err := browserPaneSpecWithProfile(cwd, name, profileName, url, persistent)
 	if err != nil {
 		return paneSpec{}, err
 	}
@@ -119,7 +133,6 @@ func controlledBrowserSpec(g *ControlGuard, cwd, name, url string) (paneSpec, er
 			spec.Argv = argv
 		}
 	}
-	spec.Profile = browserProfileDir(cwd, profileName)
 	spec.Name = name
 	if spec.Embedded {
 		spec.StartupReport = filepath.Join(spec.Profile, ".startup-"+rand.Text()[:12]+".json")
