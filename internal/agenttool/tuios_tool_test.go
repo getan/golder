@@ -132,6 +132,11 @@ func (f *tuiosFake) result(verb string, params map[string]any) any {
 		return map[string]any{"type": "resized", "width": 100, "height": 40}
 	case "set-window":
 		return map[string]any{"type": "window_set", "window_id": "w2", "display_name": "api", "minimized": false}
+	case "new-window":
+		return map[string]any{
+			"type": "window_created", "window_id": "created", "name": "created",
+			"keep_open": params["keep_open"],
+		}
 	case "close-window", "focus-window":
 		return map[string]any{"type": "ok"}
 	}
@@ -226,6 +231,41 @@ func TestTuiosListCoversExistingPanes(t *testing.T) {
 	text := agentcore.ContentToText(res.Content)
 	if !strings.Contains(text, "w2") || !strings.Contains(text, "build") {
 		t.Fatalf("list = %s, want the existing non-golder pane", text)
+	}
+}
+
+func TestTuiosNewKeepsArgvPaneForFailureInspection(t *testing.T) {
+	f, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := NewTuiosTool(t.TempDir(), true)
+	trustFakeControl(tool.Control)
+
+	res, err := tool.Execute(context.Background(), "1",
+		json.RawMessage(`{"action":"new","argv":["false"],"focus":false}`), nil)
+	if err != nil || res.IsError {
+		t.Fatalf("new failed: %v %s", err, agentcore.ContentToText(res.Content))
+	}
+	f.mu.Lock()
+	params := append([]map[string]any(nil), f.params...)
+	f.mu.Unlock()
+	var create map[string]any
+	for i, verb := range f.verbs {
+		if verb == "new-window" {
+			create = params[i]
+			break
+		}
+	}
+	if create == nil || create["keep_open"] != true || create["close_on_exit"] != nil {
+		t.Fatalf("new-window params = %#v, want keep_open alone", create)
+	}
+	if text := agentcore.ContentToText(res.Content); !strings.Contains(text, `"keep_open":true`) {
+		t.Fatalf("new result = %s, want keep_open echoed", text)
+	}
+
+	res, err = tool.Execute(context.Background(), "2",
+		json.RawMessage(`{"action":"new","argv":["true"],"keep_open":true,"close_on_exit":true}`), nil)
+	if err != nil || !res.IsError || !strings.Contains(agentcore.ContentToText(res.Content), "cannot both be true") {
+		t.Fatalf("conflicting lifecycle flags = %+v, %v", res, err)
 	}
 }
 
@@ -419,6 +459,21 @@ func TestTuiosListMarksTheAgentsOwnPane(t *testing.T) {
 	text := agentcore.ContentToText(res.Content)
 	if !strings.Contains(text, `"own":true`) {
 		t.Fatalf("list = %s, want the agent's own pane marked", text)
+	}
+}
+
+func TestTuiosListMarksControlledHelpers(t *testing.T) {
+	_, sock := startTuiosFake(t)
+	useTuiosFake(t, sock)
+	tool := NewTuiosTool(t.TempDir(), true)
+	tool.Control.panes["w2"] = controlledPane{isolated: true, policy: controlPolicyStamp()}
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"list"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := agentcore.ContentToText(res.Content)
+	if !strings.Contains(text, `"window_id":"w2"`) || !strings.Contains(text, `"controlled":true`) {
+		t.Fatalf("list = %s, want the helper marked controlled", text)
 	}
 }
 

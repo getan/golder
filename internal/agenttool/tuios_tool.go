@@ -64,9 +64,11 @@ func (t *TuiosTool) Name() string { return "tuios" }
 func (t *TuiosTool) Description() string {
 	if t.allowControl {
 		return "Manage panes in the current tuios session: list, capture, wait for output/events, " +
-			"with control limited to this agent's sandboxed helpers by default. External targets require host_control:true and one-call authorization. " +
+			"with control limited to this agent's helpers by default. list marks this process as own and its helpers as controlled; " +
+			"for a target with neither marker, request host_control:true on the first control call. " +
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
-			"daemon events, not polling. Close needs a full window id and refuses golder's own pane. " +
+			"daemon events, not polling. A new pane with argv defaults to keep_open, preserving startup failures for capture; " +
+			"set close_on_exit:true for disposable panes. Close needs a full window id and refuses golder's own pane. " +
 			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure."
 	}
 	return "Read panes in the current tuios session: list, capture, wait for output/events. " +
@@ -104,7 +106,7 @@ const tuiosControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
     "action":{"type":"string","enum":["list","capture","wait","run","send","press","screenshot","new","focus","move","resize","rename","minimize","close"]},
-    "host_control":{"type":"boolean","description":"Request one-call control of a non-owned pane. Never permits agent approval input."},
+    "host_control":{"type":"boolean","description":"Request one-call control when list shows neither own nor controlled. Use it on the first call; never permits agent approval input."},
     "network":{"type":"string","enum":["off","on"],"description":"For new: network capability of the pane; for input: request authorization to use a network-enabled pane."},
     "window":{"type":"string","description":"Window id or name. close and move require the full id; omit for the focused pane where allowed."},
     "source":{"type":"string","enum":["visible","recent"],"description":"For capture: visible screen or recent scrollback."},
@@ -138,7 +140,8 @@ const tuiosControlSchema = `{
     "minimized":{"type":"boolean","description":"For minimize: default true; false restores the pane."},
     "argv":{"type":"array","items":{"type":"string"},"description":"For new: optional argv, no shell parsing."},
     "focus":{"type":"boolean","description":"For new: focus the pane; default true."},
-    "close_on_exit":{"type":"boolean","description":"For new: close the pane when its command exits."}
+    "close_on_exit":{"type":"boolean","description":"For new with argv: close the pane when its command exits; overrides the keep_open default."},
+    "keep_open":{"type":"boolean","description":"For new with argv: keep the pane after exit and show status, so capture/screenshot can inspect failures. Defaults true unless close_on_exit is true."}
   }
 }`
 
@@ -178,6 +181,7 @@ type tuiosArgs struct {
 	Argv        []string `json:"argv,omitempty"`
 	Focus       *bool    `json:"focus,omitempty"`
 	CloseOnExit *bool    `json:"close_on_exit,omitempty"`
+	KeepOpen    *bool    `json:"keep_open,omitempty"`
 	Force       bool     `json:"force,omitempty"`
 }
 
@@ -346,6 +350,9 @@ func (t *TuiosTool) list(ctx context.Context) (agentcore.AgentToolResult, error)
 		}
 		if own != "" && wl.Windows[i].WindowID == own {
 			wl.Windows[i].Own = true
+		}
+		if _, ok := t.Control.pane(wl.Windows[i].WindowID); ok {
+			wl.Windows[i].Controlled = true
 		}
 	}
 	return agentcore.AgentToolResult{
@@ -768,6 +775,13 @@ func (t *TuiosTool) newWindow(ctx context.Context, a tuiosArgs) (agentcore.Agent
 	if a.CloseOnExit != nil {
 		closeOnExit = *a.CloseOnExit
 	}
+	keepOpen := len(a.Argv) > 0 && !closeOnExit
+	if a.KeepOpen != nil {
+		keepOpen = *a.KeepOpen
+	}
+	if closeOnExit && keepOpen {
+		return tuiosError(errors.New("keep_open and close_on_exit cannot both be true")), nil
+	}
 	for _, arg := range a.Argv {
 		if strings.ContainsAny(arg, "\x00\r\n") {
 			return tuiosError(errors.New("argv entries must not contain control characters")), nil
@@ -775,7 +789,7 @@ func (t *TuiosTool) newWindow(ctx context.Context, a tuiosArgs) (agentcore.Agent
 	}
 	res, err := t.Control.launch(ctx, c, tuiosctl.NewWindowParams{
 		Name: a.Name, Cwd: cwd, Workspace: a.Workspace, Command: a.Argv,
-		Focus: focus, CloseOnExit: closeOnExit,
+		Focus: focus, CloseOnExit: closeOnExit, KeepOpen: keepOpen,
 	}, a.Network == "on", false, false)
 	if err != nil {
 		return tuiosError(err), nil

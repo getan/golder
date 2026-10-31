@@ -26,6 +26,9 @@ type Window struct {
 	// Own marks the pane running this golder process, when it is known. It is
 	// computed by the tool, not sent by the daemon.
 	Own bool `json:"own,omitempty"`
+	// Controlled marks a helper pane this agent launched through its broker. It
+	// is computed by the tool, not accepted from daemon metadata or pane titles.
+	Controlled bool `json:"controlled,omitempty"`
 }
 
 // WindowList is one session's panes across every workspace.
@@ -137,9 +140,12 @@ type NewWindowParams struct {
 }
 
 type NewWindowResult struct {
-	Type     string `json:"type"`
-	WindowID string `json:"window_id"`
-	Name     string `json:"name"`
+	Type      string `json:"type"`
+	WindowID  string `json:"window_id"`
+	Name      string `json:"name"`
+	Workspace int    `json:"workspace,omitempty"`
+	Focused   bool   `json:"focused,omitempty"`
+	KeepOpen  bool   `json:"keep_open,omitempty"`
 }
 
 // MoveResult reports where a pane went.

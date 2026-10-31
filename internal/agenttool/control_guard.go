@@ -97,7 +97,9 @@ func (g *ControlGuard) checkPane(ctx context.Context, win tuiosctl.Window, own s
 		return errors.New("refusing input into an agent/approval pane; only the person may answer approvals")
 	}
 	p, managed := g.pane(win.WindowID)
-	if !managed || (!p.isolated && !g.full()) {
+	managedEnvelope := managed && (p.isolated || g.full() ||
+		p.browserRuntime && !agentcore.SandboxRequestedFromContext(ctx) && seatbelt.ModeFromEnv() != seatbelt.ModeEnforce)
+	if !managedEnvelope {
 		if !g.host(ctx, host) {
 			return errors.New("pane is not owned by this agent; host_control:true requires a separate one-call authorization")
 		}

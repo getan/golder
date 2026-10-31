@@ -105,6 +105,20 @@ func TestControlGuardManagedCeiling(t *testing.T) {
 	}
 }
 
+func TestBrowserRuntimePaneAllowsLifecycleButNotTerminalInput(t *testing.T) {
+	g := NewControlGuard(t.TempDir())
+	g.panes["browser"] = controlledPane{
+		browser: true, browserRuntime: true, policy: controlPolicyStamp(),
+	}
+	w := tuiosctl.Window{WindowID: "browser"}
+	if err := g.checkPane(context.Background(), w, "self", false, false); err != nil {
+		t.Fatalf("controlled browser lifecycle needs host_control: %v", err)
+	}
+	if err := g.checkPane(context.Background(), w, "self", false, true); err == nil || !strings.Contains(err.Error(), "use the browser tool") {
+		t.Fatalf("browser terminal input = %v, want browser-tool refusal", err)
+	}
+}
+
 func TestControlLaunchFailsClosedAndScrubsEnvironment(t *testing.T) {
 	g := NewControlGuard(t.TempDir())
 	g.Runner = nil

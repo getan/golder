@@ -12,6 +12,17 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Fixed
+- **`tuios` now identifies and retains the helpers it creates**: `list` marks
+  broker-created panes as `controlled`, so an agent can distinguish them from
+  external panes and request `host_control:true` on the first call only when it
+  is actually needed. A controlled macOS browser-runtime pane can be focused,
+  resized or closed without an unnecessary host-control retry; terminal input
+  remains refused and must use the reviewed `browser` actions.
+- **`tuios new` preserves command startup failures for inspection**: a pane
+  created with `argv` now defaults to `keep_open`, leaving its output and exit
+  status available to `capture` and `screenshot` instead of disappearing between
+  `new` and the next tool call. `close_on_exit:true` keeps the disposable-pane
+  behavior, and conflicting lifecycle flags are rejected before launch.
 - **A browser pane seeds its first visible page image immediately**: kitty-browse
   v0.2.5 starts the bounded PNG fallback on the first UI tick when no image has
   reached the terminal yet. A static page no longer opens as a black pane until
