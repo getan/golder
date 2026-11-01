@@ -15,6 +15,8 @@ import (
 type Request struct {
 	Action      string   `json:"action"`
 	Command     string   `json:"command"`
+	Script      string   `json:"script"`
+	Remote      bool     `json:"remote"`
 	Text        string   `json:"text"`
 	Argv        []string `json:"argv"`
 	Cwd         string   `json:"cwd"`
@@ -53,7 +55,7 @@ func Commands(tool string, raw json.RawMessage) []string {
 	case "tuios":
 		switch r.Action {
 		case "run":
-			cmds = append(cmds, r.Command)
+			cmds = append(cmds, r.Command, r.Script)
 		case "send":
 			cmds = append(cmds, r.Text)
 		case "new":
@@ -85,7 +87,7 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 		return r.Action == "list" || r.Action == "snapshot"
 	case "browser":
 		switch r.Action {
-		case "list", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network":
+		case "list", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "status":
 			return true
 		}
 	}
@@ -95,14 +97,14 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 func Network(tool string, raw json.RawMessage) bool {
 	r := Parse(raw)
 	if tool == "tuios" {
-		return r.Network == "on" || (r.HostControl && (r.Action == "run" || r.Action == "send" || r.Action == "press"))
+		return r.Network == "on" || r.Remote || (r.HostControl && (r.Action == "run" || r.Action == "send" || r.Action == "press"))
 	}
 	if tool == "workspace" {
 		return r.Action == "create" && (r.Network == "on" || r.Preset == "debug-fullstack" || r.Preset == "review")
 	}
 	if tool == "browser" {
 		switch r.Action {
-		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot":
+		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "status", "pause", "resume":
 			return false
 		default:
 			return true // page input can submit forms and trigger requests

@@ -133,6 +133,10 @@ func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 }
 
 func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
+	return browserPaneSpecWithProfile(cwd, name, profileName, url, "")
+}
+
+func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) (paneSpec, error) {
 	if err := checkBrowserName(name); err != nil {
 		return paneSpec{}, err
 	}
@@ -145,6 +149,13 @@ func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
 	}
 	// A controlled launch must not reuse or prune another session's profile.
 	profile := browserProfileDir(cwd, profileName)
+	if persistent != "" {
+		var err error
+		profile, err = persistentBrowserProfile(cwd, persistent, true)
+		if err != nil {
+			return paneSpec{}, err
+		}
+	}
 	if err := privatepath.EnsureDir(profile); err != nil {
 		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
 	}
@@ -177,8 +188,12 @@ func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
 	if err != nil {
 		return paneSpec{}, err
 	}
+	if persistent != "" {
+		argv = append(append(append([]string{}, argv[:len(argv)-1]...), "-login-profile", browserProjectKey(cwd)+"/"+persistent), url)
+	}
 	return paneSpec{
 		Name: name, Kind: "browser", Socket: socket, URL: url,
+		Profile: profile, PersistentProfile: persistent, RecordName: profileName,
 		Embedded: EmbeddedBrowserConfigured(), Argv: argv,
 	}, nil
 }
@@ -254,8 +269,12 @@ func pruneBrowserProfiles(dir, keep string, now time.Time) {
 // startBrowserPane opens a pane running a browser and adopts the socket it
 // creates. It returns the socket and the pane id.
 func startBrowserPane(ctx context.Context, cwd, name, url string, dial func(context.Context) (*tuiosctl.Client, error)) (string, string, error) {
+	return startBrowserPaneWithProfile(ctx, cwd, name, url, "", dial)
+}
+
+func startBrowserPaneWithProfile(ctx context.Context, cwd, name, url, profile string, dial func(context.Context) (*tuiosctl.Client, error)) (string, string, error) {
 	g := controlGuardFrom(ctx)
-	spec, err := controlledBrowserSpec(g, cwd, name, url)
+	spec, err := controlledBrowserSpecWithProfile(g, cwd, name, url, profile)
 	if err != nil {
 		return "", "", err
 	}
@@ -351,19 +370,23 @@ func adoptBrowserPaneWithExit(ctx context.Context, cwd string, spec paneSpec, wi
 	if spec.Profile != "" {
 		recordName = strings.TrimSuffix(filepath.Base(spec.Profile), ".profile")
 	}
+	if spec.RecordName != "" {
+		recordName = spec.RecordName
+	}
 	record := browserPaneRecord{
 		Root: cwd, Name: recordName, WindowID: windowID, Socket: spec.Socket,
 		Program: spec.baseName(), BrowserID: info.BrowserID, Embedded: spec.Embedded,
 	}
 	rememberBrowserPane(record)
 	if g := controlGuardFrom(ctx); g != nil {
-		g.rememberBrowser(info.BrowserID, spec.Socket, windowID)
+		g.rememberBrowser(info.BrowserID, spec.Socket, windowID, spec.PersistentProfile)
 	}
 	// The metadata is what discovery and a later session read. Losing it is not
 	// fatal for this session, so it does not fail the pane.
 	_ = writeBrowserMetadata(browserMetadataPath(cwd, recordName), browserMetadata{
 		Name: recordName, Socket: spec.Socket, Profile: spec.Profile,
-		WindowID: windowID, Program: record.Program, BrowserID: info.BrowserID, Embedded: spec.Embedded,
+		PersistentProfile: spec.PersistentProfile,
+		WindowID:          windowID, Program: record.Program, BrowserID: info.BrowserID, Embedded: spec.Embedded,
 	})
 	setBrowserSocket(spec.Socket)
 	return record, nil

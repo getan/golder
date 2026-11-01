@@ -241,6 +241,15 @@ func (t *BrowserTool) listInstances(ctx context.Context) agentcore.AgentToolResu
 }
 
 func (t *BrowserTool) listInstancesResult(d browserDiscovery) agentcore.AgentToolResult {
+	// Discovery may reveal a saved-profile identity for consent, not its
+	// signed-in page titles/URLs to an agent that has not been approved.
+	d.Instances = append([]browserInstance(nil), d.Instances...)
+	for i := range d.Instances {
+		if t.checkProfileAccess(d.Instances[i].Info) != nil {
+			d.Instances[i].Info.Tabs = nil
+			d.Instances[i].Info.ActiveTabID = ""
+		}
+	}
 	out := map[string]any{"instances": d.Instances, "unavailable": d.Failures, "truncated": d.Truncated,
 		"selected_socket": t.socketPath(), "hint": "Use attach with the browserId from instances[].info to select an instance. list never switches browsers."}
 	// Keep the original tab-list shape for an already selected live endpoint.
@@ -266,6 +275,9 @@ func (t *BrowserTool) attach(ctx context.Context, id string) (agentcore.AgentToo
 	d := t.discovery(ctx) // re-probe, don't trust a cached inventory or supplied path
 	for _, instance := range d.Instances {
 		if instance.Info.BrowserID == id {
+			if err := t.checkProfileAccess(instance.Info); err != nil {
+				return browserError(err), nil
+			}
 			t.bind(instance)
 			return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{

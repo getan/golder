@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Verified, zero-install SSH scripts and shared browser control** (v1.5.41):
+  `tuios run` accepts a noninteractive POSIX `script`, verifies numbered payload
+  frames, length, SHA-256 and syntax before execution, and waits on daemon
+  receipts instead of polling. Input serializes per pane, not across hosts,
+  and model-visible results carry request/source/target identities. Saved browser
+  profiles require per-agent human consent; footer activity and explicit
+  verification/rate-limit pause/resume come from kitty-browse v0.2.7.
+  Ambiguous shell errors no longer trigger command resends, and manual browser
+  focus/ASCII/CJK/Backspace input remains usable. See
+  [v1.5.41 release notes](docs/releases/v1.5.41.md).
 - **Explicit proxy routing for browser panes**: `/proxy browser on|off` shares
   the saved `/proxy url` address with Chromium while remaining independent of
   provider selection. The interactive picker exposes the browser row; changes

@@ -30,13 +30,14 @@ type ControlGuard struct {
 	Runner seatbelt.CallRunner
 	// BrowserProxy resolves the person's explicit browser route at launch time.
 	// It is wired by the CLI assembly layer; nil keeps library/tests direct.
-	BrowserProxy   func() (string, error)
-	mu             sync.Mutex
-	launchMu       sync.Mutex
-	panes          map[string]controlledPane
-	browsers       map[string]controlledBrowser
-	id             string
-	extensionState *seatbelt.ExtensionState // operator-only offline auth viewer
+	BrowserProxy    func() (string, error)
+	mu              sync.Mutex
+	launchMu        sync.Mutex
+	panes           map[string]controlledPane
+	browsers        map[string]controlledBrowser
+	browserProfiles map[string]bool // explicit operator consent, this agent only
+	id              string
+	extensionState  *seatbelt.ExtensionState // operator-only offline auth viewer
 }
 
 type controlledPane struct {
@@ -53,6 +54,7 @@ type controlledPane struct {
 type controlledBrowser struct {
 	socket         string
 	window         string
+	profile        string
 	isolated       bool
 	browserRuntime bool
 	policy         [32]byte
@@ -142,11 +144,15 @@ func (g *ControlGuard) checkBrowser(ctx context.Context, id, socket string, host
 	return nil
 }
 
-func (g *ControlGuard) rememberBrowser(id, socket, window string) {
+func (g *ControlGuard) rememberBrowser(id, socket, window string, profile ...string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	p := g.panes[window]
-	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
+	name := ""
+	if len(profile) > 0 {
+		name = profile[0]
+	}
+	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, profile: name, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
 }
 
 func (g *ControlGuard) release(id string) {
@@ -216,6 +222,22 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 		return clean, cleanHome, false, nil
 	}
 	policy := seatbelt.CallPolicy{Network: network, OwnTerminal: !browser, ReadDirs: []string{home}, WriteDirs: []string{home}, ExtensionState: g.extensionState}
+	if browser {
+		// Only the consented, derived dedicated profile is admitted, never an
+		// arbitrary -profile-dir or the user's personal Chrome directories.
+		for i := 0; i+1 < len(argv); i++ {
+			if argv[i] != "-profile-dir" {
+				continue
+			}
+			path := argv[i+1]
+			name := strings.TrimSuffix(filepath.Base(path), ".profile")
+			want, err := persistentBrowserProfile(g.Root, name, false)
+			if err == nil && path == want && g.profileAllowed(name) {
+				policy.ReadDirs = append(policy.ReadDirs, path)
+				policy.WriteDirs = append(policy.WriteDirs, path)
+			}
+		}
+	}
 	policy.ReadFiles = append(policy.ReadFiles, runtimeFiles...)
 	seatbelt.RefusedPaths(&policy)
 	// One-call directory/file grants are decided by consent, never by arguments.

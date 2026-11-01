@@ -187,6 +187,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	if t, ok := tool.(interface{ RequiresOperatorConfirmation() bool }); ok {
 		requireOperator = t.RequiresOperatorConfirmation()
 	}
+	if t, ok := tool.(interface{ RequiresOperatorConfirmationFor(json.RawMessage) bool }); ok {
+		requireOperator = requireOperator || t.RequiresOperatorConfirmationFor(args)
+	}
 	if cfg.BeforeToolCall != nil {
 		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator}); dec != nil {
 			if dec.Block {

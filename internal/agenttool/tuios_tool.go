@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/tuiosctl"
@@ -49,14 +50,16 @@ func NewTuiosTool(cwd string, allowControl bool) *TuiosTool {
 
 type tuiosClientFactory func(context.Context) (*tuiosctl.Client, error)
 
-// TuiosTool is the one tuios tool. Control actions share a mutex so two
-// parallel calls in one batch cannot race focus/close.
+// TuiosTool serializes layout operations separately from per-pane input, so
+// waiting for one server does not block an independent server's commands.
 type TuiosTool struct {
 	Control      *ControlGuard
 	newClient    tuiosClientFactory
 	cwd          string
 	allowControl bool
 	controlMu    sync.Mutex
+	inputMu      sync.Mutex
+	inputs       map[string]*tuiosInputClaim
 }
 
 func (t *TuiosTool) Name() string { return "tuios" }
@@ -69,7 +72,11 @@ func (t *TuiosTool) Description() string {
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
 			"daemon events, not polling. A new pane with argv defaults to keep_open, preserving startup failures for capture; " +
 			"set close_on_exit:true for disposable panes. Close needs a full window id and refuses golder's own pane. " +
-			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure."
+			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure." +
+			" For SSH or large/multiline file-editing commands, use run with script instead of command/send. " +
+			"script uses existing sh/base64/SHA tools, validates the entire payload before execution, and waits on receipts without polling or sleeps. " +
+			"Leave a blank shell prompt first; script runs noninteractively in a child POSIX sh and does not persist cd/aliases. " +
+			"Unknown execution state must never be automatically retried. Input serializes per pane, not across different panes."
 	}
 	return "Read panes in the current tuios session: list, capture, wait for output/events. " +
 		"Control actions are not available to sub-agents."
@@ -118,7 +125,9 @@ const tuiosControlSchema = `{
     "timeout_ms":{"type":"integer","minimum":100,"maximum":600000,"description":"Default 30000, or 10000 for browser close; max 10 minutes."},
     "force":{"type":"boolean","description":"For close: allow hard close if the browser does not confirm normal exit; default false."},
     "until":{"type":"array","items":{"type":"string"},"description":"agent-state names; default idle, done, needs_input."},
-    "command":{"type":"string","description":"For run: one shell command line; newlines/control characters are rejected."},
+    "command":{"type":"string","maxLength":2048,"description":"For run: short interactive shell command; no newlines/control characters. Use script for SSH or large content."},
+    "script":{"type":"string","maxLength":1048576,"description":"For run: verified POSIX sh script, including multiline content, using only existing system tools on the target. Mutually exclusive with command/expect. Runs in a child shell, stdin closed. Leave a blank shell prompt first; no remote installation required."},
+    "remote":{"type":"boolean","description":"For run script: require an SSH Linux context on a different kernel from this machine; prevents execution in the local shell after SSH drops. Automatically set when SSH is observed; set explicitly if detection is unavailable."},
     "text":{"type":"string","description":"For send: literal text written to the pane."},
     "submit":{"type":"boolean","description":"For send: submit the text with Enter after a short paste wait."},
     "paste":{"type":"boolean","description":"For send: send as a paste so multi-line text is not executed line by line."},
@@ -159,6 +168,8 @@ type tuiosArgs struct {
 	CommandSeq  uint64   `json:"command_seq,omitempty"`
 	TimeoutMS   int      `json:"timeout_ms,omitempty"`
 	Command     string   `json:"command,omitempty"`
+	Script      string   `json:"script,omitempty"`
+	Remote      bool     `json:"remote,omitempty"`
 	Text        string   `json:"text,omitempty"`
 	Submit      bool     `json:"submit,omitempty"`
 	Paste       bool     `json:"paste,omitempty"`
@@ -183,9 +194,11 @@ type tuiosArgs struct {
 	CloseOnExit *bool    `json:"close_on_exit,omitempty"`
 	KeepOpen    *bool    `json:"keep_open,omitempty"`
 	Force       bool     `json:"force,omitempty"`
+	TargetLabel string   `json:"-"`
+	HostHint    string   `json:"-"`
 }
 
-func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (result agentcore.AgentToolResult, resultErr error) {
 	if err := controlFloor(ctx, "tuios", raw); err != nil {
 		return tuiosError(err), nil
 	}
@@ -195,14 +208,38 @@ func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, 
 			return tuiosError(err), nil
 		}
 	}
+	defer func() { result = tuiosTagResult(callID, a, result) }()
 	if a.Action == "" {
 		return tuiosError(errors.New("action is required")), nil
 	}
 	if !t.allowControl && tuiosIsControl(a.Action) {
 		return tuiosError(errors.New("pane control actions are not available to sub-agents")), nil
 	}
+	requested := a
 	if err := t.checkControl(ctx, &a); err != nil {
 		return tuiosError(err), nil
+	}
+	if a.Action == "run" || a.Action == "send" || a.Action == "press" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, tuiosTimeout(a.TimeoutMS))
+		defer cancel()
+		release, err := t.claimInput(ctx, a.Window)
+		if err != nil {
+			return tuiosError(err), nil
+		}
+		defer release()
+		// A queued call must revalidate revocations and the target after it
+		// acquires the pane, not reuse a potentially minutes-old permission
+		// snapshot. Rebuild from original arguments to avoid two cd prefixes.
+		fresh := requested
+		fresh.Window, fresh.Remote = a.Window, a.Remote
+		if err := t.checkControl(ctx, &fresh); err != nil {
+			return tuiosError(err), nil
+		}
+		if fresh.Remote != a.Remote || fresh.HostHint != a.HostHint {
+			return tuiosError(errors.New("pane's remote context changed while waiting; nothing was sent")), nil
+		}
+		a = fresh
 	}
 	switch a.Action {
 	case "list":
@@ -212,16 +249,10 @@ func (t *TuiosTool) Execute(ctx context.Context, _ string, raw json.RawMessage, 
 	case "wait":
 		return t.wait(ctx, a)
 	case "run":
-		t.controlMu.Lock()
-		defer t.controlMu.Unlock()
 		return t.run(ctx, a)
 	case "send":
-		t.controlMu.Lock()
-		defer t.controlMu.Unlock()
 		return t.send(ctx, a)
 	case "press":
-		t.controlMu.Lock()
-		defer t.controlMu.Unlock()
 		return t.press(ctx, a)
 	case "screenshot":
 		return t.screenshot(ctx, a)
@@ -524,19 +555,21 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 		return tuiosError(err), nil
 	}
 	timeout := tuiosTimeout(a.TimeoutMS)
+	if a.Script != "" {
+		return t.runScript(ctx, c, a)
+	}
 	if a.Expect == "" {
 		res, err := c.Run(ctx, a.Window, a.Command, timeout, tuiosLines(a.Lines))
 		if err != nil {
-			var de *tuiosctl.Error
-			if errors.As(err, &de) && de.Code == "no_shell_integration" {
-				return t.runWithoutMarks(ctx, c, a, timeout)
-			}
-			return tuiosError(err), nil
+			return tuiosRunUnknown(a.Window, err), nil
+		}
+		if res.Window != "" && res.Window != a.Window {
+			return tuiosRunUnknown(a.Window, errors.New("daemon returned a different pane; output was not attributed")), nil
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosTruncate(tuiosUntrusted(res.Output)))},
 			Details: map[string]any{
-				"untrusted": true, "window": res.Window, "exit_code": res.ExitCode,
+				"untrusted": true, "window": a.Window, "exit_code": res.ExitCode,
 				"duration_ms": res.DurationMS, "command_seq": res.CommandSeq,
 			},
 		}, nil
@@ -561,7 +594,7 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 			cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
 			return agentcore.AgentToolResult{
 				Content: agentcore.ContentList{agentcore.NewTextContent(
-					tuiosJSON(map[string]any{"timed_out": true, "expect": a.Expect, "tail": tuiosUntrusted(cap.Content)}))},
+					tuiosJSON(map[string]any{"timed_out": true, "window": a.Window, "execution_state": "unknown", "retryable": false, "expect": a.Expect, "tail": tuiosUntrusted(cap.Content)}))},
 				Details: map[string]any{"timed_out": true, "untrusted": true},
 			}, nil
 		}
@@ -570,55 +603,9 @@ func (t *TuiosTool) run(ctx context.Context, a tuiosArgs) (agentcore.AgentToolRe
 	cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
-			"matched": true, "pattern": wait.Pattern, "source": "visible", "tail": tuiosUntrusted(cap.Content),
+			"matched": true, "window": a.Window, "execution_state": "unconfirmed", "pattern": wait.Pattern, "source": "visible", "tail": tuiosUntrusted(cap.Content),
 		}))},
 		Details: map[string]any{"untrusted": true, "revision": cap.Revision},
-	}, nil
-}
-
-// runWithoutMarks is the fallback for a shell that does not emit OSC 133
-// command marks. It types the command plus a unique sentinel that prints the
-// exit status, then waits for that sentinel on the event hub. It cannot know
-// the command's exact duration, but it returns output and distinguishes a
-// completed command from a timeout.
-func (t *TuiosTool) runWithoutMarks(ctx context.Context, c *tuiosctl.Client, a tuiosArgs, timeout time.Duration) (agentcore.AgentToolResult, error) {
-	marker := fmt.Sprintf("__GOLDER_DONE_%d__", time.Now().UnixNano())
-	command := a.Command + "\nprintf '\\n" + marker + ":%s\\n' \"$?\"\n"
-	if _, err := c.SendText(ctx, a.Window, command, false); err != nil {
-		return tuiosError(err), nil
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
-	defer cancel()
-	wait, err := t.waitPane(waitCtx, c, tuiosctl.WaitParams{
-		Condition: "window-output", Window: a.Window,
-		Pattern: regexp.QuoteMeta(marker) + `:(\d+)`, Timeout: timeout,
-	})
-	if err != nil {
-		var de *tuiosctl.Error
-		if errors.As(err, &de) && de.Code == "timeout" {
-			cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
-			return agentcore.AgentToolResult{
-				Content: agentcore.ContentList{agentcore.NewTextContent(
-					tuiosJSON(map[string]any{"timed_out": true, "tail": tuiosUntrusted(cap.Content)}))},
-				Details: map[string]any{"timed_out": true, "untrusted": true},
-			}, nil
-		}
-		return tuiosError(err), nil
-	}
-	cap, _ := c.CapturePane(ctx, a.Window, "visible", tuiosLines(a.Lines), false)
-	text := cap.Content
-	details := map[string]any{"untrusted": true, "window": wait.Window, "fallback": true}
-	if re, rerr := regexp.Compile(regexp.QuoteMeta(marker) + `:(\d+)`); rerr == nil {
-		if m := re.FindStringSubmatch(text); len(m) == 2 {
-			var exit int
-			if _, serr := fmt.Sscanf(m[1], "%d", &exit); serr == nil {
-				details["exit_code"] = exit
-			}
-		}
-	}
-	return agentcore.AgentToolResult{
-		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosTruncate(tuiosUntrusted(text)))},
-		Details: details,
 	}, nil
 }
 
@@ -644,7 +631,7 @@ func (t *TuiosTool) send(ctx context.Context, a tuiosArgs) (agentcore.AgentToolR
 	if err != nil {
 		return tuiosError(err), nil
 	}
-	out := map[string]any{"sent": true, "window": window, "submit": a.Submit, "paste": a.Paste}
+	out := map[string]any{"sent": true, "window": window, "submit": a.Submit, "paste": a.Paste, "delivery": "local_pty_only", "execution_state": "unconfirmed"}
 	if sendNote != "" {
 		out["note"] = sendNote
 	}
@@ -743,11 +730,28 @@ func (t *TuiosTool) artifactPath(kind, out, format string) (string, error) {
 }
 
 func validateRun(a tuiosArgs) error {
+	if a.Script != "" {
+		if a.Command != "" || a.Expect != "" {
+			return errors.New("script cannot be combined with command or expect")
+		}
+		if strings.TrimSpace(a.Script) == "" || len(a.Script) > tuiosMaxScript || strings.ContainsRune(a.Script, 0) {
+			return errors.New("invalid script: nonempty POSIX sh, no NUL, at most 1 MiB")
+		}
+		return nil
+	}
+	if a.Remote {
+		return errors.New("SSH commands require run with script so a dropped connection cannot redirect execution into the local shell")
+	}
 	if strings.TrimSpace(a.Command) == "" {
 		return errors.New("command is required")
 	}
-	if strings.ContainsAny(a.Command, "\r\n") {
-		return errors.New("command must be one line")
+	if len(a.Command) > 2048 {
+		return errors.New("command exceeds safe terminal line budget; use run with script")
+	}
+	for _, r := range a.Command {
+		if unicode.IsControl(r) {
+			return errors.New("command must be one line without control characters; use script for multiline content")
+		}
 	}
 	if a.Expect != "" {
 		if _, err := regexp.Compile(a.Expect); err != nil {

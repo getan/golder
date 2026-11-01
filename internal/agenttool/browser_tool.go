@@ -85,7 +85,10 @@ type BrowserTool struct {
 func (t *BrowserTool) Name() string { return "browser" }
 
 const browserToolUseHint = " Use this tool rather than launching `golder browse` or `kitty-browse` through bash: " +
-	"the browser tool owns the pane identity, control socket and cleanup."
+	"the browser tool owns the pane identity, control socket and cleanup. " +
+	"Open with profile:<name> only when the person chooses to remember logins; first use needs exact operator confirmation. " +
+	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
+	"Only resume after the person explicitly continues and confirms the call, or uses Ctrl+G in the pane."
 
 func (t *BrowserTool) Description() string {
 	if !t.available() {
@@ -124,7 +127,7 @@ var browserIdleActions = []string{"open", "list", "attach"}
 const browserReadSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot"]},
+    "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","status"]},
     "browser":{"type":"string","description":"Exact browser identity, pinned before review."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
@@ -155,9 +158,10 @@ const browserReadSchema = `{
 const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss"]},
+    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume"]},
     "host_control":{"type":"boolean","description":"Request one-call access to a browser not created by this agent. Attaching does not grant later control."},
     "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance."},
+    "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: opt into a named project-scoped profile that remembers logins. First use requires exact operator confirmation for this agent session; never a personal Chrome profile or filesystem path."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
@@ -195,6 +199,7 @@ const browserControlSchema = `{
 type browserArgs struct {
 	HostControl bool    `json:"host_control,omitempty"`
 	NewInstance bool    `json:"new_instance,omitempty"`
+	Profile     string  `json:"profile,omitempty"`
 	PageURL     string  `json:"page_url,omitempty"`
 	Action      string  `json:"action"`
 	Browser     string  `json:"browser,omitempty"`
@@ -276,13 +281,13 @@ func trimActionEnum(schema string, allowed []string) json.RawMessage {
 func browserReadOnly(action string) bool {
 	switch action {
 	case "list", "snapshot", "find", "get", "is", "wait", "dialog",
-		"console", "errors", "network", "screenshot":
+		"console", "errors", "network", "screenshot", "status":
 		return true
 	}
 	return false
 }
 
-func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
 	if err := controlFloor(ctx, "browser", raw); err != nil {
 		return browserError(err), nil
 	}
@@ -304,6 +309,17 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	}
 	if t.Control == nil {
 		return browserError(errors.New("browser control policy is not configured")), nil
+	}
+	if a.Profile != "" {
+		if a.Action != "open" || !browserProfileName.MatchString(a.Profile) {
+			return browserError(errors.New("profile is a validated name supported only by open")), nil
+		}
+		if err := t.authorizeProfile(ctx, callID, raw, a.Profile); err != nil {
+			return browserError(err), nil
+		}
+	}
+	if a.Action == "resume" && !agentcore.OperatorConfirmedFor(ctx, callID, t.Name(), raw) {
+		return browserError(errors.New("resuming automation needs your exact confirmation; use /permissions ask, or press Ctrl+G in the browser pane")), nil
 	}
 	if a.Action == "screenshot" && (agentcore.SandboxRequestedFromContext(ctx) || (t.Control.Mode != nil && t.Control.Mode.Mode() == permissions.ReadOnly)) {
 		return browserError(errors.New("screenshot writes cannot satisfy read-only/required OS containment")), nil
@@ -348,6 +364,9 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	if err != nil {
 		return browserError(fmt.Errorf("selected socket %q: %w", t.socketPath(), err)), nil
 	}
+	if err := t.checkProfileAccess(info); err != nil {
+		return browserError(err), nil
+	}
 	if err := t.checkBinding(info); err != nil {
 		return browserError(err), nil
 	}
@@ -368,6 +387,15 @@ func (t *BrowserTool) Execute(ctx context.Context, _ string, raw json.RawMessage
 	}
 
 	switch a.Action {
+	case "status", "pause", "resume":
+		result, meta, err := c.Action(ctx, "interaction."+a.Action, map[string]any{}, browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
+		if err != nil {
+			return browserError(err), nil
+		}
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{"ok": true, "result": json.RawMessage(result)}))},
+			Details: map[string]any{"action": a.Action, "browser": meta.BrowserID},
+		}, nil
 	case "screenshot":
 		png, err := c.Screenshot(ctx, a.FullPage)
 		if err != nil {
@@ -733,6 +761,22 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		if a.Browser != "" && instance.Info.BrowserID != a.Browser {
 			continue
 		}
+		if t.checkProfileAccess(instance.Info) != nil {
+			continue
+		}
+		if a.Profile != "" {
+			t.Control.mu.Lock()
+			owned, ok := t.Control.browsers[instance.Info.BrowserID]
+			t.Control.mu.Unlock()
+			matches := instance.Info.LoginProfile == browserProjectKey(t.cwd)+"/"+a.Profile
+			if matches && t.Control.profileAllowed(a.Profile) {
+				t.Control.mu.Lock()
+				t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: a.Profile, browserRuntime: true, policy: controlPolicyStamp()}
+				t.Control.mu.Unlock()
+			} else if !ok || owned.profile != a.Profile {
+				continue
+			}
+		}
 		if t.Control.checkBrowser(ctx, instance.Info.BrowserID, instance.Socket, a.HostControl) == nil {
 			filtered = append(filtered, instance)
 		}
@@ -789,7 +833,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if url == "" {
 		url = "http://localhost:3000"
 	}
-	socket, window, err := startBrowserPane(ctx, t.cwd, "browser", url, t.newTuios)
+	socket, window, err := startBrowserPaneWithProfile(ctx, t.cwd, "browser", url, a.Profile, t.newTuios)
 	if err != nil {
 		return browserError(err), nil
 	}
@@ -824,6 +868,9 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	}
 	info, err := c.Info(ctx)
 	if err != nil {
+		return err
+	}
+	if err := t.checkProfileAccess(info); err != nil {
 		return err
 	}
 	if err := t.checkBinding(info); err != nil {

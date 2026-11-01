@@ -115,14 +115,15 @@ func browserMetadataPath(cwd, name string) string {
 // One record per browser name, so the newest launch wins; it holds no secret
 // and the profile and the socket's own permissions stay the access control.
 type browserMetadata struct {
-	Name      string    `json:"name"`
-	Socket    string    `json:"socket"`
-	Profile   string    `json:"profile,omitempty"`
-	WindowID  string    `json:"window_id,omitempty"`
-	Program   string    `json:"program,omitempty"`
-	BrowserID string    `json:"browser_id,omitempty"`
-	Embedded  bool      `json:"embedded,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Name              string    `json:"name"`
+	Socket            string    `json:"socket"`
+	Profile           string    `json:"profile,omitempty"`
+	PersistentProfile string    `json:"persistent_profile,omitempty"`
+	WindowID          string    `json:"window_id,omitempty"`
+	Program           string    `json:"program,omitempty"`
+	BrowserID         string    `json:"browser_id,omitempty"`
+	Embedded          bool      `json:"embedded,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func readBrowserMetadata(path string) (browserMetadata, error) {
@@ -154,7 +155,15 @@ func checkBrowserRecord(root string, meta browserMetadata) error {
 	if !validBrowserSocketLocation(root, meta.Socket) {
 		return fmt.Errorf("browser record %q names %q, which is not a socket golder could have created for this workspace", meta.Name, meta.Socket)
 	}
-	if meta.Profile != "" && canonicalBrowserSocket(meta.Profile) != canonicalBrowserSocket(browserProfileDir(root, meta.Name)) {
+	expected := browserProfileDir(root, meta.Name)
+	if meta.PersistentProfile != "" {
+		var err error
+		expected, err = persistentBrowserProfile(root, meta.PersistentProfile, false)
+		if err != nil {
+			return err
+		}
+	}
+	if meta.Profile != "" && canonicalBrowserSocket(meta.Profile) != canonicalBrowserSocket(expected) {
 		return fmt.Errorf("browser record %q names profile %q, which is not %q", meta.Name, meta.Profile, browserProfileDir(root, meta.Name))
 	}
 	return nil

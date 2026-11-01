@@ -50,13 +50,15 @@ type workspacePane struct {
 
 // paneSpec is one line of a preset plan.
 type paneSpec struct {
-	Name          string
-	Kind          string
-	Argv          []string
-	Socket        string
-	URL           string
-	Profile       string
-	StartupReport string
+	Name              string
+	Kind              string
+	Argv              []string
+	Socket            string
+	URL               string
+	Profile           string
+	PersistentProfile string
+	RecordName        string
+	StartupReport     string
 	// Embedded marks a browser pane started by golder's own binary rather than
 	// an external kitty-browse; close needs it to know which teardown applies.
 	Embedded bool
