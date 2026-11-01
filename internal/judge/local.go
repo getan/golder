@@ -193,7 +193,7 @@ func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) 
 		return v
 	}
 	if v, ok := localGradeOf(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
-		if NetworkRequested(tool, args) {
+		if NetworkRequired(ctx, tool, args) {
 			// The local table may approve network only for calls it has actually
 			// classified as outbound work. A read-only-looking or local-effects
 			// command asking for network needs the session reviewer's judgment;

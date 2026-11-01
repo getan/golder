@@ -222,6 +222,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			if dec.Direct {
 				execCtx = agentcore.WithDirectGrant(execCtx)
 			}
+			if dec.ExecutionBinding != "" && dec.Direct && !dec.Sandbox {
+				execCtx = agentcore.WithExecutionBinding(execCtx, dec.ExecutionBinding)
+			}
 			if dec.BrowserRuntime && !dec.Sandbox {
 				execCtx = agentcore.WithBrowserRuntimeGrant(execCtx)
 			}

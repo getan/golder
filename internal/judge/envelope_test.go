@@ -54,7 +54,7 @@ func TestAutoApprovalCarriesTheBareEnvelope(t *testing.T) {
 		Sandboxed:  func(string) bool { return true },
 	})
 
-	dec := gate(context.Background(), toolCall("bash", `{"command":"git push origin master"}`))
+	dec := gate(context.Background(), toolCall("bash", `{"command":"ls internal"}`))
 	if dec == nil || !dec.Bare || dec.Sandbox || dec.Block {
 		t.Fatalf("an enumerable allow must carry the bare envelope, got %+v", dec)
 	}

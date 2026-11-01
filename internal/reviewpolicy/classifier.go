@@ -59,6 +59,10 @@ type Classifier struct {
 	// Cwd is the working directory the state reports, so the judge can tell a
 	// path inside the workspace from one outside it.
 	Cwd string
+	// DirTrust is the trust decision for Cwd ("trusted"/"untrusted"). It is
+	// especially relevant when execution facts report a local Git hook that
+	// would run in the same outside-sandbox envelope as an SSH push.
+	DirTrust string
 	// ExtraRoots are directories outside the workspace the session treats as its
 	// own (the skills directory golder advertises in the system prompt). They
 	// travel with Cwd because both answer the same question — is this path the
@@ -167,7 +171,7 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 		return c.escalate(ctx, tool, args, CallRecord{Tool: tool, Routed: "escalated", Escalation: reason}, lang)
 	}
 
-	network := judge.NetworkRequested(tool, args)
+	network := judge.NetworkRequired(ctx, tool, args)
 	res, err := c.Client.Evaluate(ctx, c.state(ctx, tool, args, facts), QuestionsFor(network))
 	rec := CallRecord{Tool: tool}
 	if res != nil {
@@ -256,6 +260,8 @@ func (c *Classifier) factsFor(tool string, args json.RawMessage) *shellfacts.Pla
 // it: what the judge sees decides what it can decide.
 type State struct {
 	Tool string `json:"tool"`
+	// DirectoryTrust is the session's trust decision for Cwd.
+	DirectoryTrust string `json:"directoryTrust,omitempty"`
 	// Context is the recent user requests — the evidence the intent question
 	// needs. The decision model is a third-party call, so it carries user words
 	// only, not tool output: enough to tell an explicit request from a guess,
@@ -300,13 +306,17 @@ type State struct {
 	// looks like any other script until a reader knows when it runs, which is
 	// exactly what a file's contents do not say.
 	Outliving []string `json:"outliving,omitempty"`
+	// Execution carries deterministic, credential-free facts that argv hides,
+	// such as the effective transport/host of a named Git push remote.
+	Execution []judge.ExecutionFact `json:"execution,omitempty"`
 }
 
 func (c *Classifier) state(ctx context.Context, tool string, args json.RawMessage, facts *shellfacts.Plan) State {
-	st := State{Tool: tool, Cwd: c.Cwd}
+	st := State{Tool: tool, Cwd: c.Cwd, DirectoryTrust: c.DirTrust}
 	st.Context = judge.UserIntentSection(agentcore.MessageSnapshotFromContext(ctx))
 	st.Auth = judge.AuthFacts(tool, args, c.Cwd, c.ExtraRoots, c.WritableAt)
 	st.Outliving = judge.OutlivingPaths(tool, args)
+	st.Execution = judge.ExecutionFactsFromContext(ctx)
 	if facts != nil {
 		st.Command = facts.Raw
 		st.Facts = facts

@@ -184,6 +184,10 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			return blockCall(call, Verdict{Level: Deny, Source: "static", Reasons: []string{"read-only permissions mode"}},
 				"switch with /permissions ask|auto|full-access to allow mutating tools")
 		}
+		// Resolve hidden execution dependencies once and give that exact snapshot
+		// to every grader and capability collector. This is local config reading,
+		// never a network operation; opaque/failed resolution remains contained.
+		ctx = withExecutionFacts(ctx, resolveExecutionFacts(ctx, call, opts.Cwd))
 		v := classifyForGate(ctx, opts.Classifier, call)
 		if mode == permissions.ReadOnly {
 			needs := collectNeeds(ctx, opts, call, v, mode, lang)
@@ -202,6 +206,9 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 		needs := collectNeeds(ctx, opts, call, v, mode, lang)
 		if opts.Enforce && hasNeed(needs, CapBrowserRuntime) {
 			return blockCall(call, v, "sandbox enforce cannot grant the macOS browser runtime exception; Chromium's own sandbox cannot initialize inside Seatbelt")
+		}
+		if opts.Enforce && hasNeed(needs, CapUnconfined) && executionRequiresUnconfined(ctx) {
+			return blockCall(call, v, "sandbox enforce cannot satisfy this call's required outside-sandbox execution facts")
 		}
 		if v.Level == Deny {
 			n := noteFor(call, v, NoteDenied, lang)
@@ -300,12 +307,15 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		needs = append(needs, Need{Cap: CapHostControl})
 	}
 	needs = append(needs, boundaryNeeds(call, opts, mode, lang)...)
-	if NetworkRequested(call.Name, call.Arguments) && !v.Network {
-		need := Need{Cap: CapNetwork}
+	if NetworkRequired(ctx, call.Name, call.Arguments) && !v.Network {
+		need := Need{Cap: CapNetwork, Key: executionNetworkKey(ctx)}
 		if key, ok := NetworkKey(call.Name, call.Arguments); ok {
 			need.Key = key
 		}
 		needs = append(needs, need)
+	}
+	if executionRequiresUnconfined(ctx) {
+		needs = append(needs, Need{Cap: CapUnconfined, Key: "git SSH"})
 	}
 	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") && !opts.Enforce {
 		// In auto the level is the whole answer: allow/confirm authorize the
@@ -313,7 +323,7 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		// authorize it, so it fails closed. In ask the person decides. Enforce
 		// never offers one: it contains every bash call, so a CapUnconfined need
 		// would only block or ask for an impossible answer.
-		if mode == permissions.Ask || (mode == permissions.Auto && v.Failed) {
+		if (mode == permissions.Ask || mode == permissions.Auto && v.Failed) && !hasNeed(needs, CapUnconfined) {
 			needs = append(needs, Need{Cap: CapUnconfined})
 		}
 	}
@@ -326,7 +336,9 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		switch {
 		case opts.Enforce, v.Failed, mode == permissions.Ask,
 			mode == permissions.Auto && !directForLevel(v.Level):
-			needs = append(needs, Need{Cap: CapUnconfined})
+			if !hasNeed(needs, CapUnconfined) {
+				needs = append(needs, Need{Cap: CapUnconfined})
+			}
 		}
 	}
 	return dedupeNeeds(needs)
@@ -458,14 +470,16 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {
 			notify(noteFor(call, v, NoteSandboxed, lang))
-			return containedDecision(call, v)
+			return containedDecision(ctx, call, v)
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
-	// The only CapUnconfined need that survives to this point is a call that
-	// cannot be contained at all (enforce without a runner); failed reviews were
-	// handled above, and contain/deny never reach here. Block rather than run bare.
-	if hasNeed(needs, CapUnconfined) {
+	// A deterministic execution fact (currently Git-over-SSH) can prove that the
+	// requested operation cannot work in the file sandbox. An allow/confirm grade
+	// authorizes that one bound escape. Other CapUnconfined needs retain the old
+	// fail-closed meaning (for example no sandbox implementation is available).
+	derivedUnconfined := hasNeed(needs, CapUnconfined) && executionRequiresUnconfined(ctx)
+	if hasNeed(needs, CapUnconfined) && !derivedUnconfined {
 		n := noteFor(call, v, NoteDenied, lang)
 		n.Needs = needs
 		n.Rationale = localized(lang,
@@ -482,16 +496,19 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
-	if NetworkRequested(call.Name, call.Arguments) {
+	if NetworkRequired(ctx, call.Name, call.Arguments) {
 		dec.Network = true
 	}
-	if askedToEscape(call) && directForLevel(v.Level) && !v.Failed {
+	if (askedToEscape(call) || derivedUnconfined) && directForLevel(v.Level) && !v.Failed {
 		// The level is the whole authorization. Only bash has an escape request;
 		// a native tool carrying the argument must not inherit its bit.
 		dec.Direct = true
+		if derivedUnconfined {
+			dec.ExecutionBinding = executionBinding(ctx)
+		}
 	}
 	if len(needs) == 0 {
-		if bare, why := envelopeFor(call, lang); bare {
+		if bare, why := envelopeFor(ctx, call, lang); bare {
 			dec.Bare, dec.BareReason = true, why
 		}
 	}
@@ -527,10 +544,10 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	// reaches a person. This is what keeps `ask` usable for routine work.
 	if v.Level == Allow && len(needs) == 0 && !v.Failed && !call.RequireOperatorConfirmation {
 		dec := &agentcore.BeforeToolCallDecision{}
-		if NetworkRequested(call.Name, call.Arguments) {
+		if NetworkRequired(ctx, call.Name, call.Arguments) {
 			dec.Network = true
 		}
-		if bare, why := envelopeFor(call, lang); bare {
+		if bare, why := envelopeFor(ctx, call, lang); bare {
 			dec.Bare, dec.BareReason = true, why
 		}
 		return dec
@@ -541,7 +558,10 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		Needs:  needs, Mode: mode.String(), Level: v.Level,
 		Risk: riskWord(v.Risk, lang), Authorization: authWord(v.Authorization, lang),
 		Rationale: firstReason(v), Origin: agentcore.OriginFromContext(ctx),
-		CanContain: opts.Sandboxed != nil && opts.Sandboxed(call.Name) && !hasNeed(needs, CapBrowserRuntime),
+		CanContain: opts.Sandboxed != nil && opts.Sandboxed(call.Name) && !hasNeed(needs, CapBrowserRuntime) && !hasNeed(needs, CapUnconfined),
+	}
+	if hasNeed(needs, CapUnconfined) {
+		req.RequestedExec = ExecUnconfined
 	}
 	if req.Rationale == "" {
 		req.Rationale = consentRationale(v, needs, lang)
@@ -583,6 +603,9 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	}
 	if unconfined {
 		dec.Direct = true
+		if executionRequiresUnconfined(ctx) {
+			dec.ExecutionBinding = executionBinding(ctx)
+		}
 	} else if v.Level == Contain && !dec.BrowserRuntime {
 		dec.Sandbox = true
 	}
@@ -595,7 +618,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	// reviewer's own grant has no Need (it would have blocked the call
 	// otherwise), so carry that one here; never infer a grant from Approve
 	// alone when the answer omitted the capability.
-	if v.Network && NetworkRequested(call.Name, call.Arguments) {
+	if v.Network && NetworkRequired(ctx, call.Name, call.Arguments) {
 		dec.Network = true
 	}
 	granted := ans.Needs
@@ -626,9 +649,9 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 // same review granted separately: a contained command may still have network
 // access (the grant applies inside the sandbox, not on the host). Dropping the
 // bit here made the executor refuse a call the reviewer had already authorized.
-func containedDecision(call agentcore.AgentToolCall, v Verdict) *agentcore.BeforeToolCallDecision {
+func containedDecision(ctx context.Context, call agentcore.AgentToolCall, v Verdict) *agentcore.BeforeToolCallDecision {
 	dec := &agentcore.BeforeToolCallDecision{Sandbox: true}
-	if v.Network && NetworkRequested(call.Name, call.Arguments) {
+	if v.Network && NetworkRequired(ctx, call.Name, call.Arguments) {
 		dec.Network = true
 	}
 	return dec
@@ -734,6 +757,9 @@ func needLabel(n Need, lang string) string {
 		}
 		return localized(lang, "联网", "network")
 	case CapUnconfined:
+		if n.Key != "" {
+			return localized(lang, "沙箱外运行（"+n.Key+"）", "run outside the sandbox ("+n.Key+")")
+		}
 		return localized(lang, "沙箱外运行", "run outside the sandbox")
 	case CapHostControl:
 		return localized(lang, "控制非本会话创建的终端/浏览器（宿主权限）", "control an external terminal/browser with host authority")

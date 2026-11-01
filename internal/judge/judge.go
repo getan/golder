@@ -511,7 +511,7 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		// returns nil (the common case: a tool with no further opinion) would
 		// silently discard the user's decision — the read would be refused after
 		// they approved it.
-		if firstDec != nil && (firstDec.OperatorConfirmed || firstDec.Sandbox || firstDec.Network || firstDec.HostControl || firstDec.Direct || firstDec.BrowserRuntime || firstDec.Bare || firstDec.ReadGrant != "" || firstDec.WriteGrant != "") {
+		if firstDec != nil && (firstDec.OperatorConfirmed || firstDec.Sandbox || firstDec.Network || firstDec.HostControl || firstDec.Direct || firstDec.BrowserRuntime || firstDec.Bare || firstDec.ReadGrant != "" || firstDec.WriteGrant != "" || firstDec.ExecutionBinding != "") {
 			if dec == nil {
 				return firstDec
 			}
@@ -528,6 +528,18 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 			out.Bare = out.Bare || (firstDec.Bare && !out.Sandbox)
 			if out.Bare && out.BareReason == "" {
 				out.BareReason = firstDec.BareReason
+			}
+			if out.ExecutionBinding == "" {
+				out.ExecutionBinding = firstDec.ExecutionBinding
+			} else if firstDec.ExecutionBinding != "" && out.ExecutionBinding != firstDec.ExecutionBinding {
+				content := agentcore.ContentList{agentcore.NewTextContent("tool call blocked: authorization gates produced conflicting execution bindings")}
+				return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
+			}
+			if out.Sandbox || !out.Direct {
+				// A binding validates an outside-sandbox decision; carrying it into
+				// a contained/non-direct call would make a fingerprint look like an
+				// authorization and could block an unrelated sandboxed execution.
+				out.ExecutionBinding = ""
 			}
 			if out.ReadGrant == "" {
 				out.ReadGrant = firstDec.ReadGrant

@@ -39,6 +39,7 @@ func TestConsentAutoContainCarriesTheReviewerNetworkGrant(t *testing.T) {
 // requested escape, and the decision line says so.
 func TestConsentAutoContainRefusesTheEscape(t *testing.T) {
 	grantstest.Install(t)
+	scratch := t.TempDir()
 	var notes []Note
 	gate := ConsentGate(ConsentOpts{
 		Mode: permissions.New(permissions.Auto),
@@ -50,10 +51,18 @@ func TestConsentAutoContainRefusesTheEscape(t *testing.T) {
 		Sandboxed: func(string) bool { return true },
 		Notify:    func(n Note) { notes = append(notes, n) },
 	})
-	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "contain-escape", Name: "bash",
-		Arguments: json.RawMessage(`{"command":"rm -r /tmp/kb-view","sandbox_permissions":"require_escalated","justification":"清理本次任务的临时截图"}`)})
+	args, _ := json.Marshal(map[string]string{
+		"command":             "rm -r " + shellQuotePath(scratch),
+		"sandbox_permissions": "require_escalated",
+		"justification":       "清理本次任务的临时截图",
+	})
+	dec := gate(context.Background(), agentcore.AgentToolCall{ID: "contain-escape", Name: "bash", Arguments: args})
 	if dec == nil || dec.Block {
-		t.Fatalf("the contained call should run, got %+v", dec)
+		body := ""
+		if dec != nil && dec.Content != nil {
+			body = agentcore.ContentToText(*dec.Content)
+		}
+		t.Fatalf("the contained call should run, got %+v: %s; notes=%+v", dec, body, notes)
 	}
 	if !dec.Sandbox || dec.Direct {
 		t.Errorf("envelope = %+v, want containment and no escape", dec)
@@ -325,4 +334,37 @@ func TestChainGatesKeepsBareEnvelope(t *testing.T) {
 	if !dec.Network {
 		t.Errorf("the second gate's network grant was lost: %+v", dec)
 	}
+}
+
+func TestChainGatesKeepsAndConfinesExecutionBindings(t *testing.T) {
+	first := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{Direct: true, ExecutionBinding: "git-push-v1:one"}
+	}
+	t.Run("survives unrelated capability", func(t *testing.T) {
+		second := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+			return &agentcore.BeforeToolCallDecision{Network: true}
+		}
+		dec := ChainGates(first, second)(context.Background(), agentcore.AgentToolCall{Name: "bash"})
+		if dec == nil || !dec.Direct || dec.ExecutionBinding != "git-push-v1:one" || !dec.Network {
+			t.Fatalf("binding was lost: %+v", dec)
+		}
+	})
+	t.Run("sandbox clears binding", func(t *testing.T) {
+		second := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+			return &agentcore.BeforeToolCallDecision{Sandbox: true}
+		}
+		dec := ChainGates(first, second)(context.Background(), agentcore.AgentToolCall{Name: "bash"})
+		if dec == nil || !dec.Sandbox || dec.Direct || dec.ExecutionBinding != "" {
+			t.Fatalf("contained call retained direct binding: %+v", dec)
+		}
+	})
+	t.Run("conflict blocks", func(t *testing.T) {
+		second := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+			return &agentcore.BeforeToolCallDecision{Direct: true, ExecutionBinding: "git-push-v1:two"}
+		}
+		dec := ChainGates(first, second)(context.Background(), agentcore.AgentToolCall{Name: "bash"})
+		if dec == nil || !dec.Block {
+			t.Fatalf("conflicting bindings were merged: %+v", dec)
+		}
+	})
 }

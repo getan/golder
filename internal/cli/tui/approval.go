@@ -296,6 +296,9 @@ func consentNeedLabel(n judge.Need) string {
 		}
 		return "network access"
 	case judge.CapUnconfined:
+		if n.Key != "" {
+			return "run outside the sandbox (" + n.Key + ")"
+		}
 		return "run outside the sandbox"
 	default:
 		return "capability"
