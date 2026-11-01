@@ -12,6 +12,14 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Deterministic Git push transport review**: before grading one literal
+  `git push`, the consent gate resolves the effective push URL from local Git
+  configuration without contacting the remote and gives every reviewer the same
+  credential-free transport/host/authentication/hook facts. SSH contributes a
+  bounded network + unconfined need because the file sandbox excludes SSH
+  trust/identity material; opaque remotes stay contained. A SHA-256 binding over
+  the effective URL and local pre-push hook is revalidated immediately before
+  execution, so a changed remote or hook cannot spend the earlier approval.
 - **Verified, zero-install SSH scripts and shared browser control** (v1.5.41):
   `tuios run` accepts a noninteractive POSIX `script`, verifies numbered payload
   frames, length, SHA-256 and syntax before execution, and waits on daemon

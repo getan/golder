@@ -119,7 +119,7 @@ func NewReviewer(model, providerName string, prov provider.Provider, creds *prov
 	// FirstParty runs before JEV/local: a fixed, closed set of golder tools is
 	// settled by meaning (a pane read is a read, a pane command is a shell
 	// command), while everything else keeps the normal routine grader.
-	return judge.Chain{Inner: judge.FirstParty{Next: routineGrader(llm, creds, cwd)}}
+	return judge.Chain{Inner: judge.FirstParty{Next: routineGrader(llm, creds, cwd, trusted)}}
 }
 
 // routineGrader picks the layer that settles routine calls for this run: the
@@ -135,9 +135,9 @@ func NewReviewer(model, providerName string, prov provider.Provider, creds *prov
 // a user might want instead — every call reviewed by a model, policy reasons
 // included — is not a preference this layer can honor while still being the
 // fallback, so it is not offered rather than offered and then contradicted.
-func routineGrader(llm judge.Classifier, creds *provider.CredentialStore, cwd string) judge.Classifier {
+func routineGrader(llm judge.Classifier, creds *provider.CredentialStore, cwd string, trusted bool) judge.Classifier {
 	if jevConfigured(creds) {
-		return JevRouter(llm, creds, cwd)
+		return JevRouter(llm, creds, cwd, trusted)
 	}
 	return judge.Local{Next: llm}
 }
@@ -195,7 +195,7 @@ func JevSettingsFromEnv(getenv func(string) string) JevSettings {
 // reviewer unchanged when the feature is off or no credential exists, so the
 // caller gets byte-for-byte the behaviour it had before — an absent key must
 // never add a failed round trip to every gated call.
-func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd string) judge.Classifier {
+func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd string, trusted bool) judge.Classifier {
 	settings := JevSettingsFromEnv(os.Getenv)
 	if !settings.Enabled {
 		return fallback
@@ -209,6 +209,10 @@ func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd s
 	}
 	if !hasKey {
 		return fallback
+	}
+	dirTrust := "untrusted"
+	if trusted {
+		dirTrust = "trusted"
 	}
 	return &reviewpolicy.Classifier{
 		Client: jev.New(jev.Config{
@@ -227,6 +231,7 @@ func JevRouter(fallback judge.Classifier, creds *provider.CredentialStore, cwd s
 		Fallback: fallback,
 		Config:   reviewpolicy.DefaultConfig(),
 		Cwd:      cwd,
+		DirTrust: dirTrust,
 		// The same extra roots the gate chain enforces with, so the reviewer's
 		// view of the boundary matches the gate's rather than being one directory
 		// stricter (which reads a skills read as a boundary crossing).

@@ -176,6 +176,33 @@ func TestExecutorSandboxRequestReachesTool(t *testing.T) {
 	}
 }
 
+func TestExecutorExecutionBindingRequiresDirectEnvelope(t *testing.T) {
+	const binding = "git-push-v1:reviewed"
+	var saw string
+	tool := execTool{name: "echo", run: func(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+		saw = agentcore.ExecutionBindingFromContext(ctx)
+		return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("ok")}}, nil
+	}}
+	cfg := newExecCfg(t, tool)
+	cfg.BeforeToolCall = func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		return &agentcore.BeforeToolCallDecision{Direct: true, ExecutionBinding: binding}
+	}
+	if msg, _ := executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "bound", Name: "echo"}, nil); msg.IsError || saw != binding {
+		t.Fatalf("direct binding was not published: result=%+v binding=%q", msg, saw)
+	}
+
+	for _, dec := range []*agentcore.BeforeToolCallDecision{
+		{ExecutionBinding: binding},
+		{Direct: true, Sandbox: true, ExecutionBinding: binding},
+	} {
+		saw = "stale"
+		cfg.BeforeToolCall = func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision { return dec }
+		if _, _ = executeToolCall(context.Background(), cfg, agentcore.AgentToolCall{ID: "not-direct", Name: "echo"}, nil); saw != "" {
+			t.Fatalf("non-direct decision published binding: decision=%+v binding=%q", dec, saw)
+		}
+	}
+}
+
 // TestExecutorReadGrantReachesTool verifies the beforeToolCall ReadGrant
 // decision is published into the context the tool executes with, the same seam
 // the sandbox request uses. Without this the whole out-of-workspace read flow

@@ -285,7 +285,11 @@ func (t *BashTool) Description() string {
 		"inside an OS sandbox by default (writes confined to the workspace and temp dir, " +
 		"network off). Set network=on for a call that needs outbound access, such as " +
 		"git push or a package download: the authorization gate decides execution " +
-		"AND network in one review, keeping the file sandbox. A sandbox denial is " +
+		"AND network in one review, keeping the file sandbox. For one literal git push, " +
+		"the gate resolves the effective push remote from local Git config without network; " +
+		"a resolved SSH transport becomes a binding-checked one-call outside-sandbox need " +
+		"because known_hosts and SSH identities are intentionally excluded. Do not add " +
+		"require_escalated merely to explain a named SSH remote. A sandbox denial is " +
 		"labelled in the output — when a command legitimately needs files the " +
 		"sandbox denies, retry it with " +
 		"sandbox_permissions=\"require_escalated\" plus a short justification, which " +
@@ -518,6 +522,11 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	if a.Command == "" {
 		return errorResult("bash: command is required"), nil
+	}
+	if binding := agentcore.ExecutionBindingFromContext(ctx); binding != "" {
+		if err := judge.VerifyExecutionBinding(ctx, "bash", args, t.Dir, binding); err != nil {
+			return errorResult("bash: " + err.Error()), nil
+		}
 	}
 	if a.Network == "on" && (t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess) &&
 		!agentcore.NetworkGrantedFromContext(ctx) && !agentcore.DirectGrantedFromContext(ctx) {

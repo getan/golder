@@ -17,6 +17,12 @@ second authorization system.
 escape is decided by the same level: on a `require_escalated` call, `allow` or
 `confirm` runs it outside the sandbox, `contain` runs it isolated and never
 escapes, and `deny` blocks. There is no separate direct field.
+One deterministic exception does not rely on a model-authored escape flag:
+a single literal `git push` has its effective push remote resolved locally
+before review. A verified SSH transport contributes one `network` need and one
+binding-checked `run outside the sandbox (git SSH)` need because credential
+material is deliberately absent from the file sandbox. The reviewer/person
+still decides; opaque or changing remotes stay contained/fail closed.
 `GOLDER_SANDBOX=enforce` overrides the level too: every bash call is contained,
 and the note says so. A network answer the reviewer gave separately still
 applies inside a contained call, while any other un-granted need blocks it.
@@ -61,6 +67,12 @@ withholds, and an unconfined run is never mistaken for an ordinary approval.
 Ratings are concrete capabilities, not high/medium/low: `needs:` names what the
 call required, `granted:` names what the answer actually allowed. A simple call
 with no extra capability has neither suffix.
+
+For Git SSH, the approval row names `run outside the sandbox (git SSH)` even
+when the model did not guess `require_escalated`. Reviewer state contains only
+transport/host/authentication enums and hook state—never the effective URL,
+credentials, repository path or hook contents. The approved URL/hook snapshot
+is hashed and revalidated immediately before Bash starts.
 
 `confirm` is a grade, not a capability: in `ask` it is the dialog line before
 the person answers (`→ your call`); after an approval the transcript note is an

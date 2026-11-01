@@ -129,6 +129,11 @@ type BeforeToolCallDecision struct {
 	Bare bool
 	// BareReason is the sentence a note and the card carry when Bare is set.
 	BareReason string
+	// ExecutionBinding is a non-secret fingerprint of locally derived facts an
+	// unconfined decision relied on (for example an effective Git SSH remote).
+	// The executor publishes it to the tool, which must revalidate immediately
+	// before spawn. It grants nothing by itself and is ignored when Block is set.
+	ExecutionBinding string
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

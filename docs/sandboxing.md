@@ -54,13 +54,22 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 - `shellfacts` 解析失败、含 `for`/`if` 等构造、出现 `$VAR`/`$(...)`/`$((...))`/进程替换、赋值改变程序或加载（`PATH=/tmp/bin`、`LD_PRELOAD=...`、`HOME=...`）→ 收容；`GOCACHE=`/`TMPDIR=` 这类缓存/临时目录不改变执行，仍可枚举；
 - 程序本身是运行文本或包装器（`bash`/`sh`/`python`/`node`/`make`/`docker`/`env`/`xargs`/`sudo` 等）→ 收容；
 - 命令行里出现凭据路径（`~/.ssh` 等）→ 收容（凭据永远不可授权）；
-- 其余（`git push`、`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
+- 单条、字面量 `git push` 先走下述 Git 远端事实解析；其余可完整枚举的命令（`go test`、`ls`、`cargo build` 等）→ 不套沙箱，直接在宿主上跑。
+
+#### Git push 的确定性远端事实
+
+`git push origin …` 的 `origin` 不是传输事实。ConsentGate 在审查前只运行 Git 的**本地配置读取命令**（`remote get-url --push --all`、`config`、`symbolic-ref`、`rev-parse`），不联网、不调用 credential helper、不提示密码，把结果压成结构化且无凭据的事实：`operation=push`、远端名称、`transport=ssh|https|…`、经过 ASCII 校验的主机名、认证类别、是否需要网络/沙箱外运行、以及本地 pre-push hook 是 absent/present/disabled/opaque。有效 URL、用户名、仓库路径、token、hook 路径和内容都不送给评审模型。
+
+- `pushurl` 优先，`pushInsteadOf`/`insteadOf`、linked worktree、当前分支的 `pushRemote`/`remote.pushDefault`/`branch.remote` 均由 Git 自己按实际配置解析；
+- SSH push 客观需要沙箱故意排除的 `known_hosts` 与 SSH agent/identity，因此形成 `network + run outside the sandbox (git SSH)` 的一次性 Need，不要求模型从历史输出猜，也不要求它先撞一次沙箱；`auto` 的 allow/confirm 或 `ask` 的人工同意才会授予，contain/deny/评审失败不运行；
+- 审查只覆盖一条无 wrapper、无动态变量、无 `-c`/`--config-env` 的 `git push`。自定义 `core.sshCommand`/`GIT_SSH_COMMAND`、remote helper、无法解析的配置、外部/超大 hook 一律标成 opaque 并保持收容；显式 `--no-verify` 记录为 hook disabled；
+- 授权携带有效远端 URL（仅用于哈希）和可执行 pre-push hook 内容的非秘密 SHA-256 binding。BashTool 在 spawn 前重新解析并比对；远端、URL rewrite、SSH 命令、hook 状态/内容发生变化就失败关闭，绝不拿旧批准执行新目标。这个复核不是网络轮询，只是紧邻执行的本地配置读取。
 
 `GOLDER_SANDBOX=enforce` 仍然把**每一条**都收进沙箱，优先于信封**和档位**：`auto` 的 allow/confirm + `require_escalated`、`ask` 的“沙箱外运行”都会被强制收容，并播报实际结果；`full-access` 不变；`ask`/`auto` 的信封相同。每次 bash 结果和 worker 执行的原生文件工具（`read`/`grep`/`find`/`ls`/`view_image`/`apply_patch`）的结果都带 `details.envelope`（`sandbox`/`bare`）：TUI 卡片标题带 `·sandbox`/`·unconfined`，REPL 结果行后缀同义。原生文件工具由 `toolworker` 的一次性沙箱执行；`full-access`、allow/confirm 授权的越界或没有 runner 时退回进程内，标 `bare`。`todo`/`websearch`/`webfetch`/`write_stdin` 等不走 OS 沙箱的工具没有这个标记。信封只改变**已批准**调用的执行位置，不产生批准；显式 `require_escalated` 的越界在非 enforce 下由档位决定。
 
 **为什么原生文件工具不需要 `require_escalated`**：它们确实也走 worker，但 worker 是**每次调用新建的沙箱**，而调用参数（或 patch 文本）已经点名了它要碰的路径。`ReadGrant`/`WriteGrant` 只是把这一条路径加进本次 worker 的 `CallPolicy`（`ReadFiles`/`WriteFiles`，或目录根），沙箱其余部分照旧关闭——这是“在沙箱里开一个精确的小口”，不是 escape。bash 的**读取和网络同样走窄授权**；一次性读/写授权会进入 bash 本次调用的 `ReadFiles`/`ReadDirs`、`WriteFiles`/`WriteDirs`——目录按 subtree，文件按 literal，所以“读/写这个命名路径”不需要 escape。只有范围无法从命令文本表达（变量、重定向、任意程序），或者删除目标本身需要父目录写权限时，才走会话级 writable root（仍在沙箱内）或 `require_escalated`（allow/confirm 档，整个进程出沙箱）。执行层只有一个 `Direct` 信封位，它由档位派生；`ReadGrant`/`WriteGrant` 都不是它。
 
-网络是另一个维度，并且**按次**决定：没有持久化的网络白名单，也没有单独的 `/network` 命令。需要联网的调用由模型声明 `network:"on`，这条能力请求和外部路径、沙箱外运行一起进入同一次决策。`auto` 下评审的 Allow/Confirm 直接携带声明的网络，Contain 只在评审同时授予网络时保留；`ask` 在同一个弹窗里问；`read-only` 拒绝；`full-access` 不问。信封只决定执行位置，不改变网络授权。
+网络是另一个维度，并且**按次**决定：没有持久化的网络白名单，也没有单独的 `/network` 命令。需要联网的调用通常由模型声明 `network: "on"`；对上述已确定解析的 Git push，`needsNetwork` 事实也会产生同一个按次 Need，避免一个漏写字段让 SSH escape 获准却没有匹配的网络裁决。这条能力请求和外部路径、沙箱外运行一起进入同一次决策。`auto` 下评审的 Allow/Confirm 直接携带声明/派生的网络，Contain 只在评审同时授予网络时保留；`ask` 在同一个弹窗里问；`read-only` 拒绝；`full-access` 不问。信封只决定执行位置，不改变网络授权。
 
 ### `auto` 的审查器（就是会话模型）
 
@@ -145,9 +154,9 @@ export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
 
 ### 网络与 golder 自身状态
 
-**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network:"on`（例如 `git push`、包下载），授权门在**同一次**审批里决定是否授予这一次的网络能力——授予后仍留在文件沙箱内，不需要"脱离沙箱提权"。`auto` 的 Allow/Confirm 直接携带网络，Contain 只在评审授予网络时保留；`ask` 与 Confirm 在同一个弹窗里按次决定；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。一次批准只覆盖这一次调用：没有跨调用记住的网络规则。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
+**网络默认关闭，且按次授权**：沙箱内 `network*` 默认 deny / `--unshare-net`。需要联网的调用由模型在 `bash` 参数里声明 `network: "on"`（包下载等）；可确定解析的 Git push 另由 `needsNetwork` 本地事实提出同一能力。授权门在**同一次**审批里决定是否授予这一次的网络能力。普通网络调用获准后仍留在文件沙箱内，不需要"脱离沙箱提权"；Git SSH 的独立 unconfined Need 来自凭据边界，不是"因为网络所以提权"。`auto` 的 Allow/Confirm 直接携带网络，Contain 只在评审授予网络时保留；`ask` 与 Confirm 在同一个弹窗里按次决定；评估器无法给出明确网络答案时问人（`ask`/TUI 弹窗），无人可问则失败关闭。一次批准只覆盖这一次调用：没有跨调用记住的网络规则。环境变量 `GOLDER_SANDBOX_NETWORK` 已移除（不再有全局开网开关）。
 
-**Bare 与网络无关**：已批准的 Bare 命令跑在宿主上，网络是它的自然能力；但一次 Bare 批准不等于一次网络授权——需要联网的容器/命令仍要在调用里声明网络意图，由同一次决策授予。contained 调用同理：评审的 Allow/Confirm 携带网络，Contain 以评审是否授予网络为准。
+**Bare 与网络无关**：已批准的 Bare 命令跑在宿主上，网络是它的自然能力；但一次 Bare 批准不等于一次网络授权——普通联网命令仍要在调用里声明网络意图；唯一的派生入口是上面确定解析的 Git push，由 `needsNetwork` 事实提出同一个按次能力。contained 调用同理：评审的 Allow/Confirm 携带网络，Contain 以评审是否授予网络为准。
 
 **golder 自身状态始终拒读写**：`ProtectedGolderPaths()` 返回**整个状态根**（`~/.golder`，或 `$GOLDER_HOME`）。它平时就不在白名单里，但若项目根恰好在状态根内，项目绑定会连它一起覆盖——所以在可写绑定**之后**再显式拒一次（macOS 用 deny 规则，Linux 用空 tmpfs 覆盖，后挂载生效）。拒的是目录而不是文件清单：清单式的旧写法已经落后过一次——`grants.json`（决定 agent 能读写什么的那份文件）当时不在清单里，而 `trust.json` 在。按目录拒之后，以后往状态根里新增任何文件都自动受保护。
 

@@ -34,6 +34,7 @@ package judge
 //     (GOLDER_SANDBOX=enforce).
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -133,9 +134,14 @@ func EnvelopeBare(command, lang string) (bool, string) {
 // envelopeFor answers the envelope question for one call: only a shell call has
 // a command line to read, and a call whose arguments do not carry one (a
 // malformed argument object) stays contained.
-func envelopeFor(call agentcore.AgentToolCall, lang string) (bool, string) {
+func envelopeFor(ctx context.Context, call agentcore.AgentToolCall, lang string) (bool, string) {
 	if !strings.EqualFold(call.Name, "bash") {
 		return false, ""
+	}
+	if executionBlocksBare(ctx) {
+		return false, localized(lang,
+			"Git 远端传输无法被本地配置事实安全解析，继续保持隔离",
+			"Git remote transport could not be safely resolved from local configuration, so it stays contained")
 	}
 	command, ok := bashCommand(call.Arguments)
 	if !ok {
