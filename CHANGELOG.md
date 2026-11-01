@@ -80,6 +80,11 @@ interactive REPL/TUI.
   [v1.5.35 release notes](docs/releases/v1.5.35.md).
 
 ### Security
+- **Go and HTML parsing vulnerabilities are patched for v1.5.42**: release
+  builds use Go 1.27.3 instead of 1.27.1, and `golang.org/x/net` moves from
+  v0.60.0 to v0.62.0. This removes reachable standard-library HTTP/TLS/x509
+  findings plus GO-2026-6866 and GO-2026-6860 in HTML rendering/parsing paths.
+  Exact-toolchain `govulncheck` reports no reachable vulnerabilities afterward.
 - **Controlled macOS helpers can configure only their own allocated PTY**
   (v1.5.16): the sandbox bootstrap binds terminal ioctls to the child terminal
   and its verified controlling-terminal alias, not every host terminal.
