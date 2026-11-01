@@ -23,6 +23,15 @@ no daemon/provider credentials. The person and project agents intentionally
 share that default. Explicitly authorized named profiles provide separate login
 identities.
 The pinned allocator uses basic password storage and a mock macOS keychain.
+That cookie-encryption choice is part of profile compatibility, not just a launch
+optimization. Ordinary macOS Chromium defaults to the system Keychain, so opening
+the same `user-data-dir` in a GUI process can write cookies the controlled runtime
+cannot decrypt. A GUI-only verification fallback must start only after the owned
+browser releases the profile, use `--password-store=basic` and
+`--use-mock-keychain`, and keep the same saved browser proxy route. It must exit
+completely before the controlled pane reopens. `browser status` exposes these
+non-secret runtime facts and the derived authorized profile path; it never reads
+or returns cookie names or values.
 These precautions do **not** impose an outer filesystem deny policy on
 Chromium's main process; it is a trusted browser binary, not an arbitrary shell.
 Control stays on the native, owned CDP endpoint. Ordinary pane input cannot

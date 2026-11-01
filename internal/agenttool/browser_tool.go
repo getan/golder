@@ -86,7 +86,9 @@ func (t *BrowserTool) Name() string { return "browser" }
 
 const browserToolUseHint = " Use this tool rather than launching `golder browse` or `kitty-browse` through bash: " +
 	"the browser tool owns the pane identity, control socket and cleanup. " +
-	"Open with profile:<name> only when the person chooses to remember logins; first use needs exact operator confirmation. " +
+	"The default open uses a persistent project-shared profile and remembers logins; profile:<name> selects a separate project-scoped identity whose first use needs exact operator confirmation. " +
+	"On macOS, a manual GUI Chromium login against that profile must use the status-reported profile, basic password store, mock keychain and browser proxy after the owned browser fully closes; otherwise cookies may exist but be unreadable. " +
+	"If verification cannot be completed in the pane and the person explicitly requests a GUI login, inspect status before that narrow installed-Chromium fallback; never import a personal profile, overlap profile users, read or export cookies, or retry verification to bypass it. " +
 	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
 	"Only resume after the person explicitly continues and confirms the call, or uses Ctrl+G in the pane."
 
@@ -97,7 +99,7 @@ func (t *BrowserTool) Description() string {
 				browserToolUseHint
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse an owned instance or start a controlled browser with a fresh profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. Ambient proxy variables are ignored; the person's saved /proxy browser setting is applied on launch. External control requires host_control:true and one-call authorization." +
+			"Or call open with a URL to reuse an owned instance or start a controlled browser with the persistent project-shared profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. Ambient proxy variables are ignored; the person's saved /proxy browser setting is applied on launch. External control requires host_control:true and one-call authorization." +
 			browserToolUseHint
 	}
 	if t.allowControl {
@@ -392,8 +394,12 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		if err != nil {
 			return browserError(err), nil
 		}
+		payload := map[string]any{"ok": true, "result": json.RawMessage(result)}
+		if a.Action == "status" {
+			payload["runtime"] = t.browserRuntimeDiagnostics(info)
+		}
 		return agentcore.AgentToolResult{
-			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{"ok": true, "result": json.RawMessage(result)}))},
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(payload))},
 			Details: map[string]any{"action": a.Action, "browser": meta.BrowserID},
 		}, nil
 	case "screenshot":
@@ -771,8 +777,12 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		t.Control.mu.Unlock()
 		matches := instance.Info.LoginProfile == browserLoginProfile(t.cwd, effectiveProfile)
 		if matches && t.Control.profileAllowed(effectiveProfile) {
+			proxyMode := browserProxyModeUnknown
+			if ok && owned.proxyMode != "" {
+				proxyMode = owned.proxyMode
+			}
 			t.Control.mu.Lock()
-			t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: effectiveProfile, browserRuntime: true, policy: controlPolicyStamp()}
+			t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: effectiveProfile, proxyMode: proxyMode, browserRuntime: true, policy: controlPolicyStamp()}
 			t.Control.mu.Unlock()
 		} else if a.Profile != "" && (!ok || owned.profile != effectiveProfile) {
 			continue

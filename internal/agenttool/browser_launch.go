@@ -403,7 +403,7 @@ func adoptBrowserPaneWithExit(ctx context.Context, cwd string, spec paneSpec, wi
 	}
 	rememberBrowserPane(record)
 	if g := controlGuardFrom(ctx); g != nil {
-		g.rememberBrowser(info.BrowserID, spec.Socket, windowID, spec.PersistentProfile)
+		g.rememberBrowser(info.BrowserID, spec.Socket, windowID, spec.PersistentProfile, spec.ProxyMode)
 	}
 	// The metadata is what discovery and a later session read. Losing it is not
 	// fatal for this session, so it does not fail the pane.

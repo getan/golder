@@ -19,6 +19,11 @@ interactive REPL/TUI.
   profile caches while retaining login state and downloads. Agent guidance
   forbids repository-local Go/Chromium caches; tuios scratch shells export the
   shared GOPATH/GOMODCACHE/GOCACHE captured before XDG isolation.
+- **Observable browser login compatibility**: browser guidance now distinguishes
+  the persistent project-default identity from separately named identities and
+  records the macOS basic-password-store/mock-keychain invariant. `browser status`
+  reports the authorized profile/runtime plus actual and configured proxy modes
+  without opening Chromium's cookie database or exposing cookie data.
 - **Deterministic Git push transport review**: before grading one literal
   `git push`, the consent gate resolves the effective push URL from local Git
   configuration without contacting the remote and gives every reviewer the same

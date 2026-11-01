@@ -237,6 +237,7 @@ func TestControlledBrowsersShareProjectDefaultProfile(t *testing.T) {
 	}
 	want := mustPersistentBrowserProfile(t, root, sharedBrowserProfileName)
 	if a.Profile != want || b.Profile != want || a.PersistentProfile != sharedBrowserProfileName || b.PersistentProfile != sharedBrowserProfileName ||
+		a.ProxyMode != browserProxyModeDirect || b.ProxyMode != browserProxyModeDirect ||
 		!slices.Contains(a.Argv, "-profile-dir") || !slices.Contains(b.Argv, "-profile-dir") || slices.Contains(a.Argv, "-private") || slices.Contains(b.Argv, "-private") {
 		t.Fatalf("fresh browsers do not share the project default profile: a=%+v b=%+v", a, b)
 	}

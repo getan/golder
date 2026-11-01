@@ -308,6 +308,9 @@ func TestControlledBrowserPaneCarriesExplicitProxyFlag(t *testing.T) {
 	if len(spec.Argv) < len(wantTail) || !slices.Equal(spec.Argv[len(spec.Argv)-len(wantTail):], wantTail) {
 		t.Fatalf("browser argv = %q, want tail %q", spec.Argv, wantTail)
 	}
+	if spec.ProxyMode != browserProxyModeProxy {
+		t.Fatalf("proxy mode = %q, want %q", spec.ProxyMode, browserProxyModeProxy)
+	}
 }
 
 // Registration asks "can a browser be started here". With the built-in pane

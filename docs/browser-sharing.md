@@ -2,9 +2,9 @@
 
 Named-profile sharing was introduced in **Golder v1.5.41** with
 **kitty-browse v0.2.7**. The project-shared default and bounded component-cache
-behavior below are in the current unreleased changes. A normal release build
-uses the version pinned in `go.mod`; restart the Golder workspace after upgrading
-so new panes use the updated browser implementation.
+behavior below shipped in **Golder v1.5.42** with **kitty-browse v0.2.8**. A
+normal release build uses the version pinned in `go.mod`; restart the Golder
+workspace after upgrading so new panes use the updated browser implementation.
 
 ## Remembering a login
 
@@ -45,8 +45,20 @@ screenshots either. An approved agent can reuse the already-running browser of
 the same project/profile, rather than starting a competing Chromium process.
 
 The person and an approved agent interact with the same browser, so a manual
-login also applies to later agent navigation. Cookies stay in Chromium; they
-are not exported as tool output or put into the model context.
+login in the controlled pane applies to later agent navigation. A fallback GUI
+Chromium must use the same project profile, basic password store, mock macOS
+keychain and browser proxy, and the controlled browser must fully exit first.
+Opening the same profile directory with ordinary macOS Chromium defaults is not
+equivalent: cookies may be present on disk but encrypted for the system Keychain
+and unreadable to the controlled runtime. Close the GUI browser completely before
+reopening the pane; never overlap two Chromium processes on one profile or import
+a personal Chrome profile. `browser status` reports the authorized profile path,
+runtime/cookie-store mode and actual versus configured proxy mode without opening
+the cookie database. The actual route is `direct` or `proxy` when the current
+session launched the browser, and honestly remains `unknown` after adopting an
+endpoint whose launch route cannot be attested; the configured route is what the
+next launch will use. Cookies stay in Chromium; their names and values are not
+exported as tool output or put into the model context.
 
 ## Footer and input
 

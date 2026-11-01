@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,7 +21,7 @@ import (
 func TestBrowserToolDescriptionKeepsBrowserInTheTool(t *testing.T) {
 	tool := &BrowserTool{cwd: t.TempDir(), allowControl: true}
 	desc := strings.ToLower(tool.Description())
-	for _, want := range []string{"rather than launching", "golder browse", "kitty-browse", "owns the pane identity", "socket", "cleanup"} {
+	for _, want := range []string{"rather than launching", "golder browse", "kitty-browse", "owns the pane identity", "socket", "cleanup", "persistent project-shared profile", "separate project-scoped identity", "basic password store", "mock keychain", "inspect status"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("browser description is missing %q:\n%s", want, tool.Description())
 		}
@@ -29,9 +31,10 @@ func TestBrowserToolDescriptionKeepsBrowserInTheTool(t *testing.T) {
 // fakeBrowser serves the kitty-browse control API over a stub transport. The
 // tool only speaks HTTP, so no real Unix socket is needed to test it.
 type fakeBrowser struct {
-	mu      sync.Mutex
-	actions []map[string]any
-	replies map[string]string
+	mu           sync.Mutex
+	actions      []map[string]any
+	replies      map[string]string
+	loginProfile string
 	// screenshot, when set, replaces the tiny invalid PNG the default fake
 	// returns. Tests that need a decodable/large image set this.
 	screenshot []byte
@@ -41,7 +44,11 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body string
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/info":
-		body = `{"apiVersion":"v1","browserId":"browser-1","activeTabId":"tab-2","backend":"native-cdp",
+		profile := ""
+		if f.loginProfile != "" {
+			profile = `,"loginProfile":` + strconv.Quote(f.loginProfile)
+		}
+		body = `{"apiVersion":"v1","browserId":"browser-1"` + profile + `,"activeTabId":"tab-2","backend":"native-cdp",
 			"tabs":[
 				{"id":"tab-1","targetId":"t1","url":"http://localhost:3000/","title":"App","index":1,"active":false},
 				{"id":"tab-2","targetId":"t2","url":"http://localhost:3000/login","title":"Login","index":2,"active":true}
@@ -78,6 +85,114 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}, nil
+}
+
+func TestBrowserStatusAddsNonSensitiveRuntimeDiagnostics(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	root := t.TempDir()
+	f := &fakeBrowser{
+		replies:      map[string]string{"interaction.status": `{"busy":false,"paused":false}`},
+		loginProfile: browserLoginProfile(root, sharedBrowserProfileName),
+	}
+	tool := newFakeBrowserToolWith(t, root, f)
+	tool.Control.BrowserProxy = func() (string, error) { return "http://127.0.0.1:7897", nil }
+	tool.Control.browsers["browser-1"] = controlledBrowser{
+		socket: "stub", profile: sharedBrowserProfileName, proxyMode: browserProxyModeProxy, browserRuntime: true,
+	}
+
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"status"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("status failed: %s", agentcore.ContentToText(res.Content))
+	}
+	var out struct {
+		Result  map[string]any       `json:"result"`
+		Runtime browserRuntimeStatus `json:"runtime"`
+	}
+	text := agentcore.ContentToText(res.Content)
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("decode status %q: %v", text, err)
+	}
+	wantProfile, err := persistentBrowserProfile(root, sharedBrowserProfileName, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Result["busy"] != false || out.Runtime.ProfileMode != "project-default" ||
+		out.Runtime.PersistentProfile != sharedBrowserProfileName || out.Runtime.ProfileDir != wantProfile ||
+		!out.Runtime.ProfileInUse || out.Runtime.RuntimeMode != "controlled-headless" ||
+		out.Runtime.CookieStore != "basic" || out.Runtime.MockKeychain != (runtime.GOOS == "darwin") ||
+		out.Runtime.ProxyMode != browserProxyModeProxy || out.Runtime.ConfiguredProxyMode != browserProxyModeProxy ||
+		!out.Runtime.ManualLogin.CloseProfileFirst || !out.Runtime.ManualLogin.SameProxyRequired {
+		t.Fatalf("status diagnostics = %+v; result=%v", out.Runtime, out.Result)
+	}
+	wantFlags := []string{"--password-store=basic"}
+	if runtime.GOOS == "darwin" {
+		wantFlags = append(wantFlags, "--use-mock-keychain")
+	}
+	if strings.Join(out.Runtime.ManualLogin.RequiredFlags, " ") != strings.Join(wantFlags, " ") {
+		t.Fatalf("manual login flags = %q, want %q", out.Runtime.ManualLogin.RequiredFlags, wantFlags)
+	}
+	for _, forbidden := range []string{"cookie_value", "sessionid", "authorization"} {
+		if strings.Contains(strings.ToLower(text), forbidden) {
+			t.Fatalf("status exposed credential-shaped detail %q: %s", forbidden, text)
+		}
+	}
+}
+
+func TestBrowserStatusDoesNotClaimCookieBackendForExternalEndpoint(t *testing.T) {
+	root := t.TempDir()
+	f := &fakeBrowser{replies: map[string]string{
+		"interaction.status": `{"busy":false,"paused":false}`,
+	}}
+	tool := newFakeBrowserToolWith(t, root, f)
+
+	res, err := tool.Execute(context.Background(), "1", json.RawMessage(`{"action":"status"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.IsError {
+		t.Fatalf("status failed: %s", agentcore.ContentToText(res.Content))
+	}
+	var out struct {
+		Runtime browserRuntimeStatus `json:"runtime"`
+	}
+	if err := json.Unmarshal([]byte(agentcore.ContentToText(res.Content)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Runtime.RuntimeMode != "external" || out.Runtime.CookieStore != browserStatusUnknown ||
+		out.Runtime.MockKeychain || out.Runtime.ProxyMode != browserProxyModeUnknown ||
+		len(out.Runtime.ManualLogin.RequiredFlags) != 0 {
+		t.Fatalf("external endpoint was presented as a controlled runtime: %+v", out.Runtime)
+	}
+}
+
+func TestBrowserOpenPreservesKnownProxyModeWhenReusingOwnedProfile(t *testing.T) {
+	root := t.TempDir()
+	tool := NewBrowserTool(root, true)
+	trustFakeControl(tool.Control)
+	instance := browserInstance{Socket: "stub", Selected: true, Info: browserctl.Info{
+		BrowserID: "browser-1", LoginProfile: browserLoginProfile(root, sharedBrowserProfileName),
+	}}
+	tool.discover = func(context.Context) browserDiscovery {
+		return browserDiscovery{Instances: []browserInstance{instance}}
+	}
+	tool.Control.browsers[instance.Info.BrowserID] = controlledBrowser{
+		socket: canonicalBrowserSocket(instance.Socket), profile: sharedBrowserProfileName,
+		proxyMode: browserProxyModeProxy, browserRuntime: true, policy: controlPolicyStamp(),
+	}
+
+	res := runBrowserCall(t, tool, `{"action":"open"}`)
+	if res.IsError {
+		t.Fatalf("open failed: %s", agentcore.ContentToText(res.Content))
+	}
+	tool.Control.mu.Lock()
+	got := tool.Control.browsers[instance.Info.BrowserID].proxyMode
+	tool.Control.mu.Unlock()
+	if got != browserProxyModeProxy {
+		t.Fatalf("reused browser proxy mode = %q, want %q", got, browserProxyModeProxy)
+	}
 }
 
 func newFakeBrowserTool(t *testing.T, allowControl bool, root string) *BrowserTool {

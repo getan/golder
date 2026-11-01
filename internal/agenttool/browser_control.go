@@ -124,12 +124,14 @@ func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persisten
 	if err != nil {
 		return paneSpec{}, err
 	}
+	spec.ProxyMode = browserProxyModeDirect
 	if g.BrowserProxy != nil {
 		proxy, err := g.BrowserProxy()
 		if err != nil {
 			return paneSpec{}, err
 		}
 		if proxy != "" {
+			spec.ProxyMode = browserProxyModeProxy
 			last := len(spec.Argv) - 1 // the single positional URL is always last
 			argv := append([]string{}, spec.Argv[:last]...)
 			argv = append(argv, "-proxy-server", proxy, spec.Argv[last])

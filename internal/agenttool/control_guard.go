@@ -55,6 +55,7 @@ type controlledBrowser struct {
 	socket         string
 	window         string
 	profile        string
+	proxyMode      string
 	isolated       bool
 	browserRuntime bool
 	policy         [32]byte
@@ -144,15 +145,11 @@ func (g *ControlGuard) checkBrowser(ctx context.Context, id, socket string, host
 	return nil
 }
 
-func (g *ControlGuard) rememberBrowser(id, socket, window string, profile ...string) {
+func (g *ControlGuard) rememberBrowser(id, socket, window, profile, proxyMode string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	p := g.panes[window]
-	name := ""
-	if len(profile) > 0 {
-		name = profile[0]
-	}
-	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, profile: name, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
+	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, profile: profile, proxyMode: proxyMode, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
 }
 
 func (g *ControlGuard) release(id string) {
