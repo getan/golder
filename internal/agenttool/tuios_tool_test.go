@@ -181,7 +181,7 @@ func TestTuiosRunUsesEventWaitForExpect(t *testing.T) {
 	}
 }
 
-func TestTuiosRunFallsBackWithoutShellIntegration(t *testing.T) {
+func TestTuiosRunNeverResendsAfterAmbiguousShellError(t *testing.T) {
 	f, sock := startTuiosFake(t)
 	useTuiosFake(t, sock)
 	f.answer = func(verb string, params map[string]any) any {
@@ -208,15 +208,15 @@ func TestTuiosRunFallsBackWithoutShellIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IsError {
-		t.Fatalf("fallback run failed: %s", agentcore.ContentToText(res.Content))
+	if !res.IsError {
+		t.Fatalf("missing completion proof must be an error: %s", agentcore.ContentToText(res.Content))
 	}
-	if !f.seen("send-text") {
-		t.Fatal("fallback did not type the command")
+	if f.seen("send-text") {
+		t.Fatal("potentially executed command was sent again")
 	}
 	d, _ := res.Details.(map[string]any)
-	if fallback, _ := d["fallback"].(bool); !fallback {
-		t.Fatalf("details = %#v, want fallback", res.Details)
+	if d["execution_state"] != "unknown" || d["retryable"] != false {
+		t.Fatalf("details = %#v, want unknown/non-retryable", res.Details)
 	}
 }
 

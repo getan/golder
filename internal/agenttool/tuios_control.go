@@ -49,7 +49,18 @@ func (t *TuiosTool) PrepareCall(ctx context.Context, raw json.RawMessage) (json.
 			return nil, fmt.Errorf("pane target %q is missing or ambiguous; use an exact id", want)
 		}
 		a.Window = ids[0]
-		if p, ok := t.Control.pane(a.Window); ok {
+		remote := a.Remote
+		for _, win := range list.Windows {
+			if win.WindowID == a.Window {
+				remote = remote || tuiosRemoteHint(win)
+			}
+		}
+		if remote {
+			a.Cwd = ""
+			a.Network = "on"
+			a.Remote = true
+		}
+		if p, ok := t.Control.pane(a.Window); ok && !remote {
 			a.Cwd = p.cwd
 			if p.network {
 				a.Network = "on"
@@ -104,10 +115,22 @@ func (t *TuiosTool) checkControl(ctx context.Context, a *tuiosArgs) error {
 		return err
 	}
 	a.Window = win.WindowID
-	if p, ok := t.Control.pane(a.Window); ok && a.Action == "run" {
+	a.TargetLabel, a.HostHint = win.DisplayName, win.CwdHost
+	a.Remote = a.Remote || tuiosRemoteHint(win)
+	if input && a.Remote && !t.Control.network(ctx) {
+		return errors.New("SSH pane input requires reviewed network authority")
+	}
+	if input && a.Remote && agentcore.SandboxRequestedFromContext(ctx) {
+		return errors.New("a local pane sandbox cannot promise containment of commands on an SSH server")
+	}
+	if p, ok := t.Control.pane(a.Window); ok && a.Action == "run" && !a.Remote {
 		// A command is reviewed relative to this fixed cwd, not whatever a
 		// previous input (or the person) left in the interactive shell.
-		a.Command = "cd " + quoteControlArg(p.cwd) + " && " + a.Command
+		if a.Script != "" {
+			a.Script = "cd " + quoteControlArg(p.cwd) + " || exit\n" + a.Script
+		} else {
+			a.Command = "cd " + quoteControlArg(p.cwd) + " && " + a.Command
+		}
 	}
 	return nil
 }

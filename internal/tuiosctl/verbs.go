@@ -23,6 +23,8 @@ type Window struct {
 	AgentState    string `json:"agent_state"`
 	HistoryRows   int    `json:"history_rows"`
 	Revision      uint64 `json:"revision"`
+	Cwd           string `json:"cwd,omitempty"`
+	CwdHost       string `json:"cwd_host,omitempty"`
 	// Own marks the pane running this golder process, when it is known. It is
 	// computed by the tool, not sent by the daemon.
 	Own bool `json:"own,omitempty"`

@@ -25,6 +25,15 @@ func TestCommandsPreserveArgv(t *testing.T) {
 	}
 }
 
+func TestScriptsAreReviewedAsCodeNotOpaqueTransfer(t *testing.T) {
+	body := "printf ok\nrm -rf /outside/data"
+	raw, _ := json.Marshal(map[string]any{"action": "run", "script": body, "remote": true})
+	commands := Commands("tuios", raw)
+	if len(commands) != 1 || commands[0] != body || !Network("tuios", raw) || ReadOnly("tuios", raw) {
+		t.Fatal("script bypasses command/network review")
+	}
+}
+
 func TestAllBrowserURLEntriesRejectActiveAndLocalSchemes(t *testing.T) {
 	for _, raw := range []string{"file:///etc/passwd", " File:///etc/passwd", "javascript:1", "data:text/html,x", "chrome://settings", "https://user:secret@example.com", "//example.com"} {
 		if BrowserURL(raw) == nil {
