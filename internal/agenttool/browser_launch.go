@@ -126,8 +126,9 @@ func BrowserLaunchAvailable() bool {
 func KittyBrowseAvailable() bool { return BrowserLaunchAvailable() }
 
 // browserPaneSpec is the pane command for a browser named name, pointed at url.
-// The socket and profile live under the workspace: the profile keeps the login
-// state across restarts, and the socket path is discoverable without config.
+// Fresh controlled browsers use a stable project-default profile outside the
+// checkout, shared by the person and agents. Separately authorized named login
+// profiles live beside it. The workspace keeps only socket/identity metadata.
 func browserPaneSpec(cwd, name, url string) (paneSpec, error) {
 	return browserPaneSpecFor(cwd, name, name, url)
 }
@@ -147,14 +148,13 @@ func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) 
 	if err := ensureBrowserDir(dir); err != nil {
 		return paneSpec{}, fmt.Errorf("browser state directory %s must be owner-only and real: %w", dir, err)
 	}
-	// A controlled launch must not reuse or prune another session's profile.
-	profile := browserProfileDir(cwd, profileName)
-	if persistent != "" {
-		var err error
-		profile, err = persistentBrowserProfile(cwd, persistent, true)
-		if err != nil {
-			return paneSpec{}, err
-		}
+	// Remove legacy workspace profiles only after they are old and no live
+	// control socket still names them. New fresh launches no longer create one.
+	pruneBrowserProfiles(dir, "", time.Now())
+	persistent = effectiveBrowserProfileName(persistent)
+	profile, err := persistentBrowserProfile(cwd, persistent, true)
+	if err != nil {
+		return paneSpec{}, err
 	}
 	if err := privatepath.EnsureDir(profile); err != nil {
 		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
@@ -188,9 +188,7 @@ func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) 
 	if err != nil {
 		return paneSpec{}, err
 	}
-	if persistent != "" {
-		argv = append(append(append([]string{}, argv[:len(argv)-1]...), "-login-profile", browserProjectKey(cwd)+"/"+persistent), url)
-	}
+	argv = append(append(append([]string{}, argv[:len(argv)-1]...), "-login-profile", browserLoginProfile(cwd, persistent)), url)
 	return paneSpec{
 		Name: name, Kind: "browser", Socket: socket, URL: url,
 		Profile: profile, PersistentProfile: persistent, RecordName: profileName,
@@ -227,7 +225,12 @@ func browserPaneArgv(socket, profile, url string) ([]string, error) {
 		}
 		argv = append(argv, "-chrome", abs)
 	}
-	return append(argv, "-profile-dir", profile, "-control-socket", socket, url), nil
+	if profile == "" {
+		argv = append(argv, "-private")
+	} else {
+		argv = append(argv, "-profile-dir", profile)
+	}
+	return append(argv, "-control-socket", socket, url), nil
 }
 
 func staleBrowserSocket(path string) bool {
@@ -262,8 +265,26 @@ func pruneBrowserProfiles(dir, keep string, now time.Time) {
 		if err != nil || now.Sub(info.ModTime()) < browserProfileMaxAge {
 			continue
 		}
+		if browserProfileIsLive(dir, entry.Name()) {
+			continue
+		}
 		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
 	}
+}
+
+func browserProfileIsLive(dir, profileName string) bool {
+	name := strings.TrimSuffix(profileName, ".profile")
+	meta, err := readBrowserMetadata(filepath.Join(dir, name+".browser.json"))
+	if err != nil || canonicalBrowserSocket(meta.Profile) != canonicalBrowserSocket(filepath.Join(dir, profileName)) {
+		return false
+	}
+	info, err := os.Lstat(meta.Socket)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	// false means live OR not safely classifiable. Pruning is deliberately
+	// conservative around a socket another process may still own.
+	return !staleBrowserSocket(meta.Socket)
 }
 
 // startBrowserPane opens a pane running a browser and adopts the socket it
@@ -309,6 +330,9 @@ type browserPaneExit struct {
 }
 
 func waitAndAdoptBrowserPane(ctx context.Context, c *tuiosctl.Client, cwd string, spec paneSpec, windowID string, wait time.Duration) (browserPaneRecord, error) {
+	if spec.StartupReport != "" {
+		defer os.Remove(spec.StartupReport)
+	}
 	wctx, cancel := context.WithCancel(ctx)
 	exit := make(chan browserPaneExit, 1)
 	done := make(chan struct{})

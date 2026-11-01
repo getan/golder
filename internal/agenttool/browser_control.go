@@ -32,6 +32,7 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 			return json.Marshal(a)
 		}
 		var candidates []browserInstance
+		effectiveProfile := effectiveBrowserProfileName(a.Profile)
 		for _, instance := range t.discovery(ctx).Instances {
 			if a.Browser != "" && instance.Info.BrowserID != a.Browser {
 				continue
@@ -39,11 +40,12 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 			t.Control.mu.Lock()
 			ownedBrowser, owned := t.Control.browsers[instance.Info.BrowserID]
 			t.Control.mu.Unlock()
-			profileMatch := a.Profile != "" && instance.Info.LoginProfile == browserProjectKey(t.cwd)+"/"+a.Profile
+			profileMatch := instance.Info.LoginProfile == browserLoginProfile(t.cwd, effectiveProfile)
 			if a.Profile != "" && !profileMatch && (!owned || ownedBrowser.profile != a.Profile) {
 				continue
 			}
-			if owned || profileMatch || a.HostControl || t.Control.full() {
+			ownedMatch := owned && ownedBrowser.profile == effectiveProfile
+			if ownedMatch || profileMatch || a.HostControl || t.Control.full() {
 				candidates = append(candidates, instance)
 			}
 		}
@@ -110,11 +112,12 @@ func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persisten
 	if g == nil {
 		return paneSpec{}, errors.New("browser control policy is not configured")
 	}
-	if persistent != "" && !g.profileAllowed(persistent) {
+	persistent = effectiveBrowserProfileName(persistent)
+	if !g.profileAllowed(persistent) {
 		return paneSpec{}, errors.New("saved browser logins have not been authorized for this agent session")
 	}
 	profileName := name
-	if !g.full() || persistent != "" {
+	if !g.full() || persistent != sharedBrowserProfileName {
 		profileName += "-" + g.id + "-" + rand.Text()[:8]
 	}
 	spec, err := browserPaneSpecWithProfile(cwd, name, profileName, url, persistent)
@@ -135,7 +138,7 @@ func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persisten
 	}
 	spec.Name = name
 	if spec.Embedded {
-		spec.StartupReport = filepath.Join(spec.Profile, ".startup-"+rand.Text()[:12]+".json")
+		spec.StartupReport = filepath.Join(browserStateDir(cwd), ".startup-"+rand.Text()[:12]+".json")
 		argv := append([]string{}, spec.Argv[:2]...)
 		argv = append(argv, "-golder-startup-report", spec.StartupReport)
 		spec.Argv = append(argv, spec.Argv[2:]...)

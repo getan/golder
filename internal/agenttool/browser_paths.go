@@ -2,10 +2,11 @@ package agenttool
 
 // Where a browser pane keeps its state.
 //
-// Two facts drive this file. A Chromium profile holds cookies and logins, so it
-// must be owner-only, not the 0755 directory a first draft created. And a
-// control endpoint is a Unix socket, whose path is short by construction: 104
-// bytes on macOS and 108 on Linux, counting the terminating NUL. A workspace
+// Two facts drive this file. A Chromium profile holds cookies and logins, so the
+// project-shared and named profiles live owner-only under GOLDER_HOME, outside
+// the checkout. And a control endpoint is a Unix socket, whose path is short by
+// construction: 104 bytes on macOS and 108 on Linux, counting the terminating
+// NUL. A workspace
 // near the limit would otherwise make the browser fail to bind *after* golder
 // had already opened the pane, with the daemon reporting "invalid argument" and
 // no way to tell why. So the socket stays in .golder/browser when it fits, and
@@ -18,9 +19,8 @@ package agenttool
 // shared temp directory:
 //
 //   - A checkout can contain ".golder" or ".golder/browser" as a symlink to
-//     anywhere, so neither is followed: state is written only into a real
-//     directory (see ensureBrowserDir), and the profile directory inside it is
-//     created the same way.
+//     anywhere, so neither is followed: socket/identity state is written only
+//     into a real directory (see ensureBrowserDir).
 //   - A runtime directory in a world-writable temp dir can be pre-created by
 //     another account, so its name is scoped by uid (privatepath.RuntimeRoot)
 //     and a directory owned by someone else is refused rather than used.
@@ -68,8 +68,9 @@ func checkBrowserName(name string) error {
 	return nil
 }
 
-// browserStateDir is the workspace's browser state directory: profiles, the
-// sockets that fit, and the metadata that makes a runtime socket discoverable.
+// browserStateDir is the workspace's browser state directory: sockets that fit
+// and metadata that makes a runtime socket discoverable. Old releases also put
+// profiles here; launch prunes those legacy directories conservatively.
 func browserStateDir(cwd string) string { return filepath.Join(cwd, ".golder", "browser") }
 
 // ensureBrowserDir creates dir — a .golder/browser state directory or a runtime
@@ -98,7 +99,7 @@ func ensureBrowserDir(dir string) error {
 	return nil
 }
 
-// browserProfileDir is the persistent Chromium profile for name.
+// browserProfileDir is the legacy workspace Chromium profile for name.
 func browserProfileDir(cwd, name string) string {
 	return filepath.Join(browserStateDir(cwd), name+".profile")
 }

@@ -386,6 +386,10 @@ const approvalGuide = "Approvals are capability answers, not retries. " +
 	"approach or tell the user exactly what access is needed. " +
 	"When the sandbox reports that it cannot allocate a pseudo-terminal (PTY), do not retry with " +
 	"sandbox_permissions=\"require_escalated\"; use an in-process or unit test instead. " +
+	"Never redirect GOCACHE, GOMODCACHE or GOPATH into the repository to evade the sandbox; use " +
+	"the installed Go defaults, and request the exact cache path once if the boundary denies it. " +
+	"Do not download Chromium/Chrome-for-Testing into a checkout: use an installed browser or a " +
+	"shared cache outside repositories, and clean any explicit test runtime after the opt-in run. " +
 	"Invoke installed programs by name rather than by an absolute $HOME path, so a read the call " +
 	"does not need does not raise a consent dialog. " +
 	"For predictable out-of-workspace I/O, ask once for a boundary grant " +

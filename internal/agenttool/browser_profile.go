@@ -16,6 +16,21 @@ import (
 
 var browserProfileName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
+// The project default is intentionally shared by the person and every agent
+// working in this project. Other named profiles retain exact per-agent consent.
+const sharedBrowserProfileName = "default"
+
+func effectiveBrowserProfileName(name string) string {
+	if name == "" {
+		return sharedBrowserProfileName
+	}
+	return name
+}
+
+func browserLoginProfile(root, name string) string {
+	return browserProjectKey(root) + "/" + effectiveBrowserProfileName(name)
+}
+
 // persistentBrowserProfile resolves only a dedicated, project-scoped profile.
 // No caller can supply a filesystem path or select a personal Chrome profile.
 // It stays outside the checkout, where ordinary agent file tools cannot read it.
@@ -46,6 +61,9 @@ func (g *ControlGuard) profileAllowed(name string) bool {
 	if g == nil {
 		return false
 	}
+	if name == sharedBrowserProfileName {
+		return true
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.browserProfiles[name]
@@ -63,8 +81,9 @@ func (t *BrowserTool) checkProfileAccess(info browserctl.Info) error {
 }
 
 // RequiresOperatorConfirmationFor is a trusted, per-call policy, not a model
-// argument. A fresh agent must get a person's answer before accessing logins;
-// the ordinary auto reviewer and even full-access mode cannot invent it.
+// argument. The project default is deliberately shared; a fresh agent must get
+// a person's answer before accessing any other named login profile. The
+// ordinary auto reviewer and even full-access mode cannot invent it.
 func (t *BrowserTool) RequiresOperatorConfirmationFor(raw json.RawMessage) bool {
 	var a browserArgs
 	_ = json.Unmarshal(raw, &a)

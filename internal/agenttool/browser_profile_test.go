@@ -5,11 +5,22 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
 )
+
+func mustPersistentBrowserProfile(t *testing.T, root, name string) string {
+	t.Helper()
+	profile, err := persistentBrowserProfile(root, name, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile
+}
 
 func TestBrowserProfileConsentIsSessionLocal(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
@@ -38,6 +49,13 @@ func TestBrowserProfileConsentIsSessionLocal(t *testing.T) {
 	}
 	if a.checkProfileAccess(browserctl.Info{LoginProfile: "another-project/publishing"}) == nil {
 		t.Fatal("same profile name granted access across projects")
+	}
+	shared := browserctl.Info{LoginProfile: browserLoginProfile(root, sharedBrowserProfileName)}
+	if a.checkProfileAccess(shared) != nil || b.checkProfileAccess(shared) != nil || !a.Control.profileAllowed(sharedBrowserProfileName) {
+		t.Fatal("project default profile was not shared across agent sessions")
+	}
+	if a.RequiresOperatorConfirmationFor(json.RawMessage(`{"action":"open","profile":"default"}`)) {
+		t.Fatal("project default profile unexpectedly requires named-profile consent")
 	}
 	p, err := persistentBrowserProfile(root, "publishing", true)
 	if err != nil {
@@ -97,5 +115,67 @@ func TestSavedBrowserProfileAdoptionNeedsExactConsent(t *testing.T) {
 	other := NewBrowserTool(root, true)
 	if other.checkProfileAccess(instance.Info) == nil {
 		t.Fatal("profile consent leaked to another pane/agent")
+	}
+}
+
+func TestSharedDefaultBrowserAdoptionNeedsNoNamedProfileConsent(t *testing.T) {
+	root := t.TempDir()
+	instance := browserInstance{Socket: filepath.Join(root, "browser.sock"), Info: browserctl.Info{
+		BrowserID: "shared-browser", LoginProfile: browserLoginProfile(root, sharedBrowserProfileName),
+	}}
+	for _, tool := range []*BrowserTool{NewBrowserTool(root, true), NewBrowserTool(root, true)} {
+		tool.discover = func(context.Context) browserDiscovery {
+			return browserDiscovery{Instances: []browserInstance{instance}}
+		}
+		raw, err := tool.PrepareCall(context.Background(), json.RawMessage(`{"action":"open"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tool.RequiresOperatorConfirmationFor(raw) {
+			t.Fatal("shared default browser requested named-profile confirmation")
+		}
+		ctx := agentcore.WithNetworkGrant(context.Background())
+		if result, _ := tool.Execute(ctx, "open", raw, nil); result.IsError {
+			t.Fatalf("agent session could not adopt shared default browser: %+v", result)
+		}
+		if err := tool.Control.checkBrowser(context.Background(), instance.Info.BrowserID, instance.Socket, false); err != nil {
+			t.Fatal("shared default browser was not remembered by this agent session:", err)
+		}
+	}
+}
+
+func TestAuthorizedNamedProfileStaysSeparateFromSharedDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("GOLDER_HOME", home)
+	root := shortRoot(t)
+	if err := ConfigureEmbeddedBrowser(os.Args[0]); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ConfigureEmbeddedBrowser("") })
+	guard := NewControlGuard(root)
+	guard.browserProfiles = map[string]bool{"publishing": true}
+	spec, err := controlledBrowserSpecWithProfile(guard, root, "browser", "about:blank", "publishing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := persistentBrowserProfile(root, "publishing", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Profile != want || !slices.Contains(spec.Argv, "-profile-dir") || slices.Contains(spec.Argv, "-private") {
+		t.Fatalf("named login profile was not persistent: %+v", spec)
+	}
+	shared, err := persistentBrowserProfile(root, sharedBrowserProfileName, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shared == spec.Profile {
+		t.Fatal("named login profile reused the project shared profile")
+	}
+	if !strings.HasPrefix(spec.Profile, filepath.Join(home, "browser-profiles")+string(filepath.Separator)) {
+		t.Fatalf("named profile escaped private storage: %q", spec.Profile)
+	}
+	if spec.StartupReport == "" || filepath.Dir(spec.StartupReport) != browserStateDir(root) {
+		t.Fatalf("startup report should stay out of the login profile: %+v", spec)
 	}
 }

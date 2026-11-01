@@ -127,8 +127,9 @@ If browser exit cannot be confirmed, the tool returns an error without a hard
 close. An explicit `force:true` permits the fallback, reported as
 `close_mode: forced`. Cancellation never triggers that fallback. This policy
 applies only to closes through golder, not tuios' own close key, daemon crashes
-or machine shutdown. It neither deletes persistent profiles nor prevents
-Chromium from downloading components into them.
+or machine shutdown. It never deletes the project-default or explicitly named
+persistent profiles. kitty-browse disables component updates and prunes only
+regenerable caches from them.
 
 ## Permissions
 
