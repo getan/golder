@@ -1,4 +1,7 @@
-# Reliable tasks through an existing SSH pane (development)
+# Reliable tasks through an existing SSH pane
+
+Available in **Golder v1.5.41**. Restart Golder after upgrading to refresh the
+tool schema; existing SSH server installations do not need an upgrade.
 
 No remote tuios, daemon, agent, Python installation, root access or SSH config
 change is required. Golder sends a one-shot `sh -c` receiver through the existing

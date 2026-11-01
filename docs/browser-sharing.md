@@ -1,13 +1,9 @@
-# Human and agent browser sharing (development)
+# Human and agent browser sharing
 
-These changes are not released. Build/test with a Go workspace containing both
-Golder and the local kitty-browse module (`.build/browser-input.go.work` in this
-development checkout). The released dependency pin and installed Golder are
-unchanged; an ordinary build against the old dependency does not include the new
-browser-side features.
-
-The browser-side implementation is recorded in local kitty-browse commit
-`780b2a7`; publishing/updating the dependency remains a separate step.
+Available in **Golder v1.5.41**, with the published **kitty-browse v0.2.7**
+dependency. A normal build uses the version pinned in `go.mod`; no local sibling
+checkout or development Go workspace is required. Restart the Golder workspace
+after upgrading so new panes use the updated browser implementation.
 
 ## Remembering a login
 
@@ -89,7 +85,7 @@ alone never auto-resumes. A new browser process starts with fresh pause state.
 In addition to both modules' normal unit/race checks:
 
 ```sh
-GOWORK="$PWD/.build/browser-input.go.work" \
+GOWORK=off \
   GOLDER_TEST_BROWSER_PROFILE=1 \
   GOLDER_TEST_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome-headless-shell \
   go test -race ./internal/agenttool -run 'Browser.*Profile|ExecutorDynamicOperator' -count=1
