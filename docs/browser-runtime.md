@@ -18,17 +18,27 @@ It is produced by trusted launch classification, never a model argument:
 | Read-only / sandbox enforce | No launch exception |
 
 The process gets a scrubbed environment, a private HOME (including
-`CFFIXED_USER_HOME`), a dedicated profile and no daemon/provider credentials.
+`CFFIXED_USER_HOME`), a stable project-default profile outside the checkout and
+no daemon/provider credentials. The person and project agents intentionally
+share that default. Explicitly authorized named profiles provide separate login
+identities.
 The pinned allocator uses basic password storage and a mock macOS keychain.
 These precautions do **not** impose an outer filesystem deny policy on
 Chromium's main process; it is a trusted browser binary, not an arbitrary shell.
 Control stays on the native, owned CDP endpoint. Ordinary pane input cannot
 be used to turn the exception into a terminal escape.
 
+The allocator disables Chromium component updates (including optional speech
+and on-device optimization models). Every persistent profile startup removes a
+closed list of regenerable caches after taking the profile lock; login-bearing
+state and downloads are not touched. kitty-browse's explicit `-private` mode
+still uses an owner-marked temporary tree, but it is not Golder's default.
+
 ## Startup diagnostics
 
-The child writes an owner-only, atomic startup report beside its dedicated
-profile. Raw startup output is bounded to 16 KiB, redacted before persistence,
+The child writes an owner-only, atomic startup report in the workspace's small
+browser state directory and Golder removes it after startup resolves. Raw output
+is bounded to 16 KiB, redacted before persistence,
 and stopped/cleared once the about:blank anchor connects to CDP, before the
 first user-page navigation. Normal page, console and keyboard traffic is not a
 startup log.

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -110,9 +111,10 @@ func TestBrowserStateDirectoryRefusesASymlinkedBrowserDir(t *testing.T) {
 	}
 }
 
-// A profile holds cookies and logins, so it is never created through a link a
-// checkout could contain either.
-func TestBrowserProfileRefusesASymlink(t *testing.T) {
+// Fresh browsers no longer touch the legacy workspace profile path at all. A
+// checkout may contain an old/symlinked path, but the external shared profile
+// must ignore it; named-profile symlinks are covered by browser_profile_test.
+func TestFreshBrowserIgnoresLegacyProfileSymlink(t *testing.T) {
 	withEmbeddedBrowser(t, selfExecutable(t))
 	root := shortRoot(t)
 	if err := os.MkdirAll(browserStateDir(root), 0o700); err != nil {
@@ -125,9 +127,13 @@ func TestBrowserProfileRefusesASymlink(t *testing.T) {
 	if err := os.Symlink(target, browserProfileDir(root, "browser")); err != nil {
 		t.Skipf("this platform has no symlinks: %v", err)
 	}
-	if _, err := browserPaneSpec(root, "browser", "https://example.com"); err == nil ||
-		!strings.Contains(err.Error(), "owner-only") {
-		t.Fatalf("err = %v, want a refusal of the linked profile directory", err)
+	spec, err := browserPaneSpec(root, "browser", "https://example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Profile != mustPersistentBrowserProfile(t, root, sharedBrowserProfileName) ||
+		!slices.Contains(spec.Argv, "-profile-dir") || slices.Contains(spec.Argv, "-private") {
+		t.Fatalf("fresh browser reused legacy profile: %+v", spec)
 	}
 	info, err := os.Lstat(target)
 	if err != nil {
@@ -185,6 +191,7 @@ func TestBrowserRecordMustNameGoldersOwnPaths(t *testing.T) {
 		ok   bool
 	}{
 		{name: "golders own record", meta: browserMetadata{Name: "browser", Socket: socket, Profile: browserProfileDir(root, "browser")}, ok: true},
+		{name: "shared project profile", meta: browserMetadata{Name: "browser", Socket: socket, Profile: mustPersistentBrowserProfile(t, root, sharedBrowserProfileName), PersistentProfile: sharedBrowserProfileName}, ok: true},
 		{name: "no profile", meta: browserMetadata{Name: "browser", Socket: socket}, ok: true},
 		{name: "escaping name", meta: browserMetadata{Name: "../../id_rsa", Socket: socket}, ok: false},
 		{name: "dot name", meta: browserMetadata{Name: ".", Socket: socket}, ok: false},

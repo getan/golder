@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Bounded browser and developer caches**: fresh controlled browsers now use
+  one persistent project-default profile outside the checkout, shared by the
+  person and agents, rather than `.golder/browser/*.profile` directories.
+  kitty-browse disables Chromium component updates and clears only regenerable
+  profile caches while retaining login state and downloads. Agent guidance
+  forbids repository-local Go/Chromium caches; tuios scratch shells export the
+  shared GOPATH/GOMODCACHE/GOCACHE captured before XDG isolation.
 - **Deterministic Git push transport review**: before grading one literal
   `git push`, the consent gate resolves the effective push URL from local Git
   configuration without contacting the remote and gives every reviewer the same

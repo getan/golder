@@ -160,8 +160,8 @@ const browserControlSchema = `{
   "properties":{
     "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume"]},
     "host_control":{"type":"boolean","description":"Request one-call access to a browser not created by this agent. Attaching does not grant later control."},
-    "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance."},
-    "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: opt into a named project-scoped profile that remembers logins. First use requires exact operator confirmation for this agent session; never a personal Chrome profile or filesystem path."},
+    "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance. Chromium permits only one live browser per persistent profile."},
+    "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: use a separate named project-scoped profile. Omit for the persistent project-shared default; other names need exact first-use confirmation. Never a personal Chrome profile or filesystem path."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
     "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
@@ -755,8 +755,10 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		d.Instances = nil
 		d.Truncated = false
 	}
-	// Discovery is not authority. Never auto-adopt another session's profile.
+	// The project default is deliberately shared and may be adopted by another
+	// agent session. Discovery alone is not authority for any other named profile.
 	filtered := d.Instances[:0]
+	effectiveProfile := effectiveBrowserProfileName(a.Profile)
 	for _, instance := range d.Instances {
 		if a.Browser != "" && instance.Info.BrowserID != a.Browser {
 			continue
@@ -764,18 +766,16 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		if t.checkProfileAccess(instance.Info) != nil {
 			continue
 		}
-		if a.Profile != "" {
+		t.Control.mu.Lock()
+		owned, ok := t.Control.browsers[instance.Info.BrowserID]
+		t.Control.mu.Unlock()
+		matches := instance.Info.LoginProfile == browserLoginProfile(t.cwd, effectiveProfile)
+		if matches && t.Control.profileAllowed(effectiveProfile) {
 			t.Control.mu.Lock()
-			owned, ok := t.Control.browsers[instance.Info.BrowserID]
+			t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: effectiveProfile, browserRuntime: true, policy: controlPolicyStamp()}
 			t.Control.mu.Unlock()
-			matches := instance.Info.LoginProfile == browserProjectKey(t.cwd)+"/"+a.Profile
-			if matches && t.Control.profileAllowed(a.Profile) {
-				t.Control.mu.Lock()
-				t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: a.Profile, browserRuntime: true, policy: controlPolicyStamp()}
-				t.Control.mu.Unlock()
-			} else if !ok || owned.profile != a.Profile {
-				continue
-			}
+		} else if a.Profile != "" && (!ok || owned.profile != effectiveProfile) {
+			continue
 		}
 		if t.Control.checkBrowser(ctx, instance.Info.BrowserID, instance.Socket, a.HostControl) == nil {
 			filtered = append(filtered, instance)

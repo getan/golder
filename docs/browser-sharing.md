@@ -1,27 +1,40 @@
 # Human and agent browser sharing
 
-Available in **Golder v1.5.41**, with the published **kitty-browse v0.2.7**
-dependency. A normal build uses the version pinned in `go.mod`; no local sibling
-checkout or development Go workspace is required. Restart the Golder workspace
-after upgrading so new panes use the updated browser implementation.
+Named-profile sharing was introduced in **Golder v1.5.41** with
+**kitty-browse v0.2.7**. The project-shared default and bounded component-cache
+behavior below are in the current unreleased changes. A normal release build
+uses the version pinned in `go.mod`; restart the Golder workspace after upgrading
+so new panes use the updated browser implementation.
 
 ## Remembering a login
 
-The default remains an isolated profile for a fresh controlled browser. To opt
-in, ask the agent to open a named profile, for example:
+The default is a persistent **project-shared profile**. A browser opened without
+`profile` always uses `$GOLDER_HOME/browser-profiles/<project-key>/default.profile`,
+outside the checkout. Its cookies, storage, history and downloads survive
+restarts, and the visible person plus agents working in this project use the
+same live browser and profile. The default profile is intentionally available
+without the separate named-profile consent prompt.
+
+For a separate identity, ask the agent to open a named profile, for example:
 
 ```json
 {"action":"open","profile":"publishing","url":"https://juejin.cn/"}
 ```
 
-The profile is dedicated to Golder and scoped to this project. Its cookies and
-storage remain under the private `$GOLDER_HOME/browser-profiles/<project-key>/`
-directory, outside the checkout. Names are not filesystem paths. Personal Chrome
-profiles are never imported. Explicit profiles are not subject to the temporary
-workspace profile pruning routine. Chromium's own profile lock prevents two
-processes from opening the same profile concurrently.
+Named profiles live beside `default.profile` and are still project-scoped.
+Names are not filesystem paths, and personal Chrome profiles are never imported.
+Chromium's own profile lock prevents two processes from opening the same profile
+concurrently; a second agent adopts the live default browser instead of starting
+a competing process.
 
-First use requires an **exact human confirmation**, using `/permissions ask`.
+Chromium component auto-updates are disabled for these automation profiles, so
+speech packs and on-device optimization models cannot silently add gigabytes.
+On each profile open, kitty-browse removes only regenerable component,
+HTTP/code/GPU/shader caches. Cookies, Local Storage, IndexedDB, history and
+downloads are retained.
+
+First use of a non-default named profile requires an **exact human confirmation**,
+using `/permissions ask`.
 Automatic review and full-access mode do not manufacture that confirmation.
 After approval, this agent session may reopen the same profile without asking
 again; the person may return to `/permissions auto` after the initial consent.

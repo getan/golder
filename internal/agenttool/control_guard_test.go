@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -219,8 +220,9 @@ func TestBrowserControlNeedsNetworkAndOwnership(t *testing.T) {
 	}
 }
 
-func TestControlledBrowserProfilesArePrivateToSession(t *testing.T) {
+func TestControlledBrowsersShareProjectDefaultProfile(t *testing.T) {
 	root := shortRoot(t)
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	if err := ConfigureEmbeddedBrowser(os.Args[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +235,28 @@ func TestControlledBrowserProfilesArePrivateToSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Profile == b.Profile || a.Profile == browserProfileDir(root, "browser") {
-		t.Fatal("shared login profile reused")
+	want := mustPersistentBrowserProfile(t, root, sharedBrowserProfileName)
+	if a.Profile != want || b.Profile != want || a.PersistentProfile != sharedBrowserProfileName || b.PersistentProfile != sharedBrowserProfileName ||
+		!slices.Contains(a.Argv, "-profile-dir") || !slices.Contains(b.Argv, "-profile-dir") || slices.Contains(a.Argv, "-private") || slices.Contains(b.Argv, "-private") {
+		t.Fatalf("fresh browsers do not share the project default profile: a=%+v b=%+v", a, b)
+	}
+	if insidePath(root, want) {
+		t.Fatalf("project shared profile is inside the checkout: %q", want)
+	}
+	if _, err := os.Stat(browserStateDir(root)); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(browserStateDir(root)); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, entry := range entries {
+			if strings.HasSuffix(entry.Name(), ".profile") {
+				t.Fatalf("fresh controlled browser persisted %s", entry.Name())
+			}
+		}
 	}
 	if len(a.Socket) > unixSocketPathLimit {
-		t.Fatal("private profile made socket too long")
+		t.Fatal("shared profile made socket too long")
 	}
 }
 

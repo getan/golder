@@ -50,6 +50,7 @@ func selfExecutable(t *testing.T) string {
 // restores whatever was configured before, so state cannot leak between tests.
 func withEmbeddedBrowser(t *testing.T, executable string) {
 	t.Helper()
+	t.Setenv("GOLDER_HOME", t.TempDir())
 	embeddedBrowserMu.RLock()
 	prevExe, prevErr := embeddedBrowserExecutable, embeddedBrowserErr
 	embeddedBrowserMu.RUnlock()
@@ -161,6 +162,57 @@ func TestPruneBrowserProfilesKeepsCurrentAndFresh(t *testing.T) {
 	}
 }
 
+func TestPruneBrowserProfilesKeepsAStaleLiveProfile(t *testing.T) {
+	root := shortRoot(t)
+	dir := browserStateDir(root)
+	if err := ensureBrowserDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	profile := filepath.Join(dir, "live.profile")
+	if err := os.Mkdir(profile, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * browserProfileMaxAge)
+	if err := os.Chtimes(profile, old, old); err != nil {
+		t.Fatal(err)
+	}
+	socket := filepath.Join(dir, "live.sock")
+	_ = newControlFake(t, socket, "live-browser", "quit")
+	if err := writeBrowserMetadata(browserMetadataPath(root, "live"), browserMetadata{
+		Name: "live", Socket: socket, Profile: profile, WindowID: "pane-live", BrowserID: "live-browser",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pruneBrowserProfiles(dir, "", time.Now())
+	if _, err := os.Stat(profile); err != nil {
+		t.Fatalf("live stale profile was pruned: %v", err)
+	}
+}
+
+func TestBrowserPaneSpecPrunesLegacyStaleProfile(t *testing.T) {
+	withEmbeddedBrowser(t, selfExecutable(t))
+	root := shortRoot(t)
+	dir := browserStateDir(root)
+	if err := ensureBrowserDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "legacy.profile")
+	if err := os.Mkdir(stale, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * browserProfileMaxAge)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := browserPaneSpec(root, "browser", "about:blank"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("legacy stale profile survived the next launch: %v", err)
+	}
+}
+
 func TestStaleBrowserSocketDetectsClosedListener(t *testing.T) {
 	root := shortRoot(t)
 	sock := filepath.Join(root, "stale.sock")
@@ -225,14 +277,15 @@ func TestEmbeddedBrowserPaneSpecUsesOwnBrowseArgvWithEmptyPath(t *testing.T) {
 	}
 	want := []string{
 		self, "browse",
-		"-profile-dir", browserProfileDir(root, "browser"),
+		"-profile-dir", mustPersistentBrowserProfile(t, root, sharedBrowserProfileName),
 		"-control-socket", filepath.Join(browserStateDir(root), "browser.sock"),
+		"-login-profile", browserLoginProfile(root, sharedBrowserProfileName),
 		"https://example.com/app",
 	}
 	if !slices.Equal(spec.Argv, want) {
 		t.Fatalf("argv = %q, want %q", spec.Argv, want)
 	}
-	if !spec.Embedded || spec.Socket != browserSocketPath(root) {
+	if !spec.Embedded || spec.Socket != browserSocketPath(root) || spec.Profile != mustPersistentBrowserProfile(t, root, sharedBrowserProfileName) || spec.PersistentProfile != sharedBrowserProfileName {
 		t.Fatalf("spec = %+v", spec)
 	}
 	if !filepath.IsAbs(spec.Argv[0]) {
@@ -328,8 +381,8 @@ func TestConfigureEmbeddedBrowserResetDisables(t *testing.T) {
 	}
 }
 
-// A profile holds live sessions, so the directory and the profile are created
-// owner-only even when an older version left them readable.
+// The workspace state directory and external shared profile are owner-only. A
+// fresh browser must not recreate the legacy profile under the checkout.
 func TestBrowserPaneSpecKeepsBrowserStateOwnerOnly(t *testing.T) {
 	withEmbeddedBrowser(t, selfExecutable(t))
 	root := shortRoot(t)
@@ -343,14 +396,23 @@ func TestBrowserPaneSpecKeepsBrowserStateOwnerOnly(t *testing.T) {
 	if _, err := browserPaneSpec(root, "browser", "https://example.com"); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{dir, browserProfileDir(root, "browser")} {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if perm := info.Mode().Perm(); perm != 0o700 {
-			t.Fatalf("%s is %04o, want 0700", path, perm)
-		}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("%s is %04o, want 0700", dir, perm)
+	}
+	profile := mustPersistentBrowserProfile(t, root, sharedBrowserProfileName)
+	info, err = os.Stat(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("%s is %04o, want 0700", profile, perm)
+	}
+	if _, err := os.Stat(browserProfileDir(root, "browser")); !os.IsNotExist(err) {
+		t.Fatalf("fresh launch left a workspace profile: %v", err)
 	}
 }
 

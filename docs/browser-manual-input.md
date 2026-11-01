@@ -1,15 +1,12 @@
 # Browser pane manual input regression
 
-## Scope and development status
+## Scope and release status
 
 Manual typing and the `browser fill` action use different paths. A successful
 `fill` does not prove terminal keyboard input reaches the page.
 
-The fixes below are in local `../kitty-browse` commit `ffd11dc`. Golder still pins
-`github.com/getan/kitty-browse v0.2.6`; no dependency release, Golder release or
-installed-binary replacement was performed. Use a development Go workspace
-including both modules to exercise the fixes before publishing a dependency.
-The local-only workspace for this verification is `.build/browser-input.go.work`.
+These fixes shipped in kitty-browse v0.2.7 and Golder v1.5.41. A local sibling
+checkout and repository-local Go workspace are no longer required.
 
 ## Reproduced failures
 
@@ -47,7 +44,7 @@ typing while read-only observation is active.
 # runtime. The verified local run used chrome-headless-shell.
 export GOLDER_TEST_CHROMIUM_EXECUTABLE=/absolute/path/to/chrome-headless-shell
 
-GOWORK="$PWD/.build/browser-input.go.work" \
+GOWORK=off \
   GOLDER_TEST_BROWSER_INPUT=1 \
   go test -race ./cmd/golder -run '^TestBrowserManualInputPTY$' -count=5 -timeout 60s
 
