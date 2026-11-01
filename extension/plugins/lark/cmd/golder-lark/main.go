@@ -13,8 +13,8 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
-	"github.com/getan/golder/plugins/lark"
-	"github.com/getan/golder/plugins/lark/internal/larkmcp"
+	"github.com/getan/golder/extension/plugins/lark"
+	"github.com/getan/golder/extension/plugins/lark/internal/larkmcp"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

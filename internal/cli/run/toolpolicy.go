@@ -122,8 +122,8 @@ func quoteNames(names []string) string {
 
 // ValidateToolPolicy checks every allow/deny entry against the assembled tool
 // set. It must run AFTER the full set exists (builtins + memory + task +
-// plugins), because plugin and memory tool names are only known at runtime;
-// validating right after flag parsing would reject legitimate plugin names.
+// extensions), because extension and memory tool names are only known at runtime;
+// validating right after flag parsing would reject legitimate external names.
 //
 // An empty tool set (--no-tools) skips validation entirely: there is nothing to
 // constrain, and reporting every name as unknown would be noise.

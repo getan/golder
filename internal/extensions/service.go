@@ -17,7 +17,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/permissions"
-	legacy "github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/pluginwire"
 )
 
 type Item struct {
@@ -107,7 +107,7 @@ type Manager struct {
 	closed    atomic.Bool
 	persistMu sync.Mutex
 	skills    skillSet
-	events    chan legacy.EventParams
+	events    chan pluginwire.EventParams
 }
 
 func New(opts Options) (*Manager, error) {
@@ -129,7 +129,7 @@ func New(opts Options) (*Manager, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{sources: map[string]*source{}, opts: opts, ctx: ctx, cancel: cancel, events: make(chan legacy.EventParams, 64)}
+	m := &Manager{sources: map[string]*source{}, opts: opts, ctx: ctx, cancel: cancel, events: make(chan pluginwire.EventParams, 64)}
 	m.revision.Store(1)
 	var saved map[string]persisted
 	if b, e := readLimited(m.statePath(), 16<<20); e == nil {

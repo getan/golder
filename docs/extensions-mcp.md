@@ -14,7 +14,7 @@ MCP 使用官方纯 Go SDK；现有自定义 stdio RPC 只作为兼容插件。
 
 ## Background / 背景
 
-现有 `internal/plugin` 已实现 initialize、tools/call、commands/call、event、
+旧实现 `internal/plugin` 曾处理 initialize、tools/call、commands/call、event、
 shutdown；它不是 MCP。原来的 Discover 会运行插件目录中的所有可执行文件，
 `run.ToolRegistry` 还会忽略注册错误。这些行为不适合新的扩展管理边界。
 现有 Skills 已支持 `/skill-name`、disable-model-invocation 和正文按需读取；
@@ -202,11 +202,13 @@ CLI 修改影响之后启动；不创建跨进程控制 daemon。当前会话使
 
 ```text
 Extensions
-  Tool sources
-  › local-tools     [CLI]           enabled       4 tools
+  MCP servers
     team-docs       [MCP · stdio]   disconnected  8 / 24 tools
+  CLI plugins
+  › local-tools     [CLI]           enabled       4 tools
+  Legacy RPC plugins
     old-audit       [RPC · legacy]  running       1 command
-  Skills
+  Skills · instructions only
     code-review     [Skill]         available     user
     release-flow    [Skill]         manual only   user
 ```
@@ -256,7 +258,7 @@ Skills 的目录、frontmatter、按需读取和 `/skill-name` 行为保持兼�
 |---|---|
 | 公共类型、legacy 插件 SDK | `extension`、`extension/plugin`；提供纯 Go 示例 |
 | 配置、指纹信任、目录缓存、受控进程 | `internal/extensions`；session approval 与 remembered approval 分开保存 |
-| CLI / legacy / MCP adapters | CLI argv、legacy v1、官方 Go SDK v1.8.0（stdio + HTTP） |
+| CLI / legacy / MCP adapters | CLI argv、`internal/pluginwire` 数据类型、官方 Go SDK v1.8.0（stdio + HTTP） |
 | 启动和轮次接线 | SetupEnv 只发现；runtime SyncTools 在轮次边界发布完整目录 |
 | CLI / REPL / TUI | `extensioncmd` 共享命令；TUI picker 分工具来源和 Skills，耗时操作异步 |
 | Skills | 保留现有加载和 slash，增加包归属、预览和会话禁用，不授予工具权限 |
@@ -264,6 +266,10 @@ Skills 的目录、frontmatter、按需读取和 `/skill-name` 行为保持兼�
 | Legacy dynamic commands | 只显示声明；不直接执行，避免旧 slash 回调绕过 gate |
 | Agent SDK | `agent.WithExtensions()` 显式 opt-in，默认不继承机器上的外部来源 |
 | 项目声明、自动 OAuth、sampling / elicitation、MCP server | 本轮不提供 |
+
+旧的 `internal/plugin.Manager` 会在启动时直接运行插件目录，并另建一套工具、slash
+command 和事件接线；`SetupEnv` 已不再构造它。实现现统一由 `internal/extensions.Manager`
+拥有进程和目录生命周期，legacy v1 只保留 `internal/pluginwire` 的兼容数据结构。
 
 模型工具名发生字符变形或截断时会带稳定 hash；精确允许列表以 `tools` 输出中的
 `model_name` 为准，不从展示名猜测 wire name。完整操作示例见

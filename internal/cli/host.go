@@ -17,7 +17,6 @@ import (
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
@@ -48,10 +47,6 @@ type Host interface {
 	Reminders() *runtime.ReminderRegistry
 	Slash() *runtime.SlashRegistry
 	Creds() *provider.CredentialStore
-	Notifier() *plugin.EventNotifier
-	// NotifierHandle returns the plugin event-delivery callback for this
-	// session's runs, or nil when no plugin subscribed.
-	NotifierHandle() func(agentcore.AgentEvent)
 	Trust() *trust.Manager
 	// Permissions returns the live approval mode shared by the session's gates
 	// and tools. /goal and /btw build their own runs and need it to enforce the

@@ -23,6 +23,17 @@ func extensionModel(t *testing.T) Model {
 	if e := extensions.WriteSource(path, extensions.SourceRef{Kind: "plugin", ID: "old"}, &extensions.SourceConfig{Runtime: "rpc", Command: program}); e != nil {
 		t.Fatal(e)
 	}
+	manifestDir := filepath.Join(home, "cli-plugin")
+	if e := os.MkdirAll(manifestDir, 0o700); e != nil {
+		t.Fatal(e)
+	}
+	manifest := filepath.Join(manifestDir, "golder-plugin.toml")
+	if e := os.WriteFile(manifest, []byte("[plugin]\nid='local'\nversion='1'\n"), 0o600); e != nil {
+		t.Fatal(e)
+	}
+	if e := extensions.WriteSource(path, extensions.SourceRef{Kind: "plugin", ID: "local"}, &extensions.SourceConfig{Runtime: "cli", Manifest: manifest}); e != nil {
+		t.Fatal(e)
+	}
 	m, e := extensions.New(extensions.Options{ConfigPath: path})
 	if e != nil {
 		t.Fatal(e)
@@ -38,7 +49,7 @@ func extensionModel(t *testing.T) Model {
 	return res.(Model)
 }
 
-func TestExtensionPickerSeparatesSourcesAndSkills(t *testing.T) {
+func TestExtensionPickerSeparatesSourceKindsAndSkills(t *testing.T) {
 	m := extensionModel(t)
 	res, cmd := m.runSlash("/extensions")
 	m = res.(Model)
@@ -49,7 +60,7 @@ func TestExtensionPickerSeparatesSourcesAndSkills(t *testing.T) {
 	for _, r := range m.menu.pick {
 		text.WriteString(r.Title + " " + r.Status + "\n")
 	}
-	for _, want := range []string{"Tool sources", "MCP · http", "RPC · legacy", "Skills", "demo [Skill]", "manual only"} {
+	for _, want := range []string{"MCP servers", "MCP · http", "CLI plugins", "local [CLI]", "Legacy RPC plugins", "RPC · legacy", "Skills · instructions only", "demo [Skill]", "manual only"} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("missing %s: %s", want, text.String())
 		}
@@ -57,11 +68,30 @@ func TestExtensionPickerSeparatesSourcesAndSkills(t *testing.T) {
 	if !strings.Contains(m.View().Content, "MCP") {
 		t.Fatal("narrow view lost type label")
 	}
-	res, _ = m.runSlash("/skills")
-	m = res.(Model)
-	for _, r := range m.menu.pick {
-		if strings.Contains(r.Title, "remote") {
-			t.Fatal("source in Skills filter")
+	for _, tc := range []struct {
+		command string
+		want    []string
+		reject  []string
+	}{
+		{command: "/mcp", want: []string{"MCP servers", "remote"}, reject: []string{"CLI plugins", "Legacy RPC plugins", "Skills"}},
+		{command: "/plugin", want: []string{"CLI plugins", "local", "Legacy RPC plugins", "old"}, reject: []string{"MCP servers", "Skills"}},
+		{command: "/skills", want: []string{"Skills · instructions only", "demo"}, reject: []string{"MCP servers", "CLI plugins", "Legacy RPC plugins", "remote", "local", "old"}},
+	} {
+		res, _ = m.runSlash(tc.command)
+		m = res.(Model)
+		text.Reset()
+		for _, r := range m.menu.pick {
+			text.WriteString(r.Title + "\n")
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(text.String(), want) {
+				t.Errorf("%s missing %q: %s", tc.command, want, text.String())
+			}
+		}
+		for _, reject := range tc.reject {
+			if strings.Contains(text.String(), reject) {
+				t.Errorf("%s contains %q: %s", tc.command, reject, text.String())
+			}
 		}
 	}
 }

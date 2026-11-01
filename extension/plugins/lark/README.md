@@ -1,4 +1,4 @@
-# Golder Lark MCP plugin
+# Golder Lark MCP extension
 
 `golder-lark` is a separate MCP stdio executable. It wraps **two official native
 CLIs**, not a new Golder runtime:
@@ -13,7 +13,7 @@ an automatic bot fallback. Project needs its own user authorization.
 ## Layout
 
 ```text
-plugins/lark/
+extension/plugins/lark/
   cmd/golder-lark/           executable and local operator commands
   internal/larkmcp/          catalog, runners, OAuth, Project and collaboration adapters
   skills/lark/              optional progressive-disclosure workflow and references
@@ -28,7 +28,7 @@ packages. The plugin does not import the host UI/agent/permission internals.
 Build from this repository (or unpack the matching `golder-lark` release):
 
 ```sh
-GOWORK=off go build -o .build/golder-lark ./plugins/lark/cmd/golder-lark
+GOWORK=off go build -o .build/golder-lark ./extension/plugins/lark/cmd/golder-lark
 ```
 
 Install the official CLIs **yourself**, only for the services you need:
@@ -51,7 +51,7 @@ Generate a disabled source table without executing any service command:
 .build/golder-lark print-config \
   --lark-cli /absolute/path/to/native/lark-cli \
   --project-cli /absolute/path/to/native/meegle \
-  --skills-dir /absolute/path/to/golder/plugins/lark/skills
+  --skills-dir /absolute/path/to/golder/extension/plugins/lark/skills
 ```
 
 Merge that table into your Golder config (normally `$GOLDER_HOME/config.toml`).

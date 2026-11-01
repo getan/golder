@@ -7,8 +7,8 @@ Related: [extensions-mcp.md](extensions-mcp.md), [extensions-state-setup.md](ext
 
 ## 实现记录（优先于下文原始提案细节）
 
-代码集中在 [`plugins/lark/`](../plugins/lark/README.md)，入口为
-`plugins/lark/cmd/golder-lark`；宿主通用能力仍在现有 extensions/seatbelt/gate/UI 包。
+代码集中在 [`extension/plugins/lark/`](../extension/plugins/lark/README.md)，入口为
+`extension/plugins/lark/cmd/golder-lark`；宿主通用能力仍在现有 extensions/seatbelt/gate/UI 包。
 已提供 22 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
 精确人类确认与命令长尾限制。实际配置以 `golder-lark print-config` 生成结果为准。
 

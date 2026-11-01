@@ -129,7 +129,6 @@ func TestRunStatusEnvAndCreds(t *testing.T) {
 	host.live.BaseURL = "https://api.example.com"
 
 	host.slash.AddSkill(runtime.SlashCommand{Name: "my-skill", Expand: func(string) string { return "" }})
-	host.slash.AddPlugin(runtime.SlashCommand{Name: "my-plugin", Run: func(string) (string, string) { return "", "" }})
 
 	host.creds.SetOverride("test-provider", "sk-secretkey-wxyz")
 
@@ -149,10 +148,6 @@ func TestRunStatusEnvAndCreds(t *testing.T) {
 	if !strings.Contains(output, "skills: 1 (my-skill)") {
 		t.Error("expected 'skills: 1 (my-skill)'")
 	}
-	if !strings.Contains(output, "plugins: 1 (my-plugin)") {
-		t.Error("expected 'plugins: 1 (my-plugin)'")
-	}
-
 	if !strings.Contains(output, "credentials & connectivity:") {
 		t.Error("expected 'credentials & connectivity:' section")
 	}

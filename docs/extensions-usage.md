@@ -9,6 +9,46 @@ Golder 的 `/extensions` 是统一管理入口，不是新的执行协议。
 | RPC · legacy | 兼容 golder 原有的自定义 stdio JSON-RPC 插件 |
 | Skill | 知识和流程；保留原来的 frontmatter、按需读取与 `/skill-name` |
 
+## 概念边界：不是三个并列的 runtime
+
+`Extension` 是宿主管理边界，不是与 Plugin/MCP/Skill 并列的第四种类型：
+
+```text
+Extension Manager
+├── Tool sources（会产生模型工具、受 gate/Schema/沙箱约束）
+│   ├── plugin
+│   │   ├── CLI manifest（每次调用一个 argv 进程）
+│   │   └── legacy RPC（兼容 stdio JSON-RPC v1）
+│   └── mcp
+│       ├── stdio
+│       └── Streamable HTTP
+└── Skill catalog（说明和工作流，不连接进程、不授予工具权限）
+```
+
+因此可以口语化地说 UI 里有 Plugin、MCP、Skill 三类，但代码和权限上并非三种
+同构插件：Plugin/MCP 是执行型来源，Skill 是独立的指令目录。MCP Prompt/Resource
+也不是 Skill；它们必须由用户预览并明确附加。
+
+## 代码目录与调用链
+
+| 位置 | 职责 |
+|---|---|
+| `extension/types.go` | 对外稳定、协议无关的 ToolSpec / Call / Result / Progress |
+| `extension/plugin/` | legacy RPC v1 的 Go server SDK；不是宿主加载器 |
+| `internal/extensions/` | 唯一宿主运行时：配置、指纹信任、目录快照、进程、MCP/CLI/RPC adapter、Skills 聚合 |
+| `internal/pluginwire/` | legacy RPC 的内部数据结构；不启动进程 |
+| `internal/runtime/skills.go` | Skill frontmatter、正文解析和目录发现 |
+| `internal/cli/run/extensions.go` | 每轮按 revision 原子更新模型工具与系统提示 |
+| `internal/cli/extensioncmd/` | CLI、REPL 和 TUI 共用的管理语义 |
+| `internal/cli/tui/extensions.go` | `/extensions` picker、详情页和异步操作 |
+| `internal/cli/prompts/registry.go` | `/skills` 管理命令及 `/skill-name` 注册/同步 |
+| `extension/plugins/lark/` | 第一方具体扩展：标准 MCP server + 可选 Skill，不是特殊 runtime |
+
+启动路径是 `run.SetupEnv → extensions.New（只读发现）→ SetSkills → Prompt/ToolRegistry`。
+真正调用时再走 `ManagedExtension tool → host authorization → network/profile gate →
+Schema validation → connectLocked → CLI/RPC/MCP adapter`。目录查看、`list`、`inspect`
+不会执行第三方代码。
+
 本功能不包含飞书集成、第三方工具安装器、市场或 MCP server。宿主和演示程序均为 Go，
 不需要 Node。外部命令由用户安装，golder 不自动执行 npm/npx 或下载运行时。
 
@@ -43,11 +83,14 @@ GOWORK=off go build -o .build/demo-mcp ./examples/extensions/demo-mcp
 ```text
 golder extensions list|doctor [--json]
 golder plugin add <manifest-or-executable> [--id <id>]
-golder plugin list|inspect|tools|logs|enable|disable|remove|test <id>
+golder plugin list|inspect|tools|logs|enable|disable|remove|test|setup|reset <id>
 golder mcp add <id> --transport stdio -- <program> [args...]
 golder mcp add <id> --transport http --url <url>
-golder mcp list|inspect|tools|logs|enable|disable|remove|test <id>
+golder mcp list|inspect|tools|logs|prompts|resources|enable|disable|remove|test|setup|reset <id>
 ```
+
+独立 CLI 只有 `extensions`、`plugin`、`mcp` 三个顶层命令；Skill 是会话目录，使用
+TUI/REPL 的 `/skills` 和 `/skill-name`，没有单独的 `golder skills` 配置命令。
 
 CLI 改配置影响未来启动，不控制已经运行的另一份 golder；不启动额外管理 daemon。
 `list` / `inspect` / `doctor` / `tools` 不启动第三方程序，不联网。
@@ -70,6 +113,12 @@ JSON 查询结果不混入普通日志，错误在 stderr 返回 `extension_erro
 /mcp logs demo
 /mcp disable demo
 /mcp enable demo --yes
+/mcp setup demo [variant]
+/mcp reset demo --yes
+/skills inspect <name>
+/skills preview <name>
+/skills use <name> [arguments]
+/skills enable|disable <name>
 ```
 
 slash 的 enable/disable 默认只影响本会话；`--save` 才记住信任并修改配置。
@@ -79,8 +128,9 @@ resources 用 `/mcp resource <id> <uri>` 预览。预览不自动交给模型。
 
 ## TUI
 
-`/extensions` 显示 Tool sources 与 Skills 两个分区；`/plugin`、`/mcp`、`/skills`
-是同一个 picker 的过滤视图。Enter 打开详情，Esc 关闭。
+`/extensions` 按 MCP servers、CLI plugins、Legacy RPC plugins、Skills
+（instructions only）分为四区；`/plugin`、`/mcp`、`/skills` 是同一个 picker 的
+过滤视图。Enter 打开详情，Esc 关闭。
 
 - CLI：工具、Schema、启动配置、日志和禁用，没有连接按钮。
 - MCP：工具、prompts、resources、连接/重连、刷新和日志。

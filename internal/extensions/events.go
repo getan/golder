@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
-	legacy "github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/pluginwire"
 )
 
 // Observe only queues host-owned metadata. Message bodies, tool arguments and
@@ -30,7 +30,7 @@ func (m *Manager) Observe(ev agentcore.AgentEvent) {
 	}
 	raw, _ := json.Marshal(data)
 	select {
-	case m.events <- legacy.EventParams{Type: ev.EventType(), Data: raw}:
+	case m.events <- pluginwire.EventParams{Type: ev.EventType(), Data: raw}:
 	default:
 	}
 }

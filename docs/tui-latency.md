@@ -69,8 +69,7 @@ after the elapsed milliseconds:
 | --- | --- |
 | `diag` | process capabilities; terminal environment whitelist |
 | `main` | argument count, flag/config/redaction/grant phases, dispatch, exit code |
-| `setup` | provider resolution, tool set, memory, plugins, skills, prompt build; the one-time sandbox runner probe (bwrap on Linux) |
-| `plugin` | each executable's basename, load success and handshake duration; aggregate count |
+| `setup` | provider resolution, tool set, memory, extension catalog, skills, prompt build; the one-time sandbox runner probe (bwrap on Linux) |
 | `hooks` | dispatcher size and synchronous `SessionStart` duration |
 | `session` | session store open, resumed message count, trust store, host reporting, hook wiring |
 | `tui` | session/model/program phases, input/output, Update/View, git probe |

@@ -7,7 +7,6 @@ import (
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -59,9 +58,6 @@ type Options struct {
 	// --no-skills, so nothing is registered.
 	Skills []*runtime.Skill
 
-	// Plugins holds the loaded plugin manager so the TUI can deliver lifecycle
-	// events to subscribed plugins (US-017, #133). It may be nil (no plugins).
-	Plugins    *plugin.Manager
 	Extensions *extensions.Manager
 
 	// ConfigPrompts holds prompt-template paths from the config.toml `prompts`

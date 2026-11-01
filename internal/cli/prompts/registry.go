@@ -1,8 +1,8 @@
 // Package prompts holds the slash-command registry assembly shared by the REPL
 // (internal/cli/repl) and the forthcoming TUI (internal/cli/tui). It was sunk
 // out of the repl package (#383) so both front-ends wire the same built-in,
-// live-state, plugin-declared, prompt-template and skill commands from one
-// owner, avoiding drift between the two command surfaces.
+// live-state, prompt-template and skill commands from one owner, avoiding drift
+// between the two command surfaces.
 //
 // The logic here is a verbatim move of repl's former private
 // buildSlashRegistry/loadPromptPaths/promptTemplateSources (plus their
@@ -11,7 +11,6 @@ package prompts
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,7 +28,6 @@ import (
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -89,18 +87,16 @@ func LoadPromptPaths(paths []string) []runtime.SlashCommand {
 // BuildSlashRegistry assembles the slash-command registry: compile-time
 // built-ins seeded by runtime.NewSlashRegistry, the live-state action commands
 // (/model, /help) bound to live, user declarative templates loaded from
-// ~/.golder/commands (or $GOLDER_HOME/commands), plugin-declared commands from the
-// loaded Manager, plus the pre-loaded skills — each surfaced as a "/skill-name"
+// ~/.golder/commands (or $GOLDER_HOME/commands), plus the pre-loaded skills —
+// each surfaced as a "/skill-name"
 // command (mirrors Claude Code's /skill invocation). A missing directory is not an
 // error. Names that collide with a built-in are shadowed (the built-in wins) and
 // reported on stderr. The skills slice is loaded once by setupAgentEnv (empty
 // under --no-skills), so no /skill-name commands are registered when it is
-// empty. mgr may be nil (no plugins loaded). creds may be nil, which disables
-// "/model" live catalog discovery.
-func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, skills []*runtime.Skill, mgr *plugin.Manager, srcs PromptTemplateSources) (*runtime.SlashRegistry, error) {
+// empty. creds may be nil, which disables "/model" live catalog discovery.
+func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, skills []*runtime.Skill, srcs PromptTemplateSources) (*runtime.SlashRegistry, error) {
 	reg := runtime.NewSlashRegistry()
 	RegisterLiveCommands(reg, live, creds)
-	RegisterPluginCommands(reg, mgr)
 	RegisterExtensionCommands(reg, srcs.Extensions)
 	// --no-prompt-templates disables all prompt-template discovery (global,
 	// settings, CLI); built-in slash commands and skills are unaffected.
@@ -212,47 +208,6 @@ func RegisterExtensionCommands(reg *runtime.SlashRegistry, m *extensions.Manager
 	}
 }
 
-// RegisterPluginCommands installs each plugin-declared slash command
-// (Manager.Commands()) into the registry as a hybrid (Run) command. Invoking it
-// RPCs the owning plugin (Plugin.CallCommand), returns the plugin's
-// notifications as the outcome Message, and returns the plugin's Prompt to run
-// as the next turn. Plugin commands are registered with AddPlugin so a same-named
-// built-in still wins (existing precedence preserved) and a collision is
-// reported as shadowed. mgr may be nil (no plugins), in which case this is a
-// no-op.
-//
-// The args passed to CallCommand are the invocation's raw argument text encoded
-// as a JSON string (json.RawMessage of a quoted string), never null: the host
-// (node #263) expects a JSON string for a no-arg command, so a bare "/cmd"
-// sends `""` rather than nil. Each command captures its own plugin and spec name
-// (loop variables copied per-iteration).
-func RegisterPluginCommands(reg *runtime.SlashRegistry, mgr *plugin.Manager) {
-	if mgr == nil {
-		return
-	}
-	for _, pc := range mgr.Commands() {
-		pc := pc // capture per iteration
-		reg.AddPlugin(runtime.SlashCommand{
-			Name:        pc.Spec.Name,
-			Description: pc.Spec.Description,
-			Run: func(args string) (message, prompt string) {
-				// Encode the raw arg text as a JSON string ("" for no args), matching
-				// the host's CommandCallParams.Args contract (a JSON string, never
-				// null). json.Marshal of a Go string always succeeds.
-				raw, _ := json.Marshal(args)
-				res, err := pc.Plugin.CallCommand(context.Background(), pc.Spec.Name, json.RawMessage(raw))
-				if err != nil {
-					return fmt.Sprintf("plugin command %q failed: %v", pc.Spec.Name, err), ""
-				}
-				return formatNotifications(res.Notifications), res.Prompt
-			},
-		})
-	}
-}
-
-// formatNotifications renders a plugin command's notifications into a single
-// block to surface to the user, one per line, prefixed by their type (when set)
-// so severity is visible. Returns "" when there are none.
 // modelCatalogKey resolves the cache key for the live provider's catalog
 // (provider name + effective endpoint), or ok=false when the provider is
 // unknown (nothing to key on).
@@ -385,25 +340,6 @@ func EnsureModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) (
 		return ids, nil
 	}
 	return fetchModelCatalogIDs(live, creds)
-}
-
-func formatNotifications(notes []plugin.CommandNotification) string {
-	if len(notes) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, n := range notes {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		if n.Type != "" {
-			b.WriteString("[")
-			b.WriteString(n.Type)
-			b.WriteString("] ")
-		}
-		b.WriteString(n.Message)
-	}
-	return b.String()
 }
 
 // RegisterLiveCommands installs the built-in action commands that need live
@@ -1176,8 +1112,8 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 }
 
 // renderHelp renders the /help listing grouped by category: built-ins under
-// their own category, skills/plugins/prompt templates collected under
-// Extensions with their source tag. order is the category render order.
+// their own category, skills and prompt templates collected under Extensions
+// with their source tag. order is the category render order.
 func renderHelp(reg *runtime.SlashRegistry, order []string) string {
 	color := ui.Enabled()
 	groups := make(map[string][]runtime.SlashCommand)
@@ -1213,14 +1149,12 @@ func renderHelp(reg *runtime.SlashRegistry, order []string) string {
 	return b.String()
 }
 
-// extensionSource labels an extension command: skills and plugins by their
-// kind, prompt templates by their discovery tier (global/project/settings/cli).
+// extensionSource labels an extension command: skills by kind, prompt templates
+// by their discovery tier (global/project/settings/cli).
 func extensionSource(c runtime.SlashCommand) string {
 	switch c.Source {
 	case runtime.SourceSkill:
 		return "skill"
-	case runtime.SourcePlugin:
-		return "plugin"
 	default:
 		return c.Tier.String()
 	}

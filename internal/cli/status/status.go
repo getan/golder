@@ -162,28 +162,25 @@ func printContextStatus(out io.Writer, color bool, host cli.Host) {
 }
 
 // printEnvStatus prints the project & environment section: cwd, trust status,
-// and counts of loaded skills and plugins (with names). User command templates
-// are listed separately when present.
+// loaded skills and user command templates. Tool extensions have their own
+// /extensions inventory rather than pretending to be slash commands.
 func printEnvStatus(out io.Writer, color bool, host cli.Host) {
 	fmt.Fprintf(out, "%s\n", ui.Colorize(color, ui.Bold, "project & environment:"))
 	fmt.Fprintf(out, "  %s %s\n", ui.Colorize(color, ui.Dim, "cwd:"), host.Cwd())
 	fmt.Fprintf(out, "  %s %s\n", ui.Colorize(color, ui.Dim, "trust:"), trustStatus(host.Trust(), host.Cwd()))
 
-	var skills, plugins, userCmds []string
+	var skills, userCmds []string
 	if slash := host.Slash(); slash != nil {
 		for _, c := range slash.List() {
 			switch c.Source {
 			case runtime.SourceSkill:
 				skills = append(skills, c.Name)
-			case runtime.SourcePlugin:
-				plugins = append(plugins, c.Name)
 			case runtime.SourceUser:
 				userCmds = append(userCmds, c.Name)
 			}
 		}
 	}
 	fmt.Fprintf(out, "  %s %d%s\n", ui.Colorize(color, ui.Dim, "skills:"), len(skills), namesSuffix(skills))
-	fmt.Fprintf(out, "  %s %d%s\n", ui.Colorize(color, ui.Dim, "plugins:"), len(plugins), namesSuffix(plugins))
 	if len(userCmds) > 0 {
 		fmt.Fprintf(out, "  %s %d%s\n", ui.Colorize(color, ui.Dim, "user commands:"), len(userCmds), namesSuffix(userCmds))
 	}

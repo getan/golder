@@ -1,7 +1,7 @@
 // Package run holds the run-assembly layer (US-005, #362): the shared setup that
 // both the interactive REPL and the headless driver need — resolving the
 // provider, building the tool set rooted at the working directory, discovering
-// skills and plugins, and constructing the loop RunConfig. Pulling it out of
+// skills and managed extension sources, and constructing the loop RunConfig. Pulling it out of
 // cmd/golder lets the subpackages assemble a run through one exported API instead
 // of duplicating the wiring.
 package run
@@ -27,7 +27,6 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/seatbelt"
@@ -57,9 +56,6 @@ type Env struct {
 	// recorded user inputs from the session header (see cli.ResumeSystemPrompt).
 	Prompt runtime.PromptInputs
 
-	// Plugins holds any loaded external plugins so the caller can Close them when
-	// the run ends. It is nil when no plugins were discovered.
-	Plugins *plugin.Manager
 	// Extensions owns managed CLI/MCP/legacy sources. Discovery never starts
 	// third-party code. The caller closes it when the session ends.
 	Extensions *extensions.Manager
@@ -623,11 +619,6 @@ func LoadSkills(noSkills bool) ([]*runtime.Skill, error) {
 	}
 	return runtime.LoadSkillsDir(dir)
 }
-
-// PluginsDir returns the directory external plugins are discovered from:
-// plugins/ under the golder state root. An empty string means the root cannot be
-// resolved (Discover then treats it as "no plugins").
-func PluginsDir() string { return golderhome.File(golderhome.PluginsDir) }
 
 // ConfigDir returns the golder state root, which is where the global config
 // layer lives. An empty string means the root cannot be resolved (the caller

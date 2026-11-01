@@ -98,7 +98,7 @@ type pickInfoLine struct {
 // newSlashRegistry assembles the shared slash-command registry for the TUI the
 // same way the REPL does: built-ins seeded from runtime, the live-state /model
 // and /help commands bound to live (so a /model switch mutates the very config
-// the run loop reads), user/plugin/skill/template commands from disk. A load
+// the run loop reads), user/skill/template commands from disk. A load
 // error is non-fatal — BuildSlashRegistry still returns a registry with the
 // built-ins, so the TUI stays usable and the failure is surfaced on stderr.
 func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry {
@@ -106,7 +106,7 @@ func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry
 	// "/model" live catalog listing (issue #566) can authenticate against the live endpoint.
 	creds := provider.NewCredentialStore(nil)
 	creds.SetOverride(opts.ProviderName, opts.APIKey)
-	reg, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, opts.Plugins, prompts.PromptTemplateSources{
+	reg, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, prompts.PromptTemplateSources{
 		Extensions: opts.Extensions,
 		Settings:   opts.ConfigPrompts,
 		CLI:        opts.CliPrompts,

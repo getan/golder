@@ -28,7 +28,7 @@ import (
 // manager, /boundary the conversation language).
 func builtinRegistry(t *testing.T) *runtime.SlashRegistry {
 	t.Helper()
-	reg, err := BuildSlashRegistry(nil, nil, nil, nil, PromptTemplateSources{Disable: true})
+	reg, err := BuildSlashRegistry(nil, nil, nil, PromptTemplateSources{Disable: true})
 	if err != nil {
 		t.Fatalf("BuildSlashRegistry: %v", err)
 	}

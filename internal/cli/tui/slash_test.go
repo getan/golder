@@ -561,7 +561,6 @@ func TestSlashMenuDescCapTiersBySource(t *testing.T) {
 	for _, add := range []func(*runtime.SlashRegistry, runtime.SlashCommand){
 		(*runtime.SlashRegistry).AddUser,
 		(*runtime.SlashRegistry).AddSkill,
-		(*runtime.SlashRegistry).AddPlugin,
 	} {
 		reg := runtime.NewSlashRegistry()
 		add(reg, descCommand("mine", longDescText))

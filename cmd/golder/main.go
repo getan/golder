@@ -209,7 +209,7 @@ func main() {
 		_ = seatbelt.ConfigureTerminalLauncher(executable)
 	}
 	// Start the one diagnostic clock before any startup work (config,
-	// credentials, plugins, sandbox probes). Without GOLDER_TUI_TRACE or the
+	// credentials, extensions, sandbox probes). Without GOLDER_TUI_TRACE or the
 	// GOLDER_STARTUP_TRACE alias, every diagtrace call is a no-op.
 	if err := diagtrace.InitFromEnv(); err != nil {
 		fmt.Fprintf(os.Stderr, "golder: trace disabled: %v\n", err)
@@ -715,9 +715,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		if !applyPermissionsFlag(&env, opts.permissions, errOut) {
 			return 2
 		}
-		if env.Plugins != nil {
-			defer env.Plugins.Close()
-		}
 		if env.Extensions != nil {
 			defer env.Extensions.Close()
 		}
@@ -755,7 +752,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				ResumeID:          resumeID,
 				Approve:           opts.approve,
 				Skills:            env.Skills,
-				Plugins:           env.Plugins,
 				Extensions:        env.Extensions,
 				ConfigPrompts:     opts.configPrompts,
 				CliPrompts:        opts.promptTemplates,
@@ -786,7 +782,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			ResumeID:          resumeID,
 			Approve:           opts.approve,
 			Skills:            env.Skills,
-			Plugins:           env.Plugins,
 			Extensions:        env.Extensions,
 			ConfigPrompts:     opts.configPrompts,
 			CliPrompts:        opts.promptTemplates,
@@ -816,9 +811,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 	}
 	if !applyPermissionsFlag(&env, opts.permissions, errOut) {
 		return 2
-	}
-	if env.Plugins != nil {
-		defer env.Plugins.Close()
 	}
 	if env.Extensions != nil {
 		defer env.Extensions.Close()
@@ -887,9 +879,6 @@ func runGitHubReview(ctx context.Context, opts cliOptions, errOut io.Writer) int
 	}
 	if !applyPermissionsFlag(&env, opts.permissions, errOut) {
 		return 2
-	}
-	if env.Plugins != nil {
-		defer env.Plugins.Close()
 	}
 	if env.Extensions != nil {
 		defer env.Extensions.Close()

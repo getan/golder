@@ -16,7 +16,6 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
@@ -25,19 +24,17 @@ import (
 
 var _ cli.Host = (*runSession)(nil)
 
-func (s *runSession) Store() *session.Store                      { return s.store }
-func (s *runSession) Header() session.SessionHeader              { return s.header }
-func (s *runSession) AgentCtx() *agentcore.AgentContext          { return s.agentCtx }
-func (s *runSession) Live() *cli.LiveConfig                      { return s.live }
-func (s *runSession) Registry() *agenttool.ToolRegistry          { return s.reg }
-func (s *runSession) Reminders() *runtime.ReminderRegistry       { return s.reminders }
-func (s *runSession) Slash() *runtime.SlashRegistry              { return s.slash }
-func (s *runSession) Creds() *provider.CredentialStore           { return s.creds }
-func (s *runSession) Notifier() *plugin.EventNotifier            { return nil }
-func (s *runSession) NotifierHandle() func(agentcore.AgentEvent) { return s.onEvent }
-func (s *runSession) Trust() *trust.Manager                      { return s.trust }
-func (s *runSession) Permissions() *permissions.State            { return s.perms }
-func (s *runSession) ReviewNotes() *run.ReviewNotes              { return s.notes }
+func (s *runSession) Store() *session.Store                { return s.store }
+func (s *runSession) Header() session.SessionHeader        { return s.header }
+func (s *runSession) AgentCtx() *agentcore.AgentContext    { return s.agentCtx }
+func (s *runSession) Live() *cli.LiveConfig                { return s.live }
+func (s *runSession) Registry() *agenttool.ToolRegistry    { return s.reg }
+func (s *runSession) Reminders() *runtime.ReminderRegistry { return s.reminders }
+func (s *runSession) Slash() *runtime.SlashRegistry        { return s.slash }
+func (s *runSession) Creds() *provider.CredentialStore     { return s.creds }
+func (s *runSession) Trust() *trust.Manager                { return s.trust }
+func (s *runSession) Permissions() *permissions.State      { return s.perms }
+func (s *runSession) ReviewNotes() *run.ReviewNotes        { return s.notes }
 func (s *runSession) Goal() *agenttool.GoalState {
 	if s.goal == nil {
 		s.goal = agenttool.NewGoalState()

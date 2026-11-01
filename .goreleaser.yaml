@@ -32,7 +32,7 @@ builds:
       - -X main.date={{.Date}}
 
   - id: golder-lark
-    main: ./plugins/lark/cmd/golder-lark
+    main: ./extension/plugins/lark/cmd/golder-lark
     binary: golder-lark
     env:
       - CGO_ENABLED=0
@@ -74,8 +74,8 @@ archives:
     name_template: "golder-lark_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
-      - plugins/lark/README.md
-      - plugins/lark/skills/**
+      - extension/plugins/lark/README.md
+      - extension/plugins/lark/skills/**
 
 checksum:
   name_template: "checksums.txt"

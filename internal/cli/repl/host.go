@@ -15,7 +15,6 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
@@ -24,23 +23,21 @@ import (
 
 var _ cli.Host = (*replDeps)(nil)
 
-func (d *replDeps) Store() *session.Store                      { return d.store }
-func (d *replDeps) Header() session.SessionHeader              { return d.header }
-func (d *replDeps) AgentCtx() *agentcore.AgentContext          { return d.agentCtx }
-func (d *replDeps) Live() *cli.LiveConfig                      { return d.live }
-func (d *replDeps) Registry() *agenttool.ToolRegistry          { return d.reg }
-func (d *replDeps) Reminders() *runtime.ReminderRegistry       { return d.reminders }
-func (d *replDeps) Slash() *runtime.SlashRegistry              { return d.slash }
-func (d *replDeps) Creds() *provider.CredentialStore           { return d.creds }
-func (d *replDeps) Notifier() *plugin.EventNotifier            { return d.notifier }
-func (d *replDeps) NotifierHandle() func(agentcore.AgentEvent) { return d.notifierHandle() }
-func (d *replDeps) Trust() *trust.Manager                      { return d.trust }
-func (d *replDeps) Permissions() *permissions.State            { return d.perms }
-func (d *replDeps) ReviewNotes() *run.ReviewNotes              { return d.notes }
-func (d *replDeps) Goal() *agenttool.GoalState                 { return d.goal }
-func (d *replDeps) Telemetry() *cli.TelemetryHolder            { return d.telemetry }
-func (d *replDeps) Dispatcher() *hooks.Dispatcher              { return d.dispatcher }
-func (d *replDeps) HookDeps() run.HookDeps                     { return d.hookDeps }
+func (d *replDeps) Store() *session.Store                { return d.store }
+func (d *replDeps) Header() session.SessionHeader        { return d.header }
+func (d *replDeps) AgentCtx() *agentcore.AgentContext    { return d.agentCtx }
+func (d *replDeps) Live() *cli.LiveConfig                { return d.live }
+func (d *replDeps) Registry() *agenttool.ToolRegistry    { return d.reg }
+func (d *replDeps) Reminders() *runtime.ReminderRegistry { return d.reminders }
+func (d *replDeps) Slash() *runtime.SlashRegistry        { return d.slash }
+func (d *replDeps) Creds() *provider.CredentialStore     { return d.creds }
+func (d *replDeps) Trust() *trust.Manager                { return d.trust }
+func (d *replDeps) Permissions() *permissions.State      { return d.perms }
+func (d *replDeps) ReviewNotes() *run.ReviewNotes        { return d.notes }
+func (d *replDeps) Goal() *agenttool.GoalState           { return d.goal }
+func (d *replDeps) Telemetry() *cli.TelemetryHolder      { return d.telemetry }
+func (d *replDeps) Dispatcher() *hooks.Dispatcher        { return d.dispatcher }
+func (d *replDeps) HookDeps() run.HookDeps               { return d.hookDeps }
 func (d *replDeps) PromptNote() func(question string) func() {
 	if d.host == nil {
 		return nil

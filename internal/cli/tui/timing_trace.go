@@ -5,7 +5,7 @@ package tui
 // timing. It can safely distinguish a late input read from a blocked Update/View
 // or a slow terminal write without recording what the person typed. The file,
 // clock, switch and privacy rules live in internal/diagtrace, shared with main,
-// run assembly, plugins and hooks so startup and TUI share one timeline.
+// run assembly, extensions and hooks so startup and TUI share one timeline.
 
 import (
 	"os"
