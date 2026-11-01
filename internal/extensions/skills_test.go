@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
-	legacy "github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/pluginwire"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -34,7 +34,7 @@ func TestSkillDisableAndManualInvocationAreIndependentOfTools(t *testing.T) {
 }
 
 func TestEventMetadataNeverContainsConversationText(t *testing.T) {
-	m := &Manager{events: make(chan legacy.EventParams, 1)}
+	m := &Manager{events: make(chan pluginwire.EventParams, 1)}
 	m.Observe(agentcore.TurnEndEvent{Message: agentcore.AssistantMessage{Content: agentcore.ContentList{agentcore.NewTextContent("private conversation text")}}})
 	ev := <-m.events
 	if strings.Contains(string(ev.Data), "private") {

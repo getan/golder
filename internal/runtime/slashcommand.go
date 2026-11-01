@@ -1,7 +1,7 @@
 // This file implements slash-commands (US-029, #45): typed "/name" shortcuts a
-// user invokes in the REPL. Commands come from four sources — built-in
-// registrations, user markdown templates, skills and plugins (the Source*
-// constants) — resolved with a fixed priority:
+// user invokes in the REPL. Commands come from built-in registrations, user
+// markdown templates and skills (the Source* constants), resolved with a fixed
+// priority:
 //
 //   - Built-in commands are registered at compile time via RegisterBuiltin
 //     (from init() in the fork's own code). They are always available.
@@ -14,9 +14,8 @@
 // loser is reported via Shadowed. Built-ins are load-bearing and always win.
 // Within a tier, the last-added command overrides earlier ones (a re-load).
 //
-// Plugins extend the set through the plugin package (SourcePlugin) rather than a
-// second mechanism, and a fork can add built-ins via init() registration; the
-// MCP client is not implemented, so nothing is sourced from MCP.
+// Tool extensions do not register root slash commands. They are managed through
+// the built-in /extensions, /plugin and /mcp commands instead.
 package runtime
 
 import (
@@ -43,10 +42,6 @@ const (
 	// /skill-name command. It behaves like SourceUser for the built-in-wins
 	// conflict rule; the finer tag is for display only (e.g. /status).
 	SourceSkill
-	// SourcePlugin is a command declared by a loaded plugin. It behaves like
-	// SourceUser for the built-in-wins conflict rule; the finer tag is for
-	// display only.
-	SourcePlugin
 )
 
 func (s SlashCommandSource) String() string {
@@ -55,8 +50,6 @@ func (s SlashCommandSource) String() string {
 		return "builtin"
 	case SourceSkill:
 		return "skill"
-	case SourcePlugin:
-		return "plugin"
 	default:
 		return "user"
 	}
@@ -65,8 +58,8 @@ func (s SlashCommandSource) String() string {
 // Tier is the priority tier of a command, used to resolve same-name conflicts
 // across sources (mirrors pi prompt-templates discovery priority). Higher tiers
 // win; the loser is recorded in Shadowed. Within the same tier the last-added
-// command wins (a re-load overrides). Skills and plugins are treated as
-// Global-tier for priority - their finer Source label is for display only.
+// command wins (a re-load overrides). Skills are treated as Global-tier for
+// priority; their finer Source label is for display only.
 type Tier int
 
 const (
@@ -321,14 +314,6 @@ func (r *SlashRegistry) AddUser(cmd SlashCommand) {
 // wins - only the source tag differs, so /status can report skills separately.
 func (r *SlashRegistry) AddSkill(cmd SlashCommand) {
 	cmd.Source = SourceSkill
-	cmd.Tier = TierGlobal
-	r.add(cmd)
-}
-
-// AddPlugin installs a plugin-declared command at TierGlobal, mirroring AddUser
-// with a SourcePlugin tag for display.
-func (r *SlashRegistry) AddPlugin(cmd SlashCommand) {
-	cmd.Source = SourcePlugin
 	cmd.Tier = TierGlobal
 	r.add(cmd)
 }

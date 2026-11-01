@@ -100,7 +100,7 @@ func TestBuildSlashRegistryIncludesSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run.LoadSkills: %v", err)
 	}
-	reg, err := prompts.BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, skills, nil, prompts.PromptTemplateSources{})
+	reg, err := prompts.BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, skills, prompts.PromptTemplateSources{})
 	if err != nil {
 		t.Fatalf("buildSlashRegistry: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestBuildSlashRegistryIncludesSkills(t *testing.T) {
 func TestBuildSlashRegistryNoSkills(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 
-	reg, err := prompts.BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, nil, nil, prompts.PromptTemplateSources{})
+	reg, err := prompts.BuildSlashRegistry(&cli.LiveConfig{Model: "test", ProviderName: "test"}, nil, nil, prompts.PromptTemplateSources{})
 	if err != nil {
 		t.Fatalf("buildSlashRegistry: %v", err)
 	}

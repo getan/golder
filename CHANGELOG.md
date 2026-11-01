@@ -109,6 +109,13 @@ interactive REPL/TUI.
   The unused `diagram` workspace preset is removed with it.
 
 ### Changed
+- **One extension runtime instead of a dead eager-plugin path**: CLI manifests,
+  legacy RPC and MCP are all owned by `internal/extensions`; Skills remain a
+  separate instruction catalog surfaced in the same UI. The unreachable
+  startup plugin manager, dynamic legacy slash-command path and duplicate event
+  notifier are removed. Legacy wire compatibility remains data-only in
+  `internal/pluginwire`, and the extension guide now maps CLI/TUI commands to
+  their owning packages.
 - **SSH workspace rendering is deliberately reduced** (v1.5.17): tuios-mini
   uses ASCII chrome/file marks, a short plain welcome, no decorative motion,
   gradients or periodic dock jobs, and a 10 Hz background pane-output cap.

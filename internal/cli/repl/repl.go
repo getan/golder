@@ -43,7 +43,6 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/selfupdate"
@@ -75,11 +74,6 @@ type replDeps struct {
 	// startup hint compares it against the cached latest tag. Empty/"dev" builds
 	// never print the hint.
 	version string
-
-	// notifier delivers agent lifecycle events to subscribed plugins (US-017,
-	// #133). It is nil when no plugin subscribes; DrainStream's OnEvent stays
-	// unset in that case.
-	notifier *plugin.EventNotifier
 
 	// trust persists project-trust decisions (US-018, #134). It is nil when
 	// trust is disabled (e.g. the store could not be loaded); when nil the
@@ -207,17 +201,6 @@ type replDeps struct {
 // for a terminal REPL (where OS line buffering bounds normal input) in exchange
 // for correct buffer sharing with the tool-call confirmation prompt.
 const replScanBufInit = 64 * 1024
-
-// notifierHandle returns the plugin event-delivery callback for this session's
-// runs, or nil when no plugin subscribed. Returning nil (rather than a func that
-// dispatches to a nil notifier) keeps DrainStream's OnEvent unset in the common
-// no-plugin case, so the drain loop skips the per-event call entirely.
-func (deps replDeps) notifierHandle() func(agentcore.AgentEvent) {
-	if deps.notifier == nil {
-		return nil
-	}
-	return deps.notifier.Handle
-}
 
 // runREPL runs the read → run → stream-print loop until EOF, /exit or /quit. It
 // reads from in (os.Stdin in production) and writes prompts, streamed replies
@@ -734,18 +717,13 @@ func streamRun(ctx context.Context, out io.Writer, deps replDeps, prompt string)
 		}
 		reply.Reset()
 	}
-	// The SessionEnd/PreCompact observer chains onto the existing OnEvent closure
-	// (plugin notifier + telemetry). Nil when no hooks are configured.
+	// SessionEnd/PreCompact events are sent to hooks when configured.
 	var hookEvent func(agentcore.AgentEvent)
 	if deps.dispatcher != nil {
 		hookEvent = hooks.NewHookNotifier(deps.dispatcher, deps.hookDeps.SessionID, deps.hookDeps.ProjectDir).Handle
 	}
 	_, err = runtime.DrainStream(ctx, stream, runtime.StreamHandler{
 		OnEvent: func(ev agentcore.AgentEvent) {
-			// First call the notifier if present.
-			if notifier := deps.notifierHandle(); notifier != nil {
-				notifier(ev)
-			}
 			// Capture TelemetryEvent and fold it into the holder.
 			if telemetry, ok := ev.(agentcore.TelemetryEvent); ok && deps.telemetry != nil {
 				deps.telemetry.Fold(telemetry)

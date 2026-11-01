@@ -2,16 +2,14 @@
 // (US-020) extracted from the CLI dispatch seam (#363). dispatch resolves the
 // output mode and the run environment, then hands off to Run, which wires the
 // session, prompt, thinking level, and provider credentials into a
-// runtime.HeadlessConfig and executes one run. Plugin slash commands and output
-// mode parsing live here because they are specific to the headless path.
+// runtime.HeadlessConfig and executes one run. Output-mode parsing lives here
+// because it is specific to the headless path.
 package headless
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli"
@@ -20,7 +18,6 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/hostcompat"
 	"github.com/getan/golder/internal/judge"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
@@ -52,14 +49,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 	// Kill still-running shell sessions on exit so a long-running command handed
 	// back as a bash_id is not orphaned when the one-shot run finishes.
 	defer run.KillShellSessions(env.Tools)
-	// Best-effort plugin slash-command support in headless mode: if the prompt is
-	// a "/cmd ..." naming a plugin command, invoke it, print its notifications to
-	// errOut, and use the returned prompt for this run (appending the raw args if
-	// the command produced no prompt). Headless has no turn injection, so
-	// appending the returned prompt is the accepted behavior. A non-plugin prompt
-	// or unknown command is left untouched.
-	headlessPrompt := resolveHeadlessPluginCommand(p.Prompt, env.Plugins, errOut)
-	promptContent, err := ui.BuildUserContent(headlessPrompt)
+	promptContent, err := ui.BuildUserContent(p.Prompt)
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return 1
@@ -147,7 +137,7 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 
 	// Wire hooks uniformly with every other driver (#425): resolve the trust-gated
 	// hook set, install the tool-execution + Stop seams, dispatch SessionStart, and
-	// chain the SessionEnd/PreCompact observer onto the plugin event notifier. A
+	// install the SessionEnd/PreCompact observer. A
 	// malformed hook layer is a config error (exit 2), matching thinking-level.
 	source := "startup"
 	if p.ResumeID != "" {
@@ -159,18 +149,11 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 		return 2
 	}
 	hookDeps := run.HookDeps{SessionID: hs.header.ID, ProjectDir: env.Cwd, WarnLog: errOut}
-	// Deliver agent lifecycle events to any subscribed plugin (US-017, #133).
-	// NewEventNotifier returns nil when no plugin subscribes, so the base handler
-	// stays nil in the common no-plugin case.
-	var baseOnEvent func(agentcore.AgentEvent)
-	if n := plugin.NewEventNotifier(env.Plugins, errOut); n != nil {
-		baseOnEvent = n.Handle
-	}
-	d, onEvent := gates.InstallDriver(ctx, &runCfg, set, hookDeps, source, baseOnEvent)
+	d, onEvent := gates.InstallDriver(ctx, &runCfg, set, hookDeps, source, nil)
 	// UserPromptSubmit runs before the prompt is handed to the loop: a block aborts
 	// the headless run non-zero; additionalContext is injected into this run only.
 	if d != nil {
-		if block, reason := run.DispatchUserPromptSubmit(ctx, d, &runCfg, hookDeps, headlessPrompt); block {
+		if block, reason := run.DispatchUserPromptSubmit(ctx, d, &runCfg, hookDeps, p.Prompt); block {
 			fmt.Fprintf(errOut, "golder: prompt blocked by hook: %s\n", reason)
 			return 1
 		}
@@ -202,57 +185,6 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 		return 1
 	}
 	return 0
-}
-
-// resolveHeadlessPluginCommand gives the headless / print path best-effort
-// support for plugin slash commands. When prompt is a "/cmd ..." naming a
-// plugin command (from mgr.Commands()), it invokes the command, prints each
-// returned notification to notifyOut, and returns the command's returned Prompt
-// as the run's prompt. If the command returns no prompt, the raw argument text
-// is used instead (so a bare "/cmd" with only notifications still runs
-// something sensible rather than an empty prompt). Any other input — a
-// non-command, an unknown command, or a call error — leaves prompt unchanged so
-// the normal headless run proceeds. mgr may be nil (no plugins).
-//
-// Headless has no turn-injection loop, so "inject the returned prompt" degrades
-// to "use the returned prompt for this run", which the acceptance criteria
-// permit.
-func resolveHeadlessPluginCommand(prompt string, mgr *plugin.Manager, notifyOut io.Writer) string {
-	if mgr == nil || !strings.HasPrefix(strings.TrimLeft(prompt, " \t"), "/") {
-		return prompt
-	}
-	trimmed := strings.TrimLeft(prompt, " \t")[1:]
-	name := trimmed
-	args := ""
-	if i := strings.IndexAny(trimmed, " \t"); i >= 0 {
-		name = trimmed[:i]
-		args = strings.TrimSpace(trimmed[i+1:])
-	}
-	for _, pc := range mgr.Commands() {
-		if pc.Spec.Name != name {
-			continue
-		}
-		// Encode the raw arg text as a JSON string (never null), matching the
-		// host's CommandCallParams.Args contract.
-		raw, _ := json.Marshal(args)
-		res, err := pc.Plugin.CallCommand(context.Background(), name, json.RawMessage(raw))
-		if err != nil {
-			fmt.Fprintf(notifyOut, "golder: plugin command %q failed: %v\n", name, err)
-			return prompt
-		}
-		for _, n := range res.Notifications {
-			if n.Type != "" {
-				fmt.Fprintf(notifyOut, "[%s] %s\n", n.Type, n.Message)
-			} else {
-				fmt.Fprintln(notifyOut, n.Message)
-			}
-		}
-		if res.Prompt != "" {
-			return res.Prompt
-		}
-		return args
-	}
-	return prompt
 }
 
 // ParseOutputMode maps the --output-format flag onto a HeadlessMode, erroring on

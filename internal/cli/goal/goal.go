@@ -364,24 +364,14 @@ func goalTurnActivity(tail []agentcore.AgentMessage) (outputTokens int, hadTool 
 
 // drainGoalStream prints the streamed assistant text and tool activity of a goal
 // run to out, mirroring streamRun's rendering. It blocks until the run ends.
-// chainGoalEvent returns the OnEvent observer for a goal run: the plugin
-// notifier, with the SessionEnd/PreCompact hook notifier chained after it when
-// hooks are configured, mirroring the REPL's OnEvent composition.
+// chainGoalEvent returns the SessionEnd/PreCompact hook observer for a goal run.
 func chainGoalEvent(host cli.Host) func(agentcore.AgentEvent) {
-	notifier := host.NotifierHandle()
 	d := host.Dispatcher()
 	if d == nil {
-		return notifier
+		return nil
 	}
 	deps := host.HookDeps()
-	hookEvent := hooks.NewHookNotifier(d, deps.SessionID, deps.ProjectDir).Handle
-	if notifier == nil {
-		return hookEvent
-	}
-	return func(ev agentcore.AgentEvent) {
-		notifier(ev)
-		hookEvent(ev)
-	}
+	return hooks.NewHookNotifier(d, deps.SessionID, deps.ProjectDir).Handle
 }
 
 func drainGoalStream(ctx context.Context, out io.Writer, host cli.Host, stream *runtime.LoopEventStream) {

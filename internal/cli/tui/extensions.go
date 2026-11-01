@@ -29,6 +29,52 @@ func extensionCommand(line string) bool {
 }
 func extensionValue(args ...string) string { b, _ := json.Marshal(args); return string(b) }
 
+const (
+	extensionSectionMCP    = "MCP servers"
+	extensionSectionCLI    = "CLI plugins"
+	extensionSectionLegacy = "Legacy RPC plugins"
+)
+
+func extensionSection(s extensions.Snapshot) string {
+	if s.Ref.Kind == "mcp" {
+		return extensionSectionMCP
+	}
+	if s.Type == "CLI" {
+		return extensionSectionCLI
+	}
+	return extensionSectionLegacy
+}
+
+func extensionSectionVisible(kind, section string) bool {
+	switch kind {
+	case "mcp":
+		return section == extensionSectionMCP
+	case "plugin":
+		return section != extensionSectionMCP
+	case "skills":
+		return false
+	default:
+		return true
+	}
+}
+
+func extensionSourceRow(s extensions.Snapshot) pickItem {
+	available := 0
+	for _, t := range s.Tools {
+		if t.State == "available" {
+			available++
+		}
+	}
+	tone := pickMuted
+	if s.State == "ready" || s.State == "on demand" && s.Trust == "approved" {
+		tone = pickOK
+	}
+	if s.LastError != "" || s.Authentication == "required" {
+		tone = pickWarn
+	}
+	return pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: s.State, StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", available, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Error", Value: s.LastError}}}
+}
+
 func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 	ext := m.opts.Extensions
 	if ext == nil {
@@ -37,29 +83,25 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 	}
 	var rows []pickItem
 	if kind != "skills" {
-		rows = append(rows, pickItem{Title: "Tool sources", Heading: true})
-		for _, s := range ext.List() {
-			if kind == "mcp" && s.Ref.Kind != "mcp" || kind == "plugin" && s.Ref.Kind != "plugin" {
+		sources := ext.List()
+		for _, section := range []string{extensionSectionMCP, extensionSectionCLI, extensionSectionLegacy} {
+			if !extensionSectionVisible(kind, section) {
 				continue
 			}
-			n := 0
-			for _, t := range s.Tools {
-				if t.State == "available" {
-					n++
+			var sectionRows []pickItem
+			for _, source := range sources {
+				if extensionSection(source) == section {
+					sectionRows = append(sectionRows, extensionSourceRow(source))
 				}
 			}
-			tone := pickMuted
-			if s.State == "ready" || s.State == "on demand" && s.Trust == "approved" {
-				tone = pickOK
+			if len(sectionRows) > 0 {
+				rows = append(rows, pickItem{Title: section, Heading: true})
+				rows = append(rows, sectionRows...)
 			}
-			if s.LastError != "" || s.Authentication == "required" {
-				tone = pickWarn
-			}
-			rows = append(rows, pickItem{Title: s.Ref.ID + " [" + s.Type + "]", Status: s.State, StatusTone: tone, Detail: fmt.Sprintf("%d/%d tools", n, len(s.Tools)), Value: extensionValue("detail", s.Ref.Kind, s.Ref.ID), Info: []pickInfoLine{{Label: "Source", Value: s.Ref.String()}, {Label: "Trust", Value: s.Trust}, {Label: "Auth", Value: s.Authentication}, {Label: "Endpoint", Value: s.Endpoint}, {Label: "Error", Value: s.LastError}}})
 		}
 	}
 	if kind == "extensions" || kind == "skills" {
-		rows = append(rows, pickItem{Title: "Skills", Heading: true})
+		rows = append(rows, pickItem{Title: "Skills · instructions only", Heading: true})
 		for _, s := range ext.SkillViews() {
 			owner := "user"
 			if s.ProvidedBy != "" {

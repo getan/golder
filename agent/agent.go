@@ -71,9 +71,6 @@ func New(opts ...Option) (*Session, error) {
 		if env.Extensions != nil {
 			_ = env.Extensions.Close()
 		}
-		if env.Plugins != nil {
-			_ = env.Plugins.Close()
-		}
 		if env.Memory != nil {
 			_ = env.Memory.Close()
 		}
@@ -192,19 +189,13 @@ func (s *Session) Model() string { return s.model }
 // which is inferred from the model id unless WithProvider was set.
 func (s *Session) Provider() string { return s.env.ProviderName }
 
-// Close releases resources held by the session: any loaded plugin manager and
-// the persistent memory store (when WithMemory was used). It is safe to call
-// once, and safe to call on a session that holds neither. After Close the
-// session must not be used again.
+// Close releases resources held by the session: the extension manager and the
+// persistent memory store (when enabled). It is safe to call once, and safe to
+// call on a session that holds neither. After Close the session must not be used.
 func (s *Session) Close() error {
 	var firstErr error
 	if s.env.Extensions != nil {
 		firstErr = s.env.Extensions.Close()
-	}
-	if s.env.Plugins != nil {
-		if err := s.env.Plugins.Close(); err != nil && firstErr == nil {
-			firstErr = err
-		}
 	}
 	if s.env.Memory != nil {
 		if err := s.env.Memory.Close(); err != nil && firstErr == nil {

@@ -240,24 +240,14 @@ func AskSide(setCancel func(context.CancelFunc), out io.Writer, host cli.Host, s
 	drainSideStream(runCtx, out, host, stream)
 }
 
-// chainBtwEvent returns the OnEvent observer for a /btw side run: the plugin
-// notifier, with the SessionEnd/PreCompact hook notifier chained after it when
-// hooks are configured, mirroring the REPL's OnEvent composition.
+// chainBtwEvent returns the SessionEnd/PreCompact hook observer for a /btw run.
 func chainBtwEvent(host cli.Host) func(agentcore.AgentEvent) {
-	notifier := host.NotifierHandle()
 	d := host.Dispatcher()
 	if d == nil {
-		return notifier
+		return nil
 	}
 	deps := host.HookDeps()
-	hookEvent := hooks.NewHookNotifier(d, deps.SessionID, deps.ProjectDir).Handle
-	if notifier == nil {
-		return hookEvent
-	}
-	return func(ev agentcore.AgentEvent) {
-		notifier(ev)
-		hookEvent(ev)
-	}
+	return hooks.NewHookNotifier(d, deps.SessionID, deps.ProjectDir).Handle
 }
 
 // drainSideStream prints the streamed assistant text and tool activity of a side

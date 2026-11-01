@@ -15,7 +15,7 @@ import (
 
 	"github.com/getan/golder/extension"
 	"github.com/getan/golder/internal/jsonrpc"
-	legacy "github.com/getan/golder/internal/plugin"
+	"github.com/getan/golder/internal/pluginwire"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -40,7 +40,7 @@ func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *lo
 			cleanup()
 			return nil, e
 		}
-		var manifest legacy.Manifest
+		var manifest pluginwire.Manifest
 		if json.Unmarshal(raw, &manifest) != nil || manifest.Name == "" {
 			_ = client.Close()
 			cleanup()
@@ -192,7 +192,7 @@ func (b *cliBackend) Close() error { return nil }
 
 type rpcBackend struct {
 	client   *jsonrpc.Client
-	manifest legacy.Manifest
+	manifest pluginwire.Manifest
 	cleanup  func()
 }
 
@@ -207,11 +207,11 @@ func (b *rpcBackend) Catalog(context.Context) (Catalog, error) {
 	return cat, nil
 }
 func (b *rpcBackend) Call(ctx context.Context, c extension.Call, _ func(extension.Progress)) (extension.Result, error) {
-	raw, e := b.client.Call(ctx, "tools/call", legacy.CallParams{Name: c.Tool, Arguments: c.Arguments})
+	raw, e := b.client.Call(ctx, "tools/call", pluginwire.CallParams{Name: c.Tool, Arguments: c.Arguments})
 	if e != nil {
 		return extension.Result{}, e
 	}
-	var r legacy.CallResult
+	var r pluginwire.CallResult
 	if e = json.Unmarshal(raw, &r); e != nil {
 		return extension.Result{}, e
 	}

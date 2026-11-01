@@ -88,8 +88,8 @@ func newStreamHandler(ch chan tea.Msg, extra func(agentcore.AgentEvent)) runtime
 			ch <- turnEndMsg{msg: msg, results: results, stall: stall}
 		},
 		OnEvent: func(ev agentcore.AgentEvent) {
-			// Deliver observer events (plugin notifier, SessionEnd/PreCompact hook)
-			// first, then translate into TUI messages.
+			// Deliver SessionEnd/PreCompact hook events first, then translate into
+			// TUI messages.
 			if extra != nil {
 				extra(ev)
 			}

@@ -45,7 +45,6 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
-	"github.com/getan/golder/internal/plugin"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/session"
@@ -132,8 +131,7 @@ type runSession struct {
 	// inherited context again while constructing its first frame.
 	initialContextTokens int
 	initialContextKnown  bool
-	// onEvent is the observer chain delivered to every run: the plugin notifier
-	// (US-017) with the SessionEnd/PreCompact hook notifier chained after it.
+	// onEvent is the SessionEnd/PreCompact hook observer delivered to every run.
 	onEvent func(agentcore.AgentEvent)
 
 	// curLeaf is the id of the on-disk entry the next turn descends from; persisted
@@ -452,11 +450,9 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	// first-run trust picker (Model.withSession); wireHooks then runs when the
 	// answer lands, mirroring the REPL's ordering (dialog before hook
 	// resolution) so project-layer hooks load exactly when trust is granted and
-	// SessionStart fires exactly once. Until then only plugin events are live.
+	// SessionStart fires exactly once.
 	if s.trust == nil || s.trusted || s.trust.NearestTrustDecision(cwd).Found {
 		s.wireHooks(opts)
-	} else if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
-		s.onEvent = n.Handle
 	}
 	if len(history) > 0 && live.ContextWindow > 0 {
 		finish := diagtrace.Span("session", "initial_context_estimate")
@@ -468,8 +464,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 }
 
 // wireHooks resolves the trust-gated hook set for the session's launch
-// directory, builds the dispatcher, dispatches SessionStart once, and composes
-// the SessionEnd/PreCompact observer with the plugin notifier. Trust is granted
+// directory, builds the dispatcher, and dispatches SessionStart once. Trust is granted
 // by --approve, a saved decision, or the first-run trust picker; project-layer
 // hooks only apply when trusted (FR-14). A malformed hook layer disables hooks
 // with a warning rather than failing the TUI launch. It is idempotent: the
@@ -481,14 +476,10 @@ func (s *runSession) wireHooks(opts Options) {
 	}
 	s.hooksWired = true
 	start := time.Now()
-	var baseOnEvent func(agentcore.AgentEvent)
-	if n := plugin.NewEventNotifier(opts.Plugins, os.Stderr); n != nil {
-		baseOnEvent = n.Handle
-	}
 	if set, err := run.ResolveHookSet(s.hookDeps.ProjectDir, s.trusted); err != nil {
 		diagtrace.Event("session", "hooks resolve failed=true duration=%s", time.Since(start))
 		fmt.Fprintf(os.Stderr, "golder: hooks disabled: %v\n", err)
-		s.onEvent = baseOnEvent
+		s.onEvent = nil
 		return
 	} else if d := run.BuildDispatcher(set, s.hookDeps); d != nil {
 		s.dispatcher = d
@@ -500,10 +491,10 @@ func (s *runSession) wireHooks(opts Options) {
 		diagtrace.Event("session", "hooks wired duration=%s", time.Since(start))
 		s.reminders = ssCfg.Reminders
 		n := hooks.NewHookNotifier(d, s.hookDeps.SessionID, s.hookDeps.ProjectDir)
-		s.onEvent = chainTUIEvent(baseOnEvent, n.Handle)
+		s.onEvent = n.Handle
 		return
 	}
-	s.onEvent = baseOnEvent
+	s.onEvent = nil
 }
 
 // decideTrust applies the first-run trust picker's answer (or Esc, choice "")
@@ -550,21 +541,6 @@ func sessionStartSource(opts Options) string {
 		return "resume"
 	}
 	return "startup"
-}
-
-// chainTUIEvent composes the plugin notifier with the hook notifier into one
-// observer; a nil operand is identity.
-func chainTUIEvent(prev, next func(agentcore.AgentEvent)) func(agentcore.AgentEvent) {
-	if prev == nil {
-		return next
-	}
-	if next == nil {
-		return prev
-	}
-	return func(ev agentcore.AgentEvent) {
-		prev(ev)
-		next(ev)
-	}
 }
 
 // buildConfig assembles the RunConfig for one turn from the live config and
