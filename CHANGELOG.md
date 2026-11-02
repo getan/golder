@@ -24,6 +24,10 @@ interactive REPL/TUI.
   records the macOS basic-password-store/mock-keychain invariant. `browser status`
   reports the authorized profile/runtime plus actual and configured proxy modes
   without opening Chromium's cookie database or exposing cookie data.
+- **Desktop GUI architecture proposal**: `docs/gui-architecture.md` compares
+  Wails, Fyne, Gio and the low-level WebView binding, then specifies an additive
+  `golder-gui` architecture that preserves the existing CLI/TUI binaries,
+  permission model, session store and CGO-free default build matrix.
 - **Deterministic Git push transport review**: before grading one literal
   `git push`, the consent gate resolves the effective push URL from local Git
   configuration without contacting the remote and gives every reviewer the same
@@ -51,6 +55,14 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Every failed sandboxed Git push gets one bounded outside retry**: retry
+  guidance now depends on the parsed `git push` command and its non-zero exit,
+  not localized authentication or sandbox error strings. Pushes for another
+  repository are normalized to `git -C <repo> push` so the gate can resolve the
+  effective remote; an approved HTTPS retry keeps network access and runs
+  outside the file sandbox. A refused or failed retry stops instead of looping,
+  and a non-zero multi-ref push is not assumed to have changed nothing. See
+  [v1.5.43 release notes](docs/releases/v1.5.43.md).
 - **Git history details open correctly** (v1.5.40): tuios-mini v0.10.39 registers
   the detail kinds and `ref` parameter used by commit, graph, branch, tag,
   stash, remote and file-history drawers. Git navigation uses clickable
