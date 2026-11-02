@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Discoverable Lark package and layered pane-control menus** (v1.5.45):
+  `/extensions` now shows the first-party Lark + Project MCP package even when
+  it is not installed or configured, with explicit next steps and no automatic
+  download, registration, enablement or execution. tuios pane authorization now
+  uses short nested menus—choose Agent, then scope—and splits transfer parties
+  across rows instead of truncating the decision behind an ellipsis. See
+  [v1.5.45 release notes](docs/releases/v1.5.45.md).
 - **Exclusive operator-assigned tuios pane control** (v1.5.44): every live
   top-level Golder session registers a stable Agent ID and conversation/workspace
   identity in a daemon-scoped registry. The tuios pane context menu lists eligible

@@ -99,6 +99,23 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 				rows = append(rows, sectionRows...)
 			}
 		}
+		if kind == "extensions" {
+			var packageRows []pickItem
+			for _, p := range ext.PackageViews() {
+				if p.Configured {
+					continue
+				}
+				packageRows = append(packageRows, pickItem{
+					Title: p.Name + " [" + p.Type + "]", Status: p.State, Detail: "available package · no authority",
+					Value: extensionValue("package-detail", p.ID),
+					Info:  []pickInfoLine{{Label: "Description", Value: p.Description}, {Label: "Next", Value: p.NextAction}, {Label: "Docs", Value: p.Docs}},
+				})
+			}
+			if len(packageRows) > 0 {
+				rows = append(rows, pickItem{Title: "Available packages · not enabled", Heading: true})
+				rows = append(rows, packageRows...)
+			}
+		}
 	}
 	if kind == "skills" {
 		rows = append(rows, pickItem{Title: "Skills · instructions only", Heading: true})
@@ -193,6 +210,19 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 	case "detail":
 		if len(v) == 3 {
 			return m.extensionDetail(extensions.SourceRef{Kind: v[1], ID: v[2]})
+		}
+	case "package-detail":
+		if len(v) != 2 {
+			return m, nil
+		}
+		for _, p := range m.opts.Extensions.PackageViews() {
+			if p.ID != v[1] {
+				continue
+			}
+			info := []pickInfoLine{{Label: "Package", Value: p.Name}, {Label: "Type", Value: p.Type}, {Label: "Status", Value: p.State}, {Label: "Executable", Value: p.Executable}, {Label: "Description", Value: p.Description}, {Label: "Next", Value: p.NextAction}, {Label: "Docs", Value: p.Docs}, {Label: "Authority", Value: "visibility installs, configures, enables, and executes nothing"}}
+			m.menu.openPickerDetailed([]pickItem{{Title: "Back", Value: extensionValue("back"), Info: info}}, "", "extensions")
+			m.relayout()
+			return m, nil
 		}
 	case "skill-detail":
 		if len(v) != 2 {

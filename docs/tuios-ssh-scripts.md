@@ -15,7 +15,7 @@ for the transfer implementation.
 
 For a single operation on an existing pane, keep `host_control:true` as shown
 below. For repeated work, the person can instead open that pane's tuios context
-menu and choose **Agent control → <Agent> → This Agent session**, or type
+menu and choose **Agent control… → <Agent> → This conversation**, or type
 `/pane allow-agent <full-pane-id> session` in that Agent's own composer. A lease
 removes repeated host-control prompts, not command review or the SSH network
 requirement; omit `host_control` but keep `network:"on"` and `remote:true` on

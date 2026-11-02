@@ -41,6 +41,19 @@ func RenderList(m *extensions.Manager, kind string) string {
 			}
 			fmt.Fprintf(&b, "  %s  [%s]  %s · %s · %d/%d tools\n", s.Ref, s.Type, s.State, s.Trust, n, len(s.Tools))
 		}
+		if kind == "extensions" {
+			var shown bool
+			for _, p := range m.PackageViews() {
+				if p.Configured {
+					continue
+				}
+				if !shown {
+					b.WriteString("Available packages (not enabled)\n")
+					shown = true
+				}
+				fmt.Fprintf(&b, "  %s  [%s]  %s\n    next: %s\n", p.Name, p.Type, p.State, p.NextAction)
+			}
+		}
 	}
 	if kind == "skills" {
 		b.WriteString("Skills\n")
@@ -334,7 +347,7 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 	if op == "list" || op == "doctor" {
 		if j {
 			if kind == "extensions" {
-				_ = json.NewEncoder(out).Encode(map[string]any{"sources": m.List()})
+				_ = json.NewEncoder(out).Encode(map[string]any{"sources": m.List(), "packages": m.PackageViews()})
 			} else {
 				var filtered []extensions.Snapshot
 				for _, s := range m.List() {

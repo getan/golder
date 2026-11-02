@@ -25,6 +25,12 @@ packages. The plugin does not import the host UI/agent/permission internals.
 
 ## Install and register
 
+`/extensions` always shows **Lark + Project** in its first-party package section,
+even before it is installed or configured. That row is discovery only: it does
+not download, register, enable or execute anything. Once an `mcp:lark` source is
+configured, the package row disappears and the real MCP source row takes its
+place with its actual state and tools.
+
 Build from this repository (or unpack the matching `golder-lark` release):
 
 ```sh

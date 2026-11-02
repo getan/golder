@@ -60,7 +60,7 @@ func TestExtensionPickerLeavesSkillsUnderSkills(t *testing.T) {
 	for _, r := range m.menu.pick {
 		text.WriteString(r.Title + " " + r.Status + "\n")
 	}
-	for _, want := range []string{"MCP servers", "MCP · http", "CLI plugins", "local [CLI]", "Legacy RPC plugins", "RPC · legacy"} {
+	for _, want := range []string{"MCP servers", "MCP · http", "CLI plugins", "local [CLI]", "Legacy RPC plugins", "RPC · legacy", "Available packages", "Lark + Project [MCP package]"} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("missing %s: %s", want, text.String())
 		}
@@ -70,6 +70,13 @@ func TestExtensionPickerLeavesSkillsUnderSkills(t *testing.T) {
 			t.Fatalf("/extensions duplicated %q from /skills: %s", duplicate, text.String())
 		}
 	}
+	res, _ = m.chooseExtension(extensionValue("package-detail", "lark"))
+	m = res.(Model)
+	if len(m.menu.pick) != 1 || !strings.Contains(m.menu.pick[0].Info[0].Value, "Lark") {
+		t.Fatalf("Lark package details missing: %+v", m.menu.pick)
+	}
+	res, _ = m.chooseExtension(extensionValue("back"))
+	m = res.(Model)
 	if !strings.Contains(m.View().Content, "MCP") {
 		t.Fatal("narrow view lost type label")
 	}

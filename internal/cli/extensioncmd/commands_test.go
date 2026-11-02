@@ -73,10 +73,18 @@ func TestExtensionsListLeavesSkillsToSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.SetSkills([]*runtime.Skill{skill}, false)
-	if got := RenderList(m, "extensions"); strings.Contains(got, "Deploy") || strings.Contains(got, "Skills") {
+	if got := RenderList(m, "extensions"); strings.Contains(got, "Deploy") || strings.Contains(got, "Skills") || !strings.Contains(got, "Lark + Project") {
 		t.Fatalf("extensions list duplicated Skills:\n%s", got)
 	}
 	if got := RenderList(m, "skills"); !strings.Contains(got, "deploy") || !strings.Contains(got, "Skills") {
 		t.Fatalf("skills list lost its catalog:\n%s", got)
+	}
+	var out, errs bytes.Buffer
+	if code := Run("extensions", []string{"list", "--json"}, strings.NewReader(""), &out, &errs); code != 0 {
+		t.Fatalf("extensions JSON failed: %s", errs.String())
+	}
+	var inventory map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &inventory); err != nil || inventory["packages"] == nil || inventory["skills"] != nil {
+		t.Fatalf("extensions JSON mixed packages and Skills: %s (%v)", out.String(), err)
 	}
 }

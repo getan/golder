@@ -76,10 +76,11 @@ Inside a local tuios daemon, the person can give one existing terminal pane to
 one online top-level Golder Agent without repeating `host_control:true` on every
 operation:
 
-- Open the pane's context menu in tuios. The **Agent control** rows list only
-  live Agents in that session and workspace which are not read-only or waiting
-  on an approval. Choose **Next action** or **This Agent session**. The menu
-  shows the current controller and offers **Revoke Agent control**.
+- Open the pane's context menu in tuios and choose **Agent control…**. Choose a
+  live Agent in that session/workspace, then **Next action** or
+  **This conversation**. Read-only Agents and Agents waiting on an approval are
+  omitted. The first level stays short, shows the current controller/scope, and
+  offers **Revoke Agent control**.
 - Or, in the chosen Agent's own composer, run `/pane agents`, then
   `/pane allow-agent <full-pane-id> one-call|session`. `/pane status` shows
   controllers and `/pane revoke-agent <full-pane-id>` revokes one. Selecting a
