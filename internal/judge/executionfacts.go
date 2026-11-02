@@ -308,6 +308,13 @@ func shellOverridesGit() bool {
 	return false
 }
 
+// ContainsLiteralGitPush reports whether a parsed command line visibly invokes
+// Git's push subcommand. It does not claim the whole invocation is safe or that
+// its remote is resolvable; callers use it only to identify a push attempt.
+func ContainsLiteralGitPush(command string) bool {
+	return containsLiteralGitPush(command)
+}
+
 // containsLiteralGitPush is the conservative half of parseSingleGitPush. Once
 // a parsed line visibly invokes Git's push subcommand, failure to prove the
 // exact remote must block Bare; returning no fact would let EnvelopeBare treat

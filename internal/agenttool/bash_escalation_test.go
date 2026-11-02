@@ -304,6 +304,51 @@ func (failingRunner) SandboxCall(argv []string, _ string, _ seatbelt.CallPolicy)
 	return []string{argv[0], argv[1], "echo 'Operation not permitted' >&2; exit 1"}, func() {}, nil
 }
 
+const gitPushFailureOutput = "arbitrary Git failure wording"
+
+type gitPushFailingRunner struct{}
+
+func (gitPushFailingRunner) SandboxArgv(shell, flag, _, _ string) ([]string, func(), error) {
+	return []string{shell, flag, `printf "%s\n" "` + gitPushFailureOutput + `" >&2; exit 1`}, func() {}, nil
+}
+
+func (gitPushFailingRunner) SandboxCall(argv []string, _ string, _ seatbelt.CallPolicy) ([]string, func(), error) {
+	return []string{argv[0], argv[1], `printf "%s\n" "` + gitPushFailureOutput + `" >&2; exit 1`}, func() {}, nil
+}
+
+func TestBashEverySandboxedGitPushFailureGetsOneEscalationHint(t *testing.T) {
+	tool := &BashTool{Dir: t.TempDir(), Sandbox: gitPushFailingRunner{}, ForceSandbox: true}
+	_, err := runBashErr(t, tool, map[string]any{"command": "cd ../annotation-workbench && git push origin main"})
+	if err == nil {
+		t.Fatal("expected the simulated Git push failure")
+	}
+	for _, want := range []string{"git -C <repo> push", `network="on"`, `sandbox_permissions="require_escalated"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Git push hint missing %q: %v", want, err)
+		}
+	}
+
+	_, err = runBashErr(t, tool, map[string]any{
+		"command":             "git -C ../annotation-workbench push origin main",
+		"sandbox_permissions": "require_escalated",
+		"justification":       "use the host Git credential helper",
+	})
+	if err == nil || !strings.Contains(err.Error(), "request was not granted") {
+		t.Fatalf("contained escalation must explain the refusal, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "retry once") {
+		t.Fatalf("contained escalation must not invite the same retry: %v", err)
+	}
+
+	_, err = runBashErr(t, tool, map[string]any{"command": "git status"})
+	if err == nil {
+		t.Fatal("expected the simulated non-push failure")
+	}
+	if strings.Contains(err.Error(), "git push:") || strings.Contains(err.Error(), "require_escalated") {
+		t.Fatalf("a failed non-push command received the push hint: %v", err)
+	}
+}
+
 // TestBashNonSandboxFailureHasNoHint asserts an unsandboxed failure is not
 // labelled as a sandbox denial.
 func TestBashNonSandboxFailureHasNoHint(t *testing.T) {

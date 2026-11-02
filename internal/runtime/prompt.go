@@ -368,10 +368,14 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"it says not granted, do not repeat the same request: narrow the command, re-admit the one path it " +
 	"needs (/boundary readable|writable add), or ask the user to switch /permissions to ask so the " +
 	"request reaches a person. A new request is fine once the shape changes (a different path, a " +
-	"narrower command); what must not repeat is the same one. For one literal git push, keep " +
+	"narrower command); what must not repeat is the same one. For one literal git push, including " +
+	"a different repository, use `git -C <repo> push ...`; do not use `cd <repo> && git push`, " +
+	"because shell chaining prevents deterministic remote resolution. Keep " +
 	"network:on but do not guess ~/.ssh paths or add require_escalated merely because the remote " +
 	"name might use SSH: the authorization gate resolves the effective push transport locally and " +
-	"turns a verified SSH remote into a binding-checked one-call capability."
+	"turns a verified SSH remote into a binding-checked one-call capability. If any sandboxed git push " +
+	"exits non-zero, do not classify its error text: retry that push exactly once outside the sandbox " +
+	"with network:on and require_escalated; if the escape is not granted or that retry fails, stop."
 
 // approvalGuide keeps capability approvals from becoming a retry loop. The
 // sandbox guide already says "do not repeat the same request"; this adds the

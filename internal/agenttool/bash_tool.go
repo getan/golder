@@ -285,11 +285,15 @@ func (t *BashTool) Description() string {
 		"inside an OS sandbox by default (writes confined to the workspace and temp dir, " +
 		"network off). Set network=on for a call that needs outbound access, such as " +
 		"git push or a package download: the authorization gate decides execution " +
-		"AND network in one review, keeping the file sandbox. For one literal git push, " +
+		"AND network in one review, keeping the file sandbox. For one literal git push " +
+		"(including another repository written as git -C <repo> push), " +
 		"the gate resolves the effective push remote from local Git config without network; " +
 		"a resolved SSH transport becomes a binding-checked one-call outside-sandbox need " +
 		"because known_hosts and SSH identities are intentionally excluded. Do not add " +
-		"require_escalated merely to explain a named SSH remote. A sandbox denial is " +
+		"require_escalated merely to explain a named SSH remote. Do not wrap a push in " +
+		"cd <repo> && git push: shell chaining intentionally prevents deterministic remote " +
+		"resolution. If any git push exits non-zero inside the sandbox, request exactly one " +
+		"outside-sandbox retry regardless of its error wording. A sandbox denial is " +
 		"labelled in the output — when a command legitimately needs files the " +
 		"sandbox denies, retry it with " +
 		"sandbox_permissions=\"require_escalated\" plus a short justification, which " +
@@ -380,6 +384,16 @@ const sandboxEscalationDeniedHint = "\n[sandboxed: sandbox_permissions=\"require
 // one step that actually changes the answer instead of being left to retry an
 // escape no human will be shown.
 const sandboxEscalationAutoNote = " This run is in auto mode, where the reviewer alone answers escapes: retrying cannot change the answer, but two smaller fixes can — (1) if the blocked access is a read, ask the user to re-admit that path inside the sandbox (`/boundary readable add <path>`, or GOLDER_SANDBOX_READABLE for the next run); (2) to write a directory, ask them to switch /permissions to ask, where the dialog's w/s rows grant the path and keep the call contained."
+
+// gitPushFailureHint is based only on the parsed command and exit status, never
+// on Git's localized/platform-specific stderr. One outside retry is requested
+// for every sandboxed push that exits non-zero. The wording does not claim that
+// no remote refs changed: a multi-ref push can partially succeed and still fail.
+const gitPushFailureHint = "\n[git push: this push exited non-zero inside the sandbox. Do not inspect the error wording to decide whether to escalate. For another repository, rewrite `cd <repo> && git push ...` as one literal `git -C <repo> push ...` so the gate can resolve the effective remote, then retry exactly once with network=\"on\" and sandbox_permissions=\"require_escalated\" plus a short justification. The reviewer decides under auto and the user under ask. Do not assume that no remote refs changed merely from the non-zero exit. If the escape is not granted or the outside-sandbox retry also fails, stop and report the failure.]"
+
+// gitPushEscalationDeniedHint is the loop breaker after that one retry was
+// requested but the gate kept the push contained.
+const gitPushEscalationDeniedHint = "\n[git push: this push asked to run outside the sandbox, but the request was not granted and the contained push exited non-zero. Do not retry the same escalation. Ask the user to switch /permissions to ask if they want to authorize the one-call escape, or report the push failure.]"
 
 // looksRGMissing reports whether a failed command's output says ripgrep is not
 // installed. Only the failure path consults it.
@@ -621,7 +635,14 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// escalation can create one, so it gets its own hint before the sandbox
 	// advice and the retry loop it would otherwise invite.
 	ptyUnavailable := snap.ExitCode != 0 && looksPTYUnavailable(out)
+	gitPushFailed := sandboxed && snap.ExitCode != 0 && judge.ContainsLiteralGitPush(a.Command)
 	switch {
+	case gitPushFailed:
+		if strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
+			hint = gitPushEscalationDeniedHint
+		} else {
+			hint = gitPushFailureHint
+		}
 	case ptyUnavailable:
 		hint = ptyUnavailableHint
 	case sandboxDenied:
@@ -644,7 +665,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// escalation advice; the two markers do not overlap in practice (a missing
 	// binary prints "command not found", not "operation not permitted").
 	rgMissing := false
-	if snap.ExitCode != 0 && !ptyUnavailable && !sandboxDenied && looksRGMissing(out) {
+	if snap.ExitCode != 0 && !gitPushFailed && !ptyUnavailable && !sandboxDenied && looksRGMissing(out) {
 		rgMissing = true
 		hint = rgMissingHint
 	}
@@ -663,7 +684,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// second denial, leaves the original failure in place. Escalation requests
 	// are skipped: the escape flow already had its say about that path.
 	denialPath := ""
-	if sandboxDenied && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
+	if sandboxDenied && !gitPushFailed && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
 		!strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
 		// The denial's own message is the ground truth about which path was
 		// refused: the OS prints the file the syscall failed on, read or write,
@@ -681,7 +702,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 			}
 		}
 	}
-	if sandboxDenied && denialPath == "" {
+	if sandboxDenied && !gitPushFailed && denialPath == "" {
 		// Every path the OS named was system-protected or credential material.
 		// Offering a one-click path grant would be a lie: SIP will still refuse
 		// /private/var/select/sh, and ~/.ssh/known_hosts is not something this

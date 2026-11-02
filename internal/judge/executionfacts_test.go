@@ -135,6 +135,18 @@ func TestGitPushFactsResolveLinkedWorktreeAndDefaultRemote(t *testing.T) {
 	}
 }
 
+func TestGitPushFactsResolveLiteralGitC(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "git@git-c.example.com:org/repo.git")
+	cwd := filepath.Dir(repo)
+	command := "git -C " + filepath.Base(repo) + " push origin main"
+	facts := resolveGitPushFacts(context.Background(), command, cwd, runGitFactQuery)
+	fact := oneExecutionFact(t, facts)
+	if fact.Transport != "ssh" || fact.Host != "git-c.example.com" || !fact.RequiresUnconfined || facts.binding == "" {
+		t.Fatalf("git -C fact=%+v private=%+v", fact, facts)
+	}
+}
+
 func TestGitPushFactsKeepOpaqueTransportsContained(t *testing.T) {
 	for _, tc := range []struct {
 		name, remote string
@@ -352,6 +364,29 @@ func TestGitPushFactsFeedReviewerAndCapabilityGate(t *testing.T) {
 		dec := gate(context.Background(), httpsCall)
 		if dec == nil || dec.Block || dec.Direct || dec.Bare || !dec.Network {
 			t.Fatalf("HTTPS decision=%+v", dec)
+		}
+	})
+
+	t.Run("auto confirm grants explicit HTTPS git-C escape", func(t *testing.T) {
+		httpsRepo := gitFactRepo(t)
+		gitFactCommand(t, httpsRepo, "remote", "add", "origin", "https://example.com/org/repo.git")
+		cwd := filepath.Dir(httpsRepo)
+		args, err := json.Marshal(map[string]string{
+			"command":             "git -C " + filepath.Base(httpsRepo) + " push origin main",
+			"network":             "on",
+			"sandbox_permissions": "require_escalated",
+			"justification":       "retry the failed push with host Git credentials",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		httpsCall := agentcore.AgentToolCall{ID: "https-escalated", Name: "bash", Arguments: args}
+		gate := ConsentGate(ConsentOpts{Mode: permissions.New(permissions.Auto), Cwd: cwd,
+			Classifier: consentClassifier{v: Verdict{Level: Confirm, Network: true, Source: "llm", Reasons: []string{"authorized bounded push retry"}}},
+			Sandboxed:  func(string) bool { return true }})
+		dec := gate(context.Background(), httpsCall)
+		if dec == nil || dec.Block || !dec.Direct || dec.Sandbox || !dec.Network {
+			t.Fatalf("explicit HTTPS git-C decision=%+v", dec)
 		}
 	})
 

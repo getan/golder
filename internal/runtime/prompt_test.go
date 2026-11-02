@@ -344,6 +344,29 @@ func TestBuildSystemPromptAdvertisesToolFirstReads(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptUsesLiteralGitCPushForAnotherRepository(t *testing.T) {
+	got, err := BuildSystemPrompt(PromptConfig{
+		WorkingDir: "/work/proj",
+		Now:        fixedTime,
+		ReadFile:   func(string) ([]byte, error) { return nil, os.ErrNotExist },
+	})
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"git -C <repo> push",
+		"do not use `cd <repo> && git push`",
+		"prevents deterministic remote resolution",
+		"If any sandboxed git push exits non-zero",
+		"do not classify its error text",
+		"retry that push exactly once outside the sandbox",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Git push guidance missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestBuildSystemPromptAGENTSOrdering is the acceptance-critical test: with an
 // AGENTS.md at the root and at a nested working directory, the root's content
 // must appear BEFORE the nested one (general → specific).
