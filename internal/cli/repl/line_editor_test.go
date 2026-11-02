@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -29,6 +30,20 @@ func TestLineEditorCompletesSlashCommands(t *testing.T) {
 	e := testLineEditor()
 	if got := e.suggestion("/mod"); got != "/model" {
 		t.Fatalf("suggestion = %q, want /model", got)
+	}
+}
+
+func TestLineEditorHidesSkillsAtBareSlash(t *testing.T) {
+	reg := runtime.NewSlashRegistry()
+	reg.AddBuiltin(runtime.SlashCommand{Name: "skills"})
+	reg.AddSkill(runtime.SlashCommand{Name: "deploy"})
+	e := newREPLLineEditor(nil, nil, nil, reg, nil)
+	bare := e.suggestions("/")
+	if !slices.Contains(bare, "/skills") || slices.Contains(bare, "/deploy") {
+		t.Fatalf("bare slash suggestions = %v, want /skills without every Skill", bare)
+	}
+	if got := e.suggestion("/dep"); got != "/deploy" {
+		t.Fatalf("typed Skill prefix suggestion = %q, want /deploy", got)
 	}
 }
 

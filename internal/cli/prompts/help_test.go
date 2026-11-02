@@ -20,6 +20,8 @@ func TestHelpGroupsByCategory(t *testing.T) {
 		Description: "Review PRs",
 		Expand:      func(string) string { return "" },
 	})
+	reg.AddBuiltin(runtime.SlashCommand{Name: "skills", Category: runtime.CategoryExtensions, Description: "Manage Skills"})
+	reg.AddSkill(runtime.SlashCommand{Name: "deploy", Description: "Deploy workflow", Expand: func(string) string { return "" }})
 
 	out, err := reg.ResolveOutcome("/help")
 	if err != nil {
@@ -48,5 +50,8 @@ func TestHelpGroupsByCategory(t *testing.T) {
 	}
 	if !strings.Contains(msg, "/review") || !strings.Contains(msg, "(source: global)") {
 		t.Errorf("user command should be listed under Extensions with its source:\n%s", msg)
+	}
+	if !strings.Contains(msg, "/skills") || strings.Contains(msg, "/deploy") {
+		t.Errorf("/help should keep the Skills entry point without duplicating every Skill:\n%s", msg)
 	}
 }

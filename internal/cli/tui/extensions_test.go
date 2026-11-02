@@ -49,7 +49,7 @@ func extensionModel(t *testing.T) Model {
 	return res.(Model)
 }
 
-func TestExtensionPickerSeparatesSourceKindsAndSkills(t *testing.T) {
+func TestExtensionPickerLeavesSkillsUnderSkills(t *testing.T) {
 	m := extensionModel(t)
 	res, cmd := m.runSlash("/extensions")
 	m = res.(Model)
@@ -60,9 +60,14 @@ func TestExtensionPickerSeparatesSourceKindsAndSkills(t *testing.T) {
 	for _, r := range m.menu.pick {
 		text.WriteString(r.Title + " " + r.Status + "\n")
 	}
-	for _, want := range []string{"MCP servers", "MCP · http", "CLI plugins", "local [CLI]", "Legacy RPC plugins", "RPC · legacy", "Skills · instructions only", "demo [Skill]", "manual only"} {
+	for _, want := range []string{"MCP servers", "MCP · http", "CLI plugins", "local [CLI]", "Legacy RPC plugins", "RPC · legacy"} {
 		if !strings.Contains(text.String(), want) {
 			t.Fatalf("missing %s: %s", want, text.String())
+		}
+	}
+	for _, duplicate := range []string{"Skills · instructions only", "demo [Skill]"} {
+		if strings.Contains(text.String(), duplicate) {
+			t.Fatalf("/extensions duplicated %q from /skills: %s", duplicate, text.String())
 		}
 	}
 	if !strings.Contains(m.View().Content, "MCP") {
@@ -93,6 +98,19 @@ func TestExtensionPickerSeparatesSourceKindsAndSkills(t *testing.T) {
 				t.Errorf("%s contains %q: %s", tc.command, reject, text.String())
 			}
 		}
+	}
+	res, _ = m.runSlash("/skills")
+	m = res.(Model)
+	res, _ = m.chooseExtension(extensionValue("skill-detail", "demo"))
+	m = res.(Model)
+	res, _ = m.chooseExtension(extensionValue("back", "skills"))
+	m = res.(Model)
+	text.Reset()
+	for _, r := range m.menu.pick {
+		text.WriteString(r.Title + "\n")
+	}
+	if !strings.Contains(text.String(), "demo [Skill]") || strings.Contains(text.String(), "MCP servers") {
+		t.Fatalf("Skill Back left the /skills catalog: %s", text.String())
 	}
 }
 

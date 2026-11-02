@@ -67,8 +67,8 @@ func (t *TuiosTool) Name() string { return "tuios" }
 func (t *TuiosTool) Description() string {
 	if t.allowControl {
 		return "Manage panes in the current tuios session: list, capture, wait for output/events, " +
-			"with control limited to this agent's helpers by default. list marks this process as own and its helpers as controlled; " +
-			"for a target with neither marker, request host_control:true on the first control call. " +
+			"with control limited to this agent's helpers and operator-claimed panes by default. list reports own, control origin/scope, and whether input is currently allowed. " +
+			"For an external pane, host_control:true authorizes only that call; use claim with scope=session and host_control:true in /permissions ask for reusable control, and revoke to remove it. " +
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
 			"daemon events, not polling. A new pane with argv defaults to keep_open, preserving startup failures for capture; " +
 			"set close_on_exit:true for disposable panes. Close needs a full window id and refuses golder's own pane. " +
@@ -112,8 +112,14 @@ const tuiosReadSchema = `{
 const tuiosControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["list","capture","wait","run","send","press","screenshot","new","focus","move","resize","rename","minimize","close"]},
-    "host_control":{"type":"boolean","description":"Request one-call control when list shows neither own nor controlled. Use it on the first call; never permits agent approval input."},
+	    "action":{"type":"string","enum":["list","capture","wait","claim","revoke","run","send","press","screenshot","new","focus","move","resize","rename","minimize","close"]},
+	    "host_control":{"type":"boolean","description":"Request one-call control of an external pane, or the exact operator-confirmed capability needed by claim. It never permits agent/approval/browser pane input."},
+	    "scope":{"type":"string","enum":["one-call","session"],"description":"For claim: required write-control lifetime. one-call is consumed by the next run/send/press; session lasts until this conversation ends or is revoked/transferred."},
+	    "transfer":{"type":"boolean","description":"For claim: explicitly transfer an existing exclusive lease from another agent after operator confirmation."},
+	    "target_identity":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Prepared internal identity binding for claim; callers must not invent or reuse it."},
+	    "control_origin":{"type":"string","enum":["agent-created","operator-claimed"],"description":"Prepared target fact for review; callers must not set it. Operator-claimed panes are outside the agent's OS sandbox."},
+	    "control_scope":{"type":"string","enum":["session","one-call"],"description":"Prepared target control lifetime for review; callers must not set it."},
+	    "current_controller":{"type":"string","description":"Prepared display label of the Agent whose exclusive lease transfer=true will replace."},
     "network":{"type":"string","enum":["off","on"],"description":"For new: network capability of the pane; for input: request authorization to use a network-enabled pane."},
     "window":{"type":"string","description":"Window id or name. close and move require the full id; omit for the focused pane where allowed."},
     "source":{"type":"string","enum":["visible","recent"],"description":"For capture: visible screen or recent scrollback."},
@@ -155,47 +161,54 @@ const tuiosControlSchema = `{
 }`
 
 type tuiosArgs struct {
-	HostControl bool     `json:"host_control,omitempty"`
-	Network     string   `json:"network,omitempty"`
-	Action      string   `json:"action"`
-	Window      string   `json:"window,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	Lines       int      `json:"lines,omitempty"`
-	Condition   string   `json:"condition,omitempty"`
-	Pattern     string   `json:"pattern,omitempty"`
-	Until       []string `json:"until,omitempty"`
-	IdleMS      int      `json:"idle_ms,omitempty"`
-	CommandSeq  uint64   `json:"command_seq,omitempty"`
-	TimeoutMS   int      `json:"timeout_ms,omitempty"`
-	Command     string   `json:"command,omitempty"`
-	Script      string   `json:"script,omitempty"`
-	Remote      bool     `json:"remote,omitempty"`
-	Text        string   `json:"text,omitempty"`
-	Submit      bool     `json:"submit,omitempty"`
-	Paste       bool     `json:"paste,omitempty"`
-	Keys        string   `json:"keys,omitempty"`
-	Repeat      int      `json:"repeat,omitempty"`
-	Format      string   `json:"format,omitempty"`
-	Frame       string   `json:"frame,omitempty"`
-	Theme       string   `json:"theme,omitempty"`
-	Out         string   `json:"out,omitempty"`
-	Scrollback  bool     `json:"scrollback,omitempty"`
-	Cursor      bool     `json:"cursor,omitempty"`
-	Expect      string   `json:"expect,omitempty"`
-	Name        string   `json:"name,omitempty"`
-	Cwd         string   `json:"cwd,omitempty"`
-	Workspace   int      `json:"workspace,omitempty"`
-	Width       int      `json:"width,omitempty"`
-	Height      int      `json:"height,omitempty"`
-	Follow      bool     `json:"follow,omitempty"`
-	Minimized   *bool    `json:"minimized,omitempty"`
-	Argv        []string `json:"argv,omitempty"`
-	Focus       *bool    `json:"focus,omitempty"`
-	CloseOnExit *bool    `json:"close_on_exit,omitempty"`
-	KeepOpen    *bool    `json:"keep_open,omitempty"`
-	Force       bool     `json:"force,omitempty"`
-	TargetLabel string   `json:"-"`
-	HostHint    string   `json:"-"`
+	HostControl       bool     `json:"host_control,omitempty"`
+	Network           string   `json:"network,omitempty"`
+	Action            string   `json:"action"`
+	Window            string   `json:"window,omitempty"`
+	Scope             string   `json:"scope,omitempty"`
+	Transfer          bool     `json:"transfer,omitempty"`
+	TargetIdentity    string   `json:"target_identity,omitempty"`
+	ControlOrigin     string   `json:"control_origin,omitempty"`
+	ControlScope      string   `json:"control_scope,omitempty"`
+	CurrentController string   `json:"current_controller,omitempty"`
+	Source            string   `json:"source,omitempty"`
+	Lines             int      `json:"lines,omitempty"`
+	Condition         string   `json:"condition,omitempty"`
+	Pattern           string   `json:"pattern,omitempty"`
+	Until             []string `json:"until,omitempty"`
+	IdleMS            int      `json:"idle_ms,omitempty"`
+	CommandSeq        uint64   `json:"command_seq,omitempty"`
+	TimeoutMS         int      `json:"timeout_ms,omitempty"`
+	Command           string   `json:"command,omitempty"`
+	Script            string   `json:"script,omitempty"`
+	Remote            bool     `json:"remote,omitempty"`
+	Text              string   `json:"text,omitempty"`
+	Submit            bool     `json:"submit,omitempty"`
+	Paste             bool     `json:"paste,omitempty"`
+	Keys              string   `json:"keys,omitempty"`
+	Repeat            int      `json:"repeat,omitempty"`
+	Format            string   `json:"format,omitempty"`
+	Frame             string   `json:"frame,omitempty"`
+	Theme             string   `json:"theme,omitempty"`
+	Out               string   `json:"out,omitempty"`
+	Scrollback        bool     `json:"scrollback,omitempty"`
+	Cursor            bool     `json:"cursor,omitempty"`
+	Expect            string   `json:"expect,omitempty"`
+	Name              string   `json:"name,omitempty"`
+	Cwd               string   `json:"cwd,omitempty"`
+	Workspace         int      `json:"workspace,omitempty"`
+	Width             int      `json:"width,omitempty"`
+	Height            int      `json:"height,omitempty"`
+	Follow            bool     `json:"follow,omitempty"`
+	Minimized         *bool    `json:"minimized,omitempty"`
+	Argv              []string `json:"argv,omitempty"`
+	Focus             *bool    `json:"focus,omitempty"`
+	CloseOnExit       *bool    `json:"close_on_exit,omitempty"`
+	KeepOpen          *bool    `json:"keep_open,omitempty"`
+	Force             bool     `json:"force,omitempty"`
+	ConsumeLease      bool     `json:"-"`
+	TargetLabel       string   `json:"-"`
+	HostHint          string   `json:"-"`
 }
 
 func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (result agentcore.AgentToolResult, resultErr error) {
@@ -232,12 +245,25 @@ func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMess
 		// acquires the pane, not reuse a potentially minutes-old permission
 		// snapshot. Rebuild from original arguments to avoid two cd prefixes.
 		fresh := requested
-		fresh.Window, fresh.Remote = a.Window, a.Remote
+		fresh.Window, fresh.Remote, fresh.ConsumeLease = a.Window, a.Remote, true
 		if err := t.checkControl(ctx, &fresh); err != nil {
 			return tuiosError(err), nil
 		}
 		if fresh.Remote != a.Remote || fresh.HostHint != a.HostHint {
 			return tuiosError(errors.New("pane's remote context changed while waiting; nothing was sent")), nil
+		}
+		a = fresh
+	} else if tuiosConsumesPaneLease(a.Action) {
+		// A one-call lease covers one pane mutation, not unlimited focus/move/
+		// rename operations. Revalidate immediately before dispatch just as input
+		// does; a transfer or revoke that landed after preflight wins.
+		fresh := requested
+		fresh.Window, fresh.Remote, fresh.ConsumeLease = a.Window, a.Remote, true
+		if err := t.checkControl(ctx, &fresh); err != nil {
+			return tuiosError(err), nil
+		}
+		if fresh.Remote != a.Remote || fresh.HostHint != a.HostHint {
+			return tuiosError(errors.New("pane's remote context changed before the operation; nothing was changed")), nil
 		}
 		a = fresh
 	}
@@ -248,6 +274,14 @@ func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMess
 		return t.capture(ctx, a)
 	case "wait":
 		return t.wait(ctx, a)
+	case "claim":
+		t.controlMu.Lock()
+		defer t.controlMu.Unlock()
+		return t.claimPane(ctx, callID, raw, a)
+	case "revoke":
+		t.controlMu.Lock()
+		defer t.controlMu.Unlock()
+		return t.revokePane(ctx, a)
 	case "run":
 		return t.run(ctx, a)
 	case "send":
@@ -291,7 +325,15 @@ func (t *TuiosTool) Execute(ctx context.Context, callID string, raw json.RawMess
 
 func tuiosIsControl(action string) bool {
 	switch action {
-	case "run", "send", "press", "screenshot", "new", "focus", "move", "resize", "rename", "minimize", "close":
+	case "claim", "revoke", "run", "send", "press", "screenshot", "new", "focus", "move", "resize", "rename", "minimize", "close":
+		return true
+	}
+	return false
+}
+
+func tuiosConsumesPaneLease(action string) bool {
+	switch action {
+	case "focus", "move", "resize", "rename", "minimize", "close":
 		return true
 	}
 	return false
@@ -371,10 +413,12 @@ func (t *TuiosTool) list(ctx context.Context) (agentcore.AgentToolResult, error)
 	if err != nil {
 		return tuiosError(err), nil
 	}
+	t.Control.touchAgent(c, wl.Windows)
 	// Mark the pane this process runs in. Closing it would kill the agent, so
 	// the tool refuses that target, and the model can tell the user's panes
 	// from its own.
 	own := c.PaneID()
+	t.Control.reapExternal(wl.Windows)
 	for i := range wl.Windows {
 		if sensitivePane(wl.Windows[i]) {
 			wl.Windows[i].Title, wl.Windows[i].DisplayName = "Authorization (operator-only)", "Authorization (operator-only)"
@@ -382,8 +426,28 @@ func (t *TuiosTool) list(ctx context.Context) (agentcore.AgentToolResult, error)
 		if own != "" && wl.Windows[i].WindowID == own {
 			wl.Windows[i].Own = true
 		}
-		if _, ok := t.Control.pane(wl.Windows[i].WindowID); ok {
-			wl.Windows[i].Controlled = true
+		state := t.Control.controlState(wl.Windows[i], own, c.Session(), c.Socket())
+		if state.controlled || state.ownerID != "" {
+			allowed := state.inputAllowed
+			wl.Windows[i].Controlled = state.controlled
+			wl.Windows[i].ControlOrigin = state.origin
+			wl.Windows[i].ControlScope = state.scope
+			wl.Windows[i].ControlOwner = state.ownerLabel
+			wl.Windows[i].ControlOwnerID = state.ownerID
+			wl.Windows[i].InputAllowed = &allowed
+			wl.Windows[i].Sealed = state.sealed
+			wl.Windows[i].ControlReason = state.reason
+		}
+	}
+	if store, agent := t.Control.sharedLeaseState(); store != nil && agent.ID != "" {
+		if agents, err := store.Agents(c.Session(), agent.Workspace); err == nil {
+			wl.ControlAgents = make([]tuiosctl.PaneControlAgent, 0, len(agents))
+			for _, candidate := range agents {
+				wl.ControlAgents = append(wl.ControlAgents, tuiosctl.PaneControlAgent{
+					AgentID: candidate.ID, Label: candidate.Label, Project: candidate.Project, Role: candidate.Role,
+					Conversation: candidate.ConversationID, PaneID: candidate.PaneID, Workspace: candidate.Workspace,
+				})
+			}
 		}
 	}
 	return agentcore.AgentToolResult{

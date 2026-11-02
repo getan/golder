@@ -201,6 +201,10 @@ func TestInstallThenStatusThenUninstall(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", home)
 	t.Setenv("TUIOS_HARNESS_DIR", "")
+	// This test exercises the external tuios integration even when the suite is
+	// itself running inside golder workspace. The workspace marker otherwise
+	// deliberately outranks tuios and makes the manifest irrelevant.
+	t.Setenv("GOLDER_WORKSPACE", "")
 	t.Setenv("TUIOS_ENV", "1")
 	t.Setenv("TUIOS_PANE_ID", "pane-1")
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/extensions"
+	"github.com/getan/golder/internal/runtime"
 )
 
 func TestRegisterListEnableDisableNeverRunsProgram(t *testing.T) {
@@ -57,5 +58,25 @@ func TestHTTPConfigRequiresNoConnectionAndJSONIsClean(t *testing.T) {
 		if !json.Valid(bytes.TrimSpace(out.Bytes())) {
 			t.Fatalf("not JSON for %v: %s", args, out.String())
 		}
+	}
+}
+
+func TestExtensionsListLeavesSkillsToSkills(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	m, err := extensions.New(extensions.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	skill, err := runtime.ParseSkill("/skills/deploy/SKILL.md", []byte("---\nname: deploy\ndescription: Deploy workflow\n---\nDeploy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetSkills([]*runtime.Skill{skill}, false)
+	if got := RenderList(m, "extensions"); strings.Contains(got, "Deploy") || strings.Contains(got, "Skills") {
+		t.Fatalf("extensions list duplicated Skills:\n%s", got)
+	}
+	if got := RenderList(m, "skills"); !strings.Contains(got, "deploy") || !strings.Contains(got, "Skills") {
+		t.Fatalf("skills list lost its catalog:\n%s", got)
 	}
 }

@@ -135,7 +135,7 @@ type SlashCommand struct {
 	Description string
 	// Category groups the command in /help and the TUI menu. Empty means
 	// CategoryGeneral for a built-in; non-builtin sources (skills, plugins,
-	// prompt templates) are always grouped under CategoryExtensions.
+	// prompt templates) are grouped under CategoryExtensions when shown.
 	Category string
 	// ArgumentHint is an optional frontmatter hint shown before the description
 	// in autocomplete (e.g. "<PR-URL>"). Convention: <angle> for required args,
@@ -206,6 +206,12 @@ func CategoryOf(c SlashCommand) string {
 	}
 	return c.Category
 }
+
+// TopLevelVisible reports whether a command belongs in an unfiltered command
+// catalog. Skills stay directly invocable and appear when their name is typed,
+// but their potentially large list lives behind /skills instead of being
+// duplicated in /help and a bare "/" menu.
+func TopLevelVisible(c SlashCommand) bool { return c.Source != SourceSkill }
 
 // SlashKind classifies how a resolved invocation should be handled by the
 // caller: run its prompt through the agent, or treat it as a completed action.

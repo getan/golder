@@ -11,6 +11,7 @@ package repl
 import (
 	"io"
 
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/hostcompat"
 )
 
@@ -21,12 +22,14 @@ import (
 // follow the one golder actually runs.
 func (d *replDeps) hostStart() {
 	d.host.Start(d.hookDeps.SessionID, hostcompat.ResumeArgv(d.hookDeps.SessionID))
+	agenttool.SetPaneAgentState(d.agentCtx.Tools, "idle")
 	d.hostMeta()
 }
 
 // hostTurnStart reports that golder took a prompt.
 func (d *replDeps) hostTurnStart() {
 	d.host.TurnStart()
+	agenttool.SetPaneAgentState(d.agentCtx.Tools, "working")
 	d.hostMeta()
 }
 
@@ -35,6 +38,11 @@ func (d *replDeps) hostTurnStart() {
 // failure, so it reports rest.
 func (d *replDeps) hostTurnEnd(failed bool) {
 	d.host.TurnEnd(failed)
+	state := "done"
+	if failed {
+		state = "errored"
+	}
+	agenttool.SetPaneAgentState(d.agentCtx.Tools, state)
 }
 
 // hostClose clears the pane's agent: golder is going away.
@@ -45,7 +53,12 @@ func (d *replDeps) hostClose() {
 // hostPrompt is the gates' OnPrompt hook: golder is about to ask the person
 // something, and the pane is blocked until they answer.
 func (d *replDeps) hostPrompt(question string) func() {
-	return d.host.Block(hostcompat.KindApproval, question)
+	agenttool.SetPaneAgentState(d.agentCtx.Tools, "needs_input")
+	done := d.host.Block(hostcompat.KindApproval, question)
+	return func() {
+		done()
+		agenttool.SetPaneAgentState(d.agentCtx.Tools, "working")
+	}
 }
 
 // hostMeta reports display metadata: the model the session runs and how full

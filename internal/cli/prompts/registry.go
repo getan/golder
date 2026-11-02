@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/extensioncmd"
@@ -165,6 +166,21 @@ func BuildSlashRegistry(live *cli.LiveConfig, creds *provider.CredentialStore, s
 	return reg, nil
 }
 
+// RegisterPaneCommand installs the user-authored pane lease path. Typing the
+// slash command in one Agent's composer identifies that Agent without exposing
+// an agent-id argument in the ordinary workflow.
+func RegisterPaneCommand(reg *runtime.SlashRegistry, tools []agentcore.AgentTool) {
+	if reg == nil {
+		return
+	}
+	reg.AddBuiltin(runtime.SlashCommand{
+		Name: "pane", Description: "show, grant, transfer, or revoke this Agent's exclusive pane write control",
+		ArgumentHint: "[status|agents|allow-agent <full-pane-id> <one-call|session> [--agent <agent-id>] [--transfer]|revoke-agent <full-pane-id>]",
+		Category:     runtime.CategorySession,
+		Action:       func(args string) string { return agenttool.PaneCommand(tools, args) },
+	})
+}
+
 // SyncExtensionSkills removes stale skill entries, but never a builtin or user
 // template that won a name collision. Expansion rechecks admission too.
 func SyncExtensionSkills(reg *runtime.SlashRegistry, m *extensions.Manager) {
@@ -187,9 +203,16 @@ func SyncExtensionSkills(reg *runtime.SlashRegistry, m *extensions.Manager) {
 
 func RegisterExtensionCommands(reg *runtime.SlashRegistry, m *extensions.Manager) {
 	for _, kind := range []string{"extensions", "plugin", "mcp", "skills"} {
+		description := "Manage " + kind
+		hint := "[list|inspect|tools|connect|setup|reset|disable] [id]"
+		if kind == "extensions" {
+			description = "Manage extension tool sources"
+		} else if kind == "skills" {
+			description = "Manage Skills (instructions only)"
+			hint = "[list|inspect|preview|use|enable|disable] [name]"
+		}
 		reg.AddBuiltin(runtime.SlashCommand{Name: kind, Category: runtime.CategoryExtensions,
-			Description:  "Manage " + kind + " (sources and Skills have separate lifecycles)",
-			ArgumentHint: "[list|inspect|tools|connect|setup|reset|disable] [id]",
+			Description: description, ArgumentHint: hint,
 			Run: func(args string) (string, string) {
 				duration := 30 * time.Second
 				if strings.HasPrefix(strings.TrimSpace(args), "setup ") {
@@ -1112,12 +1135,15 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 }
 
 // renderHelp renders the /help listing grouped by category: built-ins under
-// their own category, skills and prompt templates collected under Extensions
-// with their source tag. order is the category render order.
+// their own category and prompt templates under Extensions with their source
+// tag. Individual Skills stay behind /skills instead of being duplicated here.
 func renderHelp(reg *runtime.SlashRegistry, order []string) string {
 	color := ui.Enabled()
 	groups := make(map[string][]runtime.SlashCommand)
 	for _, c := range reg.List() {
+		if !runtime.TopLevelVisible(c) {
+			continue
+		}
 		cat := runtime.CategoryOf(c)
 		groups[cat] = append(groups[cat], c)
 	}

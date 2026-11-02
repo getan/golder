@@ -57,6 +57,25 @@ func TestSlashMenuOpensOnSlash(t *testing.T) {
 	}
 }
 
+func TestBareSlashHidesSkillsButTypedPrefixFindsThem(t *testing.T) {
+	reg := runtime.NewSlashRegistry()
+	reg.AddBuiltin(runtime.SlashCommand{Name: "skills", Category: runtime.CategoryExtensions})
+	reg.AddSkill(runtime.SlashCommand{Name: "deploy", Description: "Deploy workflow"})
+	mn := newSlashMenu(Theme{})
+	mn.refresh("/", reg)
+	names := make([]string, 0, len(mn.filtered))
+	for _, c := range mn.filtered {
+		names = append(names, "/"+c.Name)
+	}
+	if !containsAll(names, "/skills") || containsAll(names, "/deploy") {
+		t.Fatalf("bare slash candidates = %v, want /skills without every Skill", names)
+	}
+	mn.refresh("/dep", reg)
+	if len(mn.filtered) != 1 || mn.filtered[0].Name != "deploy" {
+		t.Fatalf("typed Skill prefix candidates = %+v", mn.filtered)
+	}
+}
+
 // TestSlashMenuFiltersByPrefix verifies the popup narrows to the typed prefix:
 // "/mo" keeps /model but drops /help (and the deleted /models).
 func TestSlashMenuFiltersByPrefix(t *testing.T) {

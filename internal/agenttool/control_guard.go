@@ -17,6 +17,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/panecontrol"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/tuiosctl"
@@ -34,9 +35,14 @@ type ControlGuard struct {
 	mu              sync.Mutex
 	launchMu        sync.Mutex
 	panes           map[string]controlledPane
+	externalPanes   map[string]externalPaneLease
 	browsers        map[string]controlledBrowser
 	browserProfiles map[string]bool // explicit operator consent, this agent only
 	id              string
+	leaseStore      *panecontrol.Store
+	agentIdentity   panecontrol.Agent
+	leaseStop       chan struct{}
+	leaseDone       chan struct{}
 	extensionState  *seatbelt.ExtensionState // operator-only offline auth viewer
 }
 
@@ -67,7 +73,8 @@ func NewControlGuard(root string) *ControlGuard {
 		panic("control identity: " + err.Error())
 	}
 	return &ControlGuard{Root: root, Mode: permissions.New(permissions.Auto), Runner: seatbelt.New(root),
-		panes: map[string]controlledPane{}, browsers: map[string]controlledBrowser{}, id: hex.EncodeToString(id[:])}
+		panes: map[string]controlledPane{}, externalPanes: map[string]externalPaneLease{},
+		browsers: map[string]controlledBrowser{}, id: hex.EncodeToString(id[:])}
 }
 
 func (g *ControlGuard) full() bool {
@@ -93,29 +100,63 @@ func (g *ControlGuard) pane(id string) (controlledPane, bool) {
 }
 
 func (g *ControlGuard) checkPane(ctx context.Context, win tuiosctl.Window, own string, host, input bool) error {
+	o := tuiosctl.FromEnv()
+	return g.checkPaneAtLease(ctx, win, own, o.Session, o.Socket, host, input, false)
+}
+
+func (g *ControlGuard) checkPaneAt(ctx context.Context, win tuiosctl.Window, own, session, socket string, host, input bool) error {
+	return g.checkPaneAtLease(ctx, win, own, session, socket, host, input, false)
+}
+
+func (g *ControlGuard) checkPaneAtLease(ctx context.Context, win tuiosctl.Window, own, session, socket string, host, input, consumeLease bool) error {
 	if sensitivePane(win) {
+		g.revokeExternal(win.WindowID)
 		return errors.New("authorization panes are operator-only; agent control is refused")
 	}
 	if win.WindowID == own && input {
 		return errors.New("refusing agent input into its own pane or approval UI")
 	}
-	if input && (win.AgentState == "needs_input" || win.AgentState == "needs-input" || strings.Contains(strings.ToLower(win.ForegroundCmd), "golder")) {
+	if input && paneIsAgent(win) {
+		g.revokeExternal(win.WindowID)
 		return errors.New("refusing input into an agent/approval pane; only the person may answer approvals")
 	}
 	p, managed := g.pane(win.WindowID)
+	if input && g.paneIsBrowser(win) {
+		g.revokeExternal(win.WindowID)
+		return errors.New("use the browser tool for browser panes; terminal input could bypass browser action review")
+	}
 	managedEnvelope := managed && (p.isolated || g.full() ||
 		p.browserRuntime && !agentcore.SandboxRequestedFromContext(ctx) && seatbelt.ModeFromEnv() != seatbelt.ModeEnforce)
 	if !managedEnvelope {
+		leased, leaseErr := g.checkExternalLease(win, session, socket, input, false)
+		if leaseErr != nil {
+			return leaseErr
+		}
+		if leased {
+			if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+				return errors.New("an operator-claimed pane cannot satisfy required local OS containment")
+			}
+			if input && tuiosRemoteHint(win) && !g.network(ctx) {
+				return errors.New("SSH pane input requires reviewed network authority")
+			}
+			if consumeLease {
+				stillLeased, err := g.checkExternalLease(win, session, socket, input, true)
+				if err != nil {
+					return err
+				}
+				if !stillLeased {
+					return errors.New("pane write-control lease changed before the operation; nothing was sent")
+				}
+			}
+			return nil
+		}
 		if !g.host(ctx, host) {
-			return errors.New("pane is not owned by this agent; host_control:true requires a separate one-call authorization")
+			return errors.New("pane is not controlled by this agent; use tuios claim with scope=session for reusable operator consent, or host_control:true for this call only")
 		}
 		if input && !g.network(ctx) {
 			return errors.New("external pane input requires reviewed network/host authority")
 		}
 		return nil
-	}
-	if input && p.browser {
-		return errors.New("use the browser tool for browser panes; terminal input could bypass browser action review")
 	}
 	if input && (p.sealed || p.policy != controlPolicyStamp()) {
 		return errors.New("pane permissions changed or its one-call grant has ended; create a new controlled pane")
@@ -156,12 +197,14 @@ func (g *ControlGuard) release(id string) {
 	g.mu.Lock()
 	p, ok := g.panes[id]
 	delete(g.panes, id)
+	delete(g.externalPanes, id)
 	for bid, browser := range g.browsers {
 		if browser.window == id {
 			delete(g.browsers, bid)
 		}
 	}
 	g.mu.Unlock()
+	g.revokeExternalWith(id, true)
 	if ok && p.cleanup != nil {
 		p.cleanup()
 	}
@@ -177,6 +220,9 @@ func (g *ControlGuard) launchArgv(ctx context.Context, argv []string, cwd string
 func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd string, network, browser bool, runtimeFiles ...string) ([]string, func(), bool, error) {
 	if g.Mode != nil && g.Mode.Mode() == permissions.ReadOnly {
 		return nil, nil, false, errors.New("read-only mode cannot launch panes")
+	}
+	if agentcore.ReadGrantFromContext(ctx) != "" || agentcore.WriteGrantFromContext(ctx) != "" {
+		return nil, nil, false, errors.New("this pane would depend on a one-call path grant and cannot be reused; choose a cwd inside the workspace or grant the directory for the session")
 	}
 	if network && !g.network(ctx) {
 		return nil, nil, false, errors.New("pane/browser launch requires reviewed network permission")
@@ -344,7 +390,7 @@ func (g *ControlGuard) launch(ctx context.Context, c *tuiosctl.Client, p tuiosct
 
 func (g *ControlGuard) reap(ctx context.Context, c *tuiosctl.Client) error {
 	g.mu.Lock()
-	n := len(g.panes)
+	n := len(g.panes) + len(g.externalPanes)
 	g.mu.Unlock()
 	if n == 0 {
 		return nil
@@ -359,7 +405,14 @@ func (g *ControlGuard) reap(ctx context.Context, c *tuiosctl.Client) error {
 	}
 	g.mu.Lock()
 	var gone []string
+	known := make(map[string]bool, len(g.panes)+len(g.externalPanes))
 	for id := range g.panes {
+		known[id] = true
+	}
+	for id := range g.externalPanes {
+		known[id] = true
+	}
+	for id := range known {
 		if !live[id] {
 			gone = append(gone, id)
 		}

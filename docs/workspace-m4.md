@@ -115,5 +115,8 @@ separate validation, never inferred from a macOS pass.
 
 Local-only pane control is bounded to six own-session operations (create,
 close, focus, move-workspace, rename/minimize and resize) under the write grant.
-It does not grant admin, reach another session, move a window to another
-session, or bypass read-only restrictions. Standalone daemon policy is unchanged.
+That API does not itself grant admin, reach another session, move a window to
+another session, or bypass read-only restrictions. Golder workspaces now start
+their panes with admin explicitly enabled so tuios's Toggle admin begins on; set
+`GOLDER_WORKSPACE_PANE_GRANTS=read,write,fan` to restore the folder-scoped
+default. Standalone daemon policy is unchanged.

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/extensions"
-	"github.com/getan/golder/internal/runtime"
 	"github.com/spf13/pflag"
 )
 
@@ -43,7 +42,7 @@ func RenderList(m *extensions.Manager, kind string) string {
 			fmt.Fprintf(&b, "  %s  [%s]  %s · %s · %d/%d tools\n", s.Ref, s.Type, s.State, s.Trust, n, len(s.Tools))
 		}
 	}
-	if kind == "extensions" || kind == "skills" {
+	if kind == "skills" {
 		b.WriteString("Skills\n")
 		for _, s := range m.SkillViews() {
 			owner := "user"
@@ -244,7 +243,7 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 		if errors.Is(e, pflag.ErrHelp) {
 			fmt.Fprintf(out, "Usage: golder %s <action> [id] [flags]\n", kind)
 			if kind == "extensions" {
-				fmt.Fprintln(out, "  list | doctor           data-only source and Skills overview")
+				fmt.Fprintln(out, "  list | doctor           data-only extension source overview")
 			} else {
 				fmt.Fprintln(out, "  list | inspect | tools | logs | prompts | resources")
 				fmt.Fprintln(out, "  enable | disable | remove | test | reset <id>")
@@ -332,20 +331,10 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 		return fail(e)
 	}
 	defer m.Close()
-	if kind == "extensions" {
-		dir := os.Getenv("GOLDER_SKILLS_DIR")
-		if dir == "" {
-			if home, err := os.UserHomeDir(); err == nil {
-				dir = filepath.Join(home, ".agents", "skills")
-			}
-		}
-		skills, _ := runtime.LoadSkillsDir(dir)
-		m.SetSkills(skills, false)
-	}
 	if op == "list" || op == "doctor" {
 		if j {
 			if kind == "extensions" {
-				_ = json.NewEncoder(out).Encode(map[string]any{"sources": m.List(), "skills": m.SkillViews()})
+				_ = json.NewEncoder(out).Encode(map[string]any{"sources": m.List()})
 			} else {
 				var filtered []extensions.Snapshot
 				for _, s := range m.List() {

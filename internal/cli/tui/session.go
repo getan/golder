@@ -437,6 +437,10 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	prompts.RegisterBoundaryCommand(s.slash, func() string {
 		return s.lang()
 	})
+	if err := agenttool.ConfigurePaneAgent(context.Background(), opts.Tools, header.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: pane control registration unavailable: %v\n", err)
+	}
+	prompts.RegisterPaneCommand(s.slash, opts.Tools)
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
 	// The multiplexer around this pane learns which conversation it holds
@@ -1200,6 +1204,9 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry) ([]
 	s.lastBtw = nil
 	s.lastBtwBase = 0
 	s.hookDeps.SessionID = h.ID
+	if err := agenttool.ConfigurePaneAgent(context.Background(), s.agentCtx.Tools, h.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: pane control registration unavailable after resume: %v\n", err)
+	}
 	// The pane now holds a different conversation: a host that resumed it would
 	// otherwise reopen the one this golder no longer runs.
 	s.hostStart()

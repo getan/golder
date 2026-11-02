@@ -19,3 +19,13 @@ func TestCategoryOf(t *testing.T) {
 		}
 	}
 }
+
+func TestSkillsStayOutOfTheTopLevelCatalog(t *testing.T) {
+	if TopLevelVisible(SlashCommand{Name: "prd", Source: SourceSkill}) {
+		t.Fatal("a Skill was duplicated into the top-level command catalog")
+	}
+	if !TopLevelVisible(SlashCommand{Name: "review", Source: SourceUser}) ||
+		!TopLevelVisible(SlashCommand{Name: "skills", Source: SourceBuiltin}) {
+		t.Fatal("hiding Skills also hid a template or the /skills entry point")
+	}
+}

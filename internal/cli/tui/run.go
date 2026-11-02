@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	uv "github.com/charmbracelet/ultraviolet"
 
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/terminalstate"
@@ -52,6 +53,7 @@ func Run(opts Options) (runErr error) {
 	// Kill still-running shell sessions (bash_ids) on exit so long-running
 	// commands are not orphaned when the TUI quits.
 	defer run.KillShellSessions(opts.Tools)
+	defer agenttool.ClosePaneAgent(opts.Tools)
 	// Clear this pane's agent in the multiplexer around it (tuios or herdr) on
 	// the way out, and flush the release before the process exits. Deferred
 	// here rather than at the three quit call sites because every path out of

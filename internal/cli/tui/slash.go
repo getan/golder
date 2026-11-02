@@ -216,6 +216,9 @@ func (mn *slashMenu) refresh(buffer string, reg *runtime.SlashRegistry) {
 	}
 	var out []runtime.SlashCommand
 	for _, c := range reg.List() {
+		if token == "" && !runtime.TopLevelVisible(c) {
+			continue
+		}
 		if strings.HasPrefix(c.Name, token) {
 			out = append(out, c)
 		}

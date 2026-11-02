@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -33,14 +34,43 @@ func TestFirstPartyReadToolsAreLocalAllows(t *testing.T) {
 }
 
 func TestFirstPartyRunPreservesBrokerIdentity(t *testing.T) {
-	spy := &firstPartySpy{v: Verdict{Level: Allow, Source: "local"}}
-	v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios",
-		json.RawMessage(`{"action":"run","command":"go test ./..."}`))
-	if spy.tool != "tuios" {
-		t.Fatalf("next tool = %q, want the original tuios call", spy.tool)
+	for _, raw := range []string{
+		`{"action":"run","command":"go test ./..."}`,
+		`{"action":"run","script":"hostname\nid\n","remote":true}`,
+	} {
+		spy := &firstPartySpy{v: Verdict{Level: Allow, Source: "local"}}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios", json.RawMessage(raw))
+		if spy.tool != "tuios" || string(spy.args) != raw {
+			t.Fatalf("next call = %q %s, want the original tuios call %s", spy.tool, spy.args, raw)
+		}
+		if v.Source != "local" {
+			t.Errorf("run verdict = %+v, want the local grader's", v)
+		}
 	}
-	if v.Source != "local" {
-		t.Errorf("run verdict = %+v, want the local grader's", v)
+}
+
+func TestFirstPartyRunRequiresExactlyOneCommandOrScript(t *testing.T) {
+	for _, tc := range []struct {
+		raw, reason string
+	}{
+		{`{"action":"run"}`, "no command or script"},
+		{`{"action":"run","command":"id","script":"hostname"}`, "cannot use command and script together"},
+		{`{"action":"run","command":"id","script":"hostname","host_control":true}`, "cannot use command and script together"},
+	} {
+		spy := &firstPartySpy{v: Verdict{Level: Allow}}
+		v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios", json.RawMessage(tc.raw))
+		if !v.Failed || spy.tool != "" || len(v.Reasons) == 0 || !strings.Contains(v.Reasons[0], tc.reason) {
+			t.Errorf("%s = %+v next=%q, want fail-closed containing %q", tc.raw, v, spy.tool, tc.reason)
+		}
+	}
+}
+
+func TestFirstPartyScriptStillUsesStaticFloor(t *testing.T) {
+	spy := &firstPartySpy{v: Verdict{Level: Allow}}
+	v := (FirstParty{Next: spy}).Classify(context.Background(), "tuios",
+		json.RawMessage(`{"action":"run","script":"cat ~/.ssh/id_rsa"}`))
+	if v.Level != Deny || spy.tool != "" {
+		t.Fatalf("credential-reading script bypassed static floor: verdict=%+v next=%q", v, spy.tool)
 	}
 }
 

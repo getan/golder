@@ -32,3 +32,32 @@ func TestOperatorConfirmationIsNotAnAutomaticReviewerDecision(t *testing.T) {
 		})
 	}
 }
+
+func TestPaneClaimCombinesExactOperatorAndOneCallHostCapability(t *testing.T) {
+	for _, mode := range []permissions.Mode{permissions.Auto, permissions.FullAccess, permissions.Ask} {
+		t.Run(mode.String(), func(t *testing.T) {
+			asked := 0
+			gate := ConsentGate(ConsentOpts{Mode: permissions.New(mode), Cwd: t.TempDir(),
+				Classifier: consentClassifier{v: Verdict{Level: Confirm}},
+				Confirm: func(_ context.Context, req ConsentRequest) ConsentAnswer {
+					asked++
+					if !hasNeed(req.Needs, CapHostControl) {
+						t.Fatalf("claim dialog hid host authority: %+v", req.Needs)
+					}
+					return ConsentAnswer{Answered: true, Allow: true, Needs: req.Needs}
+				},
+			})
+			call := agentcore.AgentToolCall{ID: "claim", Name: "tuios",
+				Arguments:                   json.RawMessage(`{"action":"claim","window":"w2","scope":"session","host_control":true}`),
+				RequireOperatorConfirmation: true}
+			dec := gate(context.Background(), call)
+			if mode == permissions.Ask {
+				if dec == nil || dec.Block || !dec.OperatorConfirmed || !dec.HostControl || asked != 1 {
+					t.Fatalf("approved claim lost exact/host grants: %+v asked=%d", dec, asked)
+				}
+			} else if dec == nil || !dec.Block || dec.OperatorConfirmed || dec.HostControl || asked != 0 {
+				t.Fatalf("%s invented a persistent claim: %+v asked=%d", mode, dec, asked)
+			}
+		})
+	}
+}

@@ -132,7 +132,7 @@ func TestFirstAgentPaneRunsTheLiteralArgvWithThePanesIdentity(t *testing.T) {
 	if token := paneEnv["TUIOS_PANE_TOKEN"]; len(token) != 32 || strings.Trim(token, "0123456789abcdef") != "" {
 		t.Errorf("TUIOS_PANE_TOKEN = %q, want 32 hex characters", token)
 	}
-	for _, grant := range []string{"read", "write", "fan"} {
+	for _, grant := range []string{"read", "write", "fan", "admin"} {
 		if !strings.Contains(paneEnv["TUIOS_PANE_GRANTS"], grant) {
 			t.Errorf("TUIOS_PANE_GRANTS = %q, want %q in it", paneEnv["TUIOS_PANE_GRANTS"], grant)
 		}

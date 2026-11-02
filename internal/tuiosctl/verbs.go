@@ -29,17 +29,44 @@ type Window struct {
 	// computed by the tool, not sent by the daemon.
 	Own bool `json:"own,omitempty"`
 	// Controlled marks a helper pane this agent launched through its broker. It
-	// is computed by the tool, not accepted from daemon metadata or pane titles.
+	// also marks an external pane the operator explicitly leased to this agent
+	// session. It is computed by the tool, never accepted from daemon metadata or
+	// pane titles; the fields below say whether input is actually reusable.
 	Controlled bool `json:"controlled,omitempty"`
+	// ControlOrigin is "agent-created" or "operator-claimed". ControlScope is
+	// "session" for reusable authority and "one-call" for a sealed helper.
+	ControlOrigin  string `json:"control_origin,omitempty"`
+	ControlScope   string `json:"control_scope,omitempty"`
+	ControlOwner   string `json:"control_owner,omitempty"`
+	ControlOwnerID string `json:"control_owner_id,omitempty"`
+	// InputAllowed is nil for an uncontrolled pane. A non-nil false is emitted so
+	// list never hides the difference between controlled and currently usable.
+	InputAllowed  *bool  `json:"input_allowed,omitempty"`
+	Sealed        bool   `json:"sealed,omitempty"`
+	ControlReason string `json:"control_reason,omitempty"`
 }
 
 // WindowList is one session's panes across every workspace.
 type WindowList struct {
-	Type             string   `json:"type"`
-	Total            int      `json:"total"`
-	FocusedWindowID  string   `json:"focused_window_id"`
-	CurrentWorkspace int      `json:"current_workspace"`
-	Windows          []Window `json:"windows"`
+	Type             string             `json:"type"`
+	Total            int                `json:"total"`
+	FocusedWindowID  string             `json:"focused_window_id"`
+	CurrentWorkspace int                `json:"current_workspace"`
+	Windows          []Window           `json:"windows"`
+	ControlAgents    []PaneControlAgent `json:"control_agents,omitempty"`
+}
+
+// PaneControlAgent is one online top-level Golder agent eligible to receive an
+// exclusive pane write lease in the current workspace. It is Golder-computed
+// metadata, not daemon authority.
+type PaneControlAgent struct {
+	AgentID      string `json:"agent_id"`
+	Label        string `json:"label"`
+	Project      string `json:"project"`
+	Role         string `json:"role"`
+	Conversation string `json:"conversation_id"`
+	PaneID       string `json:"pane_id"`
+	Workspace    int    `json:"workspace"`
 }
 
 // ListWindows returns every pane in the caller's session.

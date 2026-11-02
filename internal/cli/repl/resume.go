@@ -1,10 +1,12 @@
 package repl
 
 import (
+	"context"
 	"fmt"
 	"io"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
 )
 
@@ -85,6 +87,9 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 		deps.curLeaf = entries[len(entries)-1].ID
 	}
 	deps.hookDeps.SessionID = h.ID
+	if err := agenttool.ConfigurePaneAgent(context.Background(), deps.agentCtx.Tools, h.ID); err != nil {
+		fmt.Fprintf(out, "pane control registration unavailable after resume: %v\n", err)
+	}
 	replayTranscript(out, msgs)
 	fmt.Fprintf(out, "Resumed session %s (%s).\n", id, deps.live.Model)
 	// The pane now holds a different conversation: a host that resumed it would

@@ -109,6 +109,11 @@ type Client struct {
 // caller-supplied session.
 func (c *Client) Session() string { return c.opts.Session }
 
+// Socket is the daemon endpoint this client is bound to. It is used only for
+// in-process identity binding (for example a session-scoped pane lease); tools
+// never accept a caller-supplied replacement.
+func (c *Client) Socket() string { return c.opts.Socket }
+
 // Dial connects, sends hello, and returns a ready client. hello is advisory in
 // the tuios protocol, so an older daemon's unknown_verb is not fatal; every
 // other handshake failure is.

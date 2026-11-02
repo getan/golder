@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/hostcompat"
 )
 
@@ -30,6 +31,9 @@ func (s *runSession) hostStart() {
 		return
 	}
 	s.host.Start(s.hookDeps.SessionID, hostcompat.ResumeArgv(s.hookDeps.SessionID))
+	if s.agentCtx != nil {
+		agenttool.SetPaneAgentState(s.agentCtx.Tools, "idle")
+	}
 	s.hostMeta()
 }
 
@@ -39,6 +43,9 @@ func (s *runSession) hostTurnStart() {
 		return
 	}
 	s.host.TurnStart()
+	if s.agentCtx != nil {
+		agenttool.SetPaneAgentState(s.agentCtx.Tools, "working")
+	}
 	s.hostMeta()
 }
 
@@ -49,6 +56,13 @@ func (s *runSession) hostTurnEnd(failed bool) {
 		return
 	}
 	s.host.TurnEnd(failed)
+	state := "done"
+	if failed {
+		state = "errored"
+	}
+	if s.agentCtx != nil {
+		agenttool.SetPaneAgentState(s.agentCtx.Tools, state)
+	}
 }
 
 // hostClose clears the pane's agent: golder is going away. Without it the host
@@ -71,7 +85,16 @@ func (s *runSession) hostPrompt(question string) func() {
 	if s == nil {
 		return func() {}
 	}
-	return s.host.Block(hostcompat.KindApproval, question)
+	if s.agentCtx != nil {
+		agenttool.SetPaneAgentState(s.agentCtx.Tools, "needs_input")
+	}
+	done := s.host.Block(hostcompat.KindApproval, question)
+	return func() {
+		done()
+		if s.agentCtx != nil {
+			agenttool.SetPaneAgentState(s.agentCtx.Tools, "working")
+		}
+	}
 }
 
 // hostMeta reports display metadata: the model the session runs and how full

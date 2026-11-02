@@ -344,6 +344,9 @@ func (e *replLineEditor) suggestions(input string) []string {
 	if strings.HasPrefix(input, "/") && !strings.ContainsAny(input, " \t") {
 		var commands []string
 		for _, cmd := range e.slash.List() {
+			if input == "/" && !runtime.TopLevelVisible(cmd) {
+				continue
+			}
 			commands = append(commands, "/"+cmd.Name)
 		}
 		sort.Strings(commands)

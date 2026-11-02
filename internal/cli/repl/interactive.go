@@ -7,6 +7,7 @@ package repl
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -253,6 +254,11 @@ func Run(opts Options) error {
 	prompts.RegisterBoundaryCommand(slash, func() string {
 		return judge.ConversationLanguage(agentCtx.Messages)
 	})
+	if err := agenttool.ConfigurePaneAgent(context.Background(), opts.Tools, header.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: pane control registration unavailable: %v\n", err)
+	}
+	prompts.RegisterPaneCommand(slash, opts.Tools)
+	defer agenttool.ClosePaneAgent(opts.Tools)
 
 	// --approve grants the launch directory session trust up front (mirrors pi's
 	// --approve/-a), so the first-launch prompt is skipped and side-effect tools

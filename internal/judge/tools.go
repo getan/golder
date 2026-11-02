@@ -174,7 +174,7 @@ func readOnlyAllowedCall(name string, args json.RawMessage) bool {
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(a.Action)) {
-		case "list", "capture", "wait":
+		case "list", "capture", "wait", "revoke":
 			return true
 		}
 		return false

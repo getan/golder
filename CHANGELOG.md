@@ -12,6 +12,22 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Exclusive operator-assigned tuios pane control** (v1.5.44): every live
+  top-level Golder session registers a stable Agent ID and conversation/workspace
+  identity in a daemon-scoped registry. The tuios pane context menu lists eligible
+  Agents and grants one-call or conversation-scoped write control; `/pane`
+  provides the same status/grant/revoke path from an Agent's own composer.
+  Leases are exclusive, transfers require a second explicit confirmation, queued
+  input revalidates immediately before send, and ordinary command review remains
+  in force. See [v1.5.44 release notes](docs/releases/v1.5.44.md).
+- **Workspace pane admin starts enabled** (v1.5.44): embedded workspace panes
+  now begin with `read`, `write`, `fan`, and `admin`, so tuios's Toggle admin
+  control is on by default. Set `GOLDER_WORKSPACE_PANE_GRANTS=read,write,fan`
+  before workspace startup to retain the previous folder-scoped default.
+- **Cleaner extension catalogs** (v1.5.44): `/extensions`, bare-slash
+  autocomplete and `/help` no longer duplicate every installed Skill. `/skills`
+  remains the single catalog and management entry point; typing a known Skill
+  prefix and invoking its direct slash command still work.
 - **Bounded browser and developer caches**: fresh controlled browsers now use
   one persistent project-default profile outside the checkout, shared by the
   person and agents, rather than `.golder/browser/*.profile` directories.
@@ -55,6 +71,12 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **`tuios run` reviews scripts and one-call pane state honestly** (v1.5.44):
+  the first-party reviewer accepts exactly one of `command` or `script` and no
+  longer treats `host_control:true` read/focus calls as unconditional local
+  allows. One-call path grants cannot create reusable shells, one-call pane
+  leases are consumed by non-input mutations too, and `list` exposes sealed,
+  owner, scope and input-allowed state.
 - **Every failed sandboxed Git push gets one bounded outside retry**: retry
   guidance now depends on the parsed `git push` command and its non-zero exit,
   not localized authentication or sandbox error strings. Pushes for another

@@ -100,7 +100,7 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if kind == "extensions" || kind == "skills" {
+	if kind == "skills" {
 		rows = append(rows, pickItem{Title: "Skills · instructions only", Heading: true})
 		for _, s := range ext.SkillViews() {
 			owner := "user"
@@ -185,7 +185,11 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	case "back":
-		return m.openExtensions("extensions")
+		kind := "extensions"
+		if len(v) == 2 && v[1] == "skills" {
+			kind = "skills"
+		}
+		return m.openExtensions(kind)
 	case "detail":
 		if len(v) == 3 {
 			return m.extensionDetail(extensions.SourceRef{Kind: v[1], ID: v[2]})
@@ -195,7 +199,7 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		name := v[1]
-		rows := []pickItem{{Title: "Preview instructions", Value: extensionValue("action", "skills", "preview", name)}, {Title: "Use with arguments…", Value: extensionValue("skill-use", name)}, {Title: "Disable for this session", Value: extensionValue("action", "skills", "disable", name)}, {Title: "Enable for this session", Value: extensionValue("action", "skills", "enable", name)}, {Title: "Back", Value: extensionValue("back")}}
+		rows := []pickItem{{Title: "Preview instructions", Value: extensionValue("action", "skills", "preview", name)}, {Title: "Use with arguments…", Value: extensionValue("skill-use", name)}, {Title: "Disable for this session", Value: extensionValue("action", "skills", "disable", name)}, {Title: "Enable for this session", Value: extensionValue("action", "skills", "enable", name)}, {Title: "Back", Value: extensionValue("back", "skills")}}
 		m.menu.openPickerDetailed(rows, "", "extensions")
 		m.relayout()
 		return m, nil

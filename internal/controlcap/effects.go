@@ -82,7 +82,7 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 	r := Parse(raw)
 	switch tool {
 	case "tuios":
-		return r.Action == "list" || r.Action == "capture" || r.Action == "wait"
+		return r.Action == "list" || r.Action == "capture" || r.Action == "wait" || r.Action == "revoke"
 	case "workspace":
 		return r.Action == "list" || r.Action == "snapshot"
 	case "browser":

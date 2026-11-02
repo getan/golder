@@ -9,8 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-
-	"github.com/getan/golder/internal/controlcap"
 )
 
 // FirstParty runs before the JEV/local routine grader. Tools it does not know
@@ -24,30 +22,37 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 	if v, bad := staticDeny(tool, args); bad {
 		return v
 	}
-	if controlcap.Facade(tool) && controlcap.Parse(args).HostControl {
-		return f.next(ctx, tool, args)
-	}
 	switch tool {
 	case "tuios":
 		var a struct {
-			Action  string   `json:"action"`
-			Command string   `json:"command"`
-			Text    string   `json:"text"`
-			Submit  bool     `json:"submit"`
-			Argv    []string `json:"argv"`
+			Action      string   `json:"action"`
+			Command     string   `json:"command"`
+			Script      string   `json:"script"`
+			Text        string   `json:"text"`
+			Submit      bool     `json:"submit"`
+			Argv        []string `json:"argv"`
+			HostControl bool     `json:"host_control"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return f.failClosed("tuios has no action")
 		}
 		switch a.Action {
 		case "list", "capture", "wait":
+			if a.HostControl {
+				return f.next(ctx, tool, args)
+			}
 			return Verdict{
 				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"tuios read-only action"},
 			}
 		case "run":
-			if strings.TrimSpace(a.Command) == "" {
-				return f.failClosed("tuios run has no command")
+			hasCommand := strings.TrimSpace(a.Command) != ""
+			hasScript := strings.TrimSpace(a.Script) != ""
+			switch {
+			case !hasCommand && !hasScript:
+				return f.failClosed("tuios run has no command or script")
+			case hasCommand && hasScript:
+				return f.failClosed("tuios run cannot use command and script together")
 			}
 			// Keep the real tool, target, cwd and capabilities visible to review.
 			return f.next(ctx, tool, args)
@@ -68,11 +73,22 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			// ceiling. It is not a read-only action or a local unconditional allow.
 			return f.next(ctx, tool, args)
 		case "focus":
+			if a.HostControl {
+				return f.next(ctx, tool, args)
+			}
 			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"focusing an existing pane"}}
 		case "move", "resize", "rename", "minimize":
+			if a.HostControl {
+				return f.next(ctx, tool, args)
+			}
 			return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"changing an existing pane"}}
+		case "claim":
+			return f.next(ctx, tool, args)
+		case "revoke":
+			return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+				Reasons: []string{"revoking this agent session's pane control lease"}}
 		case "close":
 			// Closing a pane can kill a running task; leave that to the
 			// contextual reviewer rather than a fixed local allow.
@@ -81,7 +97,8 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		return f.failClosed("unknown tuios action")
 	case "browser":
 		var a struct {
-			Action string `json:"action"`
+			Action      string `json:"action"`
+			HostControl bool   `json:"host_control"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return f.failClosed("browser has no action")
@@ -89,6 +106,9 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		switch a.Action {
 		case "list", "snapshot", "find", "get", "is", "wait", "dialog",
 			"console", "errors", "network", "status", "pause":
+			if a.HostControl {
+				return f.next(ctx, tool, args)
+			}
 			// Observing a page changes nothing on the host or on the page.
 			return Verdict{
 				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
@@ -113,13 +133,17 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		return f.failClosed("unknown browser action")
 	case "workspace":
 		var a struct {
-			Action string `json:"action"`
+			Action      string `json:"action"`
+			HostControl bool   `json:"host_control"`
 		}
 		if err := json.Unmarshal(args, &a); err != nil {
 			return f.failClosed("workspace has no action")
 		}
 		switch a.Action {
 		case "list", "snapshot":
+			if a.HostControl {
+				return f.next(ctx, tool, args)
+			}
 			return Verdict{
 				Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"workspace reads the arranged panes"},

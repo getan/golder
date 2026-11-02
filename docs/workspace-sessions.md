@@ -93,6 +93,13 @@ Pane tools remain authenticated and scoped to the session identified by their
 `TUIOS_*` environment. A global CLI catalog grants no cross-session pane control
 to an agent.
 
+Workspace panes start with `read`, `write`, `fan` and `admin`, so tuios's
+**Toggle admin** control is on by default and a pane may create windows outside
+its startup folder. To start every pane with admin off, set
+`GOLDER_WORKSPACE_PANE_GRANTS=read,write,fan` before starting the workspace;
+toggle admin can still grant it to one focused pane later. This controls what a
+pane may do through tuios, not Golder's command reviewer or OS file sandbox.
+
 ## Legacy sessions
 
 The old layout is `<Home>/workspace/<project-id>/sessions/<session>/`. It is

@@ -34,9 +34,11 @@ and opaque schemes; ordinary absolute HTTP(S) and `about:blank` are supported.
 
 ## Controlled resources
 
-One agent registry shares an in-memory ownership table across the three tools.
-A pane title, filesystem metadata record, attachment, or matching process name
-does not establish ownership.
+One agent registry shares ownership within a tool set. Top-level Golder sessions
+inside tuios additionally register a stable Agent ID, project/role label,
+conversation ID, pane ID and workspace in a daemon-scoped, cross-process
+registry. A pane title, repository file, attachment, or matching process name
+does not establish ownership or an Agent identity.
 
 New helpers launch with the actual platform sandbox argv, a scrubbed environment
 and a private temporary home. Missing/failed sandbox creation is not retried bare.
@@ -67,6 +69,40 @@ into an OS sandbox, so containment/enforce cannot authorize that external path.
 Terminal input into this agent's own pane, another golder agent, or a pane known
 to be waiting for approval is refused, even with a host-control grant. Browser
 panes must be driven through browser actions, not the terminal-input facade.
+
+### Operator-assigned pane leases
+
+Inside a local tuios daemon, the person can give one existing terminal pane to
+one online top-level Golder Agent without repeating `host_control:true` on every
+operation:
+
+- Open the pane's context menu in tuios. The **Agent control** rows list only
+  live Agents in that session and workspace which are not read-only or waiting
+  on an approval. Choose **Next action** or **This Agent session**. The menu
+  shows the current controller and offers **Revoke Agent control**.
+- Or, in the chosen Agent's own composer, run `/pane agents`, then
+  `/pane allow-agent <full-pane-id> one-call|session`. `/pane status` shows
+  controllers and `/pane revoke-agent <full-pane-id>` revokes one. Selecting a
+  different Agent is an advanced form using its exact ID from `/pane agents`.
+
+The lease is exclusive per full pane ID. A second Agent receives no concurrent
+write authority. Transferring an occupied pane requires a second tuios popup or
+an explicit `/pane ... --transfer`; the old controller fails revalidation before
+queued input is sent. One-call leases are atomically consumed by the next
+run/send/press or pane mutation. Session leases end on explicit revoke,
+conversation change, Agent exit, pane close, daemon replacement, workspace
+move, protected-pane transition, or SSH host/foreground identity change.
+
+The ordinary `tuios claim` tool action remains an ask-mode escape hatch and
+requires exact human confirmation; auto and full-access cannot manufacture a
+persistent lease. A direct tuios menu choice or `/pane` command is already a
+person-authored action and does not pass through the model.
+
+A lease is write routing authority, **not command approval and not an OS
+sandbox**. Every later command still goes through normal review. An existing
+local/SSH shell cannot be retrofitted into Golder's file sandbox; SSH input still
+requires reviewed network authority and `run + script` keeps its blank-prompt,
+integrity and no-resend rules.
 
 This protects the agent-tool broker paths; it is not a security boundary against
 arbitrary same-user host processes or a per-origin network firewall. Explicit

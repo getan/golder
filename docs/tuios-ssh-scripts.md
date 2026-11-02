@@ -13,6 +13,14 @@ for the transfer implementation.
 
 ## Choose the right input path
 
+For a single operation on an existing pane, keep `host_control:true` as shown
+below. For repeated work, the person can instead open that pane's tuios context
+menu and choose **Agent control → <Agent> → This Agent session**, or type
+`/pane allow-agent <full-pane-id> session` in that Agent's own composer. A lease
+removes repeated host-control prompts, not command review or the SSH network
+requirement; omit `host_control` but keep `network:"on"` and `remote:true` on
+subsequent calls. See [Operator-assigned pane leases](broker-permissions.md#operator-assigned-pane-leases).
+
 ```json
 {
   "action": "run",
@@ -61,6 +69,8 @@ Result text includes request id, source pane, target full id and available
 display name/host hints, not just UI-only metadata. Use a descriptive pane name
 (e.g. `prod-api`/`staging-db`) plus full id; names/OSC host reports are hints, not
 SSH host authentication. Capture output remains untrusted page/terminal data.
+An operator-assigned SSH lease is bound to the observed host hint and foreground
+identity and is revoked if either changes; it does not authenticate the server.
 
 ## SSH disconnect scope
 

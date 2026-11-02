@@ -7,7 +7,7 @@ import (
 
 func TestWorkspacePaneGrantsDefaultAndOverride(t *testing.T) {
 	t.Setenv("GOLDER_WORKSPACE_PANE_GRANTS", "")
-	if got := workspacePaneGrants(); !slices.Equal(got, []string{"read", "write", "fan"}) {
+	if got := workspacePaneGrants(); !slices.Equal(got, []string{"read", "write", "fan", "admin"}) {
 		t.Fatalf("default grants = %v", got)
 	}
 
@@ -17,7 +17,7 @@ func TestWorkspacePaneGrantsDefaultAndOverride(t *testing.T) {
 	}
 
 	t.Setenv("GOLDER_WORKSPACE_PANE_GRANTS", " , ")
-	if got := workspacePaneGrants(); !slices.Equal(got, []string{"read", "write", "fan"}) {
+	if got := workspacePaneGrants(); !slices.Equal(got, []string{"read", "write", "fan", "admin"}) {
 		t.Fatalf("blank override must keep the strict default, got %v", got)
 	}
 }

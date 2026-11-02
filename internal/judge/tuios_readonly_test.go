@@ -13,6 +13,8 @@ func TestTuiosReadOnlyIsActionAware(t *testing.T) {
 		{"list", true},
 		{"capture", true},
 		{"wait", true},
+		{"revoke", true},
+		{"claim", false},
 		{"run", false},
 		{"send", false},
 		{"new", false},
