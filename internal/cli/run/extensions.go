@@ -10,7 +10,13 @@ import (
 	"github.com/getan/golder/internal/runtime"
 )
 
-type SetupOptions struct{ NoExtensions bool }
+type SetupOptions struct {
+	NoExtensions bool
+	// Cwd overrides the process working directory for this assembled environment
+	// without calling os.Chdir. Desktop projects use it to keep multiple project
+	// roots in one process; CLI callers leave it empty.
+	Cwd string
+}
 
 // InstallExtensions publishes a complete catalog at turn boundaries, on the
 // loop goroutine. Both model declarations and execution see the same registry.

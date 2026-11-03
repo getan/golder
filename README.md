@@ -259,7 +259,7 @@ model = "deepseek-v4.1-flash"
 thinking_level = "max"            # global fallback; per-model defaults live in [thinking_defaults]
 # base_url = "https://..."        # override the provider's default endpoint
 # api_key = "..."                 # prefer an env var or a credential reference
-# credential = "my-key"           # references an entry in ~/.golder/.credentials.yaml
+# credential = "my-key"           # references an AES-256-GCM encrypted named credential
 ```
 
 Environment variables override file values: `GOLDER_MODEL`, `GOLDER_PROVIDER`, `GOLDER_THINKING_LEVEL`, `GOLDER_PERMISSIONS`; CLI flags take highest precedence. A project can also carry `.golder/config.json` overriding `model` / `provider` / `thinkingLevel` / `hooks` — loaded only when the directory is trusted.
@@ -474,7 +474,8 @@ See `golder --help` for the complete list.
 | `~/.golder/config.toml` | Global configuration |
 | `~/.golder/proxy.toml` | Proxy address, provider selection and browser switch saved by `/proxy` |
 | `~/.golder/sessions` | Session storage (JSONL) |
-| `~/.golder/.credentials.yaml` | Named API-key credentials (0600 recommended) |
+| `~/.golder/.credentials.yaml` | AES-256-GCM encrypted named API-key and extension credentials |
+| `~/.golder/.credential-key` | Automatically generated local encryption key (0600) |
 | `~/.agents/skills` | Skills directory (registered as `/commands`; absent means no extension commands) |
 | `GOLDER_HOME` | Override the `~/.golder` base directory |
 | `GOLDER_SKILLS_DIR` | Override the skills discovery directory (default `~/.agents/skills`) |

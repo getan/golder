@@ -1,10 +1,15 @@
 package mygoui
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
+
+	"github.com/getan/golder/gui/appsession"
 )
 
 // changesPanel is the review drawer: the changed files and the selected file's
@@ -15,15 +20,29 @@ func (a *App) changesPanel(c *ui.Context) {
 		BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-			ui.Text(c, "Changes").FontSize(13).Bold()
+			ui.Column(c).Grow(1).Gap(1).Children(func() {
+				ui.Text(c, "▤  Changes").FontSize(13).Bold()
+				if a.changes.RepoRoot != "" {
+					repo := filepath.Base(a.changes.RepoRoot)
+					if a.changes.Branch != "" {
+						repo += "  ·  " + a.changes.Branch
+					}
+					ui.Text(c, repo).FontSize(10.5).TextColor(t.TextMuted).Tooltip(a.changes.RepoRoot)
+				}
+			})
 			ui.Text(c, fmt.Sprintf("+%d −%d", a.changes.Added, a.changes.Deleted)).
 				FontSize(11).TextColor(t.TextMuted)
-			ui.Spacer(c)
 			if ui.Button(c, "Refresh").Clicked() {
 				a.refreshChanges()
 			}
 			if ui.Button(c, "Close").Clicked() {
 				a.changesOpen = false
+				a.diffRequest++
+				a.diffLoading = false
+				if a.diffCancel != nil {
+					a.diffCancel()
+					a.diffCancel = nil
+				}
 			}
 		})
 		if a.changes.NotGitRepo {
@@ -32,14 +51,46 @@ func (a *App) changesPanel(c *ui.Context) {
 			})
 			return
 		}
+		ui.Row(c).Padding(7, 10).Gap(6).AlignItems(ui.Center).
+			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+			for _, option := range []struct {
+				label string
+				view  appsession.ChangeView
+			}{{"Unstaged", appsession.ChangesUnstaged}, {"Staged", appsession.ChangesStaged}} {
+				option := option
+				button := ui.ButtonBase(c.Key(string(option.view))).Padding(5, 9).Radius(6).Label(option.label)
+				if a.currentChangesView() == option.view {
+					button.Background(t.SurfacePressed)
+				} else if button.Hovered() {
+					button.Background(t.SurfaceHover)
+				}
+				button.Children(func() { ui.Text(c, option.label).FontSize(11.5) })
+				if button.Clicked() && a.currentChangesView() != option.view {
+					a.setChangesView(option.view)
+				}
+			}
+			ui.Spacer(c)
+			action := "Stage all"
+			stage := true
+			if a.currentChangesView() == appsession.ChangesStaged {
+				action, stage = "Unstage all", false
+			}
+			if ui.Button(c, action).Disabled(len(a.changes.Files) == 0 || a.status.Running).Clicked() {
+				a.setAllStaged(stage)
+			}
+		})
 		if a.changes.Truncated {
-			ui.Text(c, "The diff is large; only the beginning is shown.").
+			ui.Text(c, "The changed-file list is limited; narrow generated output outside the app.").
 				FontSize(11).TextColor(t.Danger).Padding(6, 12)
 		}
 		ui.Scroll(c).MaxHeight(190).Children(func() {
 			ui.Column(c).Padding(6).Gap(1).Children(func() {
 				if len(a.changes.Files) == 0 {
-					ui.Text(c, "No uncommitted changes.").FontSize(12).TextColor(t.TextMuted).Padding(8)
+					empty := "No unstaged changes."
+					if a.currentChangesView() == appsession.ChangesStaged {
+						empty = "No staged changes."
+					}
+					ui.Text(c, empty).FontSize(12).TextColor(t.TextMuted).Padding(8)
 				}
 				for i, f := range a.changes.Files {
 					i, f := i, f
@@ -50,24 +101,96 @@ func (a *App) changesPanel(c *ui.Context) {
 						row.Background(t.SurfaceHover)
 					}
 					row.Children(func() {
-						ui.Text(c, f.Status).FontSize(10.5).TextColor(t.TextMuted).Width(28)
+						ui.Text(c, changeStatusIcon(f.Status)).FontSize(12).TextColor(t.TextMuted).Width(18).Tooltip(f.Status)
 						ui.Text(c, f.Path).FontSize(12).SingleLine().Ellipsis("…").Grow(1)
+						if f.Added > 0 {
+							ui.Text(c, fmt.Sprintf("+%d", f.Added)).FontSize(10.5).TextColor(t.Accent)
+						}
+						if f.Deleted > 0 {
+							ui.Text(c, fmt.Sprintf("−%d", f.Deleted)).FontSize(10.5).TextColor(t.Danger)
+						}
+						action := "Stage"
+						stage := true
+						if a.currentChangesView() == appsession.ChangesStaged {
+							action, stage = "Unstage", false
+						}
+						if ui.Button(c, action).Disabled(a.status.Running).Clicked() {
+							a.setFileStaged(f.Path, stage)
+						}
 					})
 					if row.Clicked() {
-						a.selectDiff(i)
+						a.selectDiffRow(i)
 					}
 				}
 			})
 		})
 		ui.Box(c).Height(1).Background(t.Border)
-		if a.diff != nil {
+		if a.fileDiff.Truncated {
+			ui.Text(c, "This file diff is large; only the first 2 MiB is loaded.").
+				FontSize(11).TextColor(t.Danger).Padding(6, 12)
+		}
+		if a.diffLoading {
+			ui.Column(c).Grow(1).Center().Children(func() {
+				ui.Text(c, "Loading selected file diff…").FontSize(12).TextColor(t.TextMuted)
+			})
+		} else if a.diff != nil {
 			ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 				editor.DiffView(c, a.diff).Grow(1).FillWidth()
 			})
 		} else {
 			ui.Column(c).Grow(1).Center().Children(func() {
-				ui.Text(c, "Select a file to review its diff.").FontSize(12).TextColor(t.TextMuted)
+				message := "Select a file to review its diff."
+				if len(a.changes.Files) > 0 {
+					message = "This file has no textual diff."
+				}
+				ui.Text(c, message).FontSize(12).TextColor(t.TextMuted)
 			})
 		}
 	})
+}
+
+func (a *App) currentChangesView() appsession.ChangeView {
+	if a.changesView == appsession.ChangesStaged {
+		return appsession.ChangesStaged
+	}
+	return appsession.ChangesUnstaged
+}
+
+func (a *App) setChangesView(view appsession.ChangeView) {
+	a.changesView = view
+	a.diffSel = 0
+	a.refreshChanges()
+}
+
+func (a *App) setAllStaged(staged bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.ctrl.SetAllStaged(ctx, staged); err != nil {
+		a.changesErr = err.Error()
+		return
+	}
+	a.refreshChanges()
+}
+
+func (a *App) setFileStaged(path string, staged bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.ctrl.SetFileStaged(ctx, path, staged); err != nil {
+		a.changesErr = err.Error()
+		return
+	}
+	a.refreshChanges()
+}
+
+func changeStatusIcon(status string) string {
+	switch status {
+	case "A", "?":
+		return "+"
+	case "D":
+		return "−"
+	case "R", "C":
+		return "→"
+	default:
+		return "●"
+	}
 }

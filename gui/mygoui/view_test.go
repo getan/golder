@@ -19,7 +19,9 @@ func testApp() *App {
 			Permission: "auto",
 			Title:      "A session",
 		},
-		project: "/tmp/project",
+		project:         "/tmp/project",
+		selectedProject: "/tmp/project",
+		projects:        []appsession.ProjectFolder{{Path: "/tmp/project", Name: "project"}},
 	}
 	return a
 }
@@ -27,12 +29,12 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "New session", "↑", "test-model", "auto"} {
+	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "☝"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}
 	}
-	for _, gone := range []string{"Workspace", "Browser", "Session", "Permissions: test-model"} {
+	for _, gone := range []string{"Workspace", "Browser", "Model ·", "Think ·", "Mode ·", "Permissions: test-model"} {
 		if tt.HasText(gone) {
 			t.Fatalf("view still contains retired top-level action %q", gone)
 		}
@@ -58,7 +60,7 @@ func TestSettingsRendersProviderAndPasswordControls(t *testing.T) {
 	a.settingsEdit = appsession.ProviderSettingsEdit{Provider: "openai", Model: "gpt-test", CredentialName: "openai-default"}
 	a.settingsEdit.NewCredential = "private-test-value"
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"Settings", "Provider defaults", "New API key", "Configured · openai-default", "Save & apply"} {
+	for _, want := range []string{"Settings", "Provider defaults", "New API key", "Configured · openai-default", "AES-256-GCM encrypted", "Save & apply"} {
 		if !tt.HasText(want) {
 			t.Fatalf("settings is missing %q; texts: %q", want, tt.Texts())
 		}
@@ -85,7 +87,7 @@ func TestExtensionsSettingsRendersManagedLarkWizard(t *testing.T) {
 	}
 	a.extensionDomains = map[string]bool{"docs": true, "im": true}
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"Extensions", "Lark + Project", "Official lark-cli", "Save configuration", "Approve & enable", "Authorize Lark"} {
+	for _, want := range []string{"Extensions", "Lark + Project", "Official lark-cli", "AES-256-GCM encrypted", "Save configuration", "Approve & enable", "Authorize Lark"} {
 		if !tt.HasText(want) {
 			t.Fatalf("extensions wizard is missing %q; texts: %q", want, tt.Texts())
 		}
@@ -95,27 +97,57 @@ func TestExtensionsSettingsRendersManagedLarkWizard(t *testing.T) {
 	}
 }
 
-func TestSessionGroupsFilterProjectAndArchived(t *testing.T) {
+func TestVisibleSessionsFilterProjectAndArchived(t *testing.T) {
 	a := testApp()
 	a.sessions = []appsession.SessionSummary{
 		{ID: "one", Title: "Current", Cwd: "/tmp/project", Current: true},
 		{ID: "two", Title: "Other", Cwd: "/tmp/other"},
 		{ID: "three", Title: "Old", Cwd: "/tmp/project", Archived: true},
 	}
-	a.selectedProject = allProjectsLabel
-	groups := a.visibleSessionGroups()
-	if len(groups) != 2 || groups[0].Cwd != "/tmp/project" || len(groups[0].Sessions) != 1 {
-		t.Fatalf("groups = %+v", groups)
+	a.selectedProject = "/tmp/project"
+	sessions := a.visibleSessions()
+	if len(sessions) != 1 || sessions[0].ID != "one" {
+		t.Fatalf("sessions = %+v", sessions)
 	}
 	a.showArchived = true
-	groups = a.visibleSessionGroups()
-	if len(groups[0].Sessions) != 2 {
-		t.Fatalf("archived group = %+v", groups[0])
+	sessions = a.visibleSessions()
+	if len(sessions) != 2 {
+		t.Fatalf("archived sessions = %+v", sessions)
 	}
 	a.selectedProject = "/tmp/other"
-	groups = a.visibleSessionGroups()
-	if len(groups) != 1 || groups[0].Cwd != "/tmp/other" {
-		t.Fatalf("filtered groups = %+v", groups)
+	sessions = a.visibleSessions()
+	if len(sessions) != 1 || sessions[0].ID != "two" {
+		t.Fatalf("filtered sessions = %+v", sessions)
+	}
+}
+
+func TestChangesPanelRendersGitReviewControls(t *testing.T) {
+	a := testApp()
+	a.changesOpen = true
+	a.changes = appsession.Changes{
+		View: appsession.ChangesUnstaged, RepoRoot: "/tmp/project", Branch: "feature/ui", TotalFiles: 1,
+		Files: []appsession.FileStatus{{Path: "ui.go", Status: "M", Added: 3, Deleted: 1}},
+	}
+	tt := ui.NewTester(a.view, 1400, 800)
+	for _, want := range []string{"▤  Changes", "project  ·  feature/ui", "Unstaged", "Staged", "Stage all", "Stage", "ui.go", "+3", "−1"} {
+		if !tt.HasText(want) {
+			t.Fatalf("changes panel is missing %q; texts: %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestLazyDiffDiscardsStaleResult(t *testing.T) {
+	a := testApp()
+	a.changes = appsession.Changes{Files: []appsession.FileStatus{{Path: "a.go", Status: "M"}}}
+	a.diffRequest = 2
+	patch := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	a.applyFileDiff(1, 0, appsession.FileDiff{Path: "a.go", Patch: patch, Added: 1, Deleted: 1}, nil)
+	if a.diff != nil || a.fileDiff.Path != "" {
+		t.Fatal("stale file diff was applied")
+	}
+	a.applyFileDiff(2, 0, appsession.FileDiff{Path: "a.go", Patch: patch, Added: 1, Deleted: 1}, nil)
+	if a.diff == nil || a.fileDiff.Path != "a.go" {
+		t.Fatal("current file diff was not applied")
 	}
 }
 

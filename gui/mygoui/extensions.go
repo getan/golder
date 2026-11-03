@@ -374,6 +374,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Field(c, "New App Secret", func() {
 			ui.TextInput(c, &a.extensionEdit.NewAppSecret).Password().FillWidth().Placeholder("Leave blank to keep the named credential")
 		})
+		ui.Text(c, "App Secrets use the same AES-256-GCM encrypted credential store.").FontSize(11).TextColor(theme.TextMuted)
 		ui.Field(c, "Project host", func() {
 			ui.TextInput(c, &a.extensionEdit.ProjectHost).FillWidth().Placeholder("project.feishu.cn")
 		})

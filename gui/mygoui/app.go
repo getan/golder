@@ -34,11 +34,13 @@ type App struct {
 	thinkingOpen map[string]bool
 	toolOpen     map[string]bool
 
-	draft string
+	draft       string
+	attachments []string
 
 	status          appsession.Status
 	project         string
 	selectedProject string
+	projects        []appsession.ProjectFolder
 	sessions        []appsession.SessionSummary
 	pending         []appsession.ApprovalView
 	showArchived    bool
@@ -60,8 +62,7 @@ type App struct {
 	providerOpen bool
 	providers    []string
 
-	permOpen  bool
-	thinkOpen bool
+	permOpen bool
 
 	settingsOpen bool
 	settingsTab  int
@@ -90,9 +91,13 @@ type App struct {
 	actions      []appsession.Action
 
 	changesOpen bool
+	changesView appsession.ChangeView
 	changes     appsession.Changes
 	changesErr  string
-	diffFiles   []editor.FilePatch
+	fileDiff    appsession.FileDiff
+	diffLoading bool
+	diffRequest uint64
+	diffCancel  context.CancelFunc
 	diffSel     int
 	diff        *editor.DiffState
 
@@ -131,9 +136,14 @@ func (a *App) Run() error {
 			Content:   ui.View(a.view),
 		})
 		a.win.OnClosed(func() {
+			if a.diffCancel != nil {
+				a.diffCancel()
+				a.diffCancel = nil
+			}
 			_ = a.ctrl.Close()
 		})
 		go a.pump()
+		a.refreshProjects()
 		a.refreshSessions()
 		a.refreshChanges()
 		go a.refreshModels()
@@ -238,16 +248,22 @@ func (a *App) updateTitle() {
 	a.win.SetTitle(name)
 }
 
-// submit sends one prompt and clears the draft.
-func (a *App) submit(text string) {
-	if strings.TrimSpace(text) == "" {
-		return
+// submit sends one prompt and its operator-selected local attachments.
+func (a *App) submit(text string) bool {
+	if strings.TrimSpace(text) == "" && len(a.attachments) == 0 {
+		return false
 	}
-	if err := a.ctrl.Submit(context.Background(), text); err != nil {
+	attachments := make([]appsession.UserAttachment, 0, len(a.attachments))
+	for _, path := range a.attachments {
+		attachments = append(attachments, appsession.UserAttachment{Path: path})
+	}
+	if err := a.ctrl.SubmitAttachments(context.Background(), text, attachments); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
-		return
+		return false
 	}
+	a.attachments = nil
 	a.banner, a.bannerErr = "", false
+	return true
 }
 
 func (a *App) respond(id string, answer appsession.Answer) {
@@ -267,49 +283,118 @@ func (a *App) refreshSessions() {
 	a.sessions = sessions
 }
 
+func (a *App) refreshProjects() {
+	projects, selected, err := a.ctrl.ListProjects()
+	if err != nil {
+		log.Printf("golder-gui: list projects: %v", err)
+		return
+	}
+	a.projects = projects
+	if selected != "" {
+		a.selectedProject = selected
+	} else {
+		a.selectedProject = ""
+	}
+}
+
 func (a *App) refreshChanges() {
+	if a.diffCancel != nil {
+		a.diffCancel()
+		a.diffCancel = nil
+	}
+	a.diffRequest++
+	a.diffLoading = false
+	a.fileDiff = appsession.FileDiff{}
+	a.diff = nil
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	ch, err := a.ctrl.Changes(ctx)
+	view := a.changesView
+	if view != appsession.ChangesStaged {
+		view = appsession.ChangesUnstaged
+	}
+	ch, err := a.ctrl.ChangesFor(ctx, view)
 	if err != nil {
 		a.changesErr = err.Error()
 		return
 	}
 	a.changesErr = ""
-	changed := len(ch.Files) != len(a.changes.Files) || ch.Added != a.changes.Added || ch.Deleted != a.changes.Deleted
 	a.changes = ch
-	if changed {
-		a.rebuildDiff()
+	if a.diffSel >= len(a.changes.Files) {
+		a.diffSel = 0
+	}
+	if a.changesOpen && len(a.changes.Files) > 0 {
+		a.selectDiffRow(a.diffSel)
 	}
 }
 
-func (a *App) rebuildDiff() {
-	a.diffFiles = nil
-	a.diff = nil
-	if a.changes.Patch == "" {
+func (a *App) selectDiffRow(row int) {
+	if row < 0 || row >= len(a.changes.Files) {
 		return
 	}
-	files, err := editor.ParsePatch(a.changes.Patch)
+	a.diffSel = row
+	a.diff = nil
+	a.fileDiff = appsession.FileDiff{}
+	a.changesErr = ""
+	ctrl := a.ctrl
+	if ctrl == nil {
+		a.diffLoading = false
+		return
+	}
+	a.diffLoading = true
+	if a.diffCancel != nil {
+		a.diffCancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	a.diffCancel = cancel
+	a.diffRequest++
+	request := a.diffRequest
+	path := a.changes.Files[row].Path
+	view := a.currentChangesView()
+	load := func() (appsession.FileDiff, error) { return ctrl.FileDiff(ctx, view, path) }
+	win := a.win
+	if win == nil {
+		result, err := load()
+		cancel()
+		a.applyFileDiff(request, row, result, err)
+		return
+	}
+	go func() {
+		defer cancel()
+		result, err := load()
+		win.Update(func() { a.applyFileDiff(request, row, result, err) })
+	}()
+}
+
+func (a *App) applyFileDiff(request uint64, row int, result appsession.FileDiff, loadErr error) {
+	if request != a.diffRequest || row < 0 || row >= len(a.changes.Files) ||
+		(loadErr == nil && a.changes.Files[row].Path != result.Path) {
+		return
+	}
+	a.diffCancel = nil
+	a.diffLoading = false
+	if loadErr != nil {
+		a.changesErr = loadErr.Error()
+		return
+	}
+	a.fileDiff = result
+	old := a.changes.Files[row]
+	a.changes.Files[row].Added, a.changes.Files[row].Deleted = result.Added, result.Deleted
+	a.changes.Added += result.Added - old.Added
+	a.changes.Deleted += result.Deleted - old.Deleted
+	if result.Patch == "" {
+		return
+	}
+	files, err := editor.ParsePatch(result.Patch)
 	if err != nil {
 		a.changesErr = err.Error()
 		return
 	}
-	a.diffFiles = files
-	if a.diffSel >= len(files) {
-		a.diffSel = 0
-	}
-	a.selectDiff(a.diffSel)
-}
-
-func (a *App) selectDiff(i int) {
-	if i < 0 || i >= len(a.diffFiles) {
+	if len(files) == 0 {
 		return
 	}
-	f := a.diffFiles[i]
-	d := &editor.DiffState{}
-	d.SetPatch(f)
-	a.diff = d
-	a.diffSel = i
+	diff := &editor.DiffState{}
+	diff.SetPatch(files[0])
+	a.diff = diff
 }
 
 func (a *App) refreshModels() {
@@ -361,7 +446,6 @@ func (a *App) runAction(id, args string) {
 }
 
 func (a *App) setModel(providerName, id string) {
-	a.modelOpen = false
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	thinking := a.status.Thinking
@@ -383,7 +467,6 @@ func (a *App) setPermission(mode string) {
 }
 
 func (a *App) setThinking(level string) {
-	a.thinkOpen = false
 	if err := a.ctrl.SetThinking(agentThinkingLevel(level)); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 	}
@@ -402,16 +485,25 @@ func (a *App) resume(id string) {
 }
 
 func (a *App) newSession() {
+	project := strings.TrimSpace(a.selectedProject)
+	if project == "" {
+		project = a.project
+	}
+	a.newSessionInProject(project)
+}
+
+func (a *App) newSessionInProject(project string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := a.ctrl.NewSession(ctx); err != nil {
+	if err := a.ctrl.NewSessionInProject(ctx, project); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return
 	}
-	a.items = nil
-	a.index = map[string]int{}
-	a.status = a.ctrl.Snapshot().Status
+	a.applySnapshot(a.ctrl.Snapshot())
+	a.selectedProject = a.project
+	a.refreshProjects()
 	a.refreshSessions()
+	a.refreshChanges()
 }
 
 // contextPercent renders the context gauge, 0 when the window is unknown.

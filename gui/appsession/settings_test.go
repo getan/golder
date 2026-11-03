@@ -1,7 +1,9 @@
 package appsession
 
 import (
+	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -39,6 +41,40 @@ func TestSaveProviderSettingsUsesNamedCredentialAndCanApply(t *testing.T) {
 	}
 	if cfg.Credential != "openai-default" || cfg.APIKey != "" || cfg.Protocol != "openai/resp_api" {
 		t.Fatalf("file config = %+v", cfg)
+	}
+}
+
+func TestSaveProviderSettingsMigratesLegacyLiteralKey(t *testing.T) {
+	c, _, _ := newTestController(t)
+	configPath := config.FileConfigPath()
+	if err := os.WriteFile(configPath, []byte("provider = \"openai\"\nmodel = \"gpt-test\"\napi_key = \"legacy-plain-key\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.SaveProviderSettings(context.Background(), ProviderSettingsEdit{
+		Provider: "openai", Model: "gpt-test", ThinkingLevel: "high",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Credential.Name != "openai-default" || !got.Credential.Available {
+		t.Fatalf("credential = %+v", got.Credential)
+	}
+	cfg, err := config.LoadFileConfig(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKey != "" || cfg.Credential != "openai-default" {
+		t.Fatalf("migrated config = %+v", cfg)
+	}
+	raw, err := os.ReadFile(provider.CredentialFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("legacy-plain-key")) {
+		t.Fatalf("credential remained plaintext: %q", raw)
+	}
+	if value, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), "openai-default"); err != nil || value != "legacy-plain-key" {
+		t.Fatalf("resolved migrated credential = %q, %v", value, err)
 	}
 }
 

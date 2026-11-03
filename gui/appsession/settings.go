@@ -108,6 +108,10 @@ func (c *Controller) SaveProviderSettings(ctx context.Context, edit ProviderSett
 	}
 	name := strings.TrimSpace(edit.CredentialName)
 	path := provider.CredentialFilePath()
+	current, loadErr := config.LoadFileConfig(config.FileConfigPath())
+	if loadErr != nil {
+		return ProviderSettings{}, loadErr
+	}
 	if edit.RemoveCredential {
 		// Drop the config reference first. If deleting the secret then fails,
 		// the harmless failure mode is an unreferenced value, never a dangling
@@ -117,6 +121,14 @@ func (c *Controller) SaveProviderSettings(ctx context.Context, edit ProviderSett
 			name = edit.Provider + "-default"
 		}
 		if err := provider.SaveCredential(path, name, value); err != nil {
+			return ProviderSettings{}, err
+		}
+	} else if name == "" && strings.TrimSpace(current.APIKey) != "" {
+		// A pre-named-credential config may still hold api_key in plaintext.
+		// Saving Settings is the migration boundary: encrypt it first, then let
+		// SetProviderDefaults remove the literal only after that succeeds.
+		name = edit.Provider + "-default"
+		if err := provider.SaveCredential(path, name, current.APIKey); err != nil {
 			return ProviderSettings{}, err
 		}
 	} else if name != "" {

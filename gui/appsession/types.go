@@ -221,16 +221,39 @@ type ActionResult struct {
 
 // FileStatus is one changed file in the project.
 type FileStatus struct {
-	Path   string
-	Status string
+	Path    string
+	Status  string
+	Added   int
+	Deleted int
 }
+
+// ChangeView selects which side of Git's index the review pane displays.
+type ChangeView string
+
+const (
+	ChangesUnstaged ChangeView = "unstaged"
+	ChangesStaged   ChangeView = "staged"
+)
 
 // Changes is the project's uncommitted work, for the changes drawer.
 type Changes struct {
 	Files      []FileStatus
-	Patch      string
+	View       ChangeView
+	Project    string
+	RepoRoot   string
+	Branch     string
+	TotalFiles int
 	Added      int
 	Deleted    int
 	Truncated  bool
 	NotGitRepo bool
+}
+
+// FileDiff is one lazily loaded, size-bounded file patch.
+type FileDiff struct {
+	Path      string
+	Patch     string
+	Added     int
+	Deleted   int
+	Truncated bool
 }

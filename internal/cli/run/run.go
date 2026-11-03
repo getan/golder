@@ -114,6 +114,23 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	start := time.Now()
 	diagtrace.Event("setup", "begin")
 	cwd, _ := os.Getwd()
+	if len(setup) > 0 && strings.TrimSpace(setup[0].Cwd) != "" {
+		candidate, err := filepath.Abs(strings.TrimSpace(setup[0].Cwd))
+		if err != nil {
+			return Env{}, fmt.Errorf("project directory: %w", err)
+		}
+		if resolved, resolveErr := filepath.EvalSymlinks(candidate); resolveErr == nil {
+			candidate = resolved
+		}
+		info, err := os.Stat(candidate)
+		if err != nil {
+			return Env{}, fmt.Errorf("project directory: %w", err)
+		}
+		if !info.IsDir() {
+			return Env{}, fmt.Errorf("project directory is not a directory: %s", candidate)
+		}
+		cwd = filepath.Clean(candidate)
+	}
 	step := time.Now()
 	prov, resolvedName, err := provider.ResolveProvider(model, baseURL, protocol, providerName, os.Getenv)
 	if err != nil {

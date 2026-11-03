@@ -33,12 +33,14 @@ const EnvHome = "GOLDER_HOME"
 // sites for two reasons: a rename is one edit, and the audit question "what
 // does golder write" is answered by reading this block.
 const (
-	ConfigFile      = "config.toml"
-	ProxyFile       = "proxy.toml"
-	GrantsFile      = "grants.json"
-	TrustFile       = "trust.json"
-	CredentialsFile = ".credentials.yaml"
-	UpdateCheckFile = "update-check.json"
+	ConfigFile        = "config.toml"
+	ProxyFile         = "proxy.toml"
+	GrantsFile        = "grants.json"
+	TrustFile         = "trust.json"
+	CredentialsFile   = ".credentials.yaml"
+	CredentialKeyFile = ".credential-key"
+	UpdateCheckFile   = "update-check.json"
+	GUIProjectsFile   = "gui-projects.json"
 
 	SessionsDir = "sessions"
 	MemoryDir   = "memory"

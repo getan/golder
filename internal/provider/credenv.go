@@ -8,10 +8,10 @@
 //     credentials and all DSH_* variables"; golder scrubs credential-shaped
 //     names and all GOLDER_* internals. Explicit allow entries are re-injected
 //     last, so a parent can still hand a child exactly the one key it needs.
-//   - CredentialFile: a named-credential store at $GOLDER_HOME/.credentials.yaml
-//     (mode 0600). Config files reference a credential by NAME; the literal
-//     secret lives only here, mirroring dsh's write-only keys + "settings
-//     retain only its credential reference".
+//   - CredentialFile: an AES-256-GCM encrypted named-credential store at
+//     $GOLDER_HOME/.credentials.yaml (mode 0600). Config files reference a
+//     credential by NAME; the literal secret is only present after authenticated
+//     decryption in memory.
 package provider
 
 import (
@@ -19,8 +19,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/getan/golder/internal/golderhome"
 )
@@ -96,30 +94,27 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// LoadCredentialFile reads a named-credential file (YAML mapping of
-// name → secret). The file is expected to be mode 0600; callers can use
-// CredentialFilePermissionsWarn to check.
+// LoadCredentialFile reads an encrypted named-credential file. Legacy plaintext
+// YAML mappings remain readable and are migrated on the next save.
 func LoadCredentialFile(path string) (map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string)
-	if err := yaml.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("credential file %s: %w", path, err)
-	}
-	return out, nil
+	return decodeCredentialFile(path, raw)
 }
 
 // CredentialFilePermissionsWarn reports whether the credential file's mode is
 // more permissive than 0600 (group/other access), so the caller can warn
 // without failing.
 func CredentialFilePermissionsWarn(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return false
+	for _, candidate := range []string{path, credentialKeyPath(path)} {
+		info, err := os.Stat(candidate)
+		if err == nil && info.Mode().Perm()&0o077 != 0 {
+			return true
+		}
 	}
-	return info.Mode().Perm()&0o077 != 0
+	return false
 }
 
 // CredentialFilePath returns the named-credential file location:

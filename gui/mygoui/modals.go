@@ -1,7 +1,6 @@
 package mygoui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -9,19 +8,22 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
-// modelModal is the searchable model picker. Selecting a row switches the live
-// model through appsession, not by typing into a terminal.
+// modelModal combines model and reasoning selection behind the one composer
+// control, matching Codex instead of exposing two unrelated footer buttons.
 func (a *App) modelModal(c *ui.Context) {
 	t := c.Theme()
 	ui.Modal(c, &a.modelOpen, func() {
-		ui.Column(c).Width(560).MaxHeight(520).Clip().Gap(0).Children(func() {
+		ui.Column(c).Width(580).MaxHeight(620).Clip().Gap(0).Children(func() {
 			ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).
 				BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-				ui.Text(c, "Model").FontSize(13).Bold()
+				ui.Text(c, "Model & reasoning").FontSize(13).Bold()
 				ui.Text(c, a.status.Provider).FontSize(11).TextColor(t.TextMuted)
 				ui.Spacer(c)
 				if ui.Button(c, "Refresh").Clicked() {
 					go a.refreshModels()
+				}
+				if ui.Button(c, "Close").Clicked() {
+					a.modelOpen = false
 				}
 			})
 			ui.Row(c).Padding(8, 12).Children(func() {
@@ -34,7 +36,7 @@ func (a *App) modelModal(c *ui.Context) {
 				ui.Text(c, "Loading the provider's catalog…").FontSize(12).TextColor(t.TextMuted).Padding(8, 16)
 			}
 			q := strings.ToLower(strings.TrimSpace(a.modelQuery))
-			ui.Scroll(c).MaxHeight(380).Children(func() {
+			ui.Scroll(c).MaxHeight(300).Children(func() {
 				ui.Column(c).Padding(6).Gap(1).Children(func() {
 					shown := 0
 					for _, m := range a.models {
@@ -63,6 +65,30 @@ func (a *App) modelModal(c *ui.Context) {
 					}
 					if shown == 0 {
 						ui.Text(c, "No model matches.").FontSize(12).TextColor(t.TextMuted).Padding(10)
+					}
+				})
+			})
+			ui.Column(c).Padding(10, 14, 14, 14).Gap(8).
+				BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+				ui.Text(c, "Reasoning effort").FontSize(12).FontWeight(600)
+				ui.Text(c, "Applies to the next turn; unsupported levels are clamped by the provider.").
+					FontSize(11).TextColor(t.TextMuted)
+				ui.Row(c).Gap(5).Children(func() {
+					current := thinkingLabel(a.status.Thinking)
+					for _, level := range appsession.ThinkingLevels() {
+						level := level
+						button := ui.ButtonBase(c.Key("reasoning:"+level)).Padding(5, 8).Radius(6).Label(level)
+						if level == current {
+							button.Background(t.SurfacePressed)
+						} else if button.Hovered() {
+							button.Background(t.SurfaceHover)
+						}
+						button.Children(func() {
+							ui.Text(c, level).FontSize(11.5)
+						})
+						if button.Clicked() && level != current {
+							a.setThinking(level)
+						}
 					}
 				})
 			})
@@ -114,35 +140,4 @@ func permissionHint(mode string) string {
 	default:
 		return "Routine calls run; anything the reviewer cannot clear asks you."
 	}
-}
-
-// thinkingModal switches the reasoning effort for the next turn.
-func (a *App) thinkingModal(c *ui.Context) {
-	t := c.Theme()
-	ui.Modal(c, &a.thinkOpen, func() {
-		ui.Column(c).Width(420).Gap(6).Children(func() {
-			ui.Text(c, "Reasoning effort").FontSize(16).Bold()
-			ui.Text(c, "Applies to the next turn; some models clamp to the levels they advertise.").
-				FontSize(12).TextColor(t.TextMuted)
-			for _, level := range appsession.ThinkingLevels() {
-				level := level
-				row := ui.Row(c.Key(level)).Padding(8, 10).Gap(8).Radius(6).Cursor(ui.CursorPointer)
-				if level == thinkingLabel(a.status.Thinking) {
-					row.Background(t.SurfacePressed)
-				} else if row.Hovered() {
-					row.Background(t.SurfaceHover)
-				}
-				row.Children(func() {
-					ui.Text(c, level).FontSize(13).Grow(1)
-					if level == thinkingLabel(a.status.Thinking) {
-						ui.Text(c, "current").FontSize(11).TextColor(t.Accent)
-					}
-				})
-				if row.Clicked() && level != thinkingLabel(a.status.Thinking) {
-					a.setThinking(level)
-				}
-			}
-			ui.Text(c, fmt.Sprintf("Model in use: %s", a.status.Model)).FontSize(11).TextColor(t.TextMuted)
-		})
-	})
 }

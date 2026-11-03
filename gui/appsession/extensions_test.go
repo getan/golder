@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/extensions"
+	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -77,6 +78,13 @@ func TestGUIManagedLarkConfigureEnableDisableAndUninstall(t *testing.T) {
 	}
 	if got := cfg.Env["LARK_MCP_APP_SECRET"]; got != "${credential:lark-app-secret}" || strings.Contains(got, "test-app-secret") {
 		t.Fatalf("stored secret setting = %q", got)
+	}
+	credentialBytes, err := os.ReadFile(provider.CredentialFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(credentialBytes), "test-app-secret") {
+		t.Fatal("Lark App Secret was stored in plaintext")
 	}
 	if err := controller.EnableLark(); err != nil {
 		t.Fatal(err)

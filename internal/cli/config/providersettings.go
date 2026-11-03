@@ -25,8 +25,9 @@ type ProviderDefaults struct {
 }
 
 // SetProviderDefaults updates the provider-facing top-level keys in one atomic
-// write while preserving comments, unrelated keys and tables. Saving a named
-// credential removes a legacy literal api_key line so the secret has one home.
+// write while preserving comments, unrelated keys and tables. Every GUI-style
+// settings save removes a legacy literal api_key line: callers migrate it into
+// the encrypted named credential store before calling this function.
 func SetProviderDefaults(s ProviderDefaults) error {
 	path := FileConfigPath()
 	if path == "" {
@@ -58,9 +59,7 @@ func SetProviderDefaults(s ProviderDefaults) error {
 	lines = setTopLevel(lines, protocolKey, s.Protocol)
 	lines = setTopLevel(lines, credentialKey, s.Credential)
 	lines = setTopLevel(lines, thinkingKey, s.ThinkingLevel)
-	if s.Credential != "" {
-		lines = setTopLevel(lines, apiKeyKey, "")
-	}
+	lines = setTopLevel(lines, apiKeyKey, "")
 	if s.Model != "" {
 		lines = setTableValue(lines, modelDefaultsTable, s.Provider, s.Model)
 	}

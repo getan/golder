@@ -58,7 +58,6 @@ func (a *App) view(c *ui.Context) {
 	a.paletteModal(c)
 	a.modelModal(c)
 	a.permissionModal(c)
-	a.thinkingModal(c)
 	a.settingsModal(c)
 	a.sessionRenameModal(c)
 	a.sessionDeleteModal(c)
@@ -68,7 +67,7 @@ func (a *App) view(c *ui.Context) {
 // titleBar shows the project, the session, and the page-level actions.
 func (a *App) titleBar(c *ui.Context) {
 	t := c.Theme()
-	changes := len(a.changes.Files)
+	changes := a.changes.TotalFiles
 	ui.Row(c).Height(titleHeight).Padding(0, 14).Gap(10).AlignItems(ui.Center).
 		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		project := filepath.Base(strings.TrimSpace(a.project))
@@ -83,9 +82,12 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
-		label := "Changes"
+		label := "▤  Changes"
 		if changes > 0 {
-			label = fmt.Sprintf("Changes %d  +%d −%d", changes, a.changes.Added, a.changes.Deleted)
+			label = fmt.Sprintf("▤  Changes %d", changes)
+			if len(a.changes.Files) > 0 {
+				label += fmt.Sprintf("  +%d −%d", a.changes.Added, a.changes.Deleted)
+			}
 		}
 		if ui.Button(c, label).Tooltip("Review uncommitted changes").Clicked() {
 			a.changesOpen = !a.changesOpen
@@ -106,65 +108,84 @@ func (a *App) titleBar(c *ui.Context) {
 				}
 			}
 		}
-		settings := ui.ButtonBase(c).Size(32, 32).Radius(16).Label("Settings").Tooltip("Settings").
-			Background(t.Surface).Border(1, t.Border)
-		if settings.Hovered() {
-			settings.Background(t.SurfaceHover)
-		}
-		settings.Children(func() {
-			ui.Text(c, "⚙").FontSize(16).TextAlign(ui.Center)
-		})
-		if settings.Clicked() {
-			a.openSettings()
-		}
 	})
 }
 
-// sidebar lists the sessions of the store.
+// sidebar mirrors the Codex project model: folders are explicit top-level
+// objects, while chats are filtered under the selected folder.
 func (a *App) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Column(c).Padding(10, 12).Gap(8).Children(func() {
-			options := a.projectOptions()
-			if a.selectedProject == "" {
-				a.selectedProject = a.project
+		ui.Column(c).Padding(10, 10, 8, 10).Gap(10).Children(func() {
+			if ui.PrimaryButton(c, "+  New session").FillWidth().Disabled(strings.TrimSpace(a.selectedProject) == "").Clicked() {
+				a.newSession()
 			}
-			ui.Select(c, &a.selectedProject, options).FillWidth().Tooltip("Filter sessions by project")
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				if ui.PrimaryButton(c, "New session").Grow(1).Clicked() {
-					a.newSession()
-					a.selectedProject = a.project
-				}
-				archiveLabel := "Archived"
-				if a.showArchived {
-					archiveLabel = "Hide archived"
-				}
-				if ui.Button(c, archiveLabel).Tooltip("Show or hide archived sessions").Clicked() {
-					a.showArchived = !a.showArchived
+			ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Projects").FontSize(11).FontWeight(600).TextColor(t.TextMuted).Grow(1)
+				if ui.Button(c, "+").Tooltip("Add project folder").Clicked() {
+					a.addProject()
 				}
 			})
 		})
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Padding(0, 8, 10, 8).Gap(4).Children(func() {
-				groups := a.visibleSessionGroups()
-				if len(groups) == 0 {
-					ui.Text(c, "No sessions yet.").FontSize(12).TextColor(t.TextMuted).Padding(8)
+			ui.Column(c).Padding(0, 8, 12, 8).Gap(3).Children(func() {
+				projects := a.projects
+				if len(projects) == 0 {
+					ui.Text(c, "Add a folder to start a project.").FontSize(12).TextColor(t.TextMuted).Padding(8)
 				}
-				for _, group := range groups {
-					name := filepath.Base(group.Cwd)
-					if group.Cwd == "" || name == "." {
-						name = "Unattributed"
+				for _, project := range projects {
+					project := project
+					selected := sameProjectPath(project.Path, a.selectedProject)
+					row := ui.Row(c.Key("project:"+project.Path)).Padding(6, 7).Gap(7).Radius(6).
+						AlignItems(ui.Center).Cursor(ui.CursorPointer).Tooltip(project.Path)
+					a.attachProjectMenu(row, project)
+					if selected {
+						row.Background(t.SurfacePressed)
+					} else if row.Hovered() {
+						row.Background(t.SurfaceHover)
 					}
-					ui.Column(c).Padding(8, 8, 3, 8).Gap(1).Children(func() {
-						ui.Text(c, name).FontSize(11).FontWeight(600).SingleLine().Ellipsis("…")
-						ui.Text(c, sessionPathDisplay(group.Cwd)).FontSize(10).TextColor(t.TextMuted).SingleLine().Ellipsis("…").Tooltip(group.Cwd)
+					row.Children(func() {
+						marker := "›"
+						if selected {
+							marker = "⌄"
+						}
+						ui.Text(c, marker).FontSize(13).TextColor(t.TextMuted).Width(12)
+						ui.Text(c, project.Name).FontSize(13).FontWeight(500).SingleLine().Ellipsis("…").Grow(1)
+						if sameProjectPath(project.Path, a.project) {
+							ui.Text(c, "●").FontSize(7).TextColor(t.Accent).Tooltip("Current session project")
+						}
+						if ui.Button(c, "+").Tooltip("New session in " + project.Name).Clicked() {
+							a.selectedProject = project.Path
+							a.newSessionInProject(project.Path)
+						}
 					})
-					for _, s := range group.Sessions {
-						a.sessionRow(c, s)
+					if row.Clicked() && !selected {
+						a.selectProject(project.Path)
 					}
+				}
+				ui.Text(c, "Chats").FontSize(11).FontWeight(600).TextColor(t.TextMuted).Padding(12, 8, 4, 8)
+				sessions := a.visibleSessions()
+				if len(sessions) == 0 {
+					ui.Text(c, "No sessions in this project.").FontSize(12).TextColor(t.TextMuted).Padding(8)
+				}
+				for _, session := range sessions {
+					a.sessionRow(c, session)
 				}
 			})
+		})
+		ui.Column(c).Padding(8, 10, 10, 10).Gap(4).
+			BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+			archiveLabel := "Archived sessions"
+			if a.showArchived {
+				archiveLabel = "Hide archived"
+			}
+			if ui.Button(c, archiveLabel).FillWidth().Tooltip("Show or hide archived sessions").Clicked() {
+				a.showArchived = !a.showArchived
+			}
+			if ui.Button(c, "⚙  Settings").FillWidth().Clicked() {
+				a.openSettings()
+			}
 		})
 	})
 }
@@ -186,15 +207,6 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 			}
 			ui.Text(c, s.UpdatedAt.Local().Format("01-02")).FontSize(11).TextColor(t.TextMuted).Shrink(0)
 		})
-		detail := sessionPathDisplay(s.Cwd)
-		model := s.Model
-		if s.Provider != "" && s.Model != "" {
-			model = s.Provider + "/" + s.Model
-		}
-		if model != "" {
-			detail += " · " + model
-		}
-		ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…").Tooltip(s.Cwd)
 	})
 	if row.Clicked() && !s.Current {
 		a.resume(s.ID)

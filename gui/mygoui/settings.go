@@ -160,6 +160,7 @@ func (a *App) providerSettingsView(c *ui.Context) {
 				}
 				ui.Text(c, status).FontSize(11).TextColor(color)
 			})
+			ui.Text(c, "AES-256-GCM encrypted on disk · automatically unlocked.").FontSize(11).TextColor(t.TextMuted)
 			ui.Field(c, "Reference name", func() {
 				ui.TextInput(c, &a.settingsEdit.CredentialName).FillWidth().Placeholder(a.settingsEdit.Provider + "-default")
 			})

@@ -21,6 +21,7 @@ import (
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/hooks"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/memory"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
@@ -34,6 +35,20 @@ var ErrBusy = errors.New("a turn is already running")
 
 // ErrClosed is returned once Close has been called.
 var ErrClosed = errors.New("controller is closed")
+
+// ProjectSetup is the live provider state a project environment factory needs.
+// APIKey is launch-only secret material and must not be displayed or persisted.
+type ProjectSetup struct {
+	Model        string
+	ProviderName string
+	BaseURL      string
+	Protocol     string
+	APIKey       string
+}
+
+// ProjectEnvironmentFactory assembles the project-rooted tools, prompt,
+// extensions and memory resources for one explicit desktop project folder.
+type ProjectEnvironmentFactory func(ctx context.Context, cwd string, setup ProjectSetup) (run.Env, error)
 
 // Options is the assembled run environment the GUI controller starts from. The
 // command builds it with run.SetupEnv, exactly as the CLI/TUI do, so the GUI
@@ -71,6 +86,11 @@ type Options struct {
 	ReviewNotes *run.ReviewNotes
 	Budget      *contextbudget.State
 	MaxContext  config.MaxContext
+	Memory      *memory.Store
+
+	// ProjectFactory is required to create or resume a session in a folder other
+	// than the launch directory. CLI/TUI embedders may leave it nil.
+	ProjectFactory ProjectEnvironmentFactory
 
 	// Cwd is the project directory. Empty means the process working directory.
 	Cwd string
@@ -99,12 +119,17 @@ type Controller struct {
 	notes    *run.ReviewNotes
 	trust    *trust.Manager
 	budget   *contextbudget.State
+	memory   *memory.Store
+	factory  ProjectEnvironmentFactory
 
 	dispatcher *hooks.Dispatcher
 	hookDeps   run.HookDeps
 
 	cwd    string
 	prompt runtime.PromptInputs
+	// approvedCwd is the one launch folder --approve covers. Switching projects
+	// must not silently transfer that trust decision.
+	approvedCwd string
 
 	curLeaf   string
 	persisted int
@@ -185,6 +210,9 @@ func (c *Controller) Open(ctx context.Context) error {
 	cwd := strings.TrimSpace(c.opt.Cwd)
 	if cwd == "" {
 		cwd, _ = os.Getwd()
+	}
+	if err := ensureInitialProject(cwd); err != nil {
+		c.warnf("project list unavailable: %v", err)
 	}
 
 	creds := c.opt.Credentials
@@ -304,9 +332,14 @@ func (c *Controller) Open(ctx context.Context) error {
 		notes:    notes,
 		trust:    mgr,
 		budget:   budget,
+		memory:   c.opt.Memory,
+		factory:  c.opt.ProjectFactory,
 		cwd:      cwd,
 		prompt:   c.opt.Prompt,
 		curLeaf:  curLeaf,
+	}
+	if c.opt.Approve {
+		ctrl.approvedCwd = cwd
 	}
 
 	// Move the assembled state into the receiver under the lock, keeping the
@@ -319,8 +352,9 @@ func (c *Controller) Open(ctx context.Context) error {
 	c.store, c.header, c.agentCtx, c.live = ctrl.store, ctrl.header, ctrl.agentCtx, ctrl.live
 	c.reg, c.remind, c.schedule, c.snap = ctrl.reg, ctrl.remind, ctrl.schedule, ctrl.snap
 	c.creds, c.slash, c.perms, c.notes = ctrl.creds, ctrl.slash, ctrl.perms, ctrl.notes
-	c.trust, c.budget = ctrl.trust, ctrl.budget
+	c.trust, c.budget, c.memory, c.factory = ctrl.trust, ctrl.budget, ctrl.memory, ctrl.factory
 	c.cwd, c.prompt = ctrl.cwd, ctrl.prompt
+	c.approvedCwd = ctrl.approvedCwd
 	c.curLeaf = ctrl.curLeaf
 	c.lock = lk
 	c.persisted = len(history)
@@ -364,7 +398,7 @@ func projectPromptDir(cwd string) string {
 // wireHooks resolves the trust-gated hook set and dispatches SessionStart once.
 func (c *Controller) wireHooks(ctx context.Context, resumed bool) {
 	c.mu.Lock()
-	trusted := c.trust == nil || c.trust.IsTrusted(c.cwd) || c.opt.Approve
+	trusted := c.trust == nil || c.trust.IsTrusted(c.cwd) || c.approvedCwd == c.cwd
 	deps := c.hookDeps
 	c.mu.Unlock()
 	if !trusted && c.trust != nil && !c.trust.NearestTrustDecision(c.cwd).Found {
@@ -425,6 +459,12 @@ func (c *Controller) Close() error {
 	agenttool.ClosePaneAgent(c.opt.Tools)
 	run.KillShellSessions(c.opt.Tools)
 	c.runWG.Wait()
+	if c.opt.Extensions != nil {
+		_ = c.opt.Extensions.Close()
+	}
+	if c.memory != nil {
+		_ = c.memory.Close()
+	}
 	return nil
 }
 

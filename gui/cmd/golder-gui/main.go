@@ -91,40 +91,48 @@ func main() {
 	maxContext, _ := cfg.Compaction.ResolveMaxContext()
 	memoryEnabled := cfg.Memory.Resolve().Enabled
 
-	env, err := run.SetupEnv(modelID, launch.BaseURL, launch.Protocol, launch.Provider, credential.ResolvedValue(), *noTools, *noSkills, "", nil, memoryEnabled, run.ToolPolicy{})
+	projectFactory := func(ctx context.Context, cwd string, setup appsession.ProjectSetup) (run.Env, error) {
+		if err := ctx.Err(); err != nil {
+			return run.Env{}, err
+		}
+		return run.SetupEnv(
+			setup.Model, setup.BaseURL, setup.Protocol, setup.ProviderName, setup.APIKey,
+			*noTools, *noSkills, "", nil, memoryEnabled, run.ToolPolicy{}, run.SetupOptions{Cwd: cwd},
+		)
+	}
+	env, err := projectFactory(context.Background(), wd, appsession.ProjectSetup{
+		Model: modelID, ProviderName: launch.Provider, BaseURL: launch.BaseURL,
+		Protocol: launch.Protocol, APIKey: credential.ResolvedValue(),
+	})
 	if err != nil {
 		log.Fatalf("golder-gui: %v", err)
 	}
-	if env.Extensions != nil {
-		defer env.Extensions.Close()
-	}
-	if env.Memory != nil {
-		defer env.Memory.Close()
-	}
 
 	ctrl := appsession.New(appsession.Options{
-		Model:         modelID,
-		ProviderName:  env.ProviderName,
-		Provider:      env.Provider,
-		BaseURL:       launch.BaseURL,
-		Protocol:      launch.Protocol,
-		Credentials:   env.Credentials,
-		Version:       version,
-		ThinkingLevel: thinking,
-		Tools:         env.Tools,
-		SysPrompt:     env.SysPrompt,
-		Prompt:        env.Prompt,
-		ResumeID:      *resume,
-		Approve:       *approve,
-		Skills:        env.Skills,
-		Extensions:    env.Extensions,
-		ConfigPrompts: cfg.Prompts,
-		Permissions:   env.Permissions,
-		ReviewNotes:   env.ReviewNotes,
-		Budget:        env.Budget,
-		MaxContext:    maxContext,
-		Cwd:           wd,
-		Warn:          os.Stderr,
+		Model:          modelID,
+		ProviderName:   env.ProviderName,
+		Provider:       env.Provider,
+		BaseURL:        launch.BaseURL,
+		Protocol:       launch.Protocol,
+		Credentials:    env.Credentials,
+		Version:        version,
+		ThinkingLevel:  thinking,
+		Tools:          env.Tools,
+		SysPrompt:      env.SysPrompt,
+		Prompt:         env.Prompt,
+		ResumeID:       *resume,
+		Approve:        *approve,
+		Skills:         env.Skills,
+		Extensions:     env.Extensions,
+		ConfigPrompts:  cfg.Prompts,
+		Permissions:    env.Permissions,
+		ReviewNotes:    env.ReviewNotes,
+		Budget:         env.Budget,
+		MaxContext:     maxContext,
+		Memory:         env.Memory,
+		ProjectFactory: projectFactory,
+		Cwd:            env.Cwd,
+		Warn:           os.Stderr,
 	})
 	if err := ctrl.Open(context.Background()); err != nil {
 		log.Fatalf("golder-gui: %v", err)

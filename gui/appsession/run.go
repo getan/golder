@@ -1,15 +1,20 @@
 package appsession
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
+	cliui "github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/compactionlog"
 	"github.com/getan/golder/internal/judge"
@@ -18,11 +23,31 @@ import (
 	"github.com/getan/golder/internal/runtime"
 )
 
+const (
+	maxAttachmentBytes      = 1 << 20
+	maxImageAttachmentBytes = 20 << 20
+)
+
+// UserAttachment is a local file explicitly selected in the native composer
+// picker. Images become multimodal blocks; small text files are inlined.
+type UserAttachment struct {
+	Path string
+}
+
 // Submit sends one prompt as a new turn.
 func (c *Controller) Submit(ctx context.Context, text string) error {
+	return c.SubmitAttachments(ctx, text, nil)
+}
+
+// SubmitAttachments sends one prompt plus operator-selected local files.
+func (c *Controller) SubmitAttachments(ctx context.Context, text string, attachments []UserAttachment) error {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return nil
+	}
+	content, display, err := buildUserAttachments(text, attachments)
+	if err != nil {
+		return err
 	}
 	c.mu.Lock()
 	if c.closed {
@@ -48,7 +73,7 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 
 	if dispatcher != nil {
 		pc := runtime.RunConfig{Reminders: reminders}
-		if block, reason := run.DispatchUserPromptSubmit(ctx, dispatcher, &pc, deps, text); block {
+		if block, reason := run.DispatchUserPromptSubmit(ctx, dispatcher, &pc, deps, display); block {
 			c.mu.Lock()
 			c.running = false
 			c.status.Running = false
@@ -62,12 +87,12 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 
 	agentCtx.Messages = append(agentCtx.Messages, agentcore.UserMessage{
 		RoleField: agentcore.RoleUser,
-		Content:   agentcore.ContentList{agentcore.NewTextContent(text)},
+		Content:   content,
 	})
 	c.addItem(Item{
 		ID:   runID + "-user",
 		Kind: ItemUser,
-		Text: text,
+		Text: display,
 		Done: true,
 	})
 	if err := c.persist(); err != nil {
@@ -81,8 +106,62 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 	c.remind = reminders
 	c.mu.Unlock()
 	c.runWG.Add(1)
-	go c.run(runCtx, runID, text)
+	go c.run(runCtx, runID, display)
 	return nil
+}
+
+func buildUserAttachments(text string, attachments []UserAttachment) (agentcore.ContentList, string, error) {
+	content := agentcore.ContentList{}
+	if text != "" {
+		content = append(content, agentcore.NewTextContent(text))
+	}
+	names := make([]string, 0, len(attachments))
+	for _, attachment := range attachments {
+		path := strings.TrimSpace(attachment.Path)
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("attach %q: %w", filepath.Base(path), err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, "", fmt.Errorf("attach %q: not a regular file", filepath.Base(path))
+		}
+		name := filepath.Base(path)
+		names = append(names, name)
+		if info.Size() > maxImageAttachmentBytes {
+			return nil, "", fmt.Errorf("attach %q: files must be 20 MiB or smaller", name)
+		}
+		if image, imageErr := cliui.LoadImageContent(path); imageErr == nil {
+			content = append(content, image)
+			continue
+		}
+		if info.Size() > maxAttachmentBytes {
+			return nil, "", fmt.Errorf("attach %q: text files must be 1 MiB or smaller", name)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, "", fmt.Errorf("attach %q: %w", name, err)
+		}
+		if !utf8.Valid(raw) || bytes.IndexByte(raw, 0) >= 0 {
+			return nil, "", fmt.Errorf("attach %q: unsupported binary file", name)
+		}
+		content = append(content, agentcore.NewTextContent(fmt.Sprintf("[Attached file: %s]\n%s", name, raw)))
+	}
+	if len(content) == 0 {
+		return nil, "", errors.New("message and attachments are empty")
+	}
+	display := text
+	if len(names) > 0 {
+		line := "Attached: " + strings.Join(names, ", ")
+		if display == "" {
+			display = line
+		} else {
+			display += "\n\n" + line
+		}
+	}
+	return content, display, nil
 }
 
 // Cancel interrupts the run in flight. It is a no-op when nothing runs.
@@ -162,7 +241,7 @@ func (c *Controller) reviewer() judge.Classifier {
 	creds := c.creds
 	sessionID := c.header.ID
 	cwd := c.cwd
-	trusted := c.trust == nil || c.trust.IsTrusted(c.cwd) || c.opt.Approve
+	trusted := c.trust == nil || c.trust.IsTrusted(c.cwd) || c.approvedCwd == c.cwd
 	c.mu.Unlock()
 	return run.NewReviewer(live.Model, live.ProviderName, live.Provider, creds, sessionID, cwd, trusted)
 }

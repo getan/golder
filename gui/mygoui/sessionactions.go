@@ -15,61 +15,90 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
-const allProjectsLabel = "All projects"
-
-type sessionGroup struct {
-	Cwd      string
-	Sessions []appsession.SessionSummary
-}
-
-func (a *App) projectOptions() []string {
-	seen := map[string]bool{}
-	out := []string{allProjectsLabel}
-	if a.project != "" {
-		seen[a.project] = true
-		out = append(out, a.project)
-	}
-	for _, session := range a.sessions {
-		cwd := strings.TrimSpace(session.Cwd)
-		if cwd != "" && !seen[cwd] {
-			seen[cwd] = true
-			out = append(out, cwd)
-		}
-	}
-	return out
-}
-
-func (a *App) visibleSessionGroups() []sessionGroup {
-	groups := map[string][]appsession.SessionSummary{}
-	order := []string{}
+func (a *App) visibleSessions() []appsession.SessionSummary {
 	selected := strings.TrimSpace(a.selectedProject)
+	out := make([]appsession.SessionSummary, 0, len(a.sessions))
 	for _, session := range a.sessions {
 		if session.Archived && !a.showArchived {
 			continue
 		}
-		cwd := strings.TrimSpace(session.Cwd)
-		if selected != "" && selected != allProjectsLabel && cwd != selected {
+		if selected != "" && !sameProjectPath(session.Cwd, selected) {
 			continue
 		}
-		if _, ok := groups[cwd]; !ok {
-			order = append(order, cwd)
-		}
-		groups[cwd] = append(groups[cwd], session)
-	}
-	// The active project is the first group; ListSessions already orders rows by
-	// current/recent, so no second row sort is needed.
-	for i, cwd := range order {
-		if cwd == a.project && i != 0 {
-			copy(order[1:i+1], order[0:i])
-			order[0] = cwd
-			break
-		}
-	}
-	out := make([]sessionGroup, 0, len(order))
-	for _, cwd := range order {
-		out = append(out, sessionGroup{Cwd: cwd, Sessions: groups[cwd]})
+		out = append(out, session)
 	}
 	return out
+}
+
+func sameProjectPath(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return left == right
+	}
+	leftResolved, leftErr := filepath.EvalSymlinks(left)
+	rightResolved, rightErr := filepath.EvalSymlinks(right)
+	if leftErr == nil && rightErr == nil {
+		return filepath.Clean(leftResolved) == filepath.Clean(rightResolved)
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func (a *App) selectProject(path string) {
+	if err := a.ctrl.SelectProject(path); err != nil {
+		a.banner, a.bannerErr = err.Error(), true
+		return
+	}
+	a.selectedProject = path
+	a.refreshProjects()
+}
+
+func (a *App) addProject() {
+	win := a.win
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent: win, Title: "Add project folder", ButtonLabel: "Add folder",
+			Directory: true, Multiple: false, CreateDirectories: true,
+		})
+		if win == nil {
+			return
+		}
+		win.Update(func() {
+			if err != nil {
+				a.banner, a.bannerErr = err.Error(), true
+				return
+			}
+			if len(paths) == 0 {
+				return
+			}
+			project, addErr := a.ctrl.AddProject(paths[0])
+			if addErr != nil {
+				a.banner, a.bannerErr = addErr.Error(), true
+				return
+			}
+			a.selectedProject = project.Path
+			a.refreshProjects()
+		})
+	}()
+}
+
+func (a *App) attachProjectMenu(row ui.Element, project appsession.ProjectFolder) {
+	row.ContextMenu(func(menu *ui.Menu) {
+		if menu.Item("New session").Chosen() {
+			a.newSessionInProject(project.Path)
+		}
+		if menu.Item("Reveal in folder").Chosen() {
+			mygo.Shell.ShowItemInFolder(project.Path)
+		}
+		menu.Separator()
+		if menu.Item("Remove from sidebar").Chosen() {
+			if err := a.ctrl.RemoveProject(project.Path); err != nil {
+				a.banner, a.bannerErr = err.Error(), true
+				return
+			}
+			a.refreshProjects()
+		}
+	})
 }
 
 func (a *App) attachSessionMenu(row ui.Element, session appsession.SessionSummary) {

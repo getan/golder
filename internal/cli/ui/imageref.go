@@ -100,6 +100,12 @@ func loadImageContent(path string) (agentcore.ImageContent, error) {
 	return agentcore.NewImageContent(enc, mime), nil
 }
 
+// LoadImageContent reads one operator-selected local image for GUI and SDK
+// front-ends that already have a path and therefore do not need prompt syntax.
+func LoadImageContent(path string) (agentcore.ImageContent, error) {
+	return loadImageContent(path)
+}
+
 // mimeFromPath maps a file extension to an image mime type. It returns "" for
 // unknown extensions so the caller can fall back to content sniffing.
 func mimeFromPath(path string) string {

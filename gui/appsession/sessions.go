@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli"
+	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/session"
 )
 
@@ -156,22 +158,90 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(h.Cwd) != "" {
+		target, targetErr := canonicalProjectPath(h.Cwd)
+		if targetErr != nil {
+			return targetErr
+		}
+		c.mu.Lock()
+		currentProject := c.cwd
+		c.mu.Unlock()
+		if !sameProjectPath(target, currentProject) {
+			next, prepareErr := c.prepareProjectRuntime(ctx, target)
+			if prepareErr != nil {
+				return prepareErr
+			}
+			lock, lockErr := acquireSessionLock(store.Dir(), id)
+			if lockErr != nil {
+				closeProjectRuntime(next)
+				return lockErr
+			}
+			c.installProjectSession(ctx, next, h, entries, lock, true)
+			_ = c.SelectProject(target)
+			return nil
+		}
+	}
 	if err := c.relock(id); err != nil {
 		return err
 	}
 	c.adopt(h, entries)
+	c.rebindSessionRuntime(ctx, true)
 	return nil
 }
 
 // NewSession starts a fresh conversation in the same project.
 func (c *Controller) NewSession(ctx context.Context) error {
+	c.mu.Lock()
+	cwd := c.cwd
+	c.mu.Unlock()
+	return c.NewSessionInProject(ctx, cwd)
+}
+
+// NewSessionInProject starts a fresh conversation rooted at the explicitly
+// selected desktop project, rebuilding every cwd-bound runtime component when
+// the folder differs from the active Session.
+func (c *Controller) NewSessionInProject(ctx context.Context, path string) error {
+	target, err := canonicalProjectPath(path)
+	if err != nil {
+		return err
+	}
 	if c.IsRunning() {
 		return ErrBusy
 	}
 	if err := c.persist(); err != nil {
 		return fmt.Errorf("save current session: %w", err)
 	}
+	c.mu.Lock()
+	currentProject := c.cwd
+	store := c.store
+	c.mu.Unlock()
+	if !sameProjectPath(target, currentProject) {
+		next, err := c.prepareProjectRuntime(ctx, target)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		header := session.SessionHeader{
+			ID: session.NewID(now), CreatedAt: now, UpdatedAt: now,
+			Model: next.live.Model, Provider: next.live.ProviderName,
+			SystemPrompt: next.env.SysPrompt, BaseInstruction: next.env.Prompt.Base,
+			AppendInstructions: next.env.Prompt.Appends, Cwd: next.env.Cwd,
+		}
+		lock, err := acquireSessionLock(store.Dir(), header.ID)
+		if err != nil {
+			closeProjectRuntime(next)
+			return err
+		}
+		c.installProjectSession(ctx, next, header, nil, lock, false)
+		_ = c.SelectProject(target)
+		return nil
+	}
+	return c.newSessionInCurrentProject(ctx, currentProject)
+}
+
+func (c *Controller) newSessionInCurrentProject(ctx context.Context, cwd string) error {
 	now := time.Now().UTC()
+	c.mu.Lock()
 	header := session.SessionHeader{
 		ID:                 session.NewID(now),
 		CreatedAt:          now,
@@ -181,8 +251,10 @@ func (c *Controller) NewSession(ctx context.Context) error {
 		SystemPrompt:       c.opt.SysPrompt,
 		BaseInstruction:    c.opt.Prompt.Base,
 		AppendInstructions: c.opt.Prompt.Appends,
-		Cwd:                c.cwd,
+		Cwd:                cwd,
 	}
+	tools := c.opt.Tools
+	c.mu.Unlock()
 	if err := c.relock(header.ID); err != nil {
 		return err
 	}
@@ -194,13 +266,24 @@ func (c *Controller) NewSession(ctx context.Context) error {
 	c.curLeaf = ""
 	c.persisted = 0
 	c.compacted = false
+	c.approvedForSession = map[string]bool{}
+	c.deniedForSession = map[string]bool{}
+	c.answered = map[string]bool{}
+	c.pending = nil
 	c.title = "New session"
 	c.status.SessionID = header.ID
 	c.status.Title = c.title
 	c.status.ContextUsed = 0
-	c.hookDeps.SessionID = header.ID
+	c.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: c.warnWriter()}
+	c.dispatcher = nil
 	c.mu.Unlock()
+	agenttool.ClosePaneAgent(tools)
+	if err := agenttool.ConfigurePaneAgent(ctx, tools, header.ID); err != nil {
+		c.warnf("pane control registration unavailable: %v", err)
+	}
+	c.wireHooks(ctx, false)
 	c.emitStatus()
+	_ = c.SelectProject(cwd)
 	return nil
 }
 
@@ -245,7 +328,12 @@ func (c *Controller) adopt(h session.SessionHeader, entries []session.Entry) {
 	c.live.RefreshContextWindow()
 	c.items = nil
 	c.index = map[string]int{}
-	c.hookDeps.SessionID = h.ID
+	c.approvedForSession = map[string]bool{}
+	c.deniedForSession = map[string]bool{}
+	c.answered = map[string]bool{}
+	c.pending = nil
+	c.hookDeps = run.HookDeps{SessionID: h.ID, ProjectDir: c.cwd, WarnLog: c.warnWriter()}
+	c.dispatcher = nil
 	c.status.SessionID = h.ID
 	c.status.ContextUsed = estimateTokens(msgs)
 	c.status.ContextLimit = c.live.ContextWindow
@@ -259,6 +347,18 @@ func (c *Controller) adopt(h session.SessionHeader, entries []session.Entry) {
 	c.status.Title = c.title
 	c.mu.Unlock()
 	c.emitStatus()
+}
+
+func (c *Controller) rebindSessionRuntime(ctx context.Context, resumed bool) {
+	c.mu.Lock()
+	tools := c.opt.Tools
+	id := c.header.ID
+	c.mu.Unlock()
+	agenttool.ClosePaneAgent(tools)
+	if err := agenttool.ConfigurePaneAgent(ctx, tools, id); err != nil {
+		c.warnf("pane control registration unavailable: %v", err)
+	}
+	c.wireHooks(ctx, resumed)
 }
 
 // IsRunning reports whether a turn is in flight.
@@ -400,25 +500,4 @@ func (c *Controller) withInactiveSessionLock(id string, fn func() error) error {
 	}
 	defer lk.release()
 	return fn()
-}
-
-// OpenProject notes the project directory for display. The process never
-// chdir's: tools stay rooted where the app started, matching the CLI.
-func (c *Controller) OpenProject(path string) {
-	if strings.TrimSpace(path) == "" {
-		return
-	}
-	c.mu.Lock()
-	c.opt.Cwd = path
-	c.mu.Unlock()
-}
-
-// workingDir is the process working directory, used by the command to stamp a
-// new controller.
-func workingDir() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return ""
-	}
-	return wd
 }
