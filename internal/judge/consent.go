@@ -448,10 +448,20 @@ func boundaryBlocked(call agentcore.AgentToolCall, opts ConsentOpts) *agentcore.
 func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, needs []Need, lang string, notify func(Note)) *agentcore.BeforeToolCallDecision {
 	if v.Failed {
 		if len(needs) > 0 {
+			rationale := localized(lang, "评审不可用；能力扩张未获授权", "review was unavailable; capability expansion was not authorized")
+			tail := "the reviewer could not decide the capability request; nothing was granted"
+			if executionRequiresUnconfined(ctx) {
+				// A failed review is not a policy answer. Saying so is the
+				// difference between "retry" and "stop trying".
+				rationale = localized(lang,
+					"评审失败（超时或错误），Git SSH push 未运行；重试即可",
+					"the review failed (timeout or error), so the Git SSH push did not run; retry the call")
+				tail = "the reviewer failed rather than denied; the Git SSH push did not run, retry it"
+			}
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteUnavailable, Level: v.Level, Lang: lang,
 				Source: v.Source, Needs: needs,
-				Summary: riskSummary(call), Rationale: localized(lang, "评审不可用；能力扩张未获授权", "review was unavailable; capability expansion was not authorized")})
-			return blockCall(call, v, "the reviewer could not decide the capability request; nothing was granted")
+				Summary: riskSummary(call), Rationale: rationale})
+			return blockCall(call, v, tail)
 		}
 		if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {
 			return &agentcore.BeforeToolCallDecision{Sandbox: true}
@@ -463,9 +473,15 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	}
 	if v.Level == Contain {
 		if len(needs) > 0 {
+			rationale := localized(lang, "评审要求收容，但调用需要额外能力", "review required containment, but the call needs extra capabilities")
+			if executionRequiresUnconfined(ctx) {
+				rationale = localized(lang,
+					"评审判定本次 Git push 需要收容；SSH push 无法在文件沙箱内完成，命令未运行",
+					"the review contained this call, but a Git SSH push cannot run inside the file sandbox; nothing ran")
+			}
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: v.Level, Lang: lang,
 				Source: v.Source, Needs: needs,
-				Summary: riskSummary(call), Rationale: localized(lang, "评审要求收容，但调用需要额外能力", "review required containment, but the call needs extra capabilities")})
+				Summary: riskSummary(call), Rationale: rationale})
 			return blockCall(call, v, "the call needs a capability the reviewer did not grant")
 		}
 		if opts.Sandboxed != nil && opts.Sandboxed(call.Name) {

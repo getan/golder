@@ -193,21 +193,35 @@ func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) 
 		return v
 	}
 	if v, ok := localGradeOf(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
+		// A derived execution fact is not a caller's claim. gitPushFacts has
+		// already resolved the remote and refused an opaque transport, a custom
+		// ssh command and an unbound pre-push hook; what is left is a push that
+		// provably cannot run inside the file sandbox. Deferring that to a model
+		// re-opens a question the facts settled, and in `auto` a Contain answer
+		// turned every SSH push into a dead end. The table's tier still says how
+		// much attention the command deserves.
+		proven := executionRequiresUnconfined(ctx)
 		if NetworkRequired(ctx, tool, args) {
 			// The local table may approve network only for calls it has actually
 			// classified as outbound work. A read-only-looking or local-effects
 			// command asking for network needs the session reviewer's judgment;
 			// an Allow/Confirm for some other effect is NOT network permission.
-			if v.Level != Confirm || v.Risk != "medium" || len(v.Reasons) == 0 ||
-				v.Reasons[0] != localRationale(v.Lang, "external_effects") {
+			// A proven SSH push established the network need itself, so the table
+			// only names the tier.
+			switch {
+			case proven:
+				v.Network = true
+			case v.Level == Confirm && v.Risk == "medium" && len(v.Reasons) > 0 &&
+				v.Reasons[0] == localRationale(v.Lang, "external_effects"):
+				v.Network = true
+			default:
 				return l.deferToNext(ctx, tool, args)
 			}
-			v.Network = true
 		}
-		if escalationRequested(args) {
+		if escalationRequested(args) && !proven {
 			// The source table classifies the command, not why it needs files
 			// beyond the sandbox. Only a reviewer with conversation context can
-			// explicitly authorize a one-call escape.
+			// authorize a claim the facts do not back.
 			return l.deferToNext(ctx, tool, args)
 		}
 		return v
