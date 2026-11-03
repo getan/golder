@@ -6,6 +6,10 @@ CLIs**, not a new Golder runtime:
 - `lark-cli`: Feishu documents/Wiki, chats/messages, Sheets and Base.
 - `meegle`: Feishu Project requirements, bugs, tasks and workflow transitions.
 
+For a step-by-step install on a fresh machine — pnpm build-script approval,
+native payload paths, config table, approval and OAuth — see the
+[Lark MCP setup runbook](../../../docs/lark-mcp-setup.md).
+
 An existing Feishu application is supported. **Application configuration and
 personal OAuth are separate layers**; all business operations use the user, never
 an automatic bot fallback. Project needs its own user authorization.
