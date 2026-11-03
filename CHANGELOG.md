@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Double-clickable GUI packages, built per platform** (v1.5.47): the `gui`
+  workflow compiles the `golder` CLI into the app's resources, then has MyGo
+  package a `.app` and `.dmg` on macOS, an `.exe` and NSIS installer on Windows,
+  and a tarball with `install.sh`, a `.deb` and a PKGBUILD on Linux. A packaged
+  window therefore opens a terminal workspace without the person's `PATH`. See
+  [v1.5.47 release notes](docs/releases/v1.5.47.md).
+- **Lark MCP setup runbook** (v1.5.47): `docs/lark-mcp-setup.md` records the
+  fresh-machine procedure — pnpm build-script approval for the native payloads,
+  locating and pinning the real binaries, the generated config table, approval
+  versus `enabled`, and the one-time OAuth through `golder mcp setup`.
 - **Golder GUI: a native desktop front-end in `gui/`** (v1.5.46): a separate
   `golder-gui` binary draws the session list, transcript, tool cards, approvals,
   model/permission pickers, a command palette and a diff drawer with MyGo's
