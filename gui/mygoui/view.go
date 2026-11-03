@@ -25,6 +25,14 @@ func (a *App) view(c *ui.Context) {
 		// value in long-lived view state.
 		a.settingsEdit.NewCredential = ""
 		a.settingsEdit.RemoveCredential = false
+		a.extensionEdit.NewAppSecret = ""
+		a.extensionAuthURL = ""
+		a.extensionConfirm = ""
+		a.extensionSourceConfirm = ""
+		if a.extensionCancel != nil {
+			a.extensionCancel()
+			a.extensionCancel = nil
+		}
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyK) {
 		a.paletteQuery = ""

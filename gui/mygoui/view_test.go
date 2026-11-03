@@ -68,6 +68,33 @@ func TestSettingsRendersProviderAndPasswordControls(t *testing.T) {
 	}
 }
 
+func TestExtensionsSettingsRendersManagedLarkWizard(t *testing.T) {
+	a := testApp()
+	a.settingsOpen = true
+	a.settingsTab = 2
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{
+			ID: "lark", Name: "Lark + Project", Description: "Lark services",
+			Installed: true, Configured: true, Version: "1.2.3", State: "disabled",
+		},
+		Domains: []string{"docs", "im"}, ProjectHost: "project.feishu.cn",
+	}
+	a.extensionEdit = appsession.LarkExtensionEdit{
+		AppID: "cli_test", CredentialName: "lark-app-secret", NewAppSecret: "private-extension-secret",
+		ProjectHost: "project.feishu.cn",
+	}
+	a.extensionDomains = map[string]bool{"docs": true, "im": true}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"Extensions", "Lark + Project", "Official lark-cli", "Save configuration", "Approve & enable", "Authorize Lark"} {
+		if !tt.HasText(want) {
+			t.Fatalf("extensions wizard is missing %q; texts: %q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("private-extension-secret") {
+		t.Fatal("extension secret was rendered as ordinary text")
+	}
+}
+
 func TestSessionGroupsFilterProjectAndArchived(t *testing.T) {
 	a := testApp()
 	a.sessions = []appsession.SessionSummary{

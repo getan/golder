@@ -302,6 +302,11 @@ Default Reasoning               [High ▾]
 - browser runtime；
 - Lark 等 first-party package 状态。
 
+Implemented follow-up: Settings → Extensions now manages the checksummed
+first-party Lark helper, named App Secret reference, reviewed native CLI paths,
+explicit fingerprint approval, browser authorization, connection testing,
+enable/disable, reset and uninstall. See [`gui-extensions.md`](gui-extensions.md).
+
 #### Terminal
 
 - shell；

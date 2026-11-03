@@ -7,6 +7,24 @@ a command, an expected result, and the failure it is meant to prevent.
 It complements [`extension/plugins/lark/README.md`](../extension/plugins/lark/README.md),
 which describes the adapter itself.
 
+## Desktop GUI path
+
+Packaged Golder GUI builds expose the recommended path under **Settings →
+Extensions → Lark + Project**:
+
+1. click **Install** to checksum-verify and copy the matching `golder-lark`
+   helper into the private managed package directory;
+2. choose the absolute native `lark-cli` and optional `meegle` executables;
+3. enter the existing App ID and a write-only App Secret (stored as a named
+   credential, never literal TOML);
+4. save the disabled configuration, review and explicitly enable it;
+5. click **Authorize Lark** and, when configured, **Authorize Project**;
+6. click **Test connection**.
+
+The remainder of this runbook documents the equivalent manual/CLI path and the
+official CLI installation details still relevant to the file picker. The GUI
+does not download or silently choose those third-party native CLIs.
+
 ## What the pieces are
 
 | Piece | Where it comes from | Why it exists |

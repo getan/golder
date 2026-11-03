@@ -74,6 +74,9 @@ Two optional surfaces need runtime pieces:
   fails every pending question closed;
 - configuration: a shared Settings page for provider, model, base URL, protocol
   and named credentials, plus live model/reasoning/approval controls;
+- extensions: a native manager for checksummed first-party package install,
+  exact source review, named-secret configuration, browser OAuth, test,
+  enable/disable, reset and uninstall; other configured sources appear there too;
 - changes: a Git status + unified diff drawer rendered by MyGo's diff viewer;
 - actions: a command palette over the existing slash registry, so skills,
   prompt templates and plugin commands stay reachable without typing;

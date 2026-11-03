@@ -46,6 +46,33 @@ jobs:
           mv "$tmp" gui/mygo.json
           echo "GUI_VERSION=$version" >> "$GITHUB_ENV"
 
+      - name: Build the first-party Lark helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_lark() {
+            local goos=$1 arch=$2 dir=$3 name=golder-lark
+            if [[ "$goos" == windows ]]; then name+=.exe; fi
+            mkdir -p "$dir"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$arch" \
+              go build -trimpath -ldflags "-s -w -X main.version=$GUI_VERSION" \
+              -o "$dir/$name" ./extension/plugins/lark/cmd/golder-lark
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$dir/$name" > "$dir/$name.sha256"
+            else
+              shasum -a 256 "$dir/$name" > "$dir/$name.sha256"
+            fi
+          }
+          case "${{ matrix.name }}" in
+            macos-arm64) build_lark darwin arm64 gui/resources/darwin-arm64/extensions/lark ;;
+            macos-amd64) build_lark darwin amd64 gui/resources/darwin-amd64/extensions/lark ;;
+            windows) build_lark windows amd64 gui/resources/windows-amd64/extensions/lark ;;
+            linux)
+              build_lark linux amd64 gui/resources/linux-amd64/extensions/lark
+              build_lark linux arm64 gui/resources/linux-arm64/extensions/lark
+              ;;
+          esac
+
       - name: Check the GUI dependency boundary
         shell: bash
         run: |
@@ -134,6 +161,10 @@ jobs:
           fi
           if find gui/build -type f \( -iname '*chromium*' -o -iname 'chrome' -o -iname 'chrome.exe' \) -print -quit | grep -q .; then
             echo "the GUI bundle must not contain Chromium" >&2
+            exit 1
+          fi
+          if ! find gui/build -type f -path '*/extensions/lark/golder-lark*' ! -name '*.sha256' -print -quit | grep -q .; then
+            echo "the GUI bundle is missing the first-party golder-lark helper" >&2
             exit 1
           fi
           if [[ "${{ matrix.kind }}" == "macos" ]]; then

@@ -17,6 +17,7 @@ type PackageView struct {
 	Source      SourceRef `json:"source"`
 	State       string    `json:"state"`
 	Executable  string    `json:"executable,omitempty"`
+	Version     string    `json:"version,omitempty"`
 	Configured  bool      `json:"configured"`
 	NextAction  string    `json:"next_action"`
 	Docs        string    `json:"docs"`
@@ -33,16 +34,25 @@ func (m *Manager) PackageViews() []PackageView {
 		State:       "not installed", Docs: "https://github.com/getan/golder/blob/master/docs/lark-cli-plugin.md",
 		NextAction: "Install the matching golder-lark release package and the official native CLIs explicitly; nothing is auto-installed.",
 	}
+	if installed, ok := InstalledManagedPackage("lark"); ok {
+		p.State, p.Executable, p.Version = "installed · not configured", installed.Executable, installed.Version
+		p.NextAction = "Configure the official native CLIs and application, then explicitly approve and authorize the package."
+	}
 	for _, source := range m.List() {
 		if source.Ref == ref {
-			p.Configured, p.State = true, "configured as mcp:lark"
+			p.Configured, p.State = true, source.State
+			if source.Version != "" {
+				p.Version = source.Version
+			}
 			p.NextAction = "Open the MCP source above to review, enable, authorize, or diagnose it."
 			return []PackageView{p}
 		}
 	}
-	if path := packageExecutable("golder-lark"); path != "" {
-		p.State, p.Executable = "installed · not configured", path
-		p.NextAction = "Run golder-lark print-config with absolute native CLI paths, merge the disabled mcp:lark table into config.toml, then review and enable it."
+	if p.Executable == "" {
+		if path := packageExecutable("golder-lark"); path != "" {
+			p.State, p.Executable = "installed · not configured", path
+			p.NextAction = "Run golder-lark print-config with absolute native CLI paths, merge the disabled mcp:lark table into config.toml, then review and enable it."
+		}
 	}
 	return []PackageView{p}
 }

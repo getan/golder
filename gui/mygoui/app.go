@@ -72,6 +72,18 @@ type App struct {
 	settingsBusy bool
 	ttySessions  []appsession.TTYSummary
 
+	extension              appsession.LarkExtensionSettings
+	extensionSources       []appsession.ExtensionSourceView
+	extensionEdit          appsession.LarkExtensionEdit
+	extensionDomains       map[string]bool
+	extensionBusy          bool
+	extensionErr           string
+	extensionNote          string
+	extensionAuthURL       string
+	extensionConfirm       string
+	extensionSourceConfirm string
+	extensionCancel        context.CancelFunc
+
 	paletteOpen  bool
 	paletteQuery string
 	paletteSel   int

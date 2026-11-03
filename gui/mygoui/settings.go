@@ -17,6 +17,7 @@ func (a *App) openSettings() {
 	a.settingsEdit.NewCredential = ""
 	a.settingsEdit.RemoveCredential = false
 	a.refreshTTYSessions()
+	a.loadExtensionSettings()
 	settings, err := a.ctrl.LoadProviderSettings()
 	if err != nil {
 		a.settingsErr = err.Error()
@@ -100,7 +101,7 @@ func (a *App) settingsModal(c *ui.Context) {
 				ui.Spacer(c)
 				ui.Text(c, "Shared with the Golder CLI").FontSize(11).TextColor(t.TextMuted)
 			})
-			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Tools", "Terminal", "About").
+			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Extensions", "Terminal", "About").
 				Padding(10, 16, 0, 16)
 			ui.Scroll(c).Grow(1).MaxHeight(530).Children(func() {
 				switch a.settingsTab {
@@ -109,7 +110,7 @@ func (a *App) settingsModal(c *ui.Context) {
 				case 1:
 					a.permissionSettingsView(c)
 				case 2:
-					a.toolsSettingsView(c)
+					a.extensionsSettingsView(c)
 				case 3:
 					a.terminalSettingsView(c)
 				default:
@@ -213,16 +214,6 @@ func (a *App) permissionSettingsView(c *ui.Context) {
 		})
 		ui.Text(c, "Readable and writable roots remain managed by the existing /boundary and grants store; the GUI editor for those rows is a later settings section.").
 			FontSize(12).TextColor(t.TextMuted)
-	})
-}
-
-func (a *App) toolsSettingsView(c *ui.Context) {
-	t := c.Theme()
-	ui.Column(c).Padding(18, 20).Gap(10).Children(func() {
-		ui.Text(c, "Tools & extensions").FontSize(16).FontWeight(600)
-		ui.Text(c, "Skills, MCP sources and first-party packages use the same extension manager as the CLI. Setup and authentication remain explicit operations.").
-			FontSize(12).TextColor(t.TextMuted).MaxWidth(620)
-		ui.Text(c, "Use Command Palette (⌘K / Ctrl+K) for extension and setup actions until the catalog view is added here.").FontSize(12)
 	})
 }
 

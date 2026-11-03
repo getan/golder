@@ -39,9 +39,10 @@ config.toml
 # macOS Finder metadata
 .DS_Store
 
-# GUI packaging outputs and the CLI copied into the app's resources
+# GUI packaging outputs and generated per-platform helper resources
 gui/build/
 gui/resources/*/bin/
+gui/resources/*/extensions/*/golder-*
 
 .loop-state.json
 

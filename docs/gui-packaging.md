@@ -37,6 +37,17 @@ architecture of `libghostty-vt` and supports explicit user shells and Agent TTY
 takeover. The Browser Surface talks to an already-running controlled Chromium;
 it does not package a browser.
 
+The package also carries one small first-party helper:
+
+```text
+Resources/extensions/lark/golder-lark[.exe]
+Resources/extensions/lark/golder-lark[.exe].sha256
+```
+
+It is built for the exact package architecture and version. It remains inert in
+the bundle until the operator clicks Install in Settings → Extensions; the
+managed installer verifies the checksum before copying it under `$GOLDER_HOME`.
+
 ## Building locally
 
 ```sh
@@ -121,7 +132,7 @@ None of them are required for a local build.
 
 Before upload, CI verifies that the GUI dependency graph excludes tuios-mini,
 that no full CLI or Chromium exists in the bundle, and that each macOS `.app`
-is below 50 MiB (the product target is below 45 MiB).
+contains the checksummed Lark helper and remains below 50 MiB.
 
 On a tag, the artifacts are attached to the same GitHub Release that goreleaser
 creates, so a release carries both the CLI archives and the GUI packages.

@@ -520,7 +520,7 @@ func (m *Manager) publish(s *source) {
 	if version == "" {
 		version = s.version
 	}
-	capabilities := map[string]any{"state_dir": s.cfg.StateDir, "executables": s.cfg.Executables, "skills": s.cfg.Skills, "setup_origins": s.cfg.SetupOrigins, "confirm_tools": s.cfg.ConfirmTools, "aggregate_tools": s.cfg.AggregateTools}
+	capabilities := map[string]any{"network": s.cfg.Network || s.cfg.Transport == "http", "state_dir": s.cfg.StateDir, "executables": s.cfg.Executables, "skills": s.cfg.Skills, "setup_origins": s.cfg.SetupOrigins, "confirm_tools": s.cfg.ConfirmTools, "aggregate_tools": s.cfg.AggregateTools}
 	if len(s.cfg.Setup) > 0 {
 		capabilities["setup"] = clean(strings.Join(s.cfg.Setup, " "), 2048)
 	}
