@@ -2,7 +2,7 @@
   "name": "Golder GUI",
   "slug": "golder-gui",
   "identifier": "dev.golder.gui",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "main": "./cmd/golder-gui",
   "out": "build",
   "macos": {

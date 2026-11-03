@@ -75,6 +75,11 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 		} else if st.Running {
 			ui.Text(c, "Running…").FontSize(12).TextColor(t.TextMuted)
 		}
+		if id := toolTTYID(st.Details, st.Input); id != "" {
+			if ui.Button(c, "Open Terminal").Tooltip("Attach to " + id).Clicked() {
+				a.openTTYTerminal(id)
+			}
+		}
 	})
 	if it.Failed {
 		el.TextColor(t.Danger)

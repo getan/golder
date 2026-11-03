@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -172,6 +173,23 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// List returns snapshots of every tracked session, newest first. Callers use it
+// to offer TTY takeover without learning about the manager's mutable map.
+func (m *Manager) List() []Snapshot {
+	m.mu.Lock()
+	all := make([]*Session, 0, len(m.sessions))
+	for _, session := range m.sessions {
+		all = append(all, session)
+	}
+	m.mu.Unlock()
+	out := make([]Snapshot, 0, len(all))
+	for _, session := range all {
+		out = append(out, session.Snapshot())
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
+	return out
+}
+
 // KillAll terminates every session that is still running. It is the
 // shutdown hook drivers call so long-running commands are not orphaned.
 func (m *Manager) KillAll() {
@@ -307,28 +325,31 @@ type Session struct {
 	pumpDone chan struct{}
 	// interrupts counts write-interrupts (Ctrl-C) delivered to the session:
 	// the first sends SIGINT, a second escalates to Kill.
-	interrupts int
-	notify     chan struct{}
-	exitedCh   chan struct{}
+	interrupts     int
+	notify         chan struct{}
+	exitedCh       chan struct{}
+	nextSubscriber uint64
+	subscribers    map[uint64]chan []byte
 }
 
 func newSession(id string, req StartRequest) *Session {
 	return &Session{
-		ID:        id,
-		Command:   req.Command,
-		StartedAt: time.Now(),
-		argv:      req.Argv,
-		dir:       req.Dir,
-		timeout:   req.Timeout,
-		observer:  req.Observer,
-		tty:       req.TTY,
-		env:       req.Env,
-		buf:       newHeadTailBuffer(OutputCapBytes),
-		status:    StatusRunning,
-		cleanup:   req.Cleanup,
-		lastUsed:  time.Now(),
-		notify:    make(chan struct{}, 1),
-		exitedCh:  make(chan struct{}),
+		ID:          id,
+		Command:     req.Command,
+		StartedAt:   time.Now(),
+		argv:        req.Argv,
+		dir:         req.Dir,
+		timeout:     req.Timeout,
+		observer:    req.Observer,
+		tty:         req.TTY,
+		env:         req.Env,
+		buf:         newHeadTailBuffer(OutputCapBytes),
+		status:      StatusRunning,
+		cleanup:     req.Cleanup,
+		lastUsed:    time.Now(),
+		notify:      make(chan struct{}, 1),
+		exitedCh:    make(chan struct{}),
+		subscribers: make(map[uint64]chan []byte),
 	}
 }
 
@@ -471,6 +492,27 @@ func (s *Session) SendInput(text string) error {
 	return err
 }
 
+// Resize updates a live TTY session's window size. Pipe sessions reject it.
+func (s *Session) Resize(cols, rows int) error {
+	if cols < 1 || rows < 1 {
+		return fmt.Errorf("execsess: invalid tty size %dx%d", cols, rows)
+	}
+	s.mu.Lock()
+	master := s.master
+	running := s.status == StatusRunning
+	s.mu.Unlock()
+	if !s.tty || master == nil {
+		return errors.New("execsess: session has no tty")
+	}
+	if !running {
+		// A terminal may attach after exit to inspect retained output. There is
+		// no child to notify, but resizing the local emulator should not make the
+		// connection fail before it reads that history.
+		return nil
+	}
+	return resizePTY(master, cols, rows)
+}
+
 // enforceTimeout kills the session once its hard deadline elapses.
 func (s *Session) enforceTimeout() {
 	timer := time.NewTimer(s.timeout)
@@ -494,15 +536,56 @@ func (s *Session) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	s.buf.Write(p)
 	obs := s.observer
+	streams := make([]chan []byte, 0, len(s.subscribers))
+	for _, stream := range s.subscribers {
+		streams = append(streams, stream)
+	}
 	s.mu.Unlock()
 	if obs != nil {
 		obs(string(p))
+	}
+	for _, stream := range streams {
+		chunk := append([]byte(nil), p...)
+		select {
+		case stream <- chunk:
+		default:
+			// A terminal view must never backpressure the process. Its next frame
+			// still has the bounded retained history from Subscribe's initial copy.
+		}
 	}
 	select {
 	case s.notify <- struct{}{}:
 	default:
 	}
 	return len(p), nil
+}
+
+// Subscribe attaches a read/write connection to a TTY session without taking
+// ownership of its process. Closing the connection detaches the view; it does
+// not kill the command.
+func (s *Session) Subscribe() (io.ReadWriteCloser, error) {
+	if !s.IsTTY() {
+		return nil, errors.New("execsess: session has no tty")
+	}
+	s.mu.Lock()
+	s.nextSubscriber++
+	id := s.nextSubscriber
+	stream := make(chan []byte, 256)
+	s.subscribers[id] = stream
+	initial := s.outputLocked()
+	s.mu.Unlock()
+	return newSessionConnection(s, id, stream, initial), nil
+}
+
+func (s *Session) outputLocked() []byte {
+	head, tail, omitted, _ := s.buf.readFrom(0)
+	var out strings.Builder
+	out.Write(head)
+	if omitted > 0 {
+		fmt.Fprintf(&out, "\n[truncated %d bytes]\n", omitted)
+	}
+	out.Write(tail)
+	return []byte(out.String())
 }
 
 // ReadNew returns output produced since the previous ReadNew, inserting a

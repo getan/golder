@@ -4,6 +4,7 @@ package execsess
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -107,5 +108,84 @@ func TestTTYInputAfterExit(t *testing.T) {
 	}
 	if err := s.SendInput("x\n"); err == nil {
 		t.Fatal("SendInput after exit = nil error, want failure")
+	}
+}
+
+func TestTTYSubscriptionMirrorsOutputAndWritesInput(t *testing.T) {
+	requireShell(t)
+	s := startTTY(t, NewManager(), `echo ready; read -r x; echo "got:$x"`)
+	time.Sleep(150 * time.Millisecond)
+	conn, err := s.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if resize, ok := conn.(interface{ Resize(int, int) error }); !ok {
+		t.Fatal("subscription does not expose resize")
+	} else if err := resize.Resize(100, 40); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	if _, err := conn.Write([]byte("hello\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !s.Wait(context.Background(), 5*time.Second, WaitExit) {
+		t.Fatal("session did not exit")
+	}
+	out := readConnUntil(t, conn, "got:hello")
+	if !strings.Contains(out, "ready") || !strings.Contains(out, "got:hello") {
+		t.Fatalf("connection output = %q", out)
+	}
+}
+
+func TestClosingTTYSubscriptionOnlyDetaches(t *testing.T) {
+	requireShell(t)
+	s := startTTY(t, NewManager(), `sleep 30`)
+	conn, err := s.Subscribe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if s.Exited() {
+		t.Fatal("closing the terminal connection killed the command")
+	}
+	s.Kill()
+}
+
+func readConnUntil(t *testing.T, conn io.Reader, want string) string {
+	t.Helper()
+	type result struct {
+		text string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		var b strings.Builder
+		buf := make([]byte, 4096)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				b.Write(buf[:n])
+				if strings.Contains(b.String(), want) {
+					done <- result{text: b.String()}
+					return
+				}
+			}
+			if err != nil {
+				done <- result{text: b.String(), err: err}
+				return
+			}
+		}
+	}()
+	select {
+	case got := <-done:
+		if got.err != nil && got.err != io.EOF {
+			t.Fatalf("read: %v", got.err)
+		}
+		return got.text
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out reading terminal connection")
+		return ""
 	}
 }

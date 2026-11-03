@@ -29,7 +29,6 @@ import (
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/cli/ui"
-	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 )
 
@@ -104,8 +103,7 @@ type pickInfoLine struct {
 func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry {
 	// A credentials store resolved from the same flags the run uses, so
 	// "/model" live catalog listing (issue #566) can authenticate against the live endpoint.
-	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride(opts.ProviderName, opts.APIKey)
+	creds := credentialsFor(opts)
 	reg, err := prompts.BuildSlashRegistry(live, creds, opts.Skills, prompts.PromptTemplateSources{
 		Extensions: opts.Extensions,
 		Settings:   opts.ConfigPrompts,

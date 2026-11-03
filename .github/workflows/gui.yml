@@ -2,8 +2,8 @@
 # and .dmg on macOS, an .exe and NSIS installer on Windows, and a tarball with
 # install.sh, a .deb and a PKGBUILD on Linux.
 #
-# The `golder` CLI is compiled per platform into the app's resources first, so a
-# packaged window can open a terminal workspace without the person's PATH.
+# The desktop binary contains the Agent runtime in-process. It deliberately does
+# not bundle the full `golder` CLI or tuios workspace renderer.
 name: gui
 
 on:
@@ -22,9 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos, os: macos-14, platform: "darwin/universal" }
-          - { name: windows, os: windows-2022, platform: "windows/amd64" }
-          - { name: linux, os: ubuntu-22.04, platform: "linux/amd64,linux/arm64" }
+          - { name: macos-arm64, os: macos-14, platform: "darwin/arm64", kind: macos }
+          - { name: macos-amd64, os: macos-14, platform: "darwin/amd64", kind: macos }
+          - { name: windows, os: windows-2022, platform: "windows/amd64", kind: windows }
+          - { name: linux, os: ubuntu-22.04, platform: "linux/amd64,linux/arm64", kind: linux }
     steps:
       - uses: actions/checkout@v4
 
@@ -33,38 +34,29 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # The CLI a workspace window runs. macOS ships one universal app, so its
-      # resource is a universal binary; Linux ships two targets, each with its
-      # own resource directory.
-      - name: Build the golder CLI into the app resources
+      - name: Set the app version from the release tag
         shell: bash
         run: |
           set -euo pipefail
-          ld="-X main.version=${GITHUB_REF_NAME:-dev}"
-          case "${{ matrix.name }}" in
-            macos)
-              d=gui/resources/darwin/bin; mkdir -p "$d"
-              for arch in arm64 amd64; do
-                CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -ldflags "-s -w $ld" -o "$d/golder-$arch" ./cmd/golder
-              done
-              lipo -create -output "$d/golder" "$d/golder-arm64" "$d/golder-amd64"
-              rm -f "$d/golder-arm64" "$d/golder-amd64"
-              ;;
-            windows)
-              d=gui/resources/windows-amd64/bin; mkdir -p "$d"
-              CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w $ld" -o "$d/golder.exe" ./cmd/golder
-              ;;
-            linux)
-              for target in amd64 arm64; do
-                d=gui/resources/linux-$target/bin; mkdir -p "$d"
-                CGO_ENABLED=0 GOOS=linux GOARCH=$target go build -trimpath -ldflags "-s -w $ld" -o "$d/golder" ./cmd/golder
-              done
-              ;;
-          esac
-          find gui/resources -type f -perm -u+x | sort
+          ref="${GITHUB_REF_NAME:-}"
+          version=0.0.0
+          if [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]; then version="${ref#v}"; fi
+          tmp="$RUNNER_TEMP/mygo.json"
+          jq --arg version "$version" '.version = $version' gui/mygo.json > "$tmp"
+          mv "$tmp" gui/mygo.json
+          echo "GUI_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Check the GUI dependency boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if go list -deps ./gui/cmd/golder-gui | grep -q 'github.com/getan/tuios-mini'; then
+            echo "the GUI must not link tuios-mini" >&2
+            exit 1
+          fi
 
       - name: Import the macOS signing certificate
-        if: matrix.name == 'macos'
+        if: matrix.kind == 'macos'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -84,7 +76,7 @@ jobs:
           security list-keychains -d user -s "$RUNNER_TEMP/golder.keychain" $(security list-keychains -d user | tr -d '"')
 
       - name: Store the notary credentials
-        if: matrix.name == 'macos'
+        if: matrix.kind == 'macos'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -103,6 +95,10 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
+          MYGO_LDFLAGS: >-
+            -X main.version=${{ env.GUI_VERSION }}
+            -X main.commit=${{ github.sha }}
+            -X main.date=${{ github.event.repository.updated_at }}
         run: |
           set -euo pipefail
           args=(-platform "${{ matrix.platform }}")
@@ -111,10 +107,10 @@ jobs:
           # notary credentials has to opt out explicitly: otherwise Windows and
           # Linux fail with "notarization needs a Developer ID signing identity".
           notarize=0
-          if [[ "${{ matrix.name }}" == "macos" && -n "${MACOS_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" ]]; then
+          if [[ "${{ matrix.kind }}" == "macos" && -n "${MACOS_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" ]]; then
             args+=(-sign "$MACOS_SIGNING_IDENTITY")
             notarize=1
-          elif [[ "${{ matrix.name }}" == "macos" ]]; then
+          elif [[ "${{ matrix.kind }}" == "macos" ]]; then
             args+=(-sign -) # ad hoc: runs on the machine that built it
           fi
           if [[ "$notarize" == "0" ]]; then
@@ -127,6 +123,25 @@ jobs:
       - name: List the artifacts
         shell: bash
         run: find gui/build -maxdepth 2 -type f | sort | head -60
+
+      - name: Enforce the desktop bundle boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find gui/build -type f -path '*/Resources/bin/golder*' -print -quit | grep -q .; then
+            echo "the GUI bundle contains a full golder CLI" >&2
+            exit 1
+          fi
+          if find gui/build -type f \( -iname '*chromium*' -o -iname 'chrome' -o -iname 'chrome.exe' \) -print -quit | grep -q .; then
+            echo "the GUI bundle must not contain Chromium" >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.kind }}" == "macos" ]]; then
+            app=$(find gui/build -type d -name '*.app' -print -quit)
+            mib=$(du -sm "$app" | awk '{print $1}')
+            echo "installed app size: ${mib} MiB"
+            test "$mib" -lt 50
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

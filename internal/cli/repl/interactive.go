@@ -49,6 +49,9 @@ type Options struct {
 	BaseURL      string
 	APIKey       string
 	Protocol     string
+	// Credentials is the shared resolver assembled by run.SetupEnv. APIKey is
+	// retained for embedders that construct Options directly.
+	Credentials *provider.CredentialStore
 	// Version is the build-time version string ("dev" for source builds, a real
 	// "vX.Y.Z" for released binaries). It feeds the cached latest-release check so
 	// the REPL prints the same one-line upgrade hint as the TUI banner. Mirrors
@@ -124,8 +127,11 @@ type Options struct {
 // saves the session's messages after each run completes (see runREPL/streamRun
 // in repl.go).
 func Run(opts Options) error {
-	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride(opts.ProviderName, opts.APIKey)
+	creds := opts.Credentials
+	if creds == nil {
+		creds = provider.NewCredentialStore(nil)
+		creds.SetOverride(opts.ProviderName, opts.APIKey)
+	}
 	reg := run.ToolRegistry(opts.Tools)
 
 	store, err := sessionStore()

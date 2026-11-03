@@ -81,8 +81,11 @@ func Run(ctx context.Context, p RunParams, out, errOut io.Writer) int {
 
 	// Resolve the API key by provider name from the environment (never logged).
 	// An explicit --api-key overrides env/config for the resolved provider.
-	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride(env.ProviderName, p.APIKey)
+	creds := env.Credentials
+	if creds == nil {
+		creds = provider.NewCredentialStore(nil)
+		creds.SetOverride(env.ProviderName, p.APIKey)
+	}
 	runCfg := run.NewConfig(p.Model, env.ProviderName, thinking, env.Provider, creds, run.ToolRegistry(env.Tools), run.TodoReminders(env.Tools), env.Schedule, env.Budget)
 	run.InstallExtensions(&runCfg, env.Extensions, env.Prompt)
 	// Resolve the window from the models.dev catalog when it knows the model,

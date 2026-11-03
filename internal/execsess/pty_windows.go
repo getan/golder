@@ -12,3 +12,7 @@ import (
 func openPTY() (*os.File, *os.File, error) {
 	return nil, nil, errors.New("pty sessions are not supported on Windows; omit tty (pipe sessions support polling and interrupt)")
 }
+
+func resizePTY(*os.File, int, int) error {
+	return errors.New("pty sessions are not supported on Windows")
+}

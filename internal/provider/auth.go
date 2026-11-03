@@ -201,6 +201,15 @@ func (c *CredentialStore) SetOverride(provider, key string) {
 	c.overrides[provider] = key
 }
 
+// ClearOverride removes one explicit static override so resolution falls back
+// to OAuth, the inherited environment and config. It never affects another
+// provider.
+func (c *CredentialStore) ClearOverride(provider string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.overrides, provider)
+}
+
 // RegisterOAuth registers an OAuth TokenSource for a provider. Once registered,
 // GetAPIKey prefers the (auto-refreshing) OAuth token over static keys.
 func (c *CredentialStore) RegisterOAuth(provider string, src *TokenSource) {

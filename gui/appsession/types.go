@@ -50,10 +50,21 @@ type ToolState struct {
 	Name   string
 	Input  map[string]any
 	Output string
+	// Details is structured tool metadata (for example bash_id). It is not
+	// rendered wholesale; views pick known non-secret fields.
+	Details map[string]any
 	// Running is true until the executor reports the end.
 	Running bool
 	// Error is the executor's failure flag, not a parse result.
 	Error bool
+}
+
+// TTYSummary is one interactive bash session available for terminal takeover.
+type TTYSummary struct {
+	ID       string
+	Command  string
+	Running  bool
+	ExitCode int
 }
 
 // NoteState is one permission-gate announcement.
@@ -176,6 +187,7 @@ type SessionSummary struct {
 	Cwd       string
 	UpdatedAt time.Time
 	Current   bool
+	Archived  bool
 }
 
 // ModelOption is one choice in the model picker.

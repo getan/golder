@@ -276,6 +276,7 @@ func (c *Controller) run(ctx context.Context, runID, prompt string) {
 				out := agentcore.ContentToText(e.Result.Content)
 				upsertTool(e.ToolCallID, e.ToolName, func(st *ToolState) {
 					st.Output, st.Running, st.Error = out, false, e.IsError
+					st.Details = cloneAnyMap(decodeArgsAny(e.Result.Details))
 				})
 			case agentcore.ContextUsageEvent:
 				c.mu.Lock()
@@ -397,6 +398,17 @@ func decodeArgsAny(v any) map[string]any {
 		return decodeArgs([]byte(t))
 	}
 	return nil
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // SetPermissionMode switches the live approval mode.

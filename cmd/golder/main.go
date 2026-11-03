@@ -37,6 +37,7 @@ import (
 	"github.com/getan/golder/internal/cli/extensioncmd"
 	"github.com/getan/golder/internal/cli/headless"
 	"github.com/getan/golder/internal/cli/hostcmd"
+	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/repl"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/cli/sessioncmd"
@@ -145,6 +146,10 @@ type cliOptions struct {
 	// when no --api-key / config api_key is present; the literal secret never
 	// touches config files.
 	credentialRef string
+	// resolvedCredential carries a named or explicit launch credential without
+	// copying it into another string field. The wrapper also retains only safe
+	// source metadata for GUI/status consumers.
+	resolvedCredential launchcfg.CredentialResult
 	// noTUI forces the line-based REPL instead of the full-screen TUI (US-001).
 	// When set — or when stdout is not a TTY — the no-prompt path falls back to
 	// repl.Run rather than launching tui.Run.
@@ -192,6 +197,15 @@ type cliOptions struct {
 	// invocation (read-only|ask|auto|full-access). Empty leaves the mode
 	// resolved from GOLDER_PERMISSIONS (default auto).
 	permissions string
+}
+
+// providerToken is the launch credential after named-reference resolution. The
+// value is passed directly to provider wiring and is never formatted or stored.
+func (o cliOptions) providerToken() string {
+	if value := o.resolvedCredential.ResolvedValue(); value != "" {
+		return value
+	}
+	return o.apiKey
 }
 
 func main() {
@@ -387,11 +401,16 @@ func main() {
 	} else {
 		applyFileConfig(&opts, cfg, flag.CommandLine.Changed)
 	}
+	credential := launchcfg.ResolveCredential(opts.provider, opts.apiKey, opts.credentialRef)
+	for _, warning := range credential.Warnings {
+		fmt.Fprintf(os.Stderr, "golder: %s\n", warning)
+	}
+	opts.resolvedCredential = credential
 	// Install the DLP layer before any run can build a request. A malformed
 	// mode or audit path disables redaction rather than aborting the CLI: the
 	// user asked to run the agent, and a startup failure would be a worse
 	// trade-off than a loud warning. The default (empty mode) is "redact".
-	redactErr := configureRedact(opts.redactCfg, opts.apiKey)
+	redactErr := configureRedact(opts.redactCfg, opts.providerToken())
 	if redactErr != nil {
 		fmt.Fprintf(os.Stderr, "golder: redaction disabled: %v\n", redactErr)
 		redact.SetDefault(nil)
@@ -428,23 +447,6 @@ func main() {
 		}
 	}
 	opts.model = provider.CanonicalizeModel(opts.model)
-
-	// Resolve a credential reference into an API key (issue #568): the config
-	// carries only a NAME; the literal secret lives in
-	// $GOLDER_HOME/.credentials.yaml (0600). A missing reference warns rather
-	// than aborts — the provider may authenticate from the ambient environment.
-	if opts.credentialRef != "" && opts.apiKey == "" {
-		path := provider.CredentialFilePath()
-		if provider.CredentialFilePermissionsWarn(path) {
-			fmt.Fprintf(os.Stderr, "golder: warning: %s is readable by group/other; chmod 600 recommended\n", path)
-		}
-		key, err := provider.ResolveCredentialReference(path, opts.credentialRef)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "golder: credential %q: %v\n", opts.credentialRef, err)
-		} else {
-			opts.apiKey = key
-		}
-	}
 
 	// --version is a standalone action: print build metadata and exit.
 	if opts.showVersion {
@@ -502,31 +504,14 @@ func applyReadableRootsFromEnv() {
 // explicitly passed). This yields the precedence: CLI flag > config file >
 // default. Zero-valued config fields never override.
 func applyFileConfig(opts *cliOptions, cfg config.FileConfig, changed func(string) bool) {
-	if cfg.Model != "" && !changed("model") {
-		opts.model = cfg.Model
-	}
-	if cfg.BaseURL != "" && !changed("base-url") {
-		opts.baseURL = cfg.BaseURL
-	}
-	if cfg.APIKey != "" && !changed("api-key") {
-		opts.apiKey = cfg.APIKey
-	}
-	if cfg.Credential != "" && !changed("api-key") {
-		// A direct api_key in the file wins over a reference when both are set;
-		// a reference only fills the gap (issue #568).
-		if cfg.APIKey == "" {
-			opts.credentialRef = cfg.Credential
-		}
-	}
-	if cfg.Protocol != "" && !changed("protocol") {
-		opts.protocol = cfg.Protocol
-	}
-	if cfg.Provider != "" && !changed("provider") {
-		opts.provider = cfg.Provider
-	}
-	if cfg.ThinkingLevel != "" && !changed("thinking-level") {
-		opts.thinkingLevel = cfg.ThinkingLevel
-	}
+	launch := launchcfg.Overlay(launchcfg.Values{
+		Model: opts.model, Provider: opts.provider, BaseURL: opts.baseURL,
+		Protocol: opts.protocol, APIKey: opts.apiKey, CredentialRef: opts.credentialRef,
+		ThinkingLevel: opts.thinkingLevel,
+	}, cfg, changed)
+	opts.model, opts.provider, opts.baseURL = launch.Model, launch.Provider, launch.BaseURL
+	opts.protocol, opts.apiKey, opts.credentialRef = launch.Protocol, launch.APIKey, launch.CredentialRef
+	opts.thinkingLevel = launch.ThinkingLevel
 	if cfg.OutputFormat != "" && !changed("output-format") {
 		opts.outputFmt = cfg.OutputFormat
 	}
@@ -707,7 +692,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "golder: no prompt (use -p \"...\" or positional args)")
 			return 2
 		}
-		env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.apiKey, opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
+		env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.providerToken(), opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
 		if err != nil {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
 			return setupExitCode(err)
@@ -742,8 +727,8 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				ProviderName:      env.ProviderName,
 				Provider:          env.Provider,
 				BaseURL:           opts.baseURL,
-				APIKey:            opts.apiKey,
 				Protocol:          opts.protocol,
+				Credentials:       env.Credentials,
 				Version:           version,
 				ThinkingLevel:     thinking,
 				Tools:             env.Tools,
@@ -773,8 +758,8 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			ProviderName:      env.ProviderName,
 			Provider:          env.Provider,
 			BaseURL:           opts.baseURL,
-			APIKey:            opts.apiKey,
 			Protocol:          opts.protocol,
+			Credentials:       env.Credentials,
 			ThinkingLevel:     thinking,
 			Tools:             env.Tools,
 			SysPrompt:         env.SysPrompt,
@@ -804,7 +789,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		return 2
 	}
 
-	env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.apiKey, opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
+	env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.providerToken(), opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return setupExitCode(err)
@@ -823,7 +808,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		Env:           env,
 		Prompt:        opts.prompt,
 		Model:         opts.model,
-		APIKey:        opts.apiKey,
 		ThinkingLevel: startupThinkingLevel(opts, env.ProviderName, opts.model, flag.CommandLine.Changed),
 		ResumeID:      resumeID,
 		MaxContext:    opts.memory.MaxContext,
@@ -872,7 +856,7 @@ func runGitHubReview(ctx context.Context, opts cliOptions, errOut io.Writer) int
 		fmt.Fprintf(errOut, "golder: --github-review requires a webhook secret in $%s\n", opts.githubWebhookSecretEnv)
 		return 2
 	}
-	env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.apiKey, opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
+	env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.providerToken(), opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: %v\n", err)
 		return setupExitCode(err)
@@ -941,7 +925,7 @@ func runDream(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "golder: dream: %v\n", err)
 		return 1
 	}
-	cons, err := dream.NewLLMConsolidator(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.apiKey, thinking)
+	cons, err := dream.NewLLMConsolidator(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.providerToken(), thinking)
 	if err != nil {
 		fmt.Fprintf(errOut, "golder: dream: %v\n", err)
 		return 1

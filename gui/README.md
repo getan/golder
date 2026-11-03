@@ -47,41 +47,40 @@ MyGo's CLI packages and signs the app:
 
 ```sh
 cd gui
-go run github.com/egoist/mygo/cmd/mygo build -platform darwin/universal
+go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
 ```
 
 The app is named **Golder GUI** (slug `golder-gui`), so its Linux executable
-never collides with the `golder` CLI. A packaged app carries the CLI in its
-resources (`resources/<os>-<arch>/bin/golder`), which the `gui` workflow fills
-before packaging. Artifacts, signing secrets and the Gatekeeper tradeoff are
-described in [`docs/gui-packaging.md`](../docs/gui-packaging.md).
+never collides with the `golder` CLI. The Agent runtime is linked into the GUI;
+the bundle deliberately carries neither a second full CLI nor tuios-mini.
+Artifacts, size gates, signing secrets and the Gatekeeper tradeoff are described
+in [`docs/gui-packaging.md`](../docs/gui-packaging.md).
 
-The terminal workspace window and the browser preview need native pieces at
-runtime:
+Two optional surfaces need runtime pieces:
 
 - `libghostty-vt` for the terminal plugin, installed by `mygo build` (a
   `go run` binary downloads it once into the user's cache);
-- a `golder` binary on `PATH` (or `GOLDER_BIN`) for
-  `golder workspace attach`;
-- a running browser pane's owner-only control socket for previews.
+- a running kitty-browse/browserhost owner-only control socket for the native
+  interactive Browser Surface. Chromium itself is never bundled.
 
 ## What the window does
 
-- sessions: new, resume, switch, and a writer lock that refuses a second
-  process on the same session;
+- sessions: project/path grouping, new/resume/rename/archive/delete/export, and
+  a writer lock that refuses a second process on the same session;
 - turns: streamed Markdown, thinking (collapsed), tool cards with bounded
   output, compaction and provider notices, cancel;
 - approvals: consent and trust questions answered inline; closing the window
   fails every pending question closed;
-- configuration: model picker with the provider catalog, reasoning level,
-  approval mode, context gauge;
+- configuration: a shared Settings page for provider, model, base URL, protocol
+  and named credentials, plus live model/reasoning/approval controls;
 - changes: a Git status + unified diff drawer rendered by MyGo's diff viewer;
 - actions: a command palette over the existing slash registry, so skills,
   prompt templates and plugin commands stay reachable without typing;
-- workspace: list and open an existing `golder workspace` in a terminal
-  window (the daemon, PTYs and VT remain tuios-mini's);
-- browser: discover live control sockets and show a read-only PNG preview.
+- browser: native Bitmap frames with mouse, keyboard, scroll, resize and
+  committed IME input forwarded through the typed control socket;
+- terminal: an explicit user shell and detachable takeover of Agent bash calls
+  that ran with `tty=true`.
 
-Deliberately absent: an embedded tuios workspace (that needs a snapshot+raw
-stream protocol shared by two VT emulators), and a full IDE.
+Deliberately absent: tuios workspace/pane management and a full IDE. Those
+remain CLI/TUI responsibilities.

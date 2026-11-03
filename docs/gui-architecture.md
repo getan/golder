@@ -646,14 +646,15 @@ gui/
 - 审批在窗口内回答，窗口关闭时全部按 unanswered 处理（fail closed）；
 - session writer 锁拒绝第二个写者，新建会话在首次落盘前也出现在侧栏；
 - changes 走 `git status` + `git diff`，由 MyGo `editor.DiffView` 展示；
-- workspace 列表和 pane 发现走 `workspacecmd.Discover` + `tuiosctl`，打开时运行 `golder workspace attach` 的 MyGo 终端窗口；
-- browser 预览直接取控制 socket 的 PNG，不经过 Kitty 协议。
+- GUI 不再发现或 attach workspace，也不打包第二份完整 CLI；
+- browser 通过 owner-only control socket 获取 Bitmap frame，并回传鼠标、键盘、滚轮、resize 和提交后的 IME 文本；
+- MyGo terminal 只用于显式 user shell 和现有 Agent TTY 的 detachable takeover。
 
 与本文的差异，按事实记录：
 
 - **没有使用 `gui` build tag**。GUI 是独立命令、独立目录；`golder` 二进制不导入它，但 `go build ./...` 会编译 GUI 包（这也是它的测试入口）。MyGo 因此成为 module 依赖，而不是被 `golder` 链接的依赖。
-- **Phase 3 的 embedded workspace 没有实现**。当前打开的是外部 `workspace attach` 终端窗口。真正的嵌入仍需要 tuios-mini 的 snapshot + raw stream 协议，本文的验收条件不变。
-- **浏览器是只读预览**。页面交互仍由 browser 工具和 kitty-browse 负责。
+- **GUI 明确不实现 workspace**。split pane、daemon、detach/attach 继续属于 CLI/TUI；这是产品边界，不再是待补功能。
+- **Browser Surface 的 Golder 侧接口已独立于 terminal**。kitty-browse v1 control API 尚无 raw pointer action，当前用只接受数值坐标和封闭事件集的兼容 adapter；上游加入 raw input capability 后可无 UI 变化地替换。
 
 验证命令：
 

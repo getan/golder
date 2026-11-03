@@ -118,6 +118,12 @@ type SessionHeader struct {
 	// into an inherited checkpoint (#480). Messages before this index live in the
 	// checkpoint summary rather than the replayed transcript. Optional/additive.
 	ContextWatermark int `json:"contextWatermark,omitempty"`
+	// DisplayName is a person-assigned title. Empty preserves the historical
+	// behavior where front-ends derive a title from the first user message.
+	DisplayName string `json:"displayName,omitempty"`
+	// ArchivedAt hides a session from ordinary recent lists without deleting its
+	// transcript. Nil means active.
+	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
 }
 
 // Entry wraps one persisted message with the tree metadata introduced in schema
@@ -600,6 +606,7 @@ func redactHeader(header *SessionHeader) {
 	}
 	header.SystemPrompt = r.Text(redact.SeamSession, "", header.SystemPrompt)
 	header.BaseInstruction = r.Text(redact.SeamSession, "", header.BaseInstruction)
+	header.DisplayName = r.Text(redact.SeamSession, "", header.DisplayName)
 	for i := range header.AppendInstructions {
 		header.AppendInstructions[i] = r.Text(redact.SeamSession, "", header.AppendInstructions[i])
 	}

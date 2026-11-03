@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,17 @@ const (
 // view is the window's single build function.
 func (a *App) view(c *ui.Context) {
 	t := c.Theme()
+	if !a.settingsOpen {
+		// The password field is write-only. Dismissing Settings must not retain a
+		// value in long-lived view state.
+		a.settingsEdit.NewCredential = ""
+		a.settingsEdit.RemoveCredential = false
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyK) {
+		a.paletteQuery = ""
+		a.paletteOpen = true
+		a.loadActions()
+	}
 	a.list.Key = func(i int) any { return a.items[i].ID }
 	a.list.FollowEnd = true
 	a.list.FollowAnimation = &ui.Smooth
@@ -39,7 +51,9 @@ func (a *App) view(c *ui.Context) {
 	a.modelModal(c)
 	a.permissionModal(c)
 	a.thinkingModal(c)
-	a.workspacesModal(c)
+	a.settingsModal(c)
+	a.sessionRenameModal(c)
+	a.sessionDeleteModal(c)
 	a.browsersModal(c)
 }
 
@@ -49,7 +63,11 @@ func (a *App) titleBar(c *ui.Context) {
 	changes := len(a.changes.Files)
 	ui.Row(c).Height(titleHeight).Padding(0, 14).Gap(10).AlignItems(ui.Center).
 		BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-		ui.Text(c, "Golder").FontSize(15).Bold()
+		project := filepath.Base(strings.TrimSpace(a.project))
+		if project == "." || project == "" {
+			project = "Golder"
+		}
+		ui.Text(c, project).FontSize(15).Bold().MaxWidth(220).SingleLine().Ellipsis("…").Tooltip(a.project)
 		ui.Text(c, "·").TextColor(t.TextMuted)
 		name := strings.TrimSpace(a.status.Title)
 		if name == "" {
@@ -57,11 +75,6 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
-		if ui.Button(c, "Session").Tooltip("Session actions").Clicked() {
-			a.paletteQuery = ""
-			a.paletteOpen = true
-			a.loadActions()
-		}
 		label := "Changes"
 		if changes > 0 {
 			label = fmt.Sprintf("Changes %d  +%d −%d", changes, a.changes.Added, a.changes.Deleted)
@@ -72,13 +85,29 @@ func (a *App) titleBar(c *ui.Context) {
 				a.refreshChanges()
 			}
 		}
-		if ui.Button(c, "Workspace").Tooltip("Terminal workspaces").Clicked() {
-			a.wsOpen = true
-			go a.refreshWorkspaces()
+		if len(a.browsers) > 0 {
+			browserLabel := "Browser"
+			if len(a.browsers) > 1 {
+				browserLabel = fmt.Sprintf("Browser %d", len(a.browsers))
+			}
+			if ui.Button(c, browserLabel).Tooltip("Open the active interactive browser").Clicked() {
+				if len(a.browsers) == 1 {
+					a.openBrowserPreview(a.browsers[0])
+				} else {
+					a.browserOpen = true
+				}
+			}
 		}
-		if ui.Button(c, "Browser").Tooltip("Browser panes").Clicked() {
-			a.browserOpen = true
-			go a.refreshBrowsers()
+		settings := ui.ButtonBase(c).Size(32, 32).Radius(16).Label("Settings").Tooltip("Settings").
+			Background(t.Surface).Border(1, t.Border)
+		if settings.Hovered() {
+			settings.Background(t.SurfaceHover)
+		}
+		settings.Children(func() {
+			ui.Text(c, "⚙").FontSize(16).TextAlign(ui.Center)
+		})
+		if settings.Clicked() {
+			a.openSettings()
 		}
 	})
 }
@@ -88,18 +117,44 @@ func (a *App) sidebar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Row(c).Padding(10, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.PrimaryButton(c, "New session").Grow(1).Clicked() {
-				a.newSession()
+		ui.Column(c).Padding(10, 12).Gap(8).Children(func() {
+			options := a.projectOptions()
+			if a.selectedProject == "" {
+				a.selectedProject = a.project
 			}
+			ui.Select(c, &a.selectedProject, options).FillWidth().Tooltip("Filter sessions by project")
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				if ui.PrimaryButton(c, "New session").Grow(1).Clicked() {
+					a.newSession()
+					a.selectedProject = a.project
+				}
+				archiveLabel := "Archived"
+				if a.showArchived {
+					archiveLabel = "Hide archived"
+				}
+				if ui.Button(c, archiveLabel).Tooltip("Show or hide archived sessions").Clicked() {
+					a.showArchived = !a.showArchived
+				}
+			})
 		})
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).Padding(0, 8, 10, 8).Gap(2).Children(func() {
-				if len(a.sessions) == 0 {
+			ui.Column(c).Padding(0, 8, 10, 8).Gap(4).Children(func() {
+				groups := a.visibleSessionGroups()
+				if len(groups) == 0 {
 					ui.Text(c, "No sessions yet.").FontSize(12).TextColor(t.TextMuted).Padding(8)
 				}
-				for _, s := range a.sessions {
-					a.sessionRow(c, s)
+				for _, group := range groups {
+					name := filepath.Base(group.Cwd)
+					if group.Cwd == "" || name == "." {
+						name = "Unattributed"
+					}
+					ui.Column(c).Padding(8, 8, 3, 8).Gap(1).Children(func() {
+						ui.Text(c, name).FontSize(11).FontWeight(600).SingleLine().Ellipsis("…")
+						ui.Text(c, sessionPathDisplay(group.Cwd)).FontSize(10).TextColor(t.TextMuted).SingleLine().Ellipsis("…").Tooltip(group.Cwd)
+					})
+					for _, s := range group.Sessions {
+						a.sessionRow(c, s)
+					}
 				}
 			})
 		})
@@ -109,6 +164,7 @@ func (a *App) sidebar(c *ui.Context) {
 func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 	t := c.Theme()
 	row := ui.Column(c.Key(s.ID)).Padding(7, 8).Gap(2).Radius(6).Cursor(ui.CursorPointer)
+	a.attachSessionMenu(row, s)
 	if s.Current {
 		row.Background(t.SurfacePressed)
 	} else if row.Hovered() {
@@ -117,15 +173,20 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 	row.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, s.Title).FontSize(13).FontWeight(500).SingleLine().Ellipsis("…").Grow(1)
+			if s.Archived {
+				ui.Text(c, "archived").FontSize(9).TextColor(t.TextMuted)
+			}
 			ui.Text(c, s.UpdatedAt.Local().Format("01-02")).FontSize(11).TextColor(t.TextMuted).Shrink(0)
 		})
-		detail := s.Model
+		detail := sessionPathDisplay(s.Cwd)
+		model := s.Model
 		if s.Provider != "" && s.Model != "" {
-			detail = s.Provider + "/" + s.Model
+			model = s.Provider + "/" + s.Model
 		}
-		if detail != "" {
-			ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
+		if model != "" {
+			detail += " · " + model
 		}
+		ui.Text(c, detail).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…").Tooltip(s.Cwd)
 	})
 	if row.Clicked() && !s.Current {
 		a.resume(s.ID)
@@ -158,14 +219,6 @@ func (a *App) emptyState(c *ui.Context) {
 		ui.Text(c, "Ask Golder to build something.").FontSize(22).FontWeight(600)
 		ui.Text(c, "The agent works in this project. Tool calls, approvals and changes appear here.").
 			FontSize(13).TextColor(t.TextMuted).TextAlign(ui.Center).MaxWidth(420)
-		ui.Row(c).Gap(8).Justify(ui.Center).Children(func() {
-			if ui.Button(c, "Model: "+a.status.Model).Clicked() {
-				a.modelOpen = true
-			}
-			if ui.Button(c, "Permissions: "+a.status.Permission).Clicked() {
-				a.permOpen = true
-			}
-		})
 	})
 }
 
@@ -192,61 +245,13 @@ func (a *App) bannerView(c *ui.Context) {
 	})
 }
 
-// workspacesModal lists terminal workspaces and opens one in a terminal window.
-func (a *App) workspacesModal(c *ui.Context) {
-	t := c.Theme()
-	ui.Modal(c, &a.wsOpen, func() {
-		ui.Column(c).Gap(8).Width(560).Children(func() {
-			ui.Text(c, "Terminal workspaces").FontSize(16).Bold()
-			ui.Text(c, "golder workspace keeps PTYs in a daemon. Opening one runs `golder workspace attach` in a MyGo terminal window; the GUI never runs a second workspace.").
-				FontSize(12).TextColor(t.TextMuted)
-			if ui.Button(c, "Refresh").Clicked() {
-				go a.refreshWorkspaces()
-			}
-			if len(a.workspaces) == 0 {
-				ui.Text(c, "No named workspace was found.").FontSize(12).TextColor(t.TextMuted)
-			}
-			ui.Scroll(c).MaxHeight(320).Children(func() {
-				ui.Column(c).Gap(4).Children(func() {
-					for _, w := range a.workspaces {
-						a.workspaceRow(c, w)
-					}
-				})
-			})
-		})
-	})
-}
-
-func (a *App) workspaceRow(c *ui.Context, w appsession.WorkspaceInfo) {
-	t := c.Theme()
-	state := "stopped"
-	if w.Running {
-		state = fmt.Sprintf("running · %d panes", w.Panes)
-	}
-	if w.Error != "" {
-		state = w.Error
-	}
-	ui.Row(c).Gap(8).Padding(6, 8).Radius(6).AlignItems(ui.Center).Background(t.Surface).Children(func() {
-		ui.Column(c).Grow(1).Gap(1).Children(func() {
-			ui.Text(c, w.Session).FontWeight(600)
-			ui.Text(c, state).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
-		})
-		if !w.Running {
-			ui.Button(c, "Open").Disabled(true).Tooltip("Start it with `golder workspace` first")
-		} else if ui.Button(c, "Open").Clicked() {
-			a.wsOpen = false
-			a.openWorkspaceTerminal(w.Session)
-		}
-	})
-}
-
-// browsersModal lists live browser panes and opens a read-only preview.
+// browsersModal lists live controlled browsers and opens a native surface.
 func (a *App) browsersModal(c *ui.Context) {
 	t := c.Theme()
 	ui.Modal(c, &a.browserOpen, func() {
 		ui.Column(c).Gap(8).Width(560).Children(func() {
-			ui.Text(c, "Browser panes").FontSize(16).Bold()
-			ui.Text(c, "Previews are PNG screenshots from the browser's control socket; the GUI does not load the page itself.").
+			ui.Text(c, "Browsers").FontSize(16).Bold()
+			ui.Text(c, "The native surface draws Chromium frames and forwards mouse, keyboard, scroll and composed text through the owner-only control socket.").
 				FontSize(12).TextColor(t.TextMuted)
 			if ui.Button(c, "Refresh").Clicked() {
 				go a.refreshBrowsers()
@@ -265,7 +270,7 @@ func (a *App) browsersModal(c *ui.Context) {
 						ui.Text(c, title).FontWeight(600).SingleLine().Ellipsis("…")
 						ui.Text(c, b.URL).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
 					})
-					if ui.Button(c, "Preview").Clicked() {
+					if ui.Button(c, "Open").Clicked() {
 						a.browserOpen = false
 						a.openBrowserPreview(b)
 					}

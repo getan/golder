@@ -45,7 +45,10 @@ type Options struct {
 	BaseURL      string
 	APIKey       string
 	Protocol     string
-	Version      string
+	// Credentials is the shared resolver assembled by run.SetupEnv. APIKey is a
+	// fallback for embedders that construct Options directly.
+	Credentials *provider.CredentialStore
+	Version     string
 
 	ThinkingLevel agentcore.ThinkingLevel
 	Tools         []agentcore.AgentTool
@@ -184,8 +187,11 @@ func (c *Controller) Open(ctx context.Context) error {
 		cwd, _ = os.Getwd()
 	}
 
-	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride(c.opt.ProviderName, c.opt.APIKey)
+	creds := c.opt.Credentials
+	if creds == nil {
+		creds = provider.NewCredentialStore(nil)
+		creds.SetOverride(c.opt.ProviderName, c.opt.APIKey)
+	}
 
 	now := time.Now().UTC()
 	var (
@@ -325,6 +331,9 @@ func (c *Controller) Open(ctx context.Context) error {
 	// estimate), so it runs after the assignment block releases it.
 	c.seed(history)
 	c.mu.Lock()
+	if strings.TrimSpace(header.DisplayName) != "" {
+		c.title = header.DisplayName
+	}
 	c.status = Status{
 		Model:        live.Model,
 		Provider:     live.ProviderName,
@@ -443,6 +452,16 @@ func (c *Controller) Project() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.cwd
+}
+
+// Version returns the desktop/core build version supplied by the command.
+func (c *Controller) Version() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.TrimSpace(c.opt.Version) == "" {
+		return "dev"
+	}
+	return c.opt.Version
 }
 
 // emit assigns the next sequence number and delivers one event. It is safe to

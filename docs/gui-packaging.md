@@ -4,10 +4,10 @@
 single executables, while a desktop app needs a bundle, a disk image, an
 installer or a system package to be double-clickable.
 
-This document describes the v1.5.48 packaging baseline. The accepted target
-removes the bundled full CLI, publishes separate macOS architectures, injects
-the release tag as the app version, and enforces a <45 MiB installed-size gate;
-see [`gui-ux-optimization.md`](gui-ux-optimization.md).
+The packaging boundary below implements the accepted optimization target:
+separate macOS architectures, no bundled full CLI or Chromium, a tag-derived
+app version, and a per-architecture installed-size gate. See
+[`gui-ux-optimization.md`](gui-ux-optimization.md).
 
 ## Artifacts
 
@@ -20,22 +20,22 @@ see [`gui-ux-optimization.md`](gui-ux-optimization.md).
 The app name is `Golder GUI` and its slug is `golder-gui`, so the Linux
 executable never collides with the `golder` CLI.
 
-## The CLI inside the app
+## Bundle boundary
 
-A window that opens a terminal workspace runs `golder workspace attach`. A
-packaged app must not depend on the person's `PATH`, so the build compiles the
-CLI into the bundle:
+The GUI runs the Agent runtime in-process. It does not need `golder workspace`,
+split panes, detach/attach or any other tuios-mini service, so none of the
+following may appear in a package:
 
 ```text
-gui/resources/<os>-<arch>/bin/golder
+Resources/bin/golder
+tuios-mini workspace renderer
+Chromium / Chrome for Testing
 ```
 
-`gui/mygoui/terminal.go` looks there first (`mygo.App.Path(mygo.PathResources)`),
-then `GOLDER_BIN`, then next to the executable, then `PATH`. For a universal
-macOS app the resource is a universal binary made with `lipo`.
-
-These directories are build inputs, not committed files (see `.gitignore`); the
-`gui` workflow fills them per platform before packaging.
+The MyGo terminal plugin remains: it contributes approximately 2 MiB per
+architecture of `libghostty-vt` and supports explicit user shells and Agent TTY
+takeover. The Browser Surface talks to an already-running controlled Chromium;
+it does not package a browser.
 
 ## Building locally
 
@@ -114,9 +114,14 @@ None of them are required for a local build.
 
 | Runner | Target | Notes |
 |---|---|---|
-| `macos-14` | `darwin/universal` | signs/notarizes when secrets exist, then builds the DMG |
+| `macos-14` | `darwin/arm64` | separate Apple Silicon DMG; signs/notarizes when secrets exist |
+| `macos-14` | `darwin/amd64` | separate Intel DMG; signs/notarizes when secrets exist |
 | `windows-2022` | `windows/amd64` | NSIS installer; needs NSIS, which MyGo installs |
 | `ubuntu-22.04` | `linux/amd64,linux/arm64` | tarball + `install.sh`, `.deb`, `PKGBUILD` |
+
+Before upload, CI verifies that the GUI dependency graph excludes tuios-mini,
+that no full CLI or Chromium exists in the bundle, and that each macOS `.app`
+is below 50 MiB (the product target is below 45 MiB).
 
 On a tag, the artifacts are attached to the same GitHub Release that goreleaser
 creates, so a release carries both the CLI archives and the GUI packages.

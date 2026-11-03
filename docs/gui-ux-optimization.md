@@ -1,6 +1,6 @@
 # Golder GUI 体验、浏览器与瘦身优化路线图
 
-> Status: Accepted design / 待分阶段实施  
+> Status: Implemented in Golder; upstream raw browser-input capability remains an optional parity improvement
 > Baseline: Golder v1.5.48、MyGo v0.7.4、kitty-browse v0.2.8  
 > Scope: GUI 体验、共享配置、Session 管理、可操作浏览器、终端边界与发布体积
 

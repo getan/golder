@@ -84,6 +84,7 @@ func (c *Controller) ListSessions(ctx context.Context) ([]SessionSummary, error)
 			Cwd:       h.Cwd,
 			UpdatedAt: h.UpdatedAt,
 			Current:   h.ID == current,
+			Archived:  h.ArchivedAt != nil,
 		})
 	}
 	if !found {
@@ -118,6 +119,9 @@ func (c *Controller) ListSessions(ctx context.Context) ([]SessionSummary, error)
 // sessionTitle reads the first user line of a stored session without loading
 // the whole file, falling back to its directory.
 func sessionTitle(store *session.Store, h session.SessionHeader) string {
+	if name := strings.TrimSpace(h.DisplayName); name != "" {
+		return name
+	}
 	if preview, err := store.Preview(h.ID); err == nil {
 		if line := strings.TrimSpace(strings.SplitN(preview, "\n", 2)[0]); line != "" {
 			if r := []rune(line); len(r) > 60 {
@@ -249,6 +253,9 @@ func (c *Controller) adopt(h session.SessionHeader, entries []session.Entry) {
 
 	c.seed(msgs)
 	c.mu.Lock()
+	if strings.TrimSpace(h.DisplayName) != "" {
+		c.title = h.DisplayName
+	}
 	c.status.Title = c.title
 	c.mu.Unlock()
 	c.emitStatus()
@@ -271,20 +278,128 @@ func (c *Controller) SessionID() string {
 // Export writes the session as JSONL or Markdown.
 func (c *Controller) Export(format, path string) error {
 	c.mu.Lock()
-	store, id := c.store, c.header.ID
+	id := c.header.ID
 	c.mu.Unlock()
-	if err := c.persist(); err != nil {
+	return c.ExportSession(id, format, path)
+}
+
+// RenameSession writes a display-name override. Renaming the active in-memory
+// session works before its first message creates a file; the name is persisted
+// with that first turn.
+func (c *Controller) RenameSession(ctx context.Context, id, title string) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	switch strings.ToLower(strings.TrimSpace(format)) {
-	case "", "jsonl":
-		_, err := store.Export(id, path)
+	id, title = strings.TrimSpace(id), strings.TrimSpace(title)
+	c.mu.Lock()
+	store, current := c.store, c.header.ID
+	c.mu.Unlock()
+	if id == current {
+		if err := c.persist(); err != nil {
+			return err
+		}
+		header, err := store.Rename(id, title)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		c.mu.Lock()
+		c.header.DisplayName = title
+		if err == nil {
+			c.header = header
+		}
+		c.title = title
+		if c.title == "" {
+			if err == nil {
+				c.title = sessionTitle(store, c.header)
+			} else {
+				c.title = "New session"
+			}
+		}
+		c.status.Title = c.title
+		c.mu.Unlock()
+		c.emitStatus()
+		return nil
+	}
+	return c.withInactiveSessionLock(id, func() error {
+		_, err := store.Rename(id, title)
 		return err
-	case "markdown", "md":
-		_, err := store.ExportShare(id, path, "markdown", session.ShareOptions{})
+	})
+}
+
+// ArchiveSession hides or restores a non-current session.
+func (c *Controller) ArchiveSession(ctx context.Context, id string, archived bool) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return fmt.Errorf("unsupported export format %q", format)
+	id = strings.TrimSpace(id)
+	c.mu.Lock()
+	store, current := c.store, c.header.ID
+	c.mu.Unlock()
+	if id == current {
+		return fmt.Errorf("cannot archive the current session")
+	}
+	return c.withInactiveSessionLock(id, func() error {
+		_, err := store.SetArchived(id, archived)
+		return err
+	})
+}
+
+// DeleteSession permanently removes a non-current session.
+func (c *Controller) DeleteSession(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	c.mu.Lock()
+	store, current := c.store, c.header.ID
+	c.mu.Unlock()
+	if id == current {
+		return fmt.Errorf("cannot delete the current session")
+	}
+	return c.withInactiveSessionLock(id, func() error { return store.Delete(id) })
+}
+
+// ExportSession writes any stored session as JSONL or Markdown.
+func (c *Controller) ExportSession(id, format, path string) error {
+	c.mu.Lock()
+	store, current := c.store, c.header.ID
+	c.mu.Unlock()
+	write := func() error {
+		switch strings.ToLower(strings.TrimSpace(format)) {
+		case "", "jsonl":
+			_, err := store.Export(id, path)
+			return err
+		case "markdown", "md":
+			_, err := store.ExportShare(id, path, "markdown", session.ShareOptions{})
+			return err
+		}
+		return fmt.Errorf("unsupported export format %q", format)
+	}
+	if id == current {
+		if err := c.persist(); err != nil {
+			return err
+		}
+		return write()
+	}
+	return c.withInactiveSessionLock(id, write)
+}
+
+func (c *Controller) withInactiveSessionLock(id string, fn func() error) error {
+	if err := session.ValidateID(id); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	if store == nil {
+		return errors.New("session is not open")
+	}
+	lk, err := acquireSessionLock(store.Dir(), id)
+	if err != nil {
+		return err
+	}
+	defer lk.release()
+	return fn()
 }
 
 // OpenProject notes the project directory for display. The process never

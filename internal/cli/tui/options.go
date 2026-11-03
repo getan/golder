@@ -24,6 +24,9 @@ type Options struct {
 	BaseURL      string
 	APIKey       string
 	Protocol     string
+	// Credentials is the shared resolver assembled by run.SetupEnv. APIKey is
+	// retained as an embedding fallback for callers that do not use SetupEnv.
+	Credentials *provider.CredentialStore
 	// Version is the running build version (main.version), shown in the startup
 	// banner. Empty or "dev"/"unknown" renders as-is with no update hint.
 	Version string
@@ -96,4 +99,13 @@ type Options struct {
 	// to. Empty disables the feature entirely (tests construct models without
 	// touching disk); cmd/golder resolves it under the golder home directory.
 	HistoryPath string
+}
+
+func credentialsFor(opts Options) *provider.CredentialStore {
+	if opts.Credentials != nil {
+		return opts.Credentials
+	}
+	creds := provider.NewCredentialStore(nil)
+	creds.SetOverride(opts.ProviderName, opts.APIKey)
+	return creds
 }

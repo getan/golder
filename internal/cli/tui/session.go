@@ -302,8 +302,7 @@ func newRunSession(opts Options) (*runSession, []agentcore.Message, error) {
 // collaborators, and returns the session plus the resumed history (nil for a
 // fresh session).
 func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []agentcore.Message, error) {
-	creds := provider.NewCredentialStore(nil)
-	creds.SetOverride(opts.ProviderName, opts.APIKey)
+	creds := credentialsFor(opts)
 
 	// cwd is the launch directory, captured once: it stamps fresh sessions, is
 	// the trust key, and feeds /status's environment section and the hook layer.

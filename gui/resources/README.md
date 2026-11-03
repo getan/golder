@@ -1,12 +1,8 @@
 # Resources
 
-Files here ship inside the packaged app (`mygo build`).
+Files here ship inside the packaged app (`mygo build`). Keep them data-only:
+icons, localized assets and other small static resources.
 
-`bin/golder` is the CLI a workspace window runs for `golder workspace attach`.
-It is not committed: the build workflow compiles it per platform into
-`resources/<os>-<arch>/bin/golder` (or `resources/darwin/bin/golder` for a
-universal macOS app) before packaging, so a double-clicked app does not depend
-on the person's `PATH`.
-
-`golderBinary()` in `../mygoui/terminal.go` looks there first, then
-`GOLDER_BIN`, then next to the executable, then `PATH`.
+The GUI runs the Golder Agent runtime in-process and must not carry a second
+full `golder` CLI, tuios workspace renderer or Chromium binary. The release
+workflow enforces those bundle boundaries and a per-architecture size limit.

@@ -43,6 +43,9 @@ type Env struct {
 	Provider     provider.Provider
 	ProviderName string
 	SysPrompt    string
+	// Credentials is the one provider credential resolver shared by the driver,
+	// model picker, reviewer and sub-agents. It carries no displayable value.
+	Credentials *provider.CredentialStore
 
 	// Skills is the discovered skill set (loaded once here, empty under
 	// --no-skills). It is threaded into the REPL so each skill is registered as a
@@ -116,6 +119,8 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	if err != nil {
 		return Env{}, err
 	}
+	credentials := provider.NewCredentialStore(nil)
+	credentials.SetOverride(resolvedName, apiKey)
 	diagtrace.Event("setup", "provider name=%s duration=%s", resolvedName, time.Since(step))
 	step = time.Now()
 	appends, err := resolveAppendInstructions(appendSystemPrompt)
@@ -164,8 +169,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		// a fresh store, plus the CLI/config api key as an override. Without the
 		// override a child would get an empty key whenever auth comes from config.toml
 		// or --api-key (not an env var), leaving every sub-agent unauthenticated.
-		childCreds := provider.NewCredentialStore(nil)
-		childCreds.SetOverride(resolvedName, apiKey)
+		childCreds := credentials
 		childClassifier := NewReviewer(model, resolvedName, prov, childCreds, "", cwd, Trusted(cwd))
 		// Fallback gates for a child dispatched outside a session's chain. Every
 		// CLI driver publishes its session chain onto the tool call's context
@@ -287,6 +291,7 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		Provider:     prov,
 		ProviderName: resolvedName,
 		SysPrompt:    sysPrompt,
+		Credentials:  credentials,
 		Prompt:       prompt,
 		Skills:       skills,
 		Extensions:   ext,

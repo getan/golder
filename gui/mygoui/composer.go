@@ -14,38 +14,59 @@ func (a *App) composer(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(10, 24, 14, 24).Gap(8).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		input := ui.TextArea(c, &a.draft).Lines(1, 8).Grow(1)
-		input.Placeholder("Message Golder — Enter sends, Shift+Enter adds a line")
-		input.OnTextKey(func(k ui.TextKey) bool {
-			if k.Key == ui.KeyEnter && k.Mods == 0 {
-				text := strings.TrimSpace(k.Text())
-				if text == "" {
+		ui.Column(c).MinHeight(68).Radius(18).Background(t.Surface).Border(1, t.Border).Clip().Children(func() {
+			input := ui.TextAreaBase(c, &a.draft).Lines(1, 8).Grow(1).
+				Padding(12, 54, 40, 14).
+				Placeholder("Message Golder — Enter sends, Shift+Enter adds a line")
+			input.OnTextKey(func(k ui.TextKey) bool {
+				if k.Key == ui.KeyEnter && k.Mods == 0 {
+					text := strings.TrimSpace(k.Text())
+					if text == "" {
+						return true
+					}
+					if a.status.Running {
+						a.banner, a.bannerErr = "A turn is already running; stop it first.", true
+						return true
+					}
+					a.submit(text)
+					k.SetText("")
 					return true
 				}
-				if a.status.Running {
-					a.banner, a.bannerErr = "A turn is already running; stop it first.", true
-					return true
-				}
-				a.submit(text)
-				k.SetText("")
-				return true
-			}
-			return false
-		})
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				return false
+			})
+
+			ready := strings.TrimSpace(a.draft) != ""
+			label, accessible := "↑", "Send message"
+			face, hover, pressed := t.Accent, t.AccentHover, t.AccentPressed
 			if a.status.Running {
-				if ui.Button(c, "Stop").Clicked() {
-					a.ctrl.Cancel()
-				}
-			} else if ui.PrimaryButton(c, "Send").Disabled(strings.TrimSpace(a.draft) == "").Clicked() {
-				text := strings.TrimSpace(a.draft)
-				a.draft = ""
-				a.submit(text)
+				label, accessible = "■", "Stop generation"
+				face, hover, pressed = t.Danger, t.Danger, t.Danger
+			} else if !ready {
+				face, hover, pressed = t.SurfacePressed, t.SurfacePressed, t.SurfacePressed
 			}
-			ui.Spacer(c)
-			ui.Text(c, fmt.Sprintf("%d%% context · %s / %s",
-				a.contextPercent(), formatTokens(a.status.ContextUsed), formatTokens(a.status.ContextLimit))).
-				FontSize(11).TextColor(t.TextMuted)
+			send := ui.ButtonBase(c).Absolute().Right(10).Bottom(9).Size(34, 34).Radius(17).
+				Label(accessible).Tooltip(accessible).Disabled(!a.status.Running && !ready).Background(face)
+			if send.Hovered() {
+				send.Background(hover)
+			} else if send.Pressed() {
+				send.Background(pressed)
+			}
+			send.Children(func() {
+				color := t.AccentText
+				if !a.status.Running && !ready {
+					color = t.TextMuted
+				}
+				ui.Text(c, label).FontSize(17).FontWeight(700).TextColor(color).TextAlign(ui.Center)
+			})
+			if send.Clicked() {
+				if a.status.Running {
+					a.ctrl.Cancel()
+				} else {
+					text := strings.TrimSpace(a.draft)
+					a.draft = ""
+					a.submit(text)
+				}
+			}
 		})
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			if ui.Button(c, "Model · "+a.status.Model).Tooltip("Switch model").Clicked() {
@@ -61,7 +82,9 @@ func (a *App) composer(c *ui.Context) {
 				a.permOpen = true
 			}
 			ui.Spacer(c)
-			ui.Text(c, a.status.Provider).FontSize(11).TextColor(t.TextMuted)
+			ui.Text(c, fmt.Sprintf("%d%% context · %s / %s",
+				a.contextPercent(), formatTokens(a.status.ContextUsed), formatTokens(a.status.ContextLimit))).
+				FontSize(11).TextColor(t.TextMuted)
 		})
 	})
 }

@@ -43,3 +43,7 @@ func openPTY() (master, slave *os.File, err error) {
 	}
 	return m, s, nil
 }
+
+func resizePTY(master *os.File, cols, rows int) error {
+	return unix.IoctlSetWinsize(int(master.Fd()), unix.TIOCSWINSZ, &unix.Winsize{Row: uint16(rows), Col: uint16(cols)})
+}

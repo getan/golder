@@ -36,10 +36,18 @@ type App struct {
 
 	draft string
 
-	status   appsession.Status
-	project  string
-	sessions []appsession.SessionSummary
-	pending  []appsession.ApprovalView
+	status          appsession.Status
+	project         string
+	selectedProject string
+	sessions        []appsession.SessionSummary
+	pending         []appsession.ApprovalView
+	showArchived    bool
+	renameOpen      bool
+	renameID        string
+	renameDraft     string
+	deleteOpen      bool
+	deleteID        string
+	deleteTitle     string
 
 	banner    string
 	bannerErr bool
@@ -55,6 +63,15 @@ type App struct {
 	permOpen  bool
 	thinkOpen bool
 
+	settingsOpen bool
+	settingsTab  int
+	settings     appsession.ProviderSettings
+	settingsEdit appsession.ProviderSettingsEdit
+	settingsErr  string
+	settingsNote string
+	settingsBusy bool
+	ttySessions  []appsession.TTYSummary
+
 	paletteOpen  bool
 	paletteQuery string
 	paletteSel   int
@@ -67,8 +84,6 @@ type App struct {
 	diffSel     int
 	diff        *editor.DiffState
 
-	workspaces  []appsession.WorkspaceInfo
-	wsOpen      bool
 	browsers    []appsession.BrowserPreview
 	browserOpen bool
 }
@@ -110,6 +125,7 @@ func (a *App) Run() error {
 		a.refreshSessions()
 		a.refreshChanges()
 		go a.refreshModels()
+		go a.refreshBrowsers()
 	})
 	return mygo.App.Run()
 }
@@ -129,6 +145,9 @@ func (a *App) pump() {
 func (a *App) applySnapshot(snap appsession.Snapshot) {
 	a.status = snap.Status
 	a.project = snap.Project
+	if a.selectedProject == "" {
+		a.selectedProject = snap.Project
+	}
 	a.items = append(a.items[:0], snap.Items...)
 	a.index = make(map[string]int, len(a.items))
 	for i, it := range a.items {
@@ -171,6 +190,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 		a.refreshSessions()
 		a.refreshChanges()
+		go a.refreshBrowsers()
 	}
 }
 
@@ -297,21 +317,6 @@ func (a *App) refreshModels() {
 		a.modelsErr = ""
 		a.models = models
 	})
-}
-
-func (a *App) refreshWorkspaces() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	ws, err := a.ctrl.Workspaces(ctx)
-	if err != nil {
-		a.banner, a.bannerErr = err.Error(), true
-		return
-	}
-	a.workspaces = ws
-	win := a.win
-	if win != nil {
-		win.Update(func() {})
-	}
 }
 
 func (a *App) refreshBrowsers() {
