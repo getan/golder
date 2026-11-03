@@ -106,16 +106,21 @@ jobs:
         run: |
           set -euo pipefail
           args=(-platform "${{ matrix.platform }}")
-          if [[ "${{ matrix.name }}" == "macos" ]]; then
-            if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then
-              args+=(-sign "$MACOS_SIGNING_IDENTITY")
-            else
-              args+=(-sign -)
-            fi
-            if [[ -z "${APPLE_ID:-}" ]]; then
-              args+=(-skip-notarize)
-            fi
+          # macos.notarize in gui/mygo.json is read when the configuration is
+          # validated, on every platform, so a build without a Developer ID and
+          # notary credentials has to opt out explicitly: otherwise Windows and
+          # Linux fail with "notarization needs a Developer ID signing identity".
+          notarize=0
+          if [[ "${{ matrix.name }}" == "macos" && -n "${MACOS_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" ]]; then
+            args+=(-sign "$MACOS_SIGNING_IDENTITY")
+            notarize=1
+          elif [[ "${{ matrix.name }}" == "macos" ]]; then
+            args+=(-sign -) # ad hoc: runs on the machine that built it
           fi
+          if [[ "$notarize" == "0" ]]; then
+            args+=(-skip-notarize)
+          fi
+          printf 'mygo build %s\n' "${args[*]}"
           cd gui
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
 
