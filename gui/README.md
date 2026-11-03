@@ -13,6 +13,12 @@ level, approval mode and context gauge. Selecting a model calls the same live
 configuration the `/model` command mutates; it never types `/model` into a
 hidden TUI.
 
+The accepted follow-up design — shared provider settings, project-aware Session
+management, an in-composer circular Send/Stop button, a native interactive
+browser surface, an optional terminal, removal of GUI workspace/embedded CLI,
+and the <45 MiB packaging target — is in
+[`docs/gui-ux-optimization.md`](../docs/gui-ux-optimization.md).
+
 ```
 gui/
 ├── appsession/   UI-neutral controller: session, run, approvals, actions

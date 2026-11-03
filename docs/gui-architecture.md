@@ -662,3 +662,10 @@ go test ./gui/...
 go build ./...
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
 ```
+
+后续体验与边界已经基于真实 GUI 试用重新收敛，详见
+[`gui-ux-optimization.md`](gui-ux-optimization.md)：它定义了共享
+credential/config resolver、Settings、按项目分组的 Session 管理、输入框内
+圆形 Send/Stop、kitty-browse 共享 Browser Surface、保留可选 MyGo terminal、
+删除 GUI workspace/第二份完整 CLI，以及单架构 <45 MiB 的目标。该文档是
+当前优化实施路线；本节保留 v1.5.46–v1.5.48 已实现状态作为事实基线。

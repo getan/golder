@@ -4,6 +4,11 @@
 single executables, while a desktop app needs a bundle, a disk image, an
 installer or a system package to be double-clickable.
 
+This document describes the v1.5.48 packaging baseline. The accepted target
+removes the bundled full CLI, publishes separate macOS architectures, injects
+the release tag as the app version, and enforces a <45 MiB installed-size gate;
+see [`gui-ux-optimization.md`](gui-ux-optimization.md).
+
 ## Artifacts
 
 | Platform | Output under `gui/build/<os>-<arch>/` | How a person opens it |
