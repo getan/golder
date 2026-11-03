@@ -135,14 +135,3 @@ jobs:
             gui/build/**/PKGBUILD
           if-no-files-found: warn
 
-      - name: Attach to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            gui/build/**/*.dmg
-            gui/build/**/*-setup-*.exe
-            gui/build/**/*.tar.gz
-            gui/build/**/*.deb
-          fail_on_unmatched_files: false

@@ -1,0 +1,60 @@
+# Attaches the GUI packages to the GitHub release that goreleaser creates.
+#
+# It runs after the `gui` workflow finishes rather than in it: on a tag both
+# workflows start at once, and a GUI job that created the release itself would
+# race goreleaser ("release already exists"). Waiting for completion makes the
+# order deterministic without duplicating the build.
+name: gui-attach
+
+on:
+  workflow_run:
+    workflows: ["gui"]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the GUI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pattern: golder-gui-*
+          path: artifacts
+
+      - name: Upload them to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.workflow_run.head_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          files=()
+          for f in artifacts/**/*.dmg artifacts/**/*-setup-*.exe artifacts/**/*.tar.gz artifacts/**/*.deb; do
+            [ -f "$f" ] && files+=("$f")
+          done
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no GUI packages found among the artifacts"
+            exit 0
+          fi
+          printf '%s\n' "${files[@]}"
+          # The release may still be publishing when this job starts; retry
+          # briefly rather than losing the packages to a transient 404.
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"; then
+              exit 0
+            fi
+            echo "attempt $attempt failed; waiting for the release"
+            sleep 20
+          done
+          echo "::error::could not upload the GUI packages to $TAG"
+          exit 1
