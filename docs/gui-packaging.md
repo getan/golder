@@ -57,15 +57,40 @@ verified". Two ways forward:
    `golder-notary` keychain profile that `gui/mygo.json` names, and lets
    `mygo build` sign, notarize and staple.
 
-2. **No Apple Developer Program** — the app still runs, but the person must
-   right-click → Open once, or clear the quarantine flag:
+2. **No Apple Developer Program** — the app still runs, but each machine has to
+   allow it once. The wording differs by macOS version:
 
-   ```sh
-   xattr -d com.apple.quarantine "/Applications/Golder GUI.app"
-   ```
+   - **macOS 15 Sequoia and later**: double-click once and dismiss the warning,
+     then open **System Settings → Privacy & Security**, scroll to the bottom,
+     and click **Open Anyway**. Right-click → Open no longer bypasses a
+     quarantined app on these versions.
+   - **macOS 14 and earlier**: right-click the app → **Open** → **Open**.
+   - Either way, the quarantine flag can be cleared from a terminal:
+
+     ```sh
+     xattr -dr com.apple.quarantine "/Applications/Golder GUI.app"
+     ```
 
    This is a conscious tradeoff, not a bug: macOS ties trust to a signature it
-   can verify with Apple.
+   can verify with Apple, and the "Apple cannot check it for malicious software"
+   message means exactly that the app is signed but not notarized. There is no
+   packaging trick that avoids it — zip, DMG and Homebrew casks all carry the
+   quarantine attribute.
+
+## The app icon
+
+`gui/resources/icon.png` is the app icon: a 16×16 pixel-art mark (white panel,
+stepped chamfer, dark chevron, gold cursor) drawn at 1024×1024 with no
+interpolation. It is generated, not hand-edited:
+
+```sh
+cd gui
+go run ./tools/mkicon -o resources/icon.png
+```
+
+`mygo build` turns it into `AppIcon.icns` and references it from the bundle's
+`Info.plist`. A missing `resources/icon.png` is why a build shows the generic
+blank icon.
 
 ## Signing secrets the workflow reads
 
