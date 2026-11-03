@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **A pixel-art app icon** (v1.5.48): the GUI bundle now carries an icon instead
+  of the generic blank one. It is drawn from a 16×16 bitmap — a white panel with
+  a stepped chamfer, a dark chevron and a gold cursor — by
+  `gui/tools/mkicon`, so the mark is reproducible rather than a hand-edited PNG.
+  The packaging notes also spell out the macOS 15 Gatekeeper path, where
+  right-click → Open no longer clears a quarantined app. See
+  [v1.5.48 release notes](docs/releases/v1.5.48.md).
 - **Double-clickable GUI packages, built per platform** (v1.5.47): the `gui`
   workflow compiles the `golder` CLI into the app's resources, then has MyGo
   package a `.app` and `.dmg` on macOS, an `.exe` and NSIS installer on Windows,
