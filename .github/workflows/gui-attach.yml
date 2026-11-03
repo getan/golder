@@ -47,14 +47,20 @@ jobs:
             exit 0
           fi
           printf '%s\n' "${files[@]}"
-          # The release may still be publishing when this job starts; retry
-          # briefly rather than losing the packages to a transient 404.
-          for attempt in 1 2 3 4 5; do
+          # goreleaser publishes the release some minutes after the GUI run
+          # finishes, so wait for it rather than racing: the first attempt at
+          # v1.5.48 exhausted five 20-second retries and lost the packages.
+          for attempt in $(seq 1 40); do
+            if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+              echo "attempt $attempt: release $TAG not published yet"
+              sleep 30
+              continue
+            fi
             if gh release upload "$TAG" "${files[@]}" --clobber --repo "$REPO"; then
               exit 0
             fi
-            echo "attempt $attempt failed; waiting for the release"
-            sleep 20
+            echo "attempt $attempt: upload failed; retrying"
+            sleep 30
           done
           echo "::error::could not upload the GUI packages to $TAG"
           exit 1
