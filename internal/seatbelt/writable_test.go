@@ -26,7 +26,7 @@ func TestWritableRootsComeFromTheTable(t *testing.T) {
 	if want := filepath.Join(home, "cache dir"); got != want {
 		t.Fatalf("normalized = %q, want %q", got, want)
 	}
-	other, err := grants.AddWritableRoot("/Volumes/KIOXIA/target", grants.Session, "test")
+	other, err := grants.AddWritableRoot("/Volumes/External/target", grants.Session, "test")
 	if err != nil {
 		t.Fatalf("second add: %v", err)
 	}

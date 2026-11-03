@@ -484,7 +484,7 @@ See `golder --help` for the complete list.
 | `GOLDER_STREAM_RESUME` | `0`/`false`/`off`: disable continuation of already-shown text; on by default. Unfinished local tool calls may be regenerated and execute only after a complete response; provider-executed server tools are never automatically replayed |
 | `GOLDER_STREAM_FIRST_CONTENT_TIMEOUT` | budget for the first content frame (Go duration, default `2m`); a timeout re-issues the request and no longer widens per attempt |
 | `GOLDER_STREAM_IDLE_TIMEOUT` | window with no bytes at all (Go duration, default `90s`); SSE keep-alives do not count as content progress |
-| `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/KIOXIA:$HOME/miniconda3` |
+| `GOLDER_SANDBOX_READABLE` | Extra sandbox read roots (colon/comma-separated absolute paths), e.g. `/Volumes/External:$HOME/miniconda3` |
 | `GOLDER_READABLE_ROOTS` | Directories the read-only tools (read/grep/find/ls/view_image) may reach without asking (colon/comma-separated); same as `/boundary readable add`, and also widens the sandbox read whitelist |
 | `GOLDER_MIRROR` | Download mirrors for self-update / the installer: whitespace-separated URL prefixes, or `off` to disable (default falls back to community mirrors when GitHub is unreachable) |
 | `GOLDER_HOST_REPORT` | Host reporting: `off` disables it; `tuios` / `herdr` forces one (default detects the pane's environment; outside a host nothing is reported) |

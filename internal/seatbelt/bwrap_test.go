@@ -271,9 +271,9 @@ func TestReadableRootsIsAWhitelist(t *testing.T) {
 // appended (colon- or comma-separated), relative entries are dropped so a
 // typo cannot silently widen the sandbox.
 func TestReadableRootsFromEnv(t *testing.T) {
-	t.Setenv("GOLDER_SANDBOX_READABLE", "/Volumes/KIOXIA:relative/path,/opt/custom")
+	t.Setenv("GOLDER_SANDBOX_READABLE", "/Volumes/External:relative/path,/opt/custom")
 	roots := ReadableRoots()
-	for _, want := range []string{"/Volumes/KIOXIA", "/opt/custom"} {
+	for _, want := range []string{"/Volumes/External", "/opt/custom"} {
 		if !slices.Contains(roots, want) {
 			t.Errorf("ReadableRoots missing env-added %s: %v", want, roots)
 		}

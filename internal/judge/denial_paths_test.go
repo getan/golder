@@ -172,8 +172,8 @@ func TestGrantablePathFromTextReadsTheCommandWithTheBoundaryParser(t *testing.T)
 // backreference in a s#…#…# command reached a dialog once as "/\1"; skipping it
 // hides a row, keeping it grants something no one chose.
 func TestPathTokensRejectShellExpressions(t *testing.T) {
-	got := pathTokens(`foo=/\1 bar baz=/Volumes/KIOXIA/build`)
-	if len(got) != 1 || got[0] != "/Volumes/KIOXIA/build" {
+	got := pathTokens(`foo=/\1 bar baz=/Volumes/External/build`)
+	if len(got) != 1 || got[0] != "/Volumes/External/build" {
 		t.Errorf("pathTokens = %v, want only the literal path", got)
 	}
 }

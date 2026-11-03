@@ -114,7 +114,7 @@ golder **内置 OS 沙箱并默认开启**：获准执行的 `bash` 默认在沙
 工具链不在上述路径时（conda / pyenv / sdkman / nvm 都在 `$HOME`，或你的缓存盘如 `/Volumes/XXX`），用 `GOLDER_SANDBOX_READABLE` 追加（冒号或逗号分隔的绝对路径）：
 
 ```bash
-export GOLDER_SANDBOX_READABLE=/Volumes/KIOXIA:$HOME/miniconda3
+export GOLDER_SANDBOX_READABLE=/Volumes/External:$HOME/miniconda3
 ```
 
 注意它只放宽**读**；写默认只限项目与 `TMPDIR`，编译产物写到别处（如 `CARGO_TARGET_DIR=/Volumes/…`）用下面的 writable_roots 授权，或提权执行。

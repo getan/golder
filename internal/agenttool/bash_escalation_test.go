@@ -267,10 +267,10 @@ func TestBashSandboxDenialOffersPathAndRetries(t *testing.T) {
 
 	// A yes: one question, and the command runs a second time with the path in
 	// the table (the retry's own failure does not re-open the question).
-	runner, asked := probe(t, "go build -o /Volumes/KIOXIA/build/out .", func(string) SandboxDenialAnswer {
+	runner, asked := probe(t, "go build -o /Volumes/External/build/out .", func(string) SandboxDenialAnswer {
 		return SandboxDenialReAdmitted
 	})
-	if len(asked) != 1 || asked[0] != "/Volumes/KIOXIA/build/out" {
+	if len(asked) != 1 || asked[0] != "/Volumes/External/build/out" {
 		t.Fatalf("asked = %v, want the one path the command named", asked)
 	}
 	if runner.runs != 2 {
@@ -278,7 +278,7 @@ func TestBashSandboxDenialOffersPathAndRetries(t *testing.T) {
 	}
 
 	// A no: the failure stands, with one question and one run.
-	runner, asked = probe(t, "go build -o /Volumes/KIOXIA/build/out .", func(string) SandboxDenialAnswer {
+	runner, asked = probe(t, "go build -o /Volumes/External/build/out .", func(string) SandboxDenialAnswer {
 		return SandboxDenialRefused
 	})
 	if len(asked) != 1 || runner.runs != 1 {

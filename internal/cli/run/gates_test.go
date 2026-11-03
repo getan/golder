@@ -113,10 +113,10 @@ func TestSandboxDenialAskerAsksOnceAndReAdmits(t *testing.T) {
 	if ask == nil {
 		t.Fatal("a wired dialog must produce an asker")
 	}
-	if answer := ask(context.Background(), "/Volumes/KIOXIA/out", "mkdir -p /Volumes/KIOXIA/out"); answer != agenttool.SandboxDenialReAdmitted {
+	if answer := ask(context.Background(), "/Volumes/External/out", "mkdir -p /Volumes/External/out"); answer != agenttool.SandboxDenialReAdmitted {
 		t.Fatalf("answer = %v, want the contained retry", answer)
 	}
-	if !grants.Allows("/Volumes/KIOXIA/out", grants.Write) {
+	if !grants.Allows("/Volumes/External/out", grants.Write) {
 		t.Error("the denied path was not registered for the retry")
 	}
 	if calls != 1 {
@@ -141,10 +141,10 @@ func TestSandboxDenialAskerAutoReAdmitsWithoutDialog(t *testing.T) {
 	if ask == nil {
 		t.Fatal("auto mode must install the recovery reviewer")
 	}
-	if answer := ask(context.Background(), "/Volumes/KIOXIA/cache", "cp a /Volumes/KIOXIA/cache/b"); answer != agenttool.SandboxDenialReAdmitted {
+	if answer := ask(context.Background(), "/Volumes/External/cache", "cp a /Volumes/External/cache/b"); answer != agenttool.SandboxDenialReAdmitted {
 		t.Fatalf("answer = %v, want the contained retry", answer)
 	}
-	if !grants.Allows("/Volumes/KIOXIA/cache", grants.Read) {
+	if !grants.Allows("/Volumes/External/cache", grants.Read) {
 		t.Error("the granted path was not registered")
 	}
 	if calls != 0 {
@@ -169,7 +169,7 @@ func TestSandboxDenialAskerAutoDenyStaysSilent(t *testing.T) {
 	if ask == nil {
 		t.Fatal("auto mode must install the recovery reviewer")
 	}
-	if answer := ask(context.Background(), "/Volumes/KIOXIA/cache", "cp a /Volumes/KIOXIA/cache/b"); answer != agenttool.SandboxDenialRefused {
+	if answer := ask(context.Background(), "/Volumes/External/cache", "cp a /Volumes/External/cache/b"); answer != agenttool.SandboxDenialRefused {
 		t.Fatalf("answer = %v, want refused", answer)
 	}
 	if calls != 0 {
