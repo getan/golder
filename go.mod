@@ -18,6 +18,7 @@ require (
 	github.com/chromedp/chromedp v0.20.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/egoist/mygo v0.7.4
 	github.com/getan/kitty-browse v0.2.8
 	github.com/getan/tuios-mini v0.10.43
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
@@ -27,7 +28,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/pflag v1.0.10
-	golang.org/x/image v0.45.0
+	golang.org/x/image v0.46.0
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
@@ -57,11 +58,12 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.10.2 // indirect
+	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/epilande/go-devicons v0.0.0-20250505162540-0661cab71a28 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect

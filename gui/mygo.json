@@ -1,0 +1,14 @@
+{
+  "name": "Golder",
+  "identifier": "dev.golder.gui",
+  "version": "0.1.0",
+  "main": "cmd/golder-gui",
+  "out": "build",
+  "macos": {
+    "minimumSystemVersion": "13.0"
+  },
+  "linux": {
+    "webview": false,
+    "categories": ["Development"]
+  }
+}
