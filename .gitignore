@@ -39,6 +39,10 @@ config.toml
 # macOS Finder metadata
 .DS_Store
 
+# GUI packaging outputs and the CLI copied into the app's resources
+gui/build/
+gui/resources/*/bin/
+
 .loop-state.json
 
 # Compiled binary (go build ./cmd/golder produces ./golder)

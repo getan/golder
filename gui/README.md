@@ -41,9 +41,15 @@ MyGo's CLI packages and signs the app:
 
 ```sh
 cd gui
-go tool mygo build          # build/<os>-<arch>/Golder.app (+ .dmg) on macOS
-go tool mygo dev            # rebuild and restart as the code changes
+go run github.com/egoist/mygo/cmd/mygo build -platform darwin/universal
+go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
 ```
+
+The app is named **Golder GUI** (slug `golder-gui`), so its Linux executable
+never collides with the `golder` CLI. A packaged app carries the CLI in its
+resources (`resources/<os>-<arch>/bin/golder`), which the `gui` workflow fills
+before packaging. Artifacts, signing secrets and the Gatekeeper tradeoff are
+described in [`docs/gui-packaging.md`](../docs/gui-packaging.md).
 
 The terminal workspace window and the browser preview need native pieces at
 runtime:

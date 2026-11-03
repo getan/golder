@@ -1,0 +1,148 @@
+# Builds the double-clickable Golder GUI packages with MyGo's own CLI: a .app
+# and .dmg on macOS, an .exe and NSIS installer on Windows, and a tarball with
+# install.sh, a .deb and a PKGBUILD on Linux.
+#
+# The `golder` CLI is compiled per platform into the app's resources first, so a
+# packaged window can open a terminal workspace without the person's PATH.
+name: gui
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos, os: macos-14, platform: "darwin/universal" }
+          - { name: windows, os: windows-2022, platform: "windows/amd64" }
+          - { name: linux, os: ubuntu-22.04, platform: "linux/amd64,linux/arm64" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The CLI a workspace window runs. macOS ships one universal app, so its
+      # resource is a universal binary; Linux ships two targets, each with its
+      # own resource directory.
+      - name: Build the golder CLI into the app resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          ld="-X main.version=${GITHUB_REF_NAME:-dev}"
+          case "${{ matrix.name }}" in
+            macos)
+              d=gui/resources/darwin/bin; mkdir -p "$d"
+              for arch in arm64 amd64; do
+                CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -ldflags "-s -w $ld" -o "$d/golder-$arch" ./cmd/golder
+              done
+              lipo -create -output "$d/golder" "$d/golder-arm64" "$d/golder-amd64"
+              rm -f "$d/golder-arm64" "$d/golder-amd64"
+              ;;
+            windows)
+              d=gui/resources/windows-amd64/bin; mkdir -p "$d"
+              CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w $ld" -o "$d/golder.exe" ./cmd/golder
+              ;;
+            linux)
+              for target in amd64 arm64; do
+                d=gui/resources/linux-$target/bin; mkdir -p "$d"
+                CGO_ENABLED=0 GOOS=linux GOARCH=$target go build -trimpath -ldflags "-s -w $ld" -o "$d/golder" ./cmd/golder
+              done
+              ;;
+          esac
+          find gui/resources -type f -perm -u+x | sort
+
+      - name: Import the macOS signing certificate
+        if: matrix.name == 'macos'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${MACOS_CERT_P12:-}" ]]; then
+            echo "no signing certificate in secrets; the app will be signed ad hoc"
+            exit 0
+          fi
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p actions "$RUNNER_TEMP/golder.keychain"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/golder.keychain"
+          security unlock-keychain -p actions "$RUNNER_TEMP/golder.keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/golder.keychain" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k actions "$RUNNER_TEMP/golder.keychain"
+          security list-keychains -d user -s "$RUNNER_TEMP/golder.keychain" $(security list-keychains -d user | tr -d '"')
+
+      - name: Store the notary credentials
+        if: matrix.name == 'macos'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_ID:-}" ]]; then
+            echo "no notary credentials in secrets; notarization will be skipped"
+            exit 0
+          fi
+          xcrun notarytool store-credentials golder-notary \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID"
+
+      - name: Build the app
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+        run: |
+          set -euo pipefail
+          args=(-platform "${{ matrix.platform }}")
+          if [[ "${{ matrix.name }}" == "macos" ]]; then
+            if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then
+              args+=(-sign "$MACOS_SIGNING_IDENTITY")
+            else
+              args+=(-sign -)
+            fi
+            if [[ -z "${APPLE_ID:-}" ]]; then
+              args+=(-skip-notarize)
+            fi
+          fi
+          cd gui
+          go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
+
+      - name: List the artifacts
+        shell: bash
+        run: find gui/build -maxdepth 2 -type f | sort | head -60
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golder-gui-${{ matrix.name }}
+          path: |
+            gui/build/**/*.dmg
+            gui/build/**/*.app/**
+            gui/build/**/*.exe
+            gui/build/**/*.tar.gz
+            gui/build/**/*.deb
+            gui/build/**/PKGBUILD
+          if-no-files-found: warn
+
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            gui/build/**/*.dmg
+            gui/build/**/*-setup-*.exe
+            gui/build/**/*.tar.gz
+            gui/build/**/*.deb
+          fail_on_unmatched_files: false

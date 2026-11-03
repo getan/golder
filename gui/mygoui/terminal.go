@@ -130,6 +130,17 @@ func golderBinary() (string, error) {
 	if v := os.Getenv("GOLDER_BIN"); v != "" {
 		return v, nil
 	}
+	// A packaged app carries the CLI among its resources, so a double-clicked
+	// window does not depend on the person's PATH.
+	if dir, err := mygo.App.Path(mygo.PathResources); err == nil && dir != "" {
+		candidate := filepath.Join(dir, "bin", "golder")
+		if runtimeIsWindows() {
+			candidate += ".exe"
+		}
+		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+			return candidate, nil
+		}
+	}
 	if exe, err := os.Executable(); err == nil {
 		candidate := filepath.Join(filepath.Dir(exe), "golder")
 		if runtimeIsWindows() {
