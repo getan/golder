@@ -12,6 +12,15 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Golder GUI: a native desktop front-end in `gui/`** (v1.5.46): a separate
+  `golder-gui` binary draws the session list, transcript, tool cards, approvals,
+  model/permission pickers, a command palette and a diff drawer with MyGo's
+  native UI. It reuses `run.SetupEnv`, `runtime.StartRun`, `run.Gates`,
+  `session.Store` and the slash registry in-process, so model and permission
+  changes are typed actions rather than text injected into a hidden terminal.
+  Pending approvals fail closed when the window closes, a writer lock refuses a
+  second process on the same session, and the `golder` CLI/TUI binary does not
+  import MyGo. See [v1.5.46 release notes](docs/releases/v1.5.46.md).
 - **Discoverable Lark package and layered pane-control menus** (v1.5.45):
   `/extensions` now shows the first-party Lark + Project MCP package even when
   it is not installed or configured, with explicit next steps and no automatic
