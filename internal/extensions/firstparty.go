@@ -489,11 +489,11 @@ func LarkSourceConfig(opts LarkSourceOptions) (SourceConfig, error) {
 	return SourceConfig{
 		Enabled: false, Transport: "stdio", Command: installed.Executable,
 		Network: true, StateDir: true, CallTimeout: "120s",
-		Setup: []string{installed.Executable, "setup", "--events", "--service=lark"},
+		Setup:         []string{installed.Executable, "setup", "--events", "--service=lark"},
 		SetupVariants: variants,
-		SetupOrigins: setupOrigins,
-		Executables: executables, Env: env,
-		ConfirmTools: []string{"doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call"},
+		SetupOrigins:  setupOrigins,
+		Executables:   executables, Env: env,
+		ConfirmTools:   []string{"doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call"},
 		AggregateTools: []string{"cli_call"},
 	}, nil
 }

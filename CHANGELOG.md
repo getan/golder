@@ -12,6 +12,16 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Native GUI workbench and managed Extensions** (v1.5.49): the desktop app now
+  shares launch/credential resolution with the CLI, exposes Provider and
+  Extensions settings, groups and manages sessions by project, embeds a circular
+  Send/Stop control, renders an interactive Chromium Bitmap surface, and offers
+  explicit user terminals plus detachable Agent TTY takeover. The GUI no longer
+  embeds tuios workspace or a second full `golder` CLI; macOS packages are split
+  by architecture. A checksum-verified, process-isolated `golder-lark` helper is
+  now managed through the GUI with named-secret configuration, explicit source
+  approval, browser OAuth, testing, reset and uninstall. See
+  [v1.5.49 release notes](docs/releases/v1.5.49.md).
 - **A pixel-art app icon** (v1.5.48): the GUI bundle now carries an icon instead
   of the generic blank one. It is drawn from a 16×16 bitmap — a white panel with
   a stepped chamfer, a dark chevron and a gold cursor — by
@@ -104,6 +114,11 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Fact-proven SSH pushes no longer dead-end in auto mode** (v1.5.49): a
+  resolved Git-over-SSH push with bound remote/hook facts keeps the deterministic
+  local Confirm verdict and receives its one-call execution binding instead of
+  being deferred to a reviewer that may request impossible containment. Review
+  failures are now reported as retryable failures rather than policy refusals.
 - **`tuios run` reviews scripts and one-call pane state honestly** (v1.5.44):
   the first-party reviewer accepts exactly one of `command` or `script` and no
   longer treats `host_control:true` read/focus calls as unconditional local

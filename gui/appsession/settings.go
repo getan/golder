@@ -44,7 +44,7 @@ type ProviderSettingsEdit struct {
 	BaseURL          string
 	Protocol         string
 	CredentialName   string
-	NewCredential   string
+	NewCredential    string
 	RemoveCredential bool
 	ThinkingLevel    string
 }

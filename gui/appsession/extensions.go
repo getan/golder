@@ -50,13 +50,13 @@ type ExtensionSourceView struct {
 // LarkExtensionSettings is the non-secret editable Lark configuration.
 type LarkExtensionSettings struct {
 	ExtensionPackageView
-	LarkCLI            string
-	ProjectCLI         string
-	AppID              string
-	CredentialName     string
+	LarkCLI             string
+	ProjectCLI          string
+	AppID               string
+	CredentialName      string
 	CredentialAvailable bool
-	Domains            []string
-	ProjectHost        string
+	Domains             []string
+	ProjectHost         string
 }
 
 // LarkExtensionEdit carries one configuration save. NewAppSecret is write-only
@@ -73,11 +73,11 @@ type LarkExtensionEdit struct {
 
 // ExtensionSetupEvent is the already-sanitized operator event the GUI may show.
 type ExtensionSetupEvent struct {
-	Type              string
-	Service           string
-	Message           string
-	VerificationURL   string
-	Authenticated     bool
+	Type            string
+	Service         string
+	Message         string
+	VerificationURL string
+	Authenticated   bool
 }
 
 // ExtensionSettings returns package and live source state without starting an
@@ -93,7 +93,7 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		ExtensionPackageView: ExtensionPackageView{
 			ID: "lark", Name: "Lark + Project",
 			Description: "Feishu/Lark documents, messages, Sheets, Base and Project work items.",
-			State: "not installed",
+			State:       "not installed",
 		},
 		Domains: []string{"docs", "drive", "im", "sheets", "base"}, ProjectHost: "project.feishu.cn",
 	}
@@ -146,8 +146,8 @@ func (c *Controller) ExtensionSources() []ExtensionSourceView {
 			Enabled: snapshot.Enabled, Trusted: snapshot.Trust == "approved",
 			State: snapshot.State, Authentication: snapshot.Authentication,
 			Version: snapshot.Version, LastError: snapshot.LastError, Endpoint: snapshot.Endpoint,
-			Network: capabilityBool(snapshot.Capabilities, "network"),
-			StateDir: capabilityBool(snapshot.Capabilities, "state_dir"),
+			Network:     capabilityBool(snapshot.Capabilities, "network"),
+			StateDir:    capabilityBool(snapshot.Capabilities, "state_dir"),
 			Executables: capabilityCount(snapshot.Capabilities, "executables"), Tools: len(snapshot.Tools),
 		})
 	}

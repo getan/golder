@@ -27,12 +27,12 @@ const (
 // BrowserInput carries viewport CSS coordinates. Text is committed IME input;
 // Key is a non-printing browser key such as Enter or ArrowLeft.
 type BrowserInput struct {
-	Kind       BrowserInputKind
-	X, Y       float64
-	DX, DY     float64
-	Button     int
-	Clicks     int
-	Text, Key  string
+	Kind      BrowserInputKind
+	X, Y      float64
+	DX, DY    float64
+	Button    int
+	Clicks    int
+	Text, Key string
 }
 
 // BrowserTab is safe native chrome metadata for one controlled tab.
