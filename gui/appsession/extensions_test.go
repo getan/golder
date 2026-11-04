@@ -203,3 +203,32 @@ func TestGUIManagedLarkUpdateRebindsSourceAndPreservesPrivateState(t *testing.T)
 		t.Fatalf("old package was destructively removed: %v", err)
 	}
 }
+
+func TestGUIOfficialCLIDiscoveryAndInstallUseNativePaths(t *testing.T) {
+	oldDiscover, oldInstall := discoverOfficialCLI, installOfficialCLI
+	t.Cleanup(func() { discoverOfficialCLI, installOfficialCLI = oldDiscover, oldInstall })
+	discoverOfficialCLI = func(kind extensions.OfficialCLIKind, preferred string) (extensions.OfficialCLI, bool) {
+		if preferred != "" {
+			return extensions.OfficialCLI{Kind: kind, Executable: preferred + "-resolved"}, true
+		}
+		return extensions.OfficialCLI{Kind: kind, Executable: "/managed/" + string(kind)}, true
+	}
+	var installedKind extensions.OfficialCLIKind
+	installOfficialCLI = func(_ context.Context, kind extensions.OfficialCLIKind) (extensions.OfficialCLI, error) {
+		installedKind = kind
+		return extensions.OfficialCLI{Kind: kind, Version: "1.2.3", Executable: "/installed/" + string(kind)}, nil
+	}
+	c := &Controller{}
+	larkCLI, projectCLI := c.DiscoverLarkCLIs("/existing/lark", "")
+	if larkCLI != "/existing/lark-resolved" || projectCLI != "/managed/meegle" {
+		t.Fatalf("discovery=%q %q", larkCLI, projectCLI)
+	}
+	_, _, larkFound, projectFound := c.DetectLarkCLIs("/existing/lark", "")
+	if !larkFound || !projectFound {
+		t.Fatalf("match flags lark=%t project=%t", larkFound, projectFound)
+	}
+	path, err := c.InstallOfficialLarkCLI(context.Background(), true)
+	if err != nil || installedKind != extensions.OfficialProjectCLI || path != "/installed/meegle" {
+		t.Fatalf("install kind=%q path=%q err=%v", installedKind, path, err)
+	}
+}

@@ -2,72 +2,51 @@ package appsession
 
 import (
 	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
+
+	"github.com/getan/golder/internal/session"
 )
 
 // sessionLock is one writer's claim on a session file. Two front-ends must not
 // append to the same JSONL tree: a lost branch cursor would either duplicate
 // entries or fork history silently.
 type sessionLock struct {
-	path string
+	writer *session.WriterLock
 }
 
-// acquireSessionLock creates <session>.lock beside the session file. A lock
-// left by a dead process is reclaimed; a live holder is refused.
+// acquireSessionLock uses the shared session package's OS-backed lock, so GUI,
+// TUI, REPL and headless runs all contend on the same writer lease.
 func acquireSessionLock(dir, id string) (*sessionLock, error) {
-	if dir == "" || id == "" {
-		return nil, errors.New("session lock: empty store or session id")
+	store, err := session.NewStore(dir)
+	if err != nil {
+		return nil, err
 	}
-	path := filepath.Join(dir, id+".lock")
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
-			_ = f.Close()
-			return &sessionLock{path: path}, nil
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return nil, fmt.Errorf("session lock: %w", err)
-		}
-		pid, stale := lockHolder(path)
-		if !stale && processAlive(pid) {
-			return nil, fmt.Errorf("session %s is open in another process (pid %d)", id, pid)
-		}
-		_ = os.Remove(path)
+	writer, err := store.AcquireWriter(id, "GUI")
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("session %s is locked", id)
+	return &sessionLock{writer: writer}, nil
 }
 
-// lockHolder reads a lock file. It reports the pid and whether the lock is
-// stale (unreadable, or older than a day, which outlives any real turn).
-func lockHolder(path string) (pid int, stale bool) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return 0, true
+func acquireSessionAccess(dir, id string) (lock *sessionLock, readOnly bool, holder session.WriterInfo, err error) {
+	lock, err = acquireSessionLock(dir, id)
+	if err == nil {
+		return lock, false, session.WriterInfo{}, nil
 	}
-	if time.Since(st.ModTime()) > 24*time.Hour {
-		return 0, true
+	var inUse *session.SessionInUseError
+	if errors.As(err, &inUse) {
+		return nil, true, inUse.Holder, nil
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return 0, true
-	}
-	pid, err = strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || pid <= 0 {
-		return 0, true
-	}
-	return pid, false
+	return nil, false, session.WriterInfo{}, err
+}
+
+func writerView(info session.WriterInfo) SessionWriterView {
+	return SessionWriterView{Frontend: info.Frontend, PID: info.PID, Since: info.StartedAt}
 }
 
 func (l *sessionLock) release() {
-	if l == nil || l.path == "" {
+	if l == nil || l.writer == nil {
 		return
 	}
-	_ = os.Remove(l.path)
-	l.path = ""
+	l.writer.Release()
+	l.writer = nil
 }

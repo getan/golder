@@ -96,6 +96,10 @@ func (c *Controller) Compact(ctx context.Context) (string, error) {
 		return "", ErrBusy
 	}
 	c.mu.Lock()
+	if c.readOnly {
+		c.mu.Unlock()
+		return "", ErrReadOnly
+	}
 	live := c.live
 	creds := c.creds
 	agentCtx := c.agentCtx

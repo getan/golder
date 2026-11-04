@@ -52,8 +52,15 @@ Nothing happens during discovery. The person explicitly performs these steps:
    - every state component is a real private directory (`0700`), not a symlink;
    - install does not edit config, approve a source, start code or begin OAuth.
 2. **Configure application and official CLIs**
+   - the GUI first checks configured paths, managed installs, `PATH`, local
+     `node_modules` and bounded common npm/pnpm global locations, accepting only
+     native executable magic (never a JavaScript/shell wrapper);
    - choose absolute native `lark-cli` and optional `meegle` executables with a
-     native file picker;
+     native file picker when discovery does not find them;
+   - alternatively install pinned official native releases directly: Lark comes
+     from its GitHub release and is verified with the published SHA-256, while
+     the official Meegle npm tarball is downloaded over HTTPS, verified with its
+     pinned SHA-512 SRI and unpacked without invoking npm or Node;
    - enter the existing application ID;
    - enter a new App Secret into a password field or choose a named credential;
    - the literal secret is written only to `.credentials.yaml` (`0600`);

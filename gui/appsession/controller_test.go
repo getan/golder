@@ -93,7 +93,7 @@ func TestSessionLockRefusesSecondWriter(t *testing.T) {
 	second.release()
 }
 
-func TestStaleLockIsReclaimed(t *testing.T) {
+func TestLegacyLockMetadataDoesNotOverrideOSLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "old.lock")
 	if err := os.WriteFile(path, []byte("999999\n"), 0o600); err != nil {
@@ -105,9 +105,46 @@ func TestStaleLockIsReclaimed(t *testing.T) {
 	}
 	lk, err := acquireSessionLock(dir, "old")
 	if err != nil {
-		t.Fatalf("stale lock was not reclaimed: %v", err)
+		t.Fatalf("legacy metadata was treated as lock authority: %v", err)
 	}
 	lk.release()
+}
+
+func TestGUIOpensLockedSessionReadOnlyAndCanStartFreshWriter(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	now := time.Now().UTC()
+	header := session.SessionHeader{ID: "shared-session", CreatedAt: now, UpdatedAt: now, Cwd: project}
+	if err := store.Save(header, agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("hello")}}}); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := store.AcquireWriter(header.ID, "TUI")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Release()
+	c := New(Options{Model: "m", ProviderName: "p", Cwd: project, Store: store, ResumeID: header.ID})
+	if err := c.Open(context.Background()); err != nil {
+		t.Fatalf("GUI should fall back to read-only: %v", err)
+	}
+	defer c.Close()
+	snap := c.Snapshot()
+	if !snap.ReadOnly || snap.Writer.Frontend != "TUI" || snap.Writer.PID != os.Getpid() {
+		t.Fatalf("snapshot=%+v", snap.Status)
+	}
+	if err := c.Submit(context.Background(), "must not write"); err != ErrReadOnly {
+		t.Fatalf("Submit err=%v, want ErrReadOnly", err)
+	}
+	if err := c.NewSession(context.Background()); err != nil {
+		t.Fatalf("start fresh session from read-only view: %v", err)
+	}
+	if fresh := c.Snapshot(); fresh.ReadOnly || fresh.SessionID == header.ID {
+		t.Fatalf("fresh snapshot=%+v", fresh.Status)
+	}
 }
 
 func TestPermissionModeSwitch(t *testing.T) {

@@ -58,6 +58,10 @@ func (c *Controller) SubmitAttachments(ctx context.Context, text string, attachm
 		c.mu.Unlock()
 		return errors.New("controller is not open")
 	}
+	if c.readOnly {
+		c.mu.Unlock()
+		return ErrReadOnly
+	}
 	if c.running {
 		c.mu.Unlock()
 		return ErrBusy

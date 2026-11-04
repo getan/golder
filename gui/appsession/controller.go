@@ -36,6 +36,10 @@ var ErrBusy = errors.New("a turn is already running")
 // ErrClosed is returned once Close has been called.
 var ErrClosed = errors.New("controller is closed")
 
+// ErrReadOnly is returned when a second frontend views a session whose writer
+// lease is held by another live process.
+var ErrReadOnly = errors.New("session is open read-only in this process")
+
 // ProjectSetup is the live provider state a project environment factory needs.
 // APIKey is launch-only secret material and must not be displayed or persisted.
 type ProjectSetup struct {
@@ -135,13 +139,15 @@ type Controller struct {
 	persisted int
 	compacted bool
 
-	items  []Item
-	index  map[string]int
-	lock   *sessionLock
-	seq    uint64
-	events chan Event
-	done   chan struct{}
-	closed bool
+	items      []Item
+	index      map[string]int
+	lock       *sessionLock
+	readOnly   bool
+	writerInfo session.WriterInfo
+	seq        uint64
+	events     chan Event
+	done       chan struct{}
+	closed     bool
 
 	pending      []*pendingApproval
 	nextApproval int
@@ -344,7 +350,7 @@ func (c *Controller) Open(ctx context.Context) error {
 
 	// Move the assembled state into the receiver under the lock, keeping the
 	// event channel and done signal that callers may already hold.
-	lk, err := acquireSessionLock(store.Dir(), header.ID)
+	lk, readOnly, holder, err := acquireSessionAccess(store.Dir(), header.ID)
 	if err != nil {
 		return err
 	}
@@ -357,6 +363,7 @@ func (c *Controller) Open(ctx context.Context) error {
 	c.approvedCwd = ctrl.approvedCwd
 	c.curLeaf = ctrl.curLeaf
 	c.lock = lk
+	c.readOnly, c.writerInfo = readOnly, holder
 	c.persisted = len(history)
 	c.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: c.warnWriter()}
 	c.mu.Unlock()
@@ -377,13 +384,17 @@ func (c *Controller) Open(ctx context.Context) error {
 		Title:        c.title,
 		ContextUsed:  estimateTokens(history),
 		ContextLimit: live.ContextWindow,
+		ReadOnly:     readOnly,
+		Writer:       writerView(holder),
 	}
 	c.mu.Unlock()
 
-	if err := agenttool.ConfigurePaneAgent(ctx, c.opt.Tools, header.ID); err != nil {
-		c.warnf("pane control registration unavailable: %v", err)
+	if !readOnly {
+		if err := agenttool.ConfigurePaneAgent(ctx, c.opt.Tools, header.ID); err != nil {
+			c.warnf("pane control registration unavailable: %v", err)
+		}
+		c.wireHooks(ctx, c.opt.ResumeID != "")
 	}
-	c.wireHooks(ctx, c.opt.ResumeID != "")
 	c.emitStatus()
 	return nil
 }
@@ -445,7 +456,6 @@ func (c *Controller) Close() error {
 	c.mu.Unlock()
 
 	close(c.done)
-	lock.release()
 	if cancel != nil {
 		cancel()
 	}
@@ -455,10 +465,11 @@ func (c *Controller) Close() error {
 		default:
 		}
 	}
+	c.runWG.Wait()
 	_ = c.persist()
+	lock.release()
 	agenttool.ClosePaneAgent(c.opt.Tools)
 	run.KillShellSessions(c.opt.Tools)
-	c.runWG.Wait()
 	if c.opt.Extensions != nil {
 		_ = c.opt.Extensions.Close()
 	}

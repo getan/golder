@@ -131,8 +131,16 @@ type Status struct {
 	Title        string
 	ContextUsed  int
 	ContextLimit int
+	ReadOnly     bool
+	Writer       SessionWriterView
 	// Error is the last controller error worth showing, "" when none.
 	Error string
+}
+
+type SessionWriterView struct {
+	Frontend string
+	PID      int
+	Since    time.Time
 }
 
 // Snapshot is a complete view of the controller, taken at one instant. A view

@@ -180,6 +180,58 @@ func (a *App) chooseExtensionCLI(project bool) {
 	}()
 }
 
+func (a *App) detectLarkCLIs() {
+	larkCLI, projectCLI, larkFound, projectFound := a.ctrl.DetectLarkCLIs(a.extensionEdit.LarkCLI, a.extensionEdit.ProjectCLI)
+	found := 0
+	if larkFound {
+		a.extensionEdit.LarkCLI = larkCLI
+		found++
+	}
+	if projectFound {
+		a.extensionEdit.ProjectCLI = projectCLI
+		found++
+	}
+	if found == 0 {
+		a.extensionNote = "No installed native CLIs were found. Use the install buttons; npm and Node are not required."
+	} else {
+		a.extensionNote = fmt.Sprintf("Detected %d installed native CLI(s). Review the paths, then save configuration.", found)
+	}
+}
+
+func (a *App) installOfficialLarkCLI(project bool) {
+	if a.extensionBusy {
+		return
+	}
+	name := "lark-cli"
+	if project {
+		name = "Project CLI"
+	}
+	a.extensionBusy, a.extensionErr = true, ""
+	a.extensionNote = "Downloading and verifying the official " + name + " native binary…"
+	win := a.win
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		path, err := a.ctrl.InstallOfficialLarkCLI(ctx, project)
+		if win == nil {
+			return
+		}
+		win.Update(func() {
+			a.extensionBusy = false
+			if err != nil {
+				a.extensionErr, a.extensionNote = err.Error(), ""
+				return
+			}
+			if project {
+				a.extensionEdit.ProjectCLI = path
+			} else {
+				a.extensionEdit.LarkCLI = path
+			}
+			a.extensionNote = name + " installed and selected. Save configuration to apply it."
+		})
+	}()
+}
+
 func (a *App) configureLark() {
 	if a.extensionBusy {
 		return
@@ -473,6 +525,18 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "2. Application and official CLIs").FontWeight(600).Padding(6, 0, 0, 0)
 		extensionPathField(c, "Official lark-cli", &a.extensionEdit.LarkCLI, func() { a.chooseExtensionCLI(false) })
 		extensionPathField(c, "Project/meegle CLI (optional)", &a.extensionEdit.ProjectCLI, func() { a.chooseExtensionCLI(true) })
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Detect installed CLIs").Disabled(a.extensionBusy).Clicked() {
+				a.detectLarkCLIs()
+			}
+			if ui.PrimaryButton(c, "Install lark-cli").Disabled(a.extensionBusy).Clicked() {
+				a.installOfficialLarkCLI(false)
+			}
+			if ui.Button(c, "Install Project CLI").Disabled(a.extensionBusy).Clicked() {
+				a.installOfficialLarkCLI(true)
+			}
+		})
+		ui.Text(c, "Installs pinned official native releases with SHA-256/SHA-512 verification; npm and Node are not required.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
 		ui.Field(c, "Application ID", func() { ui.TextInput(c, &a.extensionEdit.AppID).FillWidth().Placeholder("cli_…") })
 		ui.Field(c, "App Secret credential name", func() {
 			ui.TextInput(c, &a.extensionEdit.CredentialName).FillWidth().Placeholder("lark-app-secret")

@@ -50,6 +50,11 @@ func Run(opts Options) (runErr error) {
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if s.writer != nil {
+			s.writer.Release()
+		}
+	}()
 	// Kill still-running shell sessions (bash_ids) on exit so long-running
 	// commands are not orphaned when the TUI quits.
 	defer run.KillShellSessions(opts.Tools)

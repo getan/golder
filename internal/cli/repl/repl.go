@@ -54,6 +54,7 @@ import (
 // by Run and reused across every prompt in the session.
 type replDeps struct {
 	store      *session.Store
+	writer     *session.WriterLock
 	header     session.SessionHeader
 	agentCtx   *agentcore.AgentContext
 	live       *cli.LiveConfig
@@ -207,6 +208,11 @@ const replScanBufInit = 64 * 1024
 // and status lines to out (os.Stdout). It is the interactive replacement for the
 // bubbletea program.
 func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
+	defer func() {
+		if deps.writer != nil {
+			deps.writer.Release()
+		}
+	}()
 	// Use the shared buffered reader so the main loop and the tool-call
 	// confirmation prompt read from the same buffer: input is never split
 	// between them the way it would be if the loop used a bufio.Scanner with
@@ -929,6 +935,12 @@ func runForkClone(out io.Writer, deps *replDeps, line string) {
 		fmt.Fprintf(out, "golder: fork failed: %v\n", err)
 		return
 	}
+	nextWriter, err := deps.nextWriter(newHeader.ID)
+	if err != nil {
+		_ = deps.store.Delete(newHeader.ID)
+		fmt.Fprintf(out, "golder: fork failed: %v\n", err)
+		return
+	}
 
 	// Swap the live session to the new branch: rebuild the flat message list from
 	// the copied path and point the REPL at the new header. Subsequent prompts
@@ -938,6 +950,7 @@ func runForkClone(out io.Writer, deps *replDeps, line string) {
 		msgs[i] = e.Message
 	}
 	deps.header = newHeader
+	deps.replaceWriter(nextWriter)
 	deps.agentCtx.Messages = msgs
 	// The new file already holds the copied path verbatim, so mark it all
 	// persisted and set the active leaf to the copied tip.
@@ -1074,6 +1087,12 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 		fmt.Fprintf(out, "golder: import failed: %v\n", err)
 		return
 	}
+	nextWriter, err := deps.nextWriter(newHeader.ID)
+	if err != nil {
+		_ = deps.store.Delete(newHeader.ID)
+		fmt.Fprintf(out, "golder: import failed: %v\n", err)
+		return
+	}
 	// Swap the live session to the imported one: rebuild the flat message list and
 	// point the REPL at the new header. The imported file already holds the entries
 	// verbatim, so mark them all persisted and set the active leaf to the tip.
@@ -1082,6 +1101,7 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 		msgs[i] = e.Message
 	}
 	deps.header = newHeader
+	deps.replaceWriter(nextWriter)
 	deps.agentCtx.Messages = msgs
 	deps.persisted = len(entries)
 	deps.curLeaf = ""
@@ -1098,6 +1118,22 @@ func runImport(out io.Writer, deps *replDeps, line string) {
 		deps.telemetry.Reset()
 	}
 	fmt.Fprintf(out, "imported %d entries from %s → session %s\n", len(entries), path, newHeader.ID)
+}
+
+func (d *replDeps) nextWriter(id string) (*session.WriterLock, error) {
+	if d == nil || d.writer == nil {
+		return nil, nil
+	}
+	return d.store.AcquireWriter(id, "REPL")
+}
+
+func (d *replDeps) replaceWriter(next *session.WriterLock) {
+	if d == nil || next == nil {
+		return
+	}
+	old := d.writer
+	d.writer = next
+	old.Release()
 }
 
 // runManualCompact compacts the shared context on an explicit /compact request:

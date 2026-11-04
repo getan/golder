@@ -93,6 +93,7 @@ func ContinueTarget(cwd string) (id, note string, err error) {
 // branch descending from the resumed leaf rather than flattening the tree.
 type headlessSession struct {
 	store   *session.Store
+	writer  *session.WriterLock
 	header  session.SessionHeader
 	curLeaf string // active leaf id to descend from; "" for a fresh session
 	// persisted is the number of agentCtx.Messages already on disk before the
@@ -115,6 +116,14 @@ type headlessSession struct {
 // rebuilds the prompt from THIS binary through it, carrying the session's own
 // user-authored inputs over (see cli.ResumeSystemPrompt).
 func openHeadlessSession(resumeID, model, providerName, sysPrompt string, prompt runtime.PromptInputs) (agentcore.MessageList, headlessSession, error) {
+	return openHeadlessSessionWithWriter(resumeID, model, providerName, sysPrompt, prompt, false)
+}
+
+func openHeadlessWriterSession(resumeID, model, providerName, sysPrompt string, prompt runtime.PromptInputs) (agentcore.MessageList, headlessSession, error) {
+	return openHeadlessSessionWithWriter(resumeID, model, providerName, sysPrompt, prompt, true)
+}
+
+func openHeadlessSessionWithWriter(resumeID, model, providerName, sysPrompt string, prompt runtime.PromptInputs, lock bool) (agentcore.MessageList, headlessSession, error) {
 	store, err := SessionStore()
 	if err != nil {
 		return nil, headlessSession{}, err
@@ -122,8 +131,16 @@ func openHeadlessSession(resumeID, model, providerName, sysPrompt string, prompt
 	now := time.Now().UTC()
 
 	if resumeID != "" {
+		var writer *session.WriterLock
+		if lock {
+			writer, err = store.AcquireWriter(resumeID, "Headless")
+			if err != nil {
+				return nil, headlessSession{}, err
+			}
+		}
 		h, entries, err := store.LoadEntries(resumeID)
 		if err != nil {
+			writer.Release()
 			return nil, headlessSession{}, err
 		}
 		msgs := make(agentcore.MessageList, len(entries))
@@ -139,7 +156,7 @@ func openHeadlessSession(resumeID, model, providerName, sysPrompt string, prompt
 		// header keeps its original SystemPrompt (it records what the session was
 		// created with); the run uses the rebuilt one.
 		h.SystemPrompt = cli.ResumeSystemPrompt(h, prompt)
-		return msgs, headlessSession{store: store, header: h, curLeaf: curLeaf, persisted: len(msgs), model: model, provider: providerName}, nil
+		return msgs, headlessSession{store: store, writer: writer, header: h, curLeaf: curLeaf, persisted: len(msgs), model: model, provider: providerName}, nil
 	}
 
 	header := session.SessionHeader{
@@ -155,7 +172,21 @@ func openHeadlessSession(resumeID, model, providerName, sysPrompt string, prompt
 		AppendInstructions: prompt.Appends,
 		Cwd:                headlessCwd(),
 	}
-	return nil, headlessSession{store: store, header: header, curLeaf: "", persisted: 0, model: model, provider: providerName}, nil
+	var writer *session.WriterLock
+	if lock {
+		writer, err = store.AcquireWriter(header.ID, "Headless")
+		if err != nil {
+			return nil, headlessSession{}, err
+		}
+	}
+	return nil, headlessSession{store: store, writer: writer, header: header, curLeaf: "", persisted: 0, model: model, provider: providerName}, nil
+}
+
+func (hs *headlessSession) close() {
+	if hs != nil && hs.writer != nil {
+		hs.writer.Release()
+		hs.writer = nil
+	}
 }
 
 // headlessCwd returns the absolute working directory the run executes in, used

@@ -69,18 +69,27 @@ Two optional surfaces need runtime pieces:
 ## What the window does
 
 - sessions: project/path grouping, new/resume/rename/archive/delete/export, and
-  a writer lock that refuses a second process on the same session;
-- turns: streamed Markdown, thinking (collapsed), tool cards with bounded
-  output, compaction and provider notices, cancel;
+  one shared OS writer lease across GUI, TUI, REPL and headless runs (`flock` on
+  Unix, `LockFileEx` on Windows); a conflicting GUI opens the transcript
+  read-only and names the active writer;
+- turns: streamed Markdown, thinking (collapsed), compact failure panels and
+  grouped, indentation-preserving `apply_patch` diff cards with bounded output,
+  compaction and provider notices, cancel;
 - approvals: consent and trust questions answered inline; closing the window
   fails every pending question closed;
 - configuration: a shared Settings page for provider, model, base URL, protocol
-  and named credentials, plus live model/reasoning/approval controls;
+  and named credentials, plus GUI-local System/Light/Dark appearance and
+  persistent font scaling, and live model/reasoning/approval controls;
 - extensions: a native manager for checksummed first-party package install,
   exact source review, named-secret configuration, browser OAuth, safe
   phase-coded failures, one-click helper update/rebinding, separate bundled /
   installed / active and application/user-auth status, test, enable/disable,
-  reset and uninstall; other configured sources appear there too;
+  reset and uninstall; installed native Lark/Project CLIs are auto-detected, and
+  pinned official binaries can be downloaded and integrity-checked directly
+  without requiring npm or Node; other configured sources appear there too;
+- files: a custom, project-scoped Files drawer with lazy folder expansion and a
+  bounded read-only preview; generated directories are hidden and symlinks are
+  shown but never followed;
 - changes: a Git status + unified diff drawer rendered by MyGo's diff viewer,
   opened from a compact icon-only title action;
 - actions: a command palette over the existing slash registry, so skills,
@@ -89,8 +98,9 @@ Two optional surfaces need runtime pieces:
   native Bitmap frames in an automatically revealed right drawer and mouse,
   keyboard, scroll, resize and committed IME input forwarded through the typed
   control socket; auto-reveal follows the exact opened socket even with several
-  browsers or a short runtime path; title and approval actions use theme-colored
-  monochrome SVGs;
+  browsers or a short runtime path, and retries bounded discovery while a newly
+  launched socket is becoming visible; title and approval actions use
+  theme-colored monochrome SVGs;
 - terminal: an explicit user shell and detachable takeover of Agent bash calls
   that ran with `tty=true`.
 

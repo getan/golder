@@ -66,14 +66,17 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 	}
 	head := toolHeadline(*st)
 	open := a.toolOpen[it.ID]
-	el := ui.Collapsible(c.Key(it.ID), head, &open, func() {
-		if len(st.Input) > 0 {
+	ui.Collapsible(c.Key(it.ID), head, &open, func() {
+		patchRendered := st.Name == "apply_patch" && renderApplyPatch(c, st.Input)
+		if len(st.Input) > 0 && !patchRendered {
 			ui.Text(c, formatInput(st.Input)).FontSize(11.5).TextColor(t.TextMuted).Selectable()
 		}
 		if st.Output != "" {
-			ui.Text(c, truncate(st.Output, 12000)).FontSize(12).Selectable()
+			renderToolOutput(c, truncate(st.Output, 12000), it.Failed || st.Error)
 		} else if st.Running {
 			ui.Text(c, "Running…").FontSize(12).TextColor(t.TextMuted)
+		} else if it.Failed || st.Error {
+			renderToolOutput(c, "The command failed without diagnostic output.", true)
 		}
 		if id := toolTTYID(st.Details, st.Input); id != "" {
 			if ui.Button(c, "Open Terminal").Tooltip("Attach to " + id).Clicked() {
@@ -81,10 +84,23 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 			}
 		}
 	})
-	if it.Failed {
-		el.TextColor(t.Danger)
-	}
 	a.toolOpen[it.ID] = open
+}
+
+func renderToolOutput(c *ui.Context, output string, failed bool) {
+	t := c.Theme()
+	if !failed {
+		ui.Text(c, output).MarginStart(18).FontSize(12).TextColor(t.Text).Selectable().Wrap()
+		return
+	}
+	ui.Column(c).MarginStart(18).Padding(8, 10).Gap(5).Radius(7).
+		Background(t.Danger.Alpha(.06)).Border(1, t.Danger.Alpha(.22)).Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "×").FontSize(11).FontWeight(700).TextColor(t.Danger)
+			ui.Text(c, "Command failed").FontSize(11).FontWeight(600).TextColor(t.Text)
+		})
+		ui.Text(c, output).Font("monospace").FontSize(11.5).TextColor(t.Text).Selectable().Wrap()
+	})
 }
 
 func (a *App) noteLine(c *ui.Context, it appsession.Item) {
@@ -148,7 +164,9 @@ func toolSubject(st appsession.ToolState) string {
 	switch st.Name {
 	case "bash", "shell":
 		return pick("command")
-	case "read", "write", "edit", "apply_patch", "multiedit":
+	case "apply_patch":
+		return applyPatchSubject(st.Input)
+	case "read", "write", "edit", "multiedit":
 		if p := pick("path", "file_path", "file"); p != "" {
 			return p
 		}

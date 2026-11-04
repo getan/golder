@@ -13,6 +13,11 @@ import (
 
 var larkSourceRef = extensions.SourceRef{Kind: "mcp", ID: "lark"}
 
+var discoverOfficialCLI = extensions.DiscoverOfficialCLI
+var installOfficialCLI = func(ctx context.Context, kind extensions.OfficialCLIKind) (extensions.OfficialCLI, error) {
+	return extensions.NewOfficialCLIInstaller().Install(ctx, kind)
+}
+
 // ExtensionPackageView is the compact package/source state the native Settings
 // page renders. It contains no environment values, credentials or setup URLs.
 type ExtensionPackageView struct {
@@ -148,7 +153,45 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		_, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), view.CredentialName)
 		view.CredentialAvailable = err == nil
 	}
+	view.LarkCLI, view.ProjectCLI = c.DiscoverLarkCLIs(view.LarkCLI, view.ProjectCLI)
 	return view, nil
+}
+
+// DiscoverLarkCLIs performs bounded local discovery only. Script/npm wrappers
+// are ignored; returned paths are resolved native executables.
+func (c *Controller) DiscoverLarkCLIs(preferredLark, preferredProject string) (larkCLI, projectCLI string) {
+	larkCLI, projectCLI, _, _ = c.DetectLarkCLIs(preferredLark, preferredProject)
+	return larkCLI, projectCLI
+}
+
+// DetectLarkCLIs is DiscoverLarkCLIs with explicit match flags for UI feedback.
+// A configured but invalid preferred path is preserved, but is not reported as
+// detected.
+func (c *Controller) DetectLarkCLIs(preferredLark, preferredProject string) (larkCLI, projectCLI string, larkFound, projectFound bool) {
+	larkCLI, projectCLI = preferredLark, preferredProject
+	if found, ok := discoverOfficialCLI(extensions.OfficialLarkCLI, preferredLark); ok {
+		larkCLI = found.Executable
+		larkFound = true
+	}
+	if found, ok := discoverOfficialCLI(extensions.OfficialProjectCLI, preferredProject); ok {
+		projectCLI = found.Executable
+		projectFound = true
+	}
+	return larkCLI, projectCLI, larkFound, projectFound
+}
+
+// InstallOfficialLarkCLI downloads one pinned official native distribution,
+// verifies its release integrity and installs it without npm or Node.
+func (c *Controller) InstallOfficialLarkCLI(ctx context.Context, project bool) (string, error) {
+	kind := extensions.OfficialLarkCLI
+	if project {
+		kind = extensions.OfficialProjectCLI
+	}
+	installed, err := installOfficialCLI(ctx, kind)
+	if err != nil {
+		return "", err
+	}
+	return installed.Executable, nil
 }
 
 // ExtensionSources lists every configured source without executing it.

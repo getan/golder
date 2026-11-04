@@ -20,6 +20,7 @@ const (
 
 // view is the window's single build function.
 func (a *App) view(c *ui.Context) {
+	a.applyDisplayPreferences(c)
 	t := c.Theme()
 	if !a.settingsOpen {
 		// The password field is write-only. Dismissing Settings must not retain a
@@ -59,6 +60,9 @@ func (a *App) view(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			a.sidebar(c)
 			a.center(c)
+			if a.filesOpen {
+				a.fileExplorerPanel(c)
+			}
 			if a.changesOpen {
 				a.changesPanel(c)
 			}
@@ -95,6 +99,13 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
+		if compactIconButton(c, "files", filesMonochromeIcon, "Files", "Browse project files").Clicked() {
+			if a.filesOpen {
+				a.filesOpen = false
+			} else {
+				a.openFileExplorer()
+			}
+		}
 		changesTip := "Review uncommitted changes"
 		if changes > 0 {
 			changesTip = fmt.Sprintf("Changes · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
@@ -102,6 +113,7 @@ func (a *App) titleBar(c *ui.Context) {
 		if ui.Button(c, "▤").Tooltip(changesTip).Clicked() {
 			a.changesOpen = !a.changesOpen
 			if a.changesOpen {
+				a.filesOpen = false
 				a.closeBrowserPanel()
 				a.refreshChanges()
 			}
@@ -111,6 +123,7 @@ func (a *App) titleBar(c *ui.Context) {
 			browserTip = fmt.Sprintf("Browser · %d active", len(a.browsers))
 		}
 		if compactIconButton(c, "browser", browserMonochromeIcon, "Browser", browserTip).Clicked() {
+			a.filesOpen = false
 			if a.browserPanelOpen {
 				a.closeBrowserPanel()
 			} else if len(a.browsers) == 1 {

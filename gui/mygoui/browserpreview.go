@@ -44,6 +44,7 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	state.win = a.win
 	a.browserState, a.browserCancel, a.browserPanelOpen = state, cancel, true
 	a.changesOpen = false
+	a.filesOpen = false
 	go attachBrowserSurface(ctx, a.win, state, browser)
 }
 

@@ -3,6 +3,7 @@ package mygoui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -16,6 +17,10 @@ func testApp() *App {
 		thinkingOpen: map[string]bool{},
 		toolOpen:     map[string]bool{},
 		approvalOpen: map[string]bool{},
+		fileEntries:  map[string][]appsession.ProjectFileEntry{},
+		fileExpanded: map[string]bool{},
+		fileLoading:  map[string]bool{},
+		display:      appsession.DisplaySettings{Theme: "system", FontScale: 1},
 		status: appsession.Status{
 			Model:      "test-model",
 			Provider:   "test-provider",
@@ -70,6 +75,7 @@ func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 		preferredSocket string
 	}{
 		{"open", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "open"}, Details: map[string]any{"socket": "/tmp/open.sock"}}}, true, true, "/tmp/open.sock"},
+		{"navigate", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "navigate"}}}, true, true, ""},
 		{"snapshot", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "snapshot"}}}, true, false, ""},
 		{"running", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Running: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
 		{"failed", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Error: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
@@ -81,6 +87,21 @@ func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 				t.Fatalf("refresh/open/socket = %t/%t/%q, want %t/%t/%q", refresh, open, socket, tc.refresh, tc.open, tc.preferredSocket)
 			}
 		})
+	}
+}
+
+func TestBrowserAutoOpenRetriesOnlyInsideBoundedWindow(t *testing.T) {
+	now := time.Now()
+	if !browserAutoOpenShouldRetry(true, now.Add(time.Second), now) {
+		t.Fatal("pending browser open did not retry while its socket may still be starting")
+	}
+	for _, tc := range []struct {
+		pending bool
+		until   time.Time
+	}{{false, now.Add(time.Second)}, {true, time.Time{}}, {true, now.Add(-time.Second)}} {
+		if browserAutoOpenShouldRetry(tc.pending, tc.until, now) {
+			t.Fatalf("unexpected retry pending=%t until=%v", tc.pending, tc.until)
+		}
 	}
 }
 

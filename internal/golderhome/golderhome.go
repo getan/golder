@@ -41,6 +41,7 @@ const (
 	CredentialKeyFile = ".credential-key"
 	UpdateCheckFile   = "update-check.json"
 	GUIProjectsFile   = "gui-projects.json"
+	GUIDisplayFile    = "gui-display.json"
 
 	SessionsDir = "sessions"
 	MemoryDir   = "memory"

@@ -154,13 +154,19 @@ func Run(opts Options) error {
 		header   session.SessionHeader
 		history  []agentcore.AgentMessage
 		curLeaf  string // active leaf id on resume; "" for a fresh session
+		writer   *session.WriterLock
 	)
 	if opts.ResumeID != "" {
+		writer, err = store.AcquireWriter(opts.ResumeID, "REPL")
+		if err != nil {
+			return err
+		}
 		// Interactive resume always appends a fresh user message before running,
 		// so a session that ended normally (trailing assistant reply) is resumable
 		// here. Load the raw session and rebuild the context directly.
 		h, entries, err := store.LoadEntries(opts.ResumeID)
 		if err != nil {
+			writer.Release()
 			return err
 		}
 		msgs := make(agentcore.MessageList, len(entries))
@@ -190,7 +196,17 @@ func Run(opts Options) error {
 			AppendInstructions: opts.Prompt.Appends,
 			Cwd:                cwd,
 		}
+		writer, err = store.AcquireWriter(header.ID, "REPL")
+		if err != nil {
+			return err
+		}
 	}
+	writerHandedOff := false
+	defer func() {
+		if !writerHandedOff && writer != nil {
+			writer.Release()
+		}
+	}()
 
 	// live holds the run configuration that a control command (e.g. /model) may
 	// mutate mid-session. streamRun reads it on each prompt so a model switch
@@ -287,8 +303,10 @@ func Run(opts Options) error {
 	// tool is wired into this session. Not-due / disabled is a cheap no-op.
 	maybeStartBackgroundDream(os.Stdout, dream.ResolveMemoryRoot(), cwd, opts.Dream)
 
+	writerHandedOff = true
 	return runREPL(os.Stdin, os.Stdout, replDeps{
 		store:      store,
+		writer:     writer,
 		header:     header,
 		agentCtx:   agentCtx,
 		live:       live,

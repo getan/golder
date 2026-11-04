@@ -99,9 +99,9 @@ func (a *App) settingsModal(c *ui.Context) {
 				BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 				ui.Text(c, "Settings").FontSize(18).Bold()
 				ui.Spacer(c)
-				ui.Text(c, "Shared with the Golder CLI").FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "Provider defaults are shared with the Golder CLI").FontSize(11).TextColor(t.TextMuted)
 			})
-			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Extensions", "Terminal", "About").
+			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Extensions", "Display", "Terminal", "About").
 				Padding(10, 16, 0, 16)
 			ui.Scroll(c).Grow(1).MaxHeight(530).Children(func() {
 				switch a.settingsTab {
@@ -112,6 +112,8 @@ func (a *App) settingsModal(c *ui.Context) {
 				case 2:
 					a.extensionsSettingsView(c)
 				case 3:
+					a.displaySettingsView(c)
+				case 4:
 					a.terminalSettingsView(c)
 				default:
 					a.aboutSettingsView(c)

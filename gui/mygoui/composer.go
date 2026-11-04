@@ -8,6 +8,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agentcore"
 )
 
@@ -19,9 +20,13 @@ func (a *App) composer(c *ui.Context) {
 	ui.Column(c).Padding(10, 24, 12, 24).Gap(5).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Column(c).MinHeight(84).Radius(18).Background(t.Surface).Border(1, t.Border).Clip().Children(func() {
+			placeholder := "Message Golder — Enter sends, Shift+Enter adds a line"
+			if a.status.ReadOnly {
+				placeholder = "Read-only session — start a new chat to send messages"
+			}
 			input := ui.TextAreaBase(c, &a.draft).Lines(1, 8).Grow(1).
 				Padding(12, 14, 8, 14).
-				Placeholder("Message Golder — Enter sends, Shift+Enter adds a line")
+				Placeholder(placeholder).Disabled(a.status.ReadOnly)
 			input.OnTextKey(func(k ui.TextKey) bool {
 				if k.Key == ui.KeyEnter && k.Mods == 0 {
 					text := strings.TrimSpace(k.Text())
@@ -62,14 +67,14 @@ func (a *App) composer(c *ui.Context) {
 				})
 			}
 
-			ready := strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0
+			ready := !a.status.ReadOnly && (strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0)
 			label, accessible := "↑", "Send message"
 			face, hover, pressed, buttonText := composerControlPalette(t, a.status.Running, ready)
 			if a.status.Running {
 				label, accessible = "■", "Stop generation"
 			}
 			ui.Row(c).Padding(0, 9, 9, 9).Gap(6).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "+").Tooltip("Attach files or images").Clicked() {
+				if ui.Button(c, "+").Tooltip("Attach files or images").Disabled(a.status.ReadOnly).Clicked() {
 					a.pickAttachments()
 				}
 				if compactIconButton(c, "approval-mode", approvalHandIcon, "Approval mode", "Approval mode · "+a.status.Permission).Clicked() {
@@ -84,7 +89,7 @@ func (a *App) composer(c *ui.Context) {
 					}
 				}
 				send := ui.ButtonBase(c).Size(34, 34).Radius(17).
-					Label(accessible).Tooltip(accessible).Disabled(!a.status.Running && !ready).Background(face)
+					Label(accessible).Tooltip(accessible).Disabled(a.status.ReadOnly || (!a.status.Running && !ready)).Background(face)
 				if send.Hovered() {
 					send.Background(hover)
 				} else if send.Pressed() {
@@ -105,12 +110,27 @@ func (a *App) composer(c *ui.Context) {
 				}
 			})
 		})
-		ui.Row(c).Justify(ui.End).Padding(0, 4).Children(func() {
+		ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
+			if a.status.ReadOnly {
+				ui.Text(c, readOnlySessionLabel(a.status)).FontSize(11).TextColor(t.Warning)
+			}
+			ui.Spacer(c)
 			ui.Text(c, fmt.Sprintf("%d%% context · %s / %s",
 				a.contextPercent(), formatTokens(a.status.ContextUsed), formatTokens(a.status.ContextLimit))).
 				FontSize(11).TextColor(t.TextMuted)
 		})
 	})
+}
+
+func readOnlySessionLabel(status appsession.Status) string {
+	label := "Read-only · session is open elsewhere"
+	if status.Writer.Frontend != "" {
+		label = "Read-only · active in " + status.Writer.Frontend
+	}
+	if status.Writer.PID > 0 {
+		label += fmt.Sprintf(" (PID %d)", status.Writer.PID)
+	}
+	return label
 }
 
 func composerControlPalette(t *ui.Theme, running, ready bool) (face, hover, pressed, text ui.Color) {

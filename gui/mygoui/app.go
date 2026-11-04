@@ -74,6 +74,9 @@ type App struct {
 	settingsNote string
 	settingsBusy bool
 	ttySessions  []appsession.TTYSummary
+	display      appsession.DisplaySettings
+	displayErr   string
+	displayNote  string
 
 	extension              appsession.LarkExtensionSettings
 	extensionSources       []appsession.ExtensionSourceView
@@ -103,24 +106,43 @@ type App struct {
 	diffSel     int
 	diff        *editor.DiffState
 
+	filesOpen       bool
+	fileEntries     map[string][]appsession.ProjectFileEntry
+	fileExpanded    map[string]bool
+	fileLoading     map[string]bool
+	fileSelected    string
+	filePreview     appsession.ProjectFilePreview
+	filePreviewBusy bool
+	filesErr        string
+
 	browsers          []appsession.BrowserPreview
 	browserOpen       bool
 	browserPanelOpen  bool
 	browserAutoOpen   bool
 	browserAutoSocket string
+	browserAutoUntil  time.Time
+	browserRetryArmed bool
 	browserState      *browserWindowState
 	browserCancel     context.CancelFunc
 }
 
 // New builds the app around an opened controller.
 func New(ctrl *appsession.Controller) *App {
+	display, displayErr := appsession.LoadDisplaySettings()
 	a := &App{
 		ctrl:         ctrl,
 		index:        map[string]int{},
 		thinkingOpen: map[string]bool{},
 		toolOpen:     map[string]bool{},
 		approvalOpen: map[string]bool{},
+		fileEntries:  map[string][]appsession.ProjectFileEntry{},
+		fileExpanded: map[string]bool{},
+		fileLoading:  map[string]bool{},
+		display:      display,
 		md:           markdown.Options{},
+	}
+	if displayErr != nil {
+		a.displayErr = displayErr.Error()
 	}
 	a.applySnapshot(ctrl.Snapshot())
 	return a
@@ -174,8 +196,12 @@ func (a *App) pump() {
 }
 
 func (a *App) applySnapshot(snap appsession.Snapshot) {
+	previousProject := a.project
 	a.status = snap.Status
 	a.project = snap.Project
+	if previousProject != "" && previousProject != a.project {
+		a.resetFileExplorer()
+	}
 	if a.selectedProject == "" {
 		a.selectedProject = snap.Project
 	}
@@ -449,6 +475,7 @@ func (a *App) refreshBrowsersForPanel(open bool, preferredSocket string) {
 		a.browsers = browsers
 		if open {
 			a.browserAutoOpen = true
+			a.browserAutoUntil = time.Now().Add(8 * time.Second)
 			if preferredSocket = browserSocketKey(preferredSocket); preferredSocket != "" {
 				a.browserAutoSocket = preferredSocket
 			}
@@ -456,13 +483,19 @@ func (a *App) refreshBrowsersForPanel(open bool, preferredSocket string) {
 		decision, index := browserAutoOpenDecision(a.browserAutoOpen, a.browserPanelOpen, a.browserAutoSocket, browsers)
 		switch decision {
 		case browserOpenSingle:
-			a.browserAutoOpen, a.browserAutoSocket = false, ""
+			a.clearBrowserAutoOpen()
 			a.openBrowserPreview(browsers[index])
 		case browserChooseInstance:
-			a.browserAutoOpen, a.browserAutoSocket = false, ""
+			a.clearBrowserAutoOpen()
 			a.browserOpen = true
 		case browserOpenAlready:
-			a.browserAutoOpen, a.browserAutoSocket = false, ""
+			a.clearBrowserAutoOpen()
+		case browserOpenNone:
+			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
+				a.scheduleBrowserAutoOpenRetry()
+			} else if a.browserAutoOpen && !a.browserAutoUntil.IsZero() {
+				a.clearBrowserAutoOpen()
+			}
 		}
 	})
 }
@@ -474,6 +507,7 @@ func (a *App) followBrowserTool(item appsession.Item) {
 	}
 	if open {
 		a.browserAutoOpen = true
+		a.browserAutoUntil = time.Now().Add(8 * time.Second)
 		if socket = browserSocketKey(socket); socket != "" {
 			a.browserAutoSocket = socket
 		}
@@ -486,10 +520,42 @@ func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket s
 		return false, false, ""
 	}
 	action, _ := item.Tool.Input["action"].(string)
-	if action == "open" {
+	if action == "open" || action == "attach" {
 		socket, _ = item.Tool.Details["socket"].(string)
 	}
-	return true, action == "open", socket
+	switch action {
+	case "open", "attach", "navigate", "tab_new", "tab_select":
+		open = true
+	}
+	return true, open, socket
+}
+
+func (a *App) clearBrowserAutoOpen() {
+	a.browserAutoOpen, a.browserAutoSocket = false, ""
+	a.browserAutoUntil = time.Time{}
+}
+
+func (a *App) scheduleBrowserAutoOpenRetry() {
+	if a.browserRetryArmed || a.win == nil {
+		return
+	}
+	a.browserRetryArmed = true
+	win := a.win
+	go func() {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		<-timer.C
+		win.Update(func() {
+			a.browserRetryArmed = false
+			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
+				go a.refreshBrowsersForPanel(false, "")
+			}
+		})
+	}()
+}
+
+func browserAutoOpenShouldRetry(pending bool, until, now time.Time) bool {
+	return pending && !until.IsZero() && now.Before(until)
 }
 
 type browserOpenDecision uint8

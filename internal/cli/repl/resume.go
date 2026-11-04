@@ -60,9 +60,17 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 		fmt.Fprintf(out, "Already on session %s.\n", id)
 		return
 	}
+	nextWriter, err := deps.nextWriter(id)
+	if err != nil {
+		fmt.Fprintf(out, "resume: %v\n", err)
+		return
+	}
 	cli.PersistTurn(out, deps)
 	h, entries, err := deps.store.LoadEntries(id)
 	if err != nil {
+		if nextWriter != nil {
+			nextWriter.Release()
+		}
 		fmt.Fprintf(out, "resume: %v\n", err)
 		return
 	}
@@ -80,6 +88,7 @@ func runResume(out io.Writer, deps *replDeps, arg string) {
 	// about the model actually in use.
 	deps.live.RefreshContextWindow()
 	deps.header = h
+	deps.replaceWriter(nextWriter)
 	deps.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: deps.agentCtx.Tools}
 	deps.persisted = len(msgs)
 	deps.curLeaf = ""

@@ -59,6 +59,7 @@ import (
 // flattening rewrite.
 type runSession struct {
 	store      *session.Store
+	writer     *session.WriterLock
 	header     session.SessionHeader
 	agentCtx   *agentcore.AgentContext
 	live       *cli.LiveConfig
@@ -294,7 +295,28 @@ func newRunSession(opts Options) (*runSession, []agentcore.Message, error) {
 		return nil, nil, err
 	}
 	diagtrace.Event("session", "store open failed=%t duration=%s", err != nil, time.Since(start))
-	return newRunSessionWithStore(store, opts)
+	var writer *session.WriterLock
+	if opts.ResumeID != "" {
+		writer, err = store.AcquireWriter(opts.ResumeID, "TUI")
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	s, history, err := newRunSessionWithStore(store, opts)
+	if err != nil {
+		writer.Release()
+		return nil, nil, err
+	}
+	if writer == nil {
+		writer, err = store.AcquireWriter(s.header.ID, "TUI")
+		if err != nil {
+			s.hostClose()
+			agenttool.ClosePaneAgent(opts.Tools)
+			return nil, nil, err
+		}
+	}
+	s.writer = writer
+	return s, history, nil
 }
 
 // newRunSessionWithStore is the store-agnostic core of newRunSession: given an
@@ -1180,6 +1202,14 @@ func (s *runSession) switchTo(id string) ([]agentcore.Message, error) {
 // a /clone, /fork or /import) keeps serving with the provider and model already
 // in use, which is also what a launch on the same session does.
 func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry) ([]agentcore.Message, error) {
+	var nextWriter *session.WriterLock
+	if s.writer != nil && h.ID != s.header.ID {
+		var err error
+		nextWriter, err = s.store.AcquireWriter(h.ID, "TUI")
+		if err != nil {
+			return nil, err
+		}
+	}
 	msgs := make(agentcore.MessageList, len(entries))
 	for i, e := range entries {
 		msgs[i] = e.Message
@@ -1192,6 +1222,11 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry) ([]
 	// so the gauge and the auto-compaction threshold follow the live config.
 	s.live.RefreshContextWindow()
 	s.header = h
+	if nextWriter != nil {
+		old := s.writer
+		s.writer = nextWriter
+		old.Release()
+	}
 	s.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: s.agentCtx.Tools}
 	s.persisted = len(msgs)
 	s.compacted = false

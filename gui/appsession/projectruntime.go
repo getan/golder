@@ -111,7 +111,7 @@ func (c *Controller) conversationLanguage() string {
 	return judge.ConversationLanguage(messages)
 }
 
-func (c *Controller) installProjectSession(ctx context.Context, next projectRuntime, header session.SessionHeader, entries []session.Entry, lock *sessionLock, resumed bool) {
+func (c *Controller) installProjectSession(ctx context.Context, next projectRuntime, header session.SessionHeader, entries []session.Entry, lock *sessionLock, readOnly bool, holder session.WriterInfo, resumed bool) {
 	messages := make(agentcore.MessageList, len(entries))
 	curLeaf := ""
 	for i, entry := range entries {
@@ -146,6 +146,7 @@ func (c *Controller) installProjectSession(ctx context.Context, next projectRunt
 	c.perms, c.notes, c.budget = next.env.Permissions, next.env.ReviewNotes, next.env.Budget
 	c.memory, c.cwd, c.prompt = next.env.Memory, next.env.Cwd, next.env.Prompt
 	c.lock, c.curLeaf, c.persisted = lock, curLeaf, len(messages)
+	c.readOnly, c.writerInfo = readOnly, holder
 	c.compacted = false
 	c.items, c.index = nil, map[string]int{}
 	c.approvedForSession, c.deniedForSession, c.answered = map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -160,6 +161,7 @@ func (c *Controller) installProjectSession(ctx context.Context, next projectRunt
 		Model: next.live.Model, Provider: next.live.ProviderName, Thinking: next.live.ThinkingLevel,
 		Permission: next.env.Permissions.Mode().String(), SessionID: header.ID,
 		Title: c.title, ContextUsed: estimateTokens(messages), ContextLimit: next.live.ContextWindow,
+		ReadOnly: readOnly, Writer: writerView(holder),
 	}
 	c.mu.Unlock()
 
@@ -180,10 +182,12 @@ func (c *Controller) installProjectSession(ctx context.Context, next projectRunt
 	}
 	c.status.Title = c.title
 	c.mu.Unlock()
-	if err := agenttool.ConfigurePaneAgent(ctx, next.env.Tools, header.ID); err != nil {
-		c.warnf("pane control registration unavailable: %v", err)
+	if !readOnly {
+		if err := agenttool.ConfigurePaneAgent(ctx, next.env.Tools, header.ID); err != nil {
+			c.warnf("pane control registration unavailable: %v", err)
+		}
+		c.wireHooks(ctx, resumed)
 	}
-	c.wireHooks(ctx, resumed)
 	c.emitStatus()
 }
 

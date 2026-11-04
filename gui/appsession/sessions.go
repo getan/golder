@@ -24,6 +24,9 @@ func (c *Controller) persist() error {
 	if c.store == nil || c.agentCtx == nil {
 		return errors.New("session is not open")
 	}
+	if c.readOnly {
+		return nil
+	}
 	msgs := c.agentCtx.Messages
 	if c.compacted || c.persisted > len(msgs) {
 		c.header.UpdatedAt = time.Now().UTC()
@@ -171,17 +174,17 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 			if prepareErr != nil {
 				return prepareErr
 			}
-			lock, lockErr := acquireSessionLock(store.Dir(), id)
+			lock, readOnly, holder, lockErr := acquireSessionAccess(store.Dir(), id)
 			if lockErr != nil {
 				closeProjectRuntime(next)
 				return lockErr
 			}
-			c.installProjectSession(ctx, next, h, entries, lock, true)
+			c.installProjectSession(ctx, next, h, entries, lock, readOnly, holder, true)
 			_ = c.SelectProject(target)
 			return nil
 		}
 	}
-	if err := c.relock(id); err != nil {
+	if err := c.reaccess(id); err != nil {
 		return err
 	}
 	c.adopt(h, entries)
@@ -232,7 +235,7 @@ func (c *Controller) NewSessionInProject(ctx context.Context, path string) error
 			closeProjectRuntime(next)
 			return err
 		}
-		c.installProjectSession(ctx, next, header, nil, lock, false)
+		c.installProjectSession(ctx, next, header, nil, lock, false, session.WriterInfo{}, false)
 		_ = c.SelectProject(target)
 		return nil
 	}
@@ -303,6 +306,30 @@ func (c *Controller) relock(id string) error {
 	}
 	c.mu.Lock()
 	c.lock = lk
+	c.readOnly = false
+	c.writerInfo = session.WriterInfo{}
+	c.status.ReadOnly = false
+	c.status.Writer = SessionWriterView{}
+	c.mu.Unlock()
+	old.release()
+	return nil
+}
+
+func (c *Controller) reaccess(id string) error {
+	c.mu.Lock()
+	store, old := c.store, c.lock
+	c.mu.Unlock()
+	if store == nil {
+		return errors.New("session is not open")
+	}
+	lk, readOnly, holder, err := acquireSessionAccess(store.Dir(), id)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.lock = lk
+	c.readOnly, c.writerInfo = readOnly, holder
+	c.status.ReadOnly, c.status.Writer = readOnly, writerView(holder)
 	c.mu.Unlock()
 	old.release()
 	return nil
@@ -353,8 +380,12 @@ func (c *Controller) rebindSessionRuntime(ctx context.Context, resumed bool) {
 	c.mu.Lock()
 	tools := c.opt.Tools
 	id := c.header.ID
+	readOnly := c.readOnly
 	c.mu.Unlock()
 	agenttool.ClosePaneAgent(tools)
+	if readOnly {
+		return
+	}
 	if err := agenttool.ConfigurePaneAgent(ctx, tools, id); err != nil {
 		c.warnf("pane control registration unavailable: %v", err)
 	}
@@ -395,6 +426,12 @@ func (c *Controller) RenameSession(ctx context.Context, id, title string) error 
 	store, current := c.store, c.header.ID
 	c.mu.Unlock()
 	if id == current {
+		c.mu.Lock()
+		readOnly := c.readOnly
+		c.mu.Unlock()
+		if readOnly {
+			return ErrReadOnly
+		}
 		if err := c.persist(); err != nil {
 			return err
 		}
