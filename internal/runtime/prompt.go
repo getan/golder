@@ -371,9 +371,9 @@ const sandboxGuide = "Shell commands may run inside an OS sandbox that confines 
 	"narrower command); what must not repeat is the same one. For one literal git push, including " +
 	"a different repository, use `git -C <repo> push ...`; do not use `cd <repo> && git push`, " +
 	"because shell chaining prevents deterministic remote resolution. Keep " +
-	"network:on but do not guess ~/.ssh paths or add require_escalated merely because the remote " +
-	"name might use SSH: the authorization gate resolves the effective push transport locally and " +
-	"turns a verified SSH remote into a binding-checked one-call capability. If any sandboxed git push " +
+	"network:on but do not guess credential paths or add require_escalated merely because the remote " +
+	"needs authentication: the authorization gate resolves the effective push transport locally and " +
+	"turns a verified SSH or HTTPS remote and bound hook into a binding-checked one-call capability. If any sandboxed git push " +
 	"exits non-zero, do not classify its error text: retry that push exactly once outside the sandbox " +
 	"with network:on and require_escalated; if the escape is not granted or that retry fails, stop."
 

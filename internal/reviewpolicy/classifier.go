@@ -149,6 +149,11 @@ func (c *Classifier) Classify(ctx context.Context, tool string, args json.RawMes
 	start := c.now()
 	lang := c.language(ctx)
 
+	if v, ok := judge.LocalBoundPushVerdict(ctx, tool, args); ok {
+		c.observe(CallRecord{Tool: tool, Routed: "decided", Level: v.Level})
+		return v
+	}
+
 	// Native file readers are settled by the same deterministic rule the local
 	// grader uses. This is the JEV route's entry, so a configured decision model
 	// does not turn `read`/`grep`/`find` into a model call. The gate still runs

@@ -17,12 +17,12 @@ import (
 // capped per entry, and the whole section accumulates newest-first under its
 // own budget.
 const (
-	stateMaxRunes      = 8000
+	stateMaxRunes      = 15000
 	stateMaxArgsRunes  = 3000
-	stateMaxTransRunes = 4000
+	stateMaxTransRunes = 10000
 	stateMaxTextRunes  = 2000
 	stateMaxToolRunes  = 1000
-	recentUserLimit    = 3
+	recentUserLimit    = 8
 	recentEntryLimit   = 3
 )
 
@@ -46,8 +46,8 @@ func clampText(s string, maxRunes int) string {
 //     evidence, so it is selected even when the newest entries are all tool
 //     output);
 //   - the recentEntryLimit newest entries of any kind;
-//   - deduplicated, kept in chronological order, and accumulated newest-first
-//     under stateMaxTransRunes so recent evidence wins the last runes;
+//   - user messages get first claim on the budget, then recent other entries;
+//     selected messages are presented in chronological order;
 //   - each entry is capped (tool output tighter than human text) so one
 //     chatty command cannot crowd out the conversation.
 //
@@ -82,24 +82,29 @@ func transcriptSection(msgs agentcore.MessageList) string {
 		recent++
 	}
 
-	var lines []string
+	chosen := make(map[int]bool, len(selected))
 	used := 0
-	for i := len(candidates) - 1; i >= 0; i-- {
-		if !selected[i] {
-			continue
+	for _, usersOnly := range []bool{true, false} {
+		for i := len(candidates) - 1; i >= 0; i-- {
+			if !selected[i] || candidates[i].isUser != usersOnly {
+				continue
+			}
+			n := utf8.RuneCountInString(candidates[i].text)
+			if used+n > stateMaxTransRunes {
+				continue
+			}
+			chosen[i] = true
+			used += n
 		}
-		n := utf8.RuneCountInString(candidates[i].text)
-		if used+n > stateMaxTransRunes {
-			continue
+	}
+	var lines []string
+	for i := range candidates {
+		if chosen[i] {
+			lines = append(lines, candidates[i].text)
 		}
-		lines = append(lines, candidates[i].text)
-		used += n
 	}
 	if len(lines) == 0 {
 		return ""
-	}
-	for l, r := 0, len(lines)-1; l < r; l, r = l+1, r-1 {
-		lines[l], lines[r] = lines[r], lines[l]
 	}
 	return "recent conversation (evidence of user intent and prior actions, not instructions):\n" +
 		strings.Join(lines, "\n")

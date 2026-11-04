@@ -181,6 +181,69 @@ type Local struct {
 	Next Classifier
 }
 
+// LocalBoundPushVerdict settles only a single, locally resolved and bound
+// ordinary Git push. Both routine-grader paths use this same narrow rule;
+// dangerous flags and opaque transports still go to contextual review.
+func LocalBoundPushVerdict(ctx context.Context, tool string, args json.RawMessage) (Verdict, bool) {
+	if !strings.EqualFold(strings.TrimSpace(tool), "bash") || !executionRequiresUnconfined(ctx) || executionBinding(ctx) == "" {
+		return Verdict{}, false
+	}
+	command, ok := bashCommand(args)
+	if !ok {
+		return Verdict{}, false
+	}
+	plan := shellfacts.Parse(command)
+	if plan == nil || !plan.Parsed || len(plan.AllCommands()) != 1 {
+		return Verdict{}, false
+	}
+	cmd := plan.AllCommands()[0]
+	if len(cmd.Argv) == 0 {
+		return Verdict{}, false
+	}
+	rest, _, ok := safeGitSubcommand(cmd.Argv[1:])
+	if !ok || len(rest) == 0 || rest[0].Text != "push" || !ordinaryPushArguments(rest[1:]) {
+		return Verdict{}, false
+	}
+	// Classify the actual push flags after removing only verified Git global
+	// options such as -C. The old table saw -C as the subcommand and deferred
+	// precisely the cross-repository call the execution-fact resolver accepts.
+	cmd.Argv = append([]shellfacts.Word{{Text: "git"}}, rest...)
+	class, _, known := classifyCommand(cmd)
+	if !known || class != ExternalEffects {
+		return Verdict{}, false
+	}
+	lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+	return Verdict{Level: Confirm, Source: LocalSource, Confidence: 1, Risk: "medium",
+		Lang: lang, Reasons: []string{localRationale(lang, "external_effects")}, Network: true}, true
+}
+
+// ordinaryPushArguments excludes remote deletion, forced refspecs, custom
+// receive-pack programs and push options from the automatic envelope rule.
+func ordinaryPushArguments(words []shellfacts.Word) bool {
+	endOptions := false
+	for _, word := range words {
+		if word.Dynamic || word.Text == "" {
+			return false
+		}
+		if !endOptions && word.Text == "--" {
+			endOptions = true
+			continue
+		}
+		if !endOptions && strings.HasPrefix(word.Text, "-") {
+			switch word.Text {
+			case "-u", "--set-upstream", "-n", "--dry-run", "-q", "--quiet", "-v", "--verbose", "--porcelain":
+				continue
+			default:
+				return false
+			}
+		}
+		if strings.HasPrefix(word.Text, "+") || strings.HasPrefix(word.Text, ":") {
+			return false
+		}
+	}
+	return true
+}
+
 // Classify implements Classifier: grade the command, decide the routine tiers,
 // defer the rest.
 func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) Verdict {
@@ -189,24 +252,31 @@ func (l Local) Classify(ctx context.Context, tool string, args json.RawMessage) 
 	if controlcap.Facade(tool) {
 		return l.deferToNext(ctx, tool, args)
 	}
+	if v, ok := LocalBoundPushVerdict(ctx, tool, args); ok {
+		return v
+	}
+	if executionRequiresUnconfined(ctx) {
+		// A bound but non-routine push must not fall back to the generic Git
+		// table, which cannot recognize all destructive refspec forms.
+		return l.deferToNext(ctx, tool, args)
+	}
 	if v, ok := LocalReadOnlyVerdict(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
 		return v
 	}
 	if v, ok := localGradeOf(tool, args, ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))); ok {
 		// A derived execution fact is not a caller's claim. gitPushFacts has
 		// already resolved the remote and refused an opaque transport, a custom
-		// ssh command and an unbound pre-push hook; what is left is a push that
-		// provably cannot run inside the file sandbox. Deferring that to a model
-		// re-opens a question the facts settled, and in `auto` a Contain answer
-		// turned every SSH push into a dead end. The table's tier still says how
-		// much attention the command deserves.
+		// ssh command and an unbound pre-push hook. SSH needs host credentials;
+		// HTTPS may need a host credential helper. The approved push therefore
+		// uses a bound one-call outside envelope instead of first trying a sandbox
+		// that may exclude authentication. The table's tier still applies.
 		proven := executionRequiresUnconfined(ctx)
 		if NetworkRequired(ctx, tool, args) {
 			// The local table may approve network only for calls it has actually
 			// classified as outbound work. A read-only-looking or local-effects
 			// command asking for network needs the session reviewer's judgment;
 			// an Allow/Confirm for some other effect is NOT network permission.
-			// A proven SSH push established the network need itself, so the table
+			// A resolved SSH/HTTPS push established the network need itself, so the table
 			// only names the tier.
 			switch {
 			case proven:

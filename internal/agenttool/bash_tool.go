@@ -288,9 +288,9 @@ func (t *BashTool) Description() string {
 		"AND network in one review, keeping the file sandbox. For one literal git push " +
 		"(including another repository written as git -C <repo> push), " +
 		"the gate resolves the effective push remote from local Git config without network; " +
-		"a resolved SSH transport becomes a binding-checked one-call outside-sandbox need " +
-		"because known_hosts and SSH identities are intentionally excluded. Do not add " +
-		"require_escalated merely to explain a named SSH remote. Do not wrap a push in " +
+		"a resolved SSH or HTTPS transport with a bound pre-push hook becomes a " +
+		"binding-checked one-call outside-sandbox need for Git authentication. Do not add " +
+		"require_escalated merely to explain such a remote. Do not wrap a push in " +
 		"cd <repo> && git push: shell chaining intentionally prevents deterministic remote " +
 		"resolution. If any git push exits non-zero inside the sandbox, request exactly one " +
 		"outside-sandbox retry regardless of its error wording. A sandbox denial is " +

@@ -163,7 +163,7 @@ func VerifyExecutionBinding(ctx context.Context, tool string, args json.RawMessa
 	}
 	facts := resolveExecutionFacts(ctx, agentcore.AgentToolCall{Name: tool, Arguments: args}, cwd)
 	if facts.binding == "" || facts.binding != want || !facts.requiresUnconfined {
-		return errors.New("Git remote or SSH execution facts changed after review; command was not run")
+		return errors.New("Git remote or execution facts changed after review; command was not run")
 	}
 	return nil
 }
@@ -215,18 +215,20 @@ func resolveGitPushFacts(ctx context.Context, command, cwd string, query gitQuer
 	}
 	// Git always reads configuration and may run helpers/hooks that argv does
 	// not enumerate. A resolved push therefore never qualifies for the generic
-	// Bare shortcut. SSH gets an explicit, bound Direct capability below; other
-	// transports stay in the file sandbox.
+	// Bare shortcut. SSH and HTTPS get an explicitly bound Direct capability;
+	// opaque or mixed destinations are never promoted.
 	out := executionFacts{blocksBare: true}
 	private := []string{"git-push-v1", filepath.Clean(spec.dir), command, remote}
 	hasSSH := false
+	hasHTTPS := false
 	for _, raw := range urls {
 		transport, _ := classifyGitTransport(raw)
 		hasSSH = hasSSH || transport == "ssh"
+		hasHTTPS = hasHTTPS || transport == "https"
 	}
 	sshOpaque := hasSSH && customSSHTransport(ctx, spec.dir, query)
 	hookState, hookBinding, hookSafe := "", "", true
-	if hasSSH {
+	if hasSSH || hasHTTPS {
 		hookState, hookBinding, hookSafe = gitPrePushHook(ctx, spec.dir, spec.noVerify, query)
 		private = append(private, "pre-push-hook:"+hookState, hookBinding)
 	}
@@ -263,7 +265,19 @@ func resolveGitPushFacts(ctx context.Context, command, cwd string, query gitQuer
 				out.requiresNetwork = true
 				out.requiresUnconfined = true
 			}
-		case "https", "http":
+		case "https":
+			fact.Authentication = "git_credential_helper_may_be_used"
+			fact.NeedsNetwork = true
+			out.requiresNetwork = true
+			if !hookSafe {
+				fact.Resolution = "opaque"
+				fact.ContainmentReason = "pre_push_hook_not_bound"
+			} else {
+				fact.RequiresUnconfined = true
+				fact.ContainmentReason = "git_credentials_may_be_outside_file_sandbox"
+				out.requiresUnconfined = true
+			}
+		case "http":
 			fact.Authentication = "git_credential_helper_may_be_used"
 			fact.NeedsNetwork = true
 			out.requiresNetwork = true
@@ -283,6 +297,15 @@ func resolveGitPushFacts(ctx context.Context, command, cwd string, query gitQuer
 	}
 	if len(out.Public) == 0 {
 		return unresolvedGitFact(remoteName, "empty_remote")
+	}
+	for _, fact := range out.Public {
+		if fact.Resolution != "resolved" || (fact.Transport != "ssh" && fact.Transport != "https") {
+			out.requiresUnconfined = false
+			for i := range out.Public {
+				out.Public[i].RequiresUnconfined = false
+			}
+			break
+		}
 	}
 	if out.requiresUnconfined {
 		sum := sha256.Sum256([]byte(strings.Join(private, "\x00")))

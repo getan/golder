@@ -315,7 +315,7 @@ func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		needs = append(needs, need)
 	}
 	if executionRequiresUnconfined(ctx) {
-		needs = append(needs, Need{Cap: CapUnconfined, Key: "git SSH"})
+		needs = append(needs, Need{Cap: CapUnconfined, Key: "git push"})
 	}
 	if escalationRequested(call.Arguments) && strings.EqualFold(call.Name, "bash") && !opts.Enforce {
 		// In auto the level is the whole answer: allow/confirm authorize the
@@ -454,9 +454,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 				// A failed review is not a policy answer. Saying so is the
 				// difference between "retry" and "stop trying".
 				rationale = localized(lang,
-					"评审失败（超时或错误），Git SSH push 未运行；重试即可",
-					"the review failed (timeout or error), so the Git SSH push did not run; retry the call")
-				tail = "the reviewer failed rather than denied; the Git SSH push did not run, retry it"
+					"评审失败（超时或错误），Git push 未运行；重试即可",
+					"the review failed (timeout or error), so the Git push did not run; retry the call")
+				tail = "the reviewer failed rather than denied; the Git push did not run, retry it"
 			}
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteUnavailable, Level: v.Level, Lang: lang,
 				Source: v.Source, Needs: needs,
@@ -472,12 +472,22 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		return blockCall(call, v, "the reviewer could not decide and the call cannot be contained")
 	}
 	if v.Level == Contain {
+		if priorPushRetryEvidence(call.Name, call.Arguments, opts.Cwd, agentcore.MessageSnapshotFromContext(ctx)) != "" {
+			// This is already the requested outside retry of a failed contained
+			// push. A contain verdict refuses that escape; re-running the same
+			// command in the same envelope would spend a second network action
+			// without granting what was requested.
+			n := noteFor(call, v, NoteDenied, lang)
+			n.Needs = needs
+			notify(n)
+			return blockCall(call, v, "the outside-sandbox retry was not authorized; the push was not run again. Stop or ask the user to switch /permissions to ask")
+		}
 		if len(needs) > 0 {
 			rationale := localized(lang, "评审要求收容，但调用需要额外能力", "review required containment, but the call needs extra capabilities")
 			if executionRequiresUnconfined(ctx) {
 				rationale = localized(lang,
-					"评审判定本次 Git push 需要收容；SSH push 无法在文件沙箱内完成，命令未运行",
-					"the review contained this call, but a Git SSH push cannot run inside the file sandbox; nothing ran")
+					"评审要求收容，本次 Git push 的沙箱外执行未获授权，命令未运行",
+					"the review contained this call; the outside-sandbox Git push was not authorized and did not run")
 			}
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: v.Level, Lang: lang,
 				Source: v.Source, Needs: needs,
@@ -490,9 +500,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
-	// A deterministic execution fact (currently Git-over-SSH) can prove that the
-	// requested operation cannot work in the file sandbox. An allow/confirm grade
-	// authorizes that one bound escape. Other CapUnconfined needs retain the old
+	// A deterministic execution fact identifies the exact SSH/HTTPS Git push
+	// and its hook. An allow/confirm grade authorizes that one bound escape to
+	// access Git credentials. Other CapUnconfined needs retain the old
 	// fail-closed meaning (for example no sandbox implementation is available).
 	derivedUnconfined := hasNeed(needs, CapUnconfined) && executionRequiresUnconfined(ctx)
 	if hasNeed(needs, CapUnconfined) && !derivedUnconfined {

@@ -78,7 +78,8 @@ func TestGitPushFactsDistinguishHTTPSAndGitTransport(t *testing.T) {
 			gitFactCommand(t, repo, "remote", "add", "origin", tc.remote)
 			facts := resolveGitPushFacts(context.Background(), "git push origin main", repo, runGitFactQuery)
 			fact := oneExecutionFact(t, facts)
-			if fact.Transport != tc.transport || fact.Host != tc.host || !fact.NeedsNetwork || fact.RequiresUnconfined || facts.binding != "" {
+			wantDirect := tc.transport == "https"
+			if fact.Transport != tc.transport || fact.Host != tc.host || !fact.NeedsNetwork || fact.RequiresUnconfined != wantDirect || (facts.binding != "") != wantDirect {
 				t.Fatalf("fact = %+v private=%+v", fact, facts)
 			}
 			raw, _ := json.Marshal(facts.Public)
@@ -355,14 +356,14 @@ func TestGitPushFactsFeedReviewerAndCapabilityGate(t *testing.T) {
 		}
 	})
 
-	t.Run("HTTPS stays in file sandbox", func(t *testing.T) {
+	t.Run("HTTPS uses bound outside envelope", func(t *testing.T) {
 		httpsRepo := gitFactRepo(t)
 		gitFactCommand(t, httpsRepo, "remote", "add", "origin", "https://example.com/org/repo.git")
 		httpsCall := agentcore.AgentToolCall{ID: "https", Name: "bash", Arguments: json.RawMessage(`{"command":"git push origin main"}`)}
 		gate := ConsentGate(ConsentOpts{Mode: permissions.New(permissions.Auto), Cwd: httpsRepo,
 			Classifier: consentClassifier{v: Verdict{Level: Allow, Network: true, Source: "llm"}}, Sandboxed: func(string) bool { return true }})
 		dec := gate(context.Background(), httpsCall)
-		if dec == nil || dec.Block || dec.Direct || dec.Bare || !dec.Network {
+		if dec == nil || dec.Block || !dec.Direct || dec.ExecutionBinding == "" || dec.Bare || !dec.Network {
 			t.Fatalf("HTTPS decision=%+v", dec)
 		}
 	})

@@ -3,6 +3,8 @@ package judge
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,6 +22,104 @@ type countingClassifier struct {
 func (c *countingClassifier) Classify(context.Context, string, json.RawMessage) Verdict {
 	c.calls++
 	return c.v
+}
+
+func TestHTTPSGitCPushGetsBoundDirectEnvelopeOnFirstAttempt(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "https://gitlab.example.com/team/project.git")
+	cwd := filepath.Dir(repo)
+	command := "git -C " + filepath.Base(repo) + " push origin main"
+	args, err := json.Marshal(map[string]string{"command": command, "network": "on"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := agentcore.AgentToolCall{ID: "push", Name: "bash", Arguments: args}
+	fallback := &countingClassifier{v: Verdict{Level: Contain, Source: "llm"}}
+	gate := ConsentGate(ConsentOpts{Mode: permissions.New(permissions.Auto), Cwd: cwd,
+		Classifier: Local{Next: fallback}, Sandboxed: func(string) bool { return true }})
+	decision := gate(context.Background(), call)
+	if decision == nil || decision.Block || decision.Sandbox || !decision.Direct || !decision.Network || decision.ExecutionBinding == "" {
+		var detail string
+		if decision != nil && decision.Content != nil {
+			detail = agentcore.ContentToText(*decision.Content)
+		}
+		t.Fatalf("first push decision = %+v detail=%s fallback=%d", decision, detail, fallback.calls)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("ordinary bound push was re-reviewed %d times", fallback.calls)
+	}
+	if err := VerifyExecutionBinding(context.Background(), "bash", args, cwd, decision.ExecutionBinding); err != nil {
+		t.Fatalf("unchanged HTTPS binding: %v", err)
+	}
+	gitFactCommand(t, repo, "remote", "set-url", "origin", "https://other.example.com/team/project.git")
+	if err := VerifyExecutionBinding(context.Background(), "bash", args, cwd, decision.ExecutionBinding); err == nil {
+		t.Fatal("changed HTTPS remote retained authorization")
+	}
+}
+
+func TestHTTPSBoundPushRejectsChangedHook(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "https://example.com/team/project.git")
+	hook := filepath.Join(repo, ".git", "hooks", "pre-push")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args := json.RawMessage(`{"command":"git push origin main"}`)
+	facts := resolveExecutionFacts(context.Background(), agentcore.AgentToolCall{Name: "bash", Arguments: args}, repo)
+	if !facts.requiresUnconfined || facts.binding == "" {
+		t.Fatalf("HTTPS facts = %+v", facts)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyExecutionBinding(context.Background(), "bash", args, repo, facts.binding); err == nil {
+		t.Fatal("changed HTTPS pre-push hook retained authorization")
+	}
+}
+
+func TestHTTPSPushWithExternalHookDoesNotGetDirectEnvelope(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "https://example.com/team/project.git")
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, "pre-push"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitFactCommand(t, repo, "config", "core.hooksPath", external)
+	facts := resolveGitPushFacts(context.Background(), "git push origin main", repo, runGitFactQuery)
+	if facts.requiresUnconfined || facts.binding != "" || len(facts.Public) != 1 || facts.Public[0].Resolution != "opaque" {
+		t.Fatalf("unbound hook was promoted to a direct envelope: %+v", facts)
+	}
+}
+
+func TestMixedPushDestinationsDoNotGetDirectEnvelope(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "https://example.com/team/project.git")
+	gitFactCommand(t, repo, "remote", "set-url", "--add", "--push", "origin", "https://example.com/team/project.git")
+	gitFactCommand(t, repo, "remote", "set-url", "--add", "--push", "origin", "ext::opaque-helper")
+	facts := resolveGitPushFacts(context.Background(), "git push origin main", repo, runGitFactQuery)
+	if facts.requiresUnconfined || facts.binding != "" {
+		t.Fatalf("mixed opaque destinations were promoted to a direct envelope: %+v", facts)
+	}
+}
+
+func TestBoundGitPushDestructiveFormsStillReachReviewer(t *testing.T) {
+	repo := gitFactRepo(t)
+	gitFactCommand(t, repo, "remote", "add", "origin", "https://example.com/team/project.git")
+	for _, command := range []string{
+		"git push --force origin main", "git push origin :refs/heads/main",
+		"git push origin +main:main", "git push --delete origin main",
+	} {
+		t.Run(command, func(t *testing.T) {
+			args, _ := json.Marshal(map[string]string{"command": command, "network": "on"})
+			call := agentcore.AgentToolCall{Name: "bash", Arguments: args}
+			ctx := withExecutionFacts(context.Background(), resolveExecutionFacts(context.Background(), call, repo))
+			fallback := &countingClassifier{v: Verdict{Level: Contain, Source: "llm"}}
+			v := Local{Next: fallback}.Classify(ctx, call.Name, args)
+			if fallback.calls != 1 || v.Level != Contain {
+				t.Fatalf("dangerous push skipped review: calls=%d verdict=%+v", fallback.calls, v)
+			}
+		})
+	}
 }
 
 // sshPushCall is the call shape this file is about: a push whose remote,
@@ -136,7 +236,7 @@ func TestAutoContainedSSHPushExplainsWhyItCannotRun(t *testing.T) {
 	if dec == nil || !dec.Block || dec.Direct {
 		t.Fatalf("decision = %+v", dec)
 	}
-	if !hasRationale(notes, "SSH") {
+	if !hasRationale(notes, "Git push") {
 		t.Fatalf("notes = %+v", notes)
 	}
 }
