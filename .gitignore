@@ -31,6 +31,8 @@ go.work.sum
 config.toml
 **/config.toml
 .golder/
+.credentials.yaml
+.credential-key
 
 # Editor/IDE
 # .idea/

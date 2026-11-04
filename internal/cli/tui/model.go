@@ -985,6 +985,9 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus()}
+	if cmd := workspaceSyncOutput(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if !m.noTerminalQueries {
 		cmds = append(cmds, func() tea.Msg { return tea.RequestBackgroundColor() })
 	}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type refreshOutput struct {
@@ -44,6 +45,67 @@ func (m refreshProbe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, _ := m.Model.Update(msg)
 	m.Model = next.(Model)
 	return m, nil
+}
+
+type workspaceRefreshProbe struct{ refreshProbe }
+
+func (m workspaceRefreshProbe) Init() tea.Cmd { return workspaceSyncOutput() }
+
+func (m workspaceRefreshProbe) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.refreshProbe.Update(msg)
+	m.refreshProbe = next.(refreshProbe)
+	return m, cmd
+}
+
+// Even without a terminal-query response (as in query-free SSH), the owned
+// workspace VT must receive each changing Bubble Tea frame inside DEC 2026.
+func TestWorkspaceStreamingFramesUseSynchronizedOutputWithoutQueryReply(t *testing.T) {
+	t.Setenv("GOLDER_WORKSPACE", "1")
+	t.Setenv("TUIOS_PANE_ID", "pane-test")
+	m := NewModel(Options{NoAnimations: true})
+	m.width, m.height, m.running = 80, 24, true
+	start := time.Now()
+	m.spinner.begin(start, "medium")
+	m.relayout()
+	out := &refreshOutput{}
+	p := tea.NewProgram(workspaceRefreshProbe{refreshProbe{m}}, tea.WithInput(nil), tea.WithOutput(out),
+		tea.WithWindowSize(80, 24), tea.WithoutSignalHandler(),
+		tea.WithEnvironment([]string{"TERM=xterm-256color", "SSH_TTY=/dev/pts/test", "NO_COLOR=1"}))
+	done := make(chan error, 1)
+	go func() { _, err := p.Run(); done <- err }()
+	t.Cleanup(func() {
+		p.Quit()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("renderer probe: %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			p.Kill()
+			t.Error("renderer probe did not stop")
+		}
+	})
+	barrier := func() {
+		b := make(refreshBarrier)
+		p.Send(b)
+		select {
+		case <-b:
+		case <-time.After(3 * time.Second):
+			t.Fatal("renderer probe did not process its input")
+		}
+	}
+	barrier()
+	time.Sleep(100 * time.Millisecond)
+	out.take()
+	p.Send(textDeltaMsg{delta: "A streamed line with 中文 characters"})
+	p.Send(streamRenderTickMsg{})
+	barrier()
+	time.Sleep(100 * time.Millisecond)
+	got := out.take()
+	begin, end := strings.Index(got, ansi.SetModeSynchronizedOutput), strings.Index(got, ansi.ResetModeSynchronizedOutput)
+	if begin < 0 || end <= begin || !strings.Contains(got[begin:end], "streamed line") {
+		t.Fatalf("streaming update was not enclosed in a complete synchronized frame: %q", got)
+	}
 }
 
 // This checks actual terminal bytes, not just equality of two View strings.

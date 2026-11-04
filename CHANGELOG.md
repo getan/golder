@@ -12,6 +12,15 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Codex-style desktop projects, composer and Git review** (v1.5.50): explicit
+  project folders own their chats and new-session working directory; Settings
+  moves to the lower-left; attachments, approval mode, and combined
+  model/reasoning controls live inside the composer. Changes now follows the
+  active Session repository, separates staged and unstaged work, stages or
+  unstages files/all, and lazily loads one bounded file diff at a time. Provider
+  keys and Lark App Secrets use a shared cross-platform AES-256-GCM credential
+  envelope with automatic legacy-plaintext migration. See
+  [v1.5.50 release notes](docs/releases/v1.5.50.md).
 - **Native GUI workbench and managed Extensions** (v1.5.49): the desktop app now
   shares launch/credential resolution with the CLI, exposes Provider and
   Extensions settings, groups and manages sessions by project, embeds a circular
@@ -114,6 +123,10 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Synchronized guest frames in Golder workspace panes** (v1.5.50): the TUI
+  enables DEC 2026 for its own embedded tuios-mini pane even when automatic
+  terminal queries are suppressed or delayed, reducing partial-row redraws.
+  Real-terminal visual confirmation remains a separate acceptance check.
 - **Fact-proven SSH pushes no longer dead-end in auto mode** (v1.5.49): a
   resolved Git-over-SSH push with bound remote/hook facts keeps the deterministic
   local Confirm verdict and receives its one-call execution binding instead of

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/getan/golder/internal/diagtrace"
@@ -25,6 +26,21 @@ func startupQueriesDisabled() bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// workspaceSyncOutput advertises the capability of Golder's own embedded
+// tuios-mini pane, whose VT implements DEC 2026. Bubble Tea otherwise depends
+// on a terminal query/reply, which is deliberately suppressed over SSH and
+// may be delayed during startup. An unbracketed guest frame can be sampled by
+// the compositor mid-row. Never assume this capability for an arbitrary
+// external terminal or multiplexer.
+func workspaceSyncOutput() tea.Cmd {
+	if strings.TrimSpace(os.Getenv("GOLDER_WORKSPACE")) != "1" || strings.TrimSpace(os.Getenv("TUIOS_PANE_ID")) == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		return tea.ModeReportMsg{Mode: ansi.ModeSynchronizedOutput, Value: ansi.ModeReset}
 	}
 }
 

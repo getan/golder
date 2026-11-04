@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Batch intentionally returns its only command directly when just one remains.
@@ -56,6 +57,42 @@ func TestAutomaticQueriesPolicyOnlyChangesSSHOrExplicitOptOut(t *testing.T) {
 			}
 			if foundBackground == wantDisabled {
 				t.Fatalf("background query present=%t, disabled=%t", foundBackground, wantDisabled)
+			}
+		})
+	}
+}
+
+func TestWorkspaceSyncOutputOnlyForOwnedPane(t *testing.T) {
+	for _, tc := range []struct {
+		name, workspace, pane string
+		want                  bool
+	}{
+		{"direct terminal", "", "", false},
+		{"external multiplexer", "", "pane", false},
+		{"workspace without pane", "1", "", false},
+		{"owned pane", "1", "pane", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GOLDER_WORKSPACE", tc.workspace)
+			t.Setenv("TUIOS_PANE_ID", tc.pane)
+			cmd := workspaceSyncOutput()
+			if (cmd != nil) != tc.want {
+				t.Fatalf("sync command present=%t, want %t", cmd != nil, tc.want)
+			}
+			if cmd != nil {
+				msg, ok := cmd().(tea.ModeReportMsg)
+				if !ok || msg.Mode != ansi.ModeSynchronizedOutput || msg.Value != ansi.ModeReset {
+					t.Fatalf("mode report = %#v", msg)
+				}
+			}
+			found := false
+			for _, result := range commandResults(NewModel(Options{}).Init()) {
+				if msg, ok := result.(tea.ModeReportMsg); ok && msg.Mode == ansi.ModeSynchronizedOutput {
+					found = true
+				}
+			}
+			if found != tc.want {
+				t.Fatalf("initialization publishes sync capability=%t, want %t", found, tc.want)
 			}
 		})
 	}
