@@ -211,4 +211,32 @@ func TestConfigureSourceAddsDisabledUnapprovedRuntimeEntry(t *testing.T) {
 	if snapshot, _ = manager.Source(ref); !snapshot.Enabled || snapshot.Trust != "approved" {
 		t.Fatalf("enabled snapshot = %+v", snapshot)
 	}
+	old, err := manager.get(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := SourceConfig{Transport: "stdio", Command: exe, Args: []string{"-test.run=^$"}}
+	if err := manager.ReplaceSourceConfig(ref, replacement); err != nil {
+		t.Fatal(err)
+	}
+	old.mu.Lock()
+	oldEnabled, oldApproval, oldStored := old.enabled.Load(), old.approval, old.storedApproval
+	old.mu.Unlock()
+	if oldEnabled || oldApproval != "" || oldStored != "" {
+		t.Fatalf("replaced source retained authority: enabled=%t approval=%q stored=%q", oldEnabled, oldApproval, oldStored)
+	}
+	if snapshot, _ = manager.Source(ref); snapshot.Enabled || snapshot.Trust == "approved" {
+		t.Fatalf("replacement inherited authority: %+v", snapshot)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(Options{ConfigPath: configPath, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if snapshot, _ = reopened.Source(ref); snapshot.Enabled || snapshot.Trust == "approved" {
+		t.Fatalf("replacement authority survived restart: %+v", snapshot)
+	}
 }

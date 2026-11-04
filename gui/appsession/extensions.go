@@ -16,17 +16,22 @@ var larkSourceRef = extensions.SourceRef{Kind: "mcp", ID: "lark"}
 // ExtensionPackageView is the compact package/source state the native Settings
 // page renders. It contains no environment values, credentials or setup URLs.
 type ExtensionPackageView struct {
-	ID             string
-	Name           string
-	Description    string
-	Installed      bool
-	Configured     bool
-	Enabled        bool
-	Trusted        bool
-	Version        string
-	State          string
-	Authentication string
-	LastError      string
+	ID               string
+	Name             string
+	Description      string
+	Installed        bool
+	Configured       bool
+	Enabled          bool
+	Trusted          bool
+	Version          string
+	BundledVersion   string
+	InstalledVersion string
+	ActiveVersion    string
+	ActiveManaged    bool
+	UpdateAvailable  bool
+	State            string
+	Authentication   string
+	LastError        string
 }
 
 // ExtensionSourceView is one configured MCP/CLI/RPC source in the manager.
@@ -88,6 +93,7 @@ type ExtensionSetupEvent struct {
 func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 	c.mu.Lock()
 	manager := c.opt.Extensions
+	desktopVersion := c.opt.Version
 	c.mu.Unlock()
 	if manager == nil {
 		return LarkExtensionSettings{}, errors.New("extension manager unavailable")
@@ -96,21 +102,18 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		ExtensionPackageView: ExtensionPackageView{
 			ID: "lark", Name: "Lark + Project",
 			Description: "Feishu/Lark documents, messages, Sheets, Base and Project work items.",
-			State:       "not installed",
+			State:       "not installed", BundledVersion: managedExtensionVersion(desktopVersion),
 		},
 		Domains: []string{"docs", "drive", "im", "sheets", "base"}, ProjectHost: "project.feishu.cn",
 	}
 	if pkg, ok := extensions.InstalledManagedPackage("lark"); ok {
-		view.Installed, view.Version, view.State = true, pkg.Version, "installed · not configured"
+		view.Installed, view.Version, view.InstalledVersion, view.State = true, pkg.Version, pkg.Version, "installed · not configured"
 	}
 	if snapshot, ok := manager.Source(larkSourceRef); ok {
 		view.Configured = true
 		view.Enabled = snapshot.Enabled
 		view.Trusted = snapshot.Trust == "approved"
 		view.State, view.Authentication, view.LastError = snapshot.State, snapshot.Authentication, snapshot.LastError
-		if snapshot.Version != "" {
-			view.Version = snapshot.Version
-		}
 		cfg, err := manager.Config(larkSourceRef)
 		if err != nil {
 			return view, err
@@ -124,6 +127,21 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		}
 		if host := strings.TrimSpace(cfg.Env["MEEGLE_HOST"]); host != "" {
 			view.ProjectHost = host
+		}
+		if active, managed := extensions.ManagedPackageForExecutable("lark", cfg.Command); managed {
+			view.ActiveVersion, view.ActiveManaged = active.Version, true
+		} else {
+			view.ActiveVersion = strings.TrimSpace(snapshot.Version)
+		}
+		if view.ActiveVersion != "" {
+			view.Version = view.ActiveVersion
+		}
+	}
+	if view.BundledVersion != "" && view.BundledVersion != "dev" {
+		if view.Configured {
+			view.UpdateAvailable = !view.ActiveManaged || view.ActiveVersion != view.BundledVersion
+		} else {
+			view.UpdateAvailable = view.InstalledVersion != view.BundledVersion
 		}
 	}
 	if view.CredentialName != "" {
@@ -220,6 +238,40 @@ func (c *Controller) InstallLarkPackage(ctx context.Context, source, checksum, v
 	return err
 }
 
+// UpdateLarkPackage installs the verified bundled helper and rebuilds the
+// existing Source around that exact package. Existing non-secret settings,
+// named credential references and source-scoped login HOME are preserved; the
+// replacement Source is disabled and must be explicitly approved again.
+func (c *Controller) UpdateLarkPackage(ctx context.Context, source, checksum, version string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	manager := c.opt.Extensions
+	c.mu.Unlock()
+	if manager == nil {
+		return errors.New("extension manager unavailable")
+	}
+	current, err := manager.Config(larkSourceRef)
+	if err != nil {
+		return errors.New("configure Lark before updating its helper")
+	}
+	pkg, err := extensions.InstallManagedPackage(extensions.PackageInstallOptions{
+		ID: "lark", Source: source, SHA256: checksum, Version: version,
+	})
+	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	updated, err := larkSourceConfigFromExisting(pkg, current)
+	if err != nil {
+		return err
+	}
+	return manager.ReplaceSourceConfig(larkSourceRef, updated)
+}
+
 // ConfigureLark stores a new App Secret by name, writes a disabled source, then
 // updates the live manager without granting trust or starting code.
 func (c *Controller) ConfigureLark(ctx context.Context, edit LarkExtensionEdit) error {
@@ -257,16 +309,16 @@ func (c *Controller) ConfigureLark(ctx context.Context, edit LarkExtensionEdit) 
 	if err != nil {
 		return err
 	}
-	if err := extensions.WriteSource(extensions.ConfigPath(), larkSourceRef, &cfg); err != nil {
-		return err
-	}
-	return manager.ConfigureSource(larkSourceRef, cfg)
+	return manager.ReplaceSourceConfig(larkSourceRef, cfg)
 }
 
 // EnableLark is the explicit review boundary. It fingerprints the helper and
 // official CLI dependencies, remembers approval, persists enabled=true and only
 // then admits the source to the current session.
 func (c *Controller) EnableLark() error {
+	if err := c.requireMatchingLarkHelper(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	manager := c.opt.Extensions
 	c.mu.Unlock()
@@ -298,6 +350,9 @@ func (c *Controller) DisableLark() error {
 // AuthorizeLark runs the reviewed setup command and forwards only sanitized
 // events. service is "lark" or the declared "project" variant.
 func (c *Controller) AuthorizeLark(ctx context.Context, service string, show func(ExtensionSetupEvent)) error {
+	if err := c.requireMatchingLarkHelper(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	manager := c.opt.Extensions
 	c.mu.Unlock()
@@ -323,6 +378,9 @@ func (c *Controller) AuthorizeLark(ctx context.Context, service string, show fun
 }
 
 func (c *Controller) TestLark(ctx context.Context) error {
+	if err := c.requireMatchingLarkHelper(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	manager := c.opt.Extensions
 	c.mu.Unlock()
@@ -372,6 +430,37 @@ func credentialReferenceName(value string) string {
 		return strings.TrimSuffix(strings.TrimPrefix(value, prefix), "}")
 	}
 	return ""
+}
+
+func managedExtensionVersion(version string) string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if version == "" || version == "unknown" {
+		return "dev"
+	}
+	return strings.ReplaceAll(version, "+", "-")
+}
+
+func larkSourceConfigFromExisting(pkg extensions.ManagedPackage, current extensions.SourceConfig) (extensions.SourceConfig, error) {
+	credential := credentialReferenceName(current.Env["LARK_MCP_APP_SECRET"])
+	return extensions.LarkSourceConfig(extensions.LarkSourceOptions{
+		Package: pkg, LarkCLI: current.Env["LARK_MCP_CLI"], ProjectCLI: current.Env["LARK_MCP_PROJECT_CLI"],
+		AppID: current.Env["LARK_MCP_APP_ID"], AppSecretCredential: credential,
+		Domains: splitCSV(current.Env["LARK_MCP_DOMAINS"]), ProjectHost: current.Env["MEEGLE_HOST"],
+	})
+}
+
+func (c *Controller) requireMatchingLarkHelper() error {
+	settings, err := c.ExtensionSettings()
+	if err != nil {
+		return err
+	}
+	if settings.BundledVersion == "dev" {
+		return nil
+	}
+	if !settings.Configured || settings.UpdateAvailable || !settings.ActiveManaged || settings.ActiveVersion != settings.BundledVersion {
+		return errors.New("update the managed Lark helper before approval, authorization or connection testing")
+	}
+	return nil
 }
 
 func splitCSV(value string) []string {

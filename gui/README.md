@@ -47,6 +47,7 @@ MyGo's CLI packages and signs the app:
 
 ```sh
 cd gui
+go run ./tools/mkicon -o resources/icon.png
 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
 ```
@@ -77,8 +78,9 @@ Two optional surfaces need runtime pieces:
   and named credentials, plus live model/reasoning/approval controls;
 - extensions: a native manager for checksummed first-party package install,
   exact source review, named-secret configuration, browser OAuth, safe
-  phase-coded failures, separate application/user-auth status, test,
-  enable/disable, reset and uninstall; other configured sources appear there too;
+  phase-coded failures, one-click helper update/rebinding, separate bundled /
+  installed / active and application/user-auth status, test, enable/disable,
+  reset and uninstall; other configured sources appear there too;
 - changes: a Git status + unified diff drawer rendered by MyGo's diff viewer,
   opened from a compact icon-only title action;
 - actions: a command palette over the existing slash registry, so skills,
@@ -86,7 +88,9 @@ Two optional surfaces need runtime pieces:
 - browser: an Agent-visible built-in tool backed by the GUI browserhost, with
   native Bitmap frames in an automatically revealed right drawer and mouse,
   keyboard, scroll, resize and committed IME input forwarded through the typed
-  control socket; title and approval actions use theme-colored monochrome SVGs;
+  control socket; auto-reveal follows the exact opened socket even with several
+  browsers or a short runtime path; title and approval actions use theme-colored
+  monochrome SVGs;
 - terminal: an explicit user shell and detachable takeover of Agent bash calls
   that ran with `tty=true`.
 

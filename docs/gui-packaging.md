@@ -95,9 +95,10 @@ verified". Two ways forward:
 
 ## The app icon
 
-`gui/resources/icon.png` is the app icon: a 16×16 pixel-art mark (white panel,
-stepped chamfer, dark chevron, gold cursor) drawn at 1024×1024 with no
-interpolation. It is generated, not hand-edited:
+`gui/resources/icon.png` is the app icon: the existing white panel, dark `>`
+chevron and gold `-` cursor drawn as smooth high-resolution geometry. The
+generator renders at 4× and downsamples to 1024×1024, producing antialiased
+curves without changing the mark or background. It is generated, not hand-edited:
 
 ```sh
 cd gui
@@ -106,7 +107,8 @@ go run ./tools/mkicon -o resources/icon.png
 
 `mygo build` turns it into `AppIcon.icns` and references it from the bundle's
 `Info.plist`. A missing `resources/icon.png` is why a build shows the generic
-blank icon.
+blank icon. The GUI release workflow regenerates it immediately before every
+platform build, so all packages use the source-controlled geometry.
 
 ## Signing secrets the workflow reads
 

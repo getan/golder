@@ -108,6 +108,47 @@ func (a *App) installLarkPackage() {
 	}()
 }
 
+func (a *App) updateLarkPackage() {
+	if a.extensionBusy {
+		return
+	}
+	source, checksum, err := bundledLarkHelper()
+	if err != nil {
+		a.extensionErr = err.Error()
+		return
+	}
+	a.extensionBusy, a.extensionErr = true, ""
+	a.extensionNote = "Installing the bundled helper and rebinding the existing Source…"
+	version := extensionPackageVersion(a.ctrl.Version())
+	configured := a.extension.Configured
+	win := a.win
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if configured {
+			err = a.ctrl.UpdateLarkPackage(ctx, source, checksum, version)
+		} else {
+			err = a.ctrl.InstallLarkPackage(ctx, source, checksum, version)
+		}
+		if win == nil {
+			return
+		}
+		win.Update(func() {
+			a.extensionBusy = false
+			if err != nil {
+				a.extensionErr, a.extensionNote = err.Error(), ""
+				return
+			}
+			if configured {
+				a.extensionNote = "Helper updated and Source rebound. Login state and named credentials were preserved; review and enable the new helper."
+			} else {
+				a.extensionNote = "Bundled helper installed. Save configuration to create the Source."
+			}
+			a.loadExtensionSettings()
+		})
+	}()
+}
+
 func (a *App) chooseExtensionCLI(project bool) {
 	win := a.win
 	go func() {
@@ -383,6 +424,8 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 	if a.ctrl != nil {
 		guiVersion = a.ctrl.Version()
 	}
+	bundledVersion, installedVersion, activeVersion := larkHelperVersions(a.extension, guiVersion)
+	helperReady := larkHelperReady(a.extension, guiVersion)
 	statusColor := theme.TextMuted
 	if a.extension.Enabled && a.extension.State == "ready" {
 		statusColor = theme.Success
@@ -400,17 +443,31 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 
 		if !a.extension.Installed {
 			ui.Text(c, "1. Install the signed, matching golder-lark helper. Nothing is configured or executed during discovery.").FontSize(12)
-			if ui.PrimaryButton(c, "Install").Disabled(a.extensionBusy).Clicked() {
-				a.installLarkPackage()
+			ui.Text(c, "Bundled: "+bundledVersion).FontSize(11).TextColor(theme.TextMuted)
+			installLabel := "Install"
+			if a.extension.Configured {
+				installLabel = "Install & rebind"
+			}
+			if ui.PrimaryButton(c, installLabel).Disabled(a.extensionBusy).Clicked() {
+				if a.extension.Configured {
+					a.updateLarkPackage()
+				} else {
+					a.installLarkPackage()
+				}
 			}
 			a.extensionStatus(c)
 			return
 		}
 
 		ui.Text(c, "1. Package").FontWeight(600)
-		ui.Text(c, "Installed · "+a.extension.Version).FontSize(12).TextColor(theme.Success)
-		if warning := extensionVersionWarning(guiVersion, a.extension.Version); warning != "" {
-			ui.Text(c, warning).FontSize(11).TextColor(theme.Warning).Wrap()
+		ui.Text(c, "Bundled: "+bundledVersion).FontSize(12).TextColor(theme.TextMuted)
+		ui.Text(c, "Installed latest: "+installedVersion).FontSize(12).TextColor(theme.TextMuted)
+		ui.Text(c, "Active Source: "+activeVersion).FontSize(12).TextColor(map[bool]ui.Color{true: theme.Success, false: theme.Warning}[helperReady])
+		if a.extension.UpdateAvailable {
+			ui.Text(c, "Update the managed helper before authorization. Existing login state and named credentials will be preserved.").FontSize(11).TextColor(theme.Warning).Wrap()
+			if ui.PrimaryButton(c, "Update helper").Disabled(a.extensionBusy).Clicked() {
+				a.updateLarkPackage()
+			}
 		}
 
 		ui.Text(c, "2. Application and official CLIs").FontWeight(600).Padding(6, 0, 0, 0)
@@ -446,7 +503,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			FontSize(11).TextColor(theme.TextMuted).MaxWidth(650)
 		if a.extension.Configured {
 			if !a.extension.Enabled {
-				if ui.PrimaryButton(c, "Approve & enable").Disabled(a.extensionBusy).Clicked() {
+				if ui.PrimaryButton(c, "Approve & enable").Disabled(a.extensionBusy || !helperReady).Clicked() {
 					a.setLarkEnabled(true)
 				}
 			} else if ui.Button(c, "Disable").Disabled(a.extensionBusy).Clicked() {
@@ -458,13 +515,13 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.PrimaryButton(c, "Authorize Lark").Disabled(a.extensionBusy || !a.extension.Enabled).Clicked() {
+			if ui.PrimaryButton(c, "Authorize Lark").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if ui.Button(c, "Authorize Project").Disabled(a.extensionBusy || !a.extension.Enabled || strings.TrimSpace(a.extensionEdit.ProjectCLI) == "").Clicked() {
+			if ui.Button(c, "Authorize Project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || strings.TrimSpace(a.extensionEdit.ProjectCLI) == "").Clicked() {
 				a.authorizeLark("project")
 			}
-			if ui.Button(c, "Test connection").Disabled(a.extensionBusy || !a.extension.Enabled).Clicked() {
+			if ui.Button(c, "Test connection").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
 				a.testLark()
 			}
 			if a.extensionBusy && a.extensionCancel != nil {
@@ -525,13 +582,37 @@ func larkAuthorizationStatus(status string) string {
 	}
 }
 
-func extensionVersionWarning(guiVersion, helperVersion string) string {
-	guiVersion = extensionPackageVersion(guiVersion)
-	helperVersion = extensionPackageVersion(helperVersion)
-	if guiVersion == "dev" || helperVersion == "dev" || guiVersion == helperVersion {
-		return ""
+func larkHelperVersions(extension appsession.LarkExtensionSettings, guiVersion string) (bundled, installed, active string) {
+	bundled = strings.TrimSpace(extension.BundledVersion)
+	if bundled == "" {
+		bundled = extensionPackageVersion(guiVersion)
 	}
-	return "GUI " + guiVersion + " and helper " + helperVersion + " differ. Install the matching helper before diagnosing authorization."
+	installed = strings.TrimSpace(extension.InstalledVersion)
+	if installed == "" {
+		installed = strings.TrimSpace(extension.Version)
+	}
+	active = strings.TrimSpace(extension.ActiveVersion)
+	if active == "" && extension.Configured {
+		active = strings.TrimSpace(extension.Version)
+	}
+	if installed == "" {
+		installed = "Not installed"
+	}
+	if active == "" {
+		active = "Not configured"
+	}
+	return bundled, installed, active
+}
+
+func larkHelperReady(extension appsession.LarkExtensionSettings, guiVersion string) bool {
+	bundled, _, active := larkHelperVersions(extension, guiVersion)
+	if !extension.Configured {
+		return false
+	}
+	if bundled == "" || bundled == "dev" {
+		return true
+	}
+	return extension.ActiveManaged && active == bundled && !extension.UpdateAvailable
 }
 
 func extensionPathField(c *ui.Context, label string, value *string, choose func()) {

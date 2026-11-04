@@ -258,6 +258,16 @@ the model chooses a Lark tool when the task needs one.
 
 ## Upgrading
 
+The GUI distinguishes the helper bundled with the App, the newest managed
+installation, and the executable used by the active Source. When they differ,
+authorization and connection testing are blocked and Settings shows **Update
+helper**. One click verifies and installs the bundled helper, preserves App ID,
+CLI paths, domains, Project host, named App Secret and the private login HOME,
+then rebuilds the Source disabled and unapproved. Review it and click **Approve
+& enable**; do not reset a valid login merely to update the executable.
+
+The standalone official CLIs can be upgraded separately:
+
 ```sh
 pnpm update -g @larksuite/cli @lark-project/meegle
 root=$(pnpm root -g)

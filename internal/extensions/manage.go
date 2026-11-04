@@ -23,6 +23,11 @@ func (m *Manager) ConfigureSource(ref SourceRef, cfg SourceConfig) error {
 		return err
 	}
 	if existing, getErr := m.get(ref); getErr == nil && existing != nil {
+		existing.enabled.Store(false)
+		existing.mu.Lock()
+		existing.approval = ""
+		existing.storedApproval = ""
+		existing.mu.Unlock()
 		if err := m.Disconnect(ref); err != nil {
 			return err
 		}
@@ -50,6 +55,22 @@ func (m *Manager) ConfigureSource(ref SourceRef, cfg SourceConfig) error {
 	m.sources[ref.String()] = s
 	m.mu.Unlock()
 	return m.save()
+}
+
+// ReplaceSourceConfig persists and activates one replacement definition. The
+// resulting Source is always disabled and unapproved; private state_dir data and
+// named credentials are outside the definition and are deliberately untouched.
+func (m *Manager) ReplaceSourceConfig(ref SourceRef, cfg SourceConfig) error {
+	if m == nil || m.closed.Load() {
+		return errors.New("extension manager unavailable")
+	}
+	if err := validateConfig(ref, cfg); err != nil {
+		return err
+	}
+	if err := WriteSource(m.opts.ConfigPath, ref, &cfg); err != nil {
+		return err
+	}
+	return m.ConfigureSource(ref, cfg)
 }
 
 // RemoveSource forgets one live source after disconnecting it. Persistent login

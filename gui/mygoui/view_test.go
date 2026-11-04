@@ -64,20 +64,21 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 
 func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
-		item          appsession.Item
-		refresh, open bool
+		name            string
+		item            appsession.Item
+		refresh, open   bool
+		preferredSocket string
 	}{
-		{"open", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "open"}}}, true, true},
-		{"snapshot", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "snapshot"}}}, true, false},
-		{"running", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Running: true, Input: map[string]any{"action": "open"}}}, false, false},
-		{"failed", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Error: true, Input: map[string]any{"action": "open"}}}, false, false},
-		{"other", appsession.Item{Tool: &appsession.ToolState{Name: "bash"}}, false, false},
+		{"open", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "open"}, Details: map[string]any{"socket": "/tmp/open.sock"}}}, true, true, "/tmp/open.sock"},
+		{"snapshot", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "snapshot"}}}, true, false, ""},
+		{"running", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Running: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
+		{"failed", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Error: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
+		{"other", appsession.Item{Tool: &appsession.ToolState{Name: "bash"}}, false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			refresh, open := browserToolPanelRefresh(tc.item)
-			if refresh != tc.refresh || open != tc.open {
-				t.Fatalf("refresh/open = %t/%t, want %t/%t", refresh, open, tc.refresh, tc.open)
+			refresh, open, socket := browserToolPanelRefresh(tc.item)
+			if refresh != tc.refresh || open != tc.open || socket != tc.preferredSocket {
+				t.Fatalf("refresh/open/socket = %t/%t/%q, want %t/%t/%q", refresh, open, socket, tc.refresh, tc.open, tc.preferredSocket)
 			}
 		})
 	}
@@ -87,18 +88,22 @@ func TestBrowserAutoOpenWaitsForDiscovery(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		pending, panelOpen bool
-		browserCount       int
+		preferred          string
+		browsers           []appsession.BrowserPreview
 		want               browserOpenDecision
+		wantIndex          int
 	}{
-		{"socket not discovered yet", true, false, 0, browserOpenNone},
-		{"one browser", true, false, 1, browserOpenSingle},
-		{"several browsers", true, false, 2, browserChooseInstance},
-		{"drawer already open", true, true, 1, browserOpenNone},
-		{"no agent open request", false, false, 1, browserOpenNone},
+		{"preferred socket not discovered yet", true, false, "/tmp/new.sock", nil, browserOpenNone, -1},
+		{"preferred socket among several", true, false, "/tmp/new.sock", []appsession.BrowserPreview{{Socket: "/tmp/old.sock"}, {Socket: "/tmp/new.sock"}}, browserOpenSingle, 1},
+		{"one browser without preference", true, false, "", []appsession.BrowserPreview{{Socket: "/tmp/only.sock"}}, browserOpenSingle, 0},
+		{"several browsers without preference", true, false, "", []appsession.BrowserPreview{{Socket: "/tmp/a.sock"}, {Socket: "/tmp/b.sock"}}, browserChooseInstance, -1},
+		{"drawer already open", true, true, "/tmp/new.sock", []appsession.BrowserPreview{{Socket: "/tmp/new.sock"}}, browserOpenAlready, -1},
+		{"no agent open request", false, false, "", []appsession.BrowserPreview{{Socket: "/tmp/only.sock"}}, browserOpenNone, -1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := browserAutoOpenDecision(tc.pending, tc.panelOpen, tc.browserCount); got != tc.want {
-				t.Fatalf("decision=%v want=%v", got, tc.want)
+			got, index := browserAutoOpenDecision(tc.pending, tc.panelOpen, tc.preferred, tc.browsers)
+			if got != tc.want || index != tc.wantIndex {
+				t.Fatalf("decision/index=%v/%d want=%v/%d", got, index, tc.want, tc.wantIndex)
 			}
 		})
 	}

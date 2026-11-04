@@ -2,10 +2,12 @@ package mygoui
 
 import "github.com/egoist/mygo/ui"
 
-var approvalHandIcon = ui.MustParseSVG([]byte(`
+const approvalHandSVG = `
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-  <path fill="currentColor" d="M7 11V5.5a1.5 1.5 0 0 1 3 0V9h1V3.5a1.5 1.5 0 0 1 3 0V9h1V4.5a1.5 1.5 0 0 1 3 0V9h1V6.5a1.5 1.5 0 0 1 3 0V14a8 8 0 0 1-8 8h-2.36a8 8 0 0 1-5.66-2.34L2.3 15.98a1.69 1.69 0 0 1 2.33-2.44L7 15.72V11Z"/>
-</svg>`))
+  <path d="M7 11V5.5a1.5 1.5 0 0 1 3 0V9h1V3.5a1.5 1.5 0 0 1 3 0V9h1V4.5a1.5 1.5 0 0 1 3 0V9h1V6.5a1.5 1.5 0 0 1 3 0V14a8 8 0 0 1-8 8h-2.36a8 8 0 0 1-5.66-2.34L2.3 15.98a1.69 1.69 0 0 1 2.33-2.44L7 15.72V11Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`
+
+var approvalHandIcon = ui.MustParseSVG([]byte(approvalHandSVG))
 
 var browserMonochromeIcon = ui.MustParseSVG([]byte(`
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">

@@ -130,6 +130,17 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Managed Lark helper upgrades and desktop polish** (v1.5.55): Settings now
+  separates bundled, installed and active helper versions. A single **Update helper**
+  action installs the checksummed bundle and rebuilds the Source around that
+  exact executable while preserving login HOME, named credentials and Lark
+  configuration; the replacement is disabled/unapproved until reviewed again.
+  Mismatched helpers cannot authorize or test. Browser auto-reveal now follows
+  the exact socket returned by `browser open` and discovers short runtime sockets
+  through validated metadata. The approval hand is an outlined SVG, Send uses a
+  neutral gray palette for both Send and Stop, and release GUI builds regenerate
+  the existing `>`/`-` app mark with smooth supersampled geometry instead of
+  pixel stair-steps. See [v1.5.55 release notes](docs/releases/v1.5.55.md).
 - **GUI Lark authorization reconciliation and monochrome controls** (v1.5.54):
   a failed device-code command now checks the real verified user state before
   reporting failure, and final verification performs bounded read-only retries for

@@ -125,6 +125,15 @@ func BrowserWorkspaceAvailable(cwd string) bool {
 	return len(paths) != 0
 }
 
+// BrowserWorkspaceSocketPaths returns the bounded, validated browser endpoints
+// discoverable from a workspace, including short runtime sockets named by its
+// owner-only metadata records. GUI rendering uses the same discovery boundary
+// as the browser tool instead of scanning only literal .sock directory entries.
+func BrowserWorkspaceSocketPaths(cwd string) []string {
+	paths, _ := browserCandidatePaths(cwd, "")
+	return append([]string(nil), paths...)
+}
+
 func discoverBrowsers(ctx context.Context, cwd, selected string) browserDiscovery {
 	paths, truncated := browserCandidatePaths(cwd, selected)
 	out := browserDiscovery{Instances: []browserInstance{}, Truncated: truncated}

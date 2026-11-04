@@ -2,12 +2,9 @@ package appsession
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/browserctl"
 )
 
@@ -72,30 +69,5 @@ func (c *Controller) Browsers(ctx context.Context) []BrowserPreview {
 }
 
 func browserSockets(cwd string) []string {
-	if strings.TrimSpace(cwd) == "" {
-		return nil
-	}
-	var out []string
-	seen := map[string]bool{}
-	for _, dir := range []string{filepath.Join(cwd, ".golder", "browser"), filepath.Join(cwd, ".golder")} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		if len(entries) > 64 {
-			entries = entries[:64]
-		}
-		for _, entry := range entries {
-			if !strings.HasSuffix(entry.Name(), ".sock") || entry.Type()&os.ModeSocket == 0 {
-				continue
-			}
-			path := filepath.Join(dir, entry.Name())
-			if !seen[path] {
-				seen[path] = true
-				out = append(out, path)
-			}
-		}
-	}
-	sort.Strings(out)
-	return out
+	return agenttool.BrowserWorkspaceSocketPaths(cwd)
 }

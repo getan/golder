@@ -156,6 +156,30 @@ func InstalledManagedPackage(id string) (ManagedPackage, bool) {
 	return ManagedPackage{}, false
 }
 
+// ManagedPackageForExecutable resolves an active Source command to the exact
+// verified managed package it belongs to. It never trusts a version parsed from
+// the path alone: package.json and the installed executable hash must validate.
+func ManagedPackageForExecutable(id, executable string) (ManagedPackage, bool) {
+	base, err := existingManagedPackageBase(id)
+	if err != nil {
+		return ManagedPackage{}, false
+	}
+	executable = filepath.Clean(strings.TrimSpace(executable))
+	if executable == "." || !filepath.IsAbs(executable) {
+		return ManagedPackage{}, false
+	}
+	root := filepath.Dir(filepath.Dir(executable))
+	rel, err := filepath.Rel(base, root)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || !packageVersionPattern.MatchString(rel) {
+		return ManagedPackage{}, false
+	}
+	pkg, ok := loadManagedPackage(root, id)
+	if !ok || filepath.Clean(pkg.Executable) != executable {
+		return ManagedPackage{}, false
+	}
+	return pkg, true
+}
+
 // RemoveManagedPackage removes only the exact registered package root. Source
 // config and login state are separate explicit operations.
 func RemoveManagedPackage(pkg ManagedPackage) error {

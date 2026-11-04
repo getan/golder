@@ -67,10 +67,48 @@ func TestLarkStatusAndVersionLabelsAreIndependent(t *testing.T) {
 	if got := larkAuthorizationStatus("configured"); got != "Not verified" {
 		t.Fatalf("configured env was presented as user auth: %q", got)
 	}
-	if warning := extensionVersionWarning("v1.5.54", "1.5.53"); !strings.Contains(warning, "differ") {
-		t.Fatalf("version mismatch warning=%q", warning)
+	mismatch := configured
+	mismatch.BundledVersion, mismatch.InstalledVersion, mismatch.ActiveVersion = "1.5.54", "1.5.54", "1.5.53"
+	mismatch.UpdateAvailable = true
+	if larkHelperReady(mismatch, "v1.5.54") {
+		t.Fatal("mismatched active helper was treated as ready")
 	}
-	if warning := extensionVersionWarning("v1.5.54", "1.5.54"); warning != "" {
-		t.Fatalf("matching versions warned: %q", warning)
+	matching := configured
+	matching.BundledVersion, matching.InstalledVersion, matching.ActiveVersion = "1.5.54", "1.5.54", "1.5.54"
+	matching.ActiveManaged = true
+	if !larkHelperReady(matching, "v1.5.54") {
+		t.Fatal("matching helper was not ready")
+	}
+	bundled, installed, active := larkHelperVersions(mismatch, "v1.5.54")
+	if strings.Join([]string{bundled, installed, active}, "/") != "1.5.54/1.5.54/1.5.53" {
+		t.Fatalf("versions=%s/%s/%s", bundled, installed, active)
+	}
+}
+
+func TestLarkHelperMismatchShowsOneClickUpdate(t *testing.T) {
+	a := testApp()
+	a.settingsOpen = true
+	a.settingsTab = 2
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{
+			Installed: true, Configured: true, Enabled: true,
+			BundledVersion: "1.5.55", InstalledVersion: "1.5.55", ActiveVersion: "1.5.54",
+			Version: "1.5.54", UpdateAvailable: true, State: "disconnected", Authentication: "configured",
+		},
+		AppID: "cli_test", CredentialName: "lark-app-secret", CredentialAvailable: true,
+	}
+	a.extensionEdit = appsession.LarkExtensionEdit{AppID: "cli_test", CredentialName: "lark-app-secret"}
+	a.extensionDomains = map[string]bool{"docs": true}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{
+		"Bundled: 1.5.55", "Installed latest: 1.5.55", "Active Source: 1.5.54",
+		"Update helper", "Update the managed helper before authorization.",
+	} {
+		if !tt.HasText(want) {
+			t.Fatalf("mismatch UI is missing %q; texts=%q", want, tt.Texts())
+		}
+	}
+	if larkHelperReady(a.extension, "1.5.55") {
+		t.Fatal("mismatched helper left authorization controls ready")
 	}
 }

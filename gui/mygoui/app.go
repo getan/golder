@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -102,12 +103,13 @@ type App struct {
 	diffSel     int
 	diff        *editor.DiffState
 
-	browsers         []appsession.BrowserPreview
-	browserOpen      bool
-	browserPanelOpen bool
-	browserAutoOpen  bool
-	browserState     *browserWindowState
-	browserCancel    context.CancelFunc
+	browsers          []appsession.BrowserPreview
+	browserOpen       bool
+	browserPanelOpen  bool
+	browserAutoOpen   bool
+	browserAutoSocket string
+	browserState      *browserWindowState
+	browserCancel     context.CancelFunc
 }
 
 // New builds the app around an opened controller.
@@ -432,10 +434,10 @@ func (a *App) refreshModels() {
 }
 
 func (a *App) refreshBrowsers() {
-	a.refreshBrowsersForPanel(false)
+	a.refreshBrowsersForPanel(false, "")
 }
 
-func (a *App) refreshBrowsersForPanel(open bool) {
+func (a *App) refreshBrowsersForPanel(open bool, preferredSocket string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	browsers := a.ctrl.Browsers(ctx)
@@ -447,35 +449,47 @@ func (a *App) refreshBrowsersForPanel(open bool) {
 		a.browsers = browsers
 		if open {
 			a.browserAutoOpen = true
+			if preferredSocket = browserSocketKey(preferredSocket); preferredSocket != "" {
+				a.browserAutoSocket = preferredSocket
+			}
 		}
-		switch browserAutoOpenDecision(a.browserAutoOpen, a.browserPanelOpen, len(browsers)) {
+		decision, index := browserAutoOpenDecision(a.browserAutoOpen, a.browserPanelOpen, a.browserAutoSocket, browsers)
+		switch decision {
 		case browserOpenSingle:
-			a.browserAutoOpen = false
-			a.openBrowserPreview(browsers[0])
+			a.browserAutoOpen, a.browserAutoSocket = false, ""
+			a.openBrowserPreview(browsers[index])
 		case browserChooseInstance:
-			a.browserAutoOpen = false
+			a.browserAutoOpen, a.browserAutoSocket = false, ""
 			a.browserOpen = true
+		case browserOpenAlready:
+			a.browserAutoOpen, a.browserAutoSocket = false, ""
 		}
 	})
 }
 
 func (a *App) followBrowserTool(item appsession.Item) {
-	refresh, open := browserToolPanelRefresh(item)
+	refresh, open, socket := browserToolPanelRefresh(item)
 	if !refresh {
 		return
 	}
 	if open {
 		a.browserAutoOpen = true
+		if socket = browserSocketKey(socket); socket != "" {
+			a.browserAutoSocket = socket
+		}
 	}
-	go a.refreshBrowsersForPanel(open)
+	go a.refreshBrowsersForPanel(open, socket)
 }
 
-func browserToolPanelRefresh(item appsession.Item) (refresh, open bool) {
+func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket string) {
 	if item.Tool == nil || item.Tool.Name != "browser" || item.Tool.Running || item.Tool.Error {
-		return false, false
+		return false, false, ""
 	}
 	action, _ := item.Tool.Input["action"].(string)
-	return true, action == "open"
+	if action == "open" {
+		socket, _ = item.Tool.Details["socket"].(string)
+	}
+	return true, action == "open", socket
 }
 
 type browserOpenDecision uint8
@@ -484,16 +498,42 @@ const (
 	browserOpenNone browserOpenDecision = iota
 	browserOpenSingle
 	browserChooseInstance
+	browserOpenAlready
 )
 
-func browserAutoOpenDecision(pending, panelOpen bool, browserCount int) browserOpenDecision {
-	if !pending || panelOpen || browserCount < 1 {
-		return browserOpenNone
+func browserAutoOpenDecision(pending, panelOpen bool, preferredSocket string, browsers []appsession.BrowserPreview) (browserOpenDecision, int) {
+	if !pending {
+		return browserOpenNone, -1
 	}
-	if browserCount == 1 {
-		return browserOpenSingle
+	if panelOpen {
+		return browserOpenAlready, -1
 	}
-	return browserChooseInstance
+	if preferredSocket = browserSocketKey(preferredSocket); preferredSocket != "" {
+		for i, browser := range browsers {
+			if browserSocketKey(browser.Socket) == preferredSocket {
+				return browserOpenSingle, i
+			}
+		}
+		return browserOpenNone, -1
+	}
+	if len(browsers) == 1 {
+		return browserOpenSingle, 0
+	}
+	if len(browsers) > 1 {
+		return browserChooseInstance, -1
+	}
+	return browserOpenNone, -1
+}
+
+func browserSocketKey(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	return filepath.Clean(path)
 }
 
 func (a *App) runAction(id, args string) {

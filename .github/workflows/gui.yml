@@ -145,6 +145,7 @@ jobs:
           fi
           printf 'mygo build %s\n' "${args[*]}"
           cd gui
+          go run ./tools/mkicon -o resources/icon.png
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
 
       - name: List the artifacts

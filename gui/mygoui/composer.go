@@ -64,12 +64,9 @@ func (a *App) composer(c *ui.Context) {
 
 			ready := strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0
 			label, accessible := "↑", "Send message"
-			face, hover, pressed := t.Accent, t.AccentHover, t.AccentPressed
+			face, hover, pressed, buttonText := composerControlPalette(t, a.status.Running, ready)
 			if a.status.Running {
 				label, accessible = "■", "Stop generation"
-				face, hover, pressed = t.Danger, t.Danger, t.Danger
-			} else if !ready {
-				face, hover, pressed = t.SurfacePressed, t.SurfacePressed, t.SurfacePressed
 			}
 			ui.Row(c).Padding(0, 9, 9, 9).Gap(6).AlignItems(ui.Center).Children(func() {
 				if ui.Button(c, "+").Tooltip("Attach files or images").Clicked() {
@@ -94,11 +91,7 @@ func (a *App) composer(c *ui.Context) {
 					send.Background(pressed)
 				}
 				send.Children(func() {
-					color := t.AccentText
-					if !a.status.Running && !ready {
-						color = t.TextMuted
-					}
-					ui.Text(c, label).FontSize(17).FontWeight(700).TextColor(color).TextAlign(ui.Center)
+					ui.Text(c, label).FontSize(17).FontWeight(700).TextColor(buttonText).TextAlign(ui.Center)
 				})
 				if send.Clicked() {
 					if a.status.Running {
@@ -118,6 +111,13 @@ func (a *App) composer(c *ui.Context) {
 				FontSize(11).TextColor(t.TextMuted)
 		})
 	})
+}
+
+func composerControlPalette(t *ui.Theme, running, ready bool) (face, hover, pressed, text ui.Color) {
+	if !running && !ready {
+		return t.Surface, t.Surface, t.Surface, t.TextMuted
+	}
+	return t.SurfacePressed, t.SurfaceHover, t.Border, t.Text
 }
 
 func (a *App) pickAttachments() {
