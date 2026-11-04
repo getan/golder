@@ -64,7 +64,7 @@ func (a *App) browserPanel(c *ui.Context) {
 	ui.Column(c).Width(browserWidth).MinWidth(360).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(36).Padding(5, 10).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-			ui.Text(c, "🌐").FontSize(14)
+			ui.Icon(c, browserMonochromeIcon).Size(15, 15)
 			if a.browserState != nil {
 				ui.Text(c, oneLine(a.browserState.title, 70)).FontSize(12).Grow(1).SingleLine().Ellipsis("…")
 			} else {

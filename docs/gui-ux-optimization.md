@@ -403,14 +403,14 @@ Session | Changes | Workspace | Browser
 收敛为：
 
 ```text
-[Project ▾]  Session title                         [▤] [🌐]
+[Project ▾]  Session title                    [▤] [monochrome globe SVG]
 ```
 
 决策：
 
 - Session 生命周期全部进入 sidebar；
 - 删除 Workspace；
-- Changes 与 Browser 使用常驻、带 tooltip 的紧凑图标，不重复显示文案；
+- Changes 与 Browser 使用常驻、带 tooltip 的紧凑单色图标，不重复显示文案；
 - Agent `browser open` 启动 GUI browserhost 后，Browser 自动在右侧 drawer
   显示 Bitmap Surface；无需 tuios pane 或第二份 CLI；
 - Command Palette 使用 `Cmd/Ctrl+K`，不永久占一个按钮；

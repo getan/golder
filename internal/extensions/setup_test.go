@@ -19,6 +19,19 @@ func TestSetupFixtureChild(t *testing.T) {
 	if os.Getenv("EXTENSION_SETUP_FIXTURE") != "1" {
 		return
 	}
+	if mode := os.Getenv("EXTENSION_SETUP_FAILURE"); mode != "" {
+		event := setupevent.Event{
+			Version: setupevent.Version, Type: "failure", Service: "fixture",
+			Phase: setupevent.PhaseVerifyAuthorization, Code: setupevent.CodeAuthVerifyNetworkFailed,
+			Message: "access_token=must-not-leak", VerificationURL: "https://auth.example.com/private-device",
+		}
+		if mode == "unknown" {
+			event.Code = "PRIVATE_access_token_UNKNOWN"
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(event)
+		fmt.Fprintln(os.Stderr, "refresh_token=must-not-leak device_code=private")
+		os.Exit(9)
+	}
 	home := os.Getenv("HOME")
 	protected := os.Getenv("EXTENSION_TEST_PROTECTED")
 	for _, path := range []string{filepath.Join(protected, "credentials.json"), filepath.Join(protected, "extensions", "mcp-other", "home", "secret")} {
@@ -41,6 +54,62 @@ func TestSetupFixtureChild(t *testing.T) {
 	_ = encoder.Encode(setupevent.Event{Version: 1, Type: "authorization", Service: "fixture", VerificationURL: url, ExpiresAt: time.Now().Add(time.Minute)})
 	_ = encoder.Encode(setupevent.Event{Version: 1, Type: "complete", Service: "fixture", Authenticated: true})
 	os.Exit(0)
+}
+
+func TestSetupForwardsOnlyWhitelistedFailure(t *testing.T) {
+	if !seatbelt.Available() {
+		t.Skip("OS sandbox unavailable")
+	}
+	exe, _ := os.Executable()
+	ref := SourceRef{Kind: "mcp", ID: "fixture"}
+	c := SourceConfig{
+		Enabled: true, Transport: "stdio", Command: exe, StateDir: true,
+		Setup: []string{exe, "-test.run=^TestSetupFixtureChild$"},
+		Env:   map[string]string{"EXTENSION_SETUP_FIXTURE": "1", "EXTENSION_SETUP_FAILURE": "known"},
+	}
+	m := testManager(t, ref, c, nil)
+	if err := m.ApproveSession(ref); err != nil {
+		t.Fatal(err)
+	}
+	var shown setupevent.Event
+	err := m.Setup(context.Background(), ref, func(event setupevent.Event) error {
+		shown = event
+		return nil
+	})
+	if err == nil || shown.Type != "failure" || shown.Code != setupevent.CodeAuthVerifyNetworkFailed || !shown.Retryable {
+		t.Fatalf("err=%v event=%+v", err, shown)
+	}
+	text := err.Error() + shown.Message
+	for _, secret := range []string{"access_token", "refresh_token", "device_code", "private-device", "must-not-leak"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("setup failure leaked %q: %s", secret, text)
+		}
+	}
+	snapshot, ok := m.Source(ref)
+	if !ok || snapshot.Authentication != "verification-failed" {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+func TestSetupRejectsUnknownFailureCodeWithoutEchoingIt(t *testing.T) {
+	if !seatbelt.Available() {
+		t.Skip("OS sandbox unavailable")
+	}
+	exe, _ := os.Executable()
+	ref := SourceRef{Kind: "mcp", ID: "fixture"}
+	c := SourceConfig{
+		Enabled: true, Transport: "stdio", Command: exe, StateDir: true,
+		Setup: []string{exe, "-test.run=^TestSetupFixtureChild$"},
+		Env:   map[string]string{"EXTENSION_SETUP_FIXTURE": "1", "EXTENSION_SETUP_FAILURE": "unknown"},
+	}
+	m := testManager(t, ref, c, nil)
+	if err := m.ApproveSession(ref); err != nil {
+		t.Fatal(err)
+	}
+	err := m.Setup(context.Background(), ref, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid setup failure event") || strings.Contains(err.Error(), "PRIVATE") || strings.Contains(err.Error(), "access_token") {
+		t.Fatalf("error=%v", err)
+	}
 }
 
 func TestPersistentSetupIsSourceScopedAndResettable(t *testing.T) {
@@ -88,6 +157,9 @@ func TestPersistentSetupIsSourceScopedAndResettable(t *testing.T) {
 		if events != 2 {
 			t.Fatalf("events=%d", events)
 		}
+	}
+	if snapshot, ok := m.Source(ref); !ok || snapshot.Authentication != "verified" {
+		t.Fatalf("successful setup authentication state: %+v", snapshot)
 	}
 	home := sourceHome(ref)
 	data, err := os.ReadFile(filepath.Join(home, "refresh-state"))

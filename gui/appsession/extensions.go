@@ -78,6 +78,9 @@ type ExtensionSetupEvent struct {
 	Message         string
 	VerificationURL string
 	Authenticated   bool
+	Phase           string
+	Code            string
+	Retryable       bool
 }
 
 // ExtensionSettings returns package and live source state without starting an
@@ -312,6 +315,7 @@ func (c *Controller) AuthorizeLark(ctx context.Context, service string, show fun
 			show(ExtensionSetupEvent{
 				Type: event.Type, Service: event.Service, Message: event.Message,
 				VerificationURL: event.VerificationURL, Authenticated: event.Authenticated,
+				Phase: event.Phase, Code: event.Code, Retryable: event.Retryable,
 			})
 		}
 		return nil

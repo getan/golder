@@ -29,34 +29,59 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		event.Service = service
 		return json.NewEncoder(output).Encode(event)
 	}
+	fail := func(phase, code string) error {
+		event, failureErr := setupevent.FailureEvent(phase, code)
+		if failureErr != nil {
+			return failureErr
+		}
+		if failureErr = write(event); failureErr != nil {
+			return failureErr
+		}
+		return errors.New(event.Message)
+	}
+	failContext := func() error {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fail(setupevent.PhaseComplete, setupevent.CodeSetupTimeout)
+		}
+		return fail(setupevent.PhaseComplete, setupevent.CodeSetupCancelled)
+	}
 	if err := write(setupevent.Event{Type: "notice", Message: "Preparing user authorization; application configuration and personal OAuth are separate"}); err != nil {
 		return err
 	}
 	if service == "lark" {
 		if err := prepareLarkStore(p.Config.Home); err != nil {
-			return err
+			return fail(setupevent.PhasePrepareStore, setupevent.CodePrepareStoreFailed)
 		}
 		if p.Config.AppID != "" || p.Config.AppSecret != "" {
 			if p.Config.AppID == "" || p.Config.AppSecret == "" {
-				return errors.New("existing app requires both LARK_MCP_APP_ID and a private LARK_MCP_APP_SECRET credential reference")
+				return fail(setupevent.PhaseConfigureApplication, setupevent.CodeAppConfigFailed)
 			}
 			// Do not pass the App Secret in argv or create another app. The
 			// official CLI encrypts it in the source's own credential store.
 			out, err := p.Runner.Run(ctx, "lark", []string{"config", "init", "--app-id=" + p.Config.AppID, "--app-secret-stdin", "--brand=feishu"}, []byte(p.Config.AppSecret+"\n"))
 			if err != nil || out.Code != 0 || out.Truncated {
-				return errors.New("could not configure the existing application; check its ID/secret and tenant permissions (diagnostics withheld)")
+				if ctx.Err() != nil {
+					return failContext()
+				}
+				return fail(setupevent.PhaseConfigureApplication, setupevent.CodeAppConfigFailed)
 			}
 		} else {
 			out, err := p.Runner.Run(ctx, "lark", []string{"auth", "status", "--json"}, nil)
 			var status map[string]any
 			_ = json.Unmarshal(out.Stdout, &status)
 			if err != nil || out.Code != 0 || status["appId"] == nil {
-				return errors.New("configure your existing application first: supply LARK_MCP_APP_ID and LARK_MCP_APP_SECRET via a private credential reference; no new application was created")
+				if ctx.Err() != nil {
+					return failContext()
+				}
+				return fail(setupevent.PhaseConfigureApplication, setupevent.CodeAppConfigFailed)
 			}
 		}
 		out, err := p.Runner.Run(ctx, "lark", []string{"auth", "login", "--domain=" + p.Config.Domains, "--no-wait", "--json"}, nil)
 		if err != nil || out.Code != 0 || out.Truncated {
-			return errors.New("could not start user authorization; check application scopes and CLI/DPoP compatibility (no identity fallback attempted)")
+			if ctx.Err() != nil {
+				return failContext()
+			}
+			return fail(setupevent.PhaseStartAuthorization, setupevent.CodeAuthStartFailed)
 		}
 		var device struct {
 			URL     string `json:"verification_url"`
@@ -64,7 +89,7 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 			Expires int    `json:"expires_in"`
 		}
 		if json.Unmarshal(out.Stdout, &device) != nil || device.URL == "" || device.Code == "" || device.Expires <= 0 || device.Expires > 1200 {
-			return errors.New("CLI returned an unsupported authorization response")
+			return fail(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
 		}
 		if err = write(setupevent.Event{Type: "authorization", VerificationURL: device.URL, ExpiresAt: time.Now().Add(time.Duration(device.Expires) * time.Second)}); err != nil {
 			return err
@@ -72,21 +97,76 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		pollCtx, stop := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
 		defer stop()
 		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--json"}, nil)
+		verifiedAfterPollFailure := false
 		if err != nil || out.Code != 0 || out.Truncated {
-			return errors.New("user authorization expired, was declined, or failed; start a new setup explicitly")
+			if ctx.Err() != nil {
+				return failContext()
+			}
+			verified, verifyCode := p.verifyLarkUser(ctx)
+			if !verified {
+				if verifyCode == setupevent.CodeAuthVerifyNetworkFailed {
+					return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
+				}
+				return fail(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
+			}
+			verifiedAfterPollFailure = true
 		}
-		out, err = p.Runner.Run(ctx, "lark", []string{"auth", "status", "--json", "--verify"}, nil)
-		var verified map[string]any
-		_ = json.Unmarshal(out.Stdout, &verified)
-		if err != nil || out.Code != 0 || verified["identity"] != "user" || verified["verified"] != true {
-			return errors.New("authorization was not verified as the user; no bot fallback attempted")
+		if !verifiedAfterPollFailure {
+			verified, verifyCode := p.verifyLarkUser(ctx)
+			if !verified {
+				if ctx.Err() != nil {
+					return failContext()
+				}
+				return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
+			}
 		}
 	} else {
 		if err := p.projectLogin(ctx, write); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return failContext()
+			}
+			return fail(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
 		}
 	}
 	return write(setupevent.Event{Type: "complete", Authenticated: true})
+}
+
+// verifyLarkUser accepts a positive verified payload even if the CLI exits
+// non-zero after saving it. An explicit non-user/unverified payload is final;
+// otherwise bounded read-only retries cover command/network failures without
+// retrying authorization or widening identity.
+func (p *Plugin) verifyLarkUser(ctx context.Context) (bool, string) {
+	delays := []time.Duration{0, 500 * time.Millisecond, time.Second}
+	for attempt, delay := range delays {
+		if delay > 0 {
+			if err := p.wait(ctx, delay); err != nil {
+				return false, setupevent.CodeAuthVerifyNetworkFailed
+			}
+		}
+		out, err := p.Runner.Run(ctx, "lark", []string{"auth", "status", "--json", "--verify"}, nil)
+		if ctx.Err() != nil {
+			return false, setupevent.CodeAuthVerifyNetworkFailed
+		}
+		var status struct {
+			Identity string `json:"identity"`
+			Verified *bool  `json:"verified"`
+		}
+		parsed := !out.Truncated && json.Unmarshal(out.Stdout, &status) == nil
+		if parsed && status.Identity == "user" && status.Verified != nil && *status.Verified {
+			return true, ""
+		}
+		if parsed && (status.Identity != "" || status.Verified != nil) {
+			return false, setupevent.CodeAuthVerifyIdentityFailed
+		}
+		if err != nil || out.Code != 0 {
+			if attempt+1 < len(delays) {
+				continue
+			}
+			return false, setupevent.CodeAuthVerifyNetworkFailed
+		}
+		return false, setupevent.CodeAuthVerifyIdentityFailed
+	}
+	return false, setupevent.CodeAuthVerifyNetworkFailed
 }
 
 func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) error) error {

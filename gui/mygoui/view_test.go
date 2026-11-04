@@ -32,15 +32,18 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "✋", "▤", "🌐"} {
+	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "▤"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}
 	}
-	for _, gone := range []string{"Workspace", "Browser", "Model ·", "Think ·", "Mode ·", "Permissions: test-model"} {
+	for _, gone := range []string{"Workspace", "Model ·", "Think ·", "Mode ·", "Permissions: test-model", "✋", "🌐"} {
 		if tt.HasText(gone) {
 			t.Fatalf("view still contains retired top-level action %q", gone)
 		}
+	}
+	if err := tt.Click("Approval mode"); err != nil || !a.permOpen {
+		t.Fatalf("monochrome approval hand is not accessible: open=%t err=%v", a.permOpen, err)
 	}
 }
 
@@ -49,10 +52,13 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 	a.browserPanelOpen = true
 	a.browserState = &browserWindowState{title: "Example", address: "https://example.com"}
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"🌐", "Example", "Connecting to Chromium…", "×"} {
+	for _, want := range []string{"Example", "Connecting to Chromium…", "×"} {
 		if !tt.HasText(want) {
 			t.Fatalf("browser drawer is missing %q; texts: %q", want, tt.Texts())
 		}
+	}
+	if err := tt.Click("Browser"); err != nil || a.browserPanelOpen {
+		t.Fatalf("monochrome browser action did not close the drawer: open=%t err=%v", a.browserPanelOpen, err)
 	}
 }
 
@@ -72,6 +78,27 @@ func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 			refresh, open := browserToolPanelRefresh(tc.item)
 			if refresh != tc.refresh || open != tc.open {
 				t.Fatalf("refresh/open = %t/%t, want %t/%t", refresh, open, tc.refresh, tc.open)
+			}
+		})
+	}
+}
+
+func TestBrowserAutoOpenWaitsForDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		pending, panelOpen bool
+		browserCount       int
+		want               browserOpenDecision
+	}{
+		{"socket not discovered yet", true, false, 0, browserOpenNone},
+		{"one browser", true, false, 1, browserOpenSingle},
+		{"several browsers", true, false, 2, browserChooseInstance},
+		{"drawer already open", true, true, 1, browserOpenNone},
+		{"no agent open request", false, false, 1, browserOpenNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := browserAutoOpenDecision(tc.pending, tc.panelOpen, tc.browserCount); got != tc.want {
+				t.Fatalf("decision=%v want=%v", got, tc.want)
 			}
 		})
 	}

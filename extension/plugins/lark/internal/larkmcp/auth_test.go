@@ -34,6 +34,118 @@ func TestExistingApplicationAndPersonalOAuthAreSeparate(t *testing.T) {
 	}
 }
 
+func TestLarkPollFailureIsSuccessWhenStatusIsAlreadyVerified(t *testing.T) {
+	statusCalls := 0
+	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
+		line := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "config init"):
+			return Output{}, nil
+		case strings.Contains(line, "--no-wait"):
+			return Output{Stdout: []byte(`{"verification_url":"https://accounts.feishu.cn/device","device_code":"private-device","expires_in":600}`)}, nil
+		case strings.Contains(line, "--device-code="):
+			return Output{Code: 1, Stderr: []byte("access_token=must-not-leak")}, nil
+		case strings.HasPrefix(line, "auth status"):
+			statusCalls++
+			return Output{Code: 1, Stdout: []byte(`{"identity":"user","verified":true}`), Stderr: []byte("post-save cleanup failed")}, nil
+		default:
+			return Output{}, nil
+		}
+	}}
+	p := New(Config{Home: t.TempDir(), AppID: "cli_existing", AppSecret: "private", Domains: "docs"}, f)
+	var events bytes.Buffer
+	if err := p.Setup(context.Background(), "lark", &events); err != nil {
+		t.Fatal(err)
+	}
+	if statusCalls != 1 || !strings.Contains(events.String(), `"type":"complete"`) || strings.Contains(events.String(), "access_token") || strings.Contains(events.String(), "private-device") {
+		t.Fatalf("statusCalls=%d events=%s", statusCalls, events.String())
+	}
+}
+
+func TestLarkPollFailureEmitsSafeFailureWhenStatusIsNotVerified(t *testing.T) {
+	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
+		line := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "config init"):
+			return Output{}, nil
+		case strings.Contains(line, "--no-wait"):
+			return Output{Stdout: []byte(`{"verification_url":"https://accounts.feishu.cn/device","device_code":"private-device","expires_in":600}`)}, nil
+		case strings.Contains(line, "--device-code="):
+			return Output{Code: 1, Stderr: []byte("refresh_token=must-not-leak")}, nil
+		case strings.HasPrefix(line, "auth status"):
+			return Output{Code: 1, Stdout: []byte(`{"identity":"user","verified":false}`)}, nil
+		default:
+			return Output{}, nil
+		}
+	}}
+	p := New(Config{Home: t.TempDir(), AppID: "cli_existing", AppSecret: "private", Domains: "docs"}, f)
+	var events bytes.Buffer
+	err := p.Setup(context.Background(), "lark", &events)
+	if err == nil || !strings.Contains(events.String(), `"type":"failure"`) || !strings.Contains(events.String(), `"code":"AUTH_POLL_FAILED"`) || strings.Contains(events.String(), "refresh_token") || strings.Contains(events.String(), "private-device") || strings.Contains(events.String(), `"type":"complete"`) {
+		t.Fatalf("err=%v events=%s", err, events.String())
+	}
+}
+
+func TestLarkVerifyRetriesTransientNetworkFailure(t *testing.T) {
+	statusCalls := 0
+	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
+		line := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "config init"):
+			return Output{}, nil
+		case strings.Contains(line, "--no-wait"):
+			return Output{Stdout: []byte(`{"verification_url":"https://accounts.feishu.cn/device","device_code":"private-device","expires_in":600}`)}, nil
+		case strings.Contains(line, "--device-code="):
+			return Output{}, nil
+		case strings.HasPrefix(line, "auth status"):
+			statusCalls++
+			if statusCalls == 1 {
+				return Output{Code: 1, Stderr: []byte("temporary network failure")}, nil
+			}
+			return Output{Stdout: []byte(`{"identity":"user","verified":true}`)}, nil
+		default:
+			return Output{}, nil
+		}
+	}}
+	p := New(Config{Home: t.TempDir(), AppID: "cli_existing", AppSecret: "private", Domains: "docs"}, f)
+	var waits []time.Duration
+	p.wait = func(_ context.Context, delay time.Duration) error { waits = append(waits, delay); return nil }
+	var events bytes.Buffer
+	if err := p.Setup(context.Background(), "lark", &events); err != nil {
+		t.Fatal(err)
+	}
+	if statusCalls != 2 || len(waits) != 1 || waits[0] != 500*time.Millisecond {
+		t.Fatalf("statusCalls=%d waits=%v events=%s", statusCalls, waits, events.String())
+	}
+}
+
+func TestLarkVerifyRejectsBotWithoutRetry(t *testing.T) {
+	statusCalls := 0
+	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
+		line := strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "config init"):
+			return Output{}, nil
+		case strings.Contains(line, "--no-wait"):
+			return Output{Stdout: []byte(`{"verification_url":"https://accounts.feishu.cn/device","device_code":"private-device","expires_in":600}`)}, nil
+		case strings.Contains(line, "--device-code="):
+			return Output{}, nil
+		case strings.HasPrefix(line, "auth status"):
+			statusCalls++
+			return Output{Stdout: []byte(`{"identity":"bot","verified":true}`)}, nil
+		default:
+			return Output{}, nil
+		}
+	}}
+	p := New(Config{Home: t.TempDir(), AppID: "cli_existing", AppSecret: "private", Domains: "docs"}, f)
+	p.wait = func(context.Context, time.Duration) error { t.Fatal("identity failure was retried"); return nil }
+	var events bytes.Buffer
+	err := p.Setup(context.Background(), "lark", &events)
+	if err == nil || statusCalls != 1 || !strings.Contains(events.String(), `"code":"AUTH_VERIFY_IDENTITY_FAILED"`) || strings.Contains(events.String(), "private-device") {
+		t.Fatalf("err=%v statusCalls=%d events=%s", err, statusCalls, events.String())
+	}
+}
+
 func TestProjectPendingSlowDownAndNoSecretEvents(t *testing.T) {
 	polls := 0
 	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {

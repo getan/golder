@@ -13,6 +13,24 @@ import (
 const Version = 1
 const MaxLine = 16 << 10
 
+const (
+	PhasePrepareStore            = "prepare_store"
+	PhaseConfigureApplication    = "configure_application"
+	PhaseStartAuthorization      = "start_authorization"
+	PhaseWaitForAuthorization    = "wait_for_authorization"
+	PhaseVerifyAuthorization     = "verify_authorization"
+	PhaseComplete                = "complete"
+	CodePrepareStoreFailed       = "PREPARE_STORE_FAILED"
+	CodeAppConfigFailed          = "APP_CONFIG_FAILED"
+	CodeAuthStartFailed          = "AUTH_START_FAILED"
+	CodeAuthResponseUnsupported  = "AUTH_RESPONSE_UNSUPPORTED"
+	CodeAuthPollFailed           = "AUTH_POLL_FAILED"
+	CodeAuthVerifyNetworkFailed  = "AUTH_VERIFY_NETWORK_FAILED"
+	CodeAuthVerifyIdentityFailed = "AUTH_VERIFY_IDENTITY_FAILED"
+	CodeSetupCancelled           = "SETUP_CANCELLED"
+	CodeSetupTimeout             = "SETUP_TIMEOUT"
+)
+
 type Event struct {
 	Version         int       `json:"v"`
 	Type            string    `json:"type"`
@@ -21,6 +39,55 @@ type Event struct {
 	VerificationURL string    `json:"verification_url,omitempty"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 	Authenticated   bool      `json:"authenticated,omitempty"`
+	Phase           string    `json:"phase,omitempty"`
+	Code            string    `json:"code,omitempty"`
+	Retryable       bool      `json:"retryable,omitempty"`
+}
+
+// FailureEvent returns one fixed, display-safe failure. The helper and host
+// share this closed vocabulary so neither raw CLI stderr nor authorization
+// values can become operator UI text.
+func FailureEvent(phase, code string) (Event, error) {
+	event := Event{Type: "failure", Phase: phase, Code: code}
+	return SanitizeFailure(event)
+}
+
+// SanitizeFailure validates phase/code and replaces every caller-supplied
+// display field with the canonical message and retry classification.
+func SanitizeFailure(event Event) (Event, error) {
+	wantPhase, message, retryable, ok := failureDefinition(event.Code)
+	if !ok || event.Phase != wantPhase {
+		return Event{}, errors.New("unsupported setup failure code or phase")
+	}
+	return Event{
+		Version: Version, Type: "failure", Service: event.Service,
+		Phase: wantPhase, Code: event.Code, Message: message, Retryable: retryable,
+	}, nil
+}
+
+func failureDefinition(code string) (phase, message string, retryable, ok bool) {
+	switch code {
+	case CodePrepareStoreFailed:
+		return PhasePrepareStore, "Private authorization state could not be prepared.", false, true
+	case CodeAppConfigFailed:
+		return PhaseConfigureApplication, "Application configuration could not be verified.", false, true
+	case CodeAuthStartFailed:
+		return PhaseStartAuthorization, "User authorization could not be started.", true, true
+	case CodeAuthResponseUnsupported:
+		return PhaseStartAuthorization, "The authorization service returned an unsupported response.", false, true
+	case CodeAuthPollFailed:
+		return PhaseWaitForAuthorization, "Authorization did not complete. Start a new authorization flow.", true, true
+	case CodeAuthVerifyNetworkFailed:
+		return PhaseVerifyAuthorization, "Authorization may be saved, but server verification did not complete because of a network or service error.", true, true
+	case CodeAuthVerifyIdentityFailed:
+		return PhaseVerifyAuthorization, "Authorization was not verified as the required user identity.", false, true
+	case CodeSetupCancelled:
+		return PhaseComplete, "Authorization was cancelled.", true, true
+	case CodeSetupTimeout:
+		return PhaseComplete, "Authorization timed out. Start a new authorization flow.", true, true
+	default:
+		return "", "", false, false
+	}
 }
 
 // AuthorizationURL requires a reviewed exact HTTPS origin. URL text, including

@@ -198,15 +198,8 @@ func (a *App) authorizeLark(service string) {
 				return
 			}
 			win.Update(func() {
-				switch event.Type {
-				case "notice":
-					a.extensionNote = event.Message
-				case "authorization":
-					a.extensionAuthURL = event.VerificationURL
-					a.extensionNote = "Authorization page opened. Complete consent in the browser; Golder is waiting for verified login."
-					_ = mygo.Shell.OpenExternal(event.VerificationURL)
-				case "complete":
-					a.extensionNote = "Authorization verified."
+				if openURL := a.applyExtensionSetupEvent(event); openURL != "" {
+					_ = mygo.Shell.OpenExternal(openURL)
 				}
 			})
 		})
@@ -216,13 +209,62 @@ func (a *App) authorizeLark(service string) {
 		win.Update(func() {
 			a.extensionBusy = false
 			a.extensionCancel = nil
+			a.extensionAuthURL = ""
+			eventErr := a.extensionErr
+			a.loadExtensionSettings()
+			refreshErr := a.extensionErr
 			if err != nil {
-				a.extensionErr = err.Error()
+				if eventErr != "" {
+					a.extensionErr = eventErr
+				} else {
+					a.extensionErr = err.Error()
+				}
+				a.extensionNote = ""
 				return
 			}
-			a.loadExtensionSettings()
+			if refreshErr != "" {
+				a.extensionNote = "Authorization verified, but status refresh failed."
+				return
+			}
+			a.extensionErr = ""
+			a.extensionNote = "Authorization verified."
 		})
 	}()
+}
+
+func (a *App) applyExtensionSetupEvent(event appsession.ExtensionSetupEvent) string {
+	switch event.Type {
+	case "notice":
+		a.extensionNote = event.Message
+	case "authorization":
+		a.extensionAuthURL = event.VerificationURL
+		a.extensionErr = ""
+		a.extensionNote = "Authorization page opened. Complete consent in the browser; Golder is waiting for verified login."
+		return event.VerificationURL
+	case "failure":
+		a.extensionAuthURL = ""
+		a.extensionNote = ""
+		a.extensionErr = extensionSetupFailureText(event)
+	case "complete":
+		a.extensionAuthURL = ""
+		a.extensionErr = ""
+		a.extensionNote = "Authorization verified."
+	}
+	return ""
+}
+
+func extensionSetupFailureText(event appsession.ExtensionSetupEvent) string {
+	message := strings.TrimSpace(event.Message)
+	if message == "" {
+		message = "Authorization failed."
+	}
+	if event.Code != "" && event.Phase != "" {
+		message += " [" + event.Code + " · " + event.Phase + "]"
+	}
+	if event.Retryable {
+		message += " Start a new authorization when ready."
+	}
+	return message
 }
 
 func (a *App) runExtensionOperation(note string, run func(context.Context) error) {
@@ -337,6 +379,10 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 
 func (a *App) larkExtensionCard(c *ui.Context) {
 	theme := c.Theme()
+	guiVersion := ""
+	if a.ctrl != nil {
+		guiVersion = a.ctrl.Version()
+	}
 	statusColor := theme.TextMuted
 	if a.extension.Enabled && a.extension.State == "ready" {
 		statusColor = theme.Success
@@ -363,6 +409,9 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 
 		ui.Text(c, "1. Package").FontWeight(600)
 		ui.Text(c, "Installed · "+a.extension.Version).FontSize(12).TextColor(theme.Success)
+		if warning := extensionVersionWarning(guiVersion, a.extension.Version); warning != "" {
+			ui.Text(c, warning).FontSize(11).TextColor(theme.Warning).Wrap()
+		}
 
 		ui.Text(c, "2. Application and official CLIs").FontWeight(600).Padding(6, 0, 0, 0)
 		extensionPathField(c, "Official lark-cli", &a.extensionEdit.LarkCLI, func() { a.chooseExtensionCLI(false) })
@@ -406,6 +455,8 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		}
 
 		ui.Text(c, "4. Personal authorization").FontWeight(600).Padding(6, 0, 0, 0)
+		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
+		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			if ui.PrimaryButton(c, "Authorize Lark").Disabled(a.extensionBusy || !a.extension.Enabled).Clicked() {
 				a.authorizeLark("lark")
@@ -422,7 +473,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 				}
 			}
 		})
-		if a.extensionAuthURL != "" {
+		if a.extensionBusy && a.extensionAuthURL != "" {
 			if ui.Button(c, "Open authorization page again").Clicked() {
 				_ = mygo.Shell.OpenExternal(a.extensionAuthURL)
 			}
@@ -446,6 +497,41 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			}
 		})
 	})
+}
+
+func larkApplicationStatus(extension appsession.LarkExtensionSettings) string {
+	if extension.Configured && strings.TrimSpace(extension.AppID) != "" && extension.CredentialAvailable {
+		return "Configured"
+	}
+	return "Missing or incomplete"
+}
+
+func larkAuthorizationStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "verified":
+		return "Verified"
+	case "pending":
+		return "Pending"
+	case "verification-failed":
+		return "Verification failed"
+	case "required":
+		return "Required"
+	case "configured":
+		return "Not verified"
+	case "not-required":
+		return "Not verified"
+	default:
+		return "Unknown"
+	}
+}
+
+func extensionVersionWarning(guiVersion, helperVersion string) string {
+	guiVersion = extensionPackageVersion(guiVersion)
+	helperVersion = extensionPackageVersion(helperVersion)
+	if guiVersion == "dev" || helperVersion == "dev" || guiVersion == helperVersion {
+		return ""
+	}
+	return "GUI " + guiVersion + " and helper " + helperVersion + " differ. Install the matching helper before diagnosing authorization."
 }
 
 func extensionPathField(c *ui.Context, label string, value *string, choose func()) {

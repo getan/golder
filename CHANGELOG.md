@@ -130,6 +130,17 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **GUI Lark authorization reconciliation and monochrome controls** (v1.5.54):
+  a failed device-code command now checks the real verified user state before
+  reporting failure, and final verification performs bounded read-only retries for
+  command/network failures. Helpers emit only whitelisted setup phase/error
+  events; the host still withholds raw stderr, tokens, device codes and URLs.
+  The GUI clears consumed authorization links, refreshes status on every exit,
+  separates application configuration from user verification, and warns when
+  its managed helper version differs. Approval-hand and Browser actions now use
+  theme-colored SVGs, while a completed `browser open` remains pending until
+  discovery can automatically reveal the right drawer. See
+  [v1.5.54 release notes](docs/releases/v1.5.54.md).
 - **Inline GUI approvals and first-token feedback** (v1.5.52): pending consent
   now appears as an expandable transcript card instead of a detached panel;
   approval markers use a fixed aligned gutter. While a run has no assistant,

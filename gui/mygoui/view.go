@@ -110,7 +110,7 @@ func (a *App) titleBar(c *ui.Context) {
 		if len(a.browsers) > 0 {
 			browserTip = fmt.Sprintf("Browser · %d active", len(a.browsers))
 		}
-		if ui.Button(c, "🌐").Tooltip(browserTip).Clicked() {
+		if compactIconButton(c, "browser", browserMonochromeIcon, "Browser", browserTip).Clicked() {
 			if a.browserPanelOpen {
 				a.closeBrowserPanel()
 			} else if len(a.browsers) == 1 {

@@ -105,6 +105,7 @@ type App struct {
 	browsers         []appsession.BrowserPreview
 	browserOpen      bool
 	browserPanelOpen bool
+	browserAutoOpen  bool
 	browserState     *browserWindowState
 	browserCancel    context.CancelFunc
 }
@@ -444,12 +445,15 @@ func (a *App) refreshBrowsersForPanel(open bool) {
 	}
 	a.win.Update(func() {
 		a.browsers = browsers
-		if !open || a.browserPanelOpen {
-			return
+		if open {
+			a.browserAutoOpen = true
 		}
-		if len(browsers) == 1 {
+		switch browserAutoOpenDecision(a.browserAutoOpen, a.browserPanelOpen, len(browsers)) {
+		case browserOpenSingle:
+			a.browserAutoOpen = false
 			a.openBrowserPreview(browsers[0])
-		} else if len(browsers) > 1 {
+		case browserChooseInstance:
+			a.browserAutoOpen = false
 			a.browserOpen = true
 		}
 	})
@@ -460,6 +464,9 @@ func (a *App) followBrowserTool(item appsession.Item) {
 	if !refresh {
 		return
 	}
+	if open {
+		a.browserAutoOpen = true
+	}
 	go a.refreshBrowsersForPanel(open)
 }
 
@@ -469,6 +476,24 @@ func browserToolPanelRefresh(item appsession.Item) (refresh, open bool) {
 	}
 	action, _ := item.Tool.Input["action"].(string)
 	return true, action == "open"
+}
+
+type browserOpenDecision uint8
+
+const (
+	browserOpenNone browserOpenDecision = iota
+	browserOpenSingle
+	browserChooseInstance
+)
+
+func browserAutoOpenDecision(pending, panelOpen bool, browserCount int) browserOpenDecision {
+	if !pending || panelOpen || browserCount < 1 {
+		return browserOpenNone
+	}
+	if browserCount == 1 {
+		return browserOpenSingle
+	}
+	return browserChooseInstance
 }
 
 func (a *App) runAction(id, args string) {

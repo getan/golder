@@ -76,15 +76,17 @@ Two optional surfaces need runtime pieces:
 - configuration: a shared Settings page for provider, model, base URL, protocol
   and named credentials, plus live model/reasoning/approval controls;
 - extensions: a native manager for checksummed first-party package install,
-  exact source review, named-secret configuration, browser OAuth, test,
+  exact source review, named-secret configuration, browser OAuth, safe
+  phase-coded failures, separate application/user-auth status, test,
   enable/disable, reset and uninstall; other configured sources appear there too;
 - changes: a Git status + unified diff drawer rendered by MyGo's diff viewer,
   opened from a compact icon-only title action;
 - actions: a command palette over the existing slash registry, so skills,
   prompt templates and plugin commands stay reachable without typing;
 - browser: an Agent-visible built-in tool backed by the GUI browserhost, with
-  native Bitmap frames in a right drawer and mouse, keyboard, scroll, resize
-  and committed IME input forwarded through the typed control socket;
+  native Bitmap frames in an automatically revealed right drawer and mouse,
+  keyboard, scroll, resize and committed IME input forwarded through the typed
+  control socket; title and approval actions use theme-colored monochrome SVGs;
 - terminal: an explicit user shell and detachable takeover of Agent bash calls
   that ran with `tty=true`.
 

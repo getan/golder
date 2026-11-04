@@ -54,6 +54,8 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 	defer stop()
 	s.interrupt.Store(&cancel)
 	s.state = "setting up"
+	s.auth = "pending"
+	s.lastError = ""
 	defer func() {
 		if s.state == "setting up" {
 			s.state = "disconnected"
@@ -80,6 +82,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 	scanner.Buffer(make([]byte, 4096), setupevent.MaxLine)
 	count, total := 0, 0
 	completed := false
+	var failure *setupevent.Event
 	for scanner.Scan() {
 		count++
 		total += len(scanner.Bytes())
@@ -96,6 +99,11 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 		}
 		switch event.Type {
 		case "authorization":
+			if completed || failure != nil {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("setup emitted authorization after a terminal event")
+			}
 			if event.ExpiresAt.IsZero() || !event.ExpiresAt.After(time.Now()) || event.ExpiresAt.After(time.Now().Add(20*time.Minute)) {
 				cancel()
 				_ = cmd.Wait()
@@ -107,9 +115,34 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 				return err
 			}
 		case "notice":
+			if completed || failure != nil {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("setup emitted notice after a terminal event")
+			}
 			event.Message = clean(event.Message, 1024)
 		case "complete":
-			completed = event.Authenticated
+			if completed || failure != nil || !event.Authenticated {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("invalid setup completion event")
+			}
+			completed = true
+		case "failure":
+			if completed || failure != nil {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("duplicate setup terminal event")
+			}
+			safe, failureErr := setupevent.SanitizeFailure(event)
+			if failureErr != nil {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("invalid setup failure event (contents withheld)")
+			}
+			event = safe
+			captured := event
+			failure = &captured
 		default:
 			cancel()
 			_ = cmd.Wait()
@@ -119,9 +152,16 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 		event.Service = clean(event.Service, 64)
 		if event.Type != "authorization" {
 			event.VerificationURL = ""
+			event.ExpiresAt = time.Time{}
 		}
-		if event.Type != "notice" {
+		if event.Type != "notice" && event.Type != "failure" {
 			event.Message = ""
+		}
+		if event.Type != "failure" {
+			event.Phase, event.Code, event.Retryable = "", "", false
+		}
+		if event.Type != "complete" {
+			event.Authenticated = false
 		}
 		if show != nil {
 			if err = show(event); err != nil {
@@ -136,20 +176,51 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 		_ = cmd.Wait()
 		return errors.New("setup event stream invalid or over limit")
 	}
-	if err = cmd.Wait(); err != nil {
-		s.state, s.auth = "disconnected", "required"
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		s.state = "disconnected"
 		if ctx.Err() != nil {
+			s.auth = "required"
 			return ctx.Err()
 		}
-		return errors.New("setup failed; retry authorization or check CLI/application configuration (raw diagnostics withheld)")
+		if failure != nil {
+			s.auth = setupFailureAuth(*failure)
+			s.lastError = setupFailureText(*failure)
+			return errors.New(s.lastError)
+		}
+		s.auth = "required"
+		s.lastError = "setup failed; retry authorization or check CLI/application configuration (raw diagnostics withheld)"
+		return errors.New(s.lastError)
 	}
 	s.state = "disconnected"
-	if !completed {
-		return errors.New("setup exited without verified authorization")
+	if failure != nil {
+		s.auth = setupFailureAuth(*failure)
+		s.lastError = setupFailureText(*failure)
+		return errors.New(s.lastError)
 	}
-	s.auth = "configured"
+	if !completed {
+		s.auth = "required"
+		s.lastError = "setup exited without verified authorization"
+		return errors.New(s.lastError)
+	}
+	s.auth = "verified"
 	s.lastError = ""
 	return nil
+}
+
+func setupFailureText(event setupevent.Event) string {
+	suffix := ""
+	if event.Retryable {
+		suffix = " Retry is safe."
+	}
+	return fmt.Sprintf("%s [%s · %s]%s", event.Message, event.Code, event.Phase, suffix)
+}
+
+func setupFailureAuth(event setupevent.Event) string {
+	if event.Code == setupevent.CodeAuthVerifyNetworkFailed {
+		return "verification-failed"
+	}
+	return "required"
 }
 
 // Reset clears only this source HOME, with its persistent parent lock retained.

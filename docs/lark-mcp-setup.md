@@ -195,6 +195,13 @@ declares. A direct run fails with
 `golder-lark requires a private HOME` unless `LARK_MCP_STATE_HOME` is set to a
 dedicated absolute directory.
 
+The setup stream exposes only a fixed phase/error-code vocabulary. Raw CLI
+stderr, device codes, authorization URLs and tokens never become GUI or TUI
+errors. If device-code polling exits non-zero after saving a token, setup checks
+`auth status --json --verify` before declaring failure. Final verification uses
+short bounded retries for command/network failures, but never retries or falls
+back when the CLI explicitly reports a non-user or unverified identity.
+
 ## Verification
 
 ```sh
@@ -242,6 +249,9 @@ the model chooses a Lark tool when the task needs one.
 | `CLI_UNAVAILABLE` | path points at the JS shim, or the postinstall never ran | reinstall with `--allow-build`; point at `bin/lark-cli` / `bin/meegle-<os>-<arch>` |
 | `golder-lark requires a private HOME` | ran `golder-lark setup` directly | use `golder mcp setup lark` |
 | `extension requires explicit trust approval` | enabled but not approved | `golder mcp enable lark --yes --save` |
+| `AUTH_POLL_FAILED` | device authorization did not complete and status was not verified | start a new authorization flow; do not reuse the previous URL |
+| `AUTH_VERIFY_NETWORK_FAILED` | token may be saved, but bounded server verification did not complete | check network/service health, then verify or retry setup; do not reset credentials solely for this error |
+| `AUTH_VERIFY_IDENTITY_FAILED` | status explicitly reported a non-user or unverified identity | authorize the required user identity; bot fallback remains disabled |
 | pnpm: `Cannot find module .../pnpm/bin/pnpm.mjs` | a stale `pnpm setup` shim in `$PNPM_HOME/bin` shadows the real CLI | move the shim aside and use the package-manager-installed `pnpm` |
 | pnpm: `ENOENT ... mkdir '~/Library/pnpm/bin'` | `~/Library/pnpm` is a dangling symlink (store moved to an unmounted disk) | mount the disk, or replace the link with a real directory |
 | `Permission denied` deleting an old store | the mount's parent directory is not writable by the user | `sudo rm -rf /Volumes/<DISK>/pnpm_store` |
