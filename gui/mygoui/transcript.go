@@ -97,8 +97,8 @@ func (a *App) noteLine(c *ui.Context, it appsession.Item) {
 	if it.Note != nil && it.Note.Summary != "" && !strings.Contains(text, it.Note.Summary) {
 		text = it.Note.Summary + "\n" + text
 	}
-	ui.Row(c.Key(it.ID)).Gap(6).Children(func() {
-		ui.Text(c, "⚠").FontSize(12).TextColor(color)
+	ui.Row(c.Key(it.ID)).Gap(6).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, "!").FontSize(12).TextColor(color).Width(18).TextAlign(ui.Center)
 		ui.Text(c, text).FontSize(12).TextColor(color).Selectable().Grow(1)
 	})
 }

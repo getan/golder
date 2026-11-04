@@ -33,6 +33,7 @@ type App struct {
 
 	thinkingOpen map[string]bool
 	toolOpen     map[string]bool
+	approvalOpen map[string]bool
 
 	draft       string
 	attachments []string
@@ -112,6 +113,7 @@ func New(ctrl *appsession.Controller) *App {
 		index:        map[string]int{},
 		thinkingOpen: map[string]bool{},
 		toolOpen:     map[string]bool{},
+		approvalOpen: map[string]bool{},
 		md:           markdown.Options{},
 	}
 	a.applySnapshot(ctrl.Snapshot())
@@ -197,6 +199,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 	case appsession.EventApproval:
 		if ev.Approval != nil {
 			a.pending = append(a.pending, *ev.Approval)
+			a.approvalOpen[ev.Approval.ID] = true
 		}
 	case appsession.EventApprovalDone:
 		a.removeApproval(ev.ID)
@@ -229,6 +232,7 @@ func (a *App) removeApproval(id string) {
 	for i, p := range a.pending {
 		if p.ID == id {
 			a.pending = append(a.pending[:i], a.pending[i+1:]...)
+			delete(a.approvalOpen, id)
 			return
 		}
 	}

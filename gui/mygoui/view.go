@@ -39,7 +39,16 @@ func (a *App) view(c *ui.Context) {
 		a.paletteOpen = true
 		a.loadActions()
 	}
-	a.list.Key = func(i int) any { return a.items[i].ID }
+	a.list.Key = func(i int) any {
+		if i < len(a.items) {
+			return a.items[i].ID
+		}
+		i -= len(a.items)
+		if i < len(a.pending) {
+			return a.pending[i].ID
+		}
+		return "awaiting-first-output"
+	}
 	a.list.FollowEnd = true
 	a.list.FollowAnimation = &ui.Smooth
 
@@ -217,20 +226,44 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 func (a *App) center(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
-		ui.List(c, &a.list, len(a.items), func(i int) {
-			if i >= 0 && i < len(a.items) {
+		waiting := a.awaitingFirstOutput()
+		total := len(a.items) + len(a.pending)
+		if waiting {
+			total++
+		}
+		ui.List(c, &a.list, total, func(i int) {
+			switch {
+			case i >= 0 && i < len(a.items):
 				a.itemView(c, a.items[i])
+			case i >= len(a.items) && i < len(a.items)+len(a.pending):
+				a.approvalCard(c, a.pending[i-len(a.items)])
+			case waiting:
+				ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
 			}
 		}).Grow(1).MinHeight(0).Padding(18, 24).Gap(14).Justify(ui.End).Children(func() {
-			if len(a.items) == 0 {
+			if total == 0 {
 				a.emptyState(c)
 			}
 		})
-		for i := range a.pending {
-			a.approvalCard(c, a.pending[i])
-		}
 		a.composer(c)
 	})
+}
+
+func (a *App) awaitingFirstOutput() bool {
+	if !a.status.Running || a.status.RunID == "" || len(a.pending) > 0 {
+		return false
+	}
+	prefix := a.status.RunID + "-"
+	for _, item := range a.items {
+		if !strings.HasPrefix(item.ID, prefix) {
+			continue
+		}
+		switch item.Kind {
+		case appsession.ItemAssistant, appsession.ItemThinking, appsession.ItemTool:
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) emptyState(c *ui.Context) {

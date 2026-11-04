@@ -15,6 +15,7 @@ func testApp() *App {
 		index:        map[string]int{},
 		thinkingOpen: map[string]bool{},
 		toolOpen:     map[string]bool{},
+		approvalOpen: map[string]bool{},
 		status: appsession.Status{
 			Model:      "test-model",
 			Provider:   "test-provider",
@@ -252,9 +253,34 @@ func TestApprovalCardRendersDecision(t *testing.T) {
 		Needs:     []string{"network github.com"},
 	}}
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"Approval required", "git push origin main", "Allow once", "Deny"} {
+	for _, want := range []string{"!  Approval required · bash", "git push origin main", "Allow once", "Deny"} {
 		if !tt.HasText(want) {
 			t.Fatalf("approval card is missing %q; texts: %q", want, tt.Texts())
 		}
+	}
+	if !a.approvalOpen["approval-1"] {
+		t.Fatal("a new approval card must open so its decision buttons are visible")
+	}
+}
+
+func TestWaitingForFirstOutputIndicatorLifecycle(t *testing.T) {
+	a := testApp()
+	a.status.Running, a.status.RunID = true, "run-1"
+	a.items = []appsession.Item{{ID: "run-1-user", Kind: appsession.ItemUser, Text: "hello", Done: true}}
+	a.index["run-1-user"] = 0
+	if !a.awaitingFirstOutput() {
+		t.Fatal("run with no model output should be waiting")
+	}
+	if tt := ui.NewTester(a.view, 1200, 800); !tt.HasText("正在思考…") {
+		t.Fatalf("waiting indicator missing: %q", tt.Texts())
+	}
+	a.items = append(a.items, appsession.Item{ID: "run-1-a-0", Kind: appsession.ItemAssistant, Text: "answer"})
+	if a.awaitingFirstOutput() {
+		t.Fatal("first assistant output must remove the waiting indicator")
+	}
+	a.items = a.items[:1]
+	a.pending = []appsession.ApprovalView{{ID: "approval", Tool: "bash"}}
+	if a.awaitingFirstOutput() {
+		t.Fatal("pending approval card replaces the waiting indicator")
 	}
 }

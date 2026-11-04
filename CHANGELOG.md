@@ -123,6 +123,12 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Inline GUI approvals and first-token feedback** (v1.5.52): pending consent
+  now appears as an expandable transcript card instead of a detached panel;
+  approval markers use a fixed aligned gutter. While a run has no assistant,
+  reasoning, tool or approval output, the desktop shows a muted
+  `正在思考…` indicator and removes it when the first visible item arrives. See
+  [v1.5.52 release notes](docs/releases/v1.5.52.md).
 - **Approval context, Git push envelopes and desktop diffs** (v1.5.51): the
   reviewer retains more recent user intent and gives it budget priority over
   tool output. Ordinary, locally resolved SSH/HTTPS Git pushes with a bound

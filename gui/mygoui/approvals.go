@@ -9,26 +9,27 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
-// approvalCard shows one pending decision above the composer. It stays in the
-// window, not in a modal, so the transcript behind it remains readable while
-// the tool call waits.
+// approvalCard renders pending consent as a transcript card, using the same
+// folded detail pattern as tool calls rather than a separate fixed panel.
 func (a *App) approvalCard(c *ui.Context, p appsession.ApprovalView) {
 	t := c.Theme()
-	ui.Column(c.Key(p.ID)).Gap(6).Padding(11, 14).Radius(10).
-		Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Approval required").FontSize(13).Bold().TextColor(t.Danger)
-			if p.Origin != "" {
-				ui.Text(c, "from "+p.Origin).FontSize(11).TextColor(t.TextMuted)
-			}
-			ui.Spacer(c)
+	open, ok := a.approvalOpen[p.ID]
+	if !ok {
+		open = true
+	}
+	head := "!  Approval required"
+	if p.Tool != "" {
+		head += " · " + p.Tool
+	}
+	el := ui.Collapsible(c.Key(p.ID), head, &open, func() {
+		if p.Origin != "" {
+			ui.Text(c, "from "+p.Origin).FontSize(11).TextColor(t.TextMuted)
+		}
+		if p.Source != "" || p.Level != "" {
 			ui.Text(c, p.Source+"/"+p.Level).FontSize(11).TextColor(t.TextMuted)
-		})
+		}
 		if p.TrustDir != "" {
 			ui.Text(c, "Trust "+p.TrustDir+"?").FontSize(12)
-		}
-		if p.Tool != "" {
-			ui.Text(c, p.Tool).FontSize(12).FontWeight(600)
 		}
 		if p.Summary != "" {
 			ui.Text(c, p.Summary).FontSize(12).Selectable()
@@ -51,6 +52,8 @@ func (a *App) approvalCard(c *ui.Context, p appsession.ApprovalView) {
 			}
 		})
 	})
+	el.TextColor(t.Danger)
+	a.approvalOpen[p.ID] = open
 }
 
 // pendingCount is used by the title bar when a decision is waiting.
