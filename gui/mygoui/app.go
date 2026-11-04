@@ -102,8 +102,11 @@ type App struct {
 	diffSel     int
 	diff        *editor.DiffState
 
-	browsers    []appsession.BrowserPreview
-	browserOpen bool
+	browsers         []appsession.BrowserPreview
+	browserOpen      bool
+	browserPanelOpen bool
+	browserState     *browserWindowState
+	browserCancel    context.CancelFunc
 }
 
 // New builds the app around an opened controller.
@@ -142,6 +145,7 @@ func (a *App) Run() error {
 				a.diffCancel()
 				a.diffCancel = nil
 			}
+			a.closeBrowserPanel()
 			_ = a.ctrl.Close()
 		})
 		go a.pump()
@@ -188,13 +192,16 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 		if _, ok := a.index[ev.Item.ID]; ok {
 			a.replaceItem(*ev.Item)
+			a.followBrowserTool(*ev.Item)
 			return
 		}
 		a.index[ev.Item.ID] = len(a.items)
 		a.items = append(a.items, *ev.Item)
+		a.followBrowserTool(*ev.Item)
 	case appsession.EventItemUpdated:
 		if ev.Item != nil {
 			a.replaceItem(*ev.Item)
+			a.followBrowserTool(*ev.Item)
 		}
 	case appsession.EventApproval:
 		if ev.Approval != nil {
@@ -424,12 +431,44 @@ func (a *App) refreshModels() {
 }
 
 func (a *App) refreshBrowsers() {
+	a.refreshBrowsersForPanel(false)
+}
+
+func (a *App) refreshBrowsersForPanel(open bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	a.browsers = a.ctrl.Browsers(ctx)
-	if a.win != nil {
-		a.win.Update(func() {})
+	browsers := a.ctrl.Browsers(ctx)
+	if a.win == nil {
+		a.browsers = browsers
+		return
 	}
+	a.win.Update(func() {
+		a.browsers = browsers
+		if !open || a.browserPanelOpen {
+			return
+		}
+		if len(browsers) == 1 {
+			a.openBrowserPreview(browsers[0])
+		} else if len(browsers) > 1 {
+			a.browserOpen = true
+		}
+	})
+}
+
+func (a *App) followBrowserTool(item appsession.Item) {
+	refresh, open := browserToolPanelRefresh(item)
+	if !refresh {
+		return
+	}
+	go a.refreshBrowsersForPanel(open)
+}
+
+func browserToolPanelRefresh(item appsession.Item) (refresh, open bool) {
+	if item.Tool == nil || item.Tool.Name != "browser" || item.Tool.Running || item.Tool.Error {
+		return false, false
+	}
+	action, _ := item.Tool.Input["action"].(string)
+	return true, action == "open"
 }
 
 func (a *App) runAction(id, args string) {

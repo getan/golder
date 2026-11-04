@@ -58,6 +58,7 @@ type paneSpec struct {
 	Profile           string
 	PersistentProfile string
 	ProxyMode         string
+	ProxyServer       string
 	RecordName        string
 	StartupReport     string
 	// Embedded marks a browser pane started by golder's own binary rather than

@@ -49,8 +49,47 @@ var (
 	embeddedBrowserExecutable string
 	// embeddedBrowserErr keeps a rejected configuration visible: a caller that
 	// asked for the built-in pane gets a reason, not a silent fallback.
-	embeddedBrowserErr error
+	embeddedBrowserErr    error
+	nativeBrowserMu       sync.RWMutex
+	nativeBrowserLauncher NativeBrowserLauncher
 )
+
+// NativeBrowserRequest is a validated GUI-hosted browser launch. Paths and the
+// login identity are derived by the browser tool; the model cannot supply them.
+type NativeBrowserRequest struct {
+	URL, Socket, ProfileDir, LoginProfile, ProxyServer string
+}
+
+// NativeBrowserLauncher starts a headless browser control host and returns once
+// its owner-only socket is listening. The host owns its lifecycle independently
+// of the individual tool-call context.
+type NativeBrowserLauncher func(context.Context, NativeBrowserRequest) error
+
+// ConfigureNativeBrowserLauncher installs a process-wide launcher for hosts
+// such as the desktop GUI that render browser frames without a tuios pane.
+func ConfigureNativeBrowserLauncher(launch NativeBrowserLauncher) {
+	nativeBrowserMu.Lock()
+	nativeBrowserLauncher = launch
+	nativeBrowserMu.Unlock()
+}
+
+// NativeBrowserLauncherAvailable reports whether this process can open a
+// browser without a terminal pane.
+func NativeBrowserLauncherAvailable() bool {
+	nativeBrowserMu.RLock()
+	defer nativeBrowserMu.RUnlock()
+	return nativeBrowserLauncher != nil
+}
+
+func launchNativeBrowser(ctx context.Context, req NativeBrowserRequest) error {
+	nativeBrowserMu.RLock()
+	launch := nativeBrowserLauncher
+	nativeBrowserMu.RUnlock()
+	if launch == nil {
+		return errors.New("native browser host is unavailable")
+	}
+	return launch(ctx, req)
+}
 
 // ConfigureEmbeddedBrowser tells the browser tool that this executable can
 // start a browser pane itself, with `"<exe>" browse -profile-dir DIR
@@ -113,7 +152,7 @@ func EmbeddedBrowserConfigured() bool {
 // kitty-browse. Registration uses it, so the tool appears without kitty-browse
 // on PATH once the built-in pane is configured.
 func BrowserLaunchAvailable() bool {
-	if EmbeddedBrowserConfigured() {
+	if EmbeddedBrowserConfigured() || NativeBrowserLauncherAvailable() {
 		return true
 	}
 	_, err := exec.LookPath("kitty-browse")
@@ -204,6 +243,8 @@ func browserPaneArgv(socket, profile, url string) ([]string, error) {
 		return nil, err
 	} else if exe != "" {
 		argv = []string{exe, "browse"}
+	} else if NativeBrowserLauncherAvailable() {
+		argv = []string{"native-browser-host"}
 	} else {
 		bin, err := exec.LookPath("kitty-browse")
 		if err != nil {
@@ -314,6 +355,49 @@ func startBrowserPaneWithProfile(ctx context.Context, cwd, name, url, profile st
 		return "", res.WindowID, err
 	}
 	return spec.Socket, res.WindowID, nil
+}
+
+// startNativeBrowserWithProfile starts a GUI-hosted headless browser using the
+// same validated socket, profile, proxy and ownership policy as a pane launch.
+func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile string) (string, error) {
+	g := controlGuardFrom(ctx)
+	spec, err := controlledBrowserSpecWithProfile(g, cwd, name, url, profile)
+	if err != nil {
+		return "", err
+	}
+	req := NativeBrowserRequest{
+		URL: url, Socket: spec.Socket, ProfileDir: spec.Profile,
+		LoginProfile: browserLoginProfile(cwd, spec.PersistentProfile), ProxyServer: spec.ProxyServer,
+	}
+	if err := launchNativeBrowser(ctx, req); err != nil {
+		return "", fmt.Errorf("start native browser: %w", err)
+	}
+	if err := waitForBrowserSocket(ctx, spec.Socket, browserSocketWait); err != nil {
+		return "", err
+	}
+	client, err := browserctl.Dial(spec.Socket)
+	if err != nil {
+		return "", err
+	}
+	defer client.CloseIdleConnections()
+	probe, cancel := context.WithTimeout(ctx, browserProbeTimeout)
+	defer cancel()
+	info, err := client.Info(probe)
+	if err != nil {
+		return "", fmt.Errorf("native browser control endpoint is not ready: %w", err)
+	}
+	if info.APIVersion != browserctl.APIVersion || info.BrowserID == "" {
+		return "", fmt.Errorf("native browser endpoint is not a compatible %s browser", browserctl.APIVersion)
+	}
+	if g != nil {
+		g.rememberBrowser(info.BrowserID, spec.Socket, "", spec.PersistentProfile, spec.ProxyMode)
+	}
+	_ = writeBrowserMetadata(browserMetadataPath(cwd, spec.RecordName), browserMetadata{
+		Name: spec.RecordName, Socket: spec.Socket, Profile: spec.Profile,
+		PersistentProfile: spec.PersistentProfile, Program: "native-browser-host", BrowserID: info.BrowserID,
+	})
+	setBrowserSocket(spec.Socket)
+	return spec.Socket, nil
 }
 
 // adoptBrowserPane turns "a pane was created" into "a browser we can prove the

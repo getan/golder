@@ -92,27 +92,43 @@ const browserToolUseHint = " Use this tool rather than launching `golder browse`
 	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
 	"Only resume after the person explicitly continues and confirms the call, or uses Ctrl+G in the pane."
 
+func (t *BrowserTool) useHint() string {
+	if NativeBrowserLauncherAvailable() {
+		return " In the desktop GUI, open starts the native browser host; the Browser icon opens its interactive Bitmap surface in the right drawer. The browser tool owns the control socket and cleanup. " +
+			"The default open uses a persistent project-shared profile and remembers logins; profile:<name> selects a separate project-scoped identity whose first use needs exact operator confirmation. " +
+			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification."
+	}
+	return browserToolUseHint
+}
+
+func (t *BrowserTool) launchPolicy() string {
+	if NativeBrowserLauncherAvailable() {
+		return " Ambient proxy variables are ignored; the native desktop host currently requires the saved browser proxy to be off."
+	}
+	return " Ambient proxy variables are ignored; the person's saved /proxy browser setting is applied on launch."
+}
+
 func (t *BrowserTool) Description() string {
 	if !t.available() {
 		if !t.allowControl {
 			return "List live workspace browsers and tabs. No browser is selected; ask the parent agent to attach one." +
-				browserToolUseHint
+				t.useHint()
 		}
 		return "No browser is selected. Call list to discover live instances, then attach using browserId. " +
-			"Or call open with a URL to reuse an owned instance or start a controlled browser with the persistent project-shared profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment. Ambient proxy variables are ignored; the person's saved /proxy browser setting is applied on launch. External control requires host_control:true and one-call authorization." +
-			browserToolUseHint
+			"Or call open with a URL to reuse an owned instance or start a controlled browser with the persistent project-shared profile. On macOS the approval gate decides a browser-only exception outside outer Seatbelt, retaining Chromium's own sandbox and a scrubbed environment." + t.launchPolicy() + " External control requires host_control:true and one-call authorization." +
+			t.useHint()
 	}
 	if t.allowControl {
-		return "Drive the running browser pane: snapshot the accessibility tree, " +
+		return "Drive the running browser: snapshot the accessibility tree, " +
 			"with control limited to owned controlled browsers by default; host_control:true requests one-call external authority. " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
 			"Pin a tab by its id from list; refs are per document." +
-			browserToolUseHint
+			t.useHint()
 	}
-	return "Read the running browser pane: list tabs, snapshot the accessibility tree, " +
+	return "Read the running browser: list tabs, snapshot the accessibility tree, " +
 		"read url/text/html, console and network errors, and screenshot." +
-		browserToolUseHint
+		t.useHint()
 }
 
 // available reports whether a control socket is resolvable right now.
@@ -834,14 +850,35 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 			Details: map[string]any{"socket": socket, "started": false, "adopted": true},
 		}, nil
 	}
-	if !tuiosctl.Available() {
+	if !tuiosctl.Available() && !NativeBrowserLauncherAvailable() {
 		return browserError(errors.New(
-			"no browser is running and none can be opened here: a browser pane draws into a terminal, " +
-				"so it needs a tuios pane. Start golder inside one; open starts the browser from there")), nil
+			"no browser is running and none can be opened here: this process has neither a native browser host nor a tuios pane")), nil
 	}
 	url := strings.TrimSpace(a.URL)
 	if url == "" {
 		url = "http://localhost:3000"
+	}
+	if NativeBrowserLauncherAvailable() {
+		socket, err := startNativeBrowserWithProfile(ctx, t.cwd, "browser", url, a.Profile)
+		if err != nil {
+			return browserError(err), nil
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		discovered := discoverBrowsers(probeCtx, t.cwd, socket)
+		cancel()
+		for _, instance := range discovered.Instances {
+			if instance.Socket == canonicalBrowserSocket(socket) {
+				t.bind(instance)
+				break
+			}
+		}
+		t.selectOpenedTab(socket, url)
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+				"socket": socket, "url": url, "started": true, "surface": "native",
+			}))},
+			Details: map[string]any{"socket": socket, "started": true, "surface": "native"},
+		}, nil
 	}
 	socket, window, err := startBrowserPaneWithProfile(ctx, t.cwd, "browser", url, a.Profile, t.newTuios)
 	if err != nil {

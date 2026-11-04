@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,4 +92,20 @@ func TestBuiltinToolsAdvertiseBrowserBeforeOneExists(t *testing.T) {
 	if tool, ok := browser.(*agenttool.BrowserTool); !ok || tool.Control.BrowserProxy == nil {
 		t.Fatal("browser tool was not wired to the live /proxy browser setting")
 	}
+}
+
+func TestBuiltinToolsAdvertiseNativeGUIBrowserWithoutTuios(t *testing.T) {
+	t.Setenv("TUIOS_SOCKET", "")
+	t.Setenv("TUIOS_SESSION", "")
+	t.Setenv("TUIOS_ENV", "")
+	t.Setenv("TUIOS_PANE_ID", "")
+	t.Setenv("KITTY_BROWSE_SOCKET", "")
+	agenttool.ConfigureNativeBrowserLauncher(func(context.Context, agenttool.NativeBrowserRequest) error { return nil })
+	t.Cleanup(func() { agenttool.ConfigureNativeBrowserLauncher(nil) })
+	for _, tool := range BuiltinTools(t.TempDir(), false) {
+		if tool.Name() == "browser" {
+			return
+		}
+	}
+	t.Fatal("native GUI browser launcher did not advertise the browser tool")
 }

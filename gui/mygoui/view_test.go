@@ -32,7 +32,7 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "☝"} {
+	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "✋", "▤", "🌐"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}
@@ -41,6 +41,39 @@ func TestViewRendersChrome(t *testing.T) {
 		if tt.HasText(gone) {
 			t.Fatalf("view still contains retired top-level action %q", gone)
 		}
+	}
+}
+
+func TestBrowserUsesRightDrawer(t *testing.T) {
+	a := testApp()
+	a.browserPanelOpen = true
+	a.browserState = &browserWindowState{title: "Example", address: "https://example.com"}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"🌐", "Example", "Connecting to Chromium…", "×"} {
+		if !tt.HasText(want) {
+			t.Fatalf("browser drawer is missing %q; texts: %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		item          appsession.Item
+		refresh, open bool
+	}{
+		{"open", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "open"}}}, true, true},
+		{"snapshot", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "snapshot"}}}, true, false},
+		{"running", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Running: true, Input: map[string]any{"action": "open"}}}, false, false},
+		{"failed", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Error: true, Input: map[string]any{"action": "open"}}}, false, false},
+		{"other", appsession.Item{Tool: &appsession.ToolState{Name: "bash"}}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			refresh, open := browserToolPanelRefresh(tc.item)
+			if refresh != tc.refresh || open != tc.open {
+				t.Fatalf("refresh/open = %t/%t, want %t/%t", refresh, open, tc.refresh, tc.open)
+			}
+		})
 	}
 }
 

@@ -31,31 +31,53 @@ type browserWindowState struct {
 	viewportH      int
 }
 
-// openBrowserPreview opens the native interactive browser surface. The name is
-// retained for callers from the discovery modal; the window is no longer a
-// read-only preview.
+// openBrowserPreview attaches the native interactive surface in the main
+// window's right drawer. The Bitmap route remains toolkit-native and shares no
+// terminal renderer.
 func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
+	a.closeBrowserPanel()
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &browserWindowState{address: browser.URL, pageURL: browser.URL, title: browser.Title}
 	if state.title == "" {
 		state.title = browser.URL
 	}
-	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:     "Browser · " + state.title,
-		Width:     1080,
-		Height:    760,
-		MinWidth:  720,
-		MinHeight: 480,
-		Content:   ui.View(func(c *ui.Context) { browserSurfaceView(c, state) }),
-	})
-	state.win = win
-	win.OnClosed(func() {
-		cancel()
-		if state.surface != nil {
-			state.surface.Close()
+	state.win = a.win
+	a.browserState, a.browserCancel, a.browserPanelOpen = state, cancel, true
+	a.changesOpen = false
+	go attachBrowserSurface(ctx, a.win, state, browser)
+}
+
+func (a *App) closeBrowserPanel() {
+	if a.browserCancel != nil {
+		a.browserCancel()
+		a.browserCancel = nil
+	}
+	if a.browserState != nil && a.browserState.surface != nil {
+		a.browserState.surface.Close()
+	}
+	a.browserState = nil
+	a.browserPanelOpen = false
+}
+
+func (a *App) browserPanel(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Width(browserWidth).MinWidth(360).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+		ui.Row(c).Height(36).Padding(5, 10).Gap(8).AlignItems(ui.Center).
+			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
+			ui.Text(c, "🌐").FontSize(14)
+			if a.browserState != nil {
+				ui.Text(c, oneLine(a.browserState.title, 70)).FontSize(12).Grow(1).SingleLine().Ellipsis("…")
+			} else {
+				ui.Text(c, "Browser").FontSize(12).Grow(1)
+			}
+			if ui.Button(c, "×").Tooltip("Close browser panel").Clicked() {
+				a.closeBrowserPanel()
+			}
+		})
+		if a.browserState != nil {
+			browserSurfaceView(c, a.browserState)
 		}
 	})
-	go attachBrowserSurface(ctx, win, state, browser)
 }
 
 func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserWindowState, preview appsession.BrowserPreview) {

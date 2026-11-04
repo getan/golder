@@ -403,17 +403,19 @@ Session | Changes | Workspace | Browser
 收敛为：
 
 ```text
-[Project ▾]  Session title                    [Changes 3] [⚙]
+[Project ▾]  Session title                         [▤] [🌐]
 ```
 
 决策：
 
 - Session 生命周期全部进入 sidebar；
 - 删除 Workspace；
-- Browser 仅在有活动 browser 时以 tab/drawer 或 tool-card action 出现；
+- Changes 与 Browser 使用常驻、带 tooltip 的紧凑图标，不重复显示文案；
+- Agent `browser open` 启动 GUI browserhost 后，Browser 自动在右侧 drawer
+  显示 Bitmap Surface；无需 tuios pane 或第二份 CLI；
 - Command Palette 使用 `Cmd/Ctrl+K`，不永久占一个按钮；
-- Settings 固定在最右侧；
-- Changes 是唯一常驻的工作结果入口。
+- Settings 固定在 sidebar 左下角；
+- Changes 与 Browser drawer 互斥，避免同时挤压会话区。
 
 ### Composer footer
 

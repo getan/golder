@@ -14,6 +14,7 @@ import (
 const (
 	sidebarWidth = 248
 	changesWidth = 460
+	browserWidth = 600
 	titleHeight  = 46
 )
 
@@ -61,6 +62,9 @@ func (a *App) view(c *ui.Context) {
 			if a.changesOpen {
 				a.changesPanel(c)
 			}
+			if a.browserPanelOpen {
+				a.browserPanel(c)
+			}
 		})
 		a.bannerView(c)
 	})
@@ -91,30 +95,29 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
-		label := "▤  Changes"
+		changesTip := "Review uncommitted changes"
 		if changes > 0 {
-			label = fmt.Sprintf("▤  Changes %d", changes)
-			if len(a.changes.Files) > 0 {
-				label += fmt.Sprintf("  +%d −%d", a.changes.Added, a.changes.Deleted)
-			}
+			changesTip = fmt.Sprintf("Changes · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
 		}
-		if ui.Button(c, label).Tooltip("Review uncommitted changes").Clicked() {
+		if ui.Button(c, "▤").Tooltip(changesTip).Clicked() {
 			a.changesOpen = !a.changesOpen
 			if a.changesOpen {
+				a.closeBrowserPanel()
 				a.refreshChanges()
 			}
 		}
+		browserTip := "Browser · no active page"
 		if len(a.browsers) > 0 {
-			browserLabel := "Browser"
-			if len(a.browsers) > 1 {
-				browserLabel = fmt.Sprintf("Browser %d", len(a.browsers))
-			}
-			if ui.Button(c, browserLabel).Tooltip("Open the active interactive browser").Clicked() {
-				if len(a.browsers) == 1 {
-					a.openBrowserPreview(a.browsers[0])
-				} else {
-					a.browserOpen = true
-				}
+			browserTip = fmt.Sprintf("Browser · %d active", len(a.browsers))
+		}
+		if ui.Button(c, "🌐").Tooltip(browserTip).Clicked() {
+			if a.browserPanelOpen {
+				a.closeBrowserPanel()
+			} else if len(a.browsers) == 1 {
+				a.openBrowserPreview(a.browsers[0])
+			} else {
+				a.browserOpen = true
+				go a.refreshBrowsers()
 			}
 		}
 	})

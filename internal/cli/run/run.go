@@ -403,7 +403,7 @@ func BuiltinTools(cwd string, disabled bool) []agentcore.AgentTool {
 	// browser open (and workspace create) start kitty-browse in a pane, and the
 	// schema grows to the control actions once the socket appears. Existing
 	// workspace instances can also be discovered without an exported path.
-	if agenttool.BrowserAvailable() || agenttool.BrowserWorkspaceAvailable(cwd) || (agenttool.TuiosAvailable() && agenttool.KittyBrowseAvailable()) {
+	if agenttool.BrowserAvailable() || agenttool.BrowserWorkspaceAvailable(cwd) || agenttool.NativeBrowserLauncherAvailable() || (agenttool.TuiosAvailable() && agenttool.KittyBrowseAvailable()) {
 		tools = append(tools, agenttool.NewBrowserTool(cwd, true))
 	}
 	// No visual tool: `diagram` ran `tuios mermaid` and `dashboard_*` called the

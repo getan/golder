@@ -61,8 +61,9 @@ Two optional surfaces need runtime pieces:
 
 - `libghostty-vt` for the terminal plugin, installed by `mygo build` (a
   `go run` binary downloads it once into the user's cache);
-- a running kitty-browse/browserhost owner-only control socket for the native
-  interactive Browser Surface. Chromium itself is never bundled.
+- an installed Chromium for the native interactive Browser Surface. The GUI's
+  linked browserhost starts it on demand and publishes an owner-only control
+  socket; Chromium itself and a second full `golder` CLI are never bundled.
 
 ## What the window does
 
@@ -77,11 +78,13 @@ Two optional surfaces need runtime pieces:
 - extensions: a native manager for checksummed first-party package install,
   exact source review, named-secret configuration, browser OAuth, test,
   enable/disable, reset and uninstall; other configured sources appear there too;
-- changes: a Git status + unified diff drawer rendered by MyGo's diff viewer;
+- changes: a Git status + unified diff drawer rendered by MyGo's diff viewer,
+  opened from a compact icon-only title action;
 - actions: a command palette over the existing slash registry, so skills,
   prompt templates and plugin commands stay reachable without typing;
-- browser: native Bitmap frames with mouse, keyboard, scroll, resize and
-  committed IME input forwarded through the typed control socket;
+- browser: an Agent-visible built-in tool backed by the GUI browserhost, with
+  native Bitmap frames in a right drawer and mouse, keyboard, scroll, resize
+  and committed IME input forwarded through the typed control socket;
 - terminal: an explicit user shell and detachable takeover of Agent bash calls
   that ran with `tty=true`.
 

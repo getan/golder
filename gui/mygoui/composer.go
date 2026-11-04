@@ -75,7 +75,7 @@ func (a *App) composer(c *ui.Context) {
 				if ui.Button(c, "+").Tooltip("Attach files or images").Clicked() {
 					a.pickAttachments()
 				}
-				if ui.Button(c, "☝").Tooltip("Approval mode · " + a.status.Permission).Clicked() {
+				if ui.Button(c, "✋").Tooltip("Approval mode · " + a.status.Permission).Clicked() {
 					a.permOpen = true
 				}
 				ui.Spacer(c)

@@ -12,6 +12,13 @@ interactive REPL/TUI.
 ## [Unreleased]
 
 ### Added
+- **Agent-opened native browser drawer in the desktop GUI** (v1.5.53): the GUI
+  now advertises the built-in `browser` tool before a socket exists and starts
+  kitty-browse's linked headless browserhost on demand, without a tuios pane or
+  a second full CLI. Successful `browser open` calls reveal the interactive
+  Bitmap surface in a right drawer. Compact icon-only Changes/Browser actions
+  and a fuller approval-mode hand reduce title/composer clutter. See
+  [v1.5.53 release notes](docs/releases/v1.5.53.md).
 - **Codex-style desktop projects, composer and Git review** (v1.5.50): explicit
   project folders own their chats and new-session working directory; Settings
   moves to the lower-left; attachments, approval mode, and combined

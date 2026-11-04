@@ -13,11 +13,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	stdruntime "runtime"
 	"strings"
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/gui/mygoui"
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/run"
@@ -90,6 +92,12 @@ func main() {
 	}
 	maxContext, _ := cfg.Compaction.ResolveMaxContext()
 	memoryEnabled := cfg.Memory.Resolve().Enabled
+	browserHosts := newNativeBrowserHosts()
+	if stdruntime.GOOS == "darwin" || stdruntime.GOOS == "linux" {
+		agenttool.ConfigureNativeBrowserLauncher(browserHosts.Start)
+		defer agenttool.ConfigureNativeBrowserLauncher(nil)
+		defer browserHosts.Close()
+	}
 
 	projectFactory := func(ctx context.Context, cwd string, setup appsession.ProjectSetup) (run.Env, error) {
 		if err := ctx.Err(); err != nil {
