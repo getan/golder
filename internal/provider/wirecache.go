@@ -49,6 +49,8 @@ func wireCachePath() string {
 }
 
 func loadWireCache() {
+	wireCacheMu.Lock()
+	defer wireCacheMu.Unlock()
 	wireCacheOnce.Do(func() {
 		wireCache = map[string]wireCacheEntry{}
 		raw, err := os.ReadFile(wireCachePath())

@@ -130,6 +130,11 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Wire-cache initialization is race-safe** (v1.5.56): lazy `sync.Once`
+  initialization and test reset now share the cache mutex, closing a race where
+  an adaptive provider fallback could finish recording its served wire while the
+  next test reset the in-process cache. See
+  [v1.5.56 release notes](docs/releases/v1.5.56.md).
 - **Managed Lark helper upgrades and desktop polish** (v1.5.55): Settings now
   separates bundled, installed and active helper versions. A single **Update helper**
   action installs the checksummed bundle and rebuilds the Source around that

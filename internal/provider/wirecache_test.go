@@ -10,8 +10,8 @@ import (
 // resetWireCache drops the in-process map so a test observes a fresh load from
 // the file, the way a restart does.
 func resetWireCache() {
-	wireCacheOnce = sync.Once{}
 	wireCacheMu.Lock()
+	wireCacheOnce = sync.Once{}
 	wireCache = nil
 	wireCacheMu.Unlock()
 }
