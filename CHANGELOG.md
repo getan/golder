@@ -123,6 +123,13 @@ interactive REPL/TUI.
   `HTTP_PROXY` / `HTTPS_PROXY` remain ignored.
 
 ### Fixed
+- **Approval context, Git push envelopes and desktop diffs** (v1.5.51): the
+  reviewer retains more recent user intent and gives it budget priority over
+  tool output. Ordinary, locally resolved SSH/HTTPS Git pushes with a bound
+  pre-push hook can use a one-call outside-sandbox envelope on the first
+  attempt, including `git -C`; destructive or opaque calls still require
+  review. The desktop Changes drawer now uses a wrapped unified diff instead of
+  a narrow split view. See [v1.5.51 release notes](docs/releases/v1.5.51.md).
 - **Synchronized guest frames in Golder workspace panes** (v1.5.50): the TUI
   enables DEC 2026 for its own embedded tuios-mini pane even when automatic
   terminal queries are suppressed or delayed, reducing partial-row redraws.

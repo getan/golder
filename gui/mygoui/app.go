@@ -392,7 +392,10 @@ func (a *App) applyFileDiff(request uint64, row int, result appsession.FileDiff,
 	if len(files) == 0 {
 		return
 	}
-	diff := &editor.DiffState{}
+	// The review drawer is narrow: split view wastes half its width for a new
+	// or deleted file, and horizontal scrolling obscures long changed lines.
+	// Unified, wrapped rendering keeps both sides visible in one column.
+	diff := &editor.DiffState{Layout: editor.DiffUnified, Wrap: true}
 	diff.SetPatch(files[0])
 	a.diff = diff
 }

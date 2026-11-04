@@ -1,9 +1,11 @@
 package mygoui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"github.com/getan/golder/gui/appsession"
 )
@@ -148,6 +150,40 @@ func TestLazyDiffDiscardsStaleResult(t *testing.T) {
 	a.applyFileDiff(2, 0, appsession.FileDiff{Path: "a.go", Patch: patch, Added: 1, Deleted: 1}, nil)
 	if a.diff == nil || a.fileDiff.Path != "a.go" {
 		t.Fatal("current file diff was not applied")
+	}
+	if a.diff.Layout != editor.DiffUnified || !a.diff.Wrap {
+		t.Fatalf("narrow review drawer must use a wrapped unified diff: layout=%v wrap=%t", a.diff.Layout, a.diff.Wrap)
+	}
+}
+
+func TestChangesDiffUsesWrappedUnifiedLayoutForEachFileKind(t *testing.T) {
+	longLine := strings.Repeat("long text 中文 ", 30)
+	for _, tc := range []struct {
+		name, patch, oldText, newText string
+	}{
+		{"modified", "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1 +1 @@\n-old\n+" + longLine + "\n", "old", longLine},
+		{"added", "diff --git a/f.txt b/f.txt\nnew file mode 100644\n--- /dev/null\n+++ b/f.txt\n@@ -0,0 +1 @@\n+" + longLine + "\n", "", longLine},
+		{"deleted", "diff --git a/f.txt b/f.txt\ndeleted file mode 100644\n--- a/f.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-" + longLine + "\n", longLine, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testApp()
+			a.changesOpen = true
+			a.changes = appsession.Changes{Files: []appsession.FileStatus{{Path: "f.txt"}}}
+			a.diffRequest = 1
+			a.applyFileDiff(1, 0, appsession.FileDiff{Path: "f.txt", Patch: tc.patch}, nil)
+			if a.changesErr != "" || a.diff == nil {
+				t.Fatalf("diff not loaded: %s", a.changesErr)
+			}
+			if a.diff.Layout != editor.DiffUnified || !a.diff.Wrap {
+				t.Fatalf("layout=%v wrap=%t", a.diff.Layout, a.diff.Wrap)
+			}
+			if !strings.Contains(a.diff.Old.String(), tc.oldText) || !strings.Contains(a.diff.New.String(), tc.newText) {
+				t.Fatalf("patch content lost: old=%q new=%q", a.diff.Old.String(), a.diff.New.String())
+			}
+			if image := ui.NewTester(a.view, 860, 560).Image(); image == nil {
+				t.Fatal("narrow review view did not render")
+			}
+		})
 	}
 }
 
