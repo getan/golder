@@ -163,6 +163,38 @@ func (b *computerCoordinateBackend) ClickFrame(context.Context, computeruse.Targ
 	return nil
 }
 
+type limitedComputerKeyBackend struct{ computerCoordinateBackend }
+
+func (*limitedComputerKeyBackend) PressFrame(context.Context, computeruse.Target, string, string) error {
+	return nil
+}
+
+func (*limitedComputerKeyBackend) SupportsFrameKey(key string) bool {
+	return key == "enter" || key == "space"
+}
+
+func TestComputerSchemaRestrictsFrameKeysToBackend(t *testing.T) {
+	session := computeruse.New(&limitedComputerKeyBackend{})
+	if err := session.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ComputerTool{Session: session}
+	if !slices.Contains(schemaEnum(t, tool.Schema()), "press") {
+		t.Fatal("supported key action was not advertised")
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Enum []string `json:"enum"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(tool.Schema(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := schema.Properties["key"].Enum; !slices.Equal(got, []string{"enter", "space"}) {
+		t.Fatalf("advertised keys = %v", got)
+	}
+}
+
 func TestComputerCoordinateClickRequiresConfirmationAndFrame(t *testing.T) {
 	var imageData bytes.Buffer
 	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 20, 10))); err != nil {

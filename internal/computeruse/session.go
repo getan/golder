@@ -33,10 +33,11 @@ type Capabilities struct {
 }
 
 type Status struct {
-	Active       bool
-	Paused       bool
-	Target       Target
-	Capabilities Capabilities
+	Active         bool
+	Paused         bool
+	PendingPreview bool
+	Target         Target
+	Capabilities   Capabilities
 }
 
 // Backend is implemented by a platform-specific adapter. Validate must check
@@ -58,14 +59,17 @@ type SnapshotBackend interface {
 // Session serializes lifecycle transitions with target validation and backend
 // operations. Only the operator-facing host may call Start or Resume.
 type Session struct {
-	mu       sync.Mutex
-	opMu     sync.Mutex
-	backend  Backend
-	status   Status
-	cancel   context.CancelFunc
-	sequence uint64
-	snapshot *snapshotLease
-	frames   map[string]frameLease
+	mu                      sync.Mutex
+	opMu                    sync.Mutex
+	backend                 Backend
+	status                  Status
+	cancel                  context.CancelFunc
+	sequence                uint64
+	snapshot                *snapshotLease
+	frames                  map[string]frameLease
+	operatorPreview         *operatorPreviewLease
+	operatorPreviewDone     chan struct{}
+	operatorPreviewSequence uint64
 }
 
 func New(backend Backend) *Session { return &Session{backend: backend} }
@@ -112,6 +116,7 @@ func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.operatorPreviewDone = nil
 	s.status = Status{Active: true, Target: target, Capabilities: caps}
 	return nil
 }
@@ -122,7 +127,9 @@ func (s *Session) Status() Status {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.status
+	status := s.status
+	status.PendingPreview = s.operatorPreview != nil
+	return status
 }
 
 func (s *Session) SupportsSnapshot() bool {
@@ -156,6 +163,10 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 	if s.status.Paused {
 		s.mu.Unlock()
 		return ErrPaused
+	}
+	if s.operatorPreview != nil {
+		s.mu.Unlock()
+		return ErrNotAllowed
 	}
 	if !s.status.Capabilities.Observe || (control && !s.status.Capabilities.Control) || operation == nil {
 		s.mu.Unlock()
@@ -219,6 +230,10 @@ func (s *Session) Pause() {
 		s.sequence++
 		s.snapshot = nil
 		s.frames = nil
+		if s.operatorPreview != nil {
+			close(s.operatorPreview.done)
+			s.operatorPreview = nil
+		}
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -279,6 +294,10 @@ func (s *Session) Stop() {
 	s.sequence++
 	s.snapshot = nil
 	s.frames = nil
+	if s.operatorPreview != nil {
+		close(s.operatorPreview.done)
+		s.operatorPreview = nil
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}

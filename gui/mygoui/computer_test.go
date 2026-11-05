@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"context"
+	"image"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -27,6 +28,24 @@ func TestComputerPickerShowsExplicitScopeAndControlChoice(t *testing.T) {
 	}
 }
 
+func TestComputerPickerRequiresLocalPreviewConfirmation(t *testing.T) {
+	a := testApp()
+	a.computerPickerOpen = true
+	a.computerTargets = []computeruse.Target{{ID: "opaque", Application: "Calculator", Window: "Main"}}
+	a.computerSelected = 0
+	a.computerCandidate = ui.NewBitmap(image.NewRGBA(image.Rect(0, 0, 8, 8)))
+	a.computerCandidateID, a.computerCandidateTarget = "candidate", "opaque"
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"Selected: Calculator · Main", "Confirm same window", "Cancel"} {
+		if !tt.HasText(want) {
+			t.Fatalf("confirmation missing %q; texts=%q", want, tt.Texts())
+		}
+	}
+	if tt.HasText("View only") || tt.HasText("Allow control") {
+		t.Fatal("grant controls must not bypass preview confirmation")
+	}
+}
+
 func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 	a := testApp()
 	session := computeruse.New(computerUIBackend{})
@@ -43,6 +62,25 @@ func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 	}
 	if err := tt.Click("Pause / take over"); err != nil || !session.Status().Paused {
 		t.Fatalf("pause failed: paused=%t err=%v", session.Status().Paused, err)
+	}
+}
+
+func TestComputerPanelOpensAndReplacesOtherRightPanels(t *testing.T) {
+	a := testApp()
+	session := computeruse.New(computerUIBackend{})
+	if err := session.Start(context.Background(), computeruse.Target{ID: "window", Application: "Calculator"}, computeruse.Capabilities{Observe: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	a.computerSession = session
+	a.filesOpen, a.changesOpen, a.browserPanelOpen = true, true, true
+	a.showComputerPanel()
+	if !a.computerOpen || a.filesOpen || a.changesOpen || a.browserPanelOpen {
+		t.Fatalf("right panels: computer=%t files=%t changes=%t browser=%t", a.computerOpen, a.filesOpen, a.changesOpen, a.browserPanelOpen)
+	}
+	tt := ui.NewTester(a.view, 1400, 800)
+	if !tt.HasText("Computer Use") || !tt.HasText("Observation only") || !tt.HasText("Window preview unavailable; semantic access only.") {
+		t.Fatalf("computer panel not visible: %q", tt.Texts())
 	}
 }
 

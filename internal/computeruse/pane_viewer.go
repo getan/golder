@@ -77,7 +77,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	updates := make(chan paneViewerEvent, 8)
 	keys := make(chan rune, 64)
 	var captureAllowed atomic.Bool
-	captureAllowed.Store(graphics)
+	var previewPending atomic.Bool
 	go func() {
 		reader := bufio.NewReader(in)
 		var filter paneInputFilter
@@ -113,7 +113,9 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 		defer ticker.Stop()
 		for {
 			action := "status"
-			if captureAllowed.Load() {
+			if previewPending.Load() && graphics {
+				action = "candidate"
+			} else if captureAllowed.Load() {
 				action = "frame"
 			}
 			response, err := clients[0].Request(ctx, PaneRequest{Action: action})
@@ -139,6 +141,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	if err := drawOperatorPane(out, renderer, state); err != nil {
 		return err
 	}
+	statusKnown, previewSettled, previewRendered := false, false, false
 	var sequence atomic.Uint64
 	request := func(action, ref, text string, emergency bool) {
 		client := clients[1]
@@ -165,10 +168,26 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 			if event.sequence != 0 && event.sequence != sequence.Load() {
 				continue
 			}
+			if previewSettled && event.response.Status.PendingPreview {
+				continue
+			}
 			state.status = event.response.Status
 			if !state.status.Active {
 				return nil
 			}
+			wasPending := previewPending.Swap(state.status.PendingPreview)
+			if state.status.PendingPreview {
+				captureAllowed.Store(false)
+				if !graphics {
+					state.message = "Preview requires Kitty graphics. Type skip-preview for semantic-only access, or stop."
+				}
+			} else if !statusKnown || wasPending {
+				captureAllowed.Store(graphics && !state.localPaused)
+				if wasPending {
+					state.frame = nil
+				}
+			}
+			statusKnown = true
 			if state.status.Paused {
 				state.localPaused, state.frame = true, nil
 				captureAllowed.Store(false)
@@ -187,10 +206,17 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 			if event.action == "frame" && !state.localPaused && event.response.Frame != nil {
 				state.frame = event.response.Frame
 			}
-			if event.action != "frame" && event.action != "status" {
+			if event.action == "candidate" && state.status.PendingPreview && event.response.Frame != nil {
+				state.frame, state.semantic = event.response.Frame, false
+				state.message = "Confirm this preview matches the selected target: type confirm-preview, or stop."
+			}
+			if event.action != "frame" && event.action != "status" && event.action != "candidate" {
 				state.message = event.response.Text
 				if event.response.Error != "" {
 					state.message = "Error: " + event.response.Error
+				}
+				if (event.action == "confirm-preview" || event.action == "skip-preview") && event.response.Error == "" {
+					previewSettled = true
 				}
 				if event.action == "observe" && event.response.Error == "" {
 					state.semantic, state.scroll = true, 0
@@ -214,6 +240,16 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 					break
 				}
 				switch fields[0] {
+				case "confirm-preview":
+					if len(fields) == 1 && previewRendered && state.status.PendingPreview && state.frame != nil {
+						request("confirm-preview", "", "", false)
+					} else {
+						state.message = "A visible local preview is required before confirming."
+					}
+				case "skip-preview":
+					if len(fields) == 1 && state.status.PendingPreview {
+						request("skip-preview", "", "", false)
+					}
 				case "pause", "p":
 					state.localPaused, state.frame = true, nil
 					captureAllowed.Store(false)
@@ -271,6 +307,8 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 		if err := drawOperatorPane(out, renderer, state); err != nil {
 			return err
 		}
+		width, height, sizeErr := term.GetSize(out.Fd())
+		previewRendered = sizeErr == nil && width > 0 && height > 4 && state.graphics && state.status.PendingPreview && !state.semantic && !state.localPaused && state.frame != nil
 	}
 }
 
@@ -311,7 +349,11 @@ func drawOperatorPane(out *os.File, renderer *KittyRenderer, state paneViewerSta
 			return err
 		}
 	}
-	footer := fmt.Sprintf("\x1b[%d;1H%s\x1b[%d;1H%s\x1b[%d;1H%s", max(1, height-2), paneClip(state.message, width), max(1, height-1), paneClip("Ctrl+G pause · observe · click · fill · resume · stop · view", width), height, paneClip("> "+paneInputDisplay(state.input), width))
+	help := "Ctrl+G pause · observe · click · fill · resume · stop · view"
+	if state.status.PendingPreview {
+		help = "confirm-preview · skip-preview · stop"
+	}
+	footer := fmt.Sprintf("\x1b[%d;1H%s\x1b[%d;1H%s\x1b[%d;1H%s", max(1, height-2), paneClip(state.message, width), max(1, height-1), paneClip(help, width), height, paneClip("> "+paneInputDisplay(state.input), width))
 	return writePaneBytes(out, []byte(footer))
 }
 

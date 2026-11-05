@@ -7,10 +7,15 @@ import (
 )
 
 // FrameKeyBackend and FrameScrollBackend may be offered independently. Both
-// must apply the same native target and frame checks as FrameBoundBackend.
+// must apply the same target, frame and dispatch checks as FrameBoundBackend.
 type FrameKeyBackend interface {
 	FrameBoundBackend
 	PressFrame(context.Context, Target, string, string) error
+}
+
+// FrameKeyAvailability narrows the keys a backend can safely implement.
+type FrameKeyAvailability interface {
+	SupportsFrameKey(string) bool
 }
 
 type FrameScrollBackend interface {
@@ -27,7 +32,13 @@ func (s *Session) SupportsCoordinates() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.backend.(FrameBoundBackend)
-	return ok
+	if !ok {
+		return false
+	}
+	if available, ok := s.backend.(CaptureAvailability); ok {
+		return available.CaptureAvailable()
+	}
+	return true
 }
 
 func (s *Session) SupportsFrameAction(action string) bool {
@@ -36,16 +47,58 @@ func (s *Session) SupportsFrameAction(action string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if available, ok := s.backend.(CaptureAvailability); ok && !available.CaptureAvailable() {
+		return false
+	}
 	switch action {
 	case "press":
-		_, ok := s.backend.(FrameKeyBackend)
-		return ok
+		if _, ok := s.backend.(FrameKeyBackend); !ok {
+			return false
+		}
+		if filter, ok := s.backend.(FrameKeyAvailability); ok {
+			for _, key := range frameKeyNames {
+				if filter.SupportsFrameKey(key) {
+					return true
+				}
+			}
+			return false
+		}
+		return true
 	case "scroll":
 		_, ok := s.backend.(FrameScrollBackend)
 		return ok
 	default:
 		return false
 	}
+}
+
+var frameKeyNames = [...]string{"enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "page_up", "page_down", "home", "end", "space"}
+
+func validFrameKey(key string) bool {
+	for _, allowed := range frameKeyNames {
+		if key == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) SupportsFrameKey(key string) bool {
+	if s == nil || !validFrameKey(key) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if available, ok := s.backend.(CaptureAvailability); ok && !available.CaptureAvailable() {
+		return false
+	}
+	if _, ok := s.backend.(FrameKeyBackend); !ok {
+		return false
+	}
+	if filter, ok := s.backend.(FrameKeyAvailability); ok {
+		return filter.SupportsFrameKey(key)
+	}
+	return true
 }
 
 // ClickFrame consumes a recent, single-use frame lease. Coordinates are
@@ -59,14 +112,15 @@ func (s *Session) ClickFrame(ctx context.Context, frameID string, x, y float64) 
 // PressFrame permits only a small set of non-modifier keys. The platform must
 // also prove the focused control belongs to the target and is not sensitive.
 func (s *Session) PressFrame(ctx context.Context, frameID, key string) error {
-	switch key {
-	case "enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "page_up", "page_down", "home", "end", "space":
-	default:
+	if !validFrameKey(key) {
 		return ErrNotAllowed
 	}
 	return s.useFrame(ctx, frameID, 0, 0, false, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
 		keys, ok := backend.(FrameKeyBackend)
 		if !ok {
+			return ErrUnavailable
+		}
+		if filter, ok := backend.(FrameKeyAvailability); ok && !filter.SupportsFrameKey(key) {
 			return ErrUnavailable
 		}
 		return keys.PressFrame(ctx, target, lease.token, key)

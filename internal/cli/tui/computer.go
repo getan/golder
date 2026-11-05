@@ -313,8 +313,17 @@ func (m Model) chooseComputerTarget(item string) (tea.Model, tea.Cmd) {
 	}
 	info := []pickInfoLine{{Label: "Target", Value: extensions.DisplayText(label, 256)}}
 	rows := []pickItem{{Title: "Observe this window only", Value: "observe", Status: "read screen and accessibility tree", Info: info}}
+	setup.mu.Lock()
+	_, hasPreviewGate := setup.backend.(computeruse.OperatorPreviewBackend)
+	setup.mu.Unlock()
+	if hasPreviewGate {
+		rows = append(rows, pickItem{Title: "Observe without window preview", Value: "observe-semantic", Status: "accessibility tree only; no screenshot", Info: info})
+	}
 	if m.session.perms == nil || m.session.perms.Mode() != permissions.ReadOnly {
 		rows = append(rows, pickItem{Title: "Observe and allow control", Value: "control", Status: "agent actions require /permissions ask and exact confirmation", StatusTone: pickWarn, Info: info})
+		if hasPreviewGate {
+			rows = append(rows, pickItem{Title: "Control without window preview", Value: "control-semantic", Status: "accessibility actions only; no screenshot", StatusTone: pickWarn, Info: info})
+		}
 	}
 	m.menu.openPickerDetailed(rows, "", "computer-grant")
 	m.menu.pickHint = "↑↓ choose grant · Enter approve · Esc cancel"
@@ -329,7 +338,9 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	setup := m.session.computerSetup
-	if setup.selected < 0 || setup.selected >= len(setup.targets) || (item != "observe" && item != "control") || (item == "control" && m.session.perms != nil && m.session.perms.Mode() == permissions.ReadOnly) {
+	control := item == "control" || item == "control-semantic"
+	semanticOnly := item == "observe-semantic" || item == "control-semantic"
+	if setup.selected < 0 || setup.selected >= len(setup.targets) || (item != "observe" && item != "control" && !semanticOnly) || (control && m.session.perms != nil && m.session.perms.Mode() == permissions.ReadOnly) {
 		m.session.cancelComputerSetup()
 		m.menu.close()
 		m.transcript.addSystem("Computer Use: invalid or unavailable grant.")
@@ -346,13 +357,26 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 	}
 	target, cwd := setup.targets[setup.selected], m.session.cwd
 	m.menu.close()
-	m.transcript.addSystem("Opening the separate operator pane and verifying its identity…")
+	m.transcript.addSystem("Opening the separate operator pane; a system-selected window may require local preview confirmation…")
 	m.relayout()
 	return m, func() tea.Msg {
-		ctx, cancel := context.WithTimeout(setup.ctx, 25*time.Second)
+		ctx, cancel := context.WithTimeout(setup.ctx, 2*time.Minute)
 		defer cancel()
+		var preview computeruse.OperatorPreview
+		var err error
+		if gate, ok := backend.(computeruse.OperatorPreviewBackend); ok && !semanticOnly {
+			preview, err = gate.PrepareOperatorPreview(ctx, target)
+			if err == nil && preview.ID == "" {
+				err = fmt.Errorf("operator preview did not provide a confirmation identity")
+			}
+		}
 		session := computeruse.New(backend)
-		err := session.Start(ctx, target, computeruse.Capabilities{Observe: true, Control: item == "control"})
+		if err == nil {
+			err = session.Start(ctx, target, computeruse.Capabilities{Observe: true, Control: control})
+		}
+		if err == nil && preview.ID != "" {
+			err = session.InstallOperatorPreview(preview)
+		}
 		var handle *computeruse.PaneHandle
 		if err == nil {
 			handle, err = computeruse.LaunchOperatorPane(ctx, session, cwd)
@@ -364,6 +388,12 @@ func (m Model) chooseComputerGrant(item string) (tea.Model, tea.Cmd) {
 		if !setup.installHandle(handle) {
 			handle.Close()
 			return computerStartedMsg{setup: setup, err: context.Canceled}
+		}
+		if preview.ID != "" {
+			if err := session.WaitOperatorPreview(ctx); err != nil {
+				handle.Close()
+				return computerStartedMsg{setup: setup, err: err}
+			}
 		}
 		return computerStartedMsg{setup: setup, session: session}
 	}

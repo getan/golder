@@ -1,10 +1,17 @@
 # Golder Computer Use 方案
 
-> 状态：已讨论的设计方案，尚未实现。
+> 状态：功能开发中；以下为设计目标，不代表已完成首版验收。
 >
 > 首版平台：macOS、Linux、Windows；实施与验证优先顺序为 macOS → Linux → Windows。
 >
 > 范围：内置工具、单窗口会话、TUI/GUI 可视化与用户接管。
+
+### 当前实现与限制
+
+- macOS：已有基于 Accessibility 和 ScreenCaptureKit 的实现，仍需真实桌面验收。
+- Linux（amd64/arm64）：使用系统 AT-SPI2 枚举目标和执行语义观察、点击、文本替换。GUI 与 TUI 通过 XDG Portal 和 PipeWire 请求单窗口画面，并在本地预览经用户确认前禁止模型读取；需要支持稳定 PipeWire 序列号的 Portal 及相应 GStreamer 插件，不满足时拒绝采集。优先对目标子树中的控件执行语义动作；原生 X11 在 XRes PID、窗口几何、焦点、遮挡、输入状态及辅助功能命中可验证时，可向目标窗口定向发送受限合成按键和坐标事件，不使用可能被其他窗口抓取的全局 XTEST 输入。应用可以忽略合成事件，派发不代表动作已生效；Xwayland 不使用该路径。Wayland 的坐标点击、滚动及部分 Enter/Space/Escape 使用目标子树内的辅助功能动作或滚动条，其他按键和无法证明安全的画布输入仍拒绝：通用 Portal 键鼠注入不能证明事件只会到达授权窗口。终端不支持 Kitty 图形时可明确选择仅语义访问；Wayland 与 X11 均未进行真实桌面验收。
+- Windows：使用 Win32 窗口身份校验，以及系统 Windows PowerShell 承载 UI Automation 的语义观察和动作。窗口预览代码先尝试通过 Windows Graphics Capture 的 `CreateForWindow` 获取单窗口画面，再以经捕获限制检查的 `PrintWindow` 作为回退；截图绑定的点击、滚动和按键在操作前重新检查画面、焦点、遮挡和敏感控件。TUI 操作面板要求系统与 tuios 能证明本地套接字两端的进程及面板身份，无法证明时拒绝启动。目标受保护或两条采集路径均不可用时拒绝采集；这两条采集路径及 Windows TUI 均尚未进行真实 Windows 桌面验收。
+- 跨平台编译不能替代实际桌面测试；Linux 和 Windows 后端的真实可用性、安全行为及性能仍需在对应系统验证。
 
 ## 1. 目标与边界
 

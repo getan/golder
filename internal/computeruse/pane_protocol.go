@@ -85,9 +85,9 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 		err = errors.New("ref is only valid for click or fill")
 	} else if request.Action != "fill" && request.Text != "" {
 		err = errors.New("text is only valid for fill")
-	} else if request.Action != "status" && request.Action != "frame" && !pane.acceptSequence(request.Sequence) {
+	} else if request.Action != "status" && request.Action != "frame" && request.Action != "candidate" && !pane.acceptSequence(request.Sequence) {
 		err = errors.New("computer pane command is stale or unsequenced")
-	} else if (request.Action == "status" || request.Action == "frame") && request.Sequence != 0 {
+	} else if (request.Action == "status" || request.Action == "frame" || request.Action == "candidate") && request.Sequence != 0 {
 		err = errors.New("observation request cannot change the operator sequence")
 	} else {
 		switch request.Action {
@@ -98,7 +98,16 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 			if err == nil {
 				response.Frame = &frame
 			}
-		case "observe", "pause", "resume", "stop":
+		case "candidate":
+			var frame Frame
+			frame, err = pane.session.operatorPreviewFrame()
+			if err == nil {
+				pane.mu.Lock()
+				pane.previewDelivered = true
+				pane.mu.Unlock()
+				response.Frame = &frame
+			}
+		case "observe", "pause", "resume", "stop", "confirm-preview", "skip-preview":
 			response.Text, err = pane.operatorCommand(ctx, request.Action, request.Sequence)
 		case "click":
 			response.Text, err = pane.operatorCommand(ctx, "click "+request.Ref, request.Sequence)

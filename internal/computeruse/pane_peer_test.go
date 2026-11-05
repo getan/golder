@@ -44,3 +44,41 @@ func TestPanePeerRequiresKernelBoundExactPane(t *testing.T) {
 		})
 	}
 }
+
+type fakePaneListing struct{ windows []map[string]any }
+
+func (fakePaneListing) Session() string { return "session" }
+func (fakePaneListing) PaneID() string  { return "agent" }
+func (f fakePaneListing) CallInto(_ context.Context, verb string, params, out any) error {
+	if verb != "list-windows" || params.(map[string]any)["session"] != "session" {
+		panic("pane listing was not scoped to the session")
+	}
+	data, _ := json.Marshal(map[string]any{"windows": f.windows})
+	return json.Unmarshal(data, out)
+}
+
+func TestListedPaneRequiresExactUniqueLocalProcess(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		windows []map[string]any
+		ok      bool
+	}{
+		{"exact", []map[string]any{{"window_id": "viewer", "pid": 42}}, true},
+		{"wrong pid", []map[string]any{{"window_id": "viewer", "pid": 43}}, false},
+		{"missing pid", []map[string]any{{"window_id": "viewer"}}, false},
+		{"remote", []map[string]any{{"window_id": "viewer", "pid": 42, "host": "other"}}, false},
+		{"duplicate window", []map[string]any{{"window_id": "viewer", "pid": 42}, {"window_id": "viewer", "pid": 42}}, false},
+		{"duplicate pid", []map[string]any{{"window_id": "viewer", "pid": 42}, {"window_id": "other", "pid": 42}}, false},
+		{"missing window", []map[string]any{{"window_id": "other", "pid": 43}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := verifyListedOperatorPane(context.Background(), fakePaneListing{tc.windows}, "viewer", 42, 123)
+			if (err == nil) != tc.ok {
+				t.Fatalf("verification error=%v, want success=%t", err, tc.ok)
+			}
+		})
+	}
+	if err := verifyListedOperatorPane(context.Background(), fakePaneListing{}, "viewer", 42, 0); err == nil {
+		t.Fatal("a peer without a creation time was accepted")
+	}
+}

@@ -16,6 +16,25 @@ func (b *captureTestBackend) Capture(context.Context, Target) ([]byte, error) {
 	return b.png, nil
 }
 
+type gatedCaptureTestBackend struct {
+	captureTestBackend
+	available bool
+}
+
+func (b *gatedCaptureTestBackend) CaptureAvailable() bool { return b.available }
+
+func TestCaptureAvailabilityIsNotAdvertisedBeforeConfirmation(t *testing.T) {
+	backend := &gatedCaptureTestBackend{}
+	session := New(backend)
+	if session.SupportsCapture() {
+		t.Fatal("unconfirmed capture was advertised")
+	}
+	backend.available = true
+	if !session.SupportsCapture() {
+		t.Fatal("confirmed capture was not advertised")
+	}
+}
+
 func TestCaptureIsBoundedAndRequiresAuthorization(t *testing.T) {
 	var encoded bytes.Buffer
 	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 20, 10))); err != nil {

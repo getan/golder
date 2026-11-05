@@ -26,7 +26,7 @@ func VerifyOperatorPanePeer(ctx context.Context, conn net.Conn, daemon *tuiosctl
 	if err != nil {
 		return err
 	}
-	return verifyOperatorPanePeer(ctx, daemon, windowID, pid, start)
+	return verifyPlatformOperatorPanePeer(ctx, daemon, windowID, pid, start)
 }
 
 func verifyOperatorPanePeer(ctx context.Context, daemon panePeerAuthority, windowID string, pid int, start uint64) error {
@@ -46,6 +46,40 @@ func verifyOperatorPanePeer(ctx context.Context, daemon panePeerAuthority, windo
 	}
 	if !reply.Pane || reply.PID != pid || reply.Window != windowID || reply.Session != daemon.Session() || reply.Via != "pid" {
 		return errors.New("computer pane peer identity mismatch")
+	}
+	return nil
+}
+
+// verifyListedOperatorPane is used only where the OS supplies the peer PID but
+// the daemon cannot resolve PID ancestry. A directly launched helper must be
+// the exact process reported for the newly created local pane.
+func verifyListedOperatorPane(ctx context.Context, daemon panePeerAuthority, windowID string, pid int, start uint64) error {
+	if daemon == nil || windowID == "" || windowID == daemon.PaneID() || daemon.Session() == "" || pid <= 0 || start == 0 {
+		return errors.New("computer pane identity unavailable")
+	}
+	var reply struct {
+		Windows []struct {
+			ID   string `json:"window_id"`
+			PID  int    `json:"pid"`
+			Host string `json:"host"`
+		} `json:"windows"`
+	}
+	if err := daemon.CallInto(ctx, "list-windows", map[string]any{"session": daemon.Session()}, &reply); err != nil {
+		return errors.New("computer pane process could not be verified")
+	}
+	matches := 0
+	for _, window := range reply.Windows {
+		if window.ID == windowID {
+			if window.PID != pid || window.Host != "" {
+				return errors.New("computer pane process identity mismatch")
+			}
+			matches++
+		} else if window.PID == pid {
+			return errors.New("computer pane process identity is ambiguous")
+		}
+	}
+	if matches != 1 {
+		return errors.New("computer pane process identity unavailable")
 	}
 	return nil
 }

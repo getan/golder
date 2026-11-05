@@ -15,14 +15,15 @@ import (
 // terminal pane. The caller owns its PTY and must authenticate input as coming
 // from the operator; this type must not be exposed as a model-callable socket.
 type Pane struct {
-	mu       sync.Mutex
-	renderMu sync.Mutex
-	session  *Session
-	renderer *KittyRenderer
-	out      io.Writer
-	snapshot Snapshot
-	closed   bool
-	sequence atomic.Uint64
+	mu               sync.Mutex
+	renderMu         sync.Mutex
+	session          *Session
+	renderer         *KittyRenderer
+	out              io.Writer
+	snapshot         Snapshot
+	previewDelivered bool
+	closed           bool
+	sequence         atomic.Uint64
 }
 
 func NewPane(session *Session, out io.Writer, imageID uint32, graphicsSupported bool) (*Pane, error) {
@@ -104,6 +105,24 @@ func (p *Pane) operatorCommand(ctx context.Context, input string, sequence uint6
 		return "Commands: observe, click <ref>, fill <ref> <text>, pause, resume, stop", nil
 	}
 	switch fields[0] {
+	case "confirm-preview":
+		if len(fields) != 1 || !p.previewDelivered {
+			return "", ErrNotAllowed
+		}
+		if err := p.session.finishOperatorPreview(ctx, true); err != nil {
+			return "", err
+		}
+		p.previewDelivered = false
+		return "Window match confirmed. Computer Use may start.", nil
+	case "skip-preview":
+		if len(fields) != 1 {
+			return "", ErrNotAllowed
+		}
+		if err := p.session.finishOperatorPreview(ctx, false); err != nil {
+			return "", err
+		}
+		p.previewDelivered = false
+		return "Preview declined. Only semantic access is available.", nil
 	case "observe":
 		if len(fields) != 1 {
 			return "", errors.New("usage: observe")

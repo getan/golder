@@ -126,21 +126,28 @@ type App struct {
 	browserState      *browserWindowState
 	browserCancel     context.CancelFunc
 
-	computerOpen          bool
-	computerPickerOpen    bool
-	computerBusy          bool
-	computerError         string
-	computerPermission    computeruse.PermissionState
-	computerBackend       computeruse.PlatformBackend
-	computerSession       *computeruse.Session
-	computerTargets       []computeruse.Target
-	computerSelected      int
-	computerSuggested     string
-	computerRequestPicker bool
-	computerFrame         *ui.Bitmap
-	computerPreviewStop   context.CancelFunc
-	computerSetupStop     context.CancelFunc
-	computerSetupSeq      uint64
+	computerOpen             bool
+	computerPickerOpen       bool
+	computerBusy             bool
+	computerError            string
+	computerPermission       computeruse.PermissionState
+	computerBackend          computeruse.PlatformBackend
+	computerSession          *computeruse.Session
+	computerTargets          []computeruse.Target
+	computerSelected         int
+	computerSuggested        string
+	computerRequestPicker    bool
+	computerFrame            *ui.Bitmap
+	computerCandidate        *ui.Bitmap
+	computerCandidateID      string
+	computerCandidateTarget  string
+	computerCandidateSession string
+	computerCandidateControl bool
+	computerPreviewFailed    bool
+	computerSkipPreview      bool
+	computerPreviewStop      context.CancelFunc
+	computerSetupStop        context.CancelFunc
+	computerSetupSeq         uint64
 }
 
 // New builds the app around an opened controller.

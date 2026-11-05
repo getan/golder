@@ -22,9 +22,17 @@ type CaptureBackend interface {
 	Capture(context.Context, Target) ([]byte, error)
 }
 
+// CaptureAvailability lets a backend with an operator-confirmed source avoid
+// advertising screenshots while its local selection has not been approved.
+type CaptureAvailability interface {
+	CaptureAvailable() bool
+}
+
 // FrameBoundBackend binds a capture to opaque platform geometry. ClickFrame
-// must revalidate the exact target, geometry, focus, occlusion and sensitive
-// controls immediately before injection; a token alone is not authorization.
+// must revalidate the target, geometry and sensitive controls immediately
+// before dispatch. Global input additionally requires focus and occlusion
+// checks; a target-scoped semantic action must verify subtree membership.
+// A token alone is never authorization.
 type FrameBoundBackend interface {
 	CaptureBackend
 	CaptureBound(context.Context, Target) ([]byte, string, error)
@@ -59,7 +67,13 @@ func (s *Session) SupportsCapture() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.backend.(CaptureBackend)
-	return ok
+	if !ok {
+		return false
+	}
+	if available, ok := s.backend.(CaptureAvailability); ok {
+		return available.CaptureAvailable()
+	}
+	return true
 }
 
 func (s *Session) Capture(ctx context.Context) (Frame, error) {

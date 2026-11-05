@@ -46,6 +46,54 @@ func (b *frameBoundTestBackend) ScrollFrame(_ context.Context, _ Target, _ strin
 	return nil
 }
 
+type gatedFrameTestBackend struct {
+	frameBoundTestBackend
+	available bool
+}
+
+func (b *gatedFrameTestBackend) CaptureAvailable() bool { return b.available }
+
+type limitedKeyTestBackend struct{ frameBoundTestBackend }
+
+func (*limitedKeyTestBackend) SupportsFrameKey(key string) bool {
+	return key == "enter" || key == "space"
+}
+
+func TestFrameKeyAvailabilityRestrictsDispatch(t *testing.T) {
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 8, 8))); err != nil {
+		t.Fatal(err)
+	}
+	backend := &limitedKeyTestBackend{frameBoundTestBackend: frameBoundTestBackend{png: imageData.Bytes()}}
+	session := New(backend)
+	ctx := context.Background()
+	if err := session.Start(ctx, Target{ID: "target"}, Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !session.SupportsFrameKey("enter") || session.SupportsFrameKey("tab") || session.SupportsFrameKey("control") {
+		t.Fatal("key availability does not reflect the backend")
+	}
+	frame, err := session.Capture(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.PressFrame(ctx, frame.ID, "tab"); !errors.Is(err, ErrUnavailable) || backend.key != "" {
+		t.Fatalf("unsupported key was dispatched: %q %v", backend.key, err)
+	}
+}
+
+func TestFrameActionsNotAdvertisedBeforeCaptureApproval(t *testing.T) {
+	backend := &gatedFrameTestBackend{}
+	session := New(backend)
+	if session.SupportsCoordinates() || session.SupportsFrameAction("press") || session.SupportsFrameAction("scroll") {
+		t.Fatal("frame actions advertised before capture approval")
+	}
+	backend.available = true
+	if !session.SupportsCoordinates() || !session.SupportsFrameAction("press") || !session.SupportsFrameAction("scroll") {
+		t.Fatal("frame actions missing after capture approval")
+	}
+}
+
 func TestCoordinateClickRequiresRecentSingleUseFrame(t *testing.T) {
 	var imageData bytes.Buffer
 	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 200, 100))); err != nil {

@@ -139,7 +139,7 @@ func LaunchOperatorPane(ctx context.Context, session *Session, cwd string) (*Pan
 			identityErr = errors.New("computer pane connections came from different processes")
 		}
 		if identityErr == nil {
-			identityErr = verifyOperatorPanePeer(ctx, client, created.WindowID, pid, start)
+			identityErr = verifyPlatformOperatorPanePeer(ctx, client, created.WindowID, pid, start)
 		}
 		if identityErr != nil {
 			_ = conn.Close()

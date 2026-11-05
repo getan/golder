@@ -22,6 +22,9 @@ const (
 func (a *App) view(c *ui.Context) {
 	a.applyDisplayPreferences(c)
 	t := c.Theme()
+	if !a.computerPickerOpen && a.computerCandidate != nil {
+		a.clearComputerCandidate()
+	}
 	if !a.computerPickerOpen && a.computerRequestPicker {
 		a.computerRequestPicker = false
 		a.computerSuggested = ""
@@ -176,7 +179,7 @@ func (a *App) sidebar(c *ui.Context) {
 	ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Column(c).Padding(10, 10, 8, 10).Gap(10).Children(func() {
-			if ui.PrimaryButton(c, "+  New session").FillWidth().Disabled(strings.TrimSpace(a.selectedProject) == "").Clicked() {
+			if ui.Button(c, "+  New session").FillWidth().Disabled(strings.TrimSpace(a.selectedProject) == "").Clicked() {
 				a.newSession()
 			}
 			ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
