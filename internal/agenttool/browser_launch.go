@@ -28,9 +28,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/privatepath"
+	"github.com/getan/golder/internal/seatbelt"
 	"github.com/getan/golder/internal/tuiosctl"
 )
 
@@ -365,6 +367,12 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 	if err != nil {
 		return "", err
 	}
+	if agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+		return "", errors.New("native browser cannot satisfy required outer sandbox containment")
+	}
+	if runtime.GOOS == "darwin" && !g.full() && !agentcore.BrowserRuntimeGrantedFromContext(ctx) {
+		return "", errors.New("native browser requires the reviewed browser runtime authorization")
+	}
 	req := NativeBrowserRequest{
 		URL: url, Socket: spec.Socket, ProfileDir: spec.Profile,
 		LoginProfile: browserLoginProfile(cwd, spec.PersistentProfile), ProxyServer: spec.ProxyServer,
@@ -390,7 +398,7 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 		return "", fmt.Errorf("native browser endpoint is not a compatible %s browser", browserctl.APIVersion)
 	}
 	if g != nil {
-		g.rememberBrowser(info.BrowserID, spec.Socket, "", spec.PersistentProfile, spec.ProxyMode)
+		g.rememberNativeBrowser(info.BrowserID, spec.Socket, spec.PersistentProfile, spec.ProxyMode)
 	}
 	_ = writeBrowserMetadata(browserMetadataPath(cwd, spec.RecordName), browserMetadata{
 		Name: spec.RecordName, Socket: spec.Socket, Profile: spec.Profile,

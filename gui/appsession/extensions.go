@@ -62,6 +62,8 @@ type LarkExtensionSettings struct {
 	ExtensionPackageView
 	LarkCLI             string
 	ProjectCLI          string
+	SavedProjectCLI     string
+	SavedProjectHost    string
 	AppID               string
 	CredentialName      string
 	CredentialAvailable bool
@@ -87,6 +89,7 @@ type ExtensionSetupEvent struct {
 	Service         string
 	Message         string
 	VerificationURL string
+	UserCode        string
 	Authenticated   bool
 	Phase           string
 	Code            string
@@ -125,6 +128,11 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		}
 		view.LarkCLI = cfg.Env["LARK_MCP_CLI"]
 		view.ProjectCLI = cfg.Env["LARK_MCP_PROJECT_CLI"]
+		view.SavedProjectCLI = view.ProjectCLI
+		view.SavedProjectHost = strings.TrimSpace(cfg.Env["MEEGLE_HOST"])
+		if view.SavedProjectHost == "" {
+			view.SavedProjectHost = "project.feishu.cn"
+		}
 		view.AppID = cfg.Env["LARK_MCP_APP_ID"]
 		view.CredentialName = credentialReferenceName(cfg.Env["LARK_MCP_APP_SECRET"])
 		if domains := strings.TrimSpace(cfg.Env["LARK_MCP_DOMAINS"]); domains != "" {
@@ -412,7 +420,7 @@ func (c *Controller) AuthorizeLark(ctx context.Context, service string, show fun
 		if show != nil {
 			show(ExtensionSetupEvent{
 				Type: event.Type, Service: event.Service, Message: event.Message,
-				VerificationURL: event.VerificationURL, Authenticated: event.Authenticated,
+				VerificationURL: event.VerificationURL, UserCode: event.UserCode, Authenticated: event.Authenticated,
 				Phase: event.Phase, Code: event.Code, Retryable: event.Retryable,
 			})
 		}

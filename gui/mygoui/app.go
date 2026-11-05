@@ -87,6 +87,7 @@ type App struct {
 	extensionErr           string
 	extensionNote          string
 	extensionAuthURL       string
+	extensionAuthCode      string
 	extensionConfirm       string
 	extensionSourceConfirm string
 	extensionCancel        context.CancelFunc
@@ -107,14 +108,19 @@ type App struct {
 	diffSel     int
 	diff        *editor.DiffState
 
-	filesOpen       bool
-	fileEntries     map[string][]appsession.ProjectFileEntry
-	fileExpanded    map[string]bool
-	fileLoading     map[string]bool
-	fileSelected    string
-	filePreview     appsession.ProjectFilePreview
-	filePreviewBusy bool
-	filesErr        string
+	filesOpen        bool
+	fileEntries      map[string][]appsession.ProjectFileEntry
+	fileLoading      map[string]bool
+	fileDirectory    string
+	fileShowHidden   bool
+	fileGeneration   uint64
+	fileSelected     string
+	filePreview      appsession.ProjectFilePreview
+	filePreviewBusy  bool
+	fileEditor       *editor.State
+	fileSavedVersion uint64
+	fileSaving       bool
+	filesErr         string
 
 	browsers          []appsession.BrowserPreview
 	browserOpen       bool
@@ -160,7 +166,6 @@ func New(ctrl *appsession.Controller) *App {
 		toolOpen:     map[string]bool{},
 		approvalOpen: map[string]bool{},
 		fileEntries:  map[string][]appsession.ProjectFileEntry{},
-		fileExpanded: map[string]bool{},
 		fileLoading:  map[string]bool{},
 		display:      display,
 		md:           markdown.Options{},
@@ -512,44 +517,39 @@ func (a *App) refreshModels() {
 }
 
 func (a *App) refreshBrowsers() {
-	a.refreshBrowsersForPanel(false, "")
-}
-
-func (a *App) refreshBrowsersForPanel(open bool, preferredSocket string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	browsers := a.ctrl.Browsers(ctx)
 	if a.win == nil {
-		a.browsers = browsers
+		a.applyBrowserDiscovery(browsers)
 		return
 	}
-	a.win.Update(func() {
-		a.browsers = browsers
-		if open {
-			a.browserAutoOpen = true
-			a.browserAutoUntil = time.Now().Add(8 * time.Second)
-			if preferredSocket = browserSocketKey(preferredSocket); preferredSocket != "" {
-				a.browserAutoSocket = preferredSocket
-			}
+	a.win.Update(func() { a.applyBrowserDiscovery(browsers) })
+}
+
+func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
+	a.browsers = browsers
+	current := a.browserPanelOpen
+	if current && a.browserAutoSocket != "" && a.browserState != nil && a.browserState.socket != a.browserAutoSocket {
+		current = false
+	}
+	decision, index := browserAutoOpenDecision(a.browserAutoOpen, current, a.browserAutoSocket, browsers)
+	switch decision {
+	case browserOpenSingle:
+		a.clearBrowserAutoOpen()
+		a.openBrowserPreview(browsers[index])
+	case browserChooseInstance:
+		a.clearBrowserAutoOpen()
+		a.browserOpen = true
+	case browserOpenAlready:
+		a.clearBrowserAutoOpen()
+	case browserOpenNone:
+		if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
+			a.scheduleBrowserAutoOpenRetry()
+		} else if a.browserAutoOpen && !a.browserAutoUntil.IsZero() {
+			a.clearBrowserAutoOpen()
 		}
-		decision, index := browserAutoOpenDecision(a.browserAutoOpen, a.browserPanelOpen, a.browserAutoSocket, browsers)
-		switch decision {
-		case browserOpenSingle:
-			a.clearBrowserAutoOpen()
-			a.openBrowserPreview(browsers[index])
-		case browserChooseInstance:
-			a.clearBrowserAutoOpen()
-			a.browserOpen = true
-		case browserOpenAlready:
-			a.clearBrowserAutoOpen()
-		case browserOpenNone:
-			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
-				a.scheduleBrowserAutoOpenRetry()
-			} else if a.browserAutoOpen && !a.browserAutoUntil.IsZero() {
-				a.clearBrowserAutoOpen()
-			}
-		}
-	})
+	}
 }
 
 func (a *App) followBrowserTool(item appsession.Item) {
@@ -564,7 +564,9 @@ func (a *App) followBrowserTool(item appsession.Item) {
 			a.browserAutoSocket = socket
 		}
 	}
-	go a.refreshBrowsersForPanel(open, socket)
+	if a.ctrl != nil {
+		go a.refreshBrowsers()
+	}
 }
 
 func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket string) {
@@ -600,7 +602,7 @@ func (a *App) scheduleBrowserAutoOpenRetry() {
 		win.Update(func() {
 			a.browserRetryArmed = false
 			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
-				go a.refreshBrowsersForPanel(false, "")
+				go a.refreshBrowsers()
 			}
 		})
 	}()
@@ -650,6 +652,9 @@ func browserSocketKey(path string) string {
 	}
 	if absolute, err := filepath.Abs(path); err == nil {
 		path = absolute
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
 	}
 	return filepath.Clean(path)
 }
@@ -702,6 +707,10 @@ func (a *App) setThinking(level string) {
 }
 
 func (a *App) resume(id string) {
+	if a.fileSaving || a.fileHasChanges() {
+		a.banner, a.bannerErr = "Save or discard file changes before switching sessions.", true
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := a.ctrl.Resume(ctx, id); err != nil {
@@ -722,6 +731,10 @@ func (a *App) newSession() {
 }
 
 func (a *App) newSessionInProject(project string) {
+	if (a.fileSaving || a.fileHasChanges()) && !sameProjectPath(project, a.project) {
+		a.banner, a.bannerErr = "Save or discard file changes before switching projects.", true
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := a.ctrl.NewSessionInProject(ctx, project); err != nil {

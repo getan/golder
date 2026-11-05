@@ -1,12 +1,14 @@
 package mygoui
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 
 	"github.com/getan/golder/gui/appsession"
 )
@@ -15,12 +17,17 @@ const filesWidth = 620
 
 func (a *App) resetFileExplorer() {
 	a.filesOpen = false
+	a.fileGeneration++
+	a.fileDirectory = ""
+	a.fileShowHidden = false
 	a.fileEntries = map[string][]appsession.ProjectFileEntry{}
-	a.fileExpanded = map[string]bool{}
 	a.fileLoading = map[string]bool{}
 	a.fileSelected = ""
 	a.filePreview = appsession.ProjectFilePreview{}
 	a.filePreviewBusy = false
+	a.fileEditor = nil
+	a.fileSavedVersion = 0
+	a.fileSaving = false
 	a.filesErr = ""
 }
 
@@ -32,14 +39,34 @@ func (a *App) openFileExplorer() {
 	if a.fileEntries == nil {
 		a.fileEntries = map[string][]appsession.ProjectFileEntry{}
 	}
-	if a.fileExpanded == nil {
-		a.fileExpanded = map[string]bool{}
-	}
 	if a.fileLoading == nil {
 		a.fileLoading = map[string]bool{}
 	}
-	if _, loaded := a.fileEntries[""]; !loaded {
-		a.loadFileDirectory("")
+	if _, loaded := a.fileEntries[a.fileDirectory]; !loaded {
+		a.loadFileDirectory(a.fileDirectory)
+	}
+}
+
+func (a *App) refreshFileDirectory() {
+	a.fileGeneration++
+	a.fileEntries = map[string][]appsession.ProjectFileEntry{}
+	a.fileLoading = map[string]bool{}
+	a.loadFileDirectory(a.fileDirectory)
+}
+
+func (a *App) enterFileDirectory(relative string) {
+	if a.fileSaving || a.fileHasChanges() {
+		a.filesErr = "Save or discard the current file's changes before changing folders."
+		return
+	}
+	a.fileDirectory = relative
+	a.fileSelected = ""
+	a.filePreview = appsession.ProjectFilePreview{}
+	a.filePreviewBusy = false
+	a.fileEditor = nil
+	a.filesErr = ""
+	if _, loaded := a.fileEntries[relative]; !loaded {
+		a.loadFileDirectory(relative)
 	}
 }
 
@@ -48,7 +75,7 @@ func (a *App) loadFileDirectory(relative string) {
 		return
 	}
 	a.fileLoading[relative] = true
-	project, win := a.project, a.win
+	project, win, generation, showHidden := a.project, a.win, a.fileGeneration, a.fileShowHidden
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -58,7 +85,7 @@ func (a *App) loadFileDirectory(relative string) {
 		}
 		ch := make(chan result, 1)
 		go func() {
-			entries, err := a.ctrl.ListProjectFiles(relative)
+			entries, err := a.ctrl.ListProjectFilesWithHidden(relative, showHidden)
 			ch <- result{entries: entries, err: err}
 		}()
 		var got result
@@ -68,7 +95,7 @@ func (a *App) loadFileDirectory(relative string) {
 			got.err = ctx.Err()
 		}
 		apply := func() {
-			if a.project != project {
+			if a.project != project || a.fileGeneration != generation {
 				return
 			}
 			delete(a.fileLoading, relative)
@@ -91,8 +118,13 @@ func (a *App) loadFilePreview(path string) {
 	if a.filePreviewBusy || a.ctrl == nil {
 		return
 	}
+	if a.fileSaving || a.fileHasChanges() {
+		a.filesErr = "Save or discard the current file's changes before opening another file."
+		return
+	}
 	a.fileSelected, a.filePreviewBusy = path, true
 	a.filePreview = appsession.ProjectFilePreview{}
+	a.fileEditor = nil
 	project, win := a.project, a.win
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -123,6 +155,7 @@ func (a *App) loadFilePreview(path string) {
 			}
 			a.filesErr = ""
 			a.filePreview = got.preview
+			a.initFileEditor()
 		}
 		if win == nil {
 			apply()
@@ -132,18 +165,91 @@ func (a *App) loadFilePreview(path string) {
 	}()
 }
 
+func (a *App) initFileEditor() {
+	if a.filePreview.Binary || a.filePreviewBusy {
+		return
+	}
+	buffer := editor.NewBuffer(a.filePreview.Text)
+	buffer.SetLanguage(editor.LanguageFor(a.fileSelected))
+	a.fileEditor = &editor.State{Buffer: buffer, SoftWrap: true, ReadOnly: a.filePreview.Truncated, Label: "File editor"}
+	a.fileSavedVersion = buffer.Version()
+}
+
+func (a *App) fileHasChanges() bool {
+	return a.fileEditor != nil && a.fileEditor.Buffer != nil && a.fileEditor.Buffer.Version() != a.fileSavedVersion
+}
+
+func (a *App) saveFile() {
+	if a.ctrl == nil || a.fileEditor == nil || a.fileEditor.Buffer == nil || a.filePreview.Truncated || a.fileSaving || !a.fileHasChanges() {
+		return
+	}
+	path, project, win := a.fileSelected, a.project, a.win
+	var content bytes.Buffer
+	if _, err := a.fileEditor.Buffer.WriteTo(&content); err != nil {
+		a.filesErr = err.Error()
+		return
+	}
+	text, version, digest := content.String(), a.fileEditor.Buffer.Version(), a.filePreview.Digest
+	a.fileSaving, a.filesErr = true, ""
+	go func() {
+		newDigest, err := a.ctrl.SaveProjectFile(project, path, digest, text)
+		apply := func() {
+			if a.project != project || a.fileSelected != path {
+				return
+			}
+			a.fileSaving = false
+			if err != nil {
+				a.filesErr = err.Error()
+				return
+			}
+			a.filePreview.Text, a.filePreview.Digest = text, newDigest
+			a.fileSavedVersion = version
+			a.filesErr = ""
+		}
+		if win == nil {
+			apply()
+		} else {
+			win.Update(apply)
+		}
+	}()
+}
+
 func (a *App) fileExplorerPanel(c *ui.Context) {
 	t := c.Theme()
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyPeriod) {
+		a.fileShowHidden = !a.fileShowHidden
+		a.refreshFileDirectory()
+	}
+	if c.Shortcut(ui.Cmd, ui.KeyS) {
+		a.saveFile()
+	}
 	ui.Column(c).Width(filesWidth).MinWidth(380).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(42).Padding(6, 10).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Icon(c, filesMonochromeIcon).Size(15, 15)
 			ui.Text(c, "Files").FontSize(13).FontWeight(600)
-			ui.Text(c, filepath.Base(a.project)).FontSize(11).TextColor(t.TextMuted).Grow(1).SingleLine().Ellipsis("…").Tooltip(a.project)
+			if ui.Button(c, "‹").Tooltip("Parent folder").Disabled(a.fileDirectory == "").Clicked() {
+				parent := filepath.ToSlash(filepath.Dir(a.fileDirectory))
+				if parent == "." {
+					parent = ""
+				}
+				a.enterFileDirectory(parent)
+			}
+			label := filepath.Base(a.project)
+			if a.fileDirectory != "" {
+				label += " / " + a.fileDirectory
+			}
+			ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).Grow(1).SingleLine().Ellipsis("…").Tooltip(label)
+			hiddenLabel := "Show hidden files"
+			if a.fileShowHidden {
+				hiddenLabel = "Hide hidden files"
+			}
+			if compactIconButton(c, "files-hidden", hiddenFilesIcon, hiddenLabel, hiddenLabel+" (⌘⇧.)").Clicked() {
+				a.fileShowHidden = !a.fileShowHidden
+				a.refreshFileDirectory()
+			}
 			if ui.Button(c, "↻").Tooltip("Refresh project files").Clicked() {
-				a.fileEntries = map[string][]appsession.ProjectFileEntry{}
-				a.fileExpanded = map[string]bool{}
-				a.loadFileDirectory("")
+				a.refreshFileDirectory()
 			}
 			if ui.Button(c, "×").Tooltip("Close Files").Clicked() {
 				a.filesOpen = false
@@ -155,7 +261,7 @@ func (a *App) fileExplorerPanel(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			ui.Column(c).Width(250).MinWidth(190).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).Padding(6).Children(func() {
-					a.renderFileDirectory(c, "", 0)
+					a.renderFileDirectory(c, a.fileDirectory, 0)
 				})
 			})
 			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
@@ -188,11 +294,7 @@ func (a *App) renderFileDirectory(c *ui.Context, relative string, depth int) {
 		row.Children(func() {
 			ui.Spacer(c).Width(float32(depth) * 14)
 			if entry.Dir && !entry.Symlink {
-				chevron := "›"
-				if a.fileExpanded[entry.Path] {
-					chevron = "⌄"
-				}
-				ui.Text(c, chevron).Width(13).FontSize(11).TextColor(t.TextMuted).TextAlign(ui.Center)
+				ui.Text(c, "›").Width(13).FontSize(11).TextColor(t.TextMuted).TextAlign(ui.Center)
 				ui.Icon(c, folderMonochromeIcon).Size(14, 14)
 			} else {
 				ui.Spacer(c).Width(13)
@@ -208,19 +310,9 @@ func (a *App) renderFileDirectory(c *ui.Context, relative string, depth int) {
 			case entry.Symlink:
 				a.filesErr = "Symbolic links are shown but not followed."
 			case entry.Dir:
-				a.fileExpanded[entry.Path] = !a.fileExpanded[entry.Path]
-				if a.fileExpanded[entry.Path] {
-					a.loadFileDirectory(entry.Path)
-				}
+				a.enterFileDirectory(entry.Path)
 			default:
 				a.loadFilePreview(entry.Path)
-			}
-		}
-		if entry.Dir && a.fileExpanded[entry.Path] {
-			if depth >= 20 {
-				ui.Text(c, "Depth limit reached").Padding(3, 8+float32(depth+1)*14).FontSize(10).TextColor(t.TextMuted)
-			} else {
-				a.renderFileDirectory(c, entry.Path, depth+1)
 			}
 		}
 	}
@@ -240,6 +332,14 @@ func (a *App) filePreviewView(c *ui.Context) {
 		ui.Text(c, path).FontSize(11.5).FontWeight(600).Grow(1).SingleLine().Ellipsis("…").Tooltip(path)
 		if a.filePreview.Truncated {
 			ui.Text(c, "preview truncated").FontSize(10).TextColor(t.Warning)
+		} else if a.fileHasChanges() {
+			if ui.Button(c, "Discard").Disabled(a.fileSaving).Clicked() {
+				a.initFileEditor()
+				a.filesErr = ""
+			}
+		}
+		if ui.PrimaryButton(c, "Save").Disabled(a.fileSaving || a.ctrl == nil || a.filePreviewBusy || a.filePreview.Binary || a.filePreview.Truncated || !a.fileHasChanges()).Clicked() {
+			a.saveFile()
 		}
 	})
 	switch {
@@ -248,12 +348,11 @@ func (a *App) filePreviewView(c *ui.Context) {
 	case a.filePreview.Binary:
 		ui.Text(c, "Binary file — preview is unavailable.").Padding(12).FontSize(12).TextColor(t.TextMuted)
 	default:
-		text := a.filePreview.Text
-		if text == "" {
-			text = "Empty file"
+		if a.fileEditor == nil {
+			a.initFileEditor()
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Padding(10, 12).Children(func() {
-			ui.Text(c, text).Font("monospace").FontSize(11.5).TextColor(t.Text).Selectable().Wrap()
-		})
+		if a.fileEditor != nil {
+			editor.View(c, a.fileEditor).Grow(1).MinHeight(0)
+		}
 	}
 }

@@ -7,3 +7,5 @@ package computeruse
 func ProbePermissions() PermissionState {
 	return PermissionState{ScreenCapture: "unknown", Accessibility: "unknown"}
 }
+
+func RequestMacPermission(string) bool { return false }

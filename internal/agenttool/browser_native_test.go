@@ -2,10 +2,12 @@ package agenttool
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
 )
 
 func TestBrowserOpenUsesConfiguredNativeHostOutsideTuios(t *testing.T) {
@@ -30,6 +32,24 @@ func TestBrowserOpenUsesConfiguredNativeHostOutsideTuios(t *testing.T) {
 	}
 	if request.Socket == "" || request.ProfileDir == "" || request.LoginProfile == "" {
 		t.Fatalf("native request is incomplete: %+v", request)
+	}
+	tool.Control.Mode.Set(permissions.Auto)
+	if err := tool.Control.checkBrowser(context.Background(), "native-browser", request.Socket, false); err != nil {
+		t.Fatalf("the newly launched browser was not owned: %v", err)
+	}
+	controlCtx := agentcore.WithNetworkGrant(context.Background())
+	navigation, err := tool.Execute(controlCtx, "navigate", json.RawMessage(`{"action":"navigate","url":"https://example.com/next"}`), nil)
+	if err != nil || navigation.IsError {
+		t.Fatalf("native browser rejected a subsequent navigation: %v %s", err, agentcore.ContentToText(navigation.Content))
+	}
+	if err := tool.Control.checkBrowser(context.Background(), "native-browser", request.Socket+"-other", false); err == nil {
+		t.Fatal("another socket inherited native browser ownership")
+	}
+	if err := NewControlGuard(tool.cwd).checkBrowser(context.Background(), "native-browser", request.Socket, false); err == nil {
+		t.Fatal("native browser ownership leaked to another agent")
+	}
+	if err := tool.Control.checkBrowser(agentcore.WithSandboxRequest(context.Background()), "native-browser", request.Socket, false); err == nil {
+		t.Fatal("native browser satisfied an explicit outer sandbox request")
 	}
 	if !strings.Contains(agentcore.ContentToText(result.Content), `"surface":"native"`) {
 		t.Fatalf("result = %s", agentcore.ContentToText(result.Content))

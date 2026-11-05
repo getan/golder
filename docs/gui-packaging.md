@@ -52,8 +52,11 @@ managed installer verifies the checksum before copying it under `$GOLDER_HOME`.
 
 ```sh
 cd gui
-go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64 -sign - -skip-notarize
+CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64 -sign - -skip-notarize
 ```
+
+CGO is required for the macOS Computer Use backend; the GUI release workflow
+enables it and checks the packaged executable's Go build information.
 
 `-sign -` is ad-hoc signing: the app runs on the machine that built it, but
 Gatekeeper refuses it on other Macs. To ship, sign with a Developer ID and

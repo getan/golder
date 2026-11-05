@@ -279,11 +279,16 @@ func (a *App) authorizeLark(service string) {
 	if a.extensionBusy {
 		return
 	}
+	if service == "project" && !projectAuthorizationConfigured(a.extension, a.extensionEdit) {
+		a.extensionErr = "Save the Project CLI and host configuration, then approve and enable the updated source before authorizing."
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.extensionCancel = cancel
 	a.extensionBusy, a.extensionErr = true, ""
 	a.extensionNote = "Preparing authorization…"
 	a.extensionAuthURL = ""
+	a.extensionAuthCode = ""
 	win := a.win
 	go func() {
 		err := a.ctrl.AuthorizeLark(ctx, service, func(event appsession.ExtensionSetupEvent) {
@@ -303,6 +308,7 @@ func (a *App) authorizeLark(service string) {
 			a.extensionBusy = false
 			a.extensionCancel = nil
 			a.extensionAuthURL = ""
+			a.extensionAuthCode = ""
 			eventErr := a.extensionErr
 			a.loadExtensionSettings()
 			refreshErr := a.extensionErr
@@ -325,21 +331,36 @@ func (a *App) authorizeLark(service string) {
 	}()
 }
 
+func projectAuthorizationConfigured(settings appsession.LarkExtensionSettings, edit appsession.LarkExtensionEdit) bool {
+	saved, current := strings.TrimSpace(settings.SavedProjectCLI), strings.TrimSpace(edit.ProjectCLI)
+	if saved == "" || current == "" || filepath.Clean(saved) != filepath.Clean(current) {
+		return false
+	}
+	host := strings.TrimSpace(edit.ProjectHost)
+	if host == "" {
+		host = "project.feishu.cn"
+	}
+	return strings.EqualFold(host, strings.TrimSpace(settings.SavedProjectHost))
+}
+
 func (a *App) applyExtensionSetupEvent(event appsession.ExtensionSetupEvent) string {
 	switch event.Type {
 	case "notice":
 		a.extensionNote = event.Message
 	case "authorization":
 		a.extensionAuthURL = event.VerificationURL
+		a.extensionAuthCode = event.UserCode
 		a.extensionErr = ""
 		a.extensionNote = "Authorization page opened. Complete consent in the browser; Golder is waiting for verified login."
 		return event.VerificationURL
 	case "failure":
 		a.extensionAuthURL = ""
+		a.extensionAuthCode = ""
 		a.extensionNote = ""
 		a.extensionErr = extensionSetupFailureText(event)
 	case "complete":
 		a.extensionAuthURL = ""
+		a.extensionAuthCode = ""
 		a.extensionErr = ""
 		a.extensionNote = "Authorization verified."
 	}
@@ -355,7 +376,7 @@ func extensionSetupFailureText(event appsession.ExtensionSetupEvent) string {
 		message += " [" + event.Code + " · " + event.Phase + "]"
 	}
 	if event.Retryable {
-		message += " Start a new authorization when ready."
+		message += " Retry is safe."
 	}
 	return message
 }
@@ -578,11 +599,15 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "4. Personal authorization").FontWeight(600).Padding(6, 0, 0, 0)
 		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
+		projectConfigured := projectAuthorizationConfigured(a.extension, a.extensionEdit)
+		if strings.TrimSpace(a.extensionEdit.ProjectCLI) != "" && !projectConfigured {
+			ui.Text(c, "Save the Project CLI and host, then approve the updated configuration before authorizing Project.").FontSize(11).TextColor(theme.Warning).Wrap()
+		}
 		ui.Row(c).Gap(8).Wrap().Children(func() {
 			if ui.PrimaryButton(c, "Authorize Lark").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if ui.Button(c, "Authorize Project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || strings.TrimSpace(a.extensionEdit.ProjectCLI) == "").Clicked() {
+			if ui.Button(c, "Authorize Project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured).Clicked() {
 				a.authorizeLark("project")
 			}
 			if ui.Button(c, "Test connection").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
@@ -595,6 +620,9 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			}
 		})
 		if a.extensionBusy && a.extensionAuthURL != "" {
+			if a.extensionAuthCode != "" {
+				ui.Text(c, "Enter this authorization code on the Project page: "+a.extensionAuthCode).FontSize(12).Wrap()
+			}
 			if ui.Button(c, "Open authorization page again").Clicked() {
 				_ = mygo.Shell.OpenExternal(a.extensionAuthURL)
 			}

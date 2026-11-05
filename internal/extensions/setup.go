@@ -114,6 +114,11 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 				_ = cmd.Wait()
 				return err
 			}
+			if event.UserCode != "" && !setupevent.AuthorizationCode(event.UserCode) {
+				cancel()
+				_ = cmd.Wait()
+				return errors.New("invalid authorization user code")
+			}
 		case "notice":
 			if completed || failure != nil {
 				cancel()
@@ -152,6 +157,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 		event.Service = clean(event.Service, 64)
 		if event.Type != "authorization" {
 			event.VerificationURL = ""
+			event.UserCode = ""
 			event.ExpiresAt = time.Time{}
 		}
 		if event.Type != "notice" && event.Type != "failure" {

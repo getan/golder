@@ -1,7 +1,10 @@
 package appsession
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,6 +30,7 @@ type ProjectFileEntry struct {
 type ProjectFilePreview struct {
 	Path      string
 	Text      string
+	Digest    string
 	Binary    bool
 	Truncated bool
 }
@@ -36,10 +40,14 @@ var hiddenGeneratedDirectories = map[string]bool{
 	"node_modules": true, "vendor": true, "dist": true, "build": true,
 }
 
-// ListProjectFiles lists one project-relative directory without following any
-// symlink component. Large/generated state directories are hidden by default;
-// ordinary dotfiles such as .gitignore and .github remain visible.
+// ListProjectFiles lists a directory without following symlinks or dotfiles.
 func (c *Controller) ListProjectFiles(relative string) ([]ProjectFileEntry, error) {
+	return c.ListProjectFilesWithHidden(relative, false)
+}
+
+// ListProjectFilesWithHidden optionally includes dotfiles, still excluding
+// large generated non-dot directories and never following symbolic links.
+func (c *Controller) ListProjectFilesWithHidden(relative string, showHidden bool) ([]ProjectFileEntry, error) {
 	c.mu.Lock()
 	root := c.cwd
 	c.mu.Unlock()
@@ -67,7 +75,8 @@ func (c *Controller) ListProjectFiles(relative string) ([]ProjectFileEntry, erro
 			if len(out) == maxProjectDirectoryEntries {
 				break
 			}
-			if entry.IsDir() && hiddenGeneratedDirectories[entry.Name()] {
+			hidden := strings.HasPrefix(entry.Name(), ".")
+			if hidden && !showHidden || entry.IsDir() && !hidden && hiddenGeneratedDirectories[entry.Name()] {
 				continue
 			}
 			entryInfo, infoErr := entry.Info()
@@ -105,22 +114,28 @@ func (c *Controller) ReadProjectFile(relative string) (ProjectFilePreview, error
 	c.mu.Lock()
 	root := c.cwd
 	c.mu.Unlock()
-	path, clean, err := secureProjectPath(root, relative)
+	_, clean, err := secureProjectPath(root, relative)
 	if err != nil {
 		return ProjectFilePreview{}, err
 	}
-	info, err := os.Stat(path)
+	project, err := os.OpenRoot(root)
 	if err != nil {
 		return ProjectFilePreview{}, err
 	}
-	if !info.Mode().IsRegular() {
-		return ProjectFilePreview{}, errors.New("project explorer path is not a regular file")
-	}
-	f, err := os.Open(path)
+	defer project.Close()
+	f, err := project.Open(clean)
 	if err != nil {
 		return ProjectFilePreview{}, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return ProjectFilePreview{}, errors.New("project explorer path is not a regular file")
+	}
+	current, err := project.Lstat(clean)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, current) {
+		return ProjectFilePreview{}, errors.New("project file was replaced; reopen it")
+	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxProjectPreviewBytes+1))
 	if err != nil {
 		return ProjectFilePreview{}, err
@@ -135,7 +150,82 @@ func (c *Controller) ReadProjectFile(relative string) (ProjectFilePreview, error
 		return preview, nil
 	}
 	preview.Text = string(raw)
+	if !truncated {
+		sum := sha256.Sum256(raw)
+		preview.Digest = hex.EncodeToString(sum[:])
+	}
 	return preview, nil
+}
+
+// SaveProjectFile is a direct operator action, not an agent tool call. It uses
+// normal OS permissions and refuses to overwrite a file changed since preview.
+// The opened root confines path resolution even if a directory is replaced.
+func (c *Controller) SaveProjectFile(expectedProject, relative, expectedDigest, text string) (string, error) {
+	if len(text) > maxProjectPreviewBytes || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
+		return "", errors.New("file is too large or is not valid UTF-8 text")
+	}
+	if len(expectedDigest) != sha256.Size*2 {
+		return "", errors.New("file preview is incomplete; reopen the file before saving")
+	}
+	c.mu.Lock()
+	root, closed := c.cwd, c.closed
+	c.mu.Unlock()
+	if closed {
+		return "", ErrClosed
+	}
+	if expectedProject == "" || filepath.Clean(expectedProject) != filepath.Clean(root) {
+		return "", errors.New("project changed; reopen the file before saving")
+	}
+	_, clean, err := secureProjectPath(root, relative)
+	if err != nil || clean == "" {
+		if err != nil {
+			return "", err
+		}
+		return "", errors.New("select a regular file to save")
+	}
+	project, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer project.Close()
+	file, err := project.OpenFile(clean, os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("cannot open file for writing: %w", err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() {
+		return "", errors.New("project file is no longer a regular file")
+	}
+	original, err := io.ReadAll(io.LimitReader(file, maxProjectPreviewBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("cannot check file before saving: %w", err)
+	}
+	if len(original) > maxProjectPreviewBytes || bytesAreBinary(original) {
+		return "", errors.New("file changed or is not an editable text file")
+	}
+	before := sha256.Sum256(original)
+	if hex.EncodeToString(before[:]) != expectedDigest {
+		return "", errors.New("file changed on disk; reopen it before saving")
+	}
+	current, err := project.Lstat(clean)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, current) {
+		return "", errors.New("file was replaced; reopen it before saving")
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	if _, err = io.WriteString(file, text); err != nil {
+		return "", fmt.Errorf("save may be incomplete: %w", err)
+	}
+	if err = file.Truncate(int64(len(text))); err != nil {
+		return "", fmt.Errorf("save may be incomplete: %w", err)
+	}
+	if err = file.Sync(); err != nil {
+		return "", fmt.Errorf("save may be incomplete: %w", err)
+	}
+	after := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(after[:]), nil
 }
 
 func secureProjectPath(root, relative string) (path, clean string, err error) {

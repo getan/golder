@@ -7,6 +7,8 @@ import (
 	_ "image/png"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -18,6 +20,7 @@ import (
 type browserWindowState struct {
 	win     *mygo.Window
 	surface *appsession.BrowserSurface
+	socket  string
 	bitmap  *ui.Bitmap
 	address string
 	pageURL string
@@ -29,6 +32,8 @@ type browserWindowState struct {
 	viewW, viewH   float32
 	viewportW      int
 	viewportH      int
+	resizeMu       sync.Mutex
+	resizeSequence atomic.Uint64
 }
 
 // openBrowserPreview attaches the native interactive surface in the main
@@ -38,7 +43,7 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	a.closeBrowserPanel()
 	a.hideComputerPanel()
 	ctx, cancel := context.WithCancel(context.Background())
-	state := &browserWindowState{address: browser.URL, pageURL: browser.URL, title: browser.Title}
+	state := &browserWindowState{socket: browserSocketKey(browser.Socket), address: browser.URL, pageURL: browser.URL, title: browser.Title}
 	if state.title == "" {
 		state.title = browser.URL
 	}
@@ -46,7 +51,9 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	a.browserState, a.browserCancel, a.browserPanelOpen = state, cancel, true
 	a.changesOpen = false
 	a.filesOpen = false
-	go attachBrowserSurface(ctx, a.win, state, browser)
+	if a.win != nil {
+		go attachBrowserSurface(ctx, a.win, state, browser)
+	}
 }
 
 func (a *App) closeBrowserPanel() {
@@ -63,7 +70,7 @@ func (a *App) closeBrowserPanel() {
 
 func (a *App) browserPanel(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(browserWidth).MinWidth(360).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(36).Padding(5, 10).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Icon(c, browserMonochromeIcon).Size(15, 15)
@@ -234,7 +241,13 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 				(absInt(wantW-state.viewportW) > 4 || absInt(wantH-state.viewportH) > 4) {
 				state.viewportW, state.viewportH = wantW, wantH
 				surface := state.surface
+				sequence := state.resizeSequence.Add(1)
 				go func() {
+					state.resizeMu.Lock()
+					defer state.resizeMu.Unlock()
+					if state.resizeSequence.Load() != sequence {
+						return
+					}
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					_ = surface.Resize(ctx, wantW, wantH)

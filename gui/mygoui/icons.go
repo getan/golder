@@ -30,6 +30,12 @@ var folderMonochromeIcon = ui.MustParseSVG([]byte(`
   <path d="M3 6h7l2 2h9v11H3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
 </svg>`))
 
+var hiddenFilesIcon = ui.MustParseSVG([]byte(`
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+  <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
+</svg>`))
+
 func compactIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip string) ui.Element {
 	t := c.Theme()
 	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).Border(1, t.Border).

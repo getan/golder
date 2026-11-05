@@ -37,6 +37,9 @@ func runSetup(ctx context.Context, m *extensions.Manager, ref extensions.SourceR
 		case "notice":
 			show(event.Message)
 		case "authorization":
+			if event.UserCode != "" {
+				show("Enter this authorization code on the Project page: " + event.UserCode)
+			}
 			show("Opening a private QR authorization viewer… Confirm permissions in Feishu on your phone. Ctrl+C cancels.")
 			closeViewer, err := agenttool.OpenAuthorizationQR(ctx, cwd, event)
 			if err == nil {

@@ -18,7 +18,6 @@ func testApp() *App {
 		toolOpen:     map[string]bool{},
 		approvalOpen: map[string]bool{},
 		fileEntries:  map[string][]appsession.ProjectFileEntry{},
-		fileExpanded: map[string]bool{},
 		fileLoading:  map[string]bool{},
 		display:      appsession.DisplaySettings{Theme: "system", FontScale: 1},
 		status: appsession.Status{
@@ -57,6 +56,10 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 	a.browserPanelOpen = true
 	a.browserState = &browserWindowState{title: "Example", address: "https://example.com"}
 	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	if a.browserState.viewW < 1100 || a.browserState.viewH < 600 {
+		t.Fatalf("browser viewport did not fill the window: %.0fx%.0f", a.browserState.viewW, a.browserState.viewH)
+	}
 	for _, want := range []string{"Example", "Connecting to Chromium…", "×"} {
 		if !tt.HasText(want) {
 			t.Fatalf("browser drawer is missing %q; texts: %q", want, tt.Texts())
@@ -87,6 +90,32 @@ func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 				t.Fatalf("refresh/open/socket = %t/%t/%q, want %t/%t/%q", refresh, open, socket, tc.refresh, tc.open, tc.preferredSocket)
 			}
 		})
+	}
+}
+
+func TestBrowserToolCompletionActuallyOpensMatchingSurface(t *testing.T) {
+	a := testApp()
+	item := appsession.Item{ID: "browser-open", Tool: &appsession.ToolState{
+		Name: "browser", Input: map[string]any{"action": "open"}, Details: map[string]any{"socket": "/tmp/owned-browser.sock"},
+	}}
+	a.applyEvent(appsession.Event{Kind: appsession.EventItemUpdated, Item: &item})
+	if !a.browserAutoOpen {
+		t.Fatal("completed browser open did not schedule a panel")
+	}
+	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/owned-browser.sock", Title: "Example"}})
+	if !a.browserPanelOpen || a.browserState == nil || a.browserState.title != "Example" {
+		t.Fatalf("browser surface was not opened: %+v", a.browserState)
+	}
+	item.Tool.Details["socket"] = "/tmp/second-browser.sock"
+	a.applyEvent(appsession.Event{Kind: appsession.EventItemUpdated, Item: &item})
+	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/second-browser.sock", Title: "Second"}})
+	if a.browserState == nil || a.browserState.title != "Second" {
+		t.Fatal("a new owned browser did not replace the previous surface")
+	}
+	a.closeBrowserPanel()
+	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/owned-browser.sock"}})
+	if a.browserPanelOpen {
+		t.Fatal("an old discovery reopened a panel the operator closed")
 	}
 }
 

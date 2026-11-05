@@ -14,6 +14,20 @@ static int computeruse_accessibility_allowed(void) {
 static int computeruse_capture_allowed(void) {
 	return CGPreflightScreenCaptureAccess();
 }
+
+static int computeruse_request_accessibility(void) {
+	const void *keys[] = { kAXTrustedCheckOptionPrompt };
+	const void *values[] = { kCFBooleanTrue };
+	CFDictionaryRef options = CFDictionaryCreate(NULL, keys, values, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+	if (!options) return 0;
+	int trusted = AXIsProcessTrustedWithOptions(options);
+	CFRelease(options);
+	return trusted;
+}
+
+static int computeruse_request_capture(void) {
+	return CGRequestScreenCaptureAccess();
+}
 */
 import "C"
 
@@ -28,4 +42,16 @@ func ProbePermissions() PermissionState {
 		result.Accessibility = "granted"
 	}
 	return result
+}
+
+// RequestMacPermission is called only after an explicit operator button click.
+func RequestMacPermission(kind string) bool {
+	switch kind {
+	case "accessibility":
+		return C.computeruse_request_accessibility() != 0
+	case "screen":
+		return C.computeruse_request_capture() != 0
+	default:
+		return false
+	}
 }

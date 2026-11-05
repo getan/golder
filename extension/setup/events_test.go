@@ -17,6 +17,19 @@ func TestAuthorizationOriginBoundary(t *testing.T) {
 	}
 }
 
+func TestAuthorizationUserCodeIsBoundedAndPrintable(t *testing.T) {
+	for _, code := range []string{"ABCD-1234", "ABCD 1234"} {
+		if !AuthorizationCode(code) {
+			t.Fatalf("rejected user code %q", code)
+		}
+	}
+	for _, code := range []string{"", "   ", "ABC\n123", strings.Repeat("A", 65), "<secret>"} {
+		if AuthorizationCode(code) {
+			t.Fatalf("accepted invalid user code %q", code)
+		}
+	}
+}
+
 func TestFailureEventUsesClosedSafeVocabulary(t *testing.T) {
 	event, err := SanitizeFailure(Event{
 		Type: "failure", Phase: PhaseVerifyAuthorization, Code: CodeAuthVerifyNetworkFailed,

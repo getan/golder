@@ -193,6 +193,15 @@ func (g *ControlGuard) rememberBrowser(id, socket, window, profile, proxyMode st
 	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), window: window, profile: profile, proxyMode: proxyMode, isolated: p.isolated, browserRuntime: p.browserRuntime, policy: p.policy}
 }
 
+// A successfully launched native host has no tuios pane from which to inherit
+// its envelope. Record its exact endpoint under the browser-only runtime
+// ceiling; explicit sandbox requests still fail closed in checkBrowser.
+func (g *ControlGuard) rememberNativeBrowser(id, socket, profile, proxyMode string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.browsers[id] = controlledBrowser{socket: canonicalBrowserSocket(socket), profile: profile, proxyMode: proxyMode, browserRuntime: true, policy: controlPolicyStamp()}
+}
+
 func (g *ControlGuard) release(id string) {
 	g.mu.Lock()
 	p, ok := g.panes[id]

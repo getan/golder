@@ -14,7 +14,6 @@ import (
 const (
 	sidebarWidth = 248
 	changesWidth = 460
-	browserWidth = 600
 	titleHeight  = 46
 )
 
@@ -56,6 +55,7 @@ func (a *App) view(c *ui.Context) {
 		a.settingsEdit.RemoveCredential = false
 		a.extensionEdit.NewAppSecret = ""
 		a.extensionAuthURL = ""
+		a.extensionAuthCode = ""
 		a.extensionConfirm = ""
 		a.extensionSourceConfirm = ""
 		if a.extensionCancel != nil {
@@ -85,6 +85,10 @@ func (a *App) view(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		a.titleBar(c)
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			if a.browserPanelOpen {
+				a.browserPanel(c)
+				return
+			}
 			a.sidebar(c)
 			a.center(c)
 			if a.filesOpen {
@@ -92,9 +96,6 @@ func (a *App) view(c *ui.Context) {
 			}
 			if a.changesOpen {
 				a.changesPanel(c)
-			}
-			if a.browserPanelOpen {
-				a.browserPanel(c)
 			}
 			if a.computerOpen {
 				a.computerPanel(c)

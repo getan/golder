@@ -51,9 +51,47 @@ func TestSetupFixtureChild(t *testing.T) {
 		url = "https://auth.example.com/device?code=operator-only"
 	}
 	encoder := json.NewEncoder(os.Stdout)
-	_ = encoder.Encode(setupevent.Event{Version: 1, Type: "authorization", Service: "fixture", VerificationURL: url, ExpiresAt: time.Now().Add(time.Minute)})
+	_ = encoder.Encode(setupevent.Event{Version: 1, Type: "authorization", Service: "fixture", VerificationURL: url, UserCode: os.Getenv("EXTENSION_TEST_USER_CODE"), ExpiresAt: time.Now().Add(time.Minute)})
 	_ = encoder.Encode(setupevent.Event{Version: 1, Type: "complete", Service: "fixture", Authenticated: true})
 	os.Exit(0)
+}
+
+func TestSetupValidatesOperatorOnlyUserCode(t *testing.T) {
+	if !seatbelt.Available() {
+		t.Skip("OS sandbox unavailable")
+	}
+	for _, tc := range []struct {
+		name, code string
+		valid      bool
+	}{{"valid", "ABCD-1234", true}, {"invalid", "ABC\nsecret", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			exe, _ := os.Executable()
+			ref := SourceRef{Kind: "mcp", ID: "fixture"}
+			cfg := SourceConfig{
+				Enabled: true, Transport: "stdio", Command: exe, StateDir: true,
+				Setup: []string{exe, "-test.run=^TestSetupFixtureChild$"}, SetupOrigins: []string{"https://auth.example.com"},
+				Env: map[string]string{"EXTENSION_SETUP_FIXTURE": "1", "EXTENSION_TEST_USER_CODE": tc.code},
+			}
+			m := testManager(t, ref, cfg, nil)
+			if err := m.ApproveSession(ref); err != nil {
+				t.Fatal(err)
+			}
+			var shown string
+			err := m.Setup(context.Background(), ref, func(event setupevent.Event) error {
+				if event.Type == "authorization" {
+					shown = event.UserCode
+				}
+				return nil
+			})
+			if tc.valid {
+				if err != nil || shown != tc.code {
+					t.Fatalf("err=%v code=%q", err, shown)
+				}
+			} else if err == nil || shown != "" || strings.Contains(err.Error(), "secret") {
+				t.Fatalf("unsafe code reached display: err=%v code=%q", err, shown)
+			}
+		})
+	}
 }
 
 func TestSetupForwardsOnlyWhitelistedFailure(t *testing.T) {

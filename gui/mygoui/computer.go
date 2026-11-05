@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"image"
 	_ "image/png"
+	"runtime"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/internal/computeruse"
@@ -374,6 +376,20 @@ func (a *App) computerPicker(c *ui.Context) {
 				}
 			}
 			ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
+			if runtime.GOOS == "darwin" && (a.computerPermission.ScreenCapture != "granted" || a.computerPermission.Accessibility != "granted") {
+				ui.Text(c, "Use these buttons to register Golder GUI in macOS Privacy & Security. After granting, quit and reopen the app if macOS asks.").FontSize(11).TextColor(t.TextMuted).Wrap()
+				ui.Row(c).Gap(8).Children(func() {
+					if a.computerPermission.Accessibility != "granted" && ui.Button(c, "Request Accessibility").Clicked() {
+						go computeruse.RequestMacPermission("accessibility")
+					}
+					if a.computerPermission.ScreenCapture != "granted" && ui.Button(c, "Request Screen Recording").Clicked() {
+						go computeruse.RequestMacPermission("screen")
+					}
+					if ui.Button(c, "Open Privacy Settings").Clicked() {
+						go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+					}
+				})
+			}
 			if a.computerError != "" {
 				ui.Text(c, a.computerError).FontSize(11).TextColor(t.Warning).Wrap()
 			}

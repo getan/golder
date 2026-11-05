@@ -38,6 +38,7 @@ func cloneItem(it Item) Item {
 				t.Input[k] = v
 			}
 		}
+		t.Details = cloneAnyMap(it.Tool.Details)
 		out.Tool = &t
 	}
 	if it.Note != nil {
@@ -62,7 +63,7 @@ func (c *Controller) addItem(it Item) {
 		c.title = titleOf(c.items)
 		c.status.Title = c.title
 	}
-	emit := it
+	emit := cloneItem(it)
 	c.mu.Unlock()
 	c.emit(EventItemAdded, func(ev *Event) { ev.Item = &emit })
 }

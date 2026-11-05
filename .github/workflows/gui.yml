@@ -146,6 +146,11 @@ jobs:
           printf 'mygo build %s\n' "${args[*]}"
           cd gui
           go run ./tools/mkicon -o resources/icon.png
+          # The macOS Computer Use backend links the native Accessibility and
+          # ScreenCaptureKit frameworks. MyGo otherwise defaults CGO to zero.
+          if [[ "${{ matrix.kind }}" == "macos" ]]; then
+            export CGO_ENABLED=1
+          fi
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
 
       - name: List the artifacts
@@ -170,6 +175,11 @@ jobs:
           fi
           if [[ "${{ matrix.kind }}" == "macos" ]]; then
             app=$(find gui/build -type d -name '*.app' -print -quit)
+            exe="$app/Contents/MacOS/Golder GUI"
+            if ! go version -m "$exe" | grep -q 'CGO_ENABLED=1'; then
+              echo "the macOS GUI was built without the Computer Use backend" >&2
+              exit 1
+            fi
             mib=$(du -sm "$app" | awk '{print $1}')
             echo "installed app size: ${mib} MiB"
             test "$mib" -lt 50

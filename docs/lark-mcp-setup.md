@@ -249,6 +249,9 @@ the model chooses a Lark tool when the task needs one.
 | `CLI_UNAVAILABLE` | path points at the JS shim, or the postinstall never ran | reinstall with `--allow-build`; point at `bin/lark-cli` / `bin/meegle-<os>-<arch>` |
 | `golder-lark requires a private HOME` | ran `golder-lark setup` directly | use `golder mcp setup lark` |
 | `extension requires explicit trust approval` | enabled but not approved | `golder mcp enable lark --yes --save` |
+| `PROJECT_CLI_UNAVAILABLE` | the configured native Project CLI could not be started | save the correct native executable path and reapprove the source if its dependencies changed |
+| `PROJECT_AUTH_NETWORK_FAILED` | Project authorization initialization could not reach the configured host | check the saved Project host, network and proxy; no authorization page was opened |
+| `PROJECT_AUTH_TLS_FAILED` | Project authorization initialization could not verify TLS | check the saved host and system certificate trust; do not disable TLS verification |
 | `AUTH_POLL_FAILED` | device authorization did not complete and status was not verified | start a new authorization flow; do not reuse the previous URL |
 | `AUTH_VERIFY_NETWORK_FAILED` | token may be saved, but bounded server verification did not complete | check network/service health, then verify or retry setup; do not reset credentials solely for this error |
 | `AUTH_VERIFY_IDENTITY_FAILED` | status explicitly reported a non-user or unverified identity | authorize the required user identity; bot fallback remains disabled |

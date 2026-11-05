@@ -1,6 +1,7 @@
 package appsession
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,8 +42,19 @@ func TestProjectFilesAreBoundedSortedAndDoNotFollowSymlinks(t *testing.T) {
 			symlink = entry.Symlink
 		}
 	}
-	if present[".git"] || present["node_modules"] || !present[".github"] || !present["src"] || !present["README.md"] {
+	if present[".git"] || present[".github"] || present["node_modules"] || !present["src"] || !present["README.md"] {
 		t.Fatalf("entries=%v", names)
+	}
+	hidden, err := c.ListProjectFilesWithHidden("", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundHidden := map[string]bool{}
+	for _, entry := range hidden {
+		foundHidden[entry.Name] = true
+	}
+	if !foundHidden[".git"] || !foundHidden[".github"] || foundHidden["node_modules"] {
+		t.Fatalf("show hidden entries = %v", foundHidden)
 	}
 	if runtime.GOOS != "windows" {
 		if !symlink {
@@ -77,5 +89,58 @@ func TestProjectFilePreviewDetectsBinaryAndTruncates(t *testing.T) {
 	large, err := c.ReadProjectFile("large.txt")
 	if err != nil || !large.Truncated || len(large.Text) != maxProjectPreviewBytes {
 		t.Fatalf("large len=%d truncated=%t err=%v", len(large.Text), large.Truncated, err)
+	}
+}
+
+func TestProjectFileSaveChecksDiskChangesAndKeepsMode(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "main.go")
+	if err := os.WriteFile(path, []byte("old\r\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	c := &Controller{cwd: root, readOnly: true}
+	preview, err := c.ReadProjectFile("main.go")
+	if err != nil || preview.Digest == "" {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	digest, err := c.SaveProjectFile(root, "main.go", preview.Digest, "new\r\n")
+	if err != nil || digest == "" {
+		t.Fatalf("operator save failed: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "new\r\n" {
+		t.Fatalf("saved=%q err=%v", data, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+		t.Fatalf("permissions changed: %v %v", info, err)
+	}
+	if _, err := c.SaveProjectFile(root, "main.go", preview.Digest, "overwrite"); err == nil {
+		t.Fatal("stale preview overwrote a changed file")
+	}
+	if _, err := c.SaveProjectFile(root, "../outside", digest, "overwrite"); err == nil {
+		t.Fatal("save escaped the project")
+	}
+	if _, err := c.SaveProjectFile(t.TempDir(), "main.go", digest, "overwrite"); err == nil {
+		t.Fatal("save accepted a different project")
+	}
+}
+
+func TestProjectFileSaveReportsOSPermissionDenied(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("POSIX file mode does not prove denial for this user")
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "readonly.txt")
+	if err := os.WriteFile(path, []byte("readable"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	c := &Controller{cwd: root}
+	preview, err := c.ReadProjectFile("readonly.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SaveProjectFile(root, "readonly.txt", preview.Digest, "changed"); err == nil || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("expected OS permission error, got %v", err)
 	}
 }

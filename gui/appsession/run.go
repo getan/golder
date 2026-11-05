@@ -3,6 +3,7 @@ package appsession
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -496,6 +497,8 @@ func decodeArgsAny(v any) map[string]any {
 	switch t := v.(type) {
 	case map[string]any:
 		return t
+	case json.RawMessage:
+		return decodeArgs(t)
 	case []byte:
 		return decodeArgs(t)
 	case string:

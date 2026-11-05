@@ -23,6 +23,9 @@ const (
 	CodePrepareStoreFailed       = "PREPARE_STORE_FAILED"
 	CodeAppConfigFailed          = "APP_CONFIG_FAILED"
 	CodeAuthStartFailed          = "AUTH_START_FAILED"
+	CodeProjectCLIUnavailable    = "PROJECT_CLI_UNAVAILABLE"
+	CodeProjectAuthNetworkFailed = "PROJECT_AUTH_NETWORK_FAILED"
+	CodeProjectAuthTLSFailed     = "PROJECT_AUTH_TLS_FAILED"
 	CodeAuthResponseUnsupported  = "AUTH_RESPONSE_UNSUPPORTED"
 	CodeAuthPollFailed           = "AUTH_POLL_FAILED"
 	CodeAuthVerifyNetworkFailed  = "AUTH_VERIFY_NETWORK_FAILED"
@@ -37,11 +40,26 @@ type Event struct {
 	Service         string    `json:"service,omitempty"`
 	Message         string    `json:"message,omitempty"`
 	VerificationURL string    `json:"verification_url,omitempty"`
+	UserCode        string    `json:"user_code,omitempty"`
 	ExpiresAt       time.Time `json:"expires_at,omitempty"`
 	Authenticated   bool      `json:"authenticated,omitempty"`
 	Phase           string    `json:"phase,omitempty"`
 	Code            string    `json:"code,omitempty"`
 	Retryable       bool      `json:"retryable,omitempty"`
+}
+
+// AuthorizationCode accepts only a short operator-facing device user code.
+// It is never a token or a model-facing result.
+func AuthorizationCode(code string) bool {
+	if len(code) == 0 || len(code) > 64 {
+		return false
+	}
+	for _, r := range code {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == ' ') {
+			return false
+		}
+	}
+	return strings.TrimSpace(code) != ""
 }
 
 // FailureEvent returns one fixed, display-safe failure. The helper and host
@@ -73,6 +91,12 @@ func failureDefinition(code string) (phase, message string, retryable, ok bool) 
 		return PhaseConfigureApplication, "Application configuration could not be verified.", false, true
 	case CodeAuthStartFailed:
 		return PhaseStartAuthorization, "User authorization could not be started.", true, true
+	case CodeProjectCLIUnavailable:
+		return PhaseStartAuthorization, "Project CLI could not be started. Check the saved native executable path and reapprove the source if it changed.", true, true
+	case CodeProjectAuthNetworkFailed:
+		return PhaseStartAuthorization, "Project authorization could not reach the configured host. Check the saved host, network and proxy settings.", true, true
+	case CodeProjectAuthTLSFailed:
+		return PhaseStartAuthorization, "Project authorization could not establish a trusted TLS connection. Check the configured host, network and system certificate trust.", true, true
 	case CodeAuthResponseUnsupported:
 		return PhaseStartAuthorization, "The authorization service returned an unsupported response.", false, true
 	case CodeAuthPollFailed:

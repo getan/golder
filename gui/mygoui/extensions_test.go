@@ -13,20 +13,51 @@ func TestExtensionSetupAuthorizationURLLivesOnlyWhilePending(t *testing.T) {
 	a := testApp()
 	a.extensionBusy = true
 	url := "https://accounts.feishu.cn/device?user_code=public"
-	if opened := a.applyExtensionSetupEvent(appsession.ExtensionSetupEvent{Type: "authorization", VerificationURL: url}); opened != url || a.extensionAuthURL != url {
+	if opened := a.applyExtensionSetupEvent(appsession.ExtensionSetupEvent{Type: "authorization", VerificationURL: url, UserCode: "ABCD-1234"}); opened != url || a.extensionAuthURL != url || a.extensionAuthCode != "ABCD-1234" {
 		t.Fatalf("authorization event did not retain the active URL: opened=%q state=%q", opened, a.extensionAuthURL)
 	}
 	a.applyExtensionSetupEvent(appsession.ExtensionSetupEvent{
 		Type: "failure", Phase: "verify_authorization", Code: "AUTH_VERIFY_NETWORK_FAILED",
 		Message: "Authorization may have been saved.", Retryable: true,
 	})
-	if a.extensionAuthURL != "" || a.extensionErr == "" || !strings.Contains(a.extensionErr, "AUTH_VERIFY_NETWORK_FAILED") {
+	if a.extensionAuthURL != "" || a.extensionAuthCode != "" || a.extensionErr == "" || !strings.Contains(a.extensionErr, "AUTH_VERIFY_NETWORK_FAILED") {
 		t.Fatalf("failure retained stale URL or lost safe diagnostics: url=%q err=%q", a.extensionAuthURL, a.extensionErr)
 	}
 	a.extensionAuthURL = url
 	a.applyExtensionSetupEvent(appsession.ExtensionSetupEvent{Type: "complete", Authenticated: true})
 	if a.extensionAuthURL != "" || a.extensionErr != "" || a.extensionNote != "Authorization verified." {
 		t.Fatalf("completion state: url=%q err=%q note=%q", a.extensionAuthURL, a.extensionErr, a.extensionNote)
+	}
+}
+
+func TestExtensionSetupFailureMatchesSavedStatus(t *testing.T) {
+	event := appsession.ExtensionSetupEvent{
+		Type: "failure", Phase: "wait_for_authorization", Code: "AUTH_POLL_FAILED",
+		Message: "Authorization did not complete. Start a new authorization flow.", Retryable: true,
+	}
+	want := "Authorization did not complete. Start a new authorization flow. [AUTH_POLL_FAILED · wait_for_authorization] Retry is safe."
+	if got := extensionSetupFailureText(event); got != want {
+		t.Fatalf("failure=%q, want %q", got, want)
+	}
+}
+
+func TestProjectAuthorizationUsesSavedReviewedConfiguration(t *testing.T) {
+	settings := appsession.LarkExtensionSettings{SavedProjectCLI: "/opt/meegle", SavedProjectHost: "project.feishu.cn"}
+	edit := appsession.LarkExtensionEdit{ProjectCLI: "/opt/meegle", ProjectHost: "project.feishu.cn"}
+	if !projectAuthorizationConfigured(settings, edit) {
+		t.Fatal("saved Project configuration was rejected")
+	}
+	edit.ProjectCLI = "/opt/another-meegle"
+	if projectAuthorizationConfigured(settings, edit) {
+		t.Fatal("unsaved Project executable was treated as approved")
+	}
+	edit.ProjectCLI, edit.ProjectHost = "/opt/meegle", "other.example"
+	if projectAuthorizationConfigured(settings, edit) {
+		t.Fatal("unsaved Project host was treated as approved")
+	}
+	settings.SavedProjectCLI = ""
+	if projectAuthorizationConfigured(settings, appsession.LarkExtensionEdit{ProjectCLI: "/opt/meegle"}) {
+		t.Fatal("discovered but unsaved Project executable was treated as configured")
 	}
 }
 

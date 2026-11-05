@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	setupevent "github.com/getan/golder/extension/setup"
@@ -125,7 +126,11 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 			if ctx.Err() != nil {
 				return failContext()
 			}
-			return fail(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
+			var failure *projectSetupFailure
+			if errors.As(err, &failure) {
+				return fail(failure.phase, failure.code)
+			}
+			return err
 		}
 	}
 	return write(setupevent.Event{Type: "complete", Authenticated: true})
@@ -169,29 +174,69 @@ func (p *Plugin) verifyLarkUser(ctx context.Context) (bool, string) {
 	return false, setupevent.CodeAuthVerifyNetworkFailed
 }
 
+type projectSetupFailure struct{ phase, code string }
+
+func (e *projectSetupFailure) Error() string { return e.code }
+
+func projectFailure(phase, code string) error {
+	return &projectSetupFailure{phase: phase, code: code}
+}
+
+// Classify only fixed diagnostic categories; never return CLI output, which
+// may contain device codes, request URLs or other private material.
+func projectStartFailure(out Output, err error) string {
+	if err != nil {
+		return setupevent.CodeProjectCLIUnavailable
+	}
+	if out.Truncated {
+		return setupevent.CodeAuthStartFailed
+	}
+	diagnostic := strings.ToLower(string(out.Stdout) + "\n" + string(out.Stderr))
+	for _, marker := range []string{"x509:", "certificate verify failed", "certificate signed by unknown authority", "tls handshake"} {
+		if strings.Contains(diagnostic, marker) {
+			return setupevent.CodeProjectAuthTLSFailed
+		}
+	}
+	for _, marker := range []string{"no such host", "network is unreachable", "connection refused", "connection reset", "proxyconnect", "i/o timeout", "server unreachable"} {
+		if strings.Contains(diagnostic, marker) {
+			return setupevent.CodeProjectAuthNetworkFailed
+		}
+	}
+	return setupevent.CodeAuthStartFailed
+}
+
 func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) error) error {
 	base := []string{"auth", "login", "--host=" + p.Config.ProjectHost, "--device-code", "--format=json"}
 	out, err := p.Runner.Run(ctx, "project", append(append([]string{}, base...), "--phase=init"), nil)
 	if err != nil || out.Code != 0 || out.Truncated {
-		return errors.New("could not start Project device authorization; check the installed meegle CLI and tenant host")
+		return projectFailure(setupevent.PhaseStartAuthorization, projectStartFailure(out, err))
 	}
 	var device struct {
 		URL      string `json:"verification_uri_complete"`
+		BasicURL string `json:"verification_uri"`
+		UserCode string `json:"user_code"`
 		Code     string `json:"device_code"`
 		ClientID string `json:"client_id"`
 		Expires  int    `json:"expires_in"`
 		Interval int    `json:"interval"`
 	}
-	if json.Unmarshal(out.Stdout, &device) != nil || device.URL == "" || device.Code == "" || device.ClientID == "" || device.Expires <= 0 || device.Expires > 1200 {
-		return errors.New("unsupported Project device authorization response")
+	if json.Unmarshal(out.Stdout, &device) != nil || device.Code == "" || device.ClientID == "" || device.Expires <= 0 || device.Expires > 1200 {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
+	}
+	userCode := ""
+	if device.URL == "" {
+		if device.BasicURL == "" || !setupevent.AuthorizationCode(device.UserCode) {
+			return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
+		}
+		device.URL, userCode = device.BasicURL, device.UserCode
 	}
 	if device.Interval < 1 {
 		device.Interval = 5
 	}
 	if device.Interval > 60 {
-		return errors.New("unsupported Project authorization interval")
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
 	}
-	if err = write(setupevent.Event{Type: "authorization", VerificationURL: device.URL, ExpiresAt: time.Now().Add(time.Duration(device.Expires) * time.Second)}); err != nil {
+	if err = write(setupevent.Event{Type: "authorization", VerificationURL: device.URL, UserCode: userCode, ExpiresAt: time.Now().Add(time.Duration(device.Expires) * time.Second)}); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
@@ -200,17 +245,26 @@ func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) 
 	interval := time.Duration(device.Interval) * time.Second
 	for {
 		if err := p.wait(ctx, interval); err != nil {
-			return err
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return projectFailure(setupevent.PhaseComplete, setupevent.CodeSetupTimeout)
+			}
+			return projectFailure(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
 		}
 		out, err := p.Runner.Run(ctx, "project", args, nil)
-		if err != nil || out.Code != 0 || out.Truncated {
-			return errors.New("Project authorization failed; retry explicitly after checking network and tenant access")
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return projectFailure(setupevent.PhaseComplete, setupevent.CodeSetupTimeout)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err != nil || out.Truncated {
+			return projectFailure(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
 		}
 		var status struct {
 			Status string `json:"status"`
 		}
 		if json.Unmarshal(out.Stdout, &status) != nil {
-			return errors.New("unsupported Project authorization poll response")
+			return projectFailure(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
 		}
 		switch status.Status {
 		case "pending", "authorization_pending":
@@ -219,19 +273,52 @@ func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) 
 			interval += 5 * time.Second
 			continue
 		case "ok":
-			out, err = p.Runner.Run(ctx, "project", []string{"auth", "status", "--format=json"}, nil)
-			var verified struct {
-				Authenticated bool `json:"authenticated"`
+			verified, code := p.verifyProjectUser(ctx)
+			if err := ctx.Err(); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					return projectFailure(setupevent.PhaseComplete, setupevent.CodeSetupTimeout)
+				}
+				return err
 			}
-			_ = json.Unmarshal(out.Stdout, &verified)
-			if err != nil || out.Code != 0 || !verified.Authenticated {
-				return errors.New("Project login was not verified; network/server failure is not proof that reauthentication is required")
+			if !verified {
+				return projectFailure(setupevent.PhaseVerifyAuthorization, code)
 			}
 			return nil
 		default:
-			return errors.New("Project authorization was declined or expired; start a new setup explicitly")
+			return projectFailure(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
 		}
 	}
+}
+
+// Verify only after this flow's poll reports success. A pre-existing login
+// must never turn a declined or failed new authorization into success.
+func (p *Plugin) verifyProjectUser(ctx context.Context) (bool, string) {
+	delays := []time.Duration{0, 500 * time.Millisecond, time.Second}
+	for attempt, delay := range delays {
+		if delay > 0 {
+			if err := p.wait(ctx, delay); err != nil {
+				return false, setupevent.CodeAuthVerifyNetworkFailed
+			}
+		}
+		out, err := p.Runner.Run(ctx, "project", []string{"auth", "status", "--format=json"}, nil)
+		if ctx.Err() != nil {
+			return false, setupevent.CodeAuthVerifyNetworkFailed
+		}
+		var status struct {
+			Authenticated *bool `json:"authenticated"`
+		}
+		parsed := !out.Truncated && json.Unmarshal(out.Stdout, &status) == nil && status.Authenticated != nil
+		if err == nil && out.Code == 0 && parsed && *status.Authenticated {
+			return true, ""
+		}
+		if err == nil && out.Code == 1 && parsed && !*status.Authenticated {
+			return false, setupevent.CodeAuthVerifyIdentityFailed
+		}
+		if attempt+1 == len(delays) {
+			return false, setupevent.CodeAuthVerifyNetworkFailed
+		}
+	}
+	return false, setupevent.CodeAuthVerifyNetworkFailed
 }
 
 func prepareLarkStore(home string) error {

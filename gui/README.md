@@ -48,9 +48,15 @@ MyGo's CLI packages and signs the app:
 ```sh
 cd gui
 go run ./tools/mkicon -o resources/icon.png
-go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
-go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
+CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
+CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
 ```
+
+On macOS, Computer Use needs CGO plus Accessibility and Screen Recording
+permissions. The Computer Use picker has explicit buttons to request them and
+open Privacy & Security; restart the app after granting access if macOS asks.
+Window capture currently requires macOS 14 or later. A GUI built without CGO
+cannot enable the macOS Computer Use backend merely by changing permissions.
 
 The app is named **Golder GUI** (slug `golder-gui`), so its Linux executable
 never collides with the `golder` CLI. The Agent runtime is linked into the GUI;
@@ -68,6 +74,11 @@ Two optional surfaces need runtime pieces:
 
 ## What the window does
 
+- Files: browse within the current project, show hidden files with the eye
+  button or Cmd/Ctrl+Shift+Period, and edit syntax-highlighted text with Save
+  (Cmd/Ctrl+S). Saves use the operator's normal filesystem permissions and
+  refuse to overwrite files changed since opening; binary files and previews
+  truncated at 512 KiB cannot be edited.
 - sessions: project/path grouping, new/resume/rename/archive/delete/export, and
   one shared OS writer lease across GUI, TUI, REPL and headless runs (`flock` on
   Unix, `LockFileEx` on Windows); a conflicting GUI opens the transcript
