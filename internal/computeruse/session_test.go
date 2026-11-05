@@ -84,3 +84,17 @@ func TestPauseCancelsInFlightOperation(t *testing.T) {
 		t.Fatal("pause did not persist")
 	}
 }
+
+func TestTargetLossDuringOperationPausesSession(t *testing.T) {
+	s := New(&testBackend{})
+	ctx := context.Background()
+	if err := s.Start(ctx, Target{ID: "window"}, Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Do(ctx, true, func(context.Context, Backend, Target) error {
+		return ErrTargetLost
+	})
+	if !errors.Is(err, ErrTargetLost) || !s.Status().Paused {
+		t.Fatalf("target loss during operation: status=%+v err=%v", s.Status(), err)
+	}
+}

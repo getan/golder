@@ -16,6 +16,7 @@ import (
 
 	setupevent "github.com/getan/golder/extension/setup"
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/privatepath"
 	"github.com/getan/golder/internal/seatbelt"
@@ -135,7 +136,10 @@ func sensitivePane(window tuiosctl.Window) bool {
 	if _, ok := authorizationPanes.Load(window.WindowID); ok {
 		return true
 	}
-	return strings.HasPrefix(window.DisplayName, authorizationPanePrefix) || strings.Contains(window.Title, authorizationPanePrefix)
+	return computeruse.IsOperatorPane(window.WindowID) ||
+		strings.HasPrefix(window.DisplayName, computeruse.OperatorPanePrefix) ||
+		strings.Contains(window.Title, computeruse.OperatorPanePrefix) ||
+		strings.HasPrefix(window.DisplayName, authorizationPanePrefix) || strings.Contains(window.Title, authorizationPanePrefix)
 }
 
 func refuseSensitivePane(ctx context.Context, c *tuiosctl.Client, target string) error {

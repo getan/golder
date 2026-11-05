@@ -99,3 +99,42 @@ func TestComputerToolRequiresExactConfirmationForControl(t *testing.T) {
 		t.Fatalf("stale confirmed call: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
 }
+
+type computerFillBackend struct{ value string }
+
+func (*computerFillBackend) Validate(context.Context, computeruse.Target, bool) error { return nil }
+func (*computerFillBackend) Close() error                                             { return nil }
+func (*computerFillBackend) Snapshot(context.Context, computeruse.Target) (string, []computeruse.Element, bool, error) {
+	return "backend-snapshot", []computeruse.Element{{Ref: "@e1", Role: "text", Enabled: true, Editable: true}}, false, nil
+}
+func (*computerFillBackend) SupportsAction(action string) bool { return action == "fill" }
+func (b *computerFillBackend) Act(_ context.Context, _ computeruse.Target, _, _, _, text string) error {
+	b.value = text
+	return nil
+}
+
+func TestComputerFillRequiresExactConfirmation(t *testing.T) {
+	backend := &computerFillBackend{}
+	s := computeruse.New(backend)
+	if err := s.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ComputerTool{Session: s}
+	if !slices.Contains(schemaEnum(t, tool.Schema()), "fill") {
+		t.Fatal("editable action was not advertised")
+	}
+	snapshot, err := s.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"action": "fill", "snapshot_id": snapshot.ID, "ref": "@e1", "text": "世界"})
+	result, err := tool.Execute(context.Background(), "fill", raw, nil)
+	if err != nil || !result.IsError || backend.value != "" || !tool.RequiresOperatorConfirmationFor(raw) {
+		t.Fatalf("unconfirmed fill: result=%+v value=%q err=%v", result, backend.value, err)
+	}
+	ctx := agentcore.WithOperatorConfirmation(context.Background(), "fill", "computer", raw)
+	result, err = tool.Execute(ctx, "fill", raw, nil)
+	if err != nil || result.IsError || backend.value != "世界" {
+		t.Fatalf("confirmed fill: result=%+v value=%q err=%v", result, backend.value, err)
+	}
+}

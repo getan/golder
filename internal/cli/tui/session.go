@@ -36,6 +36,7 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/compactionlog"
+	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/dream"
@@ -58,16 +59,19 @@ import (
 // (curLeaf / persisted) so each turn is persisted as a branch rather than a
 // flattening rewrite.
 type runSession struct {
-	store      *session.Store
-	writer     *session.WriterLock
-	header     session.SessionHeader
-	agentCtx   *agentcore.AgentContext
-	live       *cli.LiveConfig
-	reg        *agenttool.ToolRegistry
-	extensions *extensions.Manager
-	reminders  *runtime.ReminderRegistry
-	schedule   *agenttool.Schedule
-	creds      *provider.CredentialStore
+	store         *session.Store
+	writer        *session.WriterLock
+	header        session.SessionHeader
+	agentCtx      *agentcore.AgentContext
+	live          *cli.LiveConfig
+	reg           *agenttool.ToolRegistry
+	extensions    *extensions.Manager
+	computerSetup *computerSetup
+	computerTool  *agenttool.ComputerTool
+	computerPane  *computeruse.PaneHandle
+	reminders     *runtime.ReminderRegistry
+	schedule      *agenttool.Schedule
+	creds         *provider.CredentialStore
 	// snap is the shared file-snapshot recorder backing /rewind (nil when the
 	// file tools are disabled). Each completed turn commits a restore point so
 	// /rewind can roll files and the conversation back together.
@@ -462,6 +466,11 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		fmt.Fprintf(os.Stderr, "golder: pane control registration unavailable: %v\n", err)
 	}
 	prompts.RegisterPaneCommand(s.slash, opts.Tools)
+	s.slash.AddBuiltin(runtime.SlashCommand{
+		Name: "computer", Description: "select a desktop window and open its separate operator pane",
+		ArgumentHint: "[stop]", Category: runtime.CategorySession,
+		Action: func(string) string { return "Use /computer to select a window or /computer stop to revoke access." },
+	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}
 	// The multiplexer around this pane learns which conversation it holds
@@ -1221,6 +1230,7 @@ func (s *runSession) adopt(h session.SessionHeader, entries []session.Entry) ([]
 	// Re-resolve the context budget against the provider/model actually in use,
 	// so the gauge and the auto-compaction threshold follow the live config.
 	s.live.RefreshContextWindow()
+	s.stopComputer()
 	s.header = h
 	if nextWriter != nil {
 		old := s.writer

@@ -192,6 +192,15 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 	if operationCtx.Err() != nil {
 		return operationCtx.Err()
 	}
+	if errors.Is(err, ErrTargetLost) {
+		s.mu.Lock()
+		if s.sequence == sequence && s.status.Active {
+			s.status.Paused = true
+			s.sequence++
+			s.snapshot = nil
+		}
+		s.mu.Unlock()
+	}
 	return err
 }
 

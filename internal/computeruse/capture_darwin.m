@@ -10,14 +10,16 @@
 #include <string.h>
 #include <math.h>
 
-// Never offer system authorization surfaces or another Golder GUI as targets.
-// A process without a verifiable application bundle fails closed.
+// Never offer system authorization surfaces, another Golder GUI, or known
+// terminal hosts that could contain Golder's operator-only panes. Terminal
+// automation belongs to the dedicated pane tool. A process without a
+// verifiable application bundle fails closed.
 int cu_app_allowed(int32_t pid) {
 	@autoreleasepool {
 		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
 		NSString *bundle = app.bundleIdentifier.lowercaseString;
 		if (!bundle || bundle.length == 0) return 0;
-		NSArray *denied = @[@"dev.golder.gui", @"com.apple.systempreferences", @"com.apple.securityagent", @"com.apple.loginwindow", @"com.apple.systemuiserver", @"com.apple.coreservicesuiagent"];
+		NSArray *denied = @[@"dev.golder.gui", @"com.apple.systempreferences", @"com.apple.securityagent", @"com.apple.loginwindow", @"com.apple.systemuiserver", @"com.apple.coreservicesuiagent", @"com.apple.terminal", @"com.googlecode.iterm2", @"net.kovidgoyal.kitty", @"com.github.wez.wezterm", @"com.mitchellh.ghostty", @"org.alacritty", @"dev.warp"];
 		for (NSString *prefix in denied) {
 			if ([bundle isEqualToString:prefix] || [bundle hasPrefix:[prefix stringByAppendingString:@"."]]) return 0;
 		}

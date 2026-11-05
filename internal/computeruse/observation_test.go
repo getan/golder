@@ -12,7 +12,7 @@ func TestBoundedSnapshotRedactsSecureValues(t *testing.T) {
 	items := make([]Element, MaxSnapshotNodes+1)
 	items[0] = Element{Ref: "@e1", Secure: true, Value: "secret", Name: strings.Repeat("中", 300)}
 	snapshot := BoundedSnapshot("snapshot-1", items)
-	if !snapshot.Truncated || len(snapshot.Elements) != MaxSnapshotNodes || snapshot.Elements[0].Value != "" {
+	if !snapshot.Truncated || len(snapshot.Elements) != MaxSnapshotNodes || snapshot.Elements[0].Value != "" || snapshot.Elements[0].Name != "" {
 		t.Fatalf("unexpected bounded snapshot: %+v", snapshot.Elements[0])
 	}
 	if len(snapshot.Elements[0].Name) > MaxNodeTextBytes || !utf8.ValidString(snapshot.Elements[0].Name) {

@@ -59,6 +59,7 @@ func Run(opts Options) (runErr error) {
 	// commands are not orphaned when the TUI quits.
 	defer run.KillShellSessions(opts.Tools)
 	defer agenttool.ClosePaneAgent(opts.Tools)
+	defer s.stopComputer()
 	// Clear this pane's agent in the multiplexer around it (tuios or herdr) on
 	// the way out, and flush the release before the process exits. Deferred
 	// here rather than at the three quit call sites because every path out of

@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
+	"unicode/utf8"
 )
 
 // SemanticBackend may act only on the backend snapshot and ref passed here;
@@ -18,7 +20,7 @@ type SemanticBackend interface {
 type snapshotLease struct {
 	publicID  string
 	backendID string
-	refs      map[string]bool
+	refs      map[string]Element
 }
 
 func (s *Session) SupportsSemantic(action string) bool {
@@ -57,12 +59,13 @@ func (s *Session) Observe(ctx context.Context) (Snapshot, error) {
 		}
 		result = BoundedSnapshot(hex.EncodeToString(nonce[:]), elements)
 		result.Truncated = result.Truncated || truncated
-		refs := make(map[string]bool, len(result.Elements))
+		refs := make(map[string]Element, len(result.Elements))
 		for _, element := range result.Elements {
-			if element.Ref == "" || refs[element.Ref] {
+			_, duplicate := refs[element.Ref]
+			if element.Ref == "" || duplicate {
 				return errors.New("computer use backend returned an empty or duplicate ref")
 			}
-			refs[element.Ref] = true
+			refs[element.Ref] = element
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -93,6 +96,9 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 	if len(text) > 4096 {
 		return errors.New("computer use input exceeds the size limit")
 	}
+	if !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
+		return errors.New("computer use input must be valid UTF-8 without NUL")
+	}
 	return s.Do(ctx, true, func(ctx context.Context, backend Backend, target Target) error {
 		performer, ok := backend.(SemanticBackend)
 		if !ok {
@@ -103,12 +109,20 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		}
 		s.mu.Lock()
 		lease := s.snapshot
-		if lease == nil || snapshotID == "" || lease.publicID != snapshotID || !lease.refs[ref] {
+		if lease == nil || snapshotID == "" || lease.publicID != snapshotID {
+			s.mu.Unlock()
+			return ErrStaleObservation
+		}
+		element, found := lease.refs[ref]
+		if !found {
 			s.mu.Unlock()
 			return ErrStaleObservation
 		}
 		s.snapshot = nil
 		s.mu.Unlock()
+		if element.Secure || !element.Enabled || (action == "fill" && !element.Editable) {
+			return ErrNotAllowed
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}

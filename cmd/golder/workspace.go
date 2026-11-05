@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/cli/workspacecmd"
+	"github.com/getan/golder/internal/computeruse"
 	workspacehost "github.com/getan/golder/internal/workspace"
 )
 
@@ -66,4 +67,18 @@ func runBrowse(args []string, in *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "golder browse:", report.Message())
 	}
 	return 1
+}
+
+func runComputerPane(args []string, in, out *os.File, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "golder computer-pane: internal helper requires its owner socket")
+		return 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := computeruse.RunOperatorPane(ctx, args[0], in, out); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintln(stderr, "golder computer-pane:", err)
+		return 1
+	}
+	return 0
 }

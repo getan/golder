@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/panecontrol"
 	"github.com/getan/golder/internal/tuiosctl"
 )
@@ -130,12 +131,13 @@ func TestPaneClaimRejectsProtectedTargetsBeforeReview(t *testing.T) {
 				{"window_id": "agent", "display_name": "agent", "agent_state": "idle"},
 				{"window_id": "browser", "display_name": "browser", "foreground_cmd": "kitty-browse"},
 				{"window_id": "approval", "display_name": authorizationPanePrefix + " consent"},
+				{"window_id": "computer", "display_name": computeruse.OperatorPanePrefix + "fixture"},
 			}}
 		}
 		return map[string]any{"type": "ok"}
 	}
 	tool := NewTuiosTool(t.TempDir(), true)
-	for _, id := range []string{"w1", "agent", "browser", "approval"} {
+	for _, id := range []string{"w1", "agent", "browser", "approval", "computer"} {
 		raw := json.RawMessage(`{"action":"claim","window":"` + id + `","scope":"session","host_control":true}`)
 		if _, err := tool.PrepareCall(context.Background(), raw); err == nil {
 			t.Errorf("protected target %q reached review", id)

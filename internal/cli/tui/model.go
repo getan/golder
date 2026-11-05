@@ -1010,6 +1010,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// it points at before this event reads or moves its endpoints.
 	m.syncSeedShift()
 	switch msg := msg.(type) {
+	case computerTargetsMsg:
+		return m.computerTargetsReady(msg)
+	case computerStartedMsg:
+		return m.computerStarted(msg)
+	case computerEndedMsg:
+		return m.computerEnded(msg)
 	case extensionDoneMsg:
 		return m.extensionDone(msg)
 	case extensionSetupProgressMsg:
@@ -1681,6 +1687,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		wasInterrupted := m.interruptRequested
 		noticePrinted := m.interruptNoticePrinted
 		m.running = false
+		if m.session != nil && m.session.computerTool != nil && !m.session.computerTool.Session.Status().Active {
+			m.session.removeComputerTool()
+		}
 		m.runCh = nil
 		m.interruptRequested = false
 		m.interruptNoticePrinted = false
@@ -1963,6 +1972,9 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// the quit (a picker is opened by a submitted command, so the box is
 			// empty by then), leaving a selection box only Esc could dismiss and a
 			// second press that quit the program outright.
+			if (m.menu.pickKind == "computer-target" || m.menu.pickKind == "computer-grant") && m.session != nil {
+				m.session.cancelComputerSetup()
+			}
 			m.menu.close()
 			m.relayout()
 			return m, nil
@@ -2361,6 +2373,12 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			kind = "model"
 		}
 		item, ok := m.menu.pickCurrent()
+		if kind == "computer-target" && ok {
+			return m.chooseComputerTarget(item)
+		}
+		if kind == "computer-grant" && ok {
+			return m.chooseComputerGrant(item)
+		}
 		if kind == "extensions" && ok {
 			return m.chooseExtension(item)
 		}
@@ -2486,6 +2504,9 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 	// in-flight run is never torn down.
 	if line == "/resume" || strings.HasPrefix(line, "/resume ") {
 		return m.resumeSession(strings.TrimSpace(strings.TrimPrefix(line, "/resume")))
+	}
+	if line == "/computer" || strings.HasPrefix(line, "/computer ") {
+		return m.runComputer(line)
 	}
 	if extensionCommand(line) {
 		kind := strings.TrimPrefix(commandToken(line), "/")

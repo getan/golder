@@ -17,8 +17,9 @@ const (
 	MaxSnapshotBytes = 32 << 10
 )
 
-// Element represents only bounded, non-sensitive accessibility data. Platform
-// backends must never populate Value for password or secure text controls.
+// Element represents only bounded, non-sensitive accessibility data. Secure
+// includes password controls and nodes whose safety cannot be established;
+// backends must never populate their Name or Value.
 type Element struct {
 	Ref      string `json:"ref"`
 	Role     string `json:"role"`
@@ -57,6 +58,7 @@ func BoundedSnapshot(id string, elements []Element) Snapshot {
 		e.Role = boundedText(e.Role)
 		e.Name = boundedText(e.Name)
 		if e.Secure {
+			e.Name = ""
 			e.Value = ""
 		} else {
 			e.Value = boundedText(e.Value)

@@ -256,6 +256,9 @@ func main() {
 			// pane identity, socket selection and cleanup.
 			diagtrace.Event("main", "mode browse")
 			exit(runBrowse(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+		case "computer-pane":
+			// Internal operator-only helper; the TUI owns its session and socket.
+			exit(runComputerPane(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 		}
 	}
 	// Only this entry point promises that the executable implements `browse`.

@@ -166,8 +166,25 @@ typedef struct {
 	char name[512];
 	char value[512];
 	int enabled;
+	int editable;
 	int secure;
 } cu_ax_node;
+
+static int cu_ax_text_role(CFTypeRef role) {
+	return role && CFGetTypeID(role) == CFStringGetTypeID() &&
+		(CFEqual(role, CFSTR("AXTextField")) || CFEqual(role, CFSTR("AXTextArea")));
+}
+
+// A text control without a readable subrole cannot be distinguished from a
+// secure field, and an element without a readable role cannot be classified.
+static int cu_ax_secure_or_unknown(CFTypeRef role, CFTypeRef subrole) {
+	if (!role || CFGetTypeID(role) != CFStringGetTypeID()) return 1;
+	if (CFEqual(role, CFSTR("AXSecureTextField"))) return 1;
+	if (subrole && CFGetTypeID(subrole) == CFStringGetTypeID()) {
+		return CFEqual(subrole, CFSTR("AXSecureTextField"));
+	}
+	return cu_ax_text_role(role);
+}
 
 static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, int *count, int depth, int ancestor_secure, int *truncated) {
 	if (!element || *count >= cap || depth > 16) { *truncated = 1; return; }
@@ -175,8 +192,7 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 	CFTypeRef role = NULL, subrole = NULL, title = NULL, enabled = NULL, value = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
 	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	int secure = ancestor_secure || (role && CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, CFSTR("AXSecureTextField"))) ||
-		(subrole && CFGetTypeID(subrole) == CFStringGetTypeID() && CFEqual(subrole, CFSTR("AXSecureTextField")));
+	int secure = ancestor_secure || cu_ax_secure_or_unknown(role, subrole);
 	cu_ax_node *node = &nodes[(*count)++];
 	node->element = (AXUIElementRef)CFRetain(element);
 	node->secure = secure;
@@ -192,6 +208,10 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 		if (role && CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, CFSTR("AXStaticText"))) {
 			AXUIElementCopyAttributeValue(element, kAXValueAttribute, &value);
 			cu_string(value, node->value, sizeof(node->value));
+		}
+		Boolean settable = false;
+		if (cu_ax_text_role(role) && AXUIElementIsAttributeSettable(element, kAXValueAttribute, &settable) == kAXErrorSuccess && settable) {
+			node->editable = 1;
 		}
 	}
 	if (AXUIElementCopyAttributeValue(element, kAXEnabledAttribute, &enabled) == kAXErrorSuccess && enabled && CFGetTypeID(enabled) == CFBooleanGetTypeID()) {
@@ -239,8 +259,7 @@ static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int dep
 	CFTypeRef role = NULL, subrole = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
 	AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole);
-	int secure = (role && CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, CFSTR("AXSecureTextField"))) ||
-		(subrole && CFGetTypeID(subrole) == CFStringGetTypeID() && CFEqual(subrole, CFSTR("AXSecureTextField")));
+	int secure = cu_ax_secure_or_unknown(role, subrole);
 	if (role) CFRelease(role);
 	if (subrole) CFRelease(subrole);
 	if (secure) return 0;
@@ -260,7 +279,10 @@ static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int dep
 
 static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
 	if (!expected || !element || cu_cancelled(flag)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 1);
+	// AXPress is addressed to the pinned element, not to the foreground app.
+	// Requiring focus would make an operator's own terminal pane steal focus
+	// from the target. Physical keyboard/mouse injection still requires focus.
+	AXUIElementRef window = cu_ax_window(selected, 0);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	int budget = 128;
 	int found = cu_ax_contains(window, element, 0, &budget, flag);
@@ -276,7 +298,43 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 		CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), kAXPressAction);
 	if (actions) CFRelease(actions);
 	if (!allowed || cu_cancelled(flag)) return 0;
+	window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	budget = 128;
+	found = cu_ax_contains(window, element, 0, &budget, flag);
+	CFRelease(window);
+	if (!found || cu_cancelled(flag)) return 0;
 	return AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess;
+}
+
+static int cu_ax_fill(cu_window selected, AXUIElementRef expected, AXUIElementRef element, const char *text, size_t length, cu_cancel_flag *flag) {
+	if (!expected || !element || !text || length > 4096 || cu_cancelled(flag)) return 0;
+	AXUIElementRef window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	int budget = 128;
+	int found = cu_ax_contains(window, element, 0, &budget, flag);
+	CFRelease(window);
+	if (!found || cu_cancelled(flag)) return 0;
+	CFTypeRef role = NULL, enabled = NULL;
+	Boolean settable = false;
+	int allowed = AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) == kAXErrorSuccess && cu_ax_text_role(role) &&
+		AXUIElementCopyAttributeValue(element, kAXEnabledAttribute, &enabled) == kAXErrorSuccess && enabled &&
+		CFGetTypeID(enabled) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)enabled) &&
+		AXUIElementIsAttributeSettable(element, kAXValueAttribute, &settable) == kAXErrorSuccess && settable;
+	if (role) CFRelease(role);
+	if (enabled) CFRelease(enabled);
+	if (!allowed || cu_cancelled(flag)) return 0;
+	CFStringRef value = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
+	if (!value) return 0;
+	window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); CFRelease(value); return 0; }
+	budget = 128;
+	found = cu_ax_contains(window, element, 0, &budget, flag);
+	CFRelease(window);
+	if (!found || cu_cancelled(flag)) { CFRelease(value); return 0; }
+	AXError result = AXUIElementSetAttributeValue(element, kAXValueAttribute, value);
+	CFRelease(value);
+	return result == kAXErrorSuccess;
 }
 */
 import "C"
@@ -287,7 +345,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -346,7 +406,10 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	return out, nil
 }
 
-func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, control bool) error {
+// The current macOS control backend offers only target-addressed AX actions.
+// Future physical input must independently prove foreground focus and geometry
+// immediately before injection; this identity check does not grant that right.
+func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -360,13 +423,9 @@ func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, control 
 	if C.cu_window_exists(window.window_id, window.pid, window.start_sec, window.start_usec) == 0 {
 		return ErrTargetLost
 	}
-	focus := C.int(0)
-	if control {
-		focus = 1
-	}
-	current := C.cu_ax_window(window, focus)
+	current := C.cu_ax_window(window, 0)
 	if current == 0 {
-		return errors.New("macOS AX window unavailable, ambiguous, unfocused, or not authorized")
+		return errors.New("macOS AX window unavailable, ambiguous, or not authorized")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -433,7 +492,7 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	var truncated C.int
 	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated))
 	if count < 0 {
-		return "", nil, false, errors.New("macOS AX window unavailable, ambiguous, or not authorized")
+		return "", nil, false, fmt.Errorf("%w: macOS AX window unavailable, ambiguous, or not authorized", ErrTargetLost)
 	}
 	nodes := unsafe.Slice(buffer, count)
 	refs := make(map[string]C.AXUIElementRef, count)
@@ -441,7 +500,7 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	for i := range nodes {
 		ref := fmt.Sprintf("@e%d", i+1)
 		refs[ref] = nodes[i].element
-		elements = append(elements, Element{Ref: ref, Role: C.GoString(&nodes[i].role[0]), Name: C.GoString(&nodes[i].name[0]), Value: C.GoString(&nodes[i].value[0]), Enabled: nodes[i].enabled != 0, Secure: nodes[i].secure != 0})
+		elements = append(elements, Element{Ref: ref, Role: C.GoString(&nodes[i].role[0]), Name: C.GoString(&nodes[i].name[0]), Value: C.GoString(&nodes[i].value[0]), Enabled: nodes[i].enabled != 0, Editable: nodes[i].editable != 0, Secure: nodes[i].secure != 0})
 	}
 	if err := ctx.Err(); err != nil {
 		for _, ref := range refs {
@@ -460,13 +519,15 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	return c.snapshotID, elements, truncated != 0, nil
 }
 
-func (*MacWindowCatalog) SupportsAction(action string) bool { return action == "click" }
+func (*MacWindowCatalog) SupportsAction(action string) bool {
+	return action == "click" || action == "fill"
+}
 
-// Act executes AXPress on a node from the bound backend snapshot. AX target,
-// focus, descendant membership and supported actions are checked again in C
-// immediately before the OS request. This cannot undo an already-sent action.
+// Act executes a targeted AXPress or non-secure AXValue replacement on a node
+// from the bound backend snapshot. Target and membership are rechecked before
+// the OS request; cancellation cannot undo an already-sent action.
 func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, ref, action, text string) error {
-	if action != "click" || text != "" {
+	if (action != "click" && action != "fill") || (action == "click" && text != "") || len(text) > 4096 || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') {
 		return ErrNotAllowed
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
@@ -488,7 +549,14 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
-	pressed := C.cu_ax_press(window, c.pinned[target.ID], element, flag)
+	var performed C.int
+	if action == "click" {
+		performed = C.cu_ax_press(window, c.pinned[target.ID], element, flag)
+	} else {
+		value := C.CString(text)
+		performed = C.cu_ax_fill(window, c.pinned[target.ID], element, value, C.size_t(len(text)), flag)
+		C.free(unsafe.Pointer(value))
+	}
 	if !stop() {
 		<-done
 	}
@@ -497,8 +565,8 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if pressed == 0 {
-		return errors.New("AX press refused: target changed, focus changed, or action unavailable")
+	if performed == 0 {
+		return fmt.Errorf("%w: AX action refused because the target changed, the node is secure or the action is unavailable", ErrTargetLost)
 	}
 	return nil
 }
