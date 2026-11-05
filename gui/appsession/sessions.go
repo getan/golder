@@ -147,6 +147,9 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("resume: empty session id")
 	}
+	if c.IsRunning() {
+		return ErrBusy
+	}
 	if err := c.persist(); err != nil {
 		return fmt.Errorf("save current session: %w", err)
 	}
@@ -161,6 +164,7 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	c.StopComputer()
 	if strings.TrimSpace(h.Cwd) != "" {
 		target, targetErr := canonicalProjectPath(h.Cwd)
 		if targetErr != nil {
@@ -211,6 +215,7 @@ func (c *Controller) NewSessionInProject(ctx context.Context, path string) error
 	if c.IsRunning() {
 		return ErrBusy
 	}
+	c.StopComputer()
 	if err := c.persist(); err != nil {
 		return fmt.Errorf("save current session: %w", err)
 	}

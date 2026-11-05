@@ -139,15 +139,16 @@ type Controller struct {
 	persisted int
 	compacted bool
 
-	items      []Item
-	index      map[string]int
-	lock       *sessionLock
-	readOnly   bool
-	writerInfo session.WriterInfo
-	seq        uint64
-	events     chan Event
-	done       chan struct{}
-	closed     bool
+	items        []Item
+	index        map[string]int
+	lock         *sessionLock
+	readOnly     bool
+	writerInfo   session.WriterInfo
+	seq          uint64
+	events       chan Event
+	done         chan struct{}
+	closed       bool
+	computerTool *agenttool.ComputerTool
 
 	pending      []*pendingApproval
 	nextApproval int
@@ -451,11 +452,15 @@ func (c *Controller) Close() error {
 	cancel := c.cancel
 	pending := c.pending
 	lock := c.lock
+	computer := c.computerTool
 	c.lock = nil
 	c.pending = nil
 	c.mu.Unlock()
 
 	close(c.done)
+	if computer != nil {
+		computer.Session.Stop()
+	}
 	if cancel != nil {
 		cancel()
 	}
@@ -467,6 +472,9 @@ func (c *Controller) Close() error {
 	}
 	c.runWG.Wait()
 	_ = c.persist()
+	if computer != nil {
+		_ = computer.Session.Close()
+	}
 	lock.release()
 	agenttool.ClosePaneAgent(c.opt.Tools)
 	run.KillShellSessions(c.opt.Tools)

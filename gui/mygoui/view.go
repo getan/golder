@@ -22,6 +22,23 @@ const (
 func (a *App) view(c *ui.Context) {
 	a.applyDisplayPreferences(c)
 	t := c.Theme()
+	if !a.computerPickerOpen && a.computerSetupStop != nil {
+		a.computerSetupStop()
+		a.computerSetupStop = nil
+		a.computerSetupSeq++
+		a.computerBusy = false
+		if a.computerBackend != nil {
+			backend := a.computerBackend
+			a.computerBackend = nil
+			go backend.Close()
+		}
+	}
+	if !a.computerPickerOpen && a.computerBackend != nil && a.computerSession == nil {
+		backend := a.computerBackend
+		a.computerBackend = nil
+		a.computerTargets = nil
+		go backend.Close()
+	}
 	if !a.settingsOpen {
 		// The password field is write-only. Dismissing Settings must not retain a
 		// value in long-lived view state.
@@ -69,6 +86,9 @@ func (a *App) view(c *ui.Context) {
 			if a.browserPanelOpen {
 				a.browserPanel(c)
 			}
+			if a.computerOpen {
+				a.computerPanel(c)
+			}
 		})
 		a.bannerView(c)
 	})
@@ -79,6 +99,7 @@ func (a *App) view(c *ui.Context) {
 	a.sessionRenameModal(c)
 	a.sessionDeleteModal(c)
 	a.browsersModal(c)
+	a.computerPicker(c)
 }
 
 // titleBar shows the project, the session, and the page-level actions.
@@ -114,9 +135,13 @@ func (a *App) titleBar(c *ui.Context) {
 			a.changesOpen = !a.changesOpen
 			if a.changesOpen {
 				a.filesOpen = false
+				a.hideComputerPanel()
 				a.closeBrowserPanel()
 				a.refreshChanges()
 			}
+		}
+		if compactIconButton(c, "computer", computerMonochromeIcon, "Computer Use", "Select or view a controlled application window").Clicked() {
+			a.toggleComputerPanel()
 		}
 		browserTip := "Browser · no active page"
 		if len(a.browsers) > 0 {
@@ -124,6 +149,7 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		if compactIconButton(c, "browser", browserMonochromeIcon, "Browser", browserTip).Clicked() {
 			a.filesOpen = false
+			a.hideComputerPanel()
 			if a.browserPanelOpen {
 				a.closeBrowserPanel()
 			} else if len(a.browsers) == 1 {

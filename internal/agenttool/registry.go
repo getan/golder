@@ -103,6 +103,21 @@ func (r *ToolRegistry) Get(name string) (agentcore.AgentTool, bool) {
 	return t, ok
 }
 
+// UnregisterIf removes the expected tool and its compiled validation state
+// atomically, without removing a replacement registered under the same name.
+// expected must be a comparable tool value, such as a pointer.
+func (r *ToolRegistry) UnregisterIf(name string, expected agentcore.AgentTool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, ok := r.tools[name]; !ok || current != expected {
+		return false
+	}
+	delete(r.tools, name)
+	delete(r.compiled, name)
+	delete(r.shapes, name)
+	return true
+}
+
 // List returns all registered tools sorted by name (stable ordering for
 // deterministic provider tool declarations).
 func (r *ToolRegistry) List() []agentcore.AgentTool {

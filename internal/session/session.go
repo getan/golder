@@ -613,6 +613,18 @@ func redactHeader(header *SessionHeader) {
 }
 
 func redactMessageList(seam redact.Seam, msgs agentcore.MessageList) agentcore.MessageList {
+	for i, message := range msgs {
+		clean, changed := omitComputerImages(message)
+		if changed {
+			copied := append(agentcore.MessageList(nil), msgs...)
+			copied[i] = clean
+			for j := i + 1; j < len(copied); j++ {
+				copied[j], _ = omitComputerImages(copied[j])
+			}
+			msgs = copied
+			break
+		}
+	}
 	r := redact.Default()
 	if r == nil {
 		return msgs
@@ -621,11 +633,49 @@ func redactMessageList(seam redact.Seam, msgs agentcore.MessageList) agentcore.M
 }
 
 func redactMessage(seam redact.Seam, m agentcore.Message) agentcore.Message {
+	m, _ = omitComputerImages(m)
 	r := redact.Default()
 	if r == nil {
 		return m
 	}
 	return r.Message(seam, m)
+}
+
+// Computer screenshots may contain unrelated private desktop content. They are
+// available to the live model turn, but session persistence replaces their image
+// blocks with text without mutating the live context or breaking tool pairing.
+func omitComputerImages(message agentcore.Message) (agentcore.Message, bool) {
+	var result agentcore.ToolResultMessage
+	switch m := message.(type) {
+	case agentcore.ToolResultMessage:
+		result = m
+	case *agentcore.ToolResultMessage:
+		if m == nil {
+			return message, false
+		}
+		result = *m
+	default:
+		return message, false
+	}
+	if result.ToolName != "computer" {
+		return message, false
+	}
+	content := make(agentcore.ContentList, 0, len(result.Content))
+	changed := false
+	for _, block := range result.Content {
+		switch block.(type) {
+		case agentcore.ImageContent, *agentcore.ImageContent:
+			content = append(content, agentcore.NewTextContent("[Computer screenshot omitted from persisted session.]"))
+			changed = true
+		default:
+			content = append(content, block)
+		}
+	}
+	if !changed {
+		return message, false
+	}
+	result.Content = content
+	return result, true
 }
 
 // readSession decodes a session stream: header line first, then entries. For

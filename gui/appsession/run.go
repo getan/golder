@@ -437,6 +437,9 @@ func (c *Controller) run(ctx context.Context, runID, prompt string) {
 	c.mu.Lock()
 	c.running, c.cancel = false, nil
 	c.status.Running = false
+	if c.computerTool != nil && !c.computerTool.Session.Status().Active {
+		c.removeComputerLocked()
+	}
 	c.mu.Unlock()
 	if err != nil {
 		c.addNotice("Run failed: "+err.Error(), true)

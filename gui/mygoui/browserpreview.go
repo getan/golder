@@ -36,6 +36,7 @@ type browserWindowState struct {
 // terminal renderer.
 func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	a.closeBrowserPanel()
+	a.hideComputerPanel()
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &browserWindowState{address: browser.URL, pageURL: browser.URL, title: browser.Title}
 	if state.title == "" {

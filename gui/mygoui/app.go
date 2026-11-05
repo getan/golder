@@ -17,6 +17,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/computeruse"
 )
 
 // App is the window's state. Everything here is read and written on MyGo's
@@ -124,6 +125,20 @@ type App struct {
 	browserRetryArmed bool
 	browserState      *browserWindowState
 	browserCancel     context.CancelFunc
+
+	computerOpen        bool
+	computerPickerOpen  bool
+	computerBusy        bool
+	computerError       string
+	computerPermission  computeruse.PermissionState
+	computerBackend     computeruse.PlatformBackend
+	computerSession     *computeruse.Session
+	computerTargets     []computeruse.Target
+	computerSelected    int
+	computerFrame       *ui.Bitmap
+	computerPreviewStop context.CancelFunc
+	computerSetupStop   context.CancelFunc
+	computerSetupSeq    uint64
 }
 
 // New builds the app around an opened controller.
@@ -171,6 +186,7 @@ func (a *App) Run() error {
 				a.diffCancel = nil
 			}
 			a.closeBrowserPanel()
+			a.stopComputer()
 			_ = a.ctrl.Close()
 		})
 		go a.pump()
@@ -197,8 +213,12 @@ func (a *App) pump() {
 
 func (a *App) applySnapshot(snap appsession.Snapshot) {
 	previousProject := a.project
+	previousSession := a.status.SessionID
 	a.status = snap.Status
 	a.project = snap.Project
+	if previousSession != "" && previousSession != snap.SessionID {
+		a.stopComputer()
+	}
 	if previousProject != "" && previousProject != a.project {
 		a.resetFileExplorer()
 	}
@@ -241,6 +261,9 @@ func (a *App) applyEvent(ev appsession.Event) {
 		a.removeApproval(ev.ID)
 	case appsession.EventStatus:
 		if ev.Status != nil {
+			if a.status.SessionID != "" && a.status.SessionID != ev.Status.SessionID {
+				a.stopComputer()
+			}
 			a.status = *ev.Status
 			a.updateTitle()
 		}

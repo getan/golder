@@ -1,0 +1,289 @@
+// Package computeruse owns the platform-independent authorization and
+// lifecycle of a single user-selected desktop window. Platform adapters must
+// fail closed when they cannot prove the target and input conditions.
+package computeruse
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+)
+
+var (
+	ErrUnavailable = errors.New("computer use backend unavailable")
+	ErrNotActive   = errors.New("computer use session is not active")
+	ErrNotAllowed  = errors.New("computer use action is not authorized")
+	ErrPaused      = errors.New("computer use is paused; the user must resume")
+	ErrTargetLost  = errors.New("computer use target changed or is unavailable")
+)
+
+// Target is an opaque identity returned by a platform backend and selected by
+// the operator. Model-supplied process identifiers must never select a target.
+type Target struct {
+	ID          string
+	Application string
+	Window      string
+}
+
+type Capabilities struct {
+	Observe bool
+	Control bool
+}
+
+type Status struct {
+	Active       bool
+	Paused       bool
+	Target       Target
+	Capabilities Capabilities
+}
+
+// Backend is implemented by a platform-specific adapter. Validate must check
+// the identity and conditions needed for the requested action immediately
+// before execution. A successful capture does not imply safe input control.
+// Backends must honor context cancellation and recheck it before injecting
+// input; cancellation cannot undo an input already delivered to the OS.
+type Backend interface {
+	Validate(context.Context, Target, bool) error
+	Close() error
+}
+
+// SnapshotBackend is an optional semantic observation capability. Backends
+// must keep refs scoped to the current target and snapshot.
+type SnapshotBackend interface {
+	Snapshot(context.Context, Target) (string, []Element, bool, error)
+}
+
+// Session serializes lifecycle transitions with target validation and backend
+// operations. Only the operator-facing host may call Start or Resume.
+type Session struct {
+	mu       sync.Mutex
+	opMu     sync.Mutex
+	backend  Backend
+	status   Status
+	cancel   context.CancelFunc
+	sequence uint64
+	snapshot *snapshotLease
+}
+
+func New(backend Backend) *Session { return &Session{backend: backend} }
+
+// Start installs an operator-selected target and explicit grants. Starting a
+// second target requires stopping the old session and a new operator decision.
+func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) error {
+	if s == nil {
+		return ErrUnavailable
+	}
+	if target.ID == "" || !caps.Observe {
+		return ErrNotAllowed
+	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if s.backend == nil {
+		s.mu.Unlock()
+		return ErrUnavailable
+	}
+	if s.status.Active {
+		s.mu.Unlock()
+		return errors.New("computer use target is already active; stop it before selecting another")
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	validationCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	sequence, backend := s.sequence, s.backend
+	s.mu.Unlock()
+	err := backend.Validate(validationCtx, target, false)
+	cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancel = nil
+	if s.sequence != sequence {
+		return context.Canceled
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.status = Status{Active: true, Target: target, Capabilities: caps}
+	return nil
+}
+
+func (s *Session) Status() Status {
+	if s == nil {
+		return Status{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status
+}
+
+func (s *Session) SupportsSnapshot() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.backend.(SnapshotBackend)
+	return ok
+}
+
+// Do serializes one authorized backend operation and pauses if the platform
+// cannot validate the pinned target. Callers must not invoke backend input by
+// bypassing this method.
+func (s *Session) Do(ctx context.Context, control bool, operation func(context.Context, Backend, Target) error) error {
+	if s == nil {
+		return ErrUnavailable
+	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if s.backend == nil {
+		s.mu.Unlock()
+		return ErrUnavailable
+	}
+	if !s.status.Active {
+		s.mu.Unlock()
+		return ErrNotActive
+	}
+	if s.status.Paused {
+		s.mu.Unlock()
+		return ErrPaused
+	}
+	if !s.status.Capabilities.Observe || (control && !s.status.Capabilities.Control) || operation == nil {
+		s.mu.Unlock()
+		return ErrNotAllowed
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	operationCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	sequence, target, backend := s.sequence, s.status.Target, s.backend
+	s.mu.Unlock()
+	defer func() {
+		cancel()
+		s.mu.Lock()
+		s.cancel = nil
+		s.mu.Unlock()
+	}()
+	if err := backend.Validate(operationCtx, target, control); err != nil {
+		if operationCtx.Err() != nil {
+			return operationCtx.Err()
+		}
+		s.mu.Lock()
+		if s.sequence == sequence && s.status.Active {
+			s.status.Paused = true
+			s.snapshot = nil
+		}
+		s.mu.Unlock()
+		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+	}
+	if err := operationCtx.Err(); err != nil {
+		return err
+	}
+	err := operation(operationCtx, backend, target)
+	if operationCtx.Err() != nil {
+		return operationCtx.Err()
+	}
+	return err
+}
+
+func (s *Session) Pause() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status.Active {
+		s.status.Paused = true
+		s.sequence++
+		s.snapshot = nil
+		if s.cancel != nil {
+			s.cancel()
+		}
+	}
+}
+
+// Resume must only be called from an explicit operator action. It revalidates
+// the original target and never changes the scope of the original grant.
+func (s *Session) Resume(ctx context.Context) error {
+	if s == nil {
+		return ErrUnavailable
+	}
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	if s.backend == nil {
+		s.mu.Unlock()
+		return ErrUnavailable
+	}
+	if !s.status.Active {
+		s.mu.Unlock()
+		return ErrNotActive
+	}
+	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	validationCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	sequence, target, backend := s.sequence, s.status.Target, s.backend
+	s.mu.Unlock()
+	err := backend.Validate(validationCtx, target, false)
+	cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancel = nil
+	if s.sequence != sequence || !s.status.Active {
+		return context.Canceled
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.status.Paused = false
+	return nil
+}
+
+// Stop revokes the current authorization. It does not close the backend, so a
+// later operator selection can create a new session.
+func (s *Session) Stop() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sequence++
+	s.snapshot = nil
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.status = Status{}
+}
+
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.Stop()
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status = Status{}
+	if s.backend == nil {
+		return nil
+	}
+	err := s.backend.Close()
+	s.backend = nil
+	return err
+}
