@@ -61,7 +61,7 @@ static BOOL cu_wait(GolderCaptureResult *result) {
 
 // Return a PNG of exactly the selected SCWindow. No permission prompts are
 // initiated here; the operator must grant the OS permission separately.
-int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length) {
+int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h) {
 	@autoreleasepool {
 		*out = NULL;
 		*length = 0;
@@ -85,6 +85,7 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 				}
 			}
 			if (matches != 1 || !selected || selected.frame.size.width < 1 || selected.frame.size.height < 1) { [inventory release]; return 0; }
+			CGRect capturedFrame = selected.frame;
 			SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:selected];
 			SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
 			double width = selected.frame.size.width, height = selected.frame.size.height;
@@ -117,6 +118,10 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 			memcpy(copy, png.bytes, png.length);
 			*out = copy;
 			*length = png.length;
+			*x = capturedFrame.origin.x;
+			*y = capturedFrame.origin.y;
+			*w = capturedFrame.size.width;
+			*h = capturedFrame.size.height;
 			return 1;
 		}
 		return 0;

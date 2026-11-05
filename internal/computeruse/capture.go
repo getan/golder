@@ -8,6 +8,7 @@ import (
 	"errors"
 	"image"
 	_ "image/png"
+	"time"
 )
 
 const (
@@ -19,6 +20,27 @@ const (
 // adapter must refuse a capture if it cannot reliably exclude other windows.
 type CaptureBackend interface {
 	Capture(context.Context, Target) ([]byte, error)
+}
+
+// FrameBoundBackend binds a capture to opaque platform geometry. ClickFrame
+// must revalidate the exact target, geometry, focus, occlusion and sensitive
+// controls immediately before injection; a token alone is not authorization.
+type FrameBoundBackend interface {
+	CaptureBackend
+	CaptureBound(context.Context, Target) ([]byte, string, error)
+	ClickFrame(context.Context, Target, string, float64, float64) error
+}
+
+const maxFrameLeases = 64
+const frameLeaseLifetime = 30 * time.Second
+
+type frameLease struct {
+	targetID string
+	token    string
+	width    int
+	height   int
+	sequence uint64
+	created  time.Time
 }
 
 // Frame is ephemeral. It must not be put into ordinary logs or persisted as a
@@ -47,7 +69,14 @@ func (s *Session) Capture(ctx context.Context) (Frame, error) {
 		if !ok {
 			return ErrUnavailable
 		}
-		raw, err := capture.Capture(ctx, target)
+		var raw []byte
+		var token string
+		var err error
+		if bound, ok := backend.(FrameBoundBackend); ok {
+			raw, token, err = bound.CaptureBound(ctx, target)
+		} else {
+			raw, err = capture.Capture(ctx, target)
+		}
 		if err != nil {
 			return err
 		}
@@ -63,6 +92,36 @@ func (s *Session) Capture(ctx context.Context) (Frame, error) {
 			return err
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
+		if token != "" && len(token) <= 512 {
+			s.mu.Lock()
+			if err := ctx.Err(); err != nil || !s.status.Active || s.status.Paused || s.status.Target.ID != target.ID {
+				s.mu.Unlock()
+				return ErrStaleObservation
+			}
+			if s.status.Capabilities.Control {
+				if s.frames == nil {
+					s.frames = make(map[string]frameLease)
+				}
+				now := time.Now()
+				for id, lease := range s.frames {
+					if now.Sub(lease.created) > frameLeaseLifetime {
+						delete(s.frames, id)
+					}
+				}
+				if len(s.frames) >= maxFrameLeases {
+					var oldestID string
+					var oldest time.Time
+					for id, lease := range s.frames {
+						if oldestID == "" || lease.created.Before(oldest) {
+							oldestID, oldest = id, lease.created
+						}
+					}
+					delete(s.frames, oldestID)
+				}
+				s.frames[frame.ID] = frameLease{targetID: target.ID, token: token, width: cfg.Width, height: cfg.Height, sequence: s.sequence, created: now}
+			}
+			s.mu.Unlock()
+		}
 		return nil
 	})
 	if err != nil {

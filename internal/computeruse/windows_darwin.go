@@ -16,7 +16,7 @@ package computeruse
 #include <math.h>
 #include <stdatomic.h>
 
-int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length);
+int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
 int cu_app_allowed(int32_t pid);
 
 typedef struct {
@@ -277,6 +277,180 @@ static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int dep
 	return found;
 }
 
+static int cu_current_bounds(cu_window selected, CGRect *bounds) {
+	if (!cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) return 0;
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, selected.window_id);
+	if (!list || CFArrayGetCount(list) != 1) { if (list) CFRelease(list); return 0; }
+	CFDictionaryRef item = (CFDictionaryRef)CFArrayGetValueAtIndex(list, 0);
+	CFDictionaryRef raw = (CFDictionaryRef)CFDictionaryGetValue(item, kCGWindowBounds);
+	int ok = raw && CGRectMakeWithDictionaryRepresentation(raw, bounds) && bounds->size.width > 0 && bounds->size.height > 0;
+	CFRelease(list);
+	return ok;
+}
+
+// Every window above the target must be known not to cover the requested point.
+static int cu_point_unobscured(cu_window selected, CGPoint point) {
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	if (!list) return 0;
+	int found = 0, clear = 1;
+	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+		CFDictionaryRef item = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		uint32_t number = 0;
+		int32_t layer = 0;
+		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowNumber);
+		CFNumberRef l = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowLayer);
+		if (!n || !l || !CFNumberGetValue(n, kCFNumberSInt32Type, &number) || !CFNumberGetValue(l, kCFNumberSInt32Type, &layer)) { clear = 0; break; }
+		if (number == selected.window_id) { found = 1; break; }
+		if (layer < 0) continue;
+		CGRect bounds;
+		CFDictionaryRef raw = (CFDictionaryRef)CFDictionaryGetValue(item, kCGWindowBounds);
+		if (!raw || !CGRectMakeWithDictionaryRepresentation(raw, &bounds)) { clear = 0; break; }
+		double alpha = 1;
+		CFNumberRef a = (CFNumberRef)CFDictionaryGetValue(item, kCGWindowAlpha);
+		if ((a && !CFNumberGetValue(a, kCFNumberDoubleType, &alpha)) || !isfinite(alpha) || alpha < 0 || alpha > 1) { clear = 0; break; }
+		if (alpha > 0 && CGRectContainsPoint(bounds, point)) { clear = 0; break; }
+	}
+	CFRelease(list);
+	return found && clear;
+}
+
+// A container hit is ambiguous: it may hide a protected descendant that the
+// target application did not expose. Never inject into an ambiguous container.
+static int cu_direct_control(AXUIElementRef element) {
+	CFTypeRef role = NULL;
+	if (!element || AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role) != kAXErrorSuccess || !role || CFGetTypeID(role) != CFStringGetTypeID()) {
+		if (role) CFRelease(role);
+		return 0;
+	}
+	int direct = CFEqual(role, CFSTR("AXButton")) || CFEqual(role, CFSTR("AXCheckBox")) || CFEqual(role, CFSTR("AXRadioButton")) ||
+		CFEqual(role, CFSTR("AXTextField")) || CFEqual(role, CFSTR("AXTextArea")) || CFEqual(role, CFSTR("AXSlider")) ||
+		CFEqual(role, CFSTR("AXScrollBar")) || CFEqual(role, CFSTR("AXPopUpButton")) || CFEqual(role, CFSTR("AXMenuItem")) ||
+		CFEqual(role, CFSTR("AXLink")) || CFEqual(role, CFSTR("AXImage")) || CFEqual(role, CFSTR("AXStaticText")) ||
+		CFEqual(role, CFSTR("AXIncrementor")) || CFEqual(role, CFSTR("AXDisclosureTriangle"));
+	CFRelease(role);
+	return direct;
+}
+
+static int cu_point_ax_safe(AXUIElementRef window, CGPoint point, cu_cancel_flag *flag) {
+	AXUIElementRef system = AXUIElementCreateSystemWide();
+	AXUIElementRef hit = NULL;
+	int ok = system && AXUIElementCopyElementAtPosition(system, point.x, point.y, &hit) == kAXErrorSuccess && hit && !CFEqual(window, hit) && cu_direct_control(hit);
+	int budget = 128;
+	if (ok) ok = cu_ax_contains(window, hit, 0, &budget, flag);
+	if (hit) CFRelease(hit);
+	if (system) CFRelease(system);
+	return ok;
+}
+
+static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, cu_cancel_flag *flag, CGPoint *out) {
+	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || !isfinite(nx) || !isfinite(ny) || bw <= 0 || bh <= 0 || nx < 0 || nx >= 1 || ny < 0 || ny >= 1) return 0;
+	CGRect bounds;
+	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
+	CGPoint point = CGPointMake(bx + nx*bw, by + ny*bh);
+	if (!cu_point_unobscured(selected, point)) return 0;
+	AXUIElementRef window = cu_ax_window(selected, 1);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	int ok = cu_point_ax_safe(window, point, flag);
+	CFRelease(window);
+	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
+	window = cu_ax_window(selected, 1);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	ok = cu_point_ax_safe(window, point, flag);
+	CFRelease(window);
+	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
+	window = cu_ax_window(selected, 1);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	CFRelease(window);
+	if (cu_cancelled(flag)) return 0;
+	*out = point;
+	return 1;
+}
+
+static int cu_click_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, cu_cancel_flag *flag) {
+	CGPoint point;
+	if (!cu_frame_point_safe(selected, expected, bx, by, bw, bh, nx, ny, flag, &point)) return 0;
+	CGEventRef down = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, point, kCGMouseButtonLeft);
+	CGEventRef up = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, point, kCGMouseButtonLeft);
+	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); return 0; }
+	CGEventSetIntegerValueField(down, kCGMouseEventClickState, 1);
+	CGEventSetIntegerValueField(up, kCGMouseEventClickState, 1);
+	CGEventSetFlags(down, 0);
+	CGEventSetFlags(up, 0);
+	CGEventPostToPid(selected.pid, down);
+	CGEventPostToPid(selected.pid, up);
+	CFRelease(down);
+	CFRelease(up);
+	return 1; // dispatched, not proof that the app acted on the event
+}
+
+static int cu_scroll_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, double nx, double ny, int dx, int dy, cu_cancel_flag *flag) {
+	if (dx < -5 || dx > 5 || dy < -5 || dy > 5 || (dx == 0 && dy == 0)) return 0;
+	CGPoint point;
+	if (!cu_frame_point_safe(selected, expected, bx, by, bw, bh, nx, ny, flag, &point)) return 0;
+	CGEventRef event = CGEventCreateScrollWheelEvent(NULL, kCGScrollEventUnitLine, 2, dy, dx);
+	if (!event || cu_cancelled(flag)) { if (event) CFRelease(event); return 0; }
+	CGEventSetLocation(event, point);
+	CGEventSetFlags(event, 0);
+	CGEventPostToPid(selected.pid, event);
+	CFRelease(event);
+	return 1;
+}
+
+static int cu_focused_control_safe(cu_window selected, AXUIElementRef window, cu_cancel_flag *flag) {
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	CFTypeRef focused = NULL;
+	int ok = app && AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute, &focused) == kAXErrorSuccess && focused &&
+		CFGetTypeID(focused) == AXUIElementGetTypeID() && !CFEqual(window, focused) && cu_direct_control((AXUIElementRef)focused);
+	int budget = 128;
+	if (ok) ok = cu_ax_contains(window, (AXUIElementRef)focused, 0, &budget, flag);
+	CFTypeRef position = NULL, size = NULL;
+	CGPoint point;
+	CGSize dimensions;
+	if (ok) {
+		ok = AXUIElementCopyAttributeValue((AXUIElementRef)focused, kAXPositionAttribute, &position) == kAXErrorSuccess &&
+			AXUIElementCopyAttributeValue((AXUIElementRef)focused, kAXSizeAttribute, &size) == kAXErrorSuccess && position && size &&
+			CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID() &&
+			AXValueGetValue((AXValueRef)position, kAXValueCGPointType, &point) &&
+			AXValueGetValue((AXValueRef)size, kAXValueCGSizeType, &dimensions) && dimensions.width > 0 && dimensions.height > 0;
+	}
+	if (ok) {
+		point.x += dimensions.width / 2;
+		point.y += dimensions.height / 2;
+		ok = cu_point_unobscured(selected, point);
+	}
+	if (position) CFRelease(position);
+	if (size) CFRelease(size);
+	if (focused) CFRelease(focused);
+	if (app) CFRelease(app);
+	return ok;
+}
+
+static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx, double by, double bw, double bh, uint16_t code, cu_cancel_flag *flag) {
+	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
+	CGRect bounds;
+	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
+	AXUIElementRef window = cu_ax_window(selected, 1);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	int ok = cu_focused_control_safe(selected, window, flag);
+	CFRelease(window);
+	if (!ok || cu_cancelled(flag)) return 0;
+	window = cu_ax_window(selected, 1);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	ok = cu_focused_control_safe(selected, window, flag);
+	CFRelease(window);
+	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
+	CGEventRef down = CGEventCreateKeyboardEvent(NULL, code, true);
+	CGEventRef up = CGEventCreateKeyboardEvent(NULL, code, false);
+	if (!down || !up || cu_cancelled(flag)) { if (down) CFRelease(down); if (up) CFRelease(up); return 0; }
+	CGEventSetFlags(down, 0);
+	CGEventSetFlags(up, 0);
+	CGEventPostToPid(selected.pid, down);
+	CGEventPostToPid(selected.pid, up);
+	CFRelease(down);
+	CFRelease(up);
+	return 1;
+}
+
 static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementRef element, cu_cancel_flag *flag) {
 	if (!expected || !element || cu_cancelled(flag)) return 0;
 	// AXPress is addressed to the pinned element, not to the foreground app.
@@ -342,7 +516,9 @@ import "C"
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -352,7 +528,7 @@ import (
 )
 
 // MacWindowCatalog is a non-prompting operator-facing window inventory and AX
-// adapter. It does not implement coordinate input.
+// adapter with frame-bound, fail-closed coordinate input.
 type MacWindowCatalog struct {
 	mu          sync.Mutex
 	windows     map[string]C.cu_window
@@ -406,9 +582,8 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	return out, nil
 }
 
-// The current macOS control backend offers only target-addressed AX actions.
-// Future physical input must independently prove foreground focus and geometry
-// immediately before injection; this identity check does not grant that right.
+// Physical input independently proves foreground focus and geometry immediately
+// before injection; this identity check alone does not grant that right.
 func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -574,30 +749,118 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 // Capture uses ScreenCaptureKit for the selected on-screen window only. It
 // checks the pinned window before and after capture; no system prompt is raised.
 func (c *MacWindowCatalog) Capture(ctx context.Context, target Target) ([]byte, error) {
+	data, _, err := c.CaptureBound(ctx, target)
+	return data, err
+}
+
+type macFrameBinding struct {
+	Target string
+	X, Y   float64
+	W, H   float64
+	Digest [32]byte
+}
+
+func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]byte, string, error) {
 	if err := c.Validate(ctx, target, false); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	c.mu.Lock()
 	window, ok := c.windows[target.ID]
 	closed := c.closed
 	c.mu.Unlock()
 	if closed || !ok {
-		return nil, ErrTargetLost
+		return nil, "", ErrTargetLost
 	}
 	var data unsafe.Pointer
 	var length C.size_t
-	if C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length) == 0 {
-		return nil, errors.New("ScreenCaptureKit capture unavailable or not authorized")
+	var x, y, w, h C.double
+	if C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length, &x, &y, &w, &h) == 0 {
+		return nil, "", errors.New("ScreenCaptureKit capture unavailable or not authorized")
 	}
 	defer C.free(data)
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if length == 0 || length > MaxFrameBytes {
-		return nil, errors.New("ScreenCaptureKit frame exceeds the size limit")
+		return nil, "", errors.New("ScreenCaptureKit frame exceeds the size limit")
 	}
 	if err := c.Validate(ctx, target, false); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return C.GoBytes(data, C.int(length)), nil
+	image := C.GoBytes(data, C.int(length))
+	binding, err := json.Marshal(macFrameBinding{Target: target.ID, X: float64(x), Y: float64(y), W: float64(w), H: float64(h), Digest: sha256.Sum256(image)})
+	if err != nil {
+		return nil, "", err
+	}
+	return image, string(binding), nil
+}
+
+// ClickFrame refuses unless the same window, frame geometry, focus, AX hit and
+// absence of occluding windows can be established at the point of dispatch.
+func (c *MacWindowCatalog) ClickFrame(ctx context.Context, target Target, token string, x, y float64) error {
+	return c.dispatchFrame(ctx, target, token, func(window C.cu_window, pinned C.AXUIElementRef, binding macFrameBinding, flag *C.cu_cancel_flag) C.int {
+		return C.cu_click_frame(window, pinned, C.double(binding.X), C.double(binding.Y), C.double(binding.W), C.double(binding.H), C.double(x), C.double(y), flag)
+	})
+}
+
+func (c *MacWindowCatalog) ScrollFrame(ctx context.Context, target Target, token string, x, y float64, dx, dy int) error {
+	if dx < -5 || dx > 5 || dy < -5 || dy > 5 || (dx == 0 && dy == 0) {
+		return ErrNotAllowed
+	}
+	return c.dispatchFrame(ctx, target, token, func(window C.cu_window, pinned C.AXUIElementRef, binding macFrameBinding, flag *C.cu_cancel_flag) C.int {
+		return C.cu_scroll_frame(window, pinned, C.double(binding.X), C.double(binding.Y), C.double(binding.W), C.double(binding.H), C.double(x), C.double(y), C.int(dx), C.int(dy), flag)
+	})
+}
+
+func (c *MacWindowCatalog) PressFrame(ctx context.Context, target Target, token, key string) error {
+	codes := map[string]uint16{"enter": 36, "tab": 48, "escape": 53, "backspace": 51, "delete": 117, "left": 123, "right": 124, "down": 125, "up": 126, "page_up": 116, "page_down": 121, "home": 115, "end": 119, "space": 49}
+	code, ok := codes[key]
+	if !ok {
+		return ErrNotAllowed
+	}
+	return c.dispatchFrame(ctx, target, token, func(window C.cu_window, pinned C.AXUIElementRef, binding macFrameBinding, flag *C.cu_cancel_flag) C.int {
+		return C.cu_press_frame(window, pinned, C.double(binding.X), C.double(binding.Y), C.double(binding.W), C.double(binding.H), C.uint16_t(code), flag)
+	})
+}
+
+func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, token string, dispatch func(C.cu_window, C.AXUIElementRef, macFrameBinding, *C.cu_cancel_flag) C.int) error {
+	var binding macFrameBinding
+	if err := json.Unmarshal([]byte(token), &binding); err != nil || binding.Target != target.ID {
+		return ErrStaleObservation
+	}
+	fresh, freshToken, err := c.CaptureBound(ctx, target)
+	if err != nil {
+		return err
+	}
+	var current macFrameBinding
+	if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
+		return ErrStaleObservation
+	}
+	if err := c.Validate(ctx, target, true); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	window, ok := c.windows[target.ID]
+	if c.closed || !ok || c.pinned[target.ID] == 0 {
+		return ErrTargetLost
+	}
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		return errors.New("allocate input cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	sent := dispatch(window, c.pinned[target.ID], binding, flag)
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if sent == 0 {
+		return fmt.Errorf("%w: input refused because target, geometry, focus, visibility or AX hit could not be verified", ErrTargetLost)
+	}
+	return nil
 }

@@ -64,6 +64,7 @@ type Session struct {
 	cancel   context.CancelFunc
 	sequence uint64
 	snapshot *snapshotLease
+	frames   map[string]frameLease
 }
 
 func New(backend Backend) *Session { return &Session{backend: backend} }
@@ -181,6 +182,7 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 		if s.sequence == sequence && s.status.Active {
 			s.status.Paused = true
 			s.snapshot = nil
+			s.frames = nil
 		}
 		s.mu.Unlock()
 		return fmt.Errorf("%w: %v", ErrTargetLost, err)
@@ -198,6 +200,7 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 			s.status.Paused = true
 			s.sequence++
 			s.snapshot = nil
+			s.frames = nil
 		}
 		s.mu.Unlock()
 	}
@@ -214,6 +217,7 @@ func (s *Session) Pause() {
 		s.status.Paused = true
 		s.sequence++
 		s.snapshot = nil
+		s.frames = nil
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -273,6 +277,7 @@ func (s *Session) Stop() {
 	defer s.mu.Unlock()
 	s.sequence++
 	s.snapshot = nil
+	s.frames = nil
 	if s.cancel != nil {
 		s.cancel()
 	}
