@@ -165,6 +165,7 @@ func (c *Controller) installProjectSession(ctx context.Context, next projectRunt
 	}
 	c.mu.Unlock()
 
+	c.installComputerRequest()
 	oldLock.release()
 	agenttool.ClosePaneAgent(oldTools)
 	run.KillShellSessions(oldTools)

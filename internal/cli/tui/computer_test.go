@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/computeruse"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -77,4 +79,105 @@ func TestComputerToolIsRevokedWhenConversationChanges(t *testing.T) {
 		t.Fatal("computer tool remained registered")
 	}
 	_ = desktop.Close()
+}
+
+func TestSuggestedComputerTargetRequiresGrantAndHandlesAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		targets  []computeruse.Target
+		wantKind string
+		wantRows int
+	}{
+		{"unique", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Notes"}}, "computer-grant", 2},
+		{"multiple", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Calculator"}, {ID: "c", Application: "Notes"}}, "computer-target", 2},
+		{"missing", []computeruse.Target{{ID: "a", Application: "Notes"}}, "computer-target", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newRemoteTestSession(t)
+			setup := newComputerSetup(s.header.ID)
+			setup.suggested = "Calculator"
+			s.computerSetup = setup
+			m := NewModel(Options{})
+			m.session = s
+			got, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup, targets: tc.targets})
+			m = got.(Model)
+			if cmd != nil || m.menu.pickKind != tc.wantKind || len(m.menu.pick) != tc.wantRows || s.computerTool != nil {
+				t.Fatalf("kind=%q rows=%d tool=%v cmd=%v", m.menu.pickKind, len(m.menu.pick), s.computerTool, cmd)
+			}
+			s.cancelComputerSetup()
+		})
+	}
+}
+
+func TestComputerRequestHonorsToolPolicyAndOnlyQueuesSelection(t *testing.T) {
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_SOCKET", "/tmp/example.sock")
+	t.Setenv("TUIOS_SESSION", "test")
+	t.Setenv("TUIOS_PANE_ID", "agent-pane")
+	s := newRemoteTestSession(t)
+	base := &agenttool.TodoTool{Store: agenttool.NewTodoStore()}
+	s.computerEnabled = true
+	s.agentCtx.Tools = append(s.agentCtx.Tools, base)
+	s.reg = agenttool.NewToolRegistry()
+	s.toolPolicy = run.NewToolPolicy(nil, []string{"computer"})
+	s.installComputerRequest()
+	if s.computerRequest != nil {
+		t.Fatal("request tool bypassed the computer deny policy")
+	}
+	s.toolPolicy = run.ToolPolicy{}
+	s.installComputerRequest()
+	if s.computerRequest == nil {
+		t.Fatal("operator request tool was not installed")
+	}
+	s.approvalCh = newEventChan()
+	result, err := s.computerRequest.Execute(context.Background(), "request", json.RawMessage(`{"application":"Calculator"}`), nil)
+	if err != nil || result.IsError {
+		t.Fatalf("request failed: %+v %v", result, err)
+	}
+	select {
+	case msg := <-s.approvalCh:
+		req, ok := msg.(computerRequestedMsg)
+		if !ok || req.sessionID != s.header.ID || req.application != "Calculator" || s.computerTool != nil {
+			t.Fatalf("unsafe request event: %#v", msg)
+		}
+	default:
+		t.Fatal("request did not reach the local operator interface")
+	}
+	s.computerRequest.Reset()
+	side := context.WithValue(context.Background(), computerSideThreadKey{}, true)
+	result, err = s.computerRequest.Execute(side, "request", json.RawMessage(`{"application":"Calculator"}`), nil)
+	if err != nil || !result.IsError {
+		t.Fatalf("side-thread request was not rejected: %+v %v", result, err)
+	}
+	select {
+	case msg := <-s.approvalCh:
+		t.Fatalf("side thread reached the local picker: %#v", msg)
+	default:
+	}
+}
+
+func TestComputerRequestOpensPickerAfterTurnWithoutGrantingAccess(t *testing.T) {
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_SOCKET", "/tmp/example.sock")
+	t.Setenv("TUIOS_SESSION", "test")
+	t.Setenv("TUIOS_PANE_ID", "agent-pane")
+	s := newRemoteTestSession(t)
+	s.computerEnabled = true
+	s.agentCtx.Tools = append(s.agentCtx.Tools, &agenttool.TodoTool{Store: agenttool.NewTodoStore()})
+	s.reg = agenttool.NewToolRegistry()
+	m := NewModel(Options{})
+	m.session = s
+	m.running = true
+	m.runCh = newEventChan()
+	next, _ := m.Update(computerRequestedMsg{sessionID: s.header.ID, application: "Calculator"})
+	m = next.(Model)
+	if m.computerSuggested != "Calculator" || s.computerTool != nil {
+		t.Fatal("request did not remain an unauthorised suggestion")
+	}
+	next, cmd := m.Update(runEndMsg{})
+	m = next.(Model)
+	if cmd == nil || s.computerSetup == nil || s.computerSetup.suggested != "Calculator" || s.computerTool != nil {
+		t.Fatalf("picker was not scheduled safely: setup=%+v tool=%v", s.computerSetup, s.computerTool)
+	}
+	s.cancelComputerSetup()
 }

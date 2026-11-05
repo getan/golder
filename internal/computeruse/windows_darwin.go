@@ -571,7 +571,7 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 		}
 		id := hex.EncodeToString(nonce[:])
 		next[id] = window
-		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), Window: C.GoString(&window.title[0])})
+		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), Window: C.GoString(&window.title[0]), Detail: fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))})
 	}
 	for _, ref := range c.pinned {
 		C.cu_ax_release(ref)

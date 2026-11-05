@@ -735,6 +735,8 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Version:           version,
 				ThinkingLevel:     thinking,
 				Tools:             env.Tools,
+				ToolPolicy:        run.NewToolPolicy(opts.allowedTools, opts.disallowedTools),
+				EnableComputer:    !opts.noTools,
 				SysPrompt:         env.SysPrompt,
 				Prompt:            env.Prompt,
 				ResumeID:          resumeID,

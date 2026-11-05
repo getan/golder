@@ -22,6 +22,13 @@ const (
 func (a *App) view(c *ui.Context) {
 	a.applyDisplayPreferences(c)
 	t := c.Theme()
+	if !a.computerPickerOpen && a.computerRequestPicker {
+		a.computerRequestPicker = false
+		a.computerSuggested = ""
+		if a.ctrl != nil {
+			a.ctrl.ResetComputerRequest()
+		}
+	}
 	if !a.computerPickerOpen && a.computerSetupStop != nil {
 		a.computerSetupStop()
 		a.computerSetupStop = nil

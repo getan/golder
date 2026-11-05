@@ -126,19 +126,21 @@ type App struct {
 	browserState      *browserWindowState
 	browserCancel     context.CancelFunc
 
-	computerOpen        bool
-	computerPickerOpen  bool
-	computerBusy        bool
-	computerError       string
-	computerPermission  computeruse.PermissionState
-	computerBackend     computeruse.PlatformBackend
-	computerSession     *computeruse.Session
-	computerTargets     []computeruse.Target
-	computerSelected    int
-	computerFrame       *ui.Bitmap
-	computerPreviewStop context.CancelFunc
-	computerSetupStop   context.CancelFunc
-	computerSetupSeq    uint64
+	computerOpen          bool
+	computerPickerOpen    bool
+	computerBusy          bool
+	computerError         string
+	computerPermission    computeruse.PermissionState
+	computerBackend       computeruse.PlatformBackend
+	computerSession       *computeruse.Session
+	computerTargets       []computeruse.Target
+	computerSelected      int
+	computerSuggested     string
+	computerRequestPicker bool
+	computerFrame         *ui.Bitmap
+	computerPreviewStop   context.CancelFunc
+	computerSetupStop     context.CancelFunc
+	computerSetupSeq      uint64
 }
 
 // New builds the app around an opened controller.
@@ -259,6 +261,10 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 	case appsession.EventApprovalDone:
 		a.removeApproval(ev.ID)
+	case appsession.EventComputerRequest:
+		if ev.Session == a.status.SessionID {
+			a.computerSuggested = ev.ID
+		}
 	case appsession.EventStatus:
 		if ev.Status != nil {
 			if a.status.SessionID != "" && a.status.SessionID != ev.Status.SessionID {
@@ -271,6 +277,22 @@ func (a *App) applyEvent(ev appsession.Event) {
 		a.banner, a.bannerErr = "", false
 		if ev.Error != "" {
 			a.banner, a.bannerErr = ev.Error, true
+			a.computerSuggested = ""
+			if a.ctrl != nil {
+				a.ctrl.ResetComputerRequest()
+			}
+		} else if a.computerSuggested != "" {
+			if a.computerSession != nil && a.computerSession.Status().Active {
+				a.banner = "Computer Use is already active; stop it before selecting another window."
+				a.computerSuggested = ""
+				if a.ctrl != nil {
+					a.ctrl.ResetComputerRequest()
+				}
+			} else {
+				a.computerRequestPicker = true
+				a.computerPickerOpen = true
+				a.loadComputerTargets()
+			}
 		}
 		a.refreshSessions()
 		a.refreshChanges()

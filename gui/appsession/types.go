@@ -170,6 +170,8 @@ const (
 	EventStatus EventKind = "status"
 	// EventRunEnd means the run ended; Error carries a failure.
 	EventRunEnd EventKind = "run_end"
+	// EventComputerRequest asks the local view to offer an operator-owned picker.
+	EventComputerRequest EventKind = "computer_request"
 )
 
 // Event is one ordered controller notification. Seq increases monotonically for

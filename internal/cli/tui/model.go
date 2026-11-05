@@ -111,7 +111,8 @@ type Model struct {
 	// session is the assembled run/persistence state (store, header, growing
 	// context, live config). It is nil for a session-less model; when set, the
 	// model persists the conversation to ~/.golder/sessions after each turn ends.
-	session *runSession
+	session           *runSession
+	computerSuggested string
 
 	// interruptFn cancels the in-flight run (the first stage of the two-stage
 	// interrupt, FR-14): pressing Esc / Ctrl+C while running signals the run to
@@ -1010,6 +1011,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// it points at before this event reads or moves its endpoints.
 	m.syncSeedShift()
 	switch msg := msg.(type) {
+	case computerRequestedMsg:
+		if m.running && !m.sideRun && m.session != nil && m.session.header.ID == msg.sessionID {
+			m.computerSuggested = msg.application
+		} else if m.session != nil && m.session.computerRequest != nil {
+			m.session.computerRequest.Reset()
+		}
+		return m, m.pumpNext()
 	case computerTargetsMsg:
 		return m.computerTargetsReady(msg)
 	case computerStartedMsg:
@@ -1791,6 +1799,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.sideRun = false
 		m.goalRun = false
+		if m.computerSuggested != "" {
+			suggested := m.computerSuggested
+			m.computerSuggested = ""
+			if interrupted || msg.err != nil {
+				if m.session != nil && m.session.computerRequest != nil {
+					m.session.computerRequest.Reset()
+				}
+			} else {
+				return m.openComputerPickerFor(suggested, false)
+			}
+		}
 		// A message submitted mid-run that the loop never drained — typed after
 		// its last steering pull, or queued when the run was interrupted before
 		// another tool call — must not be lost. Start exactly one as the next

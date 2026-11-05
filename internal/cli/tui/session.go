@@ -59,19 +59,22 @@ import (
 // (curLeaf / persisted) so each turn is persisted as a branch rather than a
 // flattening rewrite.
 type runSession struct {
-	store         *session.Store
-	writer        *session.WriterLock
-	header        session.SessionHeader
-	agentCtx      *agentcore.AgentContext
-	live          *cli.LiveConfig
-	reg           *agenttool.ToolRegistry
-	extensions    *extensions.Manager
-	computerSetup *computerSetup
-	computerTool  *agenttool.ComputerTool
-	computerPane  *computeruse.PaneHandle
-	reminders     *runtime.ReminderRegistry
-	schedule      *agenttool.Schedule
-	creds         *provider.CredentialStore
+	store           *session.Store
+	writer          *session.WriterLock
+	header          session.SessionHeader
+	agentCtx        *agentcore.AgentContext
+	live            *cli.LiveConfig
+	reg             *agenttool.ToolRegistry
+	extensions      *extensions.Manager
+	computerSetup   *computerSetup
+	computerTool    *agenttool.ComputerTool
+	computerPane    *computeruse.PaneHandle
+	computerRequest *agenttool.ComputerRequestTool
+	toolPolicy      run.ToolPolicy
+	computerEnabled bool
+	reminders       *runtime.ReminderRegistry
+	schedule        *agenttool.Schedule
+	creds           *provider.CredentialStore
 	// snap is the shared file-snapshot recorder backing /rewind (nil when the
 	// file tools are disabled). Each completed turn commits a restore point so
 	// /rewind can roll files and the conversation back together.
@@ -409,31 +412,33 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	}
 
 	s := &runSession{
-		extensions: opts.Extensions,
-		store:      store,
-		header:     header,
-		agentCtx:   agentCtx,
-		live:       live,
-		reg:        run.ToolRegistry(opts.Tools),
-		reminders:  run.TodoReminders(opts.Tools),
-		schedule:   agenttool.ScheduleFromTools(opts.Tools),
-		snap:       run.SnapshotRecorderFromTools(opts.Tools),
-		goal:       agenttool.NewGoalState(),
-		creds:      creds,
-		cwd:        cwd,
-		prompt:     opts.Prompt,
-		trust:      mgr,
-		slash:      newSlashRegistry(opts, live),
-		telemetry:  cli.NewTelemetryHolder(),
-		curLeaf:    curLeaf,
-		persisted:  len(history),
-		memoryRoot: run.MemoryRootFromTools(opts.Tools),
-		memstore:   run.MemoryStoreFromTools(opts.Tools),
-		perms:      opts.Permissions,
-		notes:      opts.ReviewNotes,
-		budget:     opts.Budget,
-		trusted:    opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
-		steerQ:     &steerQueue{},
+		extensions:      opts.Extensions,
+		store:           store,
+		header:          header,
+		agentCtx:        agentCtx,
+		live:            live,
+		reg:             run.ToolRegistry(opts.Tools),
+		toolPolicy:      opts.ToolPolicy,
+		computerEnabled: opts.EnableComputer || len(opts.Tools) > 0,
+		reminders:       run.TodoReminders(opts.Tools),
+		schedule:        agenttool.ScheduleFromTools(opts.Tools),
+		snap:            run.SnapshotRecorderFromTools(opts.Tools),
+		goal:            agenttool.NewGoalState(),
+		creds:           creds,
+		cwd:             cwd,
+		prompt:          opts.Prompt,
+		trust:           mgr,
+		slash:           newSlashRegistry(opts, live),
+		telemetry:       cli.NewTelemetryHolder(),
+		curLeaf:         curLeaf,
+		persisted:       len(history),
+		memoryRoot:      run.MemoryRootFromTools(opts.Tools),
+		memstore:        run.MemoryStoreFromTools(opts.Tools),
+		perms:           opts.Permissions,
+		notes:           opts.ReviewNotes,
+		budget:          opts.Budget,
+		trusted:         opts.Approve || (mgr != nil && mgr.IsTrusted(cwd)),
+		steerQ:          &steerQueue{},
 		// Reporting to the terminal multiplexer around this pane, when there is
 		// one. The session id goes with it so a restored pane comes back on the
 		// same conversation; see hostStart.
@@ -466,6 +471,7 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 		fmt.Fprintf(os.Stderr, "golder: pane control registration unavailable: %v\n", err)
 	}
 	prompts.RegisterPaneCommand(s.slash, opts.Tools)
+	s.installComputerRequest()
 	s.slash.AddBuiltin(runtime.SlashCommand{
 		Name: "computer", Description: "select a desktop window and open its separate operator pane",
 		ArgumentHint: "[stop]", Category: runtime.CategorySession,
@@ -948,6 +954,15 @@ func (s *runSession) interrupt() {
 // /btw can replay it.
 func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
 	side := btw.NewSideContext(s.agentCtx)
+	if s.computerRequest != nil {
+		tools := make([]agentcore.AgentTool, 0, len(side.Tools))
+		for _, tool := range side.Tools {
+			if tool != s.computerRequest {
+				tools = append(tools, tool)
+			}
+		}
+		side.Tools = tools
+	}
 	side.Messages = append(side.Messages, agentcore.UserMessage{
 		RoleField: agentcore.RoleUser,
 		Content:   agentcore.ContentList{agentcore.NewTextContent(question)},
@@ -955,6 +970,7 @@ func (s *runSession) startBtwRun(question string) (chan tea.Msg, tea.Cmd) {
 	s.lastBtw = side
 	s.lastBtwBase = len(side.Messages) - 1
 	ctx, cancel := context.WithCancel(context.Background())
+	ctx = context.WithValue(ctx, computerSideThreadKey{}, true)
 	s.cancelRun = cancel
 	ch := s.newRunChannel()
 	return ch, startRunOn(ch, ctx, side, s.sideRunConfig(ch), s.onEvent)

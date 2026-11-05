@@ -1,12 +1,61 @@
 package appsession
 
 import (
+	"context"
 	"errors"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/computeruse"
+	"github.com/getan/golder/internal/permissions"
 )
+
+// installComputerRequest advertises only a request to the local UI, never a
+// model-selected window or an implicit observation/control grant.
+func (c *Controller) installComputerRequest() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.computerRequest = nil
+	if c.closed || c.readOnly || c.reg == nil || c.agentCtx == nil || len(c.opt.Tools) == 0 {
+		return
+	}
+	tool := &agenttool.ComputerRequestTool{Request: func(ctx context.Context, name string) error {
+		c.mu.Lock()
+		if c.closed || !c.running || c.readOnly {
+			c.mu.Unlock()
+			return errors.New("local operator interface unavailable")
+		}
+		if err := ctx.Err(); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		c.seq++
+		event := Event{Seq: c.seq, Session: c.header.ID, Kind: EventComputerRequest, ID: name}
+		events, done := c.events, c.done
+		c.mu.Unlock()
+		select {
+		case events <- event:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return errors.New("local operator interface unavailable")
+		}
+	}}
+	if c.reg.Register(tool) == nil {
+		c.computerRequest = tool
+		c.agentCtx.Tools = append(c.agentCtx.Tools, tool)
+	}
+}
+
+func (c *Controller) ResetComputerRequest() {
+	c.mu.Lock()
+	tool := c.computerRequest
+	c.mu.Unlock()
+	if tool != nil {
+		tool.Reset()
+	}
+}
 
 // AttachComputer is an operator-facing entry point. The session must already
 // have an explicitly selected target and grants; no model-provided identifier
@@ -25,6 +74,9 @@ func (c *Controller) AttachComputer(expectedSessionID string, s *computeruse.Ses
 	}
 	if c.readOnly {
 		return ErrReadOnly
+	}
+	if s.Status().Capabilities.Control && c.perms != nil && c.perms.Mode() == permissions.ReadOnly {
+		return errors.New("computer control is unavailable in read-only mode")
 	}
 	if expectedSessionID == "" || c.header.ID != expectedSessionID {
 		return errors.New("computer use target selection belongs to a different conversation")

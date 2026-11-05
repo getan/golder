@@ -260,7 +260,11 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	// BeforeToolCall confirmation gate — is what makes the boundary structural: a
 	// removed tool is never advertised and never dispatchable, so --approve cannot
 	// widen it.
-	if err := ValidateToolPolicy(append(append([]agentcore.AgentTool{}, tools...), ext.KnownTools()...), policy); err != nil {
+	known := append(append([]agentcore.AgentTool{}, tools...), ext.KnownTools()...)
+	if !noTools && len(tools) > 0 {
+		known = append(known, &agenttool.ComputerTool{}, &agenttool.ComputerRequestTool{})
+	}
+	if err := ValidateToolPolicy(known, policy); err != nil {
 		return Env{}, err
 	}
 	tools = ApplyToolPolicy(tools, policy)

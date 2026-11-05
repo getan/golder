@@ -78,9 +78,25 @@ func (a *App) loadComputerTargets() {
 				}
 				return
 			}
+			targets, a.computerSelected = matchComputerTargets(a.computerSuggested, targets)
 			a.computerBackend, a.computerTargets = backend, targets
 		})
 	}()
+}
+
+func matchComputerTargets(suggested string, targets []computeruse.Target) ([]computeruse.Target, int) {
+	matches := computeruse.MatchApplications(suggested, targets)
+	if len(matches) == 1 {
+		return targets, matches[0]
+	}
+	if suggested != "" && len(matches) > 1 {
+		filtered := make([]computeruse.Target, 0, len(matches))
+		for _, index := range matches {
+			filtered = append(filtered, targets[index])
+		}
+		return filtered, -1
+	}
+	return targets, -1
 }
 
 func (a *App) startComputer(control bool) {
@@ -126,9 +142,24 @@ func (a *App) startComputer(control bool) {
 				session.Stop()
 				return
 			}
+			requested := a.computerSuggested != ""
+			a.computerSuggested = ""
+			a.computerRequestPicker = false
+			a.ctrl.ResetComputerRequest()
 			a.computerBackend = nil // ownership transferred to session
 			a.computerSession, a.computerPickerOpen = session, false
 			a.showComputerPanel()
+			if requested {
+				go func() {
+					if err := a.ctrl.ContinueComputer(context.Background(), conversation, session); err != nil {
+						win.Update(func() {
+							if a.computerSession == session {
+								a.banner, a.bannerErr = "Computer Use continuation: "+err.Error(), true
+							}
+						})
+					}
+				}()
+			}
 		})
 	}()
 }
@@ -166,7 +197,10 @@ func (a *App) stopComputer() {
 	}
 	a.hideComputerPanel()
 	a.computerPickerOpen, a.computerBusy = false, false
+	a.computerSuggested = ""
+	a.computerRequestPicker = false
 	if a.ctrl != nil {
+		a.ctrl.ResetComputerRequest()
 		a.ctrl.StopComputer()
 	}
 	if a.computerSession != nil {
@@ -235,6 +269,12 @@ func (a *App) computerPicker(c *ui.Context) {
 		ui.Column(c).Width(620).MaxHeight(650).Gap(10).Children(func() {
 			ui.Text(c, "Computer Use").FontSize(16).Bold()
 			ui.Text(c, "Choose one application window. Its contents may be sent to your configured model provider when the agent requests a snapshot or screenshot. System permissions do not grant the agent authority to switch targets.").FontSize(12).TextColor(t.TextMuted).Wrap()
+			if a.computerSuggested != "" {
+				ui.Text(c, "Requested application: "+a.computerSuggested+". Confirm the window and permission below.").FontSize(11).TextColor(t.TextMuted).Wrap()
+				if !a.computerBusy && a.computerBackend != nil && len(computeruse.MatchApplications(a.computerSuggested, a.computerTargets)) == 0 {
+					ui.Text(c, "No exact match; choose another window or cancel.").FontSize(11).TextColor(t.Warning).Wrap()
+				}
+			}
 			ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
 			if a.computerError != "" {
 				ui.Text(c, a.computerError).FontSize(11).TextColor(t.Warning).Wrap()
@@ -250,6 +290,9 @@ func (a *App) computerPicker(c *ui.Context) {
 						if target.Window != "" {
 							label += " · " + target.Window
 						}
+						if target.Detail != "" {
+							label += " · " + target.Detail
+						}
 						if ui.Button(c.Key(target.ID), label).FillWidth().Selected(a.computerSelected == i).Disabled(a.computerBusy).Clicked() {
 							a.computerSelected = i
 						}
@@ -263,11 +306,16 @@ func (a *App) computerPicker(c *ui.Context) {
 				ui.Spacer(c)
 				if ui.Button(c, "Cancel").Clicked() {
 					a.computerPickerOpen = false
+					a.computerSuggested = ""
+					a.computerRequestPicker = false
+					if a.ctrl != nil {
+						a.ctrl.ResetComputerRequest()
+					}
 				}
 				if ui.Button(c, "View only").Disabled(a.computerBusy || a.computerSelected < 0).Clicked() {
 					a.startComputer(false)
 				}
-				if ui.PrimaryButton(c, "Allow control").Disabled(a.computerBusy || a.computerSelected < 0).Clicked() {
+				if ui.PrimaryButton(c, "Allow control").Disabled(a.computerBusy || a.computerSelected < 0 || a.status.Permission == "read-only").Clicked() {
 					a.startComputer(true)
 				}
 			})

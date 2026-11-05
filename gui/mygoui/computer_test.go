@@ -45,3 +45,34 @@ func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 		t.Fatalf("pause failed: paused=%t err=%v", session.Status().Paused, err)
 	}
 }
+
+func TestSuggestedTargetsOnlyPreselectUniqueExactApplication(t *testing.T) {
+	targets := []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Notes"}, {ID: "c", Application: "Calculator"}}
+	filtered, selected := matchComputerTargets("Calculator", targets)
+	if len(filtered) != 2 || selected != -1 || filtered[0].ID != "a" || filtered[1].ID != "c" {
+		t.Fatalf("ambiguous selection = %+v, %d", filtered, selected)
+	}
+	filtered, selected = matchComputerTargets("notes", targets)
+	if len(filtered) != 3 || selected != 1 {
+		t.Fatalf("unique selection = %+v, %d", filtered, selected)
+	}
+	filtered, selected = matchComputerTargets("missing", targets)
+	if len(filtered) != 3 || selected != -1 {
+		t.Fatalf("missing selection = %+v, %d", filtered, selected)
+	}
+}
+
+func TestComputerPickerDistinguishesDuplicateWindowNames(t *testing.T) {
+	a := testApp()
+	a.computerPickerOpen = true
+	a.computerTargets = []computeruse.Target{
+		{ID: "one", Application: "Calculator", Window: "Main", Detail: "PID 42 · Window 1"},
+		{ID: "two", Application: "Calculator", Window: "Main", Detail: "PID 42 · Window 2"},
+	}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"Calculator · Main · PID 42 · Window 1", "Calculator · Main · PID 42 · Window 2"} {
+		if !tt.HasText(want) {
+			t.Fatalf("ambiguous window label missing %q; texts=%q", want, tt.Texts())
+		}
+	}
+}

@@ -37,9 +37,11 @@ type Options struct {
 	// ThinkingLevel is the resolved reasoning-effort level (US-023): it seeds the
 	// live run config so every turn requests it, until a control command changes
 	// it.
-	ThinkingLevel agentcore.ThinkingLevel
-	Tools         []agentcore.AgentTool
-	SysPrompt     string
+	ThinkingLevel  agentcore.ThinkingLevel
+	Tools          []agentcore.AgentTool
+	ToolPolicy     run.ToolPolicy
+	EnableComputer bool
+	SysPrompt      string
 
 	// Prompt is the launch context SysPrompt was built from (user-authored base
 	// and appends, working directory, skills, tools). A resumed session rebuilds

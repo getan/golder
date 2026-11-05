@@ -24,6 +24,7 @@ type Target struct {
 	ID          string
 	Application string
 	Window      string
+	Detail      string // operator-facing disambiguation; never a model selector
 }
 
 type Capabilities struct {

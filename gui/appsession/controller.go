@@ -139,16 +139,17 @@ type Controller struct {
 	persisted int
 	compacted bool
 
-	items        []Item
-	index        map[string]int
-	lock         *sessionLock
-	readOnly     bool
-	writerInfo   session.WriterInfo
-	seq          uint64
-	events       chan Event
-	done         chan struct{}
-	closed       bool
-	computerTool *agenttool.ComputerTool
+	items           []Item
+	index           map[string]int
+	lock            *sessionLock
+	readOnly        bool
+	writerInfo      session.WriterInfo
+	seq             uint64
+	events          chan Event
+	done            chan struct{}
+	closed          bool
+	computerTool    *agenttool.ComputerTool
+	computerRequest *agenttool.ComputerRequestTool
 
 	pending      []*pendingApproval
 	nextApproval int
@@ -390,6 +391,7 @@ func (c *Controller) Open(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 
+	c.installComputerRequest()
 	if !readOnly {
 		if err := agenttool.ConfigurePaneAgent(ctx, c.opt.Tools, header.ID); err != nil {
 			c.warnf("pane control registration unavailable: %v", err)
