@@ -31,6 +31,9 @@ Browser input/navigation and browser-containing workspace presets request
 network automatically. A screenshot is a file write and is reviewed as such.
 All URL-bearing browser entry points reject local-file, script, browser-internal
 and opaque schemes; ordinary absolute HTTP(S) and `about:blank` are supported.
+The narrow exception is closing an explicitly identified `chrome://` tab in a
+browser this agent owns. This does not authorize navigating to or inspecting an
+internal page, and external browsers remain subject to the normal restriction.
 
 ## Controlled resources
 

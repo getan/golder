@@ -1,7 +1,9 @@
 package browserctl
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -165,5 +167,35 @@ func TestScreenshotTargetPinsTabAndRejectsMismatchedMetadata(t *testing.T) {
 		} else if err != nil || string(data) != "abc" {
 			t.Fatalf("screenshot = %q, %v", data, err)
 		}
+	}
+}
+
+func TestTargetedFullPageScreenshotSupportsBoundedLargeInlineReply(t *testing.T) {
+	png := bytes.Repeat([]byte{42}, 7<<20)
+	encoded := base64.StdEncoding.EncodeToString(png)
+	c := NewWithTransport("stub", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			Params struct {
+				Full bool `json:"full"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Params.Full {
+			t.Fatalf("full-page request = %+v, %v", request, err)
+		}
+		return jsonReply(http.StatusOK, `{"ok":true,"result":{"mimeType":"image/png","data":"`+encoded+`"},"meta":{"browserId":"b1","tabId":"tab-1","targetId":"target-1"}}`), nil
+	}))
+	data, _, err := c.ScreenshotTargetPage(context.Background(), Target{BrowserID: "b1", TabID: "tab-1", TargetID: "target-1"}, true)
+	if err != nil || !bytes.Equal(data, png) {
+		t.Fatalf("large inline screenshot: bytes=%d, err=%v", len(data), err)
+	}
+}
+
+func TestTargetedScreenshotRejectsOversizedReply(t *testing.T) {
+	c := NewWithTransport("stub", roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonReply(http.StatusOK, strings.Repeat("x", maxScreenshotReply+1)), nil
+	}))
+	_, _, err := c.ScreenshotTarget(context.Background(), Target{TabID: "tab"})
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized action reply = %v", err)
 	}
 }

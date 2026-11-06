@@ -27,6 +27,13 @@ Chromium's own profile lock prevents two processes from opening the same profile
 concurrently; a second agent adopts the live default browser instead of starting
 a competing process.
 
+Each browser tool session pins the tab opened or explicitly selected by that
+session. Screenshot, snapshot and other actions use that tab even if Chromium
+later activates a restored internal page. If the pinned tab closes, the tool
+fails rather than silently choosing another; select a tab from `browser.list`.
+An explicitly identified `chrome://` tab may be closed only in an owned
+browser, without granting navigation or inspection access to internal pages.
+
 Chromium component auto-updates are disabled for these automation profiles, so
 speech packs and on-device optimization models cannot silently add gigabytes.
 On each profile open, kitty-browse removes only regenerable component,

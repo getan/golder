@@ -186,6 +186,15 @@ func (g *ControlGuard) checkBrowser(ctx context.Context, id, socket string, host
 	return nil
 }
 
+// ownsBrowser is stricter than host_control or full access: it requires a
+// recorded browser identity and endpoint, as well as the current policy.
+func (g *ControlGuard) ownsBrowser(ctx context.Context, id, socket string) bool {
+	g.mu.Lock()
+	owned, ok := g.browsers[id]
+	g.mu.Unlock()
+	return ok && owned.socket == canonicalBrowserSocket(socket) && g.checkBrowser(ctx, id, socket, false) == nil
+}
+
 func (g *ControlGuard) rememberBrowser(id, socket, window, profile, proxyMode string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -3,6 +3,7 @@ package agenttool
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -35,6 +36,7 @@ type fakeBrowser struct {
 	actions      []map[string]any
 	replies      map[string]string
 	loginProfile string
+	info         string
 	// screenshot, when set, replaces the tiny invalid PNG the default fake
 	// returns. Tests that need a decodable/large image set this.
 	screenshot []byte
@@ -44,6 +46,10 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body string
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/info":
+		if f.info != "" {
+			body = f.info
+			break
+		}
 		profile := ""
 		if f.loginProfile != "" {
 			profile = `,"loginProfile":` + strconv.Quote(f.loginProfile)
@@ -72,11 +78,34 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 		action, _ := req["action"].(string)
 		result, ok := f.replies[action]
 		f.mu.Unlock()
+		target, _ := req["target"].(map[string]any)
+		tabID, _ := target["tabId"].(string)
+		targetID, _ := target["targetId"].(string)
+		pageURL := "http://localhost:3000/login"
+		if f.info != "" {
+			var info browserctl.Info
+			_ = json.Unmarshal([]byte(f.info), &info)
+			for _, tab := range info.Tabs {
+				if tab.ID == tabID {
+					pageURL = tab.URL
+				}
+			}
+		} else if tabID == "tab-1" {
+			pageURL = "http://localhost:3000/"
+		}
+		if action == "screenshot" && !ok {
+			png := f.screenshot
+			if png == nil {
+				png = []byte("\x89PNG\r\n\x1a\nfake")
+			}
+			result = `{"mimeType":"image/png","data":` + strconv.Quote(base64.StdEncoding.EncodeToString(png)) + `}`
+			ok = true
+		}
 		if !ok {
 			result = `{"ok":true}`
 		}
 		body = `{"apiVersion":"v1","id":"x","ok":true,"result":` + result +
-			`,"meta":{"browserId":"browser-1","tabId":"tab-2","url":"http://localhost:3000/","title":"App","backend":"native-cdp"}}`
+			`,"meta":{"browserId":"browser-1","tabId":` + strconv.Quote(tabID) + `,"targetId":` + strconv.Quote(targetID) + `,"url":` + strconv.Quote(pageURL) + `,"title":"App","backend":"native-cdp"}}`
 	default:
 		return &http.Response{StatusCode: http.StatusNotFound, Body: io.NopCloser(strings.NewReader("not found"))}, nil
 	}

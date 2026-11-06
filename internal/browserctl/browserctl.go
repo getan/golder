@@ -37,6 +37,10 @@ const (
 	// this is the transport-level ceiling that keeps a bad daemon from making the
 	// agent retain an unbounded response.
 	maxBody = 8 << 20
+	// Inline screenshots are base64 in a JSON envelope; kitty-browse permits up
+	// to 10 MiB of PNG data and caps the encoded response at 16 MiB.
+	maxInlineScreenshot = 10 << 20
+	maxScreenshotReply  = 16 << 20
 )
 
 // SocketFromEnv returns the configured control socket, or "".
@@ -307,9 +311,16 @@ func (c *Client) Action(ctx context.Context, action string, params any, target T
 		return nil, Meta{}, fmt.Errorf("browser: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	limit := maxBody
+	if action == "screenshot" {
+		limit = maxScreenshotReply
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return nil, Meta{}, fmt.Errorf("browser: read reply: %w", err)
+	}
+	if len(raw) > limit {
+		return nil, Meta{}, fmt.Errorf("browser: action reply exceeds %d-byte limit", limit)
 	}
 	var ar actionResponse
 	if err := json.Unmarshal(raw, &ar); err != nil {
@@ -327,10 +338,15 @@ func (c *Client) Action(ctx context.Context, action string, params any, target T
 // ScreenshotTarget captures a specific tab without changing the browser's
 // globally active tab. Unlike /v1/screenshot, the typed action accepts a target.
 func (c *Client) ScreenshotTarget(ctx context.Context, target Target) ([]byte, Meta, error) {
+	return c.ScreenshotTargetPage(ctx, target, false)
+}
+
+// ScreenshotTargetPage captures the viewport or complete page of a pinned tab.
+func (c *Client) ScreenshotTargetPage(ctx context.Context, target Target, fullPage bool) ([]byte, Meta, error) {
 	if target.TabID == "" && target.TargetID == "" {
 		return nil, Meta{}, errors.New("browser: a tab target is required for a targeted screenshot")
 	}
-	raw, meta, err := c.Action(ctx, "screenshot", map[string]any{}, target, 15*time.Second)
+	raw, meta, err := c.Action(ctx, "screenshot", map[string]any{"full": fullPage}, target, 15*time.Second)
 	if err != nil {
 		return nil, meta, err
 	}
@@ -349,9 +365,15 @@ func (c *Client) ScreenshotTarget(ctx context.Context, target Target) ([]byte, M
 	if result.MimeType != "image/png" || result.Data == "" {
 		return nil, meta, errors.New("browser: screenshot is not an inline PNG")
 	}
+	if len(result.Data) > base64.StdEncoding.EncodedLen(maxInlineScreenshot) {
+		return nil, meta, fmt.Errorf("browser: screenshot exceeds %d-byte limit", maxInlineScreenshot)
+	}
 	data, err := base64.StdEncoding.DecodeString(result.Data)
 	if err != nil {
 		return nil, meta, fmt.Errorf("browser: decode screenshot: %w", err)
+	}
+	if len(data) > maxInlineScreenshot {
+		return nil, meta, fmt.Errorf("browser: screenshot exceeds %d-byte limit", maxInlineScreenshot)
 	}
 	return data, meta, nil
 }

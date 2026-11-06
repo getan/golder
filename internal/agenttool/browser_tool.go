@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -73,11 +74,11 @@ type BrowserTool struct {
 	allowControl bool
 	discover     func(context.Context) browserDiscovery
 
-	// lastTab remembers the tab open created. kitty-browse keeps a blank anchor
-	// target in the background and can report it as active, so "no tab given"
-	// must not mean "whatever the browser says is active" right after open.
+	// lastTab is the last tab explicitly opened or selected by this tool. It
+	// remains pinned even when Chromium changes its globally active tab.
 	tabMu        sync.Mutex
 	lastTab      string
+	lastTargetID string
 	boundSocket  string
 	boundBrowser string
 }
@@ -148,7 +149,8 @@ const browserReadSchema = `{
     "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","status"]},
     "browser":{"type":"string","description":"Exact browser identity, pinned before review."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
-    "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
+    "tab":{"type":"string","description":"Tab id from list; omit for the pinned tab, or a safe active tab if none is pinned."},
+    "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
     "max_nodes":{"type":"integer","minimum":1,"description":"For snapshot: node cap; default 5000."},
@@ -182,7 +184,8 @@ const browserControlSchema = `{
     "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: use a separate named project-scoped profile. Omit for the persistent project-shared default; other names need exact first-use confirmation. Never a personal Chrome profile or filesystem path."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
-    "tab":{"type":"string","description":"Tab id from list; omit for the active tab."},
+    "tab":{"type":"string","description":"Tab id from list; omit for the pinned tab, or a safe active tab if none is pinned."},
+    "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
     "max_nodes":{"type":"integer","minimum":1,"description":"For snapshot: node cap; default 5000."},
@@ -222,6 +225,7 @@ type browserArgs struct {
 	Action      string  `json:"action"`
 	Browser     string  `json:"browser,omitempty"`
 	Tab         string  `json:"tab,omitempty"`
+	TargetID    string  `json:"target_id,omitempty"`
 	Interactive bool    `json:"interactive,omitempty"`
 	Compact     bool    `json:"compact,omitempty"`
 	MaxNodes    int     `json:"max_nodes,omitempty"`
@@ -391,13 +395,6 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	if a.Browser != "" && a.Browser != info.BrowserID {
 		return browserError(errors.New("browser identity changed after review; nothing was sent")), nil
 	}
-	if a.Action == "screenshot" {
-		for _, tab := range info.Tabs {
-			if err := controlcap.BrowserURL(tab.URL); err != nil {
-				return browserError(err), nil
-			}
-		}
-	}
 	if !browserReadOnly(a.Action) || agentcore.SandboxRequestedFromContext(ctx) {
 		if err := t.Control.checkBrowser(ctx, info.BrowserID, t.socketPath(), a.HostControl); err != nil {
 			return browserError(err), nil
@@ -418,9 +415,46 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(payload))},
 			Details: map[string]any{"action": a.Action, "browser": meta.BrowserID},
 		}, nil
-	case "screenshot":
-		png, err := c.Screenshot(ctx, a.FullPage)
+	}
+
+	target, err := t.resolveTarget(info, a.Tab)
+	if err != nil {
+		return browserError(err), nil
+	}
+	if a.TargetID != "" && target.TargetID != a.TargetID {
+		return browserError(errors.New("tab target changed after review; nothing was sent")), nil
+	}
+	var targetURL string
+	for _, tab := range info.Tabs {
+		if tab.ID == target.TabID {
+			targetURL = tab.URL
+			if tab.URL == "" {
+				return browserError(errors.New("selected tab has no known URL; nothing was sent")), nil
+			}
+			if a.PageURL != "" && tab.URL != a.PageURL {
+				return browserError(errors.New("page URL changed after review; nothing was sent")), nil
+			}
+			if err := controlcap.BrowserURL(tab.URL); err != nil {
+				// Closing a known Chromium-internal target in our own browser is
+				// cleanup, not navigation or permission to inspect that page.
+				if a.Action != "tab_close" || strings.TrimSpace(a.Tab) == "" || !strings.HasPrefix(tab.URL, "chrome://") || !t.Control.ownsBrowser(ctx, info.BrowserID, t.socketPath()) {
+					return browserError(err), nil
+				}
+			}
+		}
+	}
+	if a.Action == "screenshot" {
+		png, meta, err := c.ScreenshotTargetPage(ctx, target, a.FullPage)
 		if err != nil {
+			return browserError(err), nil
+		}
+		if meta.URL != targetURL {
+			return browserError(errors.New("page URL changed after review; screenshot was not saved")), nil
+		}
+		if meta.URL == "" {
+			return browserError(errors.New("screenshot response has no page URL; screenshot was not saved")), nil
+		}
+		if err := controlcap.BrowserURL(meta.URL); err != nil {
 			return browserError(err), nil
 		}
 		if cfg, _, cfgErr := image.DecodeConfig(bytes.NewReader(png)); cfgErr == nil {
@@ -441,27 +475,15 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 				"path": out, "bytes": len(png), "hint": "view_image this path to inspect the page",
 			}))},
-			Details: map[string]any{"path": out, "bytes": len(png)},
+			Details: map[string]any{"path": out, "bytes": len(png), "tab": target.TabID},
 		}, nil
-	}
-
-	target, err := pinTab(info, t.tabChoice(a.Tab, info))
-	if err != nil {
-		return browserError(err), nil
-	}
-	for _, tab := range info.Tabs {
-		if tab.ID == target.TabID {
-			if a.PageURL != "" && tab.URL != a.PageURL {
-				return browserError(errors.New("page URL changed after review; nothing was sent")), nil
-			}
-			if err := controlcap.BrowserURL(tab.URL); err != nil {
-				return browserError(err), nil
-			}
-		}
 	}
 	action, params, err := browserActionParams(a)
 	if err != nil {
 		return browserError(err), nil
+	}
+	if a.Action == "tab_select" || a.Action == "tab_close" {
+		params["tabId"] = target.TabID
 	}
 	timeout := time.Duration(a.TimeoutMS) * time.Millisecond
 	if timeout <= 0 || timeout > browserMaxTimeout {
@@ -470,6 +492,26 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	result, meta, err := c.Action(ctx, action, params, target, timeout)
 	if err != nil {
 		return browserError(err), nil
+	}
+	if a.Action == "tab_select" && (meta.BrowserID != info.BrowserID || meta.TabID != target.TabID || meta.TargetID != target.TargetID || meta.URL != targetURL) {
+		return browserError(errors.New("selected tab identity or URL changed; call list and select it explicitly")), nil
+	}
+	if a.Action == "tab_new" && (meta.BrowserID != info.BrowserID || meta.TabID == "" || meta.TargetID == "" || meta.URL == "" || controlcap.BrowserURL(meta.URL) != nil) {
+		return browserError(errors.New("new tab identity could not be confirmed; call list before another action")), nil
+	}
+	if a.Action == "tab_select" || a.Action == "tab_close" || a.Action == "tab_new" {
+		t.tabMu.Lock()
+		switch a.Action {
+		case "tab_select":
+			t.lastTab, t.lastTargetID = target.TabID, target.TargetID
+		case "tab_close":
+			if t.lastTab == target.TabID {
+				t.lastTab, t.lastTargetID = "", ""
+			}
+		case "tab_new":
+			t.lastTab, t.lastTargetID = meta.TabID, meta.TargetID
+		}
+		t.tabMu.Unlock()
 	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -480,78 +522,191 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	}, nil
 }
 
-// pinTab resolves the tab to act on. No tab means the browser's active tab, as
-// reported by the same info call, so the ids always agree with each other.
+// pinTab resolves an exact tab. Without one, use a safe active tab or the only
+// safe tab; an internal active page must not silently redirect an action.
 func pinTab(info browserctl.Info, want string) (browserctl.Target, error) {
 	want = strings.TrimSpace(want)
 	if want == "" {
+		var candidate *browserctl.Tab
+		count := 0
 		for _, tab := range info.Tabs {
+			if tab.ID == "" || tab.TargetID == "" || tab.URL == "" || controlcap.BrowserURL(tab.URL) != nil {
+				continue
+			}
 			if tab.Active || tab.ID == info.ActiveTabID {
 				return browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, nil
 			}
+			count++
+			copy := tab
+			candidate = &copy
 		}
-		if len(info.Tabs) == 1 {
-			tab := info.Tabs[0]
-			return browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, nil
+		if count == 1 {
+			return browserctl.Target{BrowserID: info.BrowserID, TabID: candidate.ID, TargetID: candidate.TargetID}, nil
 		}
-		return browserctl.Target{}, errors.New("the browser reported no active tab; pass tab from list")
+		if count > 1 {
+			return browserctl.Target{}, errors.New("multiple safe tabs are open and no safe tab is active; pass tab from list")
+		}
+		return browserctl.Target{}, errors.New("the browser has no safe active tab; pass an allowed tab from list")
 	}
 	for _, tab := range info.Tabs {
-		if tab.ID == want || tab.TargetID == want {
-			return browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, nil
-		}
-		if strconv.Itoa(tab.Index) == want {
+		if tab.ID == want || tab.TargetID == want || strconv.Itoa(tab.Index) == want {
+			if tab.ID == "" || tab.TargetID == "" {
+				return browserctl.Target{}, errors.New("selected tab has no stable target identity")
+			}
 			return browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, nil
 		}
 	}
 	return browserctl.Target{}, fmt.Errorf("tab %q is not open; call list and use its id", want)
 }
 
-// tabChoice prefers an explicit tab, then the one open created, then the
-// browser's own active tab.
-func (t *BrowserTool) tabChoice(want string, info browserctl.Info) string {
-	if strings.TrimSpace(want) != "" {
-		return want
-	}
+// resolveTarget preserves both IDs across calls. A disappeared or replaced
+// pin is an error, never permission to silently act on a different target.
+func (t *BrowserTool) resolveTarget(info browserctl.Info, want string) (browserctl.Target, error) {
+	explicit := strings.TrimSpace(want) != ""
 	t.tabMu.Lock()
-	id := t.lastTab
+	id, targetID := t.lastTab, t.lastTargetID
 	t.tabMu.Unlock()
-	for _, tab := range info.Tabs {
-		if tab.ID == id {
-			return id
-		}
+	if !explicit {
+		want = id
 	}
-	return ""
+	target, err := pinTab(info, want)
+	if err != nil {
+		return browserctl.Target{}, err
+	}
+	if !explicit && targetID != "" && target.TargetID != targetID {
+		return browserctl.Target{}, errors.New("pinned tab target was replaced; select a tab from list explicitly")
+	}
+	return target, nil
 }
 
-// selectOpenedTab records and activates the tab that now shows url. Without the
-// activation the pane keeps showing whichever internal target Chromium opened
-// last — usually a blank page that never produces a frame, which is why the
-// first version of open left a black pane behind.
-func (t *BrowserTool) selectOpenedTab(socket, url string) {
+// selectOpenedTab binds startup to the requested page, or its unambiguous
+// redirected target. It never retries a rejected activation, including pause.
+func (t *BrowserTool) selectOpenedTab(ctx context.Context, socket, url string) error {
 	c, err := browserctl.Dial(socket)
 	if err != nil {
-		return
+		return err
 	}
-	want := strings.TrimSuffix(url, "/")
-	// The socket appears before the tab does, so give it a moment.
-	for i := 0; i < 15; i++ {
-		info, err := c.Info(context.Background())
+	defer c.CloseIdleConnections()
+	return t.selectOpenedTabWithClient(ctx, c, url)
+}
+
+func (t *BrowserTool) selectOpenedTabWithClient(ctx context.Context, c *browserctl.Client, url string) error {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		info, err := c.Info(ctx)
 		if err == nil {
-			for _, tab := range info.Tabs {
-				if strings.TrimSuffix(tab.URL, "/") == want {
-					t.tabMu.Lock()
-					t.lastTab = tab.ID
-					t.tabMu.Unlock()
-					_, _, _ = c.Action(context.Background(), "tab.activate",
-						map[string]any{"tabId": tab.ID},
-						browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
-					return
+			if err := t.checkBinding(info); err != nil {
+				return err
+			}
+			if err := t.checkProfileAccess(info); err != nil {
+				return err
+			}
+			if tab, ok := initialBrowserTab(info, url); ok {
+				if err := activateBrowserTab(ctx, c, info, tab); err != nil {
+					return err
 				}
+				t.tabMu.Lock()
+				t.lastTab, t.lastTargetID = tab.ID, tab.TargetID
+				t.tabMu.Unlock()
+				return nil
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("cannot identify the opened browser tab; call list and select it explicitly: %w", ctx.Err())
+		case <-tick.C:
+		}
 	}
+}
+
+func initialBrowserTab(info browserctl.Info, rawURL string) (browserctl.Tab, bool) {
+	var exact, fallback browserctl.Tab
+	exactCount, fallbackCount := 0, 0
+	for _, tab := range info.Tabs {
+		if tab.ID == "" || tab.TargetID == "" || tab.URL == "" || controlcap.BrowserURL(tab.URL) != nil {
+			continue
+		}
+		if sameBrowserURL(tab.URL, rawURL) {
+			exact, exactCount = tab, exactCount+1
+		}
+		if tab.URL != "about:blank" || rawURL == "about:blank" {
+			fallback, fallbackCount = tab, fallbackCount+1
+		}
+	}
+	if exactCount == 1 {
+		return exact, true
+	}
+	// The host's initially opened tab is index 1. A later restored tab must
+	// never be mistaken for a redirect while the initial page is still blank.
+	if exactCount == 0 && fallbackCount == 1 && fallback.Index == 1 {
+		return fallback, true
+	}
+	return browserctl.Tab{}, false
+}
+
+// Normalize only the empty root path; other trailing slashes, queries, and
+// fragments can identify genuinely different pages and must not be collapsed.
+func sameBrowserURL(a, b string) bool {
+	if a == b {
+		return true
+	}
+	left, leftErr := url.Parse(a)
+	right, rightErr := url.Parse(b)
+	if leftErr != nil || rightErr != nil || left.Scheme == "" || right.Scheme == "" {
+		return false
+	}
+	if left.Path == "" && left.Host != "" {
+		left.Path = "/"
+	}
+	if right.Path == "" && right.Host != "" {
+		right.Path = "/"
+	}
+	return left.String() == right.String()
+}
+
+func matchingBrowserTab(info browserctl.Info, rawURL, pinnedTab, pinnedTarget string) (browserctl.Tab, bool, error) {
+	var match, preferred browserctl.Tab
+	count := 0
+	for _, tab := range info.Tabs {
+		if !sameBrowserURL(tab.URL, rawURL) {
+			continue
+		}
+		if tab.ID == "" || tab.TargetID == "" {
+			return browserctl.Tab{}, false, errors.New("matching tab has no stable target identity")
+		}
+		if tab.ID == pinnedTab && pinnedTarget != "" && tab.TargetID != pinnedTarget {
+			return browserctl.Tab{}, false, errors.New("pinned tab target was replaced; select a tab explicitly")
+		}
+		if tab.ID == pinnedTab && tab.TargetID == pinnedTarget {
+			preferred = tab
+		}
+		match, count = tab, count+1
+	}
+	if preferred.ID != "" {
+		return preferred, true, nil
+	}
+	if count > 1 {
+		return browserctl.Tab{}, false, errors.New("multiple tabs show that URL; select the intended tab explicitly")
+	}
+	return match, count == 1, nil
+}
+
+func activateBrowserTab(ctx context.Context, c *browserctl.Client, info browserctl.Info, tab browserctl.Tab) error {
+	if tab.Active || tab.ID == info.ActiveTabID {
+		return nil
+	}
+	_, meta, err := c.Action(ctx, "tab.activate", map[string]any{"tabId": tab.ID},
+		browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	if meta.BrowserID != info.BrowserID || meta.TabID != tab.ID || meta.TargetID != tab.TargetID || meta.URL != tab.URL {
+		return errors.New("activated tab identity or URL changed; select it explicitly")
+	}
+	return nil
 }
 
 // browserActionParams maps the tool's flat arguments onto one browser
@@ -872,7 +1027,9 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 				break
 			}
 		}
-		t.selectOpenedTab(socket, url)
+		if err := t.selectOpenedTab(ctx, socket, url); err != nil {
+			return browserError(err), nil
+		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 				"socket": socket, "url": url, "started": true, "surface": "native",
@@ -893,7 +1050,9 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 			break
 		}
 	}
-	t.selectOpenedTab(socket, url)
+	if err := t.selectOpenedTab(ctx, socket, url); err != nil {
+		return browserError(err), nil
+	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 			"socket": socket, "window_id": window, "url": url, "started": true,
@@ -913,6 +1072,7 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	if err != nil {
 		return err
 	}
+	defer c.CloseIdleConnections()
 	info, err := c.Info(ctx)
 	if err != nil {
 		return err
@@ -923,27 +1083,41 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	if err := t.checkBinding(info); err != nil {
 		return err
 	}
-	want := strings.TrimSuffix(url, "/")
-	for _, tab := range info.Tabs {
-		if strings.TrimSuffix(tab.URL, "/") != want {
-			continue
-		}
-		t.tabMu.Lock()
-		t.lastTab = tab.ID
-		t.tabMu.Unlock()
-		_, _, err := c.Action(ctx, "tab.activate", map[string]any{"tabId": tab.ID},
-			browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
-		return err
-	}
-	target, err := pinTab(info, t.tabChoice("", info))
+	t.tabMu.Lock()
+	pinnedTab, pinnedTarget := t.lastTab, t.lastTargetID
+	t.tabMu.Unlock()
+	tab, found, err := matchingBrowserTab(info, url, pinnedTab, pinnedTarget)
 	if err != nil {
 		return err
+	}
+	if found {
+		if err := activateBrowserTab(ctx, c, info, tab); err != nil {
+			return err
+		}
+		t.tabMu.Lock()
+		t.lastTab, t.lastTargetID = tab.ID, tab.TargetID
+		t.tabMu.Unlock()
+		return nil
+	}
+	target, err := t.resolveTarget(info, "")
+	if err != nil {
+		return err
+	}
+	for _, tab := range info.Tabs {
+		if tab.ID == target.TabID {
+			if tab.URL == "" {
+				return errors.New("selected tab has no known URL; navigation was not sent")
+			}
+			if err := controlcap.BrowserURL(tab.URL); err != nil {
+				return err
+			}
+		}
 	}
 	if _, _, err := c.Action(ctx, "navigate", map[string]any{"url": url}, target, 60*time.Second); err != nil {
 		return err
 	}
 	t.tabMu.Lock()
-	t.lastTab = target.TabID
+	t.lastTab, t.lastTargetID = target.TabID, target.TargetID
 	t.tabMu.Unlock()
 	return nil
 }

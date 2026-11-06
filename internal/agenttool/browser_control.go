@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"github.com/getan/golder/internal/controlcap"
 )
@@ -22,6 +23,9 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 	}
 	if err := controlcap.BrowserURL(a.URL); err != nil {
 		return nil, err
+	}
+	if (a.Action == "tab_close" || a.Action == "tab_select") && strings.TrimSpace(a.Tab) == "" {
+		return nil, errors.New(a.Action + " needs an explicit tab id from list")
 	}
 	if a.Profile != "" && (a.Action != "open" || !browserProfileName.MatchString(a.Profile)) {
 		return nil, errors.New("profile is a validated name supported only by open")
@@ -86,14 +90,21 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 		return nil, errors.New("selected browser does not match requested browser")
 	}
 	a.Browser = info.BrowserID
-	if a.Action != "screenshot" {
-		target, err := pinTab(info, t.tabChoice(a.Tab, info))
+	if a.Action != "status" && a.Action != "pause" && a.Action != "resume" {
+		target, err := t.resolveTarget(info, a.Tab)
 		if err != nil {
 			return nil, err
 		}
+		if a.TargetID != "" && a.TargetID != target.TargetID {
+			return nil, errors.New("selected tab target does not match the requested target")
+		}
 		a.Tab = target.TabID
+		a.TargetID = target.TargetID
 		for _, tab := range info.Tabs {
 			if tab.ID == target.TabID {
+				if a.PageURL != "" && a.PageURL != tab.URL {
+					return nil, errors.New("selected tab URL does not match the requested page")
+				}
 				a.PageURL = tab.URL
 			}
 		}

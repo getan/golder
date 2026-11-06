@@ -204,7 +204,7 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 	bound := t.boundSocket
 	if bound != "" {
 		if _, err := os.Stat(bound); os.IsNotExist(err) {
-			t.boundSocket, t.boundBrowser, t.lastTab = "", "", ""
+			t.boundSocket, t.boundBrowser, t.lastTab, t.lastTargetID = "", "", "", ""
 		}
 	}
 	t.tabMu.Unlock()
@@ -228,8 +228,10 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 
 func (t *BrowserTool) bind(instance browserInstance) {
 	t.tabMu.Lock()
+	if t.boundBrowser != instance.Info.BrowserID || canonicalBrowserSocket(t.boundSocket) != canonicalBrowserSocket(instance.Socket) {
+		t.lastTab, t.lastTargetID = "", "" // refs and tab choices belong to the previous browser
+	}
 	t.boundSocket, t.boundBrowser = instance.Socket, instance.Info.BrowserID
-	t.lastTab = "" // refs and tab choices belong to the previous browser
 	t.tabMu.Unlock()
 }
 
