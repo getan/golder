@@ -55,7 +55,7 @@ func (p *Plugin) Server(version string) *mcp.Server {
 		add(name, d.Description, d.schema())
 	}
 	add("status", "Diagnose Lark and Project separately: install/configuration/user authorization, not MCP readiness. Explicit call may verify the server; never auto-installs or logs in.", json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"verify":{"type":"boolean","default":true}}}`))
-	add("cli_help", "Read bounded help for one Lark/Project business command. Use before cli_call for long-tail operations; no full CLI manual in context.", tailSchema(false))
+	add("cli_help", "Read bounded help for an exposed Lark/Project business command. For Project work-item query use service=project and command=['workitem','query']; ticket_search is an MCP tool, not a CLI command. Business commands depend on the installed CLI and Project login.", tailSchema(false))
 	add("cli_call", "Execute an approved long-tail business command in the same private state/sandbox. Native fixed CLI only; no shell, auth/config/install, raw API or local-file inputs. Requires exact operator approval.", tailSchema(true))
 	return s
 }

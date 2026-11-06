@@ -38,6 +38,9 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	}
 	if name == "cli_help" {
 		if err := businessCommand(in.Service, in.Command, true); err != nil {
+			if in.Service == "project" && len(in.Command) > 0 && (in.Command[0] == "ticket" || in.Command[0] == "ticket_search" || in.Command[0] == "ticket-search") {
+				return failure(in.Service, "COMMAND_BLOCKED", "ticket_search is an MCP tool, not a Project CLI command family", `For work-item query help call cli_help with {"service":"project","command":["workitem","query"]}; command availability depends on the installed CLI and Project login`)
+			}
 			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Only business command help is available")
 		}
 		args := append(append([]string{}, in.Command...), "--help")

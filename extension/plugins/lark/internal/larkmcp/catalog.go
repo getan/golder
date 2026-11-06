@@ -62,7 +62,7 @@ func definitions() []definition {
 		{Name: "project_schema", Description: "Discover Feishu Project spaces, work-item types/fields/roles, users and allowed workflow transitions. Project is not Approval.", Service: "project", Default: "projects", Options: options("query project_key work_item_type work_item_id field_query field_keys role_query page_num transition_id"), Operations: map[string]operation{
 			"projects": op("project search"), "types": op("workitem meta-types", "project_key"), "fields": op("workitem meta-fields", "project_key", "work_item_type"), "roles": op("workitem meta-roles", "project_key", "work_item_type"), "users": op("user search", "project_key", "query"), "me": op("user me"), "transitions": op("workflow list-state-transitions", "project_key", "work_item_id"), "required": op("workflow list-state-required", "project_key", "work_item_id", "transition_id"), "nodes": op("workflow get-node", "project_key", "work_item_id"), "decode_url": op("url decode", "url"),
 		}},
-		{Name: "ticket_search", Description: "Search Feishu Project requirements/bugs/tasks in one project/type using a bounded, escaped read-only query. Discover real type/status keys first.", Service: "project", Default: "search", Options: options("project_key work_item_type query assignee status session_id group_pagination_list limit"), Operations: map[string]operation{"search": op("workitem query", "project_key")}},
+		{Name: "ticket_search", Description: "Search Feishu Project requirements/bugs/tasks in one project/type using a bounded, escaped read-only query. Discover real type/status keys first. assignee only accepts 'me' and filters current_status_operator; it is not a comprehensive participant or watcher search.", Service: "project", Default: "search", Options: options("project_key work_item_type query assignee status session_id group_pagination_list limit"), Operations: map[string]operation{"search": op("workitem query", "project_key")}},
 		{Name: "ticket_get", Description: "Read a Feishu Project work item by actual ID and project key. Returns its real work-item type; do not assume story/issue.", Service: "project", Default: "run", Options: options("project_key work_item_id fields"), Operations: map[string]operation{"run": op("workitem get", "project_key", "work_item_id")}},
 		{Name: "ticket_update", Description: "Update specific Feishu Project fields (title, assignee, priority, dates). Reads current item/schema, stringifies field_value, then reads back; no status-field shortcut.", Service: "project", Write: true, Default: "run", Options: options("project_key work_item_id fields expected"), Operations: map[string]operation{"run": op("workitem update", "project_key", "work_item_id", "fields")}},
 		{Name: "ticket_transition", Description: "Perform one allowed Feishu Project state transition or confirm one workflow node. Not Approval approve/reject. Requires exact operator approval.", Service: "project", Write: true, Default: "state", Options: options("project_key work_item_id transition_id node_id fields"), Operations: map[string]operation{"state": op("workflow transition-state", "project_key", "work_item_id", "transition_id"), "node": op("workflow transition", "project_key", "work_item_id", "node_id")}},
@@ -94,7 +94,12 @@ func definitions() []definition {
 		}
 		if d.Name == "ticket_search" {
 			d.Options["limit"] = integer(50)
-			d.Options["group_pagination_list"] = array("Continuation group_id/page_num from a previous query")
+			d.Options["assignee"] = map[string]any{
+				"type": "string", "enum": []string{"me"},
+				"description": "Optional: only the literal 'me' is supported; do not pass a user_key, open_id, email or display name. It matches array_contains(current_status_operator, current_login_user()). Coverage of other roles, collaborators, node owners and watchers is not guaranteed; omit to search without this filter.",
+			}
+			d.Options["session_id"] = text("Continuation session_id from the previous query. The existing server-side query is continued; other search filters are not reapplied.")
+			d.Options["group_pagination_list"] = array("Continuation group_id/page_num from the previous query; provide together with session_id")
 		}
 		if d.Name == "project_schema" {
 			d.Options["url"] = text("Feishu Project URL for decode_url")

@@ -11,6 +11,8 @@ import (
 
 var identifier = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
+var errSearchAssignee = errors.New("assignee only accepts the literal 'me'; user IDs, user keys, open IDs, emails and display names are not supported")
+
 func projectArgs(command []string, params map[string]any) []string {
 	b, _ := json.Marshal(params)
 	return append(append([]string{}, command...), "--params="+string(b))
@@ -21,6 +23,9 @@ func (p *Plugin) project(ctx context.Context, d definition, in input, operation 
 	if d.Name == "ticket_search" {
 		params, err := searchParams(o)
 		if err != nil {
+			if errors.Is(err, errSearchAssignee) {
+				return failure("project", "INVALID_QUERY", err.Error(), "Set assignee to 'me' for the current status operator, or omit assignee to search without that filter; other-user and watcher filters are not supported by ticket_search")
+			}
 			return failure("project", "INVALID_QUERY", err.Error(), "Discover a real project/type and use structured filters")
 		}
 		return p.run(ctx, "project", projectArgs(operation.Command, params), false)
@@ -141,6 +146,12 @@ func searchParams(o map[string]any) (map[string]any, error) {
 	if !identifier.MatchString(project) {
 		return nil, errors.New("project_key must be an actual resolved identifier")
 	}
+	if value, present := o["assignee"]; present {
+		assignee, ok := value.(string)
+		if !ok || assignee != "me" {
+			return nil, errSearchAssignee
+		}
+	}
 	if session, _ := o["session_id"].(string); session != "" {
 		if o["group_pagination_list"] == nil {
 			return nil, errors.New("continuation needs group_pagination_list")
@@ -170,10 +181,7 @@ func searchParams(o map[string]any) (map[string]any, error) {
 	if status, _ := o["status"].(string); status != "" {
 		conditions = append(conditions, "`work_item_status` = '"+strings.ReplaceAll(status, "'", "''")+"'")
 	}
-	if assignee, _ := o["assignee"].(string); assignee != "" {
-		if assignee != "me" {
-			return nil, errors.New("assignee currently supports me; discover the actual personnel field and use an explicitly reviewed long-tail query for other users")
-		}
+	if _, present := o["assignee"]; present {
 		conditions = append(conditions, "array_contains(`current_status_operator`, current_login_user())")
 	}
 	if len(conditions) > 0 {

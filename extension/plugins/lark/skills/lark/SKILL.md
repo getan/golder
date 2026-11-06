@@ -15,7 +15,9 @@ Read only the relevant reference below, not the entire upstream CLI manual.
 
 Tools use `{operation, options}`; option names use underscores. Options are typed
 and map to the installed CLI's documented flags. Check tool schemas, never guess
-new flags. If an operation is unavailable, inspect with `cli_help`.
+new flags. For Project `ticket_search`, the optional assignee is only `"me"`,
+not a user ID, and it is not a comprehensive search for everyone related to an
+item. If an operation is unavailable, inspect an allowed CLI path with `cli_help`.
 
 ## Identity, authorization and safety
 

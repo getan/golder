@@ -145,6 +145,12 @@ There are 20 high-frequency tools and `cli_help`/`cli_call`. Common tools accept
 {"operation":"search","options":{"project_key":"actual-key","work_item_type":"actual-type","query":"登录失败","limit":20}}
 ```
 
+For `ticket_search`, `assignee` is optional and accepts only `"me"`, not user
+IDs or names. It filters `current_status_operator` against the logged-in Project
+user; it does not establish exhaustive coverage of all roles, collaborators,
+node owners or watchers. Omit it for no assignee filter. Continuations reuse
+the original server-side query rather than applying new search filters.
+
 ```json
 {"operation":"cells","options":{"spreadsheet_token":"actual-token","sheet_id":"actual-sheet","range":"A1","cells":[[{"value":"001"}]]},"confirm":true}
 ```
@@ -155,7 +161,9 @@ available tool schemas to the model; this is not intent-based schema unloading.
 The model chooses tools semantically, not through a background keyword watcher.
 
 `status` diagnoses both services independently. `cli_help` discovers a focused
-business command; `cli_call` invokes the fixed native binary with literal argv,
+business command (for Project MQL use `{"service":"project","command":["workitem","query"]}`,
+not the MCP tool name `ticket_search`); availability depends on the installed
+CLI and Project login. `cli_call` invokes the fixed native binary with literal argv,
 never a shell. Auth/config/install, raw API, local-file/output paths, destructive
 bulk actions and permission/automation bypasses are blocked. A narrower tool deny
 disables the aggregate entry rather than leaving a way around that deny.

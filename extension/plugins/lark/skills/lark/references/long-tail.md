@@ -4,6 +4,10 @@ Prefer named tools for supported common work. Otherwise:
 
 1. `cli_help` with service=lark/project and a command path, e.g.
    `{"service":"lark","command":["sheets","+styles-put"]}`.
+   For Project MQL search help use
+   `{"service":"project","command":["workitem","query"]}`; `ticket_search`
+   is the MCP tool name, not a Project CLI command family. The installed CLI may
+   require Project login and server-side command discovery before help works.
 2. Read only that command's help; ensure targets, options and impact are clear.
 3. Explain the exact operation to the operator. Use `cli_call` with an argv array
    and confirm=true. This still requires the host's exact human approval.

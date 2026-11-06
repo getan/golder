@@ -8,9 +8,16 @@ These are Project requirements/bugs/tasks, not Approval `approve/reject` tasks.
 2. Discover types, fields, roles and users. For an existing item, `ticket_get`
    returns its actual type. Never hardcode story/issue, priority or status values.
 3. `ticket_search` takes project_key/work_item_type and optional query, status,
-   assignee=me, limit (1–50). It compiles a bounded escaped MQL statement. Status
-   must come from real schema options. Pagination uses session_id and
-   group_pagination_list from the previous result, not LIMIT offset.
+   `assignee="me"`, limit (1–50). `assignee` only accepts the literal `"me"`;
+   do not pass a Project user_key, Lark open_id, email, or display name. Omit it
+   to search without that filter. It compiles the bounded MQL condition
+   `array_contains(current_status_operator, current_login_user())`, which is
+   not a proven exhaustive search over role members, node owners, collaborators,
+   or watchers. Do not claim it finds all related/followed items; if watcher-only
+   coverage is required, explain that this named tool does not establish it.
+   Status must come from real schema options. Pagination uses session_id and
+   group_pagination_list from the previous result, not LIMIT offset; search
+   filters on a continuation are not reapplied to the existing server query.
 4. `ticket_update` takes exact project_key/work_item_id and a fields array of
    `{field_key, field_value}`. The wrapper serializes non-string values into the
    Project string protocol; user IDs must be Project user_keys, not Lark open_ids.
@@ -23,6 +30,10 @@ These are Project requirements/bugs/tasks, not Approval `approve/reject` tasks.
 
 ```json
 {"operation":"search","options":{"project_key":"actual-project-key","work_item_type":"actual-type-key","query":"登录失败","limit":20}}
+```
+
+```json
+{"operation":"search","options":{"project_key":"actual-project-key","work_item_type":"actual-type-key","assignee":"me","limit":20}}
 ```
 
 ```json
