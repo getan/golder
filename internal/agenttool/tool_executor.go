@@ -190,8 +190,12 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	if t, ok := tool.(interface{ RequiresOperatorConfirmationFor(json.RawMessage) bool }); ok {
 		requireOperator = requireOperator || t.RequiresOperatorConfirmationFor(args)
 	}
+	requirePolicy := false
+	if t, ok := tool.(interface{ RequiresPolicyApproval() bool }); ok {
+		requirePolicy = t.RequiresPolicyApproval()
+	}
 	if cfg.BeforeToolCall != nil {
-		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator}); dec != nil {
+		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator, RequirePolicyApproval: requirePolicy}); dec != nil {
 			if dec.Block {
 				r := agentcore.AgentToolResult{}
 				if dec.Content != nil {
@@ -215,6 +219,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			}
 			if dec.OperatorConfirmed {
 				execCtx = agentcore.WithOperatorConfirmation(execCtx, call.ID, call.Name, args)
+			}
+			if dec.PolicyApproved {
+				execCtx = agentcore.WithPolicyApproval(execCtx, call.ID, call.Name, args)
 			}
 			if dec.HostControl {
 				execCtx = agentcore.WithHostControlGrant(execCtx)
@@ -250,6 +257,10 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 	}
 	if requireOperator && !agentcore.OperatorConfirmedFor(execCtx, call.ID, call.Name, args) {
 		r := errorResult("this tool requires an exact operator confirmation; not executed")
+		return nil, nil, ctx, &r, true
+	}
+	if requirePolicy && !agentcore.PolicyApprovedFor(execCtx, call.ID, call.Name, args) {
+		r := errorResult("this tool requires exact-call authorization by the host policy; not executed")
 		return nil, nil, ctx, &r, true
 	}
 

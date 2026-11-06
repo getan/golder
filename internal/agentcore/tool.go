@@ -49,6 +49,9 @@ type AgentToolCall struct {
 	// RequireOperatorConfirmation is set by the tool registry, never decoded
 	// from model output. It forces an exact, interactive one-call approval.
 	RequireOperatorConfirmation bool `json:"-"`
+	// RequirePolicyApproval is set by a trusted tool, never by model output.
+	// The active host policy must authorize this exact call before execution.
+	RequirePolicyApproval bool `json:"-"`
 }
 
 // AgentToolResult is the outcome of executing a tool.

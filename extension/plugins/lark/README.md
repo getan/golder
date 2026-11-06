@@ -168,11 +168,18 @@ never a shell. Auth/config/install, raw API, local-file/output paths, destructiv
 bulk actions and permission/automation bypasses are blocked. A narrower tool deny
 disables the aggregate entry rather than leaving a way around that deny.
 
-Writes and long-tail execution require **ask mode and a bound human confirmation**.
-`confirm=true` expresses intent only. The Golder host attaches a namespaced MCP
-metadata marker after its exact-call approval. Other MCP hosts must implement an
-equivalent human gate and attach `io.golder/operator-confirmed`; arguments cannot
-set it. A host owns that assertion; this is not a signed cross-host credential.
+For the configured `mcp.lark` source (or an aliased stdio `golder-lark` source)
+and its write/confirmation tools, `auto`
+uses the reviewer's exact-call decision without a person prompt, `ask` requires
+the person's confirmation, `full-access` allows the call subject to the static
+safety floor, and `read-only` blocks writes. Other extensions keep their existing
+confirmation policies. `confirm=true` expresses intent only; it cannot grant
+authority. The host binds its approval to the exact tool call and sends
+`io.golder/policy-approved`, distinct from the human-only
+`io.golder/operator-confirmed` marker. Other MCP hosts are responsible for
+their own policy before asserting either marker; these are host assertions,
+not signed cross-host credentials. The matching updated Lark helper must be
+installed for it to understand policy-approved calls.
 No automatic `--yes`, bot fallback or write replay. Readback/receipts are explicitly
 reported as such, not falsely labeled complete equivalence verification.
 

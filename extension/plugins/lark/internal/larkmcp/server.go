@@ -40,6 +40,9 @@ func (p *Plugin) Server(version string) *mcp.Server {
 			if request.Params.Meta[extension.OperatorConfirmedMeta] == true {
 				ctx = context.WithValue(ctx, operatorKey{}, true)
 			}
+			if request.Params.Meta[extension.PolicyApprovedMeta] == true {
+				ctx = context.WithValue(ctx, policyKey{}, true)
+			}
 			result := p.Call(ctx, name, request.Params.Arguments)
 			b, _ := json.Marshal(result)
 			return &mcp.CallToolResult{IsError: !result.OK, Content: []mcp.Content{&mcp.TextContent{Text: string(b)}}}, nil
@@ -56,7 +59,7 @@ func (p *Plugin) Server(version string) *mcp.Server {
 	}
 	add("status", "Diagnose Lark and Project separately: install/configuration/user authorization, not MCP readiness. Explicit call may verify the server; never auto-installs or logs in.", json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"verify":{"type":"boolean","default":true}}}`))
 	add("cli_help", "Read bounded help for an exposed Lark/Project business command. For Project work-item query use service=project and command=['workitem','query']; ticket_search is an MCP tool, not a CLI command. Business commands depend on the installed CLI and Project login.", tailSchema(false))
-	add("cli_call", "Execute an approved long-tail business command in the same private state/sandbox. Native fixed CLI only; no shell, auth/config/install, raw API or local-file inputs. Requires exact operator approval.", tailSchema(true))
+	add("cli_call", "Execute an approved long-tail business command in the same private state/sandbox. Native fixed CLI only; no shell, auth/config/install, raw API or local-file inputs. Requires exact-call host policy authorization.", tailSchema(true))
 	return s
 }
 
@@ -67,8 +70,13 @@ type input struct {
 }
 
 type operatorKey struct{}
+type policyKey struct{}
 
 func operatorConfirmed(ctx context.Context) bool { v, _ := ctx.Value(operatorKey{}).(bool); return v }
+func hostAuthorized(ctx context.Context) bool {
+	approved, _ := ctx.Value(policyKey{}).(bool)
+	return approved || operatorConfirmed(ctx)
+}
 
 func waitPoll(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
@@ -94,8 +102,8 @@ func (p *Plugin) Call(ctx context.Context, name string, raw json.RawMessage) Res
 	if !ok {
 		return failure("", "UNKNOWN_TOOL", "Unknown Lark MCP tool", "Refresh the catalog")
 	}
-	if d.Write && !operatorConfirmed(ctx) {
-		return failure(d.Service, "OPERATOR_CONFIRMATION_REQUIRED", "This write requires the host's exact human approval, not a model boolean", "Use the supplied confirm_tools configuration in ask mode")
+	if d.Write && !hostAuthorized(ctx) {
+		return failure(d.Service, "OPERATOR_CONFIRMATION_REQUIRED", "This write requires exact-call host policy authorization, not a model boolean", "Use the configured host approval chain; auto uses the reviewer and ask uses the person's decision")
 	}
 	var in input
 	if json.Unmarshal(raw, &in) != nil {

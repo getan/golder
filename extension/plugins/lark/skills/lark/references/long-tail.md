@@ -9,8 +9,9 @@ Prefer named tools for supported common work. Otherwise:
    is the MCP tool name, not a Project CLI command family. The installed CLI may
    require Project login and server-side command discovery before help works.
 2. Read only that command's help; ensure targets, options and impact are clear.
-3. Explain the exact operation to the operator. Use `cli_call` with an argv array
-   and confirm=true. This still requires the host's exact human approval.
+3. Use `cli_call` with the exact argv array and confirm=true. The host separately
+   authorizes that call: the reviewer decides in `auto`, while `ask` requests a
+   person's confirmation. Never bypass a denial.
 4. Evaluate the result and perform a focused readback as needed. No write retries.
 
 The executable is fixed. No shell strings, pipes, executable paths, config/auth,

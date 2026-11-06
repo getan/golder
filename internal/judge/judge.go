@@ -511,12 +511,13 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 		// returns nil (the common case: a tool with no further opinion) would
 		// silently discard the user's decision — the read would be refused after
 		// they approved it.
-		if firstDec != nil && (firstDec.OperatorConfirmed || firstDec.Sandbox || firstDec.Network || firstDec.HostControl || firstDec.Direct || firstDec.BrowserRuntime || firstDec.Bare || firstDec.ReadGrant != "" || firstDec.WriteGrant != "" || firstDec.ExecutionBinding != "") {
+		if firstDec != nil && (firstDec.OperatorConfirmed || firstDec.PolicyApproved || firstDec.Sandbox || firstDec.Network || firstDec.HostControl || firstDec.Direct || firstDec.BrowserRuntime || firstDec.Bare || firstDec.ReadGrant != "" || firstDec.WriteGrant != "" || firstDec.ExecutionBinding != "") {
 			if dec == nil {
 				return firstDec
 			}
 			out := *dec
 			out.OperatorConfirmed = out.OperatorConfirmed || firstDec.OperatorConfirmed
+			out.PolicyApproved = out.PolicyApproved || firstDec.PolicyApproved
 			out.Sandbox = out.Sandbox || firstDec.Sandbox
 			out.Network = out.Network || firstDec.Network
 			out.HostControl = out.HostControl || firstDec.HostControl

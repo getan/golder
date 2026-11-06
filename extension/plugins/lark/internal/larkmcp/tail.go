@@ -50,8 +50,8 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	if !in.Confirm {
 		return failure(in.Service, "INTENT_REQUIRED", "Confirm the exact CLI operation before execution", "Host approval is separate")
 	}
-	if !operatorConfirmed(ctx) {
-		return failure(in.Service, "OPERATOR_CONFIRMATION_REQUIRED", "Long-tail execution requires the host's exact human approval", "Use the supplied confirm_tools configuration in ask mode")
+	if !hostAuthorized(ctx) {
+		return failure(in.Service, "OPERATOR_CONFIRMATION_REQUIRED", "Long-tail execution requires exact-call host policy authorization", "Use the configured host approval chain; auto uses the reviewer and ask uses the person's decision")
 	}
 	if len(in.Argv) < 2 {
 		return failure(in.Service, "COMMAND_BLOCKED", "Provide a business command and its operation", "Use cli_help")

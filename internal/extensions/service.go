@@ -559,9 +559,13 @@ func (m *Manager) List() []Snapshot {
 func (m *Manager) Tools() []agentcore.AgentTool {
 	var out []agentcore.AgentTool
 	for _, snap := range m.List() {
+		origin, err := m.get(snap.Ref)
+		if err != nil {
+			continue
+		}
 		for _, v := range snap.Tools {
 			if v.State == "available" {
-				out = append(out, &tool{manager: m, ref: snap.Ref, spec: v.Spec, name: v.ModelName})
+				out = append(out, &tool{manager: m, ref: snap.Ref, origin: origin, spec: v.Spec, name: v.ModelName})
 			}
 		}
 	}

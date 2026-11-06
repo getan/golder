@@ -83,6 +83,9 @@ type BeforeToolCallDecision struct {
 	// OperatorConfirmed records a person's exact-call answer. It cannot be
 	// supplied by tool arguments or the automatic reviewer.
 	OperatorConfirmed bool
+	// PolicyApproved records an exact-call host policy approval. Unlike
+	// OperatorConfirmed, this may be granted by the reviewer in auto mode.
+	PolicyApproved bool
 	// Sandbox asks the execution layer to run this call under OS-level
 	// isolation (e.g. a permission gate graded the command into a sandbox
 	// tier). The executor publishes the request into the context the tool

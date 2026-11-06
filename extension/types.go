@@ -35,9 +35,13 @@ type Call struct {
 	// OperatorConfirmed is host-only state. MCP transports may attach the
 	// namespaced metadata marker, never a field in model-controlled arguments.
 	OperatorConfirmed bool `json:"-"`
+	// PolicyApproved is a distinct host-only exact-call policy decision; it
+	// does not assert that a person individually confirmed the operation.
+	PolicyApproved bool `json:"-"`
 }
 
 const OperatorConfirmedMeta = "io.golder/operator-confirmed"
+const PolicyApprovedMeta = "io.golder/policy-approved"
 const ExecutablePathsEnv = "GOLDER_EXTENSION_EXECUTABLES"
 
 // ContentBlock is data, never a request to execute or to change host policy.

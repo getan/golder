@@ -158,7 +158,7 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			// Full access is a real mode: no review, no consent, no sandbox.
 			// Only the static floor above survives.
 			needs := collectNeeds(ctx, opts, call, Verdict{}, mode, lang)
-			if !hasPathNeed(needs) {
+			if !hasPathNeed(needs) && !call.RequirePolicyApproval {
 				// No path grant is needed: the tool's own full-access branch
 				// already runs it bare and its network branch already admits
 				// egress. Returning an empty decision would only add noise to
@@ -169,13 +169,14 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			if dec == nil {
 				return nil
 			}
+			dec.PolicyApproved = call.RequirePolicyApproval
 			return dec
 		}
 		if dec := boundaryBlocked(call, opts); dec != nil {
 			return dec
 		}
 
-		if mode == permissions.ReadOnly && !readOnlyAllowedCall(call.Name, call.Arguments) {
+		if mode == permissions.ReadOnly && (call.RequirePolicyApproval || !readOnlyAllowedCall(call.Name, call.Arguments)) {
 			notify(Note{
 				Tool: call.Name, ToolCallID: call.ID, Kind: NoteReadOnly, Level: Deny, Lang: lang,
 				Summary:   riskSummary(call),
@@ -446,6 +447,14 @@ func boundaryBlocked(call agentcore.AgentToolCall, opts ConsentOpts) *agentcore.
 }
 
 func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, needs []Need, lang string, notify func(Note)) *agentcore.BeforeToolCallDecision {
+	if call.RequirePolicyApproval && v.Failed {
+		notify(noteFor(call, v, NoteUnavailable, lang))
+		return blockCall(call, v, "the reviewer could not decide this exact external write; nothing was authorized")
+	}
+	if call.RequirePolicyApproval && !directForLevel(v.Level) {
+		notify(noteFor(call, v, NoteDenied, lang))
+		return blockCall(call, v, "the reviewer did not authorize this exact external write; not executed")
+	}
 	if v.Failed {
 		if len(needs) > 0 {
 			rationale := localized(lang, "评审不可用；能力扩张未获授权", "review was unavailable; capability expansion was not authorized")
@@ -522,6 +531,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
+	dec.PolicyApproved = call.RequirePolicyApproval
 	if NetworkRequired(ctx, call.Name, call.Arguments) {
 		dec.Network = true
 	}
@@ -568,7 +578,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, needs []Need, mode permissions.Mode, lang string, notify func(Note)) *agentcore.BeforeToolCallDecision {
 	// A clearly safe call with no expansion is the JEV/local fast path: it never
 	// reaches a person. This is what keeps `ask` usable for routine work.
-	if v.Level == Allow && len(needs) == 0 && !v.Failed && !call.RequireOperatorConfirmation {
+	if v.Level == Allow && len(needs) == 0 && !v.Failed && !call.RequireOperatorConfirmation && !call.RequirePolicyApproval {
 		dec := &agentcore.BeforeToolCallDecision{}
 		if NetworkRequired(ctx, call.Name, call.Arguments) {
 			dec.Network = true
@@ -615,7 +625,8 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
-	dec.OperatorConfirmed = call.RequireOperatorConfirmation
+	dec.OperatorConfirmed = call.RequireOperatorConfirmation || call.RequirePolicyApproval
+	dec.PolicyApproved = call.RequirePolicyApproval
 	// The person's answer decides the envelope. Asking for an unconfined run
 	// and then forcing Sandbox would silently discard it: the executor ignores
 	// Direct whenever Sandbox is set, so the command would run contained and

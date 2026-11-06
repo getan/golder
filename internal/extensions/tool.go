@@ -16,24 +16,66 @@ import (
 type tool struct {
 	manager *Manager
 	ref     SourceRef
+	origin  *source
 	spec    extension.ToolSpec
 	name    string
 }
 
 func (t *tool) ManagedExtension() {}
 func (t *tool) Name() string      { return t.name }
-func (t *tool) RequiresOperatorConfirmation() bool {
-	s, err := t.manager.get(t.ref)
-	if err != nil {
-		return true
+
+// approvalFor reads one immutable source definition. Lark's known writes and
+// all configured confirmation tools use host policy; other sources retain
+// their existing human-only confirmation contract.
+func (t *tool) approvalFor(s *source) (operator, policy bool) {
+	isLark := t.isLarkSource(s)
+	if isLark && t.larkBuiltinWrite() {
+		return false, true
 	}
 	for _, pattern := range s.cfg.ConfirmTools {
 		if match, _ := filepath.Match(pattern, t.spec.Name); match {
-			return true
+			if isLark {
+				return false, true
+			}
+			return true, false
 		}
 	}
-	return false
+	return false, false
 }
+
+func (t *tool) isLarkSource(s *source) bool {
+	if t.ref.Kind != "mcp" || s == nil {
+		return false
+	}
+	return t.ref.ID == "lark" || (s.cfg.Transport == "stdio" && filepath.Base(s.cfg.Command) == executableName("golder-lark"))
+}
+
+func (t *tool) larkBuiltinWrite() bool {
+	switch t.spec.Name {
+	case "doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call":
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *tool) approvalRequirements() (operator, policy bool) {
+	s, err := t.manager.get(t.ref)
+	if err != nil {
+		return true, false
+	}
+	return t.approvalFor(s)
+}
+
+func (t *tool) RequiresOperatorConfirmation() bool {
+	operator, _ := t.approvalRequirements()
+	return operator
+}
+func (t *tool) RequiresPolicyApproval() bool {
+	_, policy := t.approvalRequirements()
+	return policy
+}
+
 func (t *tool) Description() string {
 	return fmt.Sprintf("[%s / %s; external, hints are not authorization] %s", t.ref, t.spec.Name, t.spec.Description)
 }
@@ -47,12 +89,19 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 	if !agentcore.ExternalToolAuthorized(ctx) {
 		return fail("external tool requires the host authorization chain; not executed")
 	}
-	if t.RequiresOperatorConfirmation() && !agentcore.OperatorConfirmedFor(ctx, id, t.name, args) {
-		return fail("operation requires an exact operator confirmation; not executed")
-	}
 	s, e := m.get(t.ref)
 	if e != nil {
 		return fail(e.Error())
+	}
+	if s != t.origin && (t.isLarkSource(t.origin) || t.isLarkSource(s)) {
+		return fail("Lark source changed since this tool was registered; refresh the catalog before executing")
+	}
+	requireOperator, requirePolicy := t.approvalFor(s)
+	if requireOperator && !agentcore.OperatorConfirmedFor(ctx, id, t.name, args) {
+		return fail("operation requires an exact operator confirmation; not executed")
+	}
+	if requirePolicy && !agentcore.PolicyApprovedFor(ctx, id, t.name, args) {
+		return fail("operation requires exact-call authorization by the host policy; not executed")
 	}
 	if !s.enabled.Load() || m.closed.Load() {
 		return fail("extension disabled; not executed")
@@ -104,7 +153,9 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 		last = time.Now()
 		update(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(clean(p.Message, 1024))}})
 	}
-	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args, OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args)}, report)
+	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args,
+		OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args),
+		PolicyApproved:    requirePolicy && agentcore.PolicyApprovedFor(ctx, id, t.name, args)}, report)
 	if e != nil {
 		s.lastError = clean(e.Error(), 2048)
 		s.state = "failed"
