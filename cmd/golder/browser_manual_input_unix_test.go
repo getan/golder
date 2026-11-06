@@ -108,6 +108,33 @@ document.addEventListener('input', e => {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	t.Run("explicit-tab-selection-updates-pane", func(t *testing.T) {
+		info, err := c.Info(ctx)
+		if err != nil || len(info.Tabs) != 1 {
+			t.Fatalf("initial tabs = %+v, %v", info.Tabs, err)
+		}
+		first := info.Tabs[0]
+		_, created, err := c.Action(ctx, "tab.new", map[string]any{"url": "about:blank"}, browserctl.Target{BrowserID: info.BrowserID}, 10*time.Second)
+		if err != nil || created.TabID == "" || created.TargetID == "" || created.TabID == first.ID {
+			t.Fatalf("new tab = %+v, %v", created, err)
+		}
+		info, err = c.Info(ctx)
+		if err != nil || info.ActiveTabID != created.TabID {
+			t.Fatalf("new tab is not active in the pane: %+v, %v", info, err)
+		}
+		target := browserctl.Target{BrowserID: info.BrowserID, TabID: first.ID, TargetID: first.TargetID}
+		if _, _, err := c.Action(ctx, "tab.activate", map[string]any{"tabId": first.ID}, target, 10*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		info, err = c.Info(ctx)
+		if err != nil || info.ActiveTabID != first.ID {
+			t.Fatalf("pane did not return to the first tab: %+v, %v", info, err)
+		}
+		closed := browserctl.Target{BrowserID: info.BrowserID, TabID: created.TabID, TargetID: created.TargetID}
+		if _, _, err := c.Action(ctx, "tab.close", map[string]any{"tabId": created.TabID}, closed, 10*time.Second); err != nil {
+			t.Fatal(err)
+		}
+	})
 	assertResult := func(t *testing.T, want string) {
 		t.Helper()
 		deadline := time.Now().Add(3 * time.Second)

@@ -160,6 +160,10 @@ func TestExplicitTabSelectionUpdatesPinnedTarget(t *testing.T) {
 	if result.IsError || tool.lastTab != "internal" || tool.lastTargetID != "internal-target" {
 		t.Fatalf("tab selection did not update pin: result=%s tab=%q target=%q", agentcore.ContentToText(result.Content), tool.lastTab, tool.lastTargetID)
 	}
+	details, ok := result.Details.(map[string]any)
+	if !ok || details["action"] != "tab.activate" || details["browser"] != "browser-1" || details["tab"] != "internal" || details["target_id"] != "internal-target" || details["socket"] != "stub" {
+		t.Fatalf("selection did not expose exact view identity: %#v", result.Details)
+	}
 	result = runBrowserCall(t, tool, `{"action":"snapshot"}`)
 	if result.IsError || len(f.actions) != 2 {
 		t.Fatalf("snapshot after selection failed: %s, actions=%+v", agentcore.ContentToText(result.Content), f.actions)
@@ -167,6 +171,27 @@ func TestExplicitTabSelectionUpdatesPinnedTarget(t *testing.T) {
 	target, _ := f.actions[1]["target"].(map[string]any)
 	if target["tabId"] != "internal" || target["targetId"] != "internal-target" {
 		t.Fatalf("snapshot ignored new pin: %+v", target)
+	}
+}
+
+func TestTabSelectionIncludesOnlyMatchingHostRevision(t *testing.T) {
+	for _, matches := range []bool{false, true} {
+		tool, f := regressionBrowser(t)
+		f.info = strings.Replace(f.info, "chrome://settings/help", "https://other.test/", 1)
+		browserID := "browser-1"
+		if !matches {
+			browserID = "different-browser"
+		}
+		f.replies["tab.activate"] = `{"apiVersion":"v1","browserId":"` + browserID + `","explicitSelection":{"revision":42,"tabId":"internal","targetId":"internal-target"}}`
+		result := runBrowserCall(t, tool, `{"action":"tab_select","tab":"internal"}`)
+		if result.IsError {
+			t.Fatalf("selection failed: %s", agentcore.ContentToText(result.Content))
+		}
+		details, _ := result.Details.(map[string]any)
+		revision, exists := details["selection_revision"]
+		if exists != matches || matches && revision != "42" {
+			t.Fatalf("matches=%v revision=%v exists=%v", matches, revision, exists)
+		}
 	}
 }
 

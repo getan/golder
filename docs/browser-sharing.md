@@ -34,6 +34,16 @@ fails rather than silently choosing another; select a tab from `browser.list`.
 An explicitly identified `chrome://` tab may be closed only in an owned
 browser, without granting navigation or inspection access to internal pages.
 
+Use `tab_select` when starting or returning to the primary working tab so the
+visible browser pane follows it. A `tab` argument on a screenshot, snapshot or
+other individual action targets that page in the background and does not switch
+the visible view. The GUI follows a successful `tab_select` from its own agent;
+for a selection made by a different process, the browser host must support the
+`explicitSelection` revision signal. Older hosts such as the currently pinned
+`kitty-browse v0.2.8` do not provide that cross-process signal, so select the
+same tab in the GUI manually until the host is upgraded. No operating-system
+window focus is stolen.
+
 Chromium component auto-updates are disabled for these automation profiles, so
 speech packs and on-device optimization models cannot silently add gigabytes.
 On each profile open, kitty-browse removes only regenerable component,

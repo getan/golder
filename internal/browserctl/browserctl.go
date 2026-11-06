@@ -128,15 +128,24 @@ type Capability struct {
 	InputSchema json.RawMessage `json:"inputSchema"`
 }
 
+// ExplicitSelection records the most recent successful control-API tab
+// activation, with a monotonic revision for one browser instance.
+type ExplicitSelection struct {
+	Revision uint64 `json:"revision"`
+	TabID    string `json:"tabId"`
+	TargetID string `json:"targetId"`
+}
+
 // Info is /v1/info.
 type Info struct {
-	APIVersion   string       `json:"apiVersion"`
-	BrowserID    string       `json:"browserId"`
-	LoginProfile string       `json:"loginProfile,omitempty"`
-	ActiveTabID  string       `json:"activeTabId"`
-	Backend      string       `json:"backend"`
-	Tabs         []Tab        `json:"tabs"`
-	Capabilities []Capability `json:"capabilities"`
+	APIVersion        string             `json:"apiVersion"`
+	BrowserID         string             `json:"browserId"`
+	LoginProfile      string             `json:"loginProfile,omitempty"`
+	ActiveTabID       string             `json:"activeTabId"`
+	Backend           string             `json:"backend"`
+	Tabs              []Tab              `json:"tabs"`
+	Capabilities      []Capability       `json:"capabilities"`
+	ExplicitSelection *ExplicitSelection `json:"explicitSelection,omitempty"`
 }
 
 // HasCapability reports whether the browser advertises one action. Callers use

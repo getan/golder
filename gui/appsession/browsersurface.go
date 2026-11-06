@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/controlcap"
 )
 
 // BrowserInputKind is one person-originated event for a native browser surface.
@@ -43,6 +44,16 @@ type BrowserTab struct {
 	Active bool
 }
 
+// BrowserSelection identifies one explicitly selected tab in one browser.
+// Revision is zero only for the same-process compatibility event from a host
+// which predates the control socket's explicit-selection revision.
+type BrowserSelection struct {
+	BrowserID string
+	TabID     string
+	TargetID  string
+	Revision  uint64
+}
+
 // BrowserSurface is a terminal-independent view of one controlled Chromium
 // tab. Frames come from the target-scoped screenshot action; input is serialized
 // onto the same typed action socket. kitty-browse remains the CDP owner.
@@ -50,15 +61,16 @@ type BrowserSurface struct {
 	client   *browserctl.Client
 	operator BrowserOperator
 
-	mu           sync.Mutex
-	target       browserctl.Target
-	title        string
-	url          string
-	err          error
-	closed       bool
-	dragging     bool
-	dragTarget   browserctl.Target
-	dragX, dragY float64
+	mu                sync.Mutex
+	target            browserctl.Target
+	title             string
+	url               string
+	err               error
+	closed            bool
+	dragging          bool
+	dragTarget        browserctl.Target
+	dragX, dragY      float64
+	selectionRevision uint64
 
 	input chan surfaceInput
 	done  chan struct{}
@@ -98,6 +110,9 @@ func OpenBrowserSurface(ctx context.Context, preview BrowserPreview) (*BrowserSu
 	surface := &BrowserSurface{
 		client: client, operator: browserOperator(preview.Socket), target: target, title: title, url: rawURL,
 		input: make(chan surfaceInput, 128), done: make(chan struct{}),
+	}
+	if info.ExplicitSelection != nil {
+		surface.selectionRevision = info.ExplicitSelection.Revision
 	}
 	go surface.runInputs()
 	return surface, nil
@@ -187,6 +202,96 @@ func (s *BrowserSurface) Tabs(ctx context.Context) ([]BrowserTab, error) {
 	return out, nil
 }
 
+// PendingSelection observes successful explicit control-API activations only.
+// It never changes the local view or performs a browser action. A newer manual
+// or browser selection invalidates an older event instead of replaying it.
+func (s *BrowserSurface) PendingSelection(ctx context.Context) (*BrowserSelection, error) {
+	s.mu.Lock()
+	previous := s.target
+	s.mu.Unlock()
+	info, err := s.client.Info(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || info.BrowserID != previous.BrowserID {
+		return nil, fmt.Errorf("browser surface identity changed or closed")
+	}
+	if s.target != previous {
+		return nil, nil
+	}
+	selection := info.ExplicitSelection
+	if selection == nil || selection.Revision == 0 || selection.Revision <= s.selectionRevision {
+		return nil, nil
+	}
+	if selection.TabID == s.target.TabID && selection.TargetID == s.target.TargetID {
+		s.selectionRevision = selection.Revision
+		return nil, nil
+	}
+	if _, ok := selectionTab(info, selection.TabID, selection.TargetID); !ok {
+		s.selectionRevision = selection.Revision
+		return nil, nil
+	}
+	return &BrowserSelection{BrowserID: info.BrowserID, TabID: selection.TabID, TargetID: selection.TargetID, Revision: selection.Revision}, nil
+}
+
+// FollowSelection updates only this local surface, after rechecking the exact
+// browser, tab, target and active state. It never activates or navigates a tab.
+func (s *BrowserSurface) FollowSelection(ctx context.Context, selection BrowserSelection) error {
+	if selection.BrowserID == "" || selection.TabID == "" || selection.TargetID == "" {
+		return fmt.Errorf("browser selection requires exact browser, tab and target identities")
+	}
+	s.mu.Lock()
+	previous := s.target
+	s.mu.Unlock()
+	info, err := s.client.Info(ctx)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || info.BrowserID != previous.BrowserID || selection.BrowserID != info.BrowserID {
+		return fmt.Errorf("browser surface identity changed or closed")
+	}
+	if s.target != previous {
+		return nil // a later local selection wins
+	}
+	if selection.Revision == 0 && info.ExplicitSelection != nil {
+		return nil // revision-aware hosts are followed through their ordered signal
+	}
+	if selection.Revision != 0 {
+		current := info.ExplicitSelection
+		if selection.Revision <= s.selectionRevision || current == nil || current.Revision != selection.Revision || current.TabID != selection.TabID || current.TargetID != selection.TargetID {
+			return nil
+		}
+	}
+	tab, ok := selectionTab(info, selection.TabID, selection.TargetID)
+	if !ok {
+		if selection.Revision > s.selectionRevision {
+			s.selectionRevision = selection.Revision
+		}
+		return nil
+	}
+	s.selectTabLocked(info.BrowserID, tab)
+	if info.ExplicitSelection != nil && info.ExplicitSelection.Revision > s.selectionRevision {
+		s.selectionRevision = info.ExplicitSelection.Revision
+	}
+	return nil
+}
+
+func selectionTab(info browserctl.Info, tabID, targetID string) (browserctl.Tab, bool) {
+	if tabID == "" || targetID == "" || info.ActiveTabID != tabID {
+		return browserctl.Tab{}, false
+	}
+	for _, tab := range info.Tabs {
+		if tab.ID == tabID && tab.TargetID == targetID && tab.URL != "" && controlcap.BrowserURL(tab.URL) == nil {
+			return tab, true
+		}
+	}
+	return browserctl.Tab{}, false
+}
+
 // ActivateTab switches only this surface's view, not the browser host's active
 // tab, which may be displayed by another surface.
 func (s *BrowserSurface) ActivateTab(ctx context.Context, id string) error {
@@ -201,6 +306,9 @@ func (s *BrowserSurface) ActivateTab(ctx context.Context, id string) error {
 	}
 	for _, tab := range info.Tabs {
 		if tab.ID == id && tab.TargetID != "" {
+			if info.ExplicitSelection != nil && info.ExplicitSelection.Revision > s.selectionRevision {
+				s.selectionRevision = info.ExplicitSelection.Revision
+			}
 			s.selectTabLocked(info.BrowserID, tab)
 			return nil
 		}

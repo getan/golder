@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -124,15 +125,17 @@ type App struct {
 	fileSaving       bool
 	filesErr         string
 
-	browsers          []appsession.BrowserPreview
-	browserOpen       bool
-	browserPanelOpen  bool
-	browserAutoOpen   bool
-	browserAutoSocket string
-	browserAutoUntil  time.Time
-	browserRetryArmed bool
-	browserState      *browserWindowState
-	browserCancel     context.CancelFunc
+	browsers             []appsession.BrowserPreview
+	browserOpen          bool
+	browserPanelOpen     bool
+	browserAutoOpen      bool
+	browserAutoSocket    string
+	browserAutoUntil     time.Time
+	browserAutoSelection *appsession.BrowserSelection
+	browserFollowed      map[string]bool
+	browserRetryArmed    bool
+	browserState         *browserWindowState
+	browserCancel        context.CancelFunc
 
 	computerOpen             bool
 	computerPickerOpen       bool
@@ -235,6 +238,11 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	a.project = snap.Project
 	if previousSession != "" && previousSession != snap.SessionID {
 		a.stopComputer()
+		a.clearBrowserAutoOpen()
+		a.browserFollowed = nil
+		if a.browserState != nil {
+			a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
+		}
 	}
 	if previousProject != "" && previousProject != a.project {
 		a.resetFileExplorer()
@@ -284,6 +292,11 @@ func (a *App) applyEvent(ev appsession.Event) {
 		if ev.Status != nil {
 			if a.status.SessionID != "" && a.status.SessionID != ev.Status.SessionID {
 				a.stopComputer()
+				a.clearBrowserAutoOpen()
+				a.browserFollowed = nil
+				if a.browserState != nil {
+					a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
+				}
 			}
 			a.status = *ev.Status
 			a.updateTitle()
@@ -532,6 +545,7 @@ func (a *App) refreshBrowsers() {
 
 func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
 	a.browsers = browsers
+	selection := a.browserAutoSelection
 	current := a.browserPanelOpen
 	if current && a.browserAutoSocket != "" && a.browserState != nil && a.browserState.socket != a.browserAutoSocket {
 		current = false
@@ -541,11 +555,17 @@ func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
 	case browserOpenSingle:
 		a.clearBrowserAutoOpen()
 		a.openBrowserPreview(browsers[index])
+		if selection != nil {
+			queueBrowserFollow(a.browserState, *selection)
+		}
 	case browserChooseInstance:
 		a.clearBrowserAutoOpen()
 		a.browserOpen = true
 	case browserOpenAlready:
 		a.clearBrowserAutoOpen()
+		if selection != nil {
+			queueBrowserFollow(a.browserState, *selection)
+		}
 	case browserOpenNone:
 		if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
 			a.scheduleBrowserAutoOpenRetry()
@@ -560,12 +580,36 @@ func (a *App) followBrowserTool(item appsession.Item) {
 	if !refresh {
 		return
 	}
+	selection, selectionSocket, selected := browserToolSelection(item)
+	if selected {
+		id := item.ID
+		if id == "" && item.Tool != nil {
+			id = item.Tool.ID
+		}
+		if id != "" {
+			if a.browserFollowed == nil {
+				a.browserFollowed = make(map[string]bool)
+			}
+			if a.browserFollowed[id] {
+				return
+			}
+			a.browserFollowed[id] = true
+		}
+		if a.browserPanelOpen && a.browserState != nil && a.browserState.socket == browserSocketKey(selectionSocket) && a.browserState.browserID == selection.BrowserID {
+			queueBrowserFollow(a.browserState, selection)
+			if a.ctrl != nil {
+				go a.refreshBrowsers()
+			}
+			return
+		}
+		a.browserAutoSelection = &selection
+	} else if open {
+		a.browserAutoSelection = nil
+	}
 	if open {
 		a.browserAutoOpen = true
 		a.browserAutoUntil = time.Now().Add(8 * time.Second)
-		if socket = browserSocketKey(socket); socket != "" {
-			a.browserAutoSocket = socket
-		}
+		a.browserAutoSocket = browserSocketKey(socket)
 	}
 	if a.ctrl != nil {
 		go a.refreshBrowsers()
@@ -577,6 +621,10 @@ func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket s
 		return false, false, ""
 	}
 	action, _ := item.Tool.Input["action"].(string)
+	if action == "tab_select" {
+		_, socket, ok := browserToolSelection(item)
+		return true, ok, socket
+	}
 	if action == "open" || action == "attach" {
 		socket, _ = item.Tool.Details["socket"].(string)
 	}
@@ -590,6 +638,40 @@ func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket s
 func (a *App) clearBrowserAutoOpen() {
 	a.browserAutoOpen, a.browserAutoSocket = false, ""
 	a.browserAutoUntil = time.Time{}
+	a.browserAutoSelection = nil
+}
+
+// browserToolSelection accepts only a completed, successful explicit
+// tab_select with the exact identities reported by the browser tool.
+func browserToolSelection(item appsession.Item) (appsession.BrowserSelection, string, bool) {
+	if item.Tool == nil || item.Tool.Name != "browser" || item.Tool.Running || item.Tool.Error {
+		return appsession.BrowserSelection{}, "", false
+	}
+	action, _ := item.Tool.Input["action"].(string)
+	resultAction, _ := item.Tool.Details["action"].(string)
+	if action != "tab_select" || resultAction != "tab.activate" {
+		return appsession.BrowserSelection{}, "", false
+	}
+	browserID, _ := item.Tool.Details["browser"].(string)
+	tabID, _ := item.Tool.Details["tab"].(string)
+	targetID, _ := item.Tool.Details["target_id"].(string)
+	socket, _ := item.Tool.Details["socket"].(string)
+	if browserID == "" || tabID == "" || targetID == "" || browserSocketKey(socket) == "" {
+		return appsession.BrowserSelection{}, "", false
+	}
+	var revision uint64
+	if raw, exists := item.Tool.Details["selection_revision"]; exists {
+		text, ok := raw.(string)
+		if !ok {
+			return appsession.BrowserSelection{}, "", false
+		}
+		var err error
+		revision, err = strconv.ParseUint(text, 10, 64)
+		if err != nil || revision == 0 {
+			return appsession.BrowserSelection{}, "", false
+		}
+	}
+	return appsession.BrowserSelection{BrowserID: browserID, TabID: tabID, TargetID: targetID, Revision: revision}, socket, true
 }
 
 func (a *App) scheduleBrowserAutoOpenRetry() {

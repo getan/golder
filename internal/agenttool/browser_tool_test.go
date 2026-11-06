@@ -22,10 +22,18 @@ import (
 func TestBrowserToolDescriptionKeepsBrowserInTheTool(t *testing.T) {
 	tool := &BrowserTool{cwd: t.TempDir(), allowControl: true}
 	desc := strings.ToLower(tool.Description())
-	for _, want := range []string{"rather than launching", "golder browse", "kitty-browse", "owns the pane identity", "socket", "cleanup", "persistent project-shared profile", "separate project-scoped identity", "basic password store", "mock keychain", "inspect status"} {
+	for _, want := range []string{"rather than launching", "golder browse", "kitty-browse", "owns the pane identity", "socket", "cleanup", "persistent project-shared profile", "separate project-scoped identity", "basic password store", "mock keychain", "inspect status", "primary working tab", "tab_select", "without switching the visible page", "never use tab_select to resume"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("browser description is missing %q:\n%s", want, tool.Description())
 		}
+	}
+}
+
+func TestBrowserReadOnlyAgentAsksParentToShowWorkingTab(t *testing.T) {
+	tool := &BrowserTool{cwd: t.TempDir(), allowControl: false}
+	desc := strings.ToLower(tool.Description())
+	if !strings.Contains(desc, "ask the parent to select the main working tab") || strings.Contains(desc, "explicitly use tab_select") {
+		t.Fatalf("read-only agent guidance = %s", desc)
 	}
 }
 

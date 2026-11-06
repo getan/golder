@@ -17,17 +17,25 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
+type browserWindowUpdater interface {
+	Update(func())
+}
+
 type browserWindowState struct {
-	win         *mygo.Window
-	surface     *appsession.BrowserSurface
-	socket      string
-	bitmap      *ui.Bitmap
-	address     string
-	pageURL     string
-	title       string
-	err         string
-	tabs        []appsession.BrowserTab
-	pointerDown bool
+	win           browserWindowUpdater
+	surface       *appsession.BrowserSurface
+	socket        string
+	browserID     string
+	bitmap        *ui.Bitmap
+	address       string
+	pageURL       string
+	title         string
+	err           string
+	tabs          []appsession.BrowserTab
+	pointerDown   bool
+	pendingFollow *appsession.BrowserSelection
+	following     *appsession.BrowserSelection
+	pendingManual func(context.Context) error
 
 	frameW, frameH float32
 	viewW, viewH   float32
@@ -46,26 +54,31 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	a.closeBrowserPanel()
 	a.hideComputerPanel()
 	ctx, cancel := context.WithCancel(context.Background())
-	state := &browserWindowState{socket: browserSocketKey(browser.Socket), address: browser.URL, pageURL: browser.URL, title: browser.Title}
+	state := &browserWindowState{socket: browserSocketKey(browser.Socket), browserID: browser.Browser, address: browser.URL, pageURL: browser.URL, title: browser.Title}
 	if state.title == "" {
 		state.title = browser.URL
 	}
-	state.win = a.win
 	a.browserState, a.browserCancel, a.browserPanelOpen = state, cancel, true
 	a.changesOpen = false
 	a.filesOpen = false
 	if a.win != nil {
+		state.win = a.win
 		go attachBrowserSurface(ctx, a.win, state, browser)
 	}
 }
 
 func (a *App) closeBrowserPanel() {
+	a.clearBrowserAutoOpen()
 	if a.browserCancel != nil {
 		a.browserCancel()
 		a.browserCancel = nil
 	}
-	if a.browserState != nil && a.browserState.surface != nil {
-		a.browserState.surface.Close()
+	if a.browserState != nil {
+		a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
+		a.browserState.viewSequence.Add(1)
+		if a.browserState.surface != nil {
+			a.browserState.surface.Close()
+		}
 	}
 	a.browserState = nil
 	a.browserPanelOpen = false
@@ -108,8 +121,13 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 	}
 	title, rawURL, _ := surface.State()
 	win.Update(func() {
+		if ctx.Err() != nil {
+			surface.Close()
+			return
+		}
 		state.surface = surface
 		state.title, state.address, state.pageURL = title, rawURL, rawURL
+		drainBrowserFollow(state)
 	})
 
 	ticker := time.NewTicker(150 * time.Millisecond)
@@ -117,6 +135,18 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 	frames := 0
 	for {
 		sequence := state.viewSequence.Load()
+		if frames%2 == 0 && !state.switching.Load() {
+			selectionCtx, selectionCancel := context.WithTimeout(ctx, 3*time.Second)
+			selection, _ := surface.PendingSelection(selectionCtx)
+			selectionCancel()
+			if selection != nil {
+				win.Update(func() {
+					if ctx.Err() == nil && state.surface == surface {
+						queueBrowserFollow(state, *selection)
+					}
+				})
+			}
+		}
 		frameCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 		raw, frameErr := surface.Frame(frameCtx)
 		stop()
@@ -299,6 +329,48 @@ func runBrowserAction(state *browserWindowState, action func(context.Context) er
 // Never leave the old tab's pixels or coordinates interactive after selection
 // changes, and discard frames and resize work issued before that change.
 func runBrowserSelection(state *browserWindowState, action func(context.Context) error) {
+	// A direct GUI choice supersedes any earlier follow request.
+	state.pendingFollow = nil
+	if state.switching.Load() {
+		state.pendingManual = action
+		return
+	}
+	startBrowserSelection(state, action)
+}
+
+func queueBrowserFollow(state *browserWindowState, selection appsession.BrowserSelection) {
+	if state == nil || state.browserID == "" || selection.BrowserID != state.browserID || selection.TabID == "" || selection.TargetID == "" {
+		return
+	}
+	if state.following != nil && *state.following == selection {
+		return
+	}
+	copy := selection
+	state.pendingFollow = &copy
+	drainBrowserFollow(state)
+}
+
+func drainBrowserFollow(state *browserWindowState) {
+	if state.surface == nil || state.win == nil || state.switching.Load() {
+		return
+	}
+	if state.pendingManual != nil {
+		action := state.pendingManual
+		state.pendingManual = nil
+		startBrowserSelection(state, action)
+		return
+	}
+	if state.pendingFollow == nil {
+		return
+	}
+	selection := *state.pendingFollow
+	state.pendingFollow = nil
+	state.following = &selection
+	surface := state.surface
+	startBrowserSelection(state, func(ctx context.Context) error { return surface.FollowSelection(ctx, selection) })
+}
+
+func startBrowserSelection(state *browserWindowState, action func(context.Context) error) {
 	if state.surface == nil || state.win == nil || state.switching.Swap(true) {
 		return
 	}
@@ -320,6 +392,7 @@ func runBrowserSelection(state *browserWindowState, action func(context.Context)
 				return
 			}
 			state.switching.Store(false)
+			state.following = nil
 			state.viewportW, state.viewportH = 0, 0
 			if tabs != nil {
 				state.tabs = tabs
@@ -327,6 +400,7 @@ func runBrowserSelection(state *browserWindowState, action func(context.Context)
 			if err != nil {
 				state.err = err.Error()
 			}
+			drainBrowserFollow(state)
 		})
 	}()
 }

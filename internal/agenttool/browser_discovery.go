@@ -259,6 +259,7 @@ func (t *BrowserTool) listInstancesResult(d browserDiscovery) agentcore.AgentToo
 		if t.checkProfileAccess(d.Instances[i].Info) != nil {
 			d.Instances[i].Info.Tabs = nil
 			d.Instances[i].Info.ActiveTabID = ""
+			d.Instances[i].Info.ExplicitSelection = nil
 		}
 	}
 	out := map[string]any{"instances": d.Instances, "unavailable": d.Failures, "truncated": d.Truncated,

@@ -97,9 +97,18 @@ func (t *BrowserTool) useHint() string {
 	if NativeBrowserLauncherAvailable() {
 		return " In the desktop GUI, open starts the native browser host; the Browser icon opens its interactive Bitmap surface in the right drawer. The browser tool owns the control socket and cleanup. " +
 			"The default open uses a persistent project-shared profile and remembers logins; profile:<name> selects a separate project-scoped identity whose first use needs exact operator confirmation. " +
-			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification."
+			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification." + t.selectionHint()
 	}
-	return browserToolUseHint
+	return browserToolUseHint + t.selectionHint()
+}
+
+func (t *BrowserTool) selectionHint() string {
+	if !t.allowControl {
+		return " A tab argument observes that tab in the background and does not change what the person sees; ask the parent to select the main working tab when appropriate."
+	}
+	return " When starting or returning to the primary working tab, explicitly use tab_select with its tab ID so the person sees the working page in the browser pane or GUI. " +
+		"A tab argument on snapshot, screenshot, click or other actions targets that tab without switching the visible page; keep brief background observations in the background. " +
+		"This switches the browser tab, not the operating-system window. Never use tab_select to resume or bypass a paused browser."
 }
 
 func (t *BrowserTool) launchPolicy() string {
@@ -513,12 +522,25 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		}
 		t.tabMu.Unlock()
 	}
+	details := map[string]any{"action": action, "tab": meta.TabID, "url": meta.URL}
+	if a.Action == "tab_select" {
+		// The GUI follows only a confirmed selection from this exact browser and
+		// target. Older hosts lack the optional cross-process revision signal.
+		details["browser"] = info.BrowserID
+		details["target_id"] = target.TargetID
+		details["socket"] = t.socketPath()
+		var updated browserctl.Info
+		if json.Unmarshal(result, &updated) == nil && updated.BrowserID == info.BrowserID && updated.ExplicitSelection != nil &&
+			updated.ExplicitSelection.TabID == target.TabID && updated.ExplicitSelection.TargetID == target.TargetID {
+			details["selection_revision"] = strconv.FormatUint(updated.ExplicitSelection.Revision, 10)
+		}
+	}
 	return agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 			"ok": true, "action": action, "result": json.RawMessage(result),
 			"url": meta.URL, "title": meta.Title,
 		}))},
-		Details: map[string]any{"action": action, "tab": meta.TabID, "url": meta.URL},
+		Details: details,
 	}, nil
 }
 
