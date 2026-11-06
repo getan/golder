@@ -52,11 +52,15 @@ managed installer verifies the checksum before copying it under `$GOLDER_HOME`.
 
 ```sh
 cd gui
-CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64 -sign - -skip-notarize
+MACOSX_DEPLOYMENT_TARGET=14.0 CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64 -sign - -skip-notarize
 ```
 
 CGO is required for the macOS Computer Use backend; the GUI release workflow
-enables it and checks the packaged executable's Go build information.
+enables it and checks the packaged executable's Go build information. It also
+sets `MACOSX_DEPLOYMENT_TARGET=14.0` and verifies both the Mach-O deployment
+target and `LSMinimumSystemVersion`, plus the minimum version of each bundled
+Mach-O helper or library. The plist value alone does not constrain the compiler
+when the runner is a newer macOS release.
 
 `-sign -` is ad-hoc signing: the app runs on the machine that built it, but
 Gatekeeper refuses it on other Macs. To ship, sign with a Developer ID and

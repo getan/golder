@@ -48,8 +48,8 @@ MyGo's CLI packages and signs the app:
 ```sh
 cd gui
 go run ./tools/mkicon -o resources/icon.png
-CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
-CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
+MACOSX_DEPLOYMENT_TARGET=14.0 CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo build -platform darwin/arm64
+MACOSX_DEPLOYMENT_TARGET=14.0 CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and restart as the code changes
 ```
 
 On macOS, Computer Use needs CGO plus Accessibility and Screen Recording
@@ -60,8 +60,8 @@ use `+` in System Settings to select Golder GUI.app; restart after granting
 access if macOS asks. macOS permissions do not grant the agent a target window.
 Ad-hoc signatures can change identity between builds, so macOS may require a
 new grant after an update. A stable Developer ID signature improves continuity.
-Window capture currently requires macOS 14 or later. A GUI built without CGO
-cannot enable the macOS Computer Use backend merely by changing permissions.
+The GUI release targets macOS 14.0 or later. A GUI built without CGO cannot
+enable the macOS Computer Use backend merely by changing permissions.
 
 The app is named **Golder GUI** (slug `golder-gui`), so its Linux executable
 never collides with the `golder` CLI. The Agent runtime is linked into the GUI;

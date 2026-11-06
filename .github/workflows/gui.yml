@@ -150,6 +150,9 @@ jobs:
           # ScreenCaptureKit frameworks. MyGo otherwise defaults CGO to zero.
           if [[ "${{ matrix.kind }}" == "macos" ]]; then
             export CGO_ENABLED=1
+            # The runner's OS is newer than the oldest supported system. The
+            # plist setting alone does not set the Mach-O deployment target.
+            export MACOSX_DEPLOYMENT_TARGET=14.0
           fi
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
 
@@ -180,6 +183,32 @@ jobs:
               echo "the macOS GUI was built without the Computer Use backend" >&2
               exit 1
             fi
+            minos=$(xcrun vtool -show-build "$exe" | awk '$1 == "minos" {print $2}')
+            plist_min=$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")
+            echo "macOS minimum: Mach-O ${minos}, Info.plist ${plist_min}"
+            if [[ "$minos" != "14.0" || "$plist_min" != "14.0" ]]; then
+              echo "the macOS GUI must target macOS 14.0 in both Mach-O and Info.plist" >&2
+              exit 1
+            fi
+            # A bundled helper or library can independently prevent launch on
+            # the supported OS, even when the main executable is compatible.
+            while IFS= read -r -d '' binary; do
+              if ! file -b "$binary" | grep -q '^Mach-O'; then
+                continue
+              fi
+              build_info=$(xcrun vtool -show-build "$binary")
+              versions=$(printf '%s\n' "$build_info" | awk '$1 == "minos" {print $2}')
+              if [[ -z "$versions" ]]; then
+                echo "cannot determine the macOS minimum for $binary" >&2
+                exit 1
+              fi
+              while IFS= read -r version; do
+                if ! awk -v v="$version" 'BEGIN { n = split(v, p, "."); if (n < 2 || n > 3 || p[1] !~ /^[0-9]+$/ || p[2] !~ /^[0-9]+$/ || (n == 3 && p[3] !~ /^[0-9]+$/) || p[1] > 14 || (p[1] == 14 && (p[2] > 0 || p[3] > 0))) exit 1 }'; then
+                  echo "$binary requires macOS $version; expected at most 14.0" >&2
+                  exit 1
+                fi
+              done < <(printf '%s\n' "$versions")
+            done < <(find "$app" -type f -print0)
             mib=$(du -sm "$app" | awk '{print $1}')
             echo "installed app size: ${mib} MiB"
             test "$mib" -lt 50
