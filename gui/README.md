@@ -58,6 +58,8 @@ permissions. Move Golder GUI.app to Applications and launch that copy. Settings
 Settings also links to each macOS Privacy & Security page. If the app is not listed,
 use `+` in System Settings to select Golder GUI.app; restart after granting
 access if macOS asks. macOS permissions do not grant the agent a target window.
+Ad-hoc signatures can change identity between builds, so macOS may require a
+new grant after an update. A stable Developer ID signature improves continuity.
 Window capture currently requires macOS 14 or later. A GUI built without CGO
 cannot enable the macOS Computer Use backend merely by changing permissions.
 

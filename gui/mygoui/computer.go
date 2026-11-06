@@ -60,6 +60,7 @@ func (a *App) macComputerPermissionsView(c *ui.Context, compact bool) {
 		ui.Text(c, "For Privacy settings and manual registration, open Settings → Permissions.").FontSize(11).TextColor(t.TextMuted).Wrap()
 	} else {
 		ui.Text(c, "Install Golder GUI.app in /Applications and open that copy. Request each permission below; if it is still missing from System Settings, use + there to select Golder GUI.app. Quit and reopen after granting if macOS asks.").FontSize(11).TextColor(t.TextMuted).Wrap()
+		ui.Text(c, "Ad-hoc signed builds may need permission to be granted again after an update. A stable Developer ID signature improves identity continuity.").FontSize(11).TextColor(t.TextMuted).Wrap()
 	}
 	ui.Row(c).Gap(8).Wrap().Children(func() {
 		if ui.Button(c, "Request Accessibility").Disabled(unsupported || a.computerPermission.Accessibility == "granted").Clicked() {

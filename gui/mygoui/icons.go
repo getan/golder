@@ -20,6 +20,14 @@ var computerMonochromeIcon = ui.MustParseSVG([]byte(`
   <path d="M4 4h16v12H4zM9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`))
 
+var changesMonochromeIcon = ui.MustParseSVG([]byte(`
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="6" cy="4" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+  <circle cx="6" cy="20" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+  <circle cx="18" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M6 6v12M18 8c0 4-3 6-6 6H6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`))
+
 var filesMonochromeIcon = ui.MustParseSVG([]byte(`
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
   <path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>

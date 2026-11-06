@@ -36,18 +36,33 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "Projects", "Chats", "New session", "Settings", "↑", "test-model · off", "▤"} {
+	for _, want := range []string{"project", "Projects", "Chats", "Settings", "↑", "test-model · off", "Changes"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}
 	}
-	for _, gone := range []string{"Workspace", "Model ·", "Think ·", "Mode ·", "Permissions: test-model", "✋", "🌐"} {
+	for _, gone := range []string{"Workspace", "New session", "+  New session", "▤", "Model ·", "Think ·", "Mode ·", "Permissions: test-model", "✋", "🌐"} {
 		if tt.HasText(gone) {
 			t.Fatalf("view still contains retired top-level action %q", gone)
 		}
 	}
 	if err := tt.Click("Approval mode"); err != nil || !a.permOpen {
 		t.Fatalf("monochrome approval hand is not accessible: open=%t err=%v", a.permOpen, err)
+	}
+}
+
+func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
+	a := testApp()
+	a.changesOpen = true
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, label := range []string{"Files", "Changes", "Computer Use", "Browser"} {
+		box, ok := tt.Find(label)
+		if !ok || box.W != 30 || box.H != 30 {
+			t.Fatalf("%s button has box %+v, found=%t; want 30×30", label, box, ok)
+		}
+	}
+	if err := tt.Click("Changes"); err != nil || a.changesOpen {
+		t.Fatalf("changes action did not close the drawer: open=%t err=%v", a.changesOpen, err)
 	}
 }
 
@@ -247,7 +262,7 @@ func TestChangesPanelRendersGitReviewControls(t *testing.T) {
 		Files: []appsession.FileStatus{{Path: "ui.go", Status: "M", Added: 3, Deleted: 1}},
 	}
 	tt := ui.NewTester(a.view, 1400, 800)
-	for _, want := range []string{"▤  Changes", "project  ·  feature/ui", "Unstaged", "Staged", "Stage all", "Stage", "ui.go", "+3", "−1"} {
+	for _, want := range []string{"Changes", "project  ·  feature/ui", "Unstaged", "Staged", "Stage all", "Stage", "ui.go", "+3", "−1"} {
 		if !tt.HasText(want) {
 			t.Fatalf("changes panel is missing %q; texts: %q", want, tt.Texts())
 		}

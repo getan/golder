@@ -21,7 +21,10 @@ func (a *App) changesPanel(c *ui.Context) {
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Column(c).Grow(1).Gap(1).Children(func() {
-				ui.Text(c, "▤  Changes").FontSize(13).Bold()
+				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, changesMonochromeIcon).Size(15, 15).TextColor(t.Text)
+					ui.Text(c, "Changes").FontSize(13).Bold()
+				})
 				if a.changes.RepoRoot != "" {
 					repo := filepath.Base(a.changes.RepoRoot)
 					if a.changes.Branch != "" {

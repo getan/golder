@@ -61,6 +61,10 @@ enables it and checks the packaged executable's Go build information.
 `-sign -` is ad-hoc signing: the app runs on the machine that built it, but
 Gatekeeper refuses it on other Macs. To ship, sign with a Developer ID and
 notarize; the workflow does both when its secrets exist.
+An ad-hoc signature may also change the identity macOS privacy controls use
+between builds, so a previously granted permission may need to be requested
+again. A stable Developer ID signature helps keep that identity consistent;
+it does not grant permissions without the operator's approval.
 
 ## macOS: what makes it double-clickable elsewhere
 
@@ -130,8 +134,8 @@ None of them are required for a local build.
 
 | Runner | Target | Notes |
 |---|---|---|
-| `macos-14` | `darwin/arm64` | separate Apple Silicon DMG; signs/notarizes when secrets exist |
-| `macos-14` | `darwin/amd64` | separate Intel DMG; signs/notarizes when secrets exist |
+| `macos-15` | `darwin/arm64` | separate Apple Silicon DMG; signs/notarizes when secrets exist |
+| `macos-15-intel` | `darwin/amd64` | separate Intel DMG; signs/notarizes when secrets exist |
 | `windows-2022` | `windows/amd64` | NSIS installer; needs NSIS, which MyGo installs |
 | `ubuntu-22.04` | `linux/amd64,linux/arm64` | tarball + `install.sh`, `.deb`, `PKGBUILD` |
 

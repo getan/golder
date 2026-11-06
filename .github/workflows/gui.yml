@@ -22,8 +22,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64, os: macos-14, platform: "darwin/arm64", kind: macos }
-          - { name: macos-amd64, os: macos-14, platform: "darwin/amd64", kind: macos }
+          - { name: macos-arm64, os: macos-15, platform: "darwin/arm64", kind: macos }
+          - { name: macos-amd64, os: macos-15-intel, platform: "darwin/amd64", kind: macos }
           - { name: windows, os: windows-2022, platform: "windows/amd64", kind: windows }
           - { name: linux, os: ubuntu-22.04, platform: "linux/amd64,linux/arm64", kind: linux }
     steps:

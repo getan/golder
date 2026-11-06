@@ -142,7 +142,7 @@ func (a *App) titleBar(c *ui.Context) {
 		if changes > 0 {
 			changesTip = fmt.Sprintf("Changes · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
 		}
-		if ui.Button(c, "▤").Tooltip(changesTip).Clicked() {
+		if compactIconButton(c, "changes", changesMonochromeIcon, "Changes", changesTip).Clicked() {
 			a.changesOpen = !a.changesOpen
 			if a.changesOpen {
 				a.filesOpen = false
@@ -180,9 +180,6 @@ func (a *App) sidebar(c *ui.Context) {
 	ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Column(c).Padding(10, 10, 8, 10).Gap(10).Children(func() {
-			if ui.Button(c, "+  New session").FillWidth().Disabled(strings.TrimSpace(a.selectedProject) == "").Clicked() {
-				a.newSession()
-			}
 			ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Projects").FontSize(11).FontWeight(600).TextColor(t.TextMuted).Grow(1)
 				if ui.Button(c, "+").Tooltip("Add project folder").Clicked() {
