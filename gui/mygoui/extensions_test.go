@@ -116,6 +116,45 @@ func TestLarkStatusAndVersionLabelsAreIndependent(t *testing.T) {
 	}
 }
 
+func TestLarkWizardHighlightsNextAction(t *testing.T) {
+	a := testApp()
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true},
+		SavedLarkCLI:         "/opt/lark-cli", SavedProjectCLI: "/opt/meegle", SavedProjectHost: "project.feishu.cn",
+		AppID: "cli_test", CredentialName: "lark-app-secret", CredentialAvailable: true,
+	}
+	a.extensionEdit = appsession.LarkExtensionEdit{LarkCLI: "/opt/lark-cli", ProjectCLI: "/opt/meegle", ProjectHost: "project.feishu.cn", AppID: "cli_test", CredentialName: "lark-app-secret"}
+	a.extensionDomains = nil
+	if got := a.larkNextAction(true); got != "save" {
+		t.Fatalf("detected CLIs should lead to saving, got %q", got)
+	}
+	a.extension.Configured = true
+	if got := a.larkNextAction(true); got != "enable" {
+		t.Fatalf("saved configuration should lead to enable, got %q", got)
+	}
+	a.extension.Enabled = true
+	if got := a.larkNextAction(true); got != "lark" {
+		t.Fatalf("fresh configuration should lead to Lark authorization, got %q", got)
+	}
+	a.extensionLarkVerified = true
+	if got := a.larkNextAction(true); got != "project" {
+		t.Fatalf("verified Lark should lead to Project authorization, got %q", got)
+	}
+	a.extensionProjectVerified = true
+	if got := a.larkNextAction(true); got != "test" {
+		t.Fatalf("verified authorizations should lead to connection test, got %q", got)
+	}
+	a.extensionLarkVerified, a.extensionProjectVerified = false, false
+	a.extension.Authentication = "verified"
+	if got := a.larkNextAction(true); got != "test" {
+		t.Fatalf("shared persisted status must not imply either service was verified, got %q", got)
+	}
+	a.extensionEdit.ProjectCLI = "/new/meegle"
+	if got := a.larkNextAction(true); got != "save" {
+		t.Fatalf("edited Project CLI should lead to save, got %q", got)
+	}
+}
+
 func TestLarkHelperMismatchShowsOneClickUpdate(t *testing.T) {
 	a := testApp()
 	a.settingsOpen = true

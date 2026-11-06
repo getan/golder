@@ -53,8 +53,11 @@ CGO_ENABLED=1 go run github.com/egoist/mygo/cmd/mygo dev     # rebuild and resta
 ```
 
 On macOS, Computer Use needs CGO plus Accessibility and Screen Recording
-permissions. The Computer Use picker has explicit buttons to request them and
-open Privacy & Security; restart the app after granting access if macOS asks.
+permissions. Move Golder GUI.app to Applications and launch that copy. Settings
+→ Permissions and the Computer Use picker provide explicit request buttons;
+Settings also links to each macOS Privacy & Security page. If the app is not listed,
+use `+` in System Settings to select Golder GUI.app; restart after granting
+access if macOS asks. macOS permissions do not grant the agent a target window.
 Window capture currently requires macOS 14 or later. A GUI built without CGO
 cannot enable the macOS Computer Use backend merely by changing permissions.
 

@@ -3,6 +3,7 @@ package mygoui
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ func (a *App) openSettings() {
 	a.settingsErr, a.settingsNote = "", ""
 	a.settingsEdit.NewCredential = ""
 	a.settingsEdit.RemoveCredential = false
+	a.refreshComputerPermissions()
 	a.refreshTTYSessions()
 	a.loadExtensionSettings()
 	settings, err := a.ctrl.LoadProviderSettings()
@@ -217,6 +219,10 @@ func (a *App) permissionSettingsView(c *ui.Context) {
 		})
 		ui.Text(c, "Readable and writable roots remain managed by the existing /boundary and grants store; the GUI editor for those rows is a later settings section.").
 			FontSize(12).TextColor(t.TextMuted)
+		if runtime.GOOS == "darwin" {
+			ui.Text(c, "macOS Computer Use permissions").FontSize(14).FontWeight(600)
+			a.macComputerPermissionsView(c, false)
+		}
 	})
 }
 

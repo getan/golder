@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -205,6 +206,27 @@ func projectStartFailure(out Output, err error) string {
 	return setupevent.CodeAuthStartFailed
 }
 
+// projectSeconds accepts the CLI's JSON integer as well as a decimal string,
+// without accepting fractional, overflowing or otherwise ambiguous values.
+type projectSeconds int64
+
+func (s *projectSeconds) UnmarshalJSON(raw []byte) error {
+	text := string(raw)
+	if len(text) > 0 && text[0] == '"' {
+		var decoded string
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			return err
+		}
+		text = decoded
+	}
+	value, err := strconv.ParseInt(text, 10, 32)
+	if err != nil {
+		return err
+	}
+	*s = projectSeconds(value)
+	return nil
+}
+
 func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) error) error {
 	base := []string{"auth", "login", "--host=" + p.Config.ProjectHost, "--device-code", "--format=json"}
 	out, err := p.Runner.Run(ctx, "project", append(append([]string{}, base...), "--phase=init"), nil)
@@ -212,34 +234,52 @@ func (p *Plugin) projectLogin(ctx context.Context, write func(setupevent.Event) 
 		return projectFailure(setupevent.PhaseStartAuthorization, projectStartFailure(out, err))
 	}
 	var device struct {
-		URL      string `json:"verification_uri_complete"`
-		BasicURL string `json:"verification_uri"`
-		UserCode string `json:"user_code"`
-		Code     string `json:"device_code"`
-		ClientID string `json:"client_id"`
-		Expires  int    `json:"expires_in"`
-		Interval int    `json:"interval"`
+		URL      string         `json:"verification_uri_complete"`
+		BasicURL string         `json:"verification_uri"`
+		UserCode string         `json:"user_code"`
+		Code     string         `json:"device_code"`
+		ClientID string         `json:"client_id"`
+		Expires  projectSeconds `json:"expires_in"`
+		Interval projectSeconds `json:"interval"`
 	}
-	if json.Unmarshal(out.Stdout, &device) != nil || device.Code == "" || device.ClientID == "" || device.Expires <= 0 || device.Expires > 1200 {
-		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
+	if json.Unmarshal(out.Stdout, &device) != nil {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectResponseInvalid)
+	}
+	if device.Code == "" {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectDeviceMissing)
+	}
+	if device.ClientID == "" {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectClientMissing)
+	}
+	if device.Expires <= 0 {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectExpiryInvalid)
 	}
 	userCode := ""
 	if device.URL == "" {
-		if device.BasicURL == "" || !setupevent.AuthorizationCode(device.UserCode) {
-			return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
+		if device.BasicURL == "" {
+			return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectURLMissing)
+		}
+		if !setupevent.AuthorizationCode(device.UserCode) {
+			return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectUserCodeInvalid)
 		}
 		device.URL, userCode = device.BasicURL, device.UserCode
 	}
 	if device.Interval < 1 {
 		device.Interval = 5
 	}
-	if device.Interval > 60 {
-		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeAuthResponseUnsupported)
+	if device.Interval > 540 {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectIntervalInvalid)
 	}
-	if err = write(setupevent.Event{Type: "authorization", VerificationURL: device.URL, UserCode: userCode, ExpiresAt: time.Now().Add(time.Duration(device.Expires) * time.Second)}); err != nil {
+	// Never extend the server's lifetime. The helper's overall setup limit is
+	// ten minutes, so a longer-lived server code is safely bounded to nine.
+	lifetime := time.Duration(min(device.Expires, 540)) * time.Second
+	if time.Duration(device.Interval)*time.Second >= lifetime {
+		return projectFailure(setupevent.PhaseStartAuthorization, setupevent.CodeProjectIntervalInvalid)
+	}
+	if err = write(setupevent.Event{Type: "authorization", VerificationURL: device.URL, UserCode: userCode, ExpiresAt: time.Now().Add(lifetime)}); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, lifetime)
 	defer cancel()
 	args := append(append([]string{}, base...), "--phase=poll", "--device-code-value="+device.Code, "--client-id="+device.ClientID, "--once")
 	interval := time.Duration(device.Interval) * time.Second

@@ -252,6 +252,7 @@ the model chooses a Lark tool when the task needs one.
 | `PROJECT_CLI_UNAVAILABLE` | the configured native Project CLI could not be started | save the correct native executable path and reapprove the source if its dependencies changed |
 | `PROJECT_AUTH_NETWORK_FAILED` | Project authorization initialization could not reach the configured host | check the saved Project host, network and proxy; no authorization page was opened |
 | `PROJECT_AUTH_TLS_FAILED` | Project authorization initialization could not verify TLS | check the saved host and system certificate trust; do not disable TLS verification |
+| `PROJECT_AUTH_RESPONSE_INVALID`, `PROJECT_AUTH_DEVICE_MISSING`, `PROJECT_AUTH_CLIENT_MISSING`, `PROJECT_AUTH_EXPIRY_INVALID`, `PROJECT_AUTH_URL_MISSING`, `PROJECT_AUTH_USER_CODE_INVALID`, `PROJECT_AUTH_INTERVAL_INVALID` | Project CLI initialization returned a response that cannot be used safely | report the code and CLI version; do not share the raw response, device code, user code or authorization URL |
 | `AUTH_POLL_FAILED` | device authorization did not complete and status was not verified | start a new authorization flow; do not reuse the previous URL |
 | `AUTH_VERIFY_NETWORK_FAILED` | token may be saved, but bounded server verification did not complete | check network/service health, then verify or retry setup; do not reset credentials solely for this error |
 | `AUTH_VERIFY_IDENTITY_FAILED` | status explicitly reported a non-user or unverified identity | authorize the required user identity; bot fallback remains disabled |

@@ -27,6 +27,13 @@ const (
 	CodeProjectAuthNetworkFailed = "PROJECT_AUTH_NETWORK_FAILED"
 	CodeProjectAuthTLSFailed     = "PROJECT_AUTH_TLS_FAILED"
 	CodeAuthResponseUnsupported  = "AUTH_RESPONSE_UNSUPPORTED"
+	CodeProjectResponseInvalid   = "PROJECT_AUTH_RESPONSE_INVALID"
+	CodeProjectDeviceMissing     = "PROJECT_AUTH_DEVICE_MISSING"
+	CodeProjectClientMissing     = "PROJECT_AUTH_CLIENT_MISSING"
+	CodeProjectExpiryInvalid     = "PROJECT_AUTH_EXPIRY_INVALID"
+	CodeProjectURLMissing        = "PROJECT_AUTH_URL_MISSING"
+	CodeProjectUserCodeInvalid   = "PROJECT_AUTH_USER_CODE_INVALID"
+	CodeProjectIntervalInvalid   = "PROJECT_AUTH_INTERVAL_INVALID"
 	CodeAuthPollFailed           = "AUTH_POLL_FAILED"
 	CodeAuthVerifyNetworkFailed  = "AUTH_VERIFY_NETWORK_FAILED"
 	CodeAuthVerifyIdentityFailed = "AUTH_VERIFY_IDENTITY_FAILED"
@@ -99,6 +106,20 @@ func failureDefinition(code string) (phase, message string, retryable, ok bool) 
 		return PhaseStartAuthorization, "Project authorization could not establish a trusted TLS connection. Check the configured host, network and system certificate trust.", true, true
 	case CodeAuthResponseUnsupported:
 		return PhaseStartAuthorization, "The authorization service returned an unsupported response.", false, true
+	case CodeProjectResponseInvalid:
+		return PhaseStartAuthorization, "Project CLI returned an unsupported authorization response format.", false, true
+	case CodeProjectDeviceMissing:
+		return PhaseStartAuthorization, "Project authorization response did not include a device code.", false, true
+	case CodeProjectClientMissing:
+		return PhaseStartAuthorization, "Project authorization response did not include a client ID.", false, true
+	case CodeProjectExpiryInvalid:
+		return PhaseStartAuthorization, "Project authorization response did not include a valid expiry.", false, true
+	case CodeProjectURLMissing:
+		return PhaseStartAuthorization, "Project authorization response did not include a verification URL.", false, true
+	case CodeProjectUserCodeInvalid:
+		return PhaseStartAuthorization, "Project authorization response did not include a usable user code for its verification URL.", false, true
+	case CodeProjectIntervalInvalid:
+		return PhaseStartAuthorization, "Project authorization returned an unsupported polling interval.", false, true
 	case CodeAuthPollFailed:
 		return PhaseWaitForAuthorization, "Authorization did not complete. Start a new authorization flow.", true, true
 	case CodeAuthVerifyNetworkFailed:

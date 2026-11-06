@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"image"
 	_ "image/png"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -17,6 +20,77 @@ import (
 )
 
 const computerPanelWidth = 600
+
+func macAppBundlePath(executable string) string {
+	macOS := filepath.Dir(filepath.Clean(executable))
+	contents := filepath.Dir(macOS)
+	bundle := filepath.Dir(contents)
+	if filepath.Base(macOS) != "MacOS" || filepath.Base(contents) != "Contents" || !strings.EqualFold(filepath.Ext(bundle), ".app") {
+		return ""
+	}
+	return bundle
+}
+
+func (a *App) refreshComputerPermissions() {
+	a.computerPermission = computeruse.ProbePermissions()
+}
+
+func (a *App) requestComputerPermission(kind string) {
+	a.computerPermissionNote = "Respond to the macOS prompt, then refresh the status. macOS may require quitting and reopening Golder GUI."
+	win := a.win
+	go func() {
+		computeruse.RequestMacPermission(kind)
+		if win != nil {
+			state := computeruse.ProbePermissions()
+			win.Update(func() { a.computerPermission = state })
+		}
+	}()
+}
+
+// macComputerPermissionsView never requests a system grant until the operator
+// clicks the relevant button; OS grants do not authorize an Agent target.
+func (a *App) macComputerPermissionsView(c *ui.Context, compact bool) {
+	t := c.Theme()
+	ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
+	unsupported := a.computerPermission.ScreenCapture == "unknown" && a.computerPermission.Accessibility == "unknown"
+	if unsupported {
+		ui.Text(c, "This build cannot request macOS Computer Use permissions. Install a GUI build with CGO enabled.").FontSize(11).TextColor(t.Warning).Wrap()
+	}
+	if compact {
+		ui.Text(c, "For Privacy settings and manual registration, open Settings → Permissions.").FontSize(11).TextColor(t.TextMuted).Wrap()
+	} else {
+		ui.Text(c, "Install Golder GUI.app in /Applications and open that copy. Request each permission below; if it is still missing from System Settings, use + there to select Golder GUI.app. Quit and reopen after granting if macOS asks.").FontSize(11).TextColor(t.TextMuted).Wrap()
+	}
+	ui.Row(c).Gap(8).Wrap().Children(func() {
+		if ui.Button(c, "Request Accessibility").Disabled(unsupported || a.computerPermission.Accessibility == "granted").Clicked() {
+			a.requestComputerPermission("accessibility")
+		}
+		if ui.Button(c, "Request Screen Recording").Disabled(unsupported || a.computerPermission.ScreenCapture == "granted").Clicked() {
+			a.requestComputerPermission("screen")
+		}
+		if ui.Button(c, "Refresh system permissions").Clicked() {
+			a.refreshComputerPermissions()
+		}
+	})
+	if !compact {
+		ui.Row(c).Gap(8).Wrap().Children(func() {
+			if ui.Button(c, "Accessibility settings").Clicked() {
+				go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+			}
+			if ui.Button(c, "Screen Recording settings").Clicked() {
+				go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+			}
+			exe, _ := os.Executable()
+			bundle := macAppBundlePath(exe)
+			if ui.Button(c, "Show Golder GUI.app in Finder").Disabled(bundle == "").Clicked() {
+				go mygo.Shell.ShowItemInFolder(bundle)
+			}
+		})
+	}
+	if a.computerPermissionNote != "" {
+		ui.Text(c, a.computerPermissionNote).FontSize(11).TextColor(t.TextMuted).Wrap()
+	}
+}
 
 func (a *App) toggleComputerPanel() {
 	if a.computerSession != nil && a.computerSession.Status().Active {
@@ -375,20 +449,10 @@ func (a *App) computerPicker(c *ui.Context) {
 					ui.Text(c, "No exact match; choose another window or cancel.").FontSize(11).TextColor(t.Warning).Wrap()
 				}
 			}
-			ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
-			if runtime.GOOS == "darwin" && (a.computerPermission.ScreenCapture != "granted" || a.computerPermission.Accessibility != "granted") {
-				ui.Text(c, "Use these buttons to register Golder GUI in macOS Privacy & Security. After granting, quit and reopen the app if macOS asks.").FontSize(11).TextColor(t.TextMuted).Wrap()
-				ui.Row(c).Gap(8).Children(func() {
-					if a.computerPermission.Accessibility != "granted" && ui.Button(c, "Request Accessibility").Clicked() {
-						go computeruse.RequestMacPermission("accessibility")
-					}
-					if a.computerPermission.ScreenCapture != "granted" && ui.Button(c, "Request Screen Recording").Clicked() {
-						go computeruse.RequestMacPermission("screen")
-					}
-					if ui.Button(c, "Open Privacy Settings").Clicked() {
-						go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-					}
-				})
+			if runtime.GOOS == "darwin" {
+				a.macComputerPermissionsView(c, true)
+			} else {
+				ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
 			}
 			if a.computerError != "" {
 				ui.Text(c, a.computerError).FontSize(11).TextColor(t.Warning).Wrap()

@@ -79,18 +79,20 @@ type App struct {
 	displayErr   string
 	displayNote  string
 
-	extension              appsession.LarkExtensionSettings
-	extensionSources       []appsession.ExtensionSourceView
-	extensionEdit          appsession.LarkExtensionEdit
-	extensionDomains       map[string]bool
-	extensionBusy          bool
-	extensionErr           string
-	extensionNote          string
-	extensionAuthURL       string
-	extensionAuthCode      string
-	extensionConfirm       string
-	extensionSourceConfirm string
-	extensionCancel        context.CancelFunc
+	extension                appsession.LarkExtensionSettings
+	extensionSources         []appsession.ExtensionSourceView
+	extensionEdit            appsession.LarkExtensionEdit
+	extensionDomains         map[string]bool
+	extensionBusy            bool
+	extensionErr             string
+	extensionNote            string
+	extensionAuthURL         string
+	extensionAuthCode        string
+	extensionLarkVerified    bool
+	extensionProjectVerified bool
+	extensionConfirm         string
+	extensionSourceConfirm   string
+	extensionCancel          context.CancelFunc
 
 	paletteOpen  bool
 	paletteQuery string
@@ -137,6 +139,7 @@ type App struct {
 	computerBusy             bool
 	computerError            string
 	computerPermission       computeruse.PermissionState
+	computerPermissionNote   string
 	computerBackend          computeruse.PlatformBackend
 	computerSession          *computeruse.Session
 	computerTargets          []computeruse.Target

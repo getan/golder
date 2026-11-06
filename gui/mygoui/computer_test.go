@@ -3,6 +3,8 @@ package mygoui
 import (
 	"context"
 	"image"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -24,6 +26,32 @@ func TestComputerPickerShowsExplicitScopeAndControlChoice(t *testing.T) {
 	for _, want := range []string{"Computer Use", "Calculator · Calculator", "View only", "Allow control", "Cancel"} {
 		if !tt.HasText(want) {
 			t.Fatalf("picker is missing %q; texts=%q", want, tt.Texts())
+		}
+	}
+}
+
+func TestMacAppBundlePath(t *testing.T) {
+	bundle := filepath.Join("Applications", "Golder GUI.app")
+	executable := filepath.Join(bundle, "Contents", "MacOS", "Golder GUI")
+	if got := macAppBundlePath(executable); got != bundle {
+		t.Fatalf("bundle=%q want %q", got, bundle)
+	}
+	if got := macAppBundlePath(filepath.Join("tmp", "golder-gui")); got != "" {
+		t.Fatalf("unbundled development binary produced a bundle: %q", got)
+	}
+}
+
+func TestMacComputerPermissionsAreAvailableInSettings(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS settings")
+	}
+	a := testApp()
+	a.settingsOpen, a.settingsTab = true, 1
+	a.computerPermission = computeruse.PermissionState{ScreenCapture: "denied", Accessibility: "denied"}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"macOS Computer Use permissions", "Request Accessibility", "Request Screen Recording", "Accessibility settings", "Screen Recording settings", "Show Golder GUI.app in Finder", "Refresh system permissions"} {
+		if !tt.HasText(want) {
+			t.Fatalf("permissions settings are missing %q; texts=%q", want, tt.Texts())
 		}
 	}
 }

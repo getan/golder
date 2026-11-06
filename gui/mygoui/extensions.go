@@ -254,6 +254,7 @@ func (a *App) configureLark() {
 				a.extensionErr, a.extensionNote = err.Error(), ""
 				return
 			}
+			a.extensionLarkVerified, a.extensionProjectVerified = false, false
 			a.extensionNote = "Configuration saved disabled. Review the capabilities, then enable."
 			a.loadExtensionSettings()
 		})
@@ -285,6 +286,11 @@ func (a *App) authorizeLark(service string) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.extensionCancel = cancel
+	if service == "project" {
+		a.extensionProjectVerified = false
+	} else {
+		a.extensionLarkVerified = false
+	}
 	a.extensionBusy, a.extensionErr = true, ""
 	a.extensionNote = "Preparing authorization…"
 	a.extensionAuthURL = ""
@@ -326,6 +332,11 @@ func (a *App) authorizeLark(service string) {
 				return
 			}
 			a.extensionErr = ""
+			if service == "project" {
+				a.extensionProjectVerified = true
+			} else {
+				a.extensionLarkVerified = true
+			}
 			a.extensionNote = "Authorization verified."
 		})
 	}()
@@ -341,6 +352,72 @@ func projectAuthorizationConfigured(settings appsession.LarkExtensionSettings, e
 		host = "project.feishu.cn"
 	}
 	return strings.EqualFold(host, strings.TrimSpace(settings.SavedProjectHost))
+}
+
+func sameLarkPath(left, right string) bool {
+	left, right = strings.TrimSpace(left), strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return left == right
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func (a *App) larkNextAction(helperReady bool) string {
+	s, edit := a.extension, a.extensionEdit
+	if !s.Installed {
+		return "install"
+	}
+	if s.UpdateAvailable {
+		return "update"
+	}
+	if strings.TrimSpace(edit.LarkCLI) == "" {
+		return "install-cli"
+	}
+	if !s.Configured || !sameLarkPath(edit.LarkCLI, s.SavedLarkCLI) || !sameLarkPath(edit.ProjectCLI, s.SavedProjectCLI) ||
+		strings.TrimSpace(edit.AppID) != strings.TrimSpace(s.AppID) || strings.TrimSpace(edit.CredentialName) != strings.TrimSpace(s.CredentialName) ||
+		strings.TrimSpace(edit.NewAppSecret) != "" || larkApplicationStatus(s) != "Configured" ||
+		(strings.TrimSpace(edit.ProjectCLI) != "" && !projectAuthorizationConfigured(s, edit)) {
+		return "save"
+	}
+	if a.extensionDomains != nil {
+		for _, name := range larkDomainOrder {
+			saved := false
+			for _, domain := range s.Domains {
+				if domain == name {
+					saved = true
+					break
+				}
+			}
+			if a.extensionDomains[name] != saved {
+				return "save"
+			}
+		}
+	}
+	if !s.Enabled {
+		return "enable"
+	}
+	if !helperReady {
+		return ""
+	}
+	// The persisted source status combines both services. Do not infer which
+	// service was verified in an earlier GUI session.
+	if !a.extensionLarkVerified && !a.extensionProjectVerified && s.Authentication == "verified" {
+		return "test"
+	}
+	if !a.extensionLarkVerified {
+		return "lark"
+	}
+	if projectAuthorizationConfigured(s, edit) && !a.extensionProjectVerified {
+		return "project"
+	}
+	return "test"
+}
+
+func larkWizardButton(c *ui.Context, label string, primary bool) ui.Element {
+	if primary {
+		return ui.PrimaryButton(c, label)
+	}
+	return ui.Button(c, label)
 }
 
 func (a *App) applyExtensionSetupEvent(event appsession.ExtensionSetupEvent) string {
@@ -412,6 +489,7 @@ func (a *App) resetLark() {
 		return
 	}
 	a.extensionConfirm = ""
+	a.extensionLarkVerified, a.extensionProjectVerified = false, false
 	a.runExtensionOperation("Clearing source-scoped login state…", func(context.Context) error { return a.ctrl.ResetLark() })
 }
 
@@ -421,6 +499,7 @@ func (a *App) uninstallLark() {
 		return
 	}
 	a.extensionConfirm = ""
+	a.extensionLarkVerified, a.extensionProjectVerified = false, false
 	a.runExtensionOperation("Removing source and managed helper…", func(context.Context) error { return a.ctrl.UninstallLark() })
 }
 
@@ -499,6 +578,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 	}
 	bundledVersion, installedVersion, activeVersion := larkHelperVersions(a.extension, guiVersion)
 	helperReady := larkHelperReady(a.extension, guiVersion)
+	next := a.larkNextAction(helperReady)
 	statusColor := theme.TextMuted
 	if a.extension.Enabled && a.extension.State == "ready" {
 		statusColor = theme.Success
@@ -513,6 +593,14 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			})
 			ui.Text(c, a.extension.State).FontSize(11).TextColor(statusColor)
 		})
+		if hint := map[string]string{
+			"install": "Install the bundled helper.", "update": "Update the helper.",
+			"install-cli": "Detect or install lark-cli.", "save": "Review the paths and application credentials, then save.",
+			"enable": "Review and enable the saved configuration.", "lark": "Authorize your Lark user.",
+			"project": "Authorize your Project user.", "test": "Test the connection; authorize either service if needed.",
+		}[next]; hint != "" {
+			ui.Text(c, "Next: "+hint).FontSize(11).TextColor(theme.TextMuted).Wrap()
+		}
 
 		if !a.extension.Installed {
 			ui.Text(c, "1. Install the signed, matching golder-lark helper. Nothing is configured or executed during discovery.").FontSize(12)
@@ -550,7 +638,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			if ui.Button(c, "Detect installed CLIs").Disabled(a.extensionBusy).Clicked() {
 				a.detectLarkCLIs()
 			}
-			if ui.PrimaryButton(c, "Install lark-cli").Disabled(a.extensionBusy).Clicked() {
+			if larkWizardButton(c, "Install lark-cli", next == "install-cli").Disabled(a.extensionBusy).Clicked() {
 				a.installOfficialLarkCLI(false)
 			}
 			if ui.Button(c, "Install Project CLI").Disabled(a.extensionBusy).Clicked() {
@@ -579,7 +667,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 				}
 			}
 		})
-		if ui.Button(c, "Save configuration").Disabled(a.extensionBusy).Clicked() {
+		if larkWizardButton(c, "Save configuration", next == "save").Disabled(a.extensionBusy).Clicked() {
 			a.configureLark()
 		}
 
@@ -588,7 +676,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			FontSize(11).TextColor(theme.TextMuted).MaxWidth(650)
 		if a.extension.Configured {
 			if !a.extension.Enabled {
-				if ui.PrimaryButton(c, "Approve & enable").Disabled(a.extensionBusy || !helperReady).Clicked() {
+				if larkWizardButton(c, "Approve & enable", next == "enable").Disabled(a.extensionBusy || !helperReady || next == "save" || next == "install-cli").Clicked() {
 					a.setLarkEnabled(true)
 				}
 			} else if ui.Button(c, "Disable").Disabled(a.extensionBusy).Clicked() {
@@ -599,18 +687,20 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "4. Personal authorization").FontWeight(600).Padding(6, 0, 0, 0)
 		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
+		ui.Text(c, "Lark and Project have separate personal authorizations; the source status above is shared.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
 		projectConfigured := projectAuthorizationConfigured(a.extension, a.extensionEdit)
 		if strings.TrimSpace(a.extensionEdit.ProjectCLI) != "" && !projectConfigured {
 			ui.Text(c, "Save the Project CLI and host, then approve the updated configuration before authorizing Project.").FontSize(11).TextColor(theme.Warning).Wrap()
 		}
+		unsaved := next == "save" || next == "install-cli"
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.PrimaryButton(c, "Authorize Lark").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
+			if larkWizardButton(c, "Authorize Lark", next == "lark").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if ui.Button(c, "Authorize Project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured).Clicked() {
+			if larkWizardButton(c, "Authorize Project", next == "project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
 				a.authorizeLark("project")
 			}
-			if ui.Button(c, "Test connection").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady).Clicked() {
+			if larkWizardButton(c, "Test connection", next == "test").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.testLark()
 			}
 			if a.extensionBusy && a.extensionCancel != nil {

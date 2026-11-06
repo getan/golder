@@ -40,6 +40,8 @@ const (
 	browserProfileMaxAge = 14 * 24 * time.Hour
 	// browserSocketWait bounds how long a new pane has to create its endpoint.
 	browserSocketWait = 25 * time.Second
+	// The native host also needs a startup deadline before its socket exists.
+	browserNativeStartupWait = 45 * time.Second
 	// browserProbeTimeout bounds the identity probe that follows.
 	browserProbeTimeout = 5 * time.Second
 )
@@ -377,7 +379,13 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 		URL: url, Socket: spec.Socket, ProfileDir: spec.Profile,
 		LoginProfile: browserLoginProfile(cwd, spec.PersistentProfile), ProxyServer: spec.ProxyServer,
 	}
-	if err := launchNativeBrowser(ctx, req); err != nil {
+	startup, cancel := context.WithTimeout(ctx, browserNativeStartupWait)
+	err = launchNativeBrowser(startup, req)
+	cancel()
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return "", fmt.Errorf("native browser startup exceeded %s: %w", browserNativeStartupWait, err)
+		}
 		return "", fmt.Errorf("start native browser: %w", err)
 	}
 	if err := waitForBrowserSocket(ctx, spec.Socket, browserSocketWait); err != nil {

@@ -62,6 +62,7 @@ type LarkExtensionSettings struct {
 	ExtensionPackageView
 	LarkCLI             string
 	ProjectCLI          string
+	SavedLarkCLI        string
 	SavedProjectCLI     string
 	SavedProjectHost    string
 	AppID               string
@@ -128,6 +129,7 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 		}
 		view.LarkCLI = cfg.Env["LARK_MCP_CLI"]
 		view.ProjectCLI = cfg.Env["LARK_MCP_PROJECT_CLI"]
+		view.SavedLarkCLI = view.LarkCLI
 		view.SavedProjectCLI = view.ProjectCLI
 		view.SavedProjectHost = strings.TrimSpace(cfg.Env["MEEGLE_HOST"])
 		if view.SavedProjectHost == "" {
