@@ -86,6 +86,10 @@ func (a *App) view(c *ui.Context) {
 		a.titleBar(c)
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if a.browserPanelOpen {
+				ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
+					a.sidebar(c)
+					a.center(c)
+				})
 				a.browserPanel(c)
 				return
 			}

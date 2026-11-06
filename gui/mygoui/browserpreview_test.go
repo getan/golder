@@ -16,6 +16,10 @@ func TestBrowserViewportPointAccountsForContainLetterbox(t *testing.T) {
 	if _, _, ok := browserViewportPoint(state, 10, 300); ok {
 		t.Fatal("left letterbox was treated as page content")
 	}
+	x, y, ok = browserViewportPointClamped(state, 10, 700)
+	if !ok || math.Abs(x) > 0.01 || math.Abs(y-600) > 0.01 {
+		t.Fatalf("clamped release = (%v,%v,%v)", x, y, ok)
+	}
 }
 
 func TestBrowserKeyMapsEditingKeys(t *testing.T) {

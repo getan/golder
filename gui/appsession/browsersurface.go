@@ -44,21 +44,30 @@ type BrowserTab struct {
 }
 
 // BrowserSurface is a terminal-independent view of one controlled Chromium
-// tab. Frames come from the existing screenshot endpoint; input is serialized
+// tab. Frames come from the target-scoped screenshot action; input is serialized
 // onto the same typed action socket. kitty-browse remains the CDP owner.
 type BrowserSurface struct {
-	client *browserctl.Client
+	client   *browserctl.Client
+	operator BrowserOperator
 
-	mu     sync.Mutex
-	target browserctl.Target
-	title  string
-	url    string
-	err    error
-	closed bool
+	mu           sync.Mutex
+	target       browserctl.Target
+	title        string
+	url          string
+	err          error
+	closed       bool
+	dragging     bool
+	dragTarget   browserctl.Target
+	dragX, dragY float64
 
-	input chan BrowserInput
+	input chan surfaceInput
 	done  chan struct{}
 	once  sync.Once
+}
+
+type surfaceInput struct {
+	event  BrowserInput
+	target browserctl.Target
 }
 
 // OpenBrowserSurface attaches to a browser already admitted by the owner-only
@@ -73,6 +82,10 @@ func OpenBrowserSurface(ctx context.Context, preview BrowserPreview) (*BrowserSu
 		client.CloseIdleConnections()
 		return nil, err
 	}
+	if preview.Browser != "" && preview.Browser != info.BrowserID {
+		client.CloseIdleConnections()
+		return nil, fmt.Errorf("browser surface identity changed since discovery")
+	}
 	target := browserctl.Target{BrowserID: info.BrowserID, TabID: info.ActiveTabID}
 	title, rawURL := preview.Title, preview.URL
 	for _, tab := range info.Tabs {
@@ -83,23 +96,34 @@ func OpenBrowserSurface(ctx context.Context, preview BrowserPreview) (*BrowserSu
 		}
 	}
 	surface := &BrowserSurface{
-		client: client, target: target, title: title, url: rawURL,
-		input: make(chan BrowserInput, 128), done: make(chan struct{}),
+		client: client, operator: browserOperator(preview.Socket), target: target, title: title, url: rawURL,
+		input: make(chan surfaceInput, 128), done: make(chan struct{}),
 	}
 	go surface.runInputs()
 	return surface, nil
 }
 
-// Frame captures the current viewport as PNG. The endpoint already bounds the
-// response and uses kitty-browse's idle/still recovery path.
+// Frame captures this surface's selected tab, independently of the host's
+// globally active tab. A frame that raced a local tab switch is discarded.
 func (s *BrowserSurface) Frame(ctx context.Context) ([]byte, error) {
-	if s.isClosed() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return nil, fmt.Errorf("browser surface is closed")
 	}
-	return s.client.Screenshot(ctx, false)
+	target := s.target
+	s.mu.Unlock()
+	data, meta, err := s.client.ScreenshotTarget(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if !s.updateSelectedMeta(target, meta) {
+		return nil, fmt.Errorf("browser surface selection changed during capture")
+	}
+	return data, nil
 }
 
-// Resize changes the active Chromium viewport. Dimensions are CSS pixels.
+// Resize changes this surface's selected Chromium tab. Dimensions are CSS pixels.
 func (s *BrowserSurface) Resize(ctx context.Context, width, height int) error {
 	if width < 1 || height < 1 {
 		return nil
@@ -110,10 +134,7 @@ func (s *BrowserSurface) Resize(ctx context.Context, width, height int) error {
 
 // Navigate loads a URL through kitty-browse's validated action path.
 func (s *BrowserSurface) Navigate(ctx context.Context, rawURL string) error {
-	_, meta, err := s.action(ctx, "navigate", map[string]any{"url": strings.TrimSpace(rawURL)}, 60*time.Second)
-	if err == nil {
-		s.updateMeta(meta)
-	}
+	_, _, err := s.action(ctx, "navigate", map[string]any{"url": strings.TrimSpace(rawURL)}, 60*time.Second)
 	return err
 }
 
@@ -122,50 +143,87 @@ func (s *BrowserSurface) Back(ctx context.Context) error    { return s.simple(ct
 func (s *BrowserSurface) Forward(ctx context.Context) error { return s.simple(ctx, "forward") }
 func (s *BrowserSurface) Reload(ctx context.Context) error  { return s.simple(ctx, "reload") }
 
-// Tabs refreshes the browser's tab strip metadata.
+// Tabs refreshes metadata without adopting another surface's selection. If the
+// selected tab was closed, the browser's active tab becomes the fallback.
 func (s *BrowserSurface) Tabs(ctx context.Context) ([]BrowserTab, error) {
+	s.mu.Lock()
+	previous := s.target
+	s.mu.Unlock()
 	info, err := s.client.Info(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]BrowserTab, 0, len(info.Tabs))
-	for _, tab := range info.Tabs {
-		out = append(out, BrowserTab{ID: tab.ID, Title: tab.Title, URL: tab.URL, Active: tab.Active})
-		if tab.Active {
-			s.updateMeta(browserctl.Meta{
-				BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID,
-				Title: tab.Title, URL: tab.URL,
-			})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || info.BrowserID != s.target.BrowserID {
+		return nil, fmt.Errorf("browser surface identity changed or closed")
+	}
+	if s.target != previous {
+		return nil, fmt.Errorf("browser surface selection changed during tab discovery")
+	}
+	selected := -1
+	fallback := -1
+	for i, tab := range info.Tabs {
+		if tab.ID == s.target.TabID && tab.TargetID == s.target.TargetID {
+			selected = i
 		}
+		if tab.Active {
+			fallback = i
+		}
+	}
+	if selected < 0 {
+		selected = fallback
+		if selected < 0 && len(info.Tabs) > 0 {
+			selected = 0
+		}
+	}
+	if selected >= 0 {
+		s.selectTabLocked(info.BrowserID, info.Tabs[selected])
+	}
+	out := make([]BrowserTab, 0, len(info.Tabs))
+	for i, tab := range info.Tabs {
+		out = append(out, BrowserTab{ID: tab.ID, Title: tab.Title, URL: tab.URL, Active: i == selected})
 	}
 	return out, nil
 }
 
-// ActivateTab switches the native surface to an existing tab.
+// ActivateTab switches only this surface's view, not the browser host's active
+// tab, which may be displayed by another surface.
 func (s *BrowserSurface) ActivateTab(ctx context.Context, id string) error {
-	s.mu.Lock()
-	browserID := s.target.BrowserID
-	s.mu.Unlock()
-	_, meta, err := s.client.Action(ctx, "tab.activate", map[string]any{"tabId": id},
-		browserctl.Target{BrowserID: browserID}, 10*time.Second)
-	if err == nil {
-		s.updateMeta(meta)
+	info, err := s.client.Info(ctx)
+	if err != nil {
+		return err
 	}
-	return err
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || info.BrowserID != s.target.BrowserID {
+		return fmt.Errorf("browser surface identity changed or closed")
+	}
+	for _, tab := range info.Tabs {
+		if tab.ID == id && tab.TargetID != "" {
+			s.selectTabLocked(info.BrowserID, tab)
+			return nil
+		}
+	}
+	return fmt.Errorf("browser tab %q is no longer available", id)
 }
 
 // NewTab opens and activates a new tab.
 func (s *BrowserSurface) NewTab(ctx context.Context, rawURL string) error {
 	s.mu.Lock()
-	browserID := s.target.BrowserID
+	previous := s.target
 	s.mu.Unlock()
 	params := map[string]any{}
 	if rawURL = strings.TrimSpace(rawURL); rawURL != "" {
 		params["url"] = rawURL
 	}
-	_, meta, err := s.client.Action(ctx, "tab.new", params, browserctl.Target{BrowserID: browserID}, 30*time.Second)
+	_, meta, err := s.client.Action(ctx, "tab.new", params, browserctl.Target{BrowserID: previous.BrowserID}, 30*time.Second)
 	if err == nil {
-		s.updateMeta(meta)
+		s.mu.Lock()
+		if !s.closed && s.target == previous && meta.BrowserID == previous.BrowserID && meta.TabID != "" && meta.TargetID != "" {
+			s.selectTabLocked(meta.BrowserID, browserctl.Tab{ID: meta.TabID, TargetID: meta.TargetID, Title: meta.Title, URL: meta.URL})
+		}
+		s.mu.Unlock()
 	}
 	return err
 }
@@ -175,19 +233,16 @@ func (s *BrowserSurface) CloseTab(ctx context.Context, id string) error {
 	s.mu.Lock()
 	browserID := s.target.BrowserID
 	s.mu.Unlock()
-	_, meta, err := s.client.Action(ctx, "tab.close", map[string]any{"tabId": id},
+	_, _, err := s.client.Action(ctx, "tab.close", map[string]any{"tabId": id},
 		browserctl.Target{BrowserID: browserID}, 10*time.Second)
 	if err == nil {
-		s.updateMeta(meta)
+		_, err = s.Tabs(ctx)
 	}
 	return err
 }
 
 func (s *BrowserSurface) simple(ctx context.Context, action string) error {
-	_, meta, err := s.action(ctx, action, map[string]any{}, 30*time.Second)
-	if err == nil {
-		s.updateMeta(meta)
-	}
+	_, _, err := s.action(ctx, action, map[string]any{}, 30*time.Second)
 	return err
 }
 
@@ -195,11 +250,15 @@ func (s *BrowserSurface) simple(ctx context.Context, action string) error {
 // Under sustained control-socket pressure a new event is consumed but dropped;
 // the UI must stay responsive even when Chromium is hung.
 func (s *BrowserSurface) Input(event BrowserInput) bool {
-	if s.isClosed() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
 		return false
 	}
+	target := s.target
+	s.mu.Unlock()
 	select {
-	case s.input <- event:
+	case s.input <- surfaceInput{event: event, target: target}:
 		return true
 	default:
 		return true
@@ -217,6 +276,7 @@ func (s *BrowserSurface) State() (title, rawURL string, err error) {
 func (s *BrowserSurface) Close() {
 	s.once.Do(func() {
 		s.mu.Lock()
+		s.releaseDragLocked()
 		s.closed = true
 		s.mu.Unlock()
 		close(s.done)
@@ -224,20 +284,14 @@ func (s *BrowserSurface) Close() {
 	})
 }
 
-func (s *BrowserSurface) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
-}
-
 func (s *BrowserSurface) runInputs() {
 	for {
 		select {
 		case <-s.done:
 			return
-		case event := <-s.input:
+		case input := <-s.input:
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-			err := s.dispatchInput(ctx, event)
+			err := s.dispatchInput(ctx, input)
 			cancel()
 			s.mu.Lock()
 			s.err = err
@@ -246,10 +300,20 @@ func (s *BrowserSurface) runInputs() {
 	}
 }
 
-func (s *BrowserSurface) dispatchInput(ctx context.Context, event BrowserInput) error {
+func (s *BrowserSurface) dispatchInput(ctx context.Context, input surfaceInput) error {
+	s.mu.Lock()
+	current := !s.closed && s.target == input.target
+	s.mu.Unlock()
+	if !current {
+		return nil
+	}
+	event := input.event
+	if s.operator != nil {
+		return s.dispatchOperatorInput(ctx, input)
+	}
 	switch event.Kind {
 	case BrowserScroll:
-		_, _, err := s.action(ctx, "scroll", map[string]any{
+		_, _, err := s.actionTarget(ctx, input.target, "scroll", map[string]any{
 			"x": event.X, "viewportY": event.Y, "deltaX": event.DX, "deltaY": event.DY,
 		}, 5*time.Second)
 		return err
@@ -257,23 +321,113 @@ func (s *BrowserSurface) dispatchInput(ctx context.Context, event BrowserInput) 
 		if event.Text == "" {
 			return nil
 		}
-		_, _, err := s.action(ctx, "keyboard.insert", map[string]any{"text": event.Text}, 5*time.Second)
+		_, _, err := s.actionTarget(ctx, input.target, "keyboard.insert", map[string]any{"text": event.Text}, 5*time.Second)
 		return err
 	case BrowserKey:
 		if event.Key == "" {
 			return nil
 		}
-		_, _, err := s.action(ctx, "press", map[string]any{"key": event.Key}, 5*time.Second)
+		_, _, err := s.actionTarget(ctx, input.target, "press", map[string]any{"key": event.Key}, 5*time.Second)
 		return err
 	case BrowserPointerDown, BrowserPointerMove, BrowserPointerUp:
 		script := pointerScript(event)
 		if script == "" {
 			return nil
 		}
-		_, _, err := s.action(ctx, "eval", map[string]any{"script": script}, 5*time.Second)
+		_, _, err := s.actionTarget(ctx, input.target, "eval", map[string]any{"script": script}, 5*time.Second)
 		return err
 	default:
 		return nil
+	}
+}
+
+func (s *BrowserSurface) dispatchOperatorInput(ctx context.Context, input surfaceInput) error {
+	event := input.event
+	var kind string
+	switch event.Kind {
+	case BrowserPointerDown:
+		kind = "pointer-down"
+	case BrowserPointerMove:
+		s.mu.Lock()
+		dragging := s.dragging && s.dragTarget == input.target
+		s.mu.Unlock()
+		if dragging {
+			kind = "pointer-move"
+		} else {
+			kind = "pointer-hover"
+		}
+	case BrowserPointerUp:
+		s.mu.Lock()
+		dragging := s.dragging && s.dragTarget == input.target
+		s.mu.Unlock()
+		if !dragging {
+			return nil
+		}
+		kind = "pointer-up"
+	case BrowserScroll:
+		kind = "scroll"
+	case BrowserText:
+		kind = "text"
+	case BrowserKey:
+		kind = "key"
+	default:
+		return nil
+	}
+	if (event.Kind == BrowserPointerDown || event.Kind == BrowserPointerUp) && event.Button != 0 {
+		return fmt.Errorf("only the primary browser pointer button is supported")
+	}
+	if event.Kind == BrowserScroll && event.DX != 0 && event.DY == 0 {
+		return nil
+	}
+	if err := s.sendOperatorInput(ctx, input.target, kind, event); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	switch kind {
+	case "pointer-down":
+		if !s.closed && s.target == input.target {
+			s.dragging, s.dragTarget, s.dragX, s.dragY = true, input.target, event.X, event.Y
+		} else {
+			s.scheduleDragRelease(input.target, event.X, event.Y)
+		}
+	case "pointer-move":
+		if s.dragging && s.dragTarget == input.target {
+			s.dragX, s.dragY = event.X, event.Y
+		}
+	case "pointer-up":
+		if s.dragging && s.dragTarget == input.target {
+			s.dragging = false
+		}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *BrowserSurface) sendOperatorInput(ctx context.Context, target browserctl.Target, kind string, event BrowserInput) error {
+	raw, err := json.Marshal(map[string]any{
+		"browserId": target.BrowserID, "tabId": target.TabID, "targetId": target.TargetID,
+		"kind": kind, "x": event.X, "y": event.Y, "deltaY": event.DY, "text": event.Text, "key": event.Key,
+	})
+	if err != nil {
+		return err
+	}
+	return s.operator.SendOperatorInputJSON(ctx, raw)
+}
+
+func (s *BrowserSurface) scheduleDragRelease(target browserctl.Target, x, y float64) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.sendOperatorInput(ctx, target, "pointer-up", BrowserInput{X: x, Y: y})
+	}()
+}
+
+// releaseDragLocked prevents a tab switch from leaving a pressed pointer in a
+// different surface's page. The release stays pinned to the original target.
+func (s *BrowserSurface) releaseDragLocked() {
+	if s.dragging && s.operator != nil {
+		s.scheduleDragRelease(s.dragTarget, s.dragX, s.dragY)
+		s.dragging = false
 	}
 }
 
@@ -327,24 +481,34 @@ func (s *BrowserSurface) action(ctx context.Context, action string, params any, 
 	s.mu.Lock()
 	target := s.target
 	s.mu.Unlock()
+	return s.actionTarget(ctx, target, action, params, timeout)
+}
+
+func (s *BrowserSurface) actionTarget(ctx context.Context, target browserctl.Target, action string, params any, timeout time.Duration) (json.RawMessage, browserctl.Meta, error) {
 	result, meta, err := s.client.Action(ctx, action, params, target, timeout)
 	if err == nil {
-		s.updateMeta(meta)
+		s.updateSelectedMeta(target, meta)
 	}
 	return result, meta, err
 }
 
-func (s *BrowserSurface) updateMeta(meta browserctl.Meta) {
+func (s *BrowserSurface) selectTabLocked(browserID string, tab browserctl.Tab) {
+	target := browserctl.Target{BrowserID: browserID, TabID: tab.ID, TargetID: tab.TargetID}
+	if s.target != target {
+		s.releaseDragLocked()
+	}
+	s.target = target
+	s.title, s.url = tab.Title, tab.URL
+}
+
+// updateSelectedMeta cannot let a slow response from a previous tab change the
+// current target, even when that response arrives after a user switches tabs.
+func (s *BrowserSurface) updateSelectedMeta(target browserctl.Target, meta browserctl.Meta) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if meta.BrowserID != "" {
-		s.target.BrowserID = meta.BrowserID
-	}
-	if meta.TabID != "" {
-		s.target.TabID = meta.TabID
-	}
-	if meta.TargetID != "" {
-		s.target.TargetID = meta.TargetID
+	if s.closed || s.target != target || meta.BrowserID != target.BrowserID ||
+		meta.TabID != target.TabID || meta.TargetID != target.TargetID {
+		return false
 	}
 	if meta.Title != "" {
 		s.title = meta.Title
@@ -352,4 +516,5 @@ func (s *BrowserSurface) updateMeta(meta browserctl.Meta) {
 	if meta.URL != "" {
 		s.url = meta.URL
 	}
+	return true
 }

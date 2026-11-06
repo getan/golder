@@ -137,3 +137,33 @@ func TestInfoParsesCapabilitiesFromTheWire(t *testing.T) {
 		t.Fatalf("info = %+v", info)
 	}
 }
+
+func TestScreenshotTargetPinsTabAndRejectsMismatchedMetadata(t *testing.T) {
+	for _, mismatch := range []bool{false, true} {
+		c := NewWithTransport("stub", roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			var request struct {
+				Action string `json:"action"`
+				Target Target `json:"target"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Action != "screenshot" || request.Target.TabID != "tab-1" || request.Target.TargetID != "target-1" {
+				t.Fatalf("request = %+v", request)
+			}
+			tab := "tab-1"
+			if mismatch {
+				tab = "tab-2"
+			}
+			return jsonReply(http.StatusOK, `{"ok":true,"result":{"mimeType":"image/png","data":"YWJj"},"meta":{"browserId":"b1","tabId":"`+tab+`","targetId":"target-1"}}`), nil
+		}))
+		data, _, err := c.ScreenshotTarget(context.Background(), Target{BrowserID: "b1", TabID: "tab-1", TargetID: "target-1"})
+		if mismatch {
+			if err == nil {
+				t.Fatal("accepted a screenshot from the wrong tab")
+			}
+		} else if err != nil || string(data) != "abc" {
+			t.Fatalf("screenshot = %q, %v", data, err)
+		}
+	}
+}

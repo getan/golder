@@ -18,15 +18,16 @@ import (
 )
 
 type browserWindowState struct {
-	win     *mygo.Window
-	surface *appsession.BrowserSurface
-	socket  string
-	bitmap  *ui.Bitmap
-	address string
-	pageURL string
-	title   string
-	err     string
-	tabs    []appsession.BrowserTab
+	win         *mygo.Window
+	surface     *appsession.BrowserSurface
+	socket      string
+	bitmap      *ui.Bitmap
+	address     string
+	pageURL     string
+	title       string
+	err         string
+	tabs        []appsession.BrowserTab
+	pointerDown bool
 
 	frameW, frameH float32
 	viewW, viewH   float32
@@ -34,6 +35,8 @@ type browserWindowState struct {
 	viewportH      int
 	resizeMu       sync.Mutex
 	resizeSequence atomic.Uint64
+	viewSequence   atomic.Uint64
+	switching      atomic.Bool
 }
 
 // openBrowserPreview attaches the native interactive surface in the main
@@ -113,6 +116,7 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 	defer ticker.Stop()
 	frames := 0
 	for {
+		sequence := state.viewSequence.Load()
 		frameCtx, stop := context.WithTimeout(ctx, 5*time.Second)
 		raw, frameErr := surface.Frame(frameCtx)
 		stop()
@@ -140,6 +144,9 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 			frameErr = inputErr
 		}
 		win.Update(func() {
+			if state.switching.Load() || state.viewSequence.Load() != sequence {
+				return
+			}
 			if bitmap != nil {
 				state.bitmap, state.frameW, state.frameH = bitmap, width, height
 			}
@@ -200,16 +207,16 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 						label = tab.URL
 					}
 					if menu.Item(oneLine(label, 70)).Checked(tab.Active).Chosen() {
-						runBrowserAction(state, func(ctx context.Context) error { return state.surface.ActivateTab(ctx, tab.ID) })
+						runBrowserSelection(state, func(ctx context.Context) error { return state.surface.ActivateTab(ctx, tab.ID) })
 					}
 				}
 			})
 			browserChromeButton(c, "+", "New tab", state.surface != nil, func() {
-				runBrowserAction(state, func(ctx context.Context) error { return state.surface.NewTab(ctx, "about:blank") })
+				runBrowserSelection(state, func(ctx context.Context) error { return state.surface.NewTab(ctx, "about:blank") })
 			})
 			activeID := activeBrowserTab(state.tabs)
 			browserChromeButton(c, "×", "Close tab", state.surface != nil && activeID != "", func() {
-				runBrowserAction(state, func(ctx context.Context) error { return state.surface.CloseTab(ctx, activeID) })
+				runBrowserSelection(state, func(ctx context.Context) error { return state.surface.CloseTab(ctx, activeID) })
 			})
 		})
 
@@ -237,7 +244,7 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 		if bounds.W > 0 && bounds.H > 0 {
 			state.viewW, state.viewH = bounds.W, bounds.H
 			wantW, wantH := int(math.Round(float64(bounds.W))), int(math.Round(float64(bounds.H)))
-			if state.surface != nil && wantW > 0 && wantH > 0 &&
+			if state.surface != nil && !state.switching.Load() && wantW > 0 && wantH > 0 &&
 				(absInt(wantW-state.viewportW) > 4 || absInt(wantH-state.viewportH) > 4) {
 				state.viewportW, state.viewportH = wantW, wantH
 				surface := state.surface
@@ -289,8 +296,43 @@ func runBrowserAction(state *browserWindowState, action func(context.Context) er
 	}()
 }
 
+// Never leave the old tab's pixels or coordinates interactive after selection
+// changes, and discard frames and resize work issued before that change.
+func runBrowserSelection(state *browserWindowState, action func(context.Context) error) {
+	if state.surface == nil || state.win == nil || state.switching.Swap(true) {
+		return
+	}
+	sequence := state.viewSequence.Add(1)
+	state.resizeSequence.Add(1)
+	state.bitmap, state.frameW, state.frameH = nil, 0, 0
+	state.pointerDown = false
+	win, surface := state.win, state.surface
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		err := action(ctx)
+		var tabs []appsession.BrowserTab
+		if err == nil {
+			tabs, err = surface.Tabs(ctx)
+		}
+		win.Update(func() {
+			if state.viewSequence.Load() != sequence {
+				return
+			}
+			state.switching.Store(false)
+			state.viewportW, state.viewportH = 0, 0
+			if tabs != nil {
+				state.tabs = tabs
+			}
+			if err != nil {
+				state.err = err.Error()
+			}
+		})
+	}()
+}
+
 func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
-	if state.surface == nil {
+	if state.surface == nil || state.switching.Load() || state.bitmap == nil {
 		return false
 	}
 	x, y, inside := browserViewportPoint(state, event.X, event.Y)
@@ -299,13 +341,21 @@ func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
 		if !inside {
 			return false
 		}
-		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerDown, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
+		accepted := state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerDown, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
+		if accepted && event.Button == 0 {
+			state.pointerDown = true
+		}
+		return accepted
 	case ui.InputPointerMove:
 		if !inside {
 			return false
 		}
 		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerMove, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
 	case ui.InputPointerUp:
+		if !inside && state.pointerDown {
+			x, y, inside = browserViewportPointClamped(state, event.X, event.Y)
+		}
+		state.pointerDown = false
 		if !inside {
 			return false
 		}
@@ -326,13 +376,24 @@ func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
 }
 
 func browserViewportPoint(state *browserWindowState, x, y float32) (float64, float64, bool) {
+	return browserViewportCoordinates(state, x, y, false)
+}
+
+func browserViewportPointClamped(state *browserWindowState, x, y float32) (float64, float64, bool) {
+	return browserViewportCoordinates(state, x, y, true)
+}
+
+func browserViewportCoordinates(state *browserWindowState, x, y float32, clamp bool) (float64, float64, bool) {
 	if state.frameW <= 0 || state.frameH <= 0 || state.viewW <= 0 || state.viewH <= 0 {
 		return 0, 0, false
 	}
 	scale := min(state.viewW/state.frameW, state.viewH/state.frameH)
 	displayW, displayH := state.frameW*scale, state.frameH*scale
 	offsetX, offsetY := (state.viewW-displayW)/2, (state.viewH-displayH)/2
-	if x < offsetX || y < offsetY || x > offsetX+displayW || y > offsetY+displayH {
+	if clamp {
+		x = max(offsetX, min(x, offsetX+displayW))
+		y = max(offsetY, min(y, offsetY+displayH))
+	} else if x < offsetX || y < offsetY || x > offsetX+displayW || y > offsetY+displayH {
 		return 0, 0, false
 	}
 	return float64((x - offsetX) / scale), float64((y - offsetY) / scale), true

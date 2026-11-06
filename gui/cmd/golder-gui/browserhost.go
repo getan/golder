@@ -8,6 +8,7 @@ import (
 
 	"github.com/getan/kitty-browse/browserhost"
 
+	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agenttool"
 )
 
@@ -98,10 +99,15 @@ func (h *nativeBrowserHosts) Start(ctx context.Context, req agenttool.NativeBrow
 		return fmt.Errorf("native browser host is shutting down")
 	}
 	h.hosts[host] = true
+	unregister := func() {}
+	if operator, ok := host.(appsession.BrowserOperator); ok {
+		unregister = appsession.RegisterBrowserOperator(req.Socket, operator)
+	}
 	h.mu.Unlock()
 	go func() {
 		defer cancel()
 		_ = host.Wait()
+		unregister()
 		h.mu.Lock()
 		delete(h.hosts, host)
 		h.mu.Unlock()

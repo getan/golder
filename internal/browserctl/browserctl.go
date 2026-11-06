@@ -11,6 +11,7 @@ package browserctl
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -321,6 +322,38 @@ func (c *Client) Action(ctx context.Context, action string, params any, target T
 		return nil, ar.Meta, fmt.Errorf("browser: action failed (status %d)", resp.StatusCode)
 	}
 	return ar.Result, ar.Meta, nil
+}
+
+// ScreenshotTarget captures a specific tab without changing the browser's
+// globally active tab. Unlike /v1/screenshot, the typed action accepts a target.
+func (c *Client) ScreenshotTarget(ctx context.Context, target Target) ([]byte, Meta, error) {
+	if target.TabID == "" && target.TargetID == "" {
+		return nil, Meta{}, errors.New("browser: a tab target is required for a targeted screenshot")
+	}
+	raw, meta, err := c.Action(ctx, "screenshot", map[string]any{}, target, 15*time.Second)
+	if err != nil {
+		return nil, meta, err
+	}
+	if target.BrowserID != "" && meta.BrowserID != target.BrowserID ||
+		target.TabID != "" && meta.TabID != target.TabID ||
+		target.TargetID != "" && meta.TargetID != target.TargetID {
+		return nil, meta, errors.New("browser: screenshot response does not match the selected target")
+	}
+	var result struct {
+		MimeType string `json:"mimeType"`
+		Data     string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, meta, fmt.Errorf("browser: parse screenshot: %w", err)
+	}
+	if result.MimeType != "image/png" || result.Data == "" {
+		return nil, meta, errors.New("browser: screenshot is not an inline PNG")
+	}
+	data, err := base64.StdEncoding.DecodeString(result.Data)
+	if err != nil {
+		return nil, meta, fmt.Errorf("browser: decode screenshot: %w", err)
+	}
+	return data, meta, nil
 }
 
 // Screenshot returns the active tab's viewport as PNG.

@@ -72,8 +72,8 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 	a.browserState = &browserWindowState{title: "Example", address: "https://example.com"}
 	tt := ui.NewTester(a.view, 1200, 800)
 	tt.Frame()
-	if a.browserState.viewW < 1100 || a.browserState.viewH < 600 {
-		t.Fatalf("browser viewport did not fill the window: %.0fx%.0f", a.browserState.viewW, a.browserState.viewH)
+	if a.browserState.viewW < 550 || a.browserState.viewW > 650 || a.browserState.viewH < 600 {
+		t.Fatalf("browser viewport did not occupy half the window: %.0fx%.0f", a.browserState.viewW, a.browserState.viewH)
 	}
 	for _, want := range []string{"Example", "Connecting to Chromium…", "×"} {
 		if !tt.HasText(want) {
