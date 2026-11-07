@@ -85,7 +85,7 @@ func (a *App) composer(c *ui.Context) {
 				if ui.Button(c, modelLabel).Tooltip("Model and reasoning effort").Clicked() {
 					a.modelOpen = true
 					if !a.modelsReady {
-						go a.refreshModels()
+						go a.refreshModels(a.ctrl)
 					}
 				}
 				send := ui.ButtonBase(c).Size(34, 34).Radius(17).

@@ -75,7 +75,7 @@ func (a *App) loadFileDirectory(relative string) {
 		return
 	}
 	a.fileLoading[relative] = true
-	project, win, generation, showHidden := a.project, a.win, a.fileGeneration, a.fileShowHidden
+	project, win, generation, showHidden, ctrl := a.project, a.win, a.fileGeneration, a.fileShowHidden, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -85,7 +85,7 @@ func (a *App) loadFileDirectory(relative string) {
 		}
 		ch := make(chan result, 1)
 		go func() {
-			entries, err := a.ctrl.ListProjectFilesWithHidden(relative, showHidden)
+			entries, err := ctrl.ListProjectFilesWithHidden(relative, showHidden)
 			ch <- result{entries: entries, err: err}
 		}()
 		var got result
@@ -125,7 +125,7 @@ func (a *App) loadFilePreview(path string) {
 	a.fileSelected, a.filePreviewBusy = path, true
 	a.filePreview = appsession.ProjectFilePreview{}
 	a.fileEditor = nil
-	project, win := a.project, a.win
+	project, win, ctrl := a.project, a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -135,7 +135,7 @@ func (a *App) loadFilePreview(path string) {
 		}
 		ch := make(chan result, 1)
 		go func() {
-			preview, err := a.ctrl.ReadProjectFile(path)
+			preview, err := ctrl.ReadProjectFile(path)
 			ch <- result{preview: preview, err: err}
 		}()
 		var got result
@@ -183,7 +183,7 @@ func (a *App) saveFile() {
 	if a.ctrl == nil || a.fileEditor == nil || a.fileEditor.Buffer == nil || a.filePreview.Truncated || a.fileSaving || !a.fileHasChanges() {
 		return
 	}
-	path, project, win := a.fileSelected, a.project, a.win
+	path, project, win, ctrl := a.fileSelected, a.project, a.win, a.ctrl
 	var content bytes.Buffer
 	if _, err := a.fileEditor.Buffer.WriteTo(&content); err != nil {
 		a.filesErr = err.Error()
@@ -192,7 +192,7 @@ func (a *App) saveFile() {
 	text, version, digest := content.String(), a.fileEditor.Buffer.Version(), a.filePreview.Digest
 	a.fileSaving, a.filesErr = true, ""
 	go func() {
-		newDigest, err := a.ctrl.SaveProjectFile(project, path, digest, text)
+		newDigest, err := ctrl.SaveProjectFile(project, path, digest, text)
 		apply := func() {
 			if a.project != project || a.fileSelected != path {
 				return

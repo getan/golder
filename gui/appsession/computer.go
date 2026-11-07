@@ -106,6 +106,16 @@ func (c *Controller) AttachComputer(expectedSessionID string, s *computeruse.Ses
 	return nil
 }
 
+// ComputerSession returns this controller's current desktop session, if any.
+func (c *Controller) ComputerSession() *computeruse.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.computerTool == nil {
+		return nil
+	}
+	return c.computerTool.Session
+}
+
 // StopComputer revokes desktop access immediately, even during a turn. The
 // tool is removed from future provider requests once the run is idle.
 func (c *Controller) StopComputer() {

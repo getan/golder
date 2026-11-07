@@ -59,7 +59,7 @@ func (c *Controller) addItem(it Item) {
 	}
 	c.index[it.ID] = len(c.items)
 	c.items = append(c.items, it)
-	if it.Kind == ItemUser && c.title == "" {
+	if it.Kind == ItemUser && c.header.DisplayName == "" && (c.title == "" || c.title == "New session") {
 		c.title = titleOf(c.items)
 		c.status.Title = c.title
 	}

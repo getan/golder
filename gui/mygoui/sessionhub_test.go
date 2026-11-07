@@ -1,0 +1,130 @@
+package mygoui
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+
+	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/contextbudget"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/provider"
+	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/session"
+)
+
+type guiBlockingProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (*guiBlockingProvider) Name() string { return "fake" }
+func (*guiBlockingProvider) Models() []provider.Model {
+	return []provider.Model{{Provider: "fake", ID: "test"}}
+}
+func (p *guiBlockingProvider) StreamCompletion(ctx context.Context, _ provider.CompletionRequest) (*provider.AssistantMessageEventStream, error) {
+	stream := provider.NewAssistantMessageEventStream(1)
+	go func() {
+		defer stream.Close()
+		close(p.started)
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.release:
+		}
+		_ = stream.Emit(ctx, provider.StreamDoneEvent{Message: agentcore.AssistantMessage{
+			RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn,
+			Content: agentcore.ContentList{agentcore.NewTextContent("finished")},
+		}})
+	}()
+	return stream, nil
+}
+
+func TestSessionSidebarShowsBackgroundStates(t *testing.T) {
+	a := testApp()
+	now := time.Now()
+	a.sessions = []appsession.SessionSummary{
+		{ID: "running", Title: "Running task", Cwd: a.project, UpdatedAt: now, Running: true},
+		{ID: "approval", Title: "Approval task", Cwd: a.project, UpdatedAt: now, Running: true, NeedsApproval: true},
+		{ID: "done", Title: "Finished task", Cwd: a.project, UpdatedAt: now, Unread: true},
+		{ID: "failed", Title: "Failed task", Cwd: a.project, UpdatedAt: now, Unread: true, Failed: true},
+	}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"◌ Working", "● Needs attention", "● Done", "● Failed"} {
+		if !tt.HasText(want) {
+			t.Fatalf("sidebar missing %q: %q", want, tt.Texts())
+		}
+	}
+}
+
+func TestSessionEventNeverUpdatesAnotherTranscript(t *testing.T) {
+	a := testApp()
+	current, other := &appsession.Controller{}, &appsession.Controller{}
+	a.ctrl = current
+	a.status.SessionID = "current"
+	a.snapshotSeq = 5
+	foreign := appsession.Item{ID: "foreign", Kind: appsession.ItemAssistant, Text: "other reply"}
+	a.applySessionEvent(appsession.SessionEvent{Controller: other, Event: appsession.Event{Session: "other", Seq: 8, Kind: appsession.EventItemAdded, Item: &foreign}})
+	stale := appsession.Item{ID: "stale", Kind: appsession.ItemAssistant, Text: "already in snapshot"}
+	a.applySessionEvent(appsession.SessionEvent{Controller: current, Event: appsession.Event{Session: "current", Seq: 5, Kind: appsession.EventItemAdded, Item: &stale}})
+	if len(a.items) != 0 {
+		t.Fatalf("foreign or stale event entered active transcript: %+v", a.items)
+	}
+	currentItem := appsession.Item{ID: "local", Kind: appsession.ItemAssistant, Text: "current reply"}
+	a.applySessionEvent(appsession.SessionEvent{Controller: current, Event: appsession.Event{Session: "current", Seq: 6, Kind: appsession.EventItemAdded, Item: &currentItem}})
+	if len(a.items) != 1 || a.items[0].Text != "current reply" {
+		t.Fatalf("current session event was lost: %+v", a.items)
+	}
+}
+
+func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	project := t.TempDir()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &guiBlockingProvider{started: make(chan struct{}), release: make(chan struct{})}
+	factory := func(_ context.Context, cwd string, setup appsession.ProjectSetup) (run.Env, error) {
+		return run.Env{Cwd: cwd, ProviderName: setup.ProviderName, Provider: p, Credentials: provider.NewCredentialStore(nil),
+			SysPrompt: "test", Prompt: runtime.PromptInputs{WorkingDir: cwd}, Permissions: permissions.New(permissions.Auto),
+			ReviewNotes: run.NewReviewNotes(), Budget: contextbudget.New()}, nil
+	}
+	first := appsession.New(appsession.Options{Model: "test", ProviderName: "fake", Provider: p, Cwd: project, Store: store, ProjectFactory: factory})
+	if err := first.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	a := New(first)
+	t.Cleanup(func() { _ = a.hub.Close() })
+	if err := first.Submit(context.Background(), "first prompt"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first session did not start")
+	}
+	a.applySnapshot(first.Snapshot())
+	a.draft, a.attachments = "draft one", []string{"one.txt"}
+	firstList := &ui.ListState{}
+	a.list = firstList
+	second, err := a.hub.NewSession(context.Background(), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.activateSession(second)
+	if a.draft != "" || len(a.attachments) != 0 || a.list != nil || !first.IsRunning() {
+		t.Fatal("draft leaked into a new conversation")
+	}
+	a.draft = "draft two"
+	a.list = &ui.ListState{}
+	a.resume(first.SessionID())
+	if a.ctrl != first || !a.status.Running || a.draft != "draft one" || a.list != firstList || len(a.attachments) != 1 || a.attachments[0] != "one.txt" {
+		t.Fatalf("draft was not restored: %q %+v", a.draft, a.attachments)
+	}
+	close(p.release)
+}

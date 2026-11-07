@@ -148,6 +148,8 @@ type SessionWriterView struct {
 type Snapshot struct {
 	Status
 	Project string
+	// Seq is the last event sequence represented by this snapshot.
+	Seq uint64
 	// Items is the transcript in display order.
 	Items []Item
 	// Pending are the approvals waiting for an answer, oldest first.
@@ -190,14 +192,18 @@ type Event struct {
 
 // SessionSummary is one row of the session sidebar.
 type SessionSummary struct {
-	ID        string
-	Title     string
-	Model     string
-	Provider  string
-	Cwd       string
-	UpdatedAt time.Time
-	Current   bool
-	Archived  bool
+	ID            string
+	Title         string
+	Model         string
+	Provider      string
+	Cwd           string
+	UpdatedAt     time.Time
+	Current       bool
+	Archived      bool
+	Running       bool
+	NeedsApproval bool
+	Unread        bool
+	Failed        bool
 }
 
 // ModelOption is one choice in the model picker.

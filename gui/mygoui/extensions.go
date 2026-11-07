@@ -88,16 +88,19 @@ func (a *App) installLarkPackage() {
 	}
 	a.extensionBusy, a.extensionErr, a.extensionNote = true, "", "Installing verified helper…"
 	version := extensionPackageVersion(a.ctrl.Version())
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		err := a.ctrl.InstallLarkPackage(ctx, source, checksum, version)
+		err := ctrl.InstallLarkPackage(ctx, source, checksum, version)
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.extensionBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			if err != nil {
 				a.extensionErr, a.extensionNote = err.Error(), ""
 				return
@@ -121,20 +124,23 @@ func (a *App) updateLarkPackage() {
 	a.extensionNote = "Installing the bundled helper and rebinding the existing Source…"
 	version := extensionPackageVersion(a.ctrl.Version())
 	configured := a.extension.Configured
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if configured {
-			err = a.ctrl.UpdateLarkPackage(ctx, source, checksum, version)
+			err = ctrl.UpdateLarkPackage(ctx, source, checksum, version)
 		} else {
-			err = a.ctrl.InstallLarkPackage(ctx, source, checksum, version)
+			err = ctrl.InstallLarkPackage(ctx, source, checksum, version)
 		}
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.extensionBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			if err != nil {
 				a.extensionErr, a.extensionNote = err.Error(), ""
 				return
@@ -208,16 +214,19 @@ func (a *App) installOfficialLarkCLI(project bool) {
 	}
 	a.extensionBusy, a.extensionErr = true, ""
 	a.extensionNote = "Downloading and verifying the official " + name + " native binary…"
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer cancel()
-		path, err := a.ctrl.InstallOfficialLarkCLI(ctx, project)
+		path, err := ctrl.InstallOfficialLarkCLI(ctx, project)
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.extensionBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			if err != nil {
 				a.extensionErr, a.extensionNote = err.Error(), ""
 				return
@@ -239,16 +248,19 @@ func (a *App) configureLark() {
 	a.extensionEdit.Domains = a.selectedLarkDomains()
 	a.extensionBusy, a.extensionErr, a.extensionNote = true, "", "Saving disabled configuration…"
 	edit := a.extensionEdit
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		err := a.ctrl.ConfigureLark(ctx, edit)
+		err := ctrl.ConfigureLark(ctx, edit)
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.extensionBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			a.extensionEdit.NewAppSecret = ""
 			if err != nil {
 				a.extensionErr, a.extensionNote = err.Error(), ""
@@ -262,17 +274,17 @@ func (a *App) configureLark() {
 }
 
 func (a *App) setLarkEnabled(enabled bool) {
-	a.runExtensionOperation(map[bool]string{true: "Approving and enabling…", false: "Disabling…"}[enabled], func(context.Context) error {
+	a.runExtensionOperation(map[bool]string{true: "Approving and enabling…", false: "Disabling…"}[enabled], func(_ context.Context, ctrl *appsession.Controller) error {
 		if enabled {
-			return a.ctrl.EnableLark()
+			return ctrl.EnableLark()
 		}
-		return a.ctrl.DisableLark()
+		return ctrl.DisableLark()
 	})
 }
 
 func (a *App) testLark() {
-	a.runExtensionOperation("Testing MCP initialization…", func(ctx context.Context) error {
-		return a.ctrl.TestLark(ctx)
+	a.runExtensionOperation("Testing MCP initialization…", func(ctx context.Context, ctrl *appsession.Controller) error {
+		return ctrl.TestLark(ctx)
 	})
 }
 
@@ -295,13 +307,16 @@ func (a *App) authorizeLark(service string) {
 	a.extensionNote = "Preparing authorization…"
 	a.extensionAuthURL = ""
 	a.extensionAuthCode = ""
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
-		err := a.ctrl.AuthorizeLark(ctx, service, func(event appsession.ExtensionSetupEvent) {
+		err := ctrl.AuthorizeLark(ctx, service, func(event appsession.ExtensionSetupEvent) {
 			if win == nil {
 				return
 			}
 			win.Update(func() {
+				if a.ctrl != ctrl {
+					return
+				}
 				if openURL := a.applyExtensionSetupEvent(event); openURL != "" {
 					_ = mygo.Shell.OpenExternal(openURL)
 				}
@@ -315,6 +330,9 @@ func (a *App) authorizeLark(service string) {
 			a.extensionCancel = nil
 			a.extensionAuthURL = ""
 			a.extensionAuthCode = ""
+			if a.ctrl != ctrl {
+				return
+			}
 			eventErr := a.extensionErr
 			a.loadExtensionSettings()
 			refreshErr := a.extensionErr
@@ -458,21 +476,24 @@ func extensionSetupFailureText(event appsession.ExtensionSetupEvent) string {
 	return message
 }
 
-func (a *App) runExtensionOperation(note string, run func(context.Context) error) {
+func (a *App) runExtensionOperation(note string, run func(context.Context, *appsession.Controller) error) {
 	if a.extensionBusy {
 		return
 	}
 	a.extensionBusy, a.extensionErr, a.extensionNote = true, "", note
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		err := run(ctx)
+		err := run(ctx, ctrl)
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.extensionBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			if err != nil {
 				a.extensionErr, a.extensionNote = err.Error(), ""
 				return
@@ -490,7 +511,7 @@ func (a *App) resetLark() {
 	}
 	a.extensionConfirm = ""
 	a.extensionLarkVerified, a.extensionProjectVerified = false, false
-	a.runExtensionOperation("Clearing source-scoped login state…", func(context.Context) error { return a.ctrl.ResetLark() })
+	a.runExtensionOperation("Clearing source-scoped login state…", func(_ context.Context, ctrl *appsession.Controller) error { return ctrl.ResetLark() })
 }
 
 func (a *App) uninstallLark() {
@@ -500,7 +521,7 @@ func (a *App) uninstallLark() {
 	}
 	a.extensionConfirm = ""
 	a.extensionLarkVerified, a.extensionProjectVerified = false, false
-	a.runExtensionOperation("Removing source and managed helper…", func(context.Context) error { return a.ctrl.UninstallLark() })
+	a.runExtensionOperation("Removing source and managed helper…", func(_ context.Context, ctrl *appsession.Controller) error { return ctrl.UninstallLark() })
 }
 
 func (a *App) setGenericExtension(source appsession.ExtensionSourceView, enabled bool) {
@@ -511,14 +532,14 @@ func (a *App) setGenericExtension(source appsession.ExtensionSourceView, enabled
 		return
 	}
 	a.extensionSourceConfirm = ""
-	a.runExtensionOperation("Updating "+source.Kind+":"+source.ID+"…", func(context.Context) error {
-		return a.ctrl.SetExtensionEnabled(source.Kind, source.ID, enabled)
+	a.runExtensionOperation("Updating "+source.Kind+":"+source.ID+"…", func(_ context.Context, ctrl *appsession.Controller) error {
+		return ctrl.SetExtensionEnabled(source.Kind, source.ID, enabled)
 	})
 }
 
 func (a *App) testGenericExtension(source appsession.ExtensionSourceView) {
-	a.runExtensionOperation("Testing "+source.Kind+":"+source.ID+"…", func(ctx context.Context) error {
-		return a.ctrl.TestExtension(ctx, source.Kind, source.ID)
+	a.runExtensionOperation("Testing "+source.Kind+":"+source.ID+"…", func(ctx context.Context, ctrl *appsession.Controller) error {
+		return ctrl.TestExtension(ctx, source.Kind, source.ID)
 	})
 }
 

@@ -350,7 +350,7 @@ func (c *Controller) run(ctx context.Context, runID, prompt string) {
 		return id
 	}
 
-	_, err := runtime.DrainStream(ctx, stream, runtime.StreamHandler{
+	final, err := runtime.DrainStream(ctx, stream, runtime.StreamHandler{
 		OnEvent: func(ev agentcore.AgentEvent) {
 			switch e := ev.(type) {
 			case agentcore.MessageUpdateEvent:
@@ -463,6 +463,12 @@ func (c *Controller) run(ctx context.Context, runID, prompt string) {
 	if err != nil {
 		c.addNotice("Run failed: "+err.Error(), true)
 		c.setError(err)
+	} else if final != nil && final.StopReason == agentcore.StopReasonError {
+		reason := strings.TrimSpace(final.ErrorMessage)
+		if reason == "" {
+			reason = "the provider returned an error with no message"
+		}
+		c.setError(errors.New(reason))
 	}
 	if perr := c.persist(); perr != nil {
 		c.addNotice("Session save failed: "+perr.Error(), true)

@@ -496,6 +496,7 @@ func (c *Controller) Snapshot() Snapshot {
 	snap := Snapshot{
 		Status:  c.status,
 		Project: c.cwd,
+		Seq:     c.seq,
 		Items:   make([]Item, len(c.items)),
 		Pending: make([]ApprovalView, 0, len(c.pending)),
 	}

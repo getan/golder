@@ -26,13 +26,14 @@ import (
 // Window.Update.
 type App struct {
 	ctrl *appsession.Controller
+	hub  *appsession.SessionHub
 	win  *mygo.Window
 
 	md markdown.Options
 
 	items []appsession.Item
 	index map[string]int
-	list  ui.ListState
+	list  *ui.ListState
 
 	thinkingOpen map[string]bool
 	toolOpen     map[string]bool
@@ -40,6 +41,8 @@ type App struct {
 
 	draft       string
 	attachments []string
+	drafts      map[string]sessionDraft
+	snapshotSeq uint64
 
 	status          appsession.Status
 	project         string
@@ -164,11 +167,19 @@ type App struct {
 	computerSetupSeq         uint64
 }
 
+type sessionDraft struct {
+	text        string
+	attachments []string
+	list        *ui.ListState
+}
+
 // New builds the app around an opened controller.
 func New(ctrl *appsession.Controller) *App {
 	display, displayErr := appsession.LoadDisplaySettings()
 	a := &App{
 		ctrl:         ctrl,
+		hub:          appsession.NewSessionHub(ctrl),
+		drafts:       make(map[string]sessionDraft),
 		index:        map[string]int{},
 		thinkingOpen: map[string]bool{},
 		toolOpen:     map[string]bool{},
@@ -209,27 +220,59 @@ func (a *App) Run() error {
 			}
 			a.closeBrowserPanel()
 			a.stopComputer()
-			_ = a.ctrl.Close()
+			_ = a.hub.Close()
 		})
 		go a.pump()
 		a.refreshProjects()
 		a.refreshSessions()
 		a.refreshChanges()
-		go a.refreshModels()
-		go a.refreshBrowsers()
+		go a.refreshModels(a.ctrl)
+		go a.refreshBrowsers(a.ctrl)
 	})
 	return mygo.App.Run()
 }
 
-// pump delivers controller events onto the main thread.
+// pump delivers events from all live session controllers onto the main thread.
 func (a *App) pump() {
-	for ev := range a.ctrl.Events() {
-		ev := ev
-		win := a.win
-		if win == nil {
-			continue
+	for {
+		select {
+		case <-a.hub.Done():
+			return
+		case ev := <-a.hub.Events():
+			win := a.win
+			if win != nil {
+				win.Update(func() { a.applySessionEvent(ev) })
+			}
 		}
-		win.Update(func() { a.applyEvent(ev) })
+	}
+}
+
+func (a *App) applySessionEvent(message appsession.SessionEvent) {
+	ev := message.Event
+	if message.Controller != a.ctrl || ev.Session != a.status.SessionID {
+		if ev.Kind == appsession.EventStatus || ev.Kind == appsession.EventApproval || ev.Kind == appsession.EventApprovalDone || ev.Kind == appsession.EventRunEnd || ev.Kind == appsession.EventComputerRequest {
+			a.refreshSessions()
+		}
+		return
+	}
+	if ev.Seq != 0 && ev.Seq <= a.snapshotSeq {
+		if ev.Kind == appsession.EventRunEnd {
+			if request := a.hub.TakeComputerRequest(message.Controller); request != "" {
+				a.computerSuggested = request
+				a.applyEvent(appsession.Event{Kind: appsession.EventRunEnd})
+			}
+		}
+		return
+	}
+	if ev.Kind == appsession.EventRunEnd && a.computerSuggested == "" {
+		a.computerSuggested = a.hub.TakeComputerRequest(message.Controller)
+	}
+	a.applyEvent(ev)
+	if ev.Kind == appsession.EventRunEnd {
+		a.hub.ClearComputerRequest(message.Controller)
+	}
+	if ev.Kind == appsession.EventStatus || ev.Kind == appsession.EventApproval || ev.Kind == appsession.EventApprovalDone {
+		a.refreshSessions()
 	}
 }
 
@@ -238,8 +281,8 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	previousSession := a.status.SessionID
 	a.status = snap.Status
 	a.project = snap.Project
+	a.snapshotSeq = snap.Seq
 	if previousSession != "" && previousSession != snap.SessionID {
-		a.stopComputer()
 		a.clearBrowserAutoOpen()
 		a.browserFollowed = nil
 		if a.browserState != nil {
@@ -281,6 +324,12 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 	case appsession.EventApproval:
 		if ev.Approval != nil {
+			for i := range a.pending {
+				if a.pending[i].ID == ev.Approval.ID {
+					a.pending[i] = *ev.Approval
+					return
+				}
+			}
 			a.pending = append(a.pending, *ev.Approval)
 			a.approvalOpen[ev.Approval.ID] = true
 		}
@@ -326,7 +375,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 		a.refreshSessions()
 		a.refreshChanges()
-		go a.refreshBrowsers()
+		go a.refreshBrowsers(a.ctrl)
 	}
 }
 
@@ -390,7 +439,15 @@ func (a *App) respond(id string, answer appsession.Answer) {
 func (a *App) refreshSessions() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	sessions, err := a.ctrl.ListSessions(ctx)
+	var sessions []appsession.SessionSummary
+	var err error
+	if a.hub != nil {
+		sessions, err = a.hub.ListSessions(ctx)
+	} else if a.ctrl != nil {
+		sessions, err = a.ctrl.ListSessions(ctx)
+	} else {
+		return
+	}
 	if err != nil {
 		log.Printf("golder-gui: list sessions: %v", err)
 		return
@@ -515,15 +572,18 @@ func (a *App) applyFileDiff(request uint64, row int, result appsession.FileDiff,
 	a.diff = diff
 }
 
-func (a *App) refreshModels() {
+func (a *App) refreshModels(ctrl *appsession.Controller) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	models, err := a.ctrl.ListModels(ctx)
+	models, err := ctrl.ListModels(ctx)
 	win := a.win
 	if win == nil {
 		return
 	}
 	win.Update(func() {
+		if a.ctrl != ctrl {
+			return
+		}
 		a.modelsReady = true
 		if err != nil {
 			a.modelsErr = err.Error()
@@ -534,15 +594,19 @@ func (a *App) refreshModels() {
 	})
 }
 
-func (a *App) refreshBrowsers() {
+func (a *App) refreshBrowsers(ctrl *appsession.Controller) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	browsers := a.ctrl.Browsers(ctx)
+	browsers := ctrl.Browsers(ctx)
 	if a.win == nil {
 		a.applyBrowserDiscovery(browsers)
 		return
 	}
-	a.win.Update(func() { a.applyBrowserDiscovery(browsers) })
+	a.win.Update(func() {
+		if a.ctrl == ctrl {
+			a.applyBrowserDiscovery(browsers)
+		}
+	})
 }
 
 func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
@@ -600,7 +664,7 @@ func (a *App) followBrowserTool(item appsession.Item) {
 		if a.browserPanelOpen && a.browserState != nil && a.browserState.socket == browserSocketKey(selectionSocket) && a.browserState.browserID == selection.BrowserID {
 			queueBrowserFollow(a.browserState, selection)
 			if a.ctrl != nil {
-				go a.refreshBrowsers()
+				go a.refreshBrowsers(a.ctrl)
 			}
 			return
 		}
@@ -614,7 +678,7 @@ func (a *App) followBrowserTool(item appsession.Item) {
 		a.browserAutoSocket = browserSocketKey(socket)
 	}
 	if a.ctrl != nil {
-		go a.refreshBrowsers()
+		go a.refreshBrowsers(a.ctrl)
 	}
 }
 
@@ -689,7 +753,7 @@ func (a *App) scheduleBrowserAutoOpenRetry() {
 		win.Update(func() {
 			a.browserRetryArmed = false
 			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
-				go a.refreshBrowsers()
+				go a.refreshBrowsers(a.ctrl)
 			}
 		})
 	}()
@@ -748,6 +812,10 @@ func browserSocketKey(path string) string {
 
 func (a *App) runAction(id, args string) {
 	a.paletteOpen = false
+	if id == appsession.ActionNewSession {
+		a.newSession()
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	res, err := a.ctrl.RunAction(ctx, id, args)
@@ -757,12 +825,6 @@ func (a *App) runAction(id, args string) {
 	}
 	if res.Message != "" {
 		a.banner, a.bannerErr = res.Message, false
-	}
-	if id == appsession.ActionNewSession {
-		a.items = nil
-		a.index = map[string]int{}
-		a.status = a.ctrl.Snapshot().Status
-		a.refreshSessions()
 	}
 }
 
@@ -775,7 +837,7 @@ func (a *App) setModel(providerName, id string) {
 		return
 	}
 	a.banner, a.bannerErr = "", false
-	go a.refreshModels()
+	go a.refreshModels(a.ctrl)
 }
 
 func (a *App) setPermission(mode string) {
@@ -800,11 +862,12 @@ func (a *App) resume(id string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := a.ctrl.Resume(ctx, id); err != nil {
+	peer, err := a.hub.Resume(ctx, id)
+	if err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return
 	}
-	a.applySnapshot(a.ctrl.Snapshot())
+	a.activateSession(peer)
 	a.refreshSessions()
 	a.refreshChanges()
 }
@@ -824,15 +887,49 @@ func (a *App) newSessionInProject(project string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := a.ctrl.NewSessionInProject(ctx, project); err != nil {
+	peer, err := a.hub.NewSession(ctx, project)
+	if err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return
 	}
-	a.applySnapshot(a.ctrl.Snapshot())
+	a.activateSession(peer)
 	a.selectedProject = a.project
 	a.refreshProjects()
 	a.refreshSessions()
 	a.refreshChanges()
+}
+
+func (a *App) activateSession(peer *appsession.Controller) {
+	if peer == nil || peer == a.ctrl {
+		return
+	}
+	if a.drafts == nil {
+		a.drafts = make(map[string]sessionDraft)
+	}
+	if a.status.SessionID != "" {
+		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]string(nil), a.attachments...), list: a.list}
+	}
+	if a.computerRequestPicker && a.computerSuggested != "" {
+		a.hub.ParkComputerRequest(a.ctrl, a.computerSuggested)
+	}
+	a.parkComputerPanel()
+	a.closeBrowserPanel()
+	a.ctrl = peer
+	a.thinkingOpen, a.toolOpen, a.approvalOpen = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	a.models, a.modelsReady, a.modelsErr = nil, false, ""
+	a.applySnapshot(peer.Snapshot())
+	draft := a.drafts[a.status.SessionID]
+	a.draft, a.attachments = draft.text, append([]string(nil), draft.attachments...)
+	a.list = draft.list
+	a.computerSession = peer.ComputerSession()
+	a.selectedProject = a.project
+	_ = peer.SelectProject(a.project)
+	a.banner, a.bannerErr = "", false
+	a.updateTitle()
+	if request := a.hub.TakeComputerRequest(peer); request != "" {
+		a.computerSuggested = request
+		a.applyEvent(appsession.Event{Kind: appsession.EventRunEnd})
+	}
 }
 
 // contextPercent renders the context gauge, 0 when the window is unknown.

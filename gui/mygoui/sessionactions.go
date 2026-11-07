@@ -106,7 +106,7 @@ func (a *App) attachSessionMenu(row ui.Element, session appsession.SessionSummar
 		if menu.Item("Open").Disabled(session.Current).Chosen() {
 			a.resume(session.ID)
 		}
-		if menu.Item("Rename…").Chosen() {
+		if menu.Item("Rename…").Disabled(session.Running).Chosen() {
 			a.beginRename(session)
 		}
 		if menu.Item("Reveal project in folder").Disabled(strings.TrimSpace(session.Cwd) == "").Chosen() {
@@ -129,10 +129,10 @@ func (a *App) attachSessionMenu(row ui.Element, session appsession.SessionSummar
 		if session.Archived {
 			archive = "Unarchive"
 		}
-		if menu.Item(archive).Disabled(session.Current).Chosen() {
+		if menu.Item(archive).Disabled(session.Current || session.Running).Chosen() {
 			a.archiveSession(session)
 		}
-		if menu.Item("Delete…").Disabled(session.Current).Chosen() {
+		if menu.Item("Delete…").Disabled(session.Current || session.Running).Chosen() {
 			a.beginDelete(session)
 		}
 	})
@@ -145,7 +145,12 @@ func (a *App) beginRename(session appsession.SessionSummary) {
 func (a *App) commitRename() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := a.ctrl.RenameSession(ctx, a.renameID, a.renameDraft)
+	var err error
+	if a.hub != nil {
+		err = a.hub.RenameSession(ctx, a.renameID, a.renameDraft)
+	} else {
+		err = a.ctrl.RenameSession(ctx, a.renameID, a.renameDraft)
+	}
 	a.renameOpen = false
 	if err != nil {
 		a.banner, a.bannerErr = err.Error(), true
@@ -158,7 +163,12 @@ func (a *App) commitRename() {
 func (a *App) archiveSession(session appsession.SessionSummary) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := a.ctrl.ArchiveSession(ctx, session.ID, !session.Archived)
+	var err error
+	if a.hub != nil {
+		err = a.hub.ArchiveSession(ctx, session.ID, !session.Archived)
+	} else {
+		err = a.ctrl.ArchiveSession(ctx, session.ID, !session.Archived)
+	}
 	if err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return
@@ -173,7 +183,12 @@ func (a *App) beginDelete(session appsession.SessionSummary) {
 func (a *App) commitDelete() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := a.ctrl.DeleteSession(ctx, a.deleteID)
+	var err error
+	if a.hub != nil {
+		err = a.hub.DeleteSession(ctx, a.deleteID)
+	} else {
+		err = a.ctrl.DeleteSession(ctx, a.deleteID)
+	}
 	a.deleteOpen = false
 	if err != nil {
 		a.banner, a.bannerErr = err.Error(), true
@@ -184,7 +199,7 @@ func (a *App) commitDelete() {
 }
 
 func (a *App) exportSession(session appsession.SessionSummary, format string) {
-	win := a.win
+	win, hub, ctrl := a.win, a.hub, a.ctrl
 	go func() {
 		ext := ".md"
 		filter := mygo.FileFilter{Name: "Markdown", Extensions: []string{"md"}}
@@ -197,7 +212,11 @@ func (a *App) exportSession(session appsession.SessionSummary, format string) {
 			ButtonLabel: "Export", Filters: []mygo.FileFilter{filter}, CreateDirectories: true,
 		})
 		if err == nil && path != "" {
-			err = a.ctrl.ExportSession(session.ID, format, path)
+			if hub != nil {
+				err = hub.ExportSession(session.ID, format, path)
+			} else {
+				err = ctrl.ExportSession(session.ID, format, path)
+			}
 		}
 		if win == nil {
 			return

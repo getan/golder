@@ -10,6 +10,8 @@
 >
 > 调研基线：Golder 当前工作树、MyGo `e25ccb49`、GoRex `b206e67`
 
+> 当前实现说明：GUI 已支持多个独立的 session controller 并行运行；切换会话不会停止原会话，后台审批仍绑定原会话，侧栏显示运行中、等待用户、完成或失败。会话各自持有上下文、工具和 writer 锁，但同一项目的并行会话默认共享工作目录，并不自动创建 worktree。关闭 GUI 会结束其后台任务；隐藏 Computer Use 面板仍会暂停桌面控制。以下有关 MVP 只允许一个活动 turn、切换时取消审批的描述是早期设计，不再适用。
+
 ## 摘要
 
 我们建议新增独立的 `golder-gui` 桌面应用，使用 **MyGo Native UI** 绘制项目、会话、对话、工具调用、审批、模型选择和变更审阅；Agent 仍在进程内复用 Golder 现有的 `run`、`runtime`、`session`、permissions、sandbox 和 tool 实现。现有 `golder` CLI/TUI/workspace 二进制不链接 MyGo，不改变命令、存储格式或默认构建。

@@ -68,6 +68,9 @@ func (a *App) view(c *ui.Context) {
 		a.paletteOpen = true
 		a.loadActions()
 	}
+	if a.list == nil {
+		a.list = &ui.ListState{}
+	}
 	a.list.Key = func(i int) any {
 		if i < len(a.items) {
 			return a.items[i].ID
@@ -171,7 +174,7 @@ func (a *App) titleBar(c *ui.Context) {
 				a.openBrowserPreview(a.browsers[0])
 			} else {
 				a.browserOpen = true
-				go a.refreshBrowsers()
+				go a.refreshBrowsers(a.ctrl)
 			}
 		}
 	})
@@ -265,6 +268,16 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 	row.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, s.Title).FontSize(13).FontWeight(500).SingleLine().Ellipsis("…").Grow(1)
+			switch {
+			case s.NeedsApproval:
+				ui.Text(c, "● Needs attention").FontSize(10).TextColor(t.Warning).Tooltip("This session is waiting for you")
+			case s.Running:
+				ui.Text(c, "◌ Working").FontSize(10).TextColor(t.Accent).Tooltip("This session is running")
+			case s.Unread && s.Failed:
+				ui.Text(c, "● Failed").FontSize(10).TextColor(t.Danger).Tooltip("Background run failed")
+			case s.Unread:
+				ui.Text(c, "● Done").FontSize(10).TextColor(t.Success).Tooltip("Background run finished")
+			}
 			if s.Archived {
 				ui.Text(c, "archived").FontSize(9).TextColor(t.TextMuted)
 			}
@@ -285,7 +298,7 @@ func (a *App) center(c *ui.Context) {
 		if waiting {
 			total++
 		}
-		ui.List(c, &a.list, total, func(i int) {
+		ui.List(c, a.list, total, func(i int) {
 			switch {
 			case i >= 0 && i < len(a.items):
 				a.itemView(c, a.items[i])
@@ -361,7 +374,7 @@ func (a *App) browsersModal(c *ui.Context) {
 			ui.Text(c, "The native surface draws Chromium frames and forwards mouse, keyboard, scroll and composed text through the owner-only control socket.").
 				FontSize(12).TextColor(t.TextMuted)
 			if ui.Button(c, "Refresh").Clicked() {
-				go a.refreshBrowsers()
+				go a.refreshBrowsers(a.ctrl)
 			}
 			if len(a.browsers) == 0 {
 				ui.Text(c, "No browser control socket was found under .golder/browser.").FontSize(12).TextColor(t.TextMuted)

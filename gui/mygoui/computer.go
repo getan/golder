@@ -124,9 +124,9 @@ func (a *App) loadComputerTargets() {
 	a.clearComputerCandidate()
 	a.computerPreviewFailed, a.computerSkipPreview = false, false
 	a.computerSetupSeq++
-	seq, win, suggested, conversation := a.computerSetupSeq, a.win, a.computerSuggested, a.status.SessionID
+	seq, win, suggested, conversation, ctrl := a.computerSetupSeq, a.win, a.computerSuggested, a.status.SessionID, a.ctrl
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return a.ctrl.CheckComputerLaunch(conversation) })
+	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return ctrl.CheckComputerLaunch(conversation) })
 	a.computerSetupStop = cancel
 	go func() {
 		backend, err := computeruse.NewPlatformBackend()
@@ -190,9 +190,9 @@ func (a *App) launchComputerApplication(index int) {
 	app, backend := a.computerApplications[index], a.computerBackend
 	a.computerBusy, a.computerError = true, ""
 	a.computerSetupSeq++
-	seq, win, conversation := a.computerSetupSeq, a.win, a.status.SessionID
+	seq, win, conversation, ctrl := a.computerSetupSeq, a.win, a.status.SessionID, a.ctrl
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return a.ctrl.CheckComputerLaunch(conversation) })
+	ctx = computeruse.WithApplicationLaunchGuard(ctx, func() error { return ctrl.CheckComputerLaunch(conversation) })
 	a.computerSetupStop = cancel
 	go func() {
 		resolution, err := computeruse.LaunchAndFindApplication(ctx, backend, app)
@@ -233,7 +233,7 @@ func (a *App) startComputer(control bool) {
 	}
 	a.computerBusy, a.computerError = true, ""
 	a.computerSetupSeq++
-	seq, win, backend := a.computerSetupSeq, a.win, a.computerBackend
+	seq, win, backend, ctrl := a.computerSetupSeq, a.win, a.computerBackend, a.ctrl
 	conversation, candidateID := a.status.SessionID, a.computerCandidateID
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	a.computerSetupStop = cancel
@@ -249,7 +249,7 @@ func (a *App) startComputer(control bool) {
 		attached := false
 		if err == nil {
 			if err = ctx.Err(); err == nil {
-				err = a.ctrl.AttachComputer(conversation, session)
+				err = ctrl.AttachComputer(conversation, session)
 				attached = err == nil
 			}
 		}
@@ -257,7 +257,7 @@ func (a *App) startComputer(control bool) {
 			defer cancel()
 			if seq != a.computerSetupSeq || !a.computerPickerOpen {
 				if attached {
-					a.ctrl.DetachComputer(session)
+					ctrl.DetachComputer(session)
 				}
 				session.Stop()
 				return
@@ -265,7 +265,7 @@ func (a *App) startComputer(control bool) {
 			a.computerBusy, a.computerSetupStop = false, nil
 			if ctx.Err() != nil {
 				if attached {
-					a.ctrl.DetachComputer(session)
+					ctrl.DetachComputer(session)
 				}
 				session.Stop()
 				a.clearComputerCandidate()
@@ -281,14 +281,14 @@ func (a *App) startComputer(control bool) {
 			requested := a.computerSuggested != ""
 			a.computerSuggested = ""
 			a.computerRequestPicker = false
-			a.ctrl.ResetComputerRequest()
+			ctrl.ResetComputerRequest()
 			a.computerBackend = nil // ownership transferred to session
 			a.computerSession, a.computerPickerOpen = session, false
 			a.clearComputerCandidate()
 			a.showComputerPanel()
 			if requested {
 				go func() {
-					if err := a.ctrl.ContinueComputer(context.Background(), conversation, session); err != nil {
+					if err := ctrl.ContinueComputer(context.Background(), conversation, session); err != nil {
 						win.Update(func() {
 							if a.computerSession == session {
 								a.banner, a.bannerErr = "Computer Use continuation: "+err.Error(), true
@@ -368,6 +368,30 @@ func (a *App) hideComputerPanel() {
 		a.computerPreviewStop()
 		a.computerPreviewStop = nil
 	}
+}
+
+// parkComputerPanel hides the previous conversation's desktop view without
+// revoking its controller. Hiding still pauses desktop input, as it does when
+// the person closes the panel manually.
+func (a *App) parkComputerPanel() {
+	a.computerSetupSeq++
+	if a.computerSetupStop != nil {
+		a.computerSetupStop()
+		a.computerSetupStop = nil
+	}
+	a.hideComputerPanel()
+	a.computerPickerOpen, a.computerBusy = false, false
+	a.computerSuggested, a.computerRequestPicker = "", false
+	a.computerSession = nil
+	if a.computerBackend != nil {
+		backend := a.computerBackend
+		a.computerBackend = nil
+		go backend.Close()
+	}
+	a.computerTargets, a.computerFrame = nil, nil
+	a.computerApplications = nil
+	a.clearComputerCandidate()
+	a.computerPreviewFailed, a.computerSkipPreview = false, false
 }
 
 func (a *App) stopComputer() {

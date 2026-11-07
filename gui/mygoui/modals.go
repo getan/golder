@@ -20,7 +20,7 @@ func (a *App) modelModal(c *ui.Context) {
 				ui.Text(c, a.status.Provider).FontSize(11).TextColor(t.TextMuted)
 				ui.Spacer(c)
 				if ui.Button(c, "Refresh").Clicked() {
-					go a.refreshModels()
+					go a.refreshModels(a.ctrl)
 				}
 				if ui.Button(c, "Close").Clicked() {
 					a.modelOpen = false

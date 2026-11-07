@@ -58,7 +58,7 @@ func (a *App) saveSettings(apply bool) {
 	if apply {
 		a.settingsNote = "Saved and applied to this session."
 		a.applySnapshot(a.ctrl.Snapshot())
-		go a.refreshModels()
+		go a.refreshModels(a.ctrl)
 	} else {
 		a.settingsNote = "Saved as the default for new sessions."
 	}
@@ -72,16 +72,19 @@ func (a *App) testSettings() {
 	a.settingsErr = ""
 	a.settingsNote = "Testing connection…"
 	edit := a.settingsEdit
-	win := a.win
+	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		err := a.ctrl.TestProviderSettings(ctx, edit)
+		err := ctrl.TestProviderSettings(ctx, edit)
 		if win == nil {
 			return
 		}
 		win.Update(func() {
 			a.settingsBusy = false
+			if a.ctrl != ctrl {
+				return
+			}
 			if err != nil {
 				a.settingsErr = err.Error()
 				a.settingsNote = ""
