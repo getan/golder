@@ -39,6 +39,12 @@ func (a *App) userBubble(c *ui.Context, it appsession.Item) {
 }
 
 func (a *App) assistantBlock(c *ui.Context, it appsession.Item) {
+	if a.md.Code == nil {
+		a.md.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){
+			"svg": renderSVGCodeBlock, "SVG": renderSVGCodeBlock,
+			"xml": renderSVGCodeBlock, "XML": renderSVGCodeBlock,
+		}
+	}
 	ui.Column(c.Key(it.ID)).MaxWidth(820).Children(func() {
 		if it.Done {
 			markdown.View(c, it.Text, &a.md)
