@@ -10,8 +10,8 @@ import (
 	"github.com/getan/golder/internal/permissions"
 )
 
-// installComputerRequest advertises only a request to the local UI, never a
-// model-selected window or an implicit observation/control grant.
+// installComputerRequest delegates application resolution to the local UI;
+// model-supplied names are never interpreted as paths or window handles.
 func (c *Controller) installComputerRequest() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -19,7 +19,7 @@ func (c *Controller) installComputerRequest() {
 	if c.closed || c.readOnly || c.reg == nil || c.agentCtx == nil || len(c.opt.Tools) == 0 {
 		return
 	}
-	tool := &agenttool.ComputerRequestTool{Request: func(ctx context.Context, name string) error {
+	tool := &agenttool.ComputerRequestTool{Mode: c.perms, Request: func(ctx context.Context, name string) error {
 		c.mu.Lock()
 		if c.closed || !c.running || c.readOnly {
 			c.mu.Unlock()
@@ -57,12 +57,22 @@ func (c *Controller) ResetComputerRequest() {
 	}
 }
 
-// AttachComputer is an operator-facing entry point. The session must already
-// have an explicitly selected target and grants; no model-provided identifier
-// can call this method. It only changes the model tool set while idle.
+// CheckComputerLaunch revalidates the owning conversation and live permission
+// mode immediately before an asynchronous local application launch.
+func (c *Controller) CheckComputerLaunch(expectedSessionID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.readOnly || c.running || expectedSessionID == "" || c.header.ID != expectedSessionID {
+		return errors.New("computer application request is no longer current")
+	}
+	return agenttool.CheckComputerLaunch(c.perms)
+}
+
+// AttachComputer installs a locally resolved target-bound session while idle.
+// A model-provided identifier cannot call this frontend-owned entry point.
 func (c *Controller) AttachComputer(expectedSessionID string, s *computeruse.Session) error {
 	if s == nil || !s.Status().Active {
-		return errors.New("computer use requires an operator-selected target")
+		return errors.New("computer use requires an active resolved target")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

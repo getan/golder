@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/computeruse"
@@ -81,31 +83,81 @@ func TestComputerToolIsRevokedWhenConversationChanges(t *testing.T) {
 	_ = desktop.Close()
 }
 
-func TestSuggestedComputerTargetRequiresGrantAndHandlesAmbiguity(t *testing.T) {
+func TestSuggestedComputerTargetStartsUniqueAndHandlesAmbiguity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		targets  []computeruse.Target
 		wantKind string
 		wantRows int
+		wantCmd  bool
 	}{
-		{"unique", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Notes"}}, "computer-grant", 2},
-		{"multiple", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Calculator"}, {ID: "c", Application: "Notes"}}, "computer-target", 2},
-		{"missing", []computeruse.Target{{ID: "a", Application: "Notes"}}, "computer-target", 1},
+		{"unique", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Notes"}}, "", 0, true},
+		{"multiple", []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Calculator"}, {ID: "c", Application: "Notes"}}, "computer-target", 2, false},
+		{"missing", []computeruse.Target{{ID: "a", Application: "Notes"}}, "computer-target", 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newRemoteTestSession(t)
 			setup := newComputerSetup(s.header.ID)
 			setup.suggested = "Calculator"
+			backend := &computerPickerBackend{closed: make(chan struct{})}
+			setup.installBackend(backend)
 			s.computerSetup = setup
 			m := NewModel(Options{})
 			m.session = s
 			got, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup, targets: tc.targets})
 			m = got.(Model)
-			if cmd != nil || m.menu.pickKind != tc.wantKind || len(m.menu.pick) != tc.wantRows || s.computerTool != nil {
+			if (cmd != nil) != tc.wantCmd || m.menu.pickKind != tc.wantKind || len(m.menu.pick) != tc.wantRows || s.computerTool != nil {
 				t.Fatalf("kind=%q rows=%d tool=%v cmd=%v", m.menu.pickKind, len(m.menu.pick), s.computerTool, cmd)
+			}
+			if tc.wantCmd {
+				_ = backend.Close() // command was deliberately not run
 			}
 			s.cancelComputerSetup()
 		})
+	}
+}
+
+func TestComputerApplicationAmbiguityRequiresChoice(t *testing.T) {
+	s := newRemoteTestSession(t)
+	setup := newComputerSetup(s.header.ID)
+	setup.suggested = "Calculator"
+	backend := &computerPickerBackend{closed: make(chan struct{})}
+	setup.installBackend(backend)
+	s.computerSetup = setup
+	m := NewModel(Options{})
+	m.session = s
+	apps := []computeruse.Application{{ID: "one", Name: "Calculator", Detail: "/one"}, {ID: "two", Name: "Calculator", Detail: "/two"}}
+	next, cmd := m.computerTargetsReady(computerTargetsMsg{setup: setup, applications: apps})
+	m = next.(Model)
+	if cmd != nil || m.menu.pickKind != "computer-application" || len(m.menu.pick) != 2 {
+		t.Fatalf("application ambiguity was not presented: kind=%q rows=%d", m.menu.pickKind, len(m.menu.pick))
+	}
+	_, cmd = m.submitSlashSelected()
+	if cmd == nil {
+		t.Fatal("selecting an application did not schedule launch")
+	}
+	s.cancelComputerSetup()
+}
+
+func TestNewTurnCancelsPendingComputerSetupBeforeStarting(t *testing.T) {
+	s := newRemoteTestSession(t)
+	setup := newComputerSetup(s.header.ID)
+	backend := &computerPickerBackend{closed: make(chan struct{})}
+	setup.installBackend(backend)
+	s.computerSetup = setup
+	m := NewModel(Options{})
+	m.session = s
+	m.startRunFn = func(string) (chan tea.Msg, tea.Cmd) {
+		if setup.ctx.Err() == nil || s.computerSetup != nil {
+			t.Error("new turn started before desktop setup was canceled")
+		}
+		return make(chan tea.Msg, 1), nil
+	}
+	_, _ = m.startPrompt("another request")
+	select {
+	case <-backend.closed:
+	case <-time.After(time.Second):
+		t.Fatal("canceled desktop setup leaked its backend")
 	}
 }
 

@@ -142,6 +142,24 @@ func TestFirstPartyBrowserWritesNeedTheNextGrader(t *testing.T) {
 	}
 }
 
+func TestFirstPartyComputerRequestAndActions(t *testing.T) {
+	spy := &firstPartySpy{v: Verdict{Level: Deny, Source: "reviewer"}}
+	classifier := FirstParty{Next: spy}
+	if v := classifier.Classify(context.Background(), "computer_request", json.RawMessage(`{"application":"Calculator"}`)); v.Level != Confirm || spy.tool != "" {
+		t.Fatalf("application request = %+v, next=%q", v, spy.tool)
+	}
+	for _, action := range []string{"status", "snapshot", "screenshot", "pause", "stop"} {
+		v := classifier.Classify(context.Background(), "computer", json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
+		if v.Level != Allow || spy.tool != "" {
+			t.Fatalf("%s = %+v, next=%q", action, v, spy.tool)
+		}
+	}
+	v := classifier.Classify(context.Background(), "computer", json.RawMessage(`{"action":"click","snapshot_id":"s","ref":"@e1"}`))
+	if v.Level != Deny || spy.tool != "computer" {
+		t.Fatalf("control bypassed contextual review: %+v, next=%q", v, spy.tool)
+	}
+}
+
 // eval and upload are outside the tool's schema; a call carrying one is denied
 // without spending a reviewer round trip.
 func TestFirstPartyBrowserEvalIsDenied(t *testing.T) {

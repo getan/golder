@@ -1991,7 +1991,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// the quit (a picker is opened by a submitted command, so the box is
 			// empty by then), leaving a selection box only Esc could dismiss and a
 			// second press that quit the program outright.
-			if (m.menu.pickKind == "computer-target" || m.menu.pickKind == "computer-grant") && m.session != nil {
+			if (m.menu.pickKind == "computer-application" || m.menu.pickKind == "computer-target" || m.menu.pickKind == "computer-grant") && m.session != nil {
 				m.session.cancelComputerSetup()
 			}
 			m.menu.close()
@@ -2392,6 +2392,9 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 			kind = "model"
 		}
 		item, ok := m.menu.pickCurrent()
+		if kind == "computer-application" && ok {
+			return m.chooseComputerApplication(item)
+		}
 		if kind == "computer-target" && ok {
 			return m.chooseComputerTarget(item)
 		}
@@ -3172,6 +3175,7 @@ func (m Model) runBtw(line string) (tea.Model, tea.Cmd) {
 	m.input.Clear()
 	m.menu.close()
 	m.transcript.addSystem("Side thread — this exchange is not saved to the conversation.")
+	m.cancelPendingComputerForRun()
 	ch, cmd := m.session.startBtwRun(arg)
 	m.beginRun(ch)
 	m.sideRun = true
@@ -3253,6 +3257,7 @@ func (m Model) runGoal(line string) (tea.Model, tea.Cmd) {
 		m.relayout()
 		return m, nil
 	}
+	m.cancelPendingComputerForRun()
 	ch, cmd := m.session.startGoalRun(runLabel)
 	m.beginRun(ch)
 	m.goalRun = true
@@ -3586,6 +3591,17 @@ func (m *Model) beginRun(ch chan tea.Msg) {
 	m.lastToolCard = nil
 }
 
+func (m *Model) cancelPendingComputerForRun() {
+	if m.session == nil || m.session.computerSetup == nil {
+		return
+	}
+	m.session.cancelComputerSetup()
+	if m.menu.pickKind == "computer-application" || m.menu.pickKind == "computer-target" || m.menu.pickKind == "computer-grant" {
+		m.menu.close()
+	}
+	m.transcript.addSystem("Pending Computer Use setup canceled because a new turn started.")
+}
+
 // startPrompt launches an agent run for prompt and flips to running when a run
 // starter is wired; the composer stays focused so typing can continue into the
 // steer queue. With no starter (pre-session model / tests) it records the
@@ -3601,6 +3617,7 @@ func (m Model) startPrompt(prompt string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("(run not wired up: see session assembly in #392)")
 		return m, nil
 	}
+	m.cancelPendingComputerForRun()
 	ch, cmd := m.startRunFn(prompt)
 	m.beginRun(ch)
 	m.spinner.begin(time.Now(), m.thinkingLabel())

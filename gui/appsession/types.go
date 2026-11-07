@@ -170,7 +170,7 @@ const (
 	EventStatus EventKind = "status"
 	// EventRunEnd means the run ended; Error carries a failure.
 	EventRunEnd EventKind = "run_end"
-	// EventComputerRequest asks the local view to offer an operator-owned picker.
+	// EventComputerRequest asks the local view to resolve an application request.
 	EventComputerRequest EventKind = "computer_request"
 )
 

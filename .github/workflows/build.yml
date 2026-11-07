@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   binaries:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os == 'darwin' && 'macos-15' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +41,10 @@ jobs:
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: "0"
+          CGO_ENABLED: ${{ matrix.os == 'darwin' && '1' || '0' }}
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          CGO_CFLAGS: ${{ matrix.os == 'darwin' && '-mmacosx-version-min=14.0' || '' }}
+          CGO_LDFLAGS: ${{ matrix.os == 'darwin' && '-mmacosx-version-min=14.0' || '' }}
         run: |
           set -euo pipefail
           version="$(git describe --tags --always --dirty | sed 's/^v//')"

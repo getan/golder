@@ -1,5 +1,5 @@
 // Package computeruse owns the platform-independent authorization and
-// lifecycle of a single user-selected desktop window. Platform adapters must
+// lifecycle of a single locally resolved desktop window. Platform adapters must
 // fail closed when they cannot prove the target and input conditions.
 package computeruse
 
@@ -18,13 +18,14 @@ var (
 	ErrTargetLost  = errors.New("computer use target changed or is unavailable")
 )
 
-// Target is an opaque identity returned by a platform backend and selected by
-// the operator. Model-supplied process identifiers must never select a target.
+// Target is an opaque identity returned by a platform backend. The local host
+// resolves or confirms it; model-supplied process identifiers never select it.
 type Target struct {
-	ID          string
-	Application string
-	Window      string
-	Detail      string // operator-facing disambiguation; never a model selector
+	ID            string
+	Application   string
+	ApplicationID string // platform identity, never a model-supplied selector
+	Window        string
+	Detail        string // operator-facing disambiguation; never a model selector
 }
 
 type Capabilities struct {
@@ -74,8 +75,8 @@ type Session struct {
 
 func New(backend Backend) *Session { return &Session{backend: backend} }
 
-// Start installs an operator-selected target and explicit grants. Starting a
-// second target requires stopping the old session and a new operator decision.
+// Start installs a locally resolved target and capabilities. Starting a second
+// target requires stopping the old session and resolving the new target.
 func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) error {
 	if s == nil {
 		return ErrUnavailable

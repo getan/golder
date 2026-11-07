@@ -83,7 +83,7 @@ func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 	t.Cleanup(func() { _ = session.Close() })
 	a.computerSession, a.computerOpen = session, true
 	tt := ui.NewTester(a.view, 1400, 800)
-	for _, want := range []string{"Calculator · Calculator", "Pause / take over", "Stop", "Agent control permitted · actions require confirmation"} {
+	for _, want := range []string{"Calculator · Calculator", "Pause / take over", "Stop", "Agent control permitted"} {
 		if !tt.HasText(want) {
 			t.Fatalf("computer drawer is missing %q; texts=%q", want, tt.Texts())
 		}
@@ -112,22 +112,6 @@ func TestComputerPanelOpensAndReplacesOtherRightPanels(t *testing.T) {
 	}
 }
 
-func TestSuggestedTargetsOnlyPreselectUniqueExactApplication(t *testing.T) {
-	targets := []computeruse.Target{{ID: "a", Application: "Calculator"}, {ID: "b", Application: "Notes"}, {ID: "c", Application: "Calculator"}}
-	filtered, selected := matchComputerTargets("Calculator", targets)
-	if len(filtered) != 2 || selected != -1 || filtered[0].ID != "a" || filtered[1].ID != "c" {
-		t.Fatalf("ambiguous selection = %+v, %d", filtered, selected)
-	}
-	filtered, selected = matchComputerTargets("notes", targets)
-	if len(filtered) != 3 || selected != 1 {
-		t.Fatalf("unique selection = %+v, %d", filtered, selected)
-	}
-	filtered, selected = matchComputerTargets("missing", targets)
-	if len(filtered) != 3 || selected != -1 {
-		t.Fatalf("missing selection = %+v, %d", filtered, selected)
-	}
-}
-
 func TestComputerPickerDistinguishesDuplicateWindowNames(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
@@ -139,6 +123,40 @@ func TestComputerPickerDistinguishesDuplicateWindowNames(t *testing.T) {
 	for _, want := range []string{"Calculator · Main · PID 42 · Window 1", "Calculator · Main · PID 42 · Window 2"} {
 		if !tt.HasText(want) {
 			t.Fatalf("ambiguous window label missing %q; texts=%q", want, tt.Texts())
+		}
+	}
+}
+
+func TestComputerResolutionPreselectsOnlyUniqueTarget(t *testing.T) {
+	a := testApp()
+	a.computerSuggested = "Calculator"
+	a.status.Permission = "read-only" // no native window is needed in this test
+	unique := computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{{ID: "one", Application: "计算器"}}}
+	a.applyComputerResolution(unique)
+	if a.computerSelected != 0 || !a.computerMatched {
+		t.Fatalf("unique target was not selected: %+v", a.computerTargets)
+	}
+	a.applyComputerResolution(computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{{ID: "one"}, {ID: "two"}}})
+	if a.computerSelected != -1 {
+		t.Fatal("ambiguous windows were selected automatically")
+	}
+	a.applyComputerResolution(computeruse.ApplicationResolution{Targets: []computeruse.Target{{ID: "other", Application: "Notes"}}})
+	if a.computerSelected != -1 || a.computerMatched {
+		t.Fatal("an unrelated window was selected automatically")
+	}
+}
+
+func TestComputerPickerDistinguishesInstalledApplications(t *testing.T) {
+	a := testApp()
+	a.computerPickerOpen = true
+	a.computerApplications = []computeruse.Application{
+		{ID: "one", Name: "Calculator", Detail: "/Applications/Calculator.app"},
+		{ID: "two", Name: "Calculator", Detail: "/System/Applications/Calculator.app"},
+	}
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"Calculator · /Applications/Calculator.app", "Calculator · /System/Applications/Calculator.app"} {
+		if !tt.HasText(want) {
+			t.Fatalf("application choice missing %q; texts=%q", want, tt.Texts())
 		}
 	}
 }

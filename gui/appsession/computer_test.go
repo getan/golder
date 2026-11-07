@@ -114,6 +114,20 @@ func TestComputerContinuationRejectsWrongConversation(t *testing.T) {
 	}
 }
 
+func TestComputerLaunchRechecksConversationAndPermission(t *testing.T) {
+	c, _, _ := newTestController(t)
+	if err := c.CheckComputerLaunch("wrong-session"); err == nil {
+		t.Fatal("launch crossed a conversation boundary")
+	}
+	if err := c.CheckComputerLaunch(c.SessionID()); err != nil {
+		t.Fatalf("current conversation was rejected: %v", err)
+	}
+	c.perms.Set(permissions.ReadOnly)
+	if err := c.CheckComputerLaunch(c.SessionID()); err == nil {
+		t.Fatal("read-only mode did not revoke pending application launch")
+	}
+}
+
 func TestComputerControlCannotAttachInReadOnlyMode(t *testing.T) {
 	c, _, _ := newTestController(t)
 	desktop := computeruse.New(computerBackendFixture{})

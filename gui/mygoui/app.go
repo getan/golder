@@ -146,7 +146,9 @@ type App struct {
 	computerBackend          computeruse.PlatformBackend
 	computerSession          *computeruse.Session
 	computerTargets          []computeruse.Target
+	computerApplications     []computeruse.Application
 	computerSelected         int
+	computerMatched          bool
 	computerSuggested        string
 	computerRequestPicker    bool
 	computerFrame            *ui.Bitmap

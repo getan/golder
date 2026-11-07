@@ -71,7 +71,7 @@ func TestComputerToolAdvertisesAndEnforcesSessionState(t *testing.T) {
 	}
 }
 
-func TestComputerToolRequiresExactConfirmationForControl(t *testing.T) {
+func TestComputerToolControlsSelectedTargetWithoutPerActionConfirmation(t *testing.T) {
 	backend := &computerControlBackend{}
 	s := computeruse.New(backend)
 	if err := s.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
@@ -86,21 +86,13 @@ func TestComputerToolRequiresExactConfirmationForControl(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(map[string]string{"action": "click", "snapshot_id": snapshot.ID, "ref": "@e1"})
-	if !tool.RequiresOperatorConfirmationFor(raw) {
-		t.Fatal("control did not require confirmation")
-	}
 	result, err := tool.Execute(context.Background(), "one", raw, nil)
-	if err != nil || !result.IsError || backend.calls != 0 {
-		t.Fatalf("unconfirmed call: result=%+v calls=%d err=%v", result, backend.calls, err)
-	}
-	ctx := agentcore.WithOperatorConfirmation(context.Background(), "one", "computer", raw)
-	result, err = tool.Execute(ctx, "one", raw, nil)
 	if err != nil || result.IsError || backend.calls != 1 {
-		t.Fatalf("confirmed call: result=%+v calls=%d err=%v", result, backend.calls, err)
+		t.Fatalf("control call: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
-	result, err = tool.Execute(ctx, "one", raw, nil)
+	result, err = tool.Execute(context.Background(), "one", raw, nil)
 	if err != nil || !result.IsError || backend.calls != 1 {
-		t.Fatalf("stale confirmed call: result=%+v calls=%d err=%v", result, backend.calls, err)
+		t.Fatalf("stale call: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
 }
 
@@ -117,7 +109,7 @@ func (b *computerFillBackend) Act(_ context.Context, _ computeruse.Target, _, _,
 	return nil
 }
 
-func TestComputerFillRequiresExactConfirmation(t *testing.T) {
+func TestComputerFillUsesSelectedControlSession(t *testing.T) {
 	backend := &computerFillBackend{}
 	s := computeruse.New(backend)
 	if err := s.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
@@ -133,13 +125,8 @@ func TestComputerFillRequiresExactConfirmation(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]string{"action": "fill", "snapshot_id": snapshot.ID, "ref": "@e1", "text": "世界"})
 	result, err := tool.Execute(context.Background(), "fill", raw, nil)
-	if err != nil || !result.IsError || backend.value != "" || !tool.RequiresOperatorConfirmationFor(raw) {
-		t.Fatalf("unconfirmed fill: result=%+v value=%q err=%v", result, backend.value, err)
-	}
-	ctx := agentcore.WithOperatorConfirmation(context.Background(), "fill", "computer", raw)
-	result, err = tool.Execute(ctx, "fill", raw, nil)
 	if err != nil || result.IsError || backend.value != "世界" {
-		t.Fatalf("confirmed fill: result=%+v value=%q err=%v", result, backend.value, err)
+		t.Fatalf("fill: result=%+v value=%q err=%v", result, backend.value, err)
 	}
 }
 
@@ -195,7 +182,7 @@ func TestComputerSchemaRestrictsFrameKeysToBackend(t *testing.T) {
 	}
 }
 
-func TestComputerCoordinateClickRequiresConfirmationAndFrame(t *testing.T) {
+func TestComputerCoordinateClickRequiresCurrentFrame(t *testing.T) {
 	var imageData bytes.Buffer
 	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 20, 10))); err != nil {
 		t.Fatal(err)
@@ -215,13 +202,12 @@ func TestComputerCoordinateClickRequiresConfirmationAndFrame(t *testing.T) {
 	}
 	raw, _ := json.Marshal(map[string]any{"action": "click_at", "frame_id": frame.ID, "x": 5, "y": 4})
 	result, err := tool.Execute(context.Background(), "coordinate", raw, nil)
-	if err != nil || !result.IsError || backend.calls != 0 || !tool.RequiresOperatorConfirmationFor(raw) {
-		t.Fatalf("unconfirmed coordinate click: result=%+v calls=%d err=%v", result, backend.calls, err)
-	}
-	ctx := agentcore.WithOperatorConfirmation(context.Background(), "coordinate", "computer", raw)
-	result, err = tool.Execute(ctx, "coordinate", raw, nil)
 	if err != nil || result.IsError || backend.calls != 1 || !strings.Contains(agentcore.ContentToText(result.Content), `"verified":false`) {
-		t.Fatalf("confirmed coordinate click: result=%+v calls=%d err=%v", result, backend.calls, err)
+		t.Fatalf("coordinate click: result=%+v calls=%d err=%v", result, backend.calls, err)
+	}
+	result, err = tool.Execute(context.Background(), "coordinate", raw, nil)
+	if err != nil || !result.IsError || backend.calls != 1 {
+		t.Fatalf("stale frame click: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
 }
 

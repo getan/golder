@@ -10,19 +10,47 @@
 #include <string.h>
 #include <math.h>
 
-// Never offer system authorization surfaces, another Golder GUI, or known
-// terminal hosts that could contain Golder's operator-only panes. Terminal
-// automation belongs to the dedicated pane tool. A process without a
-// verifiable application bundle fails closed.
+// Keep system authorization surfaces, Golder, and terminal hosts out of both
+// application launch and window selection.
+static int cu_bundle_allowed(NSString *bundle) {
+	if (!bundle || bundle.length == 0) return 0;
+	bundle = bundle.lowercaseString;
+	NSArray *denied = @[@"dev.golder.gui", @"com.apple.systempreferences", @"com.apple.securityagent", @"com.apple.loginwindow", @"com.apple.systemuiserver", @"com.apple.coreservicesuiagent", @"com.apple.terminal", @"com.googlecode.iterm2", @"net.kovidgoyal.kitty", @"com.github.wez.wezterm", @"com.mitchellh.ghostty", @"org.alacritty", @"dev.warp"];
+	for (NSString *prefix in denied) {
+		if ([bundle isEqualToString:prefix] || [bundle hasPrefix:[prefix stringByAppendingString:@"."]]) return 0;
+	}
+	return 1;
+}
+
 int cu_app_allowed(int32_t pid) {
 	@autoreleasepool {
 		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
-		NSString *bundle = app.bundleIdentifier.lowercaseString;
-		if (!bundle || bundle.length == 0) return 0;
-		NSArray *denied = @[@"dev.golder.gui", @"com.apple.systempreferences", @"com.apple.securityagent", @"com.apple.loginwindow", @"com.apple.systemuiserver", @"com.apple.coreservicesuiagent", @"com.apple.terminal", @"com.googlecode.iterm2", @"net.kovidgoyal.kitty", @"com.github.wez.wezterm", @"com.mitchellh.ghostty", @"org.alacritty", @"dev.warp"];
-		for (NSString *prefix in denied) {
-			if ([bundle isEqualToString:prefix] || [bundle hasPrefix:[prefix stringByAppendingString:@"."]]) return 0;
-		}
+		return cu_bundle_allowed(app.bundleIdentifier);
+	}
+}
+
+int cu_running_bundle(int32_t pid, char *out, size_t length) {
+	@autoreleasepool {
+		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+		NSString *bundle = app.bundleIdentifier;
+		NSString *path = app.bundleURL.path.stringByResolvingSymlinksInPath;
+		if (!cu_bundle_allowed(bundle) || !path || ![path getCString:out maxLength:length encoding:NSUTF8StringEncoding]) return 0;
+		return 1;
+	}
+}
+
+int cu_application_metadata(const char *path, char *identity, size_t identityLength, char *display, size_t displayLength, char *name, size_t nameLength) {
+	@autoreleasepool {
+		NSString *appPath = [NSString stringWithUTF8String:path];
+		NSBundle *bundle = [NSBundle bundleWithPath:appPath];
+		NSString *identifier = bundle.bundleIdentifier;
+		if (!cu_bundle_allowed(identifier) || ![identifier getCString:identity maxLength:identityLength encoding:NSUTF8StringEncoding]) return 0;
+		NSString *label = [[[NSFileManager defaultManager] displayNameAtPath:appPath] stringByDeletingPathExtension];
+		NSString *bundleName = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+		if (![bundleName isKindOfClass:[NSString class]] || bundleName.length == 0) bundleName = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+		if (![bundleName isKindOfClass:[NSString class]]) bundleName = @"";
+		if (!label) label = @"";
+		if (![label getCString:display maxLength:displayLength encoding:NSUTF8StringEncoding] || ![bundleName getCString:name maxLength:nameLength encoding:NSUTF8StringEncoding]) return 0;
 		return 1;
 	}
 }

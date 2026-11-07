@@ -18,6 +18,7 @@ package computeruse
 
 int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
 int cu_app_allowed(int32_t pid);
+int cu_running_bundle(int32_t pid, char *out, size_t length);
 
 typedef struct {
 	uint32_t window_id;
@@ -25,6 +26,7 @@ typedef struct {
 	uint64_t start_sec;
 	uint64_t start_usec;
 	char application[256];
+	char bundle[4096];
 	char title[512];
 } cu_window;
 
@@ -66,6 +68,7 @@ static int cu_windows(cu_window *out, int cap) {
 		entry.pid = pid;
 		entry.window_id = window_id;
 		if (!cu_process_start(pid, &entry.start_sec, &entry.start_usec)) continue;
+		if (!cu_running_bundle(pid, entry.bundle, sizeof(entry.bundle))) continue;
 		cu_string(CFDictionaryGetValue(d, kCGWindowOwnerName), entry.application, sizeof(entry.application));
 		cu_string(CFDictionaryGetValue(d, kCGWindowName), entry.title, sizeof(entry.title));
 		if (entry.application[0] == 0) continue;
@@ -530,21 +533,22 @@ import (
 // MacWindowCatalog is a non-prompting operator-facing window inventory and AX
 // adapter with frame-bound, fail-closed coordinate input.
 type MacWindowCatalog struct {
-	mu          sync.Mutex
-	windows     map[string]C.cu_window
-	pinned      map[string]C.AXUIElementRef
-	refs        map[string]C.AXUIElementRef
-	snapshotID  string
-	snapshotFor string
-	closed      bool
+	mu           sync.Mutex
+	windows      map[string]C.cu_window
+	applications map[string]macApplication
+	pinned       map[string]C.AXUIElementRef
+	refs         map[string]C.AXUIElementRef
+	snapshotID   string
+	snapshotFor  string
+	closed       bool
 }
 
 func NewMacWindowCatalog() *MacWindowCatalog {
 	return &MacWindowCatalog{windows: make(map[string]C.cu_window), pinned: make(map[string]C.AXUIElementRef)}
 }
 
-// Targets must only be called by the operator-facing target picker, not by a
-// model-facing list action. The opaque identifiers are local to this catalog.
+// Targets is called by local target resolution, never by a model-facing list
+// action. The opaque identifiers are local to this catalog.
 func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -553,6 +557,9 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	n := int(C.cu_windows(&windows[0], C.int(len(windows))))
 	if n < 0 {
 		return nil, errors.New("macOS window inventory unavailable")
+	}
+	if n == len(windows) {
+		return nil, errors.New("macOS window inventory exceeded its safe limit")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -571,7 +578,7 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 		}
 		id := hex.EncodeToString(nonce[:])
 		next[id] = window
-		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), Window: C.GoString(&window.title[0]), Detail: fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))})
+		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), ApplicationID: C.GoString(&window.bundle[0]), Window: C.GoString(&window.title[0]), Detail: fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))})
 	}
 	for _, ref := range c.pinned {
 		C.cu_ax_release(ref)
@@ -592,7 +599,7 @@ func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) 
 	window, ok := c.windows[target.ID]
 	closed := c.closed
 	c.mu.Unlock()
-	if closed || !ok || target.Application != C.GoString(&window.application[0]) || target.Window != C.GoString(&window.title[0]) {
+	if closed || !ok || target.Application != C.GoString(&window.application[0]) || target.ApplicationID != C.GoString(&window.bundle[0]) || target.Window != C.GoString(&window.title[0]) {
 		return ErrTargetLost
 	}
 	if C.cu_window_exists(window.window_id, window.pid, window.start_sec, window.start_usec) == 0 {
@@ -635,6 +642,7 @@ func (c *MacWindowCatalog) Close() error {
 	}
 	c.pinned = nil
 	c.windows = nil
+	c.applications = nil
 	return nil
 }
 

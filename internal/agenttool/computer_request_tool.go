@@ -10,13 +10,16 @@ import (
 	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
-// ComputerRequestTool can only ask the local frontend to show a target picker.
-// It cannot enumerate windows, grant observation, select a target or start a
-// desktop session. The frontend owns the operator confirmation and lifecycle.
+// ComputerRequestTool asks the local frontend to resolve an application and
+// prepare its target-bound desktop session. The frontend handles ambiguity and
+// owns the session lifecycle; the model cannot supply paths or window handles.
 type ComputerRequestTool struct {
 	Request func(context.Context, string) error
+	Mode    *permissions.State
 	pending atomic.Bool
 }
 
@@ -30,7 +33,7 @@ func (t *ComputerRequestTool) Reset() {
 func (*ComputerRequestTool) Name() string { return "computer_request" }
 
 func (*ComputerRequestTool) Description() string {
-	return "When the user asks to use a native desktop app and no computer session is active, request the local operator's window selection and authorization by application name. Do not ask them to type a command. This grants no access; wait for their decision. Use browser for websites."
+	return "When the user asks to use a native desktop app and no computer session is active, request it by application name. The local frontend can start an unambiguous app and select its unique window automatically; it asks the person to resolve ambiguity. End the turn and wait for the frontend to continue when the session is ready. Do not ask the person to launch the app or type a command. Use browser for websites."
 }
 
 func (*ComputerRequestTool) Schema() json.RawMessage {
@@ -39,6 +42,18 @@ func (*ComputerRequestTool) Schema() json.RawMessage {
 
 func (*ComputerRequestTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionSequential
+}
+
+// CheckComputerLaunch applies the current session mode and enforced OS
+// containment both when a request is queued and immediately before launch.
+func CheckComputerLaunch(mode *permissions.State) error {
+	if mode != nil && mode.Mode() == permissions.ReadOnly {
+		return errors.New("read-only mode does not permit launching or controlling applications")
+	}
+	if seatbelt.ModeFromEnv() == seatbelt.ModeEnforce {
+		return errors.New("desktop application launch cannot satisfy required OS containment")
+	}
+	return nil
 }
 
 func (t *ComputerRequestTool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
@@ -51,11 +66,17 @@ func (t *ComputerRequestTool) Execute(ctx context.Context, _ string, raw json.Ra
 	if json.Unmarshal(raw, &args) != nil || !validComputerApplication(args.Application) {
 		return errorResult("computer request: provide a valid application name, not a path or system handle"), nil
 	}
+	if err := CheckComputerLaunch(t.Mode); err != nil {
+		return errorResult("computer request: " + err.Error()), nil
+	}
+	if agentcore.SandboxRequestedFromContext(ctx) {
+		return errorResult("computer request: desktop application launch cannot satisfy required OS containment"), nil
+	}
 	if err := ctx.Err(); err != nil {
 		return agentcore.AgentToolResult{}, err
 	}
 	if !t.pending.CompareAndSwap(false, true) {
-		return errorResult("computer request: an operator decision is already pending"), nil
+		return errorResult("computer request: application setup is already pending"), nil
 	}
 	if err := t.Request(ctx, strings.TrimSpace(args.Application)); err != nil {
 		t.pending.Store(false)
@@ -64,7 +85,7 @@ func (t *ComputerRequestTool) Execute(ctx context.Context, _ string, raw json.Ra
 		}
 		return errorResult("computer request: " + err.Error()), nil
 	}
-	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("Request submitted to the local operator. No window has been selected and no access has been granted. End this turn and wait for the operator's decision.")}}, nil
+	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("Application setup requested. End this turn; the frontend will continue when the window is ready, or ask the person to resolve an ambiguous choice.")}}, nil
 }
 
 func validComputerApplication(name string) bool {

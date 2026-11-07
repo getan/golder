@@ -1,4 +1,4 @@
-//go:build (!darwin && !linux && !windows) || (darwin && !cgo) || (linux && !amd64 && !arm64)
+//go:build (!darwin && !linux && !windows) || (linux && !amd64 && !arm64)
 
 package computeruse
 

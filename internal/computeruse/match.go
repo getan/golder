@@ -3,8 +3,8 @@ package computeruse
 import "strings"
 
 // MatchApplications returns indexes whose application name exactly matches the
-// requested name after case and whitespace normalization. It never chooses a
-// target: the operator must still confirm the window and the permission scope.
+// requested name after case and whitespace normalization. A unique match can
+// be used directly; ambiguous matches require an operator's selection.
 // Substring or title matching is deliberately excluded because a document or a
 // different application may contain the requested name.
 func MatchApplications(name string, targets []Target) []int {

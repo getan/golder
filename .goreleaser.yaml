@@ -19,12 +19,32 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
       - arm64
     # version/commit/date 变量注入 main 包（见 cmd/golder/main.go）。
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+  # The macOS desktop backend uses native frameworks and requires CGO. The
+  # release workflow runs on macOS so clang can target both Darwin architectures.
+  - id: golder-darwin
+    main: ./cmd/golder
+    binary: golder
+    env:
+      - CGO_ENABLED=1
+      - MACOSX_DEPLOYMENT_TARGET=14.0
+      - CGO_CFLAGS=-mmacosx-version-min=14.0
+      - CGO_LDFLAGS=-mmacosx-version-min=14.0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
@@ -49,6 +69,7 @@ archives:
   - id: golder
     ids:
       - golder
+      - golder-darwin
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- if eq .Os "darwin" }}Darwin

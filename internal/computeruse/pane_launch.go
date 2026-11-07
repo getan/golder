@@ -60,7 +60,7 @@ func (h *PaneHandle) Close() {
 }
 
 // LaunchOperatorPane opens a helper next to this exact agent pane. The target
-// must already have been selected and granted by the operator. Separate sockets
+// must already have been resolved and started by the frontend. Separate sockets
 // let pause/stop interrupt a slow capture or action rather than queue behind it.
 // A failure to prove all peers as the same process in the new pane fails
 // closed; no model-facing endpoint is created.
