@@ -44,7 +44,7 @@ func (a *App) displaySettingsView(c *ui.Context) {
 			ui.Row(c).Gap(8).Children(func() {
 				for _, option := range []struct{ value, label string }{{"system", "System"}, {"light", "Light"}, {"dark", "Dark"}} {
 					option := option
-					if ui.Button(c, option.label).Selected(a.display.Theme == option.value).Clicked() {
+					if subtleButton(c, option.label).Selected(a.display.Theme == option.value).Clicked() {
 						a.display.Theme = option.value
 						a.saveDisplaySettings()
 					}
@@ -71,7 +71,7 @@ func (a *App) displaySettingsView(c *ui.Context) {
 				}{{"Compact", .92}, {"Default", 1.06}, {"Large", 1.15}, {"Extra large", 1.25}} {
 					option := option
 					selected := math.Abs(float64(a.display.FontScale-option.scale)) < .005
-					if ui.Button(c, option.label).Selected(selected).Clicked() {
+					if subtleButton(c, option.label).Selected(selected).Clicked() {
 						a.display.FontScale = option.scale
 						a.saveDisplaySettings()
 					}

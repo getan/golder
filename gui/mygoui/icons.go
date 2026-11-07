@@ -49,6 +49,11 @@ var hiddenFilesIcon = ui.MustParseSVG([]byte(`
   <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
 </svg>`))
 
+var sidebarIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><path d="M3 4h18v16H3zM9 4v16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`))
+var archiveIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><path d="M4 8h16v12H4zM3 4h18v4H3zM9 12h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`))
+var settingsIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`))
+var updateIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 17v3h16v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
+
 func compactIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip string) ui.Element {
 	t := c.Theme()
 	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).

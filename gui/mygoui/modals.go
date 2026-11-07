@@ -90,6 +90,7 @@ func (a *App) modelModal(c *ui.Context) {
 					for _, level := range appsession.ThinkingLevels() {
 						level := level
 						button := ui.ButtonBase(c.Key("reasoning:"+level)).Padding(5, 8).Radius(6).Label(level)
+						hoverBorder(c, button)
 						if level == current {
 							button.Background(t.SurfacePressed)
 						} else if button.Hovered() {

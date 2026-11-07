@@ -13,7 +13,6 @@ import (
 
 const (
 	sidebarWidth = 248
-	changesWidth = 460
 	titleHeight  = 46
 )
 
@@ -95,35 +94,49 @@ func (a *App) view(c *ui.Context) {
 	c.Root().Background(t.Background)
 	ui.Column(c).Fill().Children(func() {
 		a.titleBar(c)
-		mainContent := func() {
-			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-				if a.browserPanelOpen {
-					ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
-						a.sidebar(c)
+		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+			a.navigationRail(c)
+			mainContent := func() {
+				conversation := func() {
+					if a.sidebarClosed {
 						a.center(c)
-					})
-					a.browserPanel(c)
-					return
+					} else {
+						if a.sidebarSize <= 0 {
+							a.sidebarSize = sidebarWidth
+						}
+						ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c) }).Fill().MinWidth(0)
+					}
 				}
-				a.sidebar(c)
-				a.center(c)
-				if a.filesOpen {
-					a.fileExplorerPanel(c)
+				var split *float32
+				var panel func()
+				initial := float32(60)
+				switch {
+				case a.browserPanelOpen:
+					split, panel = &a.browserSplit, func() { a.browserPanel(c) }
+					initial = 50
+				case a.filesOpen:
+					split, panel = &a.filesSplit, func() { a.fileExplorerPanel(c) }
+					initial = 45
+				case a.changesOpen:
+					split, panel = &a.changesSplit, func() { a.changesPanel(c) }
+				case a.computerOpen:
+					split, panel = &a.computerSplit, func() { a.computerPanel(c) }
+					initial = 48
 				}
-				if a.changesOpen {
-					a.changesPanel(c)
+				if panel == nil {
+					conversation()
+				} else {
+					clampPanelSplit(split, initial)
+					ui.SplitPercent(c, split, conversation, panel).Fill().MinWidth(0)
 				}
-				if a.computerOpen {
-					a.computerPanel(c)
-				}
-			})
-		}
-		if a.terminalOpen {
-			clampPanelSplit(&a.terminalSplit, 60)
-			ui.SplitPercent(c, &a.terminalSplit, mainContent, func() { a.terminalPanel(c) }).Grow(1).MinWidth(0)
-		} else {
-			mainContent()
-		}
+			}
+			if a.terminalOpen {
+				clampPanelSplit(&a.terminalSplit, 60)
+				ui.SplitPercent(c, &a.terminalSplit, mainContent, func() { a.terminalPanel(c) }).Grow(1).MinWidth(0)
+			} else {
+				mainContent()
+			}
+		})
 		a.bannerView(c)
 	})
 	a.paletteModal(c)
@@ -212,12 +225,12 @@ func (a *App) titleBar(c *ui.Context) {
 // objects, while chats are filtered under the selected folder.
 func (a *App) sidebar(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(sidebarWidth).Shrink(0).Background(t.Surface).
+	ui.Column(c).Fill().Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Column(c).Padding(10, 10, 8, 10).Gap(10).Children(func() {
 			ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "Projects").FontSize(11).FontWeight(600).TextColor(t.TextMuted).Grow(1)
-				if ui.Button(c, "+").Tooltip("Add project folder").Clicked() {
+				if subtleButton(c, "+").Label("Add project folder").Tooltip("Add project folder").Clicked() {
 					a.addProject()
 				}
 			})
@@ -249,7 +262,7 @@ func (a *App) sidebar(c *ui.Context) {
 						if sameProjectPath(project.Path, a.project) {
 							ui.Text(c, "●").FontSize(7).TextColor(t.Accent).Tooltip("Current session project")
 						}
-						if ui.Button(c, "+").Tooltip("New session in " + project.Name).Clicked() {
+						if subtleButton(c, "+").Label("Create session in " + project.Name).Tooltip("New session in " + project.Name).Clicked() {
 							a.selectedProject = project.Path
 							a.newSessionInProject(project.Path)
 						}
@@ -268,19 +281,27 @@ func (a *App) sidebar(c *ui.Context) {
 				}
 			})
 		})
-		ui.Column(c).Padding(8, 10, 10, 10).Gap(4).
-			BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-			archiveLabel := "Archived sessions"
-			if a.showArchived {
-				archiveLabel = "Hide archived"
-			}
-			if ui.Button(c, archiveLabel).FillWidth().Tooltip("Show or hide archived sessions").Clicked() {
-				a.showArchived = !a.showArchived
-			}
-			if ui.Button(c, "⚙  Settings").FillWidth().Clicked() {
-				a.openSettings()
-			}
-		})
+	})
+}
+
+func (a *App) navigationRail(c *ui.Context) {
+	t := c.Theme()
+	ui.Column(c).Width(50).Shrink(0).Padding(8, 10).Gap(8).AlignItems(ui.Center).
+		Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+		if compactIconButton(c, "toggle-sidebar", sidebarIcon, "Toggle sidebar", "Show or hide projects and chats").Clicked() {
+			a.sidebarClosed = !a.sidebarClosed
+		}
+		ui.Spacer(c)
+		if compactIconButton(c, "archive", archiveIcon, "Archived sessions", "Show or hide archived sessions").Clicked() {
+			a.showArchived = !a.showArchived
+			a.sidebarClosed = false
+		}
+		if a.updateButton(c).Clicked() {
+			a.activateGUIUpdate()
+		}
+		if compactIconButton(c, "settings", settingsIcon, "Settings", "Settings").Clicked() {
+			a.openSettings()
+		}
 	})
 }
 
@@ -387,7 +408,7 @@ func (a *App) bannerView(c *ui.Context) {
 	ui.Row(c).Padding(8, 16).Gap(8).AlignItems(ui.Center).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, msg).FontSize(12).TextColor(color).Grow(1).SingleLine().Ellipsis("…")
-		if ui.Button(c, "Dismiss").Clicked() {
+		if subtleButton(c, "Dismiss").Clicked() {
 			a.banner, a.bannerErr, a.changesErr = "", false, ""
 		}
 	})
@@ -401,7 +422,7 @@ func (a *App) browsersModal(c *ui.Context) {
 			ui.Text(c, "Browsers").FontSize(16).Bold()
 			ui.Text(c, "The native surface draws Chromium frames and forwards mouse, keyboard, scroll and composed text through the owner-only control socket.").
 				FontSize(12).TextColor(t.TextMuted)
-			if ui.Button(c, "Refresh").Clicked() {
+			if subtleButton(c, "Refresh").Clicked() {
 				go a.refreshBrowsers(a.ctrl)
 			}
 			if len(a.browsers) == 0 {
@@ -418,7 +439,7 @@ func (a *App) browsersModal(c *ui.Context) {
 						ui.Text(c, title).FontWeight(600).SingleLine().Ellipsis("…")
 						ui.Text(c, b.URL).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
 					})
-					if ui.Button(c, "Open").Clicked() {
+					if subtleButton(c, "Open").Clicked() {
 						a.browserOpen = false
 						a.openBrowserPreview(b)
 					}

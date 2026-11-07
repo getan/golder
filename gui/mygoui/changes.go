@@ -16,7 +16,7 @@ import (
 // diff, rendered by MyGo's diff viewer.
 func (a *App) changesPanel(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(changesWidth).Shrink(0).MinWidth(320).Background(t.Surface).
+	ui.Column(c).Fill().MinWidth(0).Background(t.Surface).
 		BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
@@ -35,10 +35,10 @@ func (a *App) changesPanel(c *ui.Context) {
 			})
 			ui.Text(c, fmt.Sprintf("+%d −%d", a.changes.Added, a.changes.Deleted)).
 				FontSize(11).TextColor(t.TextMuted)
-			if ui.Button(c, "Refresh").Clicked() {
+			if subtleButton(c, "Refresh").Clicked() {
 				a.refreshChanges()
 			}
-			if ui.Button(c, "Close").Clicked() {
+			if subtleButton(c, "Close").Clicked() {
 				a.changesOpen = false
 				a.diffRequest++
 				a.diffLoading = false
@@ -62,6 +62,7 @@ func (a *App) changesPanel(c *ui.Context) {
 			}{{"Unstaged", appsession.ChangesUnstaged}, {"Staged", appsession.ChangesStaged}} {
 				option := option
 				button := ui.ButtonBase(c.Key(string(option.view))).Padding(5, 9).Radius(6).Label(option.label)
+				hoverBorder(c, button)
 				if a.currentChangesView() == option.view {
 					button.Background(t.SurfacePressed)
 				} else if button.Hovered() {
@@ -78,7 +79,7 @@ func (a *App) changesPanel(c *ui.Context) {
 			if a.currentChangesView() == appsession.ChangesStaged {
 				action, stage = "Unstage all", false
 			}
-			if ui.Button(c, action).Disabled(len(a.changes.Files) == 0 || a.status.Running).Clicked() {
+			if subtleButton(c, action, len(a.changes.Files) == 0 || a.status.Running).Clicked() {
 				a.setAllStaged(stage)
 			}
 		})
@@ -117,7 +118,7 @@ func (a *App) changesPanel(c *ui.Context) {
 						if a.currentChangesView() == appsession.ChangesStaged {
 							action, stage = "Unstage", false
 						}
-						if ui.Button(c, action).Disabled(a.status.Running).Clicked() {
+						if subtleButton(c, action, a.status.Running).Clicked() {
 							a.setFileStaged(f.Path, stage)
 						}
 					})

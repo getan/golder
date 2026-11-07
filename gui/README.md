@@ -79,6 +79,13 @@ Two optional surfaces need runtime pieces:
 
 ## What the window does
 
+- Navigation: the left rail keeps archive, update and settings actions available
+  when the projects and chats sidebar is collapsed. Drag the divider to resize
+  the sidebar. Release builds check GitHub for a newer GUI package at startup;
+  the update icon turns blue when the matching platform package is published.
+  Click it to download the installer, then install it and restart the GUI. This
+  is not an unattended in-place update; package-manager installations should
+  continue to use their package manager. Source builds cannot compare versions.
 - Files: browse within the current project, show hidden files with the eye
   button or Cmd/Ctrl+Shift+Period, and edit syntax-highlighted text with Save
   (Cmd/Ctrl+S). Saves use the operator's normal filesystem permissions and

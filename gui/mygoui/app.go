@@ -52,6 +52,16 @@ type App struct {
 	sessions        []appsession.SessionSummary
 	pending         []appsession.ApprovalView
 	showArchived    bool
+	sidebarClosed   bool
+	sidebarSize     float32
+	filesSplit      float32
+	changesSplit    float32
+	computerSplit   float32
+	browserSplit    float32
+	updateBusy      bool
+	updateTag       string
+	updateURL       string
+	updateError     string
 	renameOpen      bool
 	renameID        string
 	renameDraft     string
@@ -216,6 +226,7 @@ func New(ctrl *appsession.Controller) *App {
 		fileEntries:  map[string][]appsession.ProjectFileEntry{},
 		fileLoading:  map[string]bool{},
 		display:      display,
+		sidebarSize:  sidebarWidth,
 		md:           markdown.Options{},
 	}
 	if displayErr != nil {
@@ -284,6 +295,7 @@ func (a *App) Run() error {
 		a.refreshChanges()
 		a.startModelRefresh()
 		go a.refreshBrowsers(a.ctrl)
+		a.checkGUIUpdate(false)
 	})
 	return mygo.App.Run()
 }

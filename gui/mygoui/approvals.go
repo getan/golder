@@ -41,14 +41,14 @@ func (a *App) approvalCard(c *ui.Context, p appsession.ApprovalView) {
 			ui.Text(c, p.Rationale).FontSize(11.5).TextColor(t.TextMuted).Selectable()
 		}
 		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-			if ui.Button(c, "Deny").Clicked() {
+			if subtleButton(c, "Deny").Clicked() {
 				a.respond(p.ID, appsession.AnswerDeny)
 			}
-			if ui.Button(c, "Allow once").Clicked() {
+			if subtleButton(c, "Allow once").Clicked() {
 				a.respond(p.ID, appsession.AnswerOnce)
 			}
 			if p.Tool != "terminal" {
-				if ui.PrimaryButton(c, "Always this session").Clicked() {
+				if subtlePrimaryButton(c, "Always this session").Clicked() {
 					a.respond(p.ID, appsession.AnswerSession)
 				}
 			}

@@ -79,7 +79,7 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 			renderToolOutput(c, "The command failed without diagnostic output.", true)
 		}
 		if id := toolTTYID(st.Details, st.Input); id != "" {
-			if ui.Button(c, "Open Terminal").Tooltip("Attach to " + id).Clicked() {
+			if subtleButton(c, "Open Terminal").Tooltip("Attach to " + id).Clicked() {
 				a.openTTYTerminal(id)
 			}
 		}

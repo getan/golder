@@ -95,7 +95,7 @@ func (a *App) browserPanel(c *ui.Context) {
 			} else {
 				ui.Text(c, "Browser").FontSize(12).Grow(1)
 			}
-			if ui.Button(c, "×").Tooltip("Close browser panel").Clicked() {
+			if subtleButton(c, "×").Tooltip("Close browser panel").Clicked() {
 				a.closeBrowserPanel()
 			}
 		})
@@ -226,10 +226,10 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 					})
 				}
 			})
-			if ui.Button(c, "Open externally").Clicked() && state.address != "" {
+			if subtleButton(c, "Open externally").Clicked() && state.address != "" {
 				_ = mygo.Shell.OpenExternal(state.address)
 			}
-			ui.MenuButton(c, "Tabs", func(menu *ui.Menu) {
+			tabs := ui.MenuButton(c, "Tabs", func(menu *ui.Menu) {
 				for _, tab := range state.tabs {
 					tab := tab
 					label := strings.TrimSpace(tab.Title)
@@ -241,6 +241,7 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 					}
 				}
 			})
+			hoverBorder(c, tabs)
 			browserChromeButton(c, "+", "New tab", state.surface != nil, func() {
 				runBrowserSelection(state, func(ctx context.Context) error { return state.surface.NewTab(ctx, "about:blank") })
 			})
@@ -304,7 +305,7 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 }
 
 func browserChromeButton(c *ui.Context, label, tooltip string, enabled bool, click func()) {
-	if ui.Button(c, label).Disabled(!enabled).Tooltip(tooltip).Clicked() {
+	if subtleButton(c, label, !enabled).Tooltip(tooltip).Clicked() {
 		click()
 	}
 }

@@ -178,7 +178,7 @@ func (a *App) providerSettingsView(c *ui.Context) {
 				ui.Text(c, "The named credential will be removed when you save.").FontSize(11).TextColor(t.Warning)
 			}
 			ui.Row(c).Children(func() {
-				if ui.Button(c, "Remove credential").Disabled(strings.TrimSpace(a.settingsEdit.CredentialName) == "").Clicked() {
+				if subtleButton(c, "Remove credential", strings.TrimSpace(a.settingsEdit.CredentialName) == "").Clicked() {
 					a.settingsEdit.RemoveCredential = true
 					a.settingsEdit.NewCredential = ""
 				}
@@ -191,14 +191,14 @@ func (a *App) providerSettingsView(c *ui.Context) {
 			ui.Text(c, a.settingsNote).FontSize(12).TextColor(t.Success)
 		}
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			if ui.Button(c, "Test connection").Disabled(a.settingsBusy).Clicked() {
+			if subtleButton(c, "Test connection", a.settingsBusy).Clicked() {
 				a.testSettings()
 			}
 			ui.Spacer(c)
-			if ui.Button(c, "Save as default").Disabled(a.settingsBusy).Clicked() {
+			if subtleButton(c, "Save as default", a.settingsBusy).Clicked() {
 				a.saveSettings(false)
 			}
-			if ui.PrimaryButton(c, "Save & apply").Disabled(a.settingsBusy || a.status.Running).Tooltip("Apply to the current session when it is idle").Clicked() {
+			if subtlePrimaryButton(c, "Save & apply", a.settingsBusy || a.status.Running).Tooltip("Apply to the current session when it is idle").Clicked() {
 				a.saveSettings(true)
 			}
 		})
@@ -226,7 +226,7 @@ func (a *App) terminalSettingsView(c *ui.Context) {
 		ui.Text(c, "Terminal").FontSize(16).FontWeight(600)
 		ui.Text(c, "MyGo terminal is an optional PTY surface for interactive commands and user shells. It is not used for the conversation, browser or tuios workspace.").
 			FontSize(12).TextColor(t.TextMuted).MaxWidth(620)
-		if ui.PrimaryButton(c, "Open user terminal").Clicked() {
+		if subtlePrimaryButton(c, "Open user terminal").Clicked() {
 			a.openUserTerminal()
 		}
 		ui.Text(c, "User terminals are explicit user processes. They are not Agent tool calls and do not inherit an Agent approval result.").
@@ -234,7 +234,7 @@ func (a *App) terminalSettingsView(c *ui.Context) {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "Agent TTY sessions").FontWeight(600)
 			ui.Spacer(c)
-			if ui.Button(c, "Refresh").Clicked() {
+			if subtleButton(c, "Refresh").Clicked() {
 				a.refreshTTYSessions()
 			}
 		})
@@ -252,7 +252,7 @@ func (a *App) terminalSettingsView(c *ui.Context) {
 					ui.Text(c, session.ID+" · "+state).FontSize(12).FontWeight(600)
 					ui.Text(c, oneLine(session.Command, 100)).FontSize(11).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
 				})
-				if ui.Button(c, "Open").Clicked() {
+				if subtleButton(c, "Open").Clicked() {
 					a.openTTYTerminal(session.ID)
 				}
 			})

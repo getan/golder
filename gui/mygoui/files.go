@@ -13,8 +13,6 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
-const filesWidth = 620
-
 func (a *App) resetFileExplorer() {
 	a.filesOpen = false
 	a.fileGeneration++
@@ -223,12 +221,12 @@ func (a *App) fileExplorerPanel(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyS) {
 		a.saveFile()
 	}
-	ui.Column(c).Width(filesWidth).MinWidth(380).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	ui.Column(c).Fill().MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(42).Padding(6, 10).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Icon(c, filesMonochromeIcon).Size(15, 15)
 			ui.Text(c, "Files").FontSize(13).FontWeight(600)
-			if ui.Button(c, "‹").Tooltip("Parent folder").Disabled(a.fileDirectory == "").Clicked() {
+			if subtleButton(c, "‹", a.fileDirectory == "").Tooltip("Parent folder").Clicked() {
 				parent := filepath.ToSlash(filepath.Dir(a.fileDirectory))
 				if parent == "." {
 					parent = ""
@@ -248,10 +246,10 @@ func (a *App) fileExplorerPanel(c *ui.Context) {
 				a.fileShowHidden = !a.fileShowHidden
 				a.refreshFileDirectory()
 			}
-			if ui.Button(c, "↻").Tooltip("Refresh project files").Clicked() {
+			if subtleButton(c, "↻").Tooltip("Refresh project files").Clicked() {
 				a.refreshFileDirectory()
 			}
-			if ui.Button(c, "×").Tooltip("Close Files").Clicked() {
+			if subtleButton(c, "×").Tooltip("Close Files").Clicked() {
 				a.filesOpen = false
 			}
 		})
@@ -259,12 +257,12 @@ func (a *App) fileExplorerPanel(c *ui.Context) {
 			ui.Text(c, a.filesErr).Padding(6, 10).FontSize(11).TextColor(t.Warning).Wrap()
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			ui.Column(c).Width(250).MinWidth(190).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
+			ui.Column(c).Grow(1).MinWidth(0).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 				ui.Scroll(c).Grow(1).MinHeight(0).Padding(6).Children(func() {
 					a.renderFileDirectory(c, a.fileDirectory, 0)
 				})
 			})
-			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+			ui.Column(c).Grow(2).MinWidth(0).Children(func() {
 				a.filePreviewView(c)
 			})
 		})
@@ -286,6 +284,7 @@ func (a *App) renderFileDirectory(c *ui.Context, relative string, depth int) {
 		entry := entry
 		row := ui.ButtonBase(c.Key("project-file:"+entry.Path)).FillWidth().MinHeight(26).Radius(5).
 			Padding(3, 7).Label(entry.Name).Description(entry.Path)
+		hoverBorder(c, row)
 		if entry.Path == a.fileSelected {
 			row.Background(t.SurfacePressed)
 		} else if row.Hovered() {
@@ -333,12 +332,12 @@ func (a *App) filePreviewView(c *ui.Context) {
 		if a.filePreview.Truncated {
 			ui.Text(c, "preview truncated").FontSize(10).TextColor(t.Warning)
 		} else if a.fileHasChanges() {
-			if ui.Button(c, "Discard").Disabled(a.fileSaving).Clicked() {
+			if subtleButton(c, "Discard", a.fileSaving).Clicked() {
 				a.initFileEditor()
 				a.filesErr = ""
 			}
 		}
-		if ui.PrimaryButton(c, "Save").Disabled(a.fileSaving || a.ctrl == nil || a.filePreviewBusy || a.filePreview.Binary || a.filePreview.Truncated || !a.fileHasChanges()).Clicked() {
+		if subtlePrimaryButton(c, "Save", a.fileSaving || a.ctrl == nil || a.filePreviewBusy || a.filePreview.Binary || a.filePreview.Truncated || !a.fileHasChanges()).Clicked() {
 			a.saveFile()
 		}
 	})

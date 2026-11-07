@@ -19,8 +19,6 @@ import (
 	"github.com/getan/golder/internal/computeruse"
 )
 
-const computerPanelWidth = 600
-
 func macAppBundlePath(executable string) string {
 	macOS := filepath.Dir(filepath.Clean(executable))
 	contents := filepath.Dir(macOS)
@@ -63,27 +61,27 @@ func (a *App) macComputerPermissionsView(c *ui.Context, compact bool) {
 		ui.Text(c, "Ad-hoc signed builds may need permission to be granted again after an update. A stable Developer ID signature improves identity continuity.").FontSize(11).TextColor(t.TextMuted).Wrap()
 	}
 	ui.Row(c).Gap(8).Wrap().Children(func() {
-		if ui.Button(c, "Request Accessibility").Disabled(unsupported || a.computerPermission.Accessibility == "granted").Clicked() {
+		if subtleButton(c, "Request Accessibility", unsupported || a.computerPermission.Accessibility == "granted").Clicked() {
 			a.requestComputerPermission("accessibility")
 		}
-		if ui.Button(c, "Request Screen Recording").Disabled(unsupported || a.computerPermission.ScreenCapture == "granted").Clicked() {
+		if subtleButton(c, "Request Screen Recording", unsupported || a.computerPermission.ScreenCapture == "granted").Clicked() {
 			a.requestComputerPermission("screen")
 		}
-		if ui.Button(c, "Refresh system permissions").Clicked() {
+		if subtleButton(c, "Refresh system permissions").Clicked() {
 			a.refreshComputerPermissions()
 		}
 	})
 	if !compact {
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.Button(c, "Accessibility settings").Clicked() {
+			if subtleButton(c, "Accessibility settings").Clicked() {
 				go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 			}
-			if ui.Button(c, "Screen Recording settings").Clicked() {
+			if subtleButton(c, "Screen Recording settings").Clicked() {
 				go mygo.Shell.OpenExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 			}
 			exe, _ := os.Executable()
 			bundle := macAppBundlePath(exe)
-			if ui.Button(c, "Show Golder GUI.app in Finder").Disabled(bundle == "").Clicked() {
+			if subtleButton(c, "Show Golder GUI.app in Finder", bundle == "").Clicked() {
 				go mygo.Shell.ShowItemInFolder(bundle)
 			}
 		})
@@ -489,12 +487,12 @@ func (a *App) computerPicker(c *ui.Context) {
 					ui.Text(c, a.computerError).FontSize(11).TextColor(t.Warning).Wrap()
 				}
 				ui.Row(c).Gap(8).Children(func() {
-					if ui.Button(c, "Cancel").Clicked() {
+					if subtleButton(c, "Cancel").Clicked() {
 						a.computerPickerOpen = false
 						a.clearComputerCandidate()
 					}
 					ui.Spacer(c)
-					if ui.PrimaryButton(c, "Confirm same window").Disabled(a.computerBusy || (a.computerCandidateControl && a.status.Permission == "read-only")).Clicked() {
+					if subtlePrimaryButton(c, "Confirm same window", a.computerBusy || (a.computerCandidateControl && a.status.Permission == "read-only")).Clicked() {
 						a.startComputer(a.computerCandidateControl)
 					}
 				})
@@ -509,13 +507,13 @@ func (a *App) computerPicker(c *ui.Context) {
 					ui.Column(c).Gap(4).Children(func() {
 						for i, app := range a.computerApplications {
 							i, app := i, app
-							if ui.Button(c.Key(app.ID), app.Name+" · "+app.Detail).FillWidth().Disabled(a.computerBusy).Clicked() {
+							if subtleButton(c.Key(app.ID), app.Name+" · "+app.Detail, a.computerBusy).FillWidth().Clicked() {
 								a.launchComputerApplication(i)
 							}
 						}
 					})
 				})
-				if ui.Button(c, "Cancel").Clicked() {
+				if subtleButton(c, "Cancel").Clicked() {
 					a.computerPickerOpen = false
 				}
 				return
@@ -537,7 +535,7 @@ func (a *App) computerPicker(c *ui.Context) {
 			}
 			if a.computerSkipPreview {
 				ui.Text(c, "Semantic access only: no window image will be available to the agent.").FontSize(11).TextColor(t.Warning).Wrap()
-			} else if a.computerPreviewFailed && ui.Button(c, "Continue without preview").Disabled(a.computerBusy).Clicked() {
+			} else if a.computerPreviewFailed && subtleButton(c, "Continue without preview", a.computerBusy).Clicked() {
 				a.computerSkipPreview = true
 			}
 			if a.computerBusy {
@@ -554,7 +552,7 @@ func (a *App) computerPicker(c *ui.Context) {
 						if target.Detail != "" {
 							label += " · " + target.Detail
 						}
-						if ui.Button(c.Key(target.ID), label).FillWidth().Selected(a.computerSelected == i).Disabled(a.computerBusy).Clicked() {
+						if subtleButton(c.Key(target.ID), label, a.computerBusy).FillWidth().Selected(a.computerSelected == i).Clicked() {
 							a.computerSelected = i
 							if a.computerSuggested != "" && a.status.Permission != "read-only" {
 								_, a.computerSkipPreview = a.computerBackend.(computeruse.OperatorPreviewBackend)
@@ -565,11 +563,11 @@ func (a *App) computerPicker(c *ui.Context) {
 				})
 			})
 			ui.Row(c).Gap(8).Children(func() {
-				if ui.Button(c, "Refresh windows").Disabled(a.computerBusy).Clicked() {
+				if subtleButton(c, "Refresh windows", a.computerBusy).Clicked() {
 					a.loadComputerTargets()
 				}
 				ui.Spacer(c)
-				if ui.Button(c, "Cancel").Clicked() {
+				if subtleButton(c, "Cancel").Clicked() {
 					a.computerPickerOpen = false
 					a.computerSuggested = ""
 					a.computerRequestPicker = false
@@ -577,10 +575,10 @@ func (a *App) computerPicker(c *ui.Context) {
 						a.ctrl.ResetComputerRequest()
 					}
 				}
-				if ui.Button(c, "View only").Disabled(a.computerBusy || a.computerSelected < 0).Clicked() {
+				if subtleButton(c, "View only", a.computerBusy || a.computerSelected < 0).Clicked() {
 					a.startComputer(false)
 				}
-				if ui.PrimaryButton(c, "Allow control").Disabled(a.computerBusy || a.computerSelected < 0 || a.status.Permission == "read-only").Clicked() {
+				if subtlePrimaryButton(c, "Allow control", a.computerBusy || a.computerSelected < 0 || a.status.Permission == "read-only").Clicked() {
 					a.startComputer(true)
 				}
 			})
@@ -590,7 +588,7 @@ func (a *App) computerPicker(c *ui.Context) {
 
 func (a *App) computerPanel(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(computerPanelWidth).MinWidth(360).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	ui.Column(c).Fill().MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(42).Padding(6, 10).Gap(8).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Icon(c, computerMonochromeIcon).Size(15, 15)
 			ui.Text(c, "Computer Use").FontSize(12).FontWeight(600)
@@ -600,7 +598,7 @@ func (a *App) computerPanel(c *ui.Context) {
 			} else {
 				ui.Spacer(c)
 			}
-			if ui.Button(c, "×").Tooltip("Pause and hide the Computer Use panel").Clicked() {
+			if subtleButton(c, "×").Tooltip("Pause and hide the Computer Use panel").Clicked() {
 				a.hideComputerPanel()
 			}
 		})
@@ -618,13 +616,13 @@ func (a *App) computerPanel(c *ui.Context) {
 				label = "Observation only"
 			}
 			ui.Text(c, label).FontSize(10.5).TextColor(t.TextMuted).Grow(1)
-			if status.Active && !status.Paused && ui.Button(c, "Pause / take over").Clicked() {
+			if status.Active && !status.Paused && subtleButton(c, "Pause / take over").Clicked() {
 				a.computerSession.Pause()
 			}
-			if status.Active && status.Paused && ui.Button(c, "Resume").Clicked() {
+			if status.Active && status.Paused && subtleButton(c, "Resume").Clicked() {
 				a.resumeComputer()
 			}
-			if status.Active && ui.Button(c, "Stop").Clicked() {
+			if status.Active && subtleButton(c, "Stop").Clicked() {
 				a.stopComputer()
 			}
 		})

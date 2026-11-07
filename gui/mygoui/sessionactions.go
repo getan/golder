@@ -258,10 +258,10 @@ func (a *App) sessionRenameModal(c *ui.Context) {
 			ui.Text(c, "Rename session").FontSize(16).Bold()
 			ui.TextInput(c, &a.renameDraft).AutoFocus().FillWidth().Placeholder("Session name")
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
+				if subtleButton(c, "Cancel").Clicked() {
 					a.renameOpen = false
 				}
-				if ui.PrimaryButton(c, "Rename").Clicked() {
+				if subtlePrimaryButton(c, "Rename").Clicked() {
 					a.commitRename()
 				}
 			})
@@ -277,10 +277,10 @@ func (a *App) sessionDeleteModal(c *ui.Context) {
 			ui.Text(c, fmt.Sprintf("%q will be permanently removed. This cannot be undone.", a.deleteTitle)).
 				FontSize(12).TextColor(t.TextMuted).Wrap()
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-				if ui.Button(c, "Cancel").Clicked() {
+				if subtleButton(c, "Cancel").Clicked() {
 					a.deleteOpen = false
 				}
-				if ui.Button(c, "Delete").Background(t.Danger).TextColor(t.AccentText).Clicked() {
+				if subtleButton(c, "Delete").Background(t.Danger).TextColor(t.AccentText).Clicked() {
 					a.commitDelete()
 				}
 			})

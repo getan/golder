@@ -51,6 +51,38 @@ func TestViewRendersChrome(t *testing.T) {
 	}
 }
 
+func TestSidebarToggleKeepsNavigationAccessible(t *testing.T) {
+	a := testApp()
+	tt := ui.NewTester(a.view, 1200, 800)
+	if err := tt.Click("Toggle sidebar"); err != nil || !a.sidebarClosed {
+		t.Fatalf("collapse sidebar: closed=%t err=%v", a.sidebarClosed, err)
+	}
+	tt.Frame()
+	if tt.HasText("Chats") || !tt.HasText("Settings") || !tt.HasText("Update") {
+		t.Fatalf("unexpected collapsed navigation: %q", tt.Texts())
+	}
+	if err := tt.Click("Archived sessions"); err != nil || a.sidebarClosed || !a.showArchived {
+		t.Fatalf("archive should reopen sidebar: closed=%t archived=%t err=%v", a.sidebarClosed, a.showArchived, err)
+	}
+}
+
+func TestSidebarDividerResizes(t *testing.T) {
+	a := testApp()
+	tt := ui.NewTester(a.view, 1200, 800)
+	tt.Frame()
+	divider, ok := tt.Find("Divider")
+	if !ok {
+		t.Fatal("sidebar divider not found")
+	}
+	x, y := divider.X+divider.W/2, divider.Y+divider.H/2
+	tt.Press(x, y)
+	tt.Move(x+60, y)
+	tt.Release(x+60, y)
+	if a.sidebarSize <= sidebarWidth {
+		t.Fatalf("drag did not enlarge sidebar: %v", a.sidebarSize)
+	}
+}
+
 func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
