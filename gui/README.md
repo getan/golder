@@ -103,6 +103,13 @@ Two optional surfaces need runtime pieces:
 - configuration: a shared Settings page for provider, model, base URL, protocol
   and named credentials, plus GUI-local System/Light/Dark appearance and
   persistent font scaling, and live model/reasoning/approval controls;
+- proxy: Settings → Proxy edits the same `proxy.toml` as CLI `/proxy`. The
+  suggested URL is `http://127.0.0.1:7897` (a Clash Verge mixed-port address); adjust
+  it to the local proxy in use. Browser and individual providers are selected
+  independently, and nothing is enabled merely by saving the address. Provider
+  changes apply to subsequent requests; close and reopen an existing browser to
+  change its route. `GOLDER_PROXY`, when set, overrides the saved URL. Browser
+  proxy URLs cannot include credentials or paths.
 - extensions: a native manager for checksummed first-party package install,
   exact source review, named-secret configuration, browser OAuth, safe
   phase-coded failures, one-click helper update/rebinding, separate bundled /

@@ -384,7 +384,7 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 	cancel()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-			return "", fmt.Errorf("native browser startup exceeded %s: %w", browserNativeStartupWait, err)
+			return "", nativeBrowserStartupTimeout(spec.ProxyMode, err)
 		}
 		return "", fmt.Errorf("start native browser: %w", err)
 	}
@@ -414,6 +414,16 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 	})
 	setBrowserSocket(spec.Socket)
 	return spec.Socket, nil
+}
+
+func nativeBrowserStartupTimeout(proxyMode string, cause error) error {
+	hint := "check Chromium startup and network connectivity"
+	if proxyMode == browserProxyModeDirect {
+		hint += "; browser proxy is off, enable it in Settings → Proxy or use /proxy browser on if this site needs it"
+	} else if proxyMode == browserProxyModeProxy {
+		hint += "; browser proxy is enabled, check the configured proxy is running and reachable"
+	}
+	return fmt.Errorf("native browser startup exceeded %s: %w; %s. A timeout does not identify the cause", browserNativeStartupWait, cause, hint)
 }
 
 // adoptBrowserPane turns "a pane was created" into "a browser we can prove the

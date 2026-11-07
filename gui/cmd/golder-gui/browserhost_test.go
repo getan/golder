@@ -11,6 +11,7 @@ import (
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/provider"
 )
 
 type recordingNativeInput struct{ event browserhost.OperatorInput }
@@ -47,6 +48,35 @@ func TestNativeBrowserPassesConfiguredProxy(t *testing.T) {
 	if got.ProxyServer != "http://127.0.0.1:7897" || !got.RequireSandbox {
 		t.Fatalf("native host options = %+v", got)
 	}
+}
+
+func TestSavedBrowserProxyReachesNativeHostOptions(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	t.Setenv("GOLDER_PROXY", "")
+	settings, err := appsession.LoadProxySettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.URL, settings.Browser = "http://127.0.0.1:7897", true
+	if _, err := appsession.SaveProxySettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	route, err := provider.BrowserProxyServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newNativeBrowserHosts()
+	fake := &fakeNativeHost{done: make(chan struct{})}
+	h.start = func(_ context.Context, opts browserhost.Options) (nativeBrowserHost, error) {
+		if opts.ProxyServer != settings.URL || !opts.RequireSandbox {
+			t.Errorf("native host received wrong route or sandbox: %+v", opts)
+		}
+		return fake, nil
+	}
+	if err := h.Start(context.Background(), agenttool.NativeBrowserRequest{ProxyServer: route}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Close)
 }
 
 type fakeNativeHost struct {

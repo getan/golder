@@ -20,6 +20,7 @@ func (a *App) openSettings() {
 	a.refreshComputerPermissions()
 	a.refreshTTYSessions()
 	a.loadExtensionSettings()
+	a.loadProxySettings()
 	settings, err := a.ctrl.LoadProviderSettings()
 	if err != nil {
 		a.settingsErr = err.Error()
@@ -104,9 +105,9 @@ func (a *App) settingsModal(c *ui.Context) {
 				BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 				ui.Text(c, "Settings").FontSize(18).Bold()
 				ui.Spacer(c)
-				ui.Text(c, "Provider defaults are shared with the Golder CLI").FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "Provider and proxy settings are shared with the Golder CLI").FontSize(11).TextColor(t.TextMuted)
 			})
-			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Extensions", "Display", "Terminal", "About").
+			ui.Tabs(c, &a.settingsTab, "Providers", "Permissions", "Extensions", "Display", "Terminal", "Proxy", "About").
 				Padding(10, 16, 0, 16)
 			ui.Scroll(c).Grow(1).MaxHeight(530).Children(func() {
 				switch a.settingsTab {
@@ -120,10 +121,15 @@ func (a *App) settingsModal(c *ui.Context) {
 					a.displaySettingsView(c)
 				case 4:
 					a.terminalSettingsView(c)
+				case 5:
+					a.proxySettingsView(c)
 				default:
 					a.aboutSettingsView(c)
 				}
 			})
+			if a.settingsTab == 5 {
+				a.proxySettingsFooter(c)
+			}
 		})
 	})
 }
