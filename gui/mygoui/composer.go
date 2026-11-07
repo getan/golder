@@ -56,7 +56,7 @@ func (a *App) composer(c *ui.Context) {
 						ui.Row(c.Key(a.attachments[i])).Padding(3, 7).Gap(5).Radius(7).Background(t.SurfacePressed).
 							AlignItems(ui.Center).Children(func() {
 							ui.Text(c, filepath.Base(a.attachments[i])).FontSize(11).MaxWidth(150).SingleLine().Ellipsis("…").Tooltip(a.attachments[i])
-							if ui.Button(c, "×").Tooltip("Remove attachment").Clicked() {
+							if subtleButton(c, "×").Tooltip("Remove attachment").Clicked() {
 								a.attachments = append(a.attachments[:i], a.attachments[i+1:]...)
 							}
 						})
@@ -74,7 +74,7 @@ func (a *App) composer(c *ui.Context) {
 				label, accessible = "■", "Stop generation"
 			}
 			ui.Row(c).Padding(0, 9, 9, 9).Gap(6).AlignItems(ui.Center).Children(func() {
-				if ui.Button(c, "+").Tooltip("Attach files or images").Disabled(a.status.ReadOnly).Clicked() {
+				if subtleButton(c, "+", a.status.ReadOnly).Tooltip("Attach files or images").Clicked() {
 					a.pickAttachments()
 				}
 				if compactIconButton(c, "approval-mode", approvalHandIcon, "Approval mode", "Approval mode · "+a.status.Permission).Clicked() {
@@ -94,6 +94,7 @@ func (a *App) composer(c *ui.Context) {
 				}
 				send := ui.ButtonBase(c).Size(34, 34).Radius(17).
 					Label(accessible).Tooltip(accessible).Disabled(a.status.ReadOnly || (!a.status.Running && !ready)).Background(face)
+				hoverBorder(c, send)
 				if send.Hovered() {
 					send.Background(hover)
 				} else if send.Pressed() {

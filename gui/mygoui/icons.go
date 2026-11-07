@@ -46,8 +46,9 @@ var hiddenFilesIcon = ui.MustParseSVG([]byte(`
 
 func compactIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip string) ui.Element {
 	t := c.Theme()
-	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).Border(1, t.Border).
+	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).
 		Background(t.Surface).TextColor(t.Text).Label(label).Tooltip(tooltip)
+	hoverBorder(c, button)
 	switch {
 	case button.Pressed():
 		button.Background(t.SurfacePressed)

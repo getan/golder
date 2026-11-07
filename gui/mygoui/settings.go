@@ -209,17 +209,8 @@ func (a *App) permissionSettingsView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(18, 20).Gap(12).Children(func() {
 		ui.Text(c, "Permissions & sandbox").FontSize(16).FontWeight(600)
-		ui.Text(c, "The current session uses "+a.status.Permission+" mode. Session mode remains available in the Composer for quick changes.").
+		ui.Text(c, "Change the session's approval mode using the hand button in the composer.").
 			FontSize(12).TextColor(t.TextMuted).MaxWidth(620)
-		ui.Row(c).Gap(8).Children(func() {
-			for _, mode := range []string{"read-only", "ask", "auto", "full-access"} {
-				mode := mode
-				button := ui.Button(c, mode).Selected(a.status.Permission == mode)
-				if button.Clicked() {
-					a.setPermission(mode)
-				}
-			}
-		})
 		ui.Text(c, "Readable and writable roots remain managed by the existing /boundary and grants store; the GUI editor for those rows is a later settings section.").
 			FontSize(12).TextColor(t.TextMuted)
 		if runtime.GOOS == "darwin" {
