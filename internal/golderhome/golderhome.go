@@ -40,6 +40,7 @@ const (
 	CredentialsFile   = ".credentials.yaml"
 	CredentialKeyFile = ".credential-key"
 	UpdateCheckFile   = "update-check.json"
+	UpdatePrefsFile   = "update-preferences.json"
 	GUIProjectsFile   = "gui-projects.json"
 	GUIDisplayFile    = "gui-display.json"
 

@@ -71,19 +71,21 @@ var (
 // dispatch. Separating parse from dispatch makes the dispatch logic testable
 // without touching the global flag set.
 type cliOptions struct {
-	prompt   string
-	model    string
-	baseURL  string
-	apiKey   string
-	protocol string
+	prompt        string
+	printProvided bool
+	model         string
+	baseURL       string
+	apiKey        string
+	protocol      string
 	// provider, when non-empty, selects a built-in provider by name from the
 	// registry (mirrors pi's provider selection): provider.ResolveProvider then builds the
 	// matching wire driver using the provider's default base URL, protocol, and
 	// API-key env var, ignoring the model-id heuristics.
-	provider     string
-	outputFmt    string
-	noTools      bool
-	listSessions bool
+	provider      string
+	outputFmt     string
+	noTools       bool
+	listSessions  bool
+	noUpdateCheck bool
 	// GitHub review webhook mode (--github-review, issue #567): run an isolated
 	// webhook listener that turns PR ready-for-review events into read-only
 	// review sessions.
@@ -348,6 +350,7 @@ func main() {
 	flag.BoolVar(&opts.dreamDryRun, "dream-dry-run", false, "internal: with --dream, analyze and report without writing files or updating dream state (SPEC §5.5)")
 	flag.BoolVar(&opts.noTUI, "no-tui", false, "use the line-based REPL instead of the full-screen TUI")
 	flag.BoolVar(&opts.noAnimations, "no-animations", false, "disable TUI animations (also GOLDER_NO_ANIMATIONS=1; automatic over SSH)")
+	flag.BoolVar(&opts.noUpdateCheck, "no-update-check", false, "disable the interactive startup update check")
 	flag.BoolVar(&opts.debug, "debug", false, "render diagnostic approval lines that are hidden by default")
 	flag.StringVarP(&opts.cwd, "cwd", "C", "", "run as if golder was started in this directory (matches the Claude Agent SDK's cwd; like git -C): tool file access, trust, hooks, and project config all resolve against it")
 	flag.BoolVarP(&opts.showVersion, "version", "v", false, "print version information and exit")
@@ -367,6 +370,7 @@ func main() {
 		cli.PrintProviderHelp(out)
 	}
 	flag.Parse()
+	opts.printProvided = flag.CommandLine.Changed("print")
 	diagtrace.Event("main", "flags parsed changed=%d", flag.CommandLine.NFlag())
 
 	if opts.debug {
@@ -527,6 +531,9 @@ func applyFileConfig(opts *cliOptions, cfg config.FileConfig, changed func(strin
 	}
 	if cfg.NoSkills && !changed("no-skills") {
 		opts.noSkills = true
+	}
+	if cfg.UpdateCheck != nil && !*cfg.UpdateCheck && !changed("no-update-check") {
+		opts.noUpdateCheck = true
 	}
 	if cfg.Approve && !changed("approve") {
 		opts.approve = true
@@ -699,6 +706,11 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "golder: no prompt (use -p \"...\" or positional args)")
 			return 2
 		}
+		if startupUpdateAllowed(opts, out) {
+			if done, code := startupUpdate(ctx, version, os.Stdin, out, errOut); done {
+				return code
+			}
+		}
 		env, err := run.SetupEnv(opts.model, opts.baseURL, opts.protocol, opts.provider, opts.providerToken(), opts.noTools, opts.noSkills, opts.systemPrompt, opts.appendSystemPrompt, opts.memory.Memory.Enabled, run.NewToolPolicy(opts.allowedTools, opts.disallowedTools))
 		if err != nil {
 			fmt.Fprintf(errOut, "golder: %v\n", err)
@@ -723,11 +735,6 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 		// real per-model levels without any session blocking on the network.
 		// Interactive sessions only: a one-shot -p run never opens the picker.
 		provider.StartBackgroundReasoningCatalogRefresh()
-		// Refresh the cached latest-release check off the hot path so the TUI
-		// banner and the REPL's startup hint can show an upgrade notice on this or
-		// the next launch without blocking startup (US-004). No-ops for dev builds
-		// or a fresh cache.
-		selfupdate.StartBackgroundCheck(version)
 		if shouldUseTUI(opts, isTTY) {
 			if err := tui.Run(tui.Options{
 				Model:             opts.model,

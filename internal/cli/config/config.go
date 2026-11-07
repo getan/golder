@@ -44,6 +44,7 @@ type FileConfig struct {
 	NoTools       bool   `toml:"no_tools"`
 	NoSkills      bool   `toml:"no_skills"`
 	Approve       bool   `toml:"approve"`
+	UpdateCheck   *bool  `toml:"update_check"`
 	SystemPrompt  string `toml:"system_prompt"`
 	// AllowedTools and DisallowedTools are the tool-level admission boundary:
 	// the config-file tier of --allowed-tools / --disallowed-tools. Names match

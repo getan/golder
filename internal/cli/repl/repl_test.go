@@ -88,9 +88,7 @@ func newTestDeps(t *testing.T, p provider.Provider) (replDeps, *session.Store) {
 	return deps, store
 }
 
-// TestREPLUpdateHint verifies the REPL startup hint mirrors the TUI banner: a
-// cached newer release prints one line before the first prompt, while dev builds
-// and up-to-date caches stay silent. The hint is cache-only — no network here.
+// Updates are offered by CLI startup, not repeated after entering the REPL.
 func TestREPLUpdateHint(t *testing.T) {
 	writeCache := func(t *testing.T, latest string) {
 		t.Helper()
@@ -102,7 +100,7 @@ func TestREPLUpdateHint(t *testing.T) {
 		}
 	}
 
-	t.Run("newer release prints hint", func(t *testing.T) {
+	t.Run("newer release does not repeat startup prompt", func(t *testing.T) {
 		writeCache(t, "v1.0.1")
 		deps, _ := newTestDeps(t, &replProvider{reply: "hi"})
 		deps.version = "v1.0.0"
@@ -110,11 +108,8 @@ func TestREPLUpdateHint(t *testing.T) {
 		if err := runREPL(strings.NewReader("/exit\n"), &out, deps); err != nil {
 			t.Fatalf("runREPL returned error: %v", err)
 		}
-		if !strings.Contains(out.String(), "Update available: v1.0.1") {
-			t.Errorf("missing update hint, got: %q", out.String())
-		}
-		if !strings.Contains(out.String(), "golder update") {
-			t.Errorf("hint must point at golder update, got: %q", out.String())
+		if strings.Contains(out.String(), "Update available") || strings.Contains(out.String(), "golder update") {
+			t.Errorf("unexpected repeated update hint: %q", out.String())
 		}
 	})
 

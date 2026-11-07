@@ -79,6 +79,43 @@ func StartBackgroundCheck(current string) {
 	}()
 }
 
+// LatestForStartup uses a fresh cache or waits briefly for a background check.
+// A slow check continues to fill the cache, but never interrupts an active UI.
+func LatestForStartup(current string, wait time.Duration) string {
+	return latestForStartup(current, wait, func(ctx context.Context, current string) (string, error) {
+		return LatestTag(ctx, &http.Client{Timeout: 10 * time.Second}, Repo, current)
+	}, writeCache)
+}
+
+func latestForStartup(current string, wait time.Duration, fetch func(context.Context, string) (string, error), save func(string)) string {
+	if !IsReleaseVersion(current) {
+		return ""
+	}
+	if latest, fresh := CachedLatest(); fresh {
+		return latest
+	}
+	result := make(chan string, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tag, err := fetch(ctx, current)
+		if err == nil && tag != "" {
+			save(tag)
+			result <- tag
+			return
+		}
+		result <- ""
+	}()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case tag := <-result:
+		return tag
+	case <-timer.C:
+		return ""
+	}
+}
+
 // writeCache persists the latest tag with the current time. Failures are silent.
 func writeCache(latest string) {
 	p := cachePath()

@@ -99,6 +99,9 @@ type Updater struct {
 	GOOS, GOARCH   string
 	// ExecPath is the executable to replace; defaults to os.Executable().
 	ExecPath string
+	// BeforeReplace optionally rechecks the target after downloading, immediately
+	// before the atomic replacement. An error leaves the executable untouched.
+	BeforeReplace func() error
 	// Mirrors are URL prefixes tried, in order, after the direct GitHub
 	// download fails (each applied as prefix+url). Empty means no fallback.
 	// NewUpdater fills it from GOLDER_MIRROR or the built-in defaults; tests
@@ -225,6 +228,11 @@ func (u *Updater) Apply(ctx context.Context, tag string, out io.Writer) error {
 	binary, err := extractBinary(archiveBytes, u.binaryName(), u.GOOS == "windows")
 	if err != nil {
 		return err
+	}
+	if u.BeforeReplace != nil {
+		if err := u.BeforeReplace(); err != nil {
+			return err
+		}
 	}
 	if err := u.replace(binary); err != nil {
 		return err

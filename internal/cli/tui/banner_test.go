@@ -46,14 +46,11 @@ func TestRenderBannerDevNoHint(t *testing.T) {
 	}
 }
 
-func TestRenderBannerUpgradeHint(t *testing.T) {
+func TestRenderBannerDoesNotRepeatStartupUpdate(t *testing.T) {
 	writeUpdateCache(t, "v0.4.0")
 	out := renderBanner(DefaultTheme(), Options{Version: "v0.3.1"}, "/tmp/proj")
-	if !strings.Contains(out, "v0.4.0") {
-		t.Errorf("banner should highlight newer version v0.4.0: %q", out)
-	}
-	if !strings.Contains(out, "Run golder update to upgrade") {
-		t.Errorf("banner should show upgrade hint: %q", out)
+	if strings.Contains(out, "v0.4.0") || strings.Contains(out, "Run golder update to upgrade") {
+		t.Errorf("banner must not repeat the startup update prompt: %q", out)
 	}
 }
 

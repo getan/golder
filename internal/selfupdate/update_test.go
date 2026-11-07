@@ -115,6 +115,14 @@ func TestApplyEndToEnd(t *testing.T) {
 		GOARCH:         "amd64",
 		ExecPath:       target,
 	}
+	u.BeforeReplace = func() error { return fmt.Errorf("target changed") }
+	if err := u.Apply(context.Background(), "v0.4.0", &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "target changed") {
+		t.Fatalf("BeforeReplace did not stop installation: %v", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "old" {
+		t.Fatalf("BeforeReplace failure modified target: %q", got)
+	}
+	u.BeforeReplace = nil
 	if err := u.Apply(context.Background(), "v0.4.0", &bytes.Buffer{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}

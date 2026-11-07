@@ -155,6 +155,18 @@ The script verifies the archive's sha256; downloads try GitHub directly first an
 
 `GOLDER_VERSION` picks a version and `GOLDER_INSTALL_DIR` sets the install directory (default `/usr/local/bin`, falling back to `~/.local/bin` when not writable). On Windows, download the `.zip` from [Releases](https://github.com/getan/golder/releases).
 
+Interactive CLI startup offers a newer release with **Update now**, **Skip this
+time**, and **Skip this version**. A skipped version stays skipped until a newer
+release; `golder update` remains available explicitly. Checks use a 24-hour
+cache and wait at most 800 ms on a cache miss; a slower check is saved for the
+next launch. Scripts, CI and non-terminal input/output never receive a prompt.
+Set `update_check = false` in `config.toml`, `GOLDER_NO_UPDATE_CHECK=1`, or
+pass `--no-update-check` to disable startup checks. Homebrew installs use
+`brew upgrade golder`; unknown or package-managed locations and Windows require
+updating by their original installation method. A custom standalone location
+can be identified by setting `GOLDER_INSTALL_DIR` to its absolute directory.
+Successful updates never restart Golder automatically: rerun the command.
+
 ### Build from source
 
 Requires Go 1.27 or newer:

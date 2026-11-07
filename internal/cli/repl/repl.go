@@ -45,7 +45,6 @@ import (
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
-	"github.com/getan/golder/internal/selfupdate"
 	"github.com/getan/golder/internal/session"
 	"github.com/getan/golder/internal/trust"
 )
@@ -348,18 +347,6 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 	}()
 	defer close(promptReq)
 	readerBusy := false
-
-	// Mirror the TUI banner's upgrade notice (banner.go): when the cached
-	// latest-release check says a newer release exists, print one line before the
-	// first prompt. Cache-only — no network here (main refreshes it in the
-	// background); dev/unparseable versions never trigger it.
-	if latest, _ := selfupdate.CachedLatest(); latest != "" {
-		if avail, comparable := selfupdate.UpdateAvailable(deps.version, latest); comparable && avail {
-			fmt.Fprintf(out, "%s %s\n",
-				ui.Colorize(ui.Enabled(), ui.Yellow, "Update available: "+latest),
-				ui.Colorize(ui.Enabled(), ui.Dim, `— run "golder update" to upgrade`))
-		}
-	}
 
 	for {
 		replPrompt := fmt.Sprintf("golder(%s)> ", deps.live.Model)
