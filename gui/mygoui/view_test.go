@@ -87,7 +87,7 @@ func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, label := range []string{"Files", "Changes", "Computer Use", "Browser"} {
+	for _, label := range []string{"Files", "Changes", "Computer Use", "Browser", "Terminal"} {
 		box, ok := tt.Find(label)
 		if !ok || box.W != 30 || box.H != 30 {
 			t.Fatalf("%s button has box %+v, found=%t; want 30×30", label, box, ok)
@@ -95,6 +95,31 @@ func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
 	}
 	if err := tt.Click("Changes"); err != nil || a.changesOpen {
 		t.Fatalf("changes action did not close the drawer: open=%t err=%v", a.changesOpen, err)
+	}
+}
+
+func TestTitleBarIconButtonsHaveNoDefaultTile(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		a := testApp()
+		tt := ui.NewTester(a.view, 1200, 800)
+		tt.SetDark(dark)
+		for _, label := range []string{"Files", "Changes", "Computer Use", "Browser", "Terminal"} {
+			tt.Move(2, 2)
+			box, ok := tt.Find(label)
+			if !ok {
+				t.Fatalf("button %q not found", label)
+			}
+			x, y := int(box.X+4), int(box.Y+box.H/2)
+			before := tt.Image().RGBAAt(x, y)
+			outside := tt.Image().RGBAAt(int(box.X-3), y)
+			if before != outside {
+				t.Fatalf("%s has a default tile in dark=%t: %v vs %v", label, dark, before, outside)
+			}
+			tt.Move(box.X+box.W/2, box.Y+box.H/2)
+			if after := tt.Image().RGBAAt(x, y); after == before {
+				t.Fatalf("%s has no hover feedback in dark=%t", label, dark)
+			}
+		}
 	}
 }
 

@@ -171,6 +171,25 @@ func TestTerminalToolCaptureAndModeBoundaries(t *testing.T) {
 	}
 }
 
+func TestTerminalFocusDoesNotClaimHiddenPaneIsVisible(t *testing.T) {
+	tool, pane, _ := terminalToolFixture(t)
+	tool.guard.Mode.Set(permissions.FullAccess)
+	if err := tool.app.terminalRegistry().Grant(pane.id, tool.agent.id, false, true, false); err != nil {
+		t.Fatal(err)
+	}
+	tool.app.filesOpen = true
+	req := terminalToolArgs{Action: "focus", Pane: pane.id, ControlOrigin: "operator-claimed", HostControl: true}
+	result, _ := tool.executePane(context.Background(), pane, req)
+	if !result.IsError || pane.focus || !tool.app.filesOpen || !strings.Contains(agentcore.ContentToText(result.Content), "hidden by the right-side layout") {
+		t.Fatalf("hidden focus must fail without displacing Files: %+v", result)
+	}
+	tool.app.filesOpen = false
+	result, _ = tool.executePane(context.Background(), pane, req)
+	if result.IsError || !pane.focus {
+		t.Fatalf("visible pane could not be focused: %+v", result)
+	}
+}
+
 func TestTerminalReservationRevalidatesSplitAndCleansUp(t *testing.T) {
 	tool, parent, _ := terminalToolFixture(t)
 	registry := tool.app.terminalRegistry()

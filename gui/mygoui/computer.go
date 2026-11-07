@@ -347,8 +347,9 @@ func (a *App) prepareComputerCandidate(gate computeruse.OperatorPreviewBackend, 
 }
 
 func (a *App) showComputerPanel() {
-	a.filesOpen, a.changesOpen = false, false
-	a.closeBrowserPanel()
+	if !a.computerOpen {
+		a.rightPreferred = rightPanelNone
+	}
 	a.computerOpen = true
 	a.startComputerPreview()
 }

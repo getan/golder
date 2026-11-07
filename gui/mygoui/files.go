@@ -31,9 +31,7 @@ func (a *App) resetFileExplorer() {
 
 func (a *App) openFileExplorer() {
 	a.filesOpen = true
-	a.changesOpen = false
-	a.hideComputerPanel()
-	a.closeBrowserPanel()
+	a.closeChangesPanel()
 	if a.fileEntries == nil {
 		a.fileEntries = map[string][]appsession.ProjectFileEntry{}
 	}

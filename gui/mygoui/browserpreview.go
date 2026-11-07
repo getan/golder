@@ -51,16 +51,17 @@ type browserWindowState struct {
 // window's right drawer. The Bitmap route remains toolkit-native and shares no
 // terminal renderer.
 func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
+	wasOpen := a.browserPanelOpen
 	a.closeBrowserPanel()
-	a.hideComputerPanel()
+	if !wasOpen {
+		a.rightPreferred = rightPanelNone
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &browserWindowState{socket: browserSocketKey(browser.Socket), browserID: browser.Browser, address: browser.URL, pageURL: browser.URL, title: browser.Title}
 	if state.title == "" {
 		state.title = browser.URL
 	}
 	a.browserState, a.browserCancel, a.browserPanelOpen = state, cancel, true
-	a.changesOpen = false
-	a.filesOpen = false
 	if a.win != nil {
 		state.win = a.win
 		go attachBrowserSurface(ctx, a.win, state, browser)

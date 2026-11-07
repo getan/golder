@@ -12,6 +12,19 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
+func (a *App) closeChangesPanel() {
+	if !a.changesOpen {
+		return
+	}
+	a.changesOpen = false
+	a.diffRequest++
+	a.diffLoading = false
+	if a.diffCancel != nil {
+		a.diffCancel()
+		a.diffCancel = nil
+	}
+}
+
 // changesPanel is the review drawer: the changed files and the selected file's
 // diff, rendered by MyGo's diff viewer.
 func (a *App) changesPanel(c *ui.Context) {
@@ -35,17 +48,11 @@ func (a *App) changesPanel(c *ui.Context) {
 			})
 			ui.Text(c, fmt.Sprintf("+%d −%d", a.changes.Added, a.changes.Deleted)).
 				FontSize(11).TextColor(t.TextMuted)
-			if subtleButton(c, "Refresh").Clicked() {
+			if subtleButton(c, "↻").Label("Refresh Changes").Tooltip("Refresh Changes").Clicked() {
 				a.refreshChanges()
 			}
-			if subtleButton(c, "Close").Clicked() {
-				a.changesOpen = false
-				a.diffRequest++
-				a.diffLoading = false
-				if a.diffCancel != nil {
-					a.diffCancel()
-					a.diffCancel = nil
-				}
+			if subtleButton(c, "×").Label("Close Changes").Tooltip("Close Changes").Clicked() {
+				a.closeChangesPanel()
 			}
 		})
 		if a.changes.NotGitRepo {

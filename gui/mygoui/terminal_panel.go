@@ -171,6 +171,9 @@ func (a *App) addTerminal(project, beside string, vertical bool, conn io.ReadWri
 		a.banner, a.bannerErr = "The terminal to split is no longer available.", true
 		return
 	}
+	if !a.terminalOpen {
+		a.rightPreferred = rightPanelNone
+	}
 	a.terminalOpen = true
 }
 

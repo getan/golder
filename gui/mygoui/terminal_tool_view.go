@@ -148,6 +148,9 @@ func (a *App) reserveAgentTerminal(agent *terminalAgent, parent, direction, name
 		return nil, errors.New("terminal: split target disappeared")
 	}
 	if a.terminalProjectPath() == agent.project {
+		if !a.terminalOpen {
+			a.rightPreferred = rightPanelNone
+		}
 		a.terminalOpen = true
 	}
 	return pane, nil

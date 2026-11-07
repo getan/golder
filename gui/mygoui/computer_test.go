@@ -93,7 +93,7 @@ func TestComputerDrawerShowsTargetAndTakeover(t *testing.T) {
 	}
 }
 
-func TestComputerPanelOpensAndReplacesOtherRightPanels(t *testing.T) {
+func TestComputerPanelOpensBehindManualDrawer(t *testing.T) {
 	a := testApp()
 	session := computeruse.New(computerUIBackend{})
 	if err := session.Start(context.Background(), computeruse.Target{ID: "window", Application: "Calculator"}, computeruse.Capabilities{Observe: true}); err != nil {
@@ -101,11 +101,12 @@ func TestComputerPanelOpensAndReplacesOtherRightPanels(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	a.computerSession = session
-	a.filesOpen, a.changesOpen, a.browserPanelOpen = true, true, true
+	a.filesOpen, a.browserPanelOpen = true, true
 	a.showComputerPanel()
-	if !a.computerOpen || a.filesOpen || a.changesOpen || a.browserPanelOpen {
+	if !a.computerOpen || !a.filesOpen || a.changesOpen || !a.browserPanelOpen || session.Status().Paused {
 		t.Fatalf("right panels: computer=%t files=%t changes=%t browser=%t", a.computerOpen, a.filesOpen, a.changesOpen, a.browserPanelOpen)
 	}
+	a.filesOpen = false
 	tt := ui.NewTester(a.view, 1400, 800)
 	if !tt.HasText("Computer Use") || !tt.HasText("Observation only") || !tt.HasText("Window preview unavailable; semantic access only.") {
 		t.Fatalf("computer panel not visible: %q", tt.Texts())

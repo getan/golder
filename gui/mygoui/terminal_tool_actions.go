@@ -111,7 +111,14 @@ func (t *terminalTool) executePane(ctx context.Context, pane *terminalPane, req 
 					if t.app.terminalProjectPath() != t.agent.project {
 						return errors.New("terminal: switch to this project before focusing its pane")
 					}
-					t.app.terminalOpen, pane.focus = true, true
+					if !t.app.terminalOpen {
+						t.app.rightPreferred = rightPanelNone
+					}
+					t.app.terminalOpen = true
+					if !t.app.rightPanelVisible(rightPanelTerminal) {
+						return errors.New("terminal: pane is hidden by the right-side layout; ask the operator to show Terminal")
+					}
+					pane.focus = true
 				case "resize":
 					workspace := t.app.terminals[pane.project]
 					if workspace == nil || !workspace.root.resizePane(pane.id, req.Percent) {

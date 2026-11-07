@@ -61,13 +61,17 @@ func TestFileTreeEntriesStartNearLeftEdge(t *testing.T) {
 	}
 }
 
-func TestFileExplorerMutuallyExcludesOtherDrawers(t *testing.T) {
+func TestFileExplorerCoversAutomationAndExcludesChanges(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
 	a.browserPanelOpen = true
 	a.openFileExplorer()
-	if !a.filesOpen || a.changesOpen || a.browserPanelOpen {
+	if !a.filesOpen || a.changesOpen || !a.browserPanelOpen || a.rightPanelVisible(rightPanelBrowser) {
 		t.Fatalf("drawer state files=%t changes=%t browser=%t", a.filesOpen, a.changesOpen, a.browserPanelOpen)
+	}
+	a.filesOpen = false
+	if !a.rightPanelVisible(rightPanelBrowser) {
+		t.Fatal("closing Files did not restore the browser")
 	}
 }
 

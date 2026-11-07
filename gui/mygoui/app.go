@@ -54,10 +54,9 @@ type App struct {
 	showArchived    bool
 	sidebarClosed   bool
 	sidebarSize     float32
-	filesSplit      float32
-	changesSplit    float32
-	computerSplit   float32
-	browserSplit    float32
+	rightSplit      float32
+	rightStackSplit float32
+	rightPreferred  rightPanel
 	updateBusy      bool
 	updateTag       string
 	updateURL       string
@@ -122,7 +121,6 @@ type App struct {
 	actions      []appsession.Action
 
 	terminalOpen         bool
-	terminalSplit        float32
 	terminalSeq          uint64
 	terminals            map[string]*terminalProject
 	terminalAccess       *terminalaccess.Registry
@@ -704,7 +702,11 @@ func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
 		}
 	case browserChooseInstance:
 		a.clearBrowserAutoOpen()
-		a.browserOpen = true
+		// Discovery must not interrupt an operator's Files/Changes work. The
+		// Browser icon still exposes the discovered instances for later choice.
+		if !a.filesOpen && !a.changesOpen {
+			a.browserOpen = true
+		}
 	case browserOpenAlready:
 		a.clearBrowserAutoOpen()
 		if selection != nil {

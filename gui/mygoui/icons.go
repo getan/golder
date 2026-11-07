@@ -54,6 +54,33 @@ var archiveIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><path d="M4 8
 var settingsIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`))
 var updateIcon = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M4 17v3h16v-3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`))
 
+// Title actions have no default tile; the short line distinguishes a visible
+// view from a requested but temporarily obscured one. Focus remains outlined.
+func titleIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip string, visible, present bool) ui.Element {
+	t := c.Theme()
+	indicator, color := ui.Transparent, t.Text
+	if visible {
+		indicator, color = t.Accent, t.Accent
+	} else if present {
+		indicator, color = t.TextMuted, t.TextMuted
+		tooltip += " · hidden"
+	}
+	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).TextColor(color).Label(label).Tooltip(tooltip)
+	hoverBorder(c, button)
+	if button.Pressed() {
+		button.Background(t.SurfacePressed)
+	} else if button.Hovered() {
+		button.Background(t.SurfaceHover)
+	}
+	button.Children(func() {
+		ui.Column(c).Center().Gap(2).Children(func() {
+			ui.Icon(c, icon).Size(16, 16)
+			ui.Box(c).Size(12, 2).Background(indicator)
+		})
+	})
+	return button
+}
+
 func compactIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip string) ui.Element {
 	t := c.Theme()
 	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).

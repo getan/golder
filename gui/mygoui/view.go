@@ -96,45 +96,21 @@ func (a *App) view(c *ui.Context) {
 		a.titleBar(c)
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			a.navigationRail(c)
-			mainContent := func() {
-				conversation := func() {
-					if a.sidebarClosed {
-						a.center(c)
-					} else {
-						if a.sidebarSize <= 0 {
-							a.sidebarSize = sidebarWidth
-						}
-						ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c) }).Fill().MinWidth(0)
-					}
-				}
-				var split *float32
-				var panel func()
-				initial := float32(60)
-				switch {
-				case a.browserPanelOpen:
-					split, panel = &a.browserSplit, func() { a.browserPanel(c) }
-					initial = 50
-				case a.filesOpen:
-					split, panel = &a.filesSplit, func() { a.fileExplorerPanel(c) }
-					initial = 45
-				case a.changesOpen:
-					split, panel = &a.changesSplit, func() { a.changesPanel(c) }
-				case a.computerOpen:
-					split, panel = &a.computerSplit, func() { a.computerPanel(c) }
-					initial = 48
-				}
-				if panel == nil {
-					conversation()
+			conversation := func() {
+				if a.sidebarClosed {
+					a.center(c)
 				} else {
-					clampPanelSplit(split, initial)
-					ui.SplitPercent(c, split, conversation, panel).Fill().MinWidth(0)
+					if a.sidebarSize <= 0 {
+						a.sidebarSize = sidebarWidth
+					}
+					ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c) }).Fill().MinWidth(0)
 				}
 			}
-			if a.terminalOpen {
-				clampPanelSplit(&a.terminalSplit, 60)
-				ui.SplitPercent(c, &a.terminalSplit, mainContent, func() { a.terminalPanel(c) }).Grow(1).MinWidth(0)
+			if a.hasRightPanel() {
+				clampPanelSplit(&a.rightSplit, 50)
+				ui.SplitPercent(c, &a.rightSplit, conversation, func() { a.rightPanelView(c) }).Grow(1).MinWidth(0)
 			} else {
-				mainContent()
+				conversation()
 			}
 		})
 		a.bannerView(c)
@@ -176,7 +152,7 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
-		if compactIconButton(c, "files", filesMonochromeIcon, "Files", "Browse project files").Clicked() {
+		if titleIconButton(c, "files", filesMonochromeIcon, "Files", "Browse project files", a.filesOpen, false).Clicked() {
 			if a.filesOpen {
 				a.filesOpen = false
 			} else {
@@ -187,36 +163,57 @@ func (a *App) titleBar(c *ui.Context) {
 		if changes > 0 {
 			changesTip = fmt.Sprintf("Changes · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
 		}
-		if compactIconButton(c, "changes", changesMonochromeIcon, "Changes", changesTip).Clicked() {
-			a.changesOpen = !a.changesOpen
+		if titleIconButton(c, "changes", changesMonochromeIcon, "Changes", changesTip, a.changesOpen, false).Clicked() {
 			if a.changesOpen {
+				a.closeChangesPanel()
+			} else {
 				a.filesOpen = false
-				a.hideComputerPanel()
-				a.closeBrowserPanel()
+				a.changesOpen = true
 				a.refreshChanges()
 			}
 		}
-		if compactIconButton(c, "computer", computerMonochromeIcon, "Computer Use", "Select or view a controlled application window").Clicked() {
-			a.toggleComputerPanel()
+		computerPresent := a.computerOpen || a.computerSession != nil && a.computerSession.Status().Active
+		if titleIconButton(c, "computer", computerMonochromeIcon, "Computer Use", "Select or view a controlled application window", a.rightPanelVisible(rightPanelComputer), computerPresent).Clicked() {
+			if !a.revealRequestedPanel(rightPanelComputer) {
+				a.filesOpen = false
+				a.closeChangesPanel()
+				a.toggleComputerPanel()
+				if a.computerOpen {
+					a.rightPreferred = rightPanelComputer
+				}
+			}
 		}
 		browserTip := "Browser · no active page"
 		if len(a.browsers) > 0 {
 			browserTip = fmt.Sprintf("Browser · %d active", len(a.browsers))
 		}
-		if compactIconButton(c, "browser", browserMonochromeIcon, "Browser", browserTip).Clicked() {
-			a.filesOpen = false
-			a.hideComputerPanel()
-			if a.browserPanelOpen {
-				a.closeBrowserPanel()
-			} else if len(a.browsers) == 1 {
-				a.openBrowserPreview(a.browsers[0])
-			} else {
-				a.browserOpen = true
-				go a.refreshBrowsers(a.ctrl)
+		if titleIconButton(c, "browser", browserMonochromeIcon, "Browser", browserTip, a.rightPanelVisible(rightPanelBrowser), a.browserPanelOpen || len(a.browsers) > 0).Clicked() {
+			if !a.revealRequestedPanel(rightPanelBrowser) {
+				a.filesOpen = false
+				a.closeChangesPanel()
+				if a.browserPanelOpen {
+					a.closeBrowserPanel()
+				} else if len(a.browsers) == 1 {
+					a.openBrowserPreview(a.browsers[0])
+					a.rightPreferred = rightPanelBrowser
+				} else {
+					a.browserOpen = true
+					if a.ctrl != nil {
+						go a.refreshBrowsers(a.ctrl)
+					}
+				}
 			}
 		}
-		if compactIconButton(c, "terminal", terminalMonochromeIcon, "Terminal", "Show or hide project terminals").Clicked() {
-			a.toggleTerminal()
+		terminalExists := a.terminals != nil && a.terminals[a.terminalProjectPath()] != nil && a.terminals[a.terminalProjectPath()].root != nil
+		if titleIconButton(c, "terminal", terminalMonochromeIcon, "Terminal", "Show or hide project terminals", a.rightPanelVisible(rightPanelTerminal), a.terminalOpen || terminalExists).Clicked() {
+			if !a.revealRequestedPanel(rightPanelTerminal) {
+				a.filesOpen = false
+				a.closeChangesPanel()
+				a.toggleTerminal()
+				if a.terminalOpen {
+					a.rightPreferred = rightPanelTerminal
+				}
+			}
 		}
 	})
 }
@@ -441,7 +438,10 @@ func (a *App) browsersModal(c *ui.Context) {
 					})
 					if subtleButton(c, "Open").Clicked() {
 						a.browserOpen = false
+						a.filesOpen = false
+						a.closeChangesPanel()
 						a.openBrowserPreview(b)
+						a.rightPreferred = rightPanelBrowser
 					}
 				})
 			}
