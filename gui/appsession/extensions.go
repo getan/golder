@@ -2,6 +2,7 @@ package appsession
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -247,13 +248,22 @@ func capabilityCount(values map[string]any, key string) int {
 // SetExtensionEnabled is the generic explicit enable/disable action for an
 // already-configured source. Enabling fingerprints and remembers approval.
 func (c *Controller) SetExtensionEnabled(kind, id string, enabled bool) error {
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	ref := extensions.SourceRef{Kind: kind, ID: id}
+	if kind == "mcp" {
+		reviewed, err := manager.PrepareMCPEdit(id)
+		if err != nil {
+			return err
+		}
+		if enabled {
+			return manager.EnableReviewedMCP(reviewed, true)
+		}
+		return manager.DisableReviewedMCP(reviewed)
+	}
 	if enabled {
 		if err := manager.Approve(ref); err != nil {
 			return err
@@ -270,12 +280,11 @@ func (c *Controller) SetExtensionEnabled(kind, id string, enabled bool) error {
 }
 
 func (c *Controller) TestExtension(ctx context.Context, kind, id string) error {
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	return manager.Connect(ctx, extensions.SourceRef{Kind: kind, ID: id})
 }
 
@@ -299,12 +308,11 @@ func (c *Controller) UpdateLarkPackage(ctx context.Context, source, checksum, ve
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	current, err := manager.Config(larkSourceRef)
 	if err != nil {
 		return errors.New("configure Lark before updating its helper")
@@ -331,73 +339,94 @@ func (c *Controller) ConfigureLark(ctx context.Context, edit LarkExtensionEdit) 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	pkg, ok := extensions.InstalledManagedPackage("lark")
 	if !ok {
 		return errors.New("install the managed golder-lark package first")
 	}
 	credentialName := strings.TrimSpace(edit.CredentialName)
-	if value := strings.TrimSpace(edit.NewAppSecret); value != "" {
-		if credentialName == "" {
-			credentialName = "lark-app-secret"
-		}
-		if err := provider.SaveCredential(provider.CredentialFilePath(), credentialName, value); err != nil {
-			return err
-		}
-	} else if credentialName == "" {
-		return errors.New("enter an App Secret or choose a named credential")
-	} else if _, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), credentialName); err != nil {
-		return fmt.Errorf("credential %q is not stored", credentialName)
+	value := strings.TrimSpace(edit.NewAppSecret)
+	if value != "" && credentialName == "" {
+		credentialName = "lark-app-secret"
 	}
-	cfg, err := extensions.LarkSourceConfig(extensions.LarkSourceOptions{
-		Package: pkg, LarkCLI: edit.LarkCLI, ProjectCLI: edit.ProjectCLI,
-		AppID: edit.AppID, AppSecretCredential: credentialName,
-		Domains: edit.Domains, ProjectHost: edit.ProjectHost,
-	})
+	if value == "" && credentialName == "" {
+		return errors.New("enter an App Secret or choose a named credential")
+	}
+	makeConfig := func() (extensions.SourceConfig, error) {
+		return extensions.LarkSourceConfig(extensions.LarkSourceOptions{
+			Package: pkg, LarkCLI: edit.LarkCLI, ProjectCLI: edit.ProjectCLI,
+			AppID: edit.AppID, AppSecretCredential: credentialName,
+			Domains: edit.Domains, ProjectHost: edit.ProjectHost,
+		})
+	}
+	cfg, err := makeConfig()
 	if err != nil {
 		return err
 	}
-	return manager.ReplaceSourceConfig(larkSourceRef, cfg)
+	created, committed := false, false
+	defer func() {
+		if created && !committed {
+			_ = provider.DeleteCredential(provider.CredentialFilePath(), credentialName)
+		}
+	}()
+	if value != "" {
+		err = provider.CreateCredential(provider.CredentialFilePath(), credentialName, value)
+		if errors.Is(err, provider.ErrCredentialExists) {
+			credentialName = "lark-app-" + strings.ToLower(rand.Text()[:16])
+			cfg, err = makeConfig()
+			if err == nil {
+				err = provider.CreateCredential(provider.CredentialFilePath(), credentialName, value)
+			}
+		}
+		if err != nil {
+			return err
+		}
+		created = true
+	} else if _, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), credentialName); err != nil {
+		return fmt.Errorf("credential %q is not stored", credentialName)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	err = manager.ReplaceSourceConfig(larkSourceRef, cfg)
+	committed = err == nil || errors.Is(err, extensions.ErrSourceCommitted)
+	return err
 }
 
 // EnableLark is the explicit review boundary. It fingerprints the helper and
 // official CLI dependencies, remembers approval, persists enabled=true and only
 // then admits the source to the current session.
 func (c *Controller) EnableLark() error {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := c.requireMatchingLarkHelper(); err != nil {
 		return err
 	}
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
-	}
-	if err := manager.Approve(larkSourceRef); err != nil {
+	reviewed, err := manager.PrepareMCPEdit(larkSourceRef.ID)
+	if err != nil {
 		return err
 	}
-	if err := manager.EnabledSourceConfig(larkSourceRef, true); err != nil {
-		return err
-	}
-	return manager.Enable(larkSourceRef)
+	return manager.EnableReviewedMCP(reviewed, true)
 }
 
 func (c *Controller) DisableLark() error {
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
-	}
-	if err := manager.Disable(larkSourceRef); err != nil {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
 		return err
 	}
-	return manager.EnabledSourceConfig(larkSourceRef, false)
+	defer release()
+	reviewed, err := manager.PrepareMCPEdit(larkSourceRef.ID)
+	if err != nil {
+		return err
+	}
+	return manager.DisableReviewedMCP(reviewed)
 }
 
 // AuthorizeLark runs the reviewed setup command and forwards only sanitized
@@ -431,25 +460,23 @@ func (c *Controller) AuthorizeLark(ctx context.Context, service string, show fun
 }
 
 func (c *Controller) TestLark(ctx context.Context) error {
-	if err := c.requireMatchingLarkHelper(); err != nil {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	defer release()
+	if err := c.requireMatchingLarkHelper(); err != nil {
+		return err
 	}
 	return manager.Connect(ctx, larkSourceRef)
 }
 
 func (c *Controller) ResetLark() error {
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	return manager.Reset(larkSourceRef)
 }
 
@@ -457,19 +484,17 @@ func (c *Controller) ResetLark() error {
 // server-side consent and named App Secret. Reset and credential removal are
 // separate explicit destructive operations.
 func (c *Controller) UninstallLark() error {
-	c.mu.Lock()
-	manager := c.opt.Extensions
-	c.mu.Unlock()
-	if manager == nil {
-		return errors.New("extension manager unavailable")
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return err
 	}
+	defer release()
 	if manager.HasSource(larkSourceRef) {
-		_ = manager.Disable(larkSourceRef)
-		_ = manager.Disconnect(larkSourceRef)
-		if err := extensions.WriteSource(extensions.ConfigPath(), larkSourceRef, nil); err != nil {
+		reviewed, err := manager.PrepareMCPEdit(larkSourceRef.ID)
+		if err != nil {
 			return err
 		}
-		if err := manager.RemoveSource(larkSourceRef); err != nil {
+		if err := manager.RemoveMCP(reviewed); err != nil {
 			return err
 		}
 	}

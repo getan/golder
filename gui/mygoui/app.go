@@ -92,11 +92,17 @@ type App struct {
 	extensionNote            string
 	extensionAuthURL         string
 	extensionAuthCode        string
+	extensionAuthQR          *ui.Bitmap
 	extensionLarkVerified    bool
 	extensionProjectVerified bool
 	extensionConfirm         string
 	extensionSourceConfirm   string
 	extensionCancel          context.CancelFunc
+	mcpAdd                   *mcpAddForm // transient operator-only input
+	mcpOAuth                 *guiMCPAuthorization
+	mcpRemove                *mcpRemoveState
+	mcpApproval              *mcpRemoveState
+	mcpToolsID               string
 
 	paletteOpen  bool
 	paletteQuery string
@@ -214,13 +220,26 @@ func (a *App) Run() error {
 			Content:   ui.View(a.view),
 		})
 		a.win.OnClosed(func() {
+			authBusy := a.mcpOAuth != nil && a.mcpOAuth.cancel != nil || a.extensionCancel != nil
+			if a.mcpOAuth != nil && a.mcpOAuth.cancel != nil {
+				a.mcpOAuth.cancel()
+			}
+			if a.extensionCancel != nil {
+				a.extensionCancel()
+			}
 			if a.diffCancel != nil {
 				a.diffCancel()
 				a.diffCancel = nil
 			}
 			a.closeBrowserPanel()
 			a.stopComputer()
-			_ = a.hub.Close()
+			if authBusy {
+				// Authorization teardown may need the UI thread to destroy its
+				// private web view. Do not block that thread waiting for the hub.
+				go func() { _ = a.hub.Close() }()
+			} else {
+				_ = a.hub.Close()
+			}
 		})
 		go a.pump()
 		a.refreshProjects()

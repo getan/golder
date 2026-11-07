@@ -296,6 +296,15 @@ func (a *App) authorizeLark(service string) {
 		a.extensionErr = "Save the Project CLI and host configuration, then approve and enable the updated source before authorizing."
 		return
 	}
+	if a.hub == nil {
+		a.extensionErr = "Private authorization is unavailable."
+		return
+	}
+	release, err := a.hub.BeginPrivateAuthorization()
+	if err != nil {
+		a.extensionErr = err.Error()
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	a.extensionCancel = cancel
 	if service == "project" {
@@ -307,29 +316,33 @@ func (a *App) authorizeLark(service string) {
 	a.extensionNote = "Preparing authorization…"
 	a.extensionAuthURL = ""
 	a.extensionAuthCode = ""
+	a.extensionAuthQR = nil
 	win, ctrl := a.win, a.ctrl
 	go func() {
+		defer cancel()
+		defer release()
 		err := ctrl.AuthorizeLark(ctx, service, func(event appsession.ExtensionSetupEvent) {
 			if win == nil {
 				return
 			}
 			win.Update(func() {
-				if a.ctrl != ctrl {
+				if a.ctrl != ctrl || ctx.Err() != nil || a.extensionCancel == nil {
 					return
 				}
-				if openURL := a.applyExtensionSetupEvent(event); openURL != "" {
-					_ = mygo.Shell.OpenExternal(openURL)
-				}
+				_ = a.applyExtensionSetupEvent(event)
 			})
 		})
 		if win == nil {
 			return
 		}
+		done := make(chan struct{})
 		win.Update(func() {
+			defer close(done)
 			a.extensionBusy = false
 			a.extensionCancel = nil
 			a.extensionAuthURL = ""
 			a.extensionAuthCode = ""
+			a.extensionAuthQR = nil
 			if a.ctrl != ctrl {
 				return
 			}
@@ -357,6 +370,7 @@ func (a *App) authorizeLark(service string) {
 			}
 			a.extensionNote = "Authorization verified."
 		})
+		<-done // hide private authorization before allowing new agent turns
 	}()
 }
 
@@ -431,11 +445,11 @@ func (a *App) larkNextAction(helperReady bool) string {
 	return "test"
 }
 
-func larkWizardButton(c *ui.Context, label string, primary bool) ui.Element {
+func larkWizardButton(c *ui.Context, label string, primary, disabled bool) ui.Element {
 	if primary {
-		return ui.PrimaryButton(c, label)
+		return subtlePrimaryButton(c, label, disabled)
 	}
-	return ui.Button(c, label)
+	return subtleButton(c, label, disabled)
 }
 
 func (a *App) applyExtensionSetupEvent(event appsession.ExtensionSetupEvent) string {
@@ -445,17 +459,24 @@ func (a *App) applyExtensionSetupEvent(event appsession.ExtensionSetupEvent) str
 	case "authorization":
 		a.extensionAuthURL = event.VerificationURL
 		a.extensionAuthCode = event.UserCode
-		a.extensionErr = ""
-		a.extensionNote = "Authorization page opened. Complete consent in the browser; Golder is waiting for verified login."
+		a.extensionAuthQR = authorizationQR(event.VerificationURL)
+		if a.extensionAuthQR == nil {
+			a.extensionErr = "Could not display the authorization QR code."
+		} else {
+			a.extensionErr = ""
+		}
+		a.extensionNote = "Scan the QR code with your phone and complete authorization; Golder is waiting for verified login."
 		return event.VerificationURL
 	case "failure":
 		a.extensionAuthURL = ""
 		a.extensionAuthCode = ""
+		a.extensionAuthQR = nil
 		a.extensionNote = ""
 		a.extensionErr = extensionSetupFailureText(event)
 	case "complete":
 		a.extensionAuthURL = ""
 		a.extensionAuthCode = ""
+		a.extensionAuthQR = nil
 		a.extensionErr = ""
 		a.extensionNote = "Authorization verified."
 	}
@@ -525,13 +546,31 @@ func (a *App) uninstallLark() {
 }
 
 func (a *App) setGenericExtension(source appsession.ExtensionSourceView, enabled bool) {
+	if a.status.Running {
+		a.extensionErr = "Finish the current turn before changing an extension."
+		return
+	}
 	key := source.Kind + ":" + source.ID
 	if enabled && a.extensionSourceConfirm != key {
+		if source.Kind == "mcp" {
+			edit, err := a.ctrl.PrepareMCPEdit(source.ID)
+			if err != nil {
+				a.extensionErr = err.Error()
+				return
+			}
+			a.mcpApproval = &mcpRemoveState{edit: edit}
+		}
 		a.extensionSourceConfirm = key
 		a.extensionNote = "Review the executable endpoint and capabilities shown for " + key + ", then click Confirm enable."
 		return
 	}
+	if enabled && source.Kind == "mcp" {
+		// The detailed review card owns the actual confirmation button.
+		a.extensionSourceConfirm, a.mcpApproval = "", nil
+		return
+	}
 	a.extensionSourceConfirm = ""
+	a.mcpApproval = nil
 	a.runExtensionOperation("Updating "+source.Kind+":"+source.ID+"…", func(_ context.Context, ctrl *appsession.Controller) error {
 		return ctrl.SetExtensionEnabled(source.Kind, source.ID, enabled)
 	})
@@ -551,11 +590,20 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 				ui.Text(c, "Extensions").FontSize(16).FontWeight(600)
 				ui.Text(c, "Install, review, authorize and diagnose extension processes without editing TOML.").FontSize(12).TextColor(theme.TextMuted)
 			})
-			if ui.Button(c, "Refresh").Disabled(a.extensionBusy).Clicked() {
+			if subtleButton(c, "+ Add MCP", a.extensionBusy || a.mcpAdd != nil && a.mcpAdd.busy).Clicked() {
+				a.mcpAdd = newMCPAddForm()
+			}
+			if subtleButton(c, "Refresh", a.extensionBusy).Clicked() {
 				a.loadExtensionSettings()
 			}
 		})
 
+		if a.mcpAdd != nil {
+			a.mcpAddView(c)
+		}
+		if a.mcpOAuth != nil {
+			a.mcpAuthorizationView(c)
+		}
 		a.larkExtensionCard(c)
 
 		if len(a.extensionSources) > 0 {
@@ -566,7 +614,7 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 			if source.Kind == "mcp" && source.ID == "lark" {
 				continue
 			}
-			ui.Row(c.Key(source.Kind+":"+source.ID)).Padding(10, 12).Gap(8).Radius(9).Background(theme.Surface).Border(1, theme.Border).AlignItems(ui.Center).Children(func() {
+			ui.Row(c.Key(source.Kind+":"+source.ID)).Padding(10, 12).Gap(8).Radius(9).Background(theme.Surface).Border(1, theme.Border).AlignItems(ui.Center).Wrap().Children(func() {
 				ui.Column(c).Grow(1).Gap(2).Children(func() {
 					ui.Text(c, source.Kind+":"+source.ID).FontWeight(600)
 					ui.Text(c, source.Type+" · "+source.State+" · "+source.Authentication).FontSize(11).TextColor(theme.TextMuted)
@@ -574,19 +622,53 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 					ui.Text(c, fmt.Sprintf("Trust: %s · network: %t · private state: %t · executables: %d · tools: %d",
 						map[bool]string{true: "approved", false: "needs review"}[source.Trusted], source.Network, source.StateDir, source.Executables, source.Tools)).FontSize(10).TextColor(theme.TextMuted)
 				})
-				if ui.Button(c, "Test").Disabled(a.extensionBusy || !source.Enabled).Clicked() {
+				if subtleButton(c, "Test", a.extensionBusy || !source.Enabled).Clicked() {
 					a.testGenericExtension(source)
+				}
+				if source.Kind == "mcp" && strings.Contains(source.Type, "http") {
+					if subtleButton(c, "Authorize", a.extensionBusy || !source.Enabled || !source.Trusted).Clicked() {
+						a.startMCPAuthorization(source.ID)
+					}
+				}
+				if source.Kind == "mcp" {
+					if subtleButton(c, "Tools", a.extensionBusy).Clicked() {
+						if a.mcpToolsID == source.ID {
+							a.mcpToolsID = ""
+						} else {
+							a.mcpToolsID = source.ID
+						}
+					}
+					if subtleButton(c, "Edit", a.extensionBusy || a.mcpAdd != nil && a.mcpAdd.busy).Clicked() {
+						a.beginMCPEdit(source.ID)
+					}
+					removeLabel := "Remove"
+					if a.mcpRemove != nil && a.mcpRemove.edit.ID == source.ID {
+						removeLabel = "Confirm remove"
+					}
+					if subtleButton(c, removeLabel, a.extensionBusy).Clicked() {
+						a.confirmMCPRemove(source.ID)
+					}
 				}
 				label := "Enable"
 				if source.Enabled {
 					label = "Disable"
 				} else if a.extensionSourceConfirm == source.Kind+":"+source.ID {
-					label = "Confirm enable"
+					if source.Kind == "mcp" {
+						label = "Cancel review"
+					} else {
+						label = "Confirm enable"
+					}
 				}
-				if ui.Button(c, label).Disabled(a.extensionBusy).Clicked() {
+				if subtleButton(c, label, a.extensionBusy).Clicked() {
 					a.setGenericExtension(source, !source.Enabled)
 				}
 			})
+			if source.Kind == "mcp" && a.mcpToolsID == source.ID {
+				a.mcpToolsView(c, source.ID)
+			}
+			if source.Kind == "mcp" && a.mcpApproval != nil && a.mcpApproval.edit.ID == source.ID {
+				a.mcpApprovalView(c)
+			}
 		}
 	})
 }
@@ -630,7 +712,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			if a.extension.Configured {
 				installLabel = "Install & rebind"
 			}
-			if ui.PrimaryButton(c, installLabel).Disabled(a.extensionBusy).Clicked() {
+			if subtlePrimaryButton(c, installLabel, a.extensionBusy).Clicked() {
 				if a.extension.Configured {
 					a.updateLarkPackage()
 				} else {
@@ -647,7 +729,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "Active Source: "+activeVersion).FontSize(12).TextColor(map[bool]ui.Color{true: theme.Success, false: theme.Warning}[helperReady])
 		if a.extension.UpdateAvailable {
 			ui.Text(c, "Update the managed helper before authorization. Existing login state and named credentials will be preserved.").FontSize(11).TextColor(theme.Warning).Wrap()
-			if ui.PrimaryButton(c, "Update helper").Disabled(a.extensionBusy).Clicked() {
+			if subtlePrimaryButton(c, "Update helper", a.extensionBusy).Clicked() {
 				a.updateLarkPackage()
 			}
 		}
@@ -656,13 +738,13 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		extensionPathField(c, "Official lark-cli", &a.extensionEdit.LarkCLI, func() { a.chooseExtensionCLI(false) })
 		extensionPathField(c, "Project/meegle CLI (optional)", &a.extensionEdit.ProjectCLI, func() { a.chooseExtensionCLI(true) })
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if ui.Button(c, "Detect installed CLIs").Disabled(a.extensionBusy).Clicked() {
+			if subtleButton(c, "Detect installed CLIs", a.extensionBusy).Clicked() {
 				a.detectLarkCLIs()
 			}
-			if larkWizardButton(c, "Install lark-cli", next == "install-cli").Disabled(a.extensionBusy).Clicked() {
+			if larkWizardButton(c, "Install lark-cli", next == "install-cli", a.extensionBusy).Clicked() {
 				a.installOfficialLarkCLI(false)
 			}
-			if ui.Button(c, "Install Project CLI").Disabled(a.extensionBusy).Clicked() {
+			if subtleButton(c, "Install Project CLI", a.extensionBusy).Clicked() {
 				a.installOfficialLarkCLI(true)
 			}
 		})
@@ -688,7 +770,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 				}
 			}
 		})
-		if larkWizardButton(c, "Save configuration", next == "save").Disabled(a.extensionBusy).Clicked() {
+		if larkWizardButton(c, "Save configuration", next == "save", a.extensionBusy).Clicked() {
 			a.configureLark()
 		}
 
@@ -697,10 +779,10 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			FontSize(11).TextColor(theme.TextMuted).MaxWidth(650)
 		if a.extension.Configured {
 			if !a.extension.Enabled {
-				if larkWizardButton(c, "Approve & enable", next == "enable").Disabled(a.extensionBusy || !helperReady || next == "save" || next == "install-cli").Clicked() {
+				if larkWizardButton(c, "Approve & enable", next == "enable", a.extensionBusy || !helperReady || next == "save" || next == "install-cli").Clicked() {
 					a.setLarkEnabled(true)
 				}
-			} else if ui.Button(c, "Disable").Disabled(a.extensionBusy).Clicked() {
+			} else if subtleButton(c, "Disable", a.extensionBusy).Clicked() {
 				a.setLarkEnabled(false)
 			}
 		}
@@ -715,17 +797,17 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		}
 		unsaved := next == "save" || next == "install-cli"
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if larkWizardButton(c, "Authorize Lark", next == "lark").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Lark", next == "lark", a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if larkWizardButton(c, "Authorize Project", next == "project").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Project", next == "project", a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
 				a.authorizeLark("project")
 			}
-			if larkWizardButton(c, "Test connection", next == "test").Disabled(a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Test connection", next == "test", a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.testLark()
 			}
 			if a.extensionBusy && a.extensionCancel != nil {
-				if ui.Button(c, "Cancel authorization").Clicked() {
+				if subtleButton(c, "Cancel authorization").Clicked() {
 					a.extensionCancel()
 				}
 			}
@@ -734,8 +816,9 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			if a.extensionAuthCode != "" {
 				ui.Text(c, "Enter this authorization code on the Project page: "+a.extensionAuthCode).FontSize(12).Wrap()
 			}
-			if ui.Button(c, "Open authorization page again").Clicked() {
-				_ = mygo.Shell.OpenExternal(a.extensionAuthURL)
+			if a.extensionAuthQR != nil {
+				ui.Text(c, "Scan with your phone to authorize.").FontSize(12).Wrap()
+				ui.Image(c, a.extensionAuthQR).Size(200, 200)
 			}
 		}
 
@@ -745,14 +828,14 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			if a.extensionConfirm == "reset" {
 				resetLabel = "Confirm reset"
 			}
-			if ui.Button(c, resetLabel).Disabled(a.extensionBusy || !a.extension.Configured).Clicked() {
+			if subtleButton(c, resetLabel, a.extensionBusy || !a.extension.Configured).Clicked() {
 				a.resetLark()
 			}
 			uninstallLabel := "Uninstall"
 			if a.extensionConfirm == "uninstall" {
 				uninstallLabel = "Confirm uninstall"
 			}
-			if ui.Button(c, uninstallLabel).Disabled(a.extensionBusy).Clicked() {
+			if subtleButton(c, uninstallLabel, a.extensionBusy).Clicked() {
 				a.uninstallLark()
 			}
 		})
@@ -822,7 +905,7 @@ func extensionPathField(c *ui.Context, label string, value *string, choose func(
 	ui.Field(c, label, func() {
 		ui.Row(c).Gap(6).Children(func() {
 			ui.TextInput(c, value).Grow(1).Placeholder("Choose an absolute native executable")
-			if ui.Button(c, "Choose…").Clicked() {
+			if subtleButton(c, "Choose…").Clicked() {
 				choose()
 			}
 		})

@@ -31,13 +31,14 @@ type hubEntry struct {
 // persistence remain attached to their originating session while the view
 // switches between conversations.
 type SessionHub struct {
-	mu       sync.Mutex
-	switchMu sync.Mutex
-	current  *Controller
-	entries  map[string]*hubEntry
-	events   chan SessionEvent
-	done     chan struct{}
-	closed   bool
+	mu          sync.Mutex
+	switchMu    sync.Mutex
+	current     *Controller
+	entries     map[string]*hubEntry
+	events      chan SessionEvent
+	done        chan struct{}
+	closed      bool
+	authorizing bool
 }
 
 func NewSessionHub(initial *Controller) *SessionHub {
@@ -119,6 +120,10 @@ func (h *SessionHub) Resume(ctx context.Context, id string) (*Controller, error)
 		h.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if h.authorizing {
+		h.mu.Unlock()
+		return nil, errors.New("finish private authorization before switching sessions")
+	}
 	if entry := h.entries[id]; entry != nil {
 		h.current = entry.controller
 		entry.unread, entry.failed = false, false
@@ -150,6 +155,10 @@ func (h *SessionHub) NewSession(ctx context.Context, project string) (*Controlle
 		h.mu.Unlock()
 		return nil, ErrClosed
 	}
+	if h.authorizing {
+		h.mu.Unlock()
+		return nil, errors.New("finish private authorization before opening another session")
+	}
 	current := h.current
 	h.mu.Unlock()
 	peer, err := current.newPeer(ctx, "", project)
@@ -166,9 +175,13 @@ func (h *SessionHub) NewSession(ctx context.Context, project string) (*Controlle
 func (h *SessionHub) install(peer *Controller) (*Controller, error) {
 	id := peer.SessionID()
 	h.mu.Lock()
-	if h.closed {
+	if h.closed || h.authorizing {
+		authorizing := h.authorizing
 		h.mu.Unlock()
 		_ = peer.Close()
+		if authorizing {
+			return nil, errors.New("finish private authorization before opening another session")
+		}
 		return nil, ErrClosed
 	}
 	if h.entries[id] != nil {

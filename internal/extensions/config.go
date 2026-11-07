@@ -22,6 +22,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/getan/golder/extension"
+	"github.com/getan/golder/internal/filelock"
 	"github.com/getan/golder/internal/golderhome"
 )
 
@@ -41,6 +42,8 @@ type SourceConfig struct {
 	Env             map[string]string   `toml:"env,omitempty" json:"env,omitempty"`
 	EnvPassthrough  []string            `toml:"env_passthrough,omitempty" json:"env_passthrough,omitempty"`
 	Headers         map[string]string   `toml:"headers,omitempty" json:"headers,omitempty"`
+	OAuthClientID   string              `toml:"oauth_client_id,omitempty" json:"oauth_client_id,omitempty"`
+	OAuthIssuer     string              `toml:"oauth_issuer,omitempty" json:"oauth_issuer,omitempty"`
 	AllowedTools    []string            `toml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
 	DisallowedTools []string            `toml:"disallowed_tools,omitempty" json:"disallowed_tools,omitempty"`
 	StartupTimeout  string              `toml:"startup_timeout,omitempty" json:"startup_timeout,omitempty"`
@@ -119,6 +122,9 @@ func validateConfig(ref SourceRef, c SourceConfig) error {
 		return fmt.Errorf("%s: expected runtime=cli with manifest, or runtime=rpc with command", ref)
 	}
 	if c.Transport == "stdio" && c.Command != "" {
+		if c.OAuthClientID != "" || c.OAuthIssuer != "" {
+			return fmt.Errorf("%s: OAuth client settings require HTTP transport", ref)
+		}
 		return nil
 	}
 	if c.Transport != "http" {
@@ -131,6 +137,15 @@ func validateConfig(ref SourceRef, c SourceConfig) error {
 	loop := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
 	if u.Scheme != "https" && !(u.Scheme == "http" && loop) {
 		return fmt.Errorf("%s: HTTPS required except loopback HTTP", ref)
+	}
+	if len(c.OAuthClientID) > 2048 || strings.ContainsAny(c.OAuthClientID, " \t\r\n\x00") {
+		return fmt.Errorf("%s: invalid OAuth client ID", ref)
+	}
+	if c.OAuthIssuer != "" {
+		issuer, err := url.Parse(c.OAuthIssuer)
+		if c.OAuthClientID == "" || err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" || (issuer.Scheme != "https" && !(issuer.Scheme == "http" && loop && issuer.Host == u.Host)) {
+			return fmt.Errorf("%s: invalid OAuth issuer or missing client ID", ref)
+		}
 	}
 	return nil
 }
@@ -169,6 +184,43 @@ func timeout(raw string, fallback time.Duration) time.Duration {
 func WriteSource(path string, ref SourceRef, c *SourceConfig) error {
 	configWriteMu.Lock()
 	defer configWriteMu.Unlock()
+	unlock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return writeSourceLocked(path, ref, c)
+}
+
+// WriteNewSource registers only an absent source, checking and writing under
+// the same cross-process lock so concurrent CLI additions cannot overwrite it.
+func WriteNewSource(path string, ref SourceRef, c SourceConfig) error {
+	configWriteMu.Lock()
+	defer configWriteMu.Unlock()
+	unlock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, err := LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	if ref.Kind == "mcp" {
+		if _, exists := current.MCP.Servers[ref.ID]; exists {
+			return errors.New("source already configured")
+		}
+	} else if ref.Kind == "plugin" {
+		if _, exists := current.Plugins[ref.ID]; exists {
+			return errors.New("source already configured")
+		}
+	} else {
+		return errors.New("invalid kind")
+	}
+	return writeSourceLocked(path, ref, &c)
+}
+
+func writeSourceLocked(path string, ref SourceRef, c *SourceConfig) error {
 	if c != nil {
 		if err := validateConfig(ref, *c); err != nil {
 			return err

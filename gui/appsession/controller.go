@@ -166,10 +166,12 @@ type Controller struct {
 	preTurnLeaf  string
 	preTurnLabel string
 
-	running bool
-	runID   string
-	cancel  context.CancelFunc
-	runWG   sync.WaitGroup
+	running              bool
+	privateAuthorization bool
+	extensionMutation    bool
+	runID                string
+	cancel               context.CancelFunc
+	runWG                sync.WaitGroup
 
 	status Status
 	title  string

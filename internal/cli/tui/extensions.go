@@ -117,6 +117,10 @@ func (m Model) openExtensions(kind string) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
+	if kind == "mcp" || kind == "extensions" {
+		rows = append(rows, pickItem{Title: "+ Add MCP server…", Value: extensionValue("mcp-add")})
+		rows = append(rows, pickItem{Title: "+ Set up Lark + Project…", Value: extensionValue("lark-setup")})
+	}
 	if kind == "skills" {
 		rows = append(rows, pickItem{Title: "Skills · instructions only", Heading: true})
 		for _, s := range ext.SkillViews() {
@@ -163,6 +167,9 @@ func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
 		}
 		if c, err := m.opts.Extensions.Config(ref); err == nil {
 			if s.Enabled && s.Trust == "approved" {
+				if ref.Kind == "mcp" && c.Transport == "http" {
+					rows = append(rows, pickItem{Title: "Authorize in private browser…", Value: extensionValue("mcp-oauth", ref.ID), Info: info})
+				}
 				if len(c.Setup) > 0 {
 					add("Configure / authorize…", "setup")
 				}
@@ -180,6 +187,12 @@ func (m Model) extensionDetail(ref extensions.SourceRef) (tea.Model, tea.Cmd) {
 			}
 		}
 		add("View logs", "logs")
+		if ref.Kind == "mcp" {
+			if ref.ID != "lark" {
+				rows = append(rows, pickItem{Title: "Edit connection…", Value: extensionValue("mcp-edit", ref.ID), Info: info})
+			}
+			rows = append(rows, pickItem{Title: "Remove source…", Value: extensionValue("mcp-remove", ref.ID), Info: info})
+		}
 		add("Disable for this session", "disable")
 		rows = append(rows, pickItem{Title: "Disable and save", Value: extensionValue("action", ref.Kind, "disable", ref.ID, "--save"), Info: info})
 		rows = append(rows, pickItem{Title: "Back", Value: extensionValue("back")})
@@ -197,11 +210,35 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	switch v[0] {
+	case "mcp-add":
+		return m.openMCPAddPicker()
+	case "mcp-add-mode":
+		if len(v) == 2 {
+			return m.beginMCPAdd(v[1])
+		}
+	case "mcp-oauth":
+		if len(v) == 2 {
+			return m.startMCPAuthorization(v[1])
+		}
+	case "lark-setup":
+		return m.beginLarkWizard()
+	case "mcp-edit":
+		if len(v) == 2 {
+			return m.beginMCPEdit(v[1])
+		}
+	case "mcp-remove":
+		if len(v) == 2 {
+			return m.confirmMCPRemove(v[1])
+		}
+	case "mcp-remove-confirm":
+		return m.removeConfirmedMCP()
 	case "close":
+		m.mcpRemoval = nil
 		m.menu.close()
 		m.relayout()
 		return m, nil
 	case "back":
+		m.mcpRemoval = nil
 		kind := "extensions"
 		if len(v) == 2 && v[1] == "skills" {
 			kind = "skills"
@@ -245,6 +282,9 @@ func (m Model) chooseExtension(value string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		ref := extensions.SourceRef{Kind: v[1], ID: v[2]}
+		if ref.Kind == "mcp" {
+			return m.beginMCPApproval(ref.ID)
+		}
 		c, e := m.opts.Extensions.Config(ref)
 		if e != nil {
 			return m, nil

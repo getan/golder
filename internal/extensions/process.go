@@ -26,10 +26,13 @@ func DisplayText(s string, limit int) string { return clean(s, limit) }
 // logBuffer is also the CLI stdout sink: it always drains, never blocks a child
 // merely because output is larger than the retained limit.
 type logBuffer struct {
-	mu        sync.Mutex
-	data      []byte
-	limit     int
-	truncated bool
+	mu         sync.Mutex
+	data       []byte
+	limit      int
+	truncated  bool
+	secrets    []string
+	withhold   bool
+	unresolved bool
 }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
@@ -55,12 +58,12 @@ func (b *logBuffer) Write(p []byte) (int, error) {
 }
 func (b *logBuffer) String() string {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	s := string(b.data)
 	if b.truncated {
 		s = "[output truncated]\n" + s
 	}
-	return clean(s, outputLimit)
+	b.mu.Unlock()
+	return b.Clean(s, outputLimit)
 }
 
 func clean(s string, limit int) string {

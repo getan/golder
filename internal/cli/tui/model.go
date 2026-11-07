@@ -26,6 +26,7 @@ import (
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
 	"github.com/getan/golder/internal/diagtrace"
+	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/memory"
@@ -131,6 +132,11 @@ type Model struct {
 	extensionPreview    string
 	extensionSetupText  string // transient operator UI; never persisted or sent to the model
 	extensionSetupEpoch uint64
+	mcpWizard           *mcpAddWizard // transient operator input; may contain credentials
+	mcpOAuth            *mcpOAuthState
+	mcpOAuthEpoch       uint64
+	larkWizard          *larkSetupWizard // transient operator input; may contain credentials
+	mcpRemoval          *extensions.MCPEdit
 
 	// steerQ is the mid-run input queue: messages submitted while a run is in
 	// flight wait here and the run loop's steering seams deliver them (after
@@ -1011,6 +1017,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// it points at before this event reads or moves its endpoints.
 	m.syncSeedShift()
 	switch msg := msg.(type) {
+	case mcpAddDoneMsg:
+		return m.finishMCPAdd(msg)
+	case mcpOAuthReviewMsg:
+		return m.reviewMCPAuthorization(msg)
+	case mcpOAuthProgressMsg:
+		return m.progressMCPAuthorization(msg)
+	case mcpOAuthDoneMsg:
+		return m.finishMCPAuthorization(msg)
+	case larkWizardDoneMsg:
+		return m.finishLarkWizardOperation(msg)
 	case computerRequestedMsg:
 		if m.running && !m.sideRun && m.session != nil && m.session.header.ID == msg.sessionID {
 			m.computerSuggested = msg.application
@@ -1035,6 +1051,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.mcpWizard != nil {
+			m.mcpWizard.input.SetWidth(max(10, msg.Width-8))
+		}
+		if m.larkWizard != nil {
+			m.larkWizard.input.SetWidth(max(10, msg.Width-8))
+		}
 		// Re-wrapping re-indexes every content line, so a live selection would
 		// point at the wrong text: drop it (and any autoscroll loop).
 		m.sel = selection{}
@@ -1275,6 +1297,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		m.settleLogo()
+		if m.mcpOAuth != nil {
+			return m, nil
+		}
+		if m.mcpWizard != nil {
+			return m.mcpWizardPaste(msg.Content)
+		}
+		if m.larkWizard != nil {
+			return m.larkWizardPaste(msg.Content)
+		}
 		// Bracketed paste (e.g. Cmd+V / right-click paste): the terminal delivers
 		// the whole clipboard payload as one message. A multi-line paste is
 		// collapsed to a compact placeholder (expanded at submit); a single-line
@@ -1283,6 +1314,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handlePaste(msg.Content)
 
 	case tea.ClipboardMsg:
+		if m.mcpOAuth != nil {
+			return m, nil
+		}
+		if m.mcpWizard != nil {
+			return m.mcpWizardPaste(msg.Content)
+		}
+		if m.larkWizard != nil {
+			return m.larkWizardPaste(msg.Content)
+		}
 		// OSC52 clipboard read reply (from tea.ReadClipboard on Ctrl+V / Cmd+V).
 		// Route through the same collapse-or-insert path as bracketed paste.
 		return m.handlePaste(msg.Content)
@@ -1842,9 +1882,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// gate); when idle it is echoed as a user block and run — as a slash command
 		// if it starts with "/", else a normal prompt.
 		text := strings.TrimSpace(msg.text)
-		if m.running || text == "" {
-			if m.running && text != "" {
-				m.transcript.addSystem("(remote input ignored: a run is in progress)")
+		privateOperation := m.mcpWizard != nil || m.larkWizard != nil || m.mcpRemoval != nil || m.extensionSetupText != ""
+		if m.running || privateOperation || text == "" {
+			if text != "" {
+				if m.running {
+					m.transcript.addSystem("(remote input ignored: a run is in progress)")
+				} else {
+					m.transcript.addSystem("(remote input ignored: a private operation is in progress)")
+				}
 				m.relayout()
 			}
 			return m, m.waitRemoteInput()
@@ -1882,6 +1927,15 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// emergency brake, not an app-level action.
 	if msg.String() == "ctrl+z" {
 		return m, tea.Suspend
+	}
+	if m.mcpOAuth != nil {
+		return m.handleMCPAuthorizationKey(msg)
+	}
+	if m.mcpWizard != nil {
+		return m.handleMCPWizardKey(msg)
+	}
+	if m.larkWizard != nil {
+		return m.handleLarkWizardKey(msg)
 	}
 	// A pending tool-call approval owns every key except Ctrl+C: the decision
 	// must not be dismissed or answered accidentally, and typing behind it
@@ -3999,6 +4053,15 @@ func (m Model) View() tea.View {
 	}
 	if m.extensionSetupText != "" {
 		return tea.View{Content: "Extension authorization · operator-only\n\n" + m.extensionSetupText + "\n\nCtrl+C cancels. Authorization content is not sent to the model or session history.", AltScreen: true}
+	}
+	if m.mcpOAuth != nil {
+		return tea.View{Content: m.mcpOAuth.view(), AltScreen: true}
+	}
+	if m.mcpWizard != nil {
+		return tea.View{Content: m.mcpWizard.view(m.width, m.height), AltScreen: true}
+	}
+	if m.larkWizard != nil {
+		return tea.View{Content: m.larkWizard.view(), AltScreen: true}
 	}
 
 	content, inputRow := m.renderContent()

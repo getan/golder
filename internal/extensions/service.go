@@ -16,8 +16,10 @@ import (
 	"github.com/getan/golder/extension"
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/golderhome"
+	"github.com/getan/golder/internal/mcpauth"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/pluginwire"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 type Item struct {
@@ -140,6 +142,7 @@ func New(opts Options) (*Manager, error) {
 			c.stateHome = sourceHome(ref)
 		}
 		s := &source{ref: ref, cfg: c, state: "disconnected", auth: "not-required"}
+		s.logs.registerConfigSecrets(c)
 		s.enabled.Store(c.Enabled && !opts.NoTools)
 		var fp string
 		err := validateConfig(ref, c)
@@ -147,6 +150,17 @@ func New(opts Options) (*Manager, error) {
 			fp, err = fingerprint(ref, c, opts.Cwd)
 		}
 		s.fingerprint = fp
+		if fp != "" && ref.Kind == "mcp" && c.Transport == "http" && !hasAuthorizationHeader(c.Headers) {
+			oauthFP, authErr := fingerprint(ref, c, "")
+			if authErr == nil {
+				_, authErr = mcpauth.Stored(ref.String(), oauthFP, c.URL, s.logs.AddSecrets)
+			}
+			if authErr != nil {
+				s.logs.mu.Lock()
+				s.logs.unresolved = true
+				s.logs.mu.Unlock()
+			}
+		}
 		if err != nil {
 			s.state = "failed"
 			s.lastError = clean(err.Error(), 2048)
@@ -154,7 +168,7 @@ func New(opts Options) (*Manager, error) {
 		if p, ok := saved[ref.String()]; ok {
 			s.approval = p.Approval
 			s.storedApproval = p.Approval
-			if p.Fingerprint == fp && fp != "" {
+			if p.Fingerprint == fp && fp != "" && s.logs.safeCatalog(p.Catalog) {
 				s.catalog = p.Catalog
 			}
 		}
@@ -353,6 +367,10 @@ func (m *Manager) Disconnect(ref SourceRef) error {
 }
 
 func (m *Manager) connectLocked(ctx context.Context, s *source) error {
+	return m.connectLockedWithOAuth(ctx, s, nil, false)
+}
+
+func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth auth.OAuthHandler, interactive bool) error {
 	defer m.publish(s)
 	if e := validateConfig(s.ref, s.cfg); e != nil {
 		return e
@@ -370,20 +388,36 @@ func (m *Manager) connectLocked(ctx context.Context, s *source) error {
 	if s.conn != nil {
 		return nil
 	}
+	s.logs.registerConfigSecrets(s.cfg)
+	if s.ref.Kind == "mcp" && s.cfg.Transport == "http" && oauth == nil && !hasAuthorizationHeader(s.cfg.Headers) {
+		oauthFP, authErr := fingerprint(s.ref, s.cfg, "")
+		if authErr != nil {
+			return authErr
+		}
+		oauth, e = mcpauth.Stored(s.ref.String(), oauthFP, s.cfg.URL, s.logs.AddSecrets)
+		if e != nil {
+			return e
+		}
+	}
 	s.state = "connecting"
 	m.publish(s)
 	life, cancel := context.WithCancel(m.ctx)
 	s.cancel = cancel
 	s.life = life
 	s.interrupt.Store(&cancel)
-	initCtx, stop := context.WithTimeout(ctx, timeout(s.cfg.StartupTimeout, 15*time.Second))
+	initTimeout := timeout(s.cfg.StartupTimeout, 15*time.Second)
+	if interactive {
+		initTimeout = 5 * time.Minute
+	}
+	initCtx, stop := context.WithTimeout(ctx, initTimeout)
 	defer stop()
-	b, e := openBackend(initCtx, life, s.cfg, m.opts.Cwd, &s.logs, func() { s.dirty.Store(true) })
+	b, e := openBackend(initCtx, life, s.cfg, m.opts.Cwd, &s.logs, func() { s.dirty.Store(true) }, oauth)
 	if e != nil {
 		cancel()
 		s.state = "failed"
-		s.lastError = clean(e.Error(), 2048)
-		if strings.Contains(e.Error(), "authentication") {
+		s.lastError = s.logs.Clean(e.Error(), 2048)
+		failure := strings.ToLower(e.Error())
+		if strings.Contains(failure, "authentication") || strings.Contains(failure, "unauthorized") || strings.Contains(failure, "401") {
 			s.auth = "required"
 		}
 		return errors.New(s.lastError)
@@ -393,7 +427,13 @@ func (m *Manager) connectLocked(ctx context.Context, s *source) error {
 		cancel()
 		_ = b.Close()
 		s.state = "failed"
-		s.lastError = clean(e.Error(), 2048)
+		s.lastError = s.logs.Clean(e.Error(), 2048)
+		return errors.New(s.lastError)
+	}
+	if !s.logs.safeCatalog(cat) {
+		cancel()
+		_ = b.Close()
+		s.state, s.lastError = "failed", "extension catalog contains a credential and was withheld"
 		return errors.New(s.lastError)
 	}
 	if !s.enabled.Load() || m.closed.Load() {
@@ -408,6 +448,11 @@ func (m *Manager) connectLocked(ctx context.Context, s *source) error {
 		s.state = "on demand"
 	}
 	s.lastError = ""
+	if oauth != nil {
+		if tokenSource, err := oauth.TokenSource(ctx); err == nil && tokenSource != nil {
+			s.auth = "verified"
+		}
+	}
 	s.dirty.Store(false)
 	m.revision.Add(1)
 	return nil
@@ -426,6 +471,62 @@ func (m *Manager) Connect(ctx context.Context, ref SourceRef) error {
 	}
 	return m.save()
 }
+
+func hasAuthorizationHeader(headers map[string]string) bool {
+	for name := range headers {
+		if strings.EqualFold(name, "Authorization") {
+			return true
+		}
+	}
+	return false
+}
+
+// AuthorizeMCP runs an explicitly requested, operator-controlled OAuth flow.
+// It is never called by tool execution or ordinary connection attempts.
+func (m *Manager) AuthorizeMCP(ctx context.Context, ref SourceRef, open mcpauth.Open) error {
+	s, err := m.get(ref)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if ref.Kind != "mcp" || s.cfg.Transport != "http" {
+		s.mu.Unlock()
+		return errors.New("OAuth authorization requires a remote HTTP MCP server")
+	}
+	if hasAuthorizationHeader(s.cfg.Headers) {
+		s.mu.Unlock()
+		return errors.New("remove the configured Authorization header before using OAuth")
+	}
+	if !s.enabled.Load() || s.approval == "" || s.approval != s.fingerprint {
+		s.mu.Unlock()
+		return errors.New("review and enable the MCP server before authorizing")
+	}
+	if s.conn != nil {
+		s.mu.Unlock()
+		return errors.New("disconnect the MCP server before authorizing again")
+	}
+	// The source approval remains project-bound, but the credential belongs to
+	// the same global HTTP definition across projects. Exclude only cwd from the
+	// OAuth key; the full config and declared executable bytes remain bound.
+	oauthFP, err := fingerprint(ref, s.cfg, "")
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	flow, err := mcpauth.NewWithClient(ref.String(), oauthFP, s.cfg.URL, mcpauth.Registration{ClientID: s.cfg.OAuthClientID, Issuer: s.cfg.OAuthIssuer}, open, s.logs.AddSecrets)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	err = m.connectLockedWithOAuth(ctx, s, flow, true)
+	flow.Close()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return m.save()
+}
+
 func (m *Manager) Refresh(ctx context.Context, ref SourceRef) error {
 	s, e := m.get(ref)
 	if e != nil {
@@ -436,6 +537,9 @@ func (m *Manager) Refresh(ctx context.Context, ref SourceRef) error {
 	if e == nil {
 		var cat Catalog
 		cat, e = s.conn.Catalog(ctx)
+		if e == nil && !s.logs.safeCatalog(cat) {
+			e = errors.New("extension catalog contains a credential and was withheld")
+		}
 		if e == nil {
 			s.catalog = cat
 			s.dirty.Store(false)
@@ -617,7 +721,11 @@ func (m *Manager) Prompt(ctx context.Context, ref SourceRef, name string, args m
 	if e = m.connectLocked(ctx, s); e != nil {
 		return "", e
 	}
-	return s.conn.GetPrompt(ctx, name, args)
+	result, err := s.conn.GetPrompt(ctx, name, args)
+	if err != nil {
+		return "", errors.New(s.logs.Clean(err.Error(), 2048))
+	}
+	return s.logs.Clean(result, outputLimit), nil
 }
 func (m *Manager) Resource(ctx context.Context, ref SourceRef, uri string) (string, error) {
 	s, e := m.get(ref)
@@ -629,7 +737,11 @@ func (m *Manager) Resource(ctx context.Context, ref SourceRef, uri string) (stri
 	if e = m.connectLocked(ctx, s); e != nil {
 		return "", e
 	}
-	return s.conn.ReadResource(ctx, uri)
+	result, err := s.conn.ReadResource(ctx, uri)
+	if err != nil {
+		return "", errors.New(s.logs.Clean(err.Error(), 2048))
+	}
+	return s.logs.Clean(result, outputLimit), nil
 }
 
 func (m *Manager) Close() error {

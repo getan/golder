@@ -82,6 +82,11 @@ func SetDefaultModel(model, thinkingLevel, providerName string) error {
 	if path == "" {
 		return fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read config %s: %w", path, err)
@@ -116,6 +121,11 @@ func SetDefaultThinkingLevel(thinkingLevel string) error {
 	if path == "" {
 		return fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read config %s: %w", path, err)
@@ -145,6 +155,11 @@ func SetDefaultThinkingLevelFor(providerName, model, level string) error {
 	if path == "" {
 		return fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	providerName = strings.TrimSpace(providerName)
 	model = strings.TrimSpace(model)
 	if providerName == "" || model == "" {
@@ -183,6 +198,11 @@ func SetDefaultModelFor(providerName, model, thinkingLevel string) error {
 	if path == "" {
 		return fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	providerName = strings.TrimSpace(providerName)
 	model = strings.TrimSpace(model)
 	if providerName == "" {

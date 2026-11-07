@@ -85,6 +85,14 @@ func (c *Controller) submitAttachments(ctx context.Context, text string, attachm
 		c.mu.Unlock()
 		return ErrBusy
 	}
+	if c.privateAuthorization {
+		c.mu.Unlock()
+		return errors.New("finish private authorization before starting an agent turn")
+	}
+	if c.extensionMutation {
+		c.mu.Unlock()
+		return errors.New("finish the extension operation before starting an agent turn")
+	}
 	agentCtx := c.agentCtx
 	dispatcher := c.dispatcher
 	deps := c.hookDeps

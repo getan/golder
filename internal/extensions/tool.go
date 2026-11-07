@@ -93,6 +93,9 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 	if e != nil {
 		return fail(e.Error())
 	}
+	fail = func(msg string) (agentcore.AgentToolResult, error) {
+		return agentcore.AgentToolResult{IsError: true, Content: agentcore.ContentList{agentcore.NewTextContent(s.logs.Clean(msg, 8192))}}, nil
+	}
 	if s != t.origin && (t.isLarkSource(t.origin) || t.isLarkSource(s)) {
 		return fail("Lark source changed since this tool was registered; refresh the catalog before executing")
 	}
@@ -151,34 +154,46 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 			return
 		}
 		last = time.Now()
-		update(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(clean(p.Message, 1024))}})
+		update(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(s.logs.Clean(p.Message, 1024))}})
 	}
 	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args,
 		OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args),
 		PolicyApproved:    requirePolicy && agentcore.PolicyApprovedFor(ctx, id, t.name, args)}, report)
 	if e != nil {
-		s.lastError = clean(e.Error(), 2048)
+		s.lastError = s.logs.Clean(e.Error(), 2048)
 		s.state = "failed"
 		return fail("extension call failed; execution outcome may be unknown: " + s.lastError)
 	}
-	return agentResult(r), nil // terminal result, never retry in the generic executor
+	return agentResultForSource(r, &s.logs), nil // terminal result, never retry in the generic executor
 }
 
 func agentResult(r extension.Result) agentcore.AgentToolResult {
+	return agentResultForSource(r, nil)
+}
+
+func agentResultForSource(r extension.Result, logs *logBuffer) agentcore.AgentToolResult {
+	filter := clean
+	if logs != nil {
+		filter = logs.Clean
+	}
 	out := agentcore.AgentToolResult{IsError: r.IsError}
 	for _, b := range r.Content {
 		switch b.Type {
 		case "image":
 			out.Content = append(out.Content, agentcore.NewImageContent(b.Data, b.MIMEType))
 		case "resource_link":
-			out.Content = append(out.Content, agentcore.NewTextContent(clean(b.Text+" "+b.URI, 4096)))
+			out.Content = append(out.Content, agentcore.NewTextContent(filter(b.Text+" "+b.URI, 4096)))
 		default:
-			out.Content = append(out.Content, agentcore.NewTextContent(clean(b.Text, outputLimit)))
+			out.Content = append(out.Content, agentcore.NewTextContent(filter(b.Text, outputLimit)))
 		}
 	}
 	if len(r.StructuredContent) > 0 {
-		out.Details = map[string]any{"structuredContent": r.StructuredContent}
-		out.Content = append(out.Content, agentcore.NewTextContent(clean(string(r.StructuredContent), outputLimit)))
+		if logs != nil && logs.ContainsSecretJSON(r.StructuredContent) {
+			out.Content = append(out.Content, agentcore.NewTextContent("[structured content withheld: contains a credential]"))
+		} else {
+			out.Details = map[string]any{"structuredContent": r.StructuredContent}
+			out.Content = append(out.Content, agentcore.NewTextContent(filter(string(r.StructuredContent), outputLimit)))
+		}
 	}
 	if len(out.Content) == 0 {
 		out.Content = agentcore.ContentList{agentcore.NewTextContent("(no content)")}

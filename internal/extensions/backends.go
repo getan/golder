@@ -16,10 +16,11 @@ import (
 	"github.com/getan/golder/extension"
 	"github.com/getan/golder/internal/jsonrpc"
 	"github.com/getan/golder/internal/pluginwire"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *logBuffer, dirty func()) (backend, error) {
+func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *logBuffer, dirty func(), oauth auth.OAuthHandler) (backend, error) {
 	if c.Runtime == "cli" {
 		mf, e := loadManifest(expandPath(c.Manifest))
 		return &cliBackend{mf: mf, cfg: c, cwd: cwd, logs: logs}, e
@@ -77,7 +78,7 @@ func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *lo
 			}
 			headers.Set(key, v)
 		}
-		transport = &mcp.StreamableClientTransport{Endpoint: c.URL, HTTPClient: &http.Client{Transport: &headerTransport{base: http.DefaultTransport, headers: headers}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("MCP redirects are disabled") }}}
+		transport = &mcp.StreamableClientTransport{Endpoint: c.URL, OAuthHandler: oauth, HTTPClient: &http.Client{Transport: &headerTransport{base: http.DefaultTransport, headers: headers}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("MCP redirects are disabled") }}}
 	} else {
 		cmd, cleanup, e := prepareCommand(life, c, cwd, append([]string{c.Command}, c.Args...), logs)
 		if e != nil {

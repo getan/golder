@@ -153,7 +153,7 @@ func TestExtensionReviewDoesNotConnectOrEnable(t *testing.T) {
 			t.Fatal("review granted authority")
 		}
 	}
-	if len(m.menu.pick) < 2 || !strings.Contains(m.menu.pick[1].Title, "Approve") {
+	if m.mcpWizard == nil || !m.mcpWizard.approvalOnly || !strings.Contains(m.View().Content, "Enter approve") {
 		t.Fatal("missing explicit confirmation")
 	}
 }

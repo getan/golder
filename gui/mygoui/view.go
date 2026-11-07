@@ -56,8 +56,16 @@ func (a *App) view(c *ui.Context) {
 		a.extensionEdit.NewAppSecret = ""
 		a.extensionAuthURL = ""
 		a.extensionAuthCode = ""
+		a.extensionAuthQR = nil
 		a.extensionConfirm = ""
 		a.extensionSourceConfirm = ""
+		a.mcpAdd = nil
+		a.mcpRemove = nil
+		a.mcpApproval = nil
+		a.mcpToolsID = ""
+		if a.mcpOAuth != nil && a.mcpOAuth.cancel != nil {
+			a.mcpOAuth.cancel()
+		}
 		if a.extensionCancel != nil {
 			a.extensionCancel()
 			a.extensionCancel = nil

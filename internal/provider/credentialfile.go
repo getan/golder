@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/getan/golder/internal/filelock"
 	"github.com/getan/golder/internal/golderhome"
 )
 
@@ -26,6 +28,37 @@ const (
 )
 
 var credentialFileMu sync.Mutex
+
+var ErrCredentialExists = errors.New("named credential already exists")
+
+// CreateCredential writes a new named credential without overwriting an
+// existing value, including when another process creates the name concurrently.
+func CreateCredential(path, name, value string) error {
+	name = strings.TrimSpace(name)
+	value = strings.TrimSpace(value)
+	if err := validCredentialName(name); err != nil {
+		return err
+	}
+	if value == "" {
+		return fmt.Errorf("credential %q: empty value", name)
+	}
+	credentialFileMu.Lock()
+	defer credentialFileMu.Unlock()
+	unlock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	creds, err := loadCredentialFileOrEmpty(path)
+	if err != nil {
+		return err
+	}
+	if _, exists := creds[name]; exists {
+		return ErrCredentialExists
+	}
+	creds[name] = value
+	return writeCredentialFile(path, creds)
+}
 
 // SaveCredential atomically creates or replaces one named credential. The
 // containing directory is private and the resulting file is always mode 0600.
@@ -41,6 +74,11 @@ func SaveCredential(path, name, value string) error {
 	}
 	credentialFileMu.Lock()
 	defer credentialFileMu.Unlock()
+	unlock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	creds, err := loadCredentialFileOrEmpty(path)
 	if err != nil {
 		return err
@@ -58,6 +96,11 @@ func DeleteCredential(path, name string) error {
 	}
 	credentialFileMu.Lock()
 	defer credentialFileMu.Unlock()
+	unlock, err := filelock.Acquire(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	creds, err := loadCredentialFileOrEmpty(path)
 	if err != nil {
 		return err

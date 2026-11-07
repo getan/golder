@@ -3,9 +3,14 @@ package extensions
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 )
+
+// ErrSourceCommitted reports that disk configuration was saved but the live
+// manager could not adopt it; callers must retain any newly referenced secret.
+var ErrSourceCommitted = errors.New("source saved but live update failed")
 
 // ConfigureSource installs or replaces one already-reviewed source definition
 // in this Manager. It does not approve, enable or execute the source. Callers
@@ -36,6 +41,7 @@ func (m *Manager) ConfigureSource(ref SourceRef, cfg SourceConfig) error {
 		cfg.stateHome = sourceHome(ref)
 	}
 	s := &source{ref: ref, cfg: cfg, fingerprint: fp, state: "disconnected", auth: "not-required"}
+	s.logs.registerConfigSecrets(cfg)
 	s.enabled.Store(false) // configuration is never authority
 	if len(cfg.Headers) > 0 || len(cfg.Env) > 0 {
 		s.auth = "configured"
@@ -66,6 +72,23 @@ func (m *Manager) ReplaceSourceConfig(ref SourceRef, cfg SourceConfig) error {
 	}
 	if err := validateConfig(ref, cfg); err != nil {
 		return err
+	}
+	if ref.Kind == "mcp" {
+		if m.HasSource(ref) {
+			reviewed, err := m.PrepareMCPEdit(ref.ID)
+			if err != nil {
+				return err
+			}
+			return m.ReplaceReviewedMCP(reviewed, cfg)
+		}
+		cfg.Enabled = false
+		if err := WriteNewSource(m.opts.ConfigPath, ref, cfg); err != nil {
+			return err
+		}
+		if err := m.ConfigureSource(ref, cfg); err != nil {
+			return fmt.Errorf("%w: %v", ErrSourceCommitted, err)
+		}
+		return nil
 	}
 	if err := WriteSource(m.opts.ConfigPath, ref, &cfg); err != nil {
 		return err

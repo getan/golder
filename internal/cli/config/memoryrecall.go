@@ -18,6 +18,11 @@ func SetMemoryRecall(on bool) error {
 	if path == "" {
 		return fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read config %s: %w", path, err)

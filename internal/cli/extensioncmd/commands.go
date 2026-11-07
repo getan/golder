@@ -164,6 +164,14 @@ func Execute(ctx context.Context, m *extensions.Manager, kind string, args []str
 		if !contains(args[2:], "--yes") {
 			return Response{}, errors.New("enable requires explicit approval: inspect the source, then enable <id> --yes")
 		}
+		if ref.Kind == "mcp" {
+			var reviewed extensions.MCPEdit
+			reviewed, err = m.PrepareMCPEdit(ref.ID)
+			if err == nil {
+				err = m.EnableReviewedMCP(reviewed, contains(args[2:], "--save"))
+			}
+			break
+		}
 		if contains(args[2:], "--save") {
 			err = m.Approve(ref)
 		} else {
@@ -173,7 +181,15 @@ func Execute(ctx context.Context, m *extensions.Manager, kind string, args []str
 			err = m.Enable(ref)
 		}
 	case "disable":
-		err = m.Disable(ref)
+		if ref.Kind == "mcp" && contains(args[2:], "--save") {
+			var reviewed extensions.MCPEdit
+			reviewed, err = m.PrepareMCPEdit(ref.ID)
+			if err == nil {
+				err = m.DisableReviewedMCP(reviewed)
+			}
+		} else {
+			err = m.Disable(ref)
+		}
 	case "connect", "test":
 		err = m.Connect(ctx, ref)
 	case "disconnect":
@@ -208,7 +224,7 @@ func Execute(ctx context.Context, m *extensions.Manager, kind string, args []str
 	if err != nil {
 		return Response{}, err
 	}
-	if contains(args[2:], "--save") && (op == "enable" || op == "disable") {
+	if ref.Kind != "mcp" && contains(args[2:], "--save") && (op == "enable" || op == "disable") {
 		c, e := m.Config(ref)
 		if e != nil {
 			return Response{}, e
@@ -318,18 +334,7 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 		} else {
 			return fail(errors.New("use plugin add or mcp add"))
 		}
-		cfg, e := extensions.LoadConfig(extensions.ConfigPath())
-		if e != nil {
-			return fail(e)
-		}
-		_, exists := cfg.Plugins[ref.ID]
-		if kind == "mcp" {
-			_, exists = cfg.MCP.Servers[ref.ID]
-		}
-		if exists {
-			return fail(errors.New("source already configured"))
-		}
-		if e = extensions.WriteSource(extensions.ConfigPath(), ref, &c); e != nil {
+		if e := extensions.WriteNewSource(extensions.ConfigPath(), ref, c); e != nil {
 			return fail(e)
 		}
 		if j {
@@ -367,6 +372,37 @@ func Run(kind string, args []string, in io.Reader, out, errOut io.Writer) int {
 	}
 	ref := extensions.SourceRef{Kind: kind, ID: pos[1]}
 	if op == "enable" || op == "disable" || op == "remove" {
+		if kind == "mcp" {
+			reviewed, e := m.PrepareMCPEdit(ref.ID)
+			if e != nil {
+				return fail(e)
+			}
+			if op == "enable" && !yes {
+				fmt.Fprintln(errOut, "Approve", ref, "? This permits third-party code/connection inside its configured launch ceiling.")
+				fmt.Fprintln(errOut, "Run inspect first; type yes to approve:")
+				line, _ := bufio.NewReader(in).ReadString('\n')
+				if strings.TrimSpace(line) != "yes" {
+					return fail(errors.New("not approved"))
+				}
+			}
+			switch op {
+			case "enable":
+				e = m.EnableReviewedMCP(reviewed, true)
+			case "disable":
+				e = m.DisableReviewedMCP(reviewed)
+			case "remove":
+				e = m.RemoveMCP(reviewed)
+			}
+			if e != nil {
+				return fail(e)
+			}
+			if j {
+				_ = json.NewEncoder(out).Encode(map[string]any{"source": ref, "action": op})
+			} else {
+				fmt.Fprintln(out, ref, op+" saved; applies to future sessions")
+			}
+			return 0
+		}
 		c, e := m.Config(ref)
 		if e != nil {
 			return fail(e)

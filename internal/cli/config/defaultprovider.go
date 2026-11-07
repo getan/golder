@@ -48,6 +48,11 @@ func SetDefaultProvider(name, model string) (bool, error) {
 	if path == "" {
 		return false, fmt.Errorf("cannot locate the config directory")
 	}
+	unlock, err := lockConfigFile(path)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	name = strings.TrimSpace(name)
 	model = strings.TrimSpace(model)
 
