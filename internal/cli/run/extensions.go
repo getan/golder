@@ -12,6 +12,9 @@ import (
 
 type SetupOptions struct {
 	NoExtensions bool
+	// NoTuios excludes the terminal multiplexer tools, including from task
+	// children, even when the process inherited a tuios environment.
+	NoTuios bool
 	// Cwd overrides the process working directory for this assembled environment
 	// without calling os.Chdir. Desktop projects use it to keep multiple project
 	// roots in one process; CLI callers leave it empty.

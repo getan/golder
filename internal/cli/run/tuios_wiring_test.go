@@ -37,6 +37,36 @@ func TestBuiltinToolsAdvertiseTuiosOnlyInAPane(t *testing.T) {
 	}
 }
 
+func TestSetupEnvCanExcludeTuiosForGUI(t *testing.T) {
+	t.Setenv("TUIOS_SOCKET", "/tmp/tuios.sock")
+	t.Setenv("TUIOS_SESSION", "work")
+	t.Setenv("TUIOS_ENV", "1")
+	t.Setenv("TUIOS_PANE_ID", "w1")
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	env, err := SetupEnv("openrouter/free", "", "", "", "", false, true, "", nil, false,
+		ToolPolicy{}, SetupOptions{Cwd: t.TempDir(), NoExtensions: true, NoTuios: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Extensions != nil {
+		defer env.Extensions.Close()
+	}
+	if env.Memory != nil {
+		defer env.Memory.Close()
+	}
+	for _, tool := range env.Tools {
+		if tool.Name() == "tuios" || tool.Name() == "workspace" {
+			t.Fatalf("GUI advertised %q in an inherited tuios environment", tool.Name())
+		}
+	}
+	for _, tool := range withoutTuiosTools(ChildToolSet(t.TempDir(), ToolPolicy{})) {
+		if tool.Name() == "tuios" || tool.Name() == "workspace" {
+			t.Fatalf("GUI child advertised %q", tool.Name())
+		}
+	}
+}
+
 func TestChildToolSetKeepsTuiosReadsButNotPaneWrites(t *testing.T) {
 	t.Setenv("TUIOS_SOCKET", "/tmp/tuios.sock")
 	t.Setenv("TUIOS_SESSION", "work")

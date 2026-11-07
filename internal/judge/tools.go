@@ -126,6 +126,7 @@ var tools = map[string]toolInfo{
 	// The tuios facade decides read-only by ACTION, not by tool name; see
 	// readOnlyAllowedCall. The zero entry keeps the name known to the table.
 	"tuios":     {paths: func(raw json.RawMessage) []string { return facadePaths("tuios", raw) }},
+	"terminal":  {paths: func(raw json.RawMessage) []string { return facadePaths("terminal", raw) }},
 	"workspace": {paths: func(raw json.RawMessage) []string { return facadePaths("workspace", raw) }},
 }
 
@@ -166,7 +167,7 @@ func readOnlyAllowed(name string) bool {
 // read and control actions, so /permissions read-only must inspect its action
 // instead of treating the whole tool as writable.
 func readOnlyAllowedCall(name string, args json.RawMessage) bool {
-	if strings.EqualFold(strings.TrimSpace(name), "tuios") {
+	if strings.EqualFold(strings.TrimSpace(name), "tuios") || strings.EqualFold(strings.TrimSpace(name), "terminal") {
 		var a struct {
 			Action string `json:"action"`
 		}
@@ -174,8 +175,10 @@ func readOnlyAllowedCall(name string, args json.RawMessage) bool {
 			return false
 		}
 		switch strings.ToLower(strings.TrimSpace(a.Action)) {
-		case "list", "capture", "wait", "revoke":
+		case "list", "capture", "wait":
 			return true
+		case "revoke":
+			return strings.EqualFold(strings.TrimSpace(name), "tuios")
 		}
 		return false
 	}

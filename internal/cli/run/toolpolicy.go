@@ -222,6 +222,16 @@ func nameSet(names []string) map[string]struct{} {
 	return set
 }
 
+func withoutTuiosTools(tools []agentcore.AgentTool) []agentcore.AgentTool {
+	out := make([]agentcore.AgentTool, 0, len(tools))
+	for _, tool := range tools {
+		if tool.Name() != "tuios" && tool.Name() != "workspace" {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
 // ChildToolSet builds the tool set for a task sub-agent: the builtins with
 // "task" removed (the nesting guard capping delegation depth at one), narrowed by
 // the parent's policy.

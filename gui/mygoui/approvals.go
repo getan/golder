@@ -32,7 +32,7 @@ func (a *App) approvalCard(c *ui.Context, p appsession.ApprovalView) {
 			ui.Text(c, "Trust "+p.TrustDir+"?").FontSize(12)
 		}
 		if p.Summary != "" {
-			ui.Text(c, p.Summary).FontSize(12).Selectable()
+			ui.Text(c, p.Summary).FontSize(12).Selectable().Wrap()
 		}
 		if len(p.Needs) > 0 {
 			ui.Text(c, "Needs: "+strings.Join(p.Needs, ", ")).FontSize(11).TextColor(t.TextMuted)
@@ -47,8 +47,10 @@ func (a *App) approvalCard(c *ui.Context, p appsession.ApprovalView) {
 			if ui.Button(c, "Allow once").Clicked() {
 				a.respond(p.ID, appsession.AnswerOnce)
 			}
-			if ui.PrimaryButton(c, "Always this session").Clicked() {
-				a.respond(p.ID, appsession.AnswerSession)
+			if p.Tool != "terminal" {
+				if ui.PrimaryButton(c, "Always this session").Clicked() {
+					a.respond(p.ID, appsession.AnswerSession)
+				}
 			}
 		})
 	})

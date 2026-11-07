@@ -51,6 +51,7 @@ var SideEffectTools = map[string]bool{
 	"bash":        true,
 	"apply_patch": true,
 	"tuios":       true,
+	"terminal":    true,
 	"workspace":   true,
 	"browser":     true,
 }

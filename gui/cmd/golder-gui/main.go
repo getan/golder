@@ -105,7 +105,7 @@ func main() {
 		}
 		return run.SetupEnv(
 			setup.Model, setup.BaseURL, setup.Protocol, setup.ProviderName, setup.APIKey,
-			*noTools, *noSkills, "", nil, memoryEnabled, run.ToolPolicy{}, run.SetupOptions{Cwd: cwd},
+			*noTools, *noSkills, "", nil, memoryEnabled, run.ToolPolicy{}, run.SetupOptions{Cwd: cwd, NoTuios: true},
 		)
 	}
 	env, err := projectFactory(context.Background(), wd, appsession.ProjectSetup{
@@ -139,6 +139,7 @@ func main() {
 		MaxContext:     maxContext,
 		Memory:         env.Memory,
 		ProjectFactory: projectFactory,
+		GUI:            true,
 		Cwd:            env.Cwd,
 		Warn:           os.Stderr,
 	})

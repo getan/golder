@@ -349,7 +349,7 @@ func SandboxGate() func(toolName string) bool {
 	}
 	return func(toolName string) bool {
 		switch strings.ToLower(strings.TrimSpace(toolName)) {
-		case "bash", "read", "view_image", "grep", "find", "ls", "apply_patch", "tuios", "workspace", "browser":
+		case "bash", "read", "view_image", "grep", "find", "ls", "apply_patch", "tuios", "terminal", "workspace", "browser":
 			return true
 		}
 		return false

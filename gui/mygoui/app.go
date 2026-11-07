@@ -18,6 +18,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/gui/terminalaccess"
 	"github.com/getan/golder/internal/computeruse"
 )
 
@@ -109,6 +110,27 @@ type App struct {
 	paletteQuery string
 	paletteSel   int
 	actions      []appsession.Action
+
+	terminalOpen         bool
+	terminalSplit        float32
+	terminalSeq          uint64
+	terminals            map[string]*terminalProject
+	terminalAccess       *terminalaccess.Registry
+	terminalAgentSeq     uint64
+	terminalAgents       map[*appsession.Controller]*terminalAgent
+	terminalGrantPane    *terminalPane
+	terminalGrantAgent   *terminalAgent
+	terminalGrantRead    bool
+	terminalGrantOpen    bool
+	terminalClosePane    *terminalPane
+	terminalCloseOpen    bool
+	terminalRenamePane   *terminalPane
+	terminalRenameDraft  string
+	terminalRenameOpen   bool
+	terminalExitOpen     bool
+	terminalExitApproved bool
+	terminalShuttingDown bool
+	terminalShutdownDone bool
 
 	changesOpen bool
 	changesView appsession.ChangeView
@@ -220,6 +242,18 @@ func (a *App) Run() error {
 			StateKey:  "golder-gui-main",
 			Content:   ui.View(a.view),
 		})
+		a.win.OnClose(func(event *mygo.CloseEvent) {
+			if !a.terminalExitApproved && a.hasRunningTerminals() {
+				event.PreventDefault()
+				a.terminalExitOpen = true
+				a.win.Invalidate()
+				return
+			}
+			if !a.terminalShutdownDone {
+				event.PreventDefault()
+				a.beginTerminalShutdown()
+			}
+		})
 		a.win.OnClosed(func() {
 			authBusy := a.mcpOAuth != nil && a.mcpOAuth.cancel != nil || a.extensionCancel != nil
 			if a.mcpOAuth != nil && a.mcpOAuth.cancel != nil {
@@ -234,6 +268,7 @@ func (a *App) Run() error {
 			}
 			a.closeBrowserPanel()
 			a.stopComputer()
+			a.closeTerminals()
 			if authBusy {
 				// Authorization teardown may need the UI thread to destroy its
 				// private web view. Do not block that thread waiting for the hub.
@@ -242,6 +277,7 @@ func (a *App) Run() error {
 				_ = a.hub.Close()
 			}
 		})
+		a.registerTerminalAgent(a.ctrl)
 		go a.pump()
 		a.refreshProjects()
 		a.refreshSessions()
@@ -964,6 +1000,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.parkComputerPanel()
 	a.closeBrowserPanel()
 	a.ctrl = peer
+	a.registerTerminalAgent(peer)
 	a.thinkingOpen, a.toolOpen, a.approvalOpen = map[string]bool{}, map[string]bool{}, map[string]bool{}
 	a.modelRequest++
 	a.models, a.modelsReady, a.modelsErr = nil, false, ""

@@ -157,6 +157,10 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 	budget := contextbudget.New()
 	step = time.Now()
 	tools := BuiltinTools(cwd, noTools)
+	noTuios := len(setup) > 0 && setup[0].NoTuios
+	if noTuios {
+		tools = withoutTuiosTools(tools)
+	}
 	diagtrace.Event("setup", "tools built count=%d duration=%s", len(tools), time.Since(step))
 	WirePermissionState(tools, permState)
 	// Open the persistent memory store once (issue #481) and expose it as the
@@ -205,6 +209,9 @@ func SetupEnv(model, baseURL, protocol, providerName, apiKey string, noTools, no
 		})
 		factory := func() runtime.RunConfig {
 			childTools := ChildToolSet(cwd, policy)
+			if noTuios {
+				childTools = withoutTuiosTools(childTools)
+			}
 			WirePermissionState(childTools, permState)
 			cfg := runtime.RunConfig{
 				LoopConfig: runtime.LoopConfig{

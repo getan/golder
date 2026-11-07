@@ -16,10 +16,7 @@ func (a *App) refreshTTYSessions() {
 // openUserTerminal starts an explicit user-controlled shell in the project. It
 // is not an Agent tool call and is labelled accordingly.
 func (a *App) openUserTerminal() {
-	a.openTerminalWindow("User Terminal", terminal.Options{
-		Dir: a.project, ClipboardRead: terminal.ClipboardAsk,
-		CopyOnSelect: terminal.CopyOnSelectClipboard,
-	})
+	a.addTerminal(a.terminalProjectPath(), "", false, nil, "")
 }
 
 // openTTYTerminal attaches Ghostty VT rendering to an existing gated bash PTY.
@@ -30,10 +27,7 @@ func (a *App) openTTYTerminal(id string) {
 		a.banner, a.bannerErr = err.Error(), true
 		return
 	}
-	a.openTerminalWindow("Agent Terminal · "+id, terminal.Options{
-		Conn: conn, ClipboardRead: terminal.ClipboardAsk,
-		CopyOnSelect: terminal.CopyOnSelectClipboard,
-	})
+	a.addTerminal(canonicalTerminalProject(a.project), "", false, conn, "Agent TTY · "+id)
 }
 
 func (a *App) openTerminalWindow(title string, options terminal.Options) {

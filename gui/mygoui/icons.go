@@ -15,6 +15,11 @@ var browserMonochromeIcon = ui.MustParseSVG([]byte(`
   <path d="M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 </svg>`))
 
+var terminalMonochromeIcon = ui.MustParseSVG([]byte(`
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M3 5h18v14H3zM7 9l3 3-3 3M13 15h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`))
+
 var computerMonochromeIcon = ui.MustParseSVG([]byte(`
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
   <path d="M4 4h16v12H4zM9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>

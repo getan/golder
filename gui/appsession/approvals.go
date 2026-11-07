@@ -24,6 +24,11 @@ type pendingApproval struct {
 // approvalKey keys the "allow for this session" memory: the tool plus its
 // summary, so approving a build does not also approve an unrelated command.
 func approvalKey(req judge.ApprovalRequest) string {
+	// A GUI terminal can be an unrestricted user shell. Each terminal call
+	// needs its own reviewed decision; a previous answer is not this call's.
+	if req.Tool == "terminal" {
+		return ""
+	}
 	summary := strings.TrimSpace(req.Summary)
 	if summary == "" {
 		return ""

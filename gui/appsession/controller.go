@@ -95,6 +95,8 @@ type Options struct {
 	// ProjectFactory is required to create or resume a session in a folder other
 	// than the launch directory. CLI/TUI embedders may leave it nil.
 	ProjectFactory ProjectEnvironmentFactory
+	// GUI omits commands specific to the separate tuios frontend.
+	GUI bool
 
 	// Cwd is the project directory. Empty means the process working directory.
 	Cwd string
@@ -150,6 +152,7 @@ type Controller struct {
 	closed          bool
 	computerTool    *agenttool.ComputerTool
 	computerRequest *agenttool.ComputerRequestTool
+	guiTerminalTool agentcore.AgentTool
 
 	pending      []*pendingApproval
 	nextApproval int
@@ -193,6 +196,17 @@ func New(opts Options) *Controller {
 // Events returns the ordered event stream. The channel is never closed; Close
 // ends delivery and unblocks the producer.
 func (c *Controller) Events() <-chan Event { return c.events }
+
+// Done closes when this controller is closed, including a background session.
+func (c *Controller) Done() <-chan struct{} { return c.done }
+
+// TerminalEligible reports whether a live GUI controller can receive a
+// terminal capability. It does not itself grant access to any pane.
+func (c *Controller) TerminalEligible() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.opt.GUI && !c.closed && !c.readOnly && c.agentCtx != nil && len(c.opt.Tools) != 0
+}
 
 // Open resolves the session (resume or fresh), assembles the live configuration
 // and wires the slash commands and hooks. It is idempotent only in the sense
@@ -324,7 +338,9 @@ func (c *Controller) Open(ctx context.Context) error {
 	prompts.RegisterBoundaryCommand(slash, func() string {
 		return judge.ConversationLanguage(agentCtx.Messages)
 	})
-	prompts.RegisterPaneCommand(slash, c.opt.Tools)
+	if !c.opt.GUI {
+		prompts.RegisterPaneCommand(slash, c.opt.Tools)
+	}
 
 	ctrl := &Controller{
 		opt:      c.opt,

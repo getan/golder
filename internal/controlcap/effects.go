@@ -29,7 +29,7 @@ type Request struct {
 }
 
 func Facade(tool string) bool {
-	return tool == "tuios" || tool == "workspace" || tool == "browser"
+	return tool == "tuios" || tool == "terminal" || tool == "workspace" || tool == "browser"
 }
 
 func Parse(raw json.RawMessage) Request {
@@ -52,13 +52,13 @@ func Commands(tool string, raw json.RawMessage) []string {
 	r := Parse(raw)
 	var cmds []string
 	switch tool {
-	case "tuios":
+	case "tuios", "terminal":
 		switch r.Action {
 		case "run":
 			cmds = append(cmds, r.Command, r.Script)
 		case "send":
 			cmds = append(cmds, r.Text)
-		case "new":
+		case "new", "split":
 			if len(r.Argv) > 0 {
 				cmds = append(cmds, shellquote.Join(r.Argv...))
 			}
@@ -83,6 +83,8 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 	switch tool {
 	case "tuios":
 		return r.Action == "list" || r.Action == "capture" || r.Action == "wait" || r.Action == "revoke"
+	case "terminal":
+		return r.Action == "list" || r.Action == "capture" || r.Action == "wait"
 	case "workspace":
 		return r.Action == "list" || r.Action == "snapshot"
 	case "browser":
@@ -96,7 +98,7 @@ func ReadOnly(tool string, raw json.RawMessage) bool {
 
 func Network(tool string, raw json.RawMessage) bool {
 	r := Parse(raw)
-	if tool == "tuios" {
+	if tool == "tuios" || tool == "terminal" {
 		return r.Network == "on" || r.Remote || (r.HostControl && (r.Action == "run" || r.Action == "send" || r.Action == "press"))
 	}
 	if tool == "workspace" {

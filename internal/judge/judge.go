@@ -599,6 +599,11 @@ func riskSummary(call agentcore.AgentToolCall) string {
 	if raw == "" || raw == "{}" {
 		return ""
 	}
+	// GUI terminal host-control approvals must show the exact target and input,
+	// not just a truncated command: the pane may be an unrestricted user shell.
+	if strings.EqualFold(call.Name, "terminal") {
+		return raw
+	}
 	var args map[string]any
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
 		return truncateRunes(raw, 200)

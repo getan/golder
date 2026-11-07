@@ -97,7 +97,9 @@ func (c *Controller) prepareProjectRuntime(ctx context.Context, cwd string) (pro
 	trust.RegisterCommand(slash, manager, env.Cwd)
 	prompts.RegisterPermissionCommand(slash, env.Permissions, c.conversationLanguage)
 	prompts.RegisterBoundaryCommand(slash, c.conversationLanguage)
-	prompts.RegisterPaneCommand(slash, env.Tools)
+	if !c.opt.GUI {
+		prompts.RegisterPaneCommand(slash, env.Tools)
+	}
 	return projectRuntime{env: env, live: live, slash: slash}, nil
 }
 

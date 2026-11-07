@@ -117,8 +117,14 @@ Two optional surfaces need runtime pieces:
   browsers or a short runtime path, and retries bounded discovery while a newly
   launched socket is becoming visible; title and approval actions use
   theme-colored monochrome SVGs;
-- terminal: an explicit user shell and detachable takeover of Agent bash calls
-  that ran with `tty=true`.
+- terminal: a project-scoped, resizable panel with real shell panes. Right-click
+  a pane title to split, rename or close it, separately grant an active Agent
+  view or control access, revoke access, or take back control. Agent-created
+  panes retain their creation-time sandbox/network ceiling; full-access panes
+  may be unconfined. User shells run outside the Agent sandbox, so controlling
+  them requires explicit per-call review in Ask mode (or Full Access). Exited
+  panes retain their output until closed. Existing Agent `bash` calls with
+  `tty=true` can still be attached and detached without terminating them.
 
 Deliberately absent: tuios workspace/pane management and a full IDE. Those
 remain CLI/TUI responsibilities.

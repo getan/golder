@@ -23,6 +23,32 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		return v
 	}
 	switch tool {
+	case "terminal":
+		var a struct {
+			Action  string `json:"action"`
+			Text    string `json:"text"`
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return f.failClosed("terminal has no action")
+		}
+		switch a.Action {
+		case "list", "capture", "wait":
+			return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low", Reasons: []string{"GUI terminal read, subject to pane access"}}
+		case "send":
+			if a.Text == "" {
+				return f.failClosed("terminal send has no text")
+			}
+			return f.next(ctx, tool, args)
+		case "run":
+			if strings.TrimSpace(a.Command) == "" {
+				return f.failClosed("terminal run has no command")
+			}
+			return f.next(ctx, tool, args)
+		case "new", "split", "press", "focus", "resize", "rename", "close":
+			return f.next(ctx, tool, args)
+		}
+		return f.failClosed("unknown terminal action")
 	case "tuios":
 		var a struct {
 			Action      string   `json:"action"`

@@ -393,6 +393,19 @@ func TestApprovalCardRendersDecision(t *testing.T) {
 	}
 }
 
+func TestTerminalApprovalDisplaysExactCallWithoutSessionGrant(t *testing.T) {
+	a := testApp()
+	summary := `{"action":"send","pane":"terminal-42","text":"echo reviewed"}`
+	a.pending = []appsession.ApprovalView{{ID: "terminal-approval", Tool: "terminal", Summary: summary}}
+	tt := ui.NewTester(a.view, 1200, 800)
+	if !tt.HasText(summary) || !tt.HasText("Allow once") {
+		t.Fatalf("terminal approval omitted the exact call: %q", tt.Texts())
+	}
+	if tt.HasText("Always this session") {
+		t.Fatal("terminal approval allowed future calls without review")
+	}
+}
+
 func TestWaitingForFirstOutputIndicatorLifecycle(t *testing.T) {
 	a := testApp()
 	a.status.Running, a.status.RunID = true, "run-1"

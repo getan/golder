@@ -95,27 +95,35 @@ func (a *App) view(c *ui.Context) {
 	c.Root().Background(t.Background)
 	ui.Column(c).Fill().Children(func() {
 		a.titleBar(c)
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			if a.browserPanelOpen {
-				ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
-					a.sidebar(c)
-					a.center(c)
-				})
-				a.browserPanel(c)
-				return
-			}
-			a.sidebar(c)
-			a.center(c)
-			if a.filesOpen {
-				a.fileExplorerPanel(c)
-			}
-			if a.changesOpen {
-				a.changesPanel(c)
-			}
-			if a.computerOpen {
-				a.computerPanel(c)
-			}
-		})
+		mainContent := func() {
+			ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
+				if a.browserPanelOpen {
+					ui.Row(c).Grow(1).MinWidth(0).AlignItems(ui.Stretch).Children(func() {
+						a.sidebar(c)
+						a.center(c)
+					})
+					a.browserPanel(c)
+					return
+				}
+				a.sidebar(c)
+				a.center(c)
+				if a.filesOpen {
+					a.fileExplorerPanel(c)
+				}
+				if a.changesOpen {
+					a.changesPanel(c)
+				}
+				if a.computerOpen {
+					a.computerPanel(c)
+				}
+			})
+		}
+		if a.terminalOpen {
+			clampPanelSplit(&a.terminalSplit, 60)
+			ui.SplitPercent(c, &a.terminalSplit, mainContent, func() { a.terminalPanel(c) }).Grow(1).MinWidth(0)
+		} else {
+			mainContent()
+		}
 		a.bannerView(c)
 	})
 	a.paletteModal(c)
@@ -126,6 +134,15 @@ func (a *App) view(c *ui.Context) {
 	a.sessionDeleteModal(c)
 	a.browsersModal(c)
 	a.computerPicker(c)
+	a.terminalModals(c)
+}
+
+// Keep both sides usable while remembering each panel's last in-session split.
+func clampPanelSplit(split *float32, initial float32) {
+	if *split <= 0 {
+		*split = initial
+	}
+	*split = min(max(*split, 30), 70)
 }
 
 // titleBar shows the project, the session, and the page-level actions.
@@ -184,6 +201,9 @@ func (a *App) titleBar(c *ui.Context) {
 				a.browserOpen = true
 				go a.refreshBrowsers(a.ctrl)
 			}
+		}
+		if compactIconButton(c, "terminal", terminalMonochromeIcon, "Terminal", "Show or hide project terminals").Clicked() {
+			a.toggleTerminal()
 		}
 	})
 }
