@@ -26,6 +26,12 @@ func IsOperatorPane(windowID string) bool {
 	return ok
 }
 
+func operatorPaneParams(name, cwd, executable, socket string) tuiosctl.NewWindowParams {
+	return tuiosctl.NewWindowParams{
+		Name: name, Cwd: cwd, Command: []string{executable, "computer-pane", socket}, Focus: true, CloseOnExit: true,
+	}
+}
+
 // PaneHandle owns the helper pane and its private connections. Closing it
 // revokes the target immediately, including when the model is still running.
 type PaneHandle struct {
@@ -100,9 +106,7 @@ func LaunchOperatorPane(ctx context.Context, session *Session, cwd string) (*Pan
 		return nil, err
 	}
 	name := OperatorPanePrefix + rand.Text()[:10]
-	created, err := client.NewWindowInCallerWorkspace(ctx, tuiosctl.NewWindowParams{
-		Name: name, Cwd: cwd, Command: []string{executable, "computer-pane", socket}, CloseOnExit: true,
-	})
+	created, err := client.NewWindowInCallerWorkspace(ctx, operatorPaneParams(name, cwd, executable, socket))
 	if err != nil || created.WindowID == "" {
 		_ = listener.Close()
 		cleanup()

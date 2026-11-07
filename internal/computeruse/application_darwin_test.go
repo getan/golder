@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -55,5 +56,12 @@ func TestMacApplicationInventorySupportsCalculatorChineseName(t *testing.T) {
 	apps, err := catalog.applicationsIn(context.Background(), "计算器", []string{root})
 	if err != nil || len(apps) != 1 || apps[0].Name == "" || apps[0].Identity == "" {
 		t.Fatalf("localized application inventory = %+v, %v", apps, err)
+	}
+}
+
+func TestMacApplicationLaunchDoesNotStealFrontendFocus(t *testing.T) {
+	path := "/System/Applications/Calculator.app"
+	if got := macApplicationLaunchArgs(path); !slices.Equal(got, []string{"-g", "-a", path}) {
+		t.Fatalf("open arguments = %q", got)
 	}
 }

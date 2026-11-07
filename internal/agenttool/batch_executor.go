@@ -10,7 +10,8 @@
 //     guarantee — while the parallel-capable calls, shell commands included,
 //     overlap inside their own group the way codex's read-lock tools do.
 //   - The whole batch signals termination only when every finalized result has
-//     terminate=true, matching pi.
+//     terminate=true, except a successful frontend computer handoff, which must
+//     settle the run even when the model included other calls in the batch.
 //   - Abort stops further groups and fills the remaining calls with aborted
 //     error results so every call still gets a result message.
 //
@@ -35,7 +36,8 @@ type BatchConfig struct {
 
 // ExecuteToolCalls runs a batch of tool calls belonging to one assistant
 // message. It returns the tool-result messages in source order and whether the
-// whole batch requests termination (only when every result terminates).
+// whole batch requests termination. A successful computer handoff is a trusted
+// exception: the frontend cannot start its session until the run is idle.
 func ExecuteToolCalls(ctx context.Context, cfg BatchConfig, calls []agentcore.AgentToolCall, emit agentcore.EmitFunc) ([]agentcore.ToolResultMessage, bool) {
 	if len(calls) == 0 {
 		return nil, false
@@ -70,7 +72,19 @@ func ExecuteToolCalls(ctx context.Context, cfg BatchConfig, calls []agentcore.Ag
 		wg.Wait()
 	}
 
-	// Whole batch terminates only when every result terminates (pi semantics).
+	// The frontend handoff needs an idle run even if the assistant bundled
+	// unrelated calls alongside it. A failed or blocked request never ends it.
+	for i, call := range calls {
+		if !terminates[i] || results[i].IsError || cfg.Registry == nil {
+			continue
+		}
+		if tool, ok := cfg.Registry.Get(call.Name); ok {
+			if _, handoff := tool.(*ComputerRequestTool); handoff {
+				return results, true
+			}
+		}
+	}
+	// Ordinary tools keep the all-terminate batch semantics.
 	allTerminate := true
 	for _, t := range terminates {
 		if !t {

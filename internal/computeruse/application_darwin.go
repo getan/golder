@@ -146,6 +146,12 @@ func (c *MacWindowCatalog) applicationsIn(ctx context.Context, requested string,
 	return out, nil
 }
 
+// macApplicationLaunchArgs opens the exact catalogued app without replacing
+// the Golder GUI or terminal as the foreground application.
+func macApplicationLaunchArgs(path string) []string {
+	return []string{"-g", "-a", path}
+}
+
 // LaunchApplication launches only a candidate issued by this catalog after
 // rechecking its directory and bundle identity. No shell interprets its name.
 func (c *MacWindowCatalog) LaunchApplication(ctx context.Context, app Application) error {
@@ -167,7 +173,7 @@ func (c *MacWindowCatalog) LaunchApplication(ctx context.Context, app Applicatio
 	if !ok || bundleID != candidate.bundleID {
 		return errors.New("application bundle identity changed before launch")
 	}
-	if err := exec.CommandContext(ctx, "open", "-a", candidate.path).Run(); err != nil {
+	if err := exec.CommandContext(ctx, "open", macApplicationLaunchArgs(candidate.path)...).Run(); err != nil {
 		return fmt.Errorf("launch %s: %w", app.Name, err)
 	}
 	return nil

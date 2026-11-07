@@ -391,6 +391,30 @@ func TestAgentLoopAllTerminateStopsRun(t *testing.T) {
 	}
 }
 
+func TestComputerRequestMixedBatchEndsRunForFrontend(t *testing.T) {
+	requested := ""
+	request := &agenttool.ComputerRequestTool{Request: func(_ context.Context, name string) error {
+		requested = name
+		return nil
+	}}
+	assistant := agentcore.AssistantMessage{
+		RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonToolUse,
+		Content: agentcore.ContentList{
+			agentcore.NewToolCallContent("request", "computer_request", json.RawMessage(`{"application":"Calculator"}`)),
+			agentcore.NewToolCallContent("read", "read", json.RawMessage(`{}`)),
+		},
+	}
+	cfg := newRunCfg(scriptedStream([]agentcore.AssistantMessage{
+		assistant,
+		{RoleField: agentcore.RoleAssistant, StopReason: agentcore.StopReasonEndTurn},
+	}), request, echoTool("read", agentcore.ToolExecutionParallel, false))
+	ctx := &agentcore.AgentContext{Messages: agentcore.MessageList{agentcore.UserMessage{RoleField: agentcore.RoleUser}}}
+	kinds, _ := collectStream(t, agentLoop(context.Background(), ctx, cfg))
+	if requested != "Calculator" || countKind(kinds, agentcore.EventTurnStart) != 1 {
+		t.Fatalf("handoff requested=%q events=%v", requested, kinds)
+	}
+}
+
 func assertEventKinds(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {

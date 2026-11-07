@@ -85,7 +85,10 @@ func (t *ComputerRequestTool) Execute(ctx context.Context, _ string, raw json.Ra
 		}
 		return errorResult("computer request: " + err.Error()), nil
 	}
-	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("Application setup requested. End this turn; the frontend will continue when the window is ready, or ask the person to resolve an ambiguous choice.")}}, nil
+	// Frontends resolve the application only after the current run settles. A
+	// textual instruction alone leaves that handoff dependent on the model.
+	stop := true
+	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent("Application setup requested. End this turn; the frontend will continue when the window is ready, or ask the person to resolve an ambiguous choice.")}, Terminate: &stop}, nil
 }
 
 func validComputerApplication(name string) bool {

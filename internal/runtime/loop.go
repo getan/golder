@@ -520,7 +520,8 @@ func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfi
 				return
 			}
 			if allTerminate {
-				// Every tool asked to terminate the run.
+				// All tools terminated, or a trusted frontend handoff requires
+				// the run to settle before it can establish the local session.
 				finish()
 				return
 			}
