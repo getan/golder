@@ -25,6 +25,7 @@ import (
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
+	"github.com/getan/golder/internal/seatbelt"
 )
 
 var (
@@ -34,6 +35,18 @@ var (
 )
 
 func main() {
+	// This entry point runs in the freshly allocated pane child, before GUI
+	// initialization, flags, configuration, or credentials are accessed.
+	if len(os.Args) > 1 && os.Args[1] == seatbelt.TerminalBootstrapFlag {
+		if err := seatbelt.ExecTerminalSandbox(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "golder-gui: terminal sandbox:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err := configureTerminalLauncher(); err != nil {
+		fmt.Fprintf(os.Stderr, "golder-gui: terminal sandbox launcher: %v\n", err)
+	}
 	var (
 		cwd          = flag.String("cwd", "", "project directory to run the agent in")
 		model        = flag.String("model", "", "model id (default: config.toml, else the runtime default)")
@@ -151,6 +164,14 @@ func main() {
 	if err := mygoui.New(ctrl).Run(); err != nil {
 		log.Fatalf("golder-gui: %v", err)
 	}
+}
+
+func configureTerminalLauncher() error {
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return seatbelt.ConfigureTerminalLauncher(executable)
 }
 
 func thinkingLevel(s string) agentcore.ThinkingLevel {
