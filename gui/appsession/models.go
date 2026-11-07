@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/cli/config"
+	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/prompts"
 	"github.com/getan/golder/internal/provider"
 )
@@ -63,17 +66,132 @@ func containsID(opts []ModelOption, id string) bool {
 	return false
 }
 
-// Providers lists the conversation providers, ready ones first.
+// StatusSnapshot reads the current session status without copying transcript items.
+func (c *Controller) StatusSnapshot() Status {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.status
+}
+
+// Providers lists only configured conversation providers. The active provider
+// remains visible even when its credentials are missing or it is custom.
 func (c *Controller) Providers() []string {
 	c.mu.Lock()
 	creds := c.creds
+	current := ""
+	if c.live != nil {
+		current = c.live.ProviderName
+	}
 	c.mu.Unlock()
+	cfg, _ := config.LoadFileConfig(config.FileConfigPath())
+	names, _ := provider.CredentialNames(provider.CredentialFilePath())
+	named := make(map[string]bool, len(names))
+	for _, name := range names {
+		named[name] = true
+	}
 	specs := prompts.ProvidersAvailableFirst(creds)
-	out := make([]string, len(specs))
-	for i, s := range specs {
-		out[i] = s.Name
+	out := make([]string, 0, len(specs))
+	seenCurrent := false
+	for _, spec := range specs {
+		configured := spec.Name == current || strings.EqualFold(spec.Name, cfg.Provider) ||
+			prompts.CredentialAvailable(creds, spec.Name) || named[spec.Name+"-default"]
+		if !configured {
+			for _, env := range provider.BaseURLEnvVars(spec) {
+				if strings.TrimSpace(os.Getenv(env)) != "" {
+					configured = true
+					break
+				}
+			}
+		}
+		if configured {
+			out = append(out, spec.Name)
+			seenCurrent = seenCurrent || spec.Name == current
+		}
+	}
+	if current != "" && !seenCurrent {
+		out = append([]string{current}, out...)
 	}
 	return out
+}
+
+// SelectProvider switches this session to a configured provider and its saved
+// default model. Overrides from the old gateway must never follow the switch.
+func (c *Controller) SelectProvider(ctx context.Context, name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	configured := false
+	for _, candidate := range c.Providers() {
+		if candidate == name {
+			configured = true
+			break
+		}
+	}
+	if !configured {
+		return fmt.Errorf("provider %q is not configured; add it in Settings", name)
+	}
+	spec, ok := provider.LookupProviderSpec(name)
+	if !ok || spec.DecisionOnly {
+		return fmt.Errorf("provider %q is not a conversation provider", name)
+	}
+	model := ModelForProvider(name)
+	if model == "" {
+		return fmt.Errorf("provider %q has no default model", name)
+	}
+	cfg, err := config.LoadFileConfig(config.FileConfigPath())
+	if err != nil {
+		return err
+	}
+	baseURL, protocol, credentialName, apiKey := "", "", name+"-default", ""
+	if strings.EqualFold(cfg.Provider, name) {
+		baseURL, protocol = cfg.BaseURL, cfg.Protocol
+		apiKey = cfg.APIKey
+		if cfg.Credential != "" {
+			credentialName = cfg.Credential
+		}
+	}
+	prov, resolved, err := provider.ResolveProvider(model, baseURL, protocol, name, os.Getenv)
+	if err != nil {
+		return err
+	}
+	credential := launchcfg.ResolveCredential(resolved, apiKey, credentialName)
+	level := prompts.DefaultThinkingLevelForProviderModel(name, model)
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	if c.live == nil {
+		c.mu.Unlock()
+		return fmt.Errorf("session is not open")
+	}
+	if c.running {
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	previous := c.live.ProviderName
+	if c.creds != nil && credential.ResolvedValue() != "" {
+		c.creds.SetOverride(resolved, credential.ResolvedValue())
+	}
+	c.live.Model, c.live.ProviderName, c.live.Provider = model, resolved, prov
+	c.live.BaseURL, c.live.Protocol = baseURL, protocol
+	c.live.FetchedModels, c.live.FetchedKey, c.live.FetchedAt = nil, "", time.Time{}
+	if level != "" {
+		c.live.ThinkingLevel = level
+	}
+	c.live.RefreshContextWindow()
+	c.header.Model, c.header.Provider = model, resolved
+	c.status.Model, c.status.Provider = model, resolved
+	c.status.Thinking, c.status.ContextLimit = c.live.ThinkingLevel, c.live.ContextWindow
+	c.mu.Unlock()
+	c.emitStatus()
+	c.addNotice(fmt.Sprintf("Provider switched to %s (model: %s). Previous: %s.", resolved, model, previous), false)
+	return nil
 }
 
 // SelectModel switches the live model (and provider, when the id belongs to

@@ -8,22 +8,34 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
-// modelModal combines model and reasoning selection behind the one composer
-// control, matching Codex instead of exposing two unrelated footer buttons.
+// modelModal combines provider, model and reasoning behind one composer control.
 func (a *App) modelModal(c *ui.Context) {
 	t := c.Theme()
 	ui.Modal(c, &a.modelOpen, func() {
 		ui.Column(c).Width(580).MaxHeight(620).Clip().Gap(0).Children(func() {
 			ui.Row(c).Padding(10, 14).Gap(8).AlignItems(ui.Center).
 				BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
-				ui.Text(c, "Model & reasoning").FontSize(13).Bold()
-				ui.Text(c, a.status.Provider).FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "Provider, model & reasoning").FontSize(13).Bold()
 				ui.Spacer(c)
-				if ui.Button(c, "Refresh").Clicked() {
-					go a.refreshModels(a.ctrl)
+				if subtleButton(c, "Refresh").Clicked() {
+					if a.ctrl != nil {
+						a.providers = a.ctrl.Providers()
+					}
+					a.startModelRefresh()
 				}
-				if ui.Button(c, "Close").Clicked() {
+				if subtleButton(c, "Close").Clicked() {
 					a.modelOpen = false
+				}
+			})
+			ui.Row(c).Padding(8, 12, 0, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Provider").FontSize(12).FontWeight(600)
+				if a.providerSelection == "" {
+					a.providerSelection = a.status.Provider
+				}
+				selection := ui.Select(c, &a.providerSelection, a.providers).Grow(1).Disabled(a.status.Running).
+					Tooltip("Configured providers; manage credentials in Settings")
+				if selection.Changed() && a.providerSelection != a.status.Provider {
+					a.setProvider(a.providerSelection)
 				}
 			})
 			ui.Row(c).Padding(8, 12).Children(func() {
@@ -63,7 +75,7 @@ func (a *App) modelModal(c *ui.Context) {
 							a.setModel(m.Provider, m.ID)
 						}
 					}
-					if shown == 0 {
+					if shown == 0 && a.modelsReady {
 						ui.Text(c, "No model matches.").FontSize(12).TextColor(t.TextMuted).Padding(10)
 					}
 				})

@@ -36,7 +36,7 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "Projects", "Chats", "Settings", "↑", "test-model · off", "Changes"} {
+	for _, want := range []string{"project", "Projects", "Chats", "Settings", "↑", "test-provider · test-model · off", "Changes"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}

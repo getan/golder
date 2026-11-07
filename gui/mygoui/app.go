@@ -61,13 +61,14 @@ type App struct {
 	banner    string
 	bannerErr bool
 
-	modelOpen    bool
-	modelQuery   string
-	models       []appsession.ModelOption
-	modelsErr    string
-	modelsReady  bool
-	providerOpen bool
-	providers    []string
+	modelOpen         bool
+	modelQuery        string
+	models            []appsession.ModelOption
+	modelsErr         string
+	modelsReady       bool
+	modelRequest      uint64
+	providerSelection string
+	providers         []string
 
 	permOpen bool
 
@@ -245,7 +246,7 @@ func (a *App) Run() error {
 		a.refreshProjects()
 		a.refreshSessions()
 		a.refreshChanges()
-		go a.refreshModels(a.ctrl)
+		a.startModelRefresh()
 		go a.refreshBrowsers(a.ctrl)
 	})
 	return mygo.App.Run()
@@ -591,26 +592,36 @@ func (a *App) applyFileDiff(request uint64, row int, result appsession.FileDiff,
 	a.diff = diff
 }
 
-func (a *App) refreshModels(ctrl *appsession.Controller) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	models, err := ctrl.ListModels(ctx)
-	win := a.win
+func (a *App) startModelRefresh() {
+	ctrl, win := a.ctrl, a.win
+	if ctrl == nil {
+		return
+	}
+	a.modelRequest++
+	a.models, a.modelsErr, a.modelsReady = nil, "", false
 	if win == nil {
 		return
 	}
-	win.Update(func() {
-		if a.ctrl != ctrl {
-			return
-		}
-		a.modelsReady = true
-		if err != nil {
-			a.modelsErr = err.Error()
-			return
-		}
-		a.modelsErr = ""
-		a.models = models
-	})
+	request, providerName := a.modelRequest, ctrl.StatusSnapshot().Provider
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		models, err := ctrl.ListModels(ctx)
+		win.Update(func() { a.applyModelResults(ctrl, request, providerName, models, err) })
+	}()
+}
+
+func (a *App) applyModelResults(ctrl *appsession.Controller, request uint64, providerName string, models []appsession.ModelOption, err error) {
+	if a.ctrl != ctrl || a.modelRequest != request || ctrl.StatusSnapshot().Provider != providerName {
+		return
+	}
+	a.modelsReady = true
+	if err != nil {
+		a.modelsErr = err.Error()
+		return
+	}
+	a.modelsErr = ""
+	a.models = models
 }
 
 func (a *App) refreshBrowsers(ctrl *appsession.Controller) {
@@ -856,7 +867,26 @@ func (a *App) setModel(providerName, id string) {
 		return
 	}
 	a.banner, a.bannerErr = "", false
-	go a.refreshModels(a.ctrl)
+	a.status = a.ctrl.StatusSnapshot()
+	a.startModelRefresh()
+}
+
+func (a *App) setProvider(name string) {
+	if a.ctrl == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := a.ctrl.SelectProvider(ctx, name); err != nil {
+		a.providerSelection = a.status.Provider
+		a.modelsErr = err.Error()
+		return
+	}
+	a.status = a.ctrl.StatusSnapshot()
+	a.providerSelection = a.status.Provider
+	a.modelQuery = ""
+	a.banner, a.bannerErr = "", false
+	a.startModelRefresh()
 }
 
 func (a *App) setPermission(mode string) {
@@ -935,6 +965,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.closeBrowserPanel()
 	a.ctrl = peer
 	a.thinkingOpen, a.toolOpen, a.approvalOpen = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	a.modelRequest++
 	a.models, a.modelsReady, a.modelsErr = nil, false, ""
 	a.applySnapshot(peer.Snapshot())
 	draft := a.drafts[a.status.SessionID]

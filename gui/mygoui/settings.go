@@ -58,7 +58,7 @@ func (a *App) saveSettings(apply bool) {
 	if apply {
 		a.settingsNote = "Saved and applied to this session."
 		a.applySnapshot(a.ctrl.Snapshot())
-		go a.refreshModels(a.ctrl)
+		a.startModelRefresh()
 	} else {
 		a.settingsNote = "Saved as the default for new sessions."
 	}

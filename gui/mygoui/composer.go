@@ -81,11 +81,15 @@ func (a *App) composer(c *ui.Context) {
 					a.permOpen = true
 				}
 				ui.Spacer(c)
-				modelLabel := a.status.Model + " · " + thinkingLabel(a.status.Thinking)
-				if ui.Button(c, modelLabel).Tooltip("Model and reasoning effort").Clicked() {
+				modelLabel := a.status.Provider + " · " + a.status.Model + " · " + thinkingLabel(a.status.Thinking)
+				if subtleButton(c, modelLabel).Tooltip("Provider, model and reasoning effort").Clicked() {
 					a.modelOpen = true
+					a.providerSelection = a.status.Provider
+					if a.ctrl != nil {
+						a.providers = a.ctrl.Providers()
+					}
 					if !a.modelsReady {
-						go a.refreshModels(a.ctrl)
+						a.startModelRefresh()
 					}
 				}
 				send := ui.ButtonBase(c).Size(34, 34).Radius(17).
