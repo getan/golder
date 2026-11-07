@@ -9,8 +9,45 @@ import (
 
 	"github.com/getan/kitty-browse/browserhost"
 
+	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agenttool"
 )
+
+type recordingNativeInput struct{ event browserhost.OperatorInput }
+
+func (r *recordingNativeInput) SendOperatorInput(_ context.Context, event browserhost.OperatorInput) error {
+	r.event = event
+	return nil
+}
+
+func TestNativeOperatorAdapterPreservesExactTargetAndInput(t *testing.T) {
+	recorder := &recordingNativeInput{}
+	adapter := nativeOperatorAdapter{host: recorder}
+	input := appsession.BrowserOperatorInput{BrowserID: "browser", TabID: "tab", TargetID: "target", Kind: "pointer-move", X: 12, Y: 34, DeltaY: 2, Text: "中文", Key: "Enter"}
+	if err := adapter.SendOperatorInput(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.event.BrowserID != input.BrowserID || recorder.event.TabID != input.TabID || recorder.event.TargetID != input.TargetID || recorder.event.Kind != input.Kind || recorder.event.X != input.X || recorder.event.Y != input.Y || recorder.event.DeltaY != input.DeltaY || recorder.event.Text != input.Text || recorder.event.Key != input.Key {
+		t.Fatalf("input changed at adapter: %+v", recorder.event)
+	}
+}
+
+func TestNativeBrowserPassesConfiguredProxy(t *testing.T) {
+	h := newNativeBrowserHosts()
+	fake := &fakeNativeHost{done: make(chan struct{})}
+	var got browserhost.Options
+	h.start = func(_ context.Context, opts browserhost.Options) (nativeBrowserHost, error) {
+		got = opts
+		return fake, nil
+	}
+	if err := h.Start(context.Background(), agenttool.NativeBrowserRequest{ProxyServer: "http://127.0.0.1:7897"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(h.Close)
+	if got.ProxyServer != "http://127.0.0.1:7897" || !got.RequireSandbox {
+		t.Fatalf("native host options = %+v", got)
+	}
+}
 
 type fakeNativeHost struct {
 	once sync.Once

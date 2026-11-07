@@ -2,20 +2,15 @@ package appsession
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/getan/golder/internal/browserctl"
 )
 
-type fakeBrowserOperator struct{ events chan map[string]any }
+type fakeBrowserOperator struct{ events chan BrowserOperatorInput }
 
-func (f *fakeBrowserOperator) SendOperatorInputJSON(_ context.Context, raw []byte) error {
-	var event map[string]any
-	if err := json.Unmarshal(raw, &event); err != nil {
-		return err
-	}
+func (f *fakeBrowserOperator) SendOperatorInput(_ context.Context, event BrowserOperatorInput) error {
 	f.events <- event
 	return nil
 }
@@ -37,7 +32,7 @@ func TestBrowserOperatorRegistrationDoesNotRemoveReplacement(t *testing.T) {
 }
 
 func TestBrowserOperatorHoverDragAndTabSwitchRelease(t *testing.T) {
-	operator := &fakeBrowserOperator{events: make(chan map[string]any, 8)}
+	operator := &fakeBrowserOperator{events: make(chan BrowserOperatorInput, 8)}
 	target := browserctl.Target{BrowserID: "browser", TabID: "tab", TargetID: "target"}
 	surface := &BrowserSurface{operator: operator, target: target}
 	for _, tc := range []struct {
@@ -52,7 +47,7 @@ func TestBrowserOperatorHoverDragAndTabSwitchRelease(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := <-operator.events
-		if got["kind"] != tc.kind || got["tabId"] != target.TabID {
+		if got.Kind != tc.kind || got.TabID != target.TabID {
 			t.Fatalf("operator event = %+v, want %s on %s", got, tc.kind, target.TabID)
 		}
 	}
@@ -61,10 +56,33 @@ func TestBrowserOperatorHoverDragAndTabSwitchRelease(t *testing.T) {
 	surface.mu.Unlock()
 	select {
 	case got := <-operator.events:
-		if got["kind"] != "pointer-up" || got["tabId"] != target.TabID || got["x"] != float64(5) || got["y"] != float64(6) {
+		if got.Kind != "pointer-up" || got.TabID != target.TabID || got.X != 5 || got.Y != 6 {
 			t.Fatalf("drag release = %+v", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("tab switch did not release the pointer on its original target")
+	}
+}
+
+func TestBrowserSurfaceQueuedInputReachesTypedOperator(t *testing.T) {
+	operator := &fakeBrowserOperator{events: make(chan BrowserOperatorInput, 4)}
+	target := browserctl.Target{BrowserID: "browser", TabID: "tab", TargetID: "target"}
+	surface := &BrowserSurface{operator: operator, target: target, input: newBrowserInputQueue(8), done: make(chan struct{})}
+	go surface.runInputs()
+	t.Cleanup(func() { close(surface.done) })
+	for _, kind := range []BrowserInputKind{BrowserPointerDown, BrowserPointerMove, BrowserPointerUp} {
+		if !surface.Input(BrowserInput{Kind: kind, X: 10, Y: 20}) {
+			t.Fatalf("input %v rejected", kind)
+		}
+	}
+	for _, kind := range []string{"pointer-down", "pointer-move", "pointer-up"} {
+		select {
+		case event := <-operator.events:
+			if event.Kind != kind || event.TargetID != target.TargetID {
+				t.Fatalf("got %+v, want %s on %s", event, kind, target.TargetID)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s", kind)
+		}
 	}
 }

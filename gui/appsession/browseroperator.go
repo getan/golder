@@ -10,7 +10,15 @@ import (
 // BrowserOperator is the in-process, person-originated input seam of a native
 // browser host. It is not available through a model-facing browser socket.
 type BrowserOperator interface {
-	SendOperatorInputJSON(context.Context, []byte) error
+	SendOperatorInput(context.Context, BrowserOperatorInput) error
+}
+
+// BrowserOperatorInput contains only an exact target and a bounded UI event.
+type BrowserOperatorInput struct {
+	BrowserID, TabID, TargetID string
+	Kind                       string
+	X, Y, DeltaY               float64
+	Text, Key                  string
 }
 
 type browserOperatorEntry struct{ operator BrowserOperator }

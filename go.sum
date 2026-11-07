@@ -90,6 +90,8 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/getan/kitty-browse v0.2.9 h1:Hxzbb0FAIwWvc6O+8QZUyPdjq7TrA7ulWEfjaPuwclU=
 github.com/getan/kitty-browse v0.2.9/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
+github.com/getan/kitty-browse v0.2.10 h1:Zn22udGh2DKfyuQZUaCTXtex1iG7eMgyS0TvnG75n/4=
+github.com/getan/kitty-browse v0.2.10/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
 github.com/getan/tuios-mini v0.10.44 h1:nsUzYH9z4KQK40fcZWuDBDLBokVImECJotMFzx3qJt4=
 github.com/getan/tuios-mini v0.10.44/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=

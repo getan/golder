@@ -295,7 +295,11 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 
 		ui.Row(c).Height(30).Padding(0, 10).AlignItems(ui.Center).
 			BorderWidth(1, 0, 0, 0).BorderColor(theme.Border).Children(func() {
-			ui.Text(c, "Interactive Chromium · mouse, keyboard, scroll and IME enabled").FontSize(10).TextColor(theme.TextMuted)
+			label := "Interactive Chromium · mouse, keyboard, scroll and IME enabled"
+			if state.surface == nil || !state.surface.NativePointerAvailable() {
+				label = "Interactive Chromium · native pointer unavailable"
+			}
+			ui.Text(c, label).FontSize(10).TextColor(theme.TextMuted)
 			ui.Spacer(c)
 			if state.err != "" {
 				ui.Text(c, state.err).FontSize(10).TextColor(theme.Danger).SingleLine().Ellipsis("…").MaxWidth(420)

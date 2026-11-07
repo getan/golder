@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,7 +71,7 @@ type BrowserSurface struct {
 	dragX, dragY      float64
 	selectionRevision uint64
 
-	input chan surfaceInput
+	input *browserInputQueue
 	done  chan struct{}
 	once  sync.Once
 }
@@ -109,7 +108,7 @@ func OpenBrowserSurface(ctx context.Context, preview BrowserPreview) (*BrowserSu
 	}
 	surface := &BrowserSurface{
 		client: client, operator: browserOperator(preview.Socket), target: target, title: title, url: rawURL,
-		input: make(chan surfaceInput, 128), done: make(chan struct{}),
+		input: newBrowserInputQueue(128), done: make(chan struct{}),
 	}
 	if info.ExplicitSelection != nil {
 		surface.selectionRevision = info.ExplicitSelection.Revision
@@ -355,22 +354,35 @@ func (s *BrowserSurface) simple(ctx context.Context, action string) error {
 }
 
 // Input queues a person-originated event without blocking MyGo's main thread.
-// Under sustained control-socket pressure a new event is consumed but dropped;
-// the UI must stay responsive even when Chromium is hung.
+// It returns false and reports an error if a boundary event cannot be queued.
 func (s *BrowserSurface) Input(event BrowserInput) bool {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.input == nil {
+		s.mu.Unlock()
+		return false
+	}
+	if s.operator == nil && (event.Kind == BrowserPointerDown || event.Kind == BrowserPointerMove || event.Kind == BrowserPointerUp) {
+		s.err = fmt.Errorf("browser host does not support native pointer input")
 		s.mu.Unlock()
 		return false
 	}
 	target := s.target
-	s.mu.Unlock()
-	select {
-	case s.input <- surfaceInput{event: event, target: target}:
-		return true
-	default:
-		return true
+	ok := s.input.push(surfaceInput{event: event, target: target})
+	if !ok {
+		s.err = fmt.Errorf("browser input queue is full; input was not sent")
+	} else {
+		s.err = nil
 	}
+	s.mu.Unlock()
+	return ok
+}
+
+// NativePointerAvailable is a presentation fact, not permission to dispatch an
+// Agent action through the in-process operator channel.
+func (s *BrowserSurface) NativePointerAvailable() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.operator != nil
 }
 
 // State returns display metadata and the last input error, without exposing the
@@ -397,13 +409,19 @@ func (s *BrowserSurface) runInputs() {
 		select {
 		case <-s.done:
 			return
-		case input := <-s.input:
+		case <-s.input.wake:
+			input, ok := s.input.pop()
+			if !ok {
+				continue
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 			err := s.dispatchInput(ctx, input)
 			cancel()
-			s.mu.Lock()
-			s.err = err
-			s.mu.Unlock()
+			if err != nil {
+				s.mu.Lock()
+				s.err = err
+				s.mu.Unlock()
+			}
 		}
 	}
 }
@@ -413,7 +431,7 @@ func (s *BrowserSurface) dispatchInput(ctx context.Context, input surfaceInput) 
 	current := !s.closed && s.target == input.target
 	s.mu.Unlock()
 	if !current {
-		return nil
+		return fmt.Errorf("browser input target changed; event was not sent")
 	}
 	event := input.event
 	if s.operator != nil {
@@ -438,12 +456,7 @@ func (s *BrowserSurface) dispatchInput(ctx context.Context, input surfaceInput) 
 		_, _, err := s.actionTarget(ctx, input.target, "press", map[string]any{"key": event.Key}, 5*time.Second)
 		return err
 	case BrowserPointerDown, BrowserPointerMove, BrowserPointerUp:
-		script := pointerScript(event)
-		if script == "" {
-			return nil
-		}
-		_, _, err := s.actionTarget(ctx, input.target, "eval", map[string]any{"script": script}, 5*time.Second)
-		return err
+		return fmt.Errorf("browser host does not support native pointer input")
 	default:
 		return nil
 	}
@@ -512,14 +525,10 @@ func (s *BrowserSurface) dispatchOperatorInput(ctx context.Context, input surfac
 }
 
 func (s *BrowserSurface) sendOperatorInput(ctx context.Context, target browserctl.Target, kind string, event BrowserInput) error {
-	raw, err := json.Marshal(map[string]any{
-		"browserId": target.BrowserID, "tabId": target.TabID, "targetId": target.TargetID,
-		"kind": kind, "x": event.X, "y": event.Y, "deltaY": event.DY, "text": event.Text, "key": event.Key,
+	return s.operator.SendOperatorInput(ctx, BrowserOperatorInput{
+		BrowserID: target.BrowserID, TabID: target.TabID, TargetID: target.TargetID,
+		Kind: kind, X: event.X, Y: event.Y, DeltaY: event.DY, Text: event.Text, Key: event.Key,
 	})
-	if err != nil {
-		return err
-	}
-	return s.operator.SendOperatorInputJSON(ctx, raw)
 }
 
 func (s *BrowserSurface) scheduleDragRelease(target browserctl.Target, x, y float64) {
@@ -537,52 +546,6 @@ func (s *BrowserSurface) releaseDragLocked() {
 		s.scheduleDragRelease(s.dragTarget, s.dragX, s.dragY)
 		s.dragging = false
 	}
-}
-
-// pointerScript is a compatibility adapter for kitty-browse v1 control sockets,
-// whose public action schema exposes locator clicks but not the raw Session
-// MouseDown/Move/Up methods used by its terminal pane. It accepts only numeric
-// coordinates and a closed event-kind set, so no page-controlled text enters JS.
-// A future raw-input capability can replace this adapter without changing the
-// GUI BrowserSurface contract.
-func pointerScript(event BrowserInput) string {
-	typ := ""
-	switch event.Kind {
-	case BrowserPointerDown:
-		typ = "mousedown"
-	case BrowserPointerMove:
-		typ = "mousemove"
-	case BrowserPointerUp:
-		typ = "mouseup"
-	default:
-		return ""
-	}
-	x := strconv.FormatFloat(event.X, 'f', 3, 64)
-	y := strconv.FormatFloat(event.Y, 'f', 3, 64)
-	button := event.Button
-	if button < 0 || button > 2 {
-		button = 0
-	}
-	clicks := event.Clicks
-	if clicks < 1 {
-		clicks = 1
-	}
-	return fmt.Sprintf(`(()=>{const x=%s,y=%s,e=document.elementFromPoint(x,y);if(!e)return false;`+
-		`e.dispatchEvent(new MouseEvent(%q,{bubbles:true,cancelable:true,clientX:x,clientY:y,button:%d,detail:%d}));`+
-		`%sreturn true})()`, x, y, typ, button, clicks, pointerActivation(event.Kind, button, clicks))
-}
-
-func pointerActivation(kind BrowserInputKind, button, clicks int) string {
-	if kind == BrowserPointerDown {
-		return `if(typeof e.focus==="function")e.focus();`
-	}
-	if kind != BrowserPointerUp || button != 0 {
-		return ""
-	}
-	if clicks > 1 {
-		return `e.dispatchEvent(new MouseEvent("dblclick",{bubbles:true,cancelable:true,clientX:x,clientY:y,detail:2}));`
-	}
-	return `if(typeof e.click==="function")e.click();`
 }
 
 func (s *BrowserSurface) action(ctx context.Context, action string, params any, timeout time.Duration) (json.RawMessage, browserctl.Meta, error) {

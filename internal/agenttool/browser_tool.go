@@ -133,7 +133,8 @@ func (t *BrowserTool) Description() string {
 			"with control limited to owned controlled browsers by default; host_control:true requests one-call external authority. " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
 			"and screenshot. list discovers instances; attach selects a browserId. " +
-			"Pin a tab by its id from list; refs are per document." +
+			"Pin a tab by its id from list; refs are per document. Prefer waiting for page readiness over repeated reloads. " +
+			"A timed-out mutation may already have happened: inspect the current state and never automatically repeat an action with unknown execution state." +
 			t.useHint()
 	}
 	return "Read the running browser: list tabs, snapshot the accessibility tree, " +
@@ -500,7 +501,7 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	}
 	result, meta, err := c.Action(ctx, action, params, target, timeout)
 	if err != nil {
-		return browserError(err), nil
+		return browserActionError(a.Action, err), nil
 	}
 	if a.Action == "tab_select" && (meta.BrowserID != info.BrowserID || meta.TabID != target.TabID || meta.TargetID != target.TargetID || meta.URL != targetURL) {
 		return browserError(errors.New("selected tab identity or URL changed; call list and select it explicitly")), nil
@@ -1142,6 +1143,26 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	t.lastTab, t.lastTargetID = target.TabID, target.TargetID
 	t.tabMu.Unlock()
 	return nil
+}
+
+// browserActionError does not turn a transport or host retry hint into
+// permission to replay a mutation that may already have reached the page.
+func browserActionError(action string, err error) agentcore.AgentToolResult {
+	if browserReadOnly(action) || browserctl.IsConnectionRefused(err) {
+		return browserError(err)
+	}
+	var be *browserctl.Error
+	if errors.As(err, &be) {
+		if be.Code == "browser_paused" {
+			return browserError(err)
+		}
+		copy := *be
+		copy.Retryable = false
+		err = &copy
+	}
+	result := browserError(err)
+	result.Content = append(result.Content, agentcore.NewTextContent("The action may have been dispatched; inspect the current page state and do not automatically repeat an action whose execution is unknown."))
+	return result
 }
 
 func browserError(err error) agentcore.AgentToolResult {

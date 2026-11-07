@@ -28,6 +28,23 @@ type nativeBrowserHost interface {
 	Close() error
 }
 
+type nativeBrowserInput interface {
+	SendOperatorInput(context.Context, browserhost.OperatorInput) error
+}
+
+// A dependency regression must fail at build time instead of silently falling
+// back to page-script input. The adapter keeps GUI and library types separate.
+var _ nativeBrowserInput = (*browserhost.Host)(nil)
+
+type nativeOperatorAdapter struct{ host nativeBrowserInput }
+
+func (a nativeOperatorAdapter) SendOperatorInput(ctx context.Context, in appsession.BrowserOperatorInput) error {
+	return a.host.SendOperatorInput(ctx, browserhost.OperatorInput{
+		BrowserID: in.BrowserID, TabID: in.TabID, TargetID: in.TargetID,
+		Kind: in.Kind, X: in.X, Y: in.Y, DeltaY: in.DeltaY, Text: in.Text, Key: in.Key,
+	})
+}
+
 func newNativeBrowserHosts() *nativeBrowserHosts {
 	return &nativeBrowserHosts{
 		hosts:    map[nativeBrowserHost]bool{},
@@ -39,9 +56,6 @@ func newNativeBrowserHosts() *nativeBrowserHosts {
 }
 
 func (h *nativeBrowserHosts) Start(ctx context.Context, req agenttool.NativeBrowserRequest) error {
-	if req.ProxyServer != "" {
-		return fmt.Errorf("the native GUI browser host does not yet support the configured browser proxy")
-	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -56,6 +70,9 @@ func (h *nativeBrowserHosts) Start(ctx context.Context, req agenttool.NativeBrow
 	opts.Socket = req.Socket
 	opts.ProfileDir = req.ProfileDir
 	opts.LoginProfile = req.LoginProfile
+	// The configured route is explicit and reviewed by the launcher; the host
+	// rejects credentials or malformed values rather than falling back to direct.
+	opts.ProxyServer = req.ProxyServer
 	opts.Chrome = os.Getenv("KITTY_BROWSE_CHROME")
 	opts.BrowserOutput = os.Stderr
 	opts.RequireSandbox = true
@@ -100,8 +117,8 @@ func (h *nativeBrowserHosts) Start(ctx context.Context, req agenttool.NativeBrow
 	}
 	h.hosts[host] = true
 	unregister := func() {}
-	if operator, ok := host.(appsession.BrowserOperator); ok {
-		unregister = appsession.RegisterBrowserOperator(req.Socket, operator)
+	if operator, ok := host.(nativeBrowserInput); ok {
+		unregister = appsession.RegisterBrowserOperator(req.Socket, nativeOperatorAdapter{host: operator})
 	}
 	h.mu.Unlock()
 	go func() {
