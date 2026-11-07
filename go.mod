@@ -19,8 +19,9 @@ require (
 	github.com/chromedp/chromedp v0.20.0
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.7.4
-	github.com/getan/kitty-browse v0.2.8
+	github.com/getan/kitty-browse v0.2.9
 	github.com/getan/tuios-mini v0.10.43
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -31,6 +32,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.62.0
+	golang.org/x/oauth2 v0.35.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -58,7 +60,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/epilande/go-devicons v0.0.0-20250505162540-0661cab71a28 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
@@ -101,7 +102,6 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.mitchellh.com/libghostty v0.0.0-20260920220152-31b65cdc24cf // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

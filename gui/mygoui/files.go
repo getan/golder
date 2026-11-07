@@ -283,7 +283,7 @@ func (a *App) renderFileDirectory(c *ui.Context, relative string, depth int) {
 	for _, entry := range entries {
 		entry := entry
 		row := ui.ButtonBase(c.Key("project-file:"+entry.Path)).FillWidth().MinHeight(26).Radius(5).
-			Padding(3, 7).Label(entry.Name).Description(entry.Path)
+			Padding(3, 7).Justify(ui.Start).Label(entry.Name).Description(entry.Path)
 		hoverBorder(c, row)
 		if entry.Path == a.fileSelected {
 			row.Background(t.SurfacePressed)
@@ -291,12 +291,12 @@ func (a *App) renderFileDirectory(c *ui.Context, relative string, depth int) {
 			row.Background(t.SurfaceHover)
 		}
 		row.Children(func() {
-			ui.Spacer(c).Width(float32(depth) * 14)
+			ui.Box(c).Width(float32(depth) * 14).Shrink(0)
 			if entry.Dir && !entry.Symlink {
 				ui.Text(c, "›").Width(13).FontSize(11).TextColor(t.TextMuted).TextAlign(ui.Center)
 				ui.Icon(c, folderMonochromeIcon).Size(14, 14)
 			} else {
-				ui.Spacer(c).Width(13)
+				ui.Box(c).Width(13).Shrink(0)
 				ui.Icon(c, filesMonochromeIcon).Size(14, 14)
 			}
 			ui.Text(c, entry.Name).Grow(1).FontSize(11.5).TextColor(t.Text).SingleLine().Ellipsis("…")

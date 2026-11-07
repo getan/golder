@@ -42,6 +42,25 @@ func TestFilesDrawerRendersTreeAndPreview(t *testing.T) {
 	}
 }
 
+func TestFileTreeEntriesStartNearLeftEdge(t *testing.T) {
+	a := testApp()
+	a.filesOpen = true
+	a.fileEntries[""] = []appsession.ProjectFileEntry{{Name: "src", Path: "src", Dir: true}}
+	tt := ui.NewTester(a.view, 1400, 800)
+	tt.Frame()
+	row, ok := tt.Find("src")
+	if !ok {
+		t.Fatal("file tree entry not found")
+	}
+	arrow, ok := tt.Find("›")
+	if !ok {
+		t.Fatal("directory arrow not found")
+	}
+	if offset := arrow.X - row.X; offset < 0 || offset > 20 {
+		t.Fatalf("directory arrow is too far from the left edge: offset=%v row=%+v arrow=%+v", offset, row, arrow)
+	}
+}
+
 func TestFileExplorerMutuallyExcludesOtherDrawers(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
