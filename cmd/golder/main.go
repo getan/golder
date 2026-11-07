@@ -47,6 +47,7 @@ import (
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/grants"
+	"github.com/getan/golder/internal/heapdiag"
 	"github.com/getan/golder/internal/history"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
@@ -240,6 +241,9 @@ func main() {
 		}
 		exit(0)
 		return
+	}
+	if _, err := heapdiag.StartFromEnv(os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "golder: heap profiling disabled: %v\n", err)
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {

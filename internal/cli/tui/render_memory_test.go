@@ -65,6 +65,19 @@ func TestCollapsedCardReleasesExpandedRenderBuffers(t *testing.T) {
 	}
 }
 
+func TestToolCardStrippedDiffDoesNotRetainResult(t *testing.T) {
+	diff := "--- a/large.txt\n+++ b/large.txt\n" + strings.Repeat("+large change\n", 10000)
+	result := "Edited large.txt\n" + diff
+	card := &toolCard{name: "edit"}
+	card.complete(true, result, map[string]any{"diff": diff})
+	if card.diff != diff || len(card.response) != 1 || card.response[0].text != "Edited large.txt" {
+		t.Fatal("card did not preserve the summary and separate diff")
+	}
+	if unsafe.StringData(card.response[0].text) == unsafe.StringData(result) {
+		t.Fatal("summary retains the original result and its discarded diff")
+	}
+}
+
 func TestDiffRenderCacheHasAByteBudget(t *testing.T) {
 	freshRenderCaches(t)
 	var lastDiff, lastOut string

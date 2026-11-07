@@ -553,7 +553,13 @@ func (c *toolCard) complete(ok bool, result string, details any) {
 	// card from showing the change twice (#560).
 	if diff, ok := ui.DiffFromDetails(details); ok {
 		c.diff = diff
-		result = stripDiffTail(result)
+		stripped := stripDiffTail(result)
+		if len(stripped) < len(result) {
+			// Response nodes are substrings of result. Copy the retained prefix so
+			// a short summary cannot keep the discarded, potentially large diff
+			// alive alongside the separate diff stored above.
+			result = strings.Clone(stripped)
+		}
 	}
 	c.response = parseToolResult(result)
 }
