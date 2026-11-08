@@ -57,6 +57,7 @@ func TestFacadeBoundaryPathsAndNetwork(t *testing.T) {
 		{"browser", `{"action":"open","url":"http://localhost:3000"}`, true},
 		{"browser", `{"action":"click","ref":"@e1"}`, true},
 		{"browser", `{"action":"snapshot"}`, false},
+		{"browser", `{"action":"quit"}`, false},
 		{"workspace", `{"action":"create","preset":"review"}`, true},
 		{"tuios", `{"action":"run","network":"on","command":"echo hi"}`, true},
 	} {

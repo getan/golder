@@ -78,6 +78,7 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 	if a.Action == "list" || a.Action == "attach" {
 		return raw, nil
 	}
+	selectedSocket := t.socketPath()
 	c, err := t.newClient()
 	if err != nil {
 		return nil, err
@@ -90,7 +91,13 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 		return nil, errors.New("selected browser does not match requested browser")
 	}
 	a.Browser = info.BrowserID
-	if a.Action != "status" && a.Action != "pause" && a.Action != "resume" {
+	if a.Action == "quit" {
+		if info.BrowserID == "" || selectedSocket == "" || t.socketPath() != selectedSocket {
+			return nil, errors.New("cannot pin the selected browser and socket for quit")
+		}
+		a.Socket = selectedSocket // host-supplied target fact, never a model capability
+	}
+	if a.Action != "status" && a.Action != "pause" && a.Action != "resume" && a.Action != "quit" {
 		target, err := t.resolveTarget(info, a.Tab)
 		if err != nil {
 			return nil, err

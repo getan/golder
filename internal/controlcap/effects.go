@@ -106,7 +106,7 @@ func Network(tool string, raw json.RawMessage) bool {
 	}
 	if tool == "browser" {
 		switch r.Action {
-		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "status", "pause", "resume":
+		case "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "status", "pause", "resume", "quit":
 			return false
 		default:
 			return true // page input can submit forms and trigger requests

@@ -26,6 +26,7 @@ import (
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/toolworker"
 )
 
 var (
@@ -40,6 +41,15 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == seatbelt.TerminalBootstrapFlag {
 		if err := seatbelt.ExecTerminalSandbox(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "golder-gui: terminal sandbox:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// File tools re-exec this GUI binary inside their per-call sandbox. Serve
+	// the worker protocol before parsing GUI flags or loading user state.
+	if len(os.Args) > 1 && os.Args[1] == toolworker.Flag {
+		if err := toolworker.Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "golder-gui: tool worker:", err)
 			os.Exit(1)
 		}
 		return

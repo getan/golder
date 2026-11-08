@@ -132,7 +132,7 @@ func (t *BrowserTool) Description() string {
 		return "Drive the running browser: snapshot the accessibility tree, " +
 			"with control limited to owned controlled browsers by default; host_control:true requests one-call external authority. " +
 			"click/fill/type/press by stable ref, navigate, wait, read console/network, " +
-			"and screenshot. list discovers instances; attach selects a browserId. " +
+			"and screenshot. list discovers instances; attach selects a browserId; quit requests a graceful browser shutdown. " +
 			"Pin a tab by its id from list; refs are per document. Prefer waiting for page readiness over repeated reloads. " +
 			"A timed-out mutation may already have happened: inspect the current state and never automatically repeat an action with unknown execution state." +
 			t.useHint()
@@ -188,12 +188,13 @@ const browserReadSchema = `{
 const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume"]},
+    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume","quit"]},
     "host_control":{"type":"boolean","description":"Request one-call access to a browser not created by this agent. Attaching does not grant later control."},
     "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance. Chromium permits only one live browser per persistent profile."},
     "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: use a separate named project-scoped profile. Omit for the persistent project-shared default; other names need exact first-use confirmation. Never a personal Chrome profile or filesystem path."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
+    "socket":{"type":"string","description":"Prepared target fact for quit; never a model-supplied capability."},
     "tab":{"type":"string","description":"Tab id from list; omit for the pinned tab, or a safe active tab if none is pinned."},
     "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
@@ -234,6 +235,7 @@ type browserArgs struct {
 	PageURL     string  `json:"page_url,omitempty"`
 	Action      string  `json:"action"`
 	Browser     string  `json:"browser,omitempty"`
+	Socket      string  `json:"socket,omitempty"`
 	Tab         string  `json:"tab,omitempty"`
 	TargetID    string  `json:"target_id,omitempty"`
 	Interactive bool    `json:"interactive,omitempty"`
@@ -382,6 +384,10 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	if a.Action == "list" {
 		return t.listInstances(ctx), nil
 	}
+	selectedSocket := t.socketPath()
+	if a.Action == "quit" && (a.Browser == "" || a.Socket == "" || a.Socket != selectedSocket) {
+		return browserError(errors.New("quit requires the browser identity and socket pinned before review")), nil
+	}
 	c, err := t.newClient()
 	if err != nil {
 		// The dial's own error names an environment variable; inside a pane the
@@ -405,13 +411,36 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	if a.Browser != "" && a.Browser != info.BrowserID {
 		return browserError(errors.New("browser identity changed after review; nothing was sent")), nil
 	}
+	if a.Action == "quit" && t.socketPath() != selectedSocket {
+		return browserError(errors.New("selected browser socket changed after review; nothing was sent")), nil
+	}
 	if !browserReadOnly(a.Action) || agentcore.SandboxRequestedFromContext(ctx) {
-		if err := t.Control.checkBrowser(ctx, info.BrowserID, t.socketPath(), a.HostControl); err != nil {
+		if err := t.Control.checkBrowser(ctx, info.BrowserID, selectedSocket, a.HostControl); err != nil {
 			return browserError(err), nil
 		}
 	}
 
 	switch a.Action {
+	case "quit":
+		if !info.HasCapability(browserctl.CapQuit) {
+			return browserError(errors.New("browser does not advertise graceful quit; nothing was sent")), nil
+		}
+		timeout := browserCloseTimeout
+		if a.TimeoutMS > 0 && time.Duration(a.TimeoutMS)*time.Millisecond < timeout {
+			timeout = time.Duration(a.TimeoutMS) * time.Millisecond
+		}
+		quitCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := c.Quit(quitCtx); err != nil {
+			return browserActionError(a.Action, err), nil
+		}
+		return agentcore.AgentToolResult{
+			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
+				"ok": true, "browser": info.BrowserID, "quitting": true, "exit_confirmed": false,
+				"hint": "Shutdown was accepted but exit is not yet confirmed; use list before reusing the profile.",
+			}))},
+			Details: map[string]any{"action": "quit", "browser": info.BrowserID, "socket": selectedSocket},
+		}, nil
 	case "status", "pause", "resume":
 		result, meta, err := c.Action(ctx, "interaction."+a.Action, map[string]any{}, browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
 		if err != nil {
@@ -1161,7 +1190,11 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 		err = &copy
 	}
 	result := browserError(err)
-	result.Content = append(result.Content, agentcore.NewTextContent("The action may have been dispatched; inspect the current page state and do not automatically repeat an action whose execution is unknown."))
+	hint := "The action may have been dispatched; inspect the current page state and do not automatically repeat an action whose execution is unknown."
+	if action == "quit" {
+		hint = "The quit request may have been dispatched; call list to inspect the browser and do not automatically repeat a quit whose outcome is unknown."
+	}
+	result.Content = append(result.Content, agentcore.NewTextContent(hint))
 	return result
 }
 

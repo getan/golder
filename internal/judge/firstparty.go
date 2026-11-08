@@ -144,7 +144,7 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			return f.next(ctx, tool, args)
 		case "open", "attach", "navigate", "click", "dblclick", "hover", "focus", "check", "uncheck",
 			"fill", "type", "select", "press", "insert", "scroll", "scroll_into_view",
-			"tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss", "resume":
+			"tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss", "resume", "quit":
 			// open starts a browser and Chromium; the rest type into a real page,
 			// which can submit a form, delete an account or post a comment. The
 			// session reviewer sees the arguments and the conversation; a fixed

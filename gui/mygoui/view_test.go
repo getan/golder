@@ -142,6 +142,36 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 	}
 }
 
+func TestSuccessfulBrowserQuitHidesOnlyMatchingPreviewOnce(t *testing.T) {
+	a := testApp()
+	a.browserPanelOpen = true
+	a.browserState = &browserWindowState{browserID: "browser-1", socket: browserSocketKey("/tmp/browser.sock")}
+	item := appsession.Item{ID: "quit-1", Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "quit"},
+		Details: map[string]any{"browser": "browser-1", "socket": "/tmp/browser.sock"}}}
+	item.Tool.Error = true
+	a.followBrowserTool(item)
+	if !a.browserPanelOpen {
+		t.Fatal("failed quit hid the preview")
+	}
+	item.Tool.Error = false
+	a.followBrowserTool(item)
+	if a.browserPanelOpen || a.browserState != nil {
+		t.Fatal("accepted quit did not hide its preview")
+	}
+	a.browserPanelOpen = true
+	a.browserState = &browserWindowState{browserID: "browser-1", socket: browserSocketKey("/tmp/browser.sock")}
+	a.followBrowserTool(item)
+	if !a.browserPanelOpen {
+		t.Fatal("a repeated transcript event hid the preview again")
+	}
+	item.ID = "quit-other"
+	item.Tool.Details["browser"] = "browser-2"
+	a.followBrowserTool(item)
+	if !a.browserPanelOpen {
+		t.Fatal("quit for another browser hid the preview")
+	}
+}
+
 func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

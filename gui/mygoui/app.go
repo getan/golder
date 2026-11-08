@@ -729,6 +729,25 @@ func (a *App) followBrowserTool(item appsession.Item) {
 	if !refresh {
 		return
 	}
+	if action, _ := item.Tool.Input["action"].(string); action == "quit" {
+		id := item.ID
+		if id == "" {
+			id = item.Tool.ID
+		}
+		browser, _ := item.Tool.Details["browser"].(string)
+		socket, _ := item.Tool.Details["socket"].(string)
+		if id != "" && browser != "" && socket != "" {
+			if a.browserFollowed == nil {
+				a.browserFollowed = make(map[string]bool)
+			}
+			if !a.browserFollowed[id] {
+				a.browserFollowed[id] = true
+				if a.browserPanelOpen && a.browserState != nil && a.browserState.browserID == browser && a.browserState.socket == browserSocketKey(socket) {
+					a.closeBrowserPanel()
+				}
+			}
+		}
+	}
 	selection, selectionSocket, selected := browserToolSelection(item)
 	if selected {
 		id := item.ID
