@@ -15,10 +15,11 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/getan/golder/extension/plugins/lark"
 	"github.com/getan/golder/extension/plugins/lark/internal/larkmcp"
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var version = "dev"
+var version = larkversion.Version
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

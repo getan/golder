@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 	setupevent "github.com/getan/golder/extension/setup"
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/provider"
@@ -512,10 +513,10 @@ func credentialReferenceName(value string) string {
 
 func managedExtensionVersion(version string) string {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
-	if version == "" || version == "unknown" {
+	if version == "" || version == "unknown" || version == "dev" {
 		return "dev"
 	}
-	return strings.ReplaceAll(version, "+", "-")
+	return larkversion.Version
 }
 
 func larkSourceConfigFromExisting(pkg extensions.ManagedPackage, current extensions.SourceConfig) (extensions.SourceConfig, error) {

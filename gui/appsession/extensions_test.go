@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/session"
@@ -44,7 +45,7 @@ func TestGUIManagedLarkConfigureEnableDisableAndUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 	controller := New(Options{
-		Model: "test-model", ProviderName: "test-provider", Cwd: t.TempDir(), Store: store,
+		Model: "test-model", ProviderName: "test-provider", Version: "1.5.62", Cwd: t.TempDir(), Store: store,
 		Extensions: manager,
 	})
 	if err := controller.Open(context.Background()); err != nil {
@@ -55,7 +56,7 @@ func TestGUIManagedLarkConfigureEnableDisableAndUninstall(t *testing.T) {
 	const helperContent = "managed-lark-helper"
 	helper := guiExtensionExecutable(t, t.TempDir(), "golder-lark", helperContent)
 	sum := sha256.Sum256([]byte(helperContent))
-	if err := controller.InstallLarkPackage(context.Background(), helper, hex.EncodeToString(sum[:]), "test"); err != nil {
+	if err := controller.InstallLarkPackage(context.Background(), helper, hex.EncodeToString(sum[:]), larkversion.Version); err != nil {
 		t.Fatal(err)
 	}
 	larkCLI := guiExtensionExecutable(t, t.TempDir(), "lark-cli", "official-lark")
@@ -93,6 +94,16 @@ func TestGUIManagedLarkConfigureEnableDisableAndUninstall(t *testing.T) {
 	if !view.Enabled || !view.Trusted {
 		t.Fatalf("enabled view = %+v", view)
 	}
+	controller.mu.Lock()
+	controller.opt.Version = "9.9.9"
+	controller.mu.Unlock()
+	view, err = controller.ExtensionSettings()
+	if err != nil || view.BundledVersion != larkversion.Version || view.UpdateAvailable || !view.Enabled || !view.Trusted {
+		t.Fatalf("host upgrade disturbed unchanged helper: %+v, %v", view.ExtensionPackageView, err)
+	}
+	if err := controller.requireMatchingLarkHelper(); err != nil {
+		t.Fatalf("host upgrade blocked the unchanged helper: %v", err)
+	}
 	if err := controller.DisableLark(); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +129,7 @@ func TestGUIManagedLarkUpdateRebindsSourceAndPreservesPrivateState(t *testing.T)
 		t.Fatal(err)
 	}
 	controller := New(Options{
-		Model: "test-model", ProviderName: "test-provider", Version: "1.0.0",
+		Model: "test-model", ProviderName: "test-provider", Version: "dev",
 		Cwd: t.TempDir(), Store: store, Extensions: manager,
 	})
 	if err := controller.Open(context.Background()); err != nil {
@@ -159,7 +170,7 @@ func TestGUIManagedLarkUpdateRebindsSourceAndPreservesPrivateState(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.BundledVersion != "2.0.0" || before.InstalledVersion != "1.0.0" || before.ActiveVersion != "1.0.0" || !before.UpdateAvailable {
+	if before.BundledVersion != larkversion.Version || before.InstalledVersion != "1.0.0" || before.ActiveVersion != "1.0.0" || !before.UpdateAvailable {
 		t.Fatalf("pre-update versions = %+v", before.ExtensionPackageView)
 	}
 	if err := controller.AuthorizeLark(context.Background(), "lark", nil); err == nil || !strings.Contains(err.Error(), "update the managed") {
@@ -176,21 +187,28 @@ func TestGUIManagedLarkUpdateRebindsSourceAndPreservesPrivateState(t *testing.T)
 	const newContent = "managed-lark-helper-v2"
 	newHelper := guiExtensionExecutable(t, t.TempDir(), "golder-lark", newContent)
 	newSum := sha256.Sum256([]byte(newContent))
-	if err := controller.UpdateLarkPackage(context.Background(), newHelper, hex.EncodeToString(newSum[:]), "2.0.0"); err != nil {
+	if err := controller.UpdateLarkPackage(context.Background(), newHelper, hex.EncodeToString(newSum[:]), larkversion.Version); err != nil {
 		t.Fatal(err)
 	}
 	after, err := controller.ExtensionSettings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.BundledVersion != "2.0.0" || after.InstalledVersion != "2.0.0" || after.ActiveVersion != "2.0.0" || !after.ActiveManaged || after.UpdateAvailable || after.Enabled || after.Trusted {
+	if after.BundledVersion != larkversion.Version || after.InstalledVersion != larkversion.Version || after.ActiveVersion != larkversion.Version || !after.ActiveManaged || after.UpdateAvailable || after.Enabled || after.Trusted {
 		t.Fatalf("post-update settings = %+v", after)
+	}
+	controller.mu.Lock()
+	controller.opt.Version = "9.9.9"
+	controller.mu.Unlock()
+	afterMainUpgrade, err := controller.ExtensionSettings()
+	if err != nil || afterMainUpgrade.BundledVersion != larkversion.Version || afterMainUpgrade.UpdateAvailable {
+		t.Fatalf("main upgrade changed Lark version or required an update: %+v, %v", afterMainUpgrade.ExtensionPackageView, err)
 	}
 	cfg, err := manager.Config(larkSourceRef)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(cfg.Command, filepath.Join("lark", "2.0.0", "bin")) || cfg.Enabled || cfg.Env["LARK_MCP_CLI"] != beforeCfg.Env["LARK_MCP_CLI"] || cfg.Env["LARK_MCP_APP_ID"] != beforeCfg.Env["LARK_MCP_APP_ID"] || cfg.Env["LARK_MCP_DOMAINS"] != beforeCfg.Env["LARK_MCP_DOMAINS"] {
+	if !strings.Contains(cfg.Command, filepath.Join("lark", larkversion.Version, "bin")) || cfg.Enabled || cfg.Env["LARK_MCP_CLI"] != beforeCfg.Env["LARK_MCP_CLI"] || cfg.Env["LARK_MCP_APP_ID"] != beforeCfg.Env["LARK_MCP_APP_ID"] || cfg.Env["LARK_MCP_DOMAINS"] != beforeCfg.Env["LARK_MCP_DOMAINS"] {
 		t.Fatalf("rebound source = %+v", cfg)
 	}
 	if value, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), "lark-app-secret"); err != nil || value != "test-app-secret" {

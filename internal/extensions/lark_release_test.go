@@ -7,11 +7,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 )
 
 func testLarkArchive(t *testing.T, kind byte) []byte {
@@ -41,6 +44,50 @@ func testLarkArchive(t *testing.T, kind byte) []byte {
 	return buf.Bytes()
 }
 
+func TestLarkReleaseVersionIndependentFromHost(t *testing.T) {
+	for _, host := range []string{"1.5.62", "1.5.99"} {
+		release, err := larkRelease(host, "darwin", "arm64", "https://example.invalid/releases")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if release.Version != larkversion.Version || release.Archive != "golder-lark_"+host+"_darwin_arm64.tar.gz" || !strings.Contains(release.ArchiveURL, "/v"+host+"/") {
+			t.Fatalf("host %s resolved to %+v", host, release)
+		}
+	}
+}
+
+type larkReleaseTransport func(*http.Request) (*http.Response, error)
+
+func (f larkReleaseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestLarkReleaseInstallsIndependentVersionWithoutNetwork(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	release, err := larkRelease("9.9.9", "darwin", "arm64", "https://example.invalid/releases")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := testLarkArchive(t, tar.TypeReg)
+	digest := sha256.Sum256(archive)
+	var requested []string
+	client := &http.Client{Transport: larkReleaseTransport(func(req *http.Request) (*http.Response, error) {
+		requested = append(requested, req.URL.String())
+		body := archive
+		if req.URL.String() == release.ChecksumURL {
+			body = []byte(fmt.Sprintf("%x  %s\n", digest, release.Archive))
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	pkg, err := installLarkRelease(context.Background(), release, client)
+	if err != nil || pkg.Version != larkversion.Version {
+		t.Fatalf("install = %+v, %v", pkg, err)
+	}
+	if len(requested) != 2 || requested[0] != release.ChecksumURL || requested[1] != release.ArchiveURL {
+		t.Fatalf("unexpected release requests: %v", requested)
+	}
+}
+
 func TestLarkReleaseInstallVerifiesArchive(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GOLDER_HOME", home)
@@ -63,7 +110,7 @@ func TestLarkReleaseInstallVerifiesArchive(t *testing.T) {
 	}
 	checksum = fmt.Sprintf("%x  %s\n", digest, release.Archive)
 	pkg, err := installLarkRelease(context.Background(), release, server.Client())
-	if err != nil || pkg.Version != "1.2.3" {
+	if err != nil || pkg.Version != larkversion.Version {
 		t.Fatalf("verified install failed: %v", err)
 	}
 	if len(requested) != 2 || !strings.HasSuffix(requested[0], "checksums.txt") {

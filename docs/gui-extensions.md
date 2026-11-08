@@ -41,6 +41,12 @@ This is not a second full `golder` binary. It is the Lark MCP stdio adapter. The
 release workflow builds it for the package architecture, strips it, records its
 SHA-256 and lets MyGo include/sign it with the app.
 
+The helper's version is maintained independently of the GUI version. Upgrading
+Golder alone does not require reinstalling or reapproving an unchanged, intact
+managed helper. A new Lark version triggers the update flow; a missing, unmanaged
+or modified helper still requires review. Existing packages are verified against
+their installed checksum.
+
 Nothing happens during discovery. The person explicitly performs these steps:
 
 1. **Install package**

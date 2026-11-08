@@ -9,6 +9,19 @@ import (
 	"github.com/getan/golder/gui/appsession"
 )
 
+func TestLarkInstallRequiresBundledVersion(t *testing.T) {
+	a := testApp()
+	a.installLarkPackage()
+	if !strings.Contains(a.extensionErr, "version is unavailable") || a.extensionBusy {
+		t.Fatalf("install accepted missing version: %q, busy=%t", a.extensionErr, a.extensionBusy)
+	}
+	a.extensionErr = ""
+	a.updateLarkPackage()
+	if !strings.Contains(a.extensionErr, "version is unavailable") || a.extensionBusy {
+		t.Fatalf("update accepted missing version: %q, busy=%t", a.extensionErr, a.extensionBusy)
+	}
+}
+
 func TestExtensionSetupAuthorizationURLLivesOnlyWhilePending(t *testing.T) {
 	a := testApp()
 	a.extensionBusy = true
@@ -98,19 +111,22 @@ func TestLarkStatusAndVersionLabelsAreIndependent(t *testing.T) {
 	if got := larkAuthorizationStatus("configured"); got != "Not verified" {
 		t.Fatalf("configured env was presented as user auth: %q", got)
 	}
+	if larkHelperReady(configured) {
+		t.Fatal("missing bundled version was treated as ready")
+	}
 	mismatch := configured
 	mismatch.BundledVersion, mismatch.InstalledVersion, mismatch.ActiveVersion = "1.5.54", "1.5.54", "1.5.53"
 	mismatch.UpdateAvailable = true
-	if larkHelperReady(mismatch, "v1.5.54") {
+	if larkHelperReady(mismatch) {
 		t.Fatal("mismatched active helper was treated as ready")
 	}
 	matching := configured
 	matching.BundledVersion, matching.InstalledVersion, matching.ActiveVersion = "1.5.54", "1.5.54", "1.5.54"
 	matching.ActiveManaged = true
-	if !larkHelperReady(matching, "v1.5.54") {
+	if !larkHelperReady(matching) {
 		t.Fatal("matching helper was not ready")
 	}
-	bundled, installed, active := larkHelperVersions(mismatch, "v1.5.54")
+	bundled, installed, active := larkHelperVersions(mismatch)
 	if strings.Join([]string{bundled, installed, active}, "/") != "1.5.54/1.5.54/1.5.53" {
 		t.Fatalf("versions=%s/%s/%s", bundled, installed, active)
 	}
@@ -178,7 +194,7 @@ func TestLarkHelperMismatchShowsOneClickUpdate(t *testing.T) {
 			t.Fatalf("mismatch UI is missing %q; texts=%q", want, tt.Texts())
 		}
 	}
-	if larkHelperReady(a.extension, "1.5.55") {
+	if larkHelperReady(a.extension) {
 		t.Fatal("mismatched helper left authorization controls ready")
 	}
 }

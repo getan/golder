@@ -8,7 +8,18 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 )
+
+func TestVersionReportsIndependentHelperVersion(t *testing.T) {
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"--version"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "golder-lark "+larkversion.Version+"\n"; got != want {
+		t.Fatalf("version = %q, want %q", got, want)
+	}
+}
 
 func TestConfigGenerationIsDisabledAndUsesUserIdentity(t *testing.T) {
 	var out bytes.Buffer

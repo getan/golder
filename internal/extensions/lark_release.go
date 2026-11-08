@@ -18,6 +18,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 )
 
 var larkReleaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -39,12 +41,14 @@ func larkRelease(version, goos, goarch, base string) (LarkRelease, error) {
 	if (goos != "darwin" && goos != "linux") || (goarch != "amd64" && goarch != "arm64") {
 		return LarkRelease{}, errors.New("the matching Lark helper is unavailable on this platform")
 	}
+	// Artifacts live in the host release; their package version is independent.
 	archive := fmt.Sprintf("golder-lark_%s_%s_%s.tar.gz", version, goos, goarch)
 	release := strings.TrimRight(base, "/") + "/v" + version
-	return LarkRelease{Version: version, Archive: archive, ArchiveURL: release + "/" + archive, ChecksumURL: release + "/checksums.txt"}, nil
+	return LarkRelease{Version: larkversion.Version, Archive: archive, ArchiveURL: release + "/" + archive, ChecksumURL: release + "/checksums.txt"}, nil
 }
 
-// LarkReleaseFor reports the fixed official release and checksum URLs.
+// LarkReleaseFor reports official URLs for a Golder release and the independent
+// Lark version contained in that release.
 func LarkReleaseFor(version string) (LarkRelease, error) {
 	return larkRelease(version, runtime.GOOS, runtime.GOARCH, "https://github.com/getan/golder/releases/download")
 }

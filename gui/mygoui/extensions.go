@@ -68,17 +68,13 @@ func bundledLarkHelper() (source, checksum string, err error) {
 	return source, string(raw), nil
 }
 
-func extensionPackageVersion(version string) string {
-	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
-	if version == "" || version == "unknown" {
-		return "dev"
-	}
-	version = strings.ReplaceAll(version, "+", "-")
-	return version
-}
-
 func (a *App) installLarkPackage() {
 	if a.extensionBusy {
+		return
+	}
+	version := strings.TrimSpace(a.extension.BundledVersion)
+	if version == "" {
+		a.extensionErr = "Lark helper version is unavailable; reload Settings and try again."
 		return
 	}
 	source, checksum, err := bundledLarkHelper()
@@ -87,7 +83,6 @@ func (a *App) installLarkPackage() {
 		return
 	}
 	a.extensionBusy, a.extensionErr, a.extensionNote = true, "", "Installing verified helper…"
-	version := extensionPackageVersion(a.ctrl.Version())
 	win, ctrl := a.win, a.ctrl
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -115,6 +110,11 @@ func (a *App) updateLarkPackage() {
 	if a.extensionBusy {
 		return
 	}
+	version := strings.TrimSpace(a.extension.BundledVersion)
+	if version == "" {
+		a.extensionErr = "Lark helper version is unavailable; reload Settings and try again."
+		return
+	}
 	source, checksum, err := bundledLarkHelper()
 	if err != nil {
 		a.extensionErr = err.Error()
@@ -122,7 +122,6 @@ func (a *App) updateLarkPackage() {
 	}
 	a.extensionBusy, a.extensionErr = true, ""
 	a.extensionNote = "Installing the bundled helper and rebinding the existing Source…"
-	version := extensionPackageVersion(a.ctrl.Version())
 	configured := a.extension.Configured
 	win, ctrl := a.win, a.ctrl
 	go func() {
@@ -675,12 +674,8 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 
 func (a *App) larkExtensionCard(c *ui.Context) {
 	theme := c.Theme()
-	guiVersion := ""
-	if a.ctrl != nil {
-		guiVersion = a.ctrl.Version()
-	}
-	bundledVersion, installedVersion, activeVersion := larkHelperVersions(a.extension, guiVersion)
-	helperReady := larkHelperReady(a.extension, guiVersion)
+	bundledVersion, installedVersion, activeVersion := larkHelperVersions(a.extension)
+	helperReady := larkHelperReady(a.extension)
 	next := a.larkNextAction(helperReady)
 	statusColor := theme.TextMuted
 	if a.extension.Enabled && a.extension.State == "ready" {
@@ -868,10 +863,10 @@ func larkAuthorizationStatus(status string) string {
 	}
 }
 
-func larkHelperVersions(extension appsession.LarkExtensionSettings, guiVersion string) (bundled, installed, active string) {
+func larkHelperVersions(extension appsession.LarkExtensionSettings) (bundled, installed, active string) {
 	bundled = strings.TrimSpace(extension.BundledVersion)
 	if bundled == "" {
-		bundled = extensionPackageVersion(guiVersion)
+		bundled = "Unknown"
 	}
 	installed = strings.TrimSpace(extension.InstalledVersion)
 	if installed == "" {
@@ -890,12 +885,12 @@ func larkHelperVersions(extension appsession.LarkExtensionSettings, guiVersion s
 	return bundled, installed, active
 }
 
-func larkHelperReady(extension appsession.LarkExtensionSettings, guiVersion string) bool {
-	bundled, _, active := larkHelperVersions(extension, guiVersion)
-	if !extension.Configured {
+func larkHelperReady(extension appsession.LarkExtensionSettings) bool {
+	bundled, _, active := larkHelperVersions(extension)
+	if !extension.Configured || strings.TrimSpace(extension.BundledVersion) == "" {
 		return false
 	}
-	if bundled == "" || bundled == "dev" {
+	if bundled == "dev" {
 		return true
 	}
 	return extension.ActiveManaged && active == bundled && !extension.UpdateAvailable

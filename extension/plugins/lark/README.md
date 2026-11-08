@@ -27,6 +27,18 @@ extension/plugins/lark/
 The generic state/setup, sandbox and consent code lives in the host's existing
 packages. The plugin does not import the host UI/agent/permission internals.
 
+## Versioning and releases
+
+The helper version is maintained independently in `version/version.go`, and
+is reported by `golder-lark --version` and MCP initialization. Golder releases
+continue to ship a verified helper, but a host-only release must not bump the
+helper version or require users to replace a matching installed helper. Bump
+the helper version when its code, embedded Skills, or a dependency or toolchain
+change affects it; never reuse a version for a changed helper. Archive names and
+download URLs still identify the containing Golder release. GUI bundles and CLI
+release archives use the same helper version; installations remain checksum
+verified and a checksum conflict for an existing version fails closed.
+
 ## Install and register
 
 `/extensions` always shows **Lark + Project** in its first-party package section,

@@ -341,9 +341,9 @@ func (w *larkSetupWizard) view() string {
 			b.WriteString("  " + err.Error() + "\n  Install a matching release build or configure Lark in the GUI.\n")
 		} else {
 			if w.installedVersion != "" {
-				fmt.Fprintf(&b, "  Installed helper: %s (not the current release).\n", extensions.DisplayText(w.installedVersion, 64))
+				fmt.Fprintf(&b, "  Installed helper: %s (not the bundled Lark version).\n", extensions.DisplayText(w.installedVersion, 64))
 			}
-			fmt.Fprintf(&b, "  Install the matching verified Golder helper %s?\n  %s\n  SHA-256 is checked against the official release checksums.\n\n  Enter install · Esc cancel", release.Version, release.ArchiveURL)
+			fmt.Fprintf(&b, "  Install the verified Lark helper %s?\n  %s\n  SHA-256 is checked against the official release checksums.\n\n  Enter install · Esc cancel", release.Version, release.ArchiveURL)
 		}
 	case "lark-cli", "project-cli":
 		kind := extensions.OfficialLarkCLI

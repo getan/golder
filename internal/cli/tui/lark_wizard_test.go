@@ -10,8 +10,29 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	larkversion "github.com/getan/golder/extension/plugins/lark/version"
 	"github.com/getan/golder/internal/extensions"
 )
+
+func TestLarkWizardReusesHelperAfterHostUpgrade(t *testing.T) {
+	m := extensionModel(t)
+	m.opts.Version = "v9.9.9"
+	const content = "fixture-helper"
+	path := filepath.Join(t.TempDir(), "golder-lark")
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(content))
+	pkg, err := extensions.InstallManagedPackage(extensions.PackageInstallOptions{ID: "lark", Version: larkversion.Version, Source: path, SHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _ := m.beginLarkWizard()
+	w := next.(Model).larkWizard
+	if w == nil || w.pkg.Executable != pkg.Executable || w.phase == "helper" {
+		t.Fatalf("host upgrade requested an unchanged helper: %+v", w)
+	}
+}
 
 func TestLarkWizardDefaultsAndPrivateSecret(t *testing.T) {
 	m := extensionModel(t)

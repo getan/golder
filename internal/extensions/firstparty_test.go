@@ -73,6 +73,22 @@ func TestManagedPackageRejectsWrongChecksumAndBundleSymlink(t *testing.T) {
 	}
 }
 
+func TestManagedPackageRejectsChangedBinaryForExistingVersion(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	first := executableFixture(t, t.TempDir(), executableName("golder-lark"), "first")
+	second := executableFixture(t, t.TempDir(), executableName("golder-lark"), "second")
+	if _, err := InstallManagedPackage(PackageInstallOptions{ID: "lark", Version: "1.2.3", Source: first, SHA256: checksumOf("first")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallManagedPackage(PackageInstallOptions{ID: "lark", Version: "1.2.3", Source: second, SHA256: checksumOf("second")}); err == nil || !strings.Contains(err.Error(), "checksum differs") {
+		t.Fatalf("changed helper reused an existing version: %v", err)
+	}
+	installed, ok := InstalledManagedPackage("lark")
+	if !ok || installed.SHA256 != checksumOf("first") {
+		t.Fatalf("existing helper was replaced: %+v, %t", installed, ok)
+	}
+}
+
 func TestManagedPackageRejectsSymlinkedStateComponent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("GOLDER_HOME", home)
