@@ -12,6 +12,16 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用，�
 
 审批、凭据脱敏与 OS 沙箱提供可配置的安全防护；具体边界取决于工具、权限模式和平台。
 
+### 桌面 GUI
+
+<p align="center">
+  <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI：项目与会话导航、Agent 对话以及架构图预览">
+</p>
+
+<p align="center"><sub>Golder GUI 实际界面：项目与会话导航、Agent 对话和应用内 SVG 预览。</sub></p>
+
+### 终端工作区
+
 <p align="center">
   <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
     <img src="docs/assets/demo.gif" width="100%" alt="golder workspace 真实会话：agent 在一侧改代码，另一侧 shell 同步运行测试">

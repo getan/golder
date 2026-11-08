@@ -12,6 +12,16 @@ Choose the interface that fits your work: **Golder GUI** for a graphical project
 
 Approvals, credential redaction and OS sandboxing provide configurable safeguards; their availability and behavior depend on the tool, permission mode and platform.
 
+### Desktop GUI
+
+<p align="center">
+  <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI with project and chat navigation, a conversation and an architecture diagram preview">
+</p>
+
+<p align="center"><sub>Golder GUI: project and session navigation, an Agent conversation and an in-app SVG preview.</sub></p>
+
+### Terminal workspace
+
 <p align="center">
   <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
     <img src="docs/assets/demo.gif" width="100%" alt="A real golder workspace session: the agent fixes code while tests run in a neighboring shell pane">
