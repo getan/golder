@@ -260,9 +260,14 @@ func (a *App) sidebar(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Surface).
 		BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 		ui.Column(c).Padding(10, 10, 8, 10).Gap(10).Children(func() {
-			ui.Row(c).Padding(0, 4).AlignItems(ui.Center).Children(func() {
+			header := ui.Row(c).Padding(0, 4).AlignItems(ui.Center)
+			header.Children(func() {
 				ui.Text(c, "Projects").FontSize(11).FontWeight(600).TextColor(t.TextMuted).Grow(1)
-				if subtleButton(c, "+").Label("Add project folder").Tooltip("Add project folder").Clicked() {
+				add := subtleButton(c, "+").Label("Add project folder").Tooltip("Add project folder")
+				if !header.Hovered() && !add.FocusVisible() {
+					add.Opacity(0)
+				}
+				if add.Clicked() {
 					a.addProject()
 				}
 			})
@@ -294,7 +299,11 @@ func (a *App) sidebar(c *ui.Context) {
 						if sameProjectPath(project.Path, a.project) {
 							ui.Text(c, "●").FontSize(7).TextColor(t.Accent).Tooltip("Current session project")
 						}
-						if subtleButton(c, "+").Label("Create session in " + project.Name).Tooltip("New session in " + project.Name).Clicked() {
+						add := subtleButton(c, "+").Label("Create session in " + project.Name).Tooltip("New session in " + project.Name)
+						if !row.Hovered() && !add.FocusVisible() {
+							add.Opacity(0)
+						}
+						if add.Clicked() {
 							a.selectedProject = project.Path
 							a.newSessionInProject(project.Path)
 						}

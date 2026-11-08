@@ -81,7 +81,12 @@ Two optional surfaces need runtime pieces:
 
 - Navigation: the left rail keeps archive, update and settings actions available
   when the projects and chats sidebar is collapsed. Drag the divider to resize
-  the sidebar. Release builds check GitHub for a newer GUI package at startup;
+  the sidebar. Project add buttons appear on hover or keyboard focus. Projects
+  persist separately from sessions; remove a project with its context menu.
+  A graphical launch from the filesystem root restores the selected available
+  non-root project, or uses the home directory when none is available. An
+  explicit `-cwd` is preserved. Release builds check GitHub for a newer GUI
+  package at startup;
   the update icon turns blue when the matching platform package is published.
   Click it to download the installer, then install it and restart the GUI. This
   is not an unattended in-place update; package-manager installations should

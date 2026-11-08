@@ -148,6 +148,51 @@ func (c *Controller) RemoveProject(path string) error {
 	return writeProjectFile(state)
 }
 
+// ResolveLaunchProject avoids treating a graphical launcher's filesystem-root
+// working directory as an intentionally chosen project. An explicit -cwd,
+// including a root directory, always wins.
+func ResolveLaunchProject(cwd string, explicit bool) (string, bool, error) {
+	if explicit || !isFilesystemRoot(cwd) {
+		return cwd, false, nil
+	}
+	projectFileMu.Lock()
+	state, err := loadProjectFile()
+	projectFileMu.Unlock()
+	if err != nil {
+		// Open reports the registry error separately; do not make a damaged
+		// registry prevent the GUI from starting or overwrite it here.
+		state = projectFile{}
+	}
+	sort.SliceStable(state.Projects, func(i, j int) bool {
+		if (state.Projects[i].Path == state.Selected) != (state.Projects[j].Path == state.Selected) {
+			return state.Projects[i].Path == state.Selected
+		}
+		return state.Projects[i].LastOpened.After(state.Projects[j].LastOpened)
+	})
+	for _, project := range state.Projects {
+		if !filepath.IsAbs(project.Path) {
+			continue
+		}
+		path, err := canonicalProjectPath(project.Path)
+		if err == nil && !isFilesystemRoot(path) {
+			return path, true, nil
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err == nil {
+		home, err = canonicalProjectPath(home)
+	}
+	if err != nil || home == "" || isFilesystemRoot(home) {
+		return "", false, errors.New("cannot find a project folder for graphical launch; choose one with -cwd")
+	}
+	return home, true, nil
+}
+
+func isFilesystemRoot(path string) bool {
+	path = filepath.Clean(strings.TrimSpace(path))
+	return filepath.IsAbs(path) && filepath.Dir(path) == path
+}
+
 func ensureInitialProject(path string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil

@@ -82,6 +82,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("golder-gui: %v", err)
 	}
+	wd, graphicalFallback, err := appsession.ResolveLaunchProject(wd, changed["cwd"] && strings.TrimSpace(*cwd) != "")
+	if err != nil {
+		log.Fatalf("golder-gui: %v", err)
+	}
+	if graphicalFallback {
+		if err := os.Chdir(wd); err != nil {
+			log.Fatalf("golder-gui: %v", err)
+		}
+	}
 
 	cfg, cfgErr := config.LoadFileConfig(config.FileConfigPath())
 	if cfgErr != nil {
@@ -170,6 +179,11 @@ func main() {
 		log.Fatalf("golder-gui: %v", err)
 	}
 	defer ctrl.Close()
+	if graphicalFallback {
+		if err := ctrl.SelectProject(wd); err != nil {
+			fmt.Fprintf(os.Stderr, "golder-gui: cannot select launch project: %v\n", err)
+		}
+	}
 
 	if err := mygoui.New(ctrl).Run(); err != nil {
 		log.Fatalf("golder-gui: %v", err)
