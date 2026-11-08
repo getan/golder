@@ -33,6 +33,11 @@ func (a *App) refreshComputerPermissions() {
 	a.computerPermission = computeruse.ProbePermissions()
 }
 
+func (a *App) setComputerFailure(err error) {
+	a.refreshComputerPermissions()
+	a.computerError = computeruse.DescribeFailure(err, a.computerPermission)
+}
+
 func (a *App) requestComputerPermission(kind string) {
 	a.computerPermissionNote = "Respond to the macOS prompt, then refresh the status. macOS may require quitting and reopening Golder GUI."
 	win := a.win
@@ -40,7 +45,10 @@ func (a *App) requestComputerPermission(kind string) {
 		computeruse.RequestMacPermission(kind)
 		if win != nil {
 			state := computeruse.ProbePermissions()
-			win.Update(func() { a.computerPermission = state })
+			win.Update(func() {
+				a.computerPermission = state
+				a.computerPermissionNote = computeruse.DescribePermissions(state) + " If macOS did not prompt or still reports denied, check System Settings and reopen this app."
+			})
 		}
 	}()
 }
@@ -69,6 +77,7 @@ func (a *App) macComputerPermissionsView(c *ui.Context, compact bool) {
 		}
 		if subtleButton(c, "Refresh system permissions").Clicked() {
 			a.refreshComputerPermissions()
+			a.computerPermissionNote = "Refreshed. " + computeruse.DescribePermissions(a.computerPermission)
 		}
 	})
 	if !compact {
@@ -151,7 +160,7 @@ func (a *App) loadComputerTargets() {
 				return
 			}
 			if err != nil {
-				a.computerError = err.Error()
+				a.computerError = computeruse.DescribeFailure(err, permissions)
 				if backend != nil {
 					go backend.Close()
 				}
@@ -201,7 +210,7 @@ func (a *App) launchComputerApplication(index int) {
 			}
 			a.computerBusy, a.computerSetupStop = false, nil
 			if err != nil {
-				a.computerError = err.Error()
+				a.setComputerFailure(err)
 				return
 			}
 			a.applyComputerResolution(resolution)
@@ -271,7 +280,7 @@ func (a *App) startComputer(control bool) {
 				return
 			}
 			if err != nil {
-				a.computerError = err.Error()
+				a.setComputerFailure(err)
 				a.clearComputerCandidate()
 				session.Stop()
 				return
@@ -336,7 +345,8 @@ func (a *App) prepareComputerCandidate(gate computeruse.OperatorPreviewBackend, 
 				err = errors.New("conversation changed during window selection")
 			}
 			if err != nil {
-				a.computerError, a.computerPreviewFailed = err.Error(), true
+				a.setComputerFailure(err)
+				a.computerPreviewFailed = true
 				return
 			}
 			a.computerCandidate, a.computerCandidateID = bitmap, preview.ID
@@ -459,7 +469,7 @@ func (a *App) startComputerPreview() {
 					if bitmap != nil {
 						a.computerFrame, a.computerError = bitmap, ""
 					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) {
-						a.computerError = err.Error()
+						a.setComputerFailure(err)
 					}
 				})
 			}
@@ -657,7 +667,7 @@ func (a *App) resumeComputer() {
 		err := session.Resume(ctx)
 		win.Update(func() {
 			if a.computerSession == session && err != nil {
-				a.computerError = err.Error()
+				a.setComputerFailure(err)
 			}
 		})
 	}()

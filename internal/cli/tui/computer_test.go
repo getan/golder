@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +25,37 @@ func (*computerPickerBackend) Validate(context.Context, computeruse.Target, bool
 func (b *computerPickerBackend) Close() error {
 	close(b.closed)
 	return nil
+}
+
+func TestComputerStatusDoesNotStartOrRequireDesktopSession(t *testing.T) {
+	m := NewModel(Options{})
+	m.running = true
+	next, cmd := m.runComputer("/computer status")
+	m = next.(Model)
+	text := strings.Join(m.transcript.contentLines(), "\n")
+	if cmd != nil || !strings.Contains(text, "Screen Recording:") || !strings.Contains(text, "Accessibility:") || !strings.Contains(text, "do not authorize a target window") {
+		t.Fatalf("status was not a non-prompting permission report: %q", text)
+	}
+}
+
+func TestComputerSetupFailureReportsReasonAndPermissions(t *testing.T) {
+	s := newRemoteTestSession(t)
+	setup := newComputerSetup(s.header.ID)
+	s.computerSetup = setup
+	m := NewModel(Options{})
+	m.session = s
+	next, _ := m.computerTargetsReady(computerTargetsMsg{setup: setup, err: errors.New("no matching visible window"),
+		perms: computeruse.PermissionState{ScreenCapture: "granted", Accessibility: "denied"}})
+	m = next.(Model)
+	text := strings.Join(m.transcript.contentLines(), "\n")
+	for _, want := range []string{"no matching visible window", "Screen Recording: granted", "Accessibility: denied"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("failure missing %q: %q", want, text)
+		}
+	}
+	if s.computerSetup != nil {
+		t.Fatal("failed setup remained active")
+	}
 }
 
 func TestComputerPickerRequiresSeparateReadOnlyGrantAndCancels(t *testing.T) {

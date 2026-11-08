@@ -256,9 +256,7 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 	if msg.err != nil {
 		m.session.cancelComputerSetup()
 		m.transcript.addSystem("Computer Use: " + extensions.DisplayText(msg.err.Error(), 512))
-		if strings.Contains(msg.err.Error(), "macOS AX window") && computeruse.ProbePermissions().Accessibility == "denied" {
-			m.transcript.addSystem("Enable Accessibility for the app hosting Golder in macOS System Settings → Privacy & Security → Accessibility, then retry. Screen Recording is also needed for screenshots.")
-		}
+		m.transcript.addSystem(computeruse.DescribePermissions(msg.perms))
 		m.relayout()
 		return m, nil
 	}
@@ -477,9 +475,7 @@ func (m Model) computerStarted(msg computerStartedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
 		m.session.cancelComputerSetup()
 		m.transcript.addSystem("Computer Use: " + extensions.DisplayText(msg.err.Error(), 512))
-		if strings.Contains(msg.err.Error(), "macOS AX window") && computeruse.ProbePermissions().Accessibility == "denied" {
-			m.transcript.addSystem("Enable Accessibility for the app hosting Golder in macOS System Settings → Privacy & Security → Accessibility, then retry. Screen Recording is also needed for screenshots.")
-		}
+		m.transcript.addSystem(computeruse.DescribePermissions(computeruse.ProbePermissions()))
 		m.relayout()
 		return m, nil
 	}
@@ -546,8 +542,10 @@ func (m Model) runComputer(line string) (tea.Model, tea.Cmd) {
 	m.transcript.addUser(line)
 	m.input.Clear()
 	m.menu.close()
-	if args != "stop" {
-		m.transcript.addSystem("Usage: /computer [stop]")
+	if args == "status" {
+		m.transcript.addSystem(computeruse.DescribePermissions(computeruse.ProbePermissions()))
+	} else if args != "stop" {
+		m.transcript.addSystem("Usage: /computer [status|stop]")
 	} else if m.session == nil {
 		m.transcript.addSystem("Computer Use is unavailable.")
 	} else if m.running {

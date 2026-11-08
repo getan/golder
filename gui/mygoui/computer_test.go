@@ -5,6 +5,7 @@ import (
 	"image"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -53,6 +54,34 @@ func TestMacComputerPermissionsAreAvailableInSettings(t *testing.T) {
 		if !tt.HasText(want) {
 			t.Fatalf("permissions settings are missing %q; texts=%q", want, tt.Texts())
 		}
+	}
+}
+
+func TestComputerPickerShowsSpecificFailureAndProcessPermissions(t *testing.T) {
+	a := testApp()
+	a.computerPickerOpen = true
+	a.setComputerFailure(&computeruse.WindowDiagnostic{Reason: computeruse.WindowAXNoMatch, Windows: 1})
+	if !strings.Contains(a.computerError, "none of the 1 Accessibility windows matched") || !strings.Contains(a.computerError, "System permissions for this Golder process") {
+		t.Fatalf("computer failure = %q", a.computerError)
+	}
+	tt := ui.NewTester(a.view, 1200, 800)
+	if texts := strings.Join(tt.Texts(), "\n"); !strings.Contains(texts, "none of the 1 Accessibility windows matched") {
+		t.Fatalf("picker did not show the window diagnostic: %q", texts)
+	}
+}
+
+func TestMacComputerPermissionRefreshShowsFeedback(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS settings")
+	}
+	a := testApp()
+	a.settingsOpen, a.settingsTab = true, 1
+	cc := ui.NewTester(a.view, 1200, 800)
+	if err := cc.Click("Refresh system permissions"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(a.computerPermissionNote, "Refreshed.") || !strings.Contains(a.computerPermissionNote, "Accessibility:") {
+		t.Fatalf("refresh produced no status feedback: %q", a.computerPermissionNote)
 	}
 }
 

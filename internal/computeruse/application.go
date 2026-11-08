@@ -131,7 +131,7 @@ func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		case <-ctx.Done():
 			return ApplicationResolution{}, ctx.Err()
 		case <-deadline.C:
-			return ApplicationResolution{}, fmt.Errorf("%s launched but no matching visible window appeared", app.Name)
+			return ApplicationResolution{}, fmt.Errorf("%s launched but no matching visible window appeared within 12 seconds; show its window on the current desktop and select it again", app.Name)
 		case <-ticker.C:
 		}
 	}

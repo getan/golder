@@ -112,7 +112,7 @@ func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) e
 		return context.Canceled
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -198,7 +198,7 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 			s.frames = nil
 		}
 		s.mu.Unlock()
-		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	if err := operationCtx.Err(); err != nil {
 		return err
@@ -275,7 +275,7 @@ func (s *Session) Resume(ctx context.Context) error {
 		return context.Canceled
 	}
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrTargetLost, err)
+		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

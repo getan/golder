@@ -474,8 +474,10 @@ func newRunSessionWithStore(store *session.Store, opts Options) (*runSession, []
 	s.installComputerRequest()
 	s.slash.AddBuiltin(runtime.SlashCommand{
 		Name: "computer", Description: "select a desktop window and open its separate operator pane",
-		ArgumentHint: "[stop]", Category: runtime.CategorySession,
-		Action: func(string) string { return "Use /computer to select a window or /computer stop to revoke access." },
+		ArgumentHint: "[status|stop]", Category: runtime.CategorySession,
+		Action: func(string) string {
+			return "Use /computer to select a window, /computer status to inspect system permissions, or /computer stop to revoke access."
+		},
 	})
 
 	s.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: os.Stderr}

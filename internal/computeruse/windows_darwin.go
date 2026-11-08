@@ -100,32 +100,65 @@ static int cu_window_exists(uint32_t window_id, int32_t pid, uint64_t sec, uint6
 	return found;
 }
 
+enum {
+	CU_AX_OK = 0, CU_AX_PERMISSION, CU_AX_WINDOW, CU_AX_BOUNDS, CU_AX_APP,
+	CU_AX_READ, CU_AX_EMPTY, CU_AX_GEOMETRY, CU_AX_NO_MATCH, CU_AX_AMBIGUOUS,
+	CU_AX_LIMIT, CU_AX_FOCUS, CU_AX_DISABLED
+};
+
+typedef struct {
+	int reason;
+	int ax_error;
+	int windows;
+	int readable;
+	int matches;
+} cu_ax_diagnostic;
+
+static int cu_ax_match_reason(CFIndex windows, int readable, int matches) {
+	if (windows > 128) return CU_AX_LIMIT;
+	if (matches > 1) return CU_AX_AMBIGUOUS;
+	if (windows == 0) return CU_AX_EMPTY;
+	if (readable < windows) return CU_AX_GEOMETRY;
+	if (matches == 1) return CU_AX_OK;
+	return CU_AX_NO_MATCH;
+}
+
 // Match a public AX window to the selected CG window by process and unique
-// geometry. Ambiguous matches fail closed rather than choosing a different app
-// window. The returned reference is retained and must be released.
-static AXUIElementRef cu_ax_window(cu_window selected, int require_focus) {
-	if (!AXIsProcessTrusted() || !cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) return NULL;
+// geometry. The optional diagnostic contains only failure stages and counts,
+// never element content. Input checks use the same matching path.
+static AXUIElementRef cu_ax_window_diagnostic(cu_window selected, int require_focus, cu_ax_diagnostic *diag) {
+	cu_ax_diagnostic result = {0};
+	if (!diag) diag = &result;
+	*diag = result;
+	if (!AXIsProcessTrusted()) { diag->reason = CU_AX_PERMISSION; return NULL; }
+	if (!cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) { diag->reason = CU_AX_WINDOW; return NULL; }
 	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, selected.window_id);
-	if (!list || CFArrayGetCount(list) != 1) { if (list) CFRelease(list); return NULL; }
+	if (!list || CFArrayGetCount(list) != 1) { if (list) CFRelease(list); diag->reason = CU_AX_WINDOW; return NULL; }
 	CFDictionaryRef dict = (CFDictionaryRef)CFArrayGetValueAtIndex(list, 0);
 	CFDictionaryRef bounds_dict = (CFDictionaryRef)CFDictionaryGetValue(dict, kCGWindowBounds);
 	CGRect bounds;
 	int have_bounds = bounds_dict && CGRectMakeWithDictionaryRepresentation(bounds_dict, &bounds);
 	CFRelease(list);
-	if (!have_bounds) return NULL;
+	if (!have_bounds) { diag->reason = CU_AX_BOUNDS; return NULL; }
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
-	if (!app) return NULL;
+	if (!app) { diag->reason = CU_AX_APP; return NULL; }
 	AXUIElementSetMessagingTimeout(app, 0.5);
 	CFTypeRef raw = NULL;
-	if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &raw) != kAXErrorSuccess || !raw || CFGetTypeID(raw) != CFArrayGetTypeID()) {
+	AXError ax_error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &raw);
+	if (ax_error != kAXErrorSuccess || !raw || CFGetTypeID(raw) != CFArrayGetTypeID()) {
 		if (raw) CFRelease(raw);
 		CFRelease(app);
+		diag->reason = ax_error == kAXErrorAPIDisabled ? CU_AX_DISABLED :
+			(ax_error == kAXErrorNoValue || (ax_error == kAXErrorSuccess && !raw) ? CU_AX_EMPTY : CU_AX_READ);
+		diag->ax_error = (int)ax_error;
 		return NULL;
 	}
 	CFArrayRef windows = (CFArrayRef)raw;
 	AXUIElementRef match = NULL;
-	int matches = 0;
-	for (CFIndex i = 0; i < CFArrayGetCount(windows) && i < 128; i++) {
+	CFIndex total = CFArrayGetCount(windows);
+	diag->windows = total > INT32_MAX ? INT32_MAX : (int)total;
+	int matches = 0, readable = 0;
+	for (CFIndex i = 0; i < total && i < 128; i++) {
 		AXUIElementRef window = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
 		CFTypeRef position = NULL, size = NULL;
 		CGPoint point;
@@ -138,13 +171,17 @@ static AXUIElementRef cu_ax_window(cu_window selected, int require_focus) {
 			AXValueGetValue((AXValueRef)size, kAXValueCGSizeType, &dimensions);
 		if (position) CFRelease(position);
 		if (size) CFRelease(size);
+		if (ok) readable++;
 		if (ok && fabs(point.x-bounds.origin.x) < 2 && fabs(point.y-bounds.origin.y) < 2 &&
 			fabs(dimensions.width-bounds.size.width) < 2 && fabs(dimensions.height-bounds.size.height) < 2) {
 			match = window;
 			matches++;
 		}
 	}
-	if (matches != 1) match = NULL;
+	diag->readable = readable;
+	diag->matches = matches;
+	diag->reason = cu_ax_match_reason(total, readable, matches);
+	if (diag->reason != CU_AX_OK) match = NULL;
 	if (match && require_focus) {
 		AXUIElementRef system = AXUIElementCreateSystemWide();
 		CFTypeRef focused_app = NULL, focused_window = NULL;
@@ -155,12 +192,16 @@ static AXUIElementRef cu_ax_window(cu_window selected, int require_focus) {
 		if (focused_app) CFRelease(focused_app);
 		if (focused_window) CFRelease(focused_window);
 		if (system) CFRelease(system);
-		if (!ok) match = NULL;
+		if (!ok) { diag->reason = CU_AX_FOCUS; match = NULL; }
 	}
 	if (match) CFRetain(match);
 	CFRelease(windows);
 	CFRelease(app);
 	return match;
+}
+
+static AXUIElementRef cu_ax_window(cu_window selected, int require_focus) {
+	return cu_ax_window_diagnostic(selected, require_focus, NULL);
 }
 
 typedef struct {
@@ -238,9 +279,10 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 	if (children) CFRelease(children);
 }
 
-static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated) {
-	AXUIElementRef window = cu_ax_window(selected, 0);
-	if (!window || !expected || !CFEqual(window, expected)) { if (window) CFRelease(window); return -1; }
+static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, cu_ax_diagnostic *diag) {
+	AXUIElementRef window = cu_ax_window_diagnostic(selected, 0, diag);
+	if (!window) return -1;
+	if (!expected || !CFEqual(window, expected)) { CFRelease(window); diag->reason = CU_AX_WINDOW; return -1; }
 	int count = 0;
 	cu_ax_collect(window, nodes, cap, &count, 0, 0, truncated);
 	CFRelease(window);
@@ -589,6 +631,26 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	return out, nil
 }
 
+func macWindowDiagnostic(d C.cu_ax_diagnostic) *WindowDiagnostic {
+	reasons := map[int]WindowFailure{
+		C.CU_AX_PERMISSION: WindowPermissionDenied, C.CU_AX_WINDOW: WindowUnavailable,
+		C.CU_AX_BOUNDS: WindowBoundsMissing, C.CU_AX_APP: WindowAXAppUnavailable,
+		C.CU_AX_READ: WindowAXReadFailed, C.CU_AX_EMPTY: WindowAXNoWindows,
+		C.CU_AX_GEOMETRY: WindowAXGeometry, C.CU_AX_NO_MATCH: WindowAXNoMatch,
+		C.CU_AX_AMBIGUOUS: WindowAXAmbiguous, C.CU_AX_LIMIT: WindowAXLimit,
+		C.CU_AX_FOCUS: WindowAXFocus, C.CU_AX_DISABLED: WindowAXDisabled,
+	}
+	return &WindowDiagnostic{Reason: reasons[int(d.reason)], AXError: int(d.ax_error),
+		Windows: int(d.windows), Readable: int(d.readable), Matches: int(d.matches)}
+}
+
+// macAXMatchReason exposes the native match decision to deterministic tests
+// without opening or controlling an application window.
+func macAXMatchReason(windows, readable, matches int) WindowFailure {
+	reason := C.cu_ax_match_reason(C.CFIndex(windows), C.int(readable), C.int(matches))
+	return macWindowDiagnostic(C.cu_ax_diagnostic{reason: reason}).Reason
+}
+
 // Physical input independently proves foreground focus and geometry immediately
 // before injection; this identity check alone does not grant that right.
 func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) error {
@@ -600,14 +662,15 @@ func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) 
 	closed := c.closed
 	c.mu.Unlock()
 	if closed || !ok || target.Application != C.GoString(&window.application[0]) || target.ApplicationID != C.GoString(&window.bundle[0]) || target.Window != C.GoString(&window.title[0]) {
-		return ErrTargetLost
+		return &WindowDiagnostic{Reason: WindowUnavailable}
 	}
 	if C.cu_window_exists(window.window_id, window.pid, window.start_sec, window.start_usec) == 0 {
-		return ErrTargetLost
+		return &WindowDiagnostic{Reason: WindowUnavailable}
 	}
-	current := C.cu_ax_window(window, 0)
+	var diagnostic C.cu_ax_diagnostic
+	current := C.cu_ax_window_diagnostic(window, 0, &diagnostic)
 	if current == 0 {
-		return errors.New("macOS AX window unavailable, ambiguous, or not authorized")
+		return macWindowDiagnostic(diagnostic)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -673,9 +736,10 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 	}
 	defer C.free(unsafe.Pointer(buffer))
 	var truncated C.int
-	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated))
+	var diagnostic C.cu_ax_diagnostic
+	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &diagnostic))
 	if count < 0 {
-		return "", nil, false, fmt.Errorf("%w: macOS AX window unavailable, ambiguous, or not authorized", ErrTargetLost)
+		return "", nil, false, macWindowDiagnostic(diagnostic)
 	}
 	nodes := unsafe.Slice(buffer, count)
 	refs := make(map[string]C.AXUIElementRef, count)
