@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1120" width="1200" height="1120" role="img" aria-labelledby="title description">
+  <title id="title">Golder 系统架构概览</title>
+  <desc id="description">Golder 的原生 GUI、终端和命令行共享 Agent 运行时；运行时连接模型、工具、会话和上下文，并通过权限与安全边界访问本地和外部环境。</desc>
+  <defs>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+      .heading { font-size: 35px; font-weight: 700; fill: #25211f; }
+      .subtitle { font-size: 17px; fill: #817970; }
+      .section { font-size: 15px; font-weight: 700; letter-spacing: 2px; fill: #817970; }
+      .name { font-size: 21px; font-weight: 700; fill: #292522; }
+      .desc { font-size: 16px; fill: #736b64; }
+      .small { font-size: 14px; fill: #817970; }
+      .edge { fill: none; stroke: #aaa29a; stroke-width: 2.2; }
+      .card { fill: #fff; stroke-width: 1.5; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="1120" rx="22" fill="#faf9f6"/>
+  <circle cx="63" cy="62" r="7" fill="#d97757"/>
+  <text x="84" y="72" class="heading">Golder 系统架构概览</text>
+  <text x="84" y="101" class="subtitle">从交互入口，到 Agent 循环、工具执行与安全边界</text>
+
+  <!-- Draw connectors before cards so that lines remain behind the nodes. -->
+  <g class="edge">
+    <path d="M225 233V270H600V310"/>
+    <path d="M600 233V310"/>
+    <path d="M975 233V270H600V310"/>
+    <path d="M600 414V458H225V505"/>
+    <path d="M600 414V505"/>
+    <path d="M600 414V458H975V505"/>
+    <path d="M225 601V675"/>
+    <path d="M600 601V675"/>
+    <path d="M975 601V675"/>
+    <path d="M600 771V824H300V873"/>
+    <path d="M600 771V873"/>
+    <path d="M600 771V824H900V873"/>
+  </g>
+  <g fill="#aaa29a">
+    <path d="M595 300L600 310L605 300Z"/>
+    <path d="M220 495L225 505L230 495Z M595 495L600 505L605 495Z M970 495L975 505L980 495Z"/>
+    <path d="M220 665L225 675L230 665Z M595 665L600 675L605 665Z M970 665L975 675L980 665Z"/>
+    <path d="M295 863L300 873L305 863Z M595 863L600 873L605 863Z M895 863L900 873L905 863Z"/>
+  </g>
+
+  <text x="55" y="145" class="section">01 / 交互入口</text>
+  <rect x="60" y="163" width="330" height="70" rx="12" class="card" stroke="#93bac0"/>
+  <text x="82" y="192" class="name">原生 GUI</text>
+  <text x="82" y="215" class="desc">MyGo · 对话 · 审批 · 工作区</text>
+  <rect x="435" y="163" width="330" height="70" rx="12" class="card" stroke="#93bac0"/>
+  <text x="457" y="192" class="name">终端 TUI / REPL</text>
+  <text x="457" y="215" class="desc">交互式对话 · 工具结果 · 命令</text>
+  <rect x="810" y="163" width="330" height="70" rx="12" class="card" stroke="#93bac0"/>
+  <text x="832" y="192" class="name">CLI / Workspace</text>
+  <text x="832" y="215" class="desc">无头运行 · 多窗格终端工作区</text>
+
+  <text x="55" y="296" class="section">02 / 共享核心</text>
+  <rect x="310" y="310" width="580" height="104" rx="14" fill="#fff7f1" stroke="#d97757" stroke-width="2"/>
+  <text x="338" y="343" class="name">Agent 运行时</text>
+  <text x="338" y="370" class="desc">组装上下文 → 请求模型 → 执行工具 → 返回结果 → 继续循环</text>
+  <text x="338" y="394" class="small">runtime · agentcore · cli/run</text>
+
+  <text x="55" y="490" class="section">03 / 核心能力</text>
+  <rect x="60" y="505" width="330" height="96" rx="12" class="card" stroke="#9babc9"/>
+  <text x="82" y="539" class="name">模型 Provider</text>
+  <text x="82" y="564" class="desc">协议适配 · 流式响应 · 模型切换</text>
+  <text x="82" y="586" class="small">internal/provider</text>
+  <rect x="435" y="505" width="330" height="96" rx="12" class="card" stroke="#b69ac2"/>
+  <text x="457" y="539" class="name">工具与扩展</text>
+  <text x="457" y="564" class="desc">文件 · Shell · Web · MCP · Skills</text>
+  <text x="457" y="586" class="small">agenttool · extensions</text>
+  <rect x="810" y="505" width="330" height="96" rx="12" class="card" stroke="#a5b69a"/>
+  <text x="832" y="539" class="name">会话与上下文</text>
+  <text x="832" y="564" class="desc">历史 · 恢复 · 压缩 · 记忆</text>
+  <text x="832" y="586" class="small">session · compaction · memory</text>
+
+  <text x="55" y="659" class="section">04 / 服务、权限与状态</text>
+  <rect x="60" y="675" width="330" height="96" rx="12" fill="#f8faff" stroke="#9babc9" stroke-width="1.5"/>
+  <text x="82" y="709" class="name">外部模型服务</text>
+  <text x="82" y="734" class="desc">OpenAI · Anthropic · Gemini 等</text>
+  <text x="82" y="756" class="small">根据配置连接 API</text>
+  <rect x="435" y="675" width="330" height="96" rx="12" fill="#fff8f7" stroke="#cf9b94" stroke-width="1.5"/>
+  <text x="457" y="709" class="name">权限、审批与沙箱</text>
+  <text x="457" y="734" class="desc">风险评审 · 路径授权 · 执行隔离</text>
+  <text x="457" y="756" class="small">permissions · judge · seatbelt</text>
+  <rect x="810" y="675" width="330" height="96" rx="12" fill="#f9fbf7" stroke="#a5b69a" stroke-width="1.5"/>
+  <text x="832" y="709" class="name">本地持久化</text>
+  <text x="832" y="734" class="desc">会话记录 · 配置 · 记忆</text>
+  <text x="832" y="756" class="small">支持恢复和继续对话</text>
+
+  <text x="55" y="858" class="section">05 / 工具可操作的目标</text>
+  <rect x="160" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="182" y="905" class="name">项目文件与命令</text>
+  <text x="182" y="930" class="desc">文件系统 · Shell · 构建测试</text>
+  <rect x="460" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="482" y="905" class="name">浏览器与网络</text>
+  <text x="482" y="930" class="desc">Browser · Web · 外部服务</text>
+  <rect x="760" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="782" y="905" class="name">桌面与终端窗格</text>
+  <text x="782" y="930" class="desc">Computer Use · Pane</text>
+
+  <line x1="55" y1="996" x2="1145" y2="996" stroke="#e9e4dd"/>
+  <text x="55" y="1032" class="small">示意图：主要关系经过简化。权限控制依工具、配置与运行环境而异。</text>
+  <text x="55" y="1057" class="small">Workspace 的 daemon 与 agent pane 是独立进程；GUI 与终端共享核心能力。</text>
+  <text x="55" y="1086" class="small">GOLDER · OPEN SOURCE CODING AGENT</text>
+</svg>
