@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	cliui "github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/judge"
 )
 
@@ -99,6 +100,11 @@ func (c *Controller) addNotice(text string, failed bool) {
 
 // addNote records one permission-gate verdict as a transcript item.
 func (c *Controller) addNote(n judge.Note) {
+	// Match the TUI: routine approvals are diagnostic, while sandbox routing,
+	// escapes, denials and boundary decisions remain visible.
+	if n.Kind == judge.NoteApproved && !cliui.DebugEnabled() {
+		return
+	}
 	now := time.Now()
 	st := &NoteState{
 		Tool:      n.Tool,
