@@ -73,3 +73,16 @@ func TestTranscriptSVGPreviewAndFallback(t *testing.T) {
 		})
 	}
 }
+
+func TestSVGMarkupIdentification(t *testing.T) {
+	for _, source := range []string{simpleTranscriptSVG, `<?xml version="1.0"?><svg viewBox="0 0 1 1"/>`, `<!-- diagram --><svg/>`} {
+		if !isSVGMarkup(source) {
+			t.Errorf("SVG not recognized: %q", source)
+		}
+	}
+	for _, source := range []string{`<html><svg/></html>`, `<!DOCTYPE svg><svg/>`, `<script>alert(1)</script>`, `text<svg/>`} {
+		if isSVGMarkup(source) {
+			t.Errorf("non-SVG recognized: %q", source)
+		}
+	}
+}

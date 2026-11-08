@@ -192,6 +192,7 @@ type mermaidPreviewState struct {
 	source string
 	graph  *mermaidGraph
 	seq    *mermaidSequence
+	rich   richPreviewState
 }
 
 func renderMermaidCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
@@ -206,7 +207,10 @@ func renderMermaidCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 		state.seq = parseSimpleMermaidSequence(src)
 	}
 	box.Children(func() {
+		bitmap, _ := state.rich.preview(c, state.source, true)
 		switch {
+		case bitmap != nil:
+			drawRichBitmap(c, bitmap, "Mermaid preview")
 		case state.graph != nil:
 			renderSimpleMermaid(c, state.graph)
 		case state.seq != nil:

@@ -32,8 +32,9 @@ func parseLabeledTranscriptSVG(source string) (*ui.SVG, []svgTextLabel, [4]float
 	depth := 0
 	rootSeen, textSeen, inText := false, false, false
 	type ancestor struct {
-		name string
-		safe bool
+		name        string
+		safe        bool
+		scale, x, y float64
 	}
 	var stack []ancestor
 	var labels []svgTextLabel
@@ -84,10 +85,23 @@ func parseLabeledTranscriptSVG(source string) (*ui.SVG, []svgTextLabel, [4]float
 				if !found || view[2] <= 0 || view[3] <= 0 {
 					return nil, nil, view
 				}
-				stack = append(stack, ancestor{name: "svg", safe: true})
+				stack = append(stack, ancestor{name: "svg", safe: true, scale: 1})
 				continue
 			}
 			parent := stack[len(stack)-1]
+			next := ancestor{name: v.Name.Local}
+			if v.Name.Local == "g" {
+				local, ok := parseSVGGroupTransform(v.Attr)
+				next.safe = ok && parent.safe
+				if next.safe {
+					next.scale = parent.scale * local.scale
+					next.x = parent.x + parent.scale*local.x
+					next.y = parent.y + parent.scale*local.y
+					if next.scale < .0001 || next.scale > 10000 || math.Abs(next.x) > 1e7 || math.Abs(next.y) > 1e7 {
+						return nil, nil, view
+					}
+				}
+			}
 			if v.Name.Local == "text" && (parent.name == "svg" || parent.name == "g" && parent.safe) {
 				if len(labels) >= 32 || (v.Name.Space != "" && v.Name.Space != "http://www.w3.org/2000/svg") {
 					return nil, nil, view
@@ -97,10 +111,13 @@ func parseLabeledTranscriptSVG(source string) (*ui.SVG, []svgTextLabel, [4]float
 				if !parseSVGTextAttrs(v.Attr, &current) {
 					return nil, nil, view
 				}
-			} else if textSeen && (v.Name.Local != "g" || len(v.Attr) != 0 || !parent.safe) {
+				current.x = float32(parent.x + parent.scale*float64(current.x))
+				current.y = float32(parent.y + parent.scale*float64(current.y))
+				current.size *= float32(parent.scale)
+			} else if textSeen && (v.Name.Local != "g" || !next.safe) {
 				return nil, nil, view
 			}
-			stack = append(stack, ancestor{name: v.Name.Local, safe: v.Name.Local == "g" && len(v.Attr) == 0 && parent.safe})
+			stack = append(stack, next)
 		case xml.CharData:
 			if inText {
 				current.text += string(v)
@@ -152,6 +169,68 @@ func parseLabeledTranscriptSVG(source string) (*ui.SVG, []svgTextLabel, [4]float
 
 func isFiniteSVGSize(n float32) bool {
 	return n > 0 && !math.IsNaN(float64(n)) && !math.IsInf(float64(n), 0)
+}
+
+type svgGroupTransform struct{ scale, x, y float64 }
+
+// Only translations and positive uniform scales can be applied to text by
+// this native overlay. Other transforms must fall back to the original SVG.
+func parseSVGGroupTransform(attrs []xml.Attr) (svgGroupTransform, bool) {
+	t := svgGroupTransform{scale: 1}
+	if len(attrs) == 0 {
+		return t, true
+	}
+	if len(attrs) != 1 || attrs[0].Name.Space != "" || attrs[0].Name.Local != "transform" {
+		return t, false
+	}
+	s := strings.TrimSpace(attrs[0].Value)
+	if len(s) == 0 || len(s) > 256 {
+		return t, false
+	}
+	for s != "" {
+		open := strings.IndexByte(s, '(')
+		close := strings.IndexByte(s, ')')
+		if open < 0 || close < open {
+			return t, false
+		}
+		name := strings.TrimSpace(s[:open])
+		args := s[open+1 : close]
+		if strings.Count(args, ",") > 1 {
+			return t, false
+		}
+		if before, after, hasComma := strings.Cut(args, ","); hasComma && (len(strings.Fields(before)) != 1 || len(strings.Fields(after)) != 1) {
+			return t, false
+		}
+		parts := strings.Fields(strings.ReplaceAll(args, ",", " "))
+		if len(parts) < 1 || len(parts) > 2 {
+			return t, false
+		}
+		values := [2]float64{}
+		for i, part := range parts {
+			n, err := strconv.ParseFloat(part, 64)
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) || math.Abs(n) > 100000 {
+				return t, false
+			}
+			values[i] = n
+		}
+		switch name {
+		case "translate":
+			t.x += t.scale * values[0]
+			t.y += t.scale * values[1]
+		case "scale":
+			if values[0] <= 0 || len(parts) == 2 && values[0] != values[1] {
+				return t, false
+			}
+			t.scale *= values[0]
+		default:
+			return t, false
+		}
+		if t.scale < .0001 || t.scale > 10000 || math.Abs(t.x) > 1e7 || math.Abs(t.y) > 1e7 {
+			return t, false
+		}
+		s = strings.TrimSpace(s[close+1:])
+	}
+	return t, true
 }
 
 func parseSVGTextAttrs(attrs []xml.Attr, label *svgTextLabel) bool {

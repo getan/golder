@@ -42,7 +42,9 @@ func TestLabeledTranscriptSVGRejectsUnsupportedContent(t *testing.T) {
 		`<svg viewBox="0 0 10 10"><text x="1" y="5" font-family="unknown-font">A</text></svg>`,
 		`<svg viewBox="0 0 10 10"><text x="1" y="5" fill="url(https://example.com)">A</text></svg>`,
 		`<svg viewBox="0 0 10 10"><text x="1" y="5" onclick="bad()">A</text></svg>`,
-		`<svg viewBox="0 0 10 10"><g transform="scale(2)"><text x="1" y="5">A</text></g></svg>`,
+		`<svg viewBox="0 0 10 10"><g transform="rotate(30)"><text x="1" y="5">A</text></g></svg>`,
+		`<svg viewBox="0 0 10 10"><g transform="scale(2,3)"><text x="1" y="5">A</text></g></svg>`,
+		`<svg viewBox="0 0 10 10"><g transform="translate(1,,2)"><text x="1" y="5">A</text></g></svg>`,
 	} {
 		if img, _, _ := parseLabeledTranscriptSVG(source); img != nil {
 			t.Errorf("unsupported SVG rendered: %s", source)
@@ -55,5 +57,13 @@ func TestLabeledTranscriptSVGAllowsPlainGroup(t *testing.T) {
 	img, labels, _ := parseLabeledTranscriptSVG(source)
 	if img == nil || len(labels) != 1 || labels[0].text != "Label" {
 		t.Fatalf("plain group lost: %v %+v", img, labels)
+	}
+}
+
+func TestLabeledTranscriptSVGTransformsText(t *testing.T) {
+	source := `<svg viewBox="0 0 100 100"><g transform="translate(10,20) scale(2)"><text x="5" y="8" font-size="4">Label</text></g></svg>`
+	img, labels, _ := parseLabeledTranscriptSVG(source)
+	if img == nil || len(labels) != 1 || labels[0].x != 20 || labels[0].y != 36 || labels[0].size != 8 {
+		t.Fatalf("incorrect transformed label: %v %+v", img, labels)
 	}
 }

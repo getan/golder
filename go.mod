@@ -31,6 +31,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/pflag v1.0.10
+	github.com/tetratelabs/wazero v1.12.0
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.62.0
 	golang.org/x/oauth2 v0.35.0

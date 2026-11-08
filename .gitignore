@@ -45,6 +45,11 @@ config.toml
 gui/build/
 gui/resources/*/bin/
 gui/resources/*/extensions/*/golder-*
+gui/resources/renderers/*.wasm
+gui/resources/renderers/*.wasm.gz
+gui/resources/renderers-LICENSE.svg.txt
+gui/resources/renderers-LICENSE.mermaid-deps.txt
+gui/svgwasm/target/
 
 .loop-state.json
 

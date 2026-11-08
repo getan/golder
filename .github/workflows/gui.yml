@@ -34,6 +34,26 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Build and verify offline diagram renderers
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.96.0 --profile minimal --target wasm32-wasip1
+          cargo +1.96.0 build --manifest-path gui/svgwasm/Cargo.toml --locked \
+            --release --target wasm32-wasip1 --target-dir "$RUNNER_TEMP/golder-svg-wasm"
+          mkdir -p gui/resources/renderers
+          go run ./gui/tools/packwasm -in "$RUNNER_TEMP/golder-svg-wasm/wasm32-wasip1/release/golder-svgwasm.wasm" -out gui/resources/renderers/svg.wasm.gz
+          cargo +1.96.0 metadata --manifest-path gui/svgwasm/Cargo.toml --locked --offline \
+            --filter-platform wasm32-wasip1 --format-version 1 | go run ./gui/tools/svglicenses
+          go run ./gui/tools/fetchmermaid -out "$RUNNER_TEMP/golder-mermaid.wasm"
+          go run ./gui/tools/preparemermaid -out "$RUNNER_TEMP/golder-mermaid-audit"
+          cargo +1.96.0 metadata --manifest-path "$RUNNER_TEMP/golder-mermaid-audit/Cargo.toml" --locked \
+            --filter-platform wasm32-unknown-unknown --format-version 1 | go run ./gui/tools/svglicenses -out gui/resources/renderers-LICENSE.mermaid-deps.txt
+          go run ./gui/tools/packwasm -in "$RUNNER_TEMP/golder-mermaid.wasm" -out gui/resources/renderers/mermaid.wasm.gz
+          GOLDER_TEST_SVG_WASM="$RUNNER_TEMP/golder-svg-wasm/wasm32-wasip1/release/golder-svgwasm.wasm" \
+          GOLDER_TEST_MERMAID_WASM="$RUNNER_TEMP/golder-mermaid.wasm" \
+            go test ./gui/svgwasm ./gui/mermaidwasm ./gui/mygoui -run 'Test(RenderPinnedSourceWASM|PinnedUpstreamModule|RichPreviewWithPinnedModules)' -count=1
+
       - name: Set the app version from the release tag
         shell: bash
         run: |

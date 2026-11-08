@@ -1,0 +1,15 @@
+[package]
+name = "golder-svgwasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+# Only static SVG and text are enabled; no filesystem or network fonts.
+resvg = { version = "=0.47.0", default-features = false, features = ["text"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true

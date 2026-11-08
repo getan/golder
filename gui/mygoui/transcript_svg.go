@@ -21,6 +21,7 @@ type svgPreviewState struct {
 	image  *ui.SVG
 	labels []svgTextLabel
 	view   [4]float32
+	rich   richPreviewState
 }
 
 type svgPreviewKey struct{}
@@ -31,13 +32,21 @@ func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 		markdown.DefaultCodeBlock(c, b)
 		return
 	}
-	if strings.EqualFold(b.Language, "xml") && !strings.HasPrefix(strings.TrimSpace(b.Code()), "<svg") {
+	if strings.EqualFold(b.Language, "xml") && !isSVGMarkup(b.Code()) {
 		markdown.DefaultCodeBlock(c, b)
 		return
 	}
 	box := ui.Column(c).AlignSelf(ui.Stretch).Gap(6)
 	state := *ui.Local(box, svgPreviewKey{}, func() *svgPreviewState { return &svgPreviewState{} })
 	source := b.Code()
+	box.Children(func() {
+		renderSVGPreview(c, state, source)
+		// Always keep the original, selectable and copyable source visible.
+		markdown.DefaultCodeBlock(c, b)
+	})
+}
+
+func renderSVGPreview(c *ui.Context, state *svgPreviewState, source string) {
 	if state.source != source {
 		state.source = source
 		state.labels = nil
@@ -46,26 +55,53 @@ func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 			state.image, state.labels, state.view = parseLabeledTranscriptSVG(source)
 		}
 	}
-	box.Children(func() {
-		if state.image != nil {
-			w, h := state.image.Size()
-			scale := min(float32(1), 640/w, 320/h)
-			ui.Column(c).Padding(10).Radius(7).Background(c.Theme().Surface).Children(func() {
-				ui.Text(c, "SVG preview").FontSize(11).TextColor(c.Theme().TextMuted)
-				if len(state.labels) == 0 {
-					ui.Image(c, state.image).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Label("SVG image preview")
-				} else {
-					ui.Box(c).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Clip().Label("SVG image preview").Draw(func(p *ui.Painter, r ui.Rect) {
-						drawLabeledTranscriptSVG(p, r, state.image, state.labels, state.view)
-					})
-				}
-			})
-		} else {
-			ui.Text(c, "SVG preview unavailable; showing source").FontSize(11).TextColor(c.Theme().TextMuted)
+	bitmap, _ := state.rich.preview(c, source, false)
+	if bitmap != nil {
+		drawRichBitmap(c, bitmap, "SVG preview")
+	} else if state.image != nil {
+		w, h := state.image.Size()
+		scale := min(float32(1), 640/w, 320/h)
+		ui.Column(c).Padding(10).Radius(7).Background(c.Theme().Surface).Children(func() {
+			ui.Text(c, "SVG preview").FontSize(11).TextColor(c.Theme().TextMuted)
+			if len(state.labels) == 0 {
+				ui.Image(c, state.image).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Label("SVG image preview")
+			} else {
+				ui.Box(c).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Clip().Label("SVG image preview").Draw(func(p *ui.Painter, r ui.Rect) {
+					drawLabeledTranscriptSVG(p, r, state.image, state.labels, state.view)
+				})
+			}
+		})
+	} else {
+		ui.Text(c, "SVG preview unavailable; showing source").FontSize(11).TextColor(c.Theme().TextMuted)
+	}
+}
+
+func isSVGMarkup(source string) bool {
+	if len(source) == 0 || len(source) > 512<<10 {
+		return false
+	}
+	d := xml.NewDecoder(strings.NewReader(source))
+	for {
+		token, err := d.Token()
+		if err != nil {
+			return false
 		}
-		// Always keep the original, selectable and copyable source visible.
-		markdown.DefaultCodeBlock(c, b)
-	})
+		switch v := token.(type) {
+		case xml.StartElement:
+			return v.Name.Local == "svg" && (v.Name.Space == "" || v.Name.Space == "http://www.w3.org/2000/svg")
+		case xml.CharData:
+			if strings.TrimSpace(string(v)) != "" {
+				return false
+			}
+		case xml.Comment:
+		case xml.ProcInst:
+			if v.Target != "xml" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
 }
 
 // parseTranscriptSVG accepts a bounded, self-contained subset of SVG, with no

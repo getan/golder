@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"image"
@@ -56,6 +57,7 @@ func loadTranscriptImage(project, dest string) (ui.ImageSource, error) {
 	invalid := errors.New("unsupported or unsafe transcript image")
 	var data []byte
 	var mime string
+	isSVG := false
 	if strings.HasPrefix(dest, "data:") {
 		header, encoded, ok := strings.Cut(dest, ",")
 		if !ok || len(encoded) > base64.StdEncoding.EncodedLen(maxTranscriptImageBytes) {
@@ -70,6 +72,7 @@ func loadTranscriptImage(project, dest string) (ui.ImageSource, error) {
 		if err != nil || len(data) > maxTranscriptImageBytes {
 			return nil, invalid
 		}
+		isSVG = mime == "image/svg+xml"
 	} else {
 		if strings.ContainsAny(dest, "\x00\\") && !filepath.IsAbs(dest) {
 			return nil, invalid
@@ -82,11 +85,15 @@ func loadTranscriptImage(project, dest string) (ui.ImageSource, error) {
 			}
 			path = u.Path
 		}
+		isSVG = strings.EqualFold(filepath.Ext(path), ".svg")
 		var err error
 		data, err = appsession.ReadTranscriptImage(project, path, maxTranscriptImageBytes)
 		if err != nil {
 			return nil, err
 		}
+	}
+	if isSVG {
+		return renderRichPreview(context.Background(), string(data), false)
 	}
 	config, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > maxTranscriptImageSide || config.Height > maxTranscriptImageSide || int64(config.Width)*int64(config.Height) > maxTranscriptImagePixels {
@@ -100,7 +107,7 @@ func loadTranscriptImage(project, dest string) (ui.ImageSource, error) {
 
 func transcriptImageMIME(mime string) bool {
 	switch mime {
-	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp":
+	case "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp", "image/svg+xml":
 		return true
 	}
 	return false
