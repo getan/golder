@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	sidebarWidth = 248
-	titleHeight  = 46
+	sidebarWidth     = 248
+	navigationWidth  = 50
+	minComposerWidth = 320
+	minRightWidth    = 180
+	titleHeight      = 46
 )
 
 // view is the window's single build function.
@@ -96,6 +99,7 @@ func (a *App) view(c *ui.Context) {
 		a.titleBar(c)
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			a.navigationRail(c)
+			a.clampWorkspaceWidths(c.Root().LayoutBounds().W - navigationWidth)
 			conversation := func() {
 				if a.sidebarClosed {
 					a.center(c)
@@ -107,7 +111,6 @@ func (a *App) view(c *ui.Context) {
 				}
 			}
 			if a.hasRightPanel() {
-				clampPanelSplit(&a.rightSplit, 50)
 				ui.SplitPercent(c, &a.rightSplit, conversation, func() { a.rightPanelView(c) }).Grow(1).MinWidth(0)
 			} else {
 				conversation()
@@ -124,6 +127,38 @@ func (a *App) view(c *ui.Context) {
 	a.browsersModal(c)
 	a.computerPicker(c)
 	a.terminalModals(c)
+}
+
+// Reserve space for the composer after accounting for the navigation rail,
+// optional sidebar and right panel. The layout bounds are from the previous
+// frame and are in the same unzoomed coordinates as the split sizes.
+func (a *App) clampWorkspaceWidths(width float32) {
+	if a.sidebarSize <= 0 {
+		a.sidebarSize = sidebarWidth
+	}
+	if a.rightSplit <= 0 {
+		a.rightSplit = 50
+	}
+	if width <= 1 {
+		return
+	}
+	rightMin := float32(0)
+	if a.hasRightPanel() {
+		rightMin = minRightWidth + 1
+	}
+	sidebar := float32(0)
+	if !a.sidebarClosed {
+		maxSidebar := max(width-rightMin-minComposerWidth-1, 0)
+		a.sidebarSize = min(a.sidebarSize, maxSidebar)
+		sidebar = a.sidebarSize + 1
+	}
+	if !a.hasRightPanel() {
+		return
+	}
+	available := width - 1 // the right workspace divider
+	minPercent := min(max((sidebar+minComposerWidth)*100/available, 30), 100)
+	maxPercent := max(min((available-minRightWidth)*100/available, 70), minPercent)
+	a.rightSplit = min(max(a.rightSplit, minPercent), maxPercent)
 }
 
 // Keep both sides usable while remembering each panel's last in-session split.
@@ -283,7 +318,7 @@ func (a *App) sidebar(c *ui.Context) {
 
 func (a *App) navigationRail(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Width(50).Shrink(0).Padding(8, 10).Gap(8).AlignItems(ui.Center).
+	ui.Column(c).Width(navigationWidth).Shrink(0).Padding(8, 10).Gap(8).AlignItems(ui.Center).
 		Background(t.Surface).BorderWidth(0, 1, 0, 0).BorderColor(t.Border).Children(func() {
 		if compactIconButton(c, "toggle-sidebar", sidebarIcon, "Toggle sidebar", "Show or hide projects and chats").Clicked() {
 			a.sidebarClosed = !a.sidebarClosed

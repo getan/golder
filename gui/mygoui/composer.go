@@ -82,7 +82,12 @@ func (a *App) composer(c *ui.Context) {
 				}
 				ui.Spacer(c)
 				modelLabel := a.status.Provider + " · " + a.status.Model + " · " + thinkingLabel(a.status.Thinking)
-				if subtleButton(c, modelLabel).Tooltip("Provider, model and reasoning effort").Clicked() {
+				modelButton := subtleButton(c, "").Shrink(1).MinWidth(0).MaxWidth(240).Clip().Label(modelLabel).
+					Tooltip("Provider, model and reasoning effort · " + modelLabel)
+				modelButton.Children(func() {
+					ui.Text(c, modelLabel).SingleLine().Ellipsis("…").Shrink(1).MinWidth(0)
+				})
+				if modelButton.Clicked() {
 					a.modelOpen = true
 					a.providerSelection = a.status.Provider
 					if a.ctrl != nil {

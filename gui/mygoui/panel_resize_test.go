@@ -1,6 +1,8 @@
 package mygoui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -56,6 +58,69 @@ func TestPanelSplitBounds(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("clamp(%v) = %v, want %v", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestWorkspaceResizeKeepsComposerControlsVisible(t *testing.T) {
+	for _, width := range []int{860, 1200} {
+		for _, scale := range []float32{1, 1.35} {
+			for _, sidebarClosed := range []bool{false, true} {
+				name := fmt.Sprintf("width=%d/scale=%.2f/sidebarClosed=%t", width, scale, sidebarClosed)
+				t.Run(name, func(t *testing.T) {
+					a := testApp()
+					a.display.FontScale = scale
+					a.sidebarClosed = sidebarClosed
+					a.sidebarSize = 10000
+					a.rightSplit = 1
+					a.browserPanelOpen = true
+					a.browserState = &browserWindowState{title: "Workspace browser"}
+					a.status.Model = strings.Repeat("very-long-model-name-", 8)
+					a.draft = "ready"
+					tt := ui.NewTester(a.view, width, 800)
+					tt.Frame()
+					tt.Frame()
+					send, okSend := tt.Find("Send message")
+					browser, okBrowser := tt.Find("Workspace browser")
+					if !okSend || !okBrowser || send.X+send.W > browser.X-20*scale {
+						t.Fatalf("send button is covered: send=%+v browser=%+v sidebar=%v rightSplit=%v", send, browser, a.sidebarSize, a.rightSplit)
+					}
+					if send.W < 33*scale {
+						t.Fatalf("send button was squeezed: %+v", send)
+					}
+					a.status.Running = true
+					tt.Frame()
+					stop, okStop := tt.Find("Stop generation")
+					if !okStop || stop.X+stop.W > browser.X-20*scale || stop.W < 33*scale {
+						t.Fatalf("stop button is covered or squeezed: stop=%+v browser=%+v", stop, browser)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRightDividerCannotDragAcrossComposer(t *testing.T) {
+	a := testApp()
+	a.sidebarClosed = true
+	a.browserPanelOpen = true
+	a.browserState = &browserWindowState{title: "Workspace browser"}
+	a.status.Model = strings.Repeat("very-long-model-name-", 8)
+	a.draft = "ready"
+	tt := ui.NewTester(a.view, 860, 800)
+	tt.Frame()
+	divider, ok := tt.Find("Divider")
+	if !ok {
+		t.Fatal("right divider not found")
+	}
+	x, y := divider.X+divider.W/2, divider.Y+divider.H/2
+	tt.Press(x, y)
+	tt.Move(55, y)
+	tt.Release(55, y)
+	tt.Frame()
+	send, okSend := tt.Find("Send message")
+	browser, okBrowser := tt.Find("Workspace browser")
+	if !okSend || !okBrowser || send.X+send.W > browser.X-20 {
+		t.Fatalf("drag hid send button: send=%+v browser=%+v split=%v", send, browser, a.rightSplit)
 	}
 }
 
