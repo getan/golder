@@ -110,6 +110,7 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	}
 	a.applySnapshot(first.Snapshot())
 	a.draft, a.attachments = "draft one", []string{"one.txt"}
+	a.historyNav = promptHistoryCursor{index: 1, draft: "original draft", browsing: true}
 	firstList := &ui.ListState{}
 	a.list = firstList
 	second, err := a.hub.NewSession(context.Background(), project)
@@ -117,7 +118,7 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.activateSession(second)
-	if a.draft != "" || len(a.attachments) != 0 || a.list != nil || !first.IsRunning() {
+	if a.draft != "" || len(a.attachments) != 0 || a.list != nil || a.historyNav.browsing || !first.IsRunning() {
 		t.Fatal("draft leaked into a new conversation")
 	}
 	a.draft = "draft two"
@@ -125,6 +126,9 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	a.resume(first.SessionID())
 	if a.ctrl != first || !a.status.Running || a.draft != "draft one" || a.list != firstList || len(a.attachments) != 1 || a.attachments[0] != "one.txt" {
 		t.Fatalf("draft was not restored: %q %+v", a.draft, a.attachments)
+	}
+	if a.historyNav != (promptHistoryCursor{index: 1, draft: "original draft", browsing: true}) {
+		t.Fatalf("history navigation was not restored: %+v", a.historyNav)
 	}
 	close(p.release)
 }

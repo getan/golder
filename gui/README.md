@@ -103,6 +103,8 @@ Two optional surfaces need runtime pieces:
 - turns: streamed Markdown, thinking (collapsed), compact failure panels and
   grouped, indentation-preserving `apply_patch` diff cards with bounded output,
   compaction and provider notices, cancel;
+- composer history: Up/Down browse the same global prompt history as the TUI,
+  preserving the current draft and normal caret movement within multiline text;
 - approvals: consent and trust questions answered inline; closing the window
   fails every pending question closed;
 - configuration: a shared Settings page for provider, model, base URL, protocol

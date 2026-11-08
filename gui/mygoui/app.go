@@ -40,10 +40,14 @@ type App struct {
 	toolOpen     map[string]bool
 	approvalOpen map[string]bool
 
-	draft       string
-	attachments []string
-	drafts      map[string]sessionDraft
-	snapshotSeq uint64
+	draft               string
+	attachments         []string
+	drafts              map[string]sessionDraft
+	history             promptHistory
+	historyNav          promptHistoryCursor
+	historyCaretText    string
+	historyCaretPending bool
+	snapshotSeq         uint64
 
 	status          appsession.Status
 	project         string
@@ -211,6 +215,7 @@ type sessionDraft struct {
 	text        string
 	attachments []string
 	list        *ui.ListState
+	historyNav  promptHistoryCursor
 }
 
 // New builds the app around an opened controller.
@@ -494,6 +499,7 @@ func (a *App) submit(text string) bool {
 		a.banner, a.bannerErr = err.Error(), true
 		return false
 	}
+	a.history.record(&a.historyNav, text, a.status.SessionID, a.project)
 	a.attachments = nil
 	a.banner, a.bannerErr = "", false
 	return true
@@ -1028,7 +1034,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 		a.drafts = make(map[string]sessionDraft)
 	}
 	if a.status.SessionID != "" {
-		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]string(nil), a.attachments...), list: a.list}
+		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]string(nil), a.attachments...), list: a.list, historyNav: a.historyNav}
 	}
 	if a.computerRequestPicker && a.computerSuggested != "" {
 		a.hub.ParkComputerRequest(a.ctrl, a.computerSuggested)
@@ -1043,6 +1049,8 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.applySnapshot(peer.Snapshot())
 	draft := a.drafts[a.status.SessionID]
 	a.draft, a.attachments = draft.text, append([]string(nil), draft.attachments...)
+	a.historyNav = draft.historyNav
+	a.historyCaretPending = false
 	a.list = draft.list
 	a.computerSession = peer.ComputerSession()
 	a.selectedProject = a.project

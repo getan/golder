@@ -1,5 +1,5 @@
 // Package history persists the global, append-only prompt history shared by
-// golder's interactive front-ends (the TUI for now). It mirrors Codex's
+// golder's interactive front-ends (TUI and GUI). It mirrors Codex's
 // message-history store: one JSON object per line in
 // $GOLDER_HOME/history.jsonl, appended with a single write so concurrent
 // processes never interleave partial lines, capped by size so the file cannot

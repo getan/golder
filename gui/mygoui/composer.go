@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -26,8 +27,39 @@ func (a *App) composer(c *ui.Context) {
 			}
 			input := ui.TextAreaBase(c, &a.draft).Lines(1, 8).Grow(1).
 				Padding(12, 14, 8, 14).
-				Placeholder(placeholder).Disabled(a.status.ReadOnly)
+				Placeholder(placeholder).Label("Message input").Disabled(a.status.ReadOnly)
+			if a.historyCaretPending {
+				if a.draft == a.historyCaretText {
+					end := utf8.RuneCountInString(a.draft)
+					input.SetTextSelection(end, end)
+				}
+				a.historyCaretPending = false
+			}
+			_, caret := input.TextAnchorCaret()
+			frameText := a.draft
 			input.OnTextKey(func(k ui.TextKey) bool {
+				if k.Mods == 0 && (k.Key == ui.KeyUp || k.Key == ui.KeyDown) {
+					text := k.Text()
+					// TextKey does not expose the live caret; the selection read at
+					// the last frame is safe only while the multiline text matches.
+					up := k.Key == ui.KeyUp
+					if strings.ContainsRune(text, '\n') && (text != frameText || !historyEdge(text, caret, up)) {
+						return false
+					}
+					var recalled string
+					var ok bool
+					if up {
+						a.history.load(a.ctrl)
+						recalled, ok = a.history.previous(&a.historyNav, text)
+					} else {
+						recalled, ok = a.history.next(&a.historyNav)
+					}
+					if ok {
+						k.SetText(recalled)
+						a.historyCaretText, a.historyCaretPending = recalled, true
+						return true
+					}
+				}
 				if k.Key == ui.KeyEnter && k.Mods == 0 {
 					text := strings.TrimSpace(k.Text())
 					if text == "" && len(a.attachments) == 0 {
