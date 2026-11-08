@@ -19,6 +19,8 @@ const maxTranscriptSVGElements = 1024
 type svgPreviewState struct {
 	source string
 	image  *ui.SVG
+	labels []svgTextLabel
+	view   [4]float32
 }
 
 type svgPreviewKey struct{}
@@ -38,7 +40,11 @@ func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	source := b.Code()
 	if state.source != source {
 		state.source = source
+		state.labels = nil
 		state.image, _ = parseTranscriptSVG(source)
+		if state.image == nil {
+			state.image, state.labels, state.view = parseLabeledTranscriptSVG(source)
+		}
 	}
 	box.Children(func() {
 		if state.image != nil {
@@ -46,7 +52,13 @@ func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 			scale := min(float32(1), 640/w, 320/h)
 			ui.Column(c).Padding(10).Radius(7).Background(c.Theme().Surface).Children(func() {
 				ui.Text(c, "SVG preview").FontSize(11).TextColor(c.Theme().TextMuted)
-				ui.Image(c, state.image).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Label("SVG image preview")
+				if len(state.labels) == 0 {
+					ui.Image(c, state.image).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Label("SVG image preview")
+				} else {
+					ui.Box(c).Width(w * scale).MaxWidthPercent(100).AspectRatio(w / h).Clip().Label("SVG image preview").Draw(func(p *ui.Painter, r ui.Rect) {
+						drawLabeledTranscriptSVG(p, r, state.image, state.labels, state.view)
+					})
+				}
 			})
 		} else {
 			ui.Text(c, "SVG preview unavailable; showing source").FontSize(11).TextColor(c.Theme().TextMuted)
@@ -65,6 +77,10 @@ func parseTranscriptSVG(source string) (*ui.SVG, error) {
 	}
 	d := xml.NewDecoder(strings.NewReader(source))
 	depth, count, roots := 0, 0, 0
+	var stack []string
+	var idStack []string
+	gradients := map[string]int{}
+	var refs []string
 	for {
 		tok, err := d.Token()
 		if err == io.EOF {
@@ -91,13 +107,52 @@ func parseTranscriptSVG(source string) (*ui.SVG, error) {
 			if v.Name.Space != "" && v.Name.Space != "http://www.w3.org/2000/svg" {
 				return nil, invalid
 			}
+			parent := ""
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			if (v.Name.Local == "linearGradient" || v.Name.Local == "radialGradient") && parent != "defs" || v.Name.Local == "stop" && parent != "linearGradient" && parent != "radialGradient" || v.Name.Local == "defs" && parent != "svg" {
+				return nil, invalid
+			}
+			if parent == "defs" && v.Name.Local != "linearGradient" && v.Name.Local != "radialGradient" || (parent == "linearGradient" || parent == "radialGradient") && v.Name.Local != "stop" || parent == "stop" {
+				return nil, invalid
+			}
+			var gradientID string
 			for _, a := range v.Attr {
 				if !previewSVGAttribute(a) {
 					return nil, invalid
 				}
+				if a.Name.Local == "id" {
+					if v.Name.Local != "linearGradient" && v.Name.Local != "radialGradient" || !validSVGReferenceID(a.Value) {
+						return nil, invalid
+					}
+					gradientID = a.Value
+				}
+				if strings.HasPrefix(a.Value, "url(") {
+					if a.Name.Local != "fill" && a.Name.Local != "stroke" {
+						return nil, invalid
+					}
+					refs = append(refs, a.Value[5:len(a.Value)-1])
+				}
 			}
+			if v.Name.Local == "linearGradient" || v.Name.Local == "radialGradient" {
+				if gradientID == "" {
+					return nil, invalid
+				}
+				if _, exists := gradients[gradientID]; exists {
+					return nil, invalid
+				}
+				gradients[gradientID] = 0
+			}
+			if v.Name.Local == "stop" {
+				gradients[idStack[len(idStack)-1]]++
+			}
+			stack = append(stack, v.Name.Local)
+			idStack = append(idStack, gradientID)
 		case xml.EndElement:
 			depth--
+			stack = stack[:len(stack)-1]
+			idStack = idStack[:len(idStack)-1]
 		case xml.CharData:
 			if strings.TrimSpace(string(v)) != "" {
 				return nil, invalid
@@ -114,6 +169,11 @@ func parseTranscriptSVG(source string) (*ui.SVG, error) {
 	if depth != 0 || roots != 1 {
 		return nil, invalid
 	}
+	for _, id := range refs {
+		if gradients[id] == 0 {
+			return nil, invalid
+		}
+	}
 	image, err := ui.ParseSVG([]byte(source))
 	if err != nil {
 		return nil, invalid
@@ -127,7 +187,7 @@ func parseTranscriptSVG(source string) (*ui.SVG, error) {
 
 func previewSVGElement(name string) bool {
 	switch name {
-	case "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon":
+	case "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "defs", "linearGradient", "radialGradient", "stop":
 		return true
 	}
 	return false
@@ -137,12 +197,33 @@ func previewSVGAttribute(a xml.Attr) bool {
 	if a.Name.Space == "xmlns" || a.Name.Local == "xmlns" {
 		return a.Value == "http://www.w3.org/2000/svg"
 	}
-	if a.Name.Space != "" || strings.Contains(strings.ToLower(a.Value), "url(") {
+	if a.Name.Space != "" {
 		return false
 	}
+	if strings.Contains(strings.ToLower(a.Value), "url(") {
+		return strings.HasPrefix(a.Value, "url(#") && strings.HasSuffix(a.Value, ")") && validSVGReferenceID(a.Value[5:len(a.Value)-1])
+	}
 	switch a.Name.Local {
-	case "version", "viewBox", "width", "height", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "d", "points", "transform", "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "opacity":
+	case "version", "viewBox", "width", "height", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "d", "points", "transform", "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "opacity", "id", "gradientUnits", "gradientTransform", "spreadMethod", "fx", "fy", "fr", "offset", "stop-color", "stop-opacity":
 		return true
 	}
 	return false
+}
+
+func validSVGReferenceID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if r < 'a' || r > 'z' {
+			if r < 'A' || r > 'Z' {
+				if r < '0' || r > '9' {
+					if r != '_' && r != '-' {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
 }

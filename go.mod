@@ -6,6 +6,7 @@ require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
 	charm.land/lipgloss/v2 v2.0.6
+	codeberg.org/go-latex/latex v0.3.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/alecthomas/chroma/v2 v2.27.0
@@ -43,6 +44,7 @@ require (
 require (
 	charm.land/ssh v0.4.3 // indirect
 	charm.land/tone v0.1.0 // indirect
+	git.sr.ht/~sbinet/gg v0.7.0 // indirect
 	github.com/Gaurav-Gosain/tuiffects v0.7.1 // indirect
 	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
@@ -65,6 +67,7 @@ require (
 	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect

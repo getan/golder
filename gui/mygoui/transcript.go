@@ -39,18 +39,18 @@ func (a *App) userBubble(c *ui.Context, it appsession.Item) {
 }
 
 func (a *App) assistantBlock(c *ui.Context, it appsession.Item) {
-	if a.md.Code == nil {
-		a.md.Code = map[string]func(*ui.Context, *markdown.CodeBlockView){
-			"svg": renderSVGCodeBlock, "SVG": renderSVGCodeBlock,
-			"xml": renderSVGCodeBlock, "XML": renderSVGCodeBlock,
-		}
+	root := ui.Column(c.Key(it.ID)).MaxWidth(820)
+	state := *ui.Local(root, transcriptMarkdownKey{}, func() *transcriptMarkdownState { return &transcriptMarkdownState{} })
+	if state.options == nil || state.project != a.project {
+		state.project = a.project
+		state.options = transcriptMarkdownOptions(a.project)
 	}
-	ui.Column(c.Key(it.ID)).MaxWidth(820).Children(func() {
+	root.Children(func() {
 		if it.Done {
-			markdown.View(c, it.Text, &a.md)
+			markdown.View(c, it.Text, state.options)
 			return
 		}
-		markdown.Stream(c, it.Text, &a.md)
+		markdown.Stream(c, it.Text, state.options)
 	})
 }
 

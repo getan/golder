@@ -17,6 +17,10 @@ func TestParseTranscriptSVG(t *testing.T) {
 	}{
 		{"simple", simpleTranscriptSVG, true},
 		{"path", `<svg viewBox="0 0 10 10"><path d="M0 0L10 10" stroke="blue"/></svg>`, true},
+		{"gradient", `<svg viewBox="0 0 10 10"><defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/><stop offset="1" stop-color="#00f"/></linearGradient></defs><rect width="10" height="10" fill="url(#g)"/></svg>`, true},
+		{"missing gradient", `<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="url(#missing)"/></svg>`, false},
+		{"empty gradient", `<svg viewBox="0 0 10 10"><defs><linearGradient id="g"/></defs><rect width="10" height="10" fill="url(#g)"/></svg>`, false},
+		{"duplicate gradient", `<svg viewBox="0 0 10 10"><defs><linearGradient id="g"/><linearGradient id="g"/></defs></svg>`, false},
 		{"text not supported", `<svg viewBox="0 0 10 10"><text x="0" y="5">label</text></svg>`, false},
 		{"script", `<svg viewBox="0 0 10 10"><script>alert(1)</script></svg>`, false},
 		{"external image", `<svg viewBox="0 0 10 10"><image href="https://example.com/a.png"/></svg>`, false},
