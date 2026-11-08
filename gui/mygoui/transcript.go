@@ -73,12 +73,21 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 	head := toolHeadline(*st)
 	open := a.toolOpen[it.ID]
 	ui.Collapsible(c.Key(it.ID), head, &open, func() {
-		patchRendered := st.Name == "apply_patch" && renderApplyPatch(c, st.Input)
+		patchRendered, patchComplete := false, false
+		if st.Name == "apply_patch" {
+			patchRendered, patchComplete = renderApplyPatch(c, st.Input)
+		}
 		if len(st.Input) > 0 && !patchRendered {
 			ui.Text(c, formatInput(st.Input)).FontSize(11.5).TextColor(t.TextMuted).Selectable()
 		}
 		if st.Output != "" {
-			renderToolOutput(c, truncate(st.Output, 12000), it.Failed || st.Error)
+			output := st.Output
+			if patchComplete && !st.Running && !it.Failed && !st.Error {
+				output = applyPatchDisplayOutput(output, st.Details)
+			}
+			if output != "" {
+				renderToolOutput(c, truncate(output, 12000), it.Failed || st.Error)
+			}
 		} else if st.Running {
 			ui.Text(c, "Running…").FontSize(12).TextColor(t.TextMuted)
 		} else if it.Failed || st.Error {
