@@ -102,6 +102,18 @@ jobs:
             exit 1
           fi
 
+      - name: Fetch verified terminal libraries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # MyGo verifies these same pinned hashes when it packages the app.
+          # The GitHub API avoids release-download URLs returning 504 and puts
+          # each verified library in the cache MyGo reads on this platform.
+          plugin_dir=$(go list -f '{{.Dir}}' github.com/egoist/mygo/plugins/terminal)
+          go run ./gui/tools/fetchnative -manifest "$plugin_dir/mygo-plugin.json" -platform "${{ matrix.platform }}"
+
       - name: Import the macOS signing certificate
         if: matrix.kind == 'macos'
         env:
