@@ -3,6 +3,7 @@ package agenttool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,42 @@ func (s *stubRunner) SandboxCall(argv []string, dir string, policy seatbelt.Call
 	s.argv = append(append([]string{}, argv...), dir)
 	s.policy = policy
 	return []string{"echo", "sandboxed"}, func() {}, nil
+}
+
+func TestBashSandboxPolicyBindsOnlyRequestedTTY(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		runner := &stubRunner{}
+		tool := &BashTool{Sandbox: runner}
+		_, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "bash", "-c", "echo ok", "", tty)
+		if cleanup != nil {
+			cleanup()
+		}
+		if !ok || !isolated || msg != "" || runner.calls != 1 || runner.policy.OwnTerminal != tty || runner.policy.Network {
+			t.Fatalf("tty=%t: policy=%+v calls=%d isolated=%t ok=%t msg=%q", tty, runner.policy, runner.calls, isolated, ok, msg)
+		}
+	}
+}
+
+type rejectBeforePTYRunner struct{ policy seatbelt.CallPolicy }
+
+func (*rejectBeforePTYRunner) SandboxArgv(string, string, string, string) ([]string, func(), error) {
+	return nil, nil, errors.New("unexpected legacy sandbox path")
+}
+
+func (r *rejectBeforePTYRunner) SandboxCall(_ []string, _ string, policy seatbelt.CallPolicy) ([]string, func(), error) {
+	r.policy = policy
+	return nil, nil, errors.New("test stopped before starting a process")
+}
+
+func TestBashExecutePropagatesTTYToSandboxBeforeAllocation(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		runner := &rejectBeforePTYRunner{}
+		tool := &BashTool{Sandbox: runner}
+		result, err := runBashCtx(t, context.Background(), tool, map[string]any{"command": "echo ok", "tty": tty}, nil)
+		if err != nil || !result.IsError || runner.policy.OwnTerminal != tty {
+			t.Fatalf("tty=%t: policy=%+v result=%+v err=%v", tty, runner.policy, result, err)
+		}
+	}
 }
 
 // runBashCtx runs one bash call against an explicit context, for tests that

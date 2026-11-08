@@ -30,6 +30,29 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestBashTTYUsesRegisteredTerminalBootstrap(t *testing.T) {
+	root := t.TempDir()
+	tool := &BashTool{Dir: root, Sandbox: &seatbelt.SeatbeltRunner{ProjectDir: root, TmpDir: t.TempDir()}}
+	argv, cleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "/bin/bash", "-c", "stty -a", "", true)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !isolated || msg != "" || len(argv) != 7 || argv[0] != executable || argv[1] != seatbelt.TerminalBootstrapFlag || argv[3] != "--" {
+		t.Fatalf("isolated bash TTY bypassed its bootstrap: argv=%q ok=%t isolated=%t error=%q", argv, ok, isolated, msg)
+	}
+	plain, plainCleanup, msg, ok, isolated := tool.sandboxArgv(context.Background(), "/bin/bash", "-c", "echo ok", "", false)
+	if plainCleanup != nil {
+		defer plainCleanup()
+	}
+	if !ok || !isolated || msg != "" || len(plain) == 0 || plain[0] != "sandbox-exec" {
+		t.Fatalf("pipe-only bash gained terminal bootstrap: argv=%q ok=%t isolated=%t error=%q", plain, ok, isolated, msg)
+	}
+}
+
 // This is the command envelope used by agent-created workspace/tuios panes,
 // not an ordinary bare PTY and not BashTool's separate execution path.
 func TestControlledPaneCanSetOwnTerminalEcho(t *testing.T) {

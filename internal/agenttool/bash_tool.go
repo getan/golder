@@ -204,7 +204,7 @@ func (t *BashTool) sandboxRoute(ctx context.Context, perms string) (sandbox bool
 // means run directly (auto mode without a runner: the gate already prompted).
 // sandboxed reports whether the returned argv goes through the OS sandbox, so
 // the result builder can label sandbox-shaped failures for the model.
-func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms string) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
+func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms string, tty bool) (argv []string, cleanup func(), msg string, ok bool, sandboxed bool) {
 	argv = []string{shell, flag, command}
 	sandbox, block := t.sandboxRoute(ctx, perms)
 	if block != "" {
@@ -216,7 +216,10 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 	if t.Sandbox == nil {
 		return nil, nil, "bash: no OS sandbox runner is available; the command was not run. Install a platform sandbox, use full-access, or approve an explicit one-call escape", false, false
 	}
-	policy := seatbelt.CallPolicy{Network: agentcore.NetworkGrantedFromContext(ctx)}
+	// execsess allocates the child's controlling PTY before starting this argv.
+	// On macOS OwnTerminal routes it through the trusted bootstrap so terminal
+	// ioctls are bound to that PTY, never to the launching application's TTY.
+	policy := seatbelt.CallPolicy{Network: agentcore.NetworkGrantedFromContext(ctx), OwnTerminal: tty}
 	seatbelt.RefusedPaths(&policy)
 	if p := agentcore.ReadGrantFromContext(ctx); p != "" {
 		// A one-call read grant on a directory is a subtree: the tool-level
@@ -548,7 +551,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 
 	shell, flag := resolveShell(t.Shell, runtime.GOOS, shellLookPath)
-	argv, cleanup, msg, ok, sandboxed := t.sandboxArgv(ctx, shell, flag, a.Command, a.SandboxPermissions)
+	argv, cleanup, msg, ok, sandboxed := t.sandboxArgv(ctx, shell, flag, a.Command, a.SandboxPermissions, a.TTY)
 	if !ok {
 		if msg == "" {
 			return errorResult("bash: command blocked"), nil
