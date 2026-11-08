@@ -40,7 +40,7 @@ type ApplicationResolution struct {
 	Matched      bool
 }
 
-// ResolveApplication first reuses matching visible windows. If none exist, it
+// ResolveApplication first reuses matching discovered windows. If none exist, it
 // launches only an unambiguous locally discovered application. Multiple app or
 // window candidates are returned for a person to disambiguate.
 func ResolveApplication(ctx context.Context, backend PlatformBackend, name string) (ApplicationResolution, error) {
@@ -84,6 +84,19 @@ func ResolveApplication(ctx context.Context, backend PlatformBackend, name strin
 	}
 	if len(apps) == 0 {
 		return ApplicationResolution{Targets: targets}, nil
+	}
+	// The requested localized name can differ from the window owner's name.
+	// Reuse the exact catalogued application before asking the OS to open it.
+	if apps[0].Identity != "" {
+		var existing []Target
+		for _, target := range targets {
+			if target.ApplicationID == apps[0].Identity {
+				existing = append(existing, target)
+			}
+		}
+		if len(existing) > 0 {
+			return ApplicationResolution{Targets: existing, Matched: true}, nil
+		}
 	}
 	return LaunchAndFindApplication(ctx, backend, apps[0])
 }
@@ -131,7 +144,7 @@ func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		case <-ctx.Done():
 			return ApplicationResolution{}, ctx.Err()
 		case <-deadline.C:
-			return ApplicationResolution{}, fmt.Errorf("%s launched but no matching visible window appeared within 12 seconds; show its window on the current desktop and select it again", app.Name)
+			return ApplicationResolution{}, fmt.Errorf("open request for %s succeeded, but no matching window was discovered within 12 seconds; the application may not have created a usable window", app.Name)
 		case <-ticker.C:
 		}
 	}

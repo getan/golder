@@ -38,6 +38,19 @@ func TestResolveApplicationReusesUniqueWindow(t *testing.T) {
 	}
 }
 
+func TestResolveApplicationReusesLocalizedWindowsByIdentity(t *testing.T) {
+	app := Application{ID: "opaque", Name: "Calculator", Identity: "/apps/Calculator.app"}
+	f := &applicationFixture{apps: []Application{app}, targets: []Target{
+		{ID: "other", Application: "Calculator", ApplicationID: "/other/Calculator.app"},
+		{ID: "one", Application: "Calculator", ApplicationID: app.Identity},
+		{ID: "two", Application: "Calculator", ApplicationID: app.Identity},
+	}}
+	resolution, err := ResolveApplication(context.Background(), f, "计算器")
+	if err != nil || !resolution.Matched || len(resolution.Targets) != 2 || resolution.Targets[0].ID != "one" || resolution.Targets[1].ID != "two" || len(f.launched) != 0 {
+		t.Fatalf("resolution=%+v launched=%+v err=%v", resolution, f.launched, err)
+	}
+}
+
 func TestResolveApplicationLaunchesOnlyUniqueCandidate(t *testing.T) {
 	app := Application{ID: "opaque", Name: "Calculator", Identity: "/apps/Calculator.app"}
 	f := &applicationFixture{apps: []Application{app}, after: []Target{

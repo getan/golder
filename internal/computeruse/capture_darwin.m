@@ -96,7 +96,7 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 		if (!CGPreflightScreenCaptureAccess()) return 0;
 		if (@available(macOS 14.0, *)) {
 			GolderCaptureResult *inventory = [[GolderCaptureResult alloc] init];
-			[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *error) {
+			[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content, NSError *error) {
 				[inventory->condition lock];
 				if (!error && content) inventory->content = [content retain];
 				inventory->done = YES;

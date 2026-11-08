@@ -179,7 +179,7 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		case "status", "snapshot", "screenshot", "pause", "stop":
 			return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
 				Reasons: []string{"observe or stop the current target-bound desktop session"}}
-		case "click", "click_at", "fill", "press", "scroll":
+		case "click", "click_at", "fill", "press", "scroll", "close_window":
 			// A desktop action may have external or destructive effects. The
 			// contextual reviewer still evaluates the requested operation.
 			return f.next(ctx, tool, args)

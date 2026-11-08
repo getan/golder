@@ -36,6 +36,52 @@ func (b *computerControlBackend) Act(context.Context, computeruse.Target, string
 	return nil
 }
 
+type computerCloseBackend struct {
+	computerControlBackend
+	closed computeruse.Target
+}
+
+func (b *computerCloseBackend) CloseWindow(_ context.Context, target computeruse.Target) error {
+	b.closed = target
+	return nil
+}
+
+func TestComputerCloseWindowRequiresControlAndPauses(t *testing.T) {
+	backend := &computerCloseBackend{}
+	s := computeruse.New(backend)
+	target := computeruse.Target{ID: "selected"}
+	if err := s.Start(context.Background(), target, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	mode := permissions.New(permissions.Auto)
+	tool := &ComputerTool{Session: s, Mode: mode}
+	call := func(raw string) agentcore.AgentToolResult {
+		result, err := tool.Execute(context.Background(), "close", json.RawMessage(raw), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if !slices.Contains(schemaEnum(t, tool.Schema()), "close_window") {
+		t.Fatal("window close not advertised")
+	}
+	mode.Set(permissions.ReadOnly)
+	if slices.Contains(schemaEnum(t, tool.Schema()), "close_window") || !call(`{"action":"close_window"}`).IsError || backend.closed.ID != "" {
+		t.Fatal("read-only permitted window close")
+	}
+	mode.Set(permissions.Auto)
+	if !call(`{"action":"close_window","ref":"other"}`).IsError || backend.closed.ID != "" {
+		t.Fatal("close accepted a model-supplied target")
+	}
+	result := call(`{"action":"close_window"}`)
+	if result.IsError || backend.closed != target || !s.Status().Paused || !strings.Contains(agentcore.ContentToText(result.Content), `"verified":false`) {
+		t.Fatalf("close: result=%+v target=%+v status=%+v", result, backend.closed, s.Status())
+	}
+	if slices.Contains(schemaEnum(t, tool.Schema()), "close_window") || !call(`{"action":"close_window"}`).IsError {
+		t.Fatal("paused session permitted window close")
+	}
+}
+
 func TestComputerToolAdvertisesAndEnforcesSessionState(t *testing.T) {
 	s := computeruse.New(computerTestBackend{})
 	tool := &ComputerTool{Session: s}

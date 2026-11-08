@@ -41,9 +41,9 @@ func (d *WindowDiagnostic) Error() string {
 	case WindowPermissionDenied:
 		return "macOS Accessibility permission is not granted to this Golder process; check Privacy & Security → Accessibility"
 	case WindowUnavailable:
-		return "could not verify that the selected window remains visible and belongs to the same process; show the intended window and select it again"
+		return "could not verify that the selected window still exists and belongs to the same process; select the intended window again"
 	case WindowBoundsMissing:
-		return "macOS did not provide bounds for the selected screen window; select it again when it is visible"
+		return "macOS did not provide bounds for the selected window; show the intended window and select it again"
 	case WindowAXAppUnavailable:
 		return "macOS could not create an Accessibility reference for the selected application"
 	case WindowAXDisabled:

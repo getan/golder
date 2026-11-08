@@ -13,7 +13,7 @@ func TestWindowDiagnosticsAreDistinctAndContainNoWindowContent(t *testing.T) {
 		want   string
 	}{
 		{WindowPermissionDenied, "Accessibility permission is not granted"},
-		{WindowUnavailable, "could not verify that the selected window remains visible"},
+		{WindowUnavailable, "could not verify that the selected window still exists"},
 		{WindowBoundsMissing, "bounds"},
 		{WindowAXAppUnavailable, "Accessibility reference"},
 		{WindowAXDisabled, "Accessibility API is disabled"},

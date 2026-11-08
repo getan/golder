@@ -220,7 +220,7 @@ func (m Model) openComputerPickerFor(suggested string, manual bool) (tea.Model, 
 	setup.suggested = suggested
 	mode := m.session.perms
 	m.session.computerSetup = setup
-	m.transcript.addSystem("Finding the requested application and its visible window…")
+	m.transcript.addSystem("Finding the requested application and its windows…")
 	m.relayout()
 	return m, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(setup.ctx, 30*time.Second)
@@ -274,7 +274,7 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 	}
 	if len(msg.targets) == 0 {
 		m.session.cancelComputerSetup()
-		m.transcript.addSystem(fmt.Sprintf("No matching application or visible window. Screen Recording: %s; Accessibility: %s.", msg.perms.ScreenCapture, msg.perms.Accessibility))
+		m.transcript.addSystem(fmt.Sprintf("No matching application or window. Screen Recording: %s; Accessibility: %s.", msg.perms.ScreenCapture, msg.perms.Accessibility))
 		m.relayout()
 		return m, nil
 	}

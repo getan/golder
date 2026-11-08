@@ -25,6 +25,7 @@ typedef struct {
 	int32_t pid;
 	uint64_t start_sec;
 	uint64_t start_usec;
+	int on_screen;
 	char application[256];
 	char bundle[4096];
 	char title[512];
@@ -46,7 +47,7 @@ static int cu_process_start(int32_t pid, uint64_t *sec, uint64_t *usec) {
 }
 
 static int cu_windows(cu_window *out, int cap) {
-	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
 	if (!list) return -1;
 	int count = 0;
 	CFIndex total = CFArrayGetCount(list);
@@ -67,6 +68,8 @@ static int cu_windows(cu_window *out, int cap) {
 		cu_window entry = {0};
 		entry.pid = pid;
 		entry.window_id = window_id;
+		CFTypeRef on_screen = CFDictionaryGetValue(d, kCGWindowIsOnscreen);
+		entry.on_screen = on_screen && CFGetTypeID(on_screen) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)on_screen);
 		if (!cu_process_start(pid, &entry.start_sec, &entry.start_usec)) continue;
 		if (!cu_running_bundle(pid, entry.bundle, sizeof(entry.bundle))) continue;
 		cu_string(CFDictionaryGetValue(d, kCGWindowOwnerName), entry.application, sizeof(entry.application));
@@ -81,7 +84,7 @@ static int cu_windows(cu_window *out, int cap) {
 static int cu_window_exists(uint32_t window_id, int32_t pid, uint64_t sec, uint64_t usec) {
 	uint64_t now_sec = 0, now_usec = 0;
 	if (!cu_app_allowed(pid) || !cu_process_start(pid, &now_sec, &now_usec) || now_sec != sec || now_usec != usec) return 0;
-	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, window_id);
 	if (!list) return 0;
 	int found = 0;
 	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
@@ -526,6 +529,22 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 	return AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess;
 }
 
+static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
+	if (!expected || cu_cancelled(flag)) return 0;
+	AXUIElementRef window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	CFTypeRef button = NULL;
+	AXError error = AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute, &button);
+	CFRelease(window);
+	if (error != kAXErrorSuccess || !button || CFGetTypeID(button) != AXUIElementGetTypeID()) {
+		if (button) CFRelease(button);
+		return 0;
+	}
+	int sent = cu_ax_press(selected, expected, (AXUIElementRef)button, flag);
+	CFRelease(button);
+	return sent;
+}
+
 static int cu_ax_fill(cu_window selected, AXUIElementRef expected, AXUIElementRef element, const char *text, size_t length, cu_cancel_flag *flag) {
 	if (!expected || !element || !text || length > 4096 || cu_cancelled(flag)) return 0;
 	AXUIElementRef window = cu_ax_window(selected, 0);
@@ -620,7 +639,11 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 		}
 		id := hex.EncodeToString(nonce[:])
 		next[id] = window
-		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), ApplicationID: C.GoString(&window.bundle[0]), Window: C.GoString(&window.title[0]), Detail: fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))})
+		detail := fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))
+		if window.on_screen == 0 {
+			detail += " · Off-screen"
+		}
+		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), ApplicationID: C.GoString(&window.bundle[0]), Window: C.GoString(&window.title[0]), Detail: detail})
 	}
 	for _, ref := range c.pinned {
 		C.cu_ax_release(ref)
@@ -818,7 +841,42 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	return nil
 }
 
-// Capture uses ScreenCaptureKit for the selected on-screen window only. It
+// CloseWindow sends a close request to the pinned window, never to its app.
+func (c *MacWindowCatalog) CloseWindow(ctx context.Context, target Target) error {
+	if err := c.Validate(ctx, target, true); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	window, ok := c.windows[target.ID]
+	if c.closed || !ok || c.pinned[target.ID] == 0 {
+		return ErrTargetLost
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		return errors.New("allocate AX cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	sent := C.cu_ax_close_window(window, c.pinned[target.ID], flag)
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
+	c.clearSnapshotLocked()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if sent == 0 {
+		return errors.New("close request unavailable or refused by the selected window")
+	}
+	return nil
+}
+
+// Capture uses ScreenCaptureKit for the selected window only. It
 // checks the pinned window before and after capture; no system prompt is raised.
 func (c *MacWindowCatalog) Capture(ctx context.Context, target Target) ([]byte, error) {
 	data, _, err := c.CaptureBound(ctx, target)
