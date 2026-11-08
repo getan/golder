@@ -440,7 +440,8 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 					}
 				}
 				g.opts.Notes.Emit(judge.Note{
-					Tool: "bash", Kind: judge.NoteDenied, Level: judge.Deny, Lang: lang,
+					Tool: "bash", ToolCallID: agentcore.ToolCallIDFromContext(ctx), Origin: agentcore.OriginFromContext(ctx),
+					Kind: judge.NoteDenied, Level: judge.Deny, Lang: lang,
 					Summary: summary, Needs: req.Needs, Rationale: reason,
 				})
 			}
@@ -476,7 +477,8 @@ func (g *Gates) SandboxDenialAsker() func(ctx context.Context, path, summary str
 				rationale += " (" + ans.Reason + ")"
 			}
 			g.opts.Notes.Emit(judge.Note{
-				Tool: "bash", Kind: judge.NoteSandboxed, Level: judge.Allow, Lang: lang,
+				Tool: "bash", ToolCallID: agentcore.ToolCallIDFromContext(ctx), Origin: agentcore.OriginFromContext(ctx),
+				Kind: judge.NoteSandboxed, Level: judge.Allow, Lang: lang,
 				Summary: summary, Granted: req.Needs, Rationale: rationale,
 			})
 		}

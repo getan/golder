@@ -82,18 +82,21 @@ func (a *App) view(c *ui.Context) {
 	if a.list == nil {
 		a.list = &ui.ListState{}
 	}
+	rows := a.projectedTranscriptRows()
 	a.list.Key = func(i int) any {
-		if i < len(a.items) {
-			return a.items[i].ID
-		}
-		i -= len(a.items)
-		if i < len(a.pending) {
-			return a.pending[i].ID
+		if i >= 0 && i < len(rows) {
+			return rows[i].key
 		}
 		return "awaiting-first-output"
 	}
 	a.list.FollowEnd = true
 	a.list.FollowAnimation = &ui.Smooth
+	if a.approvalReveal != "" {
+		if index := approvalRowIndex(rows, a.pending, a.approvalReveal); index >= 0 {
+			a.list.ScrollIntoView(index)
+		}
+		a.approvalReveal = ""
+	}
 
 	c.Root().Background(t.Background)
 	ui.Column(c).Fill().Children(func() {
@@ -103,12 +106,12 @@ func (a *App) view(c *ui.Context) {
 			a.clampWorkspaceWidths(c.Root().LayoutBounds().W - navigationWidth)
 			conversation := func() {
 				if a.sidebarClosed {
-					a.center(c)
+					a.center(c, rows)
 				} else {
 					if a.sidebarSize <= 0 {
 						a.sidebarSize = sidebarWidth
 					}
-					ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c) }).Fill().MinWidth(0)
+					ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c, rows) }).Fill().MinWidth(0)
 				}
 			}
 			if a.hasRightPanel() {
@@ -381,20 +384,18 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 }
 
 // center is the transcript, the approval queue and the composer.
-func (a *App) center(c *ui.Context) {
+func (a *App) center(c *ui.Context, rows []transcriptRow) {
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
 		waiting := a.awaitingFirstOutput()
-		total := len(a.items) + len(a.pending)
+		total := len(rows)
 		if waiting {
 			total++
 		}
 		ui.List(c, a.list, total, func(i int) {
 			switch {
-			case i >= 0 && i < len(a.items):
-				a.itemView(c, a.items[i])
-			case i >= len(a.items) && i < len(a.items)+len(a.pending):
-				a.approvalCard(c, a.pending[i-len(a.items)])
+			case i >= 0 && i < len(rows):
+				a.transcriptRowView(c, rows[i])
 			case waiting:
 				ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
 			}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/trust"
 )
@@ -60,6 +61,11 @@ func (c *Controller) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	c.nextApproval++
 	id := fmt.Sprintf("approval-%d", c.nextApproval)
 	view := approvalViewOf(id, req)
+	view.RunID = c.runID
+	view.ToolCallID = agentcore.ToolCallIDFromContext(ctx)
+	if view.Origin == "" {
+		view.Origin = agentcore.OriginFromContext(ctx)
+	}
 	p := &pendingApproval{view: view, req: req, reply: make(chan judge.ApprovalAnswer, 1)}
 	c.pending = append(c.pending, p)
 	c.mu.Unlock()

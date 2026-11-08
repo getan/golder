@@ -55,6 +55,8 @@ type ToolState struct {
 	Details map[string]any
 	// Running is true until the executor reports the end.
 	Running bool
+	// AwaitingStart distinguishes an announced call from one already executing.
+	AwaitingStart bool
 	// Error is the executor's failure flag, not a parse result.
 	Error bool
 }
@@ -69,13 +71,16 @@ type TTYSummary struct {
 
 // NoteState is one permission-gate announcement.
 type NoteState struct {
-	Tool      string
-	Kind      int
-	Level     string
-	Summary   string
-	Source    string
-	Rationale string
-	Mode      string
+	Tool       string
+	ToolCallID string
+	RunID      string
+	Origin     string
+	Kind       int
+	Level      string
+	Summary    string
+	Source     string
+	Rationale  string
+	Mode       string
 	// Granted is true for approvals that let a call proceed.
 	Granted bool
 	// Failure is true for denials and blocks.
@@ -86,6 +91,9 @@ type NoteState struct {
 // channel; the view only renders Require and answers with an Answer.
 type ApprovalView struct {
 	ID string
+	// ToolCallID and RunID identify the originating call for presentation only.
+	ToolCallID string
+	RunID      string
 	// Kind is "consent" or "trust".
 	Kind string
 	Tool string

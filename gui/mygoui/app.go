@@ -33,13 +33,18 @@ type App struct {
 
 	md markdown.Options
 
-	items []appsession.Item
-	index map[string]int
-	list  *ui.ListState
+	items                 []appsession.Item
+	index                 map[string]int
+	list                  *ui.ListState
+	transcriptRows        []transcriptRow
+	transcriptRowsItems   int
+	transcriptRowsPending int
+	transcriptRowsDirty   bool
 
-	thinkingOpen map[string]bool
-	toolOpen     map[string]bool
-	approvalOpen map[string]bool
+	thinkingOpen   map[string]bool
+	toolOpen       map[string]bool
+	approvalOpen   map[string]bool
+	approvalReveal string
 
 	draft               string
 	attachments         []string
@@ -376,6 +381,12 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 		a.index[it.ID] = i
 	}
 	a.pending = append(a.pending[:0], snap.Pending...)
+	a.transcriptRowsDirty = true
+	if len(a.pending) > 0 {
+		a.approvalReveal = a.pending[len(a.pending)-1].ID
+	} else {
+		a.approvalReveal = ""
+	}
 }
 
 func (a *App) applyEvent(ev appsession.Event) {
@@ -399,6 +410,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 	case appsession.EventApproval:
 		if ev.Approval != nil {
+			a.transcriptRowsDirty = true
 			for i := range a.pending {
 				if a.pending[i].ID == ev.Approval.ID {
 					a.pending[i] = *ev.Approval
@@ -407,6 +419,10 @@ func (a *App) applyEvent(ev appsession.Event) {
 			}
 			a.pending = append(a.pending, *ev.Approval)
 			a.approvalOpen[ev.Approval.ID] = true
+			a.approvalReveal = ev.Approval.ID
+			if key := toolPresentationKey(ev.Approval.RunID, ev.Approval.ToolCallID, ev.Approval.Origin); key != "" {
+				a.toolOpen[key] = true
+			}
 		}
 	case appsession.EventApprovalDone:
 		a.removeApproval(ev.ID)
@@ -458,6 +474,10 @@ func (a *App) applyEvent(ev appsession.Event) {
 
 func (a *App) replaceItem(it appsession.Item) {
 	if i, ok := a.index[it.ID]; ok {
+		previous := a.items[i]
+		if previous.Kind != it.Kind || it.Kind == appsession.ItemNote || (previous.Tool == nil) != (it.Tool == nil) || previous.Tool != nil && it.Tool != nil && (previous.Tool.ID != it.Tool.ID || previous.Tool.Name != it.Tool.Name) {
+			a.transcriptRowsDirty = true
+		}
 		a.items[i] = it
 		return
 	}
@@ -469,6 +489,7 @@ func (a *App) removeApproval(id string) {
 	for i, p := range a.pending {
 		if p.ID == id {
 			a.pending = append(a.pending[:i], a.pending[i+1:]...)
+			a.transcriptRowsDirty = true
 			delete(a.approvalOpen, id)
 			return
 		}

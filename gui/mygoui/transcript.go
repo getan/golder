@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/judge"
 )
 
 // itemView renders one transcript row.
@@ -65,14 +67,40 @@ func (a *App) thinkingBlock(c *ui.Context, it appsession.Item) {
 
 // toolCard renders a tool call, collapsed to its headline by default.
 func (a *App) toolCard(c *ui.Context, it appsession.Item) {
+	a.toolCardDetails(c, it, nil, nil)
+}
+
+func (a *App) toolCardDetails(c *ui.Context, it appsession.Item, notes, approvals []int) {
 	t := c.Theme()
 	st := it.Tool
 	if st == nil {
 		return
 	}
 	head := toolHeadline(*st)
-	open := a.toolOpen[it.ID]
+	if len(approvals) > 0 {
+		head += " · approval required"
+	}
+	var outcomes []string
+	for _, index := range notes {
+		outcome := reviewOutcome(a.items[index])
+		if outcome != "" && !slices.Contains(outcomes, outcome) {
+			outcomes = append(outcomes, outcome)
+		}
+	}
+	if len(outcomes) > 0 {
+		head += " · " + strings.Join(outcomes, ", ")
+	}
+	open, known := a.toolOpen[it.ID]
+	if !known && len(approvals) > 0 {
+		open = true
+	}
 	ui.Collapsible(c.Key(it.ID), head, &open, func() {
+		for _, index := range approvals {
+			a.approvalCard(c, a.pending[index])
+		}
+		for _, index := range notes {
+			a.noteLine(c, a.items[index])
+		}
 		patchRendered, patchComplete := false, false
 		if st.Name == "apply_patch" {
 			patchRendered, patchComplete = renderApplyPatch(c, st.Input)
@@ -88,6 +116,10 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 			if output != "" {
 				renderToolOutput(c, truncate(output, 12000), it.Failed || st.Error)
 			}
+		} else if st.Running && len(approvals) > 0 {
+			ui.Text(c, "Waiting for approval…").FontSize(12).TextColor(t.TextMuted)
+		} else if st.Running && st.AwaitingStart {
+			ui.Text(c, "Waiting to run…").FontSize(12).TextColor(t.TextMuted)
 		} else if st.Running {
 			ui.Text(c, "Running…").FontSize(12).TextColor(t.TextMuted)
 		} else if it.Failed || st.Error {
@@ -128,10 +160,42 @@ func (a *App) noteLine(c *ui.Context, it appsession.Item) {
 	if it.Note != nil && it.Note.Summary != "" && !strings.Contains(text, it.Note.Summary) {
 		text = it.Note.Summary + "\n" + text
 	}
-	ui.Row(c.Key(it.ID)).Gap(6).AlignItems(ui.Start).Children(func() {
-		ui.Text(c, "!").FontSize(12).TextColor(color).Width(18).TextAlign(ui.Center)
-		ui.Text(c, text).FontSize(12).TextColor(color).Selectable().Grow(1)
-	})
+	open := a.approvalOpen[it.ID]
+	head := "Review · " + reviewOutcome(it)
+	if it.Note != nil && it.Note.Origin != "" {
+		head += " · from " + oneLine(it.Note.Origin, 80)
+	}
+	ui.Collapsible(c.Key(it.ID), head, &open, func() {
+		ui.Text(c, text).FontSize(12).TextColor(color).Selectable().Wrap()
+	}).TextColor(color)
+	a.approvalOpen[it.ID] = open
+}
+
+// reviewOutcome keeps the security-relevant disposition visible when folded.
+func reviewOutcome(it appsession.Item) string {
+	if it.Note == nil {
+		return "decision"
+	}
+	switch judge.NoteKind(it.Note.Kind) {
+	case judge.NoteApproved:
+		return "approved"
+	case judge.NoteSandboxed:
+		return "sandboxed"
+	case judge.NoteEscaped:
+		return "outside sandbox"
+	case judge.NoteDenied:
+		return "denied"
+	case judge.NoteUnavailable:
+		return "review unavailable"
+	case judge.NoteBlockedNoPrompt, judge.NoteReadOnly:
+		return "blocked"
+	case judge.NoteBoundaryGranted:
+		return "outside access allowed"
+	case judge.NoteBoundaryDenied, judge.NoteBoundaryNoPrompt:
+		return "outside access denied"
+	default:
+		return "decision"
+	}
 }
 
 func (a *App) noticeLine(c *ui.Context, it appsession.Item) {
@@ -153,6 +217,8 @@ func toolHeadline(st appsession.ToolState) string {
 	}
 	status := "done"
 	switch {
+	case st.Running && st.AwaitingStart:
+		status = "pending"
 	case st.Running:
 		status = "running"
 	case st.Error:

@@ -3,8 +3,10 @@ package mygoui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
+
 	"github.com/getan/golder/gui/appsession"
 )
 
@@ -48,17 +50,34 @@ func TestTranscriptSVGPreviewAndFallback(t *testing.T) {
 	}{
 		{"preview", "svg", simpleTranscriptSVG, "SVG preview"},
 		{"xml preview", "xml", simpleTranscriptSVG, "SVG preview"},
-		{"unsupported", "svg", `<svg viewBox="0 0 10 10"><text>label</text></svg>`, "SVG preview unavailable; showing source"},
+		{"unsupported", "svg", `<svg viewBox="0 0 10 10"><text>label</text></svg>`, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := testApp()
 			item := appsession.Item{ID: "svg", Kind: appsession.ItemAssistant, Done: true, Text: "```" + tc.language + "\n" + tc.source + "\n```\n"}
 			tt := ui.NewTester(func(c *ui.Context) { a.itemView(c, item) }, 800, 600)
-			if !tt.HasText(tc.want) {
+			if tc.want != "" && !tt.HasText(tc.want) {
 				t.Fatalf("missing %q: %q", tc.want, tt.Texts())
 			}
+			if tc.want == "" && !tt.HasText("Rendering SVG preview") && !tt.HasText("SVG preview unavailable") {
+				t.Fatalf("missing preview status: %q", tt.Texts())
+			}
+			if !tt.HasText("SVG source") || tt.HasText("Copy") {
+				t.Fatalf("source should start collapsed: %q", tt.Texts())
+			}
+			if err := tt.Click("SVG source"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Advance(250 * time.Millisecond)
 			if !tt.HasText("Copy") {
-				t.Fatalf("source copy button missing: %q", tt.Texts())
+				t.Fatalf("source did not expand: %q", tt.Texts())
+			}
+			if err := tt.Click("SVG source"); err != nil {
+				t.Fatal(err)
+			}
+			tt.Advance(250 * time.Millisecond)
+			if tt.HasText("Copy") {
+				t.Fatalf("source did not collapse again: %q", tt.Texts())
 			}
 			if tc.source == simpleTranscriptSVG {
 				r, ok := tt.Find("SVG image preview")
@@ -71,6 +90,31 @@ func TestTranscriptSVGPreviewAndFallback(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStreamingSVGSourceStartsCollapsed(t *testing.T) {
+	a := testApp()
+	item := appsession.Item{ID: "streaming-svg", Kind: appsession.ItemAssistant, Text: "```svg\n" + simpleTranscriptSVG + "\n"}
+	tt := ui.NewTester(func(c *ui.Context) { a.itemView(c, item) }, 800, 600)
+	if !tt.HasText("SVG source") || !tt.HasText("preview will appear") || tt.HasText("Copy") {
+		t.Fatalf("streaming SVG source was not collapsed: %q", tt.Texts())
+	}
+	if err := tt.Click("SVG source"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Advance(250 * time.Millisecond)
+	if !tt.HasText("Copy") {
+		t.Fatalf("streaming SVG source could not be expanded: %q", tt.Texts())
+	}
+}
+
+func TestNonSVGXMLKeepsNormalCodeBlock(t *testing.T) {
+	a := testApp()
+	item := appsession.Item{ID: "xml", Kind: appsession.ItemAssistant, Done: true, Text: "```xml\n<config><value>hello</value></config>\n```\n"}
+	tt := ui.NewTester(func(c *ui.Context) { a.itemView(c, item) }, 800, 600)
+	if !tt.HasText("Copy") || tt.HasText("SVG source") {
+		t.Fatalf("non-SVG XML was unexpectedly folded: %q", tt.Texts())
 	}
 }
 

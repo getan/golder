@@ -441,7 +441,7 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 		if !ok {
 			id = runID + "-tool-" + callID
 			tools[callID] = id
-			st := &ToolState{ID: callID, Name: name, Running: true}
+			st := &ToolState{ID: callID, Name: name, Running: true, AwaitingStart: true}
 			if fn != nil {
 				fn(st)
 			}
@@ -452,6 +452,9 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 			if it.Tool == nil {
 				it.Tool = &ToolState{ID: callID, Name: name}
 			}
+			if name != "" {
+				it.Tool.Name = name
+			}
 			if fn != nil {
 				fn(it.Tool)
 			}
@@ -460,6 +463,23 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 			it.Done = !it.Tool.Running
 		})
 		return id
+	}
+	announceCalls := func(message agentcore.AssistantMessage, final bool) {
+		for _, call := range message.ToolCalls() {
+			if call.ID == "" {
+				continue
+			}
+			if _, announced := tools[call.ID]; announced && !final {
+				continue
+			}
+			upsertTool(call.ID, call.Name, func(st *ToolState) {
+				// Partial provider arguments are not yet redacted. Only show the
+				// finalized arguments, after runtime's assistant redaction seam.
+				if final {
+					st.Input = decodeArgs(call.Arguments)
+				}
+			})
+		}
 	}
 
 	handoff := false
@@ -481,10 +501,15 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 						upsertThinking(th.Thinking)
 					}
 				}
+				announceCalls(msg, false)
+			case agentcore.MessageEndEvent:
+				if msg, ok := e.Message.(agentcore.AssistantMessage); ok {
+					announceCalls(msg, true)
+				}
 			case agentcore.ToolExecutionStartEvent:
 				args := decodeArgsAny(e.Args)
 				upsertTool(e.ToolCallID, e.ToolName, func(st *ToolState) {
-					st.Input, st.Running = args, true
+					st.Input, st.Running, st.AwaitingStart = args, true, false
 				})
 			case agentcore.ToolExecutionUpdateEvent:
 				out := agentcore.ContentToText(e.PartialResult.Content)
@@ -573,6 +598,23 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 		},
 	})
 
+	// A streamed announcement can be interrupted before the executor emits its
+	// end event. Never leave such a card permanently marked as running.
+	for _, id := range tools {
+		c.mu.Lock()
+		index, ok := c.index[id]
+		unfinished := ok && c.items[index].Tool != nil && c.items[index].Tool.Running
+		c.mu.Unlock()
+		if unfinished {
+			c.updateItem(id, func(it *Item) {
+				it.Tool.Running, it.Tool.Error = false, true
+				it.Done, it.Failed = true, true
+				if it.Tool.Output == "" {
+					it.Tool.Output = "The tool call stopped before it completed."
+				}
+			})
+		}
+	}
 	return final, err, handoff
 }
 

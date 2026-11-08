@@ -76,6 +76,7 @@ func (c ToolExecutorConfig) redactor() *redact.Redactor {
 // terminate. emit may be nil (no events). It never returns a Go error: every
 // failure is encoded into the returned message with IsError=true.
 func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore.AgentToolCall, emit agentcore.EmitFunc) (agentcore.ToolResultMessage, bool) {
+	ctx = agentcore.WithToolCallID(ctx, call.ID)
 	// 1. prepare: lookup, prepareArguments, validate, beforeToolCall.
 	// execCtx starts as ctx and is derived when the beforeToolCall decision
 	// asks for sandbox isolation; the tool executes against execCtx so the

@@ -17,21 +17,17 @@ const maxTranscriptSVGBytes = 64 << 10
 const maxTranscriptSVGElements = 1024
 
 type svgPreviewState struct {
-	source string
-	image  *ui.SVG
-	labels []svgTextLabel
-	view   [4]float32
-	rich   richPreviewState
+	source     string
+	image      *ui.SVG
+	labels     []svgTextLabel
+	view       [4]float32
+	rich       richPreviewState
+	sourceOpen bool
 }
 
 type svgPreviewKey struct{}
 
 func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
-	// Incomplete streaming XML is shown as code until its fence closes.
-	if b.Open {
-		markdown.DefaultCodeBlock(c, b)
-		return
-	}
 	if strings.EqualFold(b.Language, "xml") && !isSVGMarkup(b.Code()) {
 		markdown.DefaultCodeBlock(c, b)
 		return
@@ -40,9 +36,14 @@ func renderSVGCodeBlock(c *ui.Context, b *markdown.CodeBlockView) {
 	state := *ui.Local(box, svgPreviewKey{}, func() *svgPreviewState { return &svgPreviewState{} })
 	source := b.Code()
 	box.Children(func() {
-		renderSVGPreview(c, state, source)
-		// Always keep the original, selectable and copyable source visible.
-		markdown.DefaultCodeBlock(c, b)
+		if b.Open {
+			ui.Text(c, "SVG preview will appear when the block is complete.").FontSize(11).TextColor(c.Theme().TextMuted)
+		} else {
+			renderSVGPreview(c, state, source)
+		}
+		ui.Collapsible(c.Key("svg-source"), "SVG source", &state.sourceOpen, func() {
+			markdown.DefaultCodeBlock(c, b)
+		})
 	})
 }
 
@@ -55,7 +56,7 @@ func renderSVGPreview(c *ui.Context, state *svgPreviewState, source string) {
 			state.image, state.labels, state.view = parseLabeledTranscriptSVG(source)
 		}
 	}
-	bitmap, _ := state.rich.preview(c, source, false)
+	bitmap, loading := state.rich.preview(c, source, false)
 	if bitmap != nil {
 		drawRichBitmap(c, bitmap, "SVG preview")
 	} else if state.image != nil {
@@ -71,8 +72,10 @@ func renderSVGPreview(c *ui.Context, state *svgPreviewState, source string) {
 				})
 			}
 		})
+	} else if loading {
+		ui.Text(c, "Rendering SVG preview…").FontSize(11).TextColor(c.Theme().TextMuted)
 	} else {
-		ui.Text(c, "SVG preview unavailable; showing source").FontSize(11).TextColor(c.Theme().TextMuted)
+		ui.Text(c, "SVG preview unavailable; expand the source below.").FontSize(11).TextColor(c.Theme().TextMuted)
 	}
 }
 
