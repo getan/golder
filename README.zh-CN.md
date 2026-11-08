@@ -6,9 +6,11 @@
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-用 Go 编写的终端 AI 编码助手：读写文件、执行命令、检索代码、抓取网页，在对话中完成从理解需求到改好代码的闭环。默认用 `golder workspace`：自带分屏终端，agent、shell 和浏览器在同一个面板里；已经有习惯的终端复用器时，直接在它的 pane/window 里跑单 agent 的 `golder`。也支持行式 REPL 与无头脚本。
+Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用，也有终端与 CLI。它可以理解代码、修改文件、执行命令和测试、操作浏览器；你可以在对话中查看过程，并对敏感操作作出授权。
 
-**单二进制、默认沙箱、密钥不进入模型上下文。**
+按习惯选择入口：用 **Golder GUI** 在图形界面中管理项目、会话与工作区；用 **`golder workspace`** 在终端里组织 agent、shell 和浏览器；也可以在已有复用器里运行 TUI，或用 REPL、无头 CLI 接入脚本和 CI。桌面应用与 CLI 分别构建，共享 Agent 核心能力。
+
+审批、凭据脱敏与 OS 沙箱提供可配置的安全防护；具体边界取决于工具、权限模式和平台。
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
@@ -18,9 +20,29 @@
 
 <p align="center"><sub>真实会话：agent 读码并打补丁，<code>go test</code> 从失败跑到全绿。<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">观看完整 37 秒演示</a>。</sub></p>
 
-如果 golder 帮你省下一次环境折腾，点个 <a href="https://github.com/getan/golder">GitHub Star</a>，让更多终端开发者发现它。
+如果 golder 帮你省下一次环境折腾，点个 <a href="https://github.com/getan/golder">GitHub Star</a>，让更多开发者发现它。
+
+## 整体架构
+
+![Golder 系统架构：原生 GUI、终端和 CLI 接入 Agent 运行时，连接模型、工具、会话与安全边界](docs/assets/golder-architecture-zh.png)
+
+从上到下看，Golder 将交互、Agent 能力和执行边界分开：
+
+1. **交互入口与运行时**：MyGo 原生 GUI、终端 TUI/REPL 和 CLI 共享 Agent 核心能力。GUI 不是终端套壳；终端工作区的 daemon 与 agent pane 则是独立进程。
+2. **核心能力**：运行时组装上下文、请求所选模型、调用工具并继续对话；文件、Shell、浏览器、Web 与扩展工具，与会话历史、上下文压缩和记忆共同构成工作流。
+3. **权限与操作目标**：适用的工具调用经过审批、路径授权和 OS 沙箱，再访问项目文件、命令、浏览器或桌面窗口。实际限制依平台和权限模式而异，不表示所有操作都无条件隔离。
+
+浏览器界面需要本机安装 Chromium；Computer Use 仍在开发中，需系统权限并由用户选择目标窗口。详见 [GUI 使用说明](gui/README.md)、[沙箱文档](docs/sandboxing.md)和 [Computer Use 当前状态](docs/computer-use.md)。
 
 ## 安装
+
+### 桌面应用
+
+从 [Releases](https://github.com/getan/golder/releases) 下载适合系统的 **Golder GUI**：macOS `.dmg`、Windows 安装程序，或 Linux 软件包 / 压缩包。GUI 与 CLI 分开安装；打包和平台依赖见 [GUI 发布说明](docs/gui-packaging.md)。
+
+**macOS Gatekeeper 提示**：当前 GUI 发布包使用临时签名，尚未经过 Apple 公证，首次打开时 macOS 可能提示无法验证开发者。这是当前签名状态下的预期提示，不代表所有安全告警都可忽略。请仅从官方 Releases 下载，确认来源后，可在 **系统设置 → 隐私与安全性** 中选择「仍要打开」。我们计划近期加入 Apple Developer ID 签名和公证，以消除这类未验证开发者提示；辅助功能、屏幕录制等其他权限提示仍可能出现。详见 [macOS 安装说明](docs/gui-packaging.md#macos-what-makes-it-double-clickable-elsewhere)。
+
+### CLI
 
 ```bash
 brew install getan/tap/golder
@@ -50,7 +72,7 @@ macOS / Linux 一条命令装好，不需要 Node/Python。Windows 从 [Releases
 
 ## 快速开始：golder workspace
 
-普通用户第一条命令就是它：`golder workspace` 打开一个自带的分屏终端，第一格是 agent；`Ctrl+b c` 再加一个 shell，浏览器按需。`Ctrl+b d` 只断开客户端，daemon 和 pane 继续在后台跑。
+如果偏好终端，`golder workspace` 会打开自带的分屏工作区，第一格是 agent；`Ctrl+b c` 再加一个 shell，浏览器按需。`Ctrl+b d` 只断开客户端，daemon 和 pane 继续在后台跑。
 
 ```bash
 golder workspace                         # 打开全局 default；没有运行则启动
@@ -109,7 +131,8 @@ workspace daemon（后台常驻，拥有 pane）
 
 ## 亮点
 
-- **默认用法是自带终端工作区**：`golder workspace` 一个面板里跑 agent、shell 和浏览器——左边 agent 改代码，右边 shell 跑测试，焦点即输入；`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`workspace` 预设（`debug-fullstack`、`data-analysis`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型。`visual`（图表 / Mermaid / TML 面板）已下架，原因见 CHANGELOG 的 Removed 一节。
+- **原生桌面工作台**：Golder GUI 在一个应用里提供项目与会话导航、流式对话、diff 卡片、审批、文件与变更视图、浏览器界面和可选终端。Computer Use 正在开发，按平台限制操作用户选定的窗口。
+- **自带终端工作区**：`golder workspace` 一个面板里跑 agent、shell 和浏览器——左边 agent 改代码，右边 shell 跑测试，焦点即输入；`browser` 通过 kitty-browse 的控制 socket 操作页面（snapshot/click/fill/wait/console/network），`workspace` 预设（`debug-fullstack`、`data-analysis`、`review`）一次起好后端、前端和浏览器，再用 `snapshot` 把所有 pane 的上下文一次交给模型。`visual`（图表 / Mermaid / TML 面板）已下架，原因见 CHANGELOG 的 Removed 一节。
 - **多 Provider 热切换，会话不绑定厂商**：`/provider` 随时换网关，`/resume` 在当前 provider 上继续同一份上下文；内置 19 个会话网关，覆盖 OpenAI Chat / Responses、Anthropic Messages、Gemini 四种线上协议，也可指向任意兼容端点。
 - **轻量 agent + 真正的安全边界**：和 pi 同一量级的单二进制，但多了逐调用审批门与 OS 沙箱（`sandbox-exec` / `bubblewrap`）——读限工作区、写限项目与临时目录、网络默认关闭；密钥和凭据路径读不到。
 - **比 codex-cli 更容易定制**：纯 Go，单语言、单二进制，没有 Node/Python 运行时；加一个工具、一个 provider 或一条审批规则，都在同一个 `go build` 里完成。
@@ -125,7 +148,7 @@ workspace daemon（后台常驻，拥有 pane）
 
 ## 更多特性
 
-- **工作区优先，单 agent 也完整**：`golder workspace` 打开自带分屏终端（agent / shell / 浏览器）；已经有习惯的复用器时直接跑 `golder`，全屏 TUI（转录、工具卡片、状态栏、↑↓ 选择菜单）一样完整；`--no-tui` 切回行式 REPL，`golder -p "..."` 无头执行，适合脚本与 CI。
+- **桌面、终端与无头模式**：Golder GUI 提供原生图形工作台；`golder workspace` 打开自带分屏终端；已有复用器时可直接运行 `golder`；`--no-tui` 切回行式 REPL，`golder -p "..."` 无头执行，适合脚本与 CI。
 - **内置工具集**：文件读取、补丁编辑、ripgrep 代码检索、Shell 会话、任务清单、网页抓取、联网搜索等（见[内置工具](#内置工具)）。
 - **tuios pane 工具**：在 tuios pane 内额外提供一个 `tuios` facade（`list` / `capture` / `wait` / `run` / `new` / `focus` / `close`），可管理当前 session 的所有 pane，等待走 daemon 事件而非轮询；见 [docs/tuios-tools.md](docs/tuios-tools.md)。
 - **凭据脱敏**：tool output、用户 prompt、assistant 文本、compaction 摘要、memory 与 session 落盘前统一扫描；覆盖 AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL 等规则，支持 `off | observe | redact | block` 四档，审计只记规则名与 hash。

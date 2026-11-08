@@ -6,9 +6,11 @@
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-A terminal coding workspace in Go: an agent, shell and browser in one split-pane session. Let the agent inspect a codebase, make a change and run tests while you keep the whole workflow in view. Prefer your own multiplexer? Run the same agent directly in its pane. Also works as a full-screen TUI, line REPL or headless CLI.
+Golder is an open-source AI coding agent in Go, available as a native desktop app and a terminal/CLI. It can inspect a codebase, edit files, run commands and tests, and work with a browser while you follow the conversation and approve sensitive actions.
 
-**One binary. Sandboxed by default. Secrets never reach the model.**
+Choose the interface that fits your work: **Golder GUI** for a graphical project and session workspace; **`golder workspace`** for agent, shell and browser panes in a terminal; or the TUI, REPL and headless CLI for your own multiplexer, scripts and CI. The desktop app and CLI are separate executables built on shared Agent capabilities.
+
+Approvals, credential redaction and OS sandboxing provide configurable safeguards; their availability and behavior depend on the tool, permission mode and platform.
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
@@ -18,9 +20,29 @@ A terminal coding workspace in Go: an agent, shell and browser in one split-pane
 
 <p align="center"><sub>Real session: the agent reads and patches code while <code>go test</code> goes from failing to green. <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">Watch the full 37-second demo</a>.</sub></p>
 
-If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub star</a> helps other terminal developers find it.
+If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub star</a> helps other developers find it.
+
+## Architecture
+
+![Golder architecture: desktop GUI, terminal and CLI connect to the Agent runtime, providers, tools, session state and security boundaries](docs/assets/golder-architecture-zh.png)
+
+The diagram's labels are in Chinese; its layers are:
+
+1. **Interfaces and runtime:** the native MyGo GUI, terminal TUI/REPL and CLI share Agent runtime capabilities. The GUI is not a terminal wrapper; a terminal workspace has its own daemon and separate agent processes.
+2. **Agent capabilities:** the runtime assembles context, calls a configured model provider, executes tools and continues the conversation. File, shell, browser, web and extension tools sit alongside session history, compaction and memory.
+3. **Boundaries and targets:** approvals, path grants and OS sandboxing mediate applicable calls before they reach project files, commands, browsers or desktop windows. Controls vary by platform and permission mode; they are not an unconditional guarantee for every operation.
+
+The browser surface needs an installed Chromium; desktop Computer Use is under development and requires platform permissions and a user-selected target. See the [GUI guide](gui/README.md), [sandbox documentation](docs/sandboxing.md) and [Computer Use status](docs/computer-use.md) for details.
 
 ## Install
+
+### Desktop app
+
+Download the **Golder GUI** package for your system from [Releases](https://github.com/getan/golder/releases): a macOS `.dmg`, Windows installer, or Linux package/archive. It is installed separately from the CLI. See [GUI packaging and platform requirements](docs/gui-packaging.md).
+
+**macOS Gatekeeper notice:** current GUI releases are ad-hoc signed and not yet notarized, so macOS can warn that the developer cannot be verified when you first open the app. Download only from the official Releases page; after confirming the source, macOS offers **Open Anyway** under **System Settings → Privacy & Security**. Apple Developer ID signing and notarization are planned soon to remove this particular warning. Other security or permission prompts, including Accessibility and Screen Recording, may still apply. See [macOS installation details](docs/gui-packaging.md#macos-what-makes-it-double-clickable-elsewhere).
+
+### CLI
 
 ```bash
 brew install getan/tap/golder
@@ -48,7 +70,7 @@ When mouse/color and other terminal replies arrive in fragments over a slow link
 
 ## Quickstart: golder workspace
 
-For most people this is the first command: `golder workspace` opens a split-pane terminal with the agent in the first pane; `Ctrl+b c` adds a shell, and the browser is one keystroke away. `Ctrl+b d` detaches the client while the daemon and its panes keep running.
+For a terminal-first workflow, `golder workspace` opens a split-pane terminal with the agent in the first pane; `Ctrl+b c` adds a shell, and the browser is one keystroke away. `Ctrl+b d` detaches the client while the daemon and its panes keep running.
 
 ```bash
 golder workspace                         # open global default; start it if not running
@@ -103,7 +125,8 @@ workspace daemon (persistent, owns the panes)
 
 ## Highlights
 
-- **The default is the built-in terminal workspace.** `golder workspace` runs the agent, shell and browser in one panel — the agent patches while the shell runs tests, and focus is input. The agent can open its browser pane itself; presets (`debug-fullstack`, `data-analysis`, `review`) start a full-stack setup, and `snapshot` gives the model context from every pane. On macOS/Linux, no separate tuios or kitty-browse install is required.
+- **A native desktop workspace.** Golder GUI brings project and session navigation, streamed conversations, diff cards, approvals, file and change views, a browser surface and an optional terminal together in one app. Desktop Computer Use is in development and operates on a user-selected window with platform-specific restrictions.
+- **A built-in terminal workspace.** `golder workspace` runs the agent, shell and browser in one panel — the agent patches while the shell runs tests, and focus is input. The agent can open its browser pane itself; presets (`debug-fullstack`, `data-analysis`, `review`) start a full-stack setup, and `snapshot` gives the model context from every pane. On macOS/Linux, no separate tuios or kitty-browse install is required.
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
 - **Lightweight like pi, with a real security boundary.** The same single-binary class, plus a per-call approval gate and an OS sandbox (`sandbox-exec` / `bubblewrap`): reads stay in the workspace, writes in the project and temp dirs, the network is off by default, and credentials are unreadable.
 - **Easier to customize than codex-cli.** Pure Go: one language, one binary, no Node/Python runtime. A new tool, provider or approval rule is one `go build` away.
@@ -119,7 +142,7 @@ workspace daemon (persistent, owns the panes)
 
 ## More features
 
-- **Workspace first, full agent either way**: `golder workspace` opens the built-in split-pane terminal (agent / shell / browser); if you already have a multiplexer, plain `golder` gives the same full-screen TUI (transcript, tool cards, status bar, arrow-key pickers). `--no-tui` falls back to the line-based REPL, and `golder -p "..."` runs headless for scripts and CI.
+- **Desktop, terminal or headless**: use Golder GUI for a native graphical workspace, `golder workspace` for split panes, or plain `golder` in an existing terminal multiplexer. `--no-tui` falls back to the line-based REPL, and `golder -p "..."` runs headless for scripts and CI.
 - **Built-in toolset**: file reading, patch editing, ripgrep code search, shell sessions, todo lists, web fetch, web search, and more (see [Built-in tools](#built-in-tools)).
 - **Credential redaction**: tool output, prompts, assistant text, compaction summaries, memory and session files are scanned before they reach the provider; AWS/GCP/Azure/GitHub/GitLab/Slack/Stripe/OpenAI/Anthropic/JWT/PEM/DB URL rules, four modes (`off | observe | redact | block`), and an audit log that records rule names and hashes only.
 - **Many providers**: defaults to the OpenCode gateway, with 19 built-in gateways (OpenAI / Anthropic / OpenRouter / DeepSeek, …) and any OpenAI-compatible endpoint.
