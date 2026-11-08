@@ -584,6 +584,7 @@ func (a *App) computerPicker(c *ui.Context) {
 					a.computerRequestPicker = false
 					if a.ctrl != nil {
 						a.ctrl.ResetComputerRequest()
+						a.resumeQueued()
 					}
 				}
 				if subtleButton(c, "View only", a.computerBusy || a.computerSelected < 0).Clicked() {

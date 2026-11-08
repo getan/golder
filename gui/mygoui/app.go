@@ -5,6 +5,7 @@ package mygoui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -433,6 +434,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 			a.computerSuggested = ""
 			if a.ctrl != nil {
 				a.ctrl.ResetComputerRequest()
+				a.resumeQueued()
 			}
 		} else if a.computerSuggested != "" {
 			if a.computerSession != nil && a.computerSession.Status().Active {
@@ -440,6 +442,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 				a.computerSuggested = ""
 				if a.ctrl != nil {
 					a.ctrl.ResetComputerRequest()
+					a.resumeQueued()
 				}
 			} else {
 				a.computerRequestPicker = true
@@ -503,6 +506,18 @@ func (a *App) submit(text string) bool {
 	a.attachments = nil
 	a.banner, a.bannerErr = "", false
 	return true
+}
+
+func (a *App) resumeQueued() {
+	if a.ctrl == nil {
+		return
+	}
+	if len(a.ctrl.StatusSnapshot().QueuedMessages) == 0 {
+		return
+	}
+	if err := a.ctrl.StartQueued(context.Background()); err != nil && !errors.Is(err, appsession.ErrBusy) {
+		a.banner, a.bannerErr = err.Error(), true
+	}
 }
 
 func (a *App) respond(id string, answer appsession.Answer) {

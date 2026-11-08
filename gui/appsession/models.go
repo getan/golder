@@ -70,7 +70,7 @@ func containsID(opts []ModelOption, id string) bool {
 func (c *Controller) StatusSnapshot() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.status
+	return c.statusWithQueueLocked()
 }
 
 // Providers lists only configured conversation providers. The active provider

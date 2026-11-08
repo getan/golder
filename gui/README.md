@@ -102,7 +102,10 @@ Two optional surfaces need runtime pieces:
   read-only and names the active writer;
 - turns: streamed Markdown, thinking (collapsed), compact failure panels and
   grouped, indentation-preserving `apply_patch` diff cards with bounded output,
-  compaction and provider notices, cancel;
+  compaction and provider notices, cancel. Messages entered during a run are
+  queued per session and delivered after the current tool batch or response;
+  Stop interrupts the run and sends any remaining queued input next. Pending
+  inputs remain in memory until delivered and persisted in the conversation;
 - composer history: Up/Down browse the same global prompt history as the TUI,
   preserving the current draft and normal caret movement within multiline text;
 - approvals: consent and trust questions answered inline; closing the window

@@ -31,6 +31,7 @@ func (a *App) view(c *ui.Context) {
 		a.computerSuggested = ""
 		if a.ctrl != nil {
 			a.ctrl.ResetComputerRequest()
+			a.resumeQueued()
 		}
 	}
 	if !a.computerPickerOpen && a.computerSetupStop != nil {

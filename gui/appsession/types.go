@@ -133,6 +133,9 @@ type Status struct {
 	ContextLimit int
 	ReadOnly     bool
 	Writer       SessionWriterView
+	// QueuedMessages are operator inputs waiting for the running turn to accept
+	// them. They are session-local and leave this list when actually delivered.
+	QueuedMessages []string
 	// Error is the last controller error worth showing, "" when none.
 	Error string
 }

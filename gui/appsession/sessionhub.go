@@ -337,8 +337,8 @@ func (h *SessionHub) removeSession(ctx context.Context, id string, preserveEmpty
 	if entry != nil && entry.controller == current {
 		return errors.New("cannot remove the current session")
 	}
-	if entry != nil && entry.controller.IsRunning() {
-		return errors.New("cannot remove a session while its turn is running")
+	if entry != nil && entry.controller.hasUnsettledInput() {
+		return errors.New("cannot remove a session while it is running or has queued messages")
 	}
 	missing := false
 	if entry != nil {

@@ -175,6 +175,10 @@ type Controller struct {
 	runID                string
 	cancel               context.CancelFunc
 	runWG                sync.WaitGroup
+	steerQueue           []queuedPrompt
+	steerDelivered       []queuedPrompt
+	steerSequence        uint64
+	steerHandoff         bool
 
 	status Status
 	title  string
@@ -512,7 +516,7 @@ func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snap := Snapshot{
-		Status:  c.status,
+		Status:  c.statusWithQueueLocked(),
 		Project: c.cwd,
 		Seq:     c.seq,
 		Items:   make([]Item, len(c.items)),
@@ -567,7 +571,7 @@ func (c *Controller) emit(kind EventKind, build func(*Event)) {
 
 func (c *Controller) emitStatus() {
 	c.emit(EventStatus, func(ev *Event) {
-		st := c.status
+		st := c.statusWithQueueLocked()
 		st.Permission = c.perms.Mode().String()
 		st.Model = c.live.Model
 		st.Provider = c.live.ProviderName

@@ -147,7 +147,7 @@ func (c *Controller) Resume(ctx context.Context, id string) error {
 	if id == "" {
 		return errors.New("resume: empty session id")
 	}
-	if c.IsRunning() {
+	if c.hasUnsettledInput() {
 		return ErrBusy
 	}
 	if err := c.persist(); err != nil {
@@ -212,7 +212,7 @@ func (c *Controller) NewSessionInProject(ctx context.Context, path string) error
 	if err != nil {
 		return err
 	}
-	if c.IsRunning() {
+	if c.hasUnsettledInput() {
 		return ErrBusy
 	}
 	c.StopComputer()
@@ -402,6 +402,14 @@ func (c *Controller) IsRunning() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.running
+}
+
+// hasUnsettledInput prevents an in-place session switch from moving queued
+// operator input into a different conversation after a local frontend handoff.
+func (c *Controller) hasUnsettledInput() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running || len(c.steerQueue) > 0 || len(c.steerDelivered) > 0
 }
 
 // SessionID returns the active session id.

@@ -20,6 +20,24 @@ func (a *App) composer(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(10, 24, 12, 24).Gap(5).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+		if len(a.status.QueuedMessages) > 0 {
+			ui.Column(c).Padding(6, 12).Gap(3).Radius(10).Background(t.Surface).Children(func() {
+				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+					ui.Text(c, fmt.Sprintf("Queued messages (%d)", len(a.status.QueuedMessages))).FontSize(11).FontWeight(600).TextColor(t.TextMuted).Grow(1)
+					if !a.status.Running && subtleButton(c, "Send queued").Clicked() {
+						a.resumeQueued()
+					}
+				})
+				ui.Text(c, "Sent after the current tool batch or response; pending input is held in memory.").FontSize(11).TextColor(t.TextMuted).Wrap()
+				for i, message := range a.status.QueuedMessages {
+					if i == 3 {
+						ui.Text(c, fmt.Sprintf("+%d more", len(a.status.QueuedMessages)-i)).FontSize(11).TextColor(t.TextMuted)
+						break
+					}
+					ui.Text(c, "↳ "+strings.ReplaceAll(message, "\n", " ")).FontSize(12).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
+				}
+			})
+		}
 		ui.Column(c).MinHeight(84).Radius(18).Background(t.Surface).Border(1, t.Border).Clip().Children(func() {
 			placeholder := "Message Golder — Enter sends, Shift+Enter adds a line"
 			if a.status.ReadOnly {
@@ -63,10 +81,6 @@ func (a *App) composer(c *ui.Context) {
 				if k.Key == ui.KeyEnter && k.Mods == 0 {
 					text := strings.TrimSpace(k.Text())
 					if text == "" && len(a.attachments) == 0 {
-						return true
-					}
-					if a.status.Running {
-						a.banner, a.bannerErr = "A turn is already running; stop it first.", true
 						return true
 					}
 					if a.submit(text) {
@@ -127,6 +141,12 @@ func (a *App) composer(c *ui.Context) {
 					}
 					if !a.modelsReady {
 						a.startModelRefresh()
+					}
+				}
+				if a.status.Running && ready {
+					queue := subtleButton(c, "↑").Size(34, 34).Radius(17).Label("Queue message").Tooltip("Queue message for the current run")
+					if queue.Clicked() && a.submit(strings.TrimSpace(a.draft)) {
+						a.draft = ""
 					}
 				}
 				send := ui.ButtonBase(c).Size(34, 34).Radius(17).

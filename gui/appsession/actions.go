@@ -83,7 +83,9 @@ func (c *Controller) RunAction(ctx context.Context, id, args string) (ActionResu
 	}
 	res := ActionResult{Message: outcome.Message}
 	if outcome.Prompt != "" {
-		if err := c.Submit(ctx, outcome.Prompt); err != nil {
+		// Prompt-producing slash actions must not become literal mid-run steer
+		// messages; this matches the TUI's command boundary.
+		if err := c.submitAttachments(ctx, outcome.Prompt, nil, "", nil, true); err != nil {
 			return res, err
 		}
 	}

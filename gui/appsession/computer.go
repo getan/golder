@@ -51,6 +51,7 @@ func (c *Controller) installComputerRequest() {
 func (c *Controller) ResetComputerRequest() {
 	c.mu.Lock()
 	tool := c.computerRequest
+	c.steerHandoff = false
 	c.mu.Unlock()
 	if tool != nil {
 		tool.Reset()
