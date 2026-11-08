@@ -108,6 +108,8 @@ github.com/getan/kitty-browse v0.2.10 h1:Zn22udGh2DKfyuQZUaCTXtex1iG7eMgyS0TvnG7
 github.com/getan/kitty-browse v0.2.10/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
 github.com/getan/tuios-mini v0.10.44 h1:nsUzYH9z4KQK40fcZWuDBDLBokVImECJotMFzx3qJt4=
 github.com/getan/tuios-mini v0.10.44/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
+github.com/getan/tuios-mini v0.10.45 h1:jTuEFsb/c/sHFh+TDfVjjJp5ETRC/cQaZ58IHF9eprM=
+github.com/getan/tuios-mini v0.10.45/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=
