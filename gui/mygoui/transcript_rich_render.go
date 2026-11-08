@@ -124,7 +124,9 @@ func renderRichWithModules(ctx context.Context, source string, mermaid bool, svg
 }
 
 func withRichRenderSlot(ctx context.Context, fn func(context.Context) (*ui.Bitmap, error)) (*ui.Bitmap, error) {
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Mermaid and SVG each have a 15-second limit; leave room for both stages
+	// and font selection while keeping the full preview bounded.
+	ctx, cancel := context.WithTimeout(ctx, 35*time.Second)
 	defer cancel()
 	select {
 	case richRenderSlots <- struct{}{}:

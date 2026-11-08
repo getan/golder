@@ -145,7 +145,8 @@ None of them are required for a local build.
 
 Before upload, CI verifies that the GUI dependency graph excludes tuios-mini,
 that no full CLI or Chromium exists in the bundle, and that each macOS `.app`
-contains the checksummed Lark helper and remains below 50 MiB.
+contains the checksummed Lark helper and remains below 60 MiB. The limit leaves
+headroom for the Intel build with offline renderers (observed at 53 MiB).
 
 On a tag, the artifacts are attached to the same GitHub Release that goreleaser
 creates, so a release carries both the CLI archives and the GUI packages.

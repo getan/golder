@@ -42,6 +42,24 @@ func TestRichPreviewSourceValidation(t *testing.T) {
 	}
 }
 
+func TestRichRenderSlotRespectsCallerDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	want, _ := ctx.Deadline()
+	called := false
+	_, err := withRichRenderSlot(ctx, func(child context.Context) (*ui.Bitmap, error) {
+		called = true
+		got, ok := child.Deadline()
+		if !ok || got.After(want) {
+			t.Errorf("deadline = %v, want no later than %v", got, want)
+		}
+		return nil, nil
+	})
+	if err != nil || !called {
+		t.Fatalf("render slot: called=%t, err=%v", called, err)
+	}
+}
+
 func TestRendererModuleRejectsCompressedBomb(t *testing.T) {
 	var compressed bytes.Buffer
 	zw := gzip.NewWriter(&compressed)

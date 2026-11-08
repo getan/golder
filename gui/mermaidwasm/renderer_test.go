@@ -2,6 +2,7 @@ package mermaidwasm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -59,6 +60,21 @@ func TestPinnedUpstreamModule(t *testing.T) {
 	if _, err := Render(ctx, module, "flowchart TD\nA-->B"); err == nil {
 		t.Fatal("canceled request succeeded")
 	}
+	t.Run("cancellation while waiting for a slot", func(t *testing.T) {
+		for range cap(slots) {
+			slots <- struct{}{}
+		}
+		defer func() {
+			for range cap(slots) {
+				<-slots
+			}
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := Render(ctx, module, "flowchart TD\nA-->B"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled wait returned %v", err)
+		}
+	})
 	if _, err := Render(context.Background(), module, "flowchart TD\n"+strings.Repeat("A", maxInputBytes)); err == nil {
 		t.Fatal("oversized input succeeded")
 	}

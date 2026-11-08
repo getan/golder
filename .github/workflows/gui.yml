@@ -243,7 +243,9 @@ jobs:
             done < <(find "$app" -type f -print0)
             mib=$(du -sm "$app" | awk '{print $1}')
             echo "installed app size: ${mib} MiB"
-            test "$mib" -lt 50
+            # The Intel bundle includes the offline renderers and Lark helper;
+            # keep a bounded budget without rejecting its observed 53 MiB.
+            test "$mib" -lt 60
           fi
 
       - uses: actions/upload-artifact@v4

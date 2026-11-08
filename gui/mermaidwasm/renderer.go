@@ -24,7 +24,8 @@ const (
 	maxInputBytes  = 32 << 10
 	maxOutputBytes = 2 << 20
 	maxFontBytes   = 32 << 20
-	timeLimit      = 5 * time.Second
+	// Allow for slow Intel hosts while retaining a hard bound on guest execution.
+	timeLimit = 15 * time.Second
 )
 
 var slots = make(chan struct{}, 2)

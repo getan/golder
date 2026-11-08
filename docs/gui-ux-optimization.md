@@ -642,7 +642,7 @@ DMG target                  < 25 MB
 
 CI 应增加门禁，防止重新把完整 CLI 或 Chromium 打进 App：
 
-- per-arch app < 50 MiB；
+- per-arch app < 60 MiB（Intel 包含离线渲染器及 Lark helper，实测 53 MiB）；
 - DMG < 30 MiB；
 - bundle 不含 `Resources/bin/golder`；
 - bundle 不含 Chromium；
