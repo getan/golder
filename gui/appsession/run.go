@@ -91,7 +91,7 @@ func (c *Controller) submitAttachments(ctx context.Context, text string, attachm
 	if err != nil {
 		return err
 	}
-	return c.submitPrepared(ctx, queuedPrompt{content: content, display: display}, expectedSession, desktop, false, rejectSteering)
+	return c.submitPrepared(ctx, queuedPrompt{content: content, display: display, text: text, attachmentLabel: strings.TrimPrefix(strings.TrimPrefix(display, text), "\n\n")}, expectedSession, desktop, false, rejectSteering)
 }
 
 // StartQueued sends the oldest pending input when a frontend handoff has ended.
@@ -135,7 +135,7 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 			c.mu.Unlock()
 			return ErrBusy
 		}
-		c.enqueueSteerLocked(prompt.content, prompt.display)
+		c.enqueuePreparedLocked(prompt)
 		c.mu.Unlock()
 		c.emitStatus()
 		return nil
@@ -154,7 +154,7 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 	} else if len(c.steerQueue) > 0 && expectedSession == "" {
 		// Preserve FIFO if a user sends a new message while a handoff has left
 		// earlier input waiting for the next run.
-		c.enqueueSteerLocked(prompt.content, prompt.display)
+		c.enqueuePreparedLocked(prompt)
 		prompt, _ = c.popSteerLocked()
 	}
 	agentCtx := c.agentCtx
@@ -211,10 +211,11 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		itemID = runID + "-user"
 	}
 	c.addItem(Item{
-		ID:   itemID,
-		Kind: ItemUser,
-		Text: prompt.display,
-		Done: true,
+		ID:     itemID,
+		Kind:   ItemUser,
+		Text:   prompt.display,
+		Images: userImages(prompt.content),
+		Done:   true,
 	})
 	if err := c.persist(); err != nil {
 		c.addNotice("Session save failed: "+err.Error(), true)

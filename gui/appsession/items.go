@@ -31,6 +31,7 @@ func titleOf(items []Item) string {
 
 func cloneItem(it Item) Item {
 	out := it
+	out.Images = append([]agentcore.ImageContent(nil), it.Images...)
 	if it.Tool != nil {
 		t := *it.Tool
 		if it.Tool.Input != nil {
@@ -154,10 +155,11 @@ func (c *Controller) seed(history []agentcore.Message) {
 		switch msg := m.(type) {
 		case agentcore.UserMessage:
 			text := agentcore.ContentToText(msg.Content)
-			if text == "" {
+			images := userImages(msg.Content)
+			if text == "" && len(images) == 0 {
 				continue
 			}
-			c.appendChild(Item{ID: next("h-user"), Kind: ItemUser, Text: text, Done: true})
+			c.appendChild(Item{ID: next("h-user"), Kind: ItemUser, Text: text, Images: images, Done: true})
 		case agentcore.AssistantMessage:
 			if text := agentcore.ContentToText(msg.Content); text != "" {
 				c.appendChild(Item{ID: next("h-assistant"), Kind: ItemAssistant, Text: text, Done: true})

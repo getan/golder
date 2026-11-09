@@ -76,7 +76,16 @@ func (a *App) paletteModal(c *ui.Context) {
 							ui.Text(c, act.Category).FontSize(10.5).TextColor(t.TextMuted)
 						})
 						if row.Clicked() {
-							a.runAction(act.ID, "")
+							if act.ArgumentHint != "" && !strings.HasPrefix(act.ID, "gui:") {
+								a.paletteOpen = false
+								if strings.TrimSpace(a.draft) != "" || len(a.attachments) > 0 {
+									a.banner, a.bannerErr = "Send or clear the current draft before choosing a command.", true
+								} else {
+									a.draft = "/" + strings.TrimPrefix(act.ID, "/") + " "
+								}
+							} else {
+								a.runAction(act.ID, "")
+							}
 						}
 					}
 				})

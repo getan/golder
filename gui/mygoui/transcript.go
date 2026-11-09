@@ -35,8 +35,14 @@ func (a *App) userBubble(c *ui.Context, it appsession.Item) {
 	t := c.Theme()
 	ui.Row(c.Key(it.ID)).Children(func() {
 		ui.Spacer(c)
-		ui.Text(c, it.Text).Selectable().FontSize(14).Padding(9, 13).Radius(12).
-			Background(t.Surface).MaxWidth(620)
+		ui.Column(c).Padding(9, 13).Gap(5).Radius(12).Background(t.Surface).MaxWidth(620).Children(func() {
+			if it.Text != "" {
+				ui.Text(c, it.Text).Selectable().FontSize(14)
+			}
+			for i, image := range it.Images {
+				renderUserImage(c, i, image)
+			}
+		})
 	})
 }
 

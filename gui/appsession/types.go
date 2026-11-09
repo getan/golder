@@ -31,6 +31,8 @@ type Item struct {
 	ID   string
 	Kind ItemKind
 	Text string
+	// Images retains user image blocks for both live and restored transcripts.
+	Images []agentcore.ImageContent
 	// Done is true once the item can no longer change. Streaming assistant text
 	// and a running tool are open.
 	Done bool
@@ -144,8 +146,16 @@ type Status struct {
 	// QueuedMessages are operator inputs waiting for the running turn to accept
 	// them. They are session-local and leave this list when actually delivered.
 	QueuedMessages []string
+	// QueuedDetails carries stable identifiers and editable text for pending input.
+	QueuedDetails []QueuedMessage
 	// Error is the last controller error worth showing, "" when none.
 	Error string
+}
+
+type QueuedMessage struct {
+	ID      string
+	Text    string
+	Display string
 }
 
 type SessionWriterView struct {

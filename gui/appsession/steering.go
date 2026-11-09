@@ -2,7 +2,10 @@ package appsession
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/cli/run"
@@ -12,26 +15,92 @@ import (
 // queuedPrompt owns the already-read attachment content so a queued message
 // does not change if a selected file is edited or removed before delivery.
 type queuedPrompt struct {
-	id      string
-	display string
-	content agentcore.ContentList
+	id              string
+	display         string
+	text            string
+	attachmentLabel string
+	content         agentcore.ContentList
 }
 
 // statusWithQueueLocked returns an independent view while c.mu is held.
 func (c *Controller) statusWithQueueLocked() Status {
 	status := c.status
 	status.QueuedMessages = make([]string, 0, len(c.steerQueue))
+	status.QueuedDetails = make([]QueuedMessage, 0, len(c.steerQueue))
 	for _, prompt := range c.steerQueue {
 		status.QueuedMessages = append(status.QueuedMessages, prompt.display)
+		status.QueuedDetails = append(status.QueuedDetails, QueuedMessage{ID: prompt.id, Text: prompt.text, Display: prompt.display})
 	}
 	return status
 }
 
 func (c *Controller) enqueueSteerLocked(content agentcore.ContentList, display string) {
+	c.enqueuePreparedLocked(queuedPrompt{content: content, display: display, text: display})
+}
+
+func (c *Controller) enqueuePreparedLocked(prompt queuedPrompt) {
 	c.steerSequence++
-	c.steerQueue = append(c.steerQueue, queuedPrompt{
-		id: fmt.Sprintf("steer-%d", c.steerSequence), display: display, content: content,
-	})
+	prompt.id = fmt.Sprintf("steer-%d", c.steerSequence)
+	c.steerQueue = append(c.steerQueue, prompt)
+}
+
+// RemoveQueued removes an input only while it remains in the pending FIFO.
+func (c *Controller) RemoveQueued(id string) error {
+	c.mu.Lock()
+	if c.closed || c.readOnly {
+		c.mu.Unlock()
+		return errors.New("session is closed or read-only")
+	}
+	for i, prompt := range c.steerQueue {
+		if prompt.id == id {
+			c.steerQueue = slices.Delete(c.steerQueue, i, i+1)
+			c.mu.Unlock()
+			c.emitStatus()
+			return nil
+		}
+	}
+	c.mu.Unlock()
+	return errors.New("queued message was already delivered or removed")
+}
+
+// EditQueued replaces only the prompt text, retaining snapshotted attachments.
+func (c *Controller) EditQueued(id, text string) error {
+	text = strings.TrimSpace(text)
+	c.mu.Lock()
+	if c.closed || c.readOnly {
+		c.mu.Unlock()
+		return errors.New("session is closed or read-only")
+	}
+	for i := range c.steerQueue {
+		p := &c.steerQueue[i]
+		if p.id != id {
+			continue
+		}
+		content := append(agentcore.ContentList(nil), p.content...)
+		if p.text != "" && len(content) > 0 {
+			content = content[1:]
+		}
+		if text == "" && len(content) == 0 {
+			c.mu.Unlock()
+			return errors.New("queued message cannot be empty")
+		}
+		if text != "" {
+			content = append(agentcore.ContentList{agentcore.NewTextContent(text)}, content...)
+		}
+		p.text, p.content = text, content
+		p.display = text
+		if p.attachmentLabel != "" {
+			if p.display != "" {
+				p.display += "\n\n"
+			}
+			p.display += p.attachmentLabel
+		}
+		c.mu.Unlock()
+		c.emitStatus()
+		return nil
+	}
+	c.mu.Unlock()
+	return errors.New("queued message was already delivered or removed")
 }
 
 func (c *Controller) popSteerLocked() (queuedPrompt, bool) {
@@ -108,7 +177,7 @@ func (c *Controller) showDeliveredSteer() {
 	c.steerDelivered[0] = queuedPrompt{}
 	c.steerDelivered = c.steerDelivered[1:]
 	c.mu.Unlock()
-	c.addItem(Item{ID: prompt.id, Kind: ItemUser, Text: prompt.display, Done: true})
+	c.addItem(Item{ID: prompt.id, Kind: ItemUser, Text: prompt.display, Images: userImages(prompt.content), Done: true})
 }
 
 // prepareQueuedPrompt starts a fallback turn after the preceding run has fully
@@ -141,7 +210,7 @@ func (c *Controller) prepareQueuedPrompt(ctx context.Context, prompt queuedPromp
 	})
 	c.remind = reminders
 	c.mu.Unlock()
-	c.addItem(Item{ID: prompt.id, Kind: ItemUser, Text: prompt.display, Done: true})
+	c.addItem(Item{ID: prompt.id, Kind: ItemUser, Text: prompt.display, Images: userImages(prompt.content), Done: true})
 	if err := c.persist(); err != nil {
 		c.addNotice("Session save failed: "+err.Error(), true)
 	}

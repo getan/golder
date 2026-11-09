@@ -30,13 +30,47 @@ func (a *App) composer(c *ui.Context) {
 					}
 				})
 				ui.Text(c, "Sent after the current tool batch or response; pending input is held in memory.").FontSize(11).TextColor(t.TextMuted).Wrap()
-				for i, message := range a.status.QueuedMessages {
-					if i == 3 {
-						ui.Text(c, fmt.Sprintf("+%d more", len(a.status.QueuedMessages)-i)).FontSize(11).TextColor(t.TextMuted)
-						break
-					}
-					ui.Text(c, "↳ "+strings.ReplaceAll(message, "\n", " ")).FontSize(12).TextColor(t.TextMuted).SingleLine().Ellipsis("…")
-				}
+				ui.Scroll(c).MaxHeight(180).Children(func() {
+					ui.Column(c).Gap(3).Children(func() {
+						for _, message := range a.status.QueuedDetails {
+							message := message
+							ui.Column(c.Key(message.ID)).Gap(3).Children(func() {
+								ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
+									ui.Text(c, "↳ "+strings.ReplaceAll(message.Display, "\n", " ")).FontSize(12).TextColor(t.TextMuted).SingleLine().Ellipsis("…").Grow(1)
+									if subtleButton(c, "Edit").Label("Edit queued " + message.ID).Clicked() {
+										a.queueEditID, a.queueEditText = message.ID, message.Text
+									}
+									if subtleButton(c, "×").Label("Remove queued " + message.ID).Clicked() {
+										if err := a.ctrl.RemoveQueued(message.ID); err != nil {
+											a.banner, a.bannerErr = err.Error(), true
+										} else {
+											a.status = a.ctrl.StatusSnapshot()
+											if a.queueEditID == message.ID {
+												a.queueEditID = ""
+											}
+										}
+									}
+								})
+								if a.queueEditID == message.ID {
+									ui.TextArea(c, &a.queueEditText).Lines(1, 4).Label("Edit queued message")
+									ui.Row(c).Gap(5).Children(func() {
+										if subtleButton(c, "Save queued edit").Clicked() {
+											if err := a.ctrl.EditQueued(message.ID, a.queueEditText); err != nil {
+												a.banner, a.bannerErr = err.Error(), true
+											} else {
+												a.status = a.ctrl.StatusSnapshot()
+												a.queueEditID, a.queueEditText = "", ""
+											}
+										}
+										if subtleButton(c, "Cancel queued edit").Clicked() {
+											a.queueEditID, a.queueEditText = "", ""
+										}
+									})
+								}
+							})
+						}
+					})
+				})
 			})
 		}
 		ui.Column(c).MinHeight(84).Radius(18).Background(t.Surface).Border(1, t.Border).Clip().Children(func() {
@@ -94,29 +128,24 @@ func (a *App) composer(c *ui.Context) {
 			})
 
 			if len(a.attachments) > 0 {
-				ui.Row(c).Padding(0, 10, 5, 10).Gap(5).AlignItems(ui.Center).Children(func() {
-					shown := len(a.attachments)
-					if shown > 3 {
-						shown = 3
-					}
-					for i := 0; i < shown && i < len(a.attachments); i++ {
-						i := i
-						attachment := a.attachments[i]
-						label, tooltip := attachment.Name, attachment.Name
-						if attachment.ImagePNG == nil {
-							label, tooltip = filepath.Base(attachment.Path), attachment.Path
-						}
-						ui.Row(c.Key(fmt.Sprintf("attachment-%d-%s", i, tooltip))).Padding(3, 7).Gap(5).Radius(7).Background(t.SurfacePressed).
-							AlignItems(ui.Center).Children(func() {
-							ui.Text(c, label).FontSize(11).MaxWidth(150).SingleLine().Ellipsis("…").Tooltip(tooltip)
-							if subtleButton(c, "×").Tooltip("Remove attachment").Clicked() {
-								a.attachments = slices.Delete(a.attachments, i, i+1)
+				ui.Scroll(c).MaxHeight(110).Children(func() {
+					ui.Column(c).Padding(0, 10, 5, 10).Gap(5).Children(func() {
+						for i := 0; i < len(a.attachments); i++ {
+							i := i
+							attachment := a.attachments[i]
+							label, tooltip := attachment.Name, attachment.Name
+							if attachment.ImagePNG == nil {
+								label, tooltip = filepath.Base(attachment.Path), attachment.Path
 							}
-						})
-					}
-					if len(a.attachments) > shown {
-						ui.Text(c, fmt.Sprintf("+%d", len(a.attachments)-shown)).FontSize(11).TextColor(t.TextMuted)
-					}
+							ui.Row(c.Key(fmt.Sprintf("attachment-%d-%s", i, tooltip))).Padding(3, 7).Gap(5).Radius(7).Background(t.SurfacePressed).
+								AlignItems(ui.Center).Children(func() {
+								ui.Text(c, label).FontSize(11).MaxWidth(150).SingleLine().Ellipsis("…").Tooltip(tooltip)
+								if subtleButton(c, "×").Label("Remove " + label).Tooltip("Remove attachment").Clicked() {
+									a.attachments = slices.Delete(a.attachments, i, i+1)
+								}
+							})
+						}
+					})
 				})
 			}
 

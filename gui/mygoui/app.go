@@ -55,6 +55,8 @@ type App struct {
 	historyNav          promptHistoryCursor
 	historyCaretText    string
 	historyCaretPending bool
+	queueEditID         string
+	queueEditText       string
 	snapshotSeq         uint64
 
 	status          appsession.Status
@@ -516,6 +518,29 @@ func (a *App) updateTitle() {
 func (a *App) submit(text string) bool {
 	if strings.TrimSpace(text) == "" && len(a.attachments) == 0 {
 		return false
+	}
+	if strings.HasPrefix(strings.TrimSpace(text), "/") {
+		if len(a.attachments) != 0 {
+			a.banner, a.bannerErr = "Remove attachments before running a slash command.", true
+			return false
+		}
+		if a.ctrl.IsRunning() {
+			a.banner, a.bannerErr = "Stop the current run before running a slash command.", true
+			return false
+		}
+		line := strings.TrimSpace(text)
+		name, args := line, ""
+		if i := strings.IndexAny(line, " \t\n"); i >= 0 {
+			name, args = line[:i], strings.TrimSpace(line[i+1:])
+		}
+		result, err := a.ctrl.RunAction(context.Background(), name, args)
+		if err != nil {
+			a.banner, a.bannerErr = err.Error(), true
+			return false
+		}
+		a.history.record(&a.historyNav, text, a.status.SessionID, a.project)
+		a.banner, a.bannerErr = result.Message, false
+		return true
 	}
 	if err := a.ctrl.SubmitAttachments(context.Background(), text, a.attachments); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
@@ -1086,6 +1111,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.draft, a.attachments = draft.text, draft.attachments
 	a.historyNav = draft.historyNav
 	a.historyCaretPending = false
+	a.queueEditID, a.queueEditText = "", ""
 	a.list = draft.list
 	a.computerSession = peer.ComputerSession()
 	a.selectedProject = a.project

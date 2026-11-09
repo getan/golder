@@ -69,6 +69,14 @@ func (c *Controller) RunAction(ctx context.Context, id, args string) (ActionResu
 
 	c.mu.Lock()
 	slash := c.slash
+	if c.readOnly {
+		c.mu.Unlock()
+		return ActionResult{}, ErrReadOnly
+	}
+	if c.running {
+		c.mu.Unlock()
+		return ActionResult{}, ErrBusy
+	}
 	c.mu.Unlock()
 	if slash == nil {
 		return ActionResult{}, errors.New("no command registry")
@@ -81,6 +89,16 @@ func (c *Controller) RunAction(ctx context.Context, id, args string) (ActionResu
 	if err != nil {
 		return ActionResult{}, err
 	}
+	c.mu.Lock()
+	if c.live != nil {
+		c.status.Model, c.status.Provider = c.live.Model, c.live.ProviderName
+		c.status.Thinking, c.status.ContextLimit = c.live.ThinkingLevel, c.live.ContextWindow
+	}
+	if c.perms != nil {
+		c.status.Permission = c.perms.Mode().String()
+	}
+	c.mu.Unlock()
+	c.emitStatus()
 	res := ActionResult{Message: outcome.Message}
 	if outcome.Prompt != "" {
 		// Prompt-producing slash actions must not become literal mid-run steer

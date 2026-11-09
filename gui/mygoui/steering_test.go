@@ -62,6 +62,26 @@ func TestComposerQueuesDuringRunByEnterAndButton(t *testing.T) {
 	if a.draft != "" || len(queued) != 2 || queued[0] != "first during run" || queued[1] != "second during run" {
 		t.Fatalf("button did not queue in order: draft=%q queued=%q", a.draft, queued)
 	}
+	a.status = ctrl.StatusSnapshot()
+	tt.Frame()
+	if err := tt.Click("Edit queued steer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Edit queued message"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("edited")
+	if err := tt.Click("Save queued edit"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("Remove queued steer-2"); err != nil {
+		t.Fatal(err)
+	}
+	queued = ctrl.StatusSnapshot().QueuedMessages
+	if len(queued) != 1 || queued[0] != "edited" {
+		t.Fatalf("queue edit/remove failed: %q", queued)
+	}
 	a.resumeQueued()
 	if a.bannerErr {
 		t.Fatalf("a stale resume attempt reported a spurious busy error: %s", a.banner)

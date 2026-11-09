@@ -104,14 +104,21 @@ Two optional surfaces need runtime pieces:
   grouped, indentation-preserving `apply_patch` diff cards with bounded output,
   compaction and provider notices, cancel. Messages entered during a run are
   queued per session and delivered after the current tool batch or response;
-  Stop interrupts the run and sends any remaining queued input next. Pending
-  inputs remain in memory until delivered and persisted in the conversation;
+  edit or remove a pending message before delivery. Stop interrupts the run and
+  sends any remaining queued input next. Pending inputs remain in memory until
+  delivered and persisted in the conversation;
 - composer history: Up/Down browse the same global prompt history as the TUI,
   preserving the current draft and normal caret movement within multiline text;
 - image paste: paste a copied image into the composer with Cmd+V on macOS or
   Ctrl+V on Linux and Windows, or use the Edit menu. Each image appears as a
   removable attachment (maximum 20 MiB) and is sent as multimodal content.
-  Clipboard images stay in memory while drafted; ordinary text paste is unchanged;
+  Clipboard images stay in memory while drafted; ordinary text paste is unchanged.
+  User images remain visible after reopening a conversation, with a fallback
+  label when a preview exceeds the transcript image safety limits;
+- slash commands: enter `/command arguments` in the composer, or choose an
+  action from Cmd/Ctrl+K. Commands requiring arguments are placed in an empty
+  composer for editing. Finish the current run and remove attachments before
+  running a slash command;
 - approvals: consent and trust questions answered inline; closing the window
   fails every pending question closed;
 - configuration: a shared Settings page for provider, model, base URL, protocol
