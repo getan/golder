@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -156,6 +157,7 @@ type App struct {
 	terminalExitApproved bool
 	terminalShuttingDown bool
 	terminalShutdownDone bool
+	fileDialog           fileDialogState
 
 	changesOpen bool
 	changesView appsession.ChangeView
@@ -254,11 +256,11 @@ func New(ctrl *appsession.Controller) *App {
 
 // Run opens the window and runs the app until the last window closes.
 func (a *App) Run() error {
-	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu},
-		{Role: mygo.RoleEditMenu},
-		{Role: mygo.RoleWindowMenu},
-	}))
+	mygo.App.SetMenu(mygo.NewMenu(desktopMenuItems(runtime.GOOS, func() {
+		if a.win != nil {
+			a.win.Close()
+		}
+	})))
 	mygo.App.WhenReady(func() {
 		a.win = mygo.NewWindow(mygo.WindowOptions{
 			Title:     "Golder",
@@ -270,6 +272,10 @@ func (a *App) Run() error {
 			Content:   ui.View(a.view),
 		})
 		a.win.OnClose(func(event *mygo.CloseEvent) {
+			if a.deferCloseForFileDialog() {
+				event.PreventDefault()
+				return
+			}
 			if !a.terminalExitApproved && a.hasRunningTerminals() {
 				event.PreventDefault()
 				a.terminalExitOpen = true

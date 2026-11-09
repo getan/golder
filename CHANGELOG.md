@@ -11,6 +11,11 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+### Windows desktop compatibility
+- Add a native File/Exit menu and guard shutdown while a Windows file picker is
+  open. The Windows GUI packaging workflow exercises the menu and picker on a
+  real Windows runner; see [v1.5.70 notes](docs/releases/v1.5.70.md).
+
 ## [1.5.67] - 2026-11-09
 
 ### Fixed

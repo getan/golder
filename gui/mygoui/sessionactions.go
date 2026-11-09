@@ -54,16 +54,16 @@ func (a *App) selectProject(path string) {
 }
 
 func (a *App) addProject() {
-	win := a.win
+	win, complete, ok := a.beginFileDialog()
+	if !ok {
+		return
+	}
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent: win, Title: "Add project folder", ButtonLabel: "Add folder",
 			Directory: true, Multiple: false, CreateDirectories: true,
 		})
-		if win == nil {
-			return
-		}
-		win.Update(func() {
+		complete(func() {
 			if err != nil {
 				a.banner, a.bannerErr = err.Error(), true
 				return
@@ -200,7 +200,11 @@ func (a *App) commitDelete() {
 }
 
 func (a *App) exportSession(session appsession.SessionSummary, format string) {
-	win, hub, ctrl := a.win, a.hub, a.ctrl
+	win, complete, ok := a.beginFileDialog()
+	if !ok {
+		return
+	}
+	hub, ctrl := a.hub, a.ctrl
 	go func() {
 		ext := ".md"
 		filter := mygo.FileFilter{Name: "Markdown", Extensions: []string{"md"}}
@@ -219,10 +223,7 @@ func (a *App) exportSession(session appsession.SessionSummary, format string) {
 				err = ctrl.ExportSession(session.ID, format, path)
 			}
 		}
-		if win == nil {
-			return
-		}
-		win.Update(func() {
+		complete(func() {
 			if err != nil {
 				a.banner, a.bannerErr = err.Error(), true
 			} else if path != "" {

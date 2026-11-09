@@ -37,6 +37,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Verify Windows native menu and dialog lifecycle
+        if: matrix.kind == 'windows'
+        timeout-minutes: 5
+        shell: bash
+        env:
+          GOLDER_WINDOWS_GUI_E2E: "1"
+        run: go test ./gui/mygoui -run '^TestWindowsNativeCompatibility$' -count=1 -timeout 2m
+
       - name: Build and verify offline diagram renderers
         shell: bash
         run: |

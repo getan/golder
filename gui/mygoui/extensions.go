@@ -155,7 +155,10 @@ func (a *App) updateLarkPackage() {
 }
 
 func (a *App) chooseExtensionCLI(project bool) {
-	win := a.win
+	win, complete, ok := a.beginFileDialog()
+	if !ok {
+		return
+	}
 	go func() {
 		title := "Choose the official lark-cli executable"
 		if project {
@@ -165,10 +168,7 @@ func (a *App) chooseExtensionCLI(project bool) {
 			Parent: win, Title: title, ButtonLabel: "Choose", Multiple: false,
 			ShowHiddenFiles: true, TreatPackagesAsDirectories: true,
 		})
-		if win == nil {
-			return
-		}
-		win.Update(func() {
+		complete(func() {
 			if err != nil {
 				a.extensionErr = err.Error()
 				return

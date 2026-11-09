@@ -63,6 +63,14 @@ new grant after an update. A stable Developer ID signature improves continuity.
 The GUI release targets macOS 14.0 or later. A GUI built without CGO cannot
 enable the macOS Computer Use backend merely by changing permissions.
 
+Windows uses a File → Exit menu alongside Edit and Window. File pickers are
+parented and serialized; a close request cancels only the owned picker, then
+continues the normal terminal/session shutdown after that picker returns.
+The Windows packaging job runs native menu-Alt and quit-during-picker checks;
+locally run them in a Windows desktop session with
+`GOLDER_WINDOWS_GUI_E2E=1 go test ./gui/mygoui -run '^TestWindowsNativeCompatibility$' -count=1`.
+These opt-in native checks are not exercised by a macOS cross-build.
+
 The app is named **Golder GUI** (slug `golder-gui`), so its Linux executable
 never collides with the `golder` CLI. The Agent runtime is linked into the GUI;
 the bundle deliberately carries neither a second full CLI nor tuios-mini.

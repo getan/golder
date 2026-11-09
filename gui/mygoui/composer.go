@@ -265,15 +265,15 @@ func (a *App) pasteClipboardImage() bool {
 }
 
 func (a *App) pickAttachments() {
-	win := a.win
+	win, complete, ok := a.beginFileDialog()
+	if !ok {
+		return
+	}
 	go func() {
 		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 			Parent: win, Title: "Attach files", ButtonLabel: "Attach", Multiple: true,
 		})
-		if win == nil {
-			return
-		}
-		win.Update(func() {
+		complete(func() {
 			if err != nil {
 				a.banner, a.bannerErr = err.Error(), true
 				return
