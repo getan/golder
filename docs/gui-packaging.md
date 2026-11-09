@@ -138,18 +138,25 @@ None of them are required for a local build.
 
 | Runner | Target | Notes |
 |---|---|---|
-| `macos-15` | `darwin/arm64` | separate Apple Silicon DMG; signs/notarizes when secrets exist |
-| `macos-15-intel` | `darwin/amd64` | separate Intel DMG; signs/notarizes when secrets exist |
+| `macos-15` | `darwin/arm64` | separate Apple Silicon DMG; release tags require signing and notarization |
+| `macos-15-intel` | `darwin/amd64` | separate Intel DMG; release tags require signing and notarization |
 | `windows-2022` | `windows/amd64` | NSIS installer; needs NSIS, which MyGo installs |
 | `ubuntu-22.04` | `linux/amd64,linux/arm64` | tarball + `install.sh`, `.deb`, `PKGBUILD` |
 
 Before upload, CI verifies that the GUI dependency graph excludes tuios-mini,
 that no full CLI or Chromium exists in the bundle, and that each macOS `.app`
-contains the checksummed Lark helper and remains below 60 MiB. The limit leaves
-headroom for the Intel build with offline renderers (observed at 53 MiB).
+contains the checksummed Lark helper and remains below 60 MiB. It verifies the
+helper checksum after signing, the Developer ID team and signature, and the DMG's
+stapled notarization ticket. The size limit leaves headroom for the Intel build
+with offline renderers (observed at 53 MiB). Release tags require all six macOS
+secrets; a manual run with none may still produce an ad-hoc build, but a partial
+configuration fails.
 
-On a tag, the artifacts are attached to the same GitHub Release that goreleaser
-creates, so a release carries both the CLI archives and the GUI packages.
+On a tag, after every GUI build passes, the publish job waits for the GitHub
+Release created by GoReleaser and attaches the DMG, Windows executables, Linux
+tarballs and Debian packages. The GUI workflow fails if the release does not
+appear within 30 minutes; rerun the failed publish job after resolving the CLI
+release failure. Its artifacts are also available from the Actions run.
 
 ## Linux notes
 

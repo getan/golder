@@ -18,6 +18,7 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -114,6 +115,28 @@ jobs:
           plugin_dir=$(go list -f '{{.Dir}}' github.com/egoist/mygo/plugins/terminal)
           go run ./gui/tools/fetchnative -manifest "$plugin_dir/mygo-plugin.json" -platform "${{ matrix.platform }}"
 
+      - name: Check macOS release credentials
+        if: matrix.kind == 'macos'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          names=(MACOS_CERT_P12 MACOS_CERT_PASSWORD MACOS_SIGNING_IDENTITY APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID)
+          present=0
+          for name in "${names[@]}"; do
+            [[ -z "${!name:-}" ]] || present=$((present + 1))
+          done
+          if [[ "$present" != 0 && "$present" != "${#names[@]}" ]] || \
+             [[ "$GITHUB_REF_TYPE" == tag && "$present" != "${#names[@]}" ]]; then
+            echo '::error::All six macOS signing and notarization secrets are required for a release (and when any one is configured).'
+            exit 1
+          fi
+
       - name: Import the macOS signing certificate
         if: matrix.kind == 'macos'
         env:
@@ -188,6 +211,28 @@ jobs:
           fi
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
 
+      - name: Verify macOS signing and notarization
+        if: matrix.kind == 'macos'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$MACOS_SIGNING_IDENTITY" ]]; then
+            echo 'Manual ad-hoc build: no notarization to verify.'
+            exit 0
+          fi
+          app=$(find gui/build -type d -name '*.app' -print -quit)
+          dmg=$(find gui/build -type f -name '*.dmg' -print -quit)
+          test -n "$app" && test -n "$dmg"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --verbose=2 "$dmg"
+          signature=$(codesign -dvv "$app" 2>&1)
+          printf '%s\n' "$signature"
+          printf '%s\n' "$signature" | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
+          printf '%s\n' "$signature" | grep -F 'Authority=Developer ID Application:'
+          xcrun stapler validate "$dmg"
+
       - name: List the artifacts
         shell: bash
         run: find gui/build -maxdepth 2 -type f | sort | head -60
@@ -210,6 +255,13 @@ jobs:
           fi
           if [[ "${{ matrix.kind }}" == "macos" ]]; then
             app=$(find gui/build -type d -name '*.app' -print -quit)
+            helper="$app/Contents/Resources/extensions/lark/golder-lark"
+            expected=$(awk 'NR == 1 {print $1}' "$helper.sha256")
+            actual=$(shasum -a 256 "$helper" | awk '{print $1}')
+            if [[ "$expected" != "$actual" ]]; then
+              echo '::error::The bundled Lark helper no longer matches its checksum after packaging/signing.'
+              exit 1
+            fi
             exe="$app/Contents/MacOS/Golder GUI"
             if ! go version -m "$exe" | grep -q 'CGO_ENABLED=1'; then
               echo "the macOS GUI was built without the Computer Use backend" >&2
@@ -258,5 +310,41 @@ jobs:
             gui/build/**/*.tar.gz
             gui/build/**/*.deb
             gui/build/**/PKGBUILD
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  publish:
+    name: Attach GUI packages to release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: golder-gui-*
+          path: gui-artifacts
+
+      - name: Upload packages to GoReleaser's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The independent CLI release workflow may still be building.
+          for attempt in {1..60}; do
+            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then break; fi
+            if [[ "$attempt" == 60 ]]; then
+              echo '::error::GoReleaser did not create the release within 30 minutes.'
+              exit 1
+            fi
+            sleep 30
+          done
+          mapfile -d '' packages < <(find gui-artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.deb' \) -print0)
+          if (( ${#packages[@]} == 0 )); then
+            echo '::error::No GUI release packages found.'
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${packages[@]}"
 
