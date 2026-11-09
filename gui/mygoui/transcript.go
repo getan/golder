@@ -129,7 +129,22 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 				output = applyPatchDisplayOutput(output, st.Details)
 			}
 			if output != "" {
-				renderToolOutput(c, truncate(output, 12000), it.Failed || st.Error)
+				output = truncate(output, 12000)
+				failed := it.Failed || st.Error
+				rendered := false
+				if !failed {
+					switch st.Name {
+					case "read":
+						rendered = renderReadOutput(c, toolSubject(*st), output)
+					case "grep":
+						rendered = renderGrepOutput(c, output)
+					case "apply_patch":
+						rendered = renderPatchResultOutput(c, output)
+					}
+				}
+				if !rendered {
+					renderToolOutput(c, output, failed)
+				}
 			}
 		} else if st.Running && len(approvals) > 0 {
 			ui.Text(c, "Waiting for approval…").FontSize(12).TextColor(t.TextMuted)

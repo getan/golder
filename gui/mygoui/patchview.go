@@ -276,7 +276,11 @@ func renderApplyPatch(c *ui.Context, input map[string]any) (rendered, complete b
 						if text == "" {
 							text = " "
 						}
-						ui.Text(c, text).Grow(1).Font("monospace").FontSize(11.5).TextColor(textColor).Selectable().Wrap()
+						if line.kind == patchAdd || line.kind == patchDelete {
+							ui.RichText(c, syntaxFileLine(file.path, text, t.Dark)...).Grow(1).Font("monospace").FontSize(11.5).TextColor(textColor).Selectable().Wrap()
+						} else {
+							ui.Text(c, text).Grow(1).Font("monospace").FontSize(11.5).TextColor(textColor).Selectable().Wrap()
+						}
 					})
 				}
 			})
