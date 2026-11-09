@@ -116,11 +116,11 @@ func runWindowsCompatibilityChild(mode string) {
 				fail(err)
 			}
 			pressWindowsCompatibilityKey(0x28) // VK_DOWN
-			if err := waitWindowsCondition("first menu open", func() bool { flags, ok := windowsMenuFlags(parent); return ok && flags&0x10 != 0 }); err != nil {
+			if err := waitWindowsCondition("first menu open", func() bool { return windowsPopupCount(parent) > 0 }); err != nil {
 				fail(err)
 			}
 			pressWindowsCompatibilityKey(0x12) // VK_MENU
-			if err := waitWindowsCondition("Alt closed menu", func() bool { flags, ok := windowsMenuFlags(parent); return ok && flags&0x10 == 0 }); err != nil {
+			if err := waitWindowsCondition("Alt closed menu", func() bool { return windowsPopupCount(parent) == 0 }); err != nil {
 				fail(err)
 			}
 			passed.Store(true)
@@ -155,6 +155,32 @@ func windowsMenuFlags(parent uintptr) (uint32, bool) {
 		return 0, false
 	}
 	return info.Flags, true
+}
+
+// Menu-bar dropdowns are not necessarily GUI_POPUPMENUMODE, which describes
+// a popup menu loop rather than every visible dropdown. Observe Windows' menu
+// windows on this app's thread, as MyGo's upstream test does.
+func windowsPopupCount(parent uintptr) int {
+	thread, _, _ := dialogThreadID.Call(parent, 0)
+	if thread == 0 {
+		return -1
+	}
+	class, _ := syscall.UTF16PtrFromString("#32768")
+	find := dialogUser32.NewProc("FindWindowExW")
+	visible := dialogUser32.NewProc("IsWindowVisible")
+	count := 0
+	for after := uintptr(0); ; {
+		hwnd, _, _ := find.Call(0, after, uintptr(unsafe.Pointer(class)), 0)
+		if hwnd == 0 {
+			return count
+		}
+		after = hwnd
+		ownerThread, _, _ := dialogThreadID.Call(hwnd, 0)
+		shown, _, _ := visible.Call(hwnd)
+		if ownerThread == thread && shown != 0 {
+			count++
+		}
+	}
 }
 
 func waitWindowsCondition(name string, check func() bool) error {
