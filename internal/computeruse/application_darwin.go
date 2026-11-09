@@ -152,9 +152,23 @@ func macApplicationLaunchArgs(path string) []string {
 	return []string{"-g", "-a", path}
 }
 
+func macApplicationRevealArgs(path string) []string {
+	return []string{"-a", path}
+}
+
 // LaunchApplication launches only a candidate issued by this catalog after
 // rechecking its directory and bundle identity. No shell interprets its name.
 func (c *MacWindowCatalog) LaunchApplication(ctx context.Context, app Application) error {
+	return c.openApplication(ctx, app, false)
+}
+
+// RevealApplication brings forward only the same locally catalogued app after
+// a background launch left no visible window, without choosing a window.
+func (c *MacWindowCatalog) RevealApplication(ctx context.Context, app Application) error {
+	return c.openApplication(ctx, app, true)
+}
+
+func (c *MacWindowCatalog) openApplication(ctx context.Context, app Application, reveal bool) error {
 	c.mu.Lock()
 	candidate, ok := c.applications[app.ID]
 	closed := c.closed
@@ -173,7 +187,11 @@ func (c *MacWindowCatalog) LaunchApplication(ctx context.Context, app Applicatio
 	if !ok || bundleID != candidate.bundleID {
 		return errors.New("application bundle identity changed before launch")
 	}
-	if err := exec.CommandContext(ctx, "open", macApplicationLaunchArgs(candidate.path)...).Run(); err != nil {
+	args := macApplicationLaunchArgs(candidate.path)
+	if reveal {
+		args = macApplicationRevealArgs(candidate.path)
+	}
+	if err := exec.CommandContext(ctx, "open", args...).Run(); err != nil {
 		return fmt.Errorf("launch %s: %w", app.Name, err)
 	}
 	return nil

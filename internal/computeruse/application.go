@@ -24,6 +24,13 @@ type ApplicationLauncher interface {
 	LaunchApplication(context.Context, Application) error
 }
 
+// ApplicationRevealer can bring an already catalogued application forward if a
+// background launch did not produce a visible window. It must revalidate the
+// same application identity, and must not select or control a window itself.
+type ApplicationRevealer interface {
+	RevealApplication(context.Context, Application) error
+}
+
 type launchGuardKey struct{}
 
 // WithApplicationLaunchGuard rechecks a frontend's live authorization just
@@ -104,6 +111,10 @@ func ResolveApplication(ctx context.Context, backend PlatformBackend, name strin
 // LaunchAndFindApplication waits for a window belonging to the exact launched
 // application. It never substitutes a window from another application.
 func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app Application) (ApplicationResolution, error) {
+	return launchAndFindApplication(ctx, backend, app, time.Second)
+}
+
+func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app Application, revealAfter time.Duration) (ApplicationResolution, error) {
 	launcher, ok := backend.(ApplicationLauncher)
 	if !ok || app.ID == "" || app.Name == "" {
 		return ApplicationResolution{}, errors.New("application launch is unavailable")
@@ -123,6 +134,13 @@ func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 	defer ticker.Stop()
 	deadline := time.NewTimer(12 * time.Second)
 	defer deadline.Stop()
+	var reveal <-chan time.Time
+	revealer, canReveal := backend.(ApplicationRevealer)
+	if canReveal {
+		timer := time.NewTimer(revealAfter)
+		defer timer.Stop()
+		reveal = timer.C
+	}
 	for {
 		targets, err := backend.Targets(ctx)
 		if err != nil {
@@ -143,6 +161,22 @@ func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		select {
 		case <-ctx.Done():
 			return ApplicationResolution{}, ctx.Err()
+		case <-reveal:
+			reveal = nil // Never repeatedly move the user's focus or spaces.
+			if err := ctx.Err(); err != nil {
+				return ApplicationResolution{}, err
+			}
+			if guard, ok := ctx.Value(launchGuardKey{}).(func() error); ok && guard != nil {
+				if err := guard(); err != nil {
+					return ApplicationResolution{}, err
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return ApplicationResolution{}, err
+			}
+			if err := revealer.RevealApplication(ctx, app); err != nil {
+				return ApplicationResolution{}, err
+			}
 		case <-deadline.C:
 			return ApplicationResolution{}, fmt.Errorf("open request for %s succeeded, but no matching usable window was discovered within 12 seconds; restore a minimized window or show it on the current desktop and retry", app.Name)
 		case <-ticker.C:

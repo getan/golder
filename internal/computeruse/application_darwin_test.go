@@ -42,6 +42,9 @@ func TestMacApplicationInventoryDisambiguatesAndRejectsForgedCandidates(t *testi
 	if err := catalog.LaunchApplication(context.Background(), forged); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("forged application candidate was accepted: %v", err)
 	}
+	if err := catalog.RevealApplication(context.Background(), forged); err == nil || !strings.Contains(err.Error(), "expired") {
+		t.Fatalf("forged application was revealed: %v", err)
+	}
 	blocked, err := catalog.applicationsIn(context.Background(), "Terminal", []string{root})
 	if err != nil || len(blocked) != 0 {
 		t.Fatalf("terminal application was offered: %+v, %v", blocked, err)
@@ -63,5 +66,8 @@ func TestMacApplicationLaunchDoesNotStealFrontendFocus(t *testing.T) {
 	path := "/System/Applications/Calculator.app"
 	if got := macApplicationLaunchArgs(path); !slices.Equal(got, []string{"-g", "-a", path}) {
 		t.Fatalf("open arguments = %q", got)
+	}
+	if got := macApplicationRevealArgs(path); !slices.Equal(got, []string{"-a", path}) {
+		t.Fatalf("reveal arguments = %q", got)
 	}
 }
