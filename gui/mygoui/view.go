@@ -79,24 +79,6 @@ func (a *App) view(c *ui.Context) {
 		a.paletteOpen = true
 		a.loadActions()
 	}
-	if a.list == nil {
-		a.list = &ui.ListState{}
-	}
-	rows := a.projectedTranscriptRows()
-	a.list.Key = func(i int) any {
-		if i >= 0 && i < len(rows) {
-			return rows[i].key
-		}
-		return "awaiting-first-output"
-	}
-	a.list.FollowEnd = true
-	a.list.FollowAnimation = &ui.Smooth
-	if a.approvalReveal != "" {
-		if index := approvalRowIndex(rows, a.pending, a.approvalReveal); index >= 0 {
-			a.list.ScrollIntoView(index)
-		}
-		a.approvalReveal = ""
-	}
 
 	c.Root().Background(t.Background)
 	ui.Column(c).Fill().Children(func() {
@@ -106,12 +88,12 @@ func (a *App) view(c *ui.Context) {
 			a.clampWorkspaceWidths(c.Root().LayoutBounds().W - navigationWidth)
 			conversation := func() {
 				if a.sidebarClosed {
-					a.center(c, rows)
+					a.center(c)
 				} else {
 					if a.sidebarSize <= 0 {
 						a.sidebarSize = sidebarWidth
 					}
-					ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c, rows) }).Fill().MinWidth(0)
+					ui.Split(c, &a.sidebarSize, func() { a.sidebar(c) }, func() { a.center(c) }).Fill().MinWidth(0)
 				}
 			}
 			if a.hasRightPanel() {
@@ -384,7 +366,28 @@ func (a *App) sessionRow(c *ui.Context, s appsession.SessionSummary) {
 }
 
 // center is the transcript, the approval queue and the composer.
-func (a *App) center(c *ui.Context, rows []transcriptRow) {
+func (a *App) center(c *ui.Context) {
+	// Sidebar actions can switch sessions during this frame. Resolve both the
+	// list and its rows after the sidebar has processed those actions, so their
+	// indices always refer to the same active session.
+	if a.list == nil {
+		a.list = &ui.ListState{}
+	}
+	rows := a.projectedTranscriptRows()
+	a.list.Key = func(i int) any {
+		if i >= 0 && i < len(rows) {
+			return rows[i].key
+		}
+		return "awaiting-first-output"
+	}
+	a.list.FollowEnd = true
+	a.list.FollowAnimation = &ui.Smooth
+	if a.approvalReveal != "" {
+		if index := approvalRowIndex(rows, a.pending, a.approvalReveal); index >= 0 {
+			a.list.ScrollIntoView(index)
+		}
+		a.approvalReveal = ""
+	}
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
 		waiting := a.awaitingFirstOutput()
