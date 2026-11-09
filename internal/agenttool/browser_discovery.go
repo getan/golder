@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/browserctl"
 )
 
@@ -172,22 +173,20 @@ func discoverBrowserPaths(ctx context.Context, paths []string, truncated bool, s
 }
 
 func (t *BrowserTool) socketPath() string {
+	if binding := t.Control.binding(); binding != nil {
+		if !t.allowControl && binding.Snapshot().Revision == 0 {
+			records := sessionBrowserRecords(t.cwd, t.Control.conversation())
+			if len(records) == 1 {
+				binding.Restore(browserbinding.Endpoint{Socket: records[0].Socket, BrowserID: records[0].BrowserID})
+			}
+		}
+		return binding.Snapshot().Endpoint.Socket
+	}
 	t.tabMu.Lock()
 	path := t.boundSocket
 	t.tabMu.Unlock()
 	if path != "" {
 		return path // an explicit attachment overrides the startup environment
-	}
-	if t.Control != nil && t.Control.conversation() != "" {
-		t.Control.mu.Lock()
-		selected := t.Control.browserSelected
-		t.Control.mu.Unlock()
-		if selected == "" && !t.allowControl {
-			if paths := BrowserSessionSocketPaths(t.cwd, t.Control.conversation()); len(paths) == 1 {
-				return paths[0]
-			}
-		}
-		return selected
 	}
 	return browserSocket()
 }
@@ -218,6 +217,13 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 	if len(d.Instances) != 0 || d.Truncated {
 		return
 	}
+	if binding := t.Control.binding(); binding != nil {
+		state := binding.Snapshot()
+		if _, err := os.Stat(state.Endpoint.Socket); state.Endpoint.Socket != "" && os.IsNotExist(err) {
+			binding.Clear(state)
+		}
+		return
+	}
 	t.tabMu.Lock()
 	bound := t.boundSocket
 	if bound != "" {
@@ -227,16 +233,6 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 	}
 	t.tabMu.Unlock()
 
-	if t.Control != nil && t.Control.conversation() != "" {
-		t.Control.mu.Lock()
-		if path := t.Control.browserSelected; path != "" {
-			if _, err := os.Stat(path); os.IsNotExist(err) {
-				t.Control.browserSelected = ""
-			}
-		}
-		t.Control.mu.Unlock()
-		return
-	}
 	if browserctl.SocketFromEnv() != "" {
 		return
 	}
@@ -255,6 +251,10 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 }
 
 func (t *BrowserTool) bind(instance browserInstance) {
+	if binding := t.Control.binding(); binding != nil {
+		binding.Select(browserbinding.Endpoint{Socket: instance.Socket, BrowserID: instance.Info.BrowserID})
+		return
+	}
 	t.tabMu.Lock()
 	if t.boundBrowser != instance.Info.BrowserID || canonicalBrowserSocket(t.boundSocket) != canonicalBrowserSocket(instance.Socket) {
 		t.lastTab, t.lastTargetID = "", "" // refs and tab choices belong to the previous browser
@@ -267,6 +267,9 @@ func (t *BrowserTool) checkBinding(info browserctl.Info) error {
 	t.tabMu.Lock()
 	id := t.boundBrowser
 	t.tabMu.Unlock()
+	if binding := t.Control.binding(); binding != nil {
+		id = binding.Snapshot().Endpoint.BrowserID
+	}
 	if id != "" && id != info.BrowserID {
 		return fmt.Errorf("selected socket now serves browser %q, not attached browser %q; call list then attach explicitly", info.BrowserID, id)
 	}

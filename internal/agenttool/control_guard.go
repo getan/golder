@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/panecontrol"
@@ -27,11 +28,11 @@ import (
 // ControlGuard is session-local authority, shared only by the three broker
 // tools in one registry. Repository metadata and pane titles cannot grant it.
 type ControlGuard struct {
-	Root            string
-	Mode            *permissions.State
-	Runner          seatbelt.CallRunner
-	browserSession  string
-	browserSelected string
+	Root           string
+	Mode           *permissions.State
+	Runner         seatbelt.CallRunner
+	browserSession string
+	browserBinding *browserbinding.Binding
 	// BrowserProxy resolves the person's explicit browser route at launch time.
 	// It is wired by the CLI assembly layer; nil keeps library/tests direct.
 	BrowserProxy    func() (string, error)

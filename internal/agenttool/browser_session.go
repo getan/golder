@@ -10,13 +10,17 @@ import (
 	"github.com/getan/kitty-browse/browserhost"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/browserpool"
 )
 
 // ConfigureBrowserSession binds broker tools before a conversation starts or
 // changes. Neither model arguments nor workspace metadata supply the identity.
-func ConfigureBrowserSession(tools []agentcore.AgentTool, id string) {
+// The returned binding is also held by the GUI controller, not reconstructed
+// from tool results. Reconfiguring the same conversation preserves its binding.
+func ConfigureBrowserSession(tools []agentcore.AgentTool, id string) *browserbinding.Binding {
 	seen := map[*ControlGuard]bool{}
+	var binding *browserbinding.Binding
 	for _, raw := range tools {
 		var g *ControlGuard
 		switch t := raw.(type) {
@@ -34,10 +38,17 @@ func ConfigureBrowserSession(tools []agentcore.AgentTool, id string) {
 		g.mu.Lock()
 		if g.browserSession != id {
 			g.browserSession = id
-			g.browserSelected = ""
+			g.browserBinding = nil
 			g.browsers = map[string]controlledBrowser{}
 			g.browserProfiles = nil
 		}
+		if binding == nil {
+			binding = g.browserBinding
+			if binding == nil {
+				binding = browserbinding.New(id)
+			}
+		}
+		g.browserBinding = binding
 		g.mu.Unlock()
 	}
 	for _, raw := range tools {
@@ -50,6 +61,10 @@ func ConfigureBrowserSession(tools []agentcore.AgentTool, id string) {
 			t.tabMu.Unlock()
 		}
 	}
+	if binding == nil {
+		binding = browserbinding.New(id)
+	}
+	return binding
 }
 
 func (g *ControlGuard) conversation() string {
@@ -61,14 +76,30 @@ func (g *ControlGuard) conversation() string {
 	return g.browserSession
 }
 
-func (g *ControlGuard) selectBrowser(socket string) {
-	if g == nil || g.conversation() == "" {
-		setBrowserSocket(socket)
-		return
+func (g *ControlGuard) binding() *browserbinding.Binding {
+	if g == nil {
+		return nil
 	}
 	g.mu.Lock()
-	g.browserSelected = socket
-	g.mu.Unlock()
+	defer g.mu.Unlock()
+	return g.browserBinding
+}
+
+func (g *ControlGuard) selectBrowser(socket string) {
+	if binding := g.binding(); binding != nil {
+		endpoint := browserbinding.Endpoint{Socket: socket}
+		g.mu.Lock()
+		for id, browser := range g.browsers {
+			if browser.socket == canonicalBrowserSocket(socket) {
+				endpoint.BrowserID = id
+				break
+			}
+		}
+		g.mu.Unlock()
+		binding.Select(endpoint)
+	} else {
+		setBrowserSocket(socket)
+	}
 }
 
 func (t *BrowserTool) scopedDiscovery(ctx context.Context) browserDiscovery {

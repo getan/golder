@@ -47,7 +47,7 @@ func TestBrowserInputQueueDoesNotCoalesceAcrossTargets(t *testing.T) {
 }
 
 func TestBrowserSurfaceInputReportsQueueOverload(t *testing.T) {
-	s := &BrowserSurface{input: newBrowserInputQueue(2)}
+	s := &BrowserSurface{input: newBrowserInputQueue(2), target: browserctl.Target{BrowserID: "b", TabID: "t", TargetID: "target"}}
 	if !s.Input(BrowserInput{Kind: BrowserText, Text: "a"}) {
 		t.Fatal("first event rejected")
 	}
@@ -61,7 +61,7 @@ func TestBrowserSurfaceInputReportsQueueOverload(t *testing.T) {
 }
 
 func TestBrowserSurfaceReportsUnavailableNativePointer(t *testing.T) {
-	s := &BrowserSurface{input: newBrowserInputQueue(4)}
+	s := &BrowserSurface{input: newBrowserInputQueue(4), target: browserctl.Target{BrowserID: "b", TabID: "t", TargetID: "target"}}
 	if s.NativePointerAvailable() || s.Input(BrowserInput{Kind: BrowserPointerDown}) {
 		t.Fatal("legacy host accepted native pointer input")
 	}

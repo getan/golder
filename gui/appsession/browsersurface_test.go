@@ -37,12 +37,13 @@ func TestOpenBrowserSurfaceRejectsReplacedBrowser(t *testing.T) {
 	}
 }
 
-func TestBrowserSurfaceSelectionDoesNotActivateHostTab(t *testing.T) {
+func TestBrowserSurfaceSelectionUsesHostTab(t *testing.T) {
 	var actions []string
+	active := "a"
 	client := browserctl.NewWithTransport("stub", surfaceRoundTrip(func(r *http.Request) (*http.Response, error) {
 		var body string
 		if r.URL.Path == "/v1/info" {
-			body = `{"apiVersion":"v1","backend":"native-cdp","browserId":"b","activeTabId":"a","tabs":[{"id":"a","targetId":"ta","url":"https://a.test","active":true},{"id":"b","targetId":"tb","url":"https://b.test"}]}`
+			body = `{"apiVersion":"v1","backend":"native-cdp","browserId":"b","activeTabId":"` + active + `","tabs":[{"id":"a","targetId":"ta","url":"https://a.test"},{"id":"b","targetId":"tb","url":"https://b.test"}]}`
 		} else {
 			var req struct {
 				Action string            `json:"action"`
@@ -52,6 +53,9 @@ func TestBrowserSurfaceSelectionDoesNotActivateHostTab(t *testing.T) {
 				t.Fatal(err)
 			}
 			actions = append(actions, req.Action)
+			if req.Action == "tab.activate" {
+				active = req.Target.TabID
+			}
 			if req.Target.TabID != "b" || req.Target.TargetID != "tb" {
 				t.Fatalf("action targeted %+v", req.Target)
 			}
@@ -68,7 +72,7 @@ func TestBrowserSurfaceSelectionDoesNotActivateHostTab(t *testing.T) {
 		t.Fatalf("surface tabs = %+v, %v", tabs, err)
 	}
 	frame, err := surface.Frame(context.Background())
-	if err != nil || string(frame) != "abc" || len(actions) != 1 || actions[0] != "screenshot" {
+	if err != nil || string(frame) != "abc" || len(actions) != 2 || actions[0] != "tab.activate" || actions[1] != "screenshot" {
 		t.Fatalf("frame = %q, actions = %v, err = %v", frame, actions, err)
 	}
 }

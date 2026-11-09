@@ -170,9 +170,12 @@ Two optional surfaces need runtime pieces:
   keyboard, scroll, resize and committed IME input forwarded through a private
   operator connection. Conversation-local sockets and tab sets share one
   persistent project profile without switching other GUI/TUI sessions' pages;
-  auto-reveal follows the exact opened socket even with several
-  browsers or a short runtime path, and retries bounded discovery while a newly
-  launched socket is becoming visible; title and approval actions use
+  the controller and Agent share one session binding, and manual GUI/TUI tab
+  selection updates the host foreground used by the next untargeted Agent call.
+  Explicit background operations and already prepared calls keep their exact
+  targets. The drawer observes the binding, never transcript/tool-completion
+  events; stale discovery cannot cross a conversation switch. See
+  [browser binding](../docs/browser-binding.md). Title and approval actions use
   theme-colored monochrome SVGs;
 - terminal: a project-scoped, resizable panel with real shell panes. Right-click
   a pane title to split, rename or close it, separately grant an active Agent

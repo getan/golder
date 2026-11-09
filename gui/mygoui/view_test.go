@@ -3,7 +3,6 @@ package mygoui
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -139,125 +138,6 @@ func TestBrowserUsesRightDrawer(t *testing.T) {
 	}
 	if err := tt.Click("Browser"); err != nil || a.browserPanelOpen {
 		t.Fatalf("monochrome browser action did not close the drawer: open=%t err=%v", a.browserPanelOpen, err)
-	}
-}
-
-func TestSuccessfulBrowserQuitHidesOnlyMatchingPreviewOnce(t *testing.T) {
-	a := testApp()
-	a.browserPanelOpen = true
-	a.browserState = &browserWindowState{browserID: "browser-1", socket: browserSocketKey("/tmp/browser.sock")}
-	item := appsession.Item{ID: "quit-1", Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "quit"},
-		Details: map[string]any{"browser": "browser-1", "socket": "/tmp/browser.sock"}}}
-	item.Tool.Error = true
-	a.followBrowserTool(item)
-	if !a.browserPanelOpen {
-		t.Fatal("failed quit hid the preview")
-	}
-	item.Tool.Error = false
-	a.followBrowserTool(item)
-	if a.browserPanelOpen || a.browserState != nil {
-		t.Fatal("accepted quit did not hide its preview")
-	}
-	a.browserPanelOpen = true
-	a.browserState = &browserWindowState{browserID: "browser-1", socket: browserSocketKey("/tmp/browser.sock")}
-	a.followBrowserTool(item)
-	if !a.browserPanelOpen {
-		t.Fatal("a repeated transcript event hid the preview again")
-	}
-	item.ID = "quit-other"
-	item.Tool.Details["browser"] = "browser-2"
-	a.followBrowserTool(item)
-	if !a.browserPanelOpen {
-		t.Fatal("quit for another browser hid the preview")
-	}
-}
-
-func TestCompletedBrowserOpenRequestsDrawer(t *testing.T) {
-	for _, tc := range []struct {
-		name            string
-		item            appsession.Item
-		refresh, open   bool
-		preferredSocket string
-	}{
-		{"open", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "open"}, Details: map[string]any{"socket": "/tmp/open.sock"}}}, true, true, "/tmp/open.sock"},
-		{"navigate", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "navigate"}}}, true, true, ""},
-		{"snapshot", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Input: map[string]any{"action": "snapshot"}}}, true, false, ""},
-		{"running", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Running: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
-		{"failed", appsession.Item{Tool: &appsession.ToolState{Name: "browser", Error: true, Input: map[string]any{"action": "open"}}}, false, false, ""},
-		{"other", appsession.Item{Tool: &appsession.ToolState{Name: "bash"}}, false, false, ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			refresh, open, socket := browserToolPanelRefresh(tc.item)
-			if refresh != tc.refresh || open != tc.open || socket != tc.preferredSocket {
-				t.Fatalf("refresh/open/socket = %t/%t/%q, want %t/%t/%q", refresh, open, socket, tc.refresh, tc.open, tc.preferredSocket)
-			}
-		})
-	}
-}
-
-func TestBrowserToolCompletionActuallyOpensMatchingSurface(t *testing.T) {
-	a := testApp()
-	item := appsession.Item{ID: "browser-open", Tool: &appsession.ToolState{
-		Name: "browser", Input: map[string]any{"action": "open"}, Details: map[string]any{"socket": "/tmp/owned-browser.sock"},
-	}}
-	a.applyEvent(appsession.Event{Kind: appsession.EventItemUpdated, Item: &item})
-	if !a.browserAutoOpen {
-		t.Fatal("completed browser open did not schedule a panel")
-	}
-	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/owned-browser.sock", Title: "Example"}})
-	if !a.browserPanelOpen || a.browserState == nil || a.browserState.title != "Example" {
-		t.Fatalf("browser surface was not opened: %+v", a.browserState)
-	}
-	item.Tool.Details["socket"] = "/tmp/second-browser.sock"
-	a.applyEvent(appsession.Event{Kind: appsession.EventItemUpdated, Item: &item})
-	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/second-browser.sock", Title: "Second"}})
-	if a.browserState == nil || a.browserState.title != "Second" {
-		t.Fatal("a new owned browser did not replace the previous surface")
-	}
-	a.closeBrowserPanel()
-	a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/owned-browser.sock"}})
-	if a.browserPanelOpen {
-		t.Fatal("an old discovery reopened a panel the operator closed")
-	}
-}
-
-func TestBrowserAutoOpenRetriesOnlyInsideBoundedWindow(t *testing.T) {
-	now := time.Now()
-	if !browserAutoOpenShouldRetry(true, now.Add(time.Second), now) {
-		t.Fatal("pending browser open did not retry while its socket may still be starting")
-	}
-	for _, tc := range []struct {
-		pending bool
-		until   time.Time
-	}{{false, now.Add(time.Second)}, {true, time.Time{}}, {true, now.Add(-time.Second)}} {
-		if browserAutoOpenShouldRetry(tc.pending, tc.until, now) {
-			t.Fatalf("unexpected retry pending=%t until=%v", tc.pending, tc.until)
-		}
-	}
-}
-
-func TestBrowserAutoOpenWaitsForDiscovery(t *testing.T) {
-	for _, tc := range []struct {
-		name               string
-		pending, panelOpen bool
-		preferred          string
-		browsers           []appsession.BrowserPreview
-		want               browserOpenDecision
-		wantIndex          int
-	}{
-		{"preferred socket not discovered yet", true, false, "/tmp/new.sock", nil, browserOpenNone, -1},
-		{"preferred socket among several", true, false, "/tmp/new.sock", []appsession.BrowserPreview{{Socket: "/tmp/old.sock"}, {Socket: "/tmp/new.sock"}}, browserOpenSingle, 1},
-		{"one browser without preference", true, false, "", []appsession.BrowserPreview{{Socket: "/tmp/only.sock"}}, browserOpenSingle, 0},
-		{"several browsers without preference", true, false, "", []appsession.BrowserPreview{{Socket: "/tmp/a.sock"}, {Socket: "/tmp/b.sock"}}, browserChooseInstance, -1},
-		{"drawer already open", true, true, "/tmp/new.sock", []appsession.BrowserPreview{{Socket: "/tmp/new.sock"}}, browserOpenAlready, -1},
-		{"no agent open request", false, false, "", []appsession.BrowserPreview{{Socket: "/tmp/only.sock"}}, browserOpenNone, -1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, index := browserAutoOpenDecision(tc.pending, tc.panelOpen, tc.preferred, tc.browsers)
-			if got != tc.want || index != tc.wantIndex {
-				t.Fatalf("decision/index=%v/%d want=%v/%d", got, index, tc.want, tc.wantIndex)
-			}
-		})
 	}
 }
 

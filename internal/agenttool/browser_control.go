@@ -79,10 +79,11 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 		return raw, nil
 	}
 	selectedSocket := t.socketPath()
-	c, err := t.newClient()
+	c, err := t.clientForSocket(selectedSocket)
 	if err != nil {
 		return nil, err
 	}
+	defer c.CloseIdleConnections()
 	info, err := c.Info(ctx)
 	if err != nil {
 		return nil, err
@@ -91,6 +92,12 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 		return nil, errors.New("selected browser does not match requested browser")
 	}
 	a.Browser = info.BrowserID
+	if t.Control.binding() != nil {
+		if selectedSocket == "" || t.socketPath() != selectedSocket {
+			return nil, errors.New("browser binding changed during preparation")
+		}
+		a.Socket = selectedSocket
+	}
 	if a.Action == "quit" {
 		if info.BrowserID == "" || selectedSocket == "" || t.socketPath() != selectedSocket {
 			return nil, errors.New("cannot pin the selected browser and socket for quit")

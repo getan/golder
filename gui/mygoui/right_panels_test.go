@@ -70,9 +70,9 @@ func TestAutomaticBrowserOpenRespectsManualDrawerAndPriority(t *testing.T) {
 
 func TestBrowserDiscoveryDoesNotInterruptManualDrawer(t *testing.T) {
 	for _, files := range []bool{true, false} {
-		a := testApp()
-		a.filesOpen, a.changesOpen, a.browserAutoOpen = files, !files, true
-		a.applyBrowserDiscovery([]appsession.BrowserPreview{{Socket: "/tmp/a.sock"}, {Socket: "/tmp/b.sock"}})
+		a, view := browserBindingApp(t)
+		a.filesOpen, a.changesOpen = files, !files
+		a.applyBrowserSnapshot(view, view.binding.Snapshot(), []appsession.BrowserPreview{{Socket: "/tmp/a.sock"}, {Socket: "/tmp/b.sock"}})
 		if a.browserOpen || len(a.browsers) != 2 || a.filesOpen != files || a.changesOpen == files {
 			t.Fatal("browser discovery interrupted the manual drawer or lost discovered instances")
 		}

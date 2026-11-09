@@ -12,6 +12,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/headless"
@@ -113,6 +114,7 @@ type Controller struct {
 
 	store    *session.Store
 	header   session.SessionHeader
+	browser  *browserbinding.Binding
 	agentCtx *agentcore.AgentContext
 	live     *cli.LiveConfig
 	reg      *agenttool.ToolRegistry
@@ -390,6 +392,7 @@ func (c *Controller) Open(ctx context.Context) error {
 	c.readOnly, c.writerInfo = readOnly, holder
 	c.persisted = len(history)
 	c.hookDeps = run.HookDeps{SessionID: header.ID, ProjectDir: cwd, WarnLog: c.warnWriter()}
+	c.browser = agenttool.ConfigureBrowserSession(c.opt.Tools, header.ID)
 	c.mu.Unlock()
 
 	// seed takes the lock itself (to publish the derived title and context

@@ -8,9 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -184,17 +182,12 @@ type App struct {
 	fileSaving       bool
 	filesErr         string
 
-	browsers             []appsession.BrowserPreview
-	browserOpen          bool
-	browserPanelOpen     bool
-	browserAutoOpen      bool
-	browserAutoSocket    string
-	browserAutoUntil     time.Time
-	browserAutoSelection *appsession.BrowserSelection
-	browserFollowed      map[string]bool
-	browserRetryArmed    bool
-	browserState         *browserWindowState
-	browserCancel        context.CancelFunc
+	browsers         []appsession.BrowserPreview
+	browserOpen      bool
+	browserPanelOpen bool
+	browserSession   *browserSessionView
+	browserState     *browserWindowState
+	browserCancel    context.CancelFunc
 
 	computerOpen             bool
 	computerPickerOpen       bool
@@ -299,7 +292,7 @@ func (a *App) Run() error {
 				a.diffCancel()
 				a.diffCancel = nil
 			}
-			a.closeBrowserPanel()
+			a.resetBrowserSession()
 			a.stopComputer()
 			a.closeTerminals()
 			if authBusy {
@@ -316,7 +309,7 @@ func (a *App) Run() error {
 		a.refreshSessions()
 		a.refreshChanges()
 		a.startModelRefresh()
-		go a.refreshBrowsers(a.ctrl)
+		a.startBrowserSession()
 		a.checkGUIUpdate(false)
 	})
 	return mygo.App.Run()
@@ -373,11 +366,7 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	a.project = snap.Project
 	a.snapshotSeq = snap.Seq
 	if previousSession != "" && previousSession != snap.SessionID {
-		a.clearBrowserAutoOpen()
-		a.browserFollowed = nil
-		if a.browserState != nil {
-			a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
-		}
+		a.resetBrowserSession()
 	}
 	if previousProject != "" && previousProject != a.project {
 		a.resetFileExplorer()
@@ -407,16 +396,13 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 		if _, ok := a.index[ev.Item.ID]; ok {
 			a.replaceItem(*ev.Item)
-			a.followBrowserTool(*ev.Item)
 			return
 		}
 		a.index[ev.Item.ID] = len(a.items)
 		a.items = append(a.items, *ev.Item)
-		a.followBrowserTool(*ev.Item)
 	case appsession.EventItemUpdated:
 		if ev.Item != nil {
 			a.replaceItem(*ev.Item)
-			a.followBrowserTool(*ev.Item)
 		}
 	case appsession.EventApproval:
 		if ev.Approval != nil {
@@ -444,13 +430,12 @@ func (a *App) applyEvent(ev appsession.Event) {
 		if ev.Status != nil {
 			if a.status.SessionID != "" && a.status.SessionID != ev.Status.SessionID {
 				a.stopComputer()
-				a.clearBrowserAutoOpen()
-				a.browserFollowed = nil
-				if a.browserState != nil {
-					a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
-				}
+				a.resetBrowserSession()
 			}
 			a.status = *ev.Status
+			if a.browserSession == nil {
+				a.startBrowserSession()
+			}
 			a.updateTitle()
 		}
 	case appsession.EventRunEnd:
@@ -478,7 +463,6 @@ func (a *App) applyEvent(ev appsession.Event) {
 		}
 		a.refreshSessions()
 		a.refreshChanges()
-		go a.refreshBrowsers(a.ctrl)
 	}
 }
 
@@ -744,245 +728,6 @@ func (a *App) applyModelResults(ctrl *appsession.Controller, request uint64, pro
 	a.models = models
 }
 
-func (a *App) refreshBrowsers(ctrl *appsession.Controller) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	browsers := ctrl.Browsers(ctx)
-	if a.win == nil {
-		a.applyBrowserDiscovery(browsers)
-		return
-	}
-	a.win.Update(func() {
-		if a.ctrl == ctrl {
-			a.applyBrowserDiscovery(browsers)
-		}
-	})
-}
-
-func (a *App) applyBrowserDiscovery(browsers []appsession.BrowserPreview) {
-	a.browsers = browsers
-	selection := a.browserAutoSelection
-	current := a.browserPanelOpen
-	if current && a.browserAutoSocket != "" && a.browserState != nil && a.browserState.socket != a.browserAutoSocket {
-		current = false
-	}
-	decision, index := browserAutoOpenDecision(a.browserAutoOpen, current, a.browserAutoSocket, browsers)
-	switch decision {
-	case browserOpenSingle:
-		a.clearBrowserAutoOpen()
-		a.openBrowserPreview(browsers[index])
-		if selection != nil {
-			queueBrowserFollow(a.browserState, *selection)
-		}
-	case browserChooseInstance:
-		a.clearBrowserAutoOpen()
-		// Discovery must not interrupt an operator's Files/Changes work. The
-		// Browser icon still exposes the discovered instances for later choice.
-		if !a.filesOpen && !a.changesOpen {
-			a.browserOpen = true
-		}
-	case browserOpenAlready:
-		a.clearBrowserAutoOpen()
-		if selection != nil {
-			queueBrowserFollow(a.browserState, *selection)
-		}
-	case browserOpenNone:
-		if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
-			a.scheduleBrowserAutoOpenRetry()
-		} else if a.browserAutoOpen && !a.browserAutoUntil.IsZero() {
-			a.clearBrowserAutoOpen()
-		}
-	}
-}
-
-func (a *App) followBrowserTool(item appsession.Item) {
-	refresh, open, socket := browserToolPanelRefresh(item)
-	if !refresh {
-		return
-	}
-	if action, _ := item.Tool.Input["action"].(string); action == "quit" {
-		id := item.ID
-		if id == "" {
-			id = item.Tool.ID
-		}
-		browser, _ := item.Tool.Details["browser"].(string)
-		socket, _ := item.Tool.Details["socket"].(string)
-		if id != "" && browser != "" && socket != "" {
-			if a.browserFollowed == nil {
-				a.browserFollowed = make(map[string]bool)
-			}
-			if !a.browserFollowed[id] {
-				a.browserFollowed[id] = true
-				if a.browserPanelOpen && a.browserState != nil && a.browserState.browserID == browser && a.browserState.socket == browserSocketKey(socket) {
-					a.closeBrowserPanel()
-				}
-			}
-		}
-	}
-	selection, selectionSocket, selected := browserToolSelection(item)
-	if selected {
-		id := item.ID
-		if id == "" && item.Tool != nil {
-			id = item.Tool.ID
-		}
-		if id != "" {
-			if a.browserFollowed == nil {
-				a.browserFollowed = make(map[string]bool)
-			}
-			if a.browserFollowed[id] {
-				return
-			}
-			a.browserFollowed[id] = true
-		}
-		if a.browserPanelOpen && a.browserState != nil && a.browserState.socket == browserSocketKey(selectionSocket) && a.browserState.browserID == selection.BrowserID {
-			queueBrowserFollow(a.browserState, selection)
-			if a.ctrl != nil {
-				go a.refreshBrowsers(a.ctrl)
-			}
-			return
-		}
-		a.browserAutoSelection = &selection
-	} else if open {
-		a.browserAutoSelection = nil
-	}
-	if open {
-		a.browserAutoOpen = true
-		a.browserAutoUntil = time.Now().Add(8 * time.Second)
-		a.browserAutoSocket = browserSocketKey(socket)
-	}
-	if a.ctrl != nil {
-		go a.refreshBrowsers(a.ctrl)
-	}
-}
-
-func browserToolPanelRefresh(item appsession.Item) (refresh, open bool, socket string) {
-	if item.Tool == nil || item.Tool.Name != "browser" || item.Tool.Running || item.Tool.Error {
-		return false, false, ""
-	}
-	action, _ := item.Tool.Input["action"].(string)
-	if action == "tab_select" {
-		_, socket, ok := browserToolSelection(item)
-		return true, ok, socket
-	}
-	if action == "open" || action == "attach" {
-		socket, _ = item.Tool.Details["socket"].(string)
-	}
-	switch action {
-	case "open", "attach", "navigate", "tab_new", "tab_select":
-		open = true
-	}
-	return true, open, socket
-}
-
-func (a *App) clearBrowserAutoOpen() {
-	a.browserAutoOpen, a.browserAutoSocket = false, ""
-	a.browserAutoUntil = time.Time{}
-	a.browserAutoSelection = nil
-}
-
-// browserToolSelection accepts only a completed, successful explicit
-// tab_select with the exact identities reported by the browser tool.
-func browserToolSelection(item appsession.Item) (appsession.BrowserSelection, string, bool) {
-	if item.Tool == nil || item.Tool.Name != "browser" || item.Tool.Running || item.Tool.Error {
-		return appsession.BrowserSelection{}, "", false
-	}
-	action, _ := item.Tool.Input["action"].(string)
-	resultAction, _ := item.Tool.Details["action"].(string)
-	if action != "tab_select" || resultAction != "tab.activate" {
-		return appsession.BrowserSelection{}, "", false
-	}
-	browserID, _ := item.Tool.Details["browser"].(string)
-	tabID, _ := item.Tool.Details["tab"].(string)
-	targetID, _ := item.Tool.Details["target_id"].(string)
-	socket, _ := item.Tool.Details["socket"].(string)
-	if browserID == "" || tabID == "" || targetID == "" || browserSocketKey(socket) == "" {
-		return appsession.BrowserSelection{}, "", false
-	}
-	var revision uint64
-	if raw, exists := item.Tool.Details["selection_revision"]; exists {
-		text, ok := raw.(string)
-		if !ok {
-			return appsession.BrowserSelection{}, "", false
-		}
-		var err error
-		revision, err = strconv.ParseUint(text, 10, 64)
-		if err != nil || revision == 0 {
-			return appsession.BrowserSelection{}, "", false
-		}
-	}
-	return appsession.BrowserSelection{BrowserID: browserID, TabID: tabID, TargetID: targetID, Revision: revision}, socket, true
-}
-
-func (a *App) scheduleBrowserAutoOpenRetry() {
-	if a.browserRetryArmed || a.win == nil {
-		return
-	}
-	a.browserRetryArmed = true
-	win := a.win
-	go func() {
-		timer := time.NewTimer(250 * time.Millisecond)
-		defer timer.Stop()
-		<-timer.C
-		win.Update(func() {
-			a.browserRetryArmed = false
-			if browserAutoOpenShouldRetry(a.browserAutoOpen, a.browserAutoUntil, time.Now()) {
-				go a.refreshBrowsers(a.ctrl)
-			}
-		})
-	}()
-}
-
-func browserAutoOpenShouldRetry(pending bool, until, now time.Time) bool {
-	return pending && !until.IsZero() && now.Before(until)
-}
-
-type browserOpenDecision uint8
-
-const (
-	browserOpenNone browserOpenDecision = iota
-	browserOpenSingle
-	browserChooseInstance
-	browserOpenAlready
-)
-
-func browserAutoOpenDecision(pending, panelOpen bool, preferredSocket string, browsers []appsession.BrowserPreview) (browserOpenDecision, int) {
-	if !pending {
-		return browserOpenNone, -1
-	}
-	if panelOpen {
-		return browserOpenAlready, -1
-	}
-	if preferredSocket = browserSocketKey(preferredSocket); preferredSocket != "" {
-		for i, browser := range browsers {
-			if browserSocketKey(browser.Socket) == preferredSocket {
-				return browserOpenSingle, i
-			}
-		}
-		return browserOpenNone, -1
-	}
-	if len(browsers) == 1 {
-		return browserOpenSingle, 0
-	}
-	if len(browsers) > 1 {
-		return browserChooseInstance, -1
-	}
-	return browserOpenNone, -1
-}
-
-func browserSocketKey(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	if absolute, err := filepath.Abs(path); err == nil {
-		path = absolute
-	}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
-	}
-	return filepath.Clean(path)
-}
-
 func (a *App) runAction(id, args string) {
 	a.paletteOpen = false
 	if id == appsession.ActionNewSession {
@@ -1105,7 +850,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 		a.hub.ParkComputerRequest(a.ctrl, a.computerSuggested)
 	}
 	a.parkComputerPanel()
-	a.closeBrowserPanel()
+	a.resetBrowserSession()
 	a.ctrl = peer
 	a.registerTerminalAgent(peer)
 	a.thinkingOpen, a.toolOpen, a.approvalOpen = map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -1124,6 +869,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	_ = peer.SelectProject(a.project)
 	a.banner, a.bannerErr = "", false
 	a.updateTitle()
+	a.startBrowserSession()
 	if request := a.hub.TakeComputerRequest(peer); request != "" {
 		a.computerSuggested = request
 		a.applyEvent(appsession.Event{Kind: appsession.EventRunEnd})

@@ -213,14 +213,14 @@ func (a *App) titleBar(c *ui.Context) {
 				a.filesOpen = false
 				a.closeChangesPanel()
 				if a.browserPanelOpen {
-					a.closeBrowserPanel()
+					a.hideBrowserPanel()
 				} else if len(a.browsers) == 1 {
-					a.openBrowserPreview(a.browsers[0])
+					a.requestBrowserPreview(a.browsers[0])
 					a.rightPreferred = rightPanelBrowser
 				} else {
 					a.browserOpen = true
 					if a.ctrl != nil {
-						go a.refreshBrowsers(a.ctrl)
+						a.refreshBrowsers()
 					}
 				}
 			}
@@ -469,7 +469,7 @@ func (a *App) browsersModal(c *ui.Context) {
 			ui.Text(c, "The native surface draws Chromium frames and forwards mouse, keyboard, scroll and composed text through the owner-only control socket.").
 				FontSize(12).TextColor(t.TextMuted)
 			if subtleButton(c, "Refresh").Clicked() {
-				go a.refreshBrowsers(a.ctrl)
+				a.refreshBrowsers()
 			}
 			if len(a.browsers) == 0 {
 				ui.Text(c, "No browser control socket was found under .golder/browser.").FontSize(12).TextColor(t.TextMuted)
@@ -489,7 +489,7 @@ func (a *App) browsersModal(c *ui.Context) {
 						a.browserOpen = false
 						a.filesOpen = false
 						a.closeChangesPanel()
-						a.openBrowserPreview(b)
+						a.requestBrowserPreview(b)
 						a.rightPreferred = rightPanelBrowser
 					}
 				})

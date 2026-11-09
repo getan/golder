@@ -43,16 +43,6 @@ type BrowserTab struct {
 	Active bool
 }
 
-// BrowserSelection identifies one explicitly selected tab in one browser.
-// Revision is zero only for the same-process compatibility event from a host
-// which predates the control socket's explicit-selection revision.
-type BrowserSelection struct {
-	BrowserID string
-	TabID     string
-	TargetID  string
-	Revision  uint64
-}
-
 // BrowserSurface is a terminal-independent view of one controlled Chromium
 // tab. Frames come from the target-scoped screenshot action; input is serialized
 // onto the same typed action socket. kitty-browse remains the CDP owner.
@@ -60,16 +50,16 @@ type BrowserSurface struct {
 	client   *browserctl.Client
 	operator BrowserOperator
 
-	mu                sync.Mutex
-	target            browserctl.Target
-	title             string
-	url               string
-	err               error
-	closed            bool
-	dragging          bool
-	dragTarget        browserctl.Target
-	dragX, dragY      float64
-	selectionRevision uint64
+	mu              sync.Mutex
+	target          browserctl.Target
+	title           string
+	url             string
+	err             error
+	closed          bool
+	dragging        bool
+	dragTarget      browserctl.Target
+	dragX, dragY    float64
+	refreshSequence uint64
 
 	input *browserInputQueue
 	done  chan struct{}
@@ -97,52 +87,82 @@ func OpenBrowserSurface(ctx context.Context, preview BrowserPreview) (*BrowserSu
 		client.CloseIdleConnections()
 		return nil, fmt.Errorf("browser surface identity changed since discovery")
 	}
-	target := browserctl.Target{BrowserID: info.BrowserID, TabID: info.ActiveTabID}
-	title, rawURL := preview.Title, preview.URL
-	for _, tab := range info.Tabs {
-		if tab.Active {
-			target.TabID, target.TargetID = tab.ID, tab.TargetID
-			title, rawURL = tab.Title, tab.URL
-			break
-		}
+	tab, err := browserctl.Foreground(info)
+	if err != nil {
+		client.CloseIdleConnections()
+		return nil, err
 	}
+	target := browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}
 	surface := &BrowserSurface{
-		client: client, operator: browserOperator(preview.Socket), target: target, title: title, url: rawURL,
+		client: client, operator: browserOperator(preview.Socket), target: target, title: tab.Title, url: tab.URL,
 		input: newBrowserInputQueue(128), done: make(chan struct{}),
-	}
-	if info.ExplicitSelection != nil {
-		surface.selectionRevision = info.ExplicitSelection.Revision
 	}
 	go surface.runInputs()
 	return surface, nil
 }
 
-// Frame captures this surface's selected tab, independently of the host's
-// globally active tab. A frame that raced a local tab switch is discarded.
+// BrowserFrame keeps the pixels, chrome and input target from one capture
+// together. Input must be pinned to the displayed frame, not a newer refresh.
+type BrowserFrame struct {
+	PNG    []byte
+	Target browserctl.Target
+	Title  string
+	URL    string
+	Tabs   []BrowserTab
+}
+
 func (s *BrowserSurface) Frame(ctx context.Context) ([]byte, error) {
+	frame, err := s.Capture(ctx)
+	return frame.PNG, err
+}
+
+// Capture projects the host foreground and rechecks it at both ends of capture.
+func (s *BrowserSurface) Capture(ctx context.Context) (BrowserFrame, error) {
+	if _, err := s.Tabs(ctx); err != nil {
+		return BrowserFrame{}, err
+	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, fmt.Errorf("browser surface is closed")
+		return BrowserFrame{}, fmt.Errorf("browser surface is closed")
 	}
 	target := s.target
 	s.mu.Unlock()
 	data, meta, err := s.client.ScreenshotTarget(ctx, target)
 	if err != nil {
-		return nil, err
+		return BrowserFrame{}, err
+	}
+	tabs, err := s.Tabs(ctx)
+	if err != nil {
+		return BrowserFrame{}, err
 	}
 	if !s.updateSelectedMeta(target, meta) {
-		return nil, fmt.Errorf("browser surface selection changed during capture")
+		return BrowserFrame{}, fmt.Errorf("browser surface selection changed during capture")
 	}
-	return data, nil
+	return BrowserFrame{PNG: data, Target: target, Title: meta.Title, URL: meta.URL, Tabs: tabs}, nil
 }
 
 // Resize changes this surface's selected Chromium tab. Dimensions are CSS pixels.
 func (s *BrowserSurface) Resize(ctx context.Context, width, height int) error {
+	s.mu.Lock()
+	target := s.target
+	s.mu.Unlock()
+	return s.ResizeTarget(ctx, target, width, height)
+}
+
+// ResizeTarget keeps deferred resize work attached to the frame that requested
+// it. A host selection change cannot resize a newly foregrounded tab by mistake.
+func (s *BrowserSurface) ResizeTarget(ctx context.Context, target browserctl.Target, width, height int) error {
 	if width < 1 || height < 1 {
 		return nil
 	}
-	_, _, err := s.action(ctx, "set.viewport", map[string]any{"width": width, "height": height}, 5*time.Second)
+	s.mu.Lock()
+	current := !s.closed && s.target == target && target.TabID != ""
+	s.mu.Unlock()
+	if !current {
+		return fmt.Errorf("browser resize target changed")
+	}
+	_, _, err := s.actionTarget(ctx, target, "set.viewport", map[string]any{"width": width, "height": height}, 5*time.Second)
 	return err
 }
 
@@ -157,11 +177,12 @@ func (s *BrowserSurface) Back(ctx context.Context) error    { return s.simple(ct
 func (s *BrowserSurface) Forward(ctx context.Context) error { return s.simple(ctx, "forward") }
 func (s *BrowserSurface) Reload(ctx context.Context) error  { return s.simple(ctx, "reload") }
 
-// Tabs refreshes metadata without adopting another surface's selection. If the
-// selected tab was closed, the browser's active tab becomes the fallback.
+// Tabs is a projection of the host foreground, not a second selection store.
+// An older concurrent Info response must not overwrite a newer refresh.
 func (s *BrowserSurface) Tabs(ctx context.Context) ([]BrowserTab, error) {
 	s.mu.Lock()
-	previous := s.target
+	s.refreshSequence++
+	sequence := s.refreshSequence
 	s.mu.Unlock()
 	info, err := s.client.Info(ctx)
 	if err != nil {
@@ -172,144 +193,53 @@ func (s *BrowserSurface) Tabs(ctx context.Context) ([]BrowserTab, error) {
 	if s.closed || info.BrowserID != s.target.BrowserID {
 		return nil, fmt.Errorf("browser surface identity changed or closed")
 	}
-	if s.target != previous {
-		return nil, fmt.Errorf("browser surface selection changed during tab discovery")
+	if sequence != s.refreshSequence {
+		return nil, fmt.Errorf("browser surface refresh superseded")
 	}
-	selected := -1
-	fallback := -1
-	for i, tab := range info.Tabs {
-		if tab.ID == s.target.TabID && tab.TargetID == s.target.TargetID {
-			selected = i
-		}
-		if tab.Active {
-			fallback = i
-		}
+	foreground, err := browserctl.Foreground(info)
+	if err != nil {
+		s.releaseDragLocked()
+		s.target = browserctl.Target{BrowserID: info.BrowserID}
+		s.title, s.url = "", ""
+		return nil, err
 	}
-	if selected < 0 {
-		selected = fallback
-		if selected < 0 && len(info.Tabs) > 0 {
-			selected = 0
-		}
-	}
-	if selected >= 0 {
-		s.selectTabLocked(info.BrowserID, info.Tabs[selected])
-	}
+	s.selectTabLocked(info.BrowserID, foreground)
 	out := make([]BrowserTab, 0, len(info.Tabs))
-	for i, tab := range info.Tabs {
-		out = append(out, BrowserTab{ID: tab.ID, Title: tab.Title, URL: tab.URL, Active: i == selected})
+	for _, tab := range info.Tabs {
+		out = append(out, BrowserTab{ID: tab.ID, Title: tab.Title, URL: tab.URL, Active: tab.ID == foreground.ID})
 	}
 	return out, nil
 }
 
-// PendingSelection observes successful explicit control-API activations only.
-// It never changes the local view or performs a browser action. A newer manual
-// or browser selection invalidates an older event instead of replaying it.
-func (s *BrowserSurface) PendingSelection(ctx context.Context) (*BrowserSelection, error) {
-	s.mu.Lock()
-	previous := s.target
-	s.mu.Unlock()
-	info, err := s.client.Info(ctx)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || info.BrowserID != previous.BrowserID {
-		return nil, fmt.Errorf("browser surface identity changed or closed")
-	}
-	if s.target != previous {
-		return nil, nil
-	}
-	selection := info.ExplicitSelection
-	if selection == nil || selection.Revision == 0 || selection.Revision <= s.selectionRevision {
-		return nil, nil
-	}
-	if selection.TabID == s.target.TabID && selection.TargetID == s.target.TargetID {
-		s.selectionRevision = selection.Revision
-		return nil, nil
-	}
-	if _, ok := selectionTab(info, selection.TabID, selection.TargetID); !ok {
-		s.selectionRevision = selection.Revision
-		return nil, nil
-	}
-	return &BrowserSelection{BrowserID: info.BrowserID, TabID: selection.TabID, TargetID: selection.TargetID, Revision: selection.Revision}, nil
-}
-
-// FollowSelection updates only this local surface, after rechecking the exact
-// browser, tab, target and active state. It never activates or navigates a tab.
-func (s *BrowserSurface) FollowSelection(ctx context.Context, selection BrowserSelection) error {
-	if selection.BrowserID == "" || selection.TabID == "" || selection.TargetID == "" {
-		return fmt.Errorf("browser selection requires exact browser, tab and target identities")
-	}
-	s.mu.Lock()
-	previous := s.target
-	s.mu.Unlock()
-	info, err := s.client.Info(ctx)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || info.BrowserID != previous.BrowserID || selection.BrowserID != info.BrowserID {
-		return fmt.Errorf("browser surface identity changed or closed")
-	}
-	if s.target != previous {
-		return nil // a later local selection wins
-	}
-	if selection.Revision == 0 && info.ExplicitSelection != nil {
-		return nil // revision-aware hosts are followed through their ordered signal
-	}
-	if selection.Revision != 0 {
-		current := info.ExplicitSelection
-		if selection.Revision <= s.selectionRevision || current == nil || current.Revision != selection.Revision || current.TabID != selection.TabID || current.TargetID != selection.TargetID {
-			return nil
-		}
-	}
-	tab, ok := selectionTab(info, selection.TabID, selection.TargetID)
-	if !ok {
-		if selection.Revision > s.selectionRevision {
-			s.selectionRevision = selection.Revision
-		}
-		return nil
-	}
-	s.selectTabLocked(info.BrowserID, tab)
-	if info.ExplicitSelection != nil && info.ExplicitSelection.Revision > s.selectionRevision {
-		s.selectionRevision = info.ExplicitSelection.Revision
-	}
-	return nil
-}
-
-func selectionTab(info browserctl.Info, tabID, targetID string) (browserctl.Tab, bool) {
-	if tabID == "" || targetID == "" || info.ActiveTabID != tabID {
-		return browserctl.Tab{}, false
-	}
-	for _, tab := range info.Tabs {
-		if tab.ID == tabID && tab.TargetID == targetID && tab.URL != "" && controlcap.BrowserURL(tab.URL) == nil {
-			return tab, true
-		}
-	}
-	return browserctl.Tab{}, false
-}
-
-// ActivateTab switches only this surface's view, not the browser host's active
-// tab, which may be displayed by another surface.
+// ActivateTab uses the host selection command, exactly as Agent and TUI do.
+// Operator authentication remains separate from Agent automation permission.
 func (s *BrowserSurface) ActivateTab(ctx context.Context, id string) error {
 	info, err := s.client.Info(ctx)
 	if err != nil {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || info.BrowserID != s.target.BrowserID {
+		s.mu.Unlock()
 		return fmt.Errorf("browser surface identity changed or closed")
 	}
+	s.refreshSequence++ // invalidate earlier reads before dispatch
+	s.mu.Unlock()
 	for _, tab := range info.Tabs {
 		if tab.ID == id && tab.TargetID != "" {
-			if info.ExplicitSelection != nil && info.ExplicitSelection.Revision > s.selectionRevision {
-				s.selectionRevision = info.ExplicitSelection.Revision
+			if err := controlcap.BrowserURL(tab.URL); err != nil {
+				return err
 			}
-			s.selectTabLocked(info.BrowserID, tab)
-			return nil
+			target := browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}
+			_, meta, err := s.surfaceAction(ctx, "tab.activate", map[string]any{"tabId": id}, target, 10*time.Second)
+			if err != nil {
+				return err
+			}
+			if meta.BrowserID != target.BrowserID || meta.TabID != target.TabID || meta.TargetID != target.TargetID {
+				return fmt.Errorf("activated browser target changed")
+			}
+			_, err = s.Tabs(ctx)
+			return err
 		}
 	}
 	return fmt.Errorf("browser tab %q is no longer available", id)
@@ -324,13 +254,9 @@ func (s *BrowserSurface) NewTab(ctx context.Context, rawURL string) error {
 	if rawURL = strings.TrimSpace(rawURL); rawURL != "" {
 		params["url"] = rawURL
 	}
-	_, meta, err := s.surfaceAction(ctx, "tab.new", params, browserctl.Target{BrowserID: previous.BrowserID}, 30*time.Second)
+	_, _, err := s.surfaceAction(ctx, "tab.new", params, browserctl.Target{BrowserID: previous.BrowserID}, 30*time.Second)
 	if err == nil {
-		s.mu.Lock()
-		if !s.closed && s.target == previous && meta.BrowserID == previous.BrowserID && meta.TabID != "" && meta.TargetID != "" {
-			s.selectTabLocked(meta.BrowserID, browserctl.Tab{ID: meta.TabID, TargetID: meta.TargetID, Title: meta.Title, URL: meta.URL})
-		}
-		s.mu.Unlock()
+		_, err = s.Tabs(ctx)
 	}
 	return err
 }
@@ -357,7 +283,15 @@ func (s *BrowserSurface) simple(ctx context.Context, action string) error {
 // It returns false and reports an error if a boundary event cannot be queued.
 func (s *BrowserSurface) Input(event BrowserInput) bool {
 	s.mu.Lock()
-	if s.closed || s.input == nil {
+	target := s.target
+	s.mu.Unlock()
+	return s.InputTarget(target, event)
+}
+
+// InputTarget rejects input for pixels superseded by a host/manual selection.
+func (s *BrowserSurface) InputTarget(target browserctl.Target, event BrowserInput) bool {
+	s.mu.Lock()
+	if s.closed || s.input == nil || target.TabID == "" || target != s.target {
 		s.mu.Unlock()
 		return false
 	}
@@ -366,7 +300,6 @@ func (s *BrowserSurface) Input(event BrowserInput) bool {
 		s.mu.Unlock()
 		return false
 	}
-	target := s.target
 	ok := s.input.push(surfaceInput{event: event, target: target})
 	if !ok {
 		s.err = fmt.Errorf("browser input queue is full; input was not sent")

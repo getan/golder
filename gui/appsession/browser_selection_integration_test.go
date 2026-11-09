@@ -14,12 +14,15 @@ import (
 
 	"github.com/getan/kitty-browse/browserhost"
 
+	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/browserctl"
 )
 
 // Opt-in: the socket and renderer use a private throwaway profile and loopback
-// fixtures. It works with both the pinned legacy host and the revision-aware
-// sibling host when linked through a temporary Go workspace.
+// fixtures. Host foreground, rather than transcript events or selection-revision
+// support, is the source of truth for both Agent and operator surfaces.
 func TestBrowserSurfaceFollowsExplicitSelectionIntegration(t *testing.T) {
 	chrome := os.Getenv("KITTY_BROWSE_CHROME")
 	if os.Getenv("GOLDER_TEST_BROWSER_FOLLOW") != "1" || chrome == "" {
@@ -41,7 +44,7 @@ func TestBrowserSurfaceFollowsExplicitSelectionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer host.Close()
+	defer func() { _ = host.Close(); _ = host.Wait() }()
 	client, err := browserctl.Dial(socket)
 	if err != nil {
 		t.Fatal(err)
@@ -61,11 +64,8 @@ func TestBrowserSurfaceFollowsExplicitSelectionIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := surface.PendingSelection(ctx); err != nil || pending != nil {
-		t.Fatalf("tab creation caused an implicit follow: %+v, %v", pending, err)
-	}
-	if _, current, _ := surface.State(); current != server.URL+"/a" {
-		t.Fatalf("background creation changed the visible tab: %q", current)
+	if _, err := surface.Tabs(ctx); err != nil {
+		t.Fatal(err)
 	}
 	selectAndFollow := func(tabID, targetID, wantURL string) {
 		t.Helper()
@@ -74,19 +74,7 @@ func TestBrowserSurfaceFollowsExplicitSelectionIntegration(t *testing.T) {
 		if err != nil || meta.TabID != tabID || meta.TargetID != targetID {
 			t.Fatalf("activate = %+v, %v", meta, err)
 		}
-		updated, err := client.Info(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		selection := BrowserSelection{BrowserID: info.BrowserID, TabID: tabID, TargetID: targetID}
-		if updated.ExplicitSelection != nil {
-			pending, err := surface.PendingSelection(ctx)
-			if err != nil || pending == nil || pending.TabID != tabID || pending.TargetID != targetID {
-				t.Fatalf("pending selection = %+v, %v", pending, err)
-			}
-			selection = *pending
-		}
-		if err := surface.FollowSelection(ctx, selection); err != nil {
+		if _, err := surface.Tabs(ctx); err != nil {
 			t.Fatal(err)
 		}
 		if _, current, _ := surface.State(); current != wantURL {
@@ -94,11 +82,38 @@ func TestBrowserSurfaceFollowsExplicitSelectionIntegration(t *testing.T) {
 		}
 	}
 	selectAndFollow(b.TabID, b.TargetID, server.URL+"/b")
+	tool := agenttool.NewBrowserTool(root, true)
+	binding := agenttool.ConfigureBrowserSession([]agentcore.AgentTool{tool}, "foreground-integration")
+	binding.Select(browserbinding.Endpoint{Socket: socket, BrowserID: info.BrowserID})
+	prepared, err := tool.PrepareCall(ctx, []byte(`{"action":"snapshot"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := surface.ActivateTab(ctx, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Execute(ctx, "already-prepared", prepared, nil)
+	details, _ := result.Details.(map[string]any)
+	if err != nil || result.IsError || details["url"] != server.URL+"/b" {
+		t.Fatalf("manual switch redirected an already prepared Agent call: %+v %v", result, err)
+	}
+	prepared, err = tool.PrepareCall(ctx, []byte(`{"action":"snapshot"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err = tool.Execute(ctx, "next-call", prepared, nil)
+	details, _ = result.Details.(map[string]any)
+	if err != nil || result.IsError || details["url"] != server.URL+"/a" {
+		t.Fatalf("next Agent call did not follow manual foreground: %+v %v", result, err)
+	}
 	selectAndFollow(a.ID, a.TargetID, server.URL+"/a")
 	if _, _, err := client.Action(ctx, "screenshot", map[string]any{"full": false}, browserctl.Target{BrowserID: info.BrowserID, TabID: b.TabID, TargetID: b.TargetID}, 15*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if pending, err := surface.PendingSelection(ctx); err != nil || pending != nil {
-		t.Fatalf("background screenshot caused a follow: %+v, %v", pending, err)
+	if _, err := surface.Tabs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, current, _ := surface.State(); current != server.URL+"/a" {
+		t.Fatalf("background screenshot changed the foreground: %q", current)
 	}
 }

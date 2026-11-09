@@ -15,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/browserctl"
 )
 
 type browserWindowUpdater interface {
@@ -33,9 +34,8 @@ type browserWindowState struct {
 	err           string
 	tabs          []appsession.BrowserTab
 	pointerDown   bool
-	pendingFollow *appsession.BrowserSelection
-	following     *appsession.BrowserSelection
 	pendingManual func(context.Context) error
+	frameTarget   browserctl.Target
 
 	frameW, frameH float32
 	viewW, viewH   float32
@@ -69,13 +69,12 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 }
 
 func (a *App) closeBrowserPanel() {
-	a.clearBrowserAutoOpen()
 	if a.browserCancel != nil {
 		a.browserCancel()
 		a.browserCancel = nil
 	}
 	if a.browserState != nil {
-		a.browserState.pendingFollow, a.browserState.pendingManual = nil, nil
+		a.browserState.pendingManual = nil
 		a.browserState.viewSequence.Add(1)
 		if a.browserState.surface != nil {
 			a.browserState.surface.Close()
@@ -97,7 +96,7 @@ func (a *App) browserPanel(c *ui.Context) {
 				ui.Text(c, "Browser").FontSize(12).Grow(1)
 			}
 			if subtleButton(c, "×").Tooltip("Close browser panel").Clicked() {
-				a.closeBrowserPanel()
+				a.hideBrowserPanel()
 			}
 		})
 		if a.browserState != nil {
@@ -128,33 +127,19 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 		}
 		state.surface = surface
 		state.title, state.address, state.pageURL = title, rawURL, rawURL
-		drainBrowserFollow(state)
 	})
 
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
-	frames := 0
 	for {
 		sequence := state.viewSequence.Load()
-		if frames%2 == 0 && !state.switching.Load() {
-			selectionCtx, selectionCancel := context.WithTimeout(ctx, 3*time.Second)
-			selection, _ := surface.PendingSelection(selectionCtx)
-			selectionCancel()
-			if selection != nil {
-				win.Update(func() {
-					if ctx.Err() == nil && state.surface == surface {
-						queueBrowserFollow(state, *selection)
-					}
-				})
-			}
-		}
 		frameCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-		raw, frameErr := surface.Frame(frameCtx)
+		frame, frameErr := surface.Capture(frameCtx)
 		stop()
 		var bitmap *ui.Bitmap
 		var width, height float32
 		if frameErr == nil {
-			img, _, decodeErr := image.Decode(bytes.NewReader(raw))
+			img, _, decodeErr := image.Decode(bytes.NewReader(frame.PNG))
 			if decodeErr != nil {
 				frameErr = decodeErr
 			} else {
@@ -163,34 +148,31 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 				width, height = float32(bounds.Dx()), float32(bounds.Dy())
 			}
 		}
-		title, rawURL, inputErr := surface.State()
-		var tabs []appsession.BrowserTab
-		if frames%10 == 0 {
-			tabsCtx, tabsCancel := context.WithTimeout(ctx, 3*time.Second)
-			tabs, _ = surface.Tabs(tabsCtx)
-			tabsCancel()
-		}
-		frames++
+		_, _, inputErr := surface.State()
 		if frameErr == nil {
 			frameErr = inputErr
 		}
 		win.Update(func() {
-			if state.switching.Load() || state.viewSequence.Load() != sequence {
+			if ctx.Err() != nil || state.switching.Load() || state.viewSequence.Load() != sequence {
 				return
 			}
 			if bitmap != nil {
+				if state.frameTarget != frame.Target {
+					state.resizeSequence.Add(1)
+					state.viewportW, state.viewportH = 0, 0
+					state.pointerDown = false
+				}
 				state.bitmap, state.frameW, state.frameH = bitmap, width, height
-			}
-			state.title = title
-			if tabs != nil {
-				state.tabs = tabs
-			}
-			previousURL := state.pageURL
-			state.pageURL = rawURL
-			if state.address == "" || state.address == previousURL {
-				state.address = rawURL
+				state.frameTarget = frame.Target
+				state.title, state.tabs = frame.Title, frame.Tabs
+				previousURL := state.pageURL
+				state.pageURL = frame.URL
+				if state.address == "" || state.address == previousURL {
+					state.address = frame.URL
+				}
 			}
 			if frameErr != nil {
+				state.bitmap, state.frameW, state.frameH = nil, 0, 0
 				state.err = frameErr.Error()
 			} else {
 				state.err = ""
@@ -276,10 +258,10 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 		if bounds.W > 0 && bounds.H > 0 {
 			state.viewW, state.viewH = bounds.W, bounds.H
 			wantW, wantH := int(math.Round(float64(bounds.W))), int(math.Round(float64(bounds.H)))
-			if state.surface != nil && !state.switching.Load() && wantW > 0 && wantH > 0 &&
+			if state.surface != nil && state.frameTarget.TabID != "" && !state.switching.Load() && wantW > 0 && wantH > 0 &&
 				(absInt(wantW-state.viewportW) > 4 || absInt(wantH-state.viewportH) > 4) {
 				state.viewportW, state.viewportH = wantW, wantH
-				surface := state.surface
+				surface, target := state.surface, state.frameTarget
 				sequence := state.resizeSequence.Add(1)
 				go func() {
 					state.resizeMu.Lock()
@@ -289,7 +271,7 @@ func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 					}
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					_ = surface.Resize(ctx, wantW, wantH)
+					_ = surface.ResizeTarget(ctx, target, wantW, wantH)
 				}()
 			}
 		}
@@ -335,45 +317,11 @@ func runBrowserAction(state *browserWindowState, action func(context.Context) er
 // Never leave the old tab's pixels or coordinates interactive after selection
 // changes, and discard frames and resize work issued before that change.
 func runBrowserSelection(state *browserWindowState, action func(context.Context) error) {
-	// A direct GUI choice supersedes any earlier follow request.
-	state.pendingFollow = nil
 	if state.switching.Load() {
 		state.pendingManual = action
 		return
 	}
 	startBrowserSelection(state, action)
-}
-
-func queueBrowserFollow(state *browserWindowState, selection appsession.BrowserSelection) {
-	if state == nil || state.browserID == "" || selection.BrowserID != state.browserID || selection.TabID == "" || selection.TargetID == "" {
-		return
-	}
-	if state.following != nil && *state.following == selection {
-		return
-	}
-	copy := selection
-	state.pendingFollow = &copy
-	drainBrowserFollow(state)
-}
-
-func drainBrowserFollow(state *browserWindowState) {
-	if state.surface == nil || state.win == nil || state.switching.Load() {
-		return
-	}
-	if state.pendingManual != nil {
-		action := state.pendingManual
-		state.pendingManual = nil
-		startBrowserSelection(state, action)
-		return
-	}
-	if state.pendingFollow == nil {
-		return
-	}
-	selection := *state.pendingFollow
-	state.pendingFollow = nil
-	state.following = &selection
-	surface := state.surface
-	startBrowserSelection(state, func(ctx context.Context) error { return surface.FollowSelection(ctx, selection) })
 }
 
 func startBrowserSelection(state *browserWindowState, action func(context.Context) error) {
@@ -398,7 +346,6 @@ func startBrowserSelection(state *browserWindowState, action func(context.Contex
 				return
 			}
 			state.switching.Store(false)
-			state.following = nil
 			state.viewportW, state.viewportH = 0, 0
 			if tabs != nil {
 				state.tabs = tabs
@@ -406,7 +353,10 @@ func startBrowserSelection(state *browserWindowState, action func(context.Contex
 			if err != nil {
 				state.err = err.Error()
 			}
-			drainBrowserFollow(state)
+			if next := state.pendingManual; next != nil {
+				state.pendingManual = nil
+				startBrowserSelection(state, next)
+			}
 		})
 	}()
 }
@@ -421,7 +371,7 @@ func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
 		if !inside {
 			return false
 		}
-		accepted := state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerDown, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
+		accepted := state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserPointerDown, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
 		if accepted && event.Button == 0 {
 			state.pointerDown = true
 		}
@@ -430,7 +380,7 @@ func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
 		if !inside {
 			return false
 		}
-		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerMove, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
+		return state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserPointerMove, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
 	case ui.InputPointerUp:
 		if !inside && state.pointerDown {
 			x, y, inside = browserViewportPointClamped(state, event.X, event.Y)
@@ -439,17 +389,17 @@ func handleBrowserInput(state *browserWindowState, event ui.InputEvent) bool {
 		if !inside {
 			return false
 		}
-		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserPointerUp, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
+		return state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserPointerUp, X: x, Y: y, Button: event.Button, Clicks: event.Clicks})
 	case ui.InputScroll:
 		if !inside {
 			return false
 		}
-		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserScroll, X: x, Y: y, DX: float64(event.DX), DY: float64(event.DY)})
+		return state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserScroll, X: x, Y: y, DX: float64(event.DX), DY: float64(event.DY)})
 	case ui.InputText:
-		return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserText, Text: event.Text})
+		return state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserText, Text: event.Text})
 	case ui.InputKeyDown:
 		if key := browserKey(event.Key); key != "" {
-			return state.surface.Input(appsession.BrowserInput{Kind: appsession.BrowserKey, Key: key})
+			return state.surface.InputTarget(state.frameTarget, appsession.BrowserInput{Kind: appsession.BrowserKey, Key: key})
 		}
 	}
 	return false

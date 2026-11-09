@@ -140,6 +140,7 @@ func (c *Controller) installProjectSession(ctx context.Context, next projectRunt
 	c.opt.Credentials, c.opt.Memory, c.opt.Cwd = next.env.Credentials, next.env.Memory, next.env.Cwd
 
 	c.header, c.agentCtx, c.live = header, agentCtx, next.live
+	c.browser = agenttool.ConfigureBrowserSession(next.env.Tools, header.ID)
 	c.reg = run.ToolRegistry(next.env.Tools)
 	c.remind = run.TodoReminders(next.env.Tools)
 	c.schedule = agenttool.ScheduleFromTools(next.env.Tools)

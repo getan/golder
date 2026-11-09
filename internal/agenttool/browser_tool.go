@@ -33,6 +33,7 @@ import (
 	_ "image/png"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserbinding"
 	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/permissions"
@@ -60,23 +61,23 @@ func NewBrowserTool(cwd string, allowControl bool) *BrowserTool {
 		cwd: cwd, allowControl: allowControl,
 		Control: NewControlGuard(cwd),
 	}
-	t.newClient = func() (*browserctl.Client, error) { return browserctl.Dial(t.socketPath()) }
 	return t
 }
 
 // BrowserTool is the browser facade.
 type BrowserTool struct {
 	Control *ControlGuard
-	// newClient resolves the control socket. Tests replace it with a client
-	// backed by a stub transport, so no real Unix socket is needed.
+	// newClient is an optional test transport. Production dials the socket
+	// captured at call start, never a binding that may change during review.
 	newClient    func() (*browserctl.Client, error)
 	newTuios     func(context.Context) (*tuiosctl.Client, error)
 	cwd          string
 	allowControl bool
 	discover     func(context.Context) browserDiscovery
 
-	// lastTab is the last tab explicitly opened or selected by this tool. It
-	// remains pinned even when Chromium changes its globally active tab.
+	// Legacy standalone/external hosts have no conversation view. Their explicit
+	// pin must not follow a globally active tab belonging to another frontend.
+	// Conversation tools use only ControlGuard.browserBinding and host Info.
 	tabMu        sync.Mutex
 	lastTab      string
 	lastTargetID string
@@ -86,6 +87,21 @@ type BrowserTool struct {
 }
 
 func (t *BrowserTool) Name() string { return "browser" }
+
+func (t *BrowserTool) clientForSocket(socket string) (*browserctl.Client, error) {
+	if t.newClient != nil {
+		return t.newClient()
+	}
+	return browserctl.Dial(socket)
+}
+
+func (t *BrowserTool) rememberStandaloneTarget(tab, target string) {
+	if t.Control.binding() == nil {
+		t.tabMu.Lock()
+		t.lastTab, t.lastTargetID = tab, target
+		t.tabMu.Unlock()
+	}
+}
 
 const browserToolUseHint = " Use this tool rather than launching `golder browse` or `kitty-browse` through bash: " +
 	"the browser tool owns the pane identity, control socket and cleanup. " +
@@ -127,6 +143,7 @@ func (t *BrowserTool) selectionHint() string {
 		return " A tab argument observes that tab in the background and does not change what the person sees; ask the parent to select the main working tab when appropriate."
 	}
 	return " When starting or returning to the primary working tab, explicitly use tab_select with its tab ID so the person sees the working page in the browser pane or GUI. " +
+		"In a conversation, an omitted tab follows the current foreground, including manual GUI/TUI tab changes; already prepared calls stay pinned. " +
 		"A tab argument on snapshot, screenshot, click or other actions targets that tab without switching the visible page; keep brief background observations in the background. " +
 		"This switches the browser tab, not the operating-system window. Never use tab_select to resume or bypass a paused browser."
 }
@@ -178,8 +195,9 @@ const browserReadSchema = `{
   "properties":{
     "action":{"type":"string","enum":["list","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","status"]},
     "browser":{"type":"string","description":"Exact browser identity, pinned before review."},
+    "socket":{"type":"string","description":"Prepared browser binding fact; never a model-supplied capability."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
-    "tab":{"type":"string","description":"Tab id from list; omit for the pinned tab, or a safe active tab if none is pinned."},
+    "tab":{"type":"string","description":"Tab id from list; omit for the conversation foreground. Standalone external browsers retain their explicit pin."},
     "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
@@ -214,8 +232,8 @@ const browserControlSchema = `{
     "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: use a separate named project-scoped profile. Omit for the persistent project-shared default; other names need exact first-use confirmation. Never a personal Chrome profile or filesystem path."},
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
-    "socket":{"type":"string","description":"Prepared target fact for quit; never a model-supplied capability."},
-    "tab":{"type":"string","description":"Tab id from list; omit for the pinned tab, or a safe active tab if none is pinned."},
+    "socket":{"type":"string","description":"Prepared browser binding fact; never a model-supplied capability."},
+    "tab":{"type":"string","description":"Tab id from list; omit for the conversation foreground. Standalone external browsers retain their explicit pin."},
     "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
     "compact":{"type":"boolean","description":"For snapshot: compact output."},
@@ -405,10 +423,19 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		return t.listInstances(ctx), nil
 	}
 	selectedSocket := t.socketPath()
+	binding := t.Control.binding()
+	var bindingState browserbinding.Snapshot
+	if binding != nil {
+		bindingState = binding.Snapshot()
+		selectedSocket = bindingState.Endpoint.Socket
+	}
+	if a.Socket != "" && a.Socket != selectedSocket {
+		return browserError(errors.New("browser binding changed after review; nothing was sent")), nil
+	}
 	if a.Action == "quit" && (a.Browser == "" || a.Socket == "" || a.Socket != selectedSocket) {
 		return browserError(errors.New("quit requires the browser identity and socket pinned before review")), nil
 	}
-	c, err := t.newClient()
+	c, err := t.clientForSocket(selectedSocket)
 	if err != nil {
 		// The dial's own error names an environment variable; inside a pane the
 		// answer is a tool call, so say that instead.
@@ -418,6 +445,7 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		}
 		return browserError(err), nil
 	}
+	defer c.CloseIdleConnections()
 	info, err := c.Info(ctx)
 	if err != nil {
 		return browserError(fmt.Errorf("selected socket %q: %w", t.socketPath(), err)), nil
@@ -453,6 +481,9 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		defer cancel()
 		if err := c.Quit(quitCtx); err != nil {
 			return browserActionError(a.Action, err), nil
+		}
+		if binding != nil {
+			binding.Clear(bindingState)
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
@@ -496,7 +527,7 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 			if err := controlcap.BrowserURL(tab.URL); err != nil {
 				// Closing a known Chromium-internal target in our own browser is
 				// cleanup, not navigation or permission to inspect that page.
-				if a.Action != "tab_close" || strings.TrimSpace(a.Tab) == "" || !strings.HasPrefix(tab.URL, "chrome://") || !t.Control.ownsBrowser(ctx, info.BrowserID, t.socketPath()) {
+				if a.Action != "tab_close" || strings.TrimSpace(a.Tab) == "" || !strings.HasPrefix(tab.URL, "chrome://") || !t.Control.ownsBrowser(ctx, info.BrowserID, selectedSocket) {
 					return browserError(err), nil
 				}
 			}
@@ -558,7 +589,13 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	if a.Action == "tab_new" && (meta.BrowserID != info.BrowserID || meta.TabID == "" || meta.TargetID == "" || meta.URL == "" || controlcap.BrowserURL(meta.URL) != nil) {
 		return browserError(errors.New("new tab identity could not be confirmed; call list before another action")), nil
 	}
-	if a.Action == "tab_select" || a.Action == "tab_close" || a.Action == "tab_new" {
+	if binding != nil {
+		foreground, foregroundErr := browserctl.Foreground(info)
+		foregroundNavigation := a.Action == "navigate" && foregroundErr == nil && foreground.ID == target.TabID && foreground.TargetID == target.TargetID
+		if a.Action == "tab_select" || a.Action == "tab_new" || foregroundNavigation {
+			binding.Present(bindingState)
+		}
+	} else if a.Action == "tab_select" || a.Action == "tab_close" || a.Action == "tab_new" {
 		t.tabMu.Lock()
 		switch a.Action {
 		case "tab_select":
@@ -574,11 +611,11 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	}
 	details := map[string]any{"action": action, "tab": meta.TabID, "url": meta.URL}
 	if a.Action == "tab_select" {
-		// The GUI follows only a confirmed selection from this exact browser and
-		// target. Older hosts lack the optional cross-process revision signal.
+		// Audit facts only. Presentation observes the binding and host directly,
+		// never these transcript details.
 		details["browser"] = info.BrowserID
 		details["target_id"] = target.TargetID
-		details["socket"] = t.socketPath()
+		details["socket"] = selectedSocket
 		var updated browserctl.Info
 		if json.Unmarshal(result, &updated) == nil && updated.BrowserID == info.BrowserID && updated.ExplicitSelection != nil &&
 			updated.ExplicitSelection.TabID == target.TabID && updated.ExplicitSelection.TargetID == target.TargetID {
@@ -631,10 +668,21 @@ func pinTab(info browserctl.Info, want string) (browserctl.Target, error) {
 	return browserctl.Target{}, fmt.Errorf("tab %q is not open; call list and use its id", want)
 }
 
-// resolveTarget preserves both IDs across calls. A disappeared or replaced
-// pin is an error, never permission to silently act on a different target.
+// Conversation views use the host foreground, shared with GUI and TUI manual
+// selection. PrepareCall then pins the exact target for the duration of review
+// and execution. Standalone external hosts retain their legacy explicit pin.
 func (t *BrowserTool) resolveTarget(info browserctl.Info, want string) (browserctl.Target, error) {
 	explicit := strings.TrimSpace(want) != ""
+	if t.Control.binding() != nil {
+		if explicit {
+			return pinTab(info, want)
+		}
+		tab, err := browserctl.Foreground(info)
+		if err != nil {
+			return browserctl.Target{}, err
+		}
+		return browserctl.Target{BrowserID: info.BrowserID, TabID: tab.ID, TargetID: tab.TargetID}, nil
+	}
 	t.tabMu.Lock()
 	id, targetID := t.lastTab, t.lastTargetID
 	t.tabMu.Unlock()
@@ -680,9 +728,7 @@ func (t *BrowserTool) selectOpenedTabWithClient(ctx context.Context, c *browserc
 				if err := activateBrowserTab(ctx, c, info, tab); err != nil {
 					return err
 				}
-				t.tabMu.Lock()
-				t.lastTab, t.lastTargetID = tab.ID, tab.TargetID
-				t.tabMu.Unlock()
+				t.rememberStandaloneTarget(tab.ID, tab.TargetID)
 				return nil
 			}
 		}
@@ -1162,6 +1208,12 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	t.tabMu.Lock()
 	pinnedTab, pinnedTarget := t.lastTab, t.lastTargetID
 	t.tabMu.Unlock()
+	if t.Control.binding() != nil {
+		pinnedTab, pinnedTarget = "", ""
+		if foreground, err := browserctl.Foreground(info); err == nil {
+			pinnedTab, pinnedTarget = foreground.ID, foreground.TargetID
+		}
+	}
 	tab, found, err := matchingBrowserTab(info, url, pinnedTab, pinnedTarget)
 	if err != nil {
 		return err
@@ -1170,9 +1222,7 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 		if err := activateBrowserTab(ctx, c, info, tab); err != nil {
 			return err
 		}
-		t.tabMu.Lock()
-		t.lastTab, t.lastTargetID = tab.ID, tab.TargetID
-		t.tabMu.Unlock()
+		t.rememberStandaloneTarget(tab.ID, tab.TargetID)
 		return nil
 	}
 	target, err := t.resolveTarget(info, "")
@@ -1192,9 +1242,7 @@ func (t *BrowserTool) showURL(ctx context.Context, socket, url string) error {
 	if _, _, err := c.Action(ctx, "navigate", map[string]any{"url": url}, target, 60*time.Second); err != nil {
 		return err
 	}
-	t.tabMu.Lock()
-	t.lastTab, t.lastTargetID = target.TabID, target.TargetID
-	t.tabMu.Unlock()
+	t.rememberStandaloneTarget(target.TabID, target.TargetID)
 	return nil
 }
 
