@@ -18,13 +18,14 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Notary processing can take longer than the build itself; leave room for
+    # slow Apple responses without allowing a runner to wait indefinitely.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - { name: macos-arm64, os: macos-15, platform: "darwin/arm64", kind: macos }
-          - { name: macos-amd64, os: macos-15-intel, platform: "darwin/amd64", kind: macos }
           - { name: windows, os: windows-2022, platform: "windows/amd64", kind: windows }
           - { name: linux, os: ubuntu-22.04, platform: "linux/amd64,linux/arm64", kind: linux }
     steps:
@@ -86,7 +87,6 @@ jobs:
           }
           case "${{ matrix.name }}" in
             macos-arm64) build_lark darwin arm64 gui/resources/darwin-arm64/extensions/lark ;;
-            macos-amd64) build_lark darwin amd64 gui/resources/darwin-amd64/extensions/lark ;;
             windows) build_lark windows amd64 gui/resources/windows-amd64/extensions/lark ;;
             linux)
               build_lark linux amd64 gui/resources/linux-amd64/extensions/lark
@@ -102,6 +102,10 @@ jobs:
             echo "the GUI must not link tuios-mini" >&2
             exit 1
           fi
+
+      - name: Test macOS finalization
+        if: matrix.kind == 'macos'
+        run: go test -count=1 ./gui/tools/finalizemac
 
       - name: Fetch verified terminal libraries
         shell: bash
@@ -183,20 +187,13 @@ jobs:
             -X main.date=${{ github.event.repository.updated_at }}
         run: |
           set -euo pipefail
-          args=(-platform "${{ matrix.platform }}")
-          # macos.notarize in gui/mygo.json is read when the configuration is
-          # validated, on every platform, so a build without a Developer ID and
-          # notary credentials has to opt out explicitly: otherwise Windows and
-          # Linux fail with "notarization needs a Developer ID signing identity".
-          notarize=0
+          # Finalize the signed helper checksum before submitting the DMG.
+          # Other platforms must also opt out of gui/mygo.json's notarization.
+          args=(-platform "${{ matrix.platform }}" -skip-notarize)
           if [[ "${{ matrix.kind }}" == "macos" && -n "${MACOS_SIGNING_IDENTITY:-}" && -n "${APPLE_ID:-}" ]]; then
             args+=(-sign "$MACOS_SIGNING_IDENTITY")
-            notarize=1
           elif [[ "${{ matrix.kind }}" == "macos" ]]; then
             args+=(-sign -) # ad hoc: runs on the machine that built it
-          fi
-          if [[ "$notarize" == "0" ]]; then
-            args+=(-skip-notarize)
           fi
           printf 'mygo build %s\n' "${args[*]}"
           cd gui
@@ -210,6 +207,17 @@ jobs:
             export MACOSX_DEPLOYMENT_TARGET=14.0
           fi
           go run github.com/egoist/mygo/cmd/mygo build "${args[@]}"
+
+      - name: Finalize and notarize macOS package
+        if: matrix.kind == 'macos'
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          app=$(find gui/build -type d -name '*.app' -print -quit)
+          dmg=$(find gui/build -type f -name '*.dmg' -print -quit)
+          test -n "$app" && test -n "$dmg"
+          bash gui/tools/finalizemac/finalize.sh "$app" "$dmg" "${MACOS_SIGNING_IDENTITY:--}"
 
       - name: Verify macOS signing and notarization
         if: matrix.kind == 'macos'
@@ -295,8 +303,7 @@ jobs:
             done < <(find "$app" -type f -print0)
             mib=$(du -sm "$app" | awk '{print $1}')
             echo "installed app size: ${mib} MiB"
-            # The Intel bundle includes the offline renderers and Lark helper;
-            # keep a bounded budget without rejecting its observed 53 MiB.
+            # Keep a bounded budget for the offline renderers and Lark helper.
             test "$mib" -lt 60
           fi
 
@@ -311,40 +318,3 @@ jobs:
             gui/build/**/*.deb
             gui/build/**/PKGBUILD
           if-no-files-found: error
-
-  publish:
-    name: Attach GUI packages to release
-    if: github.event_name == 'push' && github.ref_type == 'tag'
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: golder-gui-*
-          path: gui-artifacts
-
-      - name: Upload packages to GoReleaser's release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          # The independent CLI release workflow may still be building.
-          for attempt in {1..60}; do
-            if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then break; fi
-            if [[ "$attempt" == 60 ]]; then
-              echo '::error::GoReleaser did not create the release within 30 minutes.'
-              exit 1
-            fi
-            sleep 30
-          done
-          mapfile -d '' packages < <(find gui-artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.tar.gz' -o -name '*.deb' \) -print0)
-          if (( ${#packages[@]} == 0 )); then
-            echo '::error::No GUI release packages found.'
-            exit 1
-          fi
-          gh release upload "$RELEASE_TAG" "${packages[@]}"
-

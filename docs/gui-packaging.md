@@ -4,16 +4,16 @@
 single executables, while a desktop app needs a bundle, a disk image, an
 installer or a system package to be double-clickable.
 
-The packaging boundary below implements the accepted optimization target:
-separate macOS architectures, no bundled full CLI or Chromium, a tag-derived
-app version, and a per-architecture installed-size gate. See
+The packaging boundary below uses Apple Silicon for macOS GUI releases, no
+bundled full CLI or Chromium, a tag-derived app version, and an installed-size
+gate. The CLI retains Intel Mac support independently. See
 [`gui-ux-optimization.md`](gui-ux-optimization.md).
 
 ## Artifacts
 
 | Platform | Output under `gui/build/<os>-<arch>/` | How a person opens it |
 |---|---|---|
-| macOS | `Golder GUI.app`, `golder-gui-<version>-<arch>.dmg` | mount the DMG, drag to Applications, double-click |
+| macOS (Apple Silicon only) | `Golder GUI.app`, `golder-gui-<version>-arm64.dmg` | mount the DMG, drag to Applications, double-click |
 | Windows | `Golder GUI.exe`, `golder-gui-setup-<version>-amd64.exe` | run the installer, then the Start-menu shortcut |
 | Linux | `golder-gui`, `.desktop`, `golder-gui-<version>-linux-<arch>.tar.gz` (with `install.sh`), `.deb`, `PKGBUILD` | `install.sh`, `apt install ./…deb`, or `makepkg -si` |
 
@@ -81,8 +81,9 @@ verified". Two ways forward:
    - `APPLE_ID`, `APPLE_APP_PASSWORD`, `APPLE_TEAM_ID` for `notarytool`
 
    With those present the workflow imports the certificate, creates the
-   `golder-notary` keychain profile that `gui/mygo.json` names, and lets
-   `mygo build` sign, notarize and staple.
+   `golder-notary` keychain profile that `gui/mygo.json` names, and uses MyGo
+   to sign the app. The finalization step hashes the signed helper, re-signs
+   the outer app, then packages, notarizes and staples the DMG.
 
 2. **No Apple Developer Program** — the app still runs, but each machine has to
    allow it once. The wording differs by macOS version:
@@ -138,8 +139,7 @@ None of them are required for a local build.
 
 | Runner | Target | Notes |
 |---|---|---|
-| `macos-15` | `darwin/arm64` | separate Apple Silicon DMG; release tags require signing and notarization |
-| `macos-15-intel` | `darwin/amd64` | separate Intel DMG; release tags require signing and notarization |
+| `macos-15` | `darwin/arm64` | Apple Silicon DMG; release tags require signing and notarization |
 | `windows-2022` | `windows/amd64` | NSIS installer; needs NSIS, which MyGo installs |
 | `ubuntu-22.04` | `linux/amd64,linux/arm64` | tarball + `install.sh`, `.deb`, `PKGBUILD` |
 
@@ -147,16 +147,15 @@ Before upload, CI verifies that the GUI dependency graph excludes tuios-mini,
 that no full CLI or Chromium exists in the bundle, and that each macOS `.app`
 contains the checksummed Lark helper and remains below 60 MiB. It verifies the
 helper checksum after signing, the Developer ID team and signature, and the DMG's
-stapled notarization ticket. The size limit leaves headroom for the Intel build
-with offline renderers (observed at 53 MiB). Release tags require all six macOS
+stapled notarization ticket. Release tags require all six macOS
 secrets; a manual run with none may still produce an ad-hoc build, but a partial
 configuration fails.
 
-On a tag, after every GUI build passes, the publish job waits for the GitHub
-Release created by GoReleaser and attaches the DMG, Windows executables, Linux
-tarballs and Debian packages. The GUI workflow fails if the release does not
-appear within 30 minutes; rerun the failed publish job after resolving the CLI
-release failure. Its artifacts are also available from the Actions run.
+On a tag, after every GUI build passes, `.github/workflows/gui-attach.yml`
+waits for the GitHub Release created by GoReleaser and attaches the DMG, Windows
+installer, Linux tarballs and Debian packages. If the release does not appear,
+rerun the attach workflow after resolving the CLI release failure. GUI artifacts
+are also available from the Actions run.
 
 ## Linux notes
 

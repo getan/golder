@@ -48,7 +48,7 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用，�
 
 ### 桌面应用
 
-从 [Releases](https://github.com/getan/golder/releases) 下载适合系统的 **Golder GUI**：macOS `.dmg`、Windows 安装程序，或 Linux 软件包 / 压缩包。GUI 与 CLI 分开安装；打包和平台依赖见 [GUI 发布说明](docs/gui-packaging.md)。
+从 [Releases](https://github.com/getan/golder/releases) 下载适合系统的 **Golder GUI**：Apple Silicon Mac 的 `.dmg`、Windows 安装程序，或 Linux 软件包 / 压缩包。新版 macOS GUI 不再支持 Intel Mac，CLI 仍然支持。GUI 与 CLI 分开安装；打包和平台依赖见 [GUI 发布说明](docs/gui-packaging.md)。
 
 **macOS Gatekeeper 提示**：当前 GUI 发布包使用临时签名，尚未经过 Apple 公证，首次打开时 macOS 可能提示无法验证开发者。这是当前签名状态下的预期提示，不代表所有安全告警都可忽略。请仅从官方 Releases 下载，确认来源后，可在 **系统设置 → 隐私与安全性** 中选择「仍要打开」。我们计划近期加入 Apple Developer ID 签名和公证，以消除这类未验证开发者提示；辅助功能、屏幕录制等其他权限提示仍可能出现。详见 [macOS 安装说明](docs/gui-packaging.md#macos-what-makes-it-double-clickable-elsewhere)。
 
