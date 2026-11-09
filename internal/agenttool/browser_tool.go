@@ -99,9 +99,27 @@ func (t *BrowserTool) useHint() string {
 	if NativeBrowserLauncherAvailable() {
 		return " In the desktop GUI, open starts the native browser host; the Browser icon opens its interactive Bitmap surface in the right drawer. The browser tool owns the control socket and cleanup. " +
 			"The default open uses a persistent project-shared profile and remembers logins; profile:<name> selects a separate project-scoped identity whose first use needs exact operator confirmation. " +
-			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification." + t.selectionHint()
+			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification." + t.selectionHint() + t.cleanupHint(true)
 	}
-	return browserToolUseHint + t.selectionHint()
+	return browserToolUseHint + t.selectionHint() + t.cleanupHint(false)
+}
+
+func (t *BrowserTool) cleanupHint(native bool) string {
+	if !t.allowControl {
+		return " Leave browser cleanup to the parent agent."
+	}
+	common := " When finished with a browser you newly started for this task, clean it up unless the person wants it left open or it is paused for verification. Never close an adopted or user-owned browser merely because the task ended. "
+	if native {
+		return common + "In the desktop GUI, request browser quit for that exact owned view and inspect the result; its drawer is not a tuios pane. A successful quit can be asynchronous: if exit_confirmed is false, inspect browser list and report any unconfirmed exit honestly. A closed view or missing socket alone does not prove that the shared Chromium process or profile has exited."
+	}
+	return common + "For an owned browser pane, prefer tuios close with its exact recorded window id before issuing browser quit: close requests graceful shutdown, waits for process exit, then removes the pane. Verify its result and that the pane is gone. Never use force automatically; if identity or exit cannot be confirmed, inspect and report the remaining pane."
+}
+
+func (t *BrowserTool) quitPendingHint() string {
+	if NativeBrowserLauncherAvailable() {
+		return "Shutdown was accepted, but exit is not confirmed. Inspect browser list and report uncertainty; a missing view socket does not prove shared Chromium or its profile has exited."
+	}
+	return "Shutdown was accepted, but exit is not confirmed. Inspect browser list and the exact owned pane with tuios list/wait; verify exit and pane removal. Do not automatically repeat quit or force-close an unverified pane."
 }
 
 func (t *BrowserTool) selectionHint() string {
@@ -439,7 +457,7 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(map[string]any{
 				"ok": true, "browser": info.BrowserID, "quitting": true, "exit_confirmed": false,
-				"hint": "Shutdown was accepted but exit is not yet confirmed; use list before reusing the profile.",
+				"hint": t.quitPendingHint(),
 			}))},
 			Details: map[string]any{"action": "quit", "browser": info.BrowserID, "socket": selectedSocket},
 		}, nil
