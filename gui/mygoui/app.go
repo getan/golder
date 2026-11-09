@@ -47,7 +47,9 @@ type App struct {
 	approvalReveal string
 
 	draft               string
-	attachments         []string
+	attachments         []appsession.UserAttachment
+	clipboardImage      func() []byte
+	pastedImageSequence uint64
 	drafts              map[string]sessionDraft
 	history             promptHistory
 	historyNav          promptHistoryCursor
@@ -219,7 +221,7 @@ type App struct {
 
 type sessionDraft struct {
 	text        string
-	attachments []string
+	attachments []appsession.UserAttachment
 	list        *ui.ListState
 	historyNav  promptHistoryCursor
 }
@@ -515,11 +517,7 @@ func (a *App) submit(text string) bool {
 	if strings.TrimSpace(text) == "" && len(a.attachments) == 0 {
 		return false
 	}
-	attachments := make([]appsession.UserAttachment, 0, len(a.attachments))
-	for _, path := range a.attachments {
-		attachments = append(attachments, appsession.UserAttachment{Path: path})
-	}
-	if err := a.ctrl.SubmitAttachments(context.Background(), text, attachments); err != nil {
+	if err := a.ctrl.SubmitAttachments(context.Background(), text, a.attachments); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return false
 	}
@@ -1070,7 +1068,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 		a.drafts = make(map[string]sessionDraft)
 	}
 	if a.status.SessionID != "" {
-		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]string(nil), a.attachments...), list: a.list, historyNav: a.historyNav}
+		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]appsession.UserAttachment(nil), a.attachments...), list: a.list, historyNav: a.historyNav}
 	}
 	if a.computerRequestPicker && a.computerSuggested != "" {
 		a.hub.ParkComputerRequest(a.ctrl, a.computerSuggested)
@@ -1084,7 +1082,8 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.models, a.modelsReady, a.modelsErr = nil, false, ""
 	a.applySnapshot(peer.Snapshot())
 	draft := a.drafts[a.status.SessionID]
-	a.draft, a.attachments = draft.text, append([]string(nil), draft.attachments...)
+	delete(a.drafts, a.status.SessionID)
+	a.draft, a.attachments = draft.text, draft.attachments
 	a.historyNav = draft.historyNav
 	a.historyCaretPending = false
 	a.list = draft.list

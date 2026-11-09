@@ -42,7 +42,7 @@ func TestComposerButtonBordersAppearOnlyOnHover(t *testing.T) {
 		t.Run(map[bool]string{false: "light", true: "dark"}[dark], func(t *testing.T) {
 			a := testApp()
 			a.draft = "ready"
-			a.attachments = []string{"/tmp/example.txt"}
+			a.attachments = []appsession.UserAttachment{{Path: "/tmp/example.txt"}}
 			tt := ui.NewTester(a.composer, 900, 300)
 			tt.SetDark(dark)
 			for _, label := range []string{"+", "Approval mode", "test-provider · test-model · off", "Send message", "×"} {

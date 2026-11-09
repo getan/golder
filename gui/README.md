@@ -108,6 +108,10 @@ Two optional surfaces need runtime pieces:
   inputs remain in memory until delivered and persisted in the conversation;
 - composer history: Up/Down browse the same global prompt history as the TUI,
   preserving the current draft and normal caret movement within multiline text;
+- image paste: paste a copied image into the composer with Cmd+V on macOS or
+  Ctrl+V on Linux and Windows, or use the Edit menu. Each image appears as a
+  removable attachment (maximum 20 MiB) and is sent as multimodal content.
+  Clipboard images stay in memory while drafted; ordinary text paste is unchanged;
 - approvals: consent and trust questions answered inline; closing the window
   fails every pending question closed;
 - configuration: a shared Settings page for provider, model, base URL, protocol

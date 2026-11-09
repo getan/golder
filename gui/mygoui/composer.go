@@ -3,6 +3,7 @@ package mygoui
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -46,6 +47,7 @@ func (a *App) composer(c *ui.Context) {
 			input := ui.TextAreaBase(c, &a.draft).Lines(1, 8).Grow(1).
 				Padding(12, 14, 8, 14).
 				Placeholder(placeholder).Label("Message input").Disabled(a.status.ReadOnly)
+			input.OnPaste(func(string) bool { return a.pasteClipboardImage() })
 			if a.historyCaretPending {
 				if a.draft == a.historyCaretText {
 					end := utf8.RuneCountInString(a.draft)
@@ -97,13 +99,18 @@ func (a *App) composer(c *ui.Context) {
 					if shown > 3 {
 						shown = 3
 					}
-					for i := 0; i < shown; i++ {
+					for i := 0; i < shown && i < len(a.attachments); i++ {
 						i := i
-						ui.Row(c.Key(a.attachments[i])).Padding(3, 7).Gap(5).Radius(7).Background(t.SurfacePressed).
+						attachment := a.attachments[i]
+						label, tooltip := attachment.Name, attachment.Name
+						if attachment.ImagePNG == nil {
+							label, tooltip = filepath.Base(attachment.Path), attachment.Path
+						}
+						ui.Row(c.Key(fmt.Sprintf("attachment-%d-%s", i, tooltip))).Padding(3, 7).Gap(5).Radius(7).Background(t.SurfacePressed).
 							AlignItems(ui.Center).Children(func() {
-							ui.Text(c, filepath.Base(a.attachments[i])).FontSize(11).MaxWidth(150).SingleLine().Ellipsis("…").Tooltip(a.attachments[i])
+							ui.Text(c, label).FontSize(11).MaxWidth(150).SingleLine().Ellipsis("…").Tooltip(tooltip)
 							if subtleButton(c, "×").Tooltip("Remove attachment").Clicked() {
-								a.attachments = append(a.attachments[:i], a.attachments[i+1:]...)
+								a.attachments = slices.Delete(a.attachments, i, i+1)
 							}
 						})
 					}
@@ -202,6 +209,32 @@ func composerControlPalette(t *ui.Theme, running, ready bool) (face, hover, pres
 	return t.SurfacePressed, t.SurfaceHover, t.Border, t.Text
 }
 
+// Paste is intercepted only for images. Text and empty clipboards continue
+// through MyGo's normal editor path, including its selection and undo handling.
+func (a *App) pasteClipboardImage() bool {
+	if a.status.ReadOnly {
+		return false
+	}
+	read := a.clipboardImage
+	if read == nil {
+		read = mygo.Clipboard.ReadImage
+	}
+	data := read()
+	if len(data) == 0 {
+		return false
+	}
+	name := fmt.Sprintf("Pasted image %d.png", a.pastedImageSequence+1)
+	image, err := appsession.NewClipboardImage(name, data)
+	if err != nil {
+		a.banner, a.bannerErr = err.Error(), true
+		return true
+	}
+	a.pastedImageSequence++
+	a.attachments = append(a.attachments, image)
+	a.banner, a.bannerErr = "", false
+	return true
+}
+
 func (a *App) pickAttachments() {
 	win := a.win
 	go func() {
@@ -217,12 +250,12 @@ func (a *App) pickAttachments() {
 				return
 			}
 			seen := make(map[string]bool, len(a.attachments)+len(paths))
-			for _, path := range a.attachments {
-				seen[path] = true
+			for _, attachment := range a.attachments {
+				seen[attachment.Path] = true
 			}
 			for _, path := range paths {
 				if !seen[path] {
-					a.attachments = append(a.attachments, path)
+					a.attachments = append(a.attachments, appsession.UserAttachment{Path: path})
 					seen[path] = true
 				}
 			}

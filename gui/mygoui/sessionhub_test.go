@@ -109,7 +109,12 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 		t.Fatal("first session did not start")
 	}
 	a.applySnapshot(first.Snapshot())
-	a.draft, a.attachments = "draft one", []string{"one.txt"}
+	a.draft, a.attachments = "draft one", []appsession.UserAttachment{{Path: "one.txt"}}
+	image, err := appsession.NewClipboardImage("Pasted image 1.png", clipboardTestPNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.attachments = append(a.attachments, image)
 	a.historyNav = promptHistoryCursor{index: 1, draft: "original draft", browsing: true}
 	firstList := &ui.ListState{}
 	a.list = firstList
@@ -124,7 +129,7 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	a.draft = "draft two"
 	a.list = &ui.ListState{}
 	a.resume(first.SessionID())
-	if a.ctrl != first || !a.status.Running || a.draft != "draft one" || a.list != firstList || len(a.attachments) != 1 || a.attachments[0] != "one.txt" {
+	if a.ctrl != first || !a.status.Running || a.draft != "draft one" || a.list != firstList || len(a.attachments) != 2 || a.attachments[0].Path != "one.txt" || a.attachments[1].Name != image.Name || len(a.attachments[1].ImagePNG) == 0 {
 		t.Fatalf("draft was not restored: %q %+v", a.draft, a.attachments)
 	}
 	if a.historyNav != (promptHistoryCursor{index: 1, draft: "original draft", browsing: true}) {

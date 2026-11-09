@@ -3,9 +3,11 @@ package appsession
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +32,31 @@ const (
 	maxImageAttachmentBytes = 20 << 20
 )
 
-// UserAttachment is a local file explicitly selected in the native composer
-// picker. Images become multimodal blocks; small text files are inlined.
+// UserAttachment is either a selected local file or an in-memory clipboard
+// PNG. Images become multimodal blocks; small text files are inlined.
 type UserAttachment struct {
-	Path string
+	Path     string
+	Name     string
+	ImagePNG []byte
+}
+
+// NewClipboardImage validates and snapshots clipboard PNG data without writing
+// private image contents to disk. The same 20 MiB limit applies to file images.
+func NewClipboardImage(name string, data []byte) (UserAttachment, error) {
+	if err := validateClipboardImage(data); err != nil {
+		return UserAttachment{}, err
+	}
+	return UserAttachment{Name: name, ImagePNG: bytes.Clone(data)}, nil
+}
+
+func validateClipboardImage(data []byte) error {
+	if len(data) > maxImageAttachmentBytes {
+		return errors.New("clipboard image must be 20 MiB or smaller")
+	}
+	if _, err := png.DecodeConfig(bytes.NewReader(data)); err != nil {
+		return errors.New("clipboard image is not a valid PNG")
+	}
+	return nil
 }
 
 // Submit starts a new turn, or queues the prompt for the active turn's next
@@ -209,6 +232,18 @@ func buildUserAttachments(text string, attachments []UserAttachment) (agentcore.
 	}
 	names := make([]string, 0, len(attachments))
 	for _, attachment := range attachments {
+		if attachment.ImagePNG != nil {
+			if err := validateClipboardImage(attachment.ImagePNG); err != nil {
+				return nil, "", err
+			}
+			name := filepath.Base(attachment.Name)
+			if name == "." || name == "" {
+				name = "Pasted image.png"
+			}
+			names = append(names, name)
+			content = append(content, agentcore.NewImageContent(base64.StdEncoding.EncodeToString(attachment.ImagePNG), "image/png"))
+			continue
+		}
 		path := strings.TrimSpace(attachment.Path)
 		if path == "" {
 			continue

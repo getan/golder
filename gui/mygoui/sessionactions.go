@@ -194,6 +194,7 @@ func (a *App) commitDelete() {
 		a.banner, a.bannerErr = err.Error(), true
 		return
 	}
+	delete(a.drafts, a.deleteID)
 	a.banner, a.bannerErr = "Session deleted.", false
 	a.refreshSessions()
 }
