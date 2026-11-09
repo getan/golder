@@ -4,6 +4,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/explore"
 )
 
 // transcriptRow projects a tool and its review details into one virtual list
@@ -15,6 +16,7 @@ type transcriptRow struct {
 	placeholder   *appsession.Item
 	notes         []int
 	approvals     []int
+	members       []transcriptRow // consecutive exploration tool rows, if grouped
 }
 
 // toolPresentationKey is only a display association, never an authorization
@@ -101,19 +103,54 @@ func (a *App) projectedTranscriptRows() []transcriptRow {
 		}
 		rows = append(rows, transcriptRow{key: approval.ID, itemIndex: -1, approvalIndex: i})
 	}
-	a.transcriptRows = rows
+	a.transcriptRows = a.groupExploreRows(rows)
 	a.transcriptRowsItems, a.transcriptRowsPending = len(a.items), len(a.pending)
 	a.transcriptRowsDirty = false
-	return rows
+	return a.transcriptRows
+}
+
+// groupExploreRows compacts consecutive native read-only tools after reviews
+// have been associated with their exact calls. Other transcript rows remain
+// boundaries, just as they do in the TUI.
+func (a *App) groupExploreRows(rows []transcriptRow) []transcriptRow {
+	grouped := make([]transcriptRow, 0, len(rows))
+	for _, row := range rows {
+		item, ok := a.transcriptRowItem(row)
+		if ok && item.Kind == appsession.ItemTool && item.Tool != nil && explore.IsTool(item.Tool.Name) {
+			if n := len(grouped); n > 0 && len(grouped[n-1].members) > 0 {
+				grouped[n-1].members = append(grouped[n-1].members, row)
+			} else {
+				// Keep the first call's list identity when a run grows, so the
+				// virtual list retains its scroll anchor during streaming.
+				grouped = append(grouped, transcriptRow{key: row.key, itemIndex: -1, approvalIndex: -1, members: []transcriptRow{row}})
+			}
+			continue
+		}
+		grouped = append(grouped, row)
+	}
+	return grouped
+}
+
+func (a *App) transcriptRowItem(row transcriptRow) (appsession.Item, bool) {
+	if row.itemIndex >= 0 && row.itemIndex < len(a.items) {
+		return a.items[row.itemIndex], true
+	}
+	if row.placeholder != nil {
+		return *row.placeholder, true
+	}
+	return appsession.Item{}, false
 }
 
 func approvalRowIndex(rows []transcriptRow, pending []appsession.ApprovalView, id string) int {
 	for i, row := range rows {
-		if row.approvalIndex >= 0 && pending[row.approvalIndex].ID == id {
+		if len(row.members) > 0 && approvalRowIndex(row.members, pending, id) >= 0 {
+			return i
+		}
+		if row.approvalIndex >= 0 && row.approvalIndex < len(pending) && pending[row.approvalIndex].ID == id {
 			return i
 		}
 		for _, index := range row.approvals {
-			if pending[index].ID == id {
+			if index >= 0 && index < len(pending) && pending[index].ID == id {
 				return i
 			}
 		}
@@ -122,16 +159,16 @@ func approvalRowIndex(rows []transcriptRow, pending []appsession.ApprovalView, i
 }
 
 func (a *App) transcriptRowView(c *ui.Context, row transcriptRow) {
+	if len(row.members) > 0 {
+		a.exploreGroupView(c, row)
+		return
+	}
 	if row.approvalIndex >= 0 {
 		a.approvalCard(c, a.pending[row.approvalIndex])
 		return
 	}
-	var item appsession.Item
-	if row.itemIndex >= 0 {
-		item = a.items[row.itemIndex]
-	} else if row.placeholder != nil {
-		item = *row.placeholder
-	} else {
+	item, ok := a.transcriptRowItem(row)
+	if !ok {
 		return
 	}
 	if item.Kind != appsession.ItemTool {

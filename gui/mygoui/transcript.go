@@ -77,12 +77,21 @@ func (a *App) toolCard(c *ui.Context, it appsession.Item) {
 }
 
 func (a *App) toolCardDetails(c *ui.Context, it appsession.Item, notes, approvals []int) {
+	a.toolCardDetailsWithDefault(c, it, notes, approvals, false)
+}
+
+func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, notes, approvals []int, defaultOpen bool) {
 	t := c.Theme()
 	st := it.Tool
 	if st == nil {
 		return
 	}
 	head := toolHeadline(*st)
+	if defaultOpen {
+		if marker := exploreEnvelopeMarker(exploreEnvelope(st)); marker != "" {
+			head += " " + marker
+		}
+	}
 	if len(approvals) > 0 {
 		head += " · approval required"
 	}
@@ -97,7 +106,7 @@ func (a *App) toolCardDetails(c *ui.Context, it appsession.Item, notes, approval
 		head += " · " + strings.Join(outcomes, ", ")
 	}
 	open, known := a.toolOpen[it.ID]
-	if !known && len(approvals) > 0 {
+	if !known && (defaultOpen || len(approvals) > 0) {
 		open = true
 	}
 	ui.Collapsible(c.Key(it.ID), head, &open, func() {

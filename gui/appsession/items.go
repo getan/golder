@@ -173,6 +173,7 @@ func (c *Controller) seed(history []agentcore.Message) {
 				st := &ToolState{ID: call.ID, Name: call.Name, Input: decodeArgs(call.Arguments)}
 				if res, ok := results[call.ID]; ok {
 					st.Output = agentcore.ContentToText(res.Content)
+					st.Details = cloneAnyMap(decodeArgsAny(res.Details))
 					st.Error = res.IsError
 					st.Running = false
 				} else {

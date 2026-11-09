@@ -12,31 +12,15 @@ package tui
 // Consecutive reads additionally merge onto one line (`Read a.go, b.go`), the
 // codex shorthand for a burst of file reads.
 
-import "strings"
+import (
+	"strings"
 
-// exploreTools names the read-only exploration tools whose cards coalesce.
-// Deliberately a small, closed set: bash/apply_patch/task calls — anything with
-// side effects or its own rich rendering — always keep their own card, so the
-// group never hides a call the user must see.
-//
-// Parallelism is not the criterion, and neither is the path: view_image reads
-// one local file like read does (it folds in), while webfetch, websearch and
-// memory_search are parallel reads whose RESULT is the thing the user came to
-// see — folding those would replace a page of fetched text with a summary line.
-// A read of a file outside the workspace folds in with everything else, since
-// grouping describes what the model is doing, not where the bytes came from;
-// the summary still prints the absolute path.
-var exploreTools = map[string]bool{
-	"read":       true,
-	"ls":         true,
-	"grep":       true,
-	"find":       true,
-	"view_image": true,
-}
+	"github.com/getan/golder/internal/explore"
+)
 
 // isExploreTool reports whether a tool call is an exploration call.
 func isExploreTool(name string) bool {
-	return exploreTools[strings.ToLower(strings.TrimSpace(name))]
+	return explore.IsTool(name)
 }
 
 // exploreGroup is the state of one coalesced run: the cards in call order and
@@ -103,13 +87,13 @@ func (g exploreGroup) render(theme Theme, width int) string {
 	b.WriteString(g.header(theme) + groupMarker)
 	indent := "    "
 	for i, row := range rows {
-		line := row.text
+		line := row.Text
 		if groupMarker == "" {
 			// A mixed group says nothing on the header, so each row carries its
 			// own answer rather than the group's: one marker that covered both
 			// a sandboxed read and an unconfined one would be a lie about one of
 			// them.
-			if m := envMarkerFor(row.env); m != "" {
+			if m := envMarkerFor(row.Envelope); m != "" {
 				line += " " + m
 			}
 		}
@@ -197,109 +181,18 @@ func (g exploreGroup) summaryLines() []string {
 	rows := g.summaryRows()
 	out := make([]string, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, r.text)
+		out = append(out, r.Text)
 	}
 	return out
-}
-
-// exploreStepRow is one summary line with the envelope of the calls it names, so
-// a mixed group can mark the rows instead of the header.
-type exploreStepRow struct {
-	text string
-	env  string
 }
 
 // summaryRows is summaryLines with each row's envelope attached. A run of reads
 // merges only while the reads share an envelope: one marker cannot describe two
 // different answers.
-func (g exploreGroup) summaryRows() []exploreStepRow {
-	var (
-		out      []exploreStepRow
-		reads    []string
-		readEnv  string
-		seenRead = map[string]bool{}
-	)
-	flushReads := func() {
-		if len(reads) > 0 {
-			out = append(out, exploreStepRow{text: "Read " + strings.Join(reads, ", "), env: readEnv})
-			reads = nil
-			seenRead = map[string]bool{}
-			readEnv = ""
-		}
-	}
+func (g exploreGroup) summaryRows() []explore.Row {
+	var summary explore.Builder
 	for _, c := range g.cards {
-		verb, detail := c.exploreStep()
-		if verb == "" {
-			continue
-		}
-		if verb == "Read" {
-			if len(reads) > 0 && c.envelope != "" && readEnv != "" && c.envelope != readEnv {
-				flushReads()
-			}
-			if !seenRead[detail] {
-				seenRead[detail] = true
-				reads = append(reads, detail)
-			}
-			if readEnv == "" {
-				readEnv = c.envelope
-			}
-			continue
-		}
-		flushReads()
-		text := verb
-		if detail != "" {
-			text = verb + " " + detail
-		}
-		out = append(out, exploreStepRow{text: text, env: c.envelope})
+		summary.Add(c.name, c.input, c.envelope)
 	}
-	flushReads()
-	return out
-}
-
-// exploreStep names one exploration call for the group summary: the verb to
-// lead with and the detail to show. Each tool contributes what the user would
-// otherwise scan the card for — the file read, the directory listed, the
-// pattern searched (and where). Returns "" when the call has no usable
-// argument yet (the summary then simply omits it).
-func (c toolCard) exploreStep() (verb, detail string) {
-	arg := func(key string) string { return oneLine(argString(c.input[key])) }
-	switch strings.ToLower(strings.TrimSpace(c.name)) {
-	case "read":
-		if p := arg("path"); p != "" {
-			return "Read", p
-		}
-		return "Read", ""
-	case "ls":
-		if p := arg("path"); p != "" {
-			return "List", p
-		}
-		return "List", "."
-	case "grep":
-		pattern := arg("pattern")
-		if pattern == "" {
-			return "Search", ""
-		}
-		if scope := arg("path"); scope != "" {
-			return "Search", pattern + " in " + scope
-		}
-		if glob := arg("glob"); glob != "" {
-			return "Search", pattern + " in " + glob
-		}
-		return "Search", pattern
-	case "find":
-		glob := arg("glob")
-		if glob == "" {
-			return "Find", ""
-		}
-		if scope := arg("path"); scope != "" {
-			return "Find", glob + " in " + scope
-		}
-		return "Find", glob
-	case "view_image":
-		if p := arg("path"); p != "" {
-			return "View", p
-		}
-		return "View", ""
-	}
-	return "", ""
+	return summary.Finish()
 }
