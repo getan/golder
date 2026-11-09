@@ -17,6 +17,7 @@ package agenttool
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,6 +82,7 @@ type BrowserTool struct {
 	lastTargetID string
 	boundSocket  string
 	boundBrowser string
+	boundSession string
 }
 
 func (t *BrowserTool) Name() string { return "browser" }
@@ -1065,8 +1067,12 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 	if url == "" {
 		url = "http://localhost:3000"
 	}
+	name := "browser"
+	if a.NewInstance && t.Control.conversation() != "" && len(t.discovery(ctx).Instances) > 0 {
+		name += "-" + rand.Text()[:8]
+	}
 	if NativeBrowserLauncherAvailable() {
-		socket, err := startNativeBrowserWithProfile(ctx, t.cwd, "browser", url, a.Profile)
+		socket, err := startNativeBrowserWithProfile(ctx, t.cwd, name, url, a.Profile)
 		if err != nil {
 			return browserError(err), nil
 		}
@@ -1089,7 +1095,7 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 			Details: map[string]any{"socket": socket, "started": true, "surface": "native"},
 		}, nil
 	}
-	socket, window, err := startBrowserPaneWithProfile(ctx, t.cwd, "browser", url, a.Profile, t.newTuios)
+	socket, window, err := startBrowserPaneWithProfile(ctx, t.cwd, name, url, a.Profile, t.newTuios)
 	if err != nil {
 		return browserError(err), nil
 	}

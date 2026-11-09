@@ -11,6 +11,23 @@ interactive REPL/TUI.
 
 ## [Unreleased]
 
+## [1.5.67] - 2026-11-09
+
+### Fixed
+- Browser views now belong to conversations, not projects: GUI and TUI sessions
+  keep separate sockets, tab sets and selections while a shared persistent
+  project profile retains logins. Golder pins kitty-browse v0.2.11 and the latest
+  tuios-mini v0.10.45. See [release notes](docs/releases/v1.5.67.md).
+- GUI approvals hide routine allow verdicts outside debug mode, show the exact
+  approval context, and avoid rendering duplicate apply_patch output.
+
+### Added
+- GUI composer Up/Down prompt-history navigation and queued messages during
+  active turns, plus improved macOS desktop-window discovery and SVG source
+  presentation. Updated GUI screenshots and architecture documentation.
+
+## Previous changes (through v1.5.66)
+
 ### Added
 - **Agent-opened native browser drawer in the desktop GUI** (v1.5.53): the GUI
   now advertises the built-in `browser` tool before a socket exists and starts

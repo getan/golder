@@ -477,6 +477,7 @@ func (c *Controller) Close() error {
 	pending := c.pending
 	lock := c.lock
 	computer := c.computerTool
+	cwd, conversation, readOnly := c.cwd, c.header.ID, c.readOnly
 	c.lock = nil
 	c.pending = nil
 	c.mu.Unlock()
@@ -498,6 +499,11 @@ func (c *Controller) Close() error {
 	_ = c.persist()
 	if computer != nil {
 		_ = computer.Session.Close()
+	}
+	if !readOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		agenttool.CloseSessionBrowsers(ctx, cwd, conversation)
+		cancel()
 	}
 	lock.release()
 	agenttool.ClosePaneAgent(c.opt.Tools)

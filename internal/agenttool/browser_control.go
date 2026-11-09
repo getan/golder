@@ -138,7 +138,7 @@ func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persisten
 	if !g.full() || persistent != sharedBrowserProfileName {
 		profileName += "-" + g.id + "-" + rand.Text()[:8]
 	}
-	spec, err := browserPaneSpecWithProfile(cwd, name, profileName, url, persistent)
+	spec, err := browserPaneSpecWithProfile(cwd, name, profileName, url, persistent, g.conversation())
 	if err != nil {
 		return paneSpec{}, err
 	}
@@ -164,5 +164,5 @@ func controlledBrowserSpecWithProfile(g *ControlGuard, cwd, name, url, persisten
 		argv = append(argv, "-golder-startup-report", spec.StartupReport)
 		spec.Argv = append(argv, spec.Argv[2:]...)
 	}
-	return spec, nil
+	return sessionSpec(g, cwd, spec)
 }

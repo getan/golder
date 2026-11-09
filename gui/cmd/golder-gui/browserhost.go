@@ -10,6 +10,7 @@ import (
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browserpool"
 )
 
 // nativeBrowserHosts owns headless Chromium instances opened by the desktop
@@ -18,6 +19,7 @@ import (
 type nativeBrowserHosts struct {
 	mu       sync.Mutex
 	hosts    map[nativeBrowserHost]bool
+	remote   map[*browserhost.RemoteView]func()
 	starting map[context.Context]context.CancelFunc
 	closed   bool
 	start    func(context.Context, browserhost.Options) (nativeBrowserHost, error)
@@ -58,6 +60,31 @@ func newNativeBrowserHosts() *nativeBrowserHosts {
 func (h *nativeBrowserHosts) Start(ctx context.Context, req agenttool.NativeBrowserRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if req.ConversationID != "" {
+		opts, err := browserpool.Options(req.ProfileDir, req.LoginProfile, req.ProxyServer)
+		if err != nil {
+			return err
+		}
+		view, err := browserpool.Open(ctx, opts, req.ConversationID, req.Instance, req.URL)
+		if err != nil {
+			return err
+		}
+		if view.Socket != req.Socket {
+			return fmt.Errorf("shared browser returned another session's socket")
+		}
+		h.mu.Lock()
+		if h.closed {
+			h.mu.Unlock()
+			_ = view.Close()
+			return fmt.Errorf("browser host is shutting down")
+		}
+		if h.remote == nil {
+			h.remote = make(map[*browserhost.RemoteView]func())
+		}
+		h.remote[view] = appsession.RegisterSharedBrowser(view)
+		h.mu.Unlock()
+		return nil
 	}
 	h.mu.Lock()
 	closed := h.closed
@@ -143,7 +170,13 @@ func (h *nativeBrowserHosts) Close() {
 	for host := range h.hosts {
 		hosts = append(hosts, host)
 	}
+	remotes := h.remote
+	h.remote = nil
 	h.mu.Unlock()
+	for view, unregister := range remotes {
+		_ = view.Close()
+		unregister()
+	}
 	for _, cancel := range pending {
 		cancel()
 	}

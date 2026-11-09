@@ -20,6 +20,7 @@ import (
 	"github.com/getan/golder/gui/mygoui"
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/run"
@@ -36,6 +37,13 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == browserpool.HelperFlag {
+		if err := browserpool.RunHelper(context.Background(), os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	// This entry point runs in the freshly allocated pane child, before GUI
 	// initialization, flags, configuration, or credentials are accessed.
 	if len(os.Args) > 1 && os.Args[1] == seatbelt.TerminalBootstrapFlag {

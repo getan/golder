@@ -61,6 +61,8 @@ type paneSpec struct {
 	ProxyServer       string
 	RecordName        string
 	StartupReport     string
+	ConversationID    string
+	Instance          string
 	// Embedded marks a browser pane started by golder's own binary rather than
 	// an external kitty-browse; close needs it to know which teardown applies.
 	Embedded bool

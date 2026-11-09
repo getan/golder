@@ -38,9 +38,9 @@ type BrowserPreview struct {
 // browser owner directly.
 func (c *Controller) Browsers(ctx context.Context) []BrowserPreview {
 	c.mu.Lock()
-	cwd := c.cwd
+	cwd, sessionID, readOnly := c.cwd, c.header.ID, c.readOnly
 	c.mu.Unlock()
-	sockets := browserSockets(cwd)
+	sockets := agenttool.BrowserSessionSocketPaths(cwd, sessionID)
 	out := make([]BrowserPreview, 0, len(sockets))
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -55,6 +55,11 @@ func (c *Controller) Browsers(ctx context.Context) []BrowserPreview {
 		client.CloseIdleConnections()
 		if ierr != nil {
 			continue
+		}
+		if !readOnly && browserOperator(socket) == nil {
+			if view, err := agenttool.ConnectSessionBrowser(ctx, cwd, sessionID, socket); err == nil && view.BrowserID == info.BrowserID {
+				RegisterSharedBrowser(view)
+			}
 		}
 		preview := BrowserPreview{Socket: socket, Browser: info.BrowserID}
 		for _, tab := range info.Tabs {

@@ -136,8 +136,10 @@ Two optional surfaces need runtime pieces:
   prompt templates and plugin commands stay reachable without typing;
 - browser: an Agent-visible built-in tool backed by the GUI browserhost, with
   native Bitmap frames in an automatically revealed right drawer and mouse,
-  keyboard, scroll, resize and committed IME input forwarded through the typed
-  control socket; auto-reveal follows the exact opened socket even with several
+  keyboard, scroll, resize and committed IME input forwarded through a private
+  operator connection. Conversation-local sockets and tab sets share one
+  persistent project profile without switching other GUI/TUI sessions' pages;
+  auto-reveal follows the exact opened socket even with several
   browsers or a short runtime path, and retries bounded discovery while a newly
   launched socket is becoming visible; title and approval actions use
   theme-colored monochrome SVGs;

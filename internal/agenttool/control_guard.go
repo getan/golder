@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/panecontrol"
 	"github.com/getan/golder/internal/permissions"
@@ -26,9 +27,11 @@ import (
 // ControlGuard is session-local authority, shared only by the three broker
 // tools in one registry. Repository metadata and pane titles cannot grant it.
 type ControlGuard struct {
-	Root   string
-	Mode   *permissions.State
-	Runner seatbelt.CallRunner
+	Root            string
+	Mode            *permissions.State
+	Runner          seatbelt.CallRunner
+	browserSession  string
+	browserSelected string
 	// BrowserProxy resolves the person's explicit browser route at launch time.
 	// It is wired by the CLI assembly layer; nil keeps library/tests direct.
 	BrowserProxy    func() (string, error)
@@ -296,6 +299,16 @@ func (g *ControlGuard) launchArgvFor(ctx context.Context, argv []string, cwd str
 			if err == nil && path == want && g.profileAllowed(name) {
 				policy.ReadDirs = append(policy.ReadDirs, path)
 				policy.WriteDirs = append(policy.WriteDirs, path)
+				if g.conversation() != "" {
+					if shared, err := browserpool.Options(path, browserLoginProfile(g.Root, name), ""); err == nil {
+						if err := browserpool.Prepare(shared); err != nil {
+							cleanHome()
+							return nil, nil, false, err
+						}
+						policy.ReadDirs = append(policy.ReadDirs, shared.StateDir, shared.RuntimeDir)
+						policy.WriteDirs = append(policy.WriteDirs, shared.StateDir, shared.RuntimeDir)
+					}
+				}
 			}
 		}
 	}

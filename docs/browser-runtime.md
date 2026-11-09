@@ -22,6 +22,14 @@ The process gets a scrubbed environment, a private HOME (including
 no daemon/provider credentials. The person and project agents intentionally
 share that default. Explicitly authorized named profiles provide separate login
 identities.
+The profile owner is a detached shared broker, not the GUI or the first TUI
+session. Each conversation has its own automation socket and tab set. Its
+owner-only management socket is separate from the model-facing API; an
+authenticated per-view operator capability carries human keyboard, pointer and
+browser-chrome operations. These credentials are never placed in argv, tool
+results or transcripts. Automation cannot call an operator action to bypass a
+verification pause. The TUI surface connects to the same broker as the GUI
+Bitmap surface, so shutting down one frontend cannot close another's views.
 The pinned allocator uses basic password storage and a mock macOS keychain.
 That cookie-encryption choice is part of profile compatibility, not just a launch
 optimization. Ordinary macOS Chromium defaults to the system Keychain, so opening

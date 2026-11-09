@@ -32,6 +32,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/extensioncmd"
@@ -212,6 +213,13 @@ func (o cliOptions) providerToken() string {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == browserpool.HelperFlag {
+		if err := browserpool.RunHelper(context.Background(), os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			exit(1)
+		}
+		return
+	}
 	// The daemon has allocated this child's PTY, but no user program has run.
 	// Bind only that device before entering Seatbelt, without reading config,
 	// credentials, authorization state, or startup trace destinations.

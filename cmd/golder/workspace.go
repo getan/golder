@@ -11,6 +11,7 @@ import (
 
 	"github.com/getan/kitty-browse/browsepane"
 
+	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/cli/workspacecmd"
 	"github.com/getan/golder/internal/computeruse"
@@ -52,11 +53,16 @@ func runBrowse(args []string, in *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "golder browse: startup diagnostics:", err)
 		return 1
 	}
-	err = browsepane.Run(ctx, browsepane.Options{
+	opts := browsepane.Options{
 		Args: args, Stdin: in, Stdout: stdout, Stderr: stderr, Name: "golder browse",
 		Version:       fmt.Sprintf("golder browse %s (commit %s, built %s)", version, commit, date),
 		StartupOutput: reporter, StartupPhase: reporter.Phase, RequireChromiumSandbox: true,
-	})
+	}
+	if handled, sharedErr := browserpool.SharedPane(ctx, args, opts); handled {
+		err = sharedErr
+	} else {
+		err = browsepane.Run(ctx, opts)
+	}
 	if err == nil || errors.Is(err, context.Canceled) {
 		return 0
 	}

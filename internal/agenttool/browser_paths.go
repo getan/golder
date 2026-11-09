@@ -125,6 +125,8 @@ type browserMetadata struct {
 	BrowserID         string    `json:"browser_id,omitempty"`
 	Embedded          bool      `json:"embedded,omitempty"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	ConversationID    string    `json:"conversation_id,omitempty"`
+	Instance          string    `json:"instance,omitempty"`
 }
 
 func readBrowserMetadata(path string) (browserMetadata, error) {
@@ -152,6 +154,9 @@ func readBrowserMetadata(path string) (browserMetadata, error) {
 func checkBrowserRecord(root string, meta browserMetadata) error {
 	if err := checkBrowserName(meta.Name); err != nil {
 		return fmt.Errorf("browser record names %q: %w", meta.Name, err)
+	}
+	if meta.ConversationID != "" {
+		return checkSessionBrowserRecord(root, meta)
 	}
 	if !validBrowserSocketLocation(root, meta.Socket) {
 		return fmt.Errorf("browser record %q names %q, which is not a socket golder could have created for this workspace", meta.Name, meta.Socket)

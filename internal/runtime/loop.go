@@ -222,6 +222,12 @@ func StartRun(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConf
 // runLoop is the producer: it drives the two-layer loop, emitting events onto
 // stream and setting the stream result to the messages produced during the run.
 func runLoop(ctx context.Context, agentCtx *agentcore.AgentContext, cfg RunConfig, stream *LoopEventStream) {
+	if cfg.SessionID != "" {
+		agenttool.ConfigureBrowserSession(agentCtx.Tools, cfg.SessionID)
+		if cfg.Batch.Registry != nil {
+			agenttool.ConfigureBrowserSession(cfg.Batch.Registry.List(), cfg.SessionID)
+		}
+	}
 	// Wire per-turn system-reminder injection (US-002) onto the TransformContext
 	// seam. Reminders are appended to the request-shaped copy only, so they stay
 	// ephemeral: never written back to agentCtx.Messages, never persisted, never

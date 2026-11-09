@@ -77,6 +77,7 @@ func agentIDPart(s string) string {
 // tools in the daemon-scoped cross-process registry. Read-only sub-agent tool
 // sets are intentionally ignored.
 func ConfigurePaneAgent(ctx context.Context, tools []agentcore.AgentTool, conversationID string) error {
+	ConfigureBrowserSession(tools, conversationID)
 	if !tuiosctl.Available() {
 		return nil
 	}

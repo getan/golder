@@ -136,6 +136,10 @@ func BrowserWorkspaceSocketPaths(cwd string) []string {
 
 func discoverBrowsers(ctx context.Context, cwd, selected string) browserDiscovery {
 	paths, truncated := browserCandidatePaths(cwd, selected)
+	return discoverBrowserPaths(ctx, paths, truncated, selected)
+}
+
+func discoverBrowserPaths(ctx context.Context, paths []string, truncated bool, selected string) browserDiscovery {
 	out := browserDiscovery{Instances: []browserInstance{}, Truncated: truncated}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -174,12 +178,26 @@ func (t *BrowserTool) socketPath() string {
 	if path != "" {
 		return path // an explicit attachment overrides the startup environment
 	}
+	if t.Control != nil && t.Control.conversation() != "" {
+		t.Control.mu.Lock()
+		selected := t.Control.browserSelected
+		t.Control.mu.Unlock()
+		if selected == "" && !t.allowControl {
+			if paths := BrowserSessionSocketPaths(t.cwd, t.Control.conversation()); len(paths) == 1 {
+				return paths[0]
+			}
+		}
+		return selected
+	}
 	return browserSocket()
 }
 
 func (t *BrowserTool) discovery(ctx context.Context) browserDiscovery {
 	if t.discover != nil {
 		return t.discover(ctx)
+	}
+	if t.Control != nil && t.Control.conversation() != "" {
+		return t.scopedDiscovery(ctx)
 	}
 	return discoverBrowsers(ctx, t.cwd, t.socketPath())
 }
@@ -209,6 +227,16 @@ func (t *BrowserTool) clearMissingSelection(d browserDiscovery) {
 	}
 	t.tabMu.Unlock()
 
+	if t.Control != nil && t.Control.conversation() != "" {
+		t.Control.mu.Lock()
+		if path := t.Control.browserSelected; path != "" {
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				t.Control.browserSelected = ""
+			}
+		}
+		t.Control.mu.Unlock()
+		return
+	}
 	if browserctl.SocketFromEnv() != "" {
 		return
 	}

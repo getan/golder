@@ -11,8 +11,8 @@ workspace after upgrading so new panes use the updated browser implementation.
 The default is a persistent **project-shared profile**. A browser opened without
 `profile` always uses `$GOLDER_HOME/browser-profiles/<project-key>/default.profile`,
 outside the checkout. Its cookies, storage, history and downloads survive
-restarts, and the visible person plus agents working in this project use the
-same live browser and profile. The default profile is intentionally available
+restarts. A single profile-owning broker shares its login state while each
+conversation uses an independent browser view. The default is available
 without the separate named-profile consent prompt.
 
 For a separate identity, ask the agent to open a named profile, for example:
@@ -24,8 +24,9 @@ For a separate identity, ask the agent to open a named profile, for example:
 Named profiles live beside `default.profile` and are still project-scoped.
 Names are not filesystem paths, and personal Chrome profiles are never imported.
 Chromium's own profile lock prevents two processes from opening the same profile
-concurrently; a second agent adopts the live default browser instead of starting
-a competing process.
+concurrently. GUI sessions, TUI sessions and separate Golder processes connect
+to the same profile broker, not to each other's browser views. Each view has a
+different control socket, browser identity, tab collection and selection.
 
 Each browser tool session pins the tab opened or explicitly selected by that
 session. Screenshot, snapshot and other actions use that tab even if Chromium
@@ -37,12 +38,60 @@ browser, without granting navigation or inspection access to internal pages.
 Use `tab_select` when starting or returning to the primary working tab so the
 visible browser pane follows it. A `tab` argument on a screenshot, snapshot or
 other individual action targets that page in the background and does not switch
-the visible view. The GUI follows a successful `tab_select` from its own agent;
-for a selection made by a different process, the browser host must support the
-`explicitSelection` revision signal. Older hosts such as the currently pinned
-`kitty-browse v0.2.8` do not provide that cross-process signal, so select the
-same tab in the GUI manually until the host is upgraded. No operating-system
+the visible view. A successful `tab_select` follows only within its conversation;
+it cannot change another GUI or TUI conversation's display. The host's
+`explicitSelection` revision signal is local to the view. No operating-system
 window focus is stolen.
+
+### Session isolation and lifecycle
+
+The browser owner is a detached, credential-scrubbed Golder helper. A private
+management socket opens a view derived from the trusted runtime's conversation
+ID and instance name. The model cannot choose a socket or conversation ID.
+`browser list`, `open` reuse and GUI discovery are restricted to that
+conversation. `KITTY_BROWSE_SOCKET` and the former process-global selection no
+longer override an interactive conversation's browser selection.
+
+Switching or resuming conversations clears the frontend's previous binding;
+reopening the same live view reuses its stable socket without navigating it.
+An explicit `open` URL can then navigate that conversation's own page. A closed
+tab or replaced browser identity fails closed instead of falling back to another
+conversation. Popup reconciliation adopts only descendants of the view's own
+live pages, never arbitrary restored or other-view pages.
+
+Closing a browser view or its TUI pane releases only that view. GUI application
+shutdown closes the shared views it launched, not another process's views. After
+the final view closes, the broker exits after a 30-second idle grace period and
+releases Chromium's persistent profile. Browser tabs are ephemeral; cookies and
+site storage survive a restart. No cookies are copied, exported or merged.
+Trusted GUI/TUI surfaces renew a private per-view lease. If a frontend crashes
+or its pane is force-killed, the broker expires only that view after two minutes
+without a heartbeat, then applies the normal final-view idle cleanup.
+
+Logins and site storage are deliberately shared: signing out, clearing website
+data, or changing an account in one view may affect the others. This is display
+and control isolation, not separate website identities. The running profile's
+proxy route is immutable; a differently configured launch is refused rather
+than silently changing other sessions' network route.
+
+Normal default-profile opens add no new human-consent prompt. Existing tool
+review, network and macOS browser-runtime gates remain in force. Named-profile
+consent and explicit continuation after a verification pause are unchanged.
+
+### Development and validation status
+
+Golder v1.5.67 pins the shared-host implementation in `kitty-browse v0.2.11`.
+Normal builds resolve the published dependency and need no sibling checkout or
+local `go.work`. Older kitty-browse releases do not contain the shared-host API.
+On upgrade, close browsers started by the old standalone host before opening
+shared views: the new broker will not take over an old process's profile lock
+or silently kill it. This is a one-time runtime transition, not a new consent
+step for each conversation.
+Unit/race tests exercise session identity, operator capability separation,
+concurrent view registration and shutdown; a real helper-process test exercises
+management-socket readiness and idle cleanup without launching Chromium.
+Real Chromium GUI/TUI end-to-end validation remains deferred, not claimed as
+passing.
 
 Chromium component auto-updates are disabled for these automation profiles, so
 speech packs and on-device optimization models cannot silently add gigabytes.
@@ -58,8 +107,8 @@ again; the person may return to `/permissions auto` after the initial consent.
 A different agent session must receive its own confirmation, even if it
 runs in another pane of the same workspace. Discovering a browser is not such an
 approval. Unapproved agents cannot use the browser tool to read its DOM or take
-screenshots either. An approved agent can reuse the already-running browser of
-the same project/profile, rather than starting a competing Chromium process.
+screenshots either. An approved agent gets its own view on the already-running
+project/profile broker, rather than taking over another agent's selection.
 
 The person and an approved agent interact with the same browser, so a manual
 login in the controlled pane applies to later agent navigation. A fallback GUI

@@ -324,7 +324,7 @@ func (s *BrowserSurface) NewTab(ctx context.Context, rawURL string) error {
 	if rawURL = strings.TrimSpace(rawURL); rawURL != "" {
 		params["url"] = rawURL
 	}
-	_, meta, err := s.client.Action(ctx, "tab.new", params, browserctl.Target{BrowserID: previous.BrowserID}, 30*time.Second)
+	_, meta, err := s.surfaceAction(ctx, "tab.new", params, browserctl.Target{BrowserID: previous.BrowserID}, 30*time.Second)
 	if err == nil {
 		s.mu.Lock()
 		if !s.closed && s.target == previous && meta.BrowserID == previous.BrowserID && meta.TabID != "" && meta.TargetID != "" {
@@ -340,7 +340,7 @@ func (s *BrowserSurface) CloseTab(ctx context.Context, id string) error {
 	s.mu.Lock()
 	browserID := s.target.BrowserID
 	s.mu.Unlock()
-	_, _, err := s.client.Action(ctx, "tab.close", map[string]any{"tabId": id},
+	_, _, err := s.surfaceAction(ctx, "tab.close", map[string]any{"tabId": id},
 		browserctl.Target{BrowserID: browserID}, 10*time.Second)
 	if err == nil {
 		_, err = s.Tabs(ctx)
@@ -556,11 +556,21 @@ func (s *BrowserSurface) action(ctx context.Context, action string, params any, 
 }
 
 func (s *BrowserSurface) actionTarget(ctx context.Context, target browserctl.Target, action string, params any, timeout time.Duration) (json.RawMessage, browserctl.Meta, error) {
-	result, meta, err := s.client.Action(ctx, action, params, target, timeout)
+	result, meta, err := s.surfaceAction(ctx, action, params, target, timeout)
 	if err == nil {
 		s.updateSelectedMeta(target, meta)
 	}
 	return result, meta, err
+}
+
+func (s *BrowserSurface) surfaceAction(ctx context.Context, action string, params any, target browserctl.Target, timeout time.Duration) (json.RawMessage, browserctl.Meta, error) {
+	if operator, ok := s.operator.(BrowserChromeOperator); ok {
+		switch action {
+		case "navigate", "back", "forward", "reload", "tab.new", "tab.activate", "tab.close", "set.viewport", "interaction.resume", "interaction.pause":
+			return operator.ChromeAction(ctx, action, params, target, timeout)
+		}
+	}
+	return s.client.Action(ctx, action, params, target, timeout)
 }
 
 func (s *BrowserSurface) selectTabLocked(browserID string, tab browserctl.Tab) {

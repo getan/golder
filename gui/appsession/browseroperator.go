@@ -2,15 +2,26 @@ package appsession
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/getan/golder/internal/browserctl"
 )
 
 // BrowserOperator is the in-process, person-originated input seam of a native
 // browser host. It is not available through a model-facing browser socket.
 type BrowserOperator interface {
 	SendOperatorInput(context.Context, BrowserOperatorInput) error
+}
+
+// BrowserChromeOperator is a private, authenticated chrome-operation seam for
+// shared-host surfaces. It is never handed to the model-facing browser tool.
+type BrowserChromeOperator interface {
+	BrowserOperator
+	ChromeAction(context.Context, string, any, browserctl.Target, time.Duration) (json.RawMessage, browserctl.Meta, error)
 }
 
 // BrowserOperatorInput contains only an exact target and a bounded UI event.

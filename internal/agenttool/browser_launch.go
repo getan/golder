@@ -28,8 +28,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getan/kitty-browse/browserhost"
+
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserctl"
+	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/browserstartup"
 	"github.com/getan/golder/internal/privatepath"
 	"github.com/getan/golder/internal/seatbelt"
@@ -62,6 +65,7 @@ var (
 // login identity are derived by the browser tool; the model cannot supply them.
 type NativeBrowserRequest struct {
 	URL, Socket, ProfileDir, LoginProfile, ProxyServer string
+	ConversationID, Instance                           string
 }
 
 // NativeBrowserLauncher starts a headless browser control host and returns once
@@ -180,7 +184,7 @@ func browserPaneSpecFor(cwd, name, profileName, url string) (paneSpec, error) {
 	return browserPaneSpecWithProfile(cwd, name, profileName, url, "")
 }
 
-func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) (paneSpec, error) {
+func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string, conversation ...string) (paneSpec, error) {
 	if err := checkBrowserName(name); err != nil {
 		return paneSpec{}, err
 	}
@@ -202,11 +206,21 @@ func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) 
 	if err := privatepath.EnsureDir(profile); err != nil {
 		return paneSpec{}, fmt.Errorf("browser profile %s holds logins and must be owner-only: %w", profile, err)
 	}
-	socket, err := browserControlSocketPath(cwd, name)
+	scoped := len(conversation) > 0 && conversation[0] != ""
+	var socket string
+	if scoped {
+		opts, e := browserpool.Options(profile, browserLoginProfile(cwd, persistent), "")
+		if e != nil {
+			return paneSpec{}, e
+		}
+		socket = browserhost.ViewSocket(opts.RuntimeDir, browserhost.ViewID(conversation[0], name+"/"+persistent))
+	} else {
+		socket, err = browserControlSocketPath(cwd, name)
+	}
 	if err != nil {
 		return paneSpec{}, err
 	}
-	if _, err := os.Lstat(socket); err == nil {
+	if _, err := os.Lstat(socket); !scoped && err == nil {
 		if staleBrowserSocket(socket) {
 			if err := os.Remove(socket); err != nil && !os.IsNotExist(err) {
 				return paneSpec{}, fmt.Errorf("remove stale browser socket: %w", err)
@@ -224,7 +238,7 @@ func browserPaneSpecWithProfile(cwd, name, profileName, url, persistent string) 
 					socket, unixSocketPathLimit, dir)
 			}
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !scoped && !os.IsNotExist(err) {
 		return paneSpec{}, err
 	}
 	argv, err := browserPaneArgv(socket, profile, url)
@@ -378,6 +392,7 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 	req := NativeBrowserRequest{
 		URL: url, Socket: spec.Socket, ProfileDir: spec.Profile,
 		LoginProfile: browserLoginProfile(cwd, spec.PersistentProfile), ProxyServer: spec.ProxyServer,
+		ConversationID: spec.ConversationID, Instance: spec.Instance,
 	}
 	startup, cancel := context.WithTimeout(ctx, browserNativeStartupWait)
 	err = launchNativeBrowser(startup, req)
@@ -411,8 +426,9 @@ func startNativeBrowserWithProfile(ctx context.Context, cwd, name, url, profile 
 	_ = writeBrowserMetadata(browserMetadataPath(cwd, spec.RecordName), browserMetadata{
 		Name: spec.RecordName, Socket: spec.Socket, Profile: spec.Profile,
 		PersistentProfile: spec.PersistentProfile, Program: "native-browser-host", BrowserID: info.BrowserID,
+		ConversationID: spec.ConversationID, Instance: spec.Instance,
 	})
-	setBrowserSocket(spec.Socket)
+	g.selectBrowser(spec.Socket)
 	return spec.Socket, nil
 }
 
@@ -521,8 +537,9 @@ func adoptBrowserPaneWithExit(ctx context.Context, cwd string, spec paneSpec, wi
 		Name: recordName, Socket: spec.Socket, Profile: spec.Profile,
 		PersistentProfile: spec.PersistentProfile,
 		WindowID:          windowID, Program: record.Program, BrowserID: info.BrowserID, Embedded: spec.Embedded,
+		ConversationID: spec.ConversationID, Instance: spec.Instance,
 	})
-	setBrowserSocket(spec.Socket)
+	controlGuardFrom(ctx).selectBrowser(spec.Socket)
 	return record, nil
 }
 
