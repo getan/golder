@@ -144,7 +144,7 @@ func LaunchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		case <-ctx.Done():
 			return ApplicationResolution{}, ctx.Err()
 		case <-deadline.C:
-			return ApplicationResolution{}, fmt.Errorf("open request for %s succeeded, but no matching window was discovered within 12 seconds; the application may not have created a usable window", app.Name)
+			return ApplicationResolution{}, fmt.Errorf("open request for %s succeeded, but no matching usable window was discovered within 12 seconds; restore a minimized window or show it on the current desktop and retry", app.Name)
 		case <-ticker.C:
 		}
 	}

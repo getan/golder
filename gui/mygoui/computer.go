@@ -537,6 +537,7 @@ func (a *App) computerPicker(c *ui.Context) {
 				}
 			}
 			if runtime.GOOS == "darwin" {
+				ui.Text(c, "Only windows on the current desktop are listed. Restore minimized windows or switch desktops, then refresh.").FontSize(11).TextColor(t.TextMuted).Wrap()
 				a.macComputerPermissionsView(c, true)
 			} else {
 				ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()

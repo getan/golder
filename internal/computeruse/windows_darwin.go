@@ -25,7 +25,6 @@ typedef struct {
 	int32_t pid;
 	uint64_t start_sec;
 	uint64_t start_usec;
-	int on_screen;
 	char application[256];
 	char bundle[4096];
 	char title[512];
@@ -46,13 +45,23 @@ static int cu_process_start(int32_t pid, uint64_t *sec, uint64_t *usec) {
 	return 1;
 }
 
+static int cu_window_on_screen(CFTypeRef value) {
+	return value && CFGetTypeID(value) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)value);
+}
+
+static int cu_test_on_screen(int value) {
+	if (value == 2) return cu_window_on_screen(CFSTR("invalid"));
+	return cu_window_on_screen(value < 0 ? NULL : (value ? kCFBooleanTrue : kCFBooleanFalse));
+}
+
 static int cu_windows(cu_window *out, int cap) {
-	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
 	if (!list) return -1;
 	int count = 0;
 	CFIndex total = CFArrayGetCount(list);
-	for (CFIndex i = 0; i < total && count < cap; i++) {
+	for (CFIndex i = 0; i < total; i++) {
 		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		if (!cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen))) continue;
 		int32_t pid = 0, layer = 0;
 		uint32_t window_id = 0;
 		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
@@ -68,14 +77,15 @@ static int cu_windows(cu_window *out, int cap) {
 		cu_window entry = {0};
 		entry.pid = pid;
 		entry.window_id = window_id;
-		CFTypeRef on_screen = CFDictionaryGetValue(d, kCGWindowIsOnscreen);
-		entry.on_screen = on_screen && CFGetTypeID(on_screen) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)on_screen);
 		if (!cu_process_start(pid, &entry.start_sec, &entry.start_usec)) continue;
 		if (!cu_running_bundle(pid, entry.bundle, sizeof(entry.bundle))) continue;
 		cu_string(CFDictionaryGetValue(d, kCGWindowOwnerName), entry.application, sizeof(entry.application));
 		cu_string(CFDictionaryGetValue(d, kCGWindowName), entry.title, sizeof(entry.title));
 		if (entry.application[0] == 0) continue;
-		out[count++] = entry;
+		if (count < cap) out[count] = entry;
+		count++;
+		// Keep this bound in sync with collectWindowInventory's maximum.
+		if (count > 8192) break;
 	}
 	CFRelease(list);
 	return count;
@@ -614,13 +624,11 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var windows [128]C.cu_window
-	n := int(C.cu_windows(&windows[0], C.int(len(windows))))
-	if n < 0 {
-		return nil, errors.New("macOS window inventory unavailable")
-	}
-	if n == len(windows) {
-		return nil, errors.New("macOS window inventory exceeded its safe limit")
+	windows, err := collectWindowInventory(ctx, func(buf []C.cu_window) int {
+		return int(C.cu_windows(&buf[0], C.int(len(buf))))
+	})
+	if err != nil {
+		return nil, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -630,9 +638,9 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out := make([]Target, 0, n)
-	next := make(map[string]C.cu_window, n)
-	for _, window := range windows[:n] {
+	out := make([]Target, 0, len(windows))
+	next := make(map[string]C.cu_window, len(windows))
+	for _, window := range windows {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
 			return nil, err
@@ -640,9 +648,6 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 		id := hex.EncodeToString(nonce[:])
 		next[id] = window
 		detail := fmt.Sprintf("PID %d · Window %d", int32(window.pid), uint32(window.window_id))
-		if window.on_screen == 0 {
-			detail += " · Off-screen"
-		}
 		out = append(out, Target{ID: id, Application: C.GoString(&window.application[0]), ApplicationID: C.GoString(&window.bundle[0]), Window: C.GoString(&window.title[0]), Detail: detail})
 	}
 	for _, ref := range c.pinned {
@@ -652,6 +657,10 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	c.clearSnapshotLocked()
 	c.windows = next
 	return out, nil
+}
+
+func macWindowOnScreenFlag(value int) bool {
+	return C.cu_test_on_screen(C.int(value)) != 0
 }
 
 func macWindowDiagnostic(d C.cu_ax_diagnostic) *WindowDiagnostic {

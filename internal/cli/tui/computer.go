@@ -275,6 +275,7 @@ func (m Model) computerTargetsReady(msg computerTargetsMsg) (tea.Model, tea.Cmd)
 	if len(msg.targets) == 0 {
 		m.session.cancelComputerSetup()
 		m.transcript.addSystem(fmt.Sprintf("No matching application or window. Screen Recording: %s; Accessibility: %s.", msg.perms.ScreenCapture, msg.perms.Accessibility))
+		m.transcript.addSystem("If the window is minimized or on another desktop, show it and retry.")
 		m.relayout()
 		return m, nil
 	}
