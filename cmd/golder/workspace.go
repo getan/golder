@@ -53,6 +53,7 @@ func runBrowse(args []string, in *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "golder browse: startup diagnostics:", err)
 		return 1
 	}
+	stdout = browserPaneOutput(stdout, os.Getenv)
 	opts := browsepane.Options{
 		Args: args, Stdin: in, Stdout: stdout, Stderr: stderr, Name: "golder browse",
 		Version:       fmt.Sprintf("golder browse %s (commit %s, built %s)", version, commit, date),

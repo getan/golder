@@ -1,0 +1,83 @@
+package app
+
+import (
+	"encoding/base64"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+)
+
+// The host test supplies the actual Golder-adapted output of a complete,
+// multi-packet kitty-browse frame. No terminal, browser, or user data is used.
+func TestGolderBrowserWorkspaceGraphicsIsolation(t *testing.T) {
+	raw, err := base64.StdEncoding.DecodeString(os.Getenv("GOLDER_TEST_GRAPHICS_FRAME"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := string(raw)
+	end := strings.Index(frame, "\x1b\\")
+	if end < 0 {
+		t.Fatal("frame has no first packet")
+	}
+	end += 2
+	h := newSyncHoldHarness(t)
+	browser := h.pane("browser", 0)
+	other := h.pane("other", 40)
+	browser.write(frame)
+	other.write(frame)
+	if got := hostActions(h.tick()); strings.Count(got, "p") != 2 {
+		t.Fatalf("initial images were not placed: %q", got)
+	}
+	h.info["browser"].WindowX = 4
+	if got := hostActions(h.tick()); !strings.Contains(got, "p") {
+		t.Fatalf("browser image did not follow its pane: %q", got)
+	}
+	h.info["browser"].WindowX = 0
+	h.tick()
+	otherID := h.kp.imageIDMap["other"][1]
+	// Begin the next frame, then switch workspaces while the rest of the image
+	// is still in flight. The old browser image must be removed immediately.
+	browser.write(frame[:end])
+	h.info["browser"].Visible = false
+	hidden := h.tick()
+	if got := hostActions(hidden); !strings.Contains(got, "d") {
+		t.Fatalf("switch during partial frame did not hide the old image: %q", got)
+	}
+	if strings.Contains(hidden, fmt.Sprintf("a=d,d=i,i=%d,", otherID)) {
+		t.Fatal("hiding the browser deleted another pane's image")
+	}
+	browser.write(frame[end:])
+	assertHidden := func(out string) {
+		t.Helper()
+		actions := hostActions(out)
+		// Tuios writes the whole pending batch inside one synchronized host
+		// update, so a placement followed by its delete is never displayed.
+		if strings.Contains(actions, "p") && strings.LastIndex(actions, "d") < strings.LastIndex(actions, "p") {
+			t.Fatalf("hidden browser left a visible placement: %q", actions)
+		}
+		if strings.Contains(out, fmt.Sprintf("a=d,d=i,i=%d,", otherID)) {
+			t.Fatal("browser frame deleted the other pane's image")
+		}
+	}
+	assertHidden(h.tick())
+	for range 5 {
+		browser.write(frame)
+		assertHidden(h.tick())
+	}
+	h.info["browser"].Visible = true
+	if got := hostActions(h.tick()); !strings.Contains(got, "p") {
+		t.Fatalf("browser image did not return after switching back: %q", got)
+	}
+	// Switching to another session removes the old window from the model
+	// rather than merely marking it invisible. It must hide just as promptly.
+	browser.write(frame[:end])
+	delete(h.info, "browser")
+	removed := h.tick()
+	if got := hostActions(removed); !strings.Contains(got, "d") {
+		t.Fatalf("session switch did not remove the old image: %q", got)
+	}
+	if strings.Contains(removed, fmt.Sprintf("a=d,d=i,i=%d,", otherID)) {
+		t.Fatal("session switch removed another pane's image")
+	}
+}
