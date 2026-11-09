@@ -9,6 +9,7 @@ import (
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agentcore"
+	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/cli/run"
 	"github.com/getan/golder/internal/contextbudget"
 	"github.com/getan/golder/internal/permissions"
@@ -94,12 +95,18 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 			SysPrompt: "test", Prompt: runtime.PromptInputs{WorkingDir: cwd}, Permissions: permissions.New(permissions.Auto),
 			ReviewNotes: run.NewReviewNotes(), Budget: contextbudget.New()}, nil
 	}
-	first := appsession.New(appsession.Options{Model: "test", ProviderName: "fake", Provider: p, Cwd: project, Store: store, ProjectFactory: factory})
+	first := appsession.New(appsession.Options{Model: "test", ProviderName: "fake", Provider: p, Cwd: project, Store: store, ProjectFactory: factory,
+		Tools: []agentcore.AgentTool{&agenttool.TodoTool{Store: agenttool.NewTodoStore()}}})
 	if err := first.Open(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	a := New(first)
 	t.Cleanup(func() { _ = a.hub.Close() })
+	desktop, _ := newComputerNavigationSession(t)
+	if err := first.AttachComputer(first.SessionID(), desktop); err != nil {
+		t.Fatal(err)
+	}
+	a.computerSession, a.computerOpen = desktop, true
 	if err := first.Submit(context.Background(), "first prompt"); err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +133,9 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	if a.draft != "" || len(a.attachments) != 0 || a.list != nil || a.historyNav.browsing || !first.IsRunning() {
 		t.Fatal("draft leaked into a new conversation")
 	}
+	if first.ComputerSession() != desktop || a.computerSession != nil || second.ComputerSession() != nil || !desktop.Status().Active || desktop.Status().Paused {
+		t.Fatal("switching sessions paused, revoked, or transferred desktop control")
+	}
 	a.draft = "draft two"
 	a.list = &ui.ListState{}
 	a.resume(first.SessionID())
@@ -134,6 +144,9 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	}
 	if a.historyNav != (promptHistoryCursor{index: 1, draft: "original draft", browsing: true}) {
 		t.Fatalf("history navigation was not restored: %+v", a.historyNav)
+	}
+	if a.computerSession != desktop || desktop.Status().Paused {
+		t.Fatal("returning to the owning conversation did not preserve desktop control")
 	}
 	close(p.release)
 }

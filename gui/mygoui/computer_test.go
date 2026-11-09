@@ -50,7 +50,7 @@ func TestMacComputerPermissionsAreAvailableInSettings(t *testing.T) {
 	a.settingsOpen, a.settingsTab = true, 1
 	a.computerPermission = computeruse.PermissionState{ScreenCapture: "denied", Accessibility: "denied"}
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"macOS Computer Use permissions", "Request Accessibility", "Request Screen Recording", "Accessibility settings", "Screen Recording settings", "Show Golder GUI.app in Finder", "Refresh system permissions"} {
+	for _, want := range []string{"macOS Computer Use permissions", "Request Accessibility", "Request Screen Recording", "Accessibility settings", "Screen Recording settings", "Show Golder GUI.app in Finder", "Refresh system permissions", "Screen & System Audio Recording", "window images, not audio", "Accessibility separately"} {
 		if !tt.HasText(want) {
 			t.Fatalf("permissions settings are missing %q; texts=%q", want, tt.Texts())
 		}
@@ -173,6 +173,22 @@ func TestComputerResolutionPreselectsOnlyUniqueTarget(t *testing.T) {
 	a.applyComputerResolution(computeruse.ApplicationResolution{Targets: []computeruse.Target{{ID: "other", Application: "Notes"}}})
 	if a.computerSelected != -1 || a.computerMatched {
 		t.Fatal("an unrelated window was selected automatically")
+	}
+}
+
+func TestComputerRequestedPickerExplainsAutomaticSelection(t *testing.T) {
+	a := testApp()
+	a.computerPickerOpen = true
+	a.computerSuggested = "Calculator"
+	a.applyComputerResolution(computeruse.ApplicationResolution{Matched: true, Targets: []computeruse.Target{
+		{ID: "main", Application: "Calculator", Window: "Main"},
+		{ID: "history", Application: "Calculator", Window: "History"},
+	}})
+	tt := ui.NewTester(a.view, 1200, 800)
+	for _, want := range []string{"A unique matching window is selected automatically", "only multiple matches need your choice", "Calculator · Main", "Calculator · History"} {
+		if !tt.HasText(want) {
+			t.Fatalf("application request is missing %q; texts=%q", want, tt.Texts())
+		}
 	}
 }
 

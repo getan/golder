@@ -60,6 +60,18 @@ use `+` in System Settings to select Golder GUI.app; restart after granting
 access if macOS asks. macOS permissions do not grant the agent a target window.
 Ad-hoc signatures can change identity between builds, so macOS may require a
 new grant after an update. A stable Developer ID signature improves continuity.
+macOS may label screen capture as **Screen & System Audio Recording**; Computer
+Use captures selected-window images, not audio. Accessibility is a separate
+permission for inspecting and operating window controls. A named application
+request automatically uses its unique matching window; multiple matching apps
+or windows still require a local choice, not another OS permission grant.
+
+Switching Golder conversations hides the old Computer Use view and stops its
+local preview, but leaves the owning conversation's authorized control session
+running. It neither transfers the target to the new conversation nor resumes an
+explicitly paused session. Closing the Computer Use panel explicitly still
+pauses control; **Pause / take over** and **Stop** remain available.
+
 The GUI release targets macOS 14.0 or later. A GUI built without CGO cannot
 enable the macOS Computer Use backend merely by changing permissions.
 

@@ -58,6 +58,7 @@ func (a *App) requestComputerPermission(kind string) {
 func (a *App) macComputerPermissionsView(c *ui.Context, compact bool) {
 	t := c.Theme()
 	ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
+	ui.Text(c, "macOS may call Screen Recording ‘Screen & System Audio Recording’. Computer Use captures window images, not audio. Accessibility separately enables window controls.").FontSize(11).TextColor(t.TextMuted).Wrap()
 	unsupported := a.computerPermission.ScreenCapture == "unknown" && a.computerPermission.Accessibility == "unknown"
 	if unsupported {
 		ui.Text(c, "This build cannot request macOS Computer Use permissions. Install a GUI build with CGO enabled.").FontSize(11).TextColor(t.Warning).Wrap()
@@ -372,6 +373,12 @@ func (a *App) hideComputerPanel() {
 			a.banner = "Computer Use paused because its panel was hidden. Reopen it to resume."
 		}
 	}
+	a.hideComputerView()
+}
+
+// hideComputerView stops local rendering only. Conversation navigation must not
+// pause, revoke, or invalidate the owning controller's desktop session.
+func (a *App) hideComputerView() {
 	a.computerOpen = false
 	if a.computerPreviewStop != nil {
 		a.computerPreviewStop()
@@ -380,15 +387,15 @@ func (a *App) hideComputerPanel() {
 }
 
 // parkComputerPanel hides the previous conversation's desktop view without
-// revoking its controller. Hiding still pauses desktop input, as it does when
-// the person closes the panel manually.
+// changing its control state. Explicit pause/hide and stop remain separate user
+// actions; an already authorized session can keep working in the background.
 func (a *App) parkComputerPanel() {
 	a.computerSetupSeq++
 	if a.computerSetupStop != nil {
 		a.computerSetupStop()
 		a.computerSetupStop = nil
 	}
-	a.hideComputerPanel()
+	a.hideComputerView()
 	a.computerPickerOpen, a.computerBusy = false, false
 	a.computerSuggested, a.computerRequestPicker = "", false
 	a.computerSession = nil
@@ -531,7 +538,7 @@ func (a *App) computerPicker(c *ui.Context) {
 			}
 			ui.Text(c, "Choose one application window. Its contents may be sent to your configured model provider when the agent requests a snapshot or screenshot. System permissions do not grant the agent authority to switch targets.").FontSize(12).TextColor(t.TextMuted).Wrap()
 			if a.computerSuggested != "" {
-				ui.Text(c, "Requested application: "+a.computerSuggested+". Select the intended window if more than one is available.").FontSize(11).TextColor(t.TextMuted).Wrap()
+				ui.Text(c, "Requested application: "+a.computerSuggested+". A unique matching window is selected automatically; only multiple matches need your choice.").FontSize(11).TextColor(t.TextMuted).Wrap()
 				if !a.computerBusy && a.computerBackend != nil && !a.computerMatched {
 					ui.Text(c, "No exact match; choose another window or cancel.").FontSize(11).TextColor(t.Warning).Wrap()
 				}

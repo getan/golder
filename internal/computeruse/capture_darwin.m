@@ -121,6 +121,7 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 			configuration.width = (size_t)fmax(1, ceil(width*scale));
 			configuration.height = (size_t)fmax(1, ceil(height*scale));
 			configuration.showsCursor = NO;
+			configuration.capturesAudio = NO;
 			GolderCaptureResult *shot = [[GolderCaptureResult alloc] init];
 			[SCScreenshotManager captureImageWithFilter:filter configuration:configuration completionHandler:^(CGImageRef image, NSError *error) {
 				[shot->condition lock];
