@@ -112,6 +112,51 @@ func TestModelProtocolUnsupportedFallsBackInPriorityOrder(t *testing.T) {
 	}
 }
 
+func TestFallbackRecordsWireBeforeDeliveringTerminalEvent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	in := NewAssistantMessageEventStream(1)
+	out := NewAssistantMessageEventStream(1)
+	if err := in.Emit(ctx, StreamDoneEvent{}); err != nil {
+		t.Fatal(err)
+	}
+	in.Close()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	done := make(chan bool, 1)
+	go func() {
+		p := &wireFallbackProvider{}
+		accepted, _ := p.forwardAccepted(ctx, out, in, func() {
+			close(started)
+			<-release
+		})
+		done <- accepted
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("the wire was not recorded")
+	}
+	select {
+	case <-out.Events():
+		t.Fatal("terminal event arrived before the wire was recorded")
+	default:
+	}
+	release <- struct{}{}
+	select {
+	case event := <-out.Events():
+		if _, ok := event.(StreamDoneEvent); !ok {
+			t.Fatalf("event = %T, want StreamDoneEvent", event)
+		}
+	case <-ctx.Done():
+		t.Fatal("terminal event not delivered")
+	}
+	if !<-done {
+		t.Fatal("terminal event was not accepted")
+	}
+}
+
 // TestFallbackPromotesConfirmedWireOnce verifies the discovery is not repeated
 // on every turn: after the first answer walks Responses → Messages → Chat and
 // succeeds on Chat, the second request must go straight to Chat. The persistent

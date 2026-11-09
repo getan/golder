@@ -48,9 +48,9 @@ The browser surface needs an installed Chromium; desktop Computer Use is under d
 
 ### Desktop app
 
-Download the **Golder GUI** package for your system from [Releases](https://github.com/getan/golder/releases): an Apple Silicon macOS `.dmg`, Windows installer, or Linux package/archive. New macOS GUI releases do not support Intel Macs; the CLI still does. The GUI is installed separately from the CLI. See [GUI packaging and platform requirements](docs/gui-packaging.md).
+Download the **Golder GUI** package for your system from [Releases](https://github.com/getan/golder/releases): a macOS `.dmg` (arm64 for Apple Silicon or amd64 for Intel), Windows installer, or Linux package/archive. The GUI is installed separately from the CLI. See [GUI packaging and platform requirements](docs/gui-packaging.md).
 
-**macOS Gatekeeper notice:** current GUI releases are ad-hoc signed and not yet notarized, so macOS can warn that the developer cannot be verified when you first open the app. Download only from the official Releases page; after confirming the source, macOS offers **Open Anyway** under **System Settings → Privacy & Security**. Apple Developer ID signing and notarization are planned soon to remove this particular warning. Other security or permission prompts, including Accessibility and Screen Recording, may still apply. See [macOS installation details](docs/gui-packaging.md#macos-what-makes-it-double-clickable-elsewhere).
+**macOS Gatekeeper notice:** newer GUI releases are Developer ID signed and notarized; older releases may be ad-hoc signed and trigger a developer verification warning. Download only from the official Releases page. Other security or permission prompts, including Accessibility and Screen Recording, may still apply. See [macOS installation details](docs/gui-packaging.md#macos-what-makes-it-double-clickable-elsewhere).
 
 ### CLI
 

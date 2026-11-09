@@ -4,16 +4,16 @@
 single executables, while a desktop app needs a bundle, a disk image, an
 installer or a system package to be double-clickable.
 
-The packaging boundary below uses Apple Silicon for macOS GUI releases, no
-bundled full CLI or Chromium, a tag-derived app version, and an installed-size
-gate. The CLI retains Intel Mac support independently. See
+The packaging boundary below uses separate Apple Silicon and Intel macOS GUI
+releases, no bundled full CLI or Chromium, a tag-derived app version, and an
+installed-size gate. See
 [`gui-ux-optimization.md`](gui-ux-optimization.md).
 
 ## Artifacts
 
 | Platform | Output under `gui/build/<os>-<arch>/` | How a person opens it |
 |---|---|---|
-| macOS (Apple Silicon only) | `Golder GUI.app`, `golder-gui-<version>-arm64.dmg` | mount the DMG, drag to Applications, double-click |
+| macOS | `Golder GUI.app`, `golder-gui-<version>-<arch>.dmg` | choose arm64 for Apple Silicon or amd64 for Intel, mount the DMG, drag to Applications, double-click |
 | Windows | `Golder GUI.exe`, `golder-gui-setup-<version>-amd64.exe` | run the installer, then the Start-menu shortcut |
 | Linux | `golder-gui`, `.desktop`, `golder-gui-<version>-linux-<arch>.tar.gz` (with `install.sh`), `.deb`, `PKGBUILD` | `install.sh`, `apt install ./…deb`, or `makepkg -si` |
 
@@ -140,6 +140,7 @@ None of them are required for a local build.
 | Runner | Target | Notes |
 |---|---|---|
 | `macos-15` | `darwin/arm64` | Apple Silicon DMG; release tags require signing and notarization |
+| `macos-15-intel` | `darwin/amd64` | Intel DMG; release tags require signing and notarization |
 | `windows-2022` | `windows/amd64` | NSIS installer; needs NSIS, which MyGo installs |
 | `ubuntu-22.04` | `linux/amd64,linux/arm64` | tarball + `install.sh`, `.deb`, `PKGBUILD` |
 

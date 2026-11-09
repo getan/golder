@@ -171,10 +171,11 @@ func (p *wireFallbackProvider) pump(ctx context.Context, req CompletionRequest, 
 			lastErr = err
 			continue
 		}
-		accepted, err := p.forwardAccepted(ctx, out, in)
-		if accepted {
+		accepted, err := p.forwardAccepted(ctx, out, in, func() {
 			p.promote(a.wire, a.prov)
 			p.rememberWire(a.wire)
+		})
+		if accepted {
 			return
 		}
 		lastErr = err
@@ -235,9 +236,10 @@ func (p *wireFallbackProvider) emitError(ctx context.Context, out *AssistantMess
 // forwardAccepted relays the first viable attempt. It holds the start event
 // until it knows the attempt is not a protocol rejection; a protocol-unsupported
 // error before any content is discarded so the next wire can be tried. Once a
-// non-start event is accepted, the held start and every remaining event go to
-// the caller.
-func (p *wireFallbackProvider) forwardAccepted(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream) (bool, error) {
+// non-start event is accepted, the wire is recorded before the held start and
+// remaining events reach the caller. Outer stream wrappers can otherwise close
+// immediately on a terminal event before the cache has been updated.
+func (p *wireFallbackProvider) forwardAccepted(ctx context.Context, out *AssistantMessageEventStream, in *AssistantMessageEventStream, onAccept func()) (bool, error) {
 	var start *StreamStartEvent
 	accepted := false
 	for ev := range in.Events() {
@@ -250,6 +252,7 @@ func (p *wireFallbackProvider) forwardAccepted(ctx context.Context, out *Assista
 				return false, se.Err
 			}
 			accepted = true
+			onAccept()
 			if start != nil {
 				if err := out.Emit(ctx, *start); err != nil {
 					return true, err
