@@ -28,7 +28,7 @@ Files 和 Changes 互斥，作为覆盖右侧工作区的用户视图展示；�
 
 - 顶部功能按钮默认无方块底色，悬停时显示底色，键盘焦点保留轮廓。当前展示的功能使用强调色及短线；已打开但被遮挡或隐藏的功能使用次要色及短线，并在提示中标记 hidden。
 - Changes 标题栏使用与 Files 一致的刷新和关闭图标，并提供可访问名称和提示。
-- 暂时被布局或 Files / Changes 覆盖不会关闭浏览器预览连接、终端进程或 Computer Use 会话，也不会改变授权。**Computer Use 可能在被 Files / Changes 覆盖时继续操作**；用户可通过打开 Computer Use 并选择 Pause / take over 来暂停。主动隐藏 Computer Use 或切换会话仍沿用原有暂停行为，重新显示后需明确 Resume。
+- 暂时被布局或 Files / Changes 覆盖不会关闭浏览器预览连接、终端进程或 Computer Use 会话，也不会改变授权。**Computer Use 在隐藏、被覆盖或切换会话后仍可继续操作**；用户可通过打开 Computer Use 并选择 Pause / take over 或 Stop 来暂停/停止。重新显示面板不会自动恢复显式暂停的会话。
 - 显式关闭 Browser 预览会释放该 GUI 预览连接，但不等同关闭浏览器进程；隐藏 Terminal 不结束 pane。关闭终端 pane、停止 Computer Use 和退出 GUI 仍遵循各自的确认与生命周期规则。
 
 ## 验证范围

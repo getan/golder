@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo/ui"
+
 	"github.com/getan/golder/internal/computeruse"
 )
 
@@ -99,14 +101,43 @@ func TestComputerNavigationNeverResumesExplicitPause(t *testing.T) {
 	session, _ := newComputerNavigationSession(t)
 	a := testApp()
 	a.computerSession, a.computerOpen = session, true
+	session.Pause()
 	a.hideComputerPanel()
 	if !session.Status().Paused {
-		t.Fatal("explicitly hiding the panel must still pause control")
+		t.Fatal("hiding the panel must preserve an explicit operator pause")
 	}
 	a.parkComputerPanel()
 	a.computerSession = session // returning to the owning conversation
 	a.showComputerPanel()
 	if err := session.Do(context.Background(), true, func(context.Context, computeruse.Backend, computeruse.Target) error { return nil }); !errors.Is(err, computeruse.ErrPaused) {
 		t.Fatalf("navigation or reopening resumed an explicit pause: %v", err)
+	}
+}
+
+func TestHideComputerPanelKeepsControlAndStopsOnlyPreview(t *testing.T) {
+	session, backend := newComputerNavigationSession(t)
+	snapshot, err := session.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := testApp()
+	a.computerSession, a.computerOpen = session, true
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.computerPreviewStop = cancel
+	tt := ui.NewTester(a.view, 1400, 800)
+	if err := tt.Click("Hide Computer Use"); err != nil {
+		t.Fatal(err)
+	}
+	if a.computerOpen || ctx.Err() == nil || a.computerSession != session || session.Status().Paused || !tt.HasText("continues in the background") {
+		t.Fatal("hiding the preview paused, lost control, or did not explain background operation")
+	}
+	if err := session.Act(context.Background(), snapshot.ID, "@e1", "click", ""); err != nil || !backend.acted {
+		t.Fatalf("hiding the panel invalidated authorized control: %v", err)
+	}
+	a.showComputerPanel()
+	tt.Frame()
+	if err := tt.Click("Pause / take over"); err != nil || !session.Status().Paused {
+		t.Fatalf("explicit pause no longer works: %v", err)
 	}
 }

@@ -19,6 +19,7 @@ package computeruse
 int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
+int cu_activate_running_app(int32_t pid, const char *expectedPath);
 
 typedef struct {
 	uint32_t window_id;
@@ -310,6 +311,39 @@ static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_f
 static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
 static int cu_cancelled(cu_cancel_flag *flag) { return atomic_load(&flag->cancelled); }
 
+// Check identity independently of focus. A different AX window or process is
+// target loss, not permission to activate a convenient replacement.
+static int cu_selected_focus(cu_window selected, AXUIElementRef expected) {
+	AXUIElementRef window = cu_ax_window(selected, 0);
+	if (!window || !expected || !CFEqual(window, expected)) { if (window) CFRelease(window); return -1; }
+	CFRelease(window);
+	cu_ax_diagnostic diagnostic;
+	window = cu_ax_window_diagnostic(selected, 1, &diagnostic);
+	if (!window) return diagnostic.reason == CU_AX_FOCUS ? 0 : -1;
+	int focused = CFEqual(window, expected);
+	CFRelease(window);
+	return focused ? 1 : -1;
+}
+
+// Only a control operation may raise its own pinned window. Snapshot/capture
+// and the GUI preview do not call this, so reading cannot steal user focus.
+static int cu_focus_selected(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
+	if (!expected || cu_cancelled(flag)) return 0;
+	AXUIElementRef window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	CFRelease(window);
+	if (cu_cancelled(flag) || !cu_activate_running_app(selected.pid, selected.bundle) || cu_cancelled(flag)) return 0;
+	window = cu_ax_window(selected, 0);
+	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
+	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
+	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
+	if (!cu_cancelled(flag) && app) AXUIElementSetAttributeValue(app, kAXFocusedWindowAttribute, window);
+	if (!cu_cancelled(flag)) AXUIElementPerformAction(window, kAXRaiseAction);
+	if (app) CFRelease(app);
+	CFRelease(window);
+	return !cu_cancelled(flag); // actual focus is checked separately before input
+}
+
 static int cu_ax_contains(AXUIElementRef element, AXUIElementRef wanted, int depth, int *budget, cu_cancel_flag *flag) {
 	if (!element || depth > 16 || *budget <= 0 || cu_cancelled(flag)) return 0;
 	(*budget)--;
@@ -597,6 +631,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 	"unsafe"
 )
@@ -686,6 +721,12 @@ func macAXMatchReason(windows, readable, matches int) WindowFailure {
 // Physical input independently proves foreground focus and geometry immediately
 // before injection; this identity check alone does not grant that right.
 func (c *MacWindowCatalog) Validate(ctx context.Context, target Target, _ bool) error {
+	return waitForWindowValidation(ctx, windowSettleTimeout, windowSettleInterval, func() error {
+		return c.validateOnce(ctx, target)
+	})
+}
+
+func (c *MacWindowCatalog) validateOnce(ctx context.Context, target Target) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -975,17 +1016,35 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 	if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
 		return ErrStaleObservation
 	}
+	changed, err := prepareInputFocus(ctx, 2*time.Second, 100*time.Millisecond,
+		func() (bool, error) { return c.selectedFocus(ctx, target) },
+		func() error { return c.focusSelected(ctx, target) })
+	if err != nil {
+		return err
+	}
+	if changed {
+		// Activation can move a window or change its controls. The old frame is
+		// never silently rebound to that new UI, even though the target is ours.
+		fresh, freshToken, err = c.CaptureBound(ctx, target)
+		if err != nil {
+			return err
+		}
+		if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
+			return ErrStaleObservation
+		}
+	}
 	if err := c.Validate(ctx, target, true); err != nil {
 		return err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	window, ok := c.windows[target.ID]
 	if c.closed || !ok || c.pinned[target.ID] == 0 {
+		c.mu.Unlock()
 		return ErrTargetLost
 	}
 	flag := C.cu_cancel_new()
 	if flag == nil {
+		c.mu.Unlock()
 		return errors.New("allocate input cancellation flag")
 	}
 	done := make(chan struct{})
@@ -995,11 +1054,72 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 		<-done
 	}
 	C.free(unsafe.Pointer(flag))
+	c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if sent == 0 {
-		return fmt.Errorf("%w: input refused because target, geometry, focus, visibility or AX hit could not be verified", ErrTargetLost)
+		// All three native frame dispatchers return zero only before posting an
+		// event. Recheck the same pinned window; never replay the input.
+		return frameInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
+	}
+	return nil
+}
+
+func (c *MacWindowCatalog) selectedFocus(ctx context.Context, target Target) (bool, error) {
+	if err := c.Validate(ctx, target, true); err != nil {
+		return false, err
+	}
+	c.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return false, err
+	}
+	window, ok := c.windows[target.ID]
+	if c.closed || !ok || c.pinned[target.ID] == 0 {
+		c.mu.Unlock()
+		return false, ErrTargetLost
+	}
+	state := C.cu_selected_focus(window, c.pinned[target.ID])
+	c.mu.Unlock()
+	if state < 0 {
+		return false, frameInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
+	}
+	return state == 1, nil
+}
+
+func (c *MacWindowCatalog) focusSelected(ctx context.Context, target Target) error {
+	if err := c.Validate(ctx, target, true); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	window, ok := c.windows[target.ID]
+	if c.closed || !ok || c.pinned[target.ID] == 0 {
+		c.mu.Unlock()
+		return ErrTargetLost
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		c.mu.Unlock()
+		return errors.New("allocate focus cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	raised := C.cu_focus_selected(window, c.pinned[target.ID], flag)
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
+	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if raised == 0 {
+		return frameInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
 	}
 	return nil
 }

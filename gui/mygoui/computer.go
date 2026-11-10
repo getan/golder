@@ -369,8 +369,7 @@ func (a *App) hideComputerPanel() {
 	if a.computerOpen && a.computerSession != nil {
 		status := a.computerSession.Status()
 		if status.Active && !status.Paused {
-			a.computerSession.Pause()
-			a.banner = "Computer Use paused because its panel was hidden. Reopen it to resume."
+			a.banner = "Computer Use continues in the background. Reopen the panel to pause or stop."
 		}
 	}
 	a.hideComputerView()
@@ -387,7 +386,7 @@ func (a *App) hideComputerView() {
 }
 
 // parkComputerPanel hides the previous conversation's desktop view without
-// changing its control state. Explicit pause/hide and stop remain separate user
+// changing its control state. Explicit pause and stop remain separate user
 // actions; an already authorized session can keep working in the background.
 func (a *App) parkComputerPanel() {
 	a.computerSetupSeq++
@@ -618,7 +617,7 @@ func (a *App) computerPanel(c *ui.Context) {
 			} else {
 				ui.Spacer(c)
 			}
-			if subtleButton(c, "×").Tooltip("Pause and hide the Computer Use panel").Clicked() {
+			if subtleButton(c, "×").Label("Hide Computer Use").Tooltip("Hide preview; Agent control continues until Pause or Stop").Clicked() {
 				a.hideComputerPanel()
 			}
 		})

@@ -69,8 +69,10 @@ or windows still require a local choice, not another OS permission grant.
 Switching Golder conversations hides the old Computer Use view and stops its
 local preview, but leaves the owning conversation's authorized control session
 running. It neither transfers the target to the new conversation nor resumes an
-explicitly paused session. Closing the Computer Use panel explicitly still
-pauses control; **Pause / take over** and **Stop** remain available.
+explicitly paused session. Hiding the Computer Use panel also leaves control
+running; use **Pause / take over** or **Stop** to interrupt it. On macOS, frame
+input can restore focus to the same authorized window, then recheck its frame
+before dispatch. Preview captures and semantic actions do not steal focus.
 
 The GUI release targets macOS 14.0 or later. A GUI built without CGO cannot
 enable the macOS Computer Use backend merely by changing permissions.

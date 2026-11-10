@@ -36,3 +36,19 @@ func TestMacMissingSelectedWindowHasDiagnostic(t *testing.T) {
 		t.Fatalf("missing selected window = %v", err)
 	}
 }
+
+func TestMacFocusCannotActivateUnknownOrCanceledTarget(t *testing.T) {
+	c := NewMacWindowCatalog()
+	defer c.Close()
+	if focused, err := c.selectedFocus(context.Background(), Target{ID: "unknown"}); focused || !errors.Is(err, ErrTargetLost) {
+		t.Fatalf("unknown target focus check: focused=%t err=%v", focused, err)
+	}
+	if err := c.focusSelected(context.Background(), Target{ID: "unknown"}); !errors.Is(err, ErrTargetLost) {
+		t.Fatalf("unknown target activation: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.focusSelected(ctx, Target{ID: "unknown"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled target activation: %v", err)
+	}
+}

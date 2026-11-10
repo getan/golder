@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 // Keep system authorization surfaces, Golder, and terminal hosts out of both
 // application launch and window selection.
@@ -36,6 +37,19 @@ int cu_running_bundle(int32_t pid, char *out, size_t length) {
 		NSString *path = app.bundleURL.path.stringByResolvingSymlinksInPath;
 		if (!cu_bundle_allowed(bundle) || !path || ![path getCString:out maxLength:length encoding:NSUTF8StringEncoding]) return 0;
 		return 1;
+	}
+}
+
+// Activate only the already running, catalogued process. Do not launch another
+// copy, activate all windows, or interpret a model-provided application name.
+int cu_activate_running_app(int32_t pid, const char *expectedPath) {
+	@autoreleasepool {
+		if (pid <= 0 || pid == getpid() || !expectedPath) return 0;
+		NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:(pid_t)pid];
+		NSString *path = [NSString stringWithUTF8String:expectedPath];
+		if (!app || app.terminated || !cu_bundle_allowed(app.bundleIdentifier) ||
+			![app.bundleURL.path.stringByResolvingSymlinksInPath isEqualToString:path]) return 0;
+		return [app activateWithOptions:0] ? 1 : 0;
 	}
 }
 
