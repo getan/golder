@@ -98,6 +98,9 @@ func (a *App) testSettings() {
 }
 
 func (a *App) settingsModal(c *ui.Context) {
+	if (!a.settingsOpen || a.settingsTab != 2) && a.extensionStatusStarted {
+		a.resetExtensionAuthorizationStatus()
+	}
 	t := c.Theme()
 	ui.Modal(c, &a.settingsOpen, func() {
 		ui.Column(c).Width(760).MaxWidth(760).MaxHeight(680).Gap(0).Clip().Children(func() {

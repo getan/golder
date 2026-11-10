@@ -132,6 +132,11 @@ type App struct {
 	extensionAuthQR          *ui.Bitmap
 	extensionLarkVerified    bool
 	extensionProjectVerified bool
+	extensionLarkStatus      string
+	extensionProjectStatus   string
+	extensionStatusStarted   bool
+	extensionStatusCancel    context.CancelFunc
+	extensionStatusSeq       uint64
 	extensionConfirm         string
 	extensionSourceConfirm   string
 	extensionCancel          context.CancelFunc

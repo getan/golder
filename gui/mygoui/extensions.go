@@ -14,11 +14,72 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/extensions"
 )
 
 var larkDomainOrder = []string{"docs", "drive", "im", "sheets", "base"}
 
+func (a *App) resetExtensionAuthorizationStatus() {
+	a.extensionStatusSeq++
+	if a.extensionStatusCancel != nil {
+		a.extensionStatusCancel()
+		a.extensionStatusCancel = nil
+	}
+	a.extensionStatusStarted = false
+	a.extensionLarkStatus, a.extensionProjectStatus = "", ""
+}
+
+func (a *App) extensionAuthorizationStatusEligible() bool {
+	if a.extensionStatusStarted || a.extensionBusy || !a.settingsOpen || a.settingsTab != 2 ||
+		!a.extension.Configured || !a.extension.Enabled || !a.extension.Trusted || !larkHelperReady(a.extension) {
+		return false
+	}
+	switch a.larkNextAction(true) {
+	case "install", "update", "install-cli", "save", "enable":
+		return false
+	default:
+		return true
+	}
+}
+
+func (a *App) ensureExtensionAuthorizationStatus() {
+	if a.win == nil || a.ctrl == nil || !a.extensionAuthorizationStatusEligible() {
+		return
+	}
+	a.extensionStatusStarted = true
+	a.extensionStatusSeq++
+	seq := a.extensionStatusSeq
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	a.extensionStatusCancel = cancel
+	a.extensionLarkStatus, a.extensionProjectStatus = "checking", "checking"
+	win, ctrl := a.win, a.ctrl
+	go func() {
+		defer cancel()
+		status, err := ctrl.ProbeLarkAuthorization(ctx)
+		win.Update(func() {
+			a.applyExtensionAuthorizationStatus(seq, ctrl, status, err)
+		})
+	}()
+}
+
+func (a *App) applyExtensionAuthorizationStatus(seq uint64, ctrl *appsession.Controller, status extensions.LarkAuthorizationStatus, err error) {
+	if a.extensionStatusSeq != seq || a.ctrl != ctrl || !a.settingsOpen || a.settingsTab != 2 {
+		return
+	}
+	a.extensionStatusCancel = nil
+	if a.extensionBusy || a.larkNextAction(true) == "save" {
+		a.extensionLarkStatus, a.extensionProjectStatus = "unknown", "unknown"
+		return
+	}
+	if err != nil {
+		a.extensionLarkStatus, a.extensionProjectStatus = "unknown", "unknown"
+		return
+	}
+	a.extensionLarkStatus, a.extensionProjectStatus = status.Lark.State, status.Project.State
+}
+
 func (a *App) loadExtensionSettings() {
+	a.resetExtensionAuthorizationStatus()
 	settings, err := a.ctrl.ExtensionSettings()
 	if err != nil {
 		a.extensionErr = err.Error()
@@ -393,16 +454,15 @@ func (a *App) larkNextAction(helperReady bool) string {
 	if !helperReady {
 		return ""
 	}
-	// The persisted source status combines both services. Do not infer which
-	// service was verified in an earlier GUI session.
-	if !a.extensionLarkVerified && !a.extensionProjectVerified && s.Authentication == "verified" {
-		return "test"
-	}
-	if !a.extensionLarkVerified {
+	if a.extensionLarkStatus == "required" {
 		return "lark"
 	}
-	if projectAuthorizationConfigured(s, edit) && !a.extensionProjectVerified {
+	if a.extensionProjectStatus == "required" && projectAuthorizationConfigured(s, edit) {
 		return "project"
+	}
+	if a.extensionLarkStatus == "checking" || a.extensionProjectStatus == "checking" ||
+		(a.extensionLarkStatus == "authorized" && (a.extensionProjectStatus == "authorized" || !projectAuthorizationConfigured(s, edit))) {
+		return ""
 	}
 	return "test"
 }
@@ -545,6 +605,7 @@ func (a *App) testGenericExtension(source appsession.ExtensionSourceView) {
 }
 
 func (a *App) extensionsSettingsView(c *ui.Context) {
+	a.ensureExtensionAuthorizationStatus()
 	theme := c.Theme()
 	ui.Column(c).Padding(18, 20, 24, 20).Gap(14).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
@@ -753,21 +814,26 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "4. Personal authorization").FontWeight(600).Padding(6, 0, 0, 0)
 		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
-		ui.Text(c, "Lark and Project have separate personal authorizations; the source status above is shared.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
+		ui.Text(c, "Lark authorization: "+larkServiceStatusLabel(a.extensionLarkStatus)).FontSize(11).TextColor(theme.TextMuted)
+		ui.Text(c, "Project authorization: "+larkServiceStatusLabel(a.extensionProjectStatus)).FontSize(11).TextColor(theme.TextMuted)
+		ui.Text(c, "Authorization status is checked separately; an unavailable check does not mean you need to log in again.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
 		projectConfigured := projectAuthorizationConfigured(a.extension, a.extensionEdit)
 		if strings.TrimSpace(a.extensionEdit.ProjectCLI) != "" && !projectConfigured {
 			ui.Text(c, "Save the Project CLI and host, then approve the updated configuration before authorizing Project.").FontSize(11).TextColor(theme.Warning).Wrap()
 		}
 		unsaved := next == "save" || next == "install-cli"
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if larkWizardButton(c, "Authorize Lark", next == "lark", a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Lark", next == "lark", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if larkWizardButton(c, "Authorize Project", next == "project", a.extensionBusy || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Project", next == "project", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
 				a.authorizeLark("project")
 			}
-			if larkWizardButton(c, "Test connection", next == "test", a.extensionBusy || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Test connection", next == "test", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
 				a.testLark()
+			}
+			if (a.extensionLarkStatus == "unknown" || a.extensionProjectStatus == "unknown") && subtleButton(c, "Retry authorization status", a.extensionBusy).Clicked() {
+				a.resetExtensionAuthorizationStatus()
 			}
 			if a.extensionBusy && a.extensionCancel != nil {
 				if subtleButton(c, "Cancel authorization").Clicked() {
@@ -828,6 +894,23 @@ func larkAuthorizationStatus(status string) string {
 		return "Not verified"
 	default:
 		return "Unknown"
+	}
+}
+
+func larkServiceStatusLabel(status string) string {
+	switch status {
+	case "checking":
+		return "Checking…"
+	case "authorized":
+		return "Authorized"
+	case "required":
+		return "Authorization required"
+	case "unavailable":
+		return "Not configured"
+	case "unknown":
+		return "Could not determine; retry"
+	default:
+		return "Not checked"
 	}
 }
 

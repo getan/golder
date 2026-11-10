@@ -468,6 +468,20 @@ func (c *Controller) AuthorizeLark(ctx context.Context, service string, show fun
 	})
 }
 
+// ProbeLarkAuthorization checks the existing reviewed source without starting
+// an authorization flow. It reserves the manager against concurrent mutations.
+func (c *Controller) ProbeLarkAuthorization(ctx context.Context) (extensions.LarkAuthorizationStatus, error) {
+	manager, release, err := c.beginMCPMutation()
+	if err != nil {
+		return extensions.LarkAuthorizationStatus{}, err
+	}
+	defer release()
+	if err := c.requireMatchingLarkHelper(); err != nil {
+		return extensions.LarkAuthorizationStatus{}, err
+	}
+	return manager.ProbeLarkAuthorization(ctx)
+}
+
 func (c *Controller) TestLark(ctx context.Context) error {
 	manager, release, err := c.beginMCPMutation()
 	if err != nil {

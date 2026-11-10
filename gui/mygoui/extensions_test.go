@@ -1,12 +1,15 @@
 package mygoui
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/extensions"
 )
 
 func TestLarkInstallRequiresBundledVersion(t *testing.T) {
@@ -149,25 +152,107 @@ func TestLarkWizardHighlightsNextAction(t *testing.T) {
 		t.Fatalf("saved configuration should lead to enable, got %q", got)
 	}
 	a.extension.Enabled = true
-	if got := a.larkNextAction(true); got != "lark" {
-		t.Fatalf("fresh configuration should lead to Lark authorization, got %q", got)
+	if got := a.larkNextAction(true); got != "test" {
+		t.Fatalf("unknown prior authorization should lead to a connection check, got %q", got)
 	}
 	a.extensionLarkVerified = true
-	if got := a.larkNextAction(true); got != "project" {
-		t.Fatalf("verified Lark should lead to Project authorization, got %q", got)
+	if got := a.larkNextAction(true); got != "test" {
+		t.Fatalf("verified Lark must not imply Project needs authorization, got %q", got)
 	}
 	a.extensionProjectVerified = true
 	if got := a.larkNextAction(true); got != "test" {
 		t.Fatalf("verified authorizations should lead to connection test, got %q", got)
 	}
 	a.extensionLarkVerified, a.extensionProjectVerified = false, false
-	a.extension.Authentication = "verified"
-	if got := a.larkNextAction(true); got != "test" {
-		t.Fatalf("shared persisted status must not imply either service was verified, got %q", got)
+	for _, status := range []string{"verified", "configured", "required", "verification-failed", ""} {
+		a.extension.Authentication = status
+		if got := a.larkNextAction(true); got != "test" {
+			t.Fatalf("shared status %q must not imply a specific service needs login, got %q", status, got)
+		}
+	}
+	a.extensionLarkStatus, a.extensionProjectStatus = "authorized", "authorized"
+	if got := a.larkNextAction(true); got != "" {
+		t.Fatalf("verified services should not suggest another action, got %q", got)
+	}
+	a.extensionLarkStatus, a.extensionProjectStatus = "authorized", "required"
+	if got := a.larkNextAction(true); got != "project" {
+		t.Fatalf("only Project requires authorization, got %q", got)
+	}
+	a.extensionLarkStatus, a.extensionProjectStatus = "required", "unknown"
+	if got := a.larkNextAction(true); got != "lark" {
+		t.Fatalf("only Lark requires authorization, got %q", got)
 	}
 	a.extensionEdit.ProjectCLI = "/new/meegle"
 	if got := a.larkNextAction(true); got != "save" {
 		t.Fatalf("edited Project CLI should lead to save, got %q", got)
+	}
+}
+
+func TestExtensionAuthorizationStatusLifecycle(t *testing.T) {
+	a := testApp()
+	a.settingsOpen, a.settingsTab = true, 2
+	ctx, cancel := context.WithCancel(context.Background())
+	a.extensionStatusCancel, a.extensionStatusStarted, a.extensionStatusSeq = cancel, true, 7
+	a.extensionLarkStatus, a.extensionProjectStatus = "checking", "checking"
+	status := extensions.LarkAuthorizationStatus{Lark: extensions.LarkServiceAuthorization{State: "authorized"}, Project: extensions.LarkServiceAuthorization{State: "required"}}
+	a.applyExtensionAuthorizationStatus(6, nil, status, nil)
+	if a.extensionLarkStatus != "checking" {
+		t.Fatal("stale response changed status")
+	}
+	a.resetExtensionAuthorizationStatus()
+	if ctx.Err() == nil || a.extensionStatusStarted || a.extensionStatusCancel != nil {
+		t.Fatal("closing or refreshing did not cancel the probe")
+	}
+	a.applyExtensionAuthorizationStatus(7, nil, status, nil)
+	if a.extensionLarkStatus != "" {
+		t.Fatal("cancelled probe changed status")
+	}
+	a.extensionStatusSeq = 9
+	a.applyExtensionAuthorizationStatus(9, nil, status, nil)
+	if a.extensionLarkStatus != "authorized" || a.extensionProjectStatus != "required" {
+		t.Fatalf("separate statuses lost: %q/%q", a.extensionLarkStatus, a.extensionProjectStatus)
+	}
+	a.applyExtensionAuthorizationStatus(9, nil, status, errors.New("network unavailable"))
+	if a.extensionLarkStatus != "unknown" || a.extensionProjectStatus != "unknown" {
+		t.Fatal("failure was treated as missing authorization")
+	}
+	a.settingsOpen = false
+	a.applyExtensionAuthorizationStatus(9, nil, status, nil)
+	if a.extensionLarkStatus != "unknown" {
+		t.Fatal("closed settings accepted a stale response")
+	}
+}
+
+func TestExtensionAuthorizationStatusIsLazyAndRequiresReviewedConfiguration(t *testing.T) {
+	a := testApp()
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true, Configured: true, Enabled: true, Trusted: true, BundledVersion: "dev"},
+		SavedLarkCLI:         "/opt/lark", AppID: "cli_test", CredentialName: "secret", CredentialAvailable: true,
+	}
+	a.extensionEdit = appsession.LarkExtensionEdit{LarkCLI: "/opt/lark", AppID: "cli_test", CredentialName: "secret"}
+	if a.extensionAuthorizationStatusEligible() {
+		t.Fatal("checked before opening settings")
+	}
+	a.settingsOpen, a.settingsTab = true, 0
+	if a.extensionAuthorizationStatusEligible() {
+		t.Fatal("checked outside the Extensions tab")
+	}
+	a.settingsTab = 2
+	if !a.extensionAuthorizationStatusEligible() {
+		t.Fatal("reviewed source was not eligible")
+	}
+	a.extensionStatusStarted = true
+	if a.extensionAuthorizationStatusEligible() {
+		t.Fatal("repeated a completed or ongoing check")
+	}
+	a.extensionStatusStarted, a.extension.Trusted = false, false
+	if a.extensionAuthorizationStatusEligible() {
+		t.Fatal("checked an unreviewed source")
+	}
+	a.extension.Trusted = true
+	a.extensionEdit.LarkCLI = "/opt/changed"
+	if a.extensionAuthorizationStatusEligible() {
+		t.Fatal("checked unsaved configuration")
 	}
 }
 

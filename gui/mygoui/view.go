@@ -539,7 +539,10 @@ func (a *App) bannerView(c *ui.Context) {
 	}
 	ui.Row(c).Padding(8, 16).Gap(8).AlignItems(ui.Center).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
-		ui.Text(c, msg).FontSize(12).TextColor(color).Grow(1).SingleLine().Ellipsis("…")
+		ui.Text(c, msg).Selectable().FontSize(12).TextColor(color).Grow(1).SingleLine().Ellipsis("…")
+		if subtleButton(c, "Copy message").Clicked() {
+			c.Services().WriteClipboard(msg)
+		}
 		if subtleButton(c, "Dismiss").Clicked() {
 			a.banner, a.bannerErr, a.changesErr = "", false, ""
 		}

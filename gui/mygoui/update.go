@@ -111,7 +111,7 @@ func guiReleaseDownload(release guiRelease, current, goos, arch string) (guiDown
 
 func newGUIReleaseClient() *http.Client {
 	return &http.Client{Timeout: 20 * time.Second, Transport: downloadnet.Transport(), CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil {
+		if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.User != nil || len(via) == 0 || req.URL.Host != via[0].URL.Host || (req.URL.Host != "api.github.com" && req.URL.Host != "golder-cli.pages.dev") {
 			return fmt.Errorf("unsafe release API redirect")
 		}
 		return nil
@@ -131,10 +131,53 @@ func fetchGUIRelease(ctx context.Context, client *http.Client) (guiRelease, erro
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return release, fmt.Errorf("GitHub API rate limit exceeded; retry after the limit resets or check the download proxy")
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			return release, fmt.Errorf("release server returned %s; check GitHub access and the download proxy", resp.Status)
+		}
 		return release, fmt.Errorf("release server returned %s", resp.Status)
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&release)
 	return release, err
+}
+
+// The site only supplies a cached tag, not trusted installer size/digest. It
+// can report a possibly stale no-update result, but never authorize a download.
+func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, current string) (guiRelease, bool, error) {
+	release, err := fetchGUIRelease(ctx, client)
+	if err == nil || ctx.Err() != nil {
+		return release, false, err
+	}
+	req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, selfupdate.SiteLatestURL, nil)
+	if requestErr != nil {
+		return guiRelease{}, false, err
+	}
+	resp, requestErr := client.Do(req)
+	if requestErr != nil {
+		return guiRelease{}, false, err
+	}
+	defer resp.Body.Close()
+	var cached struct {
+		Tag     string `json:"tag"`
+		TagName string `json:"tag_name"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&cached) != nil {
+		return guiRelease{}, false, err
+	}
+	tag := strings.TrimSpace(cached.Tag)
+	if tag == "" {
+		tag = strings.TrimSpace(cached.TagName)
+	}
+	available, comparable := selfupdate.UpdateAvailable(current, tag)
+	if !comparable || guiAssetName(tag, "darwin", "arm64") == "" {
+		return guiRelease{}, false, err
+	}
+	if available {
+		return guiRelease{}, false, fmt.Errorf("cached release %s is newer, but verified package metadata is unavailable: %w", tag, err)
+	}
+	return guiRelease{Tag: tag}, true, nil
 }
 
 func (a *App) checkGUIUpdate(manual bool) {
@@ -152,7 +195,8 @@ func (a *App) checkGUIUpdate(manual bool) {
 	go func() {
 		defer cancel()
 		client := newGUIReleaseClient()
-		release, err := fetchGUIRelease(ctx, client)
+		defer client.CloseIdleConnections()
+		release, cached, err := fetchGUIReleaseWithFallback(ctx, client, current)
 		var pkg guiDownload
 		var available bool
 		if err == nil {
@@ -166,6 +210,7 @@ func (a *App) checkGUIUpdate(manual bool) {
 			a.updateAfterCheck = false
 			if err != nil {
 				a.updateError = err.Error()
+				a.updatePackage, a.updateTag = guiDownload{}, ""
 				if startDownload {
 					a.banner, a.bannerErr = "Update check failed: "+err.Error(), true
 				}
@@ -178,7 +223,9 @@ func (a *App) checkGUIUpdate(manual bool) {
 				a.updateTag = release.Tag
 			}
 			if startDownload {
-				if !available {
+				if cached {
+					a.banner, a.bannerErr = "Cached latest release: "+release.Tag+". GitHub is unavailable; this result may be stale.", false
+				} else if !available {
 					a.banner, a.bannerErr = "No newer GUI package is available for this platform.", false
 				} else {
 					a.startGUIDownload()
