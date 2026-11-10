@@ -208,17 +208,24 @@ func prepareCommand(ctx context.Context, c SourceConfig, cwd string, argv []stri
 			cleanup()
 			return nil, nil, e
 		}
+		if e = privateStateParent(c.stateHome); e != nil {
+			cleanup()
+			return nil, nil, e
+		}
+		path := filepath.Join(filepath.Dir(c.stateHome), ".lock")
+		if lease, _ := ctx.Value(stateLeaseKey{}).(*stateOperationLease); lease == nil || lease.path != path {
+			unlock, err := lockState(path)
+			if err != nil {
+				cleanup()
+				return nil, nil, err
+			}
+			removeTemp := cleanup
+			cleanup = func() { unlock(); removeTemp() }
+		}
 		if e = privateHome(c.stateHome); e != nil {
 			cleanup()
 			return nil, nil, e
 		}
-		unlock, err := lockState(filepath.Join(filepath.Dir(c.stateHome), ".lock"))
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		removeTemp := cleanup
-		cleanup = func() { unlock(); removeTemp() }
 		home = c.stateHome
 	}
 	// The state root is intentionally unreadable to children. Stage only the

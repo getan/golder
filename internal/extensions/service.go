@@ -405,13 +405,39 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	s.cancel = cancel
 	s.life = life
 	s.interrupt.Store(&cancel)
-	initTimeout := timeout(s.cfg.StartupTimeout, 15*time.Second)
+	defaultInitTimeout := 15 * time.Second
+	if callScopedLarkState(s.cfg) {
+		// Waiting for a state lease is not a stalled MCP handshake. The helper
+		// handshake gets its own startup budget after the lease is acquired.
+		defaultInitTimeout = timeout(s.cfg.CallTimeout, 120*time.Second)
+	}
+	initTimeout := timeout(s.cfg.StartupTimeout, defaultInitTimeout)
 	if interactive {
 		initTimeout = 5 * time.Minute
 	}
 	initCtx, stop := context.WithTimeout(ctx, initTimeout)
 	defer stop()
-	b, e := openBackend(initCtx, life, s.cfg, m.opts.Cwd, &s.logs, func() { s.dirty.Store(true) }, oauth)
+	var b backend
+	if callScopedLarkState(s.cfg) {
+		b = newLarkStateBackend(life, s.cfg, m.opts.Cwd, &s.logs, func() { s.dirty.Store(true) }, func() error {
+			if err := life.Err(); err != nil {
+				return err
+			}
+			if m.closed.Load() || m.opts.NoTools || !s.enabled.Load() {
+				return errors.New("extension disabled; not executed")
+			}
+			current, err := fingerprint(s.ref, s.cfg, m.opts.Cwd)
+			if err != nil {
+				return err
+			}
+			if current == "" || current != s.approval || current != s.fingerprint {
+				return errors.New("extension or dependencies changed while waiting; review before execution")
+			}
+			return nil
+		})
+	} else {
+		b, e = openBackend(initCtx, life, s.cfg, m.opts.Cwd, &s.logs, func() { s.dirty.Store(true) }, oauth)
+	}
 	if e != nil {
 		cancel()
 		s.state = "failed"
@@ -444,7 +470,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	s.conn = b
 	s.catalog = cat
 	s.state = "ready"
-	if s.cfg.Runtime == "cli" {
+	if s.cfg.Runtime == "cli" || callScopedLarkState(s.cfg) {
 		s.state = "on demand"
 	}
 	s.lastError = ""

@@ -246,7 +246,7 @@ func (m *Manager) Reset(ref SourceRef) error {
 		return errors.New("source has no persistent state")
 	}
 	home := sourceHome(ref)
-	if err = privateHome(home); err != nil {
+	if err = privateStateParent(home); err != nil {
 		return err
 	}
 	unlock, err := lockState(filepath.Join(filepath.Dir(home), ".lock"))
@@ -254,6 +254,9 @@ func (m *Manager) Reset(ref SourceRef) error {
 		return err
 	}
 	defer unlock()
+	if err = privateHome(home); err != nil {
+		return err
+	}
 	if err = os.RemoveAll(home); err != nil {
 		return fmt.Errorf("reset source HOME: %w", err)
 	}

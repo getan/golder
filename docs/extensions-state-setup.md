@@ -12,6 +12,10 @@ skills、confirm_tools、aggregate_tools；CLI/TUI 提供显式 setup/reset。�
 沙箱通过来源专属 typed capability 暴露它，不能用普通目录 grant 重开整个 protected root。
 真实子进程 fixture 覆盖私有 HOME 可写、宿主/兄弟状态不可读、重启留存及 reset 边界。
 
+Lark 的多会话实现补充见 [lark-multi-session.md](lark-multi-session.md)：已知 stdio
+`golder-lark` 来源使用按需 helper 和请求级跨进程租约，空闲逻辑连接不再占用状态锁；
+业务请求等待可取消，setup/reset 仍独占。其他第三方持久来源不自动采用这一生命周期。
+
 浏览器实现收敛为宿主生成的**离线二维码显示页**：没有控制 socket、远端页面、cookies 或桌面
 OAuth 跳转，手机访问已校验的官方 verification URL。Mac 仍需浏览器运行时例外，Linux 仍受沙箱。
 它替代下文 §5 的通用敏感 OAuth 浏览器实例；真实服务验收仍需用户参与，Linux 容器测试仍暂停。

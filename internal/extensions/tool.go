@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -160,9 +161,16 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 		OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args),
 		PolicyApproved:    requirePolicy && agentcore.PolicyApprovedFor(ctx, id, t.name, args)}, report)
 	if e != nil {
+		var notDispatched *larkNotDispatchedError
+		if errors.As(e, &notDispatched) {
+			return fail(e.Error()) // queued cancellation/schema changes are not unknown writes
+		}
 		s.lastError = s.logs.Clean(e.Error(), 2048)
 		s.state = "failed"
 		return fail("extension call failed; execution outcome may be unknown: " + s.lastError)
+	}
+	if callScopedLarkState(s.cfg) {
+		s.state, s.lastError = "on demand", ""
 	}
 	return agentResultForSource(r, &s.logs), nil // terminal result, never retry in the generic executor
 }

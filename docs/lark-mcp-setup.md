@@ -40,6 +40,11 @@ with different hosts and different OAuth grants. Configure only the one you use.
 `golder` never links any of them. It starts `golder-lark` as a child process and
 talks MCP over stdio.
 
+For multiple GUI/TUI sessions, see [Lark multi-session state handling](lark-multi-session.md).
+An `on demand` source is ready to start a reviewed helper for each operation;
+other idle conversations do not need to disconnect. Actual state access is
+serialized, and setup/reset still excludes active business operations.
+
 ## Background every agent must know
 
 1. **The npm packages are launchers, not the executables Golder runs.**

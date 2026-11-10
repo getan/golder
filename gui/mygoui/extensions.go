@@ -702,7 +702,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 	helperReady := larkHelperReady(a.extension)
 	next := a.larkNextAction(helperReady)
 	statusColor := theme.TextMuted
-	if a.extension.Enabled && a.extension.State == "ready" {
+	if a.extension.Enabled && (a.extension.State == "ready" || a.extension.State == "on demand") {
 		statusColor = theme.Success
 	} else if a.extension.LastError != "" {
 		statusColor = theme.Danger
@@ -715,6 +715,9 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			})
 			ui.Text(c, a.extension.State).FontSize(11).TextColor(statusColor)
 		})
+		if a.extension.State == "on demand" {
+			ui.Text(c, "Ready on demand. Other idle conversations do not hold the shared login state lock.").FontSize(11).TextColor(theme.TextMuted).Wrap()
+		}
 		if hint := map[string]string{
 			"install": "Install the bundled helper.", "update": "Update the helper.",
 			"install-cli": "Detect or install lark-cli.", "save": "Review the paths and application credentials, then save.",

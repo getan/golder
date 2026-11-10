@@ -106,6 +106,9 @@ func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *lo
 			return nil, e
 		}
 		b.wait = make(chan struct{})
+		if lease, _ := life.Value(stateLeaseKey{}).(*stateOperationLease); lease != nil {
+			lease.exited = b.wait
+		}
 		go func() { _ = cmd.Wait(); close(b.wait) }()
 		transport = &mcp.IOTransport{Reader: out, Writer: in, MaxLineLength: 16 << 20}
 	}

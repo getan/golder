@@ -203,8 +203,13 @@ reported as such, not falsely labeled complete equivalence verification.
   empty private store; it does not run global keychain downgrade. Project uses
   the official encrypted-file fallback with OS helper lookup disabled. Both are
   version-coupled adapters, not hardware-keystore confidentiality promises.
-- CLI refreshes can write back. A cross-process lock prevents simultaneous use
-  of the same source; disconnect another session before setup/reset.
+- CLI refreshes can write back. Known stateful `golder-lark` stdio sources use
+  on-demand helpers: multiple GUI/TUI sessions can remain logically connected,
+  while actual operations take a cancellable cross-process exclusive lease.
+  Idle connections no longer block each other; setup/reset still cannot race an
+  active operation. Disconnect an older, already-running persistent connection
+  once after upgrading; do not reset login or delete the lock file. See
+  [multi-session behavior](../../../docs/lark-multi-session.md).
 - `golder mcp reset lark --yes` clears only this source's local state, not the
   provider's server-side consent. Disable/remove do not erase it implicitly.
 - Do not copy state between machines: Project encryption can depend on USER and
