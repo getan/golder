@@ -80,6 +80,7 @@ if [[ "$identity" != '-' ]]; then
     echo 'Apple did not accept the notarization submission.' >&2
     exit 1
   fi
-  xcrun stapler staple "$dmg"
-  xcrun stapler staple "$app"
+  source "$(dirname "${BASH_SOURCE[0]}")/stapler.sh"
+  stapler_with_retry staple "$dmg"
+  stapler_with_retry staple "$app"
 fi

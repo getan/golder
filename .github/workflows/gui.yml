@@ -231,6 +231,7 @@ jobs:
 
       - name: Verify macOS signing and notarization
         if: matrix.kind == 'macos'
+        timeout-minutes: 10
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -243,13 +244,7 @@ jobs:
           app=$(find gui/build -type d -name '*.app' -print -quit)
           dmg=$(find gui/build -type f -name '*.dmg' -print -quit)
           test -n "$app" && test -n "$dmg"
-          codesign --verify --deep --strict --verbose=2 "$app"
-          codesign --verify --verbose=2 "$dmg"
-          signature=$(codesign -dvv "$app" 2>&1)
-          printf '%s\n' "$signature"
-          printf '%s\n' "$signature" | grep -Fx "TeamIdentifier=$APPLE_TEAM_ID"
-          printf '%s\n' "$signature" | grep -F 'Authority=Developer ID Application:'
-          xcrun stapler validate "$dmg"
+          bash gui/tools/finalizemac/verify.sh "$app" "$dmg" "$APPLE_TEAM_ID"
 
       - name: List the artifacts
         shell: bash

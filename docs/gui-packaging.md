@@ -174,6 +174,15 @@ stapled notarization ticket. Release tags require all six macOS
 secrets; a manual run with none may still produce an ad-hoc build, but a partial
 configuration fails.
 
+Apple's `stapler` may contact CloudKit even when the notarization ticket is
+already stapled. Stapling and ticket validation retry only explicit transient
+network errors (including the `NSURLErrorDomain -1005` connection loss seen in
+v1.5.72) and HTTP 429/500/502/503/504, at most four attempts with 5/10/20-second
+backoff. Every failure is logged; exhaustion still fails the job. Exit code 68
+by itself does not trigger a retry. Signature/team mismatches, invalid tickets
+and rejected notarization remain hard failures. A notarization submission is
+never automatically replayed after an unknown upload result.
+
 On a tag, after every GUI build passes, `.github/workflows/gui-attach.yml`
 waits for the GitHub Release created by GoReleaser and attaches the DMG, Windows
 installer, Linux tarballs and Debian packages. If the release does not appear,

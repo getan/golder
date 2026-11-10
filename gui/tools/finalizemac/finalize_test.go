@@ -12,14 +12,18 @@ import (
 
 func TestFinalizeSignsChecksumBeforePackaging(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		identity string
-		status   string
-		wantErr  bool
-		mutate   bool
+		name            string
+		identity        string
+		status          string
+		wantErr         bool
+		mutate          bool
+		stapleTransient bool
+		submitFails     bool
 	}{
 		{name: "ad hoc", identity: "-"},
 		{name: "accepted", identity: "Developer ID Application: Example", status: "Accepted"},
+		{name: "stapling recovers without resubmission", identity: "Developer ID Application: Example", status: "Accepted", stapleTransient: true},
+		{name: "unknown upload result is not resubmitted", identity: "Developer ID Application: Example", submitFails: true, wantErr: true},
 		{name: "rejected", identity: "Developer ID Application: Example", status: "Invalid", wantErr: true},
 		{name: "nested code changed", identity: "-", mutate: true, wantErr: true},
 	} {
@@ -55,8 +59,16 @@ case "$1" in
 esac`,
 				"ditto": `printf 'ditto %s\n' "$*" >> "$TEST_LOG"; cp -R "$1" "$2"`,
 				"xcrun": `printf 'xcrun %s\n' "$*" >> "$TEST_LOG"
-if [[ "$1" == notarytool ]]; then printf '{"id":"test-id","status":"%s"}\n' "$TEST_STATUS"; fi`,
-				"jq": `grep -q '"status":"Accepted"'`,
+if [[ "$1" == notarytool ]]; then
+  if [[ "$TEST_SUBMIT_FAILS" == true ]]; then echo 'Unknown upload result' >&2; exit 1; fi
+  printf '{"id":"test-id","status":"%s"}\n' "$TEST_STATUS"
+elif [[ "$TEST_STAPLE_TRANSIENT" == true && ! -f "$TEST_LOG.failed" ]]; then
+  touch "$TEST_LOG.failed"
+  echo 'NSURLErrorDomain Code=-1005 "The network connection was lost."' >&2
+  exit 68
+fi`,
+				"sleep": `printf 'sleep %s\n' "$*" >> "$TEST_LOG"`,
+				"jq":    `grep -q '"status":"Accepted"'`,
 			}
 			for name, body := range mocks {
 				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/bash\nset -e\n"+body+"\n"), 0o755); err != nil {
@@ -67,6 +79,7 @@ if [[ "$1" == notarytool ]]; then printf '{"id":"test-id","status":"%s"}\n' "$TE
 			app := filepath.Join(dir, "Golder GUI.app")
 			cmd := exec.Command("bash", "finalize.sh", app, dmg, tc.identity)
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "TEST_LOG="+log, "TEST_STATUS="+tc.status, "TEST_HELPER="+helper, fmt.Sprintf("TEST_MUTATE=%t", tc.mutate), "TMPDIR="+dir)
+			cmd.Env = append(cmd.Env, fmt.Sprintf("TEST_STAPLE_TRANSIENT=%t", tc.stapleTransient), fmt.Sprintf("TEST_SUBMIT_FAILS=%t", tc.submitFails))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tc.wantErr {
 				calls, _ := os.ReadFile(log)
@@ -92,11 +105,18 @@ if [[ "$1" == notarytool ]]; then printf '{"id":"test-id","status":"%s"}\n' "$TE
 			if tc.identity == "-" && strings.Contains(calls, "xcrun ") {
 				t.Fatalf("ad-hoc build submitted for notarization: %s", calls)
 			}
-			if tc.status == "Accepted" && strings.Count(calls, "xcrun stapler staple") != 2 {
+			wantStaples := 2
+			if tc.stapleTransient {
+				wantStaples++
+			}
+			if tc.status == "Accepted" && strings.Count(calls, "xcrun stapler staple") != wantStaples {
 				t.Fatalf("missing staple operations: %s", calls)
 			}
 			if tc.wantErr && strings.Contains(calls, "xcrun stapler staple") {
 				t.Fatalf("stapled a rejected submission: %s", calls)
+			}
+			if strings.Count(calls, "xcrun notarytool submit") > 1 {
+				t.Fatalf("notarization submission was replayed: %s", calls)
 			}
 		})
 	}
