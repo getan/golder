@@ -345,13 +345,23 @@ func TestTranscriptSelectionKeepsVirtualizationAfterScrolling(t *testing.T) {
 		a.items = append(a.items, appsession.Item{ID: fmt.Sprintf("entry-%04d", i), Kind: appsession.ItemAssistant, Text: fmt.Sprintf("Message %04d", i), Done: true})
 	}
 	tt := ui.NewTester(a.view, 1200, 500)
-	last, ok := tt.Find("Message 0999")
+	// Find reports built elements, including overscan and clipped rows. Select
+	// an interior visible row rather than assuming the last row is fully visible
+	// with every platform's font metrics.
+	firstVisible, lastVisible := a.list.Visible()
+	want := fmt.Sprintf("Message %04d", (firstVisible+lastVisible)/2)
+	row, ok := tt.Find(want)
 	if !ok {
-		t.Fatal("last message missing")
+		t.Fatalf("visible message %q missing: %q", want, tt.Texts())
 	}
-	tt.Press(last.X+1, last.Y+last.H/2)
-	tt.Move(last.X+last.W-1, last.Y+last.H/2)
-	tt.Release(last.X+last.W-1, last.Y+last.H/2)
+	tt.Press(row.X+1, row.Y+row.H/2)
+	tt.Move(row.X+row.W-1, row.Y+row.H/2)
+	tt.Release(row.X+row.W-1, row.Y+row.H/2)
+	tt.Command("copy")
+	if got := tt.Clipboard(); got != want {
+		t.Fatalf("initial selection copied %q, want %q (row=%+v, visible=%d..%d)", got, want, row, firstVisible, lastVisible)
+	}
+	tt.SetClipboard("unchanged")
 	a.list.scroll.Y = 0
 	tt.Frame()
 	if !tt.HasText("Message 0000") {
@@ -361,8 +371,8 @@ func TestTranscriptSelectionKeepsVirtualizationAfterScrolling(t *testing.T) {
 		t.Fatalf("scrolling with a short selection built %d text nodes", n)
 	}
 	tt.Command("copy")
-	if got := tt.Clipboard(); got != "Message 0999" {
-		t.Fatalf("scrolling changed the original selection: %q", got)
+	if got := tt.Clipboard(); got != want {
+		t.Fatalf("scrolling changed the original selection: got %q, want %q", got, want)
 	}
 }
 
