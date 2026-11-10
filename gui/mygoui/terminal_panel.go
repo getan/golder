@@ -257,6 +257,7 @@ func (a *App) terminalPaneView(c *ui.Context, pane *terminalPane) {
 		header.Children(func() {
 			ui.Text(c, pane.name).FontSize(11).FontWeight(600).Grow(1).SingleLine().Ellipsis("…").Label("Terminal pane " + pane.name)
 			state := "exited"
+			stateTip := ""
 			if pane.starting {
 				state = "starting"
 			} else if pane.running() {
@@ -270,12 +271,13 @@ func (a *App) terminalPaneView(c *ui.Context, pane *terminalPane) {
 				state = "Agent control"
 				for _, agent := range a.activeTerminalAgents(pane.project) {
 					if agent.id == owner {
-						state = "Agent: " + oneLine(agent.controller.Snapshot().Title, 24)
+						stateTip = terminalAgentLabel(agent)
+						state = "Agent: " + stateTip
 						break
 					}
 				}
 			}
-			ui.Text(c, state).FontSize(10).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(140)
+			ui.Text(c, state).FontSize(10).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(220).Tooltip(stateTip)
 		})
 		if pane.term != nil {
 			view := terminal.View(c, pane.term).Grow(1).FillWidth().MinHeight(0).Disabled(pane.grantPending || owner != "")
@@ -481,7 +483,13 @@ func (a *App) terminalModals(c *ui.Context) {
 			}
 			ui.Text(c, title).FontSize(16).Bold()
 			if a.terminalGrantAgent != nil {
-				ui.Text(c, terminalAgentLabel(a.terminalGrantAgent)).FontSize(12).Wrap()
+				if !a.terminalGrantRead && a.terminalGrantPane != nil {
+					owner := a.terminalRegistry().Owner(a.terminalGrantPane.id)
+					if owner != "" && owner != a.terminalGrantAgent.id {
+						ui.Text(c, "From: "+a.terminalAgentOwnerLabel(owner)).FontSize(12).Wrap()
+					}
+				}
+				ui.Text(c, "To: "+terminalAgentLabel(a.terminalGrantAgent)).FontSize(12).Wrap()
 			}
 			ui.Text(c, message).FontSize(12).Wrap()
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {

@@ -26,6 +26,7 @@ type Agent struct {
 	Project        string    `json:"project"`
 	Role           string    `json:"role"`
 	ConversationID string    `json:"conversation_id"`
+	Preview        string    `json:"preview,omitempty"`
 	SessionID      string    `json:"session_id"`
 	PaneID         string    `json:"pane_id"`
 	Workspace      int       `json:"workspace"`
@@ -195,6 +196,11 @@ func (s *Store) Register(agent Agent) error {
 		return errors.New("pane control: incomplete agent identity")
 	}
 	return s.withState(true, func(st *state) error {
+		if current, ok := st.Agents[agent.ID]; ok && current.ConversationID == agent.ConversationID && agent.Preview == "" {
+			// An in-flight heartbeat may have captured the agent before the first
+			// prompt was reported. Do not erase the newly published preview.
+			agent.Preview = current.Preview
+		}
 		agent.UpdatedAt = s.now().UTC()
 		st.Agents[agent.ID] = agent
 		for key, lease := range st.Leases {

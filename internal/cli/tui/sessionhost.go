@@ -14,6 +14,7 @@ import (
 
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/hostcompat"
+	"github.com/getan/golder/internal/session"
 )
 
 // hostLogWriter is where a failed report is noted. Nil would drop them
@@ -32,6 +33,7 @@ func (s *runSession) hostStart() {
 	}
 	s.host.Start(s.hookDeps.SessionID, hostcompat.ResumeArgv(s.hookDeps.SessionID))
 	if s.agentCtx != nil {
+		agenttool.SetPaneAgentPreview(s.agentCtx.Tools, s.header.ID, session.DisplayPreview(s.store, s.header, ""))
 		agenttool.SetPaneAgentState(s.agentCtx.Tools, "idle")
 	}
 	s.hostMeta()
@@ -44,6 +46,7 @@ func (s *runSession) hostTurnStart() {
 	}
 	s.host.TurnStart()
 	if s.agentCtx != nil {
+		agenttool.SetPaneAgentPreview(s.agentCtx.Tools, s.header.ID, session.DisplayPreview(s.store, s.header, s.preTurnLabel))
 		agenttool.SetPaneAgentState(s.agentCtx.Tools, "working")
 	}
 	s.hostMeta()

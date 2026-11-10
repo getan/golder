@@ -76,3 +76,31 @@ func TestPreviewFallsBackToTheFirstAssistantText(t *testing.T) {
 		t.Fatalf("preview = %q, want the assistant fallback", got)
 	}
 }
+
+func TestDisplayPreviewUsesFirstLineAndRedactsBeforeTruncation(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	header := SessionHeader{Version: SchemaVersion, ID: "display", CreatedAt: now, UpdatedAt: now}
+	secret := "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+	msgs := agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("修复登录 " + secret + "\n第二行")}},
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("后续消息")}},
+	}
+	if err := store.Save(header, msgs); err != nil {
+		t.Fatal(err)
+	}
+	got := DisplayPreview(store, header, "fallback")
+	if !strings.Contains(got, "修复登录") || strings.Contains(got, secret) || strings.Contains(got, "第二行") || strings.Contains(got, "后续消息") {
+		t.Fatalf("unsafe or incorrect preview: %q", got)
+	}
+	long := strings.Repeat("测", 100)
+	if got := DisplayPreview(nil, SessionHeader{}, long); len([]rune(got)) != 81 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("long preview = %q", got)
+	}
+	if got := DisplayPreview(nil, SessionHeader{DisplayName: "My session"}, "fallback"); got != "My session" {
+		t.Fatalf("custom title = %q", got)
+	}
+}

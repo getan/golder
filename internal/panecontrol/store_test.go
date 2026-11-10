@@ -17,6 +17,34 @@ func testStore(t *testing.T) *Store {
 	return New(filepath.Join(t.TempDir(), "daemon.sock"))
 }
 
+func TestPreviewSurvivesStaleHeartbeatButNotConversationSwitch(t *testing.T) {
+	s := testStore(t)
+	a := testAgent("a", "golder · Main Agent")
+	if err := s.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	current := a
+	current.Preview = "修复登录"
+	if err := s.Register(current); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	agents, err := s.Agents("work", 1)
+	if err != nil || len(agents) != 1 || agents[0].Preview != current.Preview {
+		t.Fatalf("stale heartbeat removed preview: %+v, %v", agents, err)
+	}
+	a.ConversationID = "new-conversation"
+	if err := s.Register(a); err != nil {
+		t.Fatal(err)
+	}
+	agents, err = s.Agents("work", 1)
+	if err != nil || len(agents) != 1 || agents[0].Preview != "" {
+		t.Fatalf("previous conversation preview leaked: %+v, %v", agents, err)
+	}
+}
+
 func TestExclusiveLeaseTransferAndOneCallConsumption(t *testing.T) {
 	s := testStore(t)
 	a, b := testAgent("a", "annotation-workbench · Main Agent"), testAgent("b", "label-studio · Main Agent")

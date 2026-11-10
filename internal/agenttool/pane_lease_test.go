@@ -453,6 +453,13 @@ func TestPaneSlashUsesCurrentAgentAndCanExplicitlyTransferToAnother(t *testing.T
 	}
 
 	store, current := tool.Control.sharedLeaseState()
+	SetPaneAgentPreview(tools, current.ConversationID, "修复登录按钮")
+	SetPaneAgentState(tools, "working")
+	SetPaneAgentPreview(tools, "different-conversation", "wrong session")
+	agents, err := store.Agents("work", 1)
+	if err != nil || len(agents) != 1 || agents[0].Preview != "修复登录按钮" || agents[0].State != "working" {
+		t.Fatalf("preview identity or state changed: %+v, %v", agents, err)
+	}
 	other := panecontrol.Agent{ID: "label-studio-main-9c21", Label: "label-studio · Main Agent", Project: "label-studio", Role: "main",
 		ConversationID: "conversation-b", SessionID: "work", PaneID: "agent-b", Workspace: 1, Mode: "ask", PID: os.Getpid()}
 	if err := store.Register(other); err != nil {

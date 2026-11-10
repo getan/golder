@@ -26,6 +26,24 @@ func (s *Store) Preview(id string) (string, error) {
 	return previewFrom(f)
 }
 
+// DisplayPreview is the short, redacted title used on the pane authorization
+// surface. A first in-flight prompt can be supplied before it is persisted.
+func DisplayPreview(store *Store, header SessionHeader, fallback string) string {
+	text := strings.TrimSpace(header.DisplayName)
+	if text == "" && store != nil {
+		text, _ = store.Preview(header.ID)
+	}
+	if strings.TrimSpace(text) == "" {
+		text = fallback
+	}
+	text = redact.ShareText(text)
+	text = strings.Join(strings.Fields(strings.SplitN(text, "\n", 2)[0]), " ")
+	if runes := []rune(text); len(runes) > 80 {
+		return string(runes[:80]) + "…"
+	}
+	return text
+}
+
 func previewFrom(r io.Reader) (string, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, sessionScanBufInit), sessionScanBufMax)

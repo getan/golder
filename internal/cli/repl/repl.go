@@ -586,7 +586,7 @@ func runREPL(in io.Reader, out io.Writer, deps replDeps) error {
 		// to this turn can move the conversation back to exactly here.
 		preTurnLeaf := deps.curLeaf
 		// The multiplexer sees the same turn boundary the transcript does.
-		deps.hostTurnStart()
+		deps.hostTurnStart(prompt)
 		streamRun(runCtx, out, deps, prompt)
 		cancel()
 		setCancel(nil)

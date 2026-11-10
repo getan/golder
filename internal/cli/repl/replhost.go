@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/hostcompat"
+	"github.com/getan/golder/internal/session"
 )
 
 // hostStart (re)announces the session: which conversation this pane holds, how
@@ -22,13 +23,15 @@ import (
 // follow the one golder actually runs.
 func (d *replDeps) hostStart() {
 	d.host.Start(d.hookDeps.SessionID, hostcompat.ResumeArgv(d.hookDeps.SessionID))
+	agenttool.SetPaneAgentPreview(d.agentCtx.Tools, d.header.ID, session.DisplayPreview(d.store, d.header, ""))
 	agenttool.SetPaneAgentState(d.agentCtx.Tools, "idle")
 	d.hostMeta()
 }
 
 // hostTurnStart reports that golder took a prompt.
-func (d *replDeps) hostTurnStart() {
+func (d *replDeps) hostTurnStart(prompt string) {
 	d.host.TurnStart()
+	agenttool.SetPaneAgentPreview(d.agentCtx.Tools, d.header.ID, session.DisplayPreview(d.store, d.header, prompt))
 	agenttool.SetPaneAgentState(d.agentCtx.Tools, "working")
 	d.hostMeta()
 }

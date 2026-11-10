@@ -84,6 +84,11 @@ operation:
   **This conversation**. Read-only Agents and Agents waiting on an approval are
   omitted. The first level stays short, shows the current controller/scope, and
   offers **Revoke Agent control**.
+- When available, the picker and transfer confirmation show a shortened
+  conversation title or first user message on a separate, non-selectable row.
+  Golder redacts credential-shaped content before publishing this preview to the
+  local pane-control registry. It is display context only, not an Agent identity
+  or authorization; duplicate names still carry distinct pane/conversation IDs.
 - Or, in the chosen Agent's own composer, run `/pane agents`, then
   `/pane allow-agent <full-pane-id> one-call|session`. `/pane status` shows
   controllers and `/pane revoke-agent <full-pane-id>` revokes one. Selecting a

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/session"
 )
 
 // terminalAgent identifies one live controller incarnation, not merely a saved
@@ -89,11 +91,29 @@ func (a *App) activeTerminalAgents(project string) []*terminalAgent {
 
 func terminalAgentLabel(agent *terminalAgent) string {
 	snapshot := agent.controller.Snapshot()
-	title := oneLine(snapshot.Title, 50)
+	title := oneLine(session.RedactText(snapshot.Title), 24)
 	if title == "" {
 		title = "Untitled session"
 	}
-	return title + " · " + agent.session
+	return terminalAgentBadge(agent.id) + " · " + title
+}
+
+// The registry never reuses these process-local IDs, even when a conversation
+// closes and is reopened. Put the badge first so long titles cannot hide it.
+func terminalAgentBadge(id string) string {
+	if n, ok := strings.CutPrefix(id, "gui-agent-"); ok && n != "" {
+		return "#" + n
+	}
+	return id
+}
+
+func (a *App) terminalAgentOwnerLabel(id string) string {
+	for _, agent := range a.terminalAgents {
+		if agent.id == id {
+			return terminalAgentLabel(agent)
+		}
+	}
+	return "Agent " + terminalAgentBadge(id)
 }
 
 func (a *App) findTerminalPane(project, id string) *terminalPane {

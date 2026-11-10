@@ -154,6 +154,26 @@ func SetPaneAgentState(tools []agentcore.AgentTool, state string) {
 	}
 }
 
+// SetPaneAgentPreview publishes display-only, already-redacted conversation
+// context. It never selects an Agent or grants pane access.
+func SetPaneAgentPreview(tools []agentcore.AgentTool, conversationID, preview string) {
+	seen := map[*ControlGuard]bool{}
+	for _, raw := range tools {
+		tool, ok := raw.(*TuiosTool)
+		if !ok || tool.Control == nil || seen[tool.Control] {
+			continue
+		}
+		seen[tool.Control] = true
+		g := tool.Control
+		g.mu.Lock()
+		if g.leaseStore != nil && g.agentIdentity.ID != "" && g.agentIdentity.ConversationID == conversationID && g.agentIdentity.Preview != preview {
+			g.agentIdentity.Preview = preview
+			_ = g.leaseStore.Register(g.agentIdentity)
+		}
+		g.mu.Unlock()
+	}
+}
+
 func (g *ControlGuard) configureAgent(c *tuiosctl.Client, own tuiosctl.Window, conversationID string) error {
 	if strings.TrimSpace(conversationID) == "" {
 		return errors.New("cannot register pane-control agent without a conversation id")
