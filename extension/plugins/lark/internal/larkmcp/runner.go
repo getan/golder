@@ -135,15 +135,16 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 func (b *cappedBuffer) Bytes() []byte { return b.data }
 
 type Result struct {
-	OK             bool     `json:"ok"`
-	Service        string   `json:"service"`
-	Identity       string   `json:"identity"`
-	Data           any      `json:"data,omitempty"`
-	Error          *Failure `json:"error,omitempty"`
-	ExecutionState string   `json:"execution_state"`
-	Partial        bool     `json:"partial,omitempty"`
-	Verification   string   `json:"verification,omitempty"`
-	Readback       any      `json:"readback,omitempty"`
+	OK             bool            `json:"ok"`
+	Service        string          `json:"service"`
+	Identity       string          `json:"identity"`
+	Data           any             `json:"data,omitempty"`
+	Error          *Failure        `json:"error,omitempty"`
+	ExecutionState string          `json:"execution_state"`
+	Partial        bool            `json:"partial,omitempty"`
+	Verification   string          `json:"verification,omitempty"`
+	Readback       any             `json:"readback,omitempty"`
+	Diagnostics    *CLIDiagnostics `json:"diagnostics,omitempty"`
 }
 
 type Failure struct {

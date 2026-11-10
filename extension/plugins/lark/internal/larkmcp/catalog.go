@@ -50,7 +50,7 @@ func single(name, description, command, flags string, write bool, required ...st
 
 func definitions() []definition {
 	defs := []definition{
-		single("doc_search", "Search Feishu documents/Wiki by topic and filters. Returns a bounded page, not a full-corpus scan.", "drive +search", "query doc_types created_since created_until page_token page_size mine", false),
+		single("doc_search", "Search Feishu documents/Wiki by topic and filters. mine means documents I own; created_by_me means documents I originally created. Empty query may browse by filters. Search v2 requires search:docs:read, not just drive:drive.search:readonly. Returns a bounded page, not a full-corpus scan.", "drive +search", "query doc_types created_since created_until page_token page_size mine created_by_me", false),
 		single("doc_read", "Read a Feishu document, outline, section or keyword excerpt. Use scope to avoid fetching a whole large document.", "docs +fetch", "doc scope keyword start_block_id end_block_id detail doc_format", false, "doc"),
 		{Name: "doc_write", Description: "Create, append or replace a specific text/block in a document as the user. Requires confirmed intent; no default full overwrite.", Service: "lark", Write: true, Default: "append", Options: options("doc title content pattern block_id parent_token"), Operations: map[string]operation{
 			"create": op("docs +create", "title", "content"), "append": op("docs +update", "doc", "content"), "replace_text": op("docs +update", "doc", "pattern", "content"), "replace_block": op("docs +update", "doc", "block_id", "content"),
@@ -76,7 +76,7 @@ func definitions() []definition {
 	}
 	for i := range defs {
 		d := &defs[i]
-		for _, key := range []string{"mine"} {
+		for _, key := range []string{"mine", "created_by_me"} {
 			if _, ok := d.Options[key]; ok {
 				d.Options[key] = boolean()
 			}

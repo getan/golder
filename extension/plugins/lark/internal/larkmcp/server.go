@@ -157,7 +157,7 @@ func (p *Plugin) run(ctx context.Context, service string, args []string, write b
 		args = append(args, "--format=json")
 	}
 	out, err := p.Runner.Run(ctx, service, args, nil)
-	r := normalize(service, out, err, write)
+	r := p.withCLIDiagnostics(normalize(service, out, err, write), args, out, err)
 	if r.OK && write {
 		r.ExecutionState, r.Verification = "submitted", "receipt_only"
 	}

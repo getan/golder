@@ -45,7 +45,7 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		}
 		args := append(append([]string{}, in.Command...), "--help")
 		out, err := p.Runner.Run(ctx, in.Service, args, nil)
-		return normalize(in.Service, out, err, false)
+		return p.withCLIDiagnostics(normalize(in.Service, out, err, false), args, out, err)
 	}
 	if !in.Confirm {
 		return failure(in.Service, "INTENT_REQUIRED", "Confirm the exact CLI operation before execution", "Host approval is separate")
@@ -62,7 +62,11 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	if err := businessFlags(in.Argv[2:]); err != nil {
 		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Use only inline business parameters, not local-file or configuration references")
 	}
-	return p.run(ctx, in.Service, in.Argv, true)
+	// This one fixed command is a known read, independent of untrusted CLI
+	// annotations. Keep the same exact-call host authorization requirement;
+	// all other long-tail commands remain conservatively mutating/unknown.
+	knownSearchRead := in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search"
+	return p.run(ctx, in.Service, in.Argv, !knownSearchRead)
 }
 
 func businessCommand(service string, parts []string, help bool) error {

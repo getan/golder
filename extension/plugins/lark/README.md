@@ -146,6 +146,9 @@ does not grant permissions your tenant or resource owner has withheld.
 
 ## Tools and context
 
+Business failures include bounded, redacted CLI diagnostics (helper 1.5.63+).
+See [CLI diagnostics and Search v2 scopes](../../../docs/lark-cli-diagnostics.md).
+
 There are 20 high-frequency tools and `cli_help`/`cli_call`. Common tools accept
 `{operation, options}`; option names use underscores. Examples:
 
