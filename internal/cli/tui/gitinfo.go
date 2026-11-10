@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"time"
@@ -23,10 +25,12 @@ import (
 //   - ok:     false when the cwd is not a git repository or any git command
 //     failed; the status bar hides the git segment in that case.
 type gitInfoMsg struct {
-	branch string
-	ahead  int
-	dirty  int
-	ok     bool
+	branch  string
+	ahead   int
+	dirty   int
+	ok      bool
+	request uint64
+	dir     string
 }
 
 // fetchGitCmd returns a tea.Cmd that probes the git working tree rooted at cwd
@@ -55,13 +59,38 @@ func fetchGitCmd(cwd string) tea.Cmd {
 func runGit(dir string, args ...string) (string, error) {
 	// git status may otherwise take index.lock to refresh its stat cache.
 	// A background observer must not compete with staging or committing.
-	cmd := exec.Command("git", append([]string{"--no-optional-locks"}, args...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-optional-locks"}, args...)...)
 	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
+	cmd.WaitDelay = time.Second // a child retaining stdout must not pin the TUI probe
+	out := gitProbeBuffer{limit: 8 << 20}
+	cmd.Stdout = &out
+	if err := cmd.Run(); err != nil {
 		return "", err
 	}
-	return string(out), nil
+	if out.truncated {
+		return "", errors.New("git status output exceeds 8 MiB")
+	}
+	return out.text.String(), nil
+}
+
+// gitProbeBuffer drains all output without retaining more than limit bytes. A
+// truncated reading is rejected rather than reporting a misleading file count.
+type gitProbeBuffer struct {
+	text      strings.Builder
+	limit     int
+	truncated bool
+}
+
+func (b *gitProbeBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if remaining := max(0, b.limit-b.text.Len()); len(p) > remaining {
+		b.truncated = true
+		p = p[:remaining]
+	}
+	_, _ = b.text.Write(p)
+	return n, nil
 }
 
 // parseGitStatus parses the output of `git status --porcelain -b` into a

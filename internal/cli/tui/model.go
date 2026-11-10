@@ -197,7 +197,8 @@ type Model struct {
 	// statusBar renders the persistent bottom line (#386, US-003). It is fed the
 	// terminal width, telemetry-derived context usage, and the async git probe
 	// result; View renders it just above the input line.
-	statusBar statusBar
+	statusBar  statusBar
+	gitRefresh gitRefreshState
 
 	// cwd is the launch directory, captured once at construction and reused for
 	// the git probe and the status bar's path display.
@@ -385,6 +386,7 @@ func NewModel(opts Options) Model {
 		input:             newInput(),
 		cwd:               cwd,
 		statusBar:         bar,
+		gitRefresh:        newGitRefreshState(),
 		toolCards:         make(map[string]*toolCard),
 		slash:             newSlashRegistry(opts, live),
 		live:              live,
@@ -991,7 +993,7 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 // can show the branch/dirty state as soon as it resolves; the alt-screen is
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{fetchGitCmd(m.cwd), m.input.Focus()}
+	cmds := []tea.Cmd{func() tea.Msg { return gitRefreshStartMsg{} }, m.input.Focus()}
 	if cmd := workspaceSyncOutput(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -1082,9 +1084,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case seedMoreMsg:
 		return m, m.stepSeedMore(msg)
 
+	case gitRefreshStartMsg:
+		cmd := m.startGitRefresh()
+		return m, cmd
+
+	case gitRefreshTickMsg:
+		cmd := m.tickGitRefresh(msg)
+		return m, cmd
+
+	case tea.FocusMsg:
+		cmd := m.setGitFocus(true)
+		return m, cmd
+
+	case tea.BlurMsg:
+		cmd := m.setGitFocus(false)
+		return m, cmd
+
 	case gitInfoMsg:
-		m.statusBar.SetGit(msg)
-		return m, nil
+		cmd := m.finishGitRefresh(msg)
+		return m, cmd
 
 	case trustPromptMsg:
 		return m.openTrustPicker()
@@ -1862,7 +1880,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// runs now, so this is normally a no-op) and re-probe git since a run may
 		// have changed the working tree.
 		focus := m.input.Focus()
-		return m, tea.Batch(focus, fetchGitCmd(m.cwd))
+		git := m.requestGitRefresh(true)
+		return m, tea.Batch(focus, git)
 
 	case steerInjectedMsg:
 		// The loop drained mid-run input from the steer queue and injected it
@@ -3694,7 +3713,9 @@ func (m Model) startQueuedSteer() (tea.Model, tea.Cmd, bool) {
 	m.transcript.addUser(text)
 	m.remoteEcho("\n> " + text + "\n")
 	next, cmd := m.startPrompt(text)
-	return next.(Model), tea.Batch(cmd, fetchGitCmd(m.cwd)), true
+	model := next.(Model)
+	git := model.requestGitRefresh(true)
+	return model, tea.Batch(cmd, git), true
 }
 
 // thinkingLabel returns the current thinking-effort label for the spinner stats
@@ -4048,6 +4069,14 @@ func (m Model) pumpNext() tea.Cmd {
 // AltScreen on the returned View is how Bubble Tea v2 enters/leaves the alternate
 // screen buffer, so the user's scrollback is restored on quit.
 func (m Model) View() tea.View {
+	v := m.view()
+	// A standalone terminal can report its own focus; in workspace, tuios-mini
+	// reports pane focus using the same DEC 1004 protocol.
+	v.ReportFocus = !m.quitting
+	return v
+}
+
+func (m Model) view() tea.View {
 	if m.quitting {
 		return tea.View{AltScreen: true}
 	}
