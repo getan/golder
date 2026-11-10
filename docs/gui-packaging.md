@@ -31,9 +31,12 @@ GitHub's release metadata, not an independent publisher signature.
 
 When the download finishes, the app offers **Open disk image** on macOS,
 **Open installer** on Windows, or **Open archive** on Linux, as well as
-**Show in folder** and **Later**. Opening is always a separate user action;
-nothing is installed or replaced automatically. Quit the GUI before replacing
-the macOS app, and reopen it after installation. On Linux, continue to use the
+**Show in folder** and **Later**. **Open and quit** first warns that closing
+interrupts running sessions and pending approvals and may discard unsaved work;
+after confirmation it checks and opens the package, then requests the normal
+guarded window close. Opening is always a separate user action; nothing is
+installed or replaced automatically. Quit the GUI before replacing the macOS
+app, and reopen it after installation. On Linux, continue to use the
 package manager for package-managed installations. Downloads keep the normal
 macOS quarantine or Windows internet-zone mark so platform security checks
 still apply. No browser, GitHub login, or additional update-signing key is

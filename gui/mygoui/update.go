@@ -267,32 +267,51 @@ func (a *App) startGUIDownload() {
 
 // openDownloadedGUI is called only after the person explicitly chooses Open.
 // Reverify the file off the UI thread before handing it to the system.
-func (a *App) openDownloadedGUI() {
-	if a.win == nil || a.updateBusy || a.updatePath == "" {
+func (a *App) openDownloadedGUI(quit bool) {
+	if a.win == nil || a.updateBusy || a.updatePath == "" || (quit && (!a.updateDialogOpen || !a.updateQuitConfirm)) {
 		return
 	}
 	pkg, path, win := a.updatePackage, a.updatePath, a.win
 	ctx, cancel, seq := a.beginGUIUpdateOperation("opening", 2*time.Minute)
+	a.updateError = ""
 	a.banner, a.bannerErr = "Checking the downloaded GUI package…", false
 	go func() {
 		defer cancel()
 		err := verifyDownloadedGUIFile(ctx, pkg, path, markGUIInternetDownload)
 		win.Update(func() {
-			if !a.finishGUIUpdateOperation(seq) {
-				return
-			}
-			if err != nil {
-				a.updatePath = ""
-				a.banner, a.bannerErr = "Cannot open GUI package: "+err.Error()+". Click Update to download it again.", true
-				return
-			}
-			if err := mygo.Shell.OpenPath(path); err != nil {
-				a.banner, a.bannerErr = "Cannot open GUI package: "+err.Error(), true
-				return
-			}
-			a.banner, a.bannerErr = "Package opened. Install it manually, then reopen Golder GUI.", false
+			a.finishDownloadedGUIOpen(seq, path, quit, err, mygo.Shell.OpenPath, win.Close)
 		})
 	}()
+}
+
+// finishDownloadedGUIOpen runs on the UI thread. Only a verified package that
+// the system accepted for opening can trigger the normal guarded window close.
+func (a *App) finishDownloadedGUIOpen(seq uint64, path string, quit bool, verifyErr error, open func(string) error, closeWindow func()) {
+	if !a.finishGUIUpdateOperation(seq) {
+		return
+	}
+	if quit && (!a.updateDialogOpen || !a.updateQuitConfirm) {
+		a.updateQuitConfirm = false
+		a.banner, a.bannerErr = "Opening cancelled. Nothing was installed.", false
+		return
+	}
+	if verifyErr != nil {
+		a.updatePath, a.updateError = "", verifyErr.Error()
+		a.updateDialogOpen, a.updateQuitConfirm = false, false
+		a.banner, a.bannerErr = "Cannot open GUI package: "+verifyErr.Error()+". Click Update to download it again.", true
+		return
+	}
+	if err := open(path); err != nil {
+		a.updateError = err.Error()
+		a.banner, a.bannerErr = "Cannot open GUI package: "+err.Error(), true
+		return
+	}
+	a.updateError = ""
+	a.banner, a.bannerErr = "Package opened. Install it manually, then reopen Golder GUI.", false
+	if quit {
+		a.updateDialogOpen, a.updateQuitConfirm = false, false
+		closeWindow() // Window.Close retains terminal and native-dialog guards.
+	}
 }
 
 func guiUpdateInstructions(goos string) (openLabel, message string) {
@@ -307,7 +326,18 @@ func guiUpdateInstructions(goos string) (openLabel, message string) {
 }
 
 func (a *App) guiUpdateModal(c *ui.Context) {
+	if !a.updateDialogOpen && a.updateQuitConfirm {
+		a.updateQuitConfirm = false
+		if a.updatePhase == "opening" {
+			a.cancelGUIUpdate()
+			a.banner, a.bannerErr = "Opening cancelled. Nothing was installed.", false
+		}
+	}
 	ui.Modal(c, &a.updateDialogOpen, func() {
+		if a.updateQuitConfirm {
+			a.guiUpdateQuitConfirmation(c)
+			return
+		}
 		openLabel, message := guiUpdateInstructions(runtime.GOOS)
 		ui.Column(c).Width(500).Gap(10).Children(func() {
 			ui.Text(c, "GUI "+a.updateTag+" downloaded").FontSize(16).Bold()
@@ -322,11 +352,48 @@ func (a *App) guiUpdateModal(c *ui.Context) {
 					a.updateDialogOpen = false
 					mygo.Shell.ShowItemInFolder(a.updatePath)
 				}
-				if subtlePrimaryButton(c, openLabel).Clicked() {
+				if subtleButton(c, openLabel).Clicked() {
 					a.updateDialogOpen = false
-					a.openDownloadedGUI()
+					a.openDownloadedGUI(false)
 				}
 			})
+			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+				if subtlePrimaryButton(c, "Open and quit", a.updateBusy).Clicked() {
+					a.updateError = ""
+					a.updateQuitConfirm = true
+				}
+			})
+		})
+	})
+}
+
+func (a *App) guiUpdateQuitConfirmation(c *ui.Context) {
+	ui.Column(c).Width(500).Gap(10).Children(func() {
+		ui.Text(c, "Open package and quit?").FontSize(16).Bold()
+		ui.Text(c, "Quitting interrupts running tasks in all conversations, cancels pending approvals, and may discard unsaved drafts or file edits. Running terminals may require a separate confirmation.").FontSize(12).Wrap()
+		ui.Text(c, "The package will be opened, not installed automatically.").FontSize(12).Wrap()
+		if a.updateError != "" {
+			ui.Text(c, "Cannot open GUI package: "+a.updateError).FontSize(12).TextColor(c.Theme().Danger).Wrap()
+		}
+		if a.updateBusy && a.updatePhase == "opening" {
+			ui.Text(c, "Checking the downloaded GUI package…").FontSize(12).TextColor(c.Theme().TextMuted)
+			ui.Row(c).Justify(ui.End).Children(func() {
+				if subtleButton(c, "Cancel opening").Clicked() {
+					a.cancelGUIUpdate()
+					a.updateQuitConfirm = false
+					a.banner, a.bannerErr = "Opening cancelled. Nothing was installed.", false
+				}
+			})
+			return
+		}
+		ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
+			if subtleButton(c, "Back").Clicked() {
+				a.updateQuitConfirm = false
+				a.updateError = ""
+			}
+			if subtlePrimaryButton(c, "Confirm open and quit", a.updateBusy).Clicked() {
+				a.openDownloadedGUI(true)
+			}
 		})
 	})
 }
