@@ -339,6 +339,54 @@ func TestTranscriptWindowReachesRowsOfDifferentHeights(t *testing.T) {
 	}
 }
 
+func TestTranscriptWindowMeasurementOnlyAdjustsKnownHeights(t *testing.T) {
+	s := &transcriptWindow{}
+	s.sync([]transcriptRow{{key: "before"}, {key: "anchor"}}, false)
+	s.started, s.first, s.scroll.Y = true, 1, 1000
+	if !s.measure(0, 20) || s.scroll.Y != 1000 {
+		t.Fatalf("first measurement moved scroll: %v", s.scroll.Y)
+	}
+	if !s.measure(0, 40) || s.scroll.Y != 1020 {
+		t.Fatalf("resize of measured row did not preserve anchor: %v", s.scroll.Y)
+	}
+}
+
+func TestTranscriptSelectionStableOnPressAtDifferentZoom(t *testing.T) {
+	for _, scale := range []float32{.85, .9, .95, 1, 1.05, 1.1, 1.2, 1.35} {
+		t.Run(fmt.Sprintf("%.2f", scale), func(t *testing.T) {
+			a := testApp()
+			a.display.FontScale = scale
+			for i := range 1000 {
+				a.items = append(a.items, appsession.Item{ID: fmt.Sprintf("entry-%04d", i), Kind: appsession.ItemAssistant, Text: fmt.Sprintf("Message %04d", i), Done: true})
+			}
+			tt := ui.NewTester(a.view, 1200, 500)
+			first, last := a.list.Visible()
+			want := fmt.Sprintf("Message %04d", (first+last)/2)
+			row, ok := tt.Find(want)
+			if !ok {
+				t.Fatalf("missing %q", want)
+			}
+			y := a.list.scroll.Y
+			tt.Press(row.X+1, row.Y+row.H/2)
+			after, ok := tt.Find(want)
+			if !ok || after.Y < row.Y-1 || after.Y > row.Y+1 {
+				t.Fatalf("press moved %q: before=%+v after=%+v scroll=%v -> %v", want, row, after, y, a.list.scroll.Y)
+			}
+			tt.Move(row.X+row.W-1, row.Y+row.H/2)
+			moved, _ := tt.Find(want)
+			moveY := a.list.scroll.Y
+			if moved.Y < row.Y-1 || moved.Y > row.Y+1 {
+				t.Fatalf("drag moved %q: before=%+v after=%+v scroll=%v -> %v", want, row, moved, y, moveY)
+			}
+			tt.Release(row.X+row.W-1, row.Y+row.H/2)
+			tt.Command("copy")
+			if got := tt.Clipboard(); got != want {
+				t.Fatalf("copied %q, want %q: before=%+v after-press=%+v after-move=%+v scroll=%v -> %v", got, want, row, after, moved, y, moveY)
+			}
+		})
+	}
+}
+
 func TestTranscriptSelectionKeepsVirtualizationAfterScrolling(t *testing.T) {
 	a := testApp()
 	for i := range 1000 {
@@ -476,6 +524,36 @@ func TestTranscriptWindowKeepsAnchorWhenHistoryIsPrepended(t *testing.T) {
 	after, ok := tt.Find(key)
 	if !ok || after.Y < before.Y-2 || after.Y > before.Y+2 {
 		t.Fatalf("history insertion moved anchor %q: before=%+v after=%+v present=%v", key, before, after, ok)
+	}
+}
+
+func TestTranscriptWindowKeepsAnchorWhenOverscanHeightChanges(t *testing.T) {
+	a := testApp()
+	for i := range 100 {
+		a.items = append(a.items, appsession.Item{ID: fmt.Sprintf("entry-%03d", i), Kind: appsession.ItemAssistant, Text: fmt.Sprintf("Entry %03d", i), Done: true})
+	}
+	tt := ui.NewTester(a.view, 1200, 500)
+	a.list.scroll.Y = 1500
+	tt.Frame()
+	first, _ := a.list.Visible()
+	if first < 1 {
+		t.Fatalf("expected a middle row, got %d", first)
+	}
+	key := fmt.Sprintf("Entry %03d", first)
+	before, ok := tt.Find(key)
+	if !ok {
+		t.Fatalf("anchor %q missing", key)
+	}
+	oldY, oldFirst := a.list.scroll.Y, a.list.first
+	oldHeight := a.list.height[a.list.keys[first-1]]
+	updated := a.items[first-1]
+	updated.Text += "\n\n" + strings.Repeat("A long paragraph that wraps across lines. ", 20)
+	a.index[updated.ID] = first - 1
+	a.replaceItem(updated)
+	tt.Frame()
+	after, ok := tt.Find(key)
+	if !ok || after.Y < before.Y-2 || after.Y > before.Y+2 {
+		t.Fatalf("overscan resize moved anchor %q: before=%+v after=%+v present=%v scroll=%v -> %v first=%d -> %d oldheight=%v", key, before, after, ok, oldY, a.list.scroll.Y, oldFirst, a.list.first, oldHeight)
 	}
 }
 

@@ -484,6 +484,9 @@ func (a *App) replaceItem(it appsession.Item) {
 		if previous.Kind != it.Kind || it.Kind == appsession.ItemNote || (previous.Tool == nil) != (it.Tool == nil) || previous.Tool != nil && it.Tool != nil && (previous.Tool.ID != it.Tool.ID || previous.Tool.Name != it.Tool.Name) {
 			a.transcriptRowsDirty = true
 		}
+		if a.list != nil {
+			a.list.remeasure = true
+		}
 		a.items[i] = it
 		return
 	}

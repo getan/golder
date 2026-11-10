@@ -378,6 +378,10 @@ func (a *App) center(c *ui.Context) {
 	rows := a.projectedTranscriptRows()
 	waiting := a.awaitingFirstOutput()
 	a.list.sync(rows, waiting)
+	if a.list.remeasure {
+		a.list.remeasure = false
+		c.Invalidate()
+	}
 	if a.approvalReveal != "" {
 		if index := approvalRowIndex(rows, a.pending, a.approvalReveal); index >= 0 {
 			a.list.ScrollIntoView(index)

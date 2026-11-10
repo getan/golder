@@ -32,6 +32,7 @@ type transcriptWindow struct {
 	waiting     bool
 	started     bool
 	follow      bool
+	remeasure   bool
 	first       int
 	last        int
 	builtLo     int
@@ -132,6 +133,7 @@ func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
 	if s.index != nil && s.rowsHead == head && s.rowsLen == len(rows) && s.waiting == waiting {
 		return
 	}
+	s.remeasure = true
 	var anchor string
 	var offset float64
 	if s.started && s.first >= 0 && s.first < len(s.keys) {
@@ -226,13 +228,18 @@ func (s *transcriptWindow) measure(i int, h float32) bool {
 	value := float64(h) + transcriptRowGap
 	delta := value - s.values[i]
 	if math.Abs(delta) < 0.5 {
+		s.height[s.keys[i]] = float64(h)
 		return false
 	}
+	known := s.height[s.keys[i]] > 0
 	s.values[i], s.height[s.keys[i]] = value, float64(h)
 	for j := i + 1; j < len(s.tree); j += j & -j {
 		s.tree[j] += delta
 	}
-	if s.started && !s.follow && i < s.first {
+	// The first measurement replaces an estimate for a row already laid out
+	// at its real height. Correcting the scroll offset for that difference
+	// applies the change twice and moves the text under an active drag.
+	if known && s.started && !s.follow && i < s.first {
 		s.scroll.Y = max(s.scroll.Y+float32(delta), 0)
 	}
 	return true
