@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/egoist/mygo/transfer"
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
@@ -372,17 +373,11 @@ func (a *App) center(c *ui.Context) {
 	// list and its rows after the sidebar has processed those actions, so their
 	// indices always refer to the same active session.
 	if a.list == nil {
-		a.list = &ui.ListState{}
+		a.list = &transcriptWindow{}
 	}
 	rows := a.projectedTranscriptRows()
-	a.list.Key = func(i int) any {
-		if i >= 0 && i < len(rows) {
-			return rows[i].key
-		}
-		return "awaiting-first-output"
-	}
-	a.list.FollowEnd = true
-	a.list.FollowAnimation = &ui.Smooth
+	waiting := a.awaitingFirstOutput()
+	a.list.sync(rows, waiting)
 	if a.approvalReveal != "" {
 		if index := approvalRowIndex(rows, a.pending, a.approvalReveal); index >= 0 {
 			a.list.ScrollIntoView(index)
@@ -391,21 +386,107 @@ func (a *App) center(c *ui.Context) {
 	}
 	t := c.Theme()
 	ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
-		waiting := a.awaitingFirstOutput()
-		total := len(rows)
-		if waiting {
-			total++
-		}
-		ui.List(c, a.list, total, func(i int) {
-			switch {
-			case i >= 0 && i < len(rows):
-				a.transcriptRowView(c, rows[i])
-			case waiting:
-				ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
+		window := a.list
+		scroll := ui.Scroll(c.Key("transcript:"+a.status.SessionID)).Selectable().TrackScroll(&window.scroll).Grow(1).MinHeight(0).
+			Padding(18, 24).Gap(14).Justify(ui.End).CopyData(func(parts []ui.SelectedText) transfer.Data {
+			if !window.copyReady(parts) {
+				a.banner, a.bannerErr = "The selection is still loading. Copy again when it finishes.", true
+				c.Services().Invalidate()
+				return transfer.TextData("[Selection is still loading; copy again.]")
 			}
-		}).Grow(1).MinHeight(0).Padding(18, 24).Gap(14).Justify(ui.End).Children(func() {
-			if total == 0 {
+			text, hasObjects := window.copyText(parts)
+			if hasObjects {
+				a.banner, a.bannerErr = "Inline formulas are represented as [formula] in copied text.", false
+				c.Services().Invalidate()
+			}
+			return transfer.TextData(text)
+		})
+		scroll.ContextMenu(func(m *ui.Menu) {
+			m.EditItems()
+			m.Separator()
+			item := m.Item("Copy response as Markdown")
+			if item.Chosen() {
+				if window.menuValid {
+					source := []byte(window.menuSource)
+					c.Services().WriteClipboardData(transfer.New(transfer.NewItem(
+						transfer.Bytes(transfer.Text, source), transfer.Bytes(transfer.Markdown, source),
+					)))
+				}
+				window.menuSource, window.menuValid = "", false
+			} else {
+				x, y, over := scroll.PointerPosition()
+				bounds := scroll.Bounds()
+				window.menuSource, window.menuValid = window.markdownAt(bounds.X+x, bounds.Y+y)
+				window.menuValid = over && window.menuValid
+				item.Disabled(!window.menuValid)
+			}
+		})
+		if !scroll.FocusWithin() {
+			window.focusKey = ""
+		}
+		ranges := window.plan(scroll.LayoutBounds().H, scroll.SelectedTexts())
+		window.ranges = append(window.ranges[:0], ranges...)
+		scroll.Children(func() {
+			window.startMarker = ui.Text(c.Key("transcript-select-start"), "").Absolute().Width(0).Height(0).Selectable().ID()
+			defer func() {
+				window.endMarker = ui.Text(c.Key("transcript-select-end"), "").Absolute().Width(0).Height(0).Selectable().ID()
+			}()
+			if len(window.keys) == 0 {
+				window.menuHits = nil
 				a.emptyState(c)
+				return
+			}
+			previous := 0
+			rendered := make(map[string]bool)
+			hits := make([]transcriptMenuHit, 0)
+			for _, visible := range ranges {
+				if visible.lo > previous {
+					space := window.prefix(visible.lo) - window.prefix(previous) - transcriptRowGap
+					ui.Box(c.Key(fmt.Sprintf("transcript-space:%d", previous))).Height(float32(max(space, 0))).Shrink(0)
+				}
+				for i := visible.lo; i < visible.hi; i++ {
+					i, key := i, window.keys[i]
+					rendered[key] = true
+					row := ui.Column(c.Key("transcript-row:" + key)).FillWidth().Shrink(0)
+					hit := transcriptMenuHit{box: row.Bounds()}
+					if i < len(rows) {
+						if item, ok := a.transcriptRowItem(rows[i]); ok && item.Kind == appsession.ItemAssistant {
+							hit.source, hit.assistant = item.Text, true
+						}
+					}
+					hits = append(hits, hit)
+					if row.FocusWithin() {
+						window.focusKey = key
+					}
+					height := row.LayoutBounds().H
+					if height > 0 {
+						delete(window.measuring, key)
+						if window.measure(i, height) {
+							c.Invalidate()
+						}
+					} else if !window.measuring[key] {
+						window.measuring[key] = true
+						c.Invalidate()
+					}
+					row.Children(func() {
+						if i < len(rows) {
+							a.transcriptRowView(c, rows[i])
+						} else if waiting {
+							ui.Text(c.Key("awaiting-first-output"), "正在思考…").FontSize(12).TextColor(t.TextMuted)
+						}
+					})
+				}
+				previous = visible.hi
+			}
+			window.menuHits = hits
+			for key := range window.measuring {
+				if !rendered[key] {
+					delete(window.measuring, key)
+				}
+			}
+			if previous < len(window.keys) {
+				space := window.prefix(len(window.keys)) - window.prefix(previous) - transcriptRowGap
+				ui.Box(c.Key("transcript-trailing-space")).Height(float32(max(space, 0))).Shrink(0)
 			}
 		})
 		a.composer(c)

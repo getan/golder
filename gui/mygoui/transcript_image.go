@@ -35,9 +35,10 @@ func transcriptMarkdownOptions(project string) *markdown.Options {
 	var loads atomic.Int32
 	math := newTranscriptMath()
 	return &markdown.Options{
-		Extensions: parser.Default | parser.ExtDollarMath,
-		InlineMath: math.inline,
-		Math:       math.block,
+		Extensions:     parser.Default | parser.ExtDollarMath,
+		ShareSelection: true,
+		InlineMath:     math.inline,
+		Math:           math.block,
 		Code: map[string]func(*ui.Context, *markdown.CodeBlockView){
 			"svg": renderSVGCodeBlock, "SVG": renderSVGCodeBlock,
 			"xml": renderSVGCodeBlock, "XML": renderSVGCodeBlock,

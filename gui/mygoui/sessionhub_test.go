@@ -123,7 +123,7 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 	}
 	a.attachments = append(a.attachments, image)
 	a.historyNav = promptHistoryCursor{index: 1, draft: "original draft", browsing: true}
-	firstList := &ui.ListState{}
+	firstList := &transcriptWindow{}
 	a.list = firstList
 	second, err := a.hub.NewSession(context.Background(), project)
 	if err != nil {
@@ -137,7 +137,7 @@ func TestSwitchingSessionsRestoresDrafts(t *testing.T) {
 		t.Fatal("switching sessions paused, revoked, or transferred desktop control")
 	}
 	a.draft = "draft two"
-	a.list = &ui.ListState{}
+	a.list = &transcriptWindow{}
 	a.resume(first.SessionID())
 	if a.ctrl != first || !a.status.Running || a.draft != "draft one" || a.list != firstList || len(a.attachments) != 2 || a.attachments[0].Path != "one.txt" || a.attachments[1].Name != image.Name || len(a.attachments[1].ImagePNG) == 0 {
 		t.Fatalf("draft was not restored: %q %+v", a.draft, a.attachments)

@@ -34,7 +34,7 @@ type App struct {
 
 	items                 []appsession.Item
 	index                 map[string]int
-	list                  *ui.ListState
+	list                  *transcriptWindow
 	transcriptRows        []transcriptRow
 	transcriptRowsItems   int
 	transcriptRowsPending int
@@ -229,7 +229,7 @@ type App struct {
 type sessionDraft struct {
 	text        string
 	attachments []appsession.UserAttachment
-	list        *ui.ListState
+	list        *transcriptWindow
 	historyNav  promptHistoryCursor
 }
 
