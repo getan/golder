@@ -123,6 +123,7 @@ type App struct {
 	extensionEdit            appsession.LarkExtensionEdit
 	extensionDomains         map[string]bool
 	extensionBusy            bool
+	extensionCLIInstall      *officialCLIInstallState
 	extensionErr             string
 	extensionNote            string
 	extensionAuthURL         string
@@ -297,6 +298,7 @@ func (a *App) Run() error {
 			if a.extensionCancel != nil {
 				a.extensionCancel()
 			}
+			a.cancelOfficialCLIInstall()
 			if a.diffCancel != nil {
 				a.diffCancel()
 				a.diffCancel = nil

@@ -159,7 +159,14 @@ Two optional surfaces need runtime pieces:
   installed / active and application/user-auth status, test, enable/disable,
   reset and uninstall; installed native Lark/Project CLIs are auto-detected, and
   pinned official binaries can be downloaded and integrity-checked directly
-  without requiring npm or Node; other configured sources appear there too;
+  without requiring npm or Node. Both downloads show inline byte/percentage
+  progress (bytes only if the server omits the size), connection/checksum/
+  extraction/install stages, cancellation, and errors beside the install
+  buttons. Successful installation selects that verified CLI and auto-discovers
+  the other empty path field without overwriting another tool's custom path or
+  edits made during download. Review and save explicitly; installation never
+  saves credentials, enables a source, or starts authorization. Other configured
+  sources appear there too;
 - files: a custom, project-scoped Files drawer with lazy folder expansion and a
   bounded read-only preview; generated directories are hidden and symlinks are
   shown but never followed;

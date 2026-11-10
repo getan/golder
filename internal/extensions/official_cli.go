@@ -54,11 +54,14 @@ type OfficialCLIInstallSpec struct {
 }
 
 type OfficialCLIInstaller struct {
-	Client              *http.Client
-	Root                string
-	GOOS                string
-	GOARCH              string
-	Specs               map[OfficialCLIKind]OfficialCLIInstallSpec
+	Client *http.Client
+	Root   string
+	GOOS   string
+	GOARCH string
+	Specs  map[OfficialCLIKind]OfficialCLIInstallSpec
+	// Progress is called synchronously on the installing goroutine. Callers
+	// dispatch UI updates themselves; callbacks must not block the download.
+	Progress            func(OfficialCLIInstallProgress)
 	AllowHTTP           bool // tests only
 	SkipCommonDiscovery bool // tests only
 }
@@ -125,6 +128,17 @@ func (i *OfficialCLIInstaller) Install(ctx context.Context, kind OfficialCLIKind
 	if i == nil {
 		return OfficialCLI{}, errors.New("official CLI installer is unavailable")
 	}
+	if err := ctx.Err(); err != nil {
+		return OfficialCLI{}, err
+	}
+	progress := OfficialCLIInstallProgress{Kind: kind}
+	report := func(phase string) {
+		progress.Phase = phase
+		if i.Progress != nil {
+			i.Progress(progress)
+		}
+	}
+	report("checking")
 	spec, ok := i.Specs[kind]
 	if !ok || spec.Version == "" || spec.ArchiveURL == "" || spec.ArchivePath == "" || spec.BinaryName == "" {
 		return OfficialCLI{}, fmt.Errorf("official %s binary is unavailable for %s/%s", kind, i.GOOS, i.GOARCH)
@@ -136,6 +150,7 @@ func (i *OfficialCLIInstaller) Install(ctx context.Context, kind OfficialCLIKind
 	targetRoot := filepath.Join(root, string(kind), spec.Version)
 	target := filepath.Join(targetRoot, spec.BinaryName)
 	if valid, _ := validateNativeCLI(target); valid {
+		report("complete")
 		return OfficialCLI{Kind: kind, Version: spec.Version, Executable: target}, nil
 	}
 	if _, err := os.Lstat(targetRoot); err == nil {
@@ -147,13 +162,22 @@ func (i *OfficialCLIInstaller) Install(ctx context.Context, kind OfficialCLIKind
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && !(i.AllowHTTP && parsed.Scheme == "http")) {
 		return OfficialCLI{}, errors.New("official CLI download URL is invalid")
 	}
-	archive, err := fetchOfficialCLI(ctx, i.Client, spec.ArchiveURL)
+	report("connecting")
+	archive, err := fetchOfficialCLI(ctx, i.Client, spec.ArchiveURL, func(done, total int64) {
+		progress.Downloaded, progress.Total = done, total
+		report("downloading")
+	})
 	if err != nil {
 		return OfficialCLI{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return OfficialCLI{}, err
+	}
+	report("verifying")
 	if err := verifyOfficialCLIArchive(archive, spec); err != nil {
 		return OfficialCLI{}, err
 	}
+	report("extracting")
 	binary, err := extractOfficialCLIBinary(archive, spec.ArchiveURL, spec.ArchivePath)
 	if err != nil {
 		return OfficialCLI{}, err
@@ -161,6 +185,10 @@ func (i *OfficialCLIInstaller) Install(ctx context.Context, kind OfficialCLIKind
 	if !nativeBinary(binary) {
 		return OfficialCLI{}, errors.New("official CLI archive did not contain a native executable")
 	}
+	if err := ctx.Err(); err != nil {
+		return OfficialCLI{}, err
+	}
+	report("installing")
 	kindRoot := filepath.Join(root, string(kind))
 	if err := privatepath.EnsureDir(kindRoot); err != nil {
 		return OfficialCLI{}, err
@@ -181,9 +209,13 @@ func (i *OfficialCLIInstaller) Install(ctx context.Context, kind OfficialCLIKind
 	if err := os.WriteFile(filepath.Join(tmp, "install.json"), manifest, 0o600); err != nil {
 		return OfficialCLI{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return OfficialCLI{}, err
+	}
 	if err := os.Rename(tmp, targetRoot); err != nil {
 		return OfficialCLI{}, err
 	}
+	report("complete")
 	return OfficialCLI{Kind: kind, Version: spec.Version, Executable: target}, nil
 }
 
@@ -358,7 +390,7 @@ func allowedOfficialCLIHost(host string) bool {
 	return host == "github.com" || host == "release-assets.githubusercontent.com" || host == "objects.githubusercontent.com" || host == "registry.npmjs.org"
 }
 
-func fetchOfficialCLI(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+func fetchOfficialCLI(ctx context.Context, client *http.Client, rawURL string, progress func(int64, int64)) ([]byte, error) {
 	if client == nil {
 		client = newOfficialCLIClient()
 	}
@@ -378,12 +410,20 @@ func fetchOfficialCLI(ctx context.Context, client *http.Client, rawURL string) (
 	if resp.ContentLength > maxOfficialCLIArchive {
 		return nil, errors.New("official CLI archive exceeds the size limit")
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOfficialCLIArchive+1))
+	total := max(resp.ContentLength, 0)
+	if progress != nil {
+		progress(0, total)
+	}
+	reader := &officialCLIProgressReader{reader: resp.Body, total: total, report: progress}
+	body, err := io.ReadAll(io.LimitReader(reader, maxOfficialCLIArchive+1))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("download official CLI: %w", err)
 	}
 	if len(body) > maxOfficialCLIArchive {
 		return nil, errors.New("official CLI archive exceeds the size limit")
+	}
+	if total > 0 && int64(len(body)) != total {
+		return nil, errors.New("official CLI download ended before the advertised size was received")
 	}
 	return body, nil
 }

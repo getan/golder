@@ -203,43 +203,6 @@ func (a *App) detectLarkCLIs() {
 	}
 }
 
-func (a *App) installOfficialLarkCLI(project bool) {
-	if a.extensionBusy {
-		return
-	}
-	name := "lark-cli"
-	if project {
-		name = "Project CLI"
-	}
-	a.extensionBusy, a.extensionErr = true, ""
-	a.extensionNote = "Downloading and verifying the official " + name + " native binary…"
-	win, ctrl := a.win, a.ctrl
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-		defer cancel()
-		path, err := ctrl.InstallOfficialLarkCLI(ctx, project)
-		if win == nil {
-			return
-		}
-		win.Update(func() {
-			a.extensionBusy = false
-			if a.ctrl != ctrl {
-				return
-			}
-			if err != nil {
-				a.extensionErr, a.extensionNote = err.Error(), ""
-				return
-			}
-			if project {
-				a.extensionEdit.ProjectCLI = path
-			} else {
-				a.extensionEdit.LarkCLI = path
-			}
-			a.extensionNote = name + " installed and selected. Save configuration to apply it."
-		})
-	}()
-}
-
 func (a *App) configureLark() {
 	if a.extensionBusy {
 		return
@@ -736,13 +699,14 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 			if subtleButton(c, "Detect installed CLIs", a.extensionBusy).Clicked() {
 				a.detectLarkCLIs()
 			}
-			if larkWizardButton(c, "Install lark-cli", next == "install-cli", a.extensionBusy).Clicked() {
+			if larkWizardButton(c, a.officialCLIInstallLabel(false), next == "install-cli", a.extensionBusy).Clicked() {
 				a.installOfficialLarkCLI(false)
 			}
-			if subtleButton(c, "Install Project CLI", a.extensionBusy).Clicked() {
+			if subtleButton(c, a.officialCLIInstallLabel(true), a.extensionBusy).Clicked() {
 				a.installOfficialLarkCLI(true)
 			}
 		})
+		a.officialCLIInstallStatus(c)
 		ui.Text(c, "Installs pinned official native releases with SHA-256/SHA-512 verification; npm and Node are not required.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
 		ui.Field(c, "Application ID", func() { ui.TextInput(c, &a.extensionEdit.AppID).FillWidth().Placeholder("cli_…") })
 		ui.Field(c, "App Secret credential name", func() {

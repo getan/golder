@@ -242,7 +242,7 @@ func TestGUIOfficialCLIDiscoveryAndInstallUseNativePaths(t *testing.T) {
 		return extensions.OfficialCLI{Kind: kind, Executable: "/managed/" + string(kind)}, true
 	}
 	var installedKind extensions.OfficialCLIKind
-	installOfficialCLI = func(_ context.Context, kind extensions.OfficialCLIKind) (extensions.OfficialCLI, error) {
+	installOfficialCLI = func(_ context.Context, kind extensions.OfficialCLIKind, _ func(extensions.OfficialCLIInstallProgress)) (extensions.OfficialCLI, error) {
 		installedKind = kind
 		return extensions.OfficialCLI{Kind: kind, Version: "1.2.3", Executable: "/installed/" + string(kind)}, nil
 	}

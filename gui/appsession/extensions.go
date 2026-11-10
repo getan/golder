@@ -16,8 +16,10 @@ import (
 var larkSourceRef = extensions.SourceRef{Kind: "mcp", ID: "lark"}
 
 var discoverOfficialCLI = extensions.DiscoverOfficialCLI
-var installOfficialCLI = func(ctx context.Context, kind extensions.OfficialCLIKind) (extensions.OfficialCLI, error) {
-	return extensions.NewOfficialCLIInstaller().Install(ctx, kind)
+var installOfficialCLI = func(ctx context.Context, kind extensions.OfficialCLIKind, progress func(extensions.OfficialCLIInstallProgress)) (extensions.OfficialCLI, error) {
+	installer := extensions.NewOfficialCLIInstaller()
+	installer.Progress = progress
+	return installer.Install(ctx, kind)
 }
 
 // ExtensionPackageView is the compact package/source state the native Settings
@@ -195,11 +197,17 @@ func (c *Controller) DetectLarkCLIs(preferredLark, preferredProject string) (lar
 // InstallOfficialLarkCLI downloads one pinned official native distribution,
 // verifies its release integrity and installs it without npm or Node.
 func (c *Controller) InstallOfficialLarkCLI(ctx context.Context, project bool) (string, error) {
+	return c.InstallOfficialLarkCLIWithProgress(ctx, project, nil)
+}
+
+// InstallOfficialLarkCLIWithProgress reports transport and verification stages
+// on the installing goroutine, without enabling or saving extension settings.
+func (c *Controller) InstallOfficialLarkCLIWithProgress(ctx context.Context, project bool, progress func(extensions.OfficialCLIInstallProgress)) (string, error) {
 	kind := extensions.OfficialLarkCLI
 	if project {
 		kind = extensions.OfficialProjectCLI
 	}
-	installed, err := installOfficialCLI(ctx, kind)
+	installed, err := installOfficialCLI(ctx, kind, progress)
 	if err != nil {
 		return "", err
 	}
