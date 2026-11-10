@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101721; color: #e9eef5; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100dvh; display: flex; flex-direction: column; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+header { display: flex; justify-content: space-between; gap: 1rem; padding: .9rem; background: #192536; }
+#status { color: #a6b7c8; font-size: .8rem; }
+main { flex: 1; overflow: auto; padding: .8rem; }
+section, form { max-width: 50rem; margin: auto; }
+label { display: block; margin: 1rem 0; }
+input, textarea { width: 100%; background: #1d2b3c; color: inherit; border: 1px solid #43576a; border-radius: .5rem; padding: .7rem; font: inherit; }
+button { background: #80b8ff; color: #101721; border: 0; border-radius: .5rem; padding: .7rem 1rem; font: inherit; font-weight: 600; }
+button:disabled { opacity: .5; }
+#code { font-size: 2rem; letter-spacing: .2rem; }
+#identity { color: #a6b7c8; font-size: .85rem; margin-bottom: .8rem; overflow-wrap: anywhere; }
+.message, .approval { border: 1px solid #35465a; border-radius: .7rem; padding: .8rem; margin: .6rem 0; background: #192536; }
+.message strong { color: #9dcaff; }
+.message pre, .approval pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.approval { border-color: #d6a353; }
+.approval button { margin: .3rem .4rem .3rem 0; }
+form { width: 100%; display: flex; gap: .5rem; padding: .7rem; }
+form[hidden], section[hidden], div[hidden] { display: none; }
+textarea { resize: vertical; }
+#notice { color: #f6c67c; overflow-wrap: anywhere; }

@@ -94,7 +94,7 @@ func runRemoteControl(out io.Writer, deps *replDeps, line string) {
 			remoteControlStatus(out, deps)
 			return
 		}
-		startRemoteControl(out, deps)
+		fmt.Fprintln(out, "Secure remote control is available in the full TUI or GUI; the legacy unencrypted REPL server is disabled.")
 	default:
 		fmt.Fprintln(out, deps.slash.UsageLine("remote-control"))
 	}

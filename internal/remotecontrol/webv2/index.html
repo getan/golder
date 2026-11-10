@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101721">
+  <title>Golder remote</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header><strong>Golder remote</strong><span id="status">Not connected</span></header>
+  <main>
+    <section id="pair" hidden>
+      <h1>Pair this device</h1>
+      <p>Confirm the same code on this phone and your Mac. Only pair a Mac and session you recognize.</p>
+      <label>Device name <input id="device" maxlength="80" value="Phone"></label>
+      <button id="pair-start" type="button">Start pairing</button>
+      <div id="pair-code" hidden>
+        <p>Compare this code on your Mac:</p><strong id="code"></strong>
+        <p>On the Mac, confirm the pairing request. Then confirm here.</p>
+        <button id="pair-confirm" type="button">The codes match</button>
+      </div>
+    </section>
+    <section id="session" hidden>
+      <div id="identity"></div>
+      <div id="messages" aria-live="polite"></div>
+      <div id="approvals"></div>
+    </section>
+    <p id="notice" role="status"></p>
+  </main>
+  <form id="composer" hidden>
+    <textarea id="input" rows="2" maxlength="65536" placeholder="Send a message…"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</body>
+</html>

@@ -80,6 +80,9 @@ func (a *App) view(c *ui.Context) {
 		a.paletteOpen = true
 		a.loadActions()
 	}
+	if !a.remoteOpen && a.remoteRelease != nil {
+		a.stopRemoteControl()
+	}
 
 	c.Root().Background(t.Background)
 	ui.Column(c).Fill().Children(func() {
@@ -115,6 +118,7 @@ func (a *App) view(c *ui.Context) {
 	a.computerPicker(c)
 	a.terminalModals(c)
 	a.guiUpdateModal(c)
+	a.remoteControlModal(c)
 }
 
 // Reserve space for the composer after accounting for the navigation rail,
@@ -175,6 +179,13 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
+		remoteLabel := "Remote"
+		if a.remoteServer != nil {
+			remoteLabel = "Remote ●"
+		}
+		if subtleButton(c, remoteLabel).Tooltip("Control this session from a paired phone on your Tailnet").Clicked() {
+			a.remoteOpen = true
+		}
 		if titleIconButton(c, "files", filesMonochromeIcon, "Files", "Browse project files", a.filesOpen, false).Clicked() {
 			if a.filesOpen {
 				a.filesOpen = false

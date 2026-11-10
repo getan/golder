@@ -896,7 +896,7 @@ func (s *runSession) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	}
 	reply := make(chan judge.ApprovalAnswer, 1)
 	select {
-	case ch <- approvalRequestMsg{req: req, reply: reply}:
+	case ch <- approvalRequestMsg{req: req, reply: reply, toolCallID: agentcore.ToolCallIDFromContext(ctx)}:
 	case <-ctx.Done():
 		return judge.ApprovalAnswer{}
 	}

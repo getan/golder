@@ -1,10 +1,6 @@
-// This file wires the remote-control bridge (internal/remotecontrol, #442) into
-// the full-screen TUI, the counterpart to internal/cli/repl/remotecontrol.go.
-// It adds the "/remote-control" command that starts/stops an in-process
-// HTTP+WebSocket server mirroring the session to a paired browser on the LAN,
-// mirrors transcript output to that browser, surfaces browser-submitted prompts
-// as a tea.Msg, and routes trust questions to the browser while a client is
-// connected (see trustConfirm).
+// This file owns the full-screen TUI's remote-control lifecycle. The interactive
+// command starts the authenticated Tailnet v2 service through mobile_remote.go;
+// the legacy LAN bridge remains only for its compatibility tests.
 //
 // The non-remote path is unchanged: when no session is active the mirror is a
 // no-op and waitRemoteInput returns a nil Cmd.
@@ -24,9 +20,14 @@ import (
 // activation. It is stored on runSession (so buildConfig can reach it to install
 // the confirm seam) and is nil until the command starts a session.
 type remoteSession struct {
-	server *remotecontrol.Server
-	bridge *remotecontrol.Bridge
-	url    string
+	server  *remotecontrol.Server
+	bridge  *remotecontrol.Bridge
+	url     string
+	secure  *remotecontrol.SecureServer
+	mobile  *mobileTUI
+	closeQR func()
+	pairing bool
+	pair    *remotecontrol.PairRequest
 }
 
 // hasClient reports whether a browser is currently paired and connected.
@@ -44,9 +45,8 @@ func (rs *remoteSession) sendOutput(text string) {
 	rs.server.SendOutput(text)
 }
 
-// startRemote builds and starts the server+bridge, storing the session on the
-// runSession. It returns the pairing URL, or an error if a server is already
-// running or the listener could not bind.
+// startRemote starts the legacy bridge on loopback for compatibility tests.
+// The interactive command deliberately never calls this unencrypted path.
 func (s *runSession) startRemote() (string, error) {
 	if s.remote != nil {
 		return s.remote.url, fmt.Errorf("already running")
@@ -59,6 +59,7 @@ func (s *runSession) startRemote() (string, error) {
 	// denied fail-closed instead of parking the run until a manual interrupt.
 	var bridge *remotecontrol.Bridge
 	srv := remotecontrol.NewServer(remotecontrol.Config{
+		Host: "127.0.0.1",
 		OnClientDisconnect: func() {
 			if bridge != nil {
 				bridge.DenyAllPending()
@@ -81,10 +82,26 @@ func (s *runSession) stopRemote() {
 	if s.remote == nil {
 		return
 	}
-	_ = s.remote.server.Stop(context.Background())
+	if s.remote.secure != nil {
+		s.remote.secure.Revoke()
+	}
+	if s.remote.closeQR != nil {
+		s.remote.closeQR()
+	}
+	if s.remote.mobile != nil {
+		s.remote.mobile.close()
+	}
+	if s.remote.secure != nil {
+		go s.remote.secure.Stop(context.Background())
+	}
+	if s.remote.server != nil {
+		_ = s.remote.server.Stop(context.Background())
+	}
 	// Unblock the pending waitRemoteInput listener: without this its Cmd
 	// goroutine would watch a channel that can never receive again.
-	s.remote.bridge.Close()
+	if s.remote.bridge != nil {
+		s.remote.bridge.Close()
+	}
 	s.remote = nil
 }
 
@@ -103,8 +120,41 @@ func (m Model) runRemoteControl(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	arg := strings.TrimSpace(strings.TrimPrefix(line, "/remote-control"))
+	if strings.HasPrefix(arg, "approve ") || arg == "deny" {
+		rs := m.session.remote
+		if rs == nil || rs.secure == nil || rs.pair == nil || !rs.pairing {
+			m.transcript.addSystem("No remote pairing is awaiting confirmation.")
+			return m, nil
+		}
+		allow := strings.HasPrefix(arg, "approve ")
+		if allow && strings.TrimSpace(strings.TrimPrefix(arg, "approve ")) != rs.pair.Code {
+			m.transcript.addSystem("Pairing code did not match; nothing was approved.")
+			return m, nil
+		}
+		if err := rs.secure.ConfirmPair(rs.pair.ID, rs.pair.Code, allow); err != nil {
+			m.transcript.addSystem("Pairing failed: " + err.Error())
+			m.session.stopRemote()
+			return m, nil
+		}
+		rs.pairing, rs.pair = false, nil
+		if !allow {
+			m.session.stopRemote()
+			m.transcript.addSystem("Remote pairing rejected.")
+		} else {
+			m.transcript.addSystem("Remote pairing approved. Confirm on the phone to connect.")
+		}
+		return m, nil
+	}
 	switch arg {
 	case "stop":
+		if m.remoteStarting {
+			if m.remoteStartCancel != nil {
+				m.remoteStartCancel()
+			}
+			m.remoteStarting, m.remoteStartCancel = false, nil
+			m.transcript.addSystem("Remote control startup cancelled.")
+			return m, nil
+		}
 		if m.session.remote == nil {
 			m.transcript.addSystem("remote control is not running")
 			return m, nil
@@ -113,6 +163,10 @@ func (m Model) runRemoteControl(line string) (tea.Model, tea.Cmd) {
 		m.transcript.addSystem("remote control stopped")
 		return m, nil
 	case "status":
+		if m.remoteStarting {
+			m.transcript.addSystem("remote control: starting")
+			return m, nil
+		}
 		if m.session.remote == nil {
 			m.transcript.addSystem("remote control: off")
 			return m, nil
@@ -121,26 +175,17 @@ func (m Model) runRemoteControl(line string) (tea.Model, tea.Cmd) {
 		if m.session.remote.hasClient() {
 			state = "browser connected"
 		}
-		m.transcript.addSystem(fmt.Sprintf("remote control: on (%s)\n  %s", state, m.session.remote.url))
+		if m.session.remote.secure != nil && m.session.remote.secure.Connected() {
+			state = "phone connected"
+		}
+		m.transcript.addSystem(fmt.Sprintf("remote control: on (%s)", state))
 		return m, nil
 	case "":
 		if m.session.remote != nil {
-			m.transcript.addSystem("remote control already running:\n  " + m.session.remote.url)
+			m.transcript.addSystem("remote control is already running")
 			return m, nil
 		}
-		url, err := m.session.startRemote()
-		if err != nil {
-			m.transcript.addSystem("remote control: " + err.Error())
-			return m, nil
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Remote control started. Open this URL on a device on the same network:\n\n  %s\n", url)
-		if qr, qerr := remotecontrol.Render(url); qerr == nil {
-			b.WriteString("\n" + qr)
-		}
-		b.WriteString("\nRun /remote-control stop to end the session.")
-		m.transcript.addSystem(b.String())
-		return m, m.waitRemoteInput()
+		return m.startMobileRemote()
 	default:
 		m.transcript.addSystem(m.slash.UsageLine("remote-control"))
 		return m, nil

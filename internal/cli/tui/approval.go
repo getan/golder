@@ -28,6 +28,7 @@ import (
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/judge"
+	"github.com/getan/golder/internal/remotecontrol"
 	"github.com/getan/golder/internal/trust"
 )
 
@@ -35,8 +36,9 @@ import (
 // needs the user's decision. The run goroutine blocks on reply until the model
 // answers (or the run is cancelled, which closes the dialog with Answered=false).
 type approvalRequestMsg struct {
-	req   judge.ApprovalRequest
-	reply chan judge.ApprovalAnswer
+	req        judge.ApprovalRequest
+	reply      chan judge.ApprovalAnswer
+	toolCallID string
 }
 
 // approvalRow is one option: a label, its single-key shortcut, and the value
@@ -110,6 +112,13 @@ type approvalDialog struct {
 	// exact set an approval grants.
 	consent      bool
 	consentNeeds []judge.Need
+	remoteID     string
+	remoteReq    judge.ApprovalRequest
+	remoteCallID string
+}
+
+func (d approvalDialog) remoteAnswerable() bool {
+	return d.remoteID != "" && len(remotecontrol.ProjectApproval(d.remoteID, d.remoteReq).Choices) != 0
 }
 
 // openApproval arms the dialog for one tool request. The caller keeps the
@@ -123,6 +132,11 @@ func (m *Model) openApproval(req judge.ApprovalRequest, reply chan judge.Approva
 		title:  approvalTitle(req),
 		detail: approvalDetail(req),
 		reply:  reply,
+	}
+	if m.session != nil && m.session.remote != nil && m.session.remote.secure != nil {
+		d.remoteID, _ = remotecontrol.NewApprovalID()
+		d.remoteReq = req
+		d.remoteReq.Needs = append([]judge.Need(nil), req.Needs...)
 	}
 	if req.Kind == judge.ApprovalConsent {
 		d.consent = true
@@ -335,6 +349,7 @@ func (m *Model) openNextQueuedApproval() {
 			continue
 		}
 		m.openApproval(next.req, next.reply)
+		m.approval.remoteCallID = next.toolCallID
 		return
 	}
 }

@@ -114,6 +114,9 @@ type Model struct {
 	// model persists the conversation to ~/.golder/sessions after each turn ends.
 	session           *runSession
 	computerSuggested string
+	remoteStarting    bool
+	remoteStartCancel context.CancelFunc
+	remoteStartSeq    uint64
 
 	// interruptFn cancels the in-flight run (the first stage of the two-stage
 	// interrupt, FR-14): pressing Esc / Ctrl+C while running signals the run to
@@ -1014,11 +1017,47 @@ func (m Model) Init() tea.Cmd {
 // transcript and status bar. It quits on the standard exit keys (Ctrl+C /
 // Ctrl+D).
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if model, ok := next.(Model); ok {
+		model.publishMobileSnapshot()
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// The lazy seed may have materialized older history above the viewport
 	// since the last event; keep a live content-anchored selection on the text
 	// it points at before this event reads or moves its endpoints.
 	m.syncSeedShift()
 	switch msg := msg.(type) {
+	case mobileStartMsg:
+		return m.finishMobileRemote(msg)
+	case mobileActionMsg:
+		return m.handleMobileAction(msg)
+	case mobilePairMsg:
+		if m.session != nil && m.session.remote != nil && m.session.remote.secure == msg.server {
+			rs := m.session.remote
+			if rs.closeQR != nil {
+				rs.closeQR()
+				rs.closeQR = nil
+			}
+			rs.pair = &msg.request
+			m.transcript.addSystem(fmt.Sprintf("Pairing request from %s. Compare code %s on the phone, then enter /remote-control approve %s or /remote-control deny.", msg.request.DeviceName, msg.request.Code, msg.request.Code))
+			m.relayout()
+		}
+		return m, nil
+	case mobileStoppedMsg:
+		if m.session != nil && m.session.remote != nil && m.session.remote.secure == msg.server {
+			if m.approval.active && m.approval.remoteAnswerable() {
+				dialog := m.approval
+				m.approval = approvalDialog{}
+				m.deliverApproval(dialog, judge.ApprovalAnswer{})
+			}
+			m.session.stopRemote()
+			m.transcript.addSystem("Remote control stopped or its Tailscale route changed.")
+			m.relayout()
+		}
+		return m, nil
 	case mcpAddDoneMsg:
 		return m.finishMCPAdd(msg)
 	case mcpOAuthReviewMsg:
@@ -1125,6 +1164,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.pumpNext()
 		}
 		m.openApproval(msg.req, msg.reply)
+		m.approval.remoteCallID = msg.toolCallID
 		m.relayout()
 		return m, m.pumpNext()
 
@@ -2347,6 +2387,10 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	if prompt == "" {
 		return m, nil
 	}
+	if (m.remoteStarting || m.session != nil && m.session.remote != nil && m.session.remote.pairing) && prompt != "/remote-control" && !strings.HasPrefix(prompt, "/remote-control ") {
+		m.transcript.addSystem("Finish or cancel remote pairing before starting another operation.")
+		return m, nil
+	}
 	// A "!command" line is the passthrough escape hatch (codex parity): it runs
 	// locally — no model call, no approval, no sandbox — and is never sent to the
 	// agent. It is placed before the mid-run queue on purpose: unlike a prompt,
@@ -2576,6 +2620,10 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 // run; a hybrid (plugin) command shows its notifications then runs its prompt.
 // An unknown command surfaces the resolver error as a system block.
 func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
+	if (m.remoteStarting || m.session != nil && m.session.remote != nil && m.session.remote.pairing) && line != "/remote-control" && !strings.HasPrefix(line, "/remote-control ") {
+		m.transcript.addSystem("Finish or cancel remote pairing before starting another operation.")
+		return m, nil
+	}
 	// /exit terminates the TUI, mirroring the REPL loop which intercepts it
 	// before slash resolution. It registers only as a no-op /help builtin, so
 	// without this the registry would resolve it to an empty action.
@@ -2762,8 +2810,8 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		return m.runGoal(line)
 	}
 	// /remote-control is intercepted before registry resolution (like /compact):
-	// it starts/stops the LAN mirror server, which owns state (server, bridge,
-	// listener Cmd) a string→string slash Action cannot hold.
+	// it starts/stops the secure server, which owns session state and listener
+	// commands a string→string slash Action cannot hold.
 	if line == "/remote-control" || strings.HasPrefix(line, "/remote-control ") {
 		return m.runRemoteControl(line)
 	}
@@ -3917,6 +3965,9 @@ func (m Model) interruptOrQuit() (tea.Model, tea.Cmd) {
 // WebSocket are released cleanly. A no-op when remote control is off or no
 // session is bound.
 func (m Model) shutdownRemote() {
+	if m.remoteStartCancel != nil {
+		m.remoteStartCancel()
+	}
 	if m.session != nil {
 		m.session.stopRemote()
 	}

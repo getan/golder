@@ -20,6 +20,7 @@ import (
 	"github.com/getan/golder/gui/appsession"
 	"github.com/getan/golder/gui/terminalaccess"
 	"github.com/getan/golder/internal/computeruse"
+	"github.com/getan/golder/internal/remotecontrol"
 )
 
 // App is the window's state. Everything here is read and written on MyGo's
@@ -92,6 +93,17 @@ type App struct {
 
 	banner    string
 	bannerErr bool
+
+	remoteOpen        bool
+	remoteBusy        bool
+	remoteErr         string
+	remoteServer      *remotecontrol.SecureServer
+	remoteCtrl        *appsession.Controller
+	remoteQR          *ui.Bitmap
+	remotePair        *remotecontrol.PairRequest
+	remoteRelease     func()
+	remoteStartCancel context.CancelFunc
+	remoteStartSeq    uint64
 
 	modelOpen         bool
 	modelQuery        string
@@ -297,6 +309,7 @@ func (a *App) Run() error {
 			}
 		})
 		a.win.OnClosed(func() {
+			a.stopRemoteControl()
 			authBusy := a.mcpOAuth != nil && a.mcpOAuth.cancel != nil || a.extensionCancel != nil
 			if a.mcpOAuth != nil && a.mcpOAuth.cancel != nil {
 				a.mcpOAuth.cancel()

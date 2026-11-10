@@ -65,6 +65,15 @@ func (c *Controller) Submit(ctx context.Context, text string) error {
 	return c.SubmitAttachments(ctx, text, nil)
 }
 
+// SubmitRemote binds acceptance to the original controller session under the
+// same lock that reserves the turn. It never queues behind a running turn.
+func (c *Controller) SubmitRemote(ctx context.Context, sessionID, text string) error {
+	if sessionID == "" {
+		return errors.New("remote input requires a session")
+	}
+	return c.submitAttachments(ctx, text, nil, sessionID, nil, true)
+}
+
 // SubmitAttachments sends or queues a prompt with operator-selected local files.
 func (c *Controller) SubmitAttachments(ctx context.Context, text string, attachments []UserAttachment) error {
 	return c.submitAttachments(ctx, text, attachments, "", nil, false)
@@ -114,9 +123,9 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.mu.Unlock()
 		return errors.New("controller is not open")
 	}
-	if expectedSession != "" && (c.header.ID != expectedSession || c.computerTool == nil || c.computerTool.Session != desktop || !desktop.Status().Active) {
+	if expectedSession != "" && (c.header.ID != expectedSession || desktop != nil && (c.computerTool == nil || c.computerTool.Session != desktop || !desktop.Status().Active)) {
 		c.mu.Unlock()
-		return errors.New("computer continuation belongs to a different or closed session")
+		return errors.New("input belongs to a different or closed session")
 	}
 	if c.readOnly {
 		c.mu.Unlock()
@@ -140,7 +149,7 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.emitStatus()
 		return nil
 	}
-	if c.steerHandoff && expectedSession == "" {
+	if c.steerHandoff && desktop == nil {
 		c.mu.Unlock()
 		return errors.New("finish or cancel the pending computer request before sending queued messages")
 	}
@@ -151,7 +160,7 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 			c.mu.Unlock()
 			return nil
 		}
-	} else if len(c.steerQueue) > 0 && expectedSession == "" {
+	} else if len(c.steerQueue) > 0 && desktop == nil {
 		// Preserve FIFO if a user sends a new message while a handoff has left
 		// earlier input waiting for the next run.
 		c.enqueuePreparedLocked(prompt)
@@ -197,6 +206,14 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.mu.Unlock()
 		cancel()
 		return ErrClosed
+	}
+	if expectedSession != "" && (c.header.ID != expectedSession || c.agentCtx != agentCtx) {
+		if c.runID == runID {
+			c.running, c.status.Running = false, false
+		}
+		c.mu.Unlock()
+		cancel()
+		return errors.New("input belongs to a different or closed session")
 	}
 	agentCtx.Messages = append(agentCtx.Messages, agentcore.UserMessage{
 		RoleField: agentcore.RoleUser,
@@ -764,8 +781,8 @@ func (c *Controller) SetPermissionMode(ctx context.Context, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown permission mode %q", name)
 	}
-	c.perms.Set(mode)
 	c.mu.Lock()
+	c.perms.Set(mode)
 	c.status.Permission = mode.String()
 	c.mu.Unlock()
 	c.emitStatus()

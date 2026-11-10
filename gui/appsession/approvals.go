@@ -18,6 +18,7 @@ var ErrNotPending = errors.New("approval is no longer pending")
 type pendingApproval struct {
 	view ApprovalView
 	req  judge.ApprovalRequest
+	ctx  context.Context
 	// reply is buffered so an answer that races a cancelled run is never lost.
 	reply chan judge.ApprovalAnswer
 }
@@ -66,7 +67,7 @@ func (c *Controller) confirmApproval(ctx context.Context, req judge.ApprovalRequ
 	if view.Origin == "" {
 		view.Origin = agentcore.OriginFromContext(ctx)
 	}
-	p := &pendingApproval{view: view, req: req, reply: make(chan judge.ApprovalAnswer, 1)}
+	p := &pendingApproval{view: view, req: req, ctx: ctx, reply: make(chan judge.ApprovalAnswer, 1)}
 	c.pending = append(c.pending, p)
 	c.mu.Unlock()
 

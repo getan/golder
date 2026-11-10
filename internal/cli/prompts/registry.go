@@ -1122,7 +1122,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		{"dream", "[--dry-run]", "consolidate memory now (dedupe, merge, prune, distill)", runtime.CategoryMemory},
 		{"goal", "[--tokens N] <objective> | pause | resume | clear", "run autonomously toward a goal", runtime.CategoryModes},
 		{"btw", "[question]", "ask a quick side question without touching the main conversation (bare, it reopens the last one)", runtime.CategoryModes},
-		{"remote-control", "[stop|status]", "mirror this session to a phone/browser on your LAN", runtime.CategoryModes},
+		{"remote-control", "[stop|status|approve <code>|deny]", "control this session from a paired phone over Tailscale HTTPS", runtime.CategoryModes},
 	} {
 		reg.AddBuiltin(runtime.SlashCommand{
 			Name:         c.name,

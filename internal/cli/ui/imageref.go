@@ -27,6 +27,11 @@ import (
 // token while the Markdown form is explicitly delimited by parentheses.
 var imageRefPattern = regexp.MustCompile(`!\[[^\]]*\]\(([^)]+)\)|@image:(\S+)`)
 
+// HasImageReferences reports whether submitting the text would read a local
+// image. A remote text-only frontend must reject these instead of reading a path
+// selected by a paired client outside the normal tool permission gates.
+func HasImageReferences(prompt string) bool { return imageRefPattern.MatchString(prompt) }
+
 // BuildUserContent turns a raw prompt line into a content list. When the prompt
 // contains no image references it returns a single TextContent (the common
 // case). Otherwise it returns the interleaved text and image blocks, reading and

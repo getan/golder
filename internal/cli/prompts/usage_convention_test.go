@@ -109,7 +109,7 @@ func TestBuiltinUsageInventory(t *testing.T) {
 		"dream":          "[--dry-run]",
 		"goal":           "[--tokens N] <objective> | pause | resume | clear",
 		"btw":            "[question]",
-		"remote-control": "[stop|status]",
+		"remote-control": "[stop|status|approve <code>|deny]",
 		"extensions":     "[list|inspect|tools|connect|setup|reset|disable] [id]",
 		"plugin":         "[list|inspect|tools|connect|setup|reset|disable] [id]",
 		"mcp":            "[list|inspect|tools|connect|setup|reset|disable] [id]",
