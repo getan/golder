@@ -177,9 +177,13 @@ func (a *App) providerSettingsView(c *ui.Context) {
 			ui.Field(c, "Reference name", func() {
 				ui.TextInput(c, &a.settingsEdit.CredentialName).FillWidth().Placeholder(a.settingsEdit.Provider + "-default")
 			})
+			available := providerCredentialAvailable(a.settings, a.settingsEdit)
 			ui.Field(c, "New API key", func() {
-				ui.TextInput(c, &a.settingsEdit.NewCredential).Password().FillWidth().Placeholder("Leave blank to keep the stored value")
+				ui.TextInput(c, &a.settingsEdit.NewCredential).Password().FillWidth().Label("Provider API key").Placeholder(credentialPlaceholder(available, "Enter an API key"))
 			})
+			if available {
+				ui.Text(c, "Credential available · type a new key to replace it.").FontSize(11).TextColor(t.TextMuted)
+			}
 			if a.settingsEdit.RemoveCredential {
 				ui.Text(c, "The named credential will be removed when you save.").FontSize(11).TextColor(t.Warning)
 			}

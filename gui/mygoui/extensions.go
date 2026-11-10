@@ -748,9 +748,13 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Field(c, "App Secret credential name", func() {
 			ui.TextInput(c, &a.extensionEdit.CredentialName).FillWidth().Placeholder("lark-app-secret")
 		})
+		available := larkCredentialAvailable(a.extension, a.extensionEdit)
 		ui.Field(c, "New App Secret", func() {
-			ui.TextInput(c, &a.extensionEdit.NewAppSecret).Password().FillWidth().Placeholder("Leave blank to keep the named credential")
+			ui.TextInput(c, &a.extensionEdit.NewAppSecret).Password().FillWidth().Label("Lark App Secret").Placeholder(credentialPlaceholder(available, "Enter an App Secret"))
 		})
+		if available {
+			ui.Text(c, "Credential available · type a new secret to replace it.").FontSize(11).TextColor(theme.TextMuted)
+		}
 		ui.Text(c, "App Secrets use the same AES-256-GCM encrypted credential store.").FontSize(11).TextColor(theme.TextMuted)
 		ui.Field(c, "Project host", func() {
 			ui.TextInput(c, &a.extensionEdit.ProjectHost).FillWidth().Placeholder("project.feishu.cn")

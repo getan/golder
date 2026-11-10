@@ -73,6 +73,16 @@ func TestGUIManagedLarkConfigureEnableDisableAndUninstall(t *testing.T) {
 	if !view.Installed || !view.Configured || view.Enabled || !view.CredentialAvailable || view.CredentialName != "lark-app-secret" {
 		t.Fatalf("configured view = %+v", view)
 	}
+	// Saving an unchanged, masked form must keep the original named secret.
+	if err := controller.ConfigureLark(context.Background(), LarkExtensionEdit{
+		LarkCLI: larkCLI, AppID: "cli_test", CredentialName: "lark-app-secret",
+		Domains: []string{"docs", "im"}, ProjectHost: "project.feishu.cn",
+	}); err != nil {
+		t.Fatalf("saving without a replacement App Secret: %v", err)
+	}
+	if secret, err := provider.ResolveCredentialReference(provider.CredentialFilePath(), "lark-app-secret"); err != nil || secret != "test-app-secret" {
+		t.Fatalf("unchanged save did not preserve the App Secret: %v", err)
+	}
 	cfg, err := manager.Config(larkSourceRef)
 	if err != nil {
 		t.Fatal(err)
