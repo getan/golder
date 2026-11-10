@@ -58,28 +58,35 @@ type App struct {
 	queueEditText       string
 	snapshotSeq         uint64
 
-	status          appsession.Status
-	project         string
-	selectedProject string
-	projects        []appsession.ProjectFolder
-	sessions        []appsession.SessionSummary
-	pending         []appsession.ApprovalView
-	showArchived    bool
-	sidebarClosed   bool
-	sidebarSize     float32
-	rightSplit      float32
-	rightStackSplit float32
-	rightPreferred  rightPanel
-	updateBusy      bool
-	updateTag       string
-	updateURL       string
-	updateError     string
-	renameOpen      bool
-	renameID        string
-	renameDraft     string
-	deleteOpen      bool
-	deleteID        string
-	deleteTitle     string
+	status           appsession.Status
+	project          string
+	selectedProject  string
+	projects         []appsession.ProjectFolder
+	sessions         []appsession.SessionSummary
+	pending          []appsession.ApprovalView
+	showArchived     bool
+	sidebarClosed    bool
+	sidebarSize      float32
+	rightSplit       float32
+	rightStackSplit  float32
+	rightPreferred   rightPanel
+	updateBusy       bool
+	updatePhase      string
+	updateTag        string
+	updateError      string
+	updatePackage    guiDownload
+	updatePath       string
+	updateProgress   int
+	updateDialogOpen bool
+	updateAfterCheck bool
+	updateCancel     context.CancelFunc
+	updateSeq        uint64
+	renameOpen       bool
+	renameID         string
+	renameDraft      string
+	deleteOpen       bool
+	deleteID         string
+	deleteTitle      string
 
 	banner    string
 	bannerErr bool
@@ -277,6 +284,7 @@ func (a *App) Run() error {
 			}
 			if !a.terminalShutdownDone {
 				event.PreventDefault()
+				a.cancelGUIUpdate()
 				a.beginTerminalShutdown()
 			}
 		})

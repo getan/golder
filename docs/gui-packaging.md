@@ -20,6 +20,25 @@ installed-size gate. See
 The app name is `Golder GUI` and its slug is `golder-gui`, so the Linux
 executable never collides with the `golder` CLI.
 
+## In-app update downloads
+
+Release builds check GitHub for a newer GUI package. Clicking **Update**
+downloads the package for the current platform and architecture in the
+background to the standard Downloads folder. The download is checked against
+the size and SHA-256 published by GitHub; if that metadata is missing or the
+check fails, the app does not open the file. This is an integrity check against
+GitHub's release metadata, not an independent publisher signature.
+
+When the download finishes, the app offers **Open disk image** on macOS,
+**Open installer** on Windows, or **Open archive** on Linux, as well as
+**Show in folder** and **Later**. Opening is always a separate user action;
+nothing is installed or replaced automatically. Quit the GUI before replacing
+the macOS app, and reopen it after installation. On Linux, continue to use the
+package manager for package-managed installations. Downloads keep the normal
+macOS quarantine or Windows internet-zone mark so platform security checks
+still apply. No browser, GitHub login, or additional update-signing key is
+needed. An older GUI without this feature needs to be updated manually once.
+
 ## Bundle boundary
 
 The GUI runs the Agent runtime in-process. It does not need `golder workspace`,

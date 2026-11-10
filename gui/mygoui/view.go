@@ -113,6 +113,7 @@ func (a *App) view(c *ui.Context) {
 	a.browsersModal(c)
 	a.computerPicker(c)
 	a.terminalModals(c)
+	a.guiUpdateModal(c)
 }
 
 // Reserve space for the composer after accounting for the navigation rail,
