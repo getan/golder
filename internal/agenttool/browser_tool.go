@@ -128,14 +128,14 @@ func (t *BrowserTool) cleanupHint(native bool) string {
 	if native {
 		return common + "In the desktop GUI, request browser quit for that exact owned view and inspect the result; its drawer is not a tuios pane. A successful quit can be asynchronous: if exit_confirmed is false, inspect browser list and report any unconfirmed exit honestly. A closed view or missing socket alone does not prove that the shared Chromium process or profile has exited."
 	}
-	return common + "For an owned browser pane, prefer tuios close with its exact recorded window id before issuing browser quit: close requests graceful shutdown, waits for process exit, then removes the pane. Verify its result and that the pane is gone. Never use force automatically; if identity or exit cannot be confirmed, inspect and report the remaining pane."
+	return common + tuiBrowserCloseGuide
 }
 
 func (t *BrowserTool) quitPendingHint() string {
 	if NativeBrowserLauncherAvailable() {
 		return "Shutdown was accepted, but exit is not confirmed. Inspect browser list and report uncertainty; a missing view socket does not prove shared Chromium or its profile has exited."
 	}
-	return "Shutdown was accepted, but exit is not confirmed. Inspect browser list and the exact owned pane with tuios list/wait; verify exit and pane removal. Do not automatically repeat quit or force-close an unverified pane."
+	return "Shutdown was accepted, but exit is not confirmed. Inspect browser list and the exact owned pane with tuios list/wait; verify exit and pane removal. Do not automatically repeat quit or force-close an unverified pane." + tuiBrowserExitedPaneRecovery
 }
 
 func (t *BrowserTool) selectionHint() string {

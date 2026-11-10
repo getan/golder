@@ -45,7 +45,7 @@ func persistentBrowserProfile(root, name string, create bool) (string, error) {
 	dir := filepath.Join(home, "browser-profiles", browserProjectKey(root))
 	profile := filepath.Join(dir, name+".profile")
 	if insidePath(root, profile) {
-		return "", errors.New("saved browser logins must live outside the checkout; choose a private GOLDER_HOME outside this workspace")
+		return "", errors.New("saved browser logins must live outside the checkout; the current workspace contains Golder's private browser profile storage. Select a narrower project folder in the GUI that does not contain GOLDER_HOME (normally ~/.golder), then open the controlled browser again. Do not automatically relocate GOLDER_HOME or switch to an unmanaged system browser")
 	}
 	if create {
 		for _, path := range []string{home, filepath.Join(home, "browser-profiles"), dir, profile} {

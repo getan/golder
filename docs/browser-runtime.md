@@ -22,6 +22,18 @@ The process gets a scrubbed environment, a private HOME (including
 no daemon/provider credentials. The person and project agents intentionally
 share that default. Explicitly authorized named profiles provide separate login
 identities.
+
+The project folder is not `GOLDER_HOME`: the latter stores Golder's private
+configuration, credentials and browser profiles (normally `~/.golder`). If the
+workspace is the entire user home, `GOLDER_HOME` itself, or another ancestor of
+the chosen profile, the browser currently refuses to start rather than put
+saved logins under the workspace. A first GUI launch without a saved project
+can fall back to the user home and encounter this restriction. Select an actual
+project subfolder in the GUI, then request the controlled browser again; do not
+automatically move all of `GOLDER_HOME`, relax profile isolation, or silently
+substitute the person's unmanaged/system browser. Opening a URL externally is
+not equivalent to giving the agent a controlled page it can inspect or operate.
+
 The profile owner is a detached shared broker, not the GUI or the first TUI
 session. Each conversation has its own automation socket and tab set. Its
 owner-only management socket is separate from the model-facing API; an
@@ -50,6 +62,35 @@ and on-device optimization models). Every persistent profile startup removes a
 closed list of regenerable caches after taking the profile lock; login-bearing
 state and downloads are not touched. kitty-browse's explicit `-private` mode
 still uses an owner-marked temporary tree, but it is not Golder's default.
+
+## TUI pane shutdown and exited-pane recovery
+
+For a browser pane newly created for a task, call `tuios close` with its recorded
+full pane ID first. It requests graceful browser shutdown, waits for process
+exit, and removes the pane. Do not send `browser quit` first; inspect the close
+result and confirm that the pane disappeared. Keep adopted/user-owned browsers
+and browsers paused for verification untouched unless the operator requests it.
+
+If `browser quit` was already sent prematurely, the model may make **one**
+explicit `tuios close` with `force:true` solely to remove an exited empty pane,
+but only after all of the following:
+
+1. A fresh, non-truncated `browser list` shows no live instance for the recorded
+   browser ID or socket. Socket disappearance alone, permission failures and
+   probe timeouts are not sufficient proof.
+2. A fresh `tuios list` marks the exact full pane ID `controlled=true`,
+   `control_origin=agent-created`, and `own=false`.
+3. `tuios wait condition=window-exit` for that ID returns `matched=true`, and
+   another listing confirms no foreground process remains. A blank
+   `foreground_cmd` or idle screen alone is **unknown**, not exit evidence.
+
+If the pane is already absent, no force call is needed. Verify removal after
+the one cleanup attempt; do not loop force calls or repeat quit. Any uncertain
+proof, new foreground process, adopted/claimed/user-owned pane, agent/approval
+pane, or live/paused browser means stop and report. This is a narrow TUI prompt
+recovery rule, not an automatic backend force fallback or a permission bypass.
+GUI browser views are not tuios panes, and removal of a TUI pane does not prove
+the shared Chromium process or profile has exited.
 
 ## Startup diagnostics
 

@@ -72,7 +72,7 @@ func (t *TuiosTool) Description() string {
 			"run or send input, create/focus/move/resize/rename/minimize/close a pane. Waits use " +
 			"daemon events, not polling. A new pane with argv defaults to keep_open, preserving startup failures for capture; " +
 			"set close_on_exit:true for disposable panes. Close needs a full window id and refuses golder's own pane. " +
-			"A browser pane golder started quits through the endpoint it recorded before closing; force:true allows hard close on failure." +
+			"A browser pane golder started quits through the endpoint it recorded before closing; force:true is an explicit hard close, not an automatic retry." + tuiBrowserCloseGuide +
 			" For SSH or large/multiline file-editing commands, use run with script instead of command/send. " +
 			"script uses existing sh/base64/SHA tools, validates the entire payload before execution, and waits on receipts without polling or sleeps. " +
 			"Leave a blank shell prompt first; script runs noninteractively in a child POSIX sh and does not persist cd/aliases. " +

@@ -126,7 +126,7 @@ func (t *WorkspaceTool) Description() string {
 		return "Arrange the panes a session needs (debug-fullstack, data-analysis, review) " +
 			"and read them back as one snapshot: terminal tails plus the browser's page, console and errors. " +
 			"create/list/snapshot/focus/close. Browser close asks the browser golder started to quit " +
-			"and confirms its exit first; force:true allows a hard close on failure."
+			"and confirms its exit first; force:true is an explicit hard close, not an automatic retry." + tuiBrowserCloseGuide
 	}
 	return "Read the arranged panes as one snapshot: terminal tails plus the browser's page, console and errors. list/snapshot only."
 }
