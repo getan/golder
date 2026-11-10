@@ -12,8 +12,8 @@ import (
 	"github.com/getan/golder/internal/provider"
 )
 
-// DefaultProxyURL is a suggested Clash Verge mixed-port address. Routes stay
-// off until explicitly selected, and the user may replace the address.
+// DefaultProxyURL is only a suggested Clash Verge mixed-port address until saved.
+// Downloads then use it automatically; browser/provider routing stays opt-in.
 const DefaultProxyURL = "http://127.0.0.1:7897"
 
 type ProxyProvider struct {

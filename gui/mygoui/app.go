@@ -77,6 +77,7 @@ type App struct {
 	updatePackage     guiDownload
 	updatePath        string
 	updateProgress    int
+	updateReceived    int64
 	updateDialogOpen  bool
 	updateQuitConfirm bool
 	updateAfterCheck  bool

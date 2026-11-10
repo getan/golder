@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getan/golder/internal/downloadnet"
 	"github.com/getan/golder/internal/selfupdate"
 )
 
@@ -62,7 +63,7 @@ func guiDownloadRedirect(req *http.Request, via []*http.Request) error {
 }
 
 func newGUIDownloadClient() *http.Client {
-	return &http.Client{Timeout: 15 * time.Minute, CheckRedirect: guiDownloadRedirect}
+	return &http.Client{Timeout: 15 * time.Minute, Transport: downloadnet.Transport(), CheckRedirect: guiDownloadRedirect}
 }
 
 type guiProgressWriter struct {

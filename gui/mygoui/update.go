@@ -13,6 +13,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/getan/golder/internal/downloadnet"
 	"github.com/getan/golder/internal/selfupdate"
 )
 
@@ -108,6 +109,15 @@ func guiReleaseDownload(release guiRelease, current, goos, arch string) (guiDown
 	return guiDownload{}, false, nil
 }
 
+func newGUIReleaseClient() *http.Client {
+	return &http.Client{Timeout: 20 * time.Second, Transport: downloadnet.Transport(), CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil {
+			return fmt.Errorf("unsafe release API redirect")
+		}
+		return nil
+	}}
+}
+
 func fetchGUIRelease(ctx context.Context, client *http.Client) (guiRelease, error) {
 	var release guiRelease
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+selfupdate.Repo+"/releases/latest", nil)
@@ -141,12 +151,7 @@ func (a *App) checkGUIUpdate(manual bool) {
 	ctx, cancel, seq := a.beginGUIUpdateOperation("checking", 20*time.Second)
 	go func() {
 		defer cancel()
-		client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 || req.URL.Scheme != "https" || req.URL.Host != "api.github.com" || req.URL.User != nil {
-				return fmt.Errorf("unsafe release API redirect")
-			}
-			return nil
-		}}
+		client := newGUIReleaseClient()
 		release, err := fetchGUIRelease(ctx, client)
 		var pkg guiDownload
 		var available bool
@@ -188,6 +193,8 @@ func (a *App) activateGUIUpdate() {
 		if a.updatePhase == "checking" {
 			a.updateAfterCheck = true
 			a.banner, a.bannerErr = "Checking for GUI updates…", false
+		} else if a.updatePhase == "downloading" {
+			a.updateDialogOpen = true
 		}
 		return
 	}
@@ -236,31 +243,16 @@ func (a *App) startGUIDownload() {
 		return
 	}
 	pkg, win := a.updatePackage, a.win
-	ctx, cancel, seq := a.beginGUIUpdateOperation("downloading", 15*time.Minute)
-	a.updateProgress = 0
-	a.banner, a.bannerErr = "Downloading GUI "+pkg.Tag+" in the background…", false
+	ctx, cancel, seq := a.beginGUIDownload()
 	go func() {
 		defer cancel()
 		path, err := downloadGUIPackage(ctx, newGUIDownloadClient(), pkg, dir, markGUIInternetDownload, func(done, total int64) {
-			percent := int(min(done*100/total, 100))
 			win.Update(func() {
-				if a.updateSeq == seq && a.updatePhase == "downloading" {
-					a.updateProgress = percent
-					a.banner, a.bannerErr = fmt.Sprintf("Downloading GUI %s… %d%%", pkg.Tag, percent), false
-				}
+				a.applyGUIDownloadProgress(seq, done, total)
 			})
 		})
 		win.Update(func() {
-			if !a.finishGUIUpdateOperation(seq) {
-				return
-			}
-			if err != nil {
-				a.updateError = err.Error()
-				a.banner, a.bannerErr = "GUI download failed: "+err.Error()+". Click Update to retry.", true
-				return
-			}
-			a.updateError, a.updatePath, a.updateDialogOpen = "", path, true
-			a.banner, a.bannerErr = "GUI "+pkg.Tag+" downloaded. Open the package to install it.", false
+			a.finishGUIDownload(seq, path, err)
 		})
 	}()
 }
@@ -334,6 +326,10 @@ func (a *App) guiUpdateModal(c *ui.Context) {
 		}
 	}
 	ui.Modal(c, &a.updateDialogOpen, func() {
+		if a.updateBusy && a.updatePhase == "downloading" || a.updatePath == "" {
+			a.guiDownloadProgressView(c)
+			return
+		}
 		if a.updateQuitConfirm {
 			a.guiUpdateQuitConfirmation(c)
 			return

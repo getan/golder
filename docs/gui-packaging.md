@@ -29,6 +29,20 @@ the size and SHA-256 published by GitHub; if that metadata is missing or the
 check fails, the app does not open the file. This is an integrity check against
 GitHub's release metadata, not an independent publisher signature.
 
+The download panel opens immediately, showing connection status, a progress
+bar, percentage and received/total bytes. **Continue in background** hides it
+without interrupting the download; click Update to reopen it. **Cancel download**
+interrupts the request and removes the partial file. Progress never recreates
+a dismissed notification. A 100% transfer still requires checksum/save checks;
+opening and quitting are offered only after those succeed. Errors remain visible
+in the panel with a retry action.
+
+GUI update checks and package downloads, along with the Lark/Meegle installers,
+automatically use Golder's saved proxy URL, or `GOLDER_PROXY` when set. Browser
+and provider selection switches do not control downloads. Invalid settings or
+an unreachable configured proxy fail explicitly, without falling back to direct.
+With no Golder proxy configured, the existing default/environment route remains.
+
 When the download finishes, the app offers **Open disk image** on macOS,
 **Open installer** on Windows, or **Open archive** on Linux, as well as
 **Show in folder** and **Later**. **Open and quit** first warns that closing

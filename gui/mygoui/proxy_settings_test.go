@@ -38,6 +38,13 @@ func TestProxySettingsViewSeparatesBrowserAndProviders(t *testing.T) {
 	if err := tt.Click("Use proxy for Browser"); err != nil || !a.proxySettings.Browser {
 		t.Fatalf("browser switch: enabled=%t err=%v", a.proxySettings.Browser, err)
 	}
+	// The effective Downloads route card adds content above Providers. Scroll
+	// within Settings, as a person does, before clicking the provider checkbox.
+	box, ok := tt.Find("Use proxy for Browser")
+	if !ok {
+		t.Fatal("browser route checkbox is missing")
+	}
+	tt.Scroll(box.X+5, box.Y+5, 0, 200)
 	if err := tt.Click("openai"); err != nil {
 		t.Fatal(err)
 	}

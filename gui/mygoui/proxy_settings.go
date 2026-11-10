@@ -23,23 +23,19 @@ func (a *App) saveProxySettings() {
 		return
 	}
 	a.proxySettings, a.proxyErr = settings, ""
-	a.proxyNote = "Saved. Provider requests use the new settings immediately; close and reopen existing browsers to apply their route."
+	a.proxyNote = "Saved. New GUI update and Lark/Meegle downloads use this proxy address. Provider settings apply to new requests; close and reopen existing browsers to apply their route."
 }
 
 func (a *App) proxySettingsView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(18, 20, 20, 20).Gap(14).Children(func() {
 		ui.Text(c, "Proxy").FontSize(16).FontWeight(600)
-		ui.Text(c, "Shared with CLI /proxy. Routes are independent; saving an address alone does not enable them.").FontSize(12).TextColor(t.TextMuted).Wrap()
+		ui.Text(c, "One shared proxy address for downloads, Browser and Providers. Enter your proxy application's address and save it; no environment variable is required.").FontSize(12).TextColor(t.TextMuted).Wrap()
 		ui.Field(c, "Proxy URL", func() {
 			ui.TextInput(c, &a.proxySettings.URL).FillWidth().Label("Proxy address").Placeholder(appsession.DefaultProxyURL)
 		})
 		ui.Text(c, "Suggested local port: 7897 (Clash Verge). Change it if your proxy uses another port. HTTP, HTTPS and SOCKS5 are supported.").FontSize(11).TextColor(t.TextMuted).Wrap()
-		if a.proxySettings.EnvOverride {
-			ui.Text(c, "GOLDER_PROXY overrides the saved URL for this process: "+a.proxySettings.EffectiveURL).FontSize(11).TextColor(t.Warning).Wrap()
-		} else if a.proxySettings.EffectiveURL == "" {
-			ui.Text(c, "The suggested address takes effect only after you save it.").FontSize(11).TextColor(t.TextMuted).Wrap()
-		}
+		a.downloadProxySettingsView(c)
 		ui.Column(c).Padding(12).Gap(8).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
 			ui.Text(c, "Browser").FontSize(14).FontWeight(600)
 			ui.Checkbox(c, &a.proxySettings.Browser, "Use proxy for Browser")

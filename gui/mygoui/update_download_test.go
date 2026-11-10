@@ -298,7 +298,7 @@ func TestLiveGUIDownload(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	release, err := fetchGUIRelease(ctx, &http.Client{Timeout: 20 * time.Second})
+	release, err := fetchGUIRelease(ctx, newGUIReleaseClient())
 	if err != nil {
 		t.Fatal(err)
 	}

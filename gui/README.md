@@ -149,9 +149,15 @@ Two optional surfaces need runtime pieces:
 - proxy: Settings → Proxy edits the same `proxy.toml` as CLI `/proxy`. The
   suggested URL is `http://127.0.0.1:7897` (a Clash Verge mixed-port address); adjust
   it to the local proxy in use. Browser and individual providers are selected
-  independently, and nothing is enabled merely by saving the address. Provider
+  independently. GUI update checks, GUI package downloads, and official Lark/
+  Meegle downloads automatically use the configured address; a broken proxy
+  produces an error rather than silently switching to a direct connection.
+  Without a Golder proxy, downloads retain their default/environment route. Provider
   changes apply to subsequent requests; close and reopen an existing browser to
-  change its route. `GOLDER_PROXY`, when set, overrides the saved URL. Browser
+  change its route. The Downloads card shows the effective route and whether its
+  address comes from saved GUI settings or `GOLDER_PROXY`; editing the address
+  alone does not change this loaded/saved status. No environment variable is
+  needed for normal GUI configuration. `GOLDER_PROXY`, when set, overrides the saved URL. Browser
   proxy URLs cannot include credentials or paths.
 - extensions: a native manager for checksummed first-party package install,
   exact source review, named-secret configuration, browser OAuth, safe

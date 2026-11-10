@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getan/golder/internal/downloadnet"
 	"github.com/getan/golder/internal/golderhome"
 	"github.com/getan/golder/internal/privatepath"
 )
@@ -375,7 +376,8 @@ func nativeBinary(data []byte) bool {
 
 func newOfficialCLIClient() *http.Client {
 	return &http.Client{
-		Timeout: 3 * time.Minute,
+		Timeout:   3 * time.Minute,
+		Transport: downloadnet.Transport(),
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 4 || !allowedOfficialCLIHost(req.URL.Hostname()) {
 				return errors.New("official CLI download redirect was refused")
