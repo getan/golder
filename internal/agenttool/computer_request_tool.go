@@ -33,7 +33,7 @@ func (t *ComputerRequestTool) Reset() {
 func (*ComputerRequestTool) Name() string { return "computer_request" }
 
 func (*ComputerRequestTool) Description() string {
-	return "When the user asks to use a native desktop app and no computer session is active, request it by application name. The local frontend can start an unambiguous app and select its unique window automatically; it asks the person to resolve ambiguity. End the turn and wait for the frontend to continue when the session is ready. Do not ask the person to launch the app or type a command. Use browser for websites."
+	return "When the user asks to use a native desktop app and no computer session is active, request it by application name. If a built-in terminal tool is available, generic requests to open a terminal use that tool, not Computer Use; only consider a system terminal app when the user explicitly requests it, subject to target restrictions. The local frontend can start an unambiguous app and select its unique window automatically; it asks the person to resolve ambiguity. End the turn and wait for the frontend to continue when the session is ready. Do not ask the person to launch the app or type a command. Use browser for websites."
 }
 
 func (*ComputerRequestTool) Schema() json.RawMessage {

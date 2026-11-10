@@ -50,7 +50,10 @@ type terminalTool struct {
 
 func (t *terminalTool) Name() string { return "terminal" }
 func (t *terminalTool) Description() string {
-	return "Manage this GUI project's terminal panes. list returns exact pane IDs and your access; capture reads the last lines; " +
+	return "Open and manage Golder GUI's built-in terminal panel. For 'open a terminal' or '打开终端', use action=new here by default, " +
+		"not computer_request or a desktop terminal app, unless the user explicitly requests a system terminal. " +
+		"Use list/focus for an existing authorized pane, split for another pane; ordinary noninteractive commands still use bash. " +
+		"list returns exact pane IDs and your access; capture reads the last lines; " +
 		"wait observes output revisions without polling. new and split create Agent-owned panes with a fixed sandbox/network ceiling (full-access may be unconfined); " +
 		"send, press and run write only to a pane currently assigned to this Agent. " +
 		"A person's pane is outside the Agent sandbox and needs explicit host/network review; read and input grants are separate. " +

@@ -318,6 +318,7 @@ func (c *Controller) buildConfig() runtime.RunConfig {
 	extensions := c.opt.Extensions
 	prompt := c.prompt
 	creds := c.creds
+	gui, guiTerminal := c.opt.GUI, c.guiTerminalTool
 	model, providerName := live.Model, live.ProviderName
 	thinking, prov := live.ThinkingLevel, live.Provider
 	window := live.ContextWindow
@@ -345,6 +346,9 @@ func (c *Controller) buildConfig() runtime.RunConfig {
 		Checkpoint:    c.checkpointMidRun,
 	}
 	run.InstallExtensions(&cfg, extensions, prompt)
+	if gui {
+		installGUITerminalPrompt(&cfg, guiTerminal)
+	}
 	gates := run.NewGates(run.GatesOpts{
 		Trust:      c.trust,
 		Cwd:        c.cwd,
