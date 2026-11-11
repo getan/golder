@@ -25,6 +25,11 @@ var computerMonochromeIcon = ui.MustParseSVG([]byte(`
   <path d="M4 4h16v12H4zM9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`))
 
+var phoneMonochromeIcon = ui.MustParseSVG([]byte(`
+<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <path d="M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zM10 5h4M10 19h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`))
+
 var changesMonochromeIcon = ui.MustParseSVG([]byte(`
 <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
   <circle cx="6" cy="4" r="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
@@ -65,8 +70,30 @@ func titleIconButton(c *ui.Context, key string, icon *ui.SVG, label, tooltip str
 		indicator, color = t.TextMuted, t.TextMuted
 		tooltip += " · hidden"
 	}
+	return titleIconButtonStyled(c, key, icon, label, tooltip, color, indicator, true)
+}
+
+// The phone stays monochrome even when remote control is active. A neutral
+// underline, like the other title actions, keeps the sharing state visible.
+func remoteTitleIconButton(c *ui.Context, active bool) ui.Element {
+	t := c.Theme()
+	indicator := ui.Transparent
+	tip := "Control this session from a paired phone on your Tailnet"
+	if active {
+		indicator = t.TextMuted
+		tip += " · remote control active"
+	}
+	return titleIconButtonStyled(c, "remote", phoneMonochromeIcon, "Remote", tip, t.Text, indicator, false)
+}
+
+func titleIconButtonStyled(c *ui.Context, key string, icon *ui.SVG, label, tooltip string, color, indicator ui.Color, hoverOutline bool) ui.Element {
+	t := c.Theme()
 	button := ui.ButtonBase(c.Key(key)).Size(30, 30).Radius(7).TextColor(color).Label(label).Tooltip(tooltip)
-	hoverBorder(c, button)
+	if hoverOutline {
+		hoverBorder(c, button)
+	} else if button.FocusVisible() {
+		button.Border(1, t.Focus) // Retain keyboard focus visibility without a mouse-hover border.
+	}
 	if button.Pressed() {
 		button.Background(t.SurfacePressed)
 	} else if button.Hovered() {

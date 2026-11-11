@@ -1,6 +1,7 @@
 package mygoui
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/remotecontrol"
 )
 
 func testApp() *App {
@@ -86,7 +88,7 @@ func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, label := range []string{"Files", "Changes", "Computer Use", "Browser", "Terminal"} {
+	for _, label := range []string{"Remote", "Files", "Changes", "Computer Use", "Browser", "Terminal"} {
 		box, ok := tt.Find(label)
 		if !ok || box.W != 30 || box.H != 30 {
 			t.Fatalf("%s button has box %+v, found=%t; want 30×30", label, box, ok)
@@ -102,7 +104,7 @@ func TestTitleBarIconButtonsHaveNoDefaultTile(t *testing.T) {
 		a := testApp()
 		tt := ui.NewTester(a.view, 1200, 800)
 		tt.SetDark(dark)
-		for _, label := range []string{"Files", "Changes", "Computer Use", "Browser", "Terminal"} {
+		for _, label := range []string{"Remote", "Files", "Changes", "Computer Use", "Browser", "Terminal"} {
 			tt.Move(2, 2)
 			box, ok := tt.Find(label)
 			if !ok {
@@ -118,6 +120,67 @@ func TestTitleBarIconButtonsHaveNoDefaultTile(t *testing.T) {
 			if after := tt.Image().RGBAAt(x, y); after == before {
 				t.Fatalf("%s has no hover feedback in dark=%t", label, dark)
 			}
+		}
+	}
+}
+
+func TestRemotePhoneIconOpensModalWithoutHoverBorder(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		a := testApp()
+		tt := ui.NewTester(a.view, 1200, 800)
+		tt.SetDark(dark)
+		box, ok := tt.Find("Remote")
+		if !ok {
+			t.Fatal("remote phone icon not found")
+		}
+		tt.Move(box.X+box.W/2, box.Y+box.H/2)
+		y := int(box.Y + box.H/2)
+		if edge, inside := tt.Image().RGBAAt(int(box.X+1), y), tt.Image().RGBAAt(int(box.X+4), y); edge != inside {
+			t.Fatalf("remote icon has a hover border in dark=%t: %v vs %v", dark, edge, inside)
+		}
+		if err := tt.Click("Remote"); err != nil || !a.remoteOpen {
+			t.Fatalf("remote icon did not open the modal: open=%t err=%v", a.remoteOpen, err)
+		}
+		tt.Frame()
+		if !tt.HasText("Remote control") {
+			t.Fatal("remote control modal is missing")
+		}
+	}
+}
+
+func TestRemotePhoneIconShowsMonochromeActiveIndicator(t *testing.T) {
+	for _, dark := range []bool{false, true} {
+		a := testApp()
+		tt := ui.NewTester(a.view, 1200, 800)
+		tt.SetDark(dark)
+		tt.Move(2, 2)
+		box, ok := tt.Find("Remote")
+		if !ok {
+			t.Fatal("remote phone icon not found")
+		}
+		var before [30][30]color.RGBA
+		beforeImage := tt.Image()
+		for y := range 30 {
+			for x := range 30 {
+				before[y][x] = beforeImage.RGBAAt(int(box.X)+x, int(box.Y)+y)
+			}
+		}
+		a.remoteServer = &remotecontrol.SecureServer{}
+		tt.Frame()
+		afterImage := tt.Image()
+		changed := 0
+		for y := range 30 {
+			for x := range 30 {
+				if before[y][x] != afterImage.RGBAAt(int(box.X)+x, int(box.Y)+y) {
+					if y < 20 {
+						t.Fatalf("phone icon changed color when active in dark=%t", dark)
+					}
+					changed++
+				}
+			}
+		}
+		if changed == 0 {
+			t.Fatalf("active remote control has no visible indicator in dark=%t", dark)
 		}
 	}
 }

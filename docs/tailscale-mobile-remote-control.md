@@ -45,9 +45,9 @@ tailscale serve --bg --https=8443 http://127.0.0.1:18787
 
 ## GUI
 
-1. 等待 GUI 中所有 Agent 会话空闲，在目标会话顶部点击 **Remote → Start remote control**。
+1. 等待 GUI 中所有 Agent 会话空闲，在目标会话顶部点击**手机图标 → Start remote control**。
 2. 在私有配对期间，GUI 暂停新 Agent turn；手机扫码后，在 Mac 的弹窗中核对手机名称和短码，再选择允许或拒绝。
-3. 手机上确认代码一致。标题栏显示 **Remote ●** 表示远控服务处于启用状态；再次打开 Remote 可停止。
+3. 手机上确认代码一致。标题栏的手机图标下方出现单色短线表示远控服务已启用；再次点击手机图标，选择 **Stop remote control** 可停止。
 
 切换 GUI 标签不会让手机悄悄控制另一个会话。若原 controller 被关闭或会话身份改变，远控停止或拒绝后续操作。
 

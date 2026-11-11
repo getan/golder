@@ -179,11 +179,7 @@ func (a *App) titleBar(c *ui.Context) {
 		}
 		ui.Text(c, name).FontSize(13).TextColor(t.TextMuted).SingleLine().Ellipsis("…").MaxWidth(320)
 		ui.Spacer(c)
-		remoteLabel := "Remote"
-		if a.remoteServer != nil {
-			remoteLabel = "Remote ●"
-		}
-		if subtleButton(c, remoteLabel).Tooltip("Control this session from a paired phone on your Tailnet").Clicked() {
+		if remoteTitleIconButton(c, a.remoteServer != nil).Clicked() {
 			a.remoteOpen = true
 		}
 		if titleIconButton(c, "files", filesMonochromeIcon, "Files", "Browse project files", a.filesOpen, false).Clicked() {
