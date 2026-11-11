@@ -116,20 +116,21 @@ type App struct {
 
 	permOpen bool
 
-	settingsOpen  bool
-	settingsTab   int
-	settings      appsession.ProviderSettings
-	settingsEdit  appsession.ProviderSettingsEdit
-	settingsErr   string
-	settingsNote  string
-	settingsBusy  bool
-	proxySettings appsession.ProxySettings
-	proxyErr      string
-	proxyNote     string
-	ttySessions   []appsession.TTYSummary
-	display       appsession.DisplaySettings
-	displayErr    string
-	displayNote   string
+	settingsOpen   bool
+	settingsTab    int
+	settings       appsession.ProviderSettings
+	settingsEdit   appsession.ProviderSettingsEdit
+	settingsModels []string
+	settingsErr    string
+	settingsNote   string
+	settingsBusy   bool
+	proxySettings  appsession.ProxySettings
+	proxyErr       string
+	proxyNote      string
+	ttySessions    []appsession.TTYSummary
+	display        appsession.DisplaySettings
+	displayErr     string
+	displayNote    string
 
 	extension                appsession.LarkExtensionSettings
 	extensionSources         []appsession.ExtensionSourceView

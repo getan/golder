@@ -3,6 +3,7 @@ package mygoui
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -40,6 +41,47 @@ func (a *App) installSettings(settings appsession.ProviderSettings) {
 		CredentialName: settings.Credential.Name,
 		ThinkingLevel:  settings.ThinkingLevel,
 	}
+	a.refreshSettingsModels()
+}
+
+// settingsModelSuggestions never contacts a provider. Cached catalogs are
+// scoped to the effective endpoint; bundled defaults are only offered for the
+// registered endpoint, not an unrelated custom gateway.
+func settingsModelSuggestions(name, baseURL string) []string {
+	spec, ok := provider.LookupProviderSpec(strings.TrimSpace(name))
+	if !ok {
+		return nil
+	}
+	endpoint := provider.ResolveBaseURL(spec, baseURL, os.Getenv)
+	ids, _ := provider.CachedModelCatalog(provider.ModelCatalogCacheKey(spec.Name, endpoint))
+	if len(ids) == 0 && strings.TrimRight(endpoint, "/") == strings.TrimRight(spec.DefaultBaseURL, "/") {
+		ids = provider.FallbackModelCatalog(spec.Name)
+	}
+	ids = append(ids, spec.DefaultModel)
+	seen := make(map[string]bool, len(ids))
+	var out []string
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] || provider.IsDecisionModel(id) {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return provider.OrderModelIDs(out)
+}
+
+func (a *App) refreshSettingsModels() {
+	a.settingsModels = settingsModelSuggestions(a.settingsEdit.Provider, a.settingsEdit.BaseURL)
+}
+
+// The hint is the registry default, not a saved override or a claim about the
+// effective URL: environment settings and some wire variants can change it.
+func settingsDefaultBaseURL(name string) string {
+	if spec, ok := provider.LookupProviderSpec(strings.TrimSpace(name)); ok {
+		return spec.DefaultBaseURL
+	}
+	return ""
 }
 
 func (a *App) saveSettings(apply bool) {
@@ -94,6 +136,9 @@ func (a *App) testSettings() {
 			}
 			a.settingsErr = ""
 			a.settingsNote = "Connection succeeded."
+			if a.settingsEdit.Provider == edit.Provider && a.settingsEdit.BaseURL == edit.BaseURL {
+				a.refreshSettingsModels()
+			}
 		})
 	}()
 }
@@ -158,12 +203,31 @@ func (a *App) providerSettingsView(c *ui.Context) {
 			}
 		})
 		ui.Field(c, "Default model", func() {
-			if ui.TextInput(c, &a.settingsEdit.Model).FillWidth().Placeholder("Provider default").Changed() {
-				a.settingsEdit.Protocol = ""
-			}
+			ui.Row(c).Gap(8).Children(func() {
+				if ui.TextInput(c, &a.settingsEdit.Model).Grow(1).Label("Default model ID").Placeholder("Provider default").Changed() {
+					a.settingsEdit.Protocol = ""
+				}
+				const choose = "Choose model…"
+				choice := choose
+				options := append([]string{choose}, a.settingsModels...)
+				if ui.Select(c, &choice, options).Width(190).Label("Choose default model").Changed() && choice != choose && choice != a.settingsEdit.Model {
+					a.settingsEdit.Model = choice
+					a.settingsEdit.Protocol = ""
+				}
+			})
+			ui.Text(c, "Choose a cached or bundled model, or enter a custom model ID. Availability may vary.").FontSize(11).TextColor(t.TextMuted).Wrap()
 		})
 		ui.Field(c, "Base URL", func() {
-			ui.TextInput(c, &a.settingsEdit.BaseURL).FillWidth().Placeholder("Provider default endpoint")
+			placeholder := settingsDefaultBaseURL(a.settingsEdit.Provider)
+			if placeholder == "" {
+				placeholder = "Provider default endpoint"
+			}
+			if ui.TextInput(c, &a.settingsEdit.BaseURL).FillWidth().Label("Provider Base URL").Placeholder(placeholder).Changed() {
+				a.refreshSettingsModels()
+			}
+			if url := settingsDefaultBaseURL(a.settingsEdit.Provider); url != "" {
+				ui.Text(c, "Provider default: "+url+" (environment and protocol may override it).").FontSize(11).TextColor(t.TextMuted).Wrap()
+			}
 		})
 		ui.Field(c, "Default model protocol", func() {
 			const auto = "Auto"
@@ -184,6 +248,7 @@ func (a *App) providerSettingsView(c *ui.Context) {
 					hint = "Expected protocol: " + label
 				}
 				ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted)
+				ui.Text(c, "Auto uses provider/model rules and cached results; it may probe or retry after a protocol rejection.").FontSize(11).TextColor(t.TextMuted).Wrap()
 			}
 			ui.Text(c, "A manual choice applies only to this default model. Other models use Auto.").FontSize(11).TextColor(t.TextMuted)
 		})
