@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/judge"
@@ -21,9 +22,14 @@ import (
 // (protects the model's context from huge files). Callers page with offset.
 const readToolMaxLines = 2000
 
-// readToolMaxLineLen caps how many bytes of a single line are returned; longer
-// lines are truncated with a marker.
-const readToolMaxLineLen = 2000
+// Long source lines must remain usable as whole-line apply_patch context. An
+// explicit override can read a larger line, still within the total byte budget.
+const (
+	readToolMaxLineLen   = 16 * 1024
+	readToolMaxLineBytes = 96 * 1024
+	readToolMaxBytes     = 100_000
+	readToolNoticeBytes  = 384
+)
 
 // scanBufInit is the initial per-line scanner buffer (it grows on demand up to
 // the max). readScanBufMax is generous — a read may page through a file with
@@ -61,6 +67,8 @@ type readToolArgs struct {
 	Offset int `json:"offset,omitempty"`
 	// Limit is the maximum number of lines to return. 0 means the default cap.
 	Limit int `json:"limit,omitempty"`
+	// MaxLineBytes overrides the default 16 KiB per-line limit, up to 96 KiB.
+	MaxLineBytes int `json:"max_line_bytes,omitempty"`
 }
 
 // Name implements AgentTool.
@@ -68,9 +76,11 @@ func (t *ReadTool) Name() string { return "read" }
 
 // Description implements AgentTool.
 func (t *ReadTool) Description() string {
-	return "Read a text file's contents by path, with optional line offset/limit. " +
+	return "Read a text file's contents by path, with optional line offset/limit and max_line_bytes. " +
 		"Output is line-numbered, and a file too large to return is truncated with " +
-		"a notice naming the range that came back; use offset/limit to read one " +
+		"a notice naming the range that came back. Lines default to 16 KiB; a truncated line " +
+		"reports its byte length and how to request it in full (up to 96 KiB). Never use a " +
+		"truncated preview as apply_patch context. Use offset/limit to read one " +
 		"window of a long file rather than a shell's cat/sed/head. To read several " +
 		"files, issue one read call per file in the same message — they run in parallel."
 }
@@ -82,7 +92,8 @@ func (t *ReadTool) Schema() json.RawMessage {
   "properties": {
     "path":   {"type": "string", "description": "File path to read, relative to the workspace root."},
     "offset": {"type": "integer", "description": "1-based line number to start from.", "minimum": 0},
-    "limit":  {"type": "integer", "description": "Maximum number of lines to return.", "minimum": 0}
+    "limit":  {"type": "integer", "description": "Maximum number of lines to return.", "minimum": 0},
+    "max_line_bytes": {"type": "integer", "description": "Per-line byte limit; 0 defaults to 16384. Use the reported full byte length with limit=1 to read a long source line. Total output remains capped at 100000 bytes.", "minimum": 0, "maximum": 98304}
   },
   "required": ["path"],
   "additionalProperties": false
@@ -113,6 +124,9 @@ func (t *ReadTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	if a.Path == "" {
 		return errorResult("read: path is required"), nil
 	}
+	if a.MaxLineBytes < 0 || a.MaxLineBytes > readToolMaxLineBytes {
+		return errorResult(fmt.Sprintf("read: max_line_bytes must be between 0 and %d (0 defaults to %d)", readToolMaxLineBytes, readToolMaxLineLen)), nil
+	}
 	full, err := t.resolvePath(ctx, a.Path)
 	if err != nil {
 		return errorResult("read: " + err.Error()), nil
@@ -141,23 +155,29 @@ func (t *ReadTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	defer f.Close()
 
-	text, truncated := readNumbered(f, a.Offset, a.Limit)
-	if truncated {
-		text += fmt.Sprintf("\n... (output truncated at %d lines; use offset to read more)", readToolMaxLines)
-	}
+	text, _ := readNumbered(f, a.Offset, a.Limit, a.MaxLineBytes)
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(text)}}, nil
 }
 
 // readNumbered reads lines from r starting at 1-based offset, returning at most
 // limit lines (capped at readToolMaxLines), each prefixed with its line number.
-// The bool reports whether the output was truncated by the cap.
-func readNumbered(r io.Reader, offset, limit int) (string, bool) {
+// The byte budget is enforced before constructing the output, not just by the
+// executor after the fact. Whole numbered lines are paginated at the budget;
+// only the explicit per-line limit produces a partial-line preview.
+// The bool reports whether the requested line window was incomplete.
+func readNumbered(r io.Reader, offset, limit, maxLineBytes int) (string, bool) {
 	if offset < 1 {
 		offset = 1
 	}
 	max := limit
 	if max <= 0 || max > readToolMaxLines {
 		max = readToolMaxLines
+	}
+	if maxLineBytes <= 0 {
+		maxLineBytes = readToolMaxLineLen
+	}
+	if maxLineBytes > readToolMaxLineBytes {
+		maxLineBytes = readToolMaxLineBytes
 	}
 
 	sc := bufio.NewScanner(r)
@@ -166,6 +186,8 @@ func readNumbered(r io.Reader, offset, limit int) (string, bool) {
 	lineNo := 0
 	emitted := 0
 	truncated := false
+	lastLine := offset - 1
+	stopReason := ""
 	for sc.Scan() {
 		lineNo++
 		if lineNo < offset {
@@ -173,14 +195,48 @@ func readNumbered(r io.Reader, offset, limit int) (string, bool) {
 		}
 		if emitted >= max {
 			truncated = true
+			stopReason = fmt.Sprintf("%d-line limit", max)
 			break
 		}
-		line := sc.Text()
-		if len(line) > readToolMaxLineLen {
-			line = line[:readToolMaxLineLen] + "… (line truncated)"
+		line := sc.Bytes()
+		shown := readUTF8Prefix(line, maxLineBytes)
+		marker := ""
+		if shown < len(line) {
+			advice := fmt.Sprintf("; use offset=%d, limit=1, max_line_bytes=%d for the complete line", lineNo, len(line))
+			if len(line) > readToolMaxLineBytes {
+				advice = fmt.Sprintf("; exceeds max_line_bytes maximum %d; split/format the source before line-based editing", readToolMaxLineBytes)
+			}
+			marker = fmt.Sprintf("… (line truncated: showing %d of %d bytes%s; preview is not patch context)", shown, len(line), advice)
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", lineNo, line)
+		prefix := fmt.Sprintf("%6d\t", lineNo)
+		if b.Len()+len(prefix)+shown+len(marker)+1 > readToolMaxBytes-readToolNoticeBytes {
+			truncated = true
+			stopReason = fmt.Sprintf("%d-byte output budget", readToolMaxBytes)
+			break
+		}
+		b.WriteString(prefix)
+		b.Write(line[:shown])
+		b.WriteString(marker)
+		b.WriteByte('\n')
 		emitted++
+		lastLine = lineNo
+	}
+	if err := sc.Err(); err != nil {
+		message := []byte(err.Error())
+		fmt.Fprintf(&b, "\n... (read stopped before line %d: %s; remaining content was not read)", lineNo+1, message[:readUTF8Prefix(message, 160)])
+		return b.String(), true
+	}
+	if truncated {
+		fmt.Fprintf(&b, "\n... (output truncated after line %d (%s); resume with offset=%d and a smaller limit)", lastLine, stopReason, lineNo)
 	}
 	return b.String(), truncated
+}
+
+// readUTF8Prefix returns a byte boundary without splitting a valid UTF-8 rune.
+func readUTF8Prefix(text []byte, limit int) int {
+	n := min(len(text), limit)
+	for n > 0 && n < len(text) && !utf8.RuneStart(text[n]) {
+		n--
+	}
+	return n
 }

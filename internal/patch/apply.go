@@ -297,6 +297,12 @@ func firstLine(err error) string {
 func applyChunks(lines []string, chunks []Chunk) ([]string, []string, []chunkFailure) {
 	var notes []string
 	var failures []chunkFailure
+	original := lines // merged copies below never mutate the original slice
+	origins := make([]hunkLineOrigin, len(lines))
+	for i := range origins {
+		origins[i].line = i + 1
+	}
+	edited := make(map[int]int)
 	cursor := 0
 	for i, ch := range chunks {
 		// Anchors first: each named line moves the search forward, so a hunk
@@ -331,8 +337,10 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, []string, []chunkFai
 				}
 			}
 			if !ok {
-				if ch.Header != "" {
-					failures = append(failures, chunkFailure{Index: i + 1, Err: fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, ch.Header, hunkDiagnostic(lines, old))})
+				if overlap := staleHunkOverlap(ch, i+1, original, edited); overlap != nil {
+					failures = append(failures, chunkFailure{Index: i + 1, Err: overlap})
+				} else if ch.Header != "" {
+					failures = append(failures, chunkFailure{Index: i + 1, Err: fmt.Errorf("could not find the context for hunk %d (%s)%s", i+1, diagnosticPreview(ch.Header), hunkDiagnostic(lines, old))})
 				} else {
 					failures = append(failures, chunkFailure{Index: i + 1, Err: fmt.Errorf("could not find the context for hunk %d%s", i+1, hunkDiagnostic(lines, old))})
 				}
@@ -340,27 +348,24 @@ func applyChunks(lines []string, chunks []Chunk) ([]string, []string, []chunkFai
 			}
 		}
 		old = chunkOldLines(used.Lines)
+		if overlap := currentHunkOverlap(used, idx, i+1, origins); overlap != nil {
+			failures = append(failures, chunkFailure{Index: i + 1, Err: overlap})
+			continue
+		}
 		// Context lines keep the FILE's text (they only anchored the match),
 		// so a fuzzy hit never rewrites whitespace or punctuation; additions
 		// come from the patch, deletions disappear.
-		replacement := make([]string, 0, len(used.Lines))
-		at := 0
-		for _, ln := range used.Lines {
-			switch ln.Kind {
-			case LineContext:
-				replacement = append(replacement, lines[idx+at])
-				at++
-			case LineDelete:
-				at++
-			case LineAdd:
-				replacement = append(replacement, ln.Text)
-			}
-		}
+		replacement, provenance := trackedReplacement(lines, origins, idx, i+1, used, edited)
 		merged := make([]string, 0, len(lines)-len(old)+len(replacement))
 		merged = append(merged, lines[:idx]...)
 		merged = append(merged, replacement...)
 		merged = append(merged, lines[idx+len(old):]...)
 		lines = merged
+		tracked := make([]hunkLineOrigin, 0, len(lines))
+		tracked = append(tracked, origins[:idx]...)
+		tracked = append(tracked, provenance...)
+		tracked = append(tracked, origins[idx+len(old):]...)
+		origins = tracked
 		cursor = idx + len(replacement)
 	}
 	return lines, notes, failures
@@ -474,7 +479,10 @@ func uniqueMatch(lines, pattern []string) (int, bool) {
 // hunk was stale, or the context was simply too short.
 func hunkDiagnostic(lines, old []string) string {
 	if len(old) == 0 || len(old) > len(lines) {
-		return "; re-read the file and resend the hunk"
+		if fragment := inlineFragmentDiagnostic(lines, old); fragment != "" {
+			return fragment
+		}
+		return "; the hunk's whole-line context does not fit this file; read the relevant numbered lines in full and rebuild the hunk (do not copy truncated previews)"
 	}
 	bestAt, bestHits := -1, 0
 	for start := 0; start+len(old) <= len(lines); start++ {
@@ -489,19 +497,22 @@ func hunkDiagnostic(lines, old []string) string {
 		}
 	}
 	if bestAt < 0 || bestHits == 0 {
-		if idx, text, ok := closestLine(lines, old); ok {
-			return fmt.Sprintf("; no context line matched. The closest line is %d: %q. Re-read the file and resend",
-				idx+1, strings.TrimSpace(text))
+		if fragment := inlineFragmentDiagnostic(lines, old); fragment != "" {
+			return fragment
 		}
-		return "; no line in the file matches the hunk's context; re-read the file and resend"
+		if idx, text, ok := closestLine(lines, old); ok {
+			return fmt.Sprintf("; no context line matched. The closest line is %d (%d bytes): %s. %s",
+				idx+1, len(text), diagnosticPreview(text), completeLineAdvice(idx+1, len(text)))
+		}
+		return "; no whole line in the file matches the hunk's context; read the relevant numbered lines in full and rebuild the hunk, or split/format single-line source first"
 	}
 	for j := range old {
 		if equalLine(lines[bestAt+j], old[j], matchWhitespace) {
 			continue
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "; closest match at line %d (%d/%d context lines match; expected %q, found %q). The file there reads:",
-			bestAt+1, bestHits, len(old), old[j], lines[bestAt+j])
+		fmt.Fprintf(&b, "; closest match at line %d (%d/%d context lines match; expected %s, found %s). The file there reads:",
+			bestAt+1, bestHits, len(old), diagnosticPreview(old[j]), diagnosticPreview(lines[bestAt+j]))
 		from := bestAt - 2
 		if from < 0 {
 			from = 0
@@ -511,12 +522,16 @@ func hunkDiagnostic(lines, old []string) string {
 			to = len(lines)
 		}
 		for k := from; k < to && k-from < 14; k++ {
-			fmt.Fprintf(&b, "\n  %4d | %s", k+1, lines[k])
+			row := fmt.Sprintf("\n  %4d | %s", k+1, diagnosticPreview(lines[k]))
+			if b.Len()+len(row)+512 > diagnosticMaxBytes {
+				break
+			}
+			b.WriteString(row)
 		}
-		b.WriteString("\n  re-read the file and resend")
+		fmt.Fprintf(&b, "\n  %s", completeLineAdvice(bestAt+j+1, len(lines[bestAt+j])))
 		return b.String()
 	}
-	return "; re-read the file and resend"
+	return "; rebuild the hunk using complete source lines rather than truncated previews"
 }
 
 // closestLine finds the file line most similar to the first non-empty expected

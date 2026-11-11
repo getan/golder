@@ -77,6 +77,10 @@ func (t *ApplyPatchTool) Description() string {
 		"punctuation, and a hunk whose edges do not match is retried with " +
 		"reduced context only when the remainder is unique in the file. It " +
 		"cannot invent a missing context line: a failed hunk writes nothing. " +
+		"Context/deletion rows must contain whole source lines, never truncated " +
+		"read previews or inline fragments. For long lines, read with limit=1 " +
+		"and a sufficient max_line_bytes; merge edits to the same original line " +
+		"into one hunk. There is no implicit substring replacement. " +
 		"Do not resend the same patch; read the closest region named in the " +
 		"error and rebuild only that hunk. Every hunk line starts with a space " +
 		"(context), '-' (remove) or '+' (add); a line without a prefix is read " +
