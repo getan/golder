@@ -93,7 +93,7 @@ func TestExpiredAuthorizationURLButtonIsHidden(t *testing.T) {
 	if tt.HasText("Open authorization page again") {
 		t.Fatal("finished authorization still exposed its stale URL")
 	}
-	for _, want := range []string{"Application: Configured", "User authorization: Required"} {
+	for _, want := range []string{"Application: Configured", "Lark authorization: Not checked", "Project authorization: Not checked"} {
 		if !tt.HasText(want) {
 			t.Fatalf("missing %q; texts=%q", want, tt.Texts())
 		}
@@ -107,12 +107,6 @@ func TestLarkStatusAndVersionLabelsAreIndependent(t *testing.T) {
 	}
 	if got := larkApplicationStatus(configured); got != "Configured" {
 		t.Fatalf("application status=%q", got)
-	}
-	if got := larkAuthorizationStatus(configured.Authentication); got != "Verified" {
-		t.Fatalf("authorization status=%q", got)
-	}
-	if got := larkAuthorizationStatus("configured"); got != "Not verified" {
-		t.Fatalf("configured env was presented as user auth: %q", got)
 	}
 	if larkHelperReady(configured) {
 		t.Fatal("missing bundled version was treated as ready")

@@ -816,7 +816,8 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 
 		ui.Text(c, "4. Personal authorization").FontWeight(600).Padding(6, 0, 0, 0)
 		ui.Text(c, "Application: "+larkApplicationStatus(a.extension)).FontSize(11).TextColor(theme.TextMuted)
-		ui.Text(c, "User authorization: "+larkAuthorizationStatus(a.extension.Authentication)).FontSize(11).TextColor(theme.TextMuted)
+		// Authentication describes the MCP source/transport, not the native
+		// CLIs' user grants. Only service probes can describe personal login.
 		ui.Text(c, "Lark authorization: "+larkServiceStatusLabel(a.extensionLarkStatus)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "Project authorization: "+larkServiceStatusLabel(a.extensionProjectStatus)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "Authorization status is checked separately; an unavailable check does not mean you need to log in again.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
@@ -879,25 +880,6 @@ func larkApplicationStatus(extension appsession.LarkExtensionSettings) string {
 		return "Configured"
 	}
 	return "Missing or incomplete"
-}
-
-func larkAuthorizationStatus(status string) string {
-	switch strings.TrimSpace(status) {
-	case "verified":
-		return "Verified"
-	case "pending":
-		return "Pending"
-	case "verification-failed":
-		return "Verification failed"
-	case "required":
-		return "Required"
-	case "configured":
-		return "Not verified"
-	case "not-required":
-		return "Not verified"
-	default:
-		return "Unknown"
-	}
 }
 
 func larkServiceStatusLabel(status string) string {

@@ -37,6 +37,12 @@ does not download or silently choose those third-party native CLIs.
 They are separate on purpose: Lark and Feishu Project are different products
 with different hosts and different OAuth grants. Configure only the one you use.
 
+The GUI's personal-authorization section reports Lark and Project independently
+from their native CLI status probes. The generic MCP source's `Authentication`
+field only describes source/transport configuration; `configured` does not mean
+the user is logged out, and `verified` cannot prove both services are authorized.
+An unavailable status check likewise does not require resetting login.
+
 `golder` never links any of them. It starts `golder-lark` as a child process and
 talks MCP over stdio.
 
