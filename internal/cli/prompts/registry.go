@@ -24,6 +24,7 @@ import (
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/extensioncmd"
+	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/extensions"
 	"github.com/getan/golder/internal/golderhome"
@@ -661,6 +662,17 @@ func contextSuffix(providerName, model string) string {
 	return ""
 }
 
+func applySavedProviderCredential(creds *provider.CredentialStore, name string, profile config.ProviderProfile, saved bool) {
+	if !saved || creds == nil {
+		return
+	}
+	credential := launchcfg.ResolveCredential(name, "", profile.Credential)
+	creds.ClearOverride(name)
+	if key := credential.ResolvedValue(); key != "" {
+		creds.SetOverride(name, key)
+	}
+}
+
 func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, creds *provider.CredentialStore) {
 	registerProxyCommand(reg)
 	// thinkAction views or switches the reasoning-effort level, backing the
@@ -700,38 +712,46 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		// gateway that served it: resolve with the live provider name
 		// explicit instead of the heuristic chain, which could route a
 		// gateway-specific id to OpenRouter.
-		if providerName := live.ProviderName; len(live.FetchedModels) > 0 && slices.Contains(live.FetchedModels, id) {
-			prov, name, err := provider.ResolveProvider(id, live.BaseURL, live.Protocol, providerName, os.Getenv)
-			if err != nil {
-				return fmt.Sprintf("model: cannot switch to %q: %v", id, err), false
-			}
-			live.Model = id
-			live.ProviderName = name
-			live.Provider = prov
-			// Re-resolve the budget for the new model: the status bar and the
-			// auto-compaction threshold read it from the live config.
-			live.RefreshContextWindow()
-			return fmt.Sprintf("model switched to %s (provider: %s%s%s, from fetched catalog)",
-				id, name, protocolSuffix(name, id, live.Protocol), contextSuffix(name, id)), true
-		}
-		model := provider.CanonicalizeModel(id)
-		// Fork: stay on the current provider. A bare provider name
-		// ("zai", issue #564) keeps the old jump: its canonical id
-		// differs from the input, so the provider is left to resolve.
+		fromCatalog := slices.Contains(live.FetchedModels, id)
+		model := id
 		providerName := live.ProviderName
-		if model != id {
-			providerName = ""
+		if !fromCatalog {
+			model = provider.CanonicalizeModel(id)
+			if model != id {
+				providerName = launchcfg.CanonicalProviderName(id)
+			}
 		}
-		prov, providerName, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, providerName, os.Getenv)
+		cfg, err := config.LoadFileConfig(config.FileConfigPath())
+		if err != nil {
+			return fmt.Sprintf("model: cannot load provider settings: %v", err), false
+		}
+		profile, saved := launchcfg.SavedProviderProfile(cfg, providerName)
+		baseURL, protocol := live.BaseURL, live.Protocol
+		crossProvider := providerName != live.ProviderName
+		if crossProvider {
+			baseURL, protocol = profile.BaseURL, profile.ProtocolFor(model)
+		} else if saved && model != live.Model {
+			protocol = profile.ProtocolFor(model)
+		}
+		prov, providerName, err := provider.ResolveProvider(model, baseURL, protocol, providerName, os.Getenv)
 		if err != nil {
 			return fmt.Sprintf("model: cannot switch to %q: %v", id, err), false
+		}
+		if crossProvider {
+			applySavedProviderCredential(creds, providerName, profile, saved)
+			live.FetchedModels, live.FetchedKey, live.FetchedAt = nil, "", time.Time{}
 		}
 		live.Model = model
 		live.ProviderName = providerName
 		live.Provider = prov
+		live.BaseURL, live.Protocol = baseURL, protocol
 		live.RefreshContextWindow()
-		return fmt.Sprintf("model switched to %s (provider: %s%s%s)",
-			model, providerName, protocolSuffix(providerName, model, live.Protocol), contextSuffix(providerName, model)), true
+		suffix := ""
+		if fromCatalog {
+			suffix = ", from fetched catalog"
+		}
+		return fmt.Sprintf("model switched to %s (provider: %s%s%s%s)",
+			model, providerName, protocolSuffix(providerName, model, live.Protocol), contextSuffix(providerName, model), suffix), true
 	}
 	// reasoningHint is a one-line pointer to the model's catalog reasoning
 	// levels, appended after a plain switch so the level step is discoverable.
@@ -937,19 +957,24 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		if model == "" {
 			note = "\nno default model for this provider; set one with /model <id>"
 		}
-		// A provider switch targets the new provider's registry endpoint: a
-		// --base-url / --protocol override belongs to the previous provider and
-		// would otherwise leak into the new driver (mirrors session switching).
+		// A provider switch restores the target's saved connection, never the
+		// previous gateway's URL, credential or protocol override.
+		cfg, err := config.LoadFileConfig(config.FileConfigPath())
+		if err != nil {
+			return fmt.Sprintf("provider: cannot load provider settings: %v", err)
+		}
+		profile, saved := launchcfg.SavedProviderProfile(cfg, spec.Name)
 		cleared := live.BaseURL != "" || live.Protocol != ""
-		live.BaseURL = ""
-		live.Protocol = ""
-		prov, name, err := provider.ResolveProvider(model, live.BaseURL, live.Protocol, spec.Name, os.Getenv)
+		baseURL, protocol := profile.BaseURL, profile.ProtocolFor(model)
+		prov, name, err := provider.ResolveProvider(model, baseURL, protocol, spec.Name, os.Getenv)
 		if err != nil {
 			return fmt.Sprintf("provider: cannot switch to %q: %v", arg, err)
 		}
+		applySavedProviderCredential(creds, name, profile, saved)
 		live.Model = model
 		live.ProviderName = name
 		live.Provider = prov
+		live.BaseURL, live.Protocol = baseURL, protocol
 		live.RefreshContextWindow()
 		// A provider switch adopts the level saved for the new provider's
 		// default model, never the global `thinking_level` — a default saved
@@ -964,7 +989,7 @@ func RegisterLiveCommands(reg *runtime.SlashRegistry, live *cli.LiveConfig, cred
 		live.FetchedKey = ""
 		msg := fmt.Sprintf("provider switched to %s (model: %s%s%s)",
 			name, model, protocolSuffix(name, model, live.Protocol), contextSuffix(name, model))
-		if cleared {
+		if cleared && !saved {
 			msg += "\n(base-url/protocol override cleared; using the provider's environment/default endpoint)"
 		}
 		msg += "\n" + ProviderEndpointSummary(live, spec)

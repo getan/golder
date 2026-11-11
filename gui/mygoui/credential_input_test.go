@@ -172,3 +172,46 @@ func TestProviderCredentialSaveLeavesExistingValueAndAcceptsReplacement(t *testi
 		t.Fatalf("replacement was not saved or cleared from the form: %v", err)
 	}
 }
+
+func TestProviderSettingsSwitchDoesNotCarryCredentialReference(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := appsession.New(appsession.Options{ProviderName: "openai", Model: "gpt-test", Cwd: t.TempDir(), Store: store})
+	if err := c.Open(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	settings, err := c.SaveProviderSettings(context.Background(), appsession.ProviderSettingsEdit{
+		Provider: "openai", Model: "gpt-test", BaseURL: "https://openai.example/v1", NewCredential: "fixture-key",
+	}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := testApp()
+	a.ctrl = c
+	a.installSettings(settings)
+	a.settings.Providers = []string{"openai", "opencode-go"}
+	a.settingsEdit.NewCredential = "unsaved-key"
+	a.settingsEdit.RemoveCredential = true
+	tt := ui.NewTester(a.providerSettingsView, 1000, 1100)
+	for _, item := range []string{"openai", "opencode-go"} {
+		if err := tt.Click(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := a.settingsEdit
+	if e.Provider != "opencode-go" || e.CredentialName != "" || e.BaseURL != "" || e.NewCredential != "" || e.RemoveCredential {
+		t.Fatal("provider selection retained fields or credentials from the previous form")
+	}
+	for _, item := range []string{"opencode-go", "openai"} {
+		if err := tt.Click(item); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a.settingsEdit.CredentialName != "openai-default" || a.settingsEdit.BaseURL != "https://openai.example/v1" {
+		t.Fatal("switching back did not restore the saved connection settings")
+	}
+}

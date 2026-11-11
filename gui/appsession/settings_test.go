@@ -39,8 +39,9 @@ func TestSaveProviderSettingsUsesNamedCredentialAndCanApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Credential != "openai-default" || cfg.APIKey != "" || cfg.Protocol != "openai/resp_api" {
-		t.Fatalf("file config = %+v", cfg)
+	profile := cfg.ProviderProfiles["openai"]
+	if profile.Credential != "openai-default" || cfg.APIKey != "" || cfg.Protocol != "" || profile.ProtocolFor("gpt-test") != "openai/resp_api" {
+		t.Fatalf("file provider profile = %+v", profile)
 	}
 }
 
@@ -63,8 +64,8 @@ func TestSaveProviderSettingsMigratesLegacyLiteralKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.APIKey != "" || cfg.Credential != "openai-default" {
-		t.Fatalf("migrated config = %+v", cfg)
+	if cfg.APIKey != "" || cfg.ProviderProfiles["openai"].Credential != "openai-default" {
+		t.Fatal("legacy key was not migrated to a named provider credential")
 	}
 	raw, err := os.ReadFile(provider.CredentialFilePath())
 	if err != nil {

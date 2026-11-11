@@ -307,6 +307,8 @@ thinking_level = "max"            # global fallback; per-model defaults live in 
 # credential = "my-key"           # references an AES-256-GCM encrypted named credential
 ```
 
+In the desktop GUI, **Settings → Providers** saves the Base URL and encrypted credential reference separately for each provider. All its models share that connection. A blank reference name for a new key uses `<provider>-default`, such as `opencode-go-default`. The **Default model protocol** setting applies only to that model; leave it on **Auto** to use the same provider/model selection as the TUI. Other models use Auto. `openai/chat` is the display name for Chat Completions; the existing `openai` config value still works.
+
 Environment variables override file values: `GOLDER_MODEL`, `GOLDER_PROVIDER`, `GOLDER_THINKING_LEVEL`, `GOLDER_PERMISSIONS`; CLI flags take highest precedence. A project can also carry `.golder/config.json` overriding `model` / `provider` / `thinkingLevel` / `hooks` — loaded only when the directory is trusted.
 
 ### tuios shell integration (zsh / bash, recommended)

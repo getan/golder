@@ -93,7 +93,8 @@ func (c *Controller) Providers() []string {
 	out := make([]string, 0, len(specs))
 	seenCurrent := false
 	for _, spec := range specs {
-		configured := spec.Name == current || strings.EqualFold(spec.Name, cfg.Provider) ||
+		_, _, saved := launchcfg.ProviderConnection(cfg, spec.Name)
+		configured := spec.Name == current || spec.Name == launchcfg.CanonicalProviderName(cfg.Provider) || saved ||
 			prompts.CredentialAvailable(creds, spec.Name) || named[spec.Name+"-default"]
 		if !configured {
 			for _, env := range provider.BaseURLEnvVars(spec) {
@@ -117,7 +118,7 @@ func (c *Controller) Providers() []string {
 // SelectProvider switches this session to a configured provider and its saved
 // default model. Overrides from the old gateway must never follow the switch.
 func (c *Controller) SelectProvider(ctx context.Context, name string) error {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = launchcfg.CanonicalProviderName(name)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -143,19 +144,13 @@ func (c *Controller) SelectProvider(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	baseURL, protocol, credentialName, apiKey := "", "", name+"-default", ""
-	if strings.EqualFold(cfg.Provider, name) {
-		baseURL, protocol = cfg.BaseURL, cfg.Protocol
-		apiKey = cfg.APIKey
-		if cfg.Credential != "" {
-			credentialName = cfg.Credential
-		}
-	}
+	profile, apiKey, saved := launchcfg.ProviderConnection(cfg, name)
+	baseURL, protocol := profile.BaseURL, profile.ProtocolFor(model)
 	prov, resolved, err := provider.ResolveProvider(model, baseURL, protocol, name, os.Getenv)
 	if err != nil {
 		return err
 	}
-	credential := launchcfg.ResolveCredential(resolved, apiKey, credentialName)
+	credential := settingsCredential(resolved, profile.Credential, apiKey, saved)
 	level := prompts.DefaultThinkingLevelForProviderModel(name, model)
 	c.mu.Lock()
 	if c.closed {
@@ -175,8 +170,13 @@ func (c *Controller) SelectProvider(ctx context.Context, name string) error {
 		return err
 	}
 	previous := c.live.ProviderName
-	if c.creds != nil && credential.ResolvedValue() != "" {
-		c.creds.SetOverride(resolved, credential.ResolvedValue())
+	if c.creds != nil {
+		if saved {
+			c.creds.ClearOverride(resolved)
+		}
+		if key := credential.ResolvedValue(); key != "" {
+			c.creds.SetOverride(resolved, key)
+		}
 	}
 	c.live.Model, c.live.ProviderName, c.live.Provider = model, resolved, prov
 	c.live.BaseURL, c.live.Protocol = baseURL, protocol
@@ -201,18 +201,64 @@ func (c *Controller) SelectModel(ctx context.Context, providerName, model string
 	if model == "" {
 		return fmt.Errorf("model: empty model id")
 	}
+	model = provider.CanonicalizeModel(model)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	live := c.live
-	prevModel, prevProvider, prevThinking := live.Model, live.ProviderName, live.ThinkingLevel
+	if live == nil || c.closed {
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	prevModel, prevProvider := live.Model, live.ProviderName
 	baseURL, protocol := live.BaseURL, live.Protocol
 	c.mu.Unlock()
 
+	providerName = launchcfg.CanonicalProviderName(firstSetting(providerName, prevProvider))
+	cfg, err := config.LoadFileConfig(config.FileConfigPath())
+	if err != nil {
+		return err
+	}
+	profile, key, saved := launchcfg.ProviderConnection(cfg, providerName)
+	if providerName != prevProvider || model != prevModel {
+		protocol = profile.ProtocolFor(model)
+	}
+	var credential launchcfg.CredentialResult
+	if providerName != prevProvider {
+		baseURL = profile.BaseURL
+		credential = settingsCredential(providerName, profile.Credential, key, saved)
+	}
 	prov, resolved, err := provider.ResolveProvider(model, baseURL, protocol, providerName, os.Getenv)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return ErrClosed
+	}
+	if c.running || c.live != live || live.Model != prevModel || live.ProviderName != prevProvider {
+		c.mu.Unlock()
+		return ErrBusy
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if resolved != prevProvider {
+		live.FetchedModels, live.FetchedKey, live.FetchedAt = nil, "", time.Time{}
+		if c.creds != nil {
+			if saved {
+				c.creds.ClearOverride(resolved)
+			}
+			if key := credential.ResolvedValue(); key != "" {
+				c.creds.SetOverride(resolved, key)
+			}
+		}
+	}
 	live.Model, live.ProviderName, live.Provider = model, resolved, prov
+	live.BaseURL, live.Protocol = baseURL, protocol
 	if thinking != "" {
 		live.ThinkingLevel = thinking
 	}
@@ -226,11 +272,6 @@ func (c *Controller) SelectModel(ctx context.Context, providerName, model string
 	c.emitStatus()
 	c.addNotice(fmt.Sprintf("Model switched to %s (provider: %s). Previous: %s on %s.",
 		model, resolved, prevModel, prevProvider), false)
-	if prevThinking != "" && thinking != "" && prevThinking != thinking {
-		c.mu.Lock()
-		c.status.Thinking = thinking
-		c.mu.Unlock()
-	}
 	return nil
 }
 

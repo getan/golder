@@ -49,10 +49,26 @@ type ProviderSettingsEdit struct {
 	ThinkingLevel    string
 }
 
+// AutomaticProtocolLabel previews the same wire selection as the TUI banner
+// without constructing a provider or starting a network probe.
+func (edit ProviderSettingsEdit) AutomaticProtocolLabel() string {
+	spec, ok := provider.LookupProviderSpec(strings.TrimSpace(edit.Provider))
+	if !ok {
+		return ""
+	}
+	model := providerSettingsModel(edit.Model, spec)
+	return provider.ProtocolLabel(provider.EffectiveProtocol(spec.Name, model, ""))
+}
+
 // LoadProviderSettings reads the shared config and derives a non-secret
-// credential status. When the file omits a value, the current live session is a
-// useful form default but is not written until Save is clicked.
+// credential status for the launch default.
 func (c *Controller) LoadProviderSettings() (ProviderSettings, error) {
+	return c.LoadProviderSettingsFor("")
+}
+
+// LoadProviderSettingsFor loads a specific provider's saved form. It does not
+// switch the live session or carry credentials from the previously edited form.
+func (c *Controller) LoadProviderSettingsFor(name string) (ProviderSettings, error) {
 	cfg, err := config.LoadFileConfig(config.FileConfigPath())
 	if err != nil {
 		return ProviderSettings{}, err
@@ -61,16 +77,32 @@ func (c *Controller) LoadProviderSettings() (ProviderSettings, error) {
 	live := *c.live
 	c.mu.Unlock()
 
-	providerName := firstSetting(cfg.Provider, live.ProviderName)
-	model := firstSetting(cfg.Model, live.Model)
-	baseURL := firstSetting(cfg.BaseURL, live.BaseURL)
-	protocol := firstSetting(cfg.Protocol, live.Protocol)
-	thinking := cfg.ThinkingLevel
+	providerName := launchcfg.CanonicalProviderName(firstSetting(name, cfg.Provider, live.ProviderName))
+	model := cfg.ModelDefaults[providerName]
+	thinking := ""
+	if owner := launchcfg.CanonicalProviderName(cfg.Provider); owner == providerName || owner == "" && name == "" {
+		model = firstSetting(model, cfg.Model)
+		thinking = cfg.ThinkingLevel
+	}
+	profile, legacyKey, saved := launchcfg.ProviderConnection(cfg, providerName)
+	if name == "" && providerName == live.ProviderName {
+		model = firstSetting(model, live.Model)
+		thinking = firstSetting(thinking, string(live.ThinkingLevel))
+		if !saved {
+			profile.BaseURL = live.BaseURL
+		}
+	}
+	if spec, ok := provider.LookupProviderSpec(providerName); ok {
+		model = providerSettingsModel(model, spec)
+	}
 	if scoped, scopedErr := config.DefaultThinkingLevelFor(providerName, model); scopedErr == nil && scoped != "" {
 		thinking = scoped
 	}
-	thinking = firstSetting(thinking, string(live.ThinkingLevel))
-	credential := launchcfg.ResolveCredential(providerName, cfg.APIKey, cfg.Credential)
+	credential := settingsCredential(providerName, profile.Credential, legacyKey, saved)
+	credentialName := profile.Credential
+	if credential.Status.Source == launchcfg.CredentialNamed {
+		credentialName = credential.Status.Name
+	}
 	protocols := []string{"openai", "responses", "anthropic", "gemini"}
 	if spec, ok := provider.LookupProviderSpec(providerName); ok {
 		protocols = []string{"", spec.Protocol}
@@ -82,17 +114,24 @@ func (c *Controller) LoadProviderSettings() (ProviderSettings, error) {
 		}
 	}
 	return ProviderSettings{
-		Provider: providerName, Model: model, BaseURL: baseURL, Protocol: protocol,
+		Provider: providerName, Model: model, BaseURL: profile.BaseURL, Protocol: profile.ProtocolFor(model),
 		Credential: CredentialView{
 			Available: credential.Status.Available,
 			Source:    string(credential.Status.Source),
-			Name:      firstSetting(cfg.Credential, credential.Status.Name),
+			Name:      credentialName,
 			EnvVar:    credential.Status.EnvVar,
 		},
 		ThinkingLevel: thinking,
 		Providers:     provider.ProviderNames(),
 		Protocols:     protocols,
 	}, nil
+}
+
+func settingsCredential(name, reference, legacyKey string, saved bool) launchcfg.CredentialResult {
+	if reference == "" && !saved {
+		reference = name + "-default"
+	}
+	return launchcfg.ResolveCredential(name, legacyKey, reference)
 }
 
 // SaveProviderSettings writes a named credential first, then atomically updates
@@ -112,6 +151,13 @@ func (c *Controller) SaveProviderSettings(ctx context.Context, edit ProviderSett
 	if loadErr != nil {
 		return ProviderSettings{}, loadErr
 	}
+	_, legacyKey, _ := launchcfg.ProviderConnection(current, edit.Provider)
+	if current.APIKey != "" && legacyKey == "" {
+		if owner := launchcfg.LegacyProviderName(current); owner != "" {
+			return ProviderSettings{}, fmt.Errorf("save settings for %q first to migrate its legacy API key before switching defaults", owner)
+		}
+		return ProviderSettings{}, fmt.Errorf("set the legacy API key's provider in config.toml before migrating it")
+	}
 	if edit.RemoveCredential {
 		// Drop the config reference first. If deleting the secret then fails,
 		// the harmless failure mode is an unreferenced value, never a dangling
@@ -123,12 +169,12 @@ func (c *Controller) SaveProviderSettings(ctx context.Context, edit ProviderSett
 		if err := provider.SaveCredential(path, name, value); err != nil {
 			return ProviderSettings{}, err
 		}
-	} else if name == "" && strings.TrimSpace(current.APIKey) != "" {
+	} else if strings.TrimSpace(legacyKey) != "" {
 		// A pre-named-credential config may still hold api_key in plaintext.
 		// Saving Settings is the migration boundary: encrypt it first, then let
 		// SetProviderDefaults remove the literal only after that succeeds.
-		name = edit.Provider + "-default"
-		if err := provider.SaveCredential(path, name, current.APIKey); err != nil {
+		name = firstSetting(name, edit.Provider+"-default")
+		if err := provider.SaveCredential(path, name, legacyKey); err != nil {
 			return ProviderSettings{}, err
 		}
 	} else if name != "" {
@@ -147,9 +193,15 @@ func (c *Controller) SaveProviderSettings(ctx context.Context, edit ProviderSett
 	}); err != nil {
 		return ProviderSettings{}, err
 	}
-	if edit.RemoveCredential && name != "" {
-		if err := provider.DeleteCredential(path, name); err != nil {
-			return ProviderSettings{}, err
+	if edit.RemoveCredential {
+		shared := current.Credential == name && launchcfg.LegacyProviderName(current) != edit.Provider
+		for owner, profile := range current.ProviderProfiles {
+			shared = shared || launchcfg.CanonicalProviderName(owner) != edit.Provider && profile.Credential == name
+		}
+		if name != "" && !shared {
+			if err := provider.DeleteCredential(path, name); err != nil {
+				return ProviderSettings{}, err
+			}
 		}
 		name = ""
 	}
@@ -232,8 +284,7 @@ func (c *Controller) applyProviderSettings(edit ProviderSettingsEdit) error {
 }
 
 func normalizeProviderEdit(edit ProviderSettingsEdit) (ProviderSettingsEdit, provider.Provider, string, error) {
-	edit.Provider = strings.ToLower(strings.TrimSpace(edit.Provider))
-	edit.Model = provider.CanonicalizeModel(strings.TrimSpace(edit.Model))
+	edit.Provider = launchcfg.CanonicalProviderName(edit.Provider)
 	edit.BaseURL = strings.TrimSpace(edit.BaseURL)
 	edit.Protocol = strings.TrimSpace(edit.Protocol)
 	edit.CredentialName = strings.TrimSpace(edit.CredentialName)
@@ -245,9 +296,7 @@ func normalizeProviderEdit(edit ProviderSettingsEdit) (ProviderSettingsEdit, pro
 	if !ok {
 		return edit, nil, "", fmt.Errorf("unknown provider %q", edit.Provider)
 	}
-	if edit.Model == "" {
-		edit.Model = spec.DefaultModel
-	}
+	edit.Model = providerSettingsModel(edit.Model, spec)
 	if edit.Protocol != "" {
 		canonical, err := provider.NormalizeProtocol(edit.Protocol)
 		if err != nil {
@@ -266,6 +315,10 @@ func normalizeProviderEdit(edit ProviderSettingsEdit) (ProviderSettingsEdit, pro
 	}
 	prov, resolved, err := provider.ResolveProvider(edit.Model, edit.BaseURL, edit.Protocol, edit.Provider, os.Getenv)
 	return edit, prov, resolved, err
+}
+
+func providerSettingsModel(model string, spec provider.ProviderSpec) string {
+	return firstSetting(provider.CanonicalizeModel(strings.TrimSpace(model)), spec.DefaultModel)
 }
 
 func validateProviderURL(raw string) error {

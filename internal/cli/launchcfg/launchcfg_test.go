@@ -53,3 +53,26 @@ func TestResolveCredentialDoesNotExposeEnvironmentValue(t *testing.T) {
 		t.Fatalf("status = %+v warnings=%v", got.Status, got.Warnings)
 	}
 }
+
+func TestOverlayProviderProfileDoesNotPinOtherModels(t *testing.T) {
+	file := config.FileConfig{
+		Provider: "openai", Model: "gpt-test",
+		ModelDefaults: map[string]string{"opencode-go": "deepseek-v4.1-flash"},
+		ProviderProfiles: map[string]config.ProviderProfile{
+			"openai":      {BaseURL: "https://openai.example/v1", Credential: "openai-default"},
+			"opencode-go": {BaseURL: "https://go.example/v1", Credential: "opencode-go-default", Protocol: "openai", ProtocolModel: "deepseek-v4.1-flash"},
+		},
+	}
+	for _, tc := range []struct{ model, flag, wantModel, wantProtocol string }{
+		{"", "", "deepseek-v4.1-flash", "openai"},
+		{"gemini-4-argon-contributor", "", "gemini-4-argon-contributor", ""},
+		{"gemini-4-argon-contributor", "gemini", "gemini-4-argon-contributor", "gemini"},
+	} {
+		got := Overlay(Values{Provider: "opencode-go", Model: tc.model, Protocol: tc.flag}, file, func(flag string) bool {
+			return flag == "provider" || flag == "model" && tc.model != "" || flag == "protocol" && tc.flag != ""
+		})
+		if got.Model != tc.wantModel || got.Protocol != tc.wantProtocol || got.BaseURL != "https://go.example/v1" || got.CredentialRef != "opencode-go-default" {
+			t.Fatalf("profile resolution = %+v for model %q", got, tc.model)
+		}
+	}
+}

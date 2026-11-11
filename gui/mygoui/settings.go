@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/provider"
 )
 
 func (a *App) openSettings() {
@@ -141,26 +142,50 @@ func (a *App) providerSettingsView(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(18, 20, 20, 20).Gap(14).Children(func() {
 		ui.Text(c, "Provider defaults").FontSize(16).FontWeight(600)
-		ui.Text(c, "These values are stored in config.toml and used by both the GUI and CLI. The API key is stored separately as a named credential.").
+		ui.Text(c, "Set the Base URL and API key once per provider. All models on that provider share them. The key is stored separately as a named credential.").
 			FontSize(12).TextColor(t.TextMuted).MaxWidth(650)
 
 		ui.Field(c, "Provider", func() {
-			selectProvider := ui.Select(c, &a.settingsEdit.Provider, a.settings.Providers).FillWidth()
-			if selectProvider.Changed() {
-				a.settingsEdit.Model = appsession.ModelForProvider(a.settingsEdit.Provider)
-				a.settingsEdit.Protocol = ""
-				a.settingsEdit.BaseURL = ""
+			name := a.settingsEdit.Provider
+			if ui.Select(c, &name, a.settings.Providers).FillWidth().Changed() {
+				settings, err := a.ctrl.LoadProviderSettingsFor(name)
+				a.settingsErr, a.settingsNote = "", ""
+				if err != nil {
+					a.settingsErr = err.Error()
+					return
+				}
+				a.installSettings(settings)
 			}
 		})
 		ui.Field(c, "Default model", func() {
-			ui.TextInput(c, &a.settingsEdit.Model).FillWidth().Placeholder("Provider default")
+			if ui.TextInput(c, &a.settingsEdit.Model).FillWidth().Placeholder("Provider default").Changed() {
+				a.settingsEdit.Protocol = ""
+			}
 		})
 		ui.Field(c, "Base URL", func() {
 			ui.TextInput(c, &a.settingsEdit.BaseURL).FillWidth().Placeholder("Provider default endpoint")
 		})
-		ui.Field(c, "Protocol", func() {
-			options := []string{"", "openai", "openai/resp_api", "anthropic", "gemini"}
-			ui.Select(c, &a.settingsEdit.Protocol, options).FillWidth()
+		ui.Field(c, "Default model protocol", func() {
+			const auto = "Auto"
+			selection := provider.ProtocolLabel(a.settingsEdit.Protocol)
+			if selection == "" {
+				selection = auto
+			}
+			options := []string{auto, "openai/chat", provider.ProtocolOpenAIResponses, provider.ProtocolAnthropic, provider.ProtocolGemini}
+			if ui.Select(c, &selection, options).FillWidth().Changed() {
+				a.settingsEdit.Protocol = selection
+				if selection == auto {
+					a.settingsEdit.Protocol = ""
+				}
+			}
+			if selection == auto {
+				hint := "Chooses a protocol based on the provider and model."
+				if label := a.settingsEdit.AutomaticProtocolLabel(); label != "" {
+					hint = "Expected protocol: " + label
+				}
+				ui.Text(c, hint).FontSize(11).TextColor(t.TextMuted)
+			}
+			ui.Text(c, "A manual choice applies only to this default model. Other models use Auto.").FontSize(11).TextColor(t.TextMuted)
 		})
 		ui.Field(c, "Default reasoning", func() {
 			ui.Select(c, &a.settingsEdit.ThinkingLevel, appsession.ThinkingLevels()).FillWidth()
@@ -188,7 +213,7 @@ func (a *App) providerSettingsView(c *ui.Context) {
 				ui.Text(c, "Credential available · type a new key to replace it.").FontSize(11).TextColor(t.TextMuted)
 			}
 			if a.settingsEdit.RemoveCredential {
-				ui.Text(c, "The named credential will be removed when you save.").FontSize(11).TextColor(t.Warning)
+				ui.Text(c, "This provider will stop using the named credential when you save.").FontSize(11).TextColor(t.Warning)
 			}
 			ui.Row(c).Children(func() {
 				if subtleButton(c, "Remove credential", strings.TrimSpace(a.settingsEdit.CredentialName) == "").Clicked() {

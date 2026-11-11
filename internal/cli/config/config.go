@@ -36,16 +36,18 @@ type FileConfig struct {
 	// lives in $GOLDER_HOME/.credentials.yaml (mode 0600) under this name, and
 	// config.toml carries only the name. It resolves to the API-key tier, below
 	// an explicit --api-key flag. Empty means no reference.
-	Credential    string `toml:"credential"`
-	Protocol      string `toml:"protocol"`
-	Provider      string `toml:"provider"`
-	ThinkingLevel string `toml:"thinking_level"`
-	OutputFormat  string `toml:"output_format"`
-	NoTools       bool   `toml:"no_tools"`
-	NoSkills      bool   `toml:"no_skills"`
-	Approve       bool   `toml:"approve"`
-	UpdateCheck   *bool  `toml:"update_check"`
-	SystemPrompt  string `toml:"system_prompt"`
+	Credential       string                     `toml:"credential"`
+	Protocol         string                     `toml:"protocol"`
+	Provider         string                     `toml:"provider"`
+	ProviderProfiles map[string]ProviderProfile `toml:"provider_profiles"`
+	ModelDefaults    map[string]string          `toml:"model_defaults"`
+	ThinkingLevel    string                     `toml:"thinking_level"`
+	OutputFormat     string                     `toml:"output_format"`
+	NoTools          bool                       `toml:"no_tools"`
+	NoSkills         bool                       `toml:"no_skills"`
+	Approve          bool                       `toml:"approve"`
+	UpdateCheck      *bool                      `toml:"update_check"`
+	SystemPrompt     string                     `toml:"system_prompt"`
 	// AllowedTools and DisallowedTools are the tool-level admission boundary:
 	// the config-file tier of --allowed-tools / --disallowed-tools. Names match
 	// case-insensitively and DisallowedTools wins when a name appears in both.

@@ -146,7 +146,7 @@ func TestGeminiDecoder(t *testing.T) {
 // TestGeminiResolve: the registry's Gemini selector builds the v1beta driver on
 // the variant's own base URL, under the gateway's name.
 func TestGeminiResolve(t *testing.T) {
-	env := func(string) string { return "key" }
+	env := func(string) string { return "" }
 	p, name, err := ResolveNamedProvider("opencode-go", "gemini-4-argon-contributor", "", "", env)
 	if err != nil {
 		t.Fatalf("ResolveNamedProvider: %v", err)
@@ -161,6 +161,14 @@ func TestGeminiResolve(t *testing.T) {
 	}
 	if !strings.Contains(d.baseURL, "/google/v1beta") {
 		t.Errorf("base URL = %q, want the gateway's google/v1beta endpoint", d.baseURL)
+	}
+	const custom = "https://custom.example/v1beta"
+	p, _, err = ResolveNamedProvider("opencode-go", "gemini-4-argon-contributor", custom, "", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := UnwrapProvider(p).(*geminiCompatDriver); !ok || d.baseURL != custom {
+		t.Fatal("Gemini ignored the provider's explicit Base URL")
 	}
 }
 

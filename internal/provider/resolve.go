@@ -344,12 +344,13 @@ func buildNamedProvider(spec ProviderSpec, model, baseURL, effective string, env
 		return NewOpenAIResponsesProvider(spec.Name, url, models), nil
 	case ProtocolGemini:
 		// The v1beta wire may live on a different endpoint than the provider's
-		// OpenAI-family one, so a declared variant can carry its own base URL.
-		geminiURL := url
-		if v, ok := wireVariantFor(spec, ProtocolGemini); ok && strings.TrimSpace(v.BaseURL) != "" {
-			geminiURL = strings.TrimSpace(v.BaseURL)
+		// OpenAI-family one. Its registered URL is a default, not an override
+		// of the user's provider-level Base URL.
+		if v, ok := wireVariantFor(spec, ProtocolGemini); ok && strings.TrimSpace(v.BaseURL) != "" &&
+			strings.TrimRight(url, "/") == strings.TrimRight(spec.DefaultBaseURL, "/") {
+			url = strings.TrimSpace(v.BaseURL)
 		}
-		return NewGeminiProtocolProvider(spec.Name, geminiURL, authScheme, models), nil
+		return NewGeminiProtocolProvider(spec.Name, url, authScheme, models), nil
 	default:
 		return nil, fmt.Errorf("--provider %q has unsupported protocol %q", spec.Name, spec.Protocol)
 	}

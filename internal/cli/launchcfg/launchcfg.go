@@ -29,16 +29,92 @@ type Values struct {
 // function means no flag was supplied, which is what a settings-only GUI uses.
 type Changed func(name string) bool
 
+// CanonicalProviderName resolves aliases before looking up saved settings.
+func CanonicalProviderName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if spec, ok := provider.LookupProviderSpec(name); ok {
+		return spec.Name
+	}
+	return name
+}
+
+// SavedProviderProfile looks up a provider's saved settings. A protocol
+// previously pinned to a different default no longer applies.
+func SavedProviderProfile(cfg config.FileConfig, name string) (config.ProviderProfile, bool) {
+	name = CanonicalProviderName(name)
+	profile, ok := cfg.ProviderProfiles[name]
+	model := cfg.ModelDefaults[name]
+	if !ok {
+		for alias, entry := range cfg.ProviderProfiles {
+			if CanonicalProviderName(alias) == name {
+				profile, ok = entry, true
+				if model == "" {
+					model = cfg.ModelDefaults[alias]
+				}
+				break
+			}
+		}
+	}
+	if model != "" && model != profile.ProtocolModel {
+		profile.Protocol = ""
+	}
+	return profile, ok
+}
+
+// LegacyProviderName identifies the owner of pre-profile connection settings.
+func LegacyProviderName(cfg config.FileConfig) string {
+	if name := CanonicalProviderName(cfg.Provider); name != "" {
+		return name
+	}
+	name, _ := provider.InferProviderFromModel(cfg.Model)
+	return name
+}
+
+// ProviderConnection returns the settings owned by name. The legacy literal
+// key is returned separately and must not be displayed or copied to a profile.
+func ProviderConnection(cfg config.FileConfig, name string) (config.ProviderProfile, string, bool) {
+	name = CanonicalProviderName(name)
+	if profile, ok := SavedProviderProfile(cfg, name); ok {
+		return profile, "", true
+	}
+	if LegacyProviderName(cfg) == name {
+		if cfg.BaseURL != "" || cfg.Credential != "" || cfg.Protocol != "" || cfg.APIKey != "" {
+			return config.ProviderProfile{BaseURL: cfg.BaseURL, Credential: cfg.Credential, Protocol: cfg.Protocol, ProtocolModel: cfg.Model}, cfg.APIKey, true
+		}
+	}
+	return config.ProviderProfile{}, "", false
+}
+
 // Overlay applies the shared CLI > config.toml > built-in precedence for the
 // provider-facing fields. A literal api_key wins over a named reference for
 // backward compatibility, but new writers should save only CredentialRef.
 func Overlay(v Values, cfg config.FileConfig, changed Changed) Values {
 	set := func(name string) bool { return changed != nil && changed(name) }
-	if cfg.Model != "" && !set("model") {
-		v.Model = cfg.Model
-	}
 	if cfg.Provider != "" && !set("provider") {
 		v.Provider = cfg.Provider
+	}
+	if len(cfg.ProviderProfiles) > 0 {
+		name := CanonicalProviderName(v.Provider)
+		profile, key, _ := ProviderConnection(cfg, name)
+		if name != "" {
+			if model := cfg.ModelDefaults[name]; model != "" {
+				cfg.Model = model
+			} else if name != CanonicalProviderName(cfg.Provider) {
+				cfg.Model = ""
+				if spec, ok := provider.LookupProviderSpec(name); ok {
+					cfg.Model = spec.DefaultModel
+				}
+			}
+		}
+		model := v.Model
+		if cfg.Model != "" && !set("model") {
+			model = cfg.Model
+		}
+		cfg.BaseURL, cfg.Credential, cfg.APIKey = profile.BaseURL, profile.Credential, key
+		cfg.Protocol = profile.ProtocolFor(provider.CanonicalizeModel(model))
+	}
+	if cfg.Model != "" && !set("model") {
+		v.Model = cfg.Model
 	}
 	if cfg.BaseURL != "" && !set("base-url") {
 		v.BaseURL = cfg.BaseURL
