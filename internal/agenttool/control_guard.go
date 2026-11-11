@@ -17,6 +17,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserbinding"
+	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/panecontrol"
@@ -178,16 +179,52 @@ func (g *ControlGuard) checkBrowser(ctx context.Context, id, socket string, host
 	g.mu.Lock()
 	want, ok := g.browsers[id]
 	g.mu.Unlock()
-	if ok && want.socket == canonicalBrowserSocket(socket) && (want.isolated || ((want.browserRuntime || g.full()) && !agentcore.SandboxRequestedFromContext(ctx) && seatbelt.ModeFromEnv() != seatbelt.ModeEnforce)) {
-		if want.policy != controlPolicyStamp() {
-			return errors.New("browser sandbox policy changed; open a new controlled browser")
+	required := agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce
+	details := browserEnvelopeFacts(want, ok, socket)
+	details["sandbox_required"] = required
+	details["sandbox_requested"] = agentcore.SandboxRequestedFromContext(ctx)
+	details["sandbox_enforced"] = seatbelt.ModeFromEnv() == seatbelt.ModeEnforce
+	details["execution_state"] = "not_dispatched"
+	fail := func(code, message string) error {
+		data, _ := json.Marshal(details)
+		return &browserctl.Error{Code: code, Message: message, ExecutionState: "not_dispatched", Details: data}
+	}
+	if ok {
+		if want.socket != canonicalBrowserSocket(socket) {
+			return fail("browser_socket_mismatch", "browser identity is recorded, but its socket does not match; no input was sent")
 		}
-		return nil
+		if want.policy != controlPolicyStamp() {
+			return fail("browser_policy_changed", "browser sandbox policy changed; open a new controlled browser")
+		}
+		if required && !want.isolated {
+			return fail("browser_outer_sandbox_unavailable", "this owned browser cannot satisfy required outer OS containment; host_control is not a remedy")
+		}
+		if want.isolated || want.browserRuntime || g.full() {
+			return nil
+		}
+		return fail("browser_outer_sandbox_unavailable", "the recorded browser has no valid controlled execution envelope; no input was sent")
+	}
+	if required {
+		return fail("browser_outer_sandbox_unavailable", "an external browser cannot satisfy required outer OS containment; host_control is not a remedy")
 	}
 	if !g.host(ctx, host) {
-		return errors.New("browser is not owned by this agent; host_control:true requires a separate one-call authorization")
+		return fail("browser_not_owned", "browser is not owned by this agent; host_control:true requires a separate one-call authorization")
 	}
 	return nil
+}
+
+func browserEnvelopeFacts(owned controlledBrowser, found bool, socket string) map[string]any {
+	backend := "external"
+	if found {
+		backend = "unconfined"
+		if owned.isolated {
+			backend = "outer_os_sandbox"
+		} else if owned.browserRuntime {
+			backend = "browser_runtime"
+		}
+	}
+	return map[string]any{"ownership_record_found": found, "socket_matches": found && owned.socket == canonicalBrowserSocket(socket),
+		"policy_matches": found && owned.policy == controlPolicyStamp(), "backend_envelope": backend}
 }
 
 // ownsBrowser is stricter than host_control or full access: it requires a

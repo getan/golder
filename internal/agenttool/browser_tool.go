@@ -209,7 +209,7 @@ const browserReadSchema = `{
     "role":{"type":"string","description":"ARIA role for a locator."},
     "name":{"type":"string","description":"Accessible name for a locator."},
     "text":{"type":"string","description":"Visible text for a locator, or the text to fill/type."},
-    "exact":{"type":"boolean","description":"For find/get: exact text match."},
+    "exact":{"type":"boolean","description":"Exact text/accessible-name matching for locator operations."},
     "kind":{"type":"string","enum":["title","url","text","html","count","value","box","attr"],"description":"For get."},
     "attr":{"type":"string","description":"For get kind=attr: attribute name."},
     "visible":{"type":"string","enum":["visible","hidden","enabled","checked"],"description":"For is/wait."},
@@ -245,7 +245,7 @@ const browserControlSchema = `{
     "role":{"type":"string","description":"ARIA role for a locator."},
     "name":{"type":"string","description":"Accessible name for a locator."},
     "text":{"type":"string","description":"Visible text for a locator, or the text to fill/type."},
-    "exact":{"type":"boolean","description":"For find/get: exact text match."},
+    "exact":{"type":"boolean","description":"Exact text/accessible-name matching for locator operations."},
     "kind":{"type":"string","enum":["title","url","text","html","count","value","box","attr"],"description":"For get."},
     "attr":{"type":"string","description":"For get kind=attr: attribute name."},
     "visible":{"type":"string","enum":["visible","hidden","enabled","checked"],"description":"For is/wait."},
@@ -575,6 +575,9 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	if a.Action == "tab_select" || a.Action == "tab_close" {
 		params["tabId"] = target.TabID
 	}
+	if err := t.verifyReviewedLocator(ctx, c, a, raw, params); err != nil {
+		return browserActionError(a.Action, err), nil
+	}
 	timeout := time.Duration(a.TimeoutMS) * time.Millisecond
 	if timeout <= 0 || timeout > browserMaxTimeout {
 		timeout = browserMaxTimeout
@@ -830,6 +833,13 @@ func activateBrowserTab(ctx context.Context, c *browserctl.Client, info browserc
 // browserActionParams maps the tool's flat arguments onto one browser
 // action and its params. Unknown combinations fail before a round trip.
 func browserActionParams(a browserArgs) (string, map[string]any, error) {
+	if a.Exact && !browserLocatorAction(a.Action) && a.Action != "find" && a.Action != "get" && a.Action != "is" && a.Action != "wait" {
+		return "", nil, errors.New("exact is supported only for locator operations")
+	}
+	if a.Exact && (a.Action == "get" && (a.Kind == "title" || a.Kind == "url") ||
+		a.Action == "wait" && (a.URLPattern != "" || a.State == "load" || a.State == "domcontentloaded")) {
+		return "", nil, errors.New("exact is not supported for page properties or URL/load-state waits")
+	}
 	locator := func() map[string]any {
 		m := map[string]any{}
 		if a.Ref != "" {
@@ -849,6 +859,9 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if a.Text != "" {
 			m["text"] = a.Text
 		}
+		if a.Exact && len(m) > 0 {
+			m["exact"] = true
+		}
 		return m
 	}
 	baseLocator := func() map[string]any {
@@ -865,6 +878,9 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if a.Name != "" {
 			m["name"] = a.Name
 		}
+		if a.Exact && len(m) > 0 {
+			m["exact"] = true
+		}
 		return m
 	}
 	withText := func() map[string]any {
@@ -874,6 +890,9 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		}
 		m["text"] = a.Text
 		return m
+	}
+	if a.Exact && len(locator()) == 0 {
+		return "", nil, errors.New("exact requires a locator")
 	}
 	switch a.Action {
 	case "snapshot":
@@ -1254,8 +1273,13 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 	}
 	var be *browserctl.Error
 	if errors.As(err, &be) {
-		if be.Code == "browser_paused" {
-			return browserError(err)
+		if be.Code == "browser_paused" || be.ExecutionState == "not_dispatched" {
+			result := browserError(err)
+			if be.ExecutionState == "not_dispatched" {
+				result.Content = append(result.Content, agentcore.NewTextContent("No input was dispatched. Inspect the locator/context before making a new request; no action was retried."))
+				result.Details = map[string]any{"execution_state": "not_dispatched"}
+			}
+			return result
 		}
 		copy := *be
 		copy.Retryable = false

@@ -183,6 +183,18 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		}
 		args = prepared
 	}
+	if cfg.BeforeToolCall != nil {
+		if p, ok := tool.(interface {
+			ReviewEvidence(context.Context, json.RawMessage) (agentcore.ToolReviewEvidence, error)
+		}); ok {
+			evidence, err := p.ReviewEvidence(ctx, args)
+			if err != nil {
+				r := errorResult(err.Error())
+				return nil, nil, ctx, &r, true
+			}
+			execCtx = agentcore.WithToolReviewEvidence(execCtx, call.Name, args, evidence)
+		}
+	}
 	// beforeToolCall gate sees the final, already-validated arguments.
 	requireOperator := false
 	if t, ok := tool.(interface{ RequiresOperatorConfirmation() bool }); ok {
@@ -196,7 +208,7 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		requirePolicy = t.RequiresPolicyApproval()
 	}
 	if cfg.BeforeToolCall != nil {
-		if dec := cfg.BeforeToolCall(ctx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator, RequirePolicyApproval: requirePolicy}); dec != nil {
+		if dec := cfg.BeforeToolCall(execCtx, agentcore.AgentToolCall{ID: call.ID, Name: call.Name, Arguments: args, RequireOperatorConfirmation: requireOperator, RequirePolicyApproval: requirePolicy}); dec != nil {
 			if dec.Block {
 				r := agentcore.AgentToolResult{}
 				if dec.Content != nil {

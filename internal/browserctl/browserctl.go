@@ -180,10 +180,12 @@ type Meta struct {
 // Error is the action-level failure. OK false with a code is the branch to
 // read; HTTP status alone is not enough.
 type Error struct {
-	Code      string          `json:"code"`
-	Message   string          `json:"message"`
-	Retryable bool            `json:"retryable"`
-	Details   json.RawMessage `json:"details,omitempty"`
+	Code           string          `json:"code"`
+	Message        string          `json:"message"`
+	Retryable      bool            `json:"retryable"`
+	Details        json.RawMessage `json:"details,omitempty"`
+	ExecutionState string          `json:"executionState,omitempty"`
+	Phase          string          `json:"phase,omitempty"`
 }
 
 func (e *Error) Error() string {
@@ -337,6 +339,13 @@ func (c *Client) Action(ctx context.Context, action string, params any, target T
 	}
 	if !ar.OK {
 		if ar.Error != nil {
+			// Only a bound, explicitly pre-dispatch host phase can prove that
+			// input was never sent. A familiar error code alone proves nothing.
+			if ar.Error.ExecutionState == "not_dispatched" &&
+				(ar.Error.Phase != "locator_resolution" || target.BrowserID == "" || ar.Meta.BrowserID != target.BrowserID ||
+					target.TabID != "" && ar.Meta.TabID != target.TabID || target.TargetID != "" && ar.Meta.TargetID != target.TargetID) {
+				ar.Error.ExecutionState = "dispatched_unknown"
+			}
 			return nil, ar.Meta, ar.Error
 		}
 		return nil, ar.Meta, fmt.Errorf("browser: action failed (status %d)", resp.StatusCode)

@@ -268,6 +268,7 @@ func (c *Controller) newSessionInCurrentProject(ctx context.Context, cwd string)
 	}
 	c.mu.Lock()
 	c.header = header
+	c.browser = agenttool.ConfigureBrowserSession(tools, header.ID)
 	c.agentCtx = &agentcore.AgentContext{SystemPrompt: c.opt.SysPrompt, Tools: c.opt.Tools}
 	c.items = nil
 	c.index = map[string]int{}
@@ -350,6 +351,7 @@ func (c *Controller) adopt(h session.SessionHeader, entries []session.Entry) {
 	c.mu.Lock()
 	sysPrompt := cli.ResumeSystemPrompt(h, c.prompt)
 	c.header = h
+	c.browser = agenttool.ConfigureBrowserSession(c.opt.Tools, h.ID)
 	c.agentCtx = &agentcore.AgentContext{SystemPrompt: sysPrompt, Messages: msgs, Tools: c.opt.Tools}
 	c.persisted = len(msgs)
 	c.compacted = false
@@ -386,6 +388,7 @@ func (c *Controller) rebindSessionRuntime(ctx context.Context, resumed bool) {
 	tools := c.opt.Tools
 	id := c.header.ID
 	readOnly := c.readOnly
+	c.browser = agenttool.ConfigureBrowserSession(tools, id)
 	c.mu.Unlock()
 	agenttool.ClosePaneAgent(tools)
 	if readOnly {

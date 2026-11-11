@@ -46,20 +46,21 @@ const (
 	gitBindingPrefix    = "git-push-v1:"
 )
 
-// ExecutionFact is safe, structured reviewer evidence. No URL, user name,
-// repository path, credential, config value or command output is exposed.
+// ExecutionFact is structured reviewer evidence. Git facts exclude raw config
+// and credentials; BrowserTarget carries bounded, explicitly untrusted page data.
 type ExecutionFact struct {
-	Kind               string `json:"kind"`
-	Operation          string `json:"operation"`
-	Resolution         string `json:"resolution"`
-	Remote             string `json:"remote,omitempty"`
-	Transport          string `json:"transport"`
-	Host               string `json:"host,omitempty"`
-	Authentication     string `json:"authentication,omitempty"`
-	LocalHook          string `json:"localHook,omitempty"`
-	NeedsNetwork       bool   `json:"needsNetwork,omitempty"`
-	RequiresUnconfined bool   `json:"requiresUnconfined,omitempty"`
-	ContainmentReason  string `json:"containmentReason,omitempty"`
+	Kind               string          `json:"kind"`
+	Operation          string          `json:"operation"`
+	Resolution         string          `json:"resolution"`
+	Remote             string          `json:"remote,omitempty"`
+	Transport          string          `json:"transport"`
+	Host               string          `json:"host,omitempty"`
+	Authentication     string          `json:"authentication,omitempty"`
+	LocalHook          string          `json:"localHook,omitempty"`
+	NeedsNetwork       bool            `json:"needsNetwork,omitempty"`
+	RequiresUnconfined bool            `json:"requiresUnconfined,omitempty"`
+	ContainmentReason  string          `json:"containmentReason,omitempty"`
+	BrowserTarget      json.RawMessage `json:"browserTarget,omitempty"`
 }
 
 type executionFacts struct {
@@ -137,6 +138,17 @@ func renderExecutionFacts(ctx context.Context) string {
 // value from context rather than independently resolving a possibly changing
 // remote.
 func resolveExecutionFacts(ctx context.Context, call agentcore.AgentToolCall, cwd string) executionFacts {
+	if strings.EqualFold(strings.TrimSpace(call.Name), "browser") {
+		if evidence, ok := agentcore.ToolReviewEvidenceFromContext(ctx, call.Name, call.Arguments); ok {
+			var args struct {
+				Action string `json:"action"`
+			}
+			_ = json.Unmarshal(call.Arguments, &args)
+			return executionFacts{Public: []ExecutionFact{{Kind: "browser_target", Operation: args.Action,
+				Resolution: "host_observed_untrusted_page_data", Transport: "browser-control", BrowserTarget: evidence.Facts}}}
+		}
+		return executionFacts{}
+	}
 	if !strings.EqualFold(strings.TrimSpace(call.Name), "bash") {
 		return executionFacts{}
 	}
