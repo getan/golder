@@ -132,6 +132,7 @@ type Redactor struct {
 	tokens    map[string]string
 	known     map[string]struct{}
 	maxTokens int
+	revision  atomic.Uint64
 }
 
 // New builds a redactor. The rule table and automaton are built once; a
@@ -186,15 +187,43 @@ func (r *Redactor) AddKnown(values ...string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	changed := false
 	for _, v := range values {
 		if len(v) >= 6 {
-			r.known[v] = struct{}{}
+			if _, exists := r.known[v]; !exists {
+				r.known[v] = struct{}{}
+				changed = true
+			}
 		}
 	}
+	if changed {
+		r.revision.Add(1)
+	}
+}
+
+// Revision changes when the known-secret set changes. It lets a presentation
+// cache invalidate old redacted views without exposing any secret values.
+func (r *Redactor) Revision() uint64 {
+	if r == nil {
+		return 0
+	}
+	return r.revision.Load()
 }
 
 // Scan finds secrets in text and applies the configured mode.
 func (r *Redactor) Scan(seam Seam, tool, text string) Result {
+	return r.scan(seam, tool, text, true)
+}
+
+// PreviewText applies the configured mode to a repeatedly refreshed view of
+// already-produced content. Redacted values use a non-reversible marker; no
+// audit entry or restore token is created. Original input and output seams must
+// still use audited scans.
+func (r *Redactor) PreviewText(tool, text string) string {
+	return r.scan(SeamShare, tool, text, false).Text
+}
+
+func (r *Redactor) scan(seam Seam, tool, text string, audit bool) Result {
 	if r == nil || r.mode == Off || text == "" {
 		return Result{Text: text}
 	}
@@ -227,17 +256,23 @@ func (r *Redactor) Scan(seam Seam, tool, text string) Result {
 		}
 		if r.mode == Redact {
 			b.WriteString(text[last:s.start])
-			b.WriteString(r.token(s.rule, secret))
+			if audit {
+				b.WriteString(r.token(s.rule, secret))
+			} else {
+				b.WriteString("[REDACTED]")
+			}
 			last = s.end
 		}
 	}
 
-	for _, f := range findings {
-		r.audit.log(auditEntry{
-			Time:    time.Now().UTC().Format(time.RFC3339),
-			Session: r.session, Seam: string(seam), Tool: tool,
-			Rule: f.Rule, Action: f.Action, Hash: f.Hash, Line: f.Line, Col: f.Col,
-		})
+	if audit {
+		for _, f := range findings {
+			r.audit.log(auditEntry{
+				Time:    time.Now().UTC().Format(time.RFC3339),
+				Session: r.session, Seam: string(seam), Tool: tool,
+				Rule: f.Rule, Action: f.Action, Hash: f.Hash, Line: f.Line, Col: f.Col,
+			})
+		}
 	}
 
 	switch r.mode {

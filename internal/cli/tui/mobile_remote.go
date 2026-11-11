@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +28,7 @@ type mobileTUI struct {
 	sessionID string
 	snapshot  remotecontrol.MobileSnapshot
 	private   bool
+	toolCache mobileToolCache // owned by the TUI update loop, not the server goroutine
 	actions   chan mobileTUIAction
 	done      chan struct{}
 	once      sync.Once
@@ -113,7 +115,18 @@ func (m Model) mobileSnapshot() (remotecontrol.MobileSnapshot, bool) {
 	out := remotecontrol.MobileSnapshot{SessionID: m.session.header.ID, Frontend: "TUI", Project: m.cwd, Title: m.session.header.DisplayName, Permission: m.session.perms.Mode().String(), Running: m.running}
 	start := max(len(m.transcript.blocks)-200, 0)
 	out.Truncated = start > 0
-	for i := start; i < len(m.transcript.blocks); i++ {
+	budget := newMobileToolBudget()
+	var cache *mobileToolCache
+	if m.session.remote != nil && m.session.remote.mobile != nil {
+		cache = &m.session.remote.mobile.toolCache
+		cache.begin()
+		defer cache.prune()
+	}
+	// Traverse newest first so recent tool output gets the bounded detail budget.
+	// Exploration groups hold individual cards, not block.card; expand them for
+	// mobile without changing the TUI's own grouping or expansion state.
+outer:
+	for i := len(m.transcript.blocks) - 1; i >= start; i-- {
 		block := m.transcript.blocks[i]
 		item := remotecontrol.MobileMessage{ID: fmt.Sprintf("%d", i)}
 		switch block.role {
@@ -125,15 +138,37 @@ func (m Model) mobileSnapshot() (remotecontrol.MobileSnapshot, bool) {
 		case roleAssistant:
 			item.Role, item.Text = "assistant", block.text
 		case roleTool:
+			if block.group != nil {
+				for j := len(block.group.cards) - 1; j >= 0; j-- {
+					card := block.group.cards[j]
+					if card == nil {
+						continue
+					}
+					if len(out.Messages) == 200 {
+						out.Truncated = true
+						break outer
+					}
+					out.Messages = append(out.Messages, remotecontrol.MobileMessage{ID: fmt.Sprintf("%d:%d", i, j), Role: "tool", Text: cache.project(card, budget)})
+				}
+				continue
+			}
 			if block.card == nil {
 				continue
 			}
-			item.Role, item.Text = "tool", block.card.name
+			item.Role = "tool"
 		default:
 			continue
 		}
+		if len(out.Messages) == 200 {
+			out.Truncated = true
+			break
+		}
+		if block.role == roleTool {
+			item.Text = cache.project(block.card, budget)
+		}
 		out.Messages = append(out.Messages, item)
 	}
+	slices.Reverse(out.Messages)
 	if m.approval.active && m.approval.remoteID != "" {
 		view := remotecontrol.ProjectApproval(m.approval.remoteID, m.approval.remoteReq)
 		view.ToolCallID = m.approval.remoteCallID
