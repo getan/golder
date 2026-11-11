@@ -116,7 +116,13 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout(s.cfg.CallTimeout, 120*time.Second))
 	defer cancel()
-	s.mu.Lock()
+	if callScopedLarkState(s.cfg) {
+		if err := lockLarkSource(ctx, s); err != nil {
+			return fail("Lark operation was not dispatched: " + err.Error())
+		}
+	} else {
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	defer m.publish(s)
 	if !s.enabled.Load() {
@@ -157,19 +163,32 @@ func (t *tool) Execute(ctx context.Context, id string, args json.RawMessage, upd
 		last = time.Now()
 		update(agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(s.logs.Clean(p.Message, 1024))}})
 	}
-	r, e := s.conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args,
-		OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args),
-		PolicyApproved:    requirePolicy && agentcore.PolicyApprovedFor(ctx, id, t.name, args)}, report)
+	conn := s.conn
+	_, callScoped := conn.(*larkStateBackend)
+	var r extension.Result
+	func() {
+		if callScoped {
+			// Ownership/schema admission is complete. Restore the mutex even on
+			// panic; the outer snapshot publication still requires source.mu.
+			s.mu.Unlock()
+			defer s.mu.Lock()
+		}
+		r, e = conn.Call(ctx, extension.Call{ID: id, Tool: t.spec.Name, Arguments: args,
+			OperatorConfirmed: agentcore.OperatorConfirmedFor(ctx, id, t.name, args),
+			PolicyApproved:    requirePolicy && agentcore.PolicyApprovedFor(ctx, id, t.name, args)}, report)
+	}()
 	if e != nil {
 		var notDispatched *larkNotDispatchedError
 		if errors.As(e, &notDispatched) {
 			return fail(e.Error()) // queued cancellation/schema changes are not unknown writes
 		}
-		s.lastError = s.logs.Clean(e.Error(), 2048)
-		s.state = "failed"
-		return fail("extension call failed; execution outcome may be unknown: " + s.lastError)
+		message := s.logs.Clean(e.Error(), 2048)
+		if s.conn == conn && s.enabled.Load() {
+			s.lastError, s.state = message, "failed"
+		}
+		return fail("extension call failed; execution outcome may be unknown: " + message)
 	}
-	if callScopedLarkState(s.cfg) {
+	if callScoped && s.conn == conn && s.enabled.Load() {
 		s.state, s.lastError = "on demand", ""
 	}
 	return agentResultForSource(r, &s.logs), nil // terminal result, never retry in the generic executor

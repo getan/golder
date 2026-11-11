@@ -43,7 +43,9 @@ talks MCP over stdio.
 For multiple GUI/TUI sessions, see [Lark multi-session state handling](lark-multi-session.md).
 An `on demand` source is ready to start a reviewed helper for each operation;
 other idle conversations do not need to disconnect. Actual state access is
-serialized, and setup/reset still excludes active business operations.
+bounded to four concurrent verified Lark operations per source across processes,
+with resource-level conflict locks; unverified CLIs and Meegle remain serialized.
+Setup/reset still excludes active business operations.
 
 ## Background every agent must know
 

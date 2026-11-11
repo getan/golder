@@ -430,7 +430,10 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 			if err != nil {
 				return err
 			}
-			if current == "" || current != s.approval || current != s.fingerprint {
+			// fp is the immutable approval snapshot for this connection. Revocation
+			// disables/cancels its source; do not race mutable source fields while
+			// concurrent operations wait outside source.mu.
+			if current == "" || current != fp {
 				return errors.New("extension or dependencies changed while waiting; review before execution")
 			}
 			return nil

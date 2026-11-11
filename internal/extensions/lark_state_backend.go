@@ -36,27 +36,30 @@ func callScopedLarkState(c SourceConfig) bool {
 }
 
 // A logical connection owns the reviewed catalog, not an idle child process.
-// Every operation starts one helper under the same cross-process exclusive
-// lease used by setup/reset. No credentials are copied to per-session HOMEs.
+// Every operation starts its own helper. Verified Lark business calls share a
+// maintenance lease; unknown CLIs/services retain the setup/reset exclusion.
+// No credentials are copied to per-session HOMEs.
 type larkStateBackend struct {
-	life    context.Context
-	cancel  context.CancelFunc
-	cfg     SourceConfig
-	check   func() error
-	open    func(context.Context, context.Context) (backend, error)
-	turn    chan struct{}
-	catalog Catalog // protected by turn, including fresh per-call schema checks
+	life          context.Context
+	cancel        context.CancelFunc
+	cfg           SourceConfig
+	check         func() error
+	open          func(context.Context, context.Context) (backend, error)
+	mu            sync.RWMutex
+	catalog       Catalog
+	concurrentCLI func() bool // host-only eligibility; not an environment/model flag
 }
 
 func newLarkStateBackend(life context.Context, c SourceConfig, cwd string, logs *logBuffer, dirty func(), check func() error) *larkStateBackend {
 	life, cancel := context.WithCancel(life)
-	return &larkStateBackend{life: life, cancel: cancel, cfg: c, check: check, turn: make(chan struct{}, 1),
+	return &larkStateBackend{life: life, cancel: cancel, cfg: c, check: check,
+		concurrentCLI: func() bool { return verifiedConcurrentLarkCLI(c) },
 		open: func(ctx, childLife context.Context) (backend, error) {
 			return openBackend(ctx, childLife, c, cwd, logs, dirty, nil)
 		}}
 }
 
-func (b *larkStateBackend) operation(ctx context.Context, report func(extension.Progress), run func(context.Context, backend) error) (err error) {
+func (b *larkStateBackend) operation(ctx context.Context, plan larkOperationPlan, report func(extension.Progress), run func(context.Context, backend) error) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stop := context.AfterFunc(b.life, cancel)
@@ -64,12 +67,6 @@ func (b *larkStateBackend) operation(ctx context.Context, report func(extension.
 	notDispatched := func(err error) error { return &larkNotDispatchedError{cause: err} }
 	if err := b.life.Err(); err != nil {
 		return notDispatched(err)
-	}
-	select {
-	case b.turn <- struct{}{}:
-		defer func() { <-b.turn }()
-	case <-ctx.Done():
-		return notDispatched(ctx.Err())
 	}
 	if err := ctx.Err(); err != nil {
 		return notDispatched(err)
@@ -81,13 +78,13 @@ func (b *larkStateBackend) operation(ctx context.Context, report func(extension.
 		return notDispatched(err)
 	}
 	path := filepath.Join(filepath.Dir(b.cfg.stateHome), ".lock")
-	unlock, err := lockState(path)
-	if errors.Is(err, errStateInUse) {
+	if plan.shared && (b.concurrentCLI == nil || !b.concurrentCLI()) {
 		if report != nil {
-			report(extension.Progress{Message: "Waiting for another Lark operation to release shared login state…"})
+			report(extension.Progress{Message: "Lark CLI is not in the verified concurrency set; using source-exclusive execution."})
 		}
-		unlock, err = lockStateContext(ctx, path)
+		plan = larkOperationPlan{}
 	}
+	unlock, err := acquireLarkLease(ctx, b.cfg.stateHome, plan, report)
 	if err != nil {
 		return notDispatched(err)
 	}
@@ -163,7 +160,7 @@ func closeLarkStateOperation(inner backend, lease *stateOperationLease, cancel c
 		}
 		cleanup := func() { cancel(); _ = child.Close() }
 		if !finishStateLease(lease, cleanup) {
-			return errors.New("Lark helper is still draining; login state remains exclusively locked until exit. Do not replay an operation whose outcome is unknown")
+			return errors.New("Lark helper is still draining; login state remains exclusively locked against maintenance or conflicting operations until exit. Do not replay an operation whose outcome is unknown")
 		}
 		return nil
 	}
@@ -174,11 +171,13 @@ func closeLarkStateOperation(inner backend, lease *stateOperationLease, cancel c
 }
 
 func (b *larkStateBackend) Catalog(ctx context.Context) (cat Catalog, err error) {
-	err = b.operation(ctx, nil, func(ctx context.Context, inner backend) error {
+	err = b.operation(ctx, larkOperationPlan{shared: true}, nil, func(ctx context.Context, inner backend) error {
 		var err error
 		cat, err = inner.Catalog(ctx)
 		if err == nil {
+			b.mu.Lock()
 			b.catalog = cat
+			b.mu.Unlock()
 		}
 		return err
 	})
@@ -186,12 +185,13 @@ func (b *larkStateBackend) Catalog(ctx context.Context) (cat Catalog, err error)
 }
 
 func (b *larkStateBackend) Call(ctx context.Context, call extension.Call, report func(extension.Progress)) (result extension.Result, err error) {
-	err = b.operation(ctx, report, func(ctx context.Context, inner backend) error {
+	err = b.operation(ctx, larkCallPlan(call), report, func(ctx context.Context, inner backend) error {
 		cat, err := inner.Catalog(ctx)
 		if err != nil {
 			return &larkNotDispatchedError{cause: err}
 		}
 		matched := false
+		b.mu.RLock()
 		for _, expected := range b.catalog.Tools {
 			if expected.Name != call.Tool {
 				continue
@@ -202,6 +202,7 @@ func (b *larkStateBackend) Call(ctx context.Context, call extension.Call, report
 				}
 			}
 		}
+		b.mu.RUnlock()
 		if !matched {
 			return &larkNotDispatchedError{cause: fmt.Errorf("tool %q changed; refresh the catalog before retrying", call.Tool)}
 		}
@@ -212,7 +213,7 @@ func (b *larkStateBackend) Call(ctx context.Context, call extension.Call, report
 }
 
 func (b *larkStateBackend) GetPrompt(ctx context.Context, name string, args map[string]string) (text string, err error) {
-	err = b.operation(ctx, nil, func(ctx context.Context, inner backend) error {
+	err = b.operation(ctx, larkOperationPlan{}, nil, func(ctx context.Context, inner backend) error {
 		var err error
 		text, err = inner.GetPrompt(ctx, name, args)
 		return err
@@ -221,7 +222,7 @@ func (b *larkStateBackend) GetPrompt(ctx context.Context, name string, args map[
 }
 
 func (b *larkStateBackend) ReadResource(ctx context.Context, uri string) (text string, err error) {
-	err = b.operation(ctx, nil, func(ctx context.Context, inner backend) error {
+	err = b.operation(ctx, larkOperationPlan{}, nil, func(ctx context.Context, inner backend) error {
 		var err error
 		text, err = inner.ReadResource(ctx, uri)
 		return err

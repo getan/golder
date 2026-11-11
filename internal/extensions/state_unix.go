@@ -29,6 +29,10 @@ func lockStateContext(ctx context.Context, path string) (func(), error) {
 }
 
 func stateLock(ctx context.Context, path string) (func(), error) {
+	return stateLockMode(ctx, path, false)
+}
+
+func stateLockMode(ctx context.Context, path string, shared bool) (func(), error) {
 	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return nil, err
@@ -43,7 +47,11 @@ func stateLock(ctx context.Context, path string) (func(), error) {
 		if ctx != nil && ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+		mode := unix.LOCK_EX
+		if shared {
+			mode = unix.LOCK_SH
+		}
+		err = unix.Flock(fd, mode|unix.LOCK_NB)
 		if err == nil {
 			locked = true
 			var once sync.Once

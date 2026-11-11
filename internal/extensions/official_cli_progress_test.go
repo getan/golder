@@ -219,6 +219,11 @@ func TestOfficialCLIReleaseDownload(t *testing.T) {
 			if !ok || found.Executable != resolved || lastPhase != "complete" {
 				t.Fatalf("installed=%+v discovered=%+v complete=%s", installed, found, lastPhase)
 			}
+			if kind == OfficialLarkCLI && !verifiedConcurrentLarkCLI(SourceConfig{
+				Env: map[string]string{"LARK_MCP_CLI": installed.Executable}, Executables: []string{installed.Executable},
+			}) {
+				t.Fatal("verified pinned native payload did not pass concurrency admission")
+			}
 		})
 	}
 }

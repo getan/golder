@@ -208,7 +208,9 @@ reported as such, not falsely labeled complete equivalence verification.
   version-coupled adapters, not hardware-keystore confidentiality promises.
 - CLI refreshes can write back. Known stateful `golder-lark` stdio sources use
   on-demand helpers: multiple GUI/TUI sessions can remain logically connected,
-  while actual operations take a cancellable cross-process exclusive lease.
+  with up to four concurrent Lark operations when the approved native CLI matches
+  the audited v1.0.99 payload. Resource conflicts remain serialized; unverified
+  CLIs, Meegle and unknown long-tail calls retain source-exclusive leases.
   Idle connections no longer block each other; setup/reset still cannot race an
   active operation. Disconnect an older, already-running persistent connection
   once after upgrading; do not reset login or delete the lock file. See

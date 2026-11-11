@@ -16,3 +16,7 @@ func lockState(string) (func(), error) {
 func lockStateContext(context.Context, string) (func(), error) {
 	return nil, errors.New("persistent extensions require macOS or Linux")
 }
+
+func stateLockMode(context.Context, string, bool) (func(), error) {
+	return nil, errors.New("persistent extensions require macOS or Linux")
+}

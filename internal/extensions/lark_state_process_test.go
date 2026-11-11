@@ -86,6 +86,10 @@ func TestLarkStateMCPFixture(t *testing.T) {
 }
 
 func larkStateManagers(t *testing.T) (*Manager, *Manager, SourceRef) {
+	return larkStateManagersForFixture(t, "TestLarkStateMCPFixture")
+}
+
+func larkStateManagersForFixture(t *testing.T, fixture string) (*Manager, *Manager, SourceRef) {
 	t.Helper()
 	if !seatbelt.Available() {
 		t.Skip("OS extension sandbox unavailable")
@@ -113,7 +117,7 @@ func larkStateManagers(t *testing.T) (*Manager, *Manager, SourceRef) {
 	ref := SourceRef{Kind: "mcp", ID: "lark"}
 	cfg := SourceConfig{
 		Enabled: true, Transport: "stdio", Command: helper, StateDir: true,
-		Args: []string{"-test.run=^TestLarkStateMCPFixture$"}, StartupTimeout: "5s", CallTimeout: "15s",
+		Args: []string{"-test.run=^" + fixture + "$"}, StartupTimeout: "5s", CallTimeout: "15s",
 		Setup: []string{helper, "-test.run=^TestSetupFixtureChild$"}, SetupOrigins: []string{"https://auth.example.com"},
 		Env: map[string]string{"LARK_STATE_FIXTURE": "1", "EXTENSION_SETUP_FIXTURE": "1"},
 	}
@@ -185,27 +189,25 @@ func TestLarkStateManagersCanRemainConnectedAndSerializeBusinessCalls(t *testing
 	if _, err := os.Stat(filepath.Join(home, "active")); err != nil {
 		t.Fatal("failed reset removed active state")
 	}
-	// Reconnect b while a is active. Catalog probing queues instead of claiming
-	// an idle lifetime lock; release a so b can complete within its budget.
+	// Failed maintenance must not disconnect b. An unverified native fixture
+	// still queues its business call under the conservative exclusive lease.
 	second := make(chan agentcore.AgentToolResult, 1)
+	queued := make(chan struct{}, 1)
 	go func() {
-		r, _ := b.Tools()[0].Execute(callCtx, "second", json.RawMessage(`{}`), nil)
+		r, _ := b.Tools()[0].Execute(callCtx, "second", json.RawMessage(`{}`), func(agentcore.AgentToolResult) {
+			select {
+			case queued <- struct{}{}:
+			default:
+			}
+		})
 		second <- r
 	}()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		view, _ := b.Source(ref)
-		if view.State == "connecting" {
-			break
-		}
-		select {
-		case r := <-second:
-			t.Fatalf("second manager failed instead of queuing: %s", agentcore.ContentToText(r.Content))
-		case <-ctx.Done():
-			t.Fatal("second manager never queued its connection probe")
-		case <-ticker.C:
-		}
+	select {
+	case <-queued:
+	case r := <-second:
+		t.Fatalf("second manager failed instead of queuing: %s", agentcore.ContentToText(r.Content))
+	case <-ctx.Done():
+		t.Fatal("second manager never queued its business call")
 	}
 	if err := os.WriteFile(filepath.Join(home, "release"), []byte("go"), 0o600); err != nil {
 		t.Fatal(err)

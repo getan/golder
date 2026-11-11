@@ -20,18 +20,57 @@ func (m *Manager) Setup(ctx context.Context, ref SourceRef, show func(setupevent
 	return m.SetupVariant(ctx, ref, "", show)
 }
 
+// maintenanceSource returns source.mu held. For call-scoped Lark, acquire
+// maintenance exclusion BEFORE disconnecting: a refused setup/reset must not
+// cancel another conversation's active business request.
+func (m *Manager) maintenanceSource(ref SourceRef) (*source, *stateOperationLease, error) {
+	s, err := m.get(ref)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !callScopedLarkState(s.cfg) {
+		if err := m.Disconnect(ref); err != nil {
+			return nil, nil, err
+		}
+		s.mu.Lock()
+		return s, nil, nil
+	}
+	if !s.mu.TryLock() {
+		return nil, nil, errStateInUse
+	}
+	if err := privateStateParent(s.cfg.stateHome); err != nil {
+		s.mu.Unlock()
+		return nil, nil, err
+	}
+	path := filepath.Join(filepath.Dir(s.cfg.stateHome), ".lock")
+	unlock, err := lockState(path)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, nil, err
+	}
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+	s.state = "disconnected"
+	return s, &stateOperationLease{path: path, unlock: unlock}, nil
+}
+
 func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant string, show func(setupevent.Event) error) error {
 	if m.opts.Permissions != nil && m.opts.Permissions.Mode() == permissions.ReadOnly {
 		return errors.New("read-only mode cannot write login state; switch permissions before setup")
 	}
-	if err := m.Disconnect(ref); err != nil {
-		return err
-	}
-	s, err := m.get(ref)
+	s, lease, err := m.maintenanceSource(ref)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if lease != nil {
+		defer lease.unlock()
+		ctx = context.WithValue(ctx, stateLeaseKey{}, lease)
+	}
 	defer s.mu.Unlock()
 	defer m.publish(s)
 	argv := s.cfg.Setup
@@ -232,14 +271,13 @@ func setupFailureAuth(event setupevent.Event) string {
 // Reset clears only this source HOME, with its persistent parent lock retained.
 // The caller must obtain a separate explicit operator confirmation.
 func (m *Manager) Reset(ref SourceRef) error {
-	if err := m.Disconnect(ref); err != nil {
-		return err
-	}
-	s, err := m.get(ref)
+	s, lease, err := m.maintenanceSource(ref)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
+	if lease != nil {
+		defer lease.unlock()
+	}
 	defer s.mu.Unlock()
 	defer m.publish(s)
 	if !s.cfg.StateDir {
@@ -249,11 +287,13 @@ func (m *Manager) Reset(ref SourceRef) error {
 	if err = privateStateParent(home); err != nil {
 		return err
 	}
-	unlock, err := lockState(filepath.Join(filepath.Dir(home), ".lock"))
-	if err != nil {
-		return err
+	if lease == nil {
+		unlock, err := lockState(filepath.Join(filepath.Dir(home), ".lock"))
+		if err != nil {
+			return err
+		}
+		defer unlock()
 	}
-	defer unlock()
 	if err = privateHome(home); err != nil {
 		return err
 	}
