@@ -27,20 +27,33 @@ func TestLarkStateMCPFixture(t *testing.T) {
 		return
 	}
 	home := os.Getenv("HOME")
+	inputEOF := make(chan struct{})
 	s := mcp.NewServer(&mcp.Implementation{Name: "golder-lark", Version: "fixture"}, nil)
-	s.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object","properties":{"hold":{"type":"boolean"},"block_cleanup":{"type":"boolean"}}}`)}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object","properties":{"hold":{"type":"boolean"},"block_cleanup":{"type":"boolean"},"cleanup_reply":{"type":"boolean"}}}`)}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var in struct {
+			Hold         bool `json:"hold"`
+			BlockCleanup bool `json:"block_cleanup"`
+			CleanupReply bool `json:"cleanup_reply"`
+		}
+		_ = json.Unmarshal(req.Params.Arguments, &in)
 		active := filepath.Join(home, "active")
 		f, err := os.OpenFile(active, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
 			return nil, fmt.Errorf("concurrent state writer: %w", err)
 		}
 		_ = f.Close()
-		defer os.Remove(active)
-		var in struct {
-			Hold         bool `json:"hold"`
-			BlockCleanup bool `json:"block_cleanup"`
-		}
-		_ = json.Unmarshal(req.Params.Arguments, &in)
+		defer func() {
+			if in.CleanupReply && ctx.Err() != nil {
+				<-inputEOF
+				// A final protocol notification must remain writable while the
+				// handler drains. Closing the parent's stdout reader too early
+				// kills this helper with SIGPIPE before cleanup can finish.
+				_, _ = os.Stdout.Write([]byte("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"cleanup\",\"progress\":1}}\n"))
+			}
+			if err := os.Remove(active); err != nil {
+				fmt.Fprintln(os.Stderr, "fixture cleanup:", err)
+			}
+		}()
 		if in.Hold {
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()
@@ -78,7 +91,7 @@ func TestLarkStateMCPFixture(t *testing.T) {
 		}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "lark-state-result"}}}, nil
 	})
-	if err := s.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+	if err := s.Run(context.Background(), &mcp.IOTransport{Reader: &larkFixtureEOFReader{ReadCloser: os.Stdin, eof: inputEOF}, Writer: os.Stdout}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

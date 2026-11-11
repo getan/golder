@@ -149,8 +149,15 @@ func finishStateLease(lease *stateOperationLease, cleanup func()) bool {
 
 func closeLarkStateOperation(inner backend, lease *stateOperationLease, cancel context.CancelFunc) error {
 	if child, ok := inner.(*mcpBackend); ok && child.wait != nil {
-		if child.session != nil {
-			_ = child.session.Close() // closes stdin; the server drains its handlers
+		lease.exited = child.wait
+		if child.closeInput != nil {
+			// Signal EOF to cancel/drain server handlers, but keep consuming
+			// stdout until the process exits. ClientSession.Close closes BOTH
+			// pipes; a final cleanup response can then cause SIGPIPE, terminating
+			// the helper before its native CLI and deferred cleanup finish.
+			_ = child.closeInput()
+		} else if child.session != nil {
+			_ = child.session.Close()
 		}
 		timer := time.NewTimer(2 * time.Second)
 		defer timer.Stop()
@@ -161,6 +168,9 @@ func closeLarkStateOperation(inner backend, lease *stateOperationLease, cancel c
 		cleanup := func() { cancel(); _ = child.Close() }
 		if !finishStateLease(lease, cleanup) {
 			return errors.New("Lark helper is still draining; login state remains exclusively locked against maintenance or conflicting operations until exit. Do not replay an operation whose outcome is unknown")
+		}
+		if child.waitErr != nil {
+			return fmt.Errorf("Lark helper did not exit cleanly: %w", child.waitErr)
 		}
 		return nil
 	}

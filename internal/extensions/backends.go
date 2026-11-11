@@ -106,10 +106,11 @@ func openBackend(ctx, life context.Context, c SourceConfig, cwd string, logs *lo
 			return nil, e
 		}
 		b.wait = make(chan struct{})
+		b.closeInput = in.Close
 		if lease, _ := life.Value(stateLeaseKey{}).(*stateOperationLease); lease != nil {
 			lease.exited = b.wait
 		}
-		go func() { _ = cmd.Wait(); close(b.wait) }()
+		go func() { b.waitErr = cmd.Wait(); close(b.wait) }()
 		transport = &mcp.IOTransport{Reader: out, Writer: in, MaxLineLength: 16 << 20}
 	}
 	session, e := client.Connect(ctx, transport, nil)
@@ -232,12 +233,14 @@ func (b *rpcBackend) ReadResource(context.Context, string) (string, error) {
 func (b *rpcBackend) Close() error { e := b.client.Close(); b.cleanup(); return e }
 
 type mcpBackend struct {
-	session  *mcp.ClientSession
-	command  *exec.Cmd
-	cleanup  func()
-	wait     chan struct{}
-	mu       sync.Mutex
-	progress map[string]func(extension.Progress)
+	session    *mcp.ClientSession
+	command    *exec.Cmd
+	cleanup    func()
+	closeInput func() error
+	wait       chan struct{}
+	waitErr    error // read only after wait is closed
+	mu         sync.Mutex
+	progress   map[string]func(extension.Progress)
 }
 
 func (b *mcpBackend) Catalog(ctx context.Context) (Catalog, error) {

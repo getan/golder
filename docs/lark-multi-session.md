@@ -63,6 +63,9 @@ extension state is in use; disconnect its other session before setup/reset
 6. 正常结束或取消后，关闭该次 MCP 连接并等待 helper 排空、退出，再释放锁。
    如果退出暂未确认，仍保留本次维护租约、资源锁及槽位直到实际退出；不能让冲突写者提前进入，
    但其他不冲突的 Lark 调用仍可执行。
+7. stdio 退出先只关闭 helper 的输入以发送 EOF，继续消费输出，直到进程退出后才关闭完整连接。
+   不能先关闭 stdout 读端：清理阶段的最后一条响应可能触发 SIGPIPE，令 helper 来不及完成清理。
+   异常退出码/信号会作为错误保留，而不是静默当作正常退出。
 
 锁文件在 HOME 外的持久父目录：
 
