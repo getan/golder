@@ -120,8 +120,11 @@ func (b *larkStateBackend) operation(ctx context.Context, report func(extension.
 	}
 	defer func() {
 		closeErr := closeLarkStateOperation(inner, lease, childCancel)
-		if err == nil {
-			err = closeErr
+		if closeErr != nil {
+			// A failed or cancelled call may also leave the helper draining under
+			// the lease. Preserve both facts so the caller does not mistake an
+			// unknown outcome for permission to immediately retry.
+			err = errors.Join(err, closeErr)
 		}
 	}()
 	if err := ctx.Err(); err != nil {

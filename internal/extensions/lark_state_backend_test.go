@@ -254,3 +254,23 @@ func TestLarkStateBackendPreservesExactApprovalAndNeverReplays(t *testing.T) {
 		t.Fatalf("unknown execution was replayed or mislabeled: calls=%d err=%v", calls, err)
 	}
 }
+
+func TestLarkStateBackendPreservesCallAndCleanupErrors(t *testing.T) {
+	t.Setenv("GOLDER_HOME", t.TempDir())
+	callErr := errors.New("call failed")
+	closeErr := errors.New("cleanup failed")
+	b := larkStateTestBackend(t, func(context.Context, context.Context) (backend, error) {
+		return &leasedLarkFixture{
+			cat: larkStateTestCatalog(),
+			call: func(context.Context, extension.Call) (extension.Result, error) {
+				return extension.Result{}, callErr
+			},
+			close: func() error { return closeErr },
+		}, nil
+	})
+	b.catalog = larkStateTestCatalog()
+	_, err := b.Call(context.Background(), extension.Call{Tool: "echo"}, nil)
+	if !errors.Is(err, callErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("lost call or cleanup error: %v", err)
+	}
+}

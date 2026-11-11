@@ -28,7 +28,7 @@ func TestLarkStateMCPFixture(t *testing.T) {
 	}
 	home := os.Getenv("HOME")
 	s := mcp.NewServer(&mcp.Implementation{Name: "golder-lark", Version: "fixture"}, nil)
-	s.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object","properties":{"hold":{"type":"boolean"}}}`)}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(&mcp.Tool{Name: "echo", InputSchema: json.RawMessage(`{"type":"object","properties":{"hold":{"type":"boolean"},"block_cleanup":{"type":"boolean"}}}`)}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		active := filepath.Join(home, "active")
 		f, err := os.OpenFile(active, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -37,7 +37,8 @@ func TestLarkStateMCPFixture(t *testing.T) {
 		_ = f.Close()
 		defer os.Remove(active)
 		var in struct {
-			Hold bool `json:"hold"`
+			Hold         bool `json:"hold"`
+			BlockCleanup bool `json:"block_cleanup"`
 		}
 		_ = json.Unmarshal(req.Params.Arguments, &in)
 		if in.Hold {
@@ -49,6 +50,23 @@ func TestLarkStateMCPFixture(t *testing.T) {
 				}
 				select {
 				case <-ctx.Done():
+					if in.BlockCleanup {
+						if err := os.WriteFile(filepath.Join(home, "cleanup-waiting"), []byte("waiting"), 0o600); err != nil {
+							return nil, err
+						}
+						deadline := time.NewTimer(15 * time.Second)
+						defer deadline.Stop()
+						for {
+							if _, err := os.Stat(filepath.Join(home, "release-cleanup")); err == nil {
+								break
+							}
+							select {
+							case <-deadline.C:
+								return nil, errors.New("fixture cleanup timed out")
+							case <-ticker.C:
+							}
+						}
+					}
 					return nil, ctx.Err()
 				case <-ticker.C:
 				}
@@ -255,8 +273,23 @@ func TestLarkStateManagersCancelActiveRequestBeforeReleasingLease(t *testing.T) 
 	case <-ctx.Done():
 		t.Fatal("active cancellation did not drain the helper")
 	}
-	if _, err := os.Stat(filepath.Join(home, "active")); !os.IsNotExist(err) {
-		t.Fatalf("caller returned before the helper finished state cleanup: %v", err)
+	active := filepath.Join(home, "active")
+	if _, err := os.Stat(active); err == nil {
+		// The backend may return after its bounded drain wait while the helper
+		// is still cancelling. That is safe only while the state lease remains
+		// held; recheck the marker under the lease to avoid racing its removal.
+		unlock, lockErr := lockState(filepath.Join(filepath.Dir(home), ".lock"))
+		if lockErr == nil {
+			_, statErr := os.Stat(active)
+			unlock()
+			if !os.IsNotExist(statErr) {
+				t.Fatalf("state lease released before the helper finished cleanup: %v", statErr)
+			}
+		} else if !errors.Is(lockErr, errStateInUse) {
+			t.Fatalf("check active state lease: %v", lockErr)
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("check helper cleanup marker: %v", err)
 	}
 	r, err := b.Tools()[0].Execute(agentcore.WithExternalToolAuthorization(ctx), "after-cancel", json.RawMessage(`{}`), nil)
 	if err != nil || r.IsError {
@@ -264,6 +297,84 @@ func TestLarkStateManagersCancelActiveRequestBeforeReleasingLease(t *testing.T) 
 	}
 	if data, err := os.ReadFile(filepath.Join(home, "refresh-state")); err != nil || string(data) != "x" {
 		t.Fatalf("cancelled request was replayed or interfered with the next writer: %q %v", data, err)
+	}
+}
+
+func TestLarkStateLeaseRemainsHeldDuringSlowCancellation(t *testing.T) {
+	a, b, ref := larkStateManagers(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, m := range []*Manager{a, b} {
+		if err := m.Connect(ctx, ref); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := sourceHome(ref)
+	release := filepath.Join(home, "release-cleanup")
+	t.Cleanup(func() { _ = os.WriteFile(release, []byte("release"), 0o600) })
+	activeCtx, cancelActive := context.WithCancel(agentcore.WithExternalToolAuthorization(ctx))
+	defer cancelActive()
+	done := make(chan agentcore.AgentToolResult, 1)
+	go func() {
+		r, _ := a.Tools()[0].Execute(activeCtx, "slow-cancel", json.RawMessage(`{"hold":true,"block_cleanup":true}`), nil)
+		done <- r
+	}()
+	waitLarkStateFile(t, ctx, filepath.Join(home, "active"))
+	cancelActive()
+	waitLarkStateFile(t, ctx, filepath.Join(home, "cleanup-waiting"))
+	select {
+	case result := <-done:
+		if !result.IsError {
+			t.Fatal("cancelled operation was reported successful")
+		}
+		if text := agentcore.ContentToText(result.Content); !strings.Contains(text, "login state remains exclusively locked") {
+			t.Fatalf("cancelled caller was not told the lease is still held: %s", text)
+		}
+	case <-ctx.Done():
+		t.Fatal("bounded cancellation wait did not return")
+	}
+	if _, err := os.Stat(filepath.Join(home, "active")); err != nil {
+		t.Fatalf("fixture did not keep cleanup active: %v", err)
+	}
+	if unlock, err := lockState(filepath.Join(filepath.Dir(home), ".lock")); !errors.Is(err, errStateInUse) {
+		if unlock != nil {
+			unlock()
+		}
+		t.Fatalf("state lease was released while cancellation was still draining: %v", err)
+	}
+	queued := make(chan struct{}, 1)
+	second := make(chan agentcore.AgentToolResult, 1)
+	go func() {
+		result, _ := b.Tools()[0].Execute(agentcore.WithExternalToolAuthorization(ctx), "after-slow-cancel", json.RawMessage(`{}`), func(update agentcore.AgentToolResult) {
+			if strings.Contains(agentcore.ContentToText(update.Content), "Waiting for another Lark operation") {
+				select {
+				case queued <- struct{}{}:
+				default:
+				}
+			}
+		})
+		second <- result
+	}()
+	select {
+	case <-queued:
+	case result := <-second:
+		t.Fatalf("next operation did not wait for the draining helper: %s", agentcore.ContentToText(result.Content))
+	case <-ctx.Done():
+		t.Fatal("next operation did not reach the state lease")
+	}
+	if err := os.WriteFile(release, []byte("release"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-second:
+		if result.IsError {
+			t.Fatalf("next operation did not safely acquire the released state: %s", agentcore.ContentToText(result.Content))
+		}
+	case <-ctx.Done():
+		t.Fatal("next operation remained blocked after cleanup completed")
+	}
+	if data, err := os.ReadFile(filepath.Join(home, "refresh-state")); err != nil || string(data) != "x" {
+		t.Fatalf("cancelled operation was replayed or overlapped the next writer: %q %v", data, err)
 	}
 }
 
