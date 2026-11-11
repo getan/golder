@@ -249,6 +249,7 @@ type sessionDraft struct {
 	attachments []appsession.UserAttachment
 	list        *transcriptWindow
 	historyNav  promptHistoryCursor
+	tail        appsession.Item
 }
 
 // New builds the app around an opened controller.
@@ -393,6 +394,10 @@ func (a *App) applySessionEvent(message appsession.SessionEvent) {
 func (a *App) applySnapshot(snap appsession.Snapshot) {
 	previousProject := a.project
 	previousSession := a.status.SessionID
+	var tail appsession.Item
+	if previousSession != "" && previousSession == snap.SessionID {
+		tail = transcriptTail(a.items)
+	}
 	a.status = snap.Status
 	a.project = snap.Project
 	a.snapshotSeq = snap.Seq
@@ -410,6 +415,7 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	for i, it := range a.items {
 		a.index[it.ID] = i
 	}
+	a.list.noteRestoredItems(tail, a.items, a.index)
 	a.pending = append(a.pending[:0], snap.Pending...)
 	a.transcriptRowsDirty = true
 	if len(a.pending) > 0 {
@@ -429,6 +435,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 			a.replaceItem(*ev.Item)
 			return
 		}
+		a.list.noteAddedItem(*ev.Item)
 		a.index[ev.Item.ID] = len(a.items)
 		a.items = append(a.items, *ev.Item)
 	case appsession.EventItemUpdated:
@@ -500,6 +507,8 @@ func (a *App) applyEvent(ev appsession.Event) {
 func (a *App) replaceItem(it appsession.Item) {
 	if i, ok := a.index[it.ID]; ok {
 		previous := a.items[i]
+		a.list.noteUpdatedItem(previous, it)
+		a.noteExpandedTranscriptUpdate(previous, it)
 		if previous.Kind != it.Kind || it.Kind == appsession.ItemNote || (previous.Tool == nil) != (it.Tool == nil) || previous.Tool != nil && it.Tool != nil && (previous.Tool.ID != it.Tool.ID || previous.Tool.Name != it.Tool.Name) {
 			a.transcriptRowsDirty = true
 		}
@@ -509,6 +518,7 @@ func (a *App) replaceItem(it appsession.Item) {
 		a.items[i] = it
 		return
 	}
+	a.list.noteAddedItem(it)
 	a.index[it.ID] = len(a.items)
 	a.items = append(a.items, it)
 }
@@ -569,6 +579,9 @@ func (a *App) submit(text string) bool {
 	if err := a.ctrl.SubmitAttachments(context.Background(), text, a.attachments); err != nil {
 		a.banner, a.bannerErr = err.Error(), true
 		return false
+	}
+	if a.list != nil {
+		a.list.jumpToBottom()
 	}
 	a.history.record(&a.historyNav, text, a.status.SessionID, a.project)
 	a.attachments = nil
@@ -878,7 +891,9 @@ func (a *App) activateSession(peer *appsession.Controller) {
 		a.drafts = make(map[string]sessionDraft)
 	}
 	if a.status.SessionID != "" {
-		a.drafts[a.status.SessionID] = sessionDraft{text: a.draft, attachments: append([]appsession.UserAttachment(nil), a.attachments...), list: a.list, historyNav: a.historyNav}
+		draft := sessionDraft{text: a.draft, attachments: append([]appsession.UserAttachment(nil), a.attachments...), list: a.list, historyNav: a.historyNav}
+		draft.tail = transcriptTail(a.items)
+		a.drafts[a.status.SessionID] = draft
 	}
 	if a.computerRequestPicker && a.computerSuggested != "" {
 		a.hub.ParkComputerRequest(a.ctrl, a.computerSuggested)
@@ -898,6 +913,7 @@ func (a *App) activateSession(peer *appsession.Controller) {
 	a.historyCaretPending = false
 	a.queueEditID, a.queueEditText = "", ""
 	a.list = draft.list
+	a.list.noteRestoredItems(draft.tail, a.items, a.index)
 	a.computerSession = peer.ComputerSession()
 	a.selectedProject = a.project
 	_ = peer.SelectProject(a.project)

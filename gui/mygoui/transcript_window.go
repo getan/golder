@@ -27,29 +27,35 @@ type transcriptWindow struct {
 	values    []float64
 	tree      []float64
 
-	rowsHead    *transcriptRow
-	rowsLen     int
-	waiting     bool
-	started     bool
-	follow      bool
-	remeasure   bool
-	first       int
-	last        int
-	builtLo     int
-	builtHi     int
-	pinned      bool
-	pinLo       string
-	pinHi       string
-	focusKey    string
-	selection   transcriptSelectionKey
-	ranges      []transcriptRange
-	startMarker uint64
-	endMarker   uint64
-	menuHits    []transcriptMenuHit
-	menuSource  string
-	menuValid   bool
-	reveal      int
-	hasReveal   bool
+	rowsHead        *transcriptRow
+	rowsLen         int
+	waiting         bool
+	started         bool
+	follow          bool
+	lastScrollY     float32
+	hasScrollY      bool
+	jumpPending     bool
+	upScrollPending bool
+	followSelection bool
+	unseen          int
+	remeasure       bool
+	first           int
+	last            int
+	builtLo         int
+	builtHi         int
+	pinned          bool
+	pinLo           string
+	pinHi           string
+	focusKey        string
+	selection       transcriptSelectionKey
+	ranges          []transcriptRange
+	startMarker     uint64
+	endMarker       uint64
+	menuHits        []transcriptMenuHit
+	menuSource      string
+	menuValid       bool
+	reveal          int
+	hasReveal       bool
 }
 
 type transcriptSelectionKey struct {
@@ -123,6 +129,28 @@ func (s *transcriptWindow) Visible() (int, int) { return s.first, s.last }
 
 func (s *transcriptWindow) ScrollIntoView(index int) {
 	s.reveal, s.hasReveal = index, true
+}
+
+// jumpToBottom restores follow without discarding a text selection. A new
+// selection or a subsequent upward scroll pauses it again.
+func (s *transcriptWindow) jumpToBottom() {
+	s.follow, s.jumpPending, s.followSelection = true, true, true
+	s.upScrollPending = false
+	s.unseen = 0
+	s.hasReveal = false
+	s.scroll.Y = math.MaxFloat32
+}
+
+func (s *transcriptWindow) handleScrollInput(ev ui.InputEvent) bool {
+	if ev.Kind == ui.InputScroll {
+		if ev.DY < 0 && s.scroll.MaxY > 0 && s.scroll.Y > 0 {
+			s.follow, s.jumpPending, s.followSelection = false, false, false
+			s.upScrollPending = true
+		} else if ev.DY > 0 {
+			s.upScrollPending = false
+		}
+	}
+	return false // Preserve the native scroll and selection behavior.
 }
 
 func (s *transcriptWindow) sync(rows []transcriptRow, waiting bool) {
@@ -254,15 +282,30 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 	if viewport <= 0 {
 		viewport = 600
 	}
+	if s.scroll.Y < s.scroll.MaxY-1 {
+		s.upScrollPending = false
+	}
 	if !s.started {
 		s.follow, s.started = true, true
-	} else if s.scroll.MaxY > 0 {
-		s.follow = s.scroll.Y >= s.scroll.MaxY-1
+	} else if s.follow && s.hasScrollY && !s.jumpPending && s.scroll.Y < s.lastScrollY-1 && s.scroll.Y < s.scroll.MaxY-1 {
+		// A growing scroll range or a resize does not revoke follow. Only an
+		// observed move away from the end represents scrolling up.
+		s.follow, s.followSelection = false, false
+	} else if !s.follow && !s.upScrollPending && (s.scroll.MaxY <= 0 || s.scroll.Y >= s.scroll.MaxY-1) {
+		s.follow, s.unseen = true, 0
 	}
 	selection := transcriptSelection(parts)
 	changed := selection != s.selection
+	if changed {
+		s.followSelection = false
+	}
+	if s.jumpPending {
+		s.follow, s.followSelection, s.jumpPending = true, true, false
+	}
 	if len(parts) > 0 {
-		s.follow = false
+		if !s.followSelection {
+			s.follow = false
+		}
 		if s.startMarker != 0 && s.endMarker != 0 && parts[0].ID == s.startMarker && parts[len(parts)-1].ID == s.endMarker {
 			// The native Select All selected both invisible boundary markers.
 			// Materialize all rows before Copy so it cannot omit virtual rows.
@@ -280,6 +323,7 @@ func (s *transcriptWindow) plan(viewport float32, parts []ui.SelectedText) []tra
 		s.scroll.Y = float32(max(s.prefix(i), 0))
 		s.follow, s.hasReveal = false, false
 	}
+	s.lastScrollY, s.hasScrollY = min(s.scroll.Y, s.scroll.MaxY), true
 	y := float64(s.scroll.Y)
 	if s.follow {
 		y = max(s.prefix(n)-float64(viewport)+2*transcriptPadding, 0)

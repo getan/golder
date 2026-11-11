@@ -80,6 +80,11 @@ func (a *App) view(c *ui.Context) {
 		a.paletteOpen = true
 		a.loadActions()
 	}
+	// Scrolling with the mouse need not focus a widget. In that case provide
+	// the same jump shortcut without intercepting focused editors or panes.
+	if a.list != nil && !a.list.follow && !c.Root().FocusWithin() && c.Shortcut(ui.Ctrl, ui.KeyE) {
+		a.list.jumpToBottom()
+	}
 	if !a.remoteOpen && a.remoteRelease != nil {
 		a.stopRemoteControl()
 	}
@@ -396,8 +401,13 @@ func (a *App) center(c *ui.Context) {
 		a.approvalReveal = ""
 	}
 	t := c.Theme()
-	ui.Column(c).Grow(1).MinWidth(0).Background(t.Background).Children(func() {
-		window := a.list
+	window := a.list
+	center := ui.Column(c).Grow(1).MinWidth(0).Background(t.Background)
+	center.OnShortcut(ui.Ctrl, ui.KeyE, func() {
+		window.jumpToBottom()
+		c.Services().Invalidate()
+	})
+	center.Children(func() {
 		scroll := ui.Scroll(c.Key("transcript:"+a.status.SessionID)).Selectable().TrackScroll(&window.scroll).Grow(1).MinHeight(0).
 			Padding(18, 24).Gap(14).Justify(ui.End).CopyData(func(parts []ui.SelectedText) transfer.Data {
 			if !window.copyReady(parts) {
@@ -412,6 +422,7 @@ func (a *App) center(c *ui.Context) {
 			}
 			return transfer.TextData(text)
 		})
+		scroll.HandleInput(window.handleScrollInput)
 		scroll.ContextMenu(func(m *ui.Menu) {
 			m.EditItems()
 			m.Separator()
@@ -500,6 +511,21 @@ func (a *App) center(c *ui.Context) {
 				ui.Box(c.Key("transcript-trailing-space")).Height(float32(max(space, 0))).Shrink(0)
 			}
 		})
+		if !window.follow && window.unseen > 0 && scroll.LayoutBounds().H > 0 {
+			word := "lines"
+			if window.unseen == 1 {
+				word = "line"
+			}
+			label := fmt.Sprintf("↓ %d new %s · Ctrl+E to jump", window.unseen, word)
+			bounds, parent := scroll.LayoutBounds(), center.LayoutBounds()
+			bottom := max(parent.Y+parent.H-(bounds.Y+bounds.H), 0) + 8
+			accessible := fmt.Sprintf("Jump to latest (%d new %s)", window.unseen, word)
+			if subtleButton(c, label).Absolute().Right(24).Bottom(bottom).Label(accessible).
+				Tooltip("New logical text lines; wrapped lines are not counted").Clicked() {
+				window.jumpToBottom()
+				c.Invalidate()
+			}
+		}
 		a.composer(c)
 	})
 }

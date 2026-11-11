@@ -92,6 +92,10 @@ func (a *App) composer(c *ui.Context) {
 			_, caret := input.TextAnchorCaret()
 			frameText := a.draft
 			input.OnTextKey(func(k ui.TextKey) bool {
+				if k.Mods == ui.Ctrl && k.Key == ui.KeyE && a.list != nil {
+					a.list.jumpToBottom()
+					return true
+				}
 				if k.Mods == 0 && (k.Key == ui.KeyUp || k.Key == ui.KeyDown) {
 					text := k.Text()
 					// TextKey does not expose the live caret; the selection read at
