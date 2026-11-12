@@ -3,8 +3,10 @@ package computeruse
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -138,7 +140,8 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	if !graphics {
 		state.message = "Kitty graphics unavailable; type observe for semantic controls. Ctrl+G pauses."
 	}
-	if err := drawOperatorPane(out, renderer, state); err != nil {
+	var display operatorPaneDisplay
+	if err := display.drawTerminal(out, renderer, state); err != nil {
 		return err
 	}
 	statusKnown, previewSettled, previewRendered := false, false, false
@@ -303,7 +306,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 				continue
 			}
 		}
-		if err := drawOperatorPane(out, renderer, state); err != nil {
+		if err := display.drawTerminal(out, renderer, state); err != nil {
 			return err
 		}
 		width, height, sizeErr := term.GetSize(out.Fd())
@@ -311,12 +314,60 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	}
 }
 
-func drawOperatorPane(out *os.File, renderer *KittyRenderer, state paneViewerState) error {
+type operatorPaneKey struct {
+	status                Status
+	message, input        string
+	semantic, localPaused bool
+	scroll                int
+	graphics, hasFrame    bool
+	frameHash             [sha256.Size]byte
+	width, height         int
+}
+
+type operatorPaneDisplay struct {
+	last  operatorPaneKey
+	drawn bool
+}
+
+func (d *operatorPaneDisplay) drawTerminal(out *os.File, renderer *KittyRenderer, state paneViewerState) error {
 	width, height, err := term.GetSize(out.Fd())
 	if err != nil || width < 1 || height < 1 {
 		width, height = 80, 24
 	}
 	width, height = min(width, 1000), min(height, 1000)
+	return d.draw(out, renderer, state, width, height)
+}
+
+// Repeated captures have fresh frame IDs even when their pixels do not change.
+// Avoid clearing and retransmitting the image on every status/preview tick.
+func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state paneViewerState, width, height int) (err error) {
+	key := operatorPaneKey{status: state.status, message: state.message, input: state.input,
+		semantic: state.semantic, localPaused: state.localPaused, scroll: state.scroll,
+		graphics: state.graphics, width: width, height: height}
+	key.hasFrame = !state.semantic && !state.localPaused && state.frame != nil && state.graphics && height > 4
+	if key.hasFrame {
+		key.frameHash = sha256.Sum256(state.frame.PNG)
+	}
+	if d.drawn && d.last == key {
+		return nil
+	}
+	// Compatible terminals present the clear, text and image together instead
+	// of showing the empty pane between them. Always release synchronized mode
+	// even if image transmission fails.
+	if err := writePaneBytes(out, []byte("\x1b[?2026h")); err != nil {
+		return err
+	}
+	defer func() {
+		endErr := writePaneBytes(out, []byte("\x1b[?2026l"))
+		if err == nil {
+			err = endErr
+		}
+		if err == nil {
+			d.last, d.drawn = key, true
+		} else {
+			d.drawn = false
+		}
+	}()
 	if err := renderer.Clear(); err != nil {
 		return err
 	}

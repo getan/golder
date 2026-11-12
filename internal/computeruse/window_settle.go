@@ -26,7 +26,7 @@ func transientWindowValidation(err error) bool {
 		return false
 	}
 	switch d.Reason {
-	case WindowBoundsMissing, WindowAXNoWindows, WindowAXGeometry, WindowAXNoMatch:
+	case WindowBoundsMissing, WindowAXNoWindows, WindowAXNoValue, WindowAXNullValue, WindowAXGeometry, WindowAXNoMatch:
 		return true
 	case WindowAXReadFailed:
 		return d.AXError == -25204 // kAXErrorCannotComplete

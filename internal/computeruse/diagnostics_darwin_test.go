@@ -8,6 +8,64 @@ import (
 	"testing"
 )
 
+func TestMacAXFallbackRequiresAgreementAndEmptyList(t *testing.T) {
+	for _, tc := range []struct {
+		windows, main, focused, same int
+		want                         bool
+	}{
+		{0, 1, 1, 1, true},
+		{1, 1, 1, 1, false}, // must not bypass an existing window list
+		{0, 0, 1, 1, false},
+		{0, 1, 0, 1, false},
+		{0, 1, 1, 0, false}, // different main/focused windows
+	} {
+		if got := macAXFallbackAllowed(tc.windows, tc.main, tc.focused, tc.same); got != tc.want {
+			t.Errorf("fallback %+v = %t", tc, got)
+		}
+	}
+}
+
+func TestMacAXFallbackRequiresUniqueCGWindow(t *testing.T) {
+	for scenario, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"unique selected window", true},
+		{"identical bounds in same process", false},
+		{"identical bounds in another process", true},
+		{"identical bounds on non-window layer", true},
+		{"unreadable peer window", false},
+		{"selected ID missing", false},
+		{"canceled", false},
+		{"selected geometry outside tolerance", false},
+		{"competing geometry within tolerance", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := macCGUniqueBoundsFixture(scenario); got != tc.want {
+				t.Errorf("unique = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestMacAXWindowListResultsAreDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		errorCode, hasValue, isArray int
+		want                         WindowFailure
+	}{
+		{0, 1, 1, ""},
+		{0, 0, 0, WindowAXNullValue},
+		{0, 1, 0, WindowAXUnexpectedType},
+		{-25212, 0, 0, WindowAXNoValue},    // kAXErrorNoValue
+		{-25211, 0, 0, WindowAXDisabled},   // kAXErrorAPIDisabled
+		{-25204, 0, 0, WindowAXReadFailed}, // kAXErrorCannotComplete
+	} {
+		if got := macAXListReason(tc.errorCode, tc.hasValue, tc.isArray); got != tc.want {
+			t.Errorf("error=%d value=%d array=%d: got %q want %q", tc.errorCode, tc.hasValue, tc.isArray, got, tc.want)
+		}
+	}
+}
+
 func TestMacAXMatchingDiagnosticFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		windows, readable, matches int

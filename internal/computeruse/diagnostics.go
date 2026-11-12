@@ -22,6 +22,9 @@ const (
 	WindowAXDisabled       WindowFailure = "ax-api-disabled"
 	WindowAXReadFailed     WindowFailure = "ax-windows-read-failed"
 	WindowAXNoWindows      WindowFailure = "ax-no-windows"
+	WindowAXNoValue        WindowFailure = "ax-windows-no-value"
+	WindowAXNullValue      WindowFailure = "ax-windows-null-value"
+	WindowAXUnexpectedType WindowFailure = "ax-windows-unexpected-type"
 	WindowAXGeometry       WindowFailure = "ax-geometry-unavailable"
 	WindowAXNoMatch        WindowFailure = "ax-geometry-mismatch"
 	WindowAXAmbiguous      WindowFailure = "ax-ambiguous-match"
@@ -51,7 +54,13 @@ func (d *WindowDiagnostic) Error() string {
 	case WindowAXReadFailed:
 		return fmt.Sprintf("macOS could not read the application's Accessibility window list (AX error %d); the application may be busy or unavailable", d.AXError)
 	case WindowAXNoWindows:
-		return "macOS returned no Accessibility windows for the selected application; show the intended window and select it again"
+		return "macOS returned an empty Accessibility window array for the selected application (AX error 0, windows 0); the target could not be verified"
+	case WindowAXNoValue:
+		return fmt.Sprintf("macOS returned kAXErrorNoValue for the application's Accessibility window list (AX error %d); the target could not be verified", d.AXError)
+	case WindowAXNullValue:
+		return "macOS returned success but a null Accessibility window list (AX error 0); the target could not be verified"
+	case WindowAXUnexpectedType:
+		return "macOS returned success but an unexpected Accessibility window list type (AX error 0); the target could not be verified"
 	case WindowAXGeometry:
 		return fmt.Sprintf("macOS could not read geometry for all Accessibility windows (%d of %d readable); the target could not be identified safely", d.Readable, d.Windows)
 	case WindowAXNoMatch:

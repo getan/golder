@@ -278,7 +278,7 @@ func (c toolCard) render(theme Theme, width int) string {
 	if c.expanded {
 		return out + c.renderDetail(theme, width)
 	}
-	if strings.EqualFold(c.name, "browser") && strings.EqualFold(argString(c.input["action"]), "snapshot") {
+	if c.isSnapshot() {
 		preview, hidden := c.snapshotPreview(theme, width)
 		out += preview
 		if hidden {
@@ -297,6 +297,11 @@ func (c toolCard) render(theme Theme, width int) string {
 		out += "\n" + theme.System.Render(wrapBodyLine(bodyIndent, tally, max(1, width-2)))
 	}
 	return out
+}
+
+func (c toolCard) isSnapshot() bool {
+	return (strings.EqualFold(c.name, "browser") || strings.EqualFold(c.name, "computer")) &&
+		strings.EqualFold(argString(c.input["action"]), "snapshot")
 }
 
 // renderNotes paints the gate verdicts attached to this card, one line each,
@@ -689,7 +694,7 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		wroteOutput = true
 	} else {
 		response := c.response
-		if strings.EqualFold(c.name, "browser") && strings.EqualFold(argString(c.input["action"]), "snapshot") {
+		if c.isSnapshot() {
 			response = snapshotDetailNodes(response)
 		}
 		for i, n := range response {

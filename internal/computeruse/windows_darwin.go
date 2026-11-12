@@ -169,7 +169,8 @@ static int cu_activation_safe_here(cu_window selected) {
 enum {
 	CU_AX_OK = 0, CU_AX_PERMISSION, CU_AX_WINDOW, CU_AX_BOUNDS, CU_AX_APP,
 	CU_AX_READ, CU_AX_EMPTY, CU_AX_GEOMETRY, CU_AX_NO_MATCH, CU_AX_AMBIGUOUS,
-	CU_AX_LIMIT, CU_AX_FOCUS, CU_AX_DISABLED
+	CU_AX_LIMIT, CU_AX_FOCUS, CU_AX_DISABLED, CU_AX_NO_VALUE, CU_AX_NULL_VALUE,
+	CU_AX_UNEXPECTED_TYPE
 };
 
 typedef struct {
@@ -185,6 +186,15 @@ static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_f
 static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
 static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag->cancelled); }
 
+static int cu_ax_list_result(AXError error, int has_value, int is_array) {
+	if (error == kAXErrorAPIDisabled) return CU_AX_DISABLED;
+	if (error == kAXErrorNoValue) return CU_AX_NO_VALUE;
+	if (error != kAXErrorSuccess) return CU_AX_READ;
+	if (!has_value) return CU_AX_NULL_VALUE;
+	if (!is_array) return CU_AX_UNEXPECTED_TYPE;
+	return CU_AX_OK;
+}
+
 static int cu_ax_match_reason(CFIndex windows, int readable, int matches) {
 	if (windows > 128) return CU_AX_LIMIT;
 	if (matches > 1) return CU_AX_AMBIGUOUS;
@@ -192,6 +202,129 @@ static int cu_ax_match_reason(CFIndex windows, int readable, int matches) {
 	if (readable < windows) return CU_AX_GEOMETRY;
 	if (matches == 1) return CU_AX_OK;
 	return CU_AX_NO_MATCH;
+}
+
+static int cu_same_bounds(CGRect a, CGRect b) {
+	return fabs(a.origin.x-b.origin.x) < 2 && fabs(a.origin.y-b.origin.y) < 2 &&
+		fabs(a.size.width-b.size.width) < 2 && fabs(a.size.height-b.size.height) < 2;
+}
+
+static int cu_ax_geometry(AXUIElementRef window, CGRect *bounds) {
+	CFTypeRef position = NULL, size = NULL;
+	AXUIElementSetMessagingTimeout(window, 0.5);
+	int ok = AXUIElementCopyAttributeValue(window, kAXPositionAttribute, &position) == kAXErrorSuccess &&
+		AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &size) == kAXErrorSuccess &&
+		position && size && CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID() &&
+		AXValueGetValue((AXValueRef)position, kAXValueCGPointType, &bounds->origin) &&
+		AXValueGetValue((AXValueRef)size, kAXValueCGSizeType, &bounds->size);
+	if (position) CFRelease(position);
+	if (size) CFRelease(size);
+	return ok;
+}
+
+// AXWindows may omit windows on another Space. A main/focused reference alone
+// is not sufficient: two CG windows of this process can have identical bounds.
+static int cu_cg_unique_bounds_in_list(cu_window selected, CGRect bounds, CFArrayRef list, cu_cancel_flag *flag) {
+	if (!list) return 0;
+	int total = 0, readable = 0, matches = 0, found = 0;
+	CFIndex count = CFArrayGetCount(list);
+	if (count > 8192) return 0;
+	for (CFIndex i = 0; i < count && !cu_cancelled(flag); i++) {
+		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		int32_t pid = 0, layer = 0;
+		uint32_t id = 0;
+		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
+		CFNumberRef l = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowLayer);
+		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowNumber);
+		if (!p || !CFNumberGetValue(p, kCFNumberSInt32Type, &pid)) { total = 129; break; }
+		if (pid != selected.pid) continue;
+		if (!l || !CFNumberGetValue(l, kCFNumberSInt32Type, &layer)) { total = 129; break; }
+		if (layer != 0) continue;
+		total++;
+		CGRect current;
+		CFDictionaryRef raw = (CFDictionaryRef)CFDictionaryGetValue(d, kCGWindowBounds);
+		if (!n || !CFNumberGetValue(n, kCFNumberSInt32Type, &id) || !raw || !CGRectMakeWithDictionaryRepresentation(raw, &current)) continue;
+		readable++;
+		if (cu_same_bounds(current, bounds)) {
+			matches++;
+			if (id == selected.window_id) found = 1;
+		}
+	}
+	return !cu_cancelled(flag) && found && cu_ax_match_reason(total, readable, matches) == CU_AX_OK;
+}
+
+static int cu_cg_unique_bounds(cu_window selected, CGRect bounds, cu_cancel_flag *flag) {
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	int unique = cu_cg_unique_bounds_in_list(selected, bounds, list, flag);
+	if (list) CFRelease(list);
+	return unique;
+}
+
+// Synthetic native inventory for deterministic tests; no desktop reads/input.
+static int cu_test_unique_bounds(int scenario) {
+	cu_window selected = {.pid = 7, .window_id = 1};
+	CGRect bounds = CGRectMake(10, 20, 200, 100);
+	CFMutableArrayRef list = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
+	for (int i = 0; i < 2; i++) {
+		int32_t pid = (i == 1 && scenario == 2) ? 8 : 7;
+		int32_t layer = (i == 1 && scenario == 3) ? 1 : 0;
+		int32_t id = (i == 0 && scenario == 5) ? 3 : i+1;
+		CGRect rect = bounds;
+		if (i == 1 && scenario == 0) rect.origin.x = 300;
+		if (i == 0 && scenario == 7) rect.origin.x = 12;
+		if (i == 1 && scenario == 8) rect.origin.x = 11.9;
+		CFMutableDictionaryRef d = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+		CFNumberRef p = CFNumberCreate(NULL, kCFNumberSInt32Type, &pid);
+		CFNumberRef l = CFNumberCreate(NULL, kCFNumberSInt32Type, &layer);
+		CFNumberRef n = CFNumberCreate(NULL, kCFNumberSInt32Type, &id);
+		CFDictionaryRef b = CGRectCreateDictionaryRepresentation(rect);
+		CFDictionarySetValue(d, kCGWindowOwnerPID, p);
+		CFDictionarySetValue(d, kCGWindowLayer, l);
+		CFDictionarySetValue(d, kCGWindowNumber, n);
+		if (!(i == 1 && scenario == 4)) CFDictionarySetValue(d, kCGWindowBounds, b);
+		CFArrayAppendValue(list, d);
+		CFRelease(p); CFRelease(l); CFRelease(n); CFRelease(b); CFRelease(d);
+	}
+	cu_cancel_flag flag = {0};
+	if (scenario == 6) cu_cancel_set(&flag);
+	int unique = cu_cg_unique_bounds_in_list(selected, bounds, list, &flag);
+	CFRelease(list);
+	return unique;
+}
+
+static int cu_ax_fallback_allowed(CFIndex windows, int main_valid, int focused_valid, int same_window) {
+	return windows == 0 && main_valid && focused_valid && same_window;
+}
+
+// Read-only fallback using public AX attributes, never activation or a change
+// of Space. Both attributes must agree on one AXWindow owned by the selected
+// process, and its geometry must identify exactly the selected CG window.
+static AXUIElementRef cu_ax_main_focused_window(AXUIElementRef app, cu_window selected, CGRect bounds, CFIndex list_windows, cu_cancel_flag *flag) {
+	if (cu_cancelled(flag)) return NULL;
+	CFTypeRef main = NULL, focused = NULL, role = NULL;
+	int main_ok = AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute, &main) == kAXErrorSuccess &&
+		main && CFGetTypeID(main) == AXUIElementGetTypeID();
+	int focused_ok = !cu_cancelled(flag) && AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute, &focused) == kAXErrorSuccess &&
+		focused && CFGetTypeID(focused) == AXUIElementGetTypeID();
+	AXUIElementRef match = NULL;
+	if (cu_ax_fallback_allowed(list_windows, main_ok, focused_ok, main_ok && focused_ok && CFEqual(main, focused))) {
+		AXUIElementRef window = (AXUIElementRef)main;
+		pid_t pid = 0;
+		CGRect current;
+		AXUIElementSetMessagingTimeout(window, 0.5);
+		if (!cu_cancelled(flag) && AXUIElementGetPid(window, &pid) == kAXErrorSuccess && pid == selected.pid &&
+			AXUIElementCopyAttributeValue(window, kAXRoleAttribute, &role) == kAXErrorSuccess && role &&
+			CFGetTypeID(role) == CFStringGetTypeID() && CFEqual(role, kAXWindowRole) &&
+			cu_ax_geometry(window, &current) && cu_same_bounds(current, bounds) &&
+			cu_cg_unique_bounds(selected, bounds, flag) &&
+			cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) {
+			match = (AXUIElementRef)CFRetain(window);
+		}
+	}
+	if (role) CFRelease(role);
+	if (main) CFRelease(main);
+	if (focused) CFRelease(focused);
+	return match;
 }
 
 // Match a public AX window to the selected CG window by process and unique
@@ -217,11 +350,11 @@ static AXUIElementRef cu_ax_window_diagnostic_cancel(cu_window selected, int req
 	AXUIElementSetMessagingTimeout(app, 0.5);
 	CFTypeRef raw = NULL;
 	AXError ax_error = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &raw);
-	if (ax_error != kAXErrorSuccess || !raw || CFGetTypeID(raw) != CFArrayGetTypeID()) {
+	int list_result = cu_ax_list_result(ax_error, raw != NULL, raw && CFGetTypeID(raw) == CFArrayGetTypeID());
+	if (list_result != CU_AX_OK) {
 		if (raw) CFRelease(raw);
 		CFRelease(app);
-		diag->reason = ax_error == kAXErrorAPIDisabled ? CU_AX_DISABLED :
-			(ax_error == kAXErrorNoValue || (ax_error == kAXErrorSuccess && !raw) ? CU_AX_EMPTY : CU_AX_READ);
+		diag->reason = list_result;
 		diag->ax_error = (int)ax_error;
 		return NULL;
 	}
@@ -232,20 +365,10 @@ static AXUIElementRef cu_ax_window_diagnostic_cancel(cu_window selected, int req
 	int matches = 0, readable = 0;
 	for (CFIndex i = 0; i < total && i < 128 && !cu_cancelled(flag); i++) {
 		AXUIElementRef window = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
-		CFTypeRef position = NULL, size = NULL;
-		CGPoint point;
-		CGSize dimensions;
-		AXUIElementSetMessagingTimeout(window, 0.5);
-		int ok = AXUIElementCopyAttributeValue(window, kAXPositionAttribute, &position) == kAXErrorSuccess &&
-			AXUIElementCopyAttributeValue(window, kAXSizeAttribute, &size) == kAXErrorSuccess &&
-			position && size && CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID() &&
-			AXValueGetValue((AXValueRef)position, kAXValueCGPointType, &point) &&
-			AXValueGetValue((AXValueRef)size, kAXValueCGSizeType, &dimensions);
-		if (position) CFRelease(position);
-		if (size) CFRelease(size);
+		CGRect current;
+		int ok = window && CFGetTypeID(window) == AXUIElementGetTypeID() && cu_ax_geometry(window, &current);
 		if (ok) readable++;
-		if (ok && fabs(point.x-bounds.origin.x) < 2 && fabs(point.y-bounds.origin.y) < 2 &&
-			fabs(dimensions.width-bounds.size.width) < 2 && fabs(dimensions.height-bounds.size.height) < 2) {
+		if (ok && cu_same_bounds(current, bounds)) {
 			match = window;
 			matches++;
 		}
@@ -255,6 +378,13 @@ static AXUIElementRef cu_ax_window_diagnostic_cancel(cu_window selected, int req
 	diag->matches = matches;
 	diag->reason = cu_ax_match_reason(total, readable, matches);
 	if (diag->reason != CU_AX_OK) match = NULL;
+	// Only a successfully read empty array permits this fallback. Never hide
+	// permission errors, unreadable windows, mismatches, or ambiguous matches.
+	AXUIElementRef fallback = NULL;
+	if (total == 0 && !cu_cancelled(flag)) {
+		fallback = cu_ax_main_focused_window(app, selected, bounds, total, flag);
+		if (fallback) { match = fallback; diag->reason = CU_AX_OK; }
+	}
 	if (match && require_focus) {
 		AXUIElementRef system = AXUIElementCreateSystemWide();
 		CFTypeRef focused_app = NULL, focused_window = NULL;
@@ -268,6 +398,7 @@ static AXUIElementRef cu_ax_window_diagnostic_cancel(cu_window selected, int req
 		if (!ok) { diag->reason = CU_AX_FOCUS; match = NULL; }
 	}
 	if (match) CFRetain(match);
+	if (fallback) CFRelease(fallback);
 	CFRelease(windows);
 	CFRelease(app);
 	return match;
@@ -765,6 +896,12 @@ func (c *MacWindowCatalog) targets(ctx context.Context, allSpaces bool, applicat
 		if application != "" && C.GoString(&window.bundle[0]) != application {
 			continue
 		}
+		// The all-Spaces inventory also contains internal menu/decorative
+		// records that cannot be resolved as standalone CG windows. They must
+		// not create a false multi-window choice for the requested application.
+		if allSpaces && C.cu_window_exists(window.window_id, window.pid, window.start_sec, window.start_usec) == 0 {
+			continue
+		}
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
 			return nil, err
@@ -792,7 +929,9 @@ func macWindowDiagnostic(d C.cu_ax_diagnostic) *WindowDiagnostic {
 		C.CU_AX_PERMISSION: WindowPermissionDenied, C.CU_AX_WINDOW: WindowUnavailable,
 		C.CU_AX_BOUNDS: WindowBoundsMissing, C.CU_AX_APP: WindowAXAppUnavailable,
 		C.CU_AX_READ: WindowAXReadFailed, C.CU_AX_EMPTY: WindowAXNoWindows,
-		C.CU_AX_GEOMETRY: WindowAXGeometry, C.CU_AX_NO_MATCH: WindowAXNoMatch,
+		C.CU_AX_NO_VALUE: WindowAXNoValue, C.CU_AX_NULL_VALUE: WindowAXNullValue,
+		C.CU_AX_UNEXPECTED_TYPE: WindowAXUnexpectedType,
+		C.CU_AX_GEOMETRY:        WindowAXGeometry, C.CU_AX_NO_MATCH: WindowAXNoMatch,
 		C.CU_AX_AMBIGUOUS: WindowAXAmbiguous, C.CU_AX_LIMIT: WindowAXLimit,
 		C.CU_AX_FOCUS: WindowAXFocus, C.CU_AX_DISABLED: WindowAXDisabled,
 	}
@@ -805,6 +944,19 @@ func macWindowDiagnostic(d C.cu_ax_diagnostic) *WindowDiagnostic {
 func macAXMatchReason(windows, readable, matches int) WindowFailure {
 	reason := C.cu_ax_match_reason(C.CFIndex(windows), C.int(readable), C.int(matches))
 	return macWindowDiagnostic(C.cu_ax_diagnostic{reason: reason}).Reason
+}
+
+func macAXListReason(errorCode, hasValue, isArray int) WindowFailure {
+	reason := C.cu_ax_list_result(C.AXError(errorCode), C.int(hasValue), C.int(isArray))
+	return macWindowDiagnostic(C.cu_ax_diagnostic{reason: reason}).Reason
+}
+
+func macAXFallbackAllowed(windows, mainValid, focusedValid, sameWindow int) bool {
+	return C.cu_ax_fallback_allowed(C.CFIndex(windows), C.int(mainValid), C.int(focusedValid), C.int(sameWindow)) != 0
+}
+
+func macCGUniqueBoundsFixture(scenario int) bool {
+	return C.cu_test_unique_bounds(C.int(scenario)) != 0
 }
 
 // Physical input independently proves foreground focus and geometry immediately
