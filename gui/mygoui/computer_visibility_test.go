@@ -14,7 +14,7 @@ func TestMacComputerPickerExplainsVisibleWindows(t *testing.T) {
 	a := testApp()
 	a.computerPickerOpen = true
 	tt := ui.NewTester(a.view, 1200, 800)
-	if !tt.HasText("Only windows on the current desktop are listed") || !tt.HasText("Restore minimized windows") {
+	if !tt.HasText("manual window list shows the current desktop") || !tt.HasText("without switching Spaces") || !tt.HasText("restore it and refresh") {
 		t.Fatalf("missing visibility guidance: %q", tt.Texts())
 	}
 }

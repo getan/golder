@@ -77,8 +77,18 @@ func (s *Session) SupportsCapture() bool {
 }
 
 func (s *Session) Capture(ctx context.Context) (Frame, error) {
+	return s.capture(ctx, false)
+}
+
+// CapturePreview is for the local operator view, not model-facing screenshots.
+// It neither queues behind control operations nor issues an input frame lease.
+func (s *Session) CapturePreview(ctx context.Context) (Frame, error) {
+	return s.capture(ctx, true)
+}
+
+func (s *Session) capture(ctx context.Context, preview bool) (Frame, error) {
 	var frame Frame
-	err := s.Do(ctx, false, func(ctx context.Context, backend Backend, target Target) error {
+	err := s.do(ctx, false, preview, func(ctx context.Context, backend Backend, target Target) error {
 		capture, ok := backend.(CaptureBackend)
 		if !ok {
 			return ErrUnavailable
@@ -106,7 +116,7 @@ func (s *Session) Capture(ctx context.Context) (Frame, error) {
 			return err
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
-		if token != "" && len(token) <= 512 {
+		if !preview && token != "" && len(token) <= 512 {
 			s.mu.Lock()
 			if err := ctx.Err(); err != nil || !s.status.Active || s.status.Paused || s.status.Target.ID != target.ID {
 				s.mu.Unlock()

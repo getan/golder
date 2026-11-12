@@ -48,6 +48,25 @@ func TestOperatorPaneProtocolRevokesOnDisconnect(t *testing.T) {
 	}
 }
 
+func TestOperatorPaneResumeRevalidatesTheOriginalWindow(t *testing.T) {
+	target := Target{ID: "calculator"}
+	backend := &settlingResumeBackend{target: target}
+	s := New(backend)
+	if err := s.Start(context.Background(), target, Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	s.Pause()
+	backend.failures = 1
+	pane, err := NewPane(s, io.Discard, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := paneResponse(context.Background(), pane, PaneRequest{Action: "resume", Sequence: 1})
+	if response.Error != "" || response.Status.Paused || response.Status.Target != target || backend.checks != 3 {
+		t.Fatalf("operator pane resume: response=%+v checks=%d", response, backend.checks)
+	}
+}
+
 func TestOperatorPaneProtocolUnicodeFill(t *testing.T) {
 	ctx := context.Background()
 	backend := &guardedSemanticBackend{element: Element{Ref: "@e1", Enabled: true, Editable: true}}

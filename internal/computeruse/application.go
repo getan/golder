@@ -24,6 +24,13 @@ type ApplicationLauncher interface {
 	LaunchApplication(context.Context, Application) error
 }
 
+// ApplicationWindowLookup discovers windows of the exact catalogued app,
+// including windows outside the foreground desktop when the OS can prove them.
+// It never activates an application or expands the selected app identity.
+type ApplicationWindowLookup interface {
+	ApplicationWindows(context.Context, Application) ([]Target, error)
+}
+
 // ApplicationRevealer can bring an already catalogued application forward if a
 // background launch did not produce a visible window. It must revalidate the
 // same application identity, and must not select or control a window itself.
@@ -105,7 +112,36 @@ func ResolveApplication(ctx context.Context, backend PlatformBackend, name strin
 			return ApplicationResolution{Targets: existing, Matched: true}, nil
 		}
 	}
+	if finder, ok := backend.(ApplicationWindowLookup); ok {
+		existing, err := matchingApplicationWindows(ctx, finder, apps[0])
+		if err != nil {
+			return ApplicationResolution{}, err
+		}
+		if len(existing) > 0 {
+			return ApplicationResolution{Targets: existing, Matched: true}, nil
+		}
+	}
 	return LaunchAndFindApplication(ctx, backend, apps[0])
+}
+
+func matchingApplicationWindows(ctx context.Context, finder ApplicationWindowLookup, app Application) ([]Target, error) {
+	if app.Identity == "" {
+		return nil, nil
+	}
+	targets, err := finder.ApplicationWindows(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var matches []Target
+	for _, target := range targets {
+		if target.ApplicationID == app.Identity {
+			matches = append(matches, target)
+		}
+	}
+	return matches, nil
 }
 
 // LaunchAndFindApplication waits for a window belonging to the exact launched
@@ -136,7 +172,8 @@ func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 	defer deadline.Stop()
 	var reveal <-chan time.Time
 	revealer, canReveal := backend.(ApplicationRevealer)
-	if canReveal {
+	_, canFindBackground := backend.(ApplicationWindowLookup)
+	if canReveal && !canFindBackground {
 		timer := time.NewTimer(revealAfter)
 		defer timer.Stop()
 		reveal = timer.C
@@ -153,6 +190,12 @@ func launchAndFindApplication(ctx context.Context, backend PlatformBackend, app 
 		for _, target := range targets {
 			if app.Identity != "" && app.Identity == target.ApplicationID || app.Identity == "" && normalizeApplicationName(app.Name) == normalizeApplicationName(target.Application) {
 				matches = append(matches, target)
+			}
+		}
+		if len(matches) == 0 && canFindBackground {
+			matches, err = matchingApplicationWindows(ctx, backend.(ApplicationWindowLookup), app)
+			if err != nil {
+				return ApplicationResolution{}, err
 			}
 		}
 		if len(matches) > 0 {

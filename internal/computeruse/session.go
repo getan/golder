@@ -16,6 +16,7 @@ var (
 	ErrNotAllowed  = errors.New("computer use action is not authorized")
 	ErrPaused      = errors.New("computer use is paused; the user must resume")
 	ErrTargetLost  = errors.New("computer use target changed or is unavailable")
+	ErrPreviewBusy = errors.New("computer use preview skipped while another operation is running")
 )
 
 // Target is an opaque identity returned by a platform backend. The local host
@@ -61,10 +62,11 @@ type SnapshotBackend interface {
 // operations. Only the operator-facing host may call Start or Resume.
 type Session struct {
 	mu                      sync.Mutex
-	opMu                    sync.Mutex
+	opMu                    operationLock
 	backend                 Backend
 	status                  Status
 	cancel                  context.CancelFunc
+	previewCancel           context.CancelFunc
 	sequence                uint64
 	snapshot                *snapshotLease
 	frames                  map[string]frameLease
@@ -84,8 +86,10 @@ func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) e
 	if target.ID == "" || !caps.Observe {
 		return ErrNotAllowed
 	}
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	if err := s.opMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.opMu.unlock()
 	s.mu.Lock()
 	if s.backend == nil {
 		s.mu.Unlock()
@@ -111,11 +115,14 @@ func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) e
 	if s.sequence != sequence {
 		return context.Canceled
 	}
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrTargetLost, err)
-	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if err != nil {
+		if retryableValidationFailure(err) {
+			return noInputValidationError(err)
+		}
+		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	s.operatorPreviewDone = nil
 	s.status = Status{Active: true, Target: target, Capabilities: caps}
@@ -147,11 +154,34 @@ func (s *Session) SupportsSnapshot() bool {
 // cannot validate the pinned target. Callers must not invoke backend input by
 // bypassing this method.
 func (s *Session) Do(ctx context.Context, control bool, operation func(context.Context, Backend, Target) error) error {
+	return s.do(ctx, control, false, operation)
+}
+
+// A local preview is opportunistic: it must not queue ahead of the Agent or
+// change the control session's pause state if a background capture fails.
+func (s *Session) do(ctx context.Context, control, preview bool, operation func(context.Context, Backend, Target) error) error {
 	if s == nil {
 		return ErrUnavailable
 	}
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if preview {
+		if !s.opMu.tryLock() {
+			return ErrPreviewBusy
+		}
+	} else {
+		if err := s.opMu.lockPreempt(ctx, func() {
+			s.mu.Lock()
+			if s.previewCancel != nil {
+				s.previewCancel()
+			}
+			s.mu.Unlock()
+		}); err != nil {
+			return err
+		}
+	}
+	defer s.opMu.unlock()
 	s.mu.Lock()
 	if s.backend == nil {
 		s.mu.Unlock()
@@ -177,23 +207,46 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 		s.mu.Unlock()
 		return err
 	}
+	if preview && s.opMu.waiting.Load() != 0 {
+		s.mu.Unlock()
+		return ErrPreviewBusy
+	}
 	operationCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
+	if preview {
+		s.previewCancel = cancel
+	}
 	sequence, target, backend := s.sequence, s.status.Target, s.backend
 	s.mu.Unlock()
 	defer func() {
 		cancel()
 		s.mu.Lock()
 		s.cancel = nil
+		if preview {
+			s.previewCancel = nil
+		}
 		s.mu.Unlock()
 	}()
 	if err := backend.Validate(operationCtx, target, control); err != nil {
 		if operationCtx.Err() != nil {
 			return operationCtx.Err()
 		}
+		if preview {
+			return err
+		}
+		if retryableValidationFailure(err) {
+			s.mu.Lock()
+			if s.sequence == sequence && s.status.Active {
+				s.snapshot = nil
+				s.frames = nil
+			}
+			s.mu.Unlock()
+			return noInputValidationError(err)
+		}
 		s.mu.Lock()
 		if s.sequence == sequence && s.status.Active {
 			s.status.Paused = true
+			s.sequence++
 			s.snapshot = nil
 			s.frames = nil
 		}
@@ -205,9 +258,21 @@ func (s *Session) Do(ctx context.Context, control bool, operation func(context.C
 	}
 	err := operation(operationCtx, backend, target)
 	if operationCtx.Err() != nil {
+		if control {
+			return fmt.Errorf("computer use control was interrupted; its effect may be unknown, so observe before deciding what to do: %w", operationCtx.Err())
+		}
 		return operationCtx.Err()
 	}
-	if errors.Is(err, ErrTargetLost) {
+	if !control && !preview && retryableValidationFailure(err) {
+		s.mu.Lock()
+		if s.sequence == sequence && s.status.Active {
+			s.snapshot = nil
+			s.frames = nil
+		}
+		s.mu.Unlock()
+		return noInputValidationError(err)
+	}
+	if !preview && errors.Is(err, ErrTargetLost) {
 		s.mu.Lock()
 		if s.sequence == sequence && s.status.Active {
 			s.status.Paused = true
@@ -247,8 +312,11 @@ func (s *Session) Resume(ctx context.Context) error {
 	if s == nil {
 		return ErrUnavailable
 	}
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return resumeValidationError(err)
+	}
+	// Bind the click to the pause the operator saw, before waiting behind any
+	// in-flight operation. A newer Pause/Stop must invalidate a queued Resume.
 	s.mu.Lock()
 	if s.backend == nil {
 		s.mu.Unlock()
@@ -258,15 +326,44 @@ func (s *Session) Resume(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrNotActive
 	}
+	if !s.status.Paused {
+		s.mu.Unlock()
+		return nil
+	}
+	requestedSequence := s.sequence
+	s.mu.Unlock()
+	if err := s.opMu.lock(ctx); err != nil {
+		return resumeValidationError(err)
+	}
+	defer s.opMu.unlock()
+	s.mu.Lock()
+	if s.backend == nil {
+		s.mu.Unlock()
+		return ErrUnavailable
+	}
+	if !s.status.Active {
+		s.mu.Unlock()
+		return ErrNotActive
+	}
+	if s.sequence != requestedSequence {
+		s.mu.Unlock()
+		return context.Canceled
+	}
+	if !s.status.Paused {
+		s.mu.Unlock()
+		return nil
+	}
 	if err := ctx.Err(); err != nil {
 		s.mu.Unlock()
-		return err
+		return resumeValidationError(err)
 	}
 	validationCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	sequence, target, backend := s.sequence, s.status.Target, s.backend
 	s.mu.Unlock()
-	err := backend.Validate(validationCtx, target, false)
+	err := waitForWindowValidation(validationCtx, resumeSettleTimeout, windowSettleInterval, func() error {
+		return backend.Validate(validationCtx, target, false)
+	})
 	cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -274,14 +371,27 @@ func (s *Session) Resume(ctx context.Context) error {
 	if s.sequence != sequence || !s.status.Active {
 		return context.Canceled
 	}
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrTargetLost, err)
-	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return resumeValidationError(err)
+	}
+	if err != nil {
+		if retryableValidationFailure(err) {
+			return resumeValidationError(err)
+		}
+		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	s.status.Paused = false
 	return nil
+}
+
+func resumeValidationError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("computer use resume timed out while waiting for or validating the original window; no action was replayed: %w", context.DeadlineExceeded)
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return err
 }
 
 // Stop revokes the current authorization. It does not close the backend, so a
@@ -310,8 +420,8 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.Stop()
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	_ = s.opMu.lock(context.Background())
+	defer s.opMu.unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.status = Status{}

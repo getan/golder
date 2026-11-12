@@ -32,6 +32,7 @@ type PaneResponse struct {
 	Frame  *Frame `json:"frame,omitempty"`
 	Text   string `json:"text,omitempty"`
 	Error  string `json:"error,omitempty"`
+	Busy   bool   `json:"busy,omitempty"`
 }
 
 // ServeOperatorPane serves one already authenticated connection. The caller
@@ -94,9 +95,11 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 		case "status":
 		case "frame":
 			var frame Frame
-			frame, err = pane.session.Capture(ctx)
+			frame, err = pane.session.CapturePreview(ctx)
 			if err == nil {
 				response.Frame = &frame
+			} else if errors.Is(err, ErrPreviewBusy) || errors.Is(err, context.Canceled) && ctx.Err() == nil {
+				response.Busy, err = true, nil
 			}
 		case "candidate":
 			var frame Frame
@@ -107,7 +110,11 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 				pane.mu.Unlock()
 				response.Frame = &frame
 			}
-		case "observe", "pause", "resume", "stop", "confirm-preview", "skip-preview":
+		case "resume":
+			resumeCtx, cancel := context.WithTimeout(ctx, OperatorResumeTimeout)
+			response.Text, err = pane.operatorCommand(resumeCtx, request.Action, request.Sequence)
+			cancel()
+		case "observe", "pause", "stop", "confirm-preview", "skip-preview":
 			response.Text, err = pane.operatorCommand(ctx, request.Action, request.Sequence)
 		case "click":
 			response.Text, err = pane.operatorCommand(ctx, "click "+request.Ref, request.Sequence)

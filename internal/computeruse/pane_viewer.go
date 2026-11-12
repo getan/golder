@@ -197,10 +197,9 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 				captureAllowed.Store(graphics)
 			}
 			if event.action == "frame" && event.response.Error != "" {
-				captureAllowed.Store(false)
 				state.frame = nil
 				if !state.status.Paused {
-					state.message = "Preview unavailable: " + event.response.Error + " (view retries)"
+					state.message = "Preview temporarily unavailable; retrying: " + event.response.Error
 				}
 			}
 			if event.action == "frame" && !state.localPaused && event.response.Frame != nil {

@@ -457,7 +457,7 @@ func (a *App) startComputerPreview() {
 			}
 			if !session.Status().Paused {
 				frameCtx, stop := context.WithTimeout(ctx, 20*time.Second)
-				frame, err := session.Capture(frameCtx)
+				frame, err := session.CapturePreview(frameCtx)
 				stop()
 				var bitmap *ui.Bitmap
 				if err == nil {
@@ -474,7 +474,7 @@ func (a *App) startComputerPreview() {
 					}
 					if bitmap != nil {
 						a.computerFrame, a.computerError = bitmap, ""
-					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) {
+					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) && !errors.Is(err, computeruse.ErrPreviewBusy) {
 						a.setComputerFailure(err)
 					}
 				})
@@ -543,7 +543,7 @@ func (a *App) computerPicker(c *ui.Context) {
 				}
 			}
 			if runtime.GOOS == "darwin" {
-				ui.Text(c, "Only windows on the current desktop are listed. Restore minimized windows or switch desktops, then refresh.").FontSize(11).TextColor(t.TextMuted).Wrap()
+				ui.Text(c, "The manual window list shows the current desktop. A uniquely requested app may also resolve its existing window on another desktop without switching Spaces. If the window cannot be verified, restore it and refresh.").FontSize(11).TextColor(t.TextMuted).Wrap()
 				a.macComputerPermissionsView(c, true)
 			} else {
 				ui.Text(c, fmt.Sprintf("System permissions: screen capture %s · accessibility %s", a.computerPermission.ScreenCapture, a.computerPermission.Accessibility)).FontSize(11).TextColor(t.TextMuted).Wrap()
@@ -670,12 +670,19 @@ func (a *App) resumeComputer() {
 	}
 	session, win := a.computerSession, a.win
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), computeruse.OperatorResumeTimeout)
 		defer cancel()
 		err := session.Resume(ctx)
 		win.Update(func() {
-			if a.computerSession == session && err != nil {
-				a.setComputerFailure(err)
+			if a.computerSession == session {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				if err != nil {
+					a.setComputerFailure(err)
+				} else {
+					a.computerError = ""
+				}
 			}
 		})
 	}()

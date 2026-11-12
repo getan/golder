@@ -68,7 +68,7 @@ func (p *Pane) Render(ctx context.Context, columns, rows int) error {
 	if !status.Active || status.Paused || !p.renderer.enabled {
 		return nil
 	}
-	frame, err := p.session.Capture(ctx)
+	frame, err := p.session.CapturePreview(ctx)
 	if err != nil {
 		return err
 	}

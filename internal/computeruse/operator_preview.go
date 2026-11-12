@@ -23,8 +23,10 @@ func (s *Session) InstallOperatorPreview(preview OperatorPreview) error {
 	if err != nil || format != "png" || config.Width <= 0 || config.Height <= 0 || int64(config.Width)*int64(config.Height) > MaxFramePixels {
 		return errors.New("invalid operator-only preview")
 	}
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	if err := s.opMu.lock(context.Background()); err != nil {
+		return err
+	}
+	defer s.opMu.unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.status.Active || s.status.Paused || s.backend == nil || s.operatorPreview != nil {
@@ -51,8 +53,10 @@ func (s *Session) operatorPreviewFrame() (Frame, error) {
 }
 
 func (s *Session) finishOperatorPreview(ctx context.Context, confirm bool) error {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	if err := s.opMu.lock(ctx); err != nil {
+		return err
+	}
+	defer s.opMu.unlock()
 	s.mu.Lock()
 	if !s.status.Active || s.status.Paused || s.operatorPreview == nil || s.backend == nil {
 		s.mu.Unlock()

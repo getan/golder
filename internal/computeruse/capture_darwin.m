@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <unistd.h>
 
 // Keep system authorization surfaces, Golder, and terminal hosts out of both
@@ -92,32 +93,39 @@ int cu_application_metadata(const char *path, char *identity, size_t identityLen
 }
 @end
 
-static BOOL cu_wait(GolderCaptureResult *result) {
+static BOOL cu_wait(GolderCaptureResult *result, atomic_int *cancelled) {
 	NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:5.0];
 	[result->condition lock];
-	while (!result->done && [result->condition waitUntilDate:deadline]) {}
-	BOOL done = result->done;
+	while (!result->done && !atomic_load(cancelled) && deadline.timeIntervalSinceNow > 0) {
+		NSDate *next = [NSDate dateWithTimeIntervalSinceNow:fmin(0.05, deadline.timeIntervalSinceNow)];
+		[result->condition waitUntilDate:next];
+	}
+	BOOL done = result->done && !atomic_load(cancelled);
 	[result->condition unlock];
 	return done;
 }
 
 // Return a PNG of exactly the selected SCWindow. No permission prompts are
 // initiated here; the operator must grant the OS permission separately.
-int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h) {
+int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h, void *cancel) {
 	@autoreleasepool {
 		*out = NULL;
 		*length = 0;
+		atomic_int *cancelled = (atomic_int *)cancel;
+		if (!cancelled || atomic_load(cancelled)) return 0;
 		if (!CGPreflightScreenCaptureAccess()) return 0;
 		if (@available(macOS 14.0, *)) {
 			GolderCaptureResult *inventory = [[GolderCaptureResult alloc] init];
+			[inventory retain]; // The completion may arrive after a canceled wait.
 			[SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:NO completionHandler:^(SCShareableContent *content, NSError *error) {
 				[inventory->condition lock];
 				if (!error && content) inventory->content = [content retain];
 				inventory->done = YES;
 				[inventory->condition signal];
 				[inventory->condition unlock];
+				[inventory release];
 			}];
-			if (!cu_wait(inventory) || !inventory->content) { [inventory release]; return 0; }
+			if (!cu_wait(inventory, cancelled) || !inventory->content) { [inventory release]; return 0; }
 			SCWindow *selected = nil;
 			int matches = 0;
 			for (SCWindow *window in inventory->content.windows) {
@@ -137,17 +145,19 @@ int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *lengt
 			configuration.showsCursor = NO;
 			configuration.capturesAudio = NO;
 			GolderCaptureResult *shot = [[GolderCaptureResult alloc] init];
+			[shot retain]; // The completion may arrive after a canceled wait.
 			[SCScreenshotManager captureImageWithFilter:filter configuration:configuration completionHandler:^(CGImageRef image, NSError *error) {
 				[shot->condition lock];
 				if (!error && image) shot->image = CGImageRetain(image);
 				shot->done = YES;
 				[shot->condition signal];
 				[shot->condition unlock];
+				[shot release];
 			}];
 			[filter release];
 			[configuration release];
 			[inventory release];
-			if (!cu_wait(shot) || !shot->image) { [shot release]; return 0; }
+			if (!cu_wait(shot, cancelled) || !shot->image) { [shot release]; return 0; }
 			NSMutableData *png = [NSMutableData data];
 			CGImageDestinationRef destination = CGImageDestinationCreateWithData((CFMutableDataRef)png, CFSTR("public.png"), 1, NULL);
 			if (!destination) { [shot release]; return 0; }

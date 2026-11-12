@@ -3,12 +3,17 @@ package computeruse
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
 const (
 	windowSettleTimeout  = 3 * time.Second
 	windowSettleInterval = 100 * time.Millisecond
+	resumeSettleTimeout  = 10 * time.Second
+	// OperatorResumeTimeout bounds a GUI or TUI resume without closing the
+	// operator connection while a target is still settling.
+	OperatorResumeTimeout = 15 * time.Second
 )
 
 // transientWindowValidation identifies read-only AX/CG mismatches that can
@@ -28,6 +33,25 @@ func transientWindowValidation(err error) bool {
 	default:
 		return false
 	}
+}
+
+// Only use this before dispatch, or during a read-only operation. The caller
+// must never use it to retry an action whose effect might be unknown.
+func noInputValidationError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("computer use window validation did not complete; no input was sent: %w", context.DeadlineExceeded)
+	}
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("computer use window validation did not complete; no input was sent: %w", context.Canceled)
+	}
+	if transientWindowValidation(err) {
+		return fmt.Errorf("%w: the pinned window could not yet be verified; no input was sent: %v", ErrStaleObservation, err)
+	}
+	return err
+}
+
+func retryableValidationFailure(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || transientWindowValidation(err)
 }
 
 // waitForWindowValidation repeats only a read-only identity check on the exact

@@ -85,3 +85,24 @@ func TestRefusedInputDoesNotRevalidateAfterCancellation(t *testing.T) {
 		t.Fatalf("canceled refusal revalidated: called=%t err=%v", called, err)
 	}
 }
+
+func TestSemanticPreDispatchRefusalNeverReplaysOrPausesWhenTargetIsValid(t *testing.T) {
+	s := New(&testBackend{})
+	ctx := context.Background()
+	if err := s.Start(ctx, Target{ID: "window"}, Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	checks := 0
+	err := s.Do(ctx, true, func(ctx context.Context, _ Backend, _ Target) error {
+		return semanticInputRefused(ctx, func() error { checks++; return nil })
+	})
+	if !errors.Is(err, ErrStaleObservation) || errors.Is(err, ErrTargetLost) || checks != 1 || s.Status().Paused {
+		t.Fatalf("safe semantic refusal: checks=%d status=%+v err=%v", checks, s.Status(), err)
+	}
+	err = s.Do(ctx, true, func(ctx context.Context, _ Backend, _ Target) error {
+		return semanticInputRefused(ctx, func() error { return &WindowDiagnostic{Reason: WindowAXAmbiguous} })
+	})
+	if !errors.Is(err, ErrTargetLost) || !s.Status().Paused {
+		t.Fatalf("unproven semantic target did not pause: status=%+v err=%v", s.Status(), err)
+	}
+}

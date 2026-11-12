@@ -16,7 +16,7 @@ package computeruse
 #include <math.h>
 #include <stdatomic.h>
 
-int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h);
+int cu_capture_window(uint32_t pid, uint32_t windowID, void **out, size_t *length, double *x, double *y, double *w, double *h, void *cancel);
 int cu_app_allowed(int32_t pid);
 int cu_running_bundle(int32_t pid, char *out, size_t length);
 int cu_activate_running_app(int32_t pid, const char *expectedPath);
@@ -55,14 +55,15 @@ static int cu_test_on_screen(int value) {
 	return cu_window_on_screen(value < 0 ? NULL : (value ? kCFBooleanTrue : kCFBooleanFalse));
 }
 
-static int cu_windows(cu_window *out, int cap) {
-	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+static int cu_windows(cu_window *out, int cap, int all_spaces) {
+	CGWindowListOption options = (all_spaces ? kCGWindowListOptionAll : kCGWindowListOptionOnScreenOnly) | kCGWindowListExcludeDesktopElements;
+	CFArrayRef list = CGWindowListCopyWindowInfo(options, kCGNullWindowID);
 	if (!list) return -1;
 	int count = 0;
 	CFIndex total = CFArrayGetCount(list);
 	for (CFIndex i = 0; i < total; i++) {
 		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
-		if (!cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen))) continue;
+		if (!all_spaces && !cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen))) continue;
 		int32_t pid = 0, layer = 0;
 		uint32_t window_id = 0;
 		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
@@ -114,6 +115,57 @@ static int cu_window_exists(uint32_t window_id, int32_t pid, uint64_t sec, uint6
 	return found;
 }
 
+// A physical input operation may raise a window only while that exact window
+// is already on the current desktop. Never activate another macOS Space merely
+// to satisfy a frame-bound action.
+static int cu_window_visible_here(cu_window selected) {
+	if (!cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) return 0;
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	if (!list) return 0;
+	int found = 0;
+	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		uint32_t id = 0;
+		int32_t pid = 0;
+		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowNumber);
+		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
+		if (n && p && CFNumberGetValue(n, kCFNumberSInt32Type, &id) && CFNumberGetValue(p, kCFNumberSInt32Type, &pid) &&
+			id == selected.window_id && pid == selected.pid && cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen))) {
+			found = 1;
+			break;
+		}
+	}
+	CFRelease(list);
+	return found;
+}
+
+// App activation can make macOS jump to the app's last-used Space instead of
+// the intended window. Refuse to activate if another ordinary window of this
+// process is off-screen or its visibility cannot be determined.
+static int cu_activation_safe_here(cu_window selected) {
+	if (!cu_window_visible_here(selected)) return 0;
+	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+	if (!list) return 0;
+	int safe = 1;
+	for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+		CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
+		uint32_t id = 0;
+		int32_t pid = 0, layer = 0;
+		CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowNumber);
+		CFNumberRef p = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowOwnerPID);
+		CFNumberRef l = (CFNumberRef)CFDictionaryGetValue(d, kCGWindowLayer);
+		if (!p || !CFNumberGetValue(p, kCFNumberSInt32Type, &pid) || pid != selected.pid) continue;
+		if (!n || !l || !CFNumberGetValue(n, kCFNumberSInt32Type, &id) || !CFNumberGetValue(l, kCFNumberSInt32Type, &layer)) { safe = 0; break; }
+		if (id == selected.window_id || layer != 0) continue;
+		CGRect bounds;
+		CFDictionaryRef raw = (CFDictionaryRef)CFDictionaryGetValue(d, kCGWindowBounds);
+		if (!raw || !CGRectMakeWithDictionaryRepresentation(raw, &bounds)) { safe = 0; break; }
+		if (bounds.size.width >= 1 && bounds.size.height >= 1 && !cu_window_on_screen(CFDictionaryGetValue(d, kCGWindowIsOnscreen))) { safe = 0; break; }
+	}
+	CFRelease(list);
+	return safe;
+}
+
 enum {
 	CU_AX_OK = 0, CU_AX_PERMISSION, CU_AX_WINDOW, CU_AX_BOUNDS, CU_AX_APP,
 	CU_AX_READ, CU_AX_EMPTY, CU_AX_GEOMETRY, CU_AX_NO_MATCH, CU_AX_AMBIGUOUS,
@@ -128,6 +180,11 @@ typedef struct {
 	int matches;
 } cu_ax_diagnostic;
 
+typedef struct { atomic_int cancelled; } cu_cancel_flag;
+static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_flag)); }
+static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
+static int cu_cancelled(cu_cancel_flag *flag) { return flag && atomic_load(&flag->cancelled); }
+
 static int cu_ax_match_reason(CFIndex windows, int readable, int matches) {
 	if (windows > 128) return CU_AX_LIMIT;
 	if (matches > 1) return CU_AX_AMBIGUOUS;
@@ -140,10 +197,11 @@ static int cu_ax_match_reason(CFIndex windows, int readable, int matches) {
 // Match a public AX window to the selected CG window by process and unique
 // geometry. The optional diagnostic contains only failure stages and counts,
 // never element content. Input checks use the same matching path.
-static AXUIElementRef cu_ax_window_diagnostic(cu_window selected, int require_focus, cu_ax_diagnostic *diag) {
+static AXUIElementRef cu_ax_window_diagnostic_cancel(cu_window selected, int require_focus, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
 	cu_ax_diagnostic result = {0};
 	if (!diag) diag = &result;
 	*diag = result;
+	if (cu_cancelled(flag)) return NULL;
 	if (!AXIsProcessTrusted()) { diag->reason = CU_AX_PERMISSION; return NULL; }
 	if (!cu_window_exists(selected.window_id, selected.pid, selected.start_sec, selected.start_usec)) { diag->reason = CU_AX_WINDOW; return NULL; }
 	CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, selected.window_id);
@@ -172,7 +230,7 @@ static AXUIElementRef cu_ax_window_diagnostic(cu_window selected, int require_fo
 	CFIndex total = CFArrayGetCount(windows);
 	diag->windows = total > INT32_MAX ? INT32_MAX : (int)total;
 	int matches = 0, readable = 0;
-	for (CFIndex i = 0; i < total && i < 128; i++) {
+	for (CFIndex i = 0; i < total && i < 128 && !cu_cancelled(flag); i++) {
 		AXUIElementRef window = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
 		CFTypeRef position = NULL, size = NULL;
 		CGPoint point;
@@ -192,6 +250,7 @@ static AXUIElementRef cu_ax_window_diagnostic(cu_window selected, int require_fo
 			matches++;
 		}
 	}
+	if (cu_cancelled(flag)) { CFRelease(windows); CFRelease(app); return NULL; }
 	diag->readable = readable;
 	diag->matches = matches;
 	diag->reason = cu_ax_match_reason(total, readable, matches);
@@ -214,8 +273,8 @@ static AXUIElementRef cu_ax_window_diagnostic(cu_window selected, int require_fo
 	return match;
 }
 
-static AXUIElementRef cu_ax_window(cu_window selected, int require_focus) {
-	return cu_ax_window_diagnostic(selected, require_focus, NULL);
+static AXUIElementRef cu_ax_window(cu_window selected, int require_focus, cu_cancel_flag *flag) {
+	return cu_ax_window_diagnostic_cancel(selected, require_focus, NULL, flag);
 }
 
 typedef struct {
@@ -244,8 +303,8 @@ static int cu_ax_secure_or_unknown(CFTypeRef role, CFTypeRef subrole) {
 	return cu_ax_text_role(role);
 }
 
-static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, int *count, int depth, int ancestor_secure, int *truncated) {
-	if (!element || *count >= cap || depth > 16) { *truncated = 1; return; }
+static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, int *count, int depth, int ancestor_secure, int *truncated, cu_cancel_flag *flag) {
+	if (!element || *count >= cap || depth > 16 || cu_cancelled(flag)) { *truncated = 1; return; }
 	AXUIElementSetMessagingTimeout(element, 0.3);
 	CFTypeRef role = NULL, subrole = NULL, title = NULL, enabled = NULL, value = NULL;
 	AXUIElementCopyAttributeValue(element, kAXRoleAttribute, &role);
@@ -285,20 +344,20 @@ static void cu_ax_collect(AXUIElementRef element, cu_ax_node *nodes, int cap, in
 	if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &children) == kAXErrorSuccess && children && CFGetTypeID(children) == CFArrayGetTypeID()) {
 		CFArrayRef array = (CFArrayRef)children;
 		for (CFIndex i = 0; i < CFArrayGetCount(array); i++) {
-			if (*count >= cap) { *truncated = 1; break; }
+			if (*count >= cap || cu_cancelled(flag)) { *truncated = 1; break; }
 			CFTypeRef child = CFArrayGetValueAtIndex(array, i);
-			if (child && CFGetTypeID(child) == AXUIElementGetTypeID()) cu_ax_collect((AXUIElementRef)child, nodes, cap, count, depth+1, secure, truncated);
+			if (child && CFGetTypeID(child) == AXUIElementGetTypeID()) cu_ax_collect((AXUIElementRef)child, nodes, cap, count, depth+1, secure, truncated, flag);
 		}
 	}
 	if (children) CFRelease(children);
 }
 
-static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, cu_ax_diagnostic *diag) {
-	AXUIElementRef window = cu_ax_window_diagnostic(selected, 0, diag);
+static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_ax_node *nodes, int cap, int *truncated, cu_ax_diagnostic *diag, cu_cancel_flag *flag) {
+	AXUIElementRef window = cu_ax_window_diagnostic_cancel(selected, 0, diag, flag);
 	if (!window) return -1;
 	if (!expected || !CFEqual(window, expected)) { CFRelease(window); diag->reason = CU_AX_WINDOW; return -1; }
 	int count = 0;
-	cu_ax_collect(window, nodes, cap, &count, 0, 0, truncated);
+	cu_ax_collect(window, nodes, cap, &count, 0, 0, truncated, flag);
 	CFRelease(window);
 	return count;
 }
@@ -306,19 +365,14 @@ static int cu_ax_collect_window(cu_window selected, AXUIElementRef expected, cu_
 static void cu_ax_release(AXUIElementRef element) { if (element) CFRelease(element); }
 static int cu_ax_equal(AXUIElementRef a, AXUIElementRef b) { return a && b && CFEqual(a, b); }
 
-typedef struct { atomic_int cancelled; } cu_cancel_flag;
-static cu_cancel_flag *cu_cancel_new(void) { return calloc(1, sizeof(cu_cancel_flag)); }
-static void cu_cancel_set(cu_cancel_flag *flag) { atomic_store(&flag->cancelled, 1); }
-static int cu_cancelled(cu_cancel_flag *flag) { return atomic_load(&flag->cancelled); }
-
 // Check identity independently of focus. A different AX window or process is
 // target loss, not permission to activate a convenient replacement.
-static int cu_selected_focus(cu_window selected, AXUIElementRef expected) {
-	AXUIElementRef window = cu_ax_window(selected, 0);
+static int cu_selected_focus(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !expected || !CFEqual(window, expected)) { if (window) CFRelease(window); return -1; }
 	CFRelease(window);
 	cu_ax_diagnostic diagnostic;
-	window = cu_ax_window_diagnostic(selected, 1, &diagnostic);
+	window = cu_ax_window_diagnostic_cancel(selected, 1, &diagnostic, flag);
 	if (!window) return diagnostic.reason == CU_AX_FOCUS ? 0 : -1;
 	int focused = CFEqual(window, expected);
 	CFRelease(window);
@@ -329,11 +383,11 @@ static int cu_selected_focus(cu_window selected, AXUIElementRef expected) {
 // and the GUI preview do not call this, so reading cannot steal user focus.
 static int cu_focus_selected(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
 	if (!expected || cu_cancelled(flag)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 0);
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	CFRelease(window);
-	if (cu_cancelled(flag) || !cu_activate_running_app(selected.pid, selected.bundle) || cu_cancelled(flag)) return 0;
-	window = cu_ax_window(selected, 0);
+	if (cu_cancelled(flag) || !cu_activation_safe_here(selected) || !cu_activate_running_app(selected.pid, selected.bundle) || cu_cancelled(flag)) return 0;
+	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	AXUIElementRef app = AXUIElementCreateApplication(selected.pid);
 	if (app) AXUIElementSetMessagingTimeout(app, 0.5);
@@ -440,17 +494,17 @@ static int cu_frame_point_safe(cu_window selected, AXUIElementRef expected, doub
 	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
 	CGPoint point = CGPointMake(bx + nx*bw, by + ny*bh);
 	if (!cu_point_unobscured(selected, point)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 1);
+	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	int ok = cu_point_ax_safe(window, point, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
-	window = cu_ax_window(selected, 1);
+	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	ok = cu_point_ax_safe(window, point, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag) || !cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5 || !cu_point_unobscured(selected, point)) return 0;
-	window = cu_ax_window(selected, 1);
+	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	CFRelease(window);
 	if (cu_cancelled(flag)) return 0;
@@ -521,12 +575,12 @@ static int cu_press_frame(cu_window selected, AXUIElementRef expected, double bx
 	if (!expected || cu_cancelled(flag) || !isfinite(bx) || !isfinite(by) || !isfinite(bw) || !isfinite(bh) || bw <= 0 || bh <= 0) return 0;
 	CGRect bounds;
 	if (!cu_current_bounds(selected, &bounds) || fabs(bounds.origin.x-bx) > 0.5 || fabs(bounds.origin.y-by) > 0.5 || fabs(bounds.size.width-bw) > 0.5 || fabs(bounds.size.height-bh) > 0.5) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 1);
+	AXUIElementRef window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	int ok = cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
 	if (!ok || cu_cancelled(flag)) return 0;
-	window = cu_ax_window(selected, 1);
+	window = cu_ax_window(selected, 1, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	ok = cu_focused_control_safe(selected, window, flag);
 	CFRelease(window);
@@ -548,7 +602,7 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 	// AXPress is addressed to the pinned element, not to the foreground app.
 	// Requiring focus would make an operator's own terminal pane steal focus
 	// from the target. Physical keyboard/mouse injection still requires focus.
-	AXUIElementRef window = cu_ax_window(selected, 0);
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	int budget = 128;
 	int found = cu_ax_contains(window, element, 0, &budget, flag);
@@ -564,18 +618,20 @@ static int cu_ax_press(cu_window selected, AXUIElementRef expected, AXUIElementR
 		CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), kAXPressAction);
 	if (actions) CFRelease(actions);
 	if (!allowed || cu_cancelled(flag)) return 0;
-	window = cu_ax_window(selected, 0);
+	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	budget = 128;
 	found = cu_ax_contains(window, element, 0, &budget, flag);
 	CFRelease(window);
 	if (!found || cu_cancelled(flag)) return 0;
-	return AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess;
+	// A failed AX call may still have reached the application. Distinguish it
+	// from the checks above, which provably sent no action.
+	return AXUIElementPerformAction(element, kAXPressAction) == kAXErrorSuccess ? 1 : -1;
 }
 
 static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_cancel_flag *flag) {
 	if (!expected || cu_cancelled(flag)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 0);
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	CFTypeRef button = NULL;
 	AXError error = AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute, &button);
@@ -591,7 +647,7 @@ static int cu_ax_close_window(cu_window selected, AXUIElementRef expected, cu_ca
 
 static int cu_ax_fill(cu_window selected, AXUIElementRef expected, AXUIElementRef element, const char *text, size_t length, cu_cancel_flag *flag) {
 	if (!expected || !element || !text || length > 4096 || cu_cancelled(flag)) return 0;
-	AXUIElementRef window = cu_ax_window(selected, 0);
+	AXUIElementRef window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); return 0; }
 	int budget = 128;
 	int found = cu_ax_contains(window, element, 0, &budget, flag);
@@ -608,7 +664,7 @@ static int cu_ax_fill(cu_window selected, AXUIElementRef expected, AXUIElementRe
 	if (!allowed || cu_cancelled(flag)) return 0;
 	CFStringRef value = CFStringCreateWithBytes(kCFAllocatorDefault, (const UInt8 *)text, (CFIndex)length, kCFStringEncodingUTF8, false);
 	if (!value) return 0;
-	window = cu_ax_window(selected, 0);
+	window = cu_ax_window(selected, 0, flag);
 	if (!window || !CFEqual(window, expected)) { if (window) CFRelease(window); CFRelease(value); return 0; }
 	budget = 128;
 	found = cu_ax_contains(window, element, 0, &budget, flag);
@@ -616,7 +672,7 @@ static int cu_ax_fill(cu_window selected, AXUIElementRef expected, AXUIElementRe
 	if (!found || cu_cancelled(flag)) { CFRelease(value); return 0; }
 	AXError result = AXUIElementSetAttributeValue(element, kAXValueAttribute, value);
 	CFRelease(value);
-	return result == kAXErrorSuccess;
+	return result == kAXErrorSuccess ? 1 : -1;
 }
 */
 import "C"
@@ -629,6 +685,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -656,11 +713,40 @@ func NewMacWindowCatalog() *MacWindowCatalog {
 // Targets is called by local target resolution, never by a model-facing list
 // action. The opaque identifiers are local to this catalog.
 func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
+	return c.targets(ctx, false, "")
+}
+
+// ApplicationWindows uses a catalog-issued application identity, not a
+// model-supplied path, and does not activate the app or switch macOS Spaces.
+func (c *MacWindowCatalog) ApplicationWindows(ctx context.Context, app Application) ([]Target, error) {
+	c.mu.Lock()
+	candidate, ok := c.applications[app.ID]
+	closed := c.closed
+	c.mu.Unlock()
+	if closed || !ok || candidate.application != app || candidate.file == nil || app.Identity == "" {
+		return nil, errors.New("application candidate changed or expired")
+	}
+	file, err := os.Stat(candidate.path)
+	if err != nil || !os.SameFile(candidate.file, file) {
+		return nil, errors.New("application bundle changed before window discovery")
+	}
+	bundle, _, _, valid := macApplicationMetadata(candidate.path)
+	if !valid || bundle != candidate.bundleID {
+		return nil, errors.New("application bundle identity changed before window discovery")
+	}
+	return c.targets(ctx, true, app.Identity)
+}
+
+func (c *MacWindowCatalog) targets(ctx context.Context, allSpaces bool, application string) ([]Target, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	windows, err := collectWindowInventory(ctx, func(buf []C.cu_window) int {
-		return int(C.cu_windows(&buf[0], C.int(len(buf))))
+		all := C.int(0)
+		if allSpaces {
+			all = 1
+		}
+		return int(C.cu_windows(&buf[0], C.int(len(buf)), all))
 	})
 	if err != nil {
 		return nil, err
@@ -676,6 +762,9 @@ func (c *MacWindowCatalog) Targets(ctx context.Context) ([]Target, error) {
 	out := make([]Target, 0, len(windows))
 	next := make(map[string]C.cu_window, len(windows))
 	for _, window := range windows {
+		if application != "" && C.GoString(&window.bundle[0]) != application {
+			continue
+		}
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
 			return nil, err
@@ -740,8 +829,22 @@ func (c *MacWindowCatalog) validateOnce(ctx context.Context, target Target) erro
 	if C.cu_window_exists(window.window_id, window.pid, window.start_sec, window.start_usec) == 0 {
 		return &WindowDiagnostic{Reason: WindowUnavailable}
 	}
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		return errors.New("allocate AX validation cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
 	var diagnostic C.cu_ax_diagnostic
-	current := C.cu_ax_window_diagnostic(window, 0, &diagnostic)
+	current := C.cu_ax_window_diagnostic_cancel(window, 0, &diagnostic, flag)
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
+	if err := ctx.Err(); err != nil {
+		C.cu_ax_release(current)
+		return err
+	}
 	if current == 0 {
 		return macWindowDiagnostic(diagnostic)
 	}
@@ -808,10 +911,23 @@ func (c *MacWindowCatalog) Snapshot(ctx context.Context, target Target) (string,
 		return "", nil, false, errors.New("allocate AX snapshot")
 	}
 	defer C.free(unsafe.Pointer(buffer))
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		return "", nil, false, errors.New("allocate AX snapshot cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
 	var truncated C.int
 	var diagnostic C.cu_ax_diagnostic
-	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &diagnostic))
+	count := int(C.cu_ax_collect_window(window, c.pinned[target.ID], buffer, cap, &truncated, &diagnostic, flag))
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
 	if count < 0 {
+		if err := ctx.Err(); err != nil {
+			return "", nil, false, err
+		}
 		return "", nil, false, macWindowDiagnostic(diagnostic)
 	}
 	nodes := unsafe.Slice(buffer, count)
@@ -851,20 +967,22 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 		return ErrNotAllowed
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
-		return err
+		return noInputValidationError(err)
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	window, ok := c.windows[target.ID]
 	element, found := c.refs[ref]
 	if c.closed || !ok || !found || c.snapshotID != snapshotID || c.snapshotFor != target.ID {
+		c.mu.Unlock()
 		return ErrStaleObservation
 	}
 	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
 		return err
 	}
 	flag := C.cu_cancel_new()
 	if flag == nil {
+		c.mu.Unlock()
 		return errors.New("allocate AX cancellation flag")
 	}
 	done := make(chan struct{})
@@ -882,11 +1000,15 @@ func (c *MacWindowCatalog) Act(ctx context.Context, target Target, snapshotID, r
 	}
 	C.free(unsafe.Pointer(flag))
 	c.clearSnapshotLocked()
+	c.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if performed == 0 {
-		return fmt.Errorf("%w: AX action refused because the target changed, the node is secure or the action is unavailable", ErrTargetLost)
+		return semanticInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
+	}
+	if performed < 0 {
+		return fmt.Errorf("%w: the accessibility action returned an error after dispatch; its effect is unknown and must not be replayed", ErrTargetLost)
 	}
 	return nil
 }
@@ -920,7 +1042,7 @@ func (c *MacWindowCatalog) CloseWindow(ctx context.Context, target Target) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if sent == 0 {
+	if sent != 1 {
 		return errors.New("close request unavailable or refused by the selected window")
 	}
 	return nil
@@ -954,10 +1076,26 @@ func (c *MacWindowCatalog) CaptureBound(ctx context.Context, target Target) ([]b
 	var data unsafe.Pointer
 	var length C.size_t
 	var x, y, w, h C.double
-	if C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length, &x, &y, &w, &h) == 0 {
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		return nil, "", errors.New("allocate capture cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	captured := C.cu_capture_window(C.uint32_t(window.pid), window.window_id, &data, &length, &x, &y, &w, &h, unsafe.Pointer(flag))
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
+	if data != nil {
+		defer C.free(data)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if captured == 0 {
 		return nil, "", errors.New("ScreenCaptureKit capture unavailable or not authorized")
 	}
-	defer C.free(data)
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
@@ -1010,7 +1148,7 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 	}
 	fresh, freshToken, err := c.CaptureBound(ctx, target)
 	if err != nil {
-		return err
+		return noInputValidationError(err)
 	}
 	var current macFrameBinding
 	if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
@@ -1020,21 +1158,21 @@ func (c *MacWindowCatalog) dispatchFrame(ctx context.Context, target Target, tok
 		func() (bool, error) { return c.selectedFocus(ctx, target) },
 		func() error { return c.focusSelected(ctx, target) })
 	if err != nil {
-		return err
+		return noInputValidationError(err)
 	}
 	if changed {
 		// Activation can move a window or change its controls. The old frame is
 		// never silently rebound to that new UI, even though the target is ours.
 		fresh, freshToken, err = c.CaptureBound(ctx, target)
 		if err != nil {
-			return err
+			return noInputValidationError(err)
 		}
 		if json.Unmarshal([]byte(freshToken), &current) != nil || current != binding || sha256.Sum256(fresh) != binding.Digest {
 			return ErrStaleObservation
 		}
 	}
 	if err := c.Validate(ctx, target, true); err != nil {
-		return err
+		return noInputValidationError(err)
 	}
 	c.mu.Lock()
 	window, ok := c.windows[target.ID]
@@ -1080,8 +1218,22 @@ func (c *MacWindowCatalog) selectedFocus(ctx context.Context, target Target) (bo
 		c.mu.Unlock()
 		return false, ErrTargetLost
 	}
-	state := C.cu_selected_focus(window, c.pinned[target.ID])
+	flag := C.cu_cancel_new()
+	if flag == nil {
+		c.mu.Unlock()
+		return false, errors.New("allocate focus check cancellation flag")
+	}
+	done := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { C.cu_cancel_set(flag); close(done) })
+	state := C.cu_selected_focus(window, c.pinned[target.ID], flag)
+	if !stop() {
+		<-done
+	}
+	C.free(unsafe.Pointer(flag))
 	c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if state < 0 {
 		return false, frameInputRefused(ctx, func() error { return c.Validate(ctx, target, false) })
 	}
@@ -1101,6 +1253,10 @@ func (c *MacWindowCatalog) focusSelected(ctx context.Context, target Target) err
 	if err := ctx.Err(); err != nil {
 		c.mu.Unlock()
 		return err
+	}
+	if C.cu_activation_safe_here(window) == 0 {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: no input was sent; activating the selected window could change desktops, or its visibility could not be verified; use a semantic action or show the same window", ErrStaleObservation)
 	}
 	flag := C.cu_cancel_new()
 	if flag == nil {

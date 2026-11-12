@@ -16,6 +16,15 @@ type computerNavigationBackend struct {
 	acted bool
 }
 
+type computerTransientBackend struct {
+	computerUIBackend
+	err error
+}
+
+func (b *computerTransientBackend) Validate(context.Context, computeruse.Target, bool) error {
+	return b.err
+}
+
 func (*computerNavigationBackend) Snapshot(context.Context, computeruse.Target) (string, []computeruse.Element, bool, error) {
 	return "backend-snapshot", []computeruse.Element{{Ref: "@e1", Role: "AXButton", Name: "1", Enabled: true}}, false, nil
 }
@@ -111,6 +120,31 @@ func TestComputerNavigationNeverResumesExplicitPause(t *testing.T) {
 	a.showComputerPanel()
 	if err := session.Do(context.Background(), true, func(context.Context, computeruse.Backend, computeruse.Target) error { return nil }); !errors.Is(err, computeruse.ErrPaused) {
 		t.Fatalf("navigation or reopening resumed an explicit pause: %v", err)
+	}
+}
+
+func TestComputerPanelDoesNotPauseOnTransientValidation(t *testing.T) {
+	b := &computerTransientBackend{}
+	session := computeruse.New(b)
+	if err := session.Start(context.Background(), computeruse.Target{ID: "calculator", Application: "Calculator"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	b.err = &computeruse.WindowDiagnostic{Reason: computeruse.WindowAXNoMatch}
+	called := false
+	err := session.Do(context.Background(), true, func(context.Context, computeruse.Backend, computeruse.Target) error { called = true; return nil })
+	if !errors.Is(err, computeruse.ErrStaleObservation) || called || session.Status().Paused {
+		t.Fatalf("transient validation sent input or paused: called=%t err=%v", called, err)
+	}
+	a := testApp()
+	a.computerSession, a.computerOpen = session, true
+	tt := ui.NewTester(a.view, 1400, 800)
+	if !tt.HasText("Agent control permitted") || tt.HasText("Paused · take over in the target window") {
+		t.Fatalf("panel incorrectly shows a takeover requirement: %q", tt.Texts())
+	}
+	b.err = nil
+	if err := session.Do(context.Background(), false, func(context.Context, computeruse.Backend, computeruse.Target) error { return nil }); err != nil {
+		t.Fatalf("same target did not recover without Resume: %v", err)
 	}
 }
 
