@@ -21,6 +21,9 @@ func (a *App) composer(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Padding(10, 24, 12, 24).Gap(5).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {
+		if !a.browserPanelOpen {
+			a.browserContinuationView(c, "")
+		}
 		if len(a.status.QueuedMessages) > 0 {
 			ui.Column(c).Padding(6, 12).Gap(3).Radius(10).Background(t.Surface).Children(func() {
 				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {

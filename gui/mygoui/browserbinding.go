@@ -21,6 +21,8 @@ type browserSessionView struct {
 }
 
 func (a *App) resetBrowserSession() {
+	a.browserResumeBusy, a.browserResumeNote = "", ""
+	a.browserResumeSeq++
 	if a.browserSession != nil {
 		a.browserSession.cancel()
 		a.browserSession = nil
@@ -54,6 +56,7 @@ func (a *App) startBrowserSession() {
 		defer ticker.Stop()
 		for {
 			state, browsers := view.ctrl.BrowserSnapshot(ctx, binding)
+			view.ctrl.PollBrowserContinuations(ctx)
 			if ctx.Err() != nil {
 				return
 			}

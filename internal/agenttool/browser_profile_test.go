@@ -105,6 +105,9 @@ func TestSavedBrowserProfileAdoptionNeedsExactConsent(t *testing.T) {
 	if result, _ := tool.Execute(ctx, "one", raw, nil); !result.IsError {
 		t.Fatal("another session's browser was adopted without consent")
 	}
+	// Profile consent does not create ownership. This branch exercises reuse
+	// of a view already registered by this session's trusted launcher.
+	tool.Control.rememberNativeBrowser(instance.Info.BrowserID, instance.Socket, "publishing", browserProxyModeDirect)
 	ctx = agentcore.WithOperatorConfirmation(ctx, "one", "browser", raw)
 	if result, _ := tool.Execute(ctx, "one", raw, nil); result.IsError {
 		t.Fatalf("exact consent did not allow reuse: %+v", result)
@@ -124,6 +127,7 @@ func TestSharedDefaultBrowserAdoptionNeedsNoNamedProfileConsent(t *testing.T) {
 		BrowserID: "shared-browser", LoginProfile: browserLoginProfile(root, sharedBrowserProfileName),
 	}}
 	for _, tool := range []*BrowserTool{NewBrowserTool(root, true), NewBrowserTool(root, true)} {
+		tool.Control.rememberNativeBrowser(instance.Info.BrowserID, instance.Socket, sharedBrowserProfileName, browserProxyModeDirect)
 		tool.discover = func(context.Context) browserDiscovery {
 			return browserDiscovery{Instances: []browserInstance{instance}}
 		}

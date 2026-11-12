@@ -13,6 +13,9 @@ import (
 type ToolReviewEvidence struct {
 	Facts      json.RawMessage
 	CanSandbox bool
+	// These are trusted launch/reuse facts, never model-supplied arguments.
+	RuntimeAttested bool
+	LaunchRequired  bool
 	// Binding is tool-private verification state. It is not reviewer/page data
 	// and must never be serialized into the model's execution facts.
 	Binding string

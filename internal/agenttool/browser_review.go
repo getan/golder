@@ -79,6 +79,9 @@ func (t *BrowserTool) ReviewEvidence(ctx context.Context, args json.RawMessage) 
 	owned, found := t.Control.browsers[a.Browser]
 	t.Control.mu.Unlock()
 	facts.Envelope = browserEnvelopeFacts(owned, found, socket)
+	runtimeAttested := found && owned.socket == canonicalBrowserSocket(socket) && owned.policy == controlPolicyStamp() && (owned.isolated || owned.browserRuntime)
+	launchRequired := a.Action == "open" && (!runtimeAttested || a.NewInstance)
+	facts.Envelope["runtime_attested"], facts.Envelope["launch_required"] = runtimeAttested, launchRequired
 	canSandbox := found && owned.socket == canonicalBrowserSocket(socket) && owned.isolated && owned.policy == controlPolicyStamp()
 	if a.Action == "screenshot" {
 		canSandbox = false // artifact writes occur in the host, not the browser envelope
@@ -115,7 +118,7 @@ func (t *BrowserTool) ReviewEvidence(ctx context.Context, args json.RawMessage) 
 	facts.TargetID = DisplayBrowserEvidence(facts.TargetID, 128)
 	facts.PageURL = DisplayBrowserEvidence(facts.PageURL, 1024)
 	data, err := json.Marshal(facts)
-	return agentcore.ToolReviewEvidence{Facts: data, CanSandbox: canSandbox, Binding: facts.Fingerprint}, err
+	return agentcore.ToolReviewEvidence{Facts: data, CanSandbox: canSandbox, Binding: facts.Fingerprint, RuntimeAttested: runtimeAttested, LaunchRequired: launchRequired}, err
 }
 
 func browserNotDispatched(code, message string, details any) error {
@@ -136,11 +139,12 @@ func (t *BrowserTool) observeReviewTarget(ctx context.Context, c *browserctl.Cli
 		return err
 	}
 	var state struct {
-		Paused bool `json:"paused"`
+		Paused          bool   `json:"paused"`
+		PauseGeneration uint64 `json:"pauseGeneration"`
 	}
 	_ = json.Unmarshal(status, &state)
 	if state.Paused {
-		return browserNotDispatched("browser_paused", "browser is paused; stop and wait for the person's explicit continuation", nil)
+		return browserNotDispatched("browser_paused", "browser is paused; use its local Resume automation button once the required step is complete", map[string]any{"browser": a.Browser, "pause_generation": state.PauseGeneration})
 	}
 	raw, meta, err := c.Action(ctx, "snapshot", map[string]any{"maxNodes": 10000, "includeText": false}, target, 3*time.Second)
 	if err != nil {

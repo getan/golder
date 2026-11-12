@@ -23,19 +23,20 @@ type browserWindowUpdater interface {
 }
 
 type browserWindowState struct {
-	win           browserWindowUpdater
-	surface       *appsession.BrowserSurface
-	socket        string
-	browserID     string
-	bitmap        *ui.Bitmap
-	address       string
-	pageURL       string
-	title         string
-	err           string
-	tabs          []appsession.BrowserTab
-	pointerDown   bool
-	pendingManual func(context.Context) error
-	frameTarget   browserctl.Target
+	win              browserWindowUpdater
+	surface          *appsession.BrowserSurface
+	socket           string
+	browserID        string
+	bitmap           *ui.Bitmap
+	address          string
+	pageURL          string
+	title            string
+	err              string
+	tabs             []appsession.BrowserTab
+	pointerDown      bool
+	pendingManual    func(context.Context) error
+	frameTarget      browserctl.Target
+	continuationView func(*ui.Context)
 
 	frameW, frameH float32
 	viewW, viewH   float32
@@ -58,6 +59,7 @@ func (a *App) openBrowserPreview(browser appsession.BrowserPreview) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &browserWindowState{socket: browserSocketKey(browser.Socket), browserID: browser.Browser, address: browser.URL, pageURL: browser.URL, title: browser.Title}
+	state.continuationView = func(c *ui.Context) { a.browserContinuationView(c, browser.Browser) }
 	if state.title == "" {
 		state.title = browser.URL
 	}
@@ -190,6 +192,9 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 func browserSurfaceView(c *ui.Context, state *browserWindowState) {
 	theme := c.Theme()
 	ui.Column(c).Fill().Background(theme.Background).Children(func() {
+		if state.continuationView != nil {
+			state.continuationView(c)
+		}
 		ui.Row(c).Height(48).Padding(7, 10).Gap(7).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).Children(func() {
 			browserChromeButton(c, "←", "Back", state.surface != nil, func() {

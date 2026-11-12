@@ -37,6 +37,10 @@ func ConfigureBrowserSession(tools []agentcore.AgentTool, id string) *browserbin
 		seen[g] = true
 		g.mu.Lock()
 		if g.browserSession != id {
+			if g.continuations != nil {
+				g.continuations.Close()
+				g.continuations = nil
+			}
 			g.browserSession = id
 			g.browserBinding = nil
 			g.browsers = map[string]controlledBrowser{}

@@ -175,6 +175,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		prepared, err := p.PrepareCall(ctx, args)
 		if err != nil {
 			r := errorResult(err.Error())
+			if _, browser := tool.(*BrowserTool); browser {
+				r = browserError(err)
+			}
 			return nil, nil, ctx, &r, true
 		}
 		if errs := cfg.Registry.Validate(call.Name, prepared); len(errs) > 0 {
@@ -190,6 +193,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			evidence, err := p.ReviewEvidence(ctx, args)
 			if err != nil {
 				r := errorResult(err.Error())
+				if _, browser := tool.(*BrowserTool); browser {
+					r = browserError(err)
+				}
 				return nil, nil, ctx, &r, true
 			}
 			execCtx = agentcore.WithToolReviewEvidence(execCtx, call.Name, args, evidence)

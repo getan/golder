@@ -306,7 +306,10 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, mode permissions.Mode, lang string) []Need {
 	var needs []Need
 	if opts.BrowserRuntimeOutside && controlcap.BrowserLaunch(call.Name, call.Arguments) {
-		needs = append(needs, Need{Cap: CapBrowserRuntime})
+		evidence, known := agentcore.ToolReviewEvidenceFromContext(ctx, call.Name, call.Arguments)
+		if !strings.EqualFold(call.Name, "browser") || !known || !evidence.RuntimeAttested || evidence.LaunchRequired {
+			needs = append(needs, Need{Cap: CapBrowserRuntime})
+		}
 	}
 	if controlcap.Facade(call.Name) && controlcap.Parse(call.Arguments).HostControl {
 		needs = append(needs, Need{Cap: CapHostControl})

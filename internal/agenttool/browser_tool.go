@@ -109,13 +109,14 @@ const browserToolUseHint = " Use this tool rather than launching `golder browse`
 	"On macOS, a manual GUI Chromium login against that profile must use the status-reported profile, basic password store, mock keychain and browser proxy after the owned browser fully closes; otherwise cookies may exist but be unreadable. " +
 	"If verification cannot be completed in the pane and the person explicitly requests a GUI login, inspect status before that narrow installed-Chromium fallback; never import a personal profile, overlap profile users, read or export cookies, or retry verification to bypass it. " +
 	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
-	"Only resume after the person explicitly continues and confirms the call, or uses Ctrl+G in the pane."
+	"Continue ordinary login forms, redirects, QR waiting and loading automatically; pause only for a concrete missing identity/MFA/authorization decision, a host-latched verification/limit, or the person's explicit request. " +
+	"When paused, the local Resume automation button is the primary recovery control (GUI, main TUI and browser pane); the person can also reply to its displayed request once. Never ask to switch global permission mode or repeat the same confirmation. Ctrl+G is an auxiliary pane shortcut. After recovery re-observe the current page, then plan new actions; never replay an unknown submission."
 
 func (t *BrowserTool) useHint() string {
 	if NativeBrowserLauncherAvailable() {
 		return " In the desktop GUI, open starts the native browser host; the Browser icon opens its interactive Bitmap surface in the right drawer. The browser tool owns the control socket and cleanup. " +
 			"The default open uses a persistent project-shared profile and remembers logins; profile:<name> selects a separate project-scoped identity whose first use needs exact operator confirmation. " +
-			"Use status to inspect activity/pause state. On browser_paused, stop; do not retry or open another browser to bypass verification." + t.selectionHint() + t.cleanupHint(true)
+			browserToolUseHint + t.selectionHint() + t.cleanupHint(true)
 	}
 	return browserToolUseHint + t.selectionHint() + t.cleanupHint(false)
 }
@@ -233,6 +234,11 @@ const browserControlSchema = `{
     "page_url":{"type":"string","description":"Expected page URL, pinned before review; a changed page is refused."},
     "browser":{"type":"string","description":"For attach: browserId from list's instances[].info. Never a socket path."},
     "socket":{"type":"string","description":"Prepared browser binding fact; never a model-supplied capability."},
+    "pause_generation":{"type":"integer","minimum":0,"description":"Prepared pause generation for an exact ask-mode recovery; never confirmation."},
+    "instance_epoch":{"type":"string","description":"Prepared browser instance identity, not a capability."},
+    "continuation_id":{"type":"string","description":"Prepared recovery request identity; possession does not authorize recovery."},
+    "reason":{"type":"string","enum":["user_requested","assistance_required"],"description":"For pause only: concrete intervention reason, never a detector/operator claim."},
+    "justification":{"type":"string","maxLength":240,"description":"For pause only: short concrete blocker without secrets. Ordinary login/loading is not a blocker."},
     "tab":{"type":"string","description":"Tab id from list; omit for the conversation foreground. Standalone external browsers retain their explicit pin."},
     "target_id":{"type":"string","description":"Stable target identity, pinned before review."},
     "interactive":{"type":"boolean","description":"For snapshot: only actionable nodes."},
@@ -267,43 +273,48 @@ const browserControlSchema = `{
 }`
 
 type browserArgs struct {
-	HostControl bool    `json:"host_control,omitempty"`
-	NewInstance bool    `json:"new_instance,omitempty"`
-	Profile     string  `json:"profile,omitempty"`
-	PageURL     string  `json:"page_url,omitempty"`
-	Action      string  `json:"action"`
-	Browser     string  `json:"browser,omitempty"`
-	Socket      string  `json:"socket,omitempty"`
-	Tab         string  `json:"tab,omitempty"`
-	TargetID    string  `json:"target_id,omitempty"`
-	Interactive bool    `json:"interactive,omitempty"`
-	Compact     bool    `json:"compact,omitempty"`
-	MaxNodes    int     `json:"max_nodes,omitempty"`
-	Depth       *int    `json:"depth,omitempty"`
-	IncludeText bool    `json:"include_text,omitempty"`
-	Selector    string  `json:"selector,omitempty"`
-	Ref         string  `json:"ref,omitempty"`
-	Role        string  `json:"role,omitempty"`
-	Name        string  `json:"name,omitempty"`
-	Text        string  `json:"text,omitempty"`
-	Exact       bool    `json:"exact,omitempty"`
-	Kind        string  `json:"kind,omitempty"`
-	Attr        string  `json:"attr,omitempty"`
-	Visible     string  `json:"visible,omitempty"`
-	State       string  `json:"state,omitempty"`
-	URLPattern  string  `json:"url_pattern,omitempty"`
-	TimeoutMS   int     `json:"timeout_ms,omitempty"`
-	Clear       bool    `json:"clear,omitempty"`
-	Format      string  `json:"format,omitempty"`
-	FullPage    bool    `json:"full_page,omitempty"`
-	Out         string  `json:"out,omitempty"`
-	URL         string  `json:"url,omitempty"`
-	Key         string  `json:"key,omitempty"`
-	Value       string  `json:"value,omitempty"`
-	DeltaX      float64 `json:"delta_x,omitempty"`
-	DeltaY      float64 `json:"delta_y,omitempty"`
-	PromptText  string  `json:"prompt_text,omitempty"`
-	NewTab      bool    `json:"new_tab,omitempty"`
+	HostControl     bool    `json:"host_control,omitempty"`
+	NewInstance     bool    `json:"new_instance,omitempty"`
+	Profile         string  `json:"profile,omitempty"`
+	PauseGeneration uint64  `json:"pause_generation,omitempty"`
+	InstanceEpoch   string  `json:"instance_epoch,omitempty"`
+	ContinuationID  string  `json:"continuation_id,omitempty"`
+	Reason          string  `json:"reason,omitempty"`
+	Justification   string  `json:"justification,omitempty"`
+	PageURL         string  `json:"page_url,omitempty"`
+	Action          string  `json:"action"`
+	Browser         string  `json:"browser,omitempty"`
+	Socket          string  `json:"socket,omitempty"`
+	Tab             string  `json:"tab,omitempty"`
+	TargetID        string  `json:"target_id,omitempty"`
+	Interactive     bool    `json:"interactive,omitempty"`
+	Compact         bool    `json:"compact,omitempty"`
+	MaxNodes        int     `json:"max_nodes,omitempty"`
+	Depth           *int    `json:"depth,omitempty"`
+	IncludeText     bool    `json:"include_text,omitempty"`
+	Selector        string  `json:"selector,omitempty"`
+	Ref             string  `json:"ref,omitempty"`
+	Role            string  `json:"role,omitempty"`
+	Name            string  `json:"name,omitempty"`
+	Text            string  `json:"text,omitempty"`
+	Exact           bool    `json:"exact,omitempty"`
+	Kind            string  `json:"kind,omitempty"`
+	Attr            string  `json:"attr,omitempty"`
+	Visible         string  `json:"visible,omitempty"`
+	State           string  `json:"state,omitempty"`
+	URLPattern      string  `json:"url_pattern,omitempty"`
+	TimeoutMS       int     `json:"timeout_ms,omitempty"`
+	Clear           bool    `json:"clear,omitempty"`
+	Format          string  `json:"format,omitempty"`
+	FullPage        bool    `json:"full_page,omitempty"`
+	Out             string  `json:"out,omitempty"`
+	URL             string  `json:"url,omitempty"`
+	Key             string  `json:"key,omitempty"`
+	Value           string  `json:"value,omitempty"`
+	DeltaX          float64 `json:"delta_x,omitempty"`
+	DeltaY          float64 `json:"delta_y,omitempty"`
+	PromptText      string  `json:"prompt_text,omitempty"`
+	NewTab          bool    `json:"new_tab,omitempty"`
 }
 
 func (t *BrowserTool) Schema() json.RawMessage {
@@ -390,8 +401,11 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 			return browserError(err), nil
 		}
 	}
+	if err := validateBrowserPause(a); err != nil {
+		return browserError(err), nil
+	}
 	if a.Action == "resume" && !agentcore.OperatorConfirmedFor(ctx, callID, t.Name(), raw) {
-		return browserError(errors.New("resuming automation needs your exact confirmation; use /permissions ask, or press Ctrl+G in the browser pane")), nil
+		return browserError(browserNotDispatched("browser_continuation_required", "use the displayed local Resume automation button; no permission mode switch is needed", map[string]any{"browser": a.Browser, "pause_generation": a.PauseGeneration})), nil
 	}
 	if a.Action == "screenshot" && (agentcore.SandboxRequestedFromContext(ctx) || (t.Control.Mode != nil && t.Control.Mode.Mode() == permissions.ReadOnly)) {
 		return browserError(errors.New("screenshot writes cannot satisfy read-only/required OS containment")), nil
@@ -407,7 +421,11 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	// open runs before the dial: its whole job is to create the socket the dial
 	// would need.
 	if a.Action == "open" {
-		return t.open(ctx, a)
+		result, err := t.open(ctx, a)
+		if err == nil && !result.IsError {
+			t.registerContinuation(ctx)
+		}
+		return result, err
 	}
 	if a.Action == "attach" {
 		for _, instance := range t.discovery(ctx).Instances {
@@ -417,7 +435,11 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 				}
 			}
 		}
-		return t.attach(ctx, a.Browser)
+		result, err := t.attach(ctx, a.Browser)
+		if err == nil && !result.IsError {
+			t.registerContinuation(ctx)
+		}
+		return result, err
 	}
 	if a.Action == "list" {
 		return t.listInstances(ctx), nil
@@ -469,6 +491,8 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	}
 
 	switch a.Action {
+	case "resume":
+		return t.resumeConfirmed(ctx, c, a)
 	case "quit":
 		if !info.HasCapability(browserctl.CapQuit) {
 			return browserError(errors.New("browser does not advertise graceful quit; nothing was sent")), nil
@@ -492,14 +516,29 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 			}))},
 			Details: map[string]any{"action": "quit", "browser": info.BrowserID, "socket": selectedSocket},
 		}, nil
-	case "status", "pause", "resume":
-		result, meta, err := c.Action(ctx, "interaction."+a.Action, map[string]any{}, browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
+	case "status", "pause":
+		params := map[string]any{}
+		if a.Reason != "" {
+			params["reason"] = a.Reason
+		}
+		result, meta, err := c.Action(ctx, "interaction."+a.Action, params, browserctl.Target{BrowserID: info.BrowserID}, 5*time.Second)
 		if err != nil {
 			return browserError(err), nil
 		}
 		payload := map[string]any{"ok": true, "result": json.RawMessage(result)}
 		if a.Action == "status" {
 			payload["runtime"] = t.browserRuntimeDiagnostics(info)
+		}
+		if a.Action == "pause" {
+			var state struct {
+				Generation uint64 `json:"pauseGeneration"`
+			}
+			_ = json.Unmarshal(result, &state)
+			stop := true
+			return agentcore.AgentToolResult{
+				Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(payload))}, Terminate: &stop,
+				Details: map[string]any{"action": "pause", "browser_wait": true, "browser_wait_id": info.BrowserID, "browser_wait_generation": state.Generation},
+			}, nil
 		}
 		return agentcore.AgentToolResult{
 			Content: agentcore.ContentList{agentcore.NewTextContent(tuiosJSON(payload))},
@@ -1084,14 +1123,10 @@ func (t *BrowserTool) open(ctx context.Context, a browserArgs) (agentcore.AgentT
 		owned, ok := t.Control.browsers[instance.Info.BrowserID]
 		t.Control.mu.Unlock()
 		matches := instance.Info.LoginProfile == browserLoginProfile(t.cwd, effectiveProfile)
-		if matches && t.Control.profileAllowed(effectiveProfile) {
-			proxyMode := browserProxyModeUnknown
-			if ok && owned.proxyMode != "" {
-				proxyMode = owned.proxyMode
+		if matches && t.Control.profileAllowed(effectiveProfile) && !ok {
+			if err := t.restoreManagedView(ctx, instance, effectiveProfile); err != nil {
+				return browserError(err), nil
 			}
-			t.Control.mu.Lock()
-			t.Control.browsers[instance.Info.BrowserID] = controlledBrowser{socket: canonicalBrowserSocket(instance.Socket), profile: effectiveProfile, proxyMode: proxyMode, browserRuntime: true, policy: controlPolicyStamp()}
-			t.Control.mu.Unlock()
 		} else if a.Profile != "" && (!ok || owned.profile != effectiveProfile) {
 			continue
 		}
@@ -1277,7 +1312,12 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 			result := browserError(err)
 			if be.ExecutionState == "not_dispatched" {
 				result.Content = append(result.Content, agentcore.NewTextContent("No input was dispatched. Inspect the locator/context before making a new request; no action was retried."))
-				result.Details = map[string]any{"execution_state": "not_dispatched"}
+				details, _ := result.Details.(map[string]any)
+				if details == nil {
+					details = make(map[string]any)
+				}
+				details["execution_state"] = "not_dispatched"
+				result.Details = details
 			}
 			return result
 		}
@@ -1310,7 +1350,19 @@ func browserError(err error) agentcore.AgentToolResult {
 		if be.Code == "stale_ref" {
 			msg += "; call snapshot again and use the new ref"
 		}
-		return errorResult(msg)
+		result := errorResult(msg)
+		if be.Code == "browser_paused" || be.Code == "browser_continuation_required" {
+			stop := true
+			result.Terminate = &stop
+			var bound struct {
+				Browser    string `json:"browser"`
+				Generation uint64 `json:"pause_generation"`
+			}
+			_ = json.Unmarshal(be.Details, &bound)
+			result.Details = map[string]any{"browser_wait": true, "browser_wait_id": bound.Browser, "browser_wait_generation": bound.Generation,
+				"stage": "prepare", "execution_state": "not_dispatched", "recovery": "continue"}
+		}
+		return result
 	}
 	return errorResult("browser: " + err.Error())
 }
