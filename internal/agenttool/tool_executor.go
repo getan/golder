@@ -187,6 +187,9 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 		args = prepared
 	}
 	if cfg.BeforeToolCall != nil {
+		// The proof is host-derived from the concrete implementation, bound to
+		// this validated call, and cleared even for an unrecognized tool.
+		execCtx = agentcore.WithBuiltinReview(execCtx, builtinReviewName(tool), args)
 		if p, ok := tool.(interface {
 			ReviewEvidence(context.Context, json.RawMessage) (agentcore.ToolReviewEvidence, error)
 		}); ok {

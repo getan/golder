@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+
+	"github.com/getan/golder/internal/agentcore"
 )
 
 // FirstParty runs before the JEV/local routine grader. Tools it does not know
@@ -23,6 +25,26 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 		return v
 	}
 	switch tool {
+	case "todo", "get_context_remaining", "schedule_list":
+		// The executor attests the concrete built-in after validating the call;
+		// an external or custom tool with the same name must not use this path.
+		if !agentcore.BuiltinReviewAttested(ctx, tool, args) {
+			return f.next(ctx, tool, args)
+		}
+		return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+			Reasons: []string{"host-verified session-local bookkeeping"}}
+	case "write_stdin":
+		// Only poll the session manager's existing output here. Ctrl-C and all
+		// other input can affect a process and must retain contextual review.
+		var a struct {
+			BashID string `json:"bash_id"`
+			Chars  string `json:"chars"`
+		}
+		if !agentcore.BuiltinReviewAttested(ctx, tool, args) || json.Unmarshal(args, &a) != nil || a.BashID == "" || a.Chars != "" {
+			return f.next(ctx, tool, args)
+		}
+		return Verdict{Level: Allow, Source: LocalSource, Confidence: 1, Risk: "low",
+			Reasons: []string{"host-verified session output poll without input"}}
 	case "terminal":
 		var a struct {
 			Action  string `json:"action"`

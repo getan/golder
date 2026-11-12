@@ -18,9 +18,8 @@ package judge
 //     stop changes, so an in-memory tool belongs and the rest do not.
 //
 // The two are independent, and the entries that look alike are the proof:
-// write_stdin is permitted in read-only mode (a poll changes nothing) while
-// bash is not; goal_complete is the reverse — it changes nothing on the host
-// either, and it is permitted for the same reason.
+// write_stdin can write to a running terminal and is not permitted in read-only
+// mode, while goal_complete changes nothing on the host and is permitted.
 //
 // A tool absent from this table is treated by the strict default: its paths are
 // not extracted (so the boundary gate has nothing to ask about), and read-only
@@ -94,9 +93,8 @@ var tools = map[string]toolInfo{
 	"websearch": {readOnly: true},
 
 	// In-memory and control tools: nothing on the host changes, so read-only
-	// mode permits them. They are reviewed like everything else, which costs one
-	// call each and buys the property this design is for — one rule, no
-	// exceptions to reason about.
+	// mode permits them. FirstParty locally grades a small subset only when the
+	// executor attests the exact built-in implementation and validated call.
 	"todo":                  {readOnly: true},
 	"memory_search":         {readOnly: true},
 	"schedule_list":         {readOnly: true},
@@ -111,10 +109,8 @@ var tools = map[string]toolInfo{
 
 	// write_stdin polls or interrupts a running session. Read-only mode must not
 	// let a session be typed into — a tty session's stdin is a command line —
-	// so it is not permitted there, and it is reviewed like everything else:
-	// what a written line does is exactly the kind of question a reviewer
-	// answers, and the command that opened the session is not the command this
-	// call sends it.
+	// so it is not permitted there. FirstParty classifies a host-verified empty
+	// poll locally; all input and interrupts still go to the reviewer.
 	"write_stdin": {},
 
 	// The goal signals end a loop this process is running. They change nothing
