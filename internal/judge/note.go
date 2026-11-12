@@ -7,6 +7,7 @@ package judge
 // layer; this only produces plain text.
 
 import (
+	"encoding/json"
 	"strings"
 )
 
@@ -221,6 +222,11 @@ func FormatNote(n Note) string {
 	line := origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + suffix
 	if rationale != "" {
 		line += ": " + rationale
+	}
+	if n.BrowserAudit != nil {
+		if data, err := json.Marshal(n.BrowserAudit); err == nil {
+			line += " [browser_review=" + string(data) + "]"
+		}
 	}
 	return line
 }

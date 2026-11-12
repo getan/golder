@@ -59,3 +59,28 @@ func TestReviewerReceivesEarlierDeploymentAuthorization(t *testing.T) {
 		t.Fatalf("deployment authorization missing from reviewer state: %s", stub.user)
 	}
 }
+
+func TestBrowserReviewBudgetKeepsLatestUserAndReportsTruncation(t *testing.T) {
+	call, ev, _ := browserAutoFixture(t)
+	var facts map[string]any
+	if err := json.Unmarshal(ev.Facts, &facts); err != nil {
+		t.Fatal(err)
+	}
+	facts["padding"] = strings.Repeat("x", 6000)
+	ev.Facts, _ = json.Marshal(facts)
+	var msgs agentcore.MessageList
+	for i := 0; i < 8; i++ {
+		msgs = append(msgs, agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent(strings.Repeat("背景", 900))}})
+	}
+	msgs = append(msgs, agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("授权对当前任务点立即同步")}})
+	ctx := agentcore.WithToolReviewEvidence(context.Background(), call.Name, call.Arguments, ev)
+	ctx = withExecutionFacts(ctx, resolveExecutionFacts(ctx, call, t.TempDir()))
+	judge := NewLLMJudge(nil, t.TempDir(), true)
+	state, coverage := judge.reviewStateWithCoverage(ctx, call.Name, call.Arguments, msgs)
+	if !strings.Contains(state, "授权对当前任务点立即同步") || !strings.Contains(state, "sync 立即同步") {
+		t.Fatalf("review lost latest user intent or target: %s", state)
+	}
+	if !coverage.TranscriptTruncated || coverage.ExecutionFactsOmitted || coverage.ArgumentsTruncated || !strings.Contains(state, "transcript_truncated=true") {
+		t.Fatalf("incorrect coverage: %+v", coverage)
+	}
+}

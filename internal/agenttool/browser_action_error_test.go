@@ -16,6 +16,10 @@ func TestBrowserMutationErrorDoesNotAuthorizeReplay(t *testing.T) {
 		if !result.IsError || !strings.Contains(text, "may have been dispatched") || strings.Contains(text, "(retryable)") {
 			t.Fatalf("unsafe mutation error: %q", text)
 		}
+		details, ok := result.Details.(map[string]any)
+		if !ok || details["execution_state"] != "unknown" {
+			t.Fatalf("unknown outcome was not recorded structurally: %+v", result.Details)
+		}
 	}
 }
 

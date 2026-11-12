@@ -98,6 +98,13 @@ func isKnownTier(s string) bool {
 	}
 }
 
+// ReviewInputCoverage records truncation without retaining page contents.
+type ReviewInputCoverage struct {
+	ArgumentsTruncated    bool `json:"arguments_truncated"`
+	ExecutionFactsOmitted bool `json:"execution_facts_omitted"`
+	TranscriptTruncated   bool `json:"transcript_truncated"`
+}
+
 // Verdict is one classification result.
 type Verdict struct {
 	Level      Level
@@ -119,6 +126,11 @@ type Verdict struct {
 	// in the verdict card. Empty for static verdicts.
 	Risk          string
 	Authorization string
+	// BrowserContainment is the reviewer's explicit distinction between a
+	// remote business effect and a requirement for outer OS containment. Empty
+	// or unknown is never interpreted as permission to run uncontained.
+	BrowserContainment string
+	Coverage           *ReviewInputCoverage
 	// Lang is the rationale's language ("zh"/"en"), so UI templates can
 	// match it.
 	Lang string
@@ -301,6 +313,22 @@ const (
 	NoteBoundaryNoPrompt
 )
 
+// BrowserReviewAudit contains structural, non-page data about one review.
+type BrowserReviewAudit struct {
+	Action            string               `json:"action"`
+	Level             string               `json:"level"`
+	Risk              string               `json:"risk"`
+	Authorization     string               `json:"authorization"`
+	RuntimeAttested   bool                 `json:"runtime_attested"`
+	OuterSandbox      bool                 `json:"outer_sandbox"`
+	TargetBound       bool                 `json:"target_bound"`
+	TargetIDHash      string               `json:"target_id_hash,omitempty"`
+	MatchCount        int                  `json:"match_count"`
+	SnapshotTruncated *bool                `json:"snapshot_truncated,omitempty"`
+	Containment       string               `json:"browser_containment,omitempty"`
+	Coverage          *ReviewInputCoverage `json:"coverage,omitempty"`
+}
+
 // Note is one verdict announcement for the user: the decision, the tool, and
 // the reviewer's rationale (already written in the user's language).
 type Note struct {
@@ -319,12 +347,15 @@ type Note struct {
 	// Granted names what the answer actually gave. They replace the old
 	// high/medium/low risk and authorization words: a reader can act on
 	// "write /tmp/out, network github.com" but not on "risk: medium".
-	Needs         []Need
-	Granted       []Need
-	Risk          string
-	Authorization string
-	Rationale     string
-	Lang          string
+	Needs              []Need
+	Granted            []Need
+	Risk               string
+	Authorization      string
+	Rationale          string
+	Lang               string
+	BrowserContainment string
+	ReviewCoverage     *ReviewInputCoverage
+	BrowserAudit       *BrowserReviewAudit
 	// Mode is the approval mode that was in force for this call (auto, ask,
 	// read-only, full-access), stamped by the permission gate. It is what makes
 	// a verdict line answer the reader's real question — the same grade means
@@ -460,16 +491,18 @@ func classifyForGate(ctx context.Context, classifier Classifier, call agentcore.
 // noteFor builds the user-facing note for one verdict.
 func noteFor(call agentcore.AgentToolCall, v Verdict, kind NoteKind, lang string) Note {
 	n := Note{
-		Tool:          call.Name,
-		ToolCallID:    call.ID,
-		Kind:          kind,
-		Level:         v.Level,
-		Source:        v.Source,
-		Summary:       riskSummary(call),
-		Risk:          v.Risk,
-		Authorization: v.Authorization,
-		Escalation:    askedToEscape(call),
-		Lang:          v.Lang,
+		Tool:               call.Name,
+		ToolCallID:         call.ID,
+		Kind:               kind,
+		Level:              v.Level,
+		Source:             v.Source,
+		Summary:            riskSummary(call),
+		Risk:               v.Risk,
+		Authorization:      v.Authorization,
+		BrowserContainment: v.BrowserContainment,
+		ReviewCoverage:     v.Coverage,
+		Escalation:         askedToEscape(call),
+		Lang:               v.Lang,
 	}
 	if len(v.Reasons) > 0 {
 		n.Rationale = v.Reasons[0]
@@ -557,7 +590,11 @@ func ChainGates(first, second agentcore.BeforeToolCallFunc) agentcore.BeforeTool
 func blockCall(call agentcore.AgentToolCall, v Verdict, tail string) *agentcore.BeforeToolCallDecision {
 	msg := fmt.Sprintf("tool %q blocked by risk judge (%s", call.Name, v.Level)
 	if len(v.Reasons) > 0 {
-		msg += ": " + strings.Join(v.Reasons, "; ")
+		reason := strings.Join(v.Reasons, "; ")
+		if strings.EqualFold(call.Name, "browser") {
+			reason = browserAuditRationale(reason)
+		}
+		msg += ": " + reason
 	}
 	msg += ")"
 	if tail != "" {

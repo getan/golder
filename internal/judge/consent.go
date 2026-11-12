@@ -142,6 +142,15 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			if n.Mode == "" {
 				n.Mode = mode.String()
 			}
+			if strings.EqualFold(call.Name, "browser") {
+				n.BrowserAudit = browserReviewAudit(ctx, call, n)
+				if n.BrowserAudit != nil && n.BrowserAudit.Action != "" {
+					n.Summary = "browser " + n.BrowserAudit.Action
+				} else {
+					n.Summary = "browser action"
+				}
+				n.Rationale = browserAuditRationale(n.Rationale)
+			}
 			if opts.Notify != nil {
 				opts.Notify(n)
 			}
@@ -150,6 +159,14 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 		if v, bad := staticDeny(call.Name, call.Arguments); bad {
 			notify(noteFor(call, v, NoteDenied, lang))
 			return blockCall(call, v, DenyGuidance)
+		}
+		if priorBrowserUnknown(call, agentcore.MessageSnapshotFromContext(ctx)) {
+			v := Verdict{Level: Contain, Source: "browser-outcome", Reasons: []string{"the prior matching browser action may already have been dispatched"}}
+			notify(noteFor(call, v, NoteDenied, lang))
+			dec := blockCall(call, v, "browser_prior_outcome_unknown: no input was sent; inspect the actual business result before deciding on any new action")
+			details := any(map[string]any{"execution_state": "not_dispatched", "reason": "browser_prior_outcome_unknown", "recovery": "inspect_business_result"})
+			dec.Details = &details
+			return dec
 		}
 		if call.RequireOperatorConfirmation && mode != permissions.Ask {
 			return blockCall(call, Verdict{Level: Deny, Source: "operator-policy"}, "this operation requires a person's exact-call confirmation; switch /permissions to ask")
@@ -194,6 +211,11 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			return blockCall(call, Verdict{Level: Deny, Source: "browser-runtime"}, "browser_outer_sandbox_unavailable: this browser target cannot satisfy required outer OS containment; host_control is not a remedy")
 		}
 		v := classifyForGate(ctx, opts.Classifier, call)
+		// A structured requirement for outer containment cannot be weakened by
+		// a contradictory allow/confirm level in the same reviewer response.
+		if strings.EqualFold(call.Name, "browser") && v.BrowserContainment == "outer_required" && v.Level != Deny {
+			v.Level = Contain
+		}
 		if mode == permissions.ReadOnly {
 			needs := collectNeeds(ctx, opts, call, v, mode, lang)
 			if len(needs) > 0 {
@@ -220,6 +242,12 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			n.Needs = needs
 			notify(n)
 			return blockCall(call, v, DenyGuidance)
+		}
+		if mode == permissions.Auto && strings.EqualFold(call.Name, "browser") && !v.Failed && strings.EqualFold(v.Risk, "critical") {
+			n := noteFor(call, v, NoteDenied, lang)
+			n.Needs = needs
+			notify(n)
+			return blockCall(call, v, "critical browser risk is not automatically authorized; no input was sent")
 		}
 		if mode == permissions.Auto {
 			return autoDecision(ctx, opts, call, v, needs, lang, notify)
@@ -487,6 +515,19 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 			Summary: riskSummary(call), Rationale: localized(lang, "评审不可用；无可收容路径", "review unavailable; no containment path")})
 		return blockCall(call, v, "the reviewer could not decide and the call cannot be contained")
 	}
+	if ev, allowed := browserRemoteEffectAllowed(ctx, opts, call, v, needs); allowed {
+		kind := NoteApproved
+		if !ev.CanSandbox {
+			kind = NoteEscaped // actual browser runtime, not a bash escape
+		}
+		n := noteFor(call, v, kind, lang)
+		n.Summary = "browser: reviewed remote action on one bound target"
+		n.Rationale = firstReason(v) + " " + localized(lang,
+			"评审确认仅涉及非严重远端业务影响，不要求外层隔离；此授权仅适用于本次目标。",
+			"The reviewer classified this as a noncritical remote effect, not an outer-isolation requirement; this approval applies only to the bound target.")
+		notify(n)
+		return &agentcore.BeforeToolCallDecision{Network: v.Network && NetworkRequired(ctx, call.Name, call.Arguments)}
+	}
 	if v.Level == Contain {
 		if priorPushRetryEvidence(call.Name, call.Arguments, opts.Cwd, agentcore.MessageSnapshotFromContext(ctx)) != "" {
 			// This is already the requested outside retry of a failed contained
@@ -508,6 +549,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 			notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: v.Level, Lang: lang,
 				Source: v.Source, Needs: needs,
 				Summary: riskSummary(call), Rationale: rationale})
+			if strings.EqualFold(call.Name, "browser") {
+				return browserCapabilityBlocked(call, v, needs)
+			}
 			return blockCall(call, v, "the call needs a capability the reviewer did not grant")
 		}
 		if canContainCall(ctx, opts, call) {
@@ -516,7 +560,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 		}
 		if strings.EqualFold(call.Name, "browser") {
 			notify(noteFor(call, v, NoteDenied, lang))
-			return blockCall(call, v, "browser_outer_sandbox_unavailable: review required outer OS containment, but the current browser runtime cannot satisfy it; no input was sent and host_control is not a remedy")
+			return browserContainmentBlocked(call, v)
 		}
 		return blockCall(call, v, "review required containment but no sandbox is available")
 	}
@@ -578,7 +622,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	n := Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: v.Level, Lang: lang,
 		Source: v.Source, Granted: needs,
 		Summary: riskSummary(call), Risk: v.Risk, Authorization: v.Authorization,
-		Rationale: consentRationale(v, needs, lang)}
+		Rationale: consentRationale(v, needs, lang), BrowserContainment: v.BrowserContainment, ReviewCoverage: v.Coverage}
 	if opts.Enforce && askedToEscape(call) {
 		n.Escalation = true
 	}
@@ -589,7 +633,7 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, needs []Need, mode permissions.Mode, lang string, notify func(Note)) *agentcore.BeforeToolCallDecision {
 	if strings.EqualFold(call.Name, "browser") && v.Level == Contain && !canContainCall(ctx, opts, call) && !hasNeed(needs, CapBrowserRuntime) {
 		notify(noteFor(call, v, NoteDenied, lang))
-		return blockCall(call, v, "browser_outer_sandbox_unavailable: the current browser cannot satisfy required outer containment; host_control is not a remedy")
+		return browserContainmentBlocked(call, v)
 	}
 	// A clearly safe call with no expansion is the JEV/local fast path: it never
 	// reaches a person. This is what keeps `ask` usable for routine work.
@@ -688,7 +732,7 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 	n := Note{Tool: call.Name, ToolCallID: call.ID, Kind: kind, Level: Allow, Lang: lang,
 		Source: v.Source, Granted: granted,
 		Summary: req.Summary, Risk: v.Risk, Authorization: v.Authorization,
-		Rationale: consentRationale(v, ans.Needs, lang)}
+		Rationale: consentRationale(v, ans.Needs, lang), BrowserContainment: v.BrowserContainment, ReviewCoverage: v.Coverage}
 	if opts.Enforce && askedToEscape(call) {
 		n.Escalation = true
 	}

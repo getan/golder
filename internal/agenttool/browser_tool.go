@@ -1329,6 +1329,12 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 		hint = "The quit request may have been dispatched; call list to inspect the browser and do not automatically repeat a quit whose outcome is unknown."
 	}
 	result.Content = append(result.Content, agentcore.NewTextContent(hint))
+	details, _ := result.Details.(map[string]any)
+	if details == nil {
+		details = make(map[string]any)
+	}
+	details["execution_state"] = "unknown"
+	result.Details = details
 	return result
 }
 
