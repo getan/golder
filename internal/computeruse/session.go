@@ -11,13 +11,18 @@ import (
 )
 
 var (
-	ErrUnavailable = errors.New("computer use backend unavailable")
-	ErrNotActive   = errors.New("computer use session is not active")
-	ErrNotAllowed  = errors.New("computer use action is not authorized")
-	ErrPaused      = errors.New("computer use is paused; the user must resume")
-	ErrTargetLost  = errors.New("computer use target changed or is unavailable")
-	ErrPreviewBusy = errors.New("computer use preview skipped while another operation is running")
+	ErrUnavailable  = errors.New("computer use backend unavailable")
+	ErrNotActive    = errors.New("computer use session is not active")
+	ErrNotAllowed   = errors.New("computer use action is not authorized")
+	ErrPaused       = errors.New("computer use is paused; the user must resume")
+	ErrTargetLost   = errors.New("computer use target changed or is unavailable")
+	ErrPreviewBusy  = errors.New("computer use preview skipped while another operation is running")
+	ErrNoInput      = errors.New("computer use did not dispatch input")
+	ErrClosePending = errors.New("a close request was already attempted; inspect the selected window and do not repeat it automatically")
 )
+
+// noInputError is reserved for checks known to happen before input dispatch.
+func noInputError(err error) error { return fmt.Errorf("%w: %w", ErrNoInput, err) }
 
 // Target is an opaque identity returned by a platform backend. The local host
 // resolves or confirms it; model-supplied process identifiers never select it.
@@ -70,6 +75,7 @@ type Session struct {
 	sequence                uint64
 	snapshot                *snapshotLease
 	frames                  map[string]frameLease
+	closeRequested          bool
 	operatorPreview         *operatorPreviewLease
 	operatorPreviewDone     chan struct{}
 	operatorPreviewSequence uint64
@@ -125,6 +131,7 @@ func (s *Session) Start(ctx context.Context, target Target, caps Capabilities) e
 		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	s.operatorPreviewDone = nil
+	s.closeRequested = false
 	s.status = Status{Active: true, Target: target, Capabilities: caps}
 	return nil
 }
@@ -241,7 +248,7 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 				s.frames = nil
 			}
 			s.mu.Unlock()
-			return noInputValidationError(err)
+			return fmt.Errorf("%w: %w", ErrNoInput, noInputValidationError(err))
 		}
 		s.mu.Lock()
 		if s.sequence == sequence && s.status.Active {

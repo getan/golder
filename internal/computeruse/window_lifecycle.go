@@ -1,6 +1,9 @@
 package computeruse
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // WindowCloser requests closure of the already authorized window, not its app.
 // A successful request does not prove that the window actually closed.
@@ -15,26 +18,32 @@ func (s *Session) SupportsCloseWindow() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.backend.(WindowCloser)
-	return ok
+	return ok && !s.closeRequested
 }
 
-// CloseWindow pauses the session after attempting the request, including when
-// cancellation makes its result uncertain. A dialog must be handled by the user.
+// CloseWindow attempts one request on the pinned window. Subsequent reads may
+// inspect that same window, but an unknown or successful request is never replayed.
+// A different window or an unprovable target remains outside this session.
 func (s *Session) CloseWindow(ctx context.Context) error {
 	return s.Do(ctx, true, func(ctx context.Context, backend Backend, target Target) error {
 		closer, ok := backend.(WindowCloser)
 		if !ok {
-			return ErrUnavailable
+			return fmt.Errorf("%w: %w", ErrNoInput, ErrUnavailable)
 		}
-		err := closer.CloseWindow(ctx, target)
 		s.mu.Lock()
-		if s.status.Active && s.status.Target.ID == target.ID {
-			s.status.Paused = true
-			s.sequence++
-			s.snapshot = nil
-			s.frames = nil
+		if !s.status.Active || s.status.Paused || s.status.Target.ID != target.ID || ctx.Err() != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("%w: %w", ErrNoInput, ErrStaleObservation)
 		}
+		if s.closeRequested {
+			s.mu.Unlock()
+			return fmt.Errorf("%w: %w", ErrNoInput, ErrClosePending)
+		}
+		s.closeRequested = true
+		s.sequence++
+		s.snapshot = nil
+		s.frames = nil
 		s.mu.Unlock()
-		return err
+		return closer.CloseWindow(ctx, target)
 	})
 }

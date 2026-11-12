@@ -9,15 +9,17 @@ import (
 type closeWindowBackend struct {
 	testBackend
 	called Target
+	calls  int
 	err    error
 }
 
 func (b *closeWindowBackend) CloseWindow(_ context.Context, target Target) error {
 	b.called = target
+	b.calls++
 	return b.err
 }
 
-func TestCloseWindowIsTargetBoundAndPauses(t *testing.T) {
+func TestCloseWindowIsTargetBoundAndAllowsInspection(t *testing.T) {
 	ctx := context.Background()
 	b := &closeWindowBackend{}
 	s := New(b)
@@ -30,14 +32,17 @@ func TestCloseWindowIsTargetBoundAndPauses(t *testing.T) {
 	}
 	s.snapshot = &snapshotLease{publicID: "old"}
 	s.frames = map[string]frameLease{"old": {targetID: target.ID}}
-	if err := s.CloseWindow(ctx); err != nil || b.called != target || !s.Status().Paused {
+	if err := s.CloseWindow(ctx); err != nil || b.called != target || s.Status().Paused {
 		t.Fatalf("close err=%v called=%+v status=%+v", err, b.called, s.Status())
 	}
 	if s.snapshot != nil || s.frames != nil {
 		t.Fatal("window close retained stale observations")
 	}
-	if err := s.CloseWindow(ctx); !errors.Is(err, ErrPaused) {
-		t.Fatalf("paused close = %v", err)
+	if err := s.Do(ctx, false, func(context.Context, Backend, Target) error { return nil }); err != nil {
+		t.Fatalf("cannot inspect the same window after close: %v", err)
+	}
+	if err := s.CloseWindow(ctx); !errors.Is(err, ErrClosePending) || !errors.Is(err, ErrNoInput) || b.calls != 1 {
+		t.Fatalf("close was replayed: err=%v calls=%d", err, b.calls)
 	}
 }
 
@@ -55,8 +60,11 @@ func TestCloseWindowRespectsAuthorizationAndUncertainResult(t *testing.T) {
 	if err := s.Start(ctx, Target{ID: "selected"}, Capabilities{Observe: true, Control: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CloseWindow(ctx); !errors.Is(err, context.Canceled) || !s.Status().Paused {
+	if err := s.CloseWindow(ctx); !errors.Is(err, context.Canceled) || s.Status().Paused {
 		t.Fatalf("uncertain close err=%v status=%+v", err, s.Status())
+	}
+	if err := s.CloseWindow(ctx); !errors.Is(err, ErrClosePending) || b.calls != 1 {
+		t.Fatalf("uncertain close was repeated: err=%v calls=%d", err, b.calls)
 	}
 }
 

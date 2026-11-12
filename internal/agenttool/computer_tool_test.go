@@ -46,7 +46,7 @@ func (b *computerCloseBackend) CloseWindow(_ context.Context, target computeruse
 	return nil
 }
 
-func TestComputerCloseWindowRequiresControlAndPauses(t *testing.T) {
+func TestComputerCloseWindowRequiresControlAndAllowsInspection(t *testing.T) {
 	backend := &computerCloseBackend{}
 	s := computeruse.New(backend)
 	target := computeruse.Target{ID: "selected"}
@@ -74,11 +74,11 @@ func TestComputerCloseWindowRequiresControlAndPauses(t *testing.T) {
 		t.Fatal("close accepted a model-supplied target")
 	}
 	result := call(`{"action":"close_window"}`)
-	if result.IsError || backend.closed != target || !s.Status().Paused || !strings.Contains(agentcore.ContentToText(result.Content), `"verified":false`) {
+	if result.IsError || backend.closed != target || s.Status().Paused || !strings.Contains(agentcore.ContentToText(result.Content), `"verified":false`) {
 		t.Fatalf("close: result=%+v target=%+v status=%+v", result, backend.closed, s.Status())
 	}
-	if slices.Contains(schemaEnum(t, tool.Schema()), "close_window") || !call(`{"action":"close_window"}`).IsError {
-		t.Fatal("paused session permitted window close")
+	if !slices.Contains(schemaEnum(t, tool.Schema()), "snapshot") || slices.Contains(schemaEnum(t, tool.Schema()), "close_window") || !call(`{"action":"close_window"}`).IsError {
+		t.Fatal("session did not allow inspection or permitted repeating close")
 	}
 }
 
@@ -139,6 +139,44 @@ func TestComputerToolControlsSelectedTargetWithoutPerActionConfirmation(t *testi
 	result, err = tool.Execute(context.Background(), "one", raw, nil)
 	if err != nil || !result.IsError || backend.calls != 1 {
 		t.Fatalf("stale call: result=%+v calls=%d err=%v", result, backend.calls, err)
+	}
+	details, _ := result.Details.(map[string]any)
+	if details["execution_state"] != "not_dispatched" || details["recovery"] != "inspect_and_retarget" || s.Status().Paused {
+		t.Fatalf("stale observation did not allow autonomous recovery: %+v status=%+v", details, s.Status())
+	}
+	fresh, err := s.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(map[string]string{"action": "click", "snapshot_id": fresh.ID, "ref": "@e1"})
+	result, err = tool.Execute(context.Background(), "new", raw, nil)
+	if err != nil || result.IsError || backend.calls != 2 {
+		t.Fatalf("fresh observation did not restore control: result=%+v calls=%d err=%v", result, backend.calls, err)
+	}
+}
+
+type computerUnknownBackend struct{ computerControlBackend }
+
+func (b *computerUnknownBackend) Act(context.Context, computeruse.Target, string, string, string, string) error {
+	b.calls++
+	return context.DeadlineExceeded
+}
+
+func TestComputerUnknownControlOutcomeIsNotCalledNotDispatched(t *testing.T) {
+	backend := &computerUnknownBackend{}
+	s := computeruse.New(backend)
+	if err := s.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := s.Observe(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]string{"action": "click", "snapshot_id": snapshot.ID, "ref": "@e1"})
+	result, err := (&ComputerTool{Session: s}).Execute(context.Background(), "unknown", raw, nil)
+	details, _ := result.Details.(map[string]any)
+	if err != nil || !result.IsError || backend.calls != 1 || details["execution_state"] != "unknown" || details["recovery"] == "inspect_and_retarget" || !strings.Contains(agentcore.ContentToText(result.Content), "do not automatically replay") {
+		t.Fatalf("unknown action was treated as safe to replay: result=%+v calls=%d err=%v", result, backend.calls, err)
 	}
 }
 

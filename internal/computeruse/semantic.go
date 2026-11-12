@@ -111,12 +111,12 @@ func (s *Session) Act(ctx context.Context, snapshotID, ref, action, text string)
 		lease := s.snapshot
 		if lease == nil || snapshotID == "" || lease.publicID != snapshotID {
 			s.mu.Unlock()
-			return ErrStaleObservation
+			return noInputError(ErrStaleObservation)
 		}
 		element, found := lease.refs[ref]
 		if !found {
 			s.mu.Unlock()
-			return ErrStaleObservation
+			return noInputError(ErrStaleObservation)
 		}
 		s.snapshot = nil
 		s.mu.Unlock()

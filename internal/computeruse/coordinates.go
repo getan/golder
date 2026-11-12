@@ -157,7 +157,7 @@ func (s *Session) useFrame(ctx context.Context, frameID string, x, y float64, po
 			time.Since(lease.created) <= frameLeaseLifetime && (!point || (x >= 0 && y >= 0 && x < float64(lease.width) && y < float64(lease.height)))
 		s.mu.Unlock()
 		if !valid {
-			return ErrStaleObservation
+			return noInputError(ErrStaleObservation)
 		}
 		if err := ctx.Err(); err != nil {
 			return err
