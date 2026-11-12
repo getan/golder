@@ -102,10 +102,10 @@ github.com/epilande/go-devicons v0.0.0-20250505162540-0661cab71a28 h1:FIj2HjafVK
 github.com/epilande/go-devicons v0.0.0-20250505162540-0661cab71a28/go.mod h1:myBNrCUxmCh3ktYaRUMfL8epmWMBu6/yj0JFnQHYFSU=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
-github.com/getan/kitty-browse v0.2.12-0.20261112040018-0296fb8dec59 h1:4rd00260n2Hj1k/ZXfOYGTmB3Ba+IPkMvUA52vHulLk=
-github.com/getan/kitty-browse v0.2.12-0.20261112040018-0296fb8dec59/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
-github.com/getan/tuios-mini v0.10.46-0.20261112054620-a8889b576b9c h1:z+ATZBaT+9sqI7iL580g/LFqpoz/eaNEC5ycx6qKtqo=
-github.com/getan/tuios-mini v0.10.46-0.20261112054620-a8889b576b9c/go.mod h1:+jypEd4bha9kYNY3R/uDIIrN/eUUL6IxrsOYOxHyiWg=
+github.com/getan/kitty-browse v0.2.13 h1:YGRolKZAphVP4//lK6whqHDNRa8dKdw3i2/UQFMtUT4=
+github.com/getan/kitty-browse v0.2.13/go.mod h1:w8rQ2QjZ24EjoVhf8okrLkB//DaoB+sGKelKP5JntbI=
+github.com/getan/tuios-mini v0.10.46 h1:kcWeeY8NlOJHGrd6TgHwrV/t7/hQQkHABsord0vaH14=
+github.com/getan/tuios-mini v0.10.46/go.mod h1:LkQhwbjEeC0Gn7+0OLQgCQkdUdLYwrjyQFM7VmNSOQY=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
 github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/go-ole/go-ole v1.2.6/go.mod h1:pprOEPIfldk/42T2oK7lQ4v4JSDwmV0As9GaiUsvbm0=
