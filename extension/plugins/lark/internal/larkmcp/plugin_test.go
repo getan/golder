@@ -239,3 +239,30 @@ func TestUnavailableRunnerDoesNotRetry(t *testing.T) {
 		t.Fatal(r, f.calls)
 	}
 }
+
+func TestMissingUserScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name, scopes, check string
+		code                int
+		want                bool
+	}{
+		{"missing", `{"userScopes":["docs:doc:read","search:docs:read"]}`, `{"ok":false,"missing":["search:docs:read"]}`, 1, true},
+		{"complete", `{"userScopes":["docs:doc:read"]}`, `{"ok":true,"missing":null}`, 0, true},
+		{"unknown app scope types", `{"scopes":["docs:doc:read"]}`, ``, 0, false},
+		{"login missing", `{"userScopes":["docs:doc:read"]}`, `{"ok":false,"error":"not_logged_in","missing":["docs:doc:read"]}`, 1, false},
+		{"unexpected scope", `{"userScopes":["docs:doc:read"]}`, `{"ok":false,"missing":["im:message:send"]}`, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
+				if args[1] == "scopes" {
+					return Output{Stdout: []byte(tc.scopes)}, nil
+				}
+				return Output{Code: tc.code, Stdout: []byte(tc.check)}, nil
+			}}
+			missing, ok := New(Config{}, f).missingUserScopes(context.Background())
+			if ok != tc.want || (tc.name == "missing" && (len(missing) != 1 || missing[0] != "search:docs:read")) {
+				t.Fatalf("missing=%v ok=%v", missing, ok)
+			}
+		})
+	}
+}

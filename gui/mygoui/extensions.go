@@ -27,6 +27,7 @@ func (a *App) resetExtensionAuthorizationStatus() {
 	}
 	a.extensionStatusStarted = false
 	a.extensionLarkStatus, a.extensionProjectStatus = "", ""
+	a.extensionLarkMissingScopes = nil
 }
 
 func (a *App) extensionAuthorizationStatusEligible() bool {
@@ -67,6 +68,7 @@ func (a *App) applyExtensionAuthorizationStatus(seq uint64, ctrl *appsession.Con
 		return
 	}
 	a.extensionStatusCancel = nil
+	a.extensionLarkMissingScopes = nil
 	if a.extensionBusy || a.larkNextAction(true) == "save" {
 		a.extensionLarkStatus, a.extensionProjectStatus = "unknown", "unknown"
 		return
@@ -76,6 +78,7 @@ func (a *App) applyExtensionAuthorizationStatus(seq uint64, ctrl *appsession.Con
 		return
 	}
 	a.extensionLarkStatus, a.extensionProjectStatus = status.Lark.State, status.Project.State
+	a.extensionLarkMissingScopes = append([]string(nil), status.Lark.MissingUserScopes...)
 }
 
 func (a *App) loadExtensionSettings() {
@@ -454,7 +457,7 @@ func (a *App) larkNextAction(helperReady bool) string {
 	if !helperReady {
 		return ""
 	}
-	if a.extensionLarkStatus == "required" {
+	if a.extensionLarkStatus == "required" || (a.extensionLarkStatus == "authorized" && len(a.extensionLarkMissingScopes) > 0) {
 		return "lark"
 	}
 	if a.extensionProjectStatus == "required" && projectAuthorizationConfigured(s, edit) {
@@ -819,6 +822,10 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		// Authentication describes the MCP source/transport, not the native
 		// CLIs' user grants. Only service probes can describe personal login.
 		ui.Text(c, "Lark authorization: "+larkServiceStatusLabel(a.extensionLarkStatus)).FontSize(11).TextColor(theme.TextMuted)
+		if len(a.extensionLarkMissingScopes) > 0 {
+			ui.Text(c, "App user permissions not yet granted: "+strings.Join(a.extensionLarkMissingScopes, ", ")).FontSize(11).TextColor(theme.Warning).Wrap()
+			ui.Text(c, "Authorize Lark requests permissions for the selected domains; some app permissions may require a separate explicit scope request.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
+		}
 		ui.Text(c, "Project authorization: "+larkServiceStatusLabel(a.extensionProjectStatus)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "Authorization status is checked separately; an unavailable check does not mean you need to log in again.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
 		projectConfigured := projectAuthorizationConfigured(a.extension, a.extensionEdit)

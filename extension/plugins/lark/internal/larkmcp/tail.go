@@ -199,8 +199,50 @@ func (p *Plugin) status(ctx context.Context, raw json.RawMessage) Result {
 		} else {
 			entry["configured"] = payload["appId"] != nil
 			entry["authenticated"] = out.Code == 0 && payload["identity"] == "user" && (!in.Verify || payload["verified"] == true)
+			if in.Verify && entry["authenticated"] == true {
+				if missing, ok := p.missingUserScopes(ctx); ok {
+					entry["missing_user_scopes"] = missing
+				}
+			}
 		}
 		services[service] = entry
 	}
 	return Result{OK: true, Service: "lark+project", Identity: "user", Data: map[string]any{"services": services}, ExecutionState: "completed"}
+}
+
+// missingUserScopes compares only explicitly identified app user scopes with
+// the current token. Failures are unknown, never evidence of missing grants.
+func (p *Plugin) missingUserScopes(ctx context.Context) ([]string, bool) {
+	out, err := p.Runner.Run(ctx, "lark", []string{"auth", "scopes", "--json"}, nil)
+	var app struct {
+		UserScopes []string `json:"userScopes"`
+	}
+	if err != nil || out.Code != 0 || out.Truncated || json.Unmarshal(out.Stdout, &app) != nil || app.UserScopes == nil || len(app.UserScopes) > 512 {
+		return nil, false
+	}
+	if len(app.UserScopes) == 0 {
+		return []string{}, true
+	}
+	allowed := make(map[string]bool, len(app.UserScopes))
+	for _, scope := range app.UserScopes {
+		if !diagnosticScope.MatchString(scope) {
+			return nil, false
+		}
+		allowed[scope] = true
+	}
+	out, err = p.Runner.Run(ctx, "lark", []string{"auth", "check", "--scope", strings.Join(app.UserScopes, " "), "--json"}, nil)
+	var check struct {
+		OK      *bool    `json:"ok"`
+		Missing []string `json:"missing"`
+		Error   string   `json:"error"`
+	}
+	if err != nil || out.Truncated || (out.Code != 0 && out.Code != 1) || json.Unmarshal(out.Stdout, &check) != nil || check.OK == nil || check.Error != "" || (*check.OK != (len(check.Missing) == 0)) {
+		return nil, false
+	}
+	for _, scope := range check.Missing {
+		if !allowed[scope] {
+			return nil, false
+		}
+	}
+	return check.Missing, true
 }

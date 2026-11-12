@@ -13,7 +13,8 @@ import (
 // deliberately distinct from requiring login: network and CLI failures must not
 // trigger a new authorization flow.
 type LarkServiceAuthorization struct {
-	State string // authorized, required, unavailable, or unknown
+	State             string // authorized, required, unavailable, or unknown
+	MissingUserScopes []string
 }
 
 type LarkAuthorizationStatus struct {
@@ -82,10 +83,11 @@ func parseLarkAuthorizationStatus(data []byte) (LarkAuthorizationStatus, error) 
 		OK   bool `json:"ok"`
 		Data struct {
 			Services map[string]struct {
-				Installed     *bool  `json:"installed"`
-				Authenticated *bool  `json:"authenticated"`
-				Error         string `json:"error"`
-				Details       struct {
+				Installed         *bool    `json:"installed"`
+				Authenticated     *bool    `json:"authenticated"`
+				Error             string   `json:"error"`
+				MissingUserScopes []string `json:"missing_user_scopes"`
+				Details           struct {
 					Identity      string `json:"identity"`
 					Verified      *bool  `json:"verified"`
 					Authenticated *bool  `json:"authenticated"`
@@ -106,7 +108,7 @@ func parseLarkAuthorizationStatus(data []byte) (LarkAuthorizationStatus, error) 
 		}
 		if entry.Authenticated != nil && *entry.Authenticated {
 			if name == "project" || (entry.Details.Identity == "user" && entry.Details.Verified != nil && *entry.Details.Verified) {
-				return LarkServiceAuthorization{State: "authorized"}
+				return LarkServiceAuthorization{State: "authorized", MissingUserScopes: entry.MissingUserScopes}
 			}
 		}
 		if name == "project" && entry.Details.Authenticated != nil && !*entry.Details.Authenticated {

@@ -135,32 +135,33 @@ type App struct {
 	displayErr     string
 	displayNote    string
 
-	extension                appsession.LarkExtensionSettings
-	extensionSources         []appsession.ExtensionSourceView
-	extensionEdit            appsession.LarkExtensionEdit
-	extensionDomains         map[string]bool
-	extensionBusy            bool
-	extensionCLIInstall      *officialCLIInstallState
-	extensionErr             string
-	extensionNote            string
-	extensionAuthURL         string
-	extensionAuthCode        string
-	extensionAuthQR          *ui.Bitmap
-	extensionLarkVerified    bool
-	extensionProjectVerified bool
-	extensionLarkStatus      string
-	extensionProjectStatus   string
-	extensionStatusStarted   bool
-	extensionStatusCancel    context.CancelFunc
-	extensionStatusSeq       uint64
-	extensionConfirm         string
-	extensionSourceConfirm   string
-	extensionCancel          context.CancelFunc
-	mcpAdd                   *mcpAddForm // transient operator-only input
-	mcpOAuth                 *guiMCPAuthorization
-	mcpRemove                *mcpRemoveState
-	mcpApproval              *mcpRemoveState
-	mcpToolsID               string
+	extension                  appsession.LarkExtensionSettings
+	extensionSources           []appsession.ExtensionSourceView
+	extensionEdit              appsession.LarkExtensionEdit
+	extensionDomains           map[string]bool
+	extensionBusy              bool
+	extensionCLIInstall        *officialCLIInstallState
+	extensionErr               string
+	extensionNote              string
+	extensionAuthURL           string
+	extensionAuthCode          string
+	extensionAuthQR            *ui.Bitmap
+	extensionLarkVerified      bool
+	extensionProjectVerified   bool
+	extensionLarkStatus        string
+	extensionLarkMissingScopes []string
+	extensionProjectStatus     string
+	extensionStatusStarted     bool
+	extensionStatusCancel      context.CancelFunc
+	extensionStatusSeq         uint64
+	extensionConfirm           string
+	extensionSourceConfirm     string
+	extensionCancel            context.CancelFunc
+	mcpAdd                     *mcpAddForm // transient operator-only input
+	mcpOAuth                   *guiMCPAuthorization
+	mcpRemove                  *mcpRemoveState
+	mcpApproval                *mcpRemoveState
+	mcpToolsID                 string
 
 	paletteOpen  bool
 	paletteQuery string

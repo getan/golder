@@ -116,3 +116,10 @@ func TestParseLarkAuthorizationStatusSeparatesUnknownFromLogin(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLarkAuthorizationStatusMissingScopes(t *testing.T) {
+	got, err := parseLarkAuthorizationStatus([]byte(`{"ok":true,"data":{"services":{"lark":{"installed":true,"authenticated":true,"missing_user_scopes":["search:docs:read"],"details":{"identity":"user","verified":true}}}}}`))
+	if err != nil || got.Lark.State != "authorized" || len(got.Lark.MissingUserScopes) != 1 || got.Lark.MissingUserScopes[0] != "search:docs:read" {
+		t.Fatalf("unexpected status: %+v, %v", got, err)
+	}
+}

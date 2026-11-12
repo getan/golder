@@ -168,6 +168,11 @@ func TestLarkWizardHighlightsNextAction(t *testing.T) {
 	if got := a.larkNextAction(true); got != "" {
 		t.Fatalf("verified services should not suggest another action, got %q", got)
 	}
+	a.extensionLarkMissingScopes = []string{"search:docs:read"}
+	if got := a.larkNextAction(true); got != "lark" {
+		t.Fatalf("missing user scope should suggest authorization, got %q", got)
+	}
+	a.extensionLarkMissingScopes = nil
 	a.extensionLarkStatus, a.extensionProjectStatus = "authorized", "required"
 	if got := a.larkNextAction(true); got != "project" {
 		t.Fatalf("only Project requires authorization, got %q", got)
