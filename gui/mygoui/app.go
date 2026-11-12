@@ -169,7 +169,7 @@ type App struct {
 
 	terminalOpen         bool
 	terminalSeq          uint64
-	terminals            map[string]*terminalProject
+	terminals            map[terminalScope]*terminalProject
 	terminalAccess       *terminalaccess.Registry
 	terminalAgentSeq     uint64
 	terminalAgents       map[*appsession.Controller]*terminalAgent
@@ -406,6 +406,7 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	a.snapshotSeq = snap.Seq
 	if previousSession != "" && previousSession != snap.SessionID {
 		a.resetBrowserSession()
+		a.resetTerminalDialogs()
 	}
 	if previousProject != "" && previousProject != a.project {
 		a.resetFileExplorer()
@@ -472,6 +473,7 @@ func (a *App) applyEvent(ev appsession.Event) {
 			if a.status.SessionID != "" && a.status.SessionID != ev.Status.SessionID {
 				a.stopComputer()
 				a.resetBrowserSession()
+				a.resetTerminalDialogs()
 			}
 			a.status = *ev.Status
 			if a.browserSession == nil {

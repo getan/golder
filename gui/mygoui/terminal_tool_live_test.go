@@ -21,7 +21,7 @@ func TestTerminalToolLiveAgentPTY(t *testing.T) {
 		t.Skip("set GOLDER_GUI_TERMINAL_LIVE_TEST=1 and MYGO_GHOSTTY_VT to an existing native library")
 	}
 	tool, parent, _ := terminalToolFixture(t)
-	tool.app.terminalProject(parent.project).root = nil
+	tool.app.terminalProject(parent.scope()).root = nil
 	tool.app.terminalRegistry().RemovePane(parent.id)
 	tool.guard.Mode.Set(permissions.FullAccess)
 	reg := agenttool.NewToolRegistry()
@@ -56,7 +56,7 @@ func TestTerminalToolLiveAgentPTY(t *testing.T) {
 	if err := json.Unmarshal([]byte(agentcore.ContentToText(created.Content)), &result); err != nil || result.Pane == "" {
 		t.Fatalf("new terminal result=%q err=%v", agentcore.ContentToText(created.Content), err)
 	}
-	pane := tool.app.findTerminalPane(tool.agent.project, result.Pane)
+	pane := tool.app.findTerminalPane(tool.agent.scope(), result.Pane)
 	if pane == nil || pane.term == nil || pane.conn == nil || !pane.conn.ViewLocked() {
 		t.Fatalf("created terminal is not attached and locked: %+v", pane)
 	}
@@ -72,7 +72,7 @@ func TestTerminalToolLiveAgentPTY(t *testing.T) {
 		t.Fatalf("final output was not retained: %s", text)
 	}
 	execute("close", map[string]any{"action": "close", "pane": result.Pane})
-	if tool.app.findTerminalPane(tool.agent.project, result.Pane) != nil {
+	if tool.app.findTerminalPane(tool.agent.scope(), result.Pane) != nil {
 		t.Fatal("closed Agent pane remained in its project")
 	}
 }

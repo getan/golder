@@ -192,7 +192,9 @@ Two optional surfaces need runtime pieces:
   events; stale discovery cannot cross a conversation switch. See
   [browser binding](../docs/browser-binding.md). Title and approval actions use
   theme-colored monochrome SVGs;
-- terminal: a project-scoped, resizable panel with real shell panes. Right-click
+- terminal: a conversation-scoped, resizable panel with real shell panes. Switching
+  conversations keeps their processes running but does not show or expose their
+  panes to another conversation. Right-click
   a pane title to split, rename or close it, separately grant an active Agent
   view or control access, revoke access, or take back control. Agent-created
   panes retain their creation-time sandbox/network ceiling; full-access panes

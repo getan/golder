@@ -78,7 +78,7 @@ type terminalPaneStatus struct {
 
 func (a *App) terminalStatuses(agent *terminalAgent) []terminalPaneStatus {
 	var out []terminalPaneStatus
-	workspace := a.terminals[agent.project]
+	workspace := a.terminals[agent.scope()]
 	if workspace == nil {
 		return out
 	}
@@ -119,8 +119,8 @@ func (a *App) reserveAgentTerminal(agent *terminalAgent, parent, direction, name
 	if _, err := agent.controller.CheckGUITerminalSession(agent.session, agent.project); err != nil {
 		return nil, err
 	}
-	workspace := a.terminalProject(agent.project)
-	if parent != "" && a.findTerminalPane(agent.project, parent) == nil {
+	workspace := a.terminalProject(agent.scope())
+	if parent != "" && a.findTerminalPane(agent.scope(), parent) == nil {
 		return nil, errors.New("terminal: split target no longer exists")
 	}
 	a.terminalSeq++
@@ -134,7 +134,7 @@ func (a *App) reserveAgentTerminal(agent *terminalAgent, parent, direction, name
 	// Cleanup is owned by the PTY process; pane metadata retains only the
 	// immutable policy facts needed to revalidate subsequent input.
 	envelope.Argv, envelope.Cleanup = nil, nil
-	pane := &terminalPane{id: id, name: name, project: agent.project, creator: agent.id, envelope: &envelope, starting: true}
+	pane := &terminalPane{id: id, name: name, project: agent.project, session: agent.session, creator: agent.id, envelope: &envelope, starting: true}
 	if workspace.root == nil {
 		if parent != "" {
 			a.terminalRegistry().RemovePane(id)
@@ -147,7 +147,7 @@ func (a *App) reserveAgentTerminal(agent *terminalAgent, parent, direction, name
 		a.terminalRegistry().RemovePane(id)
 		return nil, errors.New("terminal: split target disappeared")
 	}
-	if a.terminalProjectPath() == agent.project {
+	if a.currentTerminalScope() == agent.scope() {
 		if !a.terminalOpen {
 			a.rightPreferred = rightPanelNone
 		}
@@ -159,7 +159,7 @@ func (a *App) reserveAgentTerminal(agent *terminalAgent, parent, direction, name
 // attachAgentTerminal installs the already-started, sandboxed process in its
 // reserved pane. A closed pane or a revoked lease kills the orphan instead.
 func (a *App) attachAgentTerminal(agent *terminalAgent, pane *terminalPane, process *terminalaccess.Process) error {
-	if a.findTerminalPane(agent.project, pane.id) != pane {
+	if pane.scope() != agent.scope() || a.findTerminalPane(agent.scope(), pane.id) != pane {
 		return errors.New("terminal: reserved pane was closed")
 	}
 	_, write, _ := a.terminalRegistry().Access(pane.id, agent.id)
@@ -188,7 +188,7 @@ func (a *App) attachAgentTerminal(agent *terminalAgent, pane *terminalPane, proc
 }
 
 func (a *App) cleanupTerminalReservation(pane *terminalPane) {
-	if pane != nil && a.findTerminalPane(pane.project, pane.id) == pane {
+	if pane != nil && a.findTerminalPane(pane.scope(), pane.id) == pane {
 		a.closeTerminalPane(pane)
 	}
 }

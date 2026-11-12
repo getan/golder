@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"strings"
 	"testing"
@@ -41,6 +42,7 @@ func TestTerminalMenuGrantsAreExplicitAndSessionBound(t *testing.T) {
 	t.Cleanup(func() { _ = ctrl.Close() })
 	a := testApp()
 	a.ctrl, a.project, a.selectedProject, a.terminalOpen = ctrl, project, project, true
+	a.status.SessionID = ctrl.SessionID()
 	agent := a.registerTerminalAgent(ctrl)
 	if agent == nil {
 		t.Fatal("live GUI Agent was not registered")
@@ -53,9 +55,9 @@ func TestTerminalMenuGrantsAreExplicitAndSessionBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pane := &terminalPane{id: "test-pane", name: "test pane", project: canonicalTerminalProject(project), conn: conn}
+	pane := &terminalPane{id: "test-pane", name: "test pane", project: canonicalTerminalProject(project), session: agent.session, conn: conn}
 	pane.enqueue = func(b []byte) { _, _ = conn.Write(b) }
-	a.terminalProject(pane.project).root = &terminalLayout{pane: pane}
+	a.terminalProject(pane.scope()).root = &terminalLayout{pane: pane}
 	tt := ui.NewTester(a.view, 1200, 800)
 	if err := tt.RightClick("Terminal pane test pane"); err != nil {
 		t.Fatal(err)
@@ -105,7 +107,7 @@ func TestTerminalAgentIsNotInstalledWhenToolsDisabled(t *testing.T) {
 	}
 }
 
-func TestTerminalMenuDistinguishesAgentsAndConfirmsTransfer(t *testing.T) {
+func TestTerminalAgentsCannotCrossConversationBoundary(t *testing.T) {
 	t.Setenv("GOLDER_HOME", t.TempDir())
 	project := t.TempDir()
 	store, err := session.NewStore(t.TempDir())
@@ -128,6 +130,7 @@ func TestTerminalMenuDistinguishesAgentsAndConfirmsTransfer(t *testing.T) {
 	aCtrl, bCtrl := newController(), newController()
 	a := testApp()
 	a.ctrl, a.project, a.selectedProject, a.terminalOpen = aCtrl, project, project, true
+	a.status.SessionID = aCtrl.SessionID()
 	first, second := a.registerTerminalAgent(aCtrl), a.registerTerminalAgent(bCtrl)
 	if first == nil || second == nil {
 		t.Fatal("same-project Agents were not registered")
@@ -156,9 +159,9 @@ func TestTerminalMenuDistinguishesAgentsAndConfirmsTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pane := &terminalPane{id: "test-pane", name: "test pane", project: paneProject, conn: conn}
+	pane := &terminalPane{id: "test-pane", name: "test pane", project: paneProject, session: first.session, conn: conn}
 	pane.enqueue = func(b []byte) { _, _ = conn.Write(b) }
-	a.terminalProject(paneProject).root = &terminalLayout{pane: pane}
+	a.terminalProject(pane.scope()).root = &terminalLayout{pane: pane}
 	if err := registry.Grant(pane.id, first.id, false, true, false); err != nil {
 		t.Fatal(err)
 	}
@@ -166,22 +169,29 @@ func TestTerminalMenuDistinguishesAgentsAndConfirmsTransfer(t *testing.T) {
 	if !tt.HasText("Agent: " + terminalAgentLabel(first)) {
 		t.Fatalf("terminal header does not distinguish owner: %q", tt.Texts())
 	}
-	if err := tt.RightClick("Terminal pane test pane"); err != nil {
-		t.Fatal(err)
+	if agents := a.activeTerminalAgents(pane.scope()); len(agents) != 1 || agents[0] != first {
+		t.Fatalf("other conversation was offered access: %+v", agents)
 	}
-	if err := tt.ChooseMenuItem("Assign Agent control", terminalAgentLabel(second)); err != nil {
-		t.Fatal(err)
+	if len(a.terminalStatuses(second)) != 0 || a.findTerminalPane(second.scope(), pane.id) != nil {
+		t.Fatal("other conversation discovered the pane")
 	}
-	if !tt.HasText("From: "+terminalAgentLabel(first)) || !tt.HasText("To: "+terminalAgentLabel(second)) {
-		t.Fatalf("transfer confirmation does not identify both Agents: %q", tt.Texts())
+	second.tool.dispatch = func(ctx context.Context, fn func() (any, error)) (any, error) { return fn() }
+	if _, err := second.tool.PrepareCall(context.Background(), json.RawMessage(`{"action":"capture","pane":"test-pane"}`)); err == nil {
+		t.Fatal("other conversation targeted a pane by ID")
 	}
+	a.requestTerminalGrant(pane, second, false)
+	a.confirmTerminalGrant()
 	if got := registry.Owner(pane.id); got != first.id {
-		t.Fatalf("selection transferred ownership before confirmation: %q", got)
+		t.Fatalf("cross-conversation grant changed ownership: %q", got)
 	}
-	if err := tt.Click("Grant access"); err != nil {
+	a.terminalOpen = false
+	a.status.SessionID = second.session
+	child, err := a.reserveAgentTerminal(first, "", "", "background", agenttool.GUITerminalEnvelope{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := registry.Owner(pane.id); got != second.id {
-		t.Fatalf("explicit transfer did not grant selected Agent: %q", got)
+	defer a.cleanupTerminalReservation(child)
+	if a.terminalOpen || a.findTerminalPane(second.scope(), child.id) != nil || a.findTerminalPane(first.scope(), child.id) != child {
+		t.Fatal("background Agent's pane leaked into the selected conversation")
 	}
 }

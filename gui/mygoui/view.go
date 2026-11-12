@@ -239,8 +239,9 @@ func (a *App) titleBar(c *ui.Context) {
 				}
 			}
 		}
-		terminalExists := a.terminals != nil && a.terminals[a.terminalProjectPath()] != nil && a.terminals[a.terminalProjectPath()].root != nil
-		if titleIconButton(c, "terminal", terminalMonochromeIcon, "Terminal", "Show or hide project terminals", a.rightPanelVisible(rightPanelTerminal), a.terminalOpen || terminalExists).Clicked() {
+		scope := a.currentTerminalScope()
+		terminalExists := a.terminals != nil && a.terminals[scope] != nil && a.terminals[scope].root != nil
+		if titleIconButton(c, "terminal", terminalMonochromeIcon, "Terminal", "Show or hide conversation terminals", a.rightPanelVisible(rightPanelTerminal), a.terminalOpen || terminalExists).Clicked() {
 			if !a.revealRequestedPanel(rightPanelTerminal) {
 				a.filesOpen = false
 				a.closeChangesPanel()

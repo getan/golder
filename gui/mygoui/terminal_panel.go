@@ -14,12 +14,13 @@ import (
 	"github.com/getan/golder/internal/agenttool"
 )
 
-// A terminal belongs to a project, not to whichever conversation happens to be
-// selected. An attached bash session is owned by its originating controller.
+// Each pane remains bound to its original project and conversation even while
+// another conversation is selected. Attached bash sessions retain their owner.
 type terminalPane struct {
 	id           string
 	name         string
 	project      string
+	session      string
 	attached     bool
 	term         *terminal.Terminal
 	conn         *terminalaccess.Connection
@@ -37,6 +38,23 @@ type terminalPane struct {
 
 type terminalProject struct {
 	root *terminalLayout
+}
+
+type terminalScope struct {
+	project string
+	session string
+}
+
+func (p *terminalPane) scope() terminalScope {
+	return terminalScope{project: p.project, session: p.session}
+}
+
+func (a *App) currentTerminalScope() terminalScope {
+	project := a.terminalProjectPath()
+	if project == "" || project != canonicalTerminalProject(a.project) || a.status.SessionID == "" {
+		return terminalScope{}
+	}
+	return terminalScope{project: project, session: a.status.SessionID}
 }
 
 func (a *App) terminalProjectPath() string {
@@ -57,14 +75,14 @@ func canonicalTerminalProject(path string) string {
 	return filepath.Clean(path)
 }
 
-func (a *App) terminalProject(path string) *terminalProject {
+func (a *App) terminalProject(scope terminalScope) *terminalProject {
 	if a.terminals == nil {
-		a.terminals = make(map[string]*terminalProject)
+		a.terminals = make(map[terminalScope]*terminalProject)
 	}
-	project := a.terminals[path]
+	project := a.terminals[scope]
 	if project == nil {
 		project = &terminalProject{}
-		a.terminals[path] = project
+		a.terminals[scope] = project
 	}
 	return project
 }
@@ -97,14 +115,15 @@ func (a *App) addTerminal(project, beside string, vertical bool, conn io.ReadWri
 		}
 		return
 	}
-	if project == "" {
+	scope := a.currentTerminalScope()
+	if project == "" || scope.project != project || scope.session == "" {
 		if conn != nil {
 			_ = conn.Close()
 		}
-		a.banner, a.bannerErr = "Choose a project before opening a terminal.", true
+		a.banner, a.bannerErr = "Select a conversation in this project before opening a terminal.", true
 		return
 	}
-	workspace := a.terminalProject(project)
+	workspace := a.terminalProject(scope)
 	if workspace.root != nil && beside == "" {
 		workspace.root.each(func(p *terminalPane) {
 			if beside == "" {
@@ -116,7 +135,7 @@ func (a *App) addTerminal(project, beside string, vertical bool, conn io.ReadWri
 	if label == "" {
 		label = fmt.Sprintf("Terminal %d", a.terminalSeq)
 	}
-	pane := &terminalPane{id: fmt.Sprintf("terminal-%d", a.terminalSeq), name: label, project: project, attached: conn != nil}
+	pane := &terminalPane{id: fmt.Sprintf("terminal-%d", a.terminalSeq), name: label, project: project, session: scope.session, attached: conn != nil}
 	registry := a.terminalRegistry()
 	if err := registry.AddPane(pane.id, project); err != nil {
 		if conn != nil {
@@ -185,27 +204,27 @@ func (a *App) toggleTerminal() {
 	if !a.terminalOpen {
 		return
 	}
-	path := a.terminalProjectPath()
-	if path == "" {
+	scope := a.currentTerminalScope()
+	if scope.session == "" {
 		a.terminalOpen = false
-		a.banner, a.bannerErr = "Choose a project before opening a terminal.", true
+		a.banner, a.bannerErr = "Select a conversation in this project before opening a terminal.", true
 		return
 	}
-	if a.terminalProject(path).root == nil {
-		a.addTerminal(path, "", false, nil, "")
+	if a.terminalProject(scope).root == nil {
+		a.addTerminal(scope.project, "", false, nil, "")
 	}
 }
 
 func (a *App) terminalPanel(c *ui.Context) {
-	project := a.terminalProjectPath()
-	workspace := a.terminalProject(project)
+	scope := a.currentTerminalScope()
+	workspace := a.terminalProject(scope)
 	t := c.Theme()
 	ui.Column(c).Fill().MinWidth(0).Background(t.Background).Children(func() {
 		header := ui.Row(c).Height(36).Padding(6, 10).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border)
 		header.ContextMenu(func(m *ui.Menu) {
 			if m.Item("New terminal").Chosen() {
-				a.addTerminal(project, "", false, nil, "")
+				a.addTerminal(scope.project, "", false, nil, "")
 			}
 		})
 		header.Children(func() {
@@ -269,7 +288,7 @@ func (a *App) terminalPaneView(c *ui.Context, pane *terminalPane) {
 				state = "assigning Agent…"
 			} else if owner != "" {
 				state = "Agent control"
-				for _, agent := range a.activeTerminalAgents(pane.project) {
+				for _, agent := range a.activeTerminalAgents(pane.scope()) {
 					if agent.id == owner {
 						stateTip = terminalAgentLabel(agent)
 						state = "Agent: " + stateTip
@@ -300,7 +319,7 @@ func (a *App) terminalPaneMenu(m *ui.Menu, pane *terminalPane) {
 		a.addTerminal(pane.project, pane.id, true, nil, "")
 	}
 	m.Separator()
-	agents := a.activeTerminalAgents(pane.project)
+	agents := a.activeTerminalAgents(pane.scope())
 	ended := false
 	if pane.conn != nil {
 		_, ended = pane.conn.Revision()
@@ -366,7 +385,7 @@ func (a *App) closeTerminalPane(pane *terminalPane) {
 	if pane == nil {
 		return
 	}
-	workspace := a.terminals[pane.project]
+	workspace := a.terminals[pane.scope()]
 	if workspace == nil {
 		return
 	}
@@ -434,6 +453,14 @@ func closeTerminalPanes(panes []*terminalPane, registry *terminalaccess.Registry
 
 func (a *App) closeTerminals() {
 	closeTerminalPanes(a.detachTerminalPanes(), a.terminalAccess)
+}
+
+// Do not carry a conversation's terminal action dialog into another one.
+func (a *App) resetTerminalDialogs() {
+	a.terminalGrantOpen, a.terminalCloseOpen, a.terminalRenameOpen = false, false, false
+	a.terminalGrantPane, a.terminalGrantAgent = nil, nil
+	a.terminalClosePane, a.terminalRenamePane = nil, nil
+	a.terminalRenameDraft = ""
 }
 
 // beginTerminalShutdown keeps the window event loop alive while tools and

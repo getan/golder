@@ -89,7 +89,7 @@ func (t *terminalTool) executePane(ctx context.Context, pane *terminalPane, req 
 		return terminalResult(map[string]any{"pane": pane.id, "bytes_sent": n, "completion": "unknown"})
 	case "focus", "resize", "rename", "close":
 		value, err := t.ui(ctx, func() (any, error) {
-			if t.app.findTerminalPane(t.agent.project, pane.id) != pane {
+			if t.app.findTerminalPane(t.agent.scope(), pane.id) != pane {
 				return nil, errors.New("terminal: pane was closed")
 			}
 			if _, err := t.checkSession(); err != nil {
@@ -108,8 +108,8 @@ func (t *terminalTool) executePane(ctx context.Context, pane *terminalPane, req 
 			err := registry.Use(pane.id, t.agent.id, true, func() error {
 				switch req.Action {
 				case "focus":
-					if t.app.terminalProjectPath() != t.agent.project {
-						return errors.New("terminal: switch to this project before focusing its pane")
+					if t.app.currentTerminalScope() != t.agent.scope() {
+						return errors.New("terminal: switch to this conversation before focusing its pane")
 					}
 					if !t.app.terminalOpen {
 						t.app.rightPreferred = rightPanelNone
@@ -120,7 +120,7 @@ func (t *terminalTool) executePane(ctx context.Context, pane *terminalPane, req 
 					}
 					pane.focus = true
 				case "resize":
-					workspace := t.app.terminals[pane.project]
+					workspace := t.app.terminals[pane.scope()]
 					if workspace == nil || !workspace.root.resizePane(pane.id, req.Percent) {
 						return errors.New("terminal: this pane has no split to resize")
 					}
@@ -148,7 +148,7 @@ func (t *terminalTool) create(ctx context.Context, req terminalToolArgs) (agentc
 	}
 	if req.Action == "split" {
 		value, err := t.ui(ctx, func() (any, error) {
-			p := t.app.findTerminalPane(t.agent.project, req.Pane)
+			p := t.app.findTerminalPane(t.agent.scope(), req.Pane)
 			if p == nil || p.attached || p.term == nil {
 				return nil, errors.New("terminal: split target is unavailable")
 			}

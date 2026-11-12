@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/getan/golder/gui/appsession"
 )
 
 func TestTerminalLayoutSplitAndRemove(t *testing.T) {
@@ -40,8 +41,9 @@ func TestTerminalLayoutSplitAndRemove(t *testing.T) {
 func TestTerminalPanelsFollowSelectedProject(t *testing.T) {
 	a := testApp()
 	a.terminalOpen = true
-	first := &terminalPane{id: "a", name: "first", project: "/tmp/project"}
-	a.terminalProject(first.project).root = &terminalLayout{pane: first}
+	a.status.SessionID = "first-session"
+	first := &terminalPane{id: "a", name: "first", project: "/tmp/project", session: "first-session"}
+	a.terminalProject(first.scope()).root = &terminalLayout{pane: first}
 	tt := ui.NewTester(a.view, 1200, 800)
 	if !tt.HasText("first") || !tt.HasText("Terminal") {
 		t.Fatalf("first project terminal not shown: %q", tt.Texts())
@@ -65,5 +67,26 @@ func TestTerminalPanelsFollowSelectedProject(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("first") {
 		t.Fatal("returning to the project lost its pane")
+	}
+	a.status.SessionID = "second-session"
+	tt.Frame()
+	if tt.HasText("first") {
+		t.Fatal("another conversation's pane was shown")
+	}
+	a.status.SessionID = "first-session"
+	tt.Frame()
+	if !tt.HasText("first") {
+		t.Fatal("returning to the conversation lost its pane")
+	}
+}
+
+func TestTerminalDialogsResetOnConversationSwitch(t *testing.T) {
+	a := testApp()
+	a.status.SessionID = "first"
+	a.terminalGrantOpen, a.terminalCloseOpen, a.terminalRenameOpen = true, true, true
+	a.terminalGrantPane, a.terminalClosePane, a.terminalRenamePane = &terminalPane{}, &terminalPane{}, &terminalPane{}
+	a.applySnapshot(appsession.Snapshot{Status: appsession.Status{SessionID: "second"}})
+	if a.terminalGrantOpen || a.terminalCloseOpen || a.terminalRenameOpen || a.terminalGrantPane != nil || a.terminalClosePane != nil || a.terminalRenamePane != nil {
+		t.Fatal("terminal action dialog survived a conversation switch")
 	}
 }

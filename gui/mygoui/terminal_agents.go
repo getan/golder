@@ -23,6 +23,10 @@ type terminalAgent struct {
 	tool       *terminalTool
 }
 
+func (agent *terminalAgent) scope() terminalScope {
+	return terminalScope{project: agent.project, session: agent.session}
+}
+
 // registerTerminalAgent runs on the UI thread. Closing the controller revokes
 // its registry entry independently of whether that conversation is visible.
 func (a *App) registerTerminalAgent(controller *appsession.Controller) *terminalAgent {
@@ -74,13 +78,13 @@ func (a *App) registerTerminalAgent(controller *appsession.Controller) *terminal
 	return agent
 }
 
-func (a *App) activeTerminalAgents(project string) []*terminalAgent {
+func (a *App) activeTerminalAgents(scope terminalScope) []*terminalAgent {
 	var agents []*terminalAgent
 	for _, agent := range a.terminalAgents {
-		if agent.project != project || !agent.controller.TerminalEligible() {
+		if agent.scope() != scope || !agent.controller.TerminalEligible() {
 			continue
 		}
-		if snapshot := agent.controller.Snapshot(); snapshot.SessionID != agent.session || canonicalTerminalProject(snapshot.Project) != project {
+		if snapshot := agent.controller.Snapshot(); snapshot.SessionID != agent.session || canonicalTerminalProject(snapshot.Project) != scope.project {
 			continue
 		}
 		agents = append(agents, agent)
@@ -116,8 +120,8 @@ func (a *App) terminalAgentOwnerLabel(id string) string {
 	return "Agent " + terminalAgentBadge(id)
 }
 
-func (a *App) findTerminalPane(project, id string) *terminalPane {
-	workspace := a.terminals[project]
+func (a *App) findTerminalPane(scope terminalScope, id string) *terminalPane {
+	workspace := a.terminals[scope]
 	if workspace == nil {
 		return nil
 	}
@@ -137,7 +141,7 @@ func (a *App) requestTerminalGrant(pane *terminalPane, agent *terminalAgent, rea
 
 func (a *App) confirmTerminalGrant() {
 	pane, agent := a.terminalGrantPane, a.terminalGrantAgent
-	if pane == nil || agent == nil || pane.attached || a.findTerminalPane(pane.project, pane.id) != pane ||
+	if pane == nil || agent == nil || pane.attached || pane.scope() != agent.scope() || a.currentTerminalScope() != pane.scope() || a.findTerminalPane(pane.scope(), pane.id) != pane ||
 		!agent.controller.TerminalEligible() {
 		a.banner, a.bannerErr = "Terminal or Agent is no longer available.", true
 		return
@@ -198,7 +202,7 @@ func (a *App) startTerminalGrantBarrier(pane *terminalPane) {
 }
 
 func (a *App) finishTerminalGrant(pane *terminalPane, agent *terminalAgent, seq uint64, err error) {
-	if pane == nil || agent == nil || a.findTerminalPane(pane.project, pane.id) != pane ||
+	if pane == nil || agent == nil || pane.scope() != agent.scope() || a.findTerminalPane(pane.scope(), pane.id) != pane ||
 		!pane.grantPending || pane.grantSeq != seq || pane.grantAgent != agent {
 		return
 	}

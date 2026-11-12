@@ -57,6 +57,7 @@ func terminalToolFixture(t *testing.T) (*terminalTool, *terminalPane, *recording
 	t.Cleanup(func() { _ = ctrl.Close() })
 	a := testApp()
 	a.ctrl, a.project, a.selectedProject = ctrl, project, project
+	a.status.SessionID = ctrl.SessionID()
 	agent := a.registerTerminalAgent(ctrl)
 	if agent == nil || agent.tool == nil {
 		t.Fatal("terminal tool was not installed")
@@ -67,7 +68,7 @@ func terminalToolFixture(t *testing.T) (*terminalTool, *terminalPane, *recording
 		}
 		return fn()
 	}
-	pane := &terminalPane{id: "test-pane", name: "private", project: agent.project, term: &terminal.Terminal{}}
+	pane := &terminalPane{id: "test-pane", name: "private", project: agent.project, session: agent.session, term: &terminal.Terminal{}}
 	if err := a.terminalRegistry().AddPane(pane.id, pane.project); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func terminalToolFixture(t *testing.T) (*terminalTool, *terminalPane, *recording
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.terminalProject(pane.project).root = &terminalLayout{pane: pane}
+	a.terminalProject(pane.scope()).root = &terminalLayout{pane: pane}
 	return agent.tool, pane, source
 }
 
@@ -204,7 +205,7 @@ func TestTerminalReservationRevalidatesSplitAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	read, write, _ := registry.Access(child.id, tool.agent.id)
-	if !read || !write || tool.app.findTerminalPane(parent.project, child.id) != child {
+	if !read || !write || tool.app.findTerminalPane(parent.scope(), child.id) != child {
 		t.Fatal("reserved Agent pane lost its identity or creator grants")
 	}
 	registry.TakeBack(parent.id)
@@ -212,7 +213,7 @@ func TestTerminalReservationRevalidatesSplitAndCleansUp(t *testing.T) {
 		t.Fatal("split after user takeover was accepted")
 	}
 	tool.app.cleanupTerminalReservation(child)
-	if tool.app.findTerminalPane(parent.project, child.id) != nil {
+	if tool.app.findTerminalPane(parent.scope(), child.id) != nil {
 		t.Fatal("failed creation left its reserved pane in the layout")
 	}
 	if _, write, _ := registry.Access(child.id, tool.agent.id); write {

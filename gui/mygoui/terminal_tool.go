@@ -152,7 +152,7 @@ func (t *terminalTool) PrepareCall(ctx context.Context, raw json.RawMessage) (js
 			return nil, errors.New("terminal: an exact pane ID from list is required")
 		}
 		value, err := t.ui(ctx, func() (any, error) {
-			p := t.app.findTerminalPane(t.agent.project, req.Pane)
+			p := t.app.findTerminalPane(t.agent.scope(), req.Pane)
 			if p == nil || p.attached || p.conn == nil || p.term == nil {
 				return nil, errors.New("terminal: pane is unavailable or is an attached bash TTY")
 			}
@@ -281,7 +281,7 @@ func (t *terminalTool) Execute(ctx context.Context, callID string, raw json.RawM
 		return t.create(ctx, req)
 	case "capture", "wait", "send", "press", "run", "focus", "resize", "rename", "close":
 		value, err := t.ui(ctx, func() (any, error) {
-			p := t.app.findTerminalPane(t.agent.project, req.Pane)
+			p := t.app.findTerminalPane(t.agent.scope(), req.Pane)
 			if p == nil || p.attached || p.conn == nil || p.term == nil {
 				return nil, errors.New("terminal: pane is no longer available")
 			}
@@ -301,7 +301,7 @@ func (t *terminalTool) Execute(ctx context.Context, callID string, raw json.RawM
 }
 
 func (t *terminalTool) checkTarget(ctx context.Context, p *terminalPane, req terminalToolArgs) error {
-	if p.id != req.Pane || p.project != t.agent.project {
+	if p.id != req.Pane || p.scope() != t.agent.scope() {
 		return errors.New("terminal: reviewed pane identity changed")
 	}
 	if req.Remote && (agentcore.SandboxRequestedFromContext(ctx) || seatbelt.ModeFromEnv() == seatbelt.ModeEnforce) {
