@@ -171,16 +171,21 @@ type Controller struct {
 	preTurnLeaf  string
 	preTurnLabel string
 
-	running              bool
-	privateAuthorization bool
-	extensionMutation    bool
-	runID                string
-	cancel               context.CancelFunc
-	runWG                sync.WaitGroup
-	steerQueue           []queuedPrompt
-	steerDelivered       []queuedPrompt
-	steerSequence        uint64
-	steerHandoff         bool
+	running               bool
+	privateAuthorization  bool
+	extensionMutation     bool
+	runID                 string
+	browserWaitRun        string
+	browserReady          bool
+	browserWaitID         string
+	browserWaitGeneration uint64
+	browserCancelledRun   string
+	cancel                context.CancelFunc
+	runWG                 sync.WaitGroup
+	steerQueue            []queuedPrompt
+	steerDelivered        []queuedPrompt
+	steerSequence         uint64
+	steerHandoff          bool
 
 	status Status
 	title  string
@@ -476,6 +481,8 @@ func (c *Controller) Close() error {
 		return nil
 	}
 	c.closed = true
+	c.browserWaitRun, c.browserReady = "", false
+	continuations := agenttool.BrowserContinuations(c.opt.Tools)
 	cancel := c.cancel
 	pending := c.pending
 	lock := c.lock
@@ -486,6 +493,9 @@ func (c *Controller) Close() error {
 	c.mu.Unlock()
 
 	close(c.done)
+	if continuations != nil {
+		continuations.Close()
+	}
 	if computer != nil {
 		computer.Session.Stop()
 	}

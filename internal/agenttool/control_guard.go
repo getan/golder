@@ -17,6 +17,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/browserbinding"
+	"github.com/getan/golder/internal/browsercontinuation"
 	"github.com/getan/golder/internal/browserctl"
 	"github.com/getan/golder/internal/browserpool"
 	"github.com/getan/golder/internal/judge"
@@ -34,6 +35,7 @@ type ControlGuard struct {
 	Runner         seatbelt.CallRunner
 	browserSession string
 	browserBinding *browserbinding.Binding
+	continuations  *browsercontinuation.Coordinator
 	// BrowserProxy resolves the person's explicit browser route at launch time.
 	// It is wired by the CLI assembly layer; nil keeps library/tests direct.
 	BrowserProxy    func() (string, error)

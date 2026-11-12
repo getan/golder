@@ -16,6 +16,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browsercontinuation"
 	"github.com/getan/golder/internal/cli/run"
 	cliui "github.com/getan/golder/internal/cli/ui"
 	"github.com/getan/golder/internal/compaction"
@@ -139,6 +140,10 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.mu.Unlock()
 		return errors.New("finish the extension operation before starting an agent turn")
 	}
+	if prompt.browserWaitRun != "" && (!c.browserReady || c.browserWaitRun != prompt.browserWaitRun || c.runID != prompt.browserWaitRun || c.browserCancelledRun == prompt.browserWaitRun || c.perms.Mode() == permissions.ReadOnly) {
+		c.mu.Unlock()
+		return errors.New("browser resumed, but the waiting task was cancelled or replaced")
+	}
 	if c.running {
 		if expectedSession != "" || queuedOnly || rejectSteering {
 			c.mu.Unlock()
@@ -171,6 +176,8 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 	deps := c.hookDeps
 	reminders := c.remind
 	runID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+	c.browserWaitRun, c.browserReady = "", false
+	c.browserWaitID, c.browserWaitGeneration, c.browserCancelledRun = "", 0, ""
 	c.running, c.runID = true, runID
 	c.status.Running, c.status.RunID, c.status.Error = true, runID, ""
 	c.mu.Unlock()
@@ -206,6 +213,12 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.mu.Unlock()
 		cancel()
 		return ErrClosed
+	}
+	if c.browserCancelledRun == runID {
+		c.running, c.status.Running = false, false
+		c.mu.Unlock()
+		cancel()
+		return context.Canceled
 	}
 	if expectedSession != "" && (c.header.ID != expectedSession || c.agentCtx != agentCtx) {
 		if c.runID == runID {
@@ -312,6 +325,8 @@ func buildUserAttachments(text string, attachments []UserAttachment) (agentcore.
 // Cancel interrupts the run in flight. It is a no-op when nothing runs.
 func (c *Controller) Cancel() {
 	c.mu.Lock()
+	c.browserWaitRun, c.browserReady = "", false
+	c.browserCancelledRun = c.runID
 	cancel := c.cancel
 	c.mu.Unlock()
 	if cancel != nil {
@@ -574,6 +589,15 @@ func (c *Controller) runOnce(ctx context.Context, runID, prompt string) (*agentc
 					st.Output = out
 				})
 			case agentcore.ToolExecutionEndEvent:
+				if e.ToolName == "browser" {
+					if browser, generation, ok := browsercontinuation.WaitingTarget(e.Result.Details); ok {
+						c.mu.Lock()
+						if ctx.Err() == nil && c.runID == runID && c.browserCancelledRun != runID {
+							c.browserWaitRun, c.browserWaitID, c.browserWaitGeneration = runID, browser, generation
+						}
+						c.mu.Unlock()
+					}
+				}
 				if e.ToolName == "computer_request" && !e.IsError && e.Result.Terminate != nil && *e.Result.Terminate {
 					handoff = true
 				}

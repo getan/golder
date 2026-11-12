@@ -22,7 +22,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.7.4
-	github.com/getan/kitty-browse v0.2.11
+	github.com/getan/kitty-browse v0.2.12
 	github.com/getan/tuios-mini v0.10.45
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0

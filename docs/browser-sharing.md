@@ -137,7 +137,7 @@ The bottom line distinguishes:
   short input exclusion. Conflicting input produces a visible footer notice.
 - `Agent finished: ... · manual input ready`: a short completion label prevents
   quick actions from becoming an invisible flash.
-- `Automation paused: ... · manual input ready · Ctrl+G resume`: a verification,
+- `[Resume automation] [Keep paused] · Automation paused: ...`: a verification,
   rate limit or explicit pause requires the person to finish handling the page.
 
 There is no new takeover/lease/priority system. A pause stops **future** automatic
@@ -166,10 +166,34 @@ own QR polling) are not suspended; closing that tab stops them.
 {"action":"resume"}
 ```
 
-`resume` requires an exact human confirmation, or the person can press **Ctrl+G**
-in the browser pane. No earlier action is replayed. If the challenge is still
-visible, the next automatic mutation pauses again. Disappearance of a challenge
-alone never auto-resumes. A new browser process starts with fresh pause state.
+The primary recovery control is the local **Resume automation** button: in the
+GUI browser drawer (or composer when it is hidden), the main TUI's persistent
+browser card, and the browser pane's footer. **Keep paused** leaves it stopped.
+No global `/permissions` mode change or second model-generated resume call is
+needed in either auto or ask. Tab focuses TUI/pane buttons; Enter/Space activates
+them. Auxiliary pane **Ctrl+G** uses the same checked recovery operation.
+
+The main TUI also accepts `/browser continue [request-id]` and
+`/browser keep-paused [request-id]`. One displayed request may omit the ID;
+multiple requests require an exact selection. A complete local reply `继续`,
+`已授权`, `已授权，继续` or `continue` confirms only a single previously displayed,
+valid request. Page/tool text, quotes, compound messages and remote-phone input
+do not create operator consent. Expired requests must be explicitly refreshed;
+unknown results are queried without resending the recovery.
+
+The compatibility `browser resume` tool call cannot manufacture that decision.
+In auto it returns `browser_continuation_required` before generic approval; in
+ask an exact local approval is pinned to the existing request/epoch/generation.
+An already-running browser becomes a read-only status call. Missing checked
+host support disables recovery with an upgrade notice, never an unchecked
+public resume or simulated hotkey.
+
+Recovery is exact-view and exact-pause-generation, waits at most five seconds
+for mutations to drain, and replays no earlier action. If the original task is
+still waiting, the frontend schedules one fresh observation/continuation turn
+under current permissions. Cancelled, completed or replaced tasks are not
+restarted. If a challenge remains, the next automatic mutation pauses again.
+Challenge disappearance alone never resumes; server Retry-After is not cleared.
 
 ## Local verification
 

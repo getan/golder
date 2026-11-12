@@ -17,6 +17,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/browsercontinuation"
 	"github.com/getan/golder/internal/cli"
 	"github.com/getan/golder/internal/cli/dreamcmd"
 	goalpkg "github.com/getan/golder/internal/cli/goal"
@@ -246,6 +247,7 @@ type Model struct {
 	// pendingGroupClick is the same affordance for an exploration group: a
 	// click anywhere in an `Explored` cell expands every call it coalesced.
 	pendingGroupClick *exploreGroup
+	browserUI         browserContinuationUI
 
 	// draggingScrollbar is set while the left mouse button is held after pressing
 	// on the transcript scrollbar column, so subsequent motion events drag the
@@ -996,7 +998,7 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 // can show the branch/dirty state as soon as it resolves; the alt-screen is
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{func() tea.Msg { return gitRefreshStartMsg{} }, m.input.Focus()}
+	cmds := []tea.Cmd{func() tea.Msg { return gitRefreshStartMsg{} }, m.input.Focus(), browserContinuationTickCmd()}
 	if cmd := workspaceSyncOutput(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -1025,6 +1027,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	nextBrowser, browserCmd, browserHandled := m.browserContinuationEvent(msg)
+	m = nextBrowser.(Model)
+	if browserHandled {
+		return m, browserCmd
+	}
 	// The lazy seed may have materialized older history above the viewport
 	// since the last event; keep a live content-anchored selection on the text
 	// it points at before this event reads or moves its endpoints.
@@ -1617,6 +1624,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.pumpNext()
 
 	case toolEndMsg:
+		if browser, generation, ok := browsercontinuation.WaitingTarget(msg.details); ok && m.session != nil && m.running && !m.interruptRequested {
+			m.browserUI.waitSession = m.session.header.ID
+			m.browserUI.waitBrowser, m.browserUI.waitGeneration = browser, generation
+		}
 		// Flip the card's state and attach the parsed response tree. The card is
 		// held by pointer in the transcript, so a reflow re-renders it in place —
 		// but only while the card is still in the live tail. A card inside an
@@ -1838,6 +1849,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// choice rather than a failure, so neither claims golder finished its
 		// work.
 		interrupted := wasInterrupted || errors.Is(msg.err, context.Canceled)
+		if interrupted || msg.err != nil {
+			m.browserUI.waitSession, m.browserUI.ready = "", false
+		}
 		if m.session != nil {
 			m.session.hostTurnEnd(msg.err != nil && !interrupted)
 		}
@@ -1976,6 +1990,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // .String() so the mapping is terminal-independent.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" || msg.String() == "esc" {
+		m.browserUI.waitSession, m.browserUI.ready = "", false
 		// Record action/state only, never the key text or draft/selection content.
 		diagtrace.Event("interrupt", "received running=%t approval=%t selection=%t draft=%t session_op=%t menu=%t", m.running, m.approval.active, !m.sel.empty(), m.input.Value() != "", m.sessionOpCancel != nil, m.menu.active)
 	}
@@ -2386,6 +2401,11 @@ func (m Model) submit() (tea.Model, tea.Cmd) {
 	prompt := strings.TrimSpace(m.expandImages(m.expandPastes(m.input.Value())))
 	if prompt == "" {
 		return m, nil
+	}
+	if next, cmd, handled := m.browserConfirmation(prompt); handled {
+		model := next.(Model)
+		model.input.Clear()
+		return model, cmd
 	}
 	if (m.remoteStarting || m.session != nil && m.session.remote != nil && m.session.remote.pairing) && prompt != "/remote-control" && !strings.HasPrefix(prompt, "/remote-control ") {
 		m.transcript.addSystem("Finish or cancel remote pairing before starting another operation.")
@@ -3729,6 +3749,9 @@ func (m *Model) cancelPendingComputerForRun() {
 // pre-#392 system note and stays idle. It is shared by a plain submit and by a
 // slash prompt/skill command.
 func (m Model) startPrompt(prompt string) (tea.Model, tea.Cmd) {
+	if prompt != browserContinuePrompt {
+		m.browserUI.waitSession, m.browserUI.ready = "", false
+	}
 	if m.resume.pending {
 		m.transcript.addSystem("Still resuming; esc cancels the load before sending.")
 		m.relayout()
@@ -4275,6 +4298,14 @@ func (m Model) renderContent() (string, int) {
 		b.WriteByte('\n')
 		inputRow += countRows(line)
 	}
+	if lines := m.browserCardLines(width); len(lines) > 0 {
+		for _, pending := range m.browserUI.views {
+			m.browserUI.service.Displayed(pending.ID)
+		}
+		b.WriteString(strings.Join(lines, "\n"))
+		b.WriteByte('\n')
+		inputRow += len(lines)
+	}
 	b.WriteString(input)
 	b.WriteByte('\n')
 	// The status bar is the final line, pinned to the very bottom of the shell
@@ -4594,7 +4625,7 @@ func (m *Model) relayout() {
 		overlayRows = m.menu.rows(m.width)
 	}
 	rows := m.height - 1 - m.input.Height() - len(m.composerExtraLines(m.width)) -
-		overlayRows - m.histSearchRows()
+		overlayRows - m.histSearchRows() - len(m.browserCardLines(m.width))
 	if m.running {
 		rows-- // the working spinner occupies the row just above the input
 		// The sub-agent panel reserves one status row per live sub-agent, plus the

@@ -20,6 +20,7 @@ type queuedPrompt struct {
 	text            string
 	attachmentLabel string
 	content         agentcore.ContentList
+	browserWaitRun  string // trusted continuation reservation, never decoded from user input
 }
 
 // statusWithQueueLocked returns an independent view while c.mu is held.

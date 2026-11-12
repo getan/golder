@@ -30,6 +30,9 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 	if a.Profile != "" && (a.Action != "open" || !browserProfileName.MatchString(a.Profile)) {
 		return nil, errors.New("profile is a validated name supported only by open")
 	}
+	if err := validateBrowserPause(a); err != nil {
+		return nil, err
+	}
 	if a.Action == "open" {
 		if a.NewInstance {
 			a.Browser = ""
@@ -92,6 +95,9 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 		return nil, errors.New("selected browser does not match requested browser")
 	}
 	a.Browser = info.BrowserID
+	if a.Action == "resume" {
+		return t.prepareContinuation(ctx, c, a)
+	}
 	if t.Control.binding() != nil {
 		if selectedSocket == "" || t.socketPath() != selectedSocket {
 			return nil, errors.New("browser binding changed during preparation")

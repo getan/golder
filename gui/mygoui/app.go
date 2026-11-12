@@ -104,6 +104,9 @@ type App struct {
 	remoteRelease     func()
 	remoteStartCancel context.CancelFunc
 	remoteStartSeq    uint64
+	browserResumeBusy string
+	browserResumeNote string
+	browserResumeSeq  uint64
 
 	modelOpen         bool
 	modelQuery        string
@@ -552,6 +555,9 @@ func (a *App) updateTitle() {
 func (a *App) submit(text string) bool {
 	if strings.TrimSpace(text) == "" && len(a.attachments) == 0 {
 		return false
+	}
+	if a.localBrowserConfirmation(strings.TrimSpace(text)) {
+		return true
 	}
 	if strings.HasPrefix(strings.TrimSpace(text), "/") {
 		if len(a.attachments) != 0 {
