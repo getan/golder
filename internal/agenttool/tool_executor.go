@@ -225,6 +225,11 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				if dec.Details != nil {
 					r.Details = *dec.Details
 				}
+				if _, ok := tool.(*BrowserTool); ok {
+					if note := browserReviewDenialDiagnostic(execCtx, call.Name, args); note != "" {
+						r.Content = append(r.Content, agentcore.NewTextContent(note))
+					}
+				}
 				return nil, nil, ctx, &r, true
 			}
 			// Sandbox request (judge Contain tier / reviewer-failure containment):

@@ -43,6 +43,7 @@ type fakeBrowser struct {
 	mu           sync.Mutex
 	actions      []map[string]any
 	replies      map[string]string
+	getReplies   map[string]string
 	loginProfile string
 	info         string
 	// screenshot, when set, replaces the tiny invalid PNG the default fake
@@ -85,6 +86,15 @@ func (f *fakeBrowser) RoundTrip(r *http.Request) (*http.Response, error) {
 		f.actions = append(f.actions, req)
 		action, _ := req["action"].(string)
 		result, ok := f.replies[action]
+		if action == "get" {
+			if params, yes := req["params"].(map[string]any); yes {
+				if kind, yes := params["kind"].(string); yes {
+					if value, found := f.getReplies[kind]; found {
+						result, ok = value, true
+					}
+				}
+			}
+		}
 		f.mu.Unlock()
 		target, _ := req["target"].(map[string]any)
 		tabID, _ := target["tabId"].(string)

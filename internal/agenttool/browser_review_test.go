@@ -17,14 +17,14 @@ func browserReviewSnapshot(t *testing.T, document, label, parent string, duplica
 	t.Helper()
 	nodes := []map[string]any{{"ref": "@root", "role": "RootWebArea", "name": "Applications", "depth": 0}}
 	for i := range 240 {
-		nodes = append(nodes, map[string]any{"ref": fmt.Sprintf("@junk%d", i), "role": "generic", "name": strings.Repeat("background ", 8), "depth": 1})
+		nodes = append(nodes, map[string]any{"ref": fmt.Sprintf("@junk%d", i), "parentRef": "@root", "role": "generic", "name": strings.Repeat("background ", 8), "depth": 1})
 	}
-	nodes = append(nodes, map[string]any{"ref": "@row", "role": "row", "name": parent, "depth": 1},
-		map[string]any{"ref": "@e210", "role": "cell", "name": label, "value": "private-field-value", "depth": 2})
+	nodes = append(nodes, map[string]any{"ref": "@row", "parentRef": "@root", "role": "row", "name": parent, "depth": 1},
+		map[string]any{"ref": "@e210", "parentRef": "@row", "role": "cell", "name": label, "value": "private-field-value", "depth": 2})
 	if duplicate {
-		nodes = append(nodes, map[string]any{"ref": "@e211", "role": "cell", "name": label, "depth": 2})
+		nodes = append(nodes, map[string]any{"ref": "@e211", "parentRef": "@row", "role": "cell", "name": label, "depth": 2})
 	}
-	data, err := json.Marshal(map[string]any{"snapshotId": document, "nodes": nodes, "truncated": false})
+	data, err := json.Marshal(map[string]any{"snapshotId": document, "nodes": nodes, "truncated": false, "parentLinks": true})
 	if err != nil {
 		t.Fatal(err)
 	}
