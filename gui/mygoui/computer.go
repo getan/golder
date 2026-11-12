@@ -3,6 +3,7 @@ package mygoui
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"image"
@@ -379,6 +380,8 @@ func (a *App) hideComputerPanel() {
 // pause, revoke, or invalidate the owning controller's desktop session.
 func (a *App) hideComputerView() {
 	a.computerOpen = false
+	a.cancelComputerInput()
+	a.computerPreviewSeq++
 	if a.computerPreviewStop != nil {
 		a.computerPreviewStop()
 		a.computerPreviewStop = nil
@@ -446,35 +449,50 @@ func (a *App) startComputerPreview() {
 		return
 	}
 	session, win := a.computerSession, a.win
+	a.computerPreviewSeq++
+	seq := a.computerPreviewSeq
 	ctx, cancel := context.WithCancel(context.Background())
 	a.computerPreviewStop = cancel
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
+		view := computeruse.NewOperatorView(session)
+		var lastDigest [sha256.Size]byte
+		var lastBitmap *ui.Bitmap
+		haveDigest := false
 		for {
 			if !session.Status().Active {
 				return
 			}
-			if !session.Status().Paused {
+			status := session.Status()
+			if !status.Paused || status.OperatorControl {
 				frameCtx, stop := context.WithTimeout(ctx, 20*time.Second)
-				frame, err := session.CapturePreview(frameCtx)
+				frame, err := view.CapturePreview(frameCtx)
 				stop()
-				var bitmap *ui.Bitmap
-				if err == nil {
+				bitmap := lastBitmap
+				digest := sha256.Sum256(frame.PNG)
+				if err == nil && (!haveDigest || lastDigest != digest) {
 					image, _, decodeErr := image.Decode(bytes.NewReader(frame.PNG))
 					if decodeErr != nil {
 						err = decodeErr
 					} else {
 						bitmap = ui.NewBitmap(image)
+						lastBitmap = bitmap
+						lastDigest, haveDigest = digest, true
 					}
 				}
 				win.Update(func() {
-					if a.computerSession != session || !a.computerOpen {
+					if ctx.Err() != nil || a.computerPreviewSeq != seq || a.computerSession != session || !a.computerOpen || a.computerInputBusy || session.Status().OperatorControl != status.OperatorControl {
 						return
 					}
-					if bitmap != nil {
-						a.computerFrame, a.computerError = bitmap, ""
+					if err == nil {
+						if bitmap != nil {
+							a.computerFrame = bitmap
+						}
+						a.computerFrameInfo = computeruse.Frame{ID: frame.ID, Width: frame.Width, Height: frame.Height}
+						a.computerError = ""
 					} else if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, computeruse.ErrPaused) && !errors.Is(err, computeruse.ErrPreviewBusy) {
+						a.computerFrameInfo = computeruse.Frame{}
 						a.setComputerFailure(err)
 					}
 				})
@@ -627,7 +645,9 @@ func (a *App) computerPanel(c *ui.Context) {
 		}
 		ui.Row(c).Padding(6, 10).Gap(8).AlignItems(ui.Center).Children(func() {
 			label := "Stopped"
-			if status.Active && status.Paused {
+			if status.Active && status.OperatorControl {
+				label = "人工控制 / Human control · Agent paused"
+			} else if status.Active && status.Paused {
 				label = "Paused · take over in the target window"
 			} else if status.Active && status.Capabilities.Control {
 				label = "Agent control permitted"
@@ -635,10 +655,13 @@ func (a *App) computerPanel(c *ui.Context) {
 				label = "Observation only"
 			}
 			ui.Text(c, label).FontSize(10.5).TextColor(t.TextMuted).Grow(1)
-			if status.Active && !status.Paused && subtleButton(c, "Pause / take over").Clicked() {
+			if status.Active && !status.OperatorControl && status.Capabilities.Control && subtleButton(c, "Pause / take over", a.status.Permission == "read-only").Clicked() {
+				a.takeOverComputer()
+			}
+			if status.Active && !status.Paused && !status.Capabilities.Control && subtleButton(c, "Pause").Clicked() {
 				a.computerSession.Pause()
 			}
-			if status.Active && status.Paused && subtleButton(c, "Resume").Clicked() {
+			if status.Active && status.Paused && subtleButton(c, "Resume", a.computerInputBusy).Tooltip("交还 Agent / Return control to Agent").Clicked() {
 				a.resumeComputer()
 			}
 			if status.Active && subtleButton(c, "Stop").Clicked() {
@@ -648,7 +671,24 @@ func (a *App) computerPanel(c *ui.Context) {
 		if a.computerError != "" {
 			ui.Text(c, a.computerError).Padding(6, 10).FontSize(11).TextColor(t.Warning).Wrap()
 		}
-		ui.Box(c).Grow(1).MinHeight(0).Background(t.Surface).Children(func() {
+		if status.OperatorControl {
+			ui.Row(c.Key("computer-manual-input")).Padding(6, 10).Gap(6).Children(func() {
+				input := ui.TextInput(c, &a.computerTextDraft).Password().Grow(1).Label("Computer text input").Placeholder("输入文字 / Text to insert").Disabled(!a.computerManualReady())
+				if input.Submitted() {
+					a.typeComputerText()
+				}
+				if subtleButton(c, "输入 / Insert", !a.computerManualReady() || a.computerTextDraft == "").Clicked() {
+					a.typeComputerText()
+				}
+			})
+			ui.Text(c, "点击预览后输入文字；不会自动提交。Resume 交还 Agent。").Padding(0, 10).FontSize(10.5).TextColor(t.TextMuted).Wrap()
+		}
+		viewport := ui.Box(c.Key("computer-preview")).Grow(1).MinHeight(0).Background(t.Surface).Label("Computer window preview")
+		frame, bounds := a.computerFrameInfo, viewport.Bounds()
+		viewport.HandleInput(func(event ui.InputEvent) bool {
+			return a.clickComputerPreview(frame, bounds.W, bounds.H, event)
+		})
+		viewport.Children(func() {
 			if a.computerFrame != nil {
 				ui.Image(c, a.computerFrame).Fill().Fit(ui.Contain)
 			} else {
@@ -665,25 +705,34 @@ func (a *App) computerPanel(c *ui.Context) {
 }
 
 func (a *App) resumeComputer() {
-	if a.computerSession == nil || a.win == nil {
+	if a.computerSession == nil || a.computerInputBusy {
 		return
 	}
+	a.cancelComputerInput()
 	session, win := a.computerSession, a.win
+	ctx, cancel := context.WithTimeout(context.Background(), computeruse.OperatorResumeTimeout)
+	a.computerInputStop, a.computerInputBusy = cancel, true
+	seq := a.computerInputSeq
+	finish := func(err error) {
+		if a.computerSession != session || a.computerInputSeq != seq {
+			return
+		}
+		a.computerInputStop, a.computerInputBusy = nil, false
+		if err != nil {
+			a.setComputerFailure(err)
+		} else {
+			a.computerError = ""
+		}
+		a.restartComputerPreview()
+	}
+	if win == nil {
+		finish(session.Resume(ctx))
+		cancel()
+		return
+	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), computeruse.OperatorResumeTimeout)
-		defer cancel()
 		err := session.Resume(ctx)
-		win.Update(func() {
-			if a.computerSession == session {
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				if err != nil {
-					a.setComputerFailure(err)
-				} else {
-					a.computerError = ""
-				}
-			}
-		})
+		cancel()
+		win.Update(func() { finish(err) })
 	}()
 }

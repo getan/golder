@@ -2,7 +2,7 @@ package computeruse
 
 import "context"
 
-// Only the authenticated local pane can mint this context. No model-facing
+// Only the local operator frontend can mint this context. No model-facing
 // action accepts the key or can resume/enter operator control.
 type operatorAccessKey struct{}
 type operatorAccess struct {

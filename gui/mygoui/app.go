@@ -236,6 +236,12 @@ type App struct {
 	computerSuggested        string
 	computerRequestPicker    bool
 	computerFrame            *ui.Bitmap
+	computerFrameInfo        computeruse.Frame // metadata only; PNG lives in the local preview
+	computerTextDraft        string
+	computerInputBusy        bool
+	computerInputStop        context.CancelFunc
+	computerInputSeq         uint64
+	computerPreviewSeq       uint64
 	computerCandidate        *ui.Bitmap
 	computerCandidateID      string
 	computerCandidateTarget  string

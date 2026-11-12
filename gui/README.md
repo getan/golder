@@ -74,6 +74,22 @@ running; use **Pause / take over** or **Stop** to interrupt it. On macOS, frame
 input can restore focus to the same authorized window, then recheck its frame
 before dispatch. Preview captures and semantic actions do not steal focus.
 
+**Pause / take over** now enters exclusive **Human control**. The Agent remains
+paused while you click the displayed window and use the masked text field plus
+**Insert** (or Enter) to insert plain text at the caret. Text is not logged,
+does not use the clipboard, and does not implicitly submit the target form.
+**Resume** returns control to the Agent with no extra confirmation dialog.
+Clicks exclude letterboxing and retain the same frame/target/focus checks as
+the TUI's local operator path. Hiding the panel or switching conversations
+cancels pending local inputs and clears the draft without resuming the Agent.
+Native macOS desktop input still needs manual acceptance testing; other
+platforms can reject inputs their backend cannot safely perform.
+
+Computer/browser snapshot cards show at most three preview lines while folded.
+Click their headline or **Expand**, or use **Ctrl+T** in the conversation area,
+to toggle the most recent tool card. GUI window previews reuse an unchanged
+bitmap instead of decoding/replacing it on every capture tick.
+
 The GUI release targets macOS 14.0 or later. A GUI built without CGO cannot
 enable the macOS Computer Use backend merely by changing permissions.
 

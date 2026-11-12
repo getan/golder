@@ -85,6 +85,9 @@ func (a *App) view(c *ui.Context) {
 	if a.list != nil && !a.list.follow && !c.Root().FocusWithin() && c.Shortcut(ui.Ctrl, ui.KeyE) {
 		a.list.jumpToBottom()
 	}
+	if !c.Root().FocusWithin() && c.Shortcut(ui.Ctrl, ui.KeyT) {
+		a.toggleLatestToolCard()
+	}
 	if !a.remoteOpen && a.remoteRelease != nil {
 		a.stopRemoteControl()
 	}
@@ -406,6 +409,10 @@ func (a *App) center(c *ui.Context) {
 	center := ui.Column(c).Grow(1).MinWidth(0).Background(t.Background)
 	center.OnShortcut(ui.Ctrl, ui.KeyE, func() {
 		window.jumpToBottom()
+		c.Services().Invalidate()
+	})
+	center.OnShortcut(ui.Ctrl, ui.KeyT, func() {
+		a.toggleLatestToolCard()
 		c.Services().Invalidate()
 	})
 	center.Children(func() {

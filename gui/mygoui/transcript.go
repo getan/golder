@@ -162,6 +162,30 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 		}
 	})
 	a.toolOpen[it.ID] = open
+	if isSnapshotTool(st) && !open && st.Output != "" {
+		ui.Text(c, truncate(st.Output, 1200)).MarginStart(18).FontSize(12).TextColor(t.TextMuted).Wrap().MaxLines(3).Ellipsis("…")
+		if subtleButton(c.Key("snapshot-expand:"+it.ID), "… 点击展开 / Expand · Ctrl+T").Clicked() {
+			a.toolOpen[it.ID] = true
+		}
+	}
+}
+
+func isSnapshotTool(st *appsession.ToolState) bool {
+	if st == nil || (!strings.EqualFold(st.Name, "computer") && !strings.EqualFold(st.Name, "browser")) {
+		return false
+	}
+	action, _ := st.Input["action"].(string)
+	return strings.EqualFold(strings.TrimSpace(action), "snapshot")
+}
+
+func (a *App) toggleLatestToolCard() {
+	for i := len(a.items) - 1; i >= 0; i-- {
+		it := a.items[i]
+		if it.Kind == appsession.ItemTool && it.Tool != nil {
+			a.toolOpen[it.ID] = !a.toolOpen[it.ID]
+			return
+		}
+	}
 }
 
 func renderToolOutput(c *ui.Context, output string, failed bool) {
