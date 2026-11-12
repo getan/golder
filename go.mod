@@ -22,8 +22,8 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.7.4
-	github.com/getan/kitty-browse v0.2.12
-	github.com/getan/tuios-mini v0.10.45
+	github.com/getan/kitty-browse v0.2.12-0.20261112040018-0296fb8dec59
+	github.com/getan/tuios-mini v0.10.46-0.20261112054620-a8889b576b9c
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/termenv v0.16.0
