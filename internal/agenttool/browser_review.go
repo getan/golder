@@ -16,11 +16,12 @@ import (
 )
 
 type browserReviewNode struct {
-	Ref   string `json:"ref,omitempty"`
-	Role  string `json:"role,omitempty"`
-	Name  string `json:"name,omitempty"`
-	Text  string `json:"text,omitempty"`
-	Depth int    `json:"depth,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Depth   int    `json:"depth,omitempty"`
+	Visible *bool  `json:"visible,omitempty"`
 }
 
 type browserObservedNode struct {
@@ -256,7 +257,7 @@ func browserTargetFingerprint(document string, node any) string {
 
 func observeCSSReviewTarget(ctx context.Context, c *browserctl.Client, a browserArgs, target browserctl.Target, facts *browserReviewFacts) error {
 	get := func(kind string) (json.RawMessage, error) {
-		raw, meta, err := c.Action(ctx, "get", map[string]any{"kind": kind, "selector": a.Selector, "exact": a.Exact}, target, 2*time.Second)
+		raw, meta, err := c.Action(ctx, "get", map[string]any{"kind": kind, "selector": a.Selector}, target, 2*time.Second)
 		if err == nil && !browserReviewMetaMatches(a, meta) {
 			return nil, browserNotDispatched("browser_target_changed", "page changed while inspecting locator", nil)
 		}

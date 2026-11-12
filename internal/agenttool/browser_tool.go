@@ -110,6 +110,7 @@ const browserToolUseHint = " Use this tool rather than launching `golder browse`
 	"If verification cannot be completed in the pane and the person explicitly requests a GUI login, inspect status before that narrow installed-Chromium fallback; never import a personal profile, overlap profile users, read or export cookies, or retry verification to bypass it. " +
 	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
 	"Continue ordinary login forms, redirects, QR waiting and loading automatically; pause only for a concrete missing identity/MFA/authorization decision, a host-latched verification/limit, or the person's explicit request. " +
+	"Framework radio/segmented controls can expose hidden inputs or text nodes. If a target is not interactable, inspect its visible label or parent, or use keyboard navigation on the appropriate group; do not repeat the same failed ref or automatically click an unreviewed ancestor. " +
 	"When paused, the local Resume automation button is the primary recovery control (GUI, main TUI and browser pane); the person can also reply to its displayed request once. Never ask to switch global permission mode or repeat the same confirmation. Ctrl+G is an auxiliary pane shortcut. After recovery re-observe the current page, then plan new actions; never replay an unknown submission."
 
 func (t *BrowserTool) useHint() string {
@@ -210,7 +211,7 @@ const browserReadSchema = `{
     "role":{"type":"string","description":"ARIA role for a locator."},
     "name":{"type":"string","description":"Accessible name for a locator."},
     "text":{"type":"string","description":"Visible text for a locator, or the text to fill/type."},
-    "exact":{"type":"boolean","description":"Exact text/accessible-name matching for locator operations."},
+    "exact":{"type":"boolean","description":"Exact role/name/text matching; ignored for CSS selectors. A selector must still match uniquely."},
     "kind":{"type":"string","enum":["title","url","text","html","count","value","box","attr"],"description":"For get."},
     "attr":{"type":"string","description":"For get kind=attr: attribute name."},
     "visible":{"type":"string","enum":["visible","hidden","enabled","checked"],"description":"For is/wait."},
@@ -251,7 +252,7 @@ const browserControlSchema = `{
     "role":{"type":"string","description":"ARIA role for a locator."},
     "name":{"type":"string","description":"Accessible name for a locator."},
     "text":{"type":"string","description":"Visible text for a locator, or the text to fill/type."},
-    "exact":{"type":"boolean","description":"Exact text/accessible-name matching for locator operations."},
+    "exact":{"type":"boolean","description":"Exact role/name/text matching; ignored for CSS selectors. A selector must still match uniquely."},
     "kind":{"type":"string","enum":["title","url","text","html","count","value","box","attr"],"description":"For get."},
     "attr":{"type":"string","description":"For get kind=attr: attribute name."},
     "visible":{"type":"string","enum":["visible","hidden","enabled","checked"],"description":"For is/wait."},
@@ -898,7 +899,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if a.Text != "" {
 			m["text"] = a.Text
 		}
-		if a.Exact && len(m) > 0 {
+		if a.Exact && a.Selector == "" && len(m) > 0 {
 			m["exact"] = true
 		}
 		return m
@@ -917,7 +918,7 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		if a.Name != "" {
 			m["name"] = a.Name
 		}
-		if a.Exact && len(m) > 0 {
+		if a.Exact && a.Selector == "" && len(m) > 0 {
 			m["exact"] = true
 		}
 		return m
@@ -956,9 +957,6 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 		p := locator()
 		if len(p) == 0 {
 			return "", nil, errors.New("find needs selector, ref, role, name or text")
-		}
-		if a.Exact {
-			p["exact"] = true
 		}
 		return "find", p, nil
 	case "get":
@@ -1347,7 +1345,13 @@ func browserError(err error) agentcore.AgentToolResult {
 		if len(be.Details) > 0 && string(be.Details) != "null" {
 			msg += " details=" + string(be.Details)
 		}
-		if be.Code == "stale_ref" {
+		if be.Code == "not_interactable" {
+			msg += "; inspect the target: it may be hidden, disabled, outside the viewport, or a text node. Consider its visible label or an appropriate focused group and keyboard navigation; do not repeat the same failed ref or automatically click an unreviewed ancestor"
+		} else if be.Code == "ambiguous_locator" {
+			msg += "; inspect the candidates and narrow the locator to one intended element; hidden inputs and text nodes may share a name. Do not try candidates by clicking them"
+		} else if be.Code == "javascript_error" {
+			msg += "; inspect the current page state before any new action; if the target is a text node, select its intended visible label or control instead. An action with an unknown outcome must not be replayed"
+		} else if be.Code == "stale_ref" {
 			msg += "; call snapshot again and use the new ref"
 		}
 		result := errorResult(msg)
