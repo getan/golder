@@ -46,6 +46,15 @@ func browserSafeReviewURL(raw string) string {
 // A CSS locator has no AX ref to correlate to a row. Only expose its own text
 // when its bounded markup contains no editable controls or sensitive form.
 func browserReviewSafeMarkup(markup string) bool {
+	return browserReviewMarkupSafe(markup, false)
+}
+
+// A semantic item may contain its checkable input, but never editable fields.
+func browserReviewSafeContainerMarkup(markup string) bool {
+	return browserReviewMarkupSafe(markup, true)
+}
+
+func browserReviewMarkupSafe(markup string, allowCheckable bool) bool {
 	if len(markup) == 0 || len(markup) > 8192 {
 		return false
 	}
@@ -53,12 +62,27 @@ func browserReviewSafeMarkup(markup string) bool {
 	if err != nil {
 		return false
 	}
+	checkableInputs := 0
 	var safe func(*html.Node) bool
 	safe = func(n *html.Node) bool {
 		if n.Type == html.ElementNode {
 			switch strings.ToLower(n.Data) {
-			case "form", "input", "textarea", "select", "option", "script", "style", "iframe":
+			case "form", "textarea", "select", "option", "script", "style", "iframe":
 				return false
+			case "input":
+				inputType := ""
+				for _, a := range n.Attr {
+					if strings.EqualFold(a.Key, "type") {
+						inputType = strings.ToLower(a.Val)
+					}
+				}
+				if !allowCheckable || (inputType != "checkbox" && inputType != "radio") {
+					return false
+				}
+				checkableInputs++
+				if checkableInputs > 1 {
+					return false
+				}
 			}
 			for _, a := range n.Attr {
 				if strings.EqualFold(a.Key, "contenteditable") && !strings.EqualFold(a.Val, "false") {
@@ -108,6 +132,22 @@ func browserReviewControlRole(role string) bool {
 		return true
 	}
 	return browserReviewEditableRole(role)
+}
+
+func browserReviewStatefulRole(role string) bool {
+	switch strings.ToLower(role) {
+	case "checkbox", "radio", "switch", "slider", "menuitemcheckbox", "menuitemradio":
+		return true
+	}
+	return browserReviewEditableRole(role)
+}
+
+func browserReviewCheckableRole(role string) bool {
+	switch strings.ToLower(role) {
+	case "checkbox", "radio", "switch", "menuitemcheckbox", "menuitemradio":
+		return true
+	}
+	return false
 }
 
 // AX snapshots are commonly breadth-first, not contiguous subtrees. Only
@@ -222,6 +262,15 @@ func browserAssociatedContext(t *browserReviewTree, idx int, probe func(string) 
 	if browserReviewEditableRole(target.Role) {
 		return nil, "unnamed_editable_context_withheld", nil, nil
 	}
+	if browserReviewCheckableRole(target.Role) {
+		_, itemStatus := browserReviewSemanticItemStatus(t, idx)
+		if itemStatus == "ambiguous" {
+			return nil, "unnamed_target_no_verified_visible_context", nil, nil
+		}
+		if itemStatus == "too_large" {
+			return nil, "unnamed_target_context_too_large", nil, nil
+		}
+	}
 	indexes, complete := t.subtree(idx)
 	if !complete {
 		return nil, "unnamed_target_context_too_large", nil, nil
@@ -248,15 +297,25 @@ func browserAssociatedContext(t *browserReviewTree, idx int, probe func(string) 
 			}
 			indexes, complete := t.subtree(parent)
 			if !complete {
+				if semantic && browserReviewCheckableRole(target.Role) {
+					return nil, "unnamed_target_context_too_large", proof, nil
+				}
 				continue
 			}
 			controls := 0
 			for _, i := range indexes {
-				if browserReviewControlRole(t.nodes[i].Role) {
+				counted := browserReviewControlRole(t.nodes[i].Role)
+				if semantic && browserReviewCheckableRole(target.Role) {
+					counted = browserReviewStatefulRole(t.nodes[i].Role)
+				}
+				if counted {
 					controls++
 				}
 			}
 			if controls != 1 || !browserReviewControlRole(target.Role) {
+				if semantic && browserReviewCheckableRole(target.Role) {
+					return nil, "unnamed_target_no_verified_visible_context", proof, nil
+				}
 				continue
 			}
 			context, p, safe, err := t.localText(indexes, "same_item", probe)
@@ -273,4 +332,56 @@ func browserAssociatedContext(t *browserReviewTree, idx int, probe func(string) 
 		}
 	}
 	return nil, "unnamed_target_no_verified_visible_context", proof, nil
+}
+
+// Only a complete, explicit semantic item with one stateful control can be
+// probed for rendered text. Generic wrappers are not reliable row boundaries.
+func browserReviewSemanticItem(t *browserReviewTree, idx int) string {
+	ref, _ := browserReviewSemanticItemStatus(t, idx)
+	return ref
+}
+
+func browserReviewSemanticItemStatus(t *browserReviewTree, idx int) (string, string) {
+	if t == nil || idx < 0 || idx >= len(t.nodes) || !browserReviewCheckableRole(t.nodes[idx].Role) {
+		return "", "unavailable"
+	}
+	for _, parent := range t.ancestors(idx, 6) {
+		role := strings.ToLower(t.nodes[parent].Role)
+		if role != "row" && role != "layouttablerow" && role != "listitem" {
+			continue
+		}
+		indexes, complete := t.subtree(parent)
+		if !complete {
+			return "", "too_large"
+		}
+		controls := 0
+		for _, i := range indexes {
+			if browserReviewStatefulRole(t.nodes[i].Role) {
+				controls++
+			}
+		}
+		if controls == 1 {
+			return t.nodes[parent].Ref, "unique"
+		}
+		return "", "ambiguous"
+	}
+	return "", "unavailable"
+}
+
+func browserReviewItemHasAuxiliaryControls(t *browserReviewTree, ref string) bool {
+	root, ok := t.byRef[ref]
+	if !ok {
+		return true
+	}
+	indexes, complete := t.subtree(root)
+	if !complete {
+		return true
+	}
+	for _, i := range indexes {
+		role := t.nodes[i].Role
+		if browserReviewControlRole(role) && !browserReviewStatefulRole(role) {
+			return true
+		}
+	}
+	return false
 }

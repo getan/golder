@@ -121,6 +121,9 @@ func (t *BrowserTool) ReviewEvidence(ctx context.Context, args json.RawMessage) 
 		if err := t.observeReviewTarget(ctx, c, a, &facts); err != nil {
 			return agentcore.ToolReviewEvidence{}, err
 		}
+		if a.Ref != "" && facts.MatchCount == 0 && facts.Truncated != nil && !*facts.Truncated {
+			return agentcore.ToolReviewEvidence{}, browserNotDispatched("browser_ref_not_in_snapshot", "the ref is not present in the current snapshot; it may be stale or the page may have changed. Take a new snapshot before choosing a target; no input was sent", map[string]any{"source": "host_state", "url": browserSafeReviewURL(a.PageURL)})
+		}
 	}
 	facts.Browser = DisplayBrowserEvidence(facts.Browser, 128)
 	facts.Tab = DisplayBrowserEvidence(facts.Tab, 128)
@@ -268,19 +271,6 @@ func (t *BrowserTool) observeReviewTarget(ctx context.Context, c *browserctl.Cli
 			facts.ContextStatus = "unavailable_truncated_snapshot"
 		} else if !snapshot.ParentLinks {
 			facts.ContextStatus = "unavailable_host_has_no_parent_links"
-			// Older hosts can still inspect the exact unnamed container itself.
-			// They cannot safely associate a checkbox with a neighbouring row.
-			if facts.NameStatus == "no_accessible_name" && strings.EqualFold(fingerprintNode.Role, "generic") && fingerprintNode.Ref != "" {
-				text, status, proof, err := browserReviewTargetText(ctx, c, a, target, map[string]any{"ref": fingerprintNode.Ref})
-				if err != nil {
-					return err
-				}
-				directProof = proof
-				if status == "visible_target_text" && text != "" && text != "[credential-like text withheld]" {
-					facts.Context = []browserReviewContext{{Relation: "target_rendered_text", Container: DisplayBrowserEvidence(fingerprintNode.Ref, 80), Text: text, Visibility: "visible"}}
-					facts.ContextStatus = "unnamed_target_visible_rendered_text"
-				}
-			}
 		} else if tree := newBrowserReviewTree(snapshot.Nodes); tree == nil {
 			facts.ContextStatus = "unavailable_invalid_parent_links"
 		} else {
@@ -311,6 +301,41 @@ func (t *BrowserTool) observeReviewTarget(ctx context.Context, c *browserctl.Cli
 			facts.Context, facts.ContextStatus, contextProof, err = browserAssociatedContext(tree, matchIndex, probe)
 			if err != nil {
 				return err
+			}
+			if facts.NameStatus == "no_accessible_name" && !strings.Contains(facts.ContextStatus, "withheld") {
+				if ref := browserReviewSemanticItem(tree, matchIndex); ref != "" {
+					text, status, proof, err := browserReviewRenderedText(ctx, c, a, target, map[string]any{"ref": ref}, true)
+					if err != nil {
+						return err
+					}
+					directProof = proof
+					if status == "target_contains_form_or_unavailable_markup" || text == "[credential-like text withheld]" {
+						facts.Context, facts.ContextStatus = nil, "unnamed_item_sensitive_or_editable_context_withheld"
+					} else if status == "visible_target_text" && text != "" {
+						facts.Context = []browserReviewContext{{Relation: "same_item_rendered_text", Container: DisplayBrowserEvidence(ref, 80), Text: text, Visibility: "visible"}}
+						facts.ContextStatus = "unnamed_target_visible_item_context"
+					} else if browserReviewItemHasAuxiliaryControls(tree, ref) {
+						// Link labels alone are not sufficient to identify a checkbox.
+						facts.Context, facts.ContextStatus = nil, "unnamed_target_no_verified_visible_context"
+					}
+				}
+			}
+		}
+		// The exact unnamed container is safe to inspect even on hosts with
+		// parent links; association with a separate item still requires those links.
+		if !*snapshot.Truncated && facts.NameStatus == "no_accessible_name" &&
+			(facts.ContextStatus == "unavailable_host_has_no_parent_links" || facts.ContextStatus == "unnamed_target_no_verified_visible_context" || facts.ContextStatus == "unnamed_target_visible_descendant_context") &&
+			(strings.EqualFold(fingerprintNode.Role, "generic") || strings.EqualFold(fingerprintNode.Role, "group")) && fingerprintNode.Ref != "" {
+			text, status, proof, err := browserReviewTargetText(ctx, c, a, target, map[string]any{"ref": fingerprintNode.Ref})
+			if err != nil {
+				return err
+			}
+			directProof = proof
+			if status == "target_contains_form_or_unavailable_markup" || text == "[credential-like text withheld]" {
+				facts.Context, facts.ContextStatus = nil, "unnamed_target_sensitive_or_editable_context_withheld"
+			} else if status == "visible_target_text" && text != "" {
+				facts.Context = []browserReviewContext{{Relation: "target_rendered_text", Container: DisplayBrowserEvidence(fingerprintNode.Ref, 80), Text: text, Visibility: "visible"}}
+				facts.ContextStatus = "unnamed_target_visible_rendered_text"
 			}
 		}
 		facts.Fingerprint = browserTargetFingerprint(snapshot.ID, []any{fingerprintNode, parentProof, facts.ContextStatus, contextProof, directProof})
@@ -391,6 +416,10 @@ func observeCSSReviewTarget(ctx context.Context, c *browserctl.Client, a browser
 // Read only the exact target's rendered text, never its inputs or an enclosing
 // form. The markup and raw results are kept private and bound to the review.
 func browserReviewTargetText(ctx context.Context, c *browserctl.Client, a browserArgs, target browserctl.Target, locator map[string]any) (string, string, []string, error) {
+	return browserReviewRenderedText(ctx, c, a, target, locator, false)
+}
+
+func browserReviewRenderedText(ctx context.Context, c *browserctl.Client, a browserArgs, target browserctl.Target, locator map[string]any, item bool) (string, string, []string, error) {
 	call := func(action, kind string) (json.RawMessage, error) {
 		params := make(map[string]any, len(locator)+1)
 		for key, value := range locator {
@@ -409,7 +438,10 @@ func browserReviewTargetText(ctx context.Context, c *browserctl.Client, a browse
 	}
 	proof := []string{string(html)}
 	var markup string
-	if json.Unmarshal(html, &markup) != nil || !browserReviewSafeMarkup(markup) {
+	if json.Unmarshal(html, &markup) != nil {
+		return "", "markup_unavailable", proof, nil
+	}
+	if (!item && !browserReviewSafeMarkup(markup)) || (item && !browserReviewSafeContainerMarkup(markup)) {
 		return "", "target_contains_form_or_unavailable_markup", proof, nil
 	}
 	visibility, err := call("is", "visible")
@@ -464,7 +496,7 @@ func (t *BrowserTool) verifyReviewedLocator(ctx context.Context, c *browserctl.C
 	missingCSSContext := previous.NameStatus == "not_observed_for_css_locator" &&
 		(len(previous.Candidates) != 1 || previous.Candidates[0].Text == "" || previous.Candidates[0].Text == "[credential-like text withheld]")
 	if needsMeaning && (missingAXContext || missingCSSContext) {
-		return browserNotDispatched("browser_target_context_unavailable", "the target's meaning was not established with a name or verified context for revalidation; inspect the page or update the browser host", previous)
+		return browserNotDispatched("browser_target_context_unavailable", "target has no accessible name or verified visible context; inspect the page and narrow to an element with its visible label; no input was sent", previous)
 	}
 	current := browserReviewFacts{MatchCount: -1}
 	if err := t.observeReviewTarget(ctx, c, a, &current); err != nil {

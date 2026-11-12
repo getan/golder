@@ -110,6 +110,8 @@ const browserToolUseHint = " Use this tool rather than launching `golder browse`
 	"If verification cannot be completed in the pane and the person explicitly requests a GUI login, inspect status before that narrow installed-Chromium fallback; never import a personal profile, overlap profile users, read or export cookies, or retry verification to bypass it. " +
 	"Use status to inspect activity/pause state. On browser_paused, stop; do not retry, refresh or open another browser to bypass verification. " +
 	"Continue ordinary login forms, redirects, QR waiting and loading automatically; pause only for a concrete missing identity/MFA/authorization decision, a host-latched verification/limit, or the person's explicit request. " +
+	"A locator or target-context error is not a browser-wide stop: when no input was dispatched, autonomously inspect the current page with snapshot, find, get or is, try a different evidence-based approach, and submit a new independently reviewed action. Do not interrupt the person merely because a locator or target is initially unclear; continue ordinary task-relevant exploration and bounded reversible steps under normal review, assessing actual effects rather than control type. Avoid loops: if attempts make no progress, change approach; report a genuine dead end after reasonable alternatives are exhausted. Ask before an irreversible destructive action such as deletion when its exact effect was not explicitly authorized, or when an identity, MFA or authorization decision is concretely required. " +
+	"If an action's outcome is unknown, inspect the current page and business state automatically and continue other appropriate work; do not replay the unknown action. Ordinary loading and recoverable errors are not verification pauses. " +
 	"Framework radio/segmented controls can expose hidden inputs or text nodes. If a target is not interactable, inspect its visible label or parent, or use keyboard navigation on the appropriate group; do not repeat the same failed ref or automatically click an unreviewed ancestor. " +
 	"When paused, the local Resume automation button is the primary recovery control (GUI, main TUI and browser pane); the person can also reply to its displayed request once. Never ask to switch global permission mode or repeat the same confirmation. Ctrl+G is an auxiliary pane shortcut. After recovery re-observe the current page, then plan new actions; never replay an unknown submission."
 
@@ -1315,6 +1317,12 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 					details = make(map[string]any)
 				}
 				details["execution_state"] = "not_dispatched"
+				switch be.Code {
+				case "browser_target_context_unavailable", "browser_target_not_visible", "browser_evidence_unavailable":
+					details["source"] = "target_context_guard"
+				case "browser_target_changed", "stale_ref":
+					details["source"] = "host_state"
+				}
 				result.Details = details
 			}
 			return result
@@ -1324,7 +1332,7 @@ func browserActionError(action string, err error) agentcore.AgentToolResult {
 		err = &copy
 	}
 	result := browserError(err)
-	hint := "The action may have been dispatched; inspect the current page state and do not automatically repeat an action whose execution is unknown."
+	hint := "The action may have been dispatched; automatically inspect the current page and business state, continue other appropriate work, and do not automatically repeat an action whose execution is unknown."
 	if action == "quit" {
 		hint = "The quit request may have been dispatched; call list to inspect the browser and do not automatically repeat a quit whose outcome is unknown."
 	}
@@ -1360,7 +1368,29 @@ func browserError(err error) agentcore.AgentToolResult {
 		} else if be.Code == "stale_ref" {
 			msg += "; call snapshot again and use the new ref"
 		}
+		canRetarget := false
+		if be.ExecutionState == "not_dispatched" {
+			switch be.Code {
+			case "browser_ref_not_in_snapshot", "unsupported_selector_syntax", "browser_target_context_unavailable", "browser_target_not_visible", "browser_evidence_unavailable", "browser_target_changed", "ambiguous_locator", "not_found", "stale_ref", "not_interactable", "element_obscured":
+				canRetarget = true
+				msg += "; this is not a browser-wide stop: independently inspect the current page using snapshot, find, get or is, then use newly observed evidence to choose a unique target for a new reviewed action. Continue exploring without asking merely because a locator is unclear; change approach if no progress, and report a genuine dead end after reasonable alternatives. Do not bypass a verification pause or retry a denied capability"
+			}
+		}
 		result := errorResult(msg)
+		details := map[string]any{"code": be.Code}
+		if be.ExecutionState != "" {
+			details["execution_state"] = be.ExecutionState
+		}
+		if canRetarget {
+			details["recovery"] = "inspect_and_retarget"
+		}
+		switch be.Code {
+		case "browser_ref_not_in_snapshot":
+			details["source"] = "host_state"
+		case "unsupported_selector_syntax":
+			details["source"], details["dialect"] = "locator_validation", "css"
+		}
+		result.Details = details
 		if be.Code == "browser_paused" || be.Code == "browser_continuation_required" {
 			stop := true
 			result.Terminate = &stop

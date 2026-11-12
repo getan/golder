@@ -132,6 +132,13 @@ func TestReviewContextWithMultipleControlsDoesNotInventAssociation(t *testing.T)
 	if len(got) != 0 || status != "unnamed_target_no_verified_visible_context" {
 		t.Fatalf("ambiguous item received context: %+v %s", got, status)
 	}
+	// Even a visible descendant of the first control must not hide a second
+	// stateful control in the enclosing semantic item.
+	nodes = append(nodes, browserObservedNode{browserReviewNode: browserReviewNode{Ref: "@caption", ParentRef: "@one", Role: "StaticText", Name: "first", Depth: 2}})
+	got, status, _, err = browserAssociatedContext(newBrowserReviewTree(nodes), 1, nil)
+	if err != nil || len(got) != 0 || status != "unnamed_target_no_verified_visible_context" {
+		t.Fatalf("ambiguous item with descendant text received context: %+v %s %v", got, status, err)
+	}
 }
 
 func TestReviewUnknownTextVisibilityIsProbedAndBound(t *testing.T) {

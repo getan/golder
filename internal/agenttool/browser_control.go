@@ -21,6 +21,9 @@ func (t *BrowserTool) PrepareCall(ctx context.Context, raw json.RawMessage) (jso
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return nil, err
 	}
+	if unsupportedBrowserSelector(a.Selector) {
+		return nil, browserNotDispatched("unsupported_selector_syntax", "selector uses Playwright syntax; browser selector accepts CSS. Use CSS or separate role/name/text locator fields", map[string]any{"source": "locator_validation", "dialect": "css"})
+	}
 	if err := controlcap.BrowserURL(a.URL); err != nil {
 		return nil, err
 	}

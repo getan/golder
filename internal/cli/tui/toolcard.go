@@ -278,6 +278,14 @@ func (c toolCard) render(theme Theme, width int) string {
 	if c.expanded {
 		return out + c.renderDetail(theme, width)
 	}
+	if strings.EqualFold(c.name, "browser") && strings.EqualFold(argString(c.input["action"]), "snapshot") {
+		preview, hidden := c.snapshotPreview(theme, width)
+		out += preview
+		if hidden {
+			out += "\n" + theme.System.Render(wrapBodyLine(bodyIndent, "… (ctrl+t or click to expand)", max(1, width-2)))
+		}
+		return out
+	}
 	preview, hidden := c.preview(theme, width, collapsedPreviewLines)
 	out += preview
 	if hidden > 0 {
@@ -495,6 +503,63 @@ func (c toolCard) preview(theme Theme, width, n int) (string, int) {
 	return b.String(), c.totalBodyLines() - shown
 }
 
+// Snapshot results can contain a huge JSON line. Limit physical terminal rows,
+// not logical response nodes, without changing the stored result or other cards.
+func (c toolCard) snapshotPreview(theme Theme, width int) (string, bool) {
+	var b strings.Builder
+	shown := 0
+	for i, node := range c.response {
+		text := strings.Repeat("  ", min(node.depth, 64)) + clipRenderLine(node.text)
+		gutter := bodyIndent
+		if i == 0 {
+			gutter = "  └ "
+		}
+		rows := strings.Split(wrapBodyLine(gutter, text, max(1, width-2)), "\n")
+		for _, row := range rows {
+			if shown == collapsedPreviewLines {
+				return b.String(), true
+			}
+			b.WriteString("\n" + theme.ToolBody.Render(row))
+			shown++
+		}
+		if len(node.text) > renderMaxLineBytes || node.depth > 64 {
+			return b.String(), true
+		}
+	}
+	return b.String(), false
+}
+
+// Expanded snapshots are commonly a single JSON line. Split it into bounded
+// render rows rather than silently clipping the line at 4 KiB. Keep the normal
+// whole-block rendering budget; the original result remains in the session.
+func snapshotDetailNodes(nodes []respNode) []respNode {
+	var out []respNode
+	remaining := renderMaxTextBytes
+	for _, node := range nodes {
+		text := node.text
+		for len(text) > 0 {
+			if remaining == 0 {
+				return append(out, respNode{text: renderTruncated})
+			}
+			part := truncateUTF8(text, min(renderMaxLineBytes, remaining))
+			if part == "" {
+				return append(out, respNode{text: renderTruncated})
+			}
+			out = append(out, respNode{text: part, depth: node.depth})
+			text = text[len(part):]
+			remaining -= len(part)
+		}
+		if node.text == "" {
+			if remaining == 0 {
+				return append(out, respNode{text: renderTruncated})
+			}
+			out = append(out, node)
+			remaining--
+		}
+	}
+	return out
+}
+
 // headline is the tool name plus its most salient argument. A card carrying a
 // diff appends the change counts, codex-style (`apply_patch src/x.go (+37 -0)`),
 // so the headline summarises the edit the way codex's "Edited path" line does
@@ -623,7 +688,11 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		b.WriteString(renderDiff(theme, c.diff, width))
 		wroteOutput = true
 	} else {
-		for i, n := range c.response {
+		response := c.response
+		if strings.EqualFold(c.name, "browser") && strings.EqualFold(argString(c.input["action"]), "snapshot") {
+			response = snapshotDetailNodes(response)
+		}
+		for i, n := range response {
 			indent := strings.Repeat("  ", n.depth)
 			text := indent + clipRenderLine(n.text)
 			if i == 0 {
