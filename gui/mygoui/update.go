@@ -143,9 +143,40 @@ func fetchGUIRelease(ctx context.Context, client *http.Client) (guiRelease, erro
 	return release, err
 }
 
-// The site only supplies a cached tag, not trusted installer size/digest. It
-// can report a possibly stale no-update result, but never authorize a download.
+// Prefer the site's cached GitHub metadata. An older site deployment, missing
+// platform asset, or invalid metadata falls back to GitHub and the legacy
+// tag-only endpoint; neither can bypass package validation.
 func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, current string) (guiRelease, bool, error) {
+	siteCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	req, siteErr := http.NewRequestWithContext(siteCtx, http.MethodGet, "https://golder-cli.pages.dev/api/gui-release", nil)
+	if siteErr == nil {
+		var resp *http.Response
+		resp, siteErr = client.Do(req)
+		if siteErr == nil {
+			var siteRelease guiRelease
+			stale := resp.Header.Get("X-Cache-Status") == "stale-error"
+			if resp.StatusCode == http.StatusOK {
+				siteErr = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&siteRelease)
+			} else {
+				siteErr = fmt.Errorf("site release server returned %s", resp.Status)
+			}
+			resp.Body.Close()
+			if siteErr == nil {
+				available, comparable := selfupdate.UpdateAvailable(current, siteRelease.Tag)
+				if comparable && guiAssetName(siteRelease.Tag, "darwin", "arm64") != "" {
+					_, hasPackage, packageErr := guiReleaseDownload(siteRelease, current, runtime.GOOS, runtime.GOARCH)
+					if !available || (hasPackage && packageErr == nil) {
+						cancel()
+						return siteRelease, stale && !available, nil
+					}
+				}
+			}
+		}
+	}
+	cancel()
+	if ctx.Err() != nil {
+		return guiRelease{}, false, ctx.Err()
+	}
 	release, err := fetchGUIRelease(ctx, client)
 	if err == nil || ctx.Err() != nil {
 		return release, false, err

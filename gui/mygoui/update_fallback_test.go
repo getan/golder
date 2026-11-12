@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,9 +34,9 @@ func TestGUIReleaseFallbackDoesNotBypassPackageVerification(t *testing.T) {
 				header := make(http.Header)
 				if r.URL.Host == "api.github.com" {
 					header.Set("X-RateLimit-Remaining", "0")
-				} else if r.URL.Host == "golder-cli.pages.dev" {
+				} else if r.URL.Path == "/api/latest" {
 					status, body = http.StatusOK, tc.siteBody
-				} else {
+				} else if r.URL.Path != "/api/gui-release" {
 					t.Fatalf("unexpected host %q", r.URL.Host)
 				}
 				return &http.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(body)), Request: r}, nil
@@ -44,7 +45,7 @@ func TestGUIReleaseFallbackDoesNotBypassPackageVerification(t *testing.T) {
 			if cached != tc.cached || release.Tag != tc.wantTag || (tc.wantErr == "" && err != nil) || (tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr))) {
 				t.Fatalf("release=%+v cached=%t err=%v", release, cached, err)
 			}
-			if strings.Join(calls, ",") != "api.github.com,golder-cli.pages.dev" {
+			if strings.Join(calls, ",") != "golder-cli.pages.dev,api.github.com,golder-cli.pages.dev" {
 				t.Fatalf("unexpected requests: %v", calls)
 			}
 			if cached && len(release.Assets) != 0 {
@@ -72,8 +73,44 @@ func TestGUIReleaseFallbackNotUsedOnSuccessOrCancellation(t *testing.T) {
 				cancel()
 			}
 			_, cached, _ := fetchGUIReleaseWithFallback(ctx, client, "v1.2.3")
-			if calls != 1 || cached {
+			if (calls != 1 && !(cancelled && calls == 0)) || cached {
 				t.Fatalf("calls=%d cached=%t", calls, cached)
+			}
+		})
+	}
+}
+
+func TestGUIReleaseSiteMetadataAndFallback(t *testing.T) {
+	name := guiAssetName("v1.2.4", runtime.GOOS, runtime.GOARCH)
+	if name == "" {
+		t.Skip("unsupported platform")
+	}
+	for _, tc := range []struct {
+		name, digest string
+		wantCalls    int
+	}{
+		{"valid", "sha256:" + strings.Repeat("a", 64), 1},
+		{"invalid digest", "sha256:bad", 2},
+		{"missing digest", "", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: guiRoundTrip(func(r *http.Request) (*http.Response, error) {
+				calls++
+				body := fmt.Sprintf(`{"tag_name":"v1.2.4","assets":[{"name":%q,"state":"uploaded","size":10,"digest":%q}]}`, name, tc.digest)
+				if r.URL.Host == "api.github.com" {
+					body = `{"tag_name":"v1.2.3"}`
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: r}, nil
+			})}
+			release, _, err := fetchGUIReleaseWithFallback(context.Background(), client, "v1.2.3")
+			if err != nil || calls != tc.wantCalls {
+				t.Fatalf("calls=%d release=%+v err=%v", calls, release, err)
+			}
+			if calls == 1 {
+				if _, ok, err := guiReleaseDownload(release, "v1.2.3", runtime.GOOS, runtime.GOARCH); err != nil || !ok {
+					t.Fatalf("site package rejected: %v", err)
+				}
 			}
 		})
 	}
