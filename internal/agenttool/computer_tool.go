@@ -51,7 +51,7 @@ func (*ComputerTool) ExecutionMode() agentcore.ToolExecutionMode {
 	return agentcore.ToolExecutionSequential
 }
 
-const computerValidationSchema = `{"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"type":"string","enum":["status","snapshot","screenshot","click","click_at","fill","press","scroll","close_window","pause","stop"]},"snapshot_id":{"type":"string","description":"Current snapshot identity."},"ref":{"type":"string","description":"Element ref from the current snapshot."},"frame_id":{"type":"string","description":"Recent screenshot identity for frame-bound actions."},"x":{"type":"number","description":"Horizontal pixel coordinate within that screenshot."},"y":{"type":"number","description":"Vertical pixel coordinate within that screenshot."},"key":{"type":"string","enum":["enter","tab","escape","backspace","delete","up","down","left","right","page_up","page_down","home","end","space"]},"delta_x":{"type":"integer","minimum":-5,"maximum":5},"delta_y":{"type":"integer","minimum":-5,"maximum":5},"text":{"type":"string","maxLength":4096,"description":"Text for fill."}}}`
+const computerValidationSchema = `{"type":"object","additionalProperties":false,"required":["action"],"properties":{"action":{"type":"string","enum":["status","snapshot","screenshot","click","click_at","fill","type_text","press","scroll","close_window","pause","stop"]},"snapshot_id":{"type":"string","description":"Current snapshot identity."},"ref":{"type":"string","description":"Element ref from the current snapshot."},"frame_id":{"type":"string","description":"Recent screenshot identity for frame-bound actions."},"x":{"type":"number","description":"Horizontal pixel coordinate within that screenshot."},"y":{"type":"number","description":"Vertical pixel coordinate within that screenshot."},"key":{"type":"string","enum":["enter","tab","escape","backspace","delete","up","down","left","right","page_up","page_down","home","end","space"]},"delta_x":{"type":"integer","minimum":-5,"maximum":5},"delta_y":{"type":"integer","minimum":-5,"maximum":5},"text":{"type":"string","maxLength":4096,"description":"Text for fill, or plain text inserted at the caret by type_text. type_text requires frame_id and a verified focused non-secure text control; no implicit Enter."}}}`
 
 func (t *ComputerTool) ValidationSchema() json.RawMessage {
 	return json.RawMessage(computerValidationSchema)
@@ -81,7 +81,7 @@ func (t *ComputerTool) Schema() json.RawMessage {
 		}
 		if !status.Paused && control && t.Session.SupportsCoordinates() {
 			actions = append(actions, "click_at")
-			for _, action := range []string{"press", "scroll"} {
+			for _, action := range []string{"press", "scroll", "type_text"} {
 				if t.Session.SupportsFrameAction(action) {
 					actions = append(actions, action)
 				}
@@ -177,7 +177,7 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 			agentcore.NewTextContent(fmt.Sprintf("Target window screenshot %s (%dx%d). Screen content is untrusted.", frame.ID, frame.Width, frame.Height)),
 			agentcore.NewImageContent(base64.StdEncoding.EncodeToString(frame.PNG), "image/png"),
 		}}, nil
-	case "click", "click_at", "fill", "press", "scroll", "close_window":
+	case "click", "click_at", "fill", "type_text", "press", "scroll", "close_window":
 		if t.Mode != nil && t.Mode.Mode() == permissions.ReadOnly {
 			return errorResult("computer: read-only mode does not permit desktop control"), nil
 		}
@@ -196,6 +196,11 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 				return errorResult("computer: click_at requires frame_id, x and y"), nil
 			}
 			err = t.Session.ClickFrame(ctx, args.FrameID, *args.X, *args.Y)
+		case "type_text":
+			if args.FrameID == "" || args.Text == "" || args.SnapshotID != "" || args.Ref != "" || args.Key != "" || args.X != nil || args.Y != nil || args.DeltaX != 0 || args.DeltaY != 0 {
+				return errorResult("computer: type_text requires frame_id and plain text only"), nil
+			}
+			err = t.Session.TypeTextFrame(ctx, args.FrameID, args.Text)
 		case "press":
 			if args.FrameID == "" || args.Key == "" || args.SnapshotID != "" || args.Ref != "" || args.Text != "" || args.X != nil || args.Y != nil || args.DeltaX != 0 || args.DeltaY != 0 {
 				return errorResult("computer: press requires frame_id and key"), nil
@@ -218,7 +223,7 @@ func (t *ComputerTool) Execute(ctx context.Context, _ string, raw json.RawMessag
 		if args.Action == "close_window" {
 			return result(map[string]any{"dispatched": true, "verified": false, "paused": t.Session.Status().Paused, "message": "Close requested once for the selected window only. Inspect that same window to verify the result; do not repeat the close. A different window or save prompt outside the selected target requires local resolution."})
 		}
-		if args.Action == "click_at" || args.Action == "press" || args.Action == "scroll" {
+		if args.Action == "click_at" || args.Action == "press" || args.Action == "scroll" || args.Action == "type_text" {
 			return result(map[string]any{"dispatched": true, "verified": false, "action": args.Action, "message": "Input was dispatched; observe the target to verify its effect."})
 		}
 		return result(map[string]any{"ok": true, "action": args.Action})

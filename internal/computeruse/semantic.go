@@ -72,7 +72,7 @@ func (s *Session) Observe(ctx context.Context) (Snapshot, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if s.sequence != sequence || !s.status.Active || s.status.Paused || s.status.Target.ID != target.ID {
+		if s.sequence != sequence || !s.status.Active || (s.status.Paused && !isOperatorContext(ctx)) || s.status.Target.ID != target.ID {
 			return ErrStaleObservation
 		}
 		s.snapshot = &snapshotLease{publicID: result.ID, backendID: backendID, refs: refs}

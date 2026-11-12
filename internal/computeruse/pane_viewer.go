@@ -66,10 +66,10 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	}
 	defer term.Restore(in.Fd(), old)
 	graphics := queryPaneGraphics(in, out)
-	if err := writePaneBytes(out, []byte("\x1b[?1049h\x1b[?25l\x1b[?7l")); err != nil {
+	if err := writePaneBytes(out, []byte("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")); err != nil {
 		return err
 	}
-	defer func() { _ = writePaneBytes(out, []byte("\x1b[?7h\x1b[?25h\x1b[?1049l")) }()
+	defer func() { _ = writePaneBytes(out, []byte("\x1b[?1006l\x1b[?1000l\x1b[?7h\x1b[?25h\x1b[?1049l")) }()
 	renderer, err := NewKittyRenderer(out, 0x474f4c44, graphics)
 	if err != nil {
 		return err
@@ -78,6 +78,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 
 	updates := make(chan paneViewerEvent, 8)
 	keys := make(chan rune, 64)
+	clicks := make(chan paneMouseClick, 8)
 	var captureAllowed atomic.Bool
 	var previewPending atomic.Bool
 	go func() {
@@ -100,6 +101,13 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 				return
 			}
 			b, ok := filter.accept(b)
+			if filter.mouse != nil {
+				select {
+				case clicks <- *filter.mouse:
+				case <-ctx.Done():
+					return
+				}
+			}
 			if !ok {
 				continue
 			}
@@ -136,7 +144,7 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 			}
 		}
 	}()
-	state := paneViewerState{graphics: graphics, message: "Type observe, click @e1, fill @e1 text, pause, resume or stop. Ctrl+G pauses."}
+	state := paneViewerState{graphics: graphics, message: "Agent 控制 / Agent control · Ctrl+G 人工接管 / take over"}
 	if !graphics {
 		state.message = "Kitty graphics unavailable; type observe for semantic controls. Ctrl+G pauses."
 	}
@@ -146,20 +154,25 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 	}
 	statusKnown, previewSettled, previewRendered := false, false, false
 	var sequence atomic.Uint64
-	request := func(action, ref, text string, emergency bool) {
+	requestFull := func(req PaneRequest, emergency bool) {
 		client := clients[1]
 		if emergency {
 			client = clients[2]
 		}
 		id := sequence.Add(1)
+		req.Sequence = id
 		go func() {
-			response, err := client.Request(ctx, PaneRequest{Action: action, Ref: ref, Text: text, Sequence: id})
+			response, err := client.Request(ctx, req)
 			select {
-			case updates <- paneViewerEvent{action: action, sequence: id, response: response, err: err}:
+			case updates <- paneViewerEvent{action: req.Action, sequence: id, response: response, err: err}:
 			case <-ctx.Done():
 			}
 		}()
 	}
+	request := func(action, ref, text string, emergency bool) {
+		requestFull(PaneRequest{Action: action, Ref: ref, Text: text}, emergency)
+	}
+	localInputPending := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -173,6 +186,9 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 			}
 			if previewSettled && event.response.Status.PendingPreview {
 				continue
+			}
+			if event.action == "takeover" || event.action == "pause" || event.action == "resume" {
+				localInputPending = false
 			}
 			state.status = event.response.Status
 			if !state.status.Active {
@@ -191,7 +207,10 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 				}
 			}
 			statusKnown = true
-			if state.status.Paused {
+			if state.status.OperatorControl {
+				state.localPaused = false
+				captureAllowed.Store(graphics && !localInputPending)
+			} else if state.status.Paused {
 				state.localPaused, state.frame = true, nil
 				captureAllowed.Store(false)
 			}
@@ -201,12 +220,16 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 			}
 			if event.action == "frame" && event.response.Error != "" {
 				state.frame = nil
-				if !state.status.Paused {
+				if !state.status.Paused || state.status.OperatorControl {
 					state.message = "Preview temporarily unavailable; retrying: " + event.response.Error
 				}
 			}
-			if event.action == "frame" && !state.localPaused && event.response.Frame != nil {
+			if event.action == "frame" && !state.localPaused && !localInputPending && event.response.Frame != nil {
 				state.frame = event.response.Frame
+			}
+			if event.action == "click_at" || event.action == "type_text" {
+				localInputPending = false
+				captureAllowed.Store(graphics && state.status.OperatorControl)
 			}
 			if event.action == "candidate" && state.status.PendingPreview && event.response.Frame != nil {
 				state.frame, state.semantic = event.response.Frame, false
@@ -224,14 +247,29 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 					state.semantic, state.scroll = true, 0
 				}
 			}
+		case click := <-clicks:
+			width, height, err := term.GetSize(out.Fd())
+			if err != nil || !display.drawn || display.last.width != width || display.last.height != height {
+				state.message = "Pane resized; wait for the updated preview and click again."
+				break
+			}
+			x, y, ok := panePreviewPoint(state, click, width, height)
+			if !ok || localInputPending {
+				state.message = "Ctrl+G 人工接管 / take over before clicking the preview."
+				break
+			}
+			requestFull(PaneRequest{Action: "click_at", FrameID: state.frame.ID, X: &x, Y: &y}, false)
+			localInputPending, state.frame = true, nil
+			captureAllowed.Store(false)
 		case b := <-keys:
 			switch b {
 			case 0x07: // Ctrl+G is independent of a slow observation or frame.
 				state.localPaused, state.frame = true, nil
+				localInputPending = false
 				state.input = ""
 				captureAllowed.Store(false)
-				state.message = "Pausing; the operator may take over the target."
-				request("pause", "", "", true)
+				state.message = "人工接管中 / Taking over; Agent input is being canceled."
+				request("takeover", "", "", true)
 			case 0x03: // Closing the connections also stops the parent session.
 				return nil
 			case '\r', '\n':
@@ -242,6 +280,17 @@ func RunOperatorPane(ctx context.Context, socket string, in, out *os.File) error
 					break
 				}
 				switch fields[0] {
+				case "type":
+					value := strings.TrimPrefix(line, "type ")
+					if !state.status.OperatorControl || state.frame == nil || localInputPending || value == line || !validFrameText(value) {
+						state.message = "Ctrl+G take over, click a field, then type <text> and Enter."
+						break
+					}
+					requestFull(PaneRequest{Action: "type_text", FrameID: state.frame.ID, Text: value}, false)
+					localInputPending, state.frame = true, nil
+					captureAllowed.Store(false)
+				case "takeover":
+					request("takeover", "", "", true)
 				case "confirm-preview":
 					if len(fields) == 1 && previewRendered && state.status.PendingPreview && state.frame != nil {
 						request("confirm-preview", "", "", false)
@@ -372,10 +421,12 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 		return err
 	}
 	status := "connecting"
-	if state.status.Active && state.localPaused {
+	if state.status.Active && state.status.OperatorControl {
+		status = "人工控制 / Human control · Agent paused"
+	} else if state.status.Active && state.localPaused {
 		status = "PAUSED · operator takeover"
 	} else if state.status.Active && state.status.Capabilities.Control {
-		status = "control allowed"
+		status = "Agent 控制 / Agent control"
 	} else if state.status.Active {
 		status = "observe only"
 	}
@@ -399,7 +450,10 @@ func (d *operatorPaneDisplay) draw(out io.Writer, renderer *KittyRenderer, state
 			return err
 		}
 	}
-	help := "Ctrl+G pause · observe · click · fill · resume · stop · view"
+	help := "Ctrl+G 人工接管 / take over · observe · resume · stop · view"
+	if state.status.OperatorControl {
+		help = "Click preview · type <text> + Enter · resume → Agent · stop"
+	}
 	if state.status.PendingPreview {
 		help = "confirm-preview · skip-preview · stop"
 	}
@@ -433,6 +487,9 @@ func paneFillArguments(line string) (string, string, bool) {
 
 // A typed value is never echoed into pane history; only its existence is shown.
 func paneInputDisplay(line string) string {
+	if strings.HasPrefix(line, "type ") {
+		return "type •••"
+	}
 	ref, _, ok := paneFillArguments(line)
 	if !ok {
 		return line

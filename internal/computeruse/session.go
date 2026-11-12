@@ -40,11 +40,12 @@ type Capabilities struct {
 }
 
 type Status struct {
-	Active         bool
-	Paused         bool
-	PendingPreview bool
-	Target         Target
-	Capabilities   Capabilities
+	Active          bool
+	Paused          bool
+	PendingPreview  bool
+	OperatorControl bool
+	Target          Target
+	Capabilities    Capabilities
 }
 
 // Backend is implemented by a platform-specific adapter. Validate must check
@@ -198,7 +199,9 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 		s.mu.Unlock()
 		return ErrNotActive
 	}
-	if s.status.Paused {
+	access, local := ctx.Value(operatorAccessKey{}).(operatorAccess)
+	operator := local && access.session == s && access.sequence == s.sequence && s.status.OperatorControl
+	if (local && !operator) || (s.status.Paused && !operator) {
 		s.mu.Unlock()
 		return ErrPaused
 	}
@@ -236,6 +239,9 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 	}()
 	if err := backend.Validate(operationCtx, target, control); err != nil {
 		if operationCtx.Err() != nil {
+			if control {
+				return noInputError(operationCtx.Err())
+			}
 			return operationCtx.Err()
 		}
 		if preview {
@@ -253,19 +259,29 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 		s.mu.Lock()
 		if s.sequence == sequence && s.status.Active {
 			s.status.Paused = true
+			s.status.OperatorControl = false
 			s.sequence++
 			s.snapshot = nil
 			s.frames = nil
 		}
 		s.mu.Unlock()
+		if control {
+			return noInputError(fmt.Errorf("%w: %w", ErrTargetLost, err))
+		}
 		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	if err := operationCtx.Err(); err != nil {
+		if control {
+			return noInputError(err)
+		}
 		return err
 	}
 	err := operation(operationCtx, backend, target)
 	if operationCtx.Err() != nil {
 		if control {
+			if errors.Is(err, ErrNoInput) {
+				return err
+			}
 			return fmt.Errorf("computer use control was interrupted; its effect may be unknown, so observe before deciding what to do: %w", operationCtx.Err())
 		}
 		return operationCtx.Err()
@@ -283,6 +299,7 @@ func (s *Session) do(ctx context.Context, control, preview bool, operation func(
 		s.mu.Lock()
 		if s.sequence == sequence && s.status.Active {
 			s.status.Paused = true
+			s.status.OperatorControl = false
 			s.sequence++
 			s.snapshot = nil
 			s.frames = nil
@@ -300,6 +317,7 @@ func (s *Session) Pause() {
 	defer s.mu.Unlock()
 	if s.status.Active {
 		s.status.Paused = true
+		s.status.OperatorControl = false
 		s.sequence++
 		s.snapshot = nil
 		s.frames = nil
@@ -388,6 +406,9 @@ func (s *Session) Resume(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", ErrTargetLost, err)
 	}
 	s.status.Paused = false
+	s.status.OperatorControl = false
+	s.sequence++
+	s.snapshot, s.frames = nil, nil
 	return nil
 }
 

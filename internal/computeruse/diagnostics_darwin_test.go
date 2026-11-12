@@ -8,6 +8,32 @@ import (
 	"testing"
 )
 
+func TestMacActivationSkipsOnlyNonWindowRecords(t *testing.T) {
+	for _, tc := range []struct {
+		peer              uint32
+		layer, resolvable int
+		want              bool
+	}{
+		{1, 0, 1, false}, // selected window
+		{2, 0, 0, false}, // unresolvable menu/decorative record
+		{2, 1, 1, false},
+		{2, 0, 1, true}, // real peer still prevents an unsafe Space change
+	} {
+		if got := macActivationPeerRelevant(1, tc.peer, tc.layer, tc.resolvable); got != tc.want {
+			t.Errorf("peer %+v: relevant=%t", tc, got)
+		}
+	}
+}
+
+func TestMacFrameRefusalBeforeDispatchHasMarker(t *testing.T) {
+	c := NewMacWindowCatalog()
+	defer c.Close()
+	err := c.ClickFrame(context.Background(), Target{ID: "missing"}, "invalid token", 0, 0)
+	if !errors.Is(err, ErrNoInput) || !errors.Is(err, ErrStaleObservation) {
+		t.Fatalf("invalid binding lost no-input marker: %v", err)
+	}
+}
+
 func TestMacAXFallbackRequiresAgreementAndEmptyList(t *testing.T) {
 	for _, tc := range []struct {
 		windows, main, focused, same int

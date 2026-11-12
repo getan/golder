@@ -81,7 +81,8 @@ func (s *Session) Capture(ctx context.Context) (Frame, error) {
 }
 
 // CapturePreview is for the local operator view, not model-facing screenshots.
-// It neither queues behind control operations nor issues an input frame lease.
+// It does not queue behind control operations. Only an authenticated takeover
+// context receives a frame lease, so the person can click the displayed image.
 func (s *Session) CapturePreview(ctx context.Context) (Frame, error) {
 	return s.capture(ctx, true)
 }
@@ -116,9 +117,9 @@ func (s *Session) capture(ctx context.Context, preview bool) (Frame, error) {
 			return err
 		}
 		frame = Frame{ID: hex.EncodeToString(nonce[:]), Width: cfg.Width, Height: cfg.Height, PNG: raw}
-		if !preview && token != "" && len(token) <= 512 {
+		if (!preview || isOperatorContext(ctx)) && token != "" && len(token) <= 512 {
 			s.mu.Lock()
-			if err := ctx.Err(); err != nil || !s.status.Active || s.status.Paused || s.status.Target.ID != target.ID {
+			if err := ctx.Err(); err != nil || !s.status.Active || (s.status.Paused && !isOperatorContext(ctx)) || s.status.Target.ID != target.ID {
 				s.mu.Unlock()
 				return ErrStaleObservation
 			}

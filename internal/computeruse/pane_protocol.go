@@ -21,10 +21,13 @@ const (
 // PaneRequest is private to a Golder-owned, kernel-verified operator pane. It
 // intentionally has no target selector, shell, arbitrary OS handles or files.
 type PaneRequest struct {
-	Action   string `json:"action"`
-	Ref      string `json:"ref,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Sequence uint64 `json:"sequence,omitempty"`
+	Action   string   `json:"action"`
+	Ref      string   `json:"ref,omitempty"`
+	Text     string   `json:"text,omitempty"`
+	Sequence uint64   `json:"sequence,omitempty"`
+	FrameID  string   `json:"frame_id,omitempty"`
+	X        *float64 `json:"x,omitempty"`
+	Y        *float64 `json:"y,omitempty"`
 }
 
 type PaneResponse struct {
@@ -84,8 +87,10 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 	var err error
 	if request.Action != "click" && request.Action != "fill" && request.Ref != "" {
 		err = errors.New("ref is only valid for click or fill")
-	} else if request.Action != "fill" && request.Text != "" {
+	} else if request.Action != "fill" && request.Action != "type_text" && request.Text != "" {
 		err = errors.New("text is only valid for fill")
+	} else if request.Action != "click_at" && request.Action != "type_text" && (request.FrameID != "" || request.X != nil || request.Y != nil) {
+		err = errors.New("frame coordinates are only valid for local click_at or type_text")
 	} else if request.Action != "status" && request.Action != "frame" && request.Action != "candidate" && !pane.acceptSequence(request.Sequence) {
 		err = errors.New("computer pane command is stale or unsequenced")
 	} else if (request.Action == "status" || request.Action == "frame" || request.Action == "candidate") && request.Sequence != 0 {
@@ -95,7 +100,15 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 		case "status":
 		case "frame":
 			var frame Frame
-			frame, err = pane.session.CapturePreview(ctx)
+			if pane.session.Status().OperatorControl {
+				var local context.Context
+				local, err = pane.session.operatorContext(ctx)
+				if err == nil {
+					frame, err = pane.session.CapturePreview(local)
+				}
+			} else {
+				frame, err = pane.session.CapturePreview(ctx)
+			}
 			if err == nil {
 				response.Frame = &frame
 			} else if errors.Is(err, ErrPreviewBusy) || errors.Is(err, context.Canceled) && ctx.Err() == nil {
@@ -114,8 +127,13 @@ func paneResponse(ctx context.Context, pane *Pane, request PaneRequest) PaneResp
 			resumeCtx, cancel := context.WithTimeout(ctx, OperatorResumeTimeout)
 			response.Text, err = pane.operatorCommand(resumeCtx, request.Action, request.Sequence)
 			cancel()
-		case "observe", "pause", "stop", "confirm-preview", "skip-preview":
+		case "observe", "pause", "takeover", "stop", "confirm-preview", "skip-preview":
 			response.Text, err = pane.operatorCommand(ctx, request.Action, request.Sequence)
+		case "click_at", "type_text":
+			err = pane.operatorFrameInput(ctx, request)
+			if err == nil {
+				response.Text = "Input dispatched. Check the preview before the next action."
+			}
 		case "click":
 			response.Text, err = pane.operatorCommand(ctx, "click "+request.Ref, request.Sequence)
 		case "fill":

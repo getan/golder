@@ -4,6 +4,8 @@ import (
 	"context"
 	"math"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // FrameKeyBackend and FrameScrollBackend may be offered independently. Both
@@ -21,6 +23,14 @@ type FrameKeyAvailability interface {
 type FrameScrollBackend interface {
 	FrameBoundBackend
 	ScrollFrame(context.Context, Target, string, float64, float64, int, int) error
+}
+
+// FrameTextBackend inserts plain Unicode text only into a positively verified,
+// focused, non-secure text control. It must not use the clipboard or fall back
+// to an unidentified window/container. Partial dispatch must never be replayed.
+type FrameTextBackend interface {
+	FrameBoundBackend
+	TypeTextFrame(context.Context, Target, string, string) error
 }
 
 // SupportsCoordinates is true only when the backend can bind and revalidate
@@ -67,6 +77,9 @@ func (s *Session) SupportsFrameAction(action string) bool {
 	case "scroll":
 		_, ok := s.backend.(FrameScrollBackend)
 		return ok
+	case "type_text":
+		_, ok := s.backend.(FrameTextBackend)
+		return ok
 	default:
 		return false
 	}
@@ -105,6 +118,11 @@ func (s *Session) SupportsFrameKey(key string) bool {
 // pixels in that frame, never global screen coordinates or a system handle.
 func (s *Session) ClickFrame(ctx context.Context, frameID string, x, y float64) error {
 	return s.useFrame(ctx, frameID, x, y, true, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
+		if isOperatorContext(ctx) {
+			if local, ok := backend.(OperatorFrameBackend); ok {
+				return local.OperatorClickFrame(ctx, target, lease.token, x/float64(lease.width), y/float64(lease.height))
+			}
+		}
 		return backend.ClickFrame(ctx, target, lease.token, x/float64(lease.width), y/float64(lease.height))
 	})
 }
@@ -124,6 +142,39 @@ func (s *Session) PressFrame(ctx context.Context, frameID, key string) error {
 			return ErrUnavailable
 		}
 		return keys.PressFrame(ctx, target, lease.token, key)
+	})
+}
+
+func validFrameText(text string) bool {
+	if text == "" || len(text) > 4096 || !utf8.ValidString(text) {
+		return false
+	}
+	for _, r := range text {
+		// Newlines/tabs and other control codes are actions, not plain typing.
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// TypeTextFrame inserts at the caret; unlike semantic fill it does not replace
+// the field's entire value and never presses Enter implicitly.
+func (s *Session) TypeTextFrame(ctx context.Context, frameID, text string) error {
+	if !validFrameText(text) {
+		return noInputError(ErrNotAllowed)
+	}
+	return s.useFrame(ctx, frameID, 0, 0, false, func(ctx context.Context, backend FrameBoundBackend, target Target, lease frameLease) error {
+		if isOperatorContext(ctx) {
+			if local, ok := backend.(OperatorFrameBackend); ok {
+				return local.OperatorTypeTextFrame(ctx, target, lease.token, text)
+			}
+		}
+		typing, ok := backend.(FrameTextBackend)
+		if !ok {
+			return noInputError(ErrUnavailable)
+		}
+		return typing.TypeTextFrame(ctx, target, lease.token, text)
 	})
 }
 

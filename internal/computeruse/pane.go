@@ -90,6 +90,10 @@ func (p *Pane) operatorCommand(ctx context.Context, input string, sequence uint6
 	// waiting for the command mutex. Invalid commands have no side effects.
 	if len(fields) == 1 && fields[0] == "pause" {
 		p.session.Pause()
+	} else if len(fields) == 1 && fields[0] == "takeover" {
+		if err := p.session.takeOver(); err != nil {
+			return "", err
+		}
 	} else if len(fields) == 1 && fields[0] == "stop" {
 		p.session.Stop()
 	}
@@ -105,6 +109,12 @@ func (p *Pane) operatorCommand(ctx context.Context, input string, sequence uint6
 		return "Commands: observe, click <ref>, fill <ref> <text>, pause, resume, stop", nil
 	}
 	switch fields[0] {
+	case "takeover":
+		if len(fields) != 1 {
+			return "", ErrNotAllowed
+		}
+		p.snapshot = Snapshot{}
+		return "人工控制 / Human control · click the preview; type <text> then Enter · resume returns control to Agent", nil
 	case "confirm-preview":
 		if len(fields) != 1 || !p.previewDelivered {
 			return "", ErrNotAllowed
@@ -127,6 +137,13 @@ func (p *Pane) operatorCommand(ctx context.Context, input string, sequence uint6
 		if len(fields) != 1 {
 			return "", errors.New("usage: observe")
 		}
+		if p.session.Status().OperatorControl {
+			var err error
+			ctx, err = p.session.operatorContext(ctx)
+			if err != nil {
+				return "", err
+			}
+		}
 		snapshot, err := p.session.Observe(ctx)
 		if err != nil {
 			return "", err
@@ -144,9 +161,13 @@ func (p *Pane) operatorCommand(ctx context.Context, input string, sequence uint6
 		if len(fields) != 2 {
 			return "", errors.New("usage: click <ref>")
 		}
+		local, err := p.session.operatorContext(ctx)
+		if err != nil {
+			return "", err
+		}
 		id := p.snapshot.ID
 		p.snapshot = Snapshot{}
-		if err := p.session.Act(ctx, id, fields[1], "click", ""); err != nil {
+		if err := p.session.Act(local, id, fields[1], "click", ""); err != nil {
 			return "", err
 		}
 		return "Clicked. Observe again before the next action.", nil
@@ -189,9 +210,13 @@ func (p *Pane) operatorFill(ctx context.Context, ref, text string, sequence uint
 	if sequence == 0 || sequence != p.sequence.Load() {
 		return "", errors.New("computer pane command superseded by a newer operator command")
 	}
+	local, err := p.session.operatorContext(ctx)
+	if err != nil {
+		return "", err
+	}
 	id := p.snapshot.ID
 	p.snapshot = Snapshot{}
-	if err := p.session.Act(ctx, id, ref, "fill", text); err != nil {
+	if err := p.session.Act(local, id, ref, "fill", text); err != nil {
 		return "", err
 	}
 	return "Text set. Observe again before the next action.", nil

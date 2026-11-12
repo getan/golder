@@ -22,11 +22,15 @@ func TestOperatorPaneProtocolRevokesOnDisconnect(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- ServeOperatorPane(ctx, server, pane) }()
 	client := NewPaneClient(clientConn)
-	response, err := client.Request(ctx, PaneRequest{Action: "observe", Sequence: 1})
+	response, err := client.Request(ctx, PaneRequest{Action: "takeover", Sequence: 1})
+	if err != nil || response.Error != "" || !response.Status.OperatorControl {
+		t.Fatalf("takeover: response=%+v err=%v", response, err)
+	}
+	response, err = client.Request(ctx, PaneRequest{Action: "observe", Sequence: 2})
 	if err != nil || response.Error != "" || response.Text == "" {
 		t.Fatalf("observe: response=%+v err=%v", response, err)
 	}
-	response, err = client.Request(ctx, PaneRequest{Action: "click", Ref: "@e1", Sequence: 2})
+	response, err = client.Request(ctx, PaneRequest{Action: "click", Ref: "@e1", Sequence: 3})
 	if err != nil || response.Error != "" || backend.called != 1 {
 		t.Fatalf("click: response=%+v calls=%d err=%v", response, backend.called, err)
 	}
@@ -34,11 +38,11 @@ func TestOperatorPaneProtocolRevokesOnDisconnect(t *testing.T) {
 	if err != nil || response.Error == "" {
 		t.Fatalf("invalid arguments accepted: response=%+v err=%v", response, err)
 	}
-	response, err = client.Request(ctx, PaneRequest{Action: "pause", Sequence: 4})
+	response, err = client.Request(ctx, PaneRequest{Action: "pause", Sequence: 5})
 	if err != nil || response.Error != "" || !response.Status.Paused {
 		t.Fatalf("pause: response=%+v err=%v", response, err)
 	}
-	response, err = client.Request(ctx, PaneRequest{Action: "resume", Sequence: 3})
+	response, err = client.Request(ctx, PaneRequest{Action: "resume", Sequence: 4})
 	if err != nil || response.Error == "" || !response.Status.Paused {
 		t.Fatalf("stale resume reversed a newer pause: response=%+v err=%v", response, err)
 	}
@@ -82,11 +86,15 @@ func TestOperatorPaneProtocolUnicodeFill(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- ServeOperatorPane(ctx, server, pane) }()
 	client := NewPaneClient(clientConn)
-	response, err := client.Request(ctx, PaneRequest{Action: "observe", Sequence: 1})
+	response, err := client.Request(ctx, PaneRequest{Action: "takeover", Sequence: 1})
+	if err != nil || response.Error != "" || !response.Status.OperatorControl {
+		t.Fatalf("takeover: response=%+v err=%v", response, err)
+	}
+	response, err = client.Request(ctx, PaneRequest{Action: "observe", Sequence: 2})
 	if err != nil || response.Error != "" {
 		t.Fatalf("observe: response=%+v err=%v", response, err)
 	}
-	response, err = client.Request(ctx, PaneRequest{Action: "fill", Ref: "@e1", Text: "世界  two", Sequence: 2})
+	response, err = client.Request(ctx, PaneRequest{Action: "fill", Ref: "@e1", Text: "世界  two", Sequence: 3})
 	if err != nil || response.Error != "" || backend.called != 1 || backend.value != "世界  two" {
 		t.Fatalf("fill: response=%+v calls=%d value=%q err=%v", response, backend.called, backend.value, err)
 	}

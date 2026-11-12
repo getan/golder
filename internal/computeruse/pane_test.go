@@ -29,6 +29,9 @@ func TestPaneOperatorActionsAndClosePause(t *testing.T) {
 	if _, err := pane.OperatorCommand(ctx, "click @e1"); err == nil {
 		t.Fatal("click before observation succeeded")
 	}
+	if _, err := pane.OperatorCommand(ctx, "takeover"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pane.OperatorCommand(ctx, "observe"); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +66,9 @@ func TestPaneEmergencyPauseInterruptsInFlightAction(t *testing.T) {
 	}
 	pane, err := NewPane(s, &bytes.Buffer{}, 42, false)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pane.OperatorCommand(ctx, "takeover"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pane.OperatorCommand(ctx, "observe"); err != nil {
