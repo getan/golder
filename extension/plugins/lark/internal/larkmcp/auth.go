@@ -99,28 +99,25 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		pollCtx, stop := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
 		defer stop()
 		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--json"}, nil)
-		verifiedAfterPollFailure := false
 		if err != nil || out.Code != 0 || out.Truncated {
 			if ctx.Err() != nil {
 				return failContext()
 			}
 			verified, verifyCode := p.verifyLarkUser(ctx)
-			if !verified {
-				if verifyCode == setupevent.CodeAuthVerifyNetworkFailed {
-					return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
-				}
-				return fail(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
-			}
-			verifiedAfterPollFailure = true
-		}
-		if !verifiedAfterPollFailure {
-			verified, verifyCode := p.verifyLarkUser(ctx)
-			if !verified {
-				if ctx.Err() != nil {
-					return failContext()
-				}
+			if !verified && verifyCode == setupevent.CodeAuthVerifyNetworkFailed {
 				return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
 			}
+			// A pre-existing verified login does not prove this authorization
+			// flow granted the requested scope. Never report the old login as a
+			// successful new authorization.
+			return fail(setupevent.PhaseWaitForAuthorization, setupevent.CodeAuthPollFailed)
+		}
+		verified, verifyCode := p.verifyLarkUser(ctx)
+		if !verified {
+			if ctx.Err() != nil {
+				return failContext()
+			}
+			return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
 		}
 	} else {
 		if err := p.projectLogin(ctx, write); err != nil {

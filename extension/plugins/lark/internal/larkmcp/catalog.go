@@ -92,6 +92,13 @@ func definitions() []definition {
 		if d.Name == "doc_search" {
 			d.Options["page_size"] = integer(20)
 		}
+		switch d.Name {
+		case "message_search", "chat_history", "chat_search":
+			d.Options["page_size"] = integer(50)
+		}
+		if d.Name == "sheet_structure" {
+			d.Options["index"] = map[string]any{"type": "integer", "minimum": 0, "maximum": 200}
+		}
 		if d.Name == "ticket_search" {
 			d.Options["limit"] = integer(50)
 			d.Options["assignee"] = map[string]any{
@@ -131,7 +138,8 @@ func definitions() []definition {
 		}
 		if d.Name == "base_schema" {
 			delete(d.Options, "page_token")
-			d.Options["offset"] = integer(100000)
+			delete(d.Options, "page_size")
+			delete(d.Options, "offset")
 		}
 		if d.Name == "base_record_search" {
 			delete(d.Options, "page_token")

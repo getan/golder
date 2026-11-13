@@ -30,6 +30,19 @@ func (p *Plugin) project(ctx context.Context, d definition, in input, operation 
 		}
 		return p.run(ctx, "project", projectArgs(operation.Command, params), false)
 	}
+	if d.Name == "project_schema" && in.Operation == "decode_url" {
+		rawURL, _ := o["url"].(string)
+		result := p.run(ctx, "project", []string{"url", "decode", "--url=" + rawURL}, false)
+		if !result.OK && result.Error != nil {
+			// A missing/invalid CLI result is not evidence that the URL is bad,
+			// nor that the user lacks a project role. Keep the failure specific
+			// and leave the original link for the operator to retry.
+			result.Error.Code = "PROJECT_URL_DECODE_FAILED"
+			result.Error.Message = "Project URL could not be decoded; check the URL and the installed Project CLI"
+			result.Error.NextAction = "Use a full Feishu Project work-item URL; if it is valid, verify Project login and CLI availability"
+		}
+		return result
+	}
 	if d.Name == "project_schema" && (in.Operation == "fields" || in.Operation == "roles") && o["page_num"] == nil {
 		o["page_num"] = 1
 	}
@@ -95,8 +108,8 @@ func (p *Plugin) project(ctx context.Context, d definition, in input, operation 
 				return current
 			}
 			for key, value := range expected {
-				field := findObject(current.Data, "field_key", key)
-				if field == nil || !sameJSON(field["value"], value) {
+				field := projectField(current.Data, key)
+				if field == nil || !projectFieldValueEqual(field["value"], value) {
 					return failure("project", "CONFLICT", "The previously observed field changed or could not be checked: "+key, "Read it again and reconfirm the update")
 				}
 			}
@@ -205,6 +218,76 @@ func sameJSON(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// projectField returns one entry from the actual work_item_fields response. The
+// Project CLI uses {"key":"priority","value":{...}}, while some older fixtures
+// used field_key; support both without guessing from an arbitrary nested map.
+func projectField(value any, key string) map[string]any {
+	if root, ok := value.(map[string]any); ok {
+		if fields, ok := root["work_item_fields"]; ok {
+			if field := findFieldEntry(fields, key); field != nil {
+				return field
+			}
+		}
+	}
+	return findFieldEntry(value, key)
+}
+
+func findFieldEntry(value any, key string) map[string]any {
+	switch v := value.(type) {
+	case map[string]any:
+		if fmt.Sprint(v["key"]) == key || fmt.Sprint(v["field_key"]) == key {
+			return v
+		}
+		for _, child := range v {
+			if field := findFieldEntry(child, key); field != nil {
+				return field
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if field := findFieldEntry(child, key); field != nil {
+				return field
+			}
+		}
+	}
+	return nil
+}
+
+// projectFieldValueEqual compares the value shape returned by Project with the
+// value the operator copied into expected. Option/person objects expose the
+// meaningful scalar under value/label/key/name/id; arrays compare element-wise.
+func projectFieldValueEqual(actual, expected any) bool {
+	if sameJSON(actual, expected) {
+		return true
+	}
+	switch value := actual.(type) {
+	case map[string]any:
+		for _, key := range []string{"value", "label", "key", "name", "id", "text"} {
+			if candidate, ok := value[key]; ok && sameJSON(candidate, expected) {
+				return true
+			}
+		}
+	case []any:
+		if wanted, ok := expected.([]any); ok {
+			if len(value) != len(wanted) {
+				return false
+			}
+			for i := range value {
+				if !projectFieldValueEqual(value[i], wanted[i]) {
+					return false
+				}
+			}
+			return true
+		}
+		for _, item := range value {
+			if projectFieldValueEqual(item, expected) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func findObject(value any, key, want string) map[string]any {

@@ -153,6 +153,9 @@ func (p *Plugin) run(ctx context.Context, service string, args []string, write b
 	args = append([]string{}, args...)
 	if service == "lark" {
 		args = append(args, "--as=user")
+		if baseNeedsJSON(args) && !hasFormatFlag(args) {
+			args = append(args, "--format=json")
+		}
 	} else {
 		args = append(args, "--format=json")
 	}
@@ -162,6 +165,28 @@ func (p *Plugin) run(ctx context.Context, service string, args []string, write b
 		r.ExecutionState, r.Verification = "submitted", "receipt_only"
 	}
 	return r
+}
+
+// Base record commands default to NDJSON file mode in the CLI. The plugin needs
+// inline records for its own result/readback path, so request JSON explicitly.
+func baseNeedsJSON(args []string) bool {
+	if len(args) < 2 || args[0] != "base" {
+		return false
+	}
+	switch args[1] {
+	case "+record-list", "+record-search", "+record-get":
+		return true
+	}
+	return false
+}
+
+func hasFormatFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--format" || strings.HasPrefix(arg, "--format=") {
+			return true
+		}
+	}
+	return false
 }
 
 func buildArgs(command []string, opts map[string]any) ([]string, error) {

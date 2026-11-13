@@ -76,11 +76,14 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	if err := businessFlags(in.Service, in.Argv[:2], in.Argv[2:]); err != nil {
 		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Omit --as/--format/confirmation flags; use only approved inline business parameters, not local-file or configuration references")
 	}
-	// This one fixed command is a known read, independent of untrusted CLI
+	// These fixed commands are known reads, independent of untrusted CLI
 	// annotations. Keep the same exact-call host authorization requirement;
 	// all other long-tail commands remain conservatively mutating/unknown.
-	knownSearchRead := in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search"
-	return p.run(ctx, in.Service, in.Argv, !knownSearchRead)
+	knownRead := in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search"
+	if in.Service == "project" && in.Argv[0] == "url" && in.Argv[1] == "decode" {
+		knownRead = true
+	}
+	return p.run(ctx, in.Service, in.Argv, !knownRead)
 }
 
 func businessCommand(service string, parts []string, help bool) error {

@@ -9,6 +9,9 @@ import (
 
 func (p *Plugin) lark(ctx context.Context, d definition, in input, args []string) Result {
 	o := in.Options
+	if d.Name == "message_search" {
+		return markMessageSearchPartial(p.run(ctx, "lark", args, false))
+	}
 	if !d.Write {
 		return p.run(ctx, "lark", args, false)
 	}
@@ -92,6 +95,29 @@ func (p *Plugin) lark(ctx context.Context, d definition, in input, args []string
 	}
 	if findString(result.Data, "ignored_fields") != "" || containsKey(result.Data, "ignored_fields") {
 		result.Partial = true
+	}
+	return result
+}
+
+// Message search can succeed for IDs while detail hydration fails. Preserve
+// that distinction instead of letting a top-level ok=true read as full success.
+func markMessageSearchPartial(result Result) Result {
+	if !result.OK {
+		return result
+	}
+	data, ok := result.Data.(map[string]any)
+	if !ok {
+		return result
+	}
+	ids, ok := data["message_ids"].([]any)
+	if !ok || len(ids) == 0 {
+		return result
+	}
+	note, _ := data["note"].(string)
+	lower := strings.ToLower(note)
+	if note != "" && (strings.Contains(lower, "fail") || strings.Contains(lower, "unavailable") || strings.Contains(lower, "missing")) {
+		result.Partial = true
+		result.Verification = "id_list_only"
 	}
 	return result
 }

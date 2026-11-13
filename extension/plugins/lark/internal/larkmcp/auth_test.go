@@ -38,7 +38,7 @@ func TestExistingApplicationAndPersonalOAuthAreSeparate(t *testing.T) {
 	}
 }
 
-func TestLarkPollFailureIsSuccessWhenStatusIsAlreadyVerified(t *testing.T) {
+func TestLarkPollFailureDoesNotTreatExistingLoginAsSuccess(t *testing.T) {
 	statusCalls := 0
 	f := &fakeRunner{fn: func(_ string, args []string, _ []byte) (Output, error) {
 		line := strings.Join(args, " ")
@@ -58,11 +58,11 @@ func TestLarkPollFailureIsSuccessWhenStatusIsAlreadyVerified(t *testing.T) {
 	}}
 	p := New(Config{Home: t.TempDir(), AppID: "cli_existing", AppSecret: "private", Domains: "docs"}, f)
 	var events bytes.Buffer
-	if err := p.Setup(context.Background(), "lark", &events); err != nil {
-		t.Fatal(err)
-	}
-	if statusCalls != 1 || !strings.Contains(events.String(), `"type":"complete"`) || strings.Contains(events.String(), "access_token") || strings.Contains(events.String(), "private-device") {
-		t.Fatalf("statusCalls=%d events=%s", statusCalls, events.String())
+	err := p.Setup(context.Background(), "lark", &events)
+	text := events.String()
+	if err == nil || statusCalls != 1 || !strings.Contains(text, `"code":"AUTH_POLL_FAILED"`) ||
+		strings.Contains(text, `"type":"complete"`) || strings.Contains(text, "access_token") || strings.Contains(text, "private-device") {
+		t.Fatalf("err=%v statusCalls=%d events=%s", err, statusCalls, text)
 	}
 }
 
