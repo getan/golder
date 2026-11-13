@@ -80,7 +80,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 	if m.closed.Load() || m.opts.NoTools || !s.enabled.Load() || len(argv) == 0 {
 		return errors.New("setup unavailable: approve and enable a local source with a setup declaration")
 	}
-	fp, err := fingerprint(ref, s.cfg, m.opts.Cwd)
+	fp, err := fingerprint(ref, s.cfg)
 	if err != nil {
 		return err
 	}

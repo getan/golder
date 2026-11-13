@@ -145,7 +145,7 @@ func TestLarkWizardHighlightsNextAction(t *testing.T) {
 	if got := a.larkNextAction(true); got != "enable" {
 		t.Fatalf("saved configuration should lead to enable, got %q", got)
 	}
-	a.extension.Enabled = true
+	a.extension.Enabled, a.extension.Trusted = true, true
 	if got := a.larkNextAction(true); got != "test" {
 		t.Fatalf("unknown prior authorization should lead to a connection check, got %q", got)
 	}
@@ -280,5 +280,24 @@ func TestLarkHelperMismatchShowsOneClickUpdate(t *testing.T) {
 	}
 	if larkHelperReady(a.extension) {
 		t.Fatal("mismatched helper left authorization controls ready")
+	}
+}
+
+func TestLarkUntrustedSourceRequiresReviewBeforeAuthorization(t *testing.T) {
+	a := testApp()
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{
+			Installed: true, Configured: true, Enabled: true, Trusted: false, BundledVersion: "dev",
+		},
+		SavedLarkCLI: "/opt/lark", AppID: "cli_test", CredentialName: "secret", CredentialAvailable: true,
+	}
+	a.extensionEdit = appsession.LarkExtensionEdit{LarkCLI: "/opt/lark", AppID: "cli_test", CredentialName: "secret"}
+	if got := a.larkNextAction(true); got != "enable" {
+		t.Fatalf("untrusted source next action = %q, want enable", got)
+	}
+	a.settingsOpen, a.settingsTab = true, 2
+	tt := ui.NewTester(a.larkExtensionCard, 1400, 900)
+	if !tt.HasText("Review & re-approve") || !tt.HasText("The source or its dependencies changed since the last approval.") {
+		t.Fatalf("untrusted source did not require review: %q", tt.Texts())
 	}
 }

@@ -147,11 +147,11 @@ func New(opts Options) (*Manager, error) {
 		var fp string
 		err := validateConfig(ref, c)
 		if err == nil {
-			fp, err = fingerprint(ref, c, opts.Cwd)
+			fp, err = fingerprint(ref, c)
 		}
 		s.fingerprint = fp
 		if fp != "" && ref.Kind == "mcp" && c.Transport == "http" && !hasAuthorizationHeader(c.Headers) {
-			oauthFP, authErr := fingerprint(ref, c, "")
+			oauthFP, authErr := fingerprint(ref, c)
 			if authErr == nil {
 				_, authErr = mcpauth.Stored(ref.String(), oauthFP, c.URL, s.logs.AddSecrets)
 			}
@@ -282,7 +282,7 @@ func (m *Manager) approve(ref SourceRef, remember bool) error {
 	if e = validateConfig(ref, s.cfg); e != nil {
 		return e
 	}
-	fp, e := fingerprint(ref, s.cfg, m.opts.Cwd)
+	fp, e := fingerprint(ref, s.cfg)
 	if e != nil {
 		return e
 	}
@@ -378,7 +378,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	if m.closed.Load() || m.opts.NoTools || !s.enabled.Load() {
 		return errors.New("extension disabled; not executed")
 	}
-	fp, e := fingerprint(s.ref, s.cfg, m.opts.Cwd)
+	fp, e := fingerprint(s.ref, s.cfg)
 	if e != nil {
 		return e
 	}
@@ -390,7 +390,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 	}
 	s.logs.registerConfigSecrets(s.cfg)
 	if s.ref.Kind == "mcp" && s.cfg.Transport == "http" && oauth == nil && !hasAuthorizationHeader(s.cfg.Headers) {
-		oauthFP, authErr := fingerprint(s.ref, s.cfg, "")
+		oauthFP, authErr := fingerprint(s.ref, s.cfg)
 		if authErr != nil {
 			return authErr
 		}
@@ -426,7 +426,7 @@ func (m *Manager) connectLockedWithOAuth(ctx context.Context, s *source, oauth a
 			if m.closed.Load() || m.opts.NoTools || !s.enabled.Load() {
 				return errors.New("extension disabled; not executed")
 			}
-			current, err := fingerprint(s.ref, s.cfg, m.opts.Cwd)
+			current, err := fingerprint(s.ref, s.cfg)
 			if err != nil {
 				return err
 			}
@@ -534,10 +534,9 @@ func (m *Manager) AuthorizeMCP(ctx context.Context, ref SourceRef, open mcpauth.
 		s.mu.Unlock()
 		return errors.New("disconnect the MCP server before authorizing again")
 	}
-	// The source approval remains project-bound, but the credential belongs to
-	// the same global HTTP definition across projects. Exclude only cwd from the
-	// OAuth key; the full config and declared executable bytes remain bound.
-	oauthFP, err := fingerprint(ref, s.cfg, "")
+	// The credential belongs to the same account-scoped HTTP definition across
+	// projects; the full config and declared executable bytes remain bound.
+	oauthFP, err := fingerprint(ref, s.cfg)
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -715,7 +714,7 @@ func (m *Manager) PackageSkills() map[string]string {
 		}
 		s, _ := m.get(snap.Ref)
 		if s.cfg.Skills != "" {
-			if fp, err := fingerprint(s.ref, s.cfg, m.opts.Cwd); err == nil && fp == s.approval {
+			if fp, err := fingerprint(s.ref, s.cfg); err == nil && fp == s.approval {
 				out[snap.Ref.String()] = expandPath(s.cfg.Skills)
 			}
 			continue

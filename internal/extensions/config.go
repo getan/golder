@@ -361,16 +361,17 @@ func atomicWrite(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
-// fingerprint includes actual executable bytes and manifest content. PATH
-// retargeting or replacing a trusted executable invalidates approval.
-func fingerprint(ref SourceRef, c SourceConfig, cwd string) (string, error) {
+// fingerprint is account-scoped: it includes the source definition, actual
+// executable bytes and dependencies, but not the current project directory.
+// Approving an extension once must remain valid when the same operator opens
+// another project; moving or replacing its executable still invalidates trust.
+func fingerprint(ref SourceRef, c SourceConfig) (string, error) {
 	c.Enabled = false
 	h := sha256.New()
 	b, _ := json.Marshal(struct {
 		Ref    SourceRef
 		Config SourceConfig
-		Cwd    string
-	}{ref, c, cwd})
+	}{ref, c})
 	h.Write(b)
 	if c.Manifest != "" {
 		p := expandPath(c.Manifest)

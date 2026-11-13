@@ -267,7 +267,7 @@ func (m *Manager) AddMCP(d MCPDraft) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err = fingerprint(ref, cfg, m.opts.Cwd); err != nil {
+	if _, err = fingerprint(ref, cfg); err != nil {
 		return fmt.Errorf("cannot review MCP executable: %w", err)
 	}
 	configWriteMu.Lock()

@@ -451,7 +451,7 @@ func (a *App) larkNextAction(helperReady bool) string {
 			}
 		}
 	}
-	if !s.Enabled {
+	if !s.Enabled || !s.Trusted {
 		return "enable"
 	}
 	if !helperReady {
@@ -648,7 +648,7 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 					ui.Text(c, fmt.Sprintf("Trust: %s · network: %t · private state: %t · executables: %d · tools: %d",
 						map[bool]string{true: "approved", false: "needs review"}[source.Trusted], source.Network, source.StateDir, source.Executables, source.Tools)).FontSize(10).TextColor(theme.TextMuted)
 				})
-				if subtleButton(c, "Test", a.extensionBusy || !source.Enabled).Clicked() {
+				if subtleButton(c, "Test", a.extensionBusy || !source.Enabled || !source.Trusted).Clicked() {
 					a.testGenericExtension(source)
 				}
 				if source.Kind == "mcp" && strings.Contains(source.Type, "http") {
@@ -676,17 +676,26 @@ func (a *App) extensionsSettingsView(c *ui.Context) {
 					}
 				}
 				label := "Enable"
-				if source.Enabled {
+				enable := !source.Enabled
+				if !source.Trusted {
+					enable = true
+					switch {
+					case a.extensionSourceConfirm == source.Kind+":"+source.ID && source.Kind == "mcp":
+						label = "Cancel review"
+					case a.extensionSourceConfirm == source.Kind+":"+source.ID:
+						label = "Confirm enable"
+					case source.Enabled:
+						label = "Review & re-approve"
+					default:
+						label = "Approve & enable"
+					}
+				} else if source.Enabled {
 					label = "Disable"
 				} else if a.extensionSourceConfirm == source.Kind+":"+source.ID {
-					if source.Kind == "mcp" {
-						label = "Cancel review"
-					} else {
-						label = "Confirm enable"
-					}
+					label = "Confirm enable"
 				}
 				if subtleButton(c, label, a.extensionBusy).Clicked() {
-					a.setGenericExtension(source, !source.Enabled)
+					a.setGenericExtension(source, enable)
 				}
 			})
 			if source.Kind == "mcp" && a.mcpToolsID == source.ID {
@@ -807,12 +816,21 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		ui.Text(c, "3. Review and enable").FontWeight(600).Padding(6, 0, 0, 0)
 		ui.Text(c, "Runs a checksum-verified helper with network access, a private HOME, and only the official CLI paths shown above. Business writes still require normal tool approval.").
 			FontSize(11).TextColor(theme.TextMuted).MaxWidth(650)
+		if a.extension.Configured && !a.extension.Trusted {
+			ui.Text(c, "The source or its dependencies changed since the last approval. Review and re-approve before authorizing or testing.").
+				FontSize(11).TextColor(theme.Warning).Wrap()
+		}
 		if a.extension.Configured {
-			if !a.extension.Enabled {
-				if larkWizardButton(c, "Approve & enable", next == "enable", a.extensionBusy || !helperReady || next == "save" || next == "install-cli").Clicked() {
+			if !a.extension.Trusted {
+				label := "Approve & enable"
+				if a.extension.Enabled {
+					label = "Review & re-approve"
+				}
+				if larkWizardButton(c, label, next == "enable", a.extensionBusy || !helperReady || next == "save" || next == "install-cli").Clicked() {
 					a.setLarkEnabled(true)
 				}
-			} else if subtleButton(c, "Disable", a.extensionBusy).Clicked() {
+			}
+			if a.extension.Enabled && subtleButton(c, "Disable", a.extensionBusy).Clicked() {
 				a.setLarkEnabled(false)
 			}
 		}
@@ -834,13 +852,13 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		}
 		unsaved := next == "save" || next == "install-cli"
 		ui.Row(c).Gap(8).Wrap().Children(func() {
-			if larkWizardButton(c, "Authorize Lark", next == "lark", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Lark", next == "lark", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !a.extension.Trusted || !helperReady || unsaved).Clicked() {
 				a.authorizeLark("lark")
 			}
-			if larkWizardButton(c, "Authorize Project", next == "project", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || !projectConfigured || unsaved).Clicked() {
+			if larkWizardButton(c, "Authorize Project", next == "project", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !a.extension.Trusted || !helperReady || !projectConfigured || unsaved).Clicked() {
 				a.authorizeLark("project")
 			}
-			if larkWizardButton(c, "Test connection", next == "test", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !helperReady || unsaved).Clicked() {
+			if larkWizardButton(c, "Test connection", next == "test", a.extensionBusy || a.extensionStatusCancel != nil || !a.extension.Enabled || !a.extension.Trusted || !helperReady || unsaved).Clicked() {
 				a.testLark()
 			}
 			if (a.extensionLarkStatus == "unknown" || a.extensionProjectStatus == "unknown") && subtleButton(c, "Retry authorization status", a.extensionBusy).Clicked() {

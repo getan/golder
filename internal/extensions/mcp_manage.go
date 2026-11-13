@@ -149,7 +149,7 @@ func (m *Manager) ReplaceReviewedMCP(edit MCPEdit, cfg SourceConfig) error {
 	if err := validateConfig(ref, cfg); err != nil {
 		return err
 	}
-	if _, err := fingerprint(ref, cfg, m.opts.Cwd); err != nil {
+	if _, err := fingerprint(ref, cfg); err != nil {
 		return err
 	}
 	configWriteMu.Lock()
@@ -229,7 +229,7 @@ func (m *Manager) UpdateMCPTarget(edit MCPEdit, draft MCPDraft) error {
 	if err := validateConfig(ref, cfg); err != nil {
 		return err
 	}
-	if _, err := fingerprint(ref, cfg, m.opts.Cwd); err != nil {
+	if _, err := fingerprint(ref, cfg); err != nil {
 		return fmt.Errorf("cannot review MCP executable: %w", err)
 	}
 	if err := writeSourceLocked(m.opts.ConfigPath, ref, &cfg); err != nil {

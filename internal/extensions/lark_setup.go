@@ -44,7 +44,7 @@ func (m *Manager) AddLark(ctx context.Context, setup LarkSetup) (err error) {
 	if err != nil {
 		return err
 	}
-	if _, err := fingerprint(ref, cfg, m.opts.Cwd); err != nil {
+	if _, err := fingerprint(ref, cfg); err != nil {
 		return fmt.Errorf("cannot review Lark dependencies: %w", err)
 	}
 	if err := provider.CreateCredential(provider.CredentialFilePath(), name, setup.AppSecret); err != nil {

@@ -224,21 +224,21 @@ func TestDependencyAndSkillChangesInvalidateFingerprint(t *testing.T) {
 	exe, _ := os.Executable()
 	c := SourceConfig{Transport: "stdio", Command: exe, Executables: []string{dependency}}
 	ref := SourceRef{Kind: "mcp", ID: "test"}
-	before, err := fingerprint(ref, c, dir)
+	before, err := fingerprint(ref, c)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(dependency, []byte("first-native-content"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	after, err := fingerprint(ref, c, dir)
+	after, err := fingerprint(ref, c)
 	if err != nil || before == after {
 		t.Fatal("missing dependency acquired execution without a changed fingerprint", err)
 	}
 	if err = os.WriteFile(dependency, []byte("replaced-native-content"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	changed, _ := fingerprint(ref, c, dir)
+	changed, _ := fingerprint(ref, c)
 	if changed == after {
 		t.Fatal("replaced dependency retained trust")
 	}

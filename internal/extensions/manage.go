@@ -23,7 +23,7 @@ func (m *Manager) ConfigureSource(ref SourceRef, cfg SourceConfig) error {
 	if err := validateConfig(ref, cfg); err != nil {
 		return err
 	}
-	fp, err := fingerprint(ref, cfg, m.opts.Cwd)
+	fp, err := fingerprint(ref, cfg)
 	if err != nil {
 		return err
 	}
