@@ -50,7 +50,7 @@ func TestCatalogInitializationIsOfflineAndStable(t *testing.T) {
 	}
 	defer cs.Close()
 	tools, err := cs.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 28 || len(f.calls) != 0 {
+	if err != nil || len(tools.Tools) != 30 || len(f.calls) != 0 {
 		t.Fatalf("catalog=%v, calls=%v, err=%v", tools, f.calls, err)
 	}
 	for _, d := range definitions() {
@@ -88,9 +88,9 @@ func TestWriteIntentAndCLIArguments(t *testing.T) {
 
 func TestLongTailPolicy(t *testing.T) {
 	for _, args := range [][]string{
-		{"auth", "login"}, {"config", "init"}, {"sheets", "raw"}, {"base", "+record-delete"}, {"sheets", "+sheet-delete"}, {"drive", "+delete"}, {"drive", "+permission-set"}, {"docs", "+script"},
+		{"auth", "login"}, {"config", "init"}, {"install", "anything"},
 	} {
-		if err := businessCommand("lark", args, false); err == nil {
+		if err := validateCommandPath("lark", args, false); err == nil {
 			t.Fatalf("allowed forbidden command %v", args)
 		}
 	}
@@ -107,7 +107,14 @@ func TestLongTailPolicy(t *testing.T) {
 	if r := p.Call(approved(), "cli_call", json.RawMessage(`{"service":"lark","argv":["sheets","+styles-put","--url=https://tenant.feishu.cn/sheets/x","--styles={\"styles\":[]} mirrors"],"confirm":true}`)); !r.OK {
 		t.Fatal(r)
 	}
-	if len(f.calls) != 2 || !strings.HasSuffix(f.calls[0], "--help") || !strings.HasSuffix(f.calls[1], "--as=user") {
+	if r := p.Call(approved(), "cli_call", json.RawMessage(`{"service":"lark","argv":["mail","+search","--query=hello"],"confirm":true}`)); !r.OK {
+		t.Fatal(r)
+	}
+	if r := p.Call(approved(), "cli_call", json.RawMessage(`{"service":"project","argv":["workflow","list-state-transitions","--project-key=project","--work-item-id=1"],"confirm":true}`)); !r.OK {
+		t.Fatal(r)
+	}
+	if len(f.calls) != 4 || !strings.HasSuffix(f.calls[0], "--help") || !strings.HasSuffix(f.calls[1], "--as=user") ||
+		!strings.Contains(f.calls[2], "mail +search") || !strings.Contains(f.calls[3], "workflow list-state-transitions") {
 		t.Fatal(f.calls)
 	}
 }
@@ -115,28 +122,26 @@ func TestLongTailPolicy(t *testing.T) {
 func TestLongTailBusinessResourceFlags(t *testing.T) {
 	cases := []struct {
 		name    string
-		command []string
 		args    []string
 		wantErr string
 	}{
-		{name: "copy folder", command: []string{"drive", "+copy"}, args: []string{"--url=https://tenant.feishu.cn/sheets/x", "--name=copy", "--folder-token", "my_space"}},
-		{name: "copy token and type", command: []string{"drive", "+copy"}, args: []string{"--token=abc", "--type=sheet"}},
-		{name: "copy token missing type", command: []string{"drive", "+copy"}, args: []string{"--token=abc"}, wantErr: "--token requires an inline --type"},
-		{name: "search folder list", command: []string{"drive", "+search"}, args: []string{"--folder-tokens=a,b"}},
-		{name: "move tokens", command: []string{"drive", "+move"}, args: []string{"--file-token=file", "--folder-token=folder"}},
-		{name: "shortcut tokens", command: []string{"drive", "+create-shortcut"}, args: []string{"--file-token=file", "--folder-token=folder"}},
-		{name: "docs parent", command: []string{"docs", "+create"}, args: []string{"--parent-token=parent", "--title=doc"}},
-		{name: "workbook folder", command: []string{"sheets", "+workbook-create"}, args: []string{"--folder-token=folder"}},
-		{name: "create folder", command: []string{"drive", "+create-folder"}, args: []string{"--folder-token=folder"}},
-		{name: "copy file token rejected", command: []string{"drive", "+copy"}, args: []string{"--file-token=file"}, wantErr: "not an approved resource parameter"},
-		{name: "copy folder list rejected", command: []string{"drive", "+copy"}, args: []string{"--folder-tokens=a,b"}, wantErr: "not an approved resource parameter"},
-		{name: "identity rejected", command: []string{"drive", "+copy"}, args: []string{"--as=user"}, wantErr: "omit --as"},
-		{name: "credential rejected", command: []string{"drive", "+copy"}, args: []string{"--app-secret=x"}, wantErr: "configuration, credential"},
-		{name: "local reference rejected", command: []string{"drive", "+copy"}, args: []string{"--folder-token=@/tmp/x"}, wantErr: "inline resource token"},
+		{name: "folder token", args: []string{"--folder-token=folder"}},
+		{name: "token without type", args: []string{"--token=abc"}},
+		{name: "file token", args: []string{"--file-token=file"}},
+		{name: "folder list", args: []string{"--folder-tokens=a,b"}},
+		{name: "docs parent", args: []string{"--parent-token=parent", "--title=doc"}},
+		{name: "workbook folder", args: []string{"--folder-token=folder"}},
+		{name: "identity rejected", args: []string{"--as=user"}, wantErr: "omit --as"},
+		{name: "credential rejected", args: []string{"--app-secret=x"}, wantErr: "configuration, credential"},
+		{name: "local reference rejected", args: []string{"--folder-token=@/tmp/x"}, wantErr: "inline resource token"},
+		{name: "local file flag rejected", args: []string{"--file=/tmp/a"}, wantErr: "configuration, credential"},
+		{name: "output path rejected", args: []string{"--output-path=/tmp/a"}, wantErr: "configuration, credential"},
+		{name: "external url rejected", args: []string{"--url=https://evil.example/a"}, wantErr: "outside the supported"},
+		{name: "confirmation rejected", args: []string{"--yes"}, wantErr: "confirmation flags"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := businessFlags("lark", tc.command, tc.args)
+			err := businessFlags("lark", []string{"drive", "+copy"}, tc.args)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("businessFlags() = %v", err)

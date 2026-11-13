@@ -11,7 +11,7 @@ import (
 	"unicode"
 )
 
-var commandName = regexp.MustCompile(`^[+]?[a-z][a-z0-9-]*$`)
+var commandName = regexp.MustCompile(`^[+]?[a-z][a-z0-9._-]*$`)
 
 func tailSchema(execute bool) json.RawMessage {
 	key := "command"
@@ -26,6 +26,7 @@ func tailSchema(execute bool) json.RawMessage {
 	required := []string{"service", key}
 	if execute {
 		props["confirm"] = map[string]any{"type": "boolean", "const": true}
+		props["high_risk"] = map[string]any{"type": "boolean", "default": false, "description": "Set only when the CLI command is high-risk. The adapter appends --yes after exact-call host approval."}
 		required = append(required, "confirm")
 	}
 	b, _ := json.Marshal(map[string]any{"type": "object", "additionalProperties": false, "properties": props, "required": required})
@@ -34,28 +35,18 @@ func tailSchema(execute bool) json.RawMessage {
 
 func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Result {
 	var in struct {
-		Service string   `json:"service"`
-		Command []string `json:"command"`
-		Argv    []string `json:"argv"`
-		Confirm bool     `json:"confirm"`
+		Service  string   `json:"service"`
+		Command  []string `json:"command"`
+		Argv     []string `json:"argv"`
+		Confirm  bool     `json:"confirm"`
+		HighRisk bool     `json:"high_risk"`
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return failure("", "INVALID_ARGUMENTS", "Invalid long-tail request", "Use cli_help first")
 	}
 	if name == "cli_help" {
-		if len(in.Command) > 0 {
-			switch in.Command[0] {
-			case "auth", "config", "install":
-				return failure(in.Service, "COMMAND_BLOCKED",
-					"cli_help only exposes business commands; "+in.Command[0]+" is not an MCP CLI capability",
-					"Use Golder's Lark/Project authorization/settings entry for login or incremental scopes; skill CLI examples are not MCP tools")
-			}
-		}
-		if err := businessCommand(in.Service, in.Command, true); err != nil {
-			if in.Service == "project" && len(in.Command) > 0 && (in.Command[0] == "ticket" || in.Command[0] == "ticket_search" || in.Command[0] == "ticket-search") {
-				return failure(in.Service, "COMMAND_BLOCKED", "ticket_search is an MCP tool, not a Project CLI command family", `For work-item query help call cli_help with {"service":"project","command":["workitem","query"]}; command availability depends on the installed CLI and Project login`)
-			}
-			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Only business command help is available")
+		if err := validateCommandPath(in.Service, in.Command, false); err != nil {
+			return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use a business or raw command path; for login or incremental scopes use Golder's Lark/Project authorization/settings entry; skill CLI examples are not MCP tools")
 		}
 		args := append(append([]string{}, in.Command...), "--help")
 		out, err := p.Runner.Run(ctx, in.Service, args, nil)
@@ -70,74 +61,61 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	if len(in.Argv) < 2 {
 		return failure(in.Service, "COMMAND_BLOCKED", "Provide a business command and its operation", "Use cli_help")
 	}
-	if err := businessCommand(in.Service, in.Argv[:2], false); err != nil {
+	business := name == "cli_call"
+	pathLen := 2
+	if !business {
+		pathLen = commandPathLen(in.Argv, 3)
+	}
+	if err := validateCommandPath(in.Service, in.Argv[:pathLen], business); err != nil {
 		return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use setup for authorization; management/raw API commands are not exposed")
 	}
-	if err := businessFlags(in.Service, in.Argv[:2], in.Argv[2:]); err != nil {
+	if err := businessFlags(in.Service, in.Argv[:pathLen], in.Argv[pathLen:]); err != nil {
 		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Omit --as/--format/confirmation flags; use only approved inline business parameters, not local-file or configuration references")
 	}
-	// These fixed commands are known reads, independent of untrusted CLI
-	// annotations. Keep the same exact-call host authorization requirement;
-	// all other long-tail commands remain conservatively mutating/unknown.
-	knownRead := in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search"
-	if in.Service == "project" && in.Argv[0] == "url" && in.Argv[1] == "decode" {
-		knownRead = true
+	if in.HighRisk {
+		// The model never supplies --yes. The adapter adds it only after the
+		// exact-call host authorization above, mirroring dedicated write tools.
+		in.Argv = append(in.Argv, "--yes")
 	}
+	// These two fixed commands are known reads. This only affects result
+	// classification; every long-tail call still requires exact-call approval.
+	knownRead := name == "cli_call" && ((in.Service == "lark" && in.Argv[0] == "drive" && in.Argv[1] == "+search") ||
+		(in.Service == "project" && in.Argv[0] == "url" && in.Argv[1] == "decode"))
 	return p.run(ctx, in.Service, in.Argv, !knownRead)
 }
 
-func businessCommand(service string, parts []string, help bool) error {
-	if len(parts) == 0 || len(parts) > 2 {
-		return errors.New("help accepts only a domain and optional command")
+func validateCommandPath(service string, parts []string, business bool) error {
+	if service != "lark" && service != "project" {
+		return errors.New("unknown service")
+	}
+	if len(parts) == 0 || len(parts) > 3 {
+		return errors.New("provide a command family and optional resource/operation")
 	}
 	for _, part := range parts {
 		if !commandName.MatchString(part) {
 			return errors.New("invalid command path")
 		}
 	}
-	root := parts[0]
-	allowed := " docs drive im sheets base "
-	if service == "project" {
-		allowed = " workitem workflow project user mywork view comment workhour url "
-	} else if service != "lark" {
-		return errors.New("unknown service")
+	switch parts[0] {
+	case "auth", "config", "install":
+		return errors.New(parts[0] + " is not an MCP CLI capability")
 	}
-	if !strings.Contains(allowed, " "+root+" ") {
-		return errors.New("this command family is not exposed")
-	}
-	if help {
-		return nil
-	}
-	operation := parts[1]
-	if service == "lark" && !strings.HasPrefix(operation, "+") {
-		return errors.New("only business shortcuts are exposed, not raw API subcommands")
-	}
-	if service == "project" && (root == "project" || root == "user") && operation != "search" && operation != "me" {
-		return errors.New("project/user management is not exposed")
-	}
-	for _, word := range []string{"delete", "remove", "trash", "clear", "rollback", "revert", "restore", "permission", "advperm", "share", "owner", "upload", "download", "export", "import", "automation", "webhook", "workflow", "script"} {
-		if strings.Contains(operation, word) {
-			return errors.New("destructive, permission, file-transfer or automation commands require a dedicated reviewed tool")
+	if business && service == "lark" {
+		if len(parts) != 2 || !strings.HasPrefix(parts[1], "+") {
+			return errors.New("Lark business calls use +shortcuts; use cli_raw for raw resource commands")
 		}
-	}
-	if service == "project" && root == "workflow" && (operation == "create" || operation == "enable" || operation == "disable") {
-		return errors.New("workflow configuration is not exposed")
 	}
 	return nil
 }
 
-// larkResourceFlags lists the only long-tail resource identifiers reviewed for
-// each business command. Do not broaden this to every flag containing "token":
-// the point is to let business identifiers through without also exposing
-// credentials, local files or unreviewed capabilities.
-var larkResourceFlags = map[string]map[string]bool{
-	"drive +copy":             {"folder-token": true, "token": true},
-	"drive +create-folder":    {"folder-token": true},
-	"sheets +workbook-create": {"folder-token": true},
-	"drive +search":           {"folder-tokens": true},
-	"drive +move":             {"file-token": true, "folder-token": true},
-	"drive +create-shortcut":  {"file-token": true, "folder-token": true},
-	"docs +create":            {"parent-token": true},
+// commandPathLen splits an argv into its non-flag command path. Raw resource
+// commands have two or three non-flag segments before the first --flag.
+func commandPathLen(argv []string, max int) int {
+	n := 2
+	for n < len(argv) && n < max && !strings.HasPrefix(argv[n], "--") {
+		n++
+	}
+	return n
 }
 
 type businessFlag struct {
@@ -149,11 +127,6 @@ func businessFlags(service string, command, args []string) error {
 	if err != nil {
 		return err
 	}
-	allowed := map[string]bool{}
-	if service == "lark" && len(command) == 2 {
-		allowed = larkResourceFlags[command[0]+" "+command[1]]
-	}
-	sawType, typeValue, sawToken := false, "", false
 	for _, flag := range flags {
 		key, value := flag.key, flag.value
 		switch key {
@@ -164,13 +137,10 @@ func businessFlags(service string, command, args []string) error {
 		case "yes", "force", "no-confirm":
 			return errors.New("confirmation flags are controlled by the adapter; use confirm=true and the host approval chain")
 		}
-		if key == "type" {
-			sawType, typeValue = true, value
+		if strings.Contains(key, "access-token") || strings.Contains(key, "refresh-token") || strings.Contains(key, "user-token") {
+			return fmt.Errorf("--%s is a credential flag and is not exposed", key)
 		}
-		if key == "token" {
-			sawToken = true
-		}
-		if allowed[key] || existingResourceFlag(key) {
+		if resourceTokenFlag(key) {
 			if value == "" {
 				return fmt.Errorf("--%s requires an inline resource token", key)
 			}
@@ -179,13 +149,10 @@ func businessFlags(service string, command, args []string) error {
 			}
 			continue
 		}
-		if strings.Contains(key, "token") {
-			return fmt.Errorf("--%s is not an approved resource parameter for %s %s", key, service, strings.Join(command, " "))
-		}
 		if blockedFlagKey(key) {
 			return fmt.Errorf("--%s is a configuration, credential, or local-file flag and is not exposed", key)
 		}
-		if strings.HasPrefix(strings.TrimSpace(value), "@") || value == "-" || strings.ContainsAny(value, "\x00\r") {
+		if strings.HasPrefix(strings.TrimSpace(value), "@") || value == "-" || strings.ContainsAny(value, "\x00\r\n") {
 			return errors.New("local-file/stdin references are not allowed")
 		}
 		if strings.Contains(key, "url") && strings.Contains(value, "://") {
@@ -194,9 +161,8 @@ func businessFlags(service string, command, args []string) error {
 			}
 		}
 	}
-	if sawToken && (!sawType || typeValue == "") {
-		return errors.New("--token requires an inline --type for drive +copy")
-	}
+	_ = service
+	_ = command
 	return nil
 }
 
@@ -220,12 +186,12 @@ func parseBusinessFlags(args []string) ([]businessFlag, error) {
 	return out, nil
 }
 
-func existingResourceFlag(key string) bool {
-	return key == "base-token" || key == "spreadsheet-token" || key == "page-token"
+func resourceTokenFlag(key string) bool {
+	return key == "token" || key == "folder-tokens" || strings.HasSuffix(key, "-token") || strings.HasSuffix(key, "_token")
 }
 
 func blockedFlagKey(key string) bool {
-	for _, blocked := range []string{"file", "path", "output", "token", "secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin", "image", "audio", "video", "attachment", "media"} {
+	for _, blocked := range []string{"file", "path", "output", "secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin", "image", "audio", "video", "attachment", "media"} {
 		if strings.Contains(key, blocked) {
 			return true
 		}

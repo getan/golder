@@ -9,8 +9,8 @@ Related: [extensions-mcp.md](extensions-mcp.md), [extensions-state-setup.md](ext
 
 代码集中在 [`extension/plugins/lark/`](../extension/plugins/lark/README.md)，入口为
 `extension/plugins/lark/cmd/golder-lark`；宿主通用能力仍在现有 extensions/seatbelt/gate/UI 包。
-已提供 22 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
-精确人类确认与命令长尾限制。实际配置以 `golder-lark print-config` 生成结果为准。
+已提供 30 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
+精确人类确认、通用长尾和文件传输入口。实际配置以 `golder-lark print-config` 生成结果为准。
 
 根据用户已有应用的情况，首版只复用应用，以 `--app-secret-stdin` 配置，不执行 `--new`。
 默认授权协作，`setup lark project` 单独授权项目。内置浏览器显示宿主生成的离线二维码页，
@@ -215,8 +215,8 @@ access token 到期后由各 CLI 在服务商支持的范围内刷新；refresh 
 
 ### 5. 高频工具加受控长尾入口，工单全部指项目工作项
 
-模型名称为 `mcp__lark__<name>`。保留 20 个高频工具，增加 `cli_help` / `cli_call` 两个长尾入口，
-不把上游几百条命令分别注册成工具。以下为逻辑工具设计，不是允许任意 shell 的万能命令：
+模型名称为 `mcp__lark__<name>`。保留高频工具，增加 `cli_help` / `cli_call` / `cli_raw` /
+`file_transfer` 通用入口，不把上游几百条命令分别注册成工具。以下为逻辑工具设计，不是允许任意 shell 的万能命令：
 
 | 工具 | 能力 | 后端 |
 |---|---|---|
@@ -240,8 +240,10 @@ access token 到期后由各 CLI 在服务商支持的范围内刷新；refresh 
 | `base_schema` | 表和字段类型 | `base +table-list/+field-list` |
 | `base_record_search` | 按关键词、结构化 filter、ID 查询投影 | `base +record-search/+record-list/+record-get` |
 | `base_record_write` | 增、改、明确 ID 的删除 | `base +record-batch-create/+record-batch-update/+record-delete` |
-| `cli_help` | 按服务和命令路径查帮助/Schema，结果有界 | 固定 CLI 的 `--help` / `schema` / `inspect` |
-| `cli_call` | 执行经命令级策略和 gate 允许的长尾业务操作 | 固定 CLI + argv，不支持 shell |
+| `cli_help` | 查任意业务或 raw 命令帮助，无 service/命令白名单 | 固定 CLI 的 `--help` |
+| `cli_call` | 执行 Lark `+shortcut` 或 Project 业务命令，宿主 exact-call 审批 | 固定 CLI + argv，不支持 shell |
+| `cli_raw` | 执行 raw 资源 API，宿主 exact-call 审批；高风险需 `high_risk` | 固定 CLI + argv，不支持 shell |
+| `file_transfer` | 单文件上传/下载，`{file}` 占位符由适配器替换并限制在 workspace | 固定 CLI + 受控文件路径 |
 
 #### 5.1 项目工作项不能硬编码字段或状态
 
@@ -288,8 +290,8 @@ meegle workitem update --project-key PROJ --work-item-id 12345 \
   单选/多选保持类型，不写 formula/lookup 等只读字段。`ignored_fields` 作为部分结果报告。
   单批最多 200 条、同表串行；默认查询 100 条，超过限制返回分页与 partial。
 - 删除 Base 记录必须列明 ID 和影响；Sheets 删表/清空/整表回滚、Base 改权限/Workflow/仪表盘
-  不提供首版专用包装；长尾也默认阻止破坏性操作、权限管理与 Workflow 启用，
-  必须有明确的 operator 命令级授权才可扩展，不能凭模型传 `confirm` 或 raw API 绕过。
+  不提供首版专用包装。高风险操作不靠 service 名单阻止，而是每次由宿主 exact-call 审批；
+  适配器只在批准后补 `--yes`。本地文件只走 `file_transfer`，不能从业务/raw 长尾传 `@file` 或 stdin。
 
 #### 5.3 长尾命令按需发现，但权限不能按需绕过
 
@@ -299,29 +301,27 @@ meegle workitem update --project-key PROJ --work-item-id 12345 \
 {"service":"lark","command":["sheets","+sheet-info"]}
 ```
 
-`cli_help` 只允许明确的帮助/本地 Schema 查询路径；返回命令说明、必要参数和输出形态，
-不拉整套命令手册，不执行 schema 中的副作用。模型读完才构造 `cli_call` 的 argv：
+`cli_help` 允许任意业务或 raw 命令路径；返回命令说明、必要参数和输出形态，
+不拉整套命令手册，不执行 schema 中的副作用。模型读完才构造 `cli_call` / `cli_raw` 的 argv：
 
 ```json
 {"service":"lark","argv":["sheets","+sheet-info","--url","https://example.feishu.cn/sheets/token","--sheet-id","actual-id"]}
 ```
 
 `service` 只能选择配置中批准的 lark/project 二进制；不能传路径、shell、可执行脚本或任意环境变量。
-内容含 `@file`、输出文件、网络目的地或身份切换的参数由包装器校验，不能借 CLI 读宿主路径、
-上传凭据、改 cwd 或切身份。相同私有 HOME、沙箱、输出限额和副作用不重试规则继续适用。
+内容含 `@file`、输出文件、网络目的地或身份切换的参数由包装器校验；`--as` 和 `--format`
+由适配器控制，本地文件只能通过 `file_transfer` 的 `{file}` 占位符传入。
+相同私有 HOME、沙箱、输出限额和副作用不重试规则继续适用。
 
-**长尾不意味着所有命令默认放开**：
+**长尾不再维护 service/命令白名单**：
 
-- 安装/更新、自更新、登录/登出、凭据导出、任意 API、任意外部命令和配置修改默认禁止，
-  setup 仍只由用户启动。不得把安装器放进长尾入口自动下载。
-- 常规长尾业务可按命令族审阅放行；未知命令需人工审阅其参数和影响，不信任上游只读标记作为授权。
-  新版本命令只有通过版本检查、参数检查和策略允许后才可执行，不保证无条件自动可用。
-- 专用工具与长尾共用同一份业务能力/命令策略。禁止 `message_send` 时，相应发送命令也必须被拒绝；
-  禁止 `ticket_update` 时，`meegle workitem update` 也不能从长尾执行。
-  当前宿主只有工具名过滤，尚不具备这种语义映射；实现必须补命令级执行校验，
-  未补齐前有这种限制的配置禁用 `cli_call`。不能声称现有 deny 自动约束所有等价命令。
-- `cli_call` 可整体禁用，用户仍可使用高频工具。未明确授权的破坏性/共享权限变更返回阻止原因，
-  不是换 raw API 继续试。
+- Lark/Project 的业务命令和 raw 资源命令都可以通过 `cli_help` 发现；Lark 业务执行走 `cli_call`
+  的 `+shortcut`，raw 资源执行走 `cli_raw`。
+- `auth`、`config`、`install`、身份切换和本地文件参数仍不可用；高风险命令由适配器在宿主批准后补
+  `--yes`，模型不能自己传确认 flag。
+- 专用工具 deny 目前仍只是工具名过滤；如果某个专用写工具被禁用但 `cli_call`/`cli_raw` 仍开放，
+  等价 CLI 命令仍可执行。需要严格 deny 时必须同时禁用对应长尾入口，或由宿主策略拒绝该次调用。
+- `cli_call` / `cli_raw` 可整体禁用，用户仍可使用高频工具。通道被禁用时不要尝试绕到另一个入口。
 
 #### 5.4 上下文渐进披露：Skill 正文按需，工具 Schema 目前全量声明
 
@@ -329,7 +329,7 @@ meegle workitem update --project-key PROJ --work-item-id 12345 \
 
 | 内容 | 当前宿主行为 | Lark 设计 |
 |---|---|---|
-| 工具名称、简短 description、input schema | `InstallExtensions/SyncTools` 在轮次边界把全部可用扩展工具加入 `ac.Tools`，随模型请求声明 | 高频工具和两个长尾入口保持精简，但可用的 22 个 Schema 不是命中飞书意图后才出现 |
+| 工具名称、简短 description、input schema | `InstallExtensions/SyncTools` 在轮次边界把全部可用扩展工具加入 `ac.Tools`，随模型请求声明 | 高频工具和通用入口保持精简，但当前 30 个 Schema 不是命中飞书意图后才出现 |
 | Skill 索引 | `FormatSkillsForPrompt` 只写 name/description/location | 一条 lark 工作流索引，描述飞书文档、消息、项目工单、Sheets、Base |
 | Skill 正文与分域参考 | 模型通过 `read` 按需加载；非硬编码关键词路由 | 命中任务后读 SKILL.md，进入项目/表格/长尾阶段才读对应 reference |
 | 全量 CLI 帮助/复杂参数 | 不预注入 | `cli_help` 按当前命令返回，避免把上游几百条手册塞进上下文 |
@@ -430,7 +430,7 @@ npm 的命令可能先启动 JS 包装器，并在原生二进制缺失时自动
 | 私有文件登录态 | 多一次授权，换取不挂载全局凭据；密钥同盘的保护边界如实说明 |
 | 内置浏览器只做 UI | 比读取 cookie 或自动点击同意更可控；没有浏览器也可继续扫码 |
 | 平台搜索 + 按需读取 | 不搞向量、企业级同步或权限缓存，召回差一些但单机边界清楚 |
-| 高频薄包装 + 受控长尾 | 保留日常体验和 CLI 覆盖面，不维护所有上游命令的重复包装；代价是长尾需查帮助、逐命令授权 |
+| 高频薄包装 + 通用长尾 | 保留日常体验和 CLI 覆盖面，不维护 service 白名单；代价是每次长尾调用都要 exact-call 宿主授权 |
 
 ## Compatibility / 兼容性
 
@@ -448,7 +448,7 @@ npm 的命令可能先启动 JS 包装器，并在原生二进制缺失时自动
    先用假 OAuth server 验 pending/slow_down/denied/expired/恶意 URL，再做用户参与的真实扫码。
 3. **基础业务**：文档和消息搜索/读取，项目 schema/search/get，Sheets/Base 结构与读取。
 4. **写能力**：文档/消息、项目字段修改/流转、Sheets/Base 写入、强确认与结果核验。
-5. **长尾与上下文**：cli_help/cli_call、命令级策略和等价操作 deny 校验；精简 Skill 索引与工具描述，
+5. **长尾与上下文**：cli_help/cli_call/cli_raw、file_transfer、宿主 exact-call 审批和高风险确认；精简 Skill 索引与工具描述，
    测试首次语义命中、分域按需读取、缓存目录后首次按需启动以及长尾新命令的审查。
 
 代码拆分：独立 `cmd/golder-lark` + `internal/larkmcp`，其中 `auth_setup`、`lark_runner`、
@@ -466,8 +466,8 @@ npm 的命令可能先启动 JS 包装器，并在原生二进制缺失时自动
 - `status` 在依赖缺失时给安装指引，但没有 helper 的来源无法启动时由管理诊断给出错误，
   不声称模型总能调用一个尚未连接的 MCP 工具。
 - 不自动下载/安装、不向模型暴露二维码授权会话的控制端点、不会把 pending 当失败重发。
-- 高频工具未覆盖的普通命令可先 cli_help 后 cli_call；安装/认证/任意 API 等受阻，
-  禁用专用写能力不能从 cli_call 绕过。Skill 全文不预注入，工具 Schema 的当前全量行为如实计量。
+- 高频工具未覆盖的普通命令可先 cli_help 后 cli_call；raw 资源走 cli_raw，文件走 file_transfer。
+  安装/认证仍受阻；本地文件不能从业务/raw 入口传入。Skill 全文不预注入，工具 Schema 的当前全量行为如实计量。
 
 ## Appendix / 已核对的依据与待实测项
 

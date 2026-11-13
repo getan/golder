@@ -21,8 +21,8 @@
 ## 日志中的三种现象不是同一件事
 
 - `doc_search` 的 `CLI_ERROR`：旧版结果不足以区分上游权限、参数或网络错误；新版本解析 stdout **和 stderr** 的结构化公共错误。
-- `cli_help [drive files list]` 的 `COMMAND_BLOCKED`：这是 helper 的本地策略。help 只接受业务域和可选业务命令；没有派发 CLI，也不应为了调试开放 raw API。这里应查询 `drive +search` 的 help。
-- 长尾调用的 `execution_state=unknown`：原先统一按可能写入处理。现在只将固定的 `lark / drive +search` 认定为已知只读，失败返回 `failed`，成功返回 `completed`；其他长尾操作仍保守处理，原有 exact-call host policy 授权检查不变。
+- `cli_help` 的 `COMMAND_BLOCKED`：现在 help 接受任意 Lark/Project 业务或 raw 命令路径；只有 `auth/config/install` 仍被本地策略拒绝。raw 执行使用独立的 `cli_raw`。
+- 长尾调用的执行状态：`cli_call` 只将固定的 `lark / drive +search` 和 `project / url decode` 认定为已知只读；其他业务调用和全部 `cli_raw` 调用仍按可能写入处理。所有调用都保留 exact-call host policy 授权检查，管理命令和本地文件不走长尾入口。
 
 此外，`mine=true` 表示“我拥有的文档”，不是“我创建的文档”。“我创建的文档”在新版本使用：
 

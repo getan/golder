@@ -28,6 +28,9 @@ func object(description string) map[string]any {
 func array(description string) map[string]any {
 	return map[string]any{"type": "array", "maxItems": 200, "items": map[string]any{}, "description": description}
 }
+func stringArray(description string) map[string]any {
+	return map[string]any{"type": "array", "minItems": 2, "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 16000}, "description": description}
+}
 func integer(max int) map[string]any {
 	return map[string]any{"type": "integer", "minimum": 1, "maximum": max}
 }
@@ -76,6 +79,11 @@ func definitions() []definition {
 		}},
 		{Name: "wiki_write", Description: "Create a Wiki space or node, or delete a node. Requires confirmed intent and exact-call host authorization; node deletion is high risk.", Service: "lark", Write: true, Default: "node_create", Options: options("space_id parent_node_token title description name node_type obj_type origin_node_token node_token include_children"), Operations: map[string]operation{
 			"space_create": op("wiki +space-create", "name"), "node_create": op("wiki +node-create", "space_id", "title"), "node_delete": op("wiki +node-delete", "node_token"),
+		}},
+		{Name: "file_transfer", Description: "Upload or download one explicitly selected workspace file through a Lark/Project CLI command. argv must contain {file} exactly once; the adapter validates the path inside the workspace and substitutes it. No @file or stdin; requires confirmed intent and exact-call host authorization.", Service: "lark", Write: true, Default: "upload", Options: map[string]any{
+			"service": text("CLI service: lark or project"), "path": text("workspace-relative file path"), "argv": stringArray("CLI command with exactly one {file} placeholder"), "high_risk": boolean(),
+		}, Operations: map[string]operation{
+			"upload": op("file upload", "service", "path", "argv"), "download": op("file download", "service", "path", "argv"),
 		}},
 		{Name: "project_schema", Description: "Discover Feishu Project spaces, work-item types/fields/roles, users and allowed workflow transitions. Project is not Approval.", Service: "project", Default: "projects", Options: options("query project_key work_item_type work_item_id field_query field_keys role_query page_num transition_id"), Operations: map[string]operation{
 			"projects": op("project search"), "types": op("workitem meta-types", "project_key"), "fields": op("workitem meta-fields", "project_key", "work_item_type"), "roles": op("workitem meta-roles", "project_key", "work_item_type"), "users": op("user search", "project_key", "query"), "me": op("user me"), "transitions": op("workflow list-state-transitions", "project_key", "work_item_id"), "required": op("workflow list-state-required", "project_key", "work_item_id", "transition_id"), "nodes": op("workflow get-node", "project_key", "work_item_id"), "decode_url": op("url decode", "url"),

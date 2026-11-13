@@ -176,9 +176,10 @@ Minimal shape (replace every path with an absolute one on this machine):
   transport = "stdio"
   state_dir = true
   network = true
-  aggregate_tools = ["cli_call"]
+  aggregate_tools = ["cli_call", "cli_raw", "file_transfer"]
   confirm_tools = ["doc_write", "message_send", "ticket_update", "ticket_transition",
-                   "sheet_write", "sheet_structure", "base_record_write", "cli_call"]
+                   "sheet_write", "sheet_structure", "base_record_write", "cli_call",
+                   "cli_raw", "file_transfer"]
   executables = ["/ABS/PATH/TO/lark-cli", "/ABS/PATH/TO/meegle"]
   skills = "/ABS/PATH/TO/skills"
   setup = ["/ABS/PATH/TO/golder-lark", "setup", "--events", "--service=lark"]

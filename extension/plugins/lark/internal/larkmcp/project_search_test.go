@@ -132,16 +132,16 @@ func TestTicketSearchMeUsesOnlyCurrentStatusOperator(t *testing.T) {
 func TestProjectHelpUsesRealCommandFamily(t *testing.T) {
 	f := &fakeRunner{}
 	p := New(Config{}, f)
-	blocked := p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["ticket","search"]}`))
-	if blocked.OK || blocked.Error == nil || blocked.Error.Code != "COMMAND_BLOCKED" || !strings.Contains(blocked.Error.NextAction, `"command":["workitem","query"]`) || len(f.calls) != 0 {
-		t.Fatalf("blocked help result=%+v calls=%v", blocked, f.calls)
-	}
-	allowed := p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["workitem","query"]}`))
-	if !allowed.OK || len(f.calls) != 1 || f.calls[0] != "project workitem query --help" {
+	allowed := p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["ticket","search"]}`))
+	if !allowed.OK || len(f.calls) != 1 || f.calls[0] != "project ticket search --help" {
 		t.Fatalf("allowed help result=%+v calls=%v", allowed, f.calls)
 	}
-	blocked = p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["auth","login"]}`))
-	if blocked.OK || blocked.Error == nil || blocked.Error.Code != "COMMAND_BLOCKED" || !strings.Contains(blocked.Error.NextAction, "authorization") || len(f.calls) != 1 {
+	allowed = p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["workitem","query"]}`))
+	if !allowed.OK || len(f.calls) != 2 || f.calls[1] != "project workitem query --help" {
+		t.Fatalf("allowed help result=%+v calls=%v", allowed, f.calls)
+	}
+	blocked := p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["auth","login"]}`))
+	if blocked.OK || blocked.Error == nil || blocked.Error.Code != "COMMAND_BLOCKED" || !strings.Contains(blocked.Error.NextAction, "authorization") || len(f.calls) != 2 {
 		t.Fatalf("auth help policy changed: result=%+v calls=%v", blocked, f.calls)
 	}
 }
