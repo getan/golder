@@ -24,6 +24,14 @@ func builtinReviewName(tool agentcore.AgentTool) string {
 		if t != nil {
 			return "write_stdin"
 		}
+	case *BrowserTool:
+		if t != nil {
+			return "browser"
+		}
+	case *ComputerTool:
+		if t != nil {
+			return "computer"
+		}
 	}
 	return ""
 }

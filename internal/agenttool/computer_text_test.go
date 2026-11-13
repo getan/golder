@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/computeruse"
+	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -60,6 +61,47 @@ func TestComputerTypingIsFrameBoundAndReadOnlyGated(t *testing.T) {
 	result, _ = tool.Execute(ctx, "typing", raw, nil)
 	if !result.IsError || strings.Contains(agentcore.ContentToText(result.Content), "input may have been dispatched") {
 		t.Fatalf("stale typing has contradictory dispatch state: %+v", result)
+	}
+}
+
+func TestComputerTypingAutoSkipsReviewerButKeepsBoundTarget(t *testing.T) {
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 20, 10))); err != nil {
+		t.Fatal(err)
+	}
+	b := &computerTypingBackend{computerCoordinateBackend: computerCoordinateBackend{png: data.Bytes()}}
+	s := computeruse.New(b)
+	if err := s.Start(context.Background(), computeruse.Target{ID: "target"}, computeruse.Capabilities{Observe: true, Control: true}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	frame, err := s.Capture(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := permissions.New(permissions.Auto)
+	tool := &ComputerTool{Session: s, Mode: mode}
+	called := false
+	reviewer := judge.NewLLMJudge(func(_ context.Context, prompt, state string) (string, error) {
+		called = true
+		if !strings.Contains(prompt, "Browser and computer tasks should proceed without invented restrictions") || !strings.Contains(state, "type_text") || !strings.Contains(state, "search for report") {
+			t.Fatal("reviewer did not receive desktop policy and user intent")
+		}
+		return `{"level":"confirm","risk":"medium","authorization":"high","rationale":"type the requested search"}`, nil
+	}, t.TempDir(), true)
+	cfg := newExecCfg(t, tool)
+	cfg.BeforeToolCall = judge.ConsentGate(judge.ConsentOpts{Mode: mode, Classifier: judge.FirstParty{Next: reviewer}})
+	raw, _ := json.Marshal(map[string]any{"action": "type_text", "frame_id": frame.ID, "text": "quarterly report"})
+	ctx := agentcore.WithMessageSnapshot(context.Background(), agentcore.MessageList{
+		agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("search for report")}},
+	})
+	result, _ := executeToolCall(ctx, cfg, agentcore.AgentToolCall{ID: "typing", Name: "computer", Arguments: raw}, nil)
+	if result.IsError || called || b.text != "quarterly report" {
+		t.Fatalf("auto typing did not reach the bound target without review: result=%s reviewed=%t text=%q", textOf(result), called, b.text)
+	}
+	result, _ = executeToolCall(ctx, cfg, agentcore.AgentToolCall{ID: "stale", Name: "computer", Arguments: raw}, nil)
+	if !result.IsError {
+		t.Fatal("stale frame replay was permitted")
 	}
 }
 

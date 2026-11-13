@@ -12,10 +12,18 @@ It is produced by trusted launch classification, never a model argument:
 
 | Gate | Browser runtime exception |
 |---|---|
-| Auto, reviewer allow/confirm | Granted for the browser launch; no extra human prompt |
-| Auto, contain/deny/failed review | Refused |
+| Auto, built-in controlled browser launch | Granted locally; no per-action model review or extra human prompt |
+| Auto, other reviewed requests | Allow/confirm grants; contain/deny/failed review does not grant the launch exception |
 | Ask | Explicit browser-specific approval |
 | Read-only / sandbox enforce | No launch exception |
+
+In auto, actions on an attested controlled browser also take the local path;
+they are not individually judged by an LLM. This includes actions with remote
+effects: the fast path does not identify password entry, deletion, or other
+business effects. The agent must still follow the person's instructions. Target
+binding, verification pauses, external-browser authority, and the rule against
+automatically replaying a mutation of unknown outcome remain in force. Ask,
+read-only, and enforced sandbox modes retain their own policies.
 
 The process gets a scrubbed environment, a private HOME (including
 `CFFIXED_USER_HOME`), a stable project-default profile outside the checkout and

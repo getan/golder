@@ -281,7 +281,10 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			notify(noteFor(call, Verdict{Level: Deny, Source: "browser-runtime"}, NoteDenied, lang))
 			return blockCall(call, Verdict{Level: Deny, Source: "browser-runtime"}, "browser_outer_sandbox_unavailable: this browser target cannot satisfy required outer OS containment; host_control is not a remedy")
 		}
-		v := classifyForGate(ctx, opts.Classifier, call)
+		v, fast := autoInteractiveVerdict(ctx, opts, mode, call)
+		if !fast {
+			v = classifyForGate(ctx, opts.Classifier, call)
+		}
 		grade = v
 		// A structured requirement for outer containment cannot be weakened by
 		// a contradictory allow/confirm level in the same reviewer response.

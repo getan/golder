@@ -154,7 +154,7 @@ func TestFirstPartyComputerRequestAndActions(t *testing.T) {
 			t.Fatalf("%s = %+v, next=%q", action, v, spy.tool)
 		}
 	}
-	for _, action := range []string{"click", "close_window"} {
+	for _, action := range []string{"click", "click_at", "fill", "type_text", "press", "scroll", "close_window"} {
 		spy.tool = ""
 		v := classifier.Classify(context.Background(), "computer", json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
 		if v.Level != Deny || spy.tool != "computer" {

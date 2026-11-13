@@ -181,8 +181,9 @@ func browserCapabilityBlocked(call agentcore.AgentToolCall, v Verdict, needs []N
 			missing = append(missing, "other")
 		}
 	}
-	dec := blockCall(call, v, "browser_capability_not_granted: a separately required capability was not authorized; no input was sent. Do not retry unchanged")
-	details := any(map[string]any{"execution_state": "not_dispatched", "reason": "browser_capability_not_granted", "missing": missing, "recovery": "additional_evidence_or_permitted_runtime"})
+	message := "browser_capability_not_granted: review returned contain and separately required capabilities were not granted: " + strings.Join(missing, ", ") + "; no input was sent. Do not retry unchanged"
+	dec := blockCall(call, v, message)
+	details := any(map[string]any{"execution_state": "not_dispatched", "reason": "browser_capability_not_granted", "missing": missing, "review_level": v.Level.String(), "browser_containment": v.BrowserContainment, "recovery": "additional_evidence_or_permitted_runtime"})
 	dec.Details = &details
 	return dec
 }

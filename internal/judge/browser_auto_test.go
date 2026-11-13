@@ -183,3 +183,19 @@ func TestReviewerReceivesBoundSyncAndClassifiesRemoteEffect(t *testing.T) {
 		t.Fatal("review prompt lost the remote/outer and untrusted data distinctions")
 	}
 }
+
+func TestBrowserCapabilityRefusalNamesOnlyHostObservedNeeds(t *testing.T) {
+	call, _, verdict := browserAutoFixture(t)
+	decision := browserCapabilityBlocked(call, verdict, []Need{{Cap: CapNetwork}, {Cap: CapHostControl}})
+	if decision == nil || !decision.Block || decision.Details == nil {
+		t.Fatal("capability refusal was not structured")
+	}
+	details, ok := (*decision.Details).(map[string]any)
+	if !ok || details["execution_state"] != "not_dispatched" || details["browser_containment"] != "remote_effect_only" || details["review_level"] != "contain" {
+		t.Fatalf("incorrect refusal details: %+v", decision)
+	}
+	missing, ok := details["missing"].([]string)
+	if !ok || strings.Join(missing, ",") != "network,host_control" {
+		t.Fatalf("missing capability details=%v", details["missing"])
+	}
+}

@@ -21,9 +21,11 @@ func browserPriorMessages(state string) agentcore.MessageList {
 }
 
 func TestUnknownBrowserDispatchCannotBeReplayedAutomatically(t *testing.T) {
-	call, _, _ := browserAutoFixture(t)
+	call, evidence, _ := browserAutoFixture(t)
 	msgs := append(browserPriorMessages("unknown"), agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{agentcore.NewTextContent("继续")}})
 	ctx := agentcore.WithMessageSnapshot(context.Background(), msgs)
+	ctx = agentcore.WithBuiltinReview(ctx, call.Name, call.Arguments)
+	ctx = agentcore.WithToolReviewEvidence(ctx, call.Name, call.Arguments, evidence)
 	gate := ConsentGate(ConsentOpts{Mode: permissions.New(permissions.Auto), Classifier: consentClassifier{v: Verdict{Level: Confirm, Network: true}},
 		Confirm: func(context.Context, ConsentRequest) ConsentAnswer {
 			t.Fatal("auto asked a person")

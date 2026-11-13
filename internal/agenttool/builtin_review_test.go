@@ -71,6 +71,27 @@ func TestBookkeepingNameDoesNotLetCustomToolBypassReview(t *testing.T) {
 	}
 }
 
+func TestCustomInteractiveNameCannotUseAutoFastPath(t *testing.T) {
+	for _, name := range []string{"browser", "computer"} {
+		t.Run(name, func(t *testing.T) {
+			spy, ran := &builtinReviewerSpy{}, false
+			tool := execTool{name: name, schema: `{"type":"object"}`, run: func(context.Context, string, json.RawMessage, agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+				ran = true
+				return agentcore.AgentToolResult{}, nil
+			}}
+			cfg := newExecCfg(t, tool)
+			cfg.BeforeToolCall = judge.ConsentGate(judge.ConsentOpts{Mode: permissions.New(permissions.Auto), Classifier: judge.FirstParty{Next: spy}})
+			args := json.RawMessage(`{"action":"click"}`)
+			ctx := agentcore.WithToolCallID(context.Background(), "same")
+			ctx = agentcore.WithBuiltinReview(ctx, name, args)
+			msg, _ := executeToolCall(ctx, cfg, agentcore.AgentToolCall{ID: "same", Name: name, Arguments: args}, nil)
+			if ran || !msg.IsError || spy.calls != 1 {
+				t.Fatalf("custom tool bypassed reviewer: ran=%t error=%t reviews=%d", ran, msg.IsError, spy.calls)
+			}
+		})
+	}
+}
+
 func TestBookkeepingSchemaFailureNeverReachesFastPath(t *testing.T) {
 	spy := &builtinReviewerSpy{}
 	cfg := newExecCfg(t, &TodoTool{Store: NewTodoStore()})
