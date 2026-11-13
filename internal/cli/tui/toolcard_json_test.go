@@ -39,3 +39,18 @@ func TestReadToolPreviewFormatsNumberedJSON(t *testing.T) {
 		t.Fatalf("read JSON stayed on one line: %q", text)
 	}
 }
+
+func TestReadToolPreviewFormatsTruncatedLargeJSON(t *testing.T) {
+	card := toolCard{name: "read", input: map[string]any{"path": "large.json"}, expanded: true}
+	card.complete(true, "     1\t{\"name\":\"big\",\"items\":[1,2],\"tail\":\""+strings.Repeat("x", 200)+
+		"… (line truncated: showing 200 of 2000 bytes; use offset=1, limit=1, max_line_bytes=2000 for the complete line; preview is not patch context)\n", nil)
+	text := stripTCardANSI(card.render(DefaultTheme(), 100))
+	for _, want := range []string{`"name": "big"`, `"items": [`, "… (line truncated:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("truncated read preview is missing %q: %q", want, text)
+		}
+	}
+	if strings.Count(text, "\n") < 5 {
+		t.Fatalf("truncated read JSON stayed on one line: %q", text)
+	}
+}

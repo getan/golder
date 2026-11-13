@@ -211,6 +211,7 @@ type App struct {
 	fileGeneration   uint64
 	fileSelected     string
 	filePreview      appsession.ProjectFilePreview
+	filePretty       bool
 	filePreviewBusy  bool
 	fileEditor       *editor.State
 	fileSavedVersion uint64

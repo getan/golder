@@ -1,6 +1,7 @@
 package mygoui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -95,5 +96,24 @@ func TestFileEditorKeepsUnsavedChangesUntilDiscarded(t *testing.T) {
 	tt.Frame()
 	if err := tt.Click("Discard"); err != nil || a.fileHasChanges() || a.fileEditor.Buffer.String() != "package main\n" {
 		t.Fatalf("discard did not restore preview: err=%v", err)
+	}
+}
+
+func TestFilePreviewPrettyPrintsJSONAndCanToggleRaw(t *testing.T) {
+	a := testApp()
+	a.fileSelected = "data.json"
+	a.filePreview = appsession.ProjectFilePreview{Path: "data.json", Text: `{"name":"golder","items":[1,2]}`}
+	a.filePretty = true
+	a.initFileEditor()
+	if a.fileEditor == nil || !a.fileEditor.ReadOnly {
+		t.Fatal("JSON preview was not read-only")
+	}
+	if got := a.fileEditor.Buffer.String(); !strings.Contains(got, "\n  \"name\": \"golder\",") || !strings.Contains(got, "\"items\": [") {
+		t.Fatalf("JSON preview was not formatted: %q", got)
+	}
+	a.filePretty = false
+	a.initFileEditor()
+	if a.fileEditor.ReadOnly || a.fileEditor.Buffer.String() != a.filePreview.Text {
+		t.Fatal("Raw toggle did not restore the editable source text")
 	}
 }

@@ -133,6 +133,24 @@ func TestReadToolTruncation(t *testing.T) {
 	}
 }
 
+func TestReadToolLargeJSONUsesTheLineBudget(t *testing.T) {
+	dir := t.TempDir()
+	payload := `{"text":"` + strings.Repeat("x", 20<<10) + `"}`
+	path := filepath.Join(dir, "large.json")
+	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	tool := &ReadTool{Root: dir}
+	res, _ := runRead(t, tool, map[string]any{"path": "large.json"})
+	text := resultText(res)
+	if strings.Contains(text, "line truncated:") {
+		t.Fatalf("20 KiB JSON line was cut at the generic 16 KiB limit: %q", text)
+	}
+	if len(text) < len(payload) {
+		t.Fatalf("large JSON was incomplete: got %d bytes, want at least %d", len(text), len(payload))
+	}
+}
+
 func TestReadToolMissingPathArg(t *testing.T) {
 	tool := &ReadTool{Root: t.TempDir()}
 	res, _ := runRead(t, tool, map[string]any{})

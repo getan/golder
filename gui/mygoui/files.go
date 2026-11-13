@@ -2,6 +2,7 @@ package mygoui
 
 import (
 	"bytes"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/displaytext"
 )
 
 func (a *App) resetFileExplorer() {
@@ -21,6 +23,7 @@ func (a *App) resetFileExplorer() {
 	a.fileLoading = map[string]bool{}
 	a.fileSelected = ""
 	a.filePreview = appsession.ProjectFilePreview{}
+	a.filePretty = false
 	a.filePreviewBusy = false
 	a.fileEditor = nil
 	a.fileSavedVersion = 0
@@ -63,6 +66,7 @@ func (a *App) enterFileDirectory(relative string) {
 	a.fileDirectory = relative
 	a.fileSelected = ""
 	a.filePreview = appsession.ProjectFilePreview{}
+	a.filePretty = false
 	a.filePreviewBusy = false
 	a.fileEditor = nil
 	a.filesErr = ""
@@ -123,6 +127,7 @@ func (a *App) loadFilePreview(path string) {
 	}
 	a.fileSelected, a.filePreviewBusy = path, true
 	a.filePreview = appsession.ProjectFilePreview{}
+	a.filePretty = false
 	a.fileEditor = nil
 	scope, win := a.fileScope(), a.win
 	browser, err := scope.ctrl.FileBrowserAt(scope.session, scope.project, scope.root)
@@ -144,6 +149,7 @@ func (a *App) loadFilePreview(path string) {
 			}
 			a.filesErr = ""
 			a.filePreview = preview
+			a.filePretty = isJSONFile(path)
 			a.initFileEditor()
 		}
 		if win == nil {
@@ -163,10 +169,23 @@ func (a *App) initFileEditor() {
 	if a.filePreview.Binary || a.filePreviewBusy {
 		return
 	}
-	buffer := editor.NewBuffer(a.filePreview.Text)
+	text := a.filePreview.Text
+	if a.filePretty {
+		trimmed := strings.TrimSpace(text)
+		if a.filePreview.Truncated || len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') || !json.Valid([]byte(trimmed)) {
+			a.filePretty = false
+		} else if pretty := displaytext.PrettyJSON(text); pretty != "" {
+			text = pretty
+		}
+	}
+	buffer := editor.NewBuffer(text)
 	buffer.SetLanguage(editor.LanguageFor(a.fileSelected))
-	a.fileEditor = &editor.State{Buffer: buffer, SoftWrap: true, ReadOnly: a.filePreview.Truncated, Label: "File editor"}
+	a.fileEditor = &editor.State{Buffer: buffer, SoftWrap: true, ReadOnly: a.filePreview.Truncated || a.filePretty, Label: "File editor"}
 	a.fileSavedVersion = buffer.Version()
+}
+
+func isJSONFile(path string) bool {
+	return strings.EqualFold(filepath.Ext(strings.TrimSpace(path)), ".json")
 }
 
 func (a *App) fileHasChanges() bool {
@@ -174,7 +193,7 @@ func (a *App) fileHasChanges() bool {
 }
 
 func (a *App) saveFile() {
-	if a.ctrl == nil || a.fileEditor == nil || a.fileEditor.Buffer == nil || a.filePreview.Truncated || a.fileSaving || !a.fileHasChanges() {
+	if a.ctrl == nil || a.fileEditor == nil || a.fileEditor.Buffer == nil || a.filePreview.Truncated || a.filePretty || a.fileSaving || !a.fileHasChanges() {
 		return
 	}
 	path, scope, win := a.fileSelected, a.fileScope(), a.win
@@ -336,6 +355,16 @@ func (a *App) filePreviewView(c *ui.Context) {
 	}
 	ui.Row(c).Height(38).Padding(6, 10).BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 		ui.Text(c, path).FontSize(11.5).FontWeight(600).Grow(1).SingleLine().Ellipsis("…").Tooltip(path)
+		if !a.filePreviewBusy && !a.filePreview.Binary && isJSONFile(path) {
+			label := "Pretty"
+			if a.filePretty {
+				label = "Raw"
+			}
+			if subtleButton(c, label, a.fileSaving || a.fileHasChanges() || a.filePreview.Truncated).Tooltip("Toggle formatted JSON preview").Clicked() {
+				a.filePretty = !a.filePretty
+				a.initFileEditor()
+			}
+		}
 		if a.filePreview.Truncated {
 			ui.Text(c, "preview truncated").FontSize(10).TextColor(t.Warning)
 		} else if a.fileHasChanges() {
@@ -344,7 +373,7 @@ func (a *App) filePreviewView(c *ui.Context) {
 				a.filesErr = ""
 			}
 		}
-		if subtlePrimaryButton(c, "Save", a.fileSaving || a.ctrl == nil || a.filePreviewBusy || a.filePreview.Binary || a.filePreview.Truncated || !a.fileHasChanges()).Clicked() {
+		if subtlePrimaryButton(c, "Save", a.fileSaving || a.ctrl == nil || a.filePreviewBusy || a.filePreview.Binary || a.filePreview.Truncated || a.filePretty || !a.fileHasChanges()).Clicked() {
 			a.saveFile()
 		}
 	})

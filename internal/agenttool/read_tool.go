@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -155,7 +156,14 @@ func (t *ReadTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	}
 	defer f.Close()
 
-	text, _ := readNumbered(f, a.Offset, a.Limit, a.MaxLineBytes)
+	maxLineBytes := a.MaxLineBytes
+	if maxLineBytes <= 0 && strings.EqualFold(filepath.Ext(full), ".json") {
+		// Minified JSON is commonly one very long line. Use the existing total
+		// budget for it rather than cutting the useful preview at the generic
+		// 16 KiB source-line default.
+		maxLineBytes = readToolMaxLineBytes
+	}
+	text, _ := readNumbered(f, a.Offset, a.Limit, maxLineBytes)
 	return agentcore.AgentToolResult{Content: agentcore.ContentList{agentcore.NewTextContent(text)}}, nil
 }
 

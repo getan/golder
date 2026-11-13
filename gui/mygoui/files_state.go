@@ -12,6 +12,7 @@ type fileExplorerSnapshot struct {
 	open, hidden                       bool
 	entries                            map[string][]appsession.ProjectFileEntry
 	preview                            appsession.ProjectFilePreview
+	pretty                             bool
 	editor                             *editor.State
 	savedVersion                       uint64
 	previewPending                     bool
@@ -40,7 +41,7 @@ func (a *App) rememberFileExplorer(id, project string) {
 		a.fileStates = map[string]fileExplorerSnapshot{}
 	}
 	a.fileStates[id] = fileExplorerSnapshot{project: project, root: a.fileRoot, directory: a.fileDirectory, selected: a.fileSelected,
-		open: a.filesOpen, hidden: a.fileShowHidden, entries: a.fileEntries, preview: a.filePreview, editor: a.fileEditor, savedVersion: a.fileSavedVersion, previewPending: a.filePreviewBusy}
+		open: a.filesOpen, hidden: a.fileShowHidden, entries: a.fileEntries, preview: a.filePreview, pretty: a.filePretty, editor: a.fileEditor, savedVersion: a.fileSavedVersion, previewPending: a.filePreviewBusy}
 }
 
 func (a *App) restoreFileExplorer(id, project string) {
@@ -52,6 +53,7 @@ func (a *App) restoreFileExplorer(id, project string) {
 	delete(a.fileStates, id)
 	a.fileRoot, a.fileDirectory, a.fileSelected = s.root, s.directory, s.selected
 	a.filesOpen, a.fileShowHidden = s.open, s.hidden
+	a.filePretty = s.pretty
 	a.fileEntries, a.filePreview, a.fileEditor, a.fileSavedVersion = s.entries, s.preview, s.editor, s.savedVersion
 	if s.previewPending && a.fileSelected != "" {
 		a.loadFilePreview(a.fileSelected)

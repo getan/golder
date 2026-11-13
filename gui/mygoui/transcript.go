@@ -135,7 +135,11 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 				} else {
 					output = displaytext.PrettyJSON(output)
 				}
-				output = truncate(output, 12000)
+				limit := 12000
+				if st.Name == "read" {
+					limit = 512 << 10
+				}
+				output = truncate(output, limit)
 				failed := it.Failed || st.Error
 				rendered := false
 				if !failed {

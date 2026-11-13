@@ -49,3 +49,23 @@ func TestPrettyJSONReadPreservesLineNumbersAndReadNotices(t *testing.T) {
 		}
 	}
 }
+
+func TestPrettyJSONReadFormatsTruncatedLargeDocument(t *testing.T) {
+	raw := `{"name":"big","items":[1,2,3],"tail":"` + strings.Repeat("x", 200)
+	raw += "… (line truncated: showing 120 of 200 bytes; use offset=1, limit=1, max_line_bytes=200 for the complete line; preview is not patch context)\n"
+	got := PrettyJSONRead("     1\t" + raw)
+	for _, want := range []string{
+		"     1\t{",
+		"     2\t  \"name\": \"big\",",
+		"     3\t  \"items\": [",
+		"     4\t    1,",
+		"… (line truncated:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("truncated JSON preview is missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "\n") < 5 {
+		t.Fatalf("truncated JSON stayed on one line: %q", got)
+	}
+}
