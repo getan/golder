@@ -17,3 +17,35 @@ func TestPrettyJSONIsDisplayOnlyAndPreservesValues(t *testing.T) {
 		}
 	}
 }
+
+func TestPrettyJSONReadPreservesLineNumbersAndReadNotices(t *testing.T) {
+	raw := "     1\t{\"name\":\"golder\",\"items\":[1,2]}\n"
+	got := PrettyJSONRead(raw)
+	for _, want := range []string{
+		"     1\t{",
+		"     2\t  \"name\": \"golder\",",
+		"     3\t  \"items\": [",
+		"     7\t}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("numbered JSON is missing %q: %q", want, got)
+		}
+	}
+	if !strings.HasSuffix(got, "\n") {
+		t.Fatal("trailing newline was dropped")
+	}
+	notice := "\n... (output truncated after line 1 (1-line limit); resume with offset=2 and a smaller limit)\n"
+	got = PrettyJSONRead("     1\t{\"a\":1}\n" + notice)
+	if !strings.Contains(got, "     1\t{") || !strings.Contains(got, notice) {
+		t.Fatalf("read notice or line number was not preserved: %q", got)
+	}
+	for _, unchanged := range []string{
+		"ordinary text\n",
+		"1\t{bad json}\n",
+		"not numbered {\"a\":1}\n",
+	} {
+		if PrettyJSONRead(unchanged) != unchanged {
+			t.Fatalf("non-JSON read output changed: %q", unchanged)
+		}
+	}
+}

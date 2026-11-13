@@ -130,7 +130,12 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 				output = applyPatchDisplayOutput(output, st.Details)
 			}
 			if output != "" {
-				output = truncate(displaytext.PrettyJSON(output), 12000)
+				if st.Name == "read" {
+					output = displaytext.PrettyJSONRead(output)
+				} else {
+					output = displaytext.PrettyJSON(output)
+				}
+				output = truncate(output, 12000)
 				failed := it.Failed || st.Error
 				rendered := false
 				if !failed {

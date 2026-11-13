@@ -25,3 +25,17 @@ func TestToolPreviewPrettyPrintsJSONAndWrapsLongValues(t *testing.T) {
 		}
 	}
 }
+
+func TestReadToolPreviewFormatsNumberedJSON(t *testing.T) {
+	card := toolCard{name: "read", input: map[string]any{"path": "fixture.json"}, expanded: true}
+	card.complete(true, "     1\t{\"name\":\"golder\",\"items\":[1,2]}\n", nil)
+	text := stripTCardANSI(card.render(DefaultTheme(), 100))
+	for _, want := range []string{`"name": "golder"`, `"items": [`, `1`, `2`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("read preview is missing %q: %q", want, text)
+		}
+	}
+	if strings.Count(text, "\n") < 6 {
+		t.Fatalf("read JSON stayed on one line: %q", text)
+	}
+}

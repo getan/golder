@@ -632,7 +632,11 @@ func (c *toolCard) complete(ok bool, result string, details any) {
 			result = strings.Clone(stripped)
 		}
 	}
-	c.response = parseToolResult(displaytext.PrettyJSON(result))
+	formatted := displaytext.PrettyJSON(result)
+	if strings.EqualFold(c.name, "read") {
+		formatted = displaytext.PrettyJSONRead(result)
+	}
+	c.response = parseToolResult(formatted)
 }
 
 // defaultCardExpanded reports whether a tool's cards start expanded. Patch and

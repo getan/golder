@@ -25,3 +25,17 @@ func TestGUIToolPreviewFormatsJSONAndWrapsWithoutChangingStoredResult(t *testing
 		t.Fatal("display formatting changed stored tool output")
 	}
 }
+
+func TestGUIReadPreviewFormatsNumberedJSON(t *testing.T) {
+	a := testApp()
+	item := exploreTestTool("json-read", "read", map[string]any{"path": "fixture.json"},
+		"     1\t{\"name\":\"golder\",\"items\":[1,2]}\n")
+	a.toolOpen[item.ID] = true
+	tt := ui.NewTester(func(c *ui.Context) { a.toolCard(c, item) }, 800, 900)
+	tt.Frame()
+	for _, want := range []string{`"name": "golder"`, `"items": [`, `1`, `2`} {
+		if !tt.HasText(want) {
+			t.Fatalf("GUI read preview is missing %q: %q", want, tt.Texts())
+		}
+	}
+}

@@ -5,6 +5,8 @@ package displaytext
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -52,4 +54,51 @@ func PrettyJSON(text string) string {
 		return text
 	}
 	return out.String()
+}
+
+// PrettyJSONRead formats the JSON body of the read tool's numbered output.
+// Each source line is prefixed with a line number and a tab; reformatting the
+// body would otherwise fail json.Valid, which is why a one-line document used
+// to reach both frontends unchanged. Line numbers and trailing read notices
+// (pagination/truncation) are preserved; a document that is not valid JSON is
+// returned exactly as it came in.
+func PrettyJSONRead(text string) string {
+	lines := strings.Split(text, "\n")
+	body := make([]string, 0, len(lines))
+	first, width, end := 0, 0, 0
+	for end < len(lines) {
+		line := lines[end]
+		tab := strings.IndexByte(line, '\t')
+		if tab < 1 {
+			break
+		}
+		prefix := line[:tab]
+		number := strings.TrimSpace(prefix)
+		if number == "" || strings.Trim(number, "0123456789") != "" {
+			break
+		}
+		n, err := strconv.Atoi(number)
+		if err != nil || n < 1 {
+			break
+		}
+		if first == 0 {
+			first, width = n, len(prefix)
+		}
+		body = append(body, line[tab+1:])
+		end++
+	}
+	if first == 0 || len(body) == 0 {
+		return text
+	}
+	raw := strings.Join(body, "\n")
+	pretty := PrettyJSON(raw)
+	if pretty == raw {
+		return text
+	}
+	out := make([]string, 0, len(lines))
+	for i, line := range strings.Split(pretty, "\n") {
+		out = append(out, fmt.Sprintf("%*d\t%s", width, first+i, line))
+	}
+	out = append(out, lines[end:]...)
+	return strings.Join(out, "\n")
 }
