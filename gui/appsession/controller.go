@@ -174,6 +174,7 @@ type Controller struct {
 	running               bool
 	privateAuthorization  bool
 	extensionMutation     bool
+	gitMutation           bool
 	runID                 string
 	browserWaitRun        string
 	browserReady          bool

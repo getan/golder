@@ -197,11 +197,11 @@ func (a *App) titleBar(c *ui.Context) {
 				a.openFileExplorer()
 			}
 		}
-		changesTip := "Review uncommitted changes"
+		changesTip := "Git status, commit, push and fast-forward pull"
 		if changes > 0 {
-			changesTip = fmt.Sprintf("Changes · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
+			changesTip = fmt.Sprintf("Git · %d files · +%d −%d", changes, a.changes.Added, a.changes.Deleted)
 		}
-		if titleIconButton(c, "changes", changesMonochromeIcon, "Changes", changesTip, a.changesOpen, false).Clicked() {
+		if titleIconButton(c, "changes", changesMonochromeIcon, "Git", changesTip, a.changesOpen, false).Clicked() {
 			if a.changesOpen {
 				a.closeChangesPanel()
 			} else {
@@ -576,7 +576,7 @@ func (a *App) bannerView(c *ui.Context) {
 		color = t.Danger
 	}
 	if a.changesErr != "" {
-		msg, color = "Changes: "+a.changesErr, t.Danger
+		msg, color = "Git: "+a.changesErr, t.Danger
 	}
 	ui.Row(c).Padding(8, 16).Gap(8).AlignItems(ui.Center).
 		BorderWidth(1, 0, 0, 0).BorderColor(t.Border).Children(func() {

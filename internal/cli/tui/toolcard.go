@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/getan/golder/internal/cli/ui"
+	"github.com/getan/golder/internal/displaytext"
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/patch"
 )
@@ -631,7 +632,7 @@ func (c *toolCard) complete(ok bool, result string, details any) {
 			result = strings.Clone(stripped)
 		}
 	}
-	c.response = parseToolResult(result)
+	c.response = parseToolResult(displaytext.PrettyJSON(result))
 }
 
 // defaultCardExpanded reports whether a tool's cards start expanded. Patch and

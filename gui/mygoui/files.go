@@ -2,10 +2,8 @@ package mygoui
 
 import (
 	"bytes"
-	"context"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -17,6 +15,7 @@ func (a *App) resetFileExplorer() {
 	a.filesOpen = false
 	a.fileGeneration++
 	a.fileDirectory = ""
+	a.fileRoot = a.project
 	a.fileShowHidden = false
 	a.fileEntries = map[string][]appsession.ProjectFileEntry{}
 	a.fileLoading = map[string]bool{}
@@ -48,6 +47,10 @@ func (a *App) refreshFileDirectory() {
 	a.fileEntries = map[string][]appsession.ProjectFileEntry{}
 	a.fileLoading = map[string]bool{}
 	a.loadFileDirectory(a.fileDirectory)
+	if a.filePreviewBusy {
+		a.filePreviewBusy = false
+		a.loadFilePreview(a.fileSelected)
+	}
 }
 
 func (a *App) enterFileDirectory(relative string) {
@@ -55,6 +58,8 @@ func (a *App) enterFileDirectory(relative string) {
 		a.filesErr = "Save or discard the current file's changes before changing folders."
 		return
 	}
+	a.fileGeneration++
+	a.fileLoading = map[string]bool{}
 	a.fileDirectory = relative
 	a.fileSelected = ""
 	a.filePreview = appsession.ProjectFilePreview{}
@@ -70,44 +75,42 @@ func (a *App) loadFileDirectory(relative string) {
 	if a.fileLoading[relative] || a.ctrl == nil {
 		return
 	}
+	if a.fileLoading == nil {
+		a.fileLoading = map[string]bool{}
+	}
 	a.fileLoading[relative] = true
-	project, win, generation, showHidden, ctrl := a.project, a.win, a.fileGeneration, a.fileShowHidden, a.ctrl
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		type result struct {
-			entries []appsession.ProjectFileEntry
-			err     error
-		}
-		ch := make(chan result, 1)
-		go func() {
-			entries, err := ctrl.ListProjectFilesWithHidden(relative, showHidden)
-			ch <- result{entries: entries, err: err}
-		}()
-		var got result
-		select {
-		case got = <-ch:
-		case <-ctx.Done():
-			got.err = ctx.Err()
-		}
+	scope, win, showHidden := a.fileScope(), a.win, a.fileShowHidden
+	browser, err := scope.ctrl.FileBrowserAt(scope.session, scope.project, scope.root)
+	if err != nil {
+		delete(a.fileLoading, relative)
+		a.filesErr = err.Error()
+		return
+	}
+	load := func() {
+		entries, err := browser.List(relative, showHidden)
 		apply := func() {
-			if a.project != project || a.fileGeneration != generation {
+			if !scope.matches(a) {
 				return
 			}
 			delete(a.fileLoading, relative)
-			if got.err != nil {
-				a.filesErr = got.err.Error()
+			if err != nil {
+				a.filesErr = err.Error()
 				return
 			}
 			a.filesErr = ""
-			a.fileEntries[relative] = got.entries
+			a.fileEntries[relative] = entries
 		}
 		if win == nil {
 			apply()
-			return
+		} else {
+			win.Update(apply)
 		}
-		win.Update(apply)
-	}()
+	}
+	if win == nil {
+		load()
+	} else {
+		go load()
+	}
 }
 
 func (a *App) loadFilePreview(path string) {
@@ -121,44 +124,39 @@ func (a *App) loadFilePreview(path string) {
 	a.fileSelected, a.filePreviewBusy = path, true
 	a.filePreview = appsession.ProjectFilePreview{}
 	a.fileEditor = nil
-	project, win, ctrl := a.project, a.win, a.ctrl
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		type result struct {
-			preview appsession.ProjectFilePreview
-			err     error
-		}
-		ch := make(chan result, 1)
-		go func() {
-			preview, err := ctrl.ReadProjectFile(path)
-			ch <- result{preview: preview, err: err}
-		}()
-		var got result
-		select {
-		case got = <-ch:
-		case <-ctx.Done():
-			got.err = ctx.Err()
-		}
+	scope, win := a.fileScope(), a.win
+	browser, err := scope.ctrl.FileBrowserAt(scope.session, scope.project, scope.root)
+	if err != nil {
+		a.filePreviewBusy = false
+		a.filesErr = err.Error()
+		return
+	}
+	load := func() {
+		preview, err := browser.Read(path)
 		apply := func() {
-			if a.project != project || a.fileSelected != path {
+			if !scope.matches(a) || a.fileSelected != path {
 				return
 			}
 			a.filePreviewBusy = false
-			if got.err != nil {
-				a.filesErr = got.err.Error()
+			if err != nil {
+				a.filesErr = err.Error()
 				return
 			}
 			a.filesErr = ""
-			a.filePreview = got.preview
+			a.filePreview = preview
 			a.initFileEditor()
 		}
 		if win == nil {
 			apply()
-			return
+		} else {
+			win.Update(apply)
 		}
-		win.Update(apply)
-	}()
+	}
+	if win == nil {
+		load()
+	} else {
+		go load()
+	}
 }
 
 func (a *App) initFileEditor() {
@@ -179,7 +177,12 @@ func (a *App) saveFile() {
 	if a.ctrl == nil || a.fileEditor == nil || a.fileEditor.Buffer == nil || a.filePreview.Truncated || a.fileSaving || !a.fileHasChanges() {
 		return
 	}
-	path, project, win, ctrl := a.fileSelected, a.project, a.win, a.ctrl
+	path, scope, win := a.fileSelected, a.fileScope(), a.win
+	browser, err := scope.ctrl.FileBrowserAt(scope.session, scope.project, scope.root)
+	if err != nil {
+		a.filesErr = err.Error()
+		return
+	}
 	var content bytes.Buffer
 	if _, err := a.fileEditor.Buffer.WriteTo(&content); err != nil {
 		a.filesErr = err.Error()
@@ -187,10 +190,11 @@ func (a *App) saveFile() {
 	}
 	text, version, digest := content.String(), a.fileEditor.Buffer.Version(), a.filePreview.Digest
 	a.fileSaving, a.filesErr = true, ""
-	go func() {
-		newDigest, err := ctrl.SaveProjectFile(project, path, digest, text)
+	save := func() {
+		newDigest, err := browser.Save(path, digest, text)
 		apply := func() {
-			if a.project != project || a.fileSelected != path {
+			// Refreshing the directory does not invalidate an in-flight save.
+			if !scope.matchesLocation(a) || a.fileSelected != path {
 				return
 			}
 			a.fileSaving = false
@@ -207,7 +211,12 @@ func (a *App) saveFile() {
 		} else {
 			win.Update(apply)
 		}
-	}()
+	}
+	if win == nil {
+		save()
+	} else {
+		go save()
+	}
 }
 
 func (a *App) fileExplorerPanel(c *ui.Context) {
@@ -219,22 +228,22 @@ func (a *App) fileExplorerPanel(c *ui.Context) {
 	if c.Shortcut(ui.Cmd, ui.KeyS) {
 		a.saveFile()
 	}
-	ui.Column(c).Fill().MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
+	ui.Column(c.Key("files:"+a.status.SessionID)).Fill().MinWidth(0).BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Height(42).Padding(6, 10).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Icon(c, filesMonochromeIcon).Size(15, 15)
 			ui.Text(c, "Files").FontSize(13).FontWeight(600)
-			if subtleButton(c, "‹", a.fileDirectory == "").Tooltip("Parent folder").Clicked() {
-				parent := filepath.ToSlash(filepath.Dir(a.fileDirectory))
-				if parent == "." {
-					parent = ""
+			root := a.fileBrowseRoot()
+			if subtleButton(c, "‹", a.fileDirectory == "" && filepath.Dir(root) == root).Label("Parent folder").Tooltip("Parent folder").Clicked() {
+				a.parentFileDirectory()
+			}
+			if subtleButton(c, "⌂").Label("Conversation working folder").Tooltip(a.project).Clicked() {
+				if !a.fileSaving && !a.fileHasChanges() {
+					a.resetFileExplorer()
+					a.openFileExplorer()
 				}
-				a.enterFileDirectory(parent)
 			}
-			label := filepath.Base(a.project)
-			if a.fileDirectory != "" {
-				label += " / " + a.fileDirectory
-			}
+			label := filepath.Join(root, a.fileDirectory)
 			ui.Text(c, label).FontSize(11).TextColor(t.TextMuted).Grow(1).SingleLine().Ellipsis("…").Tooltip(label)
 			hiddenLabel := "Show hidden files"
 			if a.fileShowHidden {

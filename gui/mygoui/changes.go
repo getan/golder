@@ -1,10 +1,9 @@
 package mygoui
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
@@ -29,14 +28,14 @@ func (a *App) closeChangesPanel() {
 // diff, rendered by MyGo's diff viewer.
 func (a *App) changesPanel(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().MinWidth(0).Background(t.Surface).
+	ui.Column(c.Key("git:"+a.status.SessionID)).Fill().MinWidth(0).Background(t.Surface).
 		BorderWidth(0, 0, 0, 1).BorderColor(t.Border).Children(func() {
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
 			ui.Column(c).Grow(1).Gap(1).Children(func() {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 					ui.Icon(c, changesMonochromeIcon).Size(15, 15).TextColor(t.Text)
-					ui.Text(c, "Changes").FontSize(13).Bold()
+					ui.Text(c, "Git").FontSize(13).Bold()
 				})
 				if a.changes.RepoRoot != "" {
 					repo := filepath.Base(a.changes.RepoRoot)
@@ -48,10 +47,10 @@ func (a *App) changesPanel(c *ui.Context) {
 			})
 			ui.Text(c, fmt.Sprintf("+%d −%d", a.changes.Added, a.changes.Deleted)).
 				FontSize(11).TextColor(t.TextMuted)
-			if subtleButton(c, "↻").Label("Refresh Changes").Tooltip("Refresh Changes").Clicked() {
+			if subtleButton(c, "↻").Label("Refresh Git").Tooltip("Refresh Git").Clicked() {
 				a.refreshChanges()
 			}
-			if subtleButton(c, "×").Label("Close Changes").Tooltip("Close Changes").Clicked() {
+			if subtleButton(c, "×").Label("Close Git").Tooltip("Close Git").Clicked() {
 				a.closeChangesPanel()
 			}
 		})
@@ -60,6 +59,34 @@ func (a *App) changesPanel(c *ui.Context) {
 				ui.Text(c, "This project is not a Git repository.").FontSize(12).TextColor(t.TextMuted)
 			})
 			return
+		}
+		state := a.gitState(a.status.SessionID)
+		ui.Row(c).Padding(6, 10).Gap(6).Wrap().Children(func() {
+			for _, action := range []struct{ label, name string }{{"Fetch", "fetch"}, {"Pull", "pull"}, {"Push", "push"}} {
+				if subtleButton(c, action.label, a.gitDisabled()).Clicked() {
+					a.runGitAction(action.name, "")
+				}
+			}
+			if a.changes.Upstream != "" {
+				ui.Text(c, fmt.Sprintf("%s · ↑%d ↓%d", a.changes.Upstream, a.changes.Ahead, a.changes.Behind)).FontSize(10.5).TextColor(t.TextMuted).Wrap()
+			} else {
+				ui.Text(c, "No upstream configured").FontSize(10.5).TextColor(t.TextMuted)
+			}
+		})
+		ui.Row(c).Padding(6, 10).Gap(6).Children(func() {
+			ui.TextInput(c, &state.commitMessage).Label("Commit message").Placeholder("Commit message (staged changes only)").Grow(1).Disabled(a.gitDisabled())
+			if subtleButton(c, "Commit", a.gitDisabled() || a.changes.StagedFiles == 0 || strings.TrimSpace(state.commitMessage) == "").Clicked() {
+				a.runGitAction("commit", "")
+			}
+		})
+		if state.busy {
+			ui.Text(c, "Git "+state.operation+"…").Padding(4, 10).FontSize(11).TextColor(t.TextMuted)
+		}
+		if state.err != "" {
+			ui.Text(c, state.err).Padding(4, 10).FontSize(11).TextColor(t.Danger).Selectable().Tooltip(state.err).Wrap().MaxLines(6)
+		}
+		if state.result != "" {
+			ui.Text(c, state.result).Padding(4, 10).FontSize(11).TextColor(t.TextMuted).Selectable().Tooltip(state.result).Wrap().MaxLines(4)
 		}
 		ui.Row(c).Padding(7, 10).Gap(6).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(t.Border).Children(func() {
@@ -86,7 +113,7 @@ func (a *App) changesPanel(c *ui.Context) {
 			if a.currentChangesView() == appsession.ChangesStaged {
 				action, stage = "Unstage all", false
 			}
-			if subtleButton(c, action, len(a.changes.Files) == 0 || a.status.Running).Clicked() {
+			if subtleButton(c, action, len(a.changes.Files) == 0 || a.gitDisabled()).Clicked() {
 				a.setAllStaged(stage)
 			}
 		})
@@ -125,7 +152,7 @@ func (a *App) changesPanel(c *ui.Context) {
 						if a.currentChangesView() == appsession.ChangesStaged {
 							action, stage = "Unstage", false
 						}
-						if subtleButton(c, action, a.status.Running).Clicked() {
+						if subtleButton(c, action, a.gitDisabled()).Clicked() {
 							a.setFileStaged(f.Path, stage)
 						}
 					})
@@ -174,23 +201,19 @@ func (a *App) setChangesView(view appsession.ChangeView) {
 }
 
 func (a *App) setAllStaged(staged bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := a.ctrl.SetAllStaged(ctx, staged); err != nil {
-		a.changesErr = err.Error()
-		return
+	action := "unstage"
+	if staged {
+		action = "stage"
 	}
-	a.refreshChanges()
+	a.runGitAction(action, "")
 }
 
 func (a *App) setFileStaged(path string, staged bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	if err := a.ctrl.SetFileStaged(ctx, path, staged); err != nil {
-		a.changesErr = err.Error()
-		return
+	action := "unstage"
+	if staged {
+		action = "stage"
 	}
-	a.refreshChanges()
+	a.runGitAction(action, path)
 }
 
 func changeStatusIcon(status string) string {

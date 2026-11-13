@@ -51,6 +51,10 @@ func (c *Controller) ListProjectFilesWithHidden(relative string, showHidden bool
 	c.mu.Lock()
 	root := c.cwd
 	c.mu.Unlock()
+	return listFilesAt(root, relative, showHidden)
+}
+
+func listFilesAt(root, relative string, showHidden bool) ([]ProjectFileEntry, error) {
 	dir, clean, err := secureProjectPath(root, relative)
 	if err != nil {
 		return nil, err
@@ -114,6 +118,10 @@ func (c *Controller) ReadProjectFile(relative string) (ProjectFilePreview, error
 	c.mu.Lock()
 	root := c.cwd
 	c.mu.Unlock()
+	return readFileAt(root, relative)
+}
+
+func readFileAt(root, relative string) (ProjectFilePreview, error) {
 	_, clean, err := secureProjectPath(root, relative)
 	if err != nil {
 		return ProjectFilePreview{}, err
@@ -175,6 +183,13 @@ func (c *Controller) SaveProjectFile(expectedProject, relative, expectedDigest, 
 	}
 	if expectedProject == "" || filepath.Clean(expectedProject) != filepath.Clean(root) {
 		return "", errors.New("project changed; reopen the file before saving")
+	}
+	return saveFileAt(root, relative, expectedDigest, text)
+}
+
+func saveFileAt(root, relative, expectedDigest, text string) (string, error) {
+	if len(text) > maxProjectPreviewBytes || !utf8.ValidString(text) || strings.ContainsRune(text, '\x00') || len(expectedDigest) != sha256.Size*2 {
+		return "", errors.New("invalid or incomplete editable file preview")
 	}
 	_, clean, err := secureProjectPath(root, relative)
 	if err != nil || clean == "" {

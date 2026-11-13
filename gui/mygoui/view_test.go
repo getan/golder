@@ -37,7 +37,7 @@ func testApp() *App {
 func TestViewRendersChrome(t *testing.T) {
 	a := testApp()
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, want := range []string{"project", "Projects", "Chats", "Settings", "↑", "test-provider · test-model · off", "Changes"} {
+	for _, want := range []string{"project", "Projects", "Chats", "Settings", "↑", "test-provider · test-model · off", "Git"} {
 		if !tt.HasText(want) {
 			t.Fatalf("view is missing %q; texts: %q", want, tt.Texts())
 		}
@@ -88,13 +88,13 @@ func TestTitleBarIconButtonsShareSizeAndChangesCloses(t *testing.T) {
 	a := testApp()
 	a.changesOpen = true
 	tt := ui.NewTester(a.view, 1200, 800)
-	for _, label := range []string{"Remote", "Files", "Changes", "Computer Use", "Browser", "Terminal"} {
+	for _, label := range []string{"Remote", "Files", "Git", "Computer Use", "Browser", "Terminal"} {
 		box, ok := tt.Find(label)
 		if !ok || box.W != 30 || box.H != 30 {
 			t.Fatalf("%s button has box %+v, found=%t; want 30×30", label, box, ok)
 		}
 	}
-	if err := tt.Click("Changes"); err != nil || a.changesOpen {
+	if err := tt.Click("Git"); err != nil || a.changesOpen {
 		t.Fatalf("changes action did not close the drawer: open=%t err=%v", a.changesOpen, err)
 	}
 }
@@ -104,7 +104,7 @@ func TestTitleBarIconButtonsHaveNoDefaultTile(t *testing.T) {
 		a := testApp()
 		tt := ui.NewTester(a.view, 1200, 800)
 		tt.SetDark(dark)
-		for _, label := range []string{"Remote", "Files", "Changes", "Computer Use", "Browser", "Terminal"} {
+		for _, label := range []string{"Remote", "Files", "Git", "Computer Use", "Browser", "Terminal"} {
 			tt.Move(2, 2)
 			box, ok := tt.Find(label)
 			if !ok {
@@ -292,7 +292,7 @@ func TestChangesPanelRendersGitReviewControls(t *testing.T) {
 		Files: []appsession.FileStatus{{Path: "ui.go", Status: "M", Added: 3, Deleted: 1}},
 	}
 	tt := ui.NewTester(a.view, 1400, 800)
-	for _, want := range []string{"Changes", "project  ·  feature/ui", "Unstaged", "Staged", "Stage all", "Stage", "ui.go", "+3", "−1"} {
+	for _, want := range []string{"Git", "project  ·  feature/ui", "Unstaged", "Staged", "Stage all", "Stage", "ui.go", "+3", "−1", "Fetch", "Pull", "Push", "Commit message", "Commit"} {
 		if !tt.HasText(want) {
 			t.Fatalf("changes panel is missing %q; texts: %q", want, tt.Texts())
 		}

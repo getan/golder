@@ -136,6 +136,10 @@ func (c *Controller) submitPrepared(ctx context.Context, prompt queuedPrompt, ex
 		c.mu.Unlock()
 		return errors.New("finish private authorization before starting an agent turn")
 	}
+	if c.gitMutation {
+		c.mu.Unlock()
+		return errors.New("finish the Git operation before starting an agent turn")
+	}
 	if c.extensionMutation {
 		c.mu.Unlock()
 		return errors.New("finish the extension operation before starting an agent turn")

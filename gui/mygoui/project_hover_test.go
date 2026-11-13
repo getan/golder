@@ -110,7 +110,7 @@ func TestHoveredProjectAddButtonTargetsThatProject(t *testing.T) {
 	if err := tt.Click("Create session in other-project"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.bannerErr || !strings.Contains(a.banner, "Save or discard") {
+	if !a.bannerErr || !strings.Contains(a.banner, "file save") {
 		t.Fatalf("click did not target the other project: %q", a.banner)
 	}
 }

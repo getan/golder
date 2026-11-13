@@ -199,11 +199,14 @@ type App struct {
 	diffCancel  context.CancelFunc
 	diffSel     int
 	diff        *editor.DiffState
+	gitStates   map[string]*gitPanelState
 
 	filesOpen        bool
 	fileEntries      map[string][]appsession.ProjectFileEntry
 	fileLoading      map[string]bool
 	fileDirectory    string
+	fileRoot         string
+	fileStates       map[string]fileExplorerSnapshot
 	fileShowHidden   bool
 	fileGeneration   uint64
 	fileSelected     string
@@ -408,6 +411,11 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 	if previousSession != "" && previousSession == snap.SessionID {
 		tail = transcriptTail(a.items)
 	}
+	fileScopeChanged := previousSession != snap.Status.SessionID || previousProject != snap.Project
+	if fileScopeChanged && previousSession != "" {
+		a.rememberFileExplorer(previousSession, previousProject)
+		a.rememberGitView(previousSession)
+	}
 	a.status = snap.Status
 	a.project = snap.Project
 	a.snapshotSeq = snap.Seq
@@ -415,8 +423,9 @@ func (a *App) applySnapshot(snap appsession.Snapshot) {
 		a.resetBrowserSession()
 		a.resetTerminalDialogs()
 	}
-	if previousProject != "" && previousProject != a.project {
-		a.resetFileExplorer()
+	if fileScopeChanged {
+		a.restoreFileExplorer(a.status.SessionID, a.project)
+		a.restoreGitView(a.status.SessionID)
 	}
 	if a.selectedProject == "" {
 		a.selectedProject = snap.Project
@@ -855,8 +864,8 @@ func (a *App) setThinking(level string) {
 }
 
 func (a *App) resume(id string) {
-	if a.fileSaving || a.fileHasChanges() {
-		a.banner, a.bannerErr = "Save or discard file changes before switching sessions.", true
+	if a.fileSaving {
+		a.banner, a.bannerErr = "Wait for the file save to finish before switching sessions.", true
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -880,8 +889,8 @@ func (a *App) newSession() {
 }
 
 func (a *App) newSessionInProject(project string) {
-	if (a.fileSaving || a.fileHasChanges()) && !sameProjectPath(project, a.project) {
-		a.banner, a.bannerErr = "Save or discard file changes before switching projects.", true
+	if a.fileSaving {
+		a.banner, a.bannerErr = "Wait for the file save to finish before switching sessions.", true
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

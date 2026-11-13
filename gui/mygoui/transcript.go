@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui/markdown"
 
 	"github.com/getan/golder/gui/appsession"
+	"github.com/getan/golder/internal/displaytext"
 	"github.com/getan/golder/internal/judge"
 )
 
@@ -121,7 +122,7 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 			patchRendered, patchComplete = renderApplyPatch(c, st.Input)
 		}
 		if len(st.Input) > 0 && !patchRendered {
-			ui.Text(c, formatInput(st.Input)).FontSize(11.5).TextColor(t.TextMuted).Selectable()
+			ui.Text(c, formatInput(st.Input)).FontSize(11.5).TextColor(t.TextMuted).Selectable().Wrap()
 		}
 		if st.Output != "" {
 			output := st.Output
@@ -129,7 +130,7 @@ func (a *App) toolCardDetailsWithDefault(c *ui.Context, it appsession.Item, note
 				output = applyPatchDisplayOutput(output, st.Details)
 			}
 			if output != "" {
-				output = truncate(output, 12000)
+				output = truncate(displaytext.PrettyJSON(output), 12000)
 				failed := it.Failed || st.Error
 				rendered := false
 				if !failed {

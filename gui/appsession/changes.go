@@ -63,6 +63,17 @@ func (c *Controller) ChangesFor(ctx context.Context, view ChangeView) (Changes, 
 		return out, err
 	}
 	out.TotalFiles = statusFileCount(status)
+	out.StagedFiles = len(parseStatusView(status, ChangesStaged))
+	if upstream, upstreamErr := runGit(ctx, repoRoot, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"); upstreamErr == nil {
+		out.Upstream = strings.TrimSpace(upstream)
+		if counts, countErr := runGit(ctx, repoRoot, "rev-list", "--left-right", "--count", "HEAD...@{upstream}"); countErr == nil {
+			fields := strings.Fields(counts)
+			if len(fields) == 2 {
+				out.Ahead, _ = strconv.Atoi(fields[0])
+				out.Behind, _ = strconv.Atoi(fields[1])
+			}
+		}
+	}
 	out.Files = parseStatusView(status, view)
 	if len(status) >= maxGitStatusBytes || len(out.Files) > maxChangedFiles {
 		out.Truncated = true
@@ -326,8 +337,8 @@ func runGitBounded(ctx context.Context, dir string, limit int, args ...string) (
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	// Never let a repository-level credential helper or pager run.
-	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0")
+	// Local status/diff commands need neither a credential prompt nor a pager.
+	cmd.Env = append(cmd.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "GIT_LITERAL_PATHSPECS=1")
 	stdout := boundedBuffer{limit: limit}
 	stderr := boundedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

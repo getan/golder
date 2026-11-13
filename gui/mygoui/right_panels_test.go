@@ -112,10 +112,10 @@ func TestChangesCloseCancelsDiffAndRevealsUnderlyingViews(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.diffCancel = cancel
 	tt := ui.NewTester(a.view, 1200, 800)
-	if !tt.HasText("Refresh Changes") || !tt.HasText("Close Changes") {
+	if !tt.HasText("Refresh Git") || !tt.HasText("Close Git") {
 		t.Fatalf("Changes icon actions missing: %q", tt.Texts())
 	}
-	if err := tt.Click("Close Changes"); err != nil || a.changesOpen || a.diffLoading || ctx.Err() == nil || !a.rightPanelVisible(rightPanelBrowser) {
+	if err := tt.Click("Close Git"); err != nil || a.changesOpen || a.diffLoading || ctx.Err() == nil || !a.rightPanelVisible(rightPanelBrowser) {
 		t.Fatalf("closing Changes did not cancel and reveal: err=%v", err)
 	}
 }

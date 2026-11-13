@@ -275,16 +275,20 @@ const (
 
 // Changes is the project's uncommitted work, for the changes drawer.
 type Changes struct {
-	Files      []FileStatus
-	View       ChangeView
-	Project    string
-	RepoRoot   string
-	Branch     string
-	TotalFiles int
-	Added      int
-	Deleted    int
-	Truncated  bool
-	NotGitRepo bool
+	Files       []FileStatus
+	View        ChangeView
+	Project     string
+	RepoRoot    string
+	Branch      string
+	Upstream    string
+	Ahead       int
+	Behind      int
+	StagedFiles int
+	TotalFiles  int
+	Added       int
+	Deleted     int
+	Truncated   bool
+	NotGitRepo  bool
 }
 
 // FileDiff is one lazily loaded, size-bounded file patch.
