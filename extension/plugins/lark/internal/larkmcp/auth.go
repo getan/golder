@@ -98,7 +98,10 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		}
 		pollCtx, stop := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
 		defer stop()
-		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--json"}, nil)
+		// The CLI defaults to --domain all when the poll omits the domain
+		// selection. Reuse the exact domains from the start call so an
+		// incremental authorization completes the device flow it started.
+		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--domain=" + p.Config.Domains, "--json"}, nil)
 		if err != nil || out.Code != 0 || out.Truncated {
 			if ctx.Err() != nil {
 				return failContext()

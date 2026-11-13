@@ -100,6 +100,9 @@ func TestLarkVerifyRetriesTransientNetworkFailure(t *testing.T) {
 		case strings.Contains(line, "--no-wait"):
 			return Output{Stdout: []byte(`{"verification_url":"https://accounts.feishu.cn/device","device_code":"private-device","expires_in":600}`)}, nil
 		case strings.Contains(line, "--device-code="):
+			if !strings.Contains(line, "--domain=docs") {
+				t.Fatalf("poll did not reuse requested domains: %s", line)
+			}
 			return Output{}, nil
 		case strings.HasPrefix(line, "auth status"):
 			statusCalls++

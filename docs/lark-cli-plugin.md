@@ -157,7 +157,7 @@ secret 不经过对话框明文、工具参数或日志。无创建/授权资格
 
 ```sh
 lark-cli auth login --domain docs,drive,im,sheets,base --no-wait --json
-lark-cli auth login --device-code <由插件保存的device_code> --json
+lark-cli auth login --device-code <由插件保存的device_code> --domain docs,drive,im,sheets,base --json
 lark-cli auth status --json --verify
 ```
 
