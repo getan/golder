@@ -117,7 +117,7 @@ func (c *Controller) ExtensionSettings() (LarkExtensionSettings, error) {
 			Description: "Feishu/Lark documents, messages, Sheets, Base and Project work items.",
 			State:       "not installed", BundledVersion: managedExtensionVersion(desktopVersion),
 		},
-		Domains: []string{"docs", "drive", "im", "sheets", "base"}, ProjectHost: "project.feishu.cn",
+		Domains: []string{"docs", "drive", "im", "sheets", "base", "calendar", "task", "wiki"}, ProjectHost: "project.feishu.cn",
 	}
 	if pkg, ok := extensions.InstalledManagedPackage("lark"); ok {
 		view.Installed, view.Version, view.InstalledVersion, view.State = true, pkg.Version, pkg.Version, "installed · not configured"

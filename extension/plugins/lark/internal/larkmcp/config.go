@@ -48,7 +48,7 @@ func FromEnv() (Config, error) {
 		c.ProjectHost = "project.feishu.cn"
 	}
 	if c.Domains == "" {
-		c.Domains = "docs,drive,im,sheets,base"
+		c.Domains = "docs,drive,im,sheets,base,calendar,task,wiki"
 	}
 	u, err := url.Parse("https://" + c.ProjectHost)
 	if err != nil || u.Host != c.ProjectHost || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {

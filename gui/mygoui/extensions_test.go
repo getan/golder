@@ -302,21 +302,36 @@ func TestLarkUntrustedSourceRequiresReviewBeforeAuthorization(t *testing.T) {
 	}
 }
 
-func TestLarkExtendedServicesAreCollapsible(t *testing.T) {
+func TestLarkServicesRenderInOneRowAndDefaultSelected(t *testing.T) {
+	for _, domain := range larkDomainOrder {
+		if !larkDomainSelection(nil)[domain] {
+			t.Fatalf("default selection does not include %q", domain)
+		}
+	}
+	migrated := larkDomainSelection([]string{"docs", "im"})
+	for _, domain := range []string{"docs", "im", "calendar", "task", "wiki"} {
+		if !migrated[domain] {
+			t.Fatalf("migrated selection missing %q", domain)
+		}
+	}
+	for _, domain := range []string{"drive", "sheets", "base"} {
+		if migrated[domain] {
+			t.Fatalf("migration re-enabled explicitly absent %q", domain)
+		}
+	}
 	a := testApp()
 	a.extension = appsession.LarkExtensionSettings{
 		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true, BundledVersion: "dev"},
 	}
+	a.extensionDomains = larkDomainSelection(nil)
 	a.settingsOpen, a.settingsTab = true, 2
 	tt := ui.NewTester(a.larkExtensionCard, 1400, 1800)
-	if !tt.HasText("Extended services (Calendar · Tasks · Wiki)") || tt.HasText("Optional read/write tools") {
-		t.Fatalf("extended permissions were not initially collapsed: %q", tt.Texts())
+	if tt.HasText("Extended services") {
+		t.Fatalf("services are still split into a collapsible section: %q", tt.Texts())
 	}
-	a.extensionExtendedOpen = true
-	tt = ui.NewTester(a.larkExtensionCard, 1400, 1800)
-	for _, want := range []string{"Extended services (Calendar · Tasks · Wiki)", "Optional read/write tools", "calendar", "task", "wiki"} {
+	for _, want := range append([]string{"Services"}, larkDomainOrder...) {
 		if !tt.HasText(want) {
-			t.Fatalf("expanded permissions missing %q: %q", want, tt.Texts())
+			t.Fatalf("services row missing %q: %q", want, tt.Texts())
 		}
 	}
 }

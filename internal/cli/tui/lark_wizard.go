@@ -55,7 +55,7 @@ func (m Model) beginLarkWizard() (tea.Model, tea.Cmd) {
 	in.Prompt, in.CharLimit = "> ", 4096
 	in.SetWidth(max(10, m.width-8))
 	in.Focus()
-	w := &larkSetupWizard{input: in, version: m.opts.Version, projectHost: "project.feishu.cn", domains: []bool{true, true, true, true, true, false, false, false}}
+	w := &larkSetupWizard{input: in, version: m.opts.Version, projectHost: "project.feishu.cn", domains: []bool{true, true, true, true, true, true, true, true}}
 	if pkg, ok := extensions.InstalledManagedPackage("lark"); ok {
 		w.installedVersion = pkg.Version
 		release, err := extensions.LarkReleaseFor(m.opts.Version)
