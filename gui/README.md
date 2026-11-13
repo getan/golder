@@ -85,8 +85,9 @@ cancels pending local inputs and clears the draft without resuming the Agent.
 Native macOS desktop input still needs manual acceptance testing; other
 platforms can reject inputs their backend cannot safely perform.
 
-Computer/browser snapshot cards show at most three preview lines while folded.
-Click their headline or **Expand**, or use **Ctrl+T** in the conversation area,
+Computer/browser snapshot cards start completely folded, like thinking blocks:
+only the headline is visible, with no output preview or extra expand button.
+Click the headline to expand/collapse, or use **Ctrl+T** in the conversation area
 to toggle the most recent tool card. GUI window previews reuse an unchanged
 bitmap instead of decoding/replacing it on every capture tick.
 
