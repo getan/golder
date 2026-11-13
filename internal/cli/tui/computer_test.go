@@ -116,6 +116,41 @@ func TestComputerToolIsRevokedWhenConversationChanges(t *testing.T) {
 	_ = desktop.Close()
 }
 
+func TestRunEndRemovesStoppedComputerTool(t *testing.T) {
+	for _, stopped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active", true: "stopped"}[stopped], func(t *testing.T) {
+			s := newRemoteTestSession(t)
+			s.reg = agenttool.NewToolRegistry()
+			desktop := computeruse.New(&computerPickerBackend{closed: make(chan struct{})})
+			if err := desktop.Start(context.Background(), computeruse.Target{ID: "window"}, computeruse.Capabilities{Observe: true}); err != nil {
+				t.Fatal(err)
+			}
+			defer desktop.Close()
+			tool := &agenttool.ComputerTool{Session: desktop, Mode: s.perms}
+			if err := s.reg.Register(tool); err != nil {
+				t.Fatal(err)
+			}
+			s.agentCtx.Tools = append(s.agentCtx.Tools, tool)
+			s.computerTool = tool
+			m := NewModel(Options{})
+			m.session, m.running = s, true
+			if stopped {
+				desktop.Stop()
+			}
+			m.Update(runEndMsg{})
+			_, registered := s.reg.Get("computer")
+			if registered == stopped || (s.computerTool == nil) != stopped || (len(s.agentCtx.Tools) == 0) != stopped {
+				t.Fatalf("stopped=%v registered=%v tool=%v tools=%d", stopped, registered, s.computerTool, len(s.agentCtx.Tools))
+			}
+			if stopped {
+				if err := s.reg.Register(&agenttool.ComputerTool{Session: desktop}); err != nil {
+					t.Fatalf("stopped tool blocked a new registration: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestSuggestedComputerTargetStartsUniqueAndHandlesAmbiguity(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

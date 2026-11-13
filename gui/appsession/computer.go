@@ -95,6 +95,9 @@ func (c *Controller) AttachComputer(expectedSessionID string, s *computeruse.Ses
 	if c.agentCtx == nil || c.reg == nil || len(c.opt.Tools) == 0 {
 		return errors.New("computer use is unavailable when tools are disabled")
 	}
+	if c.computerTool != nil && !c.computerTool.Session.Status().Active {
+		c.removeComputerLocked()
+	}
 	if c.computerTool != nil {
 		return errors.New("computer use is already attached")
 	}

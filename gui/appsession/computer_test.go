@@ -54,6 +54,96 @@ func TestComputerAttachmentIsExplicitAndRemovedOnStop(t *testing.T) {
 	}
 }
 
+func TestStoppedComputerRemovedBetweenRuns(t *testing.T) {
+	for _, queued := range []bool{false, true} {
+		t.Run(map[bool]string{false: "idle", true: "queued"}[queued], func(t *testing.T) {
+			c, _, _ := newTestController(t)
+			base := &agenttool.TodoTool{Store: agenttool.NewTodoStore()}
+			c.mu.Lock()
+			c.opt.Tools = []agentcore.AgentTool{base}
+			c.agentCtx.Tools = []agentcore.AgentTool{base}
+			c.reg = agenttool.NewToolRegistry()
+			if err := c.reg.Register(base); err != nil {
+				c.mu.Unlock()
+				t.Fatal(err)
+			}
+			c.mu.Unlock()
+			first := computeruse.New(computerBackendFixture{})
+			if err := first.Start(context.Background(), computeruse.Target{ID: "first"}, computeruse.Capabilities{Observe: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AttachComputer(c.SessionID(), first); err != nil {
+				t.Fatal(err)
+			}
+			c.mu.Lock()
+			c.running, c.status.Running = true, true
+			if queued {
+				c.enqueueSteerLocked(agentcore.ContentList{agentcore.NewTextContent("next")}, "next")
+			}
+			c.mu.Unlock()
+			first.Stop() // The computer tool stops its session during the run.
+			nextCtx, _, _, started := c.finishRun(context.Background(), nil, nil, false)
+			if started != queued || c.IsRunning() != queued {
+				t.Fatalf("queued run state: started=%v running=%v", started, c.IsRunning())
+			}
+			if c.ComputerSession() != nil || len(c.agentCtx.Tools) != 1 {
+				t.Fatal("stopped computer tool survived the run")
+			}
+			if _, ok := c.reg.Get("computer"); ok {
+				t.Fatal("stopped computer tool remained in registry")
+			}
+			if queued {
+				c.mu.Lock()
+				c.cancel()
+				c.running, c.cancel = false, nil
+				c.mu.Unlock()
+				_ = nextCtx
+			}
+			second := computeruse.New(computerBackendFixture{})
+			if err := second.Start(context.Background(), computeruse.Target{ID: "second"}, computeruse.Capabilities{Observe: true}); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AttachComputer(c.SessionID(), second); err != nil {
+				t.Fatalf("replacement target rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestComputerAttachReplacesOnlyStoppedSession(t *testing.T) {
+	c, _, _ := newTestController(t)
+	base := &agenttool.TodoTool{Store: agenttool.NewTodoStore()}
+	c.mu.Lock()
+	c.opt.Tools = []agentcore.AgentTool{base}
+	c.agentCtx.Tools = []agentcore.AgentTool{base}
+	c.reg = agenttool.NewToolRegistry()
+	if err := c.reg.Register(base); err != nil {
+		c.mu.Unlock()
+		t.Fatal(err)
+	}
+	c.mu.Unlock()
+	first := computeruse.New(computerBackendFixture{})
+	second := computeruse.New(computerBackendFixture{})
+	for _, s := range []*computeruse.Session{first, second} {
+		if err := s.Start(context.Background(), computeruse.Target{ID: "window"}, computeruse.Capabilities{Observe: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.AttachComputer(c.SessionID(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AttachComputer(c.SessionID(), second); err == nil {
+		t.Fatal("active session was replaced")
+	}
+	first.Stop()
+	if err := c.AttachComputer(c.SessionID(), second); err != nil {
+		t.Fatalf("stale stopped session blocked attachment: %v", err)
+	}
+	if c.ComputerSession() != second || len(c.agentCtx.Tools) != 2 {
+		t.Fatal("replacement session was not installed exactly once")
+	}
+}
+
 func TestComputerRequestOnlyNotifiesLocalView(t *testing.T) {
 	c, _, _ := newTestController(t)
 	base := &agenttool.TodoTool{Store: agenttool.NewTodoStore()}

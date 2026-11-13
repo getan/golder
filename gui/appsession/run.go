@@ -723,6 +723,9 @@ func (c *Controller) finishRun(ctx context.Context, final *agentcore.AssistantMe
 	c.status.ContextUsed = estimateTokens(c.agentCtx.Messages)
 	errText := c.status.Error
 	oldCancel := c.cancel
+	// The completed run no longer owns the tool list. Keep the lock while
+	// cleaning it up and reserving any queued successor.
+	c.running = false
 	if c.computerTool != nil && !c.computerTool.Session.Status().Active {
 		c.removeComputerLocked()
 	}
@@ -735,6 +738,7 @@ func (c *Controller) finishRun(ctx context.Context, final *agentcore.AssistantMe
 		if next, ok := c.popSteerLocked(); ok {
 			nextCtx, cancel := context.WithCancel(context.Background())
 			nextID := fmt.Sprintf("run-%d", time.Now().UnixNano())
+			c.running = true
 			c.cancel, c.runID = cancel, nextID
 			c.status.RunID, c.status.Error = nextID, ""
 			c.mu.Unlock()
