@@ -57,6 +57,36 @@ func TestExtensionSetupFailureMatchesSavedStatus(t *testing.T) {
 	}
 }
 
+func TestPartialConsentDisplaysMissingScopesWithoutRecommendingScanRetry(t *testing.T) {
+	a := testApp()
+	a.extensionAuthURL = "https://accounts.feishu.cn/device"
+	a.applyExtensionSetupEvent(appsession.ExtensionSetupEvent{
+		Type: "failure", Phase: "verify_authorization", Code: "AUTH_SCOPES_INCOMPLETE",
+		Message:       "Login completed and was verified, but some requested permissions were not granted.",
+		MissingScopes: []string{"task:task:read"},
+	})
+	if a.extensionAuthURL != "" || !strings.Contains(a.extensionErr, "task:task:read") || !strings.Contains(a.extensionErr, "Login completed") || strings.Contains(a.extensionErr, "Retry is safe") {
+		t.Fatalf("partial consent display=%q url=%q", a.extensionErr, a.extensionAuthURL)
+	}
+	tt := ui.NewTester(a.extensionStatus, 1200, 400)
+	if !tt.HasText("task:task:read") {
+		t.Fatal("authorization result did not show missing scope details")
+	}
+	if err := tt.Click("Dismiss"); err != nil || a.extensionErr != "" {
+		t.Fatalf("could not dismiss authorization result: %v, %q", err, a.extensionErr)
+	}
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true, BundledVersion: "dev"},
+	}
+	a.extensionDomains = larkDomainSelection(nil)
+	a.extensionLarkStatus = "authorized"
+	a.extensionLarkMissingScopes = []string{"task:task:read"}
+	tt = ui.NewTester(a.larkExtensionCard, 1400, 1800)
+	if tt.HasText("task:task:read") || !tt.HasText("Some app permissions are not granted") {
+		t.Fatalf("settings should show only a brief status, not scope details: %q", tt.Texts())
+	}
+}
+
 func TestProjectAuthorizationUsesSavedReviewedConfiguration(t *testing.T) {
 	settings := appsession.LarkExtensionSettings{SavedProjectCLI: "/opt/meegle", SavedProjectHost: "project.feishu.cn"}
 	edit := appsession.LarkExtensionEdit{ProjectCLI: "/opt/meegle", ProjectHost: "project.feishu.cn"}

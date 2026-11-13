@@ -358,7 +358,7 @@ func main() {
 	flag.BoolVar(&opts.dreamDryRun, "dream-dry-run", false, "internal: with --dream, analyze and report without writing files or updating dream state (SPEC §5.5)")
 	flag.BoolVar(&opts.noTUI, "no-tui", false, "use the line-based REPL instead of the full-screen TUI")
 	flag.BoolVar(&opts.noAnimations, "no-animations", false, "disable TUI animations (also GOLDER_NO_ANIMATIONS=1; automatic over SSH)")
-	flag.BoolVar(&opts.noUpdateCheck, "no-update-check", false, "disable the interactive startup update check")
+	flag.BoolVar(&opts.noUpdateCheck, "no-update-check", false, "disable automatic startup and hourly TUI update checks")
 	flag.BoolVar(&opts.debug, "debug", false, "render diagnostic approval lines that are hidden by default")
 	flag.StringVarP(&opts.cwd, "cwd", "C", "", "run as if golder was started in this directory (matches the Claude Agent SDK's cwd; like git -C): tool file access, trust, hooks, and project config all resolve against it")
 	flag.BoolVarP(&opts.showVersion, "version", "v", false, "print version information and exit")
@@ -722,6 +722,7 @@ func dispatch(ctx context.Context, opts cliOptions, out, errOut io.Writer) int {
 				Protocol:          opts.protocol,
 				Credentials:       env.Credentials,
 				Version:           version,
+				NoUpdateCheck:     opts.noUpdateCheck,
 				ThinkingLevel:     thinking,
 				Tools:             env.Tools,
 				ToolPolicy:        run.NewToolPolicy(opts.allowedTools, opts.disallowedTools),

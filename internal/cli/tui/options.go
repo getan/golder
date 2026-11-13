@@ -30,6 +30,8 @@ type Options struct {
 	// Version is the running build version (main.version), shown in the startup
 	// banner. Empty or "dev"/"unknown" renders as-is with no update hint.
 	Version string
+	// NoUpdateCheck disables automatic checks, not the explicit /update command.
+	NoUpdateCheck bool
 	// NoAnimations settles the logo immediately, disables status-bar motion,
 	// and keeps the working indicator static (elapsed stats still refresh).
 	// GOLDER_NO_ANIMATIONS and SSH detection also enable this in NewModel.

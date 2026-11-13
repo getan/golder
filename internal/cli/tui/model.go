@@ -203,6 +203,7 @@ type Model struct {
 	// result; View renders it just above the input line.
 	statusBar  statusBar
 	gitRefresh gitRefreshState
+	updates    updateState
 
 	// cwd is the launch directory, captured once at construction and reused for
 	// the git probe and the status bar's path display.
@@ -999,6 +1000,9 @@ func (m Model) resumeSession(arg string) (tea.Model, tea.Cmd) {
 // requested declaratively via the AltScreen field on the View returned by View.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{func() tea.Msg { return gitRefreshStartMsg{} }, m.input.Focus(), browserContinuationTickCmd()}
+	if cmd := m.waitUpdateTick(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if cmd := workspaceSyncOutput(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
@@ -1129,6 +1133,16 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case seedMoreMsg:
 		return m, m.stepSeedMore(msg)
+
+	case updateTickMsg:
+		if m.quitting {
+			return m, nil
+		}
+		cmd := m.beginUpdateCheck(false)
+		return m, tea.Batch(cmd, m.waitUpdateTick())
+
+	case updateCheckedMsg:
+		return m.finishUpdateCheck(msg)
 
 	case gitRefreshStartMsg:
 		cmd := m.startGitRefresh()
@@ -2541,6 +2555,9 @@ func (m Model) submitSlashSelected() (tea.Model, tea.Cmd) {
 		if kind == "extensions" && ok {
 			return m.chooseExtension(item)
 		}
+		if kind == "update" && ok {
+			return m.chooseUpdate(item)
+		}
 		if kind == "proxy" && ok {
 			m.menu.close()
 			m.input.Clear()
@@ -2661,6 +2678,9 @@ func (m Model) runSlash(line string) (tea.Model, tea.Cmd) {
 		m.shutdownRemote()
 		m.quitting = true
 		return m, tea.Quit
+	}
+	if line == "/update" || strings.HasPrefix(line, "/update ") {
+		return m.runUpdate(line)
 	}
 	// /resume switches the active session in place (see runSession.switchTo).
 	// A bare /resume lists recent sessions; switching mid-run is refused so an

@@ -53,3 +53,19 @@ func TestFailureEventRejectsUnknownCodeAndWrongPhase(t *testing.T) {
 		}
 	}
 }
+
+func TestPartialScopeFailureIsActionableAndBounded(t *testing.T) {
+	event, err := SanitizeFailure(Event{
+		Type: "failure", Phase: PhaseVerifyAuthorization, Code: CodeAuthScopesIncomplete,
+		Message: "private server text", MissingScopes: []string{"task:task:read"},
+	})
+	if err != nil || event.Retryable || len(event.MissingScopes) != 1 || strings.Contains(event.Message, "private") || !strings.Contains(event.Message, "Login completed") {
+		t.Fatalf("partial scope event=%+v err=%v", event, err)
+	}
+	for _, scopes := range [][]string{{"https://private.example/device"}, {"access_token=secret"}, make([]string, 33)} {
+		event.MissingScopes = scopes
+		if _, err := SanitizeFailure(event); err == nil {
+			t.Fatal("unsafe or oversized missing scopes accepted")
+		}
+	}
+}

@@ -113,6 +113,7 @@ func newSlashRegistry(opts Options, live *cli.LiveConfig) *runtime.SlashRegistry
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "golder: slash-commands: %v\n", err)
 	}
+	registerUpdateCommand(reg)
 	return reg
 }
 

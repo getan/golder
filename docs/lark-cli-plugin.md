@@ -157,7 +157,7 @@ secret 不经过对话框明文、工具参数或日志。无创建/授权资格
 
 ```sh
 lark-cli auth login --domain docs,drive,im,sheets,base --no-wait --json
-lark-cli auth login --device-code <由插件保存的device_code> --domain docs,drive,im,sheets,base --json
+lark-cli auth login --device-code <由插件保存的device_code> --json
 lark-cli auth status --json --verify
 ```
 
@@ -165,6 +165,12 @@ lark-cli auth status --json --verify
 如某版本不接受这些域，使用该版本已核实的 scope 映射，不靠猜 flag 重试。
 第二条由后台 setup 在 URL 已展示后执行；CLI 自带轮询，不把原始 JSON 中的秘密传给模型。
 新增权限时再次扫码/确认；token 刷新不等于管理员批准或用户新授权。
+
+核对 CLI v1.0.99 源码后更正：`--device-code` 分支在 domain 计算之前返回，使用 start 阶段的私有
+scope 缓存，不会因为 poll 未传 `--domain` 而重新请求 all。扫码成功但只授予部分权限时，CLI 会先
+保存 token，输出 `event=authorization_complete` 和 `missing`，再以非零退出。Helper 1.5.67 起识别
+该回执并校验 user 身份，显示 `AUTH_SCOPES_INCOMPLETE` 和有界缺失 scope 列表；不再将其误报为
+`AUTH_POLL_FAILED` 或建议盲目重复扫码。仅有旧登录验证成功、没有本次完成回执仍不能覆盖 poll 失败。
 
 #### 3.2 飞书项目：单独的 Meegle 用户授权
 

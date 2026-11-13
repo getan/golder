@@ -98,13 +98,16 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		}
 		pollCtx, stop := context.WithTimeout(ctx, time.Duration(device.Expires)*time.Second)
 		defer stop()
-		// The CLI defaults to --domain all when the poll omits the domain
-		// selection. Reuse the exact domains from the start call so an
-		// incremental authorization completes the device flow it started.
-		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--domain=" + p.Config.Domains, "--json"}, nil)
-		if err != nil || out.Code != 0 || out.Truncated {
+		// --device-code resumes before domain resolution. The CLI restores
+		// requested scopes from the private cache written by --no-wait.
+		out, err = p.Runner.Run(pollCtx, "lark", []string{"auth", "login", "--device-code=" + device.Code, "--json"}, nil)
+		completed, missing := larkAuthorizationCompletion(out, err)
+		if err != nil || out.Truncated || (out.Code != 0 && !completed) {
 			if ctx.Err() != nil {
 				return failContext()
+			}
+			if errors.Is(pollCtx.Err(), context.DeadlineExceeded) {
+				return fail(setupevent.PhaseComplete, setupevent.CodeSetupTimeout)
 			}
 			verified, verifyCode := p.verifyLarkUser(ctx)
 			if !verified && verifyCode == setupevent.CodeAuthVerifyNetworkFailed {
@@ -122,6 +125,17 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 			}
 			return fail(setupevent.PhaseVerifyAuthorization, verifyCode)
 		}
+		if len(missing) > 0 {
+			// The CLI saves the token and emits authorization_complete even
+			// when it exits non-zero for partial consent. This is neither a
+			// failed poll nor proof that every requested scope was granted.
+			event, _ := setupevent.FailureEvent(setupevent.PhaseVerifyAuthorization, setupevent.CodeAuthScopesIncomplete)
+			event.MissingScopes = append([]string(nil), missing[:min(len(missing), 32)]...)
+			if err := write(event); err != nil {
+				return err
+			}
+			return errors.New(event.Message)
+		}
 	} else {
 		if err := p.projectLogin(ctx, write); err != nil {
 			if ctx.Err() != nil {
@@ -135,6 +149,29 @@ func (p *Plugin) Setup(ctx context.Context, service string, output io.Writer) er
 		}
 	}
 	return write(setupevent.Event{Type: "complete", Authenticated: true})
+}
+
+// A verified pre-existing login alone must never mask failure of a new flow.
+// Only this poll's explicit completion receipt allows a non-zero CLI exit to
+// proceed to user verification. Do not expose names, raw warnings or tokens.
+func larkAuthorizationCompletion(out Output, runErr error) (bool, []string) {
+	if runErr != nil || out.Truncated {
+		return false, nil
+	}
+	var receipt struct {
+		Event   string   `json:"event"`
+		UserID  string   `json:"user_open_id"`
+		Missing []string `json:"missing"`
+	}
+	if json.Unmarshal(out.Stdout, &receipt) != nil || receipt.Event != "authorization_complete" || receipt.UserID == "" || len(receipt.Missing) > 512 {
+		return false, nil
+	}
+	for _, scope := range receipt.Missing {
+		if !diagnosticScope.MatchString(scope) {
+			return false, nil
+		}
+	}
+	return true, receipt.Missing
 }
 
 // verifyLarkUser accepts a positive verified payload even if the CLI exits

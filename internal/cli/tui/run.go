@@ -68,6 +68,8 @@ func Run(opts Options) (runErr error) {
 	prepareTerminalPalette(startupQueriesDisabled())
 	trace.event("model begin")
 	m := NewModel(opts).withSession(s, history)
+	stopUpdates := m.startUpdateMonitor()
+	defer stopUpdates()
 	trace.event("model end trust_pending=%t logo_running=%t", m.pendingTrust, m.logoRunning)
 	model, programOpts := trace.program(m)
 	if m.noTerminalQueries {

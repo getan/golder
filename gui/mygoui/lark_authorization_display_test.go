@@ -43,7 +43,7 @@ func TestLarkPersonalAuthorizationUsesServiceStatusNotMCPAuthentication(t *testi
 	}
 }
 
-func TestLarkDisplaysMissingUserScopes(t *testing.T) {
+func TestLarkRoutineStatusSummarizesMissingUserScopes(t *testing.T) {
 	a := testApp()
 	a.extension = appsession.LarkExtensionSettings{
 		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true, Configured: true, Enabled: true},
@@ -52,7 +52,7 @@ func TestLarkDisplaysMissingUserScopes(t *testing.T) {
 	a.extensionLarkStatus = "authorized"
 	a.extensionLarkMissingScopes = []string{"search:docs:read"}
 	tt := ui.NewTester(a.larkExtensionCard, 1000, 1400)
-	if !tt.HasText("App user permissions not yet granted: search:docs:read") {
-		t.Fatalf("missing scope not displayed: %q", tt.Texts())
+	if !tt.HasText("Some app permissions are not granted") || tt.HasText("search:docs:read") {
+		t.Fatalf("routine status should show a summary without permanent scope details: %q", tt.Texts())
 	}
 }

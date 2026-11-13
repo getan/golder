@@ -199,6 +199,9 @@ func (m Model) composerExtraLines(width int) []string {
 	if hint := m.pasteHintLine(width); hint != "" {
 		return []string{hint}
 	}
+	if hint := m.updateHint(width); hint != "" {
+		return []string{hint}
+	}
 	return nil
 }
 

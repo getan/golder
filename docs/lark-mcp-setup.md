@@ -211,8 +211,16 @@ dedicated absolute directory.
 
 The setup stream exposes only a fixed phase/error-code vocabulary. Raw CLI
 stderr, device codes, authorization URLs and tokens never become GUI or TUI
-errors. If device-code polling exits non-zero after saving a token, setup checks
-`auth status --json --verify` before declaring failure. Final verification uses
+errors. A non-zero poll exit alone is not proof the scan failed: the CLI can
+save a token and emit `authorization_complete` with `missing` scopes, then exit
+non-zero for partial consent. Helper 1.5.67+ recognizes this receipt, verifies
+the user, and reports `AUTH_SCOPES_INCOMPLETE` with up to 32 missing scope names.
+Granted permissions remain usable; check application scopes, tenant approval and
+user consent before starting another flow. Scope details are shown in that
+authorization result and can be dismissed; they are not retained as a source
+error. Routine GUI status displays only a brief permissions summary, not a
+permanent scope list. An old verified login without a new
+completion receipt does not override a failed poll. Final verification uses
 short bounded retries for command/network failures, but never retries or falls
 back when the CLI explicitly reports a non-user or unverified identity.
 

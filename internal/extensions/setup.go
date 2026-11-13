@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	setupevent "github.com/getan/golder/extension/setup"
@@ -204,6 +205,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 		}
 		if event.Type != "failure" {
 			event.Phase, event.Code, event.Retryable = "", "", false
+			event.MissingScopes = nil
 		}
 		if event.Type != "complete" {
 			event.Authenticated = false
@@ -229,9 +231,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 			return ctx.Err()
 		}
 		if failure != nil {
-			s.auth = setupFailureAuth(*failure)
-			s.lastError = setupFailureText(*failure)
-			return errors.New(s.lastError)
+			return recordSetupFailure(s, *failure)
 		}
 		s.auth = "required"
 		s.lastError = "setup failed; retry authorization or check CLI/application configuration (raw diagnostics withheld)"
@@ -239,9 +239,7 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 	}
 	s.state = "disconnected"
 	if failure != nil {
-		s.auth = setupFailureAuth(*failure)
-		s.lastError = setupFailureText(*failure)
-		return errors.New(s.lastError)
+		return recordSetupFailure(s, *failure)
 	}
 	if !completed {
 		s.auth = "required"
@@ -253,15 +251,33 @@ func (m *Manager) SetupVariant(ctx context.Context, ref SourceRef, variant strin
 	return nil
 }
 
+func recordSetupFailure(s *source, event setupevent.Event) error {
+	s.auth = setupFailureAuth(event)
+	text := setupFailureText(event)
+	s.lastError = text
+	if event.Code == setupevent.CodeAuthScopesIncomplete {
+		// This is a verified login with a one-shot permissions warning, not
+		// a broken source. Keep details in this operation's result only.
+		s.lastError = ""
+	}
+	return errors.New(text)
+}
+
 func setupFailureText(event setupevent.Event) string {
 	suffix := ""
 	if event.Retryable {
 		suffix = " Retry is safe."
 	}
+	if len(event.MissingScopes) > 0 {
+		suffix += " Missing scopes (up to 32): " + strings.Join(event.MissingScopes, ", ")
+	}
 	return fmt.Sprintf("%s [%s · %s]%s", event.Message, event.Code, event.Phase, suffix)
 }
 
 func setupFailureAuth(event setupevent.Event) string {
+	if event.Code == setupevent.CodeAuthScopesIncomplete {
+		return "verified"
+	}
 	if event.Code == setupevent.CodeAuthVerifyNetworkFailed {
 		return "verification-failed"
 	}

@@ -200,6 +200,13 @@ updating by their original installation method. A custom standalone location
 can be identified by setting `GOLDER_INSTALL_DIR` to its absolute directory.
 Successful updates never restart Golder automatically: rerun the command.
 
+Long-running TUI sessions also check once per hour without interrupting input or
+tasks. A newer release adds a small `/update` hint near the composer, not a popup.
+Run `/update` for upgrade instructions, **Do not remind again this session**, or
+**Skip this version**; `/update check` explicitly refreshes metadata. Automatic
+hourly checks honor the same opt-outs above. No background download or install
+is performed. GUI and TUI share the hourly scheduler and version comparison.
+
 ### Build from source
 
 Requires Go 1.27 or newer:

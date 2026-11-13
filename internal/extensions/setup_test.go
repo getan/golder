@@ -28,6 +28,10 @@ func TestSetupFixtureChild(t *testing.T) {
 		if mode == "unknown" {
 			event.Code = "PRIVATE_access_token_UNKNOWN"
 		}
+		if mode == "partial" {
+			event.Code = setupevent.CodeAuthScopesIncomplete
+			event.MissingScopes = []string{"task:task:read"}
+		}
 		_ = json.NewEncoder(os.Stdout).Encode(event)
 		fmt.Fprintln(os.Stderr, "refresh_token=must-not-leak device_code=private")
 		os.Exit(9)
@@ -126,6 +130,34 @@ func TestSetupForwardsOnlyWhitelistedFailure(t *testing.T) {
 	snapshot, ok := m.Source(ref)
 	if !ok || snapshot.Authentication != "verification-failed" {
 		t.Fatalf("snapshot=%+v", snapshot)
+	}
+}
+
+func TestSetupPartialConsentPreservesVerifiedLoginAndScopeDetails(t *testing.T) {
+	if !seatbelt.Available() {
+		t.Skip("OS sandbox unavailable")
+	}
+	exe, _ := os.Executable()
+	ref := SourceRef{Kind: "mcp", ID: "fixture"}
+	m := testManager(t, ref, SourceConfig{
+		Enabled: true, Transport: "stdio", Command: exe, StateDir: true,
+		Setup: []string{exe, "-test.run=^TestSetupFixtureChild$"},
+		Env:   map[string]string{"EXTENSION_SETUP_FIXTURE": "1", "EXTENSION_SETUP_FAILURE": "partial"},
+	}, nil)
+	if err := m.ApproveSession(ref); err != nil {
+		t.Fatal(err)
+	}
+	var shown setupevent.Event
+	err := m.Setup(context.Background(), ref, func(event setupevent.Event) error {
+		shown = event
+		return nil
+	})
+	if err == nil || shown.Code != setupevent.CodeAuthScopesIncomplete || shown.Retryable || len(shown.MissingScopes) != 1 || !strings.Contains(err.Error(), "task:task:read") || strings.Contains(err.Error(), "Retry is safe") || strings.Contains(err.Error(), "must-not-leak") {
+		t.Fatalf("partial consent err=%v event=%+v", err, shown)
+	}
+	snapshot, ok := m.Source(ref)
+	if !ok || snapshot.Authentication != "verified" || snapshot.LastError != "" {
+		t.Fatalf("partial consent lost saved login status or persisted transient details: %+v", snapshot)
 	}
 }
 

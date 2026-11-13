@@ -91,6 +91,8 @@ type App struct {
 	deleteID          string
 	deleteTitle       string
 
+	updateMonitorCancel context.CancelFunc
+
 	banner    string
 	bannerErr bool
 
@@ -320,11 +322,14 @@ func (a *App) Run() error {
 			}
 			if !a.terminalShutdownDone {
 				event.PreventDefault()
+				a.stopGUIUpdateMonitor()
 				a.cancelGUIUpdate()
 				a.beginTerminalShutdown()
 			}
 		})
 		a.win.OnClosed(func() {
+			a.stopGUIUpdateMonitor()
+			a.cancelGUIUpdate()
 			a.stopRemoteControl()
 			authBusy := a.mcpOAuth != nil && a.mcpOAuth.cancel != nil || a.extensionCancel != nil
 			if a.mcpOAuth != nil && a.mcpOAuth.cancel != nil {
@@ -356,7 +361,7 @@ func (a *App) Run() error {
 		a.refreshChanges()
 		a.startModelRefresh()
 		a.startBrowserSession()
-		a.checkGUIUpdate(false)
+		a.startGUIUpdateMonitor()
 	})
 	return mygo.App.Run()
 }

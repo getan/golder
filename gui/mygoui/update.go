@@ -212,7 +212,7 @@ func fetchGUIReleaseWithFallback(ctx context.Context, client *http.Client, curre
 }
 
 func (a *App) checkGUIUpdate(manual bool) {
-	if a.updateBusy || a.ctrl == nil || a.win == nil {
+	if !a.guiUpdateCheckAllowed(manual) || a.ctrl == nil || a.win == nil {
 		return
 	}
 	current, win := a.ctrl.Version(), a.win

@@ -535,6 +535,9 @@ func extensionSetupFailureText(event appsession.ExtensionSetupEvent) string {
 	if event.Retryable {
 		message += " Retry is safe."
 	}
+	if len(event.MissingScopes) > 0 {
+		message += " Missing scopes (up to 32): " + strings.Join(event.MissingScopes, ", ")
+	}
 	return message
 }
 
@@ -857,8 +860,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		// CLIs' user grants. Only service probes can describe personal login.
 		ui.Text(c, "Lark authorization: "+larkServiceStatusLabel(a.extensionLarkStatus)).FontSize(11).TextColor(theme.TextMuted)
 		if len(a.extensionLarkMissingScopes) > 0 {
-			ui.Text(c, "App user permissions not yet granted: "+strings.Join(a.extensionLarkMissingScopes, ", ")).FontSize(11).TextColor(theme.Warning).Wrap()
-			ui.Text(c, "Authorize Lark requests permissions for the selected domains; some app permissions may require a separate explicit scope request.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
+			ui.Text(c, "Some app permissions are not granted; authorized features remain available.").FontSize(11).TextColor(theme.TextMuted).Wrap()
 		}
 		ui.Text(c, "Project authorization: "+larkServiceStatusLabel(a.extensionProjectStatus)).FontSize(11).TextColor(theme.TextMuted)
 		ui.Text(c, "Authorization status is checked separately; an unavailable check does not mean you need to log in again.").FontSize(10.5).TextColor(theme.TextMuted).Wrap()
@@ -988,6 +990,9 @@ func (a *App) extensionStatus(c *ui.Context) {
 	theme := c.Theme()
 	if a.extensionErr != "" {
 		ui.Text(c, a.extensionErr).FontSize(12).TextColor(theme.Danger).Wrap()
+		if subtleButton(c, "Dismiss", a.extensionBusy).Clicked() {
+			a.extensionErr = ""
+		}
 	} else if a.extensionNote != "" {
 		ui.Text(c, a.extensionNote).FontSize(12).TextColor(theme.TextMuted).Wrap()
 	}

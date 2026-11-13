@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -35,6 +36,7 @@ const (
 	CodeProjectUserCodeInvalid   = "PROJECT_AUTH_USER_CODE_INVALID"
 	CodeProjectIntervalInvalid   = "PROJECT_AUTH_INTERVAL_INVALID"
 	CodeAuthPollFailed           = "AUTH_POLL_FAILED"
+	CodeAuthScopesIncomplete     = "AUTH_SCOPES_INCOMPLETE"
 	CodeAuthVerifyNetworkFailed  = "AUTH_VERIFY_NETWORK_FAILED"
 	CodeAuthVerifyIdentityFailed = "AUTH_VERIFY_IDENTITY_FAILED"
 	CodeSetupCancelled           = "SETUP_CANCELLED"
@@ -53,7 +55,10 @@ type Event struct {
 	Phase           string    `json:"phase,omitempty"`
 	Code            string    `json:"code,omitempty"`
 	Retryable       bool      `json:"retryable,omitempty"`
+	MissingScopes   []string  `json:"missing_scopes,omitempty"`
 }
+
+var scopeName = regexp.MustCompile(`^[a-z][a-z0-9_]*:[a-z0-9_.:-]{1,120}$`)
 
 // AuthorizationCode accepts only a short operator-facing device user code.
 // It is never a token or a model-facing result.
@@ -84,9 +89,22 @@ func SanitizeFailure(event Event) (Event, error) {
 	if !ok || event.Phase != wantPhase {
 		return Event{}, errors.New("unsupported setup failure code or phase")
 	}
+	var missing []string
+	if event.Code == CodeAuthScopesIncomplete {
+		if len(event.MissingScopes) > 32 {
+			return Event{}, errors.New("setup missing scopes exceed display budget")
+		}
+		for _, scope := range event.MissingScopes {
+			if !scopeName.MatchString(scope) {
+				return Event{}, errors.New("invalid setup scope name")
+			}
+			missing = append(missing, scope)
+		}
+	}
 	return Event{
 		Version: Version, Type: "failure", Service: event.Service,
 		Phase: wantPhase, Code: event.Code, Message: message, Retryable: retryable,
+		MissingScopes: missing,
 	}, nil
 }
 
@@ -122,6 +140,8 @@ func failureDefinition(code string) (phase, message string, retryable, ok bool) 
 		return PhaseStartAuthorization, "Project authorization returned an unsupported polling interval.", false, true
 	case CodeAuthPollFailed:
 		return PhaseWaitForAuthorization, "Authorization did not complete. Start a new authorization flow.", true, true
+	case CodeAuthScopesIncomplete:
+		return PhaseVerifyAuthorization, "Login completed and was verified, but some requested permissions were not granted. Granted permissions remain usable. Check application scopes, tenant approval and user consent before authorizing again.", false, true
 	case CodeAuthVerifyNetworkFailed:
 		return PhaseVerifyAuthorization, "Authorization may be saved, but server verification did not complete because of a network or service error.", true, true
 	case CodeAuthVerifyIdentityFailed:

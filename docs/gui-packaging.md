@@ -22,7 +22,13 @@ executable never collides with the `golder` CLI.
 
 ## In-app update downloads
 
-Release builds check GitHub for a newer GUI package. Clicking **Update**
+Release builds check for a newer GUI package at startup and once per hour while
+the app is open. Background checks only refresh the update indicator; they do
+not start downloads or interrupt the conversation. Manual checks remain
+available. Checks do not overlap an active check/download or replace a staged
+installer, and the hourly monitor stops when the window closes.
+
+Clicking **Update**
 downloads the package for the current platform and architecture in the
 background to the standard Downloads folder. The download is checked against
 the size and SHA-256 published by GitHub; if that metadata is missing or the
