@@ -88,14 +88,14 @@ func TestWriteIntentAndCLIArguments(t *testing.T) {
 
 func TestLongTailPolicy(t *testing.T) {
 	for _, args := range [][]string{
-		{"auth", "login"}, {"config", "init"}, {"sheets", "raw"}, {"base", "+record-delete"}, {"drive", "+permission-set"}, {"docs", "+script"},
+		{"auth", "login"}, {"config", "init"}, {"sheets", "raw"}, {"base", "+record-delete"}, {"sheets", "+sheet-delete"}, {"drive", "+delete"}, {"drive", "+permission-set"}, {"docs", "+script"},
 	} {
 		if err := businessCommand("lark", args, false); err == nil {
 			t.Fatalf("allowed forbidden command %v", args)
 		}
 	}
 	for _, args := range [][]string{{"--as=bot"}, {"--content=@/tmp/secret"}, {"--output-path=/tmp/out"}, {"--headers=x"}, {"--url=https://evil.example/a"}, {"--file=/tmp/a"}, {"--", "bash"}, {"--yes"}} {
-		if err := businessFlags(args); err == nil {
+		if err := businessFlags("lark", []string{"drive", "+copy"}, args); err == nil {
 			t.Fatalf("allowed forbidden flags %v", args)
 		}
 	}
@@ -109,6 +109,70 @@ func TestLongTailPolicy(t *testing.T) {
 	}
 	if len(f.calls) != 2 || !strings.HasSuffix(f.calls[0], "--help") || !strings.HasSuffix(f.calls[1], "--as=user") {
 		t.Fatal(f.calls)
+	}
+}
+
+func TestLongTailBusinessResourceFlags(t *testing.T) {
+	cases := []struct {
+		name    string
+		command []string
+		args    []string
+		wantErr string
+	}{
+		{name: "copy folder", command: []string{"drive", "+copy"}, args: []string{"--url=https://tenant.feishu.cn/sheets/x", "--name=copy", "--folder-token", "my_space"}},
+		{name: "copy token and type", command: []string{"drive", "+copy"}, args: []string{"--token=abc", "--type=sheet"}},
+		{name: "copy token missing type", command: []string{"drive", "+copy"}, args: []string{"--token=abc"}, wantErr: "--token requires an inline --type"},
+		{name: "search folder list", command: []string{"drive", "+search"}, args: []string{"--folder-tokens=a,b"}},
+		{name: "move tokens", command: []string{"drive", "+move"}, args: []string{"--file-token=file", "--folder-token=folder"}},
+		{name: "shortcut tokens", command: []string{"drive", "+create-shortcut"}, args: []string{"--file-token=file", "--folder-token=folder"}},
+		{name: "docs parent", command: []string{"docs", "+create"}, args: []string{"--parent-token=parent", "--title=doc"}},
+		{name: "workbook folder", command: []string{"sheets", "+workbook-create"}, args: []string{"--folder-token=folder"}},
+		{name: "create folder", command: []string{"drive", "+create-folder"}, args: []string{"--folder-token=folder"}},
+		{name: "copy file token rejected", command: []string{"drive", "+copy"}, args: []string{"--file-token=file"}, wantErr: "not an approved resource parameter"},
+		{name: "copy folder list rejected", command: []string{"drive", "+copy"}, args: []string{"--folder-tokens=a,b"}, wantErr: "not an approved resource parameter"},
+		{name: "identity rejected", command: []string{"drive", "+copy"}, args: []string{"--as=user"}, wantErr: "omit --as"},
+		{name: "credential rejected", command: []string{"drive", "+copy"}, args: []string{"--app-secret=x"}, wantErr: "configuration, credential"},
+		{name: "local reference rejected", command: []string{"drive", "+copy"}, args: []string{"--folder-token=@/tmp/x"}, wantErr: "inline resource token"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := businessFlags("lark", tc.command, tc.args)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("businessFlags() = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("businessFlags() = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLongTailCopyReachesRunner(t *testing.T) {
+	f := &fakeRunner{}
+	p := New(Config{}, f)
+	raw := json.RawMessage(`{"service":"lark","argv":["drive","+copy","--url=https://tenant.feishu.cn/sheets/x","--name=copy","--folder-token","my_space"],"confirm":true}`)
+	r := p.Call(approved(), "cli_call", raw)
+	if !r.OK || len(f.calls) != 1 {
+		t.Fatalf("copy did not reach the runner: %+v %v", r, f.calls)
+	}
+	if !strings.Contains(f.calls[0], "--folder-token my_space") || !strings.HasSuffix(f.calls[0], "--as=user") {
+		t.Fatalf("copy argv lost the folder token or adapter identity: %q", f.calls[0])
+	}
+}
+
+func TestLongTailIdentityIsAdapterControlled(t *testing.T) {
+	f := &fakeRunner{}
+	p := New(Config{}, f)
+	raw := json.RawMessage(`{"service":"lark","argv":["drive","+copy","--folder-token","my_space","--as=user"],"confirm":true}`)
+	r := p.Call(approved(), "cli_call", raw)
+	if r.OK || r.Error == nil || r.Error.Code != "ARGUMENT_BLOCKED" || !strings.Contains(r.Error.Message, "omit --as") || len(f.calls) != 0 {
+		t.Fatalf("identity was not rejected before execution: %+v %v", r, f.calls)
+	}
+	if !strings.Contains(string(tailSchema(true)), "Omit --as") {
+		t.Fatal("cli_call schema does not tell the agent that the adapter controls identity")
 	}
 }
 

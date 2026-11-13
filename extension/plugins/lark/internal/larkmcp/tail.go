@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 var commandName = regexp.MustCompile(`^[+]?[a-z][a-z0-9-]*$`)
@@ -16,7 +18,11 @@ func tailSchema(execute bool) json.RawMessage {
 	if execute {
 		key = "argv"
 	}
-	props := map[string]any{"service": map[string]any{"type": "string", "enum": []string{"lark", "project"}}, key: map[string]any{"type": "array", "minItems": 1, "maxItems": 64, "items": map[string]any{"type": "string", "maxLength": 16000}}}
+	props := map[string]any{"service": map[string]any{"type": "string", "enum": []string{"lark", "project"}}, key: map[string]any{
+		"type": "array", "minItems": 1, "maxItems": 64,
+		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation.",
+		"items":       map[string]any{"type": "string", "maxLength": 16000},
+	}}
 	required := []string{"service", key}
 	if execute {
 		props["confirm"] = map[string]any{"type": "boolean", "const": true}
@@ -59,8 +65,8 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 	if err := businessCommand(in.Service, in.Argv[:2], false); err != nil {
 		return failure(in.Service, "COMMAND_BLOCKED", err.Error(), "Use setup for authorization; management/raw API commands are not exposed")
 	}
-	if err := businessFlags(in.Argv[2:]); err != nil {
-		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Use only inline business parameters, not local-file or configuration references")
+	if err := businessFlags(in.Service, in.Argv[:2], in.Argv[2:]); err != nil {
+		return failure(in.Service, "ARGUMENT_BLOCKED", err.Error(), "Omit --as/--format/confirmation flags; use only approved inline business parameters, not local-file or configuration references")
 	}
 	// This one fixed command is a known read, independent of untrusted CLI
 	// annotations. Keep the same exact-call host authorization requirement;
@@ -109,30 +115,64 @@ func businessCommand(service string, parts []string, help bool) error {
 	return nil
 }
 
-func businessFlags(args []string) error {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if !strings.HasPrefix(a, "--") || a == "--" {
-			return errors.New("only explicit long flags are accepted")
+// larkResourceFlags lists the only long-tail resource identifiers reviewed for
+// each business command. Do not broaden this to every flag containing "token":
+// the point is to let business identifiers through without also exposing
+// credentials, local files or unreviewed capabilities.
+var larkResourceFlags = map[string]map[string]bool{
+	"drive +copy":             {"folder-token": true, "token": true},
+	"drive +create-folder":    {"folder-token": true},
+	"sheets +workbook-create": {"folder-token": true},
+	"drive +search":           {"folder-tokens": true},
+	"drive +move":             {"file-token": true, "folder-token": true},
+	"drive +create-shortcut":  {"file-token": true, "folder-token": true},
+	"docs +create":            {"parent-token": true},
+}
+
+type businessFlag struct {
+	key, value string
+}
+
+func businessFlags(service string, command, args []string) error {
+	flags, err := parseBusinessFlags(args)
+	if err != nil {
+		return err
+	}
+	allowed := map[string]bool{}
+	if service == "lark" && len(command) == 2 {
+		allowed = larkResourceFlags[command[0]+" "+command[1]]
+	}
+	sawType, typeValue, sawToken := false, "", false
+	for _, flag := range flags {
+		key, value := flag.key, flag.value
+		switch key {
+		case "as":
+			return errors.New("--as is controlled by the adapter; omit --as (the adapter appends --as=user)")
+		case "format":
+			return errors.New("--format is controlled by the adapter; omit it")
+		case "yes", "force", "no-confirm":
+			return errors.New("confirmation flags are controlled by the adapter; use confirm=true and the host approval chain")
 		}
-		key, value, equals := strings.Cut(strings.TrimPrefix(a, "--"), "=")
-		if !commandName.MatchString(key) {
-			return errors.New("invalid flag name")
+		if key == "type" {
+			sawType, typeValue = true, value
 		}
-		resourceToken := key == "base-token" || key == "spreadsheet-token" || key == "page-token"
-		if !resourceToken {
-			for _, blocked := range []string{"file", "path", "output", "token", "secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin", "image", "audio", "video", "attachment", "media"} {
-				if strings.Contains(key, blocked) {
-					return errors.New("configuration/credential/file flags are not exposed")
-				}
+		if key == "token" {
+			sawToken = true
+		}
+		if allowed[key] || existingResourceFlag(key) {
+			if value == "" {
+				return fmt.Errorf("--%s requires an inline resource token", key)
 			}
+			if !validResourceValue(value, key == "folder-tokens") {
+				return fmt.Errorf("--%s must be an inline resource token, not a local file, URL or stdin reference", key)
+			}
+			continue
 		}
-		if key == "as" || key == "yes" || key == "force" || key == "no-confirm" || key == "format" {
-			return errors.New("identity, format and confirmation are controlled by the adapter")
+		if strings.Contains(key, "token") {
+			return fmt.Errorf("--%s is not an approved resource parameter for %s %s", key, service, strings.Join(command, " "))
 		}
-		if !equals && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
-			i++
-			value = args[i]
+		if blockedFlagKey(key) {
+			return fmt.Errorf("--%s is a configuration, credential, or local-file flag and is not exposed", key)
 		}
 		if strings.HasPrefix(strings.TrimSpace(value), "@") || value == "-" || strings.ContainsAny(value, "\x00\r") {
 			return errors.New("local-file/stdin references are not allowed")
@@ -143,7 +183,62 @@ func businessFlags(args []string) error {
 			}
 		}
 	}
+	if sawToken && (!sawType || typeValue == "") {
+		return errors.New("--token requires an inline --type for drive +copy")
+	}
 	return nil
+}
+
+func parseBusinessFlags(args []string) ([]businessFlag, error) {
+	out := make([]businessFlag, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if !strings.HasPrefix(a, "--") || a == "--" {
+			return nil, errors.New("only explicit long flags are accepted")
+		}
+		key, value, equals := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if !commandName.MatchString(key) {
+			return nil, errors.New("invalid flag name")
+		}
+		if !equals && i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+			i++
+			value = args[i]
+		}
+		out = append(out, businessFlag{key: key, value: value})
+	}
+	return out, nil
+}
+
+func existingResourceFlag(key string) bool {
+	return key == "base-token" || key == "spreadsheet-token" || key == "page-token"
+}
+
+func blockedFlagKey(key string) bool {
+	for _, blocked := range []string{"file", "path", "output", "token", "secret", "credential", "header", "endpoint", "host", "profile", "browser", "config", "proxy", "debug", "verbose", "stdin", "image", "audio", "video", "attachment", "media"} {
+		if strings.Contains(key, blocked) {
+			return true
+		}
+	}
+	return false
+}
+
+func validResourceValue(value string, list bool) bool {
+	parts := []string{value}
+	if list {
+		parts = strings.Split(value, ",")
+	}
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" || len(token) > 4096 || token == "-" || strings.HasPrefix(token, "@") || strings.Contains(token, "://") {
+			return false
+		}
+		for _, r := range token {
+			if unicode.IsSpace(r) || unicode.IsControl(r) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func resourceURL(raw string) error {
