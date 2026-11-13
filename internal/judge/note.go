@@ -220,6 +220,9 @@ func FormatNote(n Note) string {
 		marker = "✗ "
 	}
 	line := origin + marker + DecisionLineWithSource(n.Tool, n.Mode, n.Level, n.Source, dispositionFor(n)) + suffix
+	if n.DecisionCode != "" && n.DecisionCode != "approved" {
+		line += " [" + n.DecisionCode + "]"
+	}
 	if rationale != "" {
 		line += ": " + rationale
 	}

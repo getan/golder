@@ -373,6 +373,8 @@ type Note struct {
 	// cannot say which of the two was refused renders as "allow → denied", which
 	// reads as a contradiction instead of a decision.
 	Escalation bool
+	// DecisionCode is a machine-readable outcome, not parsed from rationale.
+	DecisionCode string
 }
 
 // escalationJustification extracts the model's reason from a bash escalation

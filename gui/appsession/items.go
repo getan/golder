@@ -111,18 +111,19 @@ func (c *Controller) addNote(n judge.Note) {
 	runID := c.runID
 	c.mu.Unlock()
 	st := &NoteState{
-		Tool:       n.Tool,
-		ToolCallID: n.ToolCallID,
-		RunID:      runID,
-		Origin:     n.Origin,
-		Kind:       int(n.Kind),
-		Level:      n.Level.String(),
-		Summary:    n.Summary,
-		Source:     n.Source,
-		Rationale:  n.Rationale,
-		Mode:       n.Mode,
-		Granted:    !n.Kind.Failure(),
-		Failure:    n.Kind.Failure(),
+		Tool:         n.Tool,
+		ToolCallID:   n.ToolCallID,
+		RunID:        runID,
+		Origin:       n.Origin,
+		Kind:         int(n.Kind),
+		Level:        n.Level.String(),
+		Summary:      n.Summary,
+		Source:       n.Source,
+		Rationale:    n.Rationale,
+		Mode:         n.Mode,
+		DecisionCode: n.DecisionCode,
+		Granted:      !n.Kind.Failure(),
+		Failure:      n.Kind.Failure(),
 	}
 	text := judge.FormatNote(n)
 	c.addItem(Item{

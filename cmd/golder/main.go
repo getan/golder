@@ -47,9 +47,9 @@ import (
 	"github.com/getan/golder/internal/diagtrace"
 	"github.com/getan/golder/internal/dream"
 	"github.com/getan/golder/internal/golderhome"
-	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/heapdiag"
 	"github.com/getan/golder/internal/history"
+	"github.com/getan/golder/internal/permissionruntime"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/redact"
@@ -435,22 +435,15 @@ func main() {
 		redact.SetDefault(nil)
 	}
 	diagtrace.Event("main", "redact configured failed=%t", redactErr != nil)
-	// The unified authorization table: grants.json in the state root. On a first
-	// run it folds the older stores into it (trust.json, the retired managed
-	// permissions.toml). Warnings are printed once here rather than surfacing
-	// later as a tool error: a legacy file that cannot be read costs an old
-	// grant, which is an inconvenience, while refusing to start is not.
-	warnings, grantsErr := grants.Open(os.Getenv)
+	permissionReport, grantsErr := permissionruntime.Initialize(os.Getenv)
 	if grantsErr != nil {
 		fmt.Fprintf(os.Stderr, "golder: %v\n", grantsErr)
-	} else {
-		for _, w := range warnings {
-			fmt.Fprintf(os.Stderr, "golder: %s\n", w)
-		}
+		os.Exit(1)
+	}
+	for _, w := range permissionReport.Warnings {
+		fmt.Fprintf(os.Stderr, "golder: %s\n", w)
 	}
 	diagtrace.Event("main", "grants open failed=%t", grantsErr != nil)
-	// After the table is open: the environment's read grants are rows in it.
-	applyReadableRootsFromEnv()
 	// A bare provider name ("zai", "deepseek") means that provider's default
 	// model (issue #564): canonicalize once here so every downstream consumer —
 	// SetupEnv, the REPL/TUI live seeds, sub-agent children — carries a real
@@ -493,29 +486,6 @@ func exit(code int) {
 	diagtrace.Event("main", "exit code=%d", code)
 	diagtrace.Close()
 	os.Exit(code)
-}
-
-// applyReadableRootsFromEnv records GOLDER_READABLE_ROOTS in the authorization
-// table as session rows.
-//
-// It is the only grant source that is not a file the user edits, and the only
-// reason it stays: a machine that cannot edit a file (a script, a container)
-// needs some way to pre-grant a directory, and an environment variable is
-// visible in the process that uses it. Session rows, not remembered ones,
-// because the variable is per-invocation: the next launch reads its own
-// environment and would otherwise accumulate a grant nobody re-declared.
-//
-// The writable side has no equivalent on purpose — GOLDER_SANDBOX_READABLE
-// covers the sandbox's read whitelist, and writing is granted through the
-// dialogs and /boundary, where the answer is recorded next to the reason.
-//
-// It must run after grants.Open, which installs the table this writes into.
-func applyReadableRootsFromEnv() {
-	for _, root := range permissions.ReadableRootsFromEnv(os.Getenv) {
-		if _, err := grants.AddReadRoot(root, grants.Session, "GOLDER_READABLE_ROOTS"); err != nil {
-			fmt.Fprintf(os.Stderr, "golder: readable root %s: %v\n", root, err)
-		}
-	}
 }
 
 // applyFileConfig overlays config.toml values onto opts, but only for flags the

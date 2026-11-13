@@ -73,16 +73,17 @@ type TTYSummary struct {
 
 // NoteState is one permission-gate announcement.
 type NoteState struct {
-	Tool       string
-	ToolCallID string
-	RunID      string
-	Origin     string
-	Kind       int
-	Level      string
-	Summary    string
-	Source     string
-	Rationale  string
-	Mode       string
+	Tool         string
+	ToolCallID   string
+	RunID        string
+	Origin       string
+	Kind         int
+	Level        string
+	Summary      string
+	Source       string
+	Rationale    string
+	Mode         string
+	DecisionCode string
 	// Granted is true for approvals that let a call proceed.
 	Granted bool
 	// Failure is true for denials and blocks.

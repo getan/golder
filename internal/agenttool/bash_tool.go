@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/getan/golder/internal/judge"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/seatbelt"
+	"github.com/getan/golder/internal/toolchain"
 )
 
 // bashMaxOutputBytes caps how many bytes of combined stdout/stderr one result
@@ -99,6 +101,8 @@ type BashTool struct {
 	// where isolation was never implemented (Windows) it stays false, and the
 	// command runs directly as it always did.
 	RequireSandbox bool
+	// ResolveToolchain is host wiring/test injection, never a tool argument.
+	ResolveToolchain func(context.Context, string, string) (toolchain.Plan, error)
 	// sessionsMu guards the lazy Sessions fallback in manager(). Production
 	// wires one manager before any call runs (BuiltinTools shares it with
 	// write_stdin); the lock exists for direct callers, and because bash is
@@ -241,6 +245,11 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 			policy.WriteFiles = []string{p}
 		}
 	}
+	if grant, ok := agentcore.ToolchainGrantFromContext(ctx); ok {
+		policy.ReadDirs = append(policy.ReadDirs, grant.ReadDirs...)
+		policy.WriteDirs = append(policy.WriteDirs, grant.WriteDirs...)
+		policy.ReadFiles = append(policy.ReadFiles, grant.ReadFiles...)
+	}
 	sa, cl, err := t.Sandbox.SandboxCall(argv, t.Dir, policy)
 	if err != nil {
 		return nil, nil, fmt.Sprintf("bash: the sandbox could not be created (%v); the command was not run. Check the platform sandbox, or approve an explicit one-call escape", err), false, false
@@ -252,6 +261,7 @@ func (t *BashTool) sandboxArgv(ctx context.Context, shell, flag, command, perms 
 type bashToolArgs struct {
 	// Command is the shell command line to run.
 	Command string `json:"command"`
+	Profile string `json:"profile,omitempty"`
 	// Network asks the authorization gate for outbound access inside the file
 	// sandbox. "on" is a request, NOT an entitlement; the gate's one-call
 	// network grant is required before execution.
@@ -319,6 +329,7 @@ func (t *BashTool) Schema() json.RawMessage {
   "properties": {
     "command":    {"type": "string", "description": "Shell command line to run."},
 	    "network": {"type": "string", "enum": ["off", "on"], "description": "Outbound network access for THIS invocation inside the file sandbox. Default off. For git push/fetch, curl or package downloads, request on; the authorization gate must approve it alongside execution. This does not allow reading additional files."},
+	    "profile": {"type":"string","enum":["go","go-download"],"description":"Explicit scoped toolchain capability request. go reads installed SDK/modules and writes build cache; go-download additionally writes module cache. No network or sandbox escape is implied. Do not combine with require_escalated."},
     "timeout_ms": {"type": "integer", "description": "Hard deadline in milliseconds; the command is killed when it elapses (capped at 10 minutes). Omit for no deadline.", "minimum": 0},
     "yield_time_ms": {"type": "integer", "description": "How long to wait for the command to finish before returning a bash_id for a running session. Defaults to 10000 ms (capped at 30000).", "minimum": 0},
     "tty": {"type": "boolean", "description": "Run the command on a pseudo-terminal so its stdin can be written via write_stdin (interactive programs). Defaults to false (pipes)."},
@@ -532,13 +543,70 @@ func sandboxRetryDone(ctx context.Context) bool {
 // Execute runs one command: sandboxed by default, direct only where the gate
 // granted a Direct decision. A sandbox denial that names a path is offered back
 // to the person before the failure is returned (see OnSandboxDenied).
-func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
+func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage, onUpdate agentcore.ToolUpdateFunc) (result agentcore.AgentToolResult, execErr error) {
+	actualEnvelope := "not_started"
+	executionReason := ""
+	defer func() {
+		if executionReason != "" {
+			details, _ := result.Details.(map[string]any)
+			if details == nil {
+				details = map[string]any{}
+			}
+			details["execution_reason"], details["execution_envelope"] = executionReason, actualEnvelope
+			result.Details = details
+		}
+		if auth, ok := agentcore.AuthorizationFromContext(ctx); ok {
+			details, _ := result.Details.(map[string]any)
+			if details == nil {
+				details = map[string]any{}
+			}
+			details["authorization"], details["execution_envelope"] = auth, actualEnvelope
+			result.Details = details
+			if auth.Reason != "approved" || auth.EscapeRequested {
+				summary := fmt.Sprintf("[authorization: %s; mode=%s; source=%s; execution=%s]", auth.Reason, auth.Mode, auth.Source, actualEnvelope)
+				result.Content = append(result.Content, agentcore.NewTextContent(summary))
+				// The executor replaces content with err.Error() on process failure.
+				// Preserve the same structured answer in that model-visible path.
+				if execErr != nil {
+					execErr = fmt.Errorf("%w\n%s", execErr, summary)
+				}
+			}
+		}
+	}()
 	a, bad := decodeArgs[bashToolArgs](args, "bash")
 	if bad != nil {
 		return *bad, nil
 	}
 	if a.Command == "" {
 		return errorResult("bash: command is required"), nil
+	}
+	var profileEnv []string
+	if a.Profile != "" {
+		grant, ok := agentcore.ToolchainGrantFromContext(ctx)
+		if !ok || grant.Name != a.Profile {
+			executionReason = "profile_not_authorized"
+			return errorResult("bash: profile_not_authorized; command was not run"), nil
+		}
+		resolve := t.ResolveToolchain
+		if resolve == nil {
+			resolve = toolchain.Resolve
+		}
+		plan, err := resolve(ctx, t.Dir, a.Profile)
+		if err != nil || plan.Binding != grant.Binding || plan.Executable != grant.Executable {
+			executionReason = "profile_changed"
+			return errorResult("bash: profile_changed; toolchain facts changed after authorization; command was not run"), nil
+		}
+		if t.Permissions == nil || t.Permissions.Mode() != permissions.FullAccess {
+			if t.Sandbox == nil {
+				executionReason = "profile_unavailable"
+				return errorResult("bash: profile requires an available OS sandbox; command was not run"), nil
+			}
+			ctx = agentcore.WithSandboxRequest(ctx)
+		}
+		profileEnv = []string{"PATH=" + filepath.Dir(grant.Executable) + string(os.PathListSeparator) + os.Getenv("PATH"), "GOROOT=" + plan.GoRoot}
+	} else if _, ok := agentcore.ToolchainGrantFromContext(ctx); ok {
+		executionReason = "profile_changed"
+		return errorResult("bash: profile_changed; the authorized profile is absent; command was not run"), nil
 	}
 	if binding := agentcore.ExecutionBindingFromContext(ctx); binding != "" {
 		if err := judge.VerifyExecutionBinding(ctx, "bash", args, t.Dir, binding); err != nil {
@@ -599,6 +667,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		Cleanup:  cleanup,
 		Observer: observer,
 		TTY:      a.TTY,
+		Env:      profileEnv,
 	})
 	if err != nil {
 		var execErr *exec.Error
@@ -608,6 +677,7 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 		}
 		return errorResult(fmt.Sprintf("bash: could not start command: %v", err)), nil
 	}
+	actualEnvelope = envelopeDetail(sandboxed)
 
 	exited := sess.Wait(ctx, yield, execsess.WaitExit)
 	if onUpdate != nil {
@@ -687,7 +757,10 @@ func (t *BashTool) Execute(ctx context.Context, id string, args json.RawMessage,
 	// second denial, leaves the original failure in place. Escalation requests
 	// are skipped: the escape flow already had its say about that path.
 	denialPath := ""
-	if sandboxDenied && !gitPushFailed && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
+	if sandboxDenied && a.Profile != "" {
+		hint = "\n[toolchain profile: scoped permissions were retained inside the sandbox. No automatic retry or escape was performed. Inspect the denied access and request the missing capability in a new reviewed call; go-download additionally requests module-cache writes, while network=on is separate.]"
+	}
+	if sandboxDenied && a.Profile == "" && !gitPushFailed && t.OnSandboxDenied != nil && !sandboxRetryDone(ctx) &&
 		!strings.EqualFold(strings.TrimSpace(a.SandboxPermissions), sandboxPermissionEscalated) {
 		// The denial's own message is the ground truth about which path was
 		// refused: the OS prints the file the syscall failed on, read or write,

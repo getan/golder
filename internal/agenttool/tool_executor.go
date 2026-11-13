@@ -228,6 +228,15 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 				if dec.Details != nil {
 					r.Details = *dec.Details
 				}
+				if dec.Authorization != nil {
+					details, _ := r.Details.(map[string]any)
+					if details == nil {
+						details = map[string]any{}
+					}
+					details["authorization"] = *dec.Authorization
+					r.Details = details
+					r.Content = append(r.Content, agentcore.NewTextContent("[authorization: "+dec.Authorization.Reason+"; source="+dec.Authorization.Source+"]"))
+				}
 				if _, ok := tool.(*BrowserTool); ok {
 					if note := browserReviewDenialDiagnostic(execCtx, call.Name, args); note != "" {
 						r.Content = append(r.Content, agentcore.NewTextContent(note))
@@ -240,6 +249,12 @@ func prepareToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore
 			// refuse; the bash tool translates it into the sandbox-exec argv.
 			if dec.Sandbox {
 				execCtx = agentcore.WithSandboxRequest(execCtx)
+			}
+			if dec.Toolchain != nil {
+				execCtx = agentcore.WithToolchainGrant(execCtx, *dec.Toolchain)
+			}
+			if dec.Authorization != nil {
+				execCtx = agentcore.WithAuthorizationDecision(execCtx, *dec.Authorization)
 			}
 			if dec.Network {
 				execCtx = agentcore.WithNetworkGrant(execCtx)

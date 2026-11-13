@@ -137,6 +137,10 @@ type BeforeToolCallDecision struct {
 	// The executor publishes it to the tool, which must revalidate immediately
 	// before spawn. It grants nothing by itself and is ignored when Block is set.
 	ExecutionBinding string
+	// Toolchain and Authorization are computed by the host gate, never decoded
+	// from a tool's arguments. Toolchain grants remain inside the file sandbox.
+	Toolchain     *ToolchainGrant
+	Authorization *AuthorizationDecision
 }
 
 // BeforeToolCallFunc runs after validation and may block the call (permission /

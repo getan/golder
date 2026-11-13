@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
@@ -35,7 +36,14 @@ func approvalKey(req judge.ApprovalRequest) string {
 	if summary == "" {
 		return ""
 	}
-	return req.Tool + "\x00" + summary
+	// A command approval is not an approval for a different cache, a writable
+	// module store, or an escape. Include the exact capability question.
+	needs := make([]string, 0, len(req.Needs))
+	for _, n := range req.Needs {
+		needs = append(needs, fmt.Sprintf("%v|%s", n, n.Key))
+	}
+	sort.Strings(needs)
+	return req.Tool + "\x00" + summary + "\x00" + strings.Join(needs, "\x00")
 }
 
 // confirmApproval is the permission gate's dialog. It publishes the request and

@@ -36,6 +36,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/shellfacts"
+	"github.com/getan/golder/internal/toolchain"
 )
 
 const (
@@ -61,6 +62,7 @@ type ExecutionFact struct {
 	RequiresUnconfined bool            `json:"requiresUnconfined,omitempty"`
 	ContainmentReason  string          `json:"containmentReason,omitempty"`
 	BrowserTarget      json.RawMessage `json:"browserTarget,omitempty"`
+	Toolchain          *toolchain.Plan `json:"toolchain,omitempty"`
 }
 
 type executionFacts struct {
@@ -167,7 +169,12 @@ func resolveExecutionFacts(ctx context.Context, call agentcore.AgentToolCall, cw
 	}
 	factCtx, cancel := context.WithTimeout(ctx, gitFactTotalTimeout)
 	defer cancel()
-	return resolveGitPushFacts(factCtx, a.Command, cwd, runGitFactQuery)
+	facts := resolveGitPushFacts(factCtx, a.Command, cwd, runGitFactQuery)
+	if p := planFromContext(ctx); p != nil {
+		facts.blocksBare = true
+		facts.Public = append(facts.Public, ExecutionFact{Kind: "toolchain", Operation: p.Name, Resolution: "locally_resolved", Transport: "filesystem", Toolchain: p})
+	}
+	return facts
 }
 
 // VerifyExecutionBinding recomputes the local-only facts just before a direct

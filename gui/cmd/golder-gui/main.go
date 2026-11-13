@@ -24,6 +24,7 @@ import (
 	"github.com/getan/golder/internal/cli/config"
 	"github.com/getan/golder/internal/cli/launchcfg"
 	"github.com/getan/golder/internal/cli/run"
+	"github.com/getan/golder/internal/permissionruntime"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/runtime"
 	"github.com/getan/golder/internal/seatbelt"
@@ -64,6 +65,13 @@ func main() {
 	}
 	if err := configureTerminalLauncher(); err != nil {
 		fmt.Fprintf(os.Stderr, "golder-gui: terminal sandbox launcher: %v\n", err)
+	}
+	permissionReport, err := permissionruntime.Initialize(os.Getenv)
+	if err != nil {
+		log.Fatalf("golder-gui: %v", err)
+	}
+	for _, warning := range permissionReport.Warnings {
+		fmt.Fprintln(os.Stderr, "golder-gui:", warning)
 	}
 	var (
 		cwd          = flag.String("cwd", "", "project directory to run the agent in")

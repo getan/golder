@@ -24,6 +24,7 @@ import (
 	"github.com/getan/golder/internal/controlcap"
 	"github.com/getan/golder/internal/grants"
 	"github.com/getan/golder/internal/permissions"
+	"github.com/getan/golder/internal/toolchain"
 )
 
 // Capability is one thing a call may need beyond the default sandbox policy.
@@ -36,6 +37,7 @@ const (
 	CapUnconfined
 	CapHostControl
 	CapBrowserRuntime
+	CapToolchain
 )
 
 // Need is one capability request with the exact scope it would cover.
@@ -47,6 +49,8 @@ type Need struct {
 	Dir string
 	// Key names a network host/command.
 	Key string
+	// Profile is locally resolved capability evidence, never tool input.
+	Profile *toolchain.Plan
 }
 
 // Scope is the lifetime of an answered need.
@@ -124,17 +128,56 @@ type ConsentOpts struct {
 	WritableAt            func(path string) bool
 	GrantWritable         func(root string, persist bool) (bool, string)
 	PersistReadRoot       func(dir string) (bool, string)
+	ResolveToolchain      func(context.Context, string, string) (toolchain.Plan, error)
 }
 
 // ConsentGate builds the single gate production drivers install after trust.
 // It replaces the separate boundary and permission gates.
 func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
-	return func(ctx context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+	return func(ctx context.Context, call agentcore.AgentToolCall) (dec *agentcore.BeforeToolCallDecision) {
 		mode := permissions.FullAccess
 		if opts.Mode != nil {
 			mode = opts.Mode.Mode()
 		}
 		lang := ConversationLanguage(agentcore.MessageSnapshotFromContext(ctx))
+		var last Note
+		var grade Verdict
+		var profile *toolchain.Plan
+		defer func() {
+			if profile != nil && (dec == nil || !dec.Block) {
+				if dec == nil {
+					dec = &agentcore.BeforeToolCallDecision{}
+				}
+				if dec.Toolchain == nil && (mode == permissions.FullAccess || profileCovered(profile, opts.Cwd)) {
+					dec.Toolchain = profileGrant(profile)
+				}
+				if dec.Toolchain == nil {
+					dec = profileBlocked(call, mode, "profile_not_authorized", "toolchain profile capabilities were not authorized; command not run")
+				}
+				if !dec.Block && mode != permissions.FullAccess {
+					dec.Sandbox, dec.Direct, dec.Bare = true, false, false
+				}
+			}
+			if dec != nil && dec.Authorization == nil {
+				reason := last.DecisionCode
+				if reason == "" {
+					reason = decisionCode(mode, opts.Enforce, call, grade, dec.Block)
+				}
+				if last.Source == "" {
+					last.Source = grade.Source
+				}
+				if last.Rationale == "" {
+					last.Rationale = firstReason(grade)
+				}
+				dec.Authorization = &agentcore.AuthorizationDecision{Mode: mode.String(), Source: last.Source, Reason: reason, Rationale: last.Rationale, EscapeRequested: askedToEscape(call), EscapeGranted: dec.Direct || mode == permissions.FullAccess}
+			}
+			if dec != nil && dec.Authorization != nil {
+				dec.Authorization.Mode = mode.String()
+				if dec.Block {
+					dec.Authorization.EscapeGranted = false
+				}
+			}
+		}()
 		notify := func(n Note) {
 			if n.Origin == "" {
 				n.Origin = agentcore.OriginFromContext(ctx)
@@ -151,6 +194,10 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 				}
 				n.Rationale = browserAuditRationale(n.Rationale)
 			}
+			if n.DecisionCode == "" {
+				n.DecisionCode = decisionCode(mode, opts.Enforce, call, Verdict{Level: n.Level, Failed: n.Kind == NoteUnavailable}, n.Kind == NoteDenied || n.Kind == NoteReadOnly)
+			}
+			last = n
 			if opts.Notify != nil {
 				opts.Notify(n)
 			}
@@ -171,6 +218,27 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 		if call.RequireOperatorConfirmation && mode != permissions.Ask {
 			return blockCall(call, Verdict{Level: Deny, Source: "operator-policy"}, "this operation requires a person's exact-call confirmation; switch /permissions to ask")
 		}
+		if name := requestedProfile(call); name != "" {
+			if mode == permissions.ReadOnly {
+				return profileBlocked(call, mode, "read_only", "read-only mode cannot write toolchain caches")
+			}
+			if askedToEscape(call) {
+				return profileBlocked(call, mode, "profile_unavailable", "profile requests scoped sandbox capabilities; do not combine it with require_escalated")
+			}
+			resolve := opts.ResolveToolchain
+			if resolve == nil {
+				resolve = toolchain.Resolve
+			}
+			p, err := resolve(ctx, opts.Cwd, name)
+			if err != nil {
+				return profileBlocked(call, mode, "profile_unavailable", err.Error())
+			}
+			profile = &p
+			if profileRefused(profile) {
+				return profileBlocked(call, mode, "profile_refused", "a toolchain path has an explicit refusal")
+			}
+			ctx = context.WithValue(ctx, toolchainPlanKey{}, profile)
+		}
 		if mode == permissions.FullAccess {
 			// Full access is a real mode: no review, no consent, no sandbox.
 			// Only the static floor above survives.
@@ -185,6 +253,9 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			dec := applyNeeds(call, opts, needs, ScopeOnce, lang)
 			if dec == nil {
 				return nil
+			}
+			if dec.Block {
+				return dec
 			}
 			dec.PolicyApproved = call.RequirePolicyApproval
 			return dec
@@ -211,6 +282,7 @@ func ConsentGate(opts ConsentOpts) agentcore.BeforeToolCallFunc {
 			return blockCall(call, Verdict{Level: Deny, Source: "browser-runtime"}, "browser_outer_sandbox_unavailable: this browser target cannot satisfy required outer OS containment; host_control is not a remedy")
 		}
 		v := classifyForGate(ctx, opts.Classifier, call)
+		grade = v
 		// A structured requirement for outer containment cannot be weakened by
 		// a contradictory allow/confirm level in the same reviewer response.
 		if strings.EqualFold(call.Name, "browser") && v.BrowserContainment == "outer_required" && v.Level != Deny {
@@ -333,6 +405,9 @@ func ReviewRecovery(ctx context.Context, opts ConsentOpts, req ConsentRequest) C
 // the person agrees. Boundary, network and sandbox are dimensions of one list.
 func collectNeeds(ctx context.Context, opts ConsentOpts, call agentcore.AgentToolCall, v Verdict, mode permissions.Mode, lang string) []Need {
 	var needs []Need
+	if p := planFromContext(ctx); p != nil && !profileCovered(p, opts.Cwd) {
+		needs = append(needs, Need{Cap: CapToolchain, Key: p.Binding, Profile: p})
+	}
 	if opts.BrowserRuntimeOutside && controlcap.BrowserLaunch(call.Name, call.Arguments) {
 		evidence, known := agentcore.ToolReviewEvidenceFromContext(ctx, call.Name, call.Arguments)
 		if !strings.EqualFold(call.Name, "browser") || !known || !evidence.RuntimeAttested || evidence.LaunchRequired {
@@ -586,6 +661,9 @@ func autoDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentToo
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
 	}
+	if dec.Block {
+		return dec
+	}
 	dec.PolicyApproved = call.RequirePolicyApproval
 	if NetworkRequired(ctx, call.Name, call.Arguments) {
 		dec.Network = true
@@ -675,14 +753,24 @@ func askDecision(ctx context.Context, opts ConsentOpts, call agentcore.AgentTool
 		ans = promptConsent(ctx, opts.In, opts.Out, opts.Mu, req, lang)
 	}
 	if !ans.Answered || !ans.Allow {
+		code := "user_declined"
+		rationale := localized(lang, "用户拒绝了本次请求", "denied by the user")
+		if !ans.Answered {
+			code = "approval_unanswered"
+			rationale = localized(lang, "本次授权没有收到回答；未授予能力", "no authorization answer was received; no capabilities were granted")
+		}
 		notify(Note{Tool: call.Name, ToolCallID: call.ID, Kind: NoteDenied, Level: Deny, Lang: lang,
-			Source: v.Source, Needs: needs,
-			Summary: req.Summary, Rationale: localized(lang, "用户拒绝了本次请求", "denied by the user")})
-		return blockCall(call, v, "denied by the user; propose a different approach or ask what they would prefer")
+			DecisionCode: code,
+			Source:       v.Source, Needs: needs,
+			Summary: req.Summary, Rationale: rationale})
+		return blockCall(call, v, rationale+"; propose a different approach or ask what they would prefer")
 	}
 	dec := applyNeeds(call, opts, ans.Needs, ans.Scope, lang)
 	if dec == nil {
 		dec = &agentcore.BeforeToolCallDecision{}
+	}
+	if dec.Block {
+		return dec
 	}
 	dec.OperatorConfirmed = call.RequireOperatorConfirmation || call.RequirePolicyApproval
 	dec.PolicyApproved = call.RequirePolicyApproval
@@ -796,6 +884,12 @@ func applyNeeds(call agentcore.AgentToolCall, opts ConsentOpts, needs []Need, sc
 			dec.HostControl = true
 		case CapBrowserRuntime:
 			dec.BrowserRuntime = true // one invocation, never a standing path/Direct grant
+		case CapToolchain:
+			grant, err := applyProfile(n.Profile, scope)
+			if err != nil {
+				return profileBlocked(call, permissions.Auto, "grant_store_unavailable", err.Error())
+			}
+			dec.Toolchain = grant
 		case CapUnconfined:
 			// The caller decides the execution envelope; an escape is never
 			// remembered and never establishes a standing grant.
@@ -861,10 +955,14 @@ func needLabel(n Need, lang string) string {
 		return localized(lang, "控制非本会话创建的终端/浏览器（宿主权限）", "control an external terminal/browser with host authority")
 	case CapBrowserRuntime:
 		return localized(lang, "仅浏览器在外层 Seatbelt 之外运行（保留 Chromium 自身沙箱与独立 profile）", "browser-only runtime outside Seatbelt (Chromium sandbox and separate profile retained)")
+	case CapToolchain:
+		return profileLabel(n.Profile)
 	default:
 		return "capability"
 	}
 }
+
+func (n Need) String() string { return needLabel(n, "en") }
 
 // promptConsent is the REPL's single-question shape. It never asks two
 // questions: every need is shown together.
