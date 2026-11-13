@@ -233,7 +233,7 @@ func (p *Plugin) withCLIDiagnostics(r Result, args []string, out Output, runErr 
 	// Keep execution_state conservative, especially for cli_call. An upstream
 	// error does not authorize retrying a mutation or starting an auth flow.
 	if d.CLIType == "permission" || len(d.MissingScopes) > 0 {
-		r.Error.NextAction = "Check the application's required scopes and tenant approval, then explicitly authorize the user via /mcp setup lark. Do not reset login or switch to bot identity."
+		r.Error.NextAction = "Check the application's required scopes and tenant approval, then explicitly authorize the user via /mcp setup lark. Do not call cli_help for auth/login, reset login or switch to bot identity."
 	} else if d.CLIType == "validation" {
 		r.Error.NextAction = "Check diagnostics.argv_shape and cli_help for the installed CLI version; empty argument boundaries are preserved."
 	}

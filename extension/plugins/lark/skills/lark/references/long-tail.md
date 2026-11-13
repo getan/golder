@@ -8,6 +8,9 @@ Prefer named tools for supported common work. Otherwise:
    `{"service":"project","command":["workitem","query"]}`; `ticket_search`
    is the MCP tool name, not a Project CLI command family. The installed CLI may
    require Project login and server-side command discovery before help works.
+   `cli_help` only covers exposed business commands; it cannot query
+   auth/config/install. Skill CLI examples are not MCP capabilities. Use
+   Golder's authorization/settings entry for login or incremental scopes.
 2. Read only that command's help; ensure targets, options and impact are clear.
 3. Use `cli_call` with the exact argv array and confirm=true. The host separately
    authorizes that call: the reviewer decides in `auto`, while `ask` requests a

@@ -20,7 +20,7 @@ func tailSchema(execute bool) json.RawMessage {
 	}
 	props := map[string]any{"service": map[string]any{"type": "string", "enum": []string{"lark", "project"}}, key: map[string]any{
 		"type": "array", "minItems": 1, "maxItems": 64,
-		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation.",
+		"description": "Inline business arguments. Omit --as, --format, --yes, --force and --no-confirm; the adapter controls identity, output format and confirmation. cli_help only covers business commands; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.",
 		"items":       map[string]any{"type": "string", "maxLength": 16000},
 	}}
 	required := []string{"service", key}
@@ -43,6 +43,14 @@ func (p *Plugin) tail(ctx context.Context, name string, raw json.RawMessage) Res
 		return failure("", "INVALID_ARGUMENTS", "Invalid long-tail request", "Use cli_help first")
 	}
 	if name == "cli_help" {
+		if len(in.Command) > 0 {
+			switch in.Command[0] {
+			case "auth", "config", "install":
+				return failure(in.Service, "COMMAND_BLOCKED",
+					"cli_help only exposes business commands; "+in.Command[0]+" is not an MCP CLI capability",
+					"Use Golder's Lark/Project authorization/settings entry for login or incremental scopes; skill CLI examples are not MCP tools")
+			}
+		}
 		if err := businessCommand(in.Service, in.Command, true); err != nil {
 			if in.Service == "project" && len(in.Command) > 0 && (in.Command[0] == "ticket" || in.Command[0] == "ticket_search" || in.Command[0] == "ticket-search") {
 				return failure(in.Service, "COMMAND_BLOCKED", "ticket_search is an MCP tool, not a Project CLI command family", `For work-item query help call cli_help with {"service":"project","command":["workitem","query"]}; command availability depends on the installed CLI and Project login`)

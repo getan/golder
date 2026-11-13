@@ -141,7 +141,7 @@ func TestProjectHelpUsesRealCommandFamily(t *testing.T) {
 		t.Fatalf("allowed help result=%+v calls=%v", allowed, f.calls)
 	}
 	blocked = p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"project","command":["auth","login"]}`))
-	if blocked.OK || blocked.Error == nil || blocked.Error.Code != "COMMAND_BLOCKED" || len(f.calls) != 1 {
+	if blocked.OK || blocked.Error == nil || blocked.Error.Code != "COMMAND_BLOCKED" || !strings.Contains(blocked.Error.NextAction, "authorization") || len(f.calls) != 1 {
 		t.Fatalf("auth help policy changed: result=%+v calls=%v", blocked, f.calls)
 	}
 }

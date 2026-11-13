@@ -177,7 +177,8 @@ The model chooses tools semantically, not through a background keyword watcher.
 
 `status` diagnoses both services independently. `cli_help` discovers a focused
 business command (for Project MQL use `{"service":"project","command":["workitem","query"]}`,
-not the MCP tool name `ticket_search`); availability depends on the installed
+not the MCP tool name `ticket_search`); it cannot query auth/config/install, and
+skill CLI examples are not MCP capabilities. Availability depends on the installed
 CLI and Project login. `cli_call` invokes the fixed native binary with literal argv,
 never a shell. Auth/config/install, raw API, local-file/output paths, destructive
 bulk actions and permission/automation bypasses are blocked. A narrower tool deny

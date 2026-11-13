@@ -17,7 +17,7 @@ Tools use `{operation, options}`; option names use underscores. Options are type
 and map to the installed CLI's documented flags. Check tool schemas, never guess
 new flags. For Project `ticket_search`, the optional assignee is only `"me"`,
 not a user ID, and it is not a comprehensive search for everyone related to an
-item. If an operation is unavailable, inspect an allowed CLI path with `cli_help`.
+item. If a business operation is unavailable, inspect an allowed business CLI path with `cli_help`; it cannot query auth/config/install. Skill CLI examples are not MCP capabilities.
 
 ## Identity, authorization and safety
 
@@ -27,8 +27,10 @@ item. If an operation is unavailable, inspect an allowed CLI path with `cli_help
 - Lark collaboration and Feishu Project have separate logins. `status` diagnoses
   them independently. An MCP connection does not prove either login is valid.
 - On authorization failure, ask the operator to use `/mcp setup lark` (Lark) or
-  `/mcp setup lark project` (Project). Do not call auth/config/install through CLI
-  escape hatches, read credentials or ask for a token/App Secret in conversation.
+  `/mcp setup lark project` (Project). `cli_help` is business-command discovery
+  only; do not use it for auth/config/install. Do not call auth/config/install
+  through CLI escape hatches, read credentials or ask for a token/App Secret in
+  conversation.
 - Use the exact recipient/object, user identity and requested changes for a write.
   `confirm=true` expresses intent only; the host independently authorizes the
   exact call. In `auto` the reviewer decides without a person prompt; `ask`

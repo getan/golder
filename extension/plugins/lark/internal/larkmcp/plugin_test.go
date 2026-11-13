@@ -176,6 +176,24 @@ func TestLongTailIdentityIsAdapterControlled(t *testing.T) {
 	}
 }
 
+func TestCLIHelpRejectsAuthenticationCommands(t *testing.T) {
+	f := &fakeRunner{}
+	p := New(Config{}, f)
+	r := p.Call(context.Background(), "cli_help", json.RawMessage(`{"service":"lark","command":["auth","login"]}`))
+	if r.OK || r.Error == nil || r.Error.Code != "COMMAND_BLOCKED" || !strings.Contains(r.Error.Message, "auth") {
+		t.Fatalf("auth help was not rejected: %+v", r)
+	}
+	if !strings.Contains(r.Error.NextAction, "authorization") || !strings.Contains(r.Error.NextAction, "skill CLI examples") {
+		t.Fatalf("auth help did not point to the authorization entry: %q", r.Error.NextAction)
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("auth help reached the CLI runner: %v", f.calls)
+	}
+	if !strings.Contains(string(tailSchema(false)), "cannot query auth/config/install") {
+		t.Fatal("cli_help schema does not document the auth/config/install boundary")
+	}
+}
+
 func TestProjectSearchEscapingAndPagination(t *testing.T) {
 	params, err := searchParams(map[string]any{"project_key": "real", "work_item_type": "bug", "query": "a_' OR 1=1--%"})
 	if err != nil || !strings.Contains(params["mql"].(string), "a\\_'' OR 1=1--\\%") || strings.Contains(params["mql"].(string), "SELECT *") {
