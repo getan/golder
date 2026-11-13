@@ -112,6 +112,17 @@ func (p *Plugin) Call(ctx context.Context, name string, raw json.RawMessage) Res
 	if in.Operation == "" {
 		in.Operation = d.Default
 	}
+	if d.Name == "task_read" && in.Operation == "mine" {
+		if in.Options == nil {
+			in.Options = map[string]any{}
+		}
+		if _, present := in.Options["complete"]; !present {
+			// "my tasks" should default to the unfinished to-do view; callers
+			// can explicitly request complete=true or omit the filter via the
+			// other task operations.
+			in.Options["complete"] = false
+		}
+	}
 	operation, ok := d.Operations[in.Operation]
 	if !ok {
 		return failure(d.Service, "INVALID_OPERATION", "Unsupported operation", "Use a declared operation")
@@ -218,6 +229,16 @@ func buildArgs(command []string, opts map[string]any) ([]string, error) {
 
 func validateBusiness(name string, in input) error {
 	o := in.Options
+	if name == "calendar_write" && in.Operation == "update" {
+		if (o["start"] == nil) != (o["end"] == nil) {
+			return errors.New("calendar update requires start and end together")
+		}
+	}
+	if name == "wiki_write" && in.Operation == "node_create" {
+		if nodeType, _ := o["node_type"].(string); nodeType == "shortcut" && o["origin_node_token"] == nil {
+			return errors.New("wiki shortcut creation requires origin_node_token")
+		}
+	}
 	if strings.HasPrefix(name, "sheet_") {
 		if (o["url"] == nil) == (o["spreadsheet_token"] == nil) {
 			return errors.New("provide exactly one of url or spreadsheet_token")

@@ -53,7 +53,7 @@ func TestLarkWizardDefaultsAndPrivateSecret(t *testing.T) {
 	in := textinput.New()
 	in.Focus()
 	in.SetValue("cli_test")
-	m.larkWizard = &larkSetupWizard{phase: "app-id", input: in, pkg: pkg, larkCLI: cli, domains: []bool{true, true, true, true, true}}
+	m.larkWizard = &larkSetupWizard{phase: "app-id", input: in, pkg: pkg, larkCLI: cli, domains: []bool{true, true, true, true, true, true, true, true}}
 	m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.larkWizard.phase != "app-secret" || m.larkWizard.input.EchoMode != textinput.EchoPassword {
 		t.Fatal("Lark secret field was not masked")

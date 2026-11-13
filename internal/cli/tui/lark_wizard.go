@@ -11,7 +11,7 @@ import (
 	"github.com/getan/golder/internal/extensions"
 )
 
-var larkWizardDomains = []string{"docs", "drive", "im", "sheets", "base"}
+var larkWizardDomains = []string{"docs", "drive", "im", "sheets", "base", "calendar", "task", "wiki"}
 
 type larkSetupWizard struct {
 	phase            string
@@ -55,7 +55,7 @@ func (m Model) beginLarkWizard() (tea.Model, tea.Cmd) {
 	in.Prompt, in.CharLimit = "> ", 4096
 	in.SetWidth(max(10, m.width-8))
 	in.Focus()
-	w := &larkSetupWizard{input: in, version: m.opts.Version, projectHost: "project.feishu.cn", domains: []bool{true, true, true, true, true}}
+	w := &larkSetupWizard{input: in, version: m.opts.Version, projectHost: "project.feishu.cn", domains: []bool{true, true, true, true, true, false, false, false}}
 	if pkg, ok := extensions.InstalledManagedPackage("lark"); ok {
 		w.installedVersion = pkg.Version
 		release, err := extensions.LarkReleaseFor(m.opts.Version)

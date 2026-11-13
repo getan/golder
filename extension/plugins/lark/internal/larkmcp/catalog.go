@@ -59,6 +59,24 @@ func definitions() []definition {
 		single("message_search", "Search Feishu messages by keyword, chats, sender and time.", "im +messages-search", "query chat_id sender start end page_size page_token", false),
 		single("chat_history", "Read a bounded page of messages from a specific Feishu group or user chat.", "im +chat-messages-list", "chat_id user_id start end page_size page_token", false),
 		single("message_send", "Send text/Markdown to an exact Feishu chat or user as the logged-in user. The host authorizes the exact recipient and full body according to the active permission mode.", "im +messages-send", "chat_id user_id text markdown", true),
+		{Name: "calendar_read", Description: "Read calendar agenda, search events, get event details or list attendees. Times use ISO 8601; pages are bounded.", Service: "lark", Default: "agenda", Options: options("start end calendar_id query attendee_ids page_size page_token event_id type"), Operations: map[string]operation{
+			"agenda": op("calendar +agenda"), "search": op("calendar +search-event"), "get": op("calendar +get", "event_id"), "attendees": op("calendar +list-attendees", "event_id"),
+		}},
+		{Name: "calendar_write", Description: "Create, update or delete a calendar event. Requires confirmed intent and exact-call host authorization; delete is high risk.", Service: "lark", Write: true, Default: "create", Options: options("calendar_id event_id summary start end description attendee_ids add_attendee_ids remove_attendee_ids apply_to rrule notify"), Operations: map[string]operation{
+			"create": op("calendar +create", "summary", "start", "end"), "update": op("calendar +update", "event_id"), "delete": op("calendar +delete", "event_id"),
+		}},
+		{Name: "task_read", Description: "Read tasks assigned to me, related tasks, task search and tasklists. Use complete=false for pending 'my tasks'; page limits are bounded.", Service: "lark", Default: "mine", Options: options("complete due_start due_end query page_limit page_token page_all created_by_me followed_by_me include_complete completed assignee creator follower due"), Operations: map[string]operation{
+			"mine": op("task +get-my-tasks"), "related": op("task +get-related-tasks"), "search": op("task +search"), "tasklists": op("task +tasklist-search"),
+		}},
+		{Name: "task_write", Description: "Create, update or complete a task. Requires confirmed intent and exact-call host authorization.", Service: "lark", Write: true, Default: "create", Options: options("task_id summary description due assignee follower tasklist_id"), Operations: map[string]operation{
+			"create": op("task +create", "summary"), "update": op("task +update", "task_id"), "complete": op("task +complete", "task_id"),
+		}},
+		{Name: "wiki_read", Description: "List Wiki spaces or nodes, or resolve a node. Use page tokens for bounded pages; my_library is a space id, not a document token.", Service: "lark", Default: "spaces", Options: options("space_id parent_node_token page_size page_token node_token"), Operations: map[string]operation{
+			"spaces": op("wiki +space-list"), "nodes": op("wiki +node-list", "space_id"), "node": op("wiki +node-get", "node_token"),
+		}},
+		{Name: "wiki_write", Description: "Create a Wiki space or node, or delete a node. Requires confirmed intent and exact-call host authorization; node deletion is high risk.", Service: "lark", Write: true, Default: "node_create", Options: options("space_id parent_node_token title description name node_type obj_type origin_node_token node_token include_children"), Operations: map[string]operation{
+			"space_create": op("wiki +space-create", "name"), "node_create": op("wiki +node-create", "space_id", "title"), "node_delete": op("wiki +node-delete", "node_token"),
+		}},
 		{Name: "project_schema", Description: "Discover Feishu Project spaces, work-item types/fields/roles, users and allowed workflow transitions. Project is not Approval.", Service: "project", Default: "projects", Options: options("query project_key work_item_type work_item_id field_query field_keys role_query page_num transition_id"), Operations: map[string]operation{
 			"projects": op("project search"), "types": op("workitem meta-types", "project_key"), "fields": op("workitem meta-fields", "project_key", "work_item_type"), "roles": op("workitem meta-roles", "project_key", "work_item_type"), "users": op("user search", "project_key", "query"), "me": op("user me"), "transitions": op("workflow list-state-transitions", "project_key", "work_item_id"), "required": op("workflow list-state-required", "project_key", "work_item_id", "transition_id"), "nodes": op("workflow get-node", "project_key", "work_item_id"), "decode_url": op("url decode", "url"),
 		}},
@@ -91,6 +109,24 @@ func definitions() []definition {
 		}
 		if d.Name == "doc_search" {
 			d.Options["page_size"] = integer(20)
+		}
+		if d.Name == "calendar_read" {
+			d.Options["page_size"] = integer(30)
+		}
+		if d.Name == "calendar_write" {
+			d.Options["notify"] = boolean()
+		}
+		if d.Name == "task_read" {
+			for _, key := range []string{"complete", "created_by_me", "followed_by_me", "include_complete", "completed", "page_all"} {
+				d.Options[key] = boolean()
+			}
+			d.Options["page_limit"] = integer(40)
+		}
+		if d.Name == "wiki_read" {
+			d.Options["page_size"] = integer(50)
+		}
+		if d.Name == "wiki_write" {
+			d.Options["include_children"] = boolean()
 		}
 		switch d.Name {
 		case "message_search", "chat_history", "chat_search":

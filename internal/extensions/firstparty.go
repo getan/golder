@@ -523,7 +523,7 @@ func LarkSourceConfig(opts LarkSourceOptions) (SourceConfig, error) {
 }
 
 func normalizeLarkDomains(values []string) ([]string, error) {
-	allowed := map[string]bool{"docs": true, "drive": true, "im": true, "sheets": true, "base": true}
+	allowed := map[string]bool{"docs": true, "drive": true, "im": true, "sheets": true, "base": true, "calendar": true, "task": true, "wiki": true}
 	if len(values) == 0 {
 		values = []string{"docs", "drive", "im", "sheets", "base"}
 	}

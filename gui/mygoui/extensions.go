@@ -17,7 +17,9 @@ import (
 	"github.com/getan/golder/internal/extensions"
 )
 
-var larkDomainOrder = []string{"docs", "drive", "im", "sheets", "base"}
+var larkCoreDomains = []string{"docs", "drive", "im", "sheets", "base"}
+var larkExtendedDomains = []string{"calendar", "task", "wiki"}
+var larkDomainOrder = append(append([]string{}, larkCoreDomains...), larkExtendedDomains...)
 
 func (a *App) resetExtensionAuthorizationStatus() {
 	a.extensionStatusSeq++
@@ -801,7 +803,7 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 		})
 		ui.Text(c, "Services").FontSize(12).FontWeight(600)
 		ui.Row(c).Gap(10).Wrap().Children(func() {
-			for _, domain := range larkDomainOrder {
+			for _, domain := range larkCoreDomains {
 				domain := domain
 				checked := a.extensionDomains[domain]
 				if ui.Checkbox(c, &checked, domain).Changed() {
@@ -809,6 +811,23 @@ func (a *App) larkExtensionCard(c *ui.Context) {
 				}
 			}
 		})
+		open := a.extensionExtendedOpen
+		ui.Collapsible(c.Key("lark-extended-services"), "Extended services (Calendar · Tasks · Wiki)", &open, func() {
+			ui.Text(c, "Optional read/write tools. Calendar, task and wiki domains are not enabled automatically; selecting one requests its user scopes on the next Authorize Lark. Writes still require exact-call host approval.").
+				FontSize(10.5).TextColor(theme.TextMuted).Wrap()
+			ui.Row(c).Gap(10).Wrap().Children(func() {
+				for _, domain := range larkExtendedDomains {
+					domain := domain
+					checked := a.extensionDomains[domain]
+					if ui.Checkbox(c, &checked, domain).Changed() {
+						a.extensionDomains[domain] = checked
+					}
+				}
+			})
+			ui.Text(c, "Application scopes and user consent are separate; the status above describes the user login, not every individual scope.").
+				FontSize(10.5).TextColor(theme.TextMuted).Wrap()
+		})
+		a.extensionExtendedOpen = open
 		if larkWizardButton(c, "Save configuration", next == "save", a.extensionBusy).Clicked() {
 			a.configureLark()
 		}

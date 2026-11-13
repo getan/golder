@@ -56,6 +56,11 @@ func (p *Plugin) lark(ctx context.Context, d definition, in input, args []string
 			}
 		}
 	}
+	if in.Operation == "delete" && d.Name == "calendar_write" || in.Operation == "node_delete" && d.Name == "wiki_write" {
+		// The CLI marks these high-risk writes with --yes. Exact-call host
+		// authorization has already been checked before this point.
+		args = append(args, "--yes")
+	}
 	result := p.run(ctx, "lark", args, true)
 	if !result.OK {
 		return result

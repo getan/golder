@@ -301,3 +301,22 @@ func TestLarkUntrustedSourceRequiresReviewBeforeAuthorization(t *testing.T) {
 		t.Fatalf("untrusted source did not require review: %q", tt.Texts())
 	}
 }
+
+func TestLarkExtendedServicesAreCollapsible(t *testing.T) {
+	a := testApp()
+	a.extension = appsession.LarkExtensionSettings{
+		ExtensionPackageView: appsession.ExtensionPackageView{Installed: true, BundledVersion: "dev"},
+	}
+	a.settingsOpen, a.settingsTab = true, 2
+	tt := ui.NewTester(a.larkExtensionCard, 1400, 1800)
+	if !tt.HasText("Extended services (Calendar · Tasks · Wiki)") || tt.HasText("Optional read/write tools") {
+		t.Fatalf("extended permissions were not initially collapsed: %q", tt.Texts())
+	}
+	a.extensionExtendedOpen = true
+	tt = ui.NewTester(a.larkExtensionCard, 1400, 1800)
+	for _, want := range []string{"Extended services (Calendar · Tasks · Wiki)", "Optional read/write tools", "calendar", "task", "wiki"} {
+		if !tt.HasText(want) {
+			t.Fatalf("expanded permissions missing %q: %q", want, tt.Texts())
+		}
+	}
+}

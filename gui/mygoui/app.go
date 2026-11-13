@@ -139,6 +139,7 @@ type App struct {
 	extensionSources           []appsession.ExtensionSourceView
 	extensionEdit              appsession.LarkExtensionEdit
 	extensionDomains           map[string]bool
+	extensionExtendedOpen      bool
 	extensionBusy              bool
 	extensionCLIInstall        *officialCLIInstallState
 	extensionErr               string
