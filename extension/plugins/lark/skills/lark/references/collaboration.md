@@ -7,6 +7,9 @@
 3. `doc_write` operations: create, append, replace_text, replace_block. Supply
    Markdown content inline. For a replacement, read the actual text/block first;
    append is not a whole-document overwrite.
+   Use `drive_write` for document/spreadsheet copying and folder creation.
+   Copy requires `docs:document:copy`; use the returned new token or URL to
+   confirm the copy exists before making edits. Missing permission is not a copy.
 4. Chat/message tools use `chat_id` or `user_id`. A name is not a recipient ID.
    Bound history/search by time and page size; return useful quotations and links.
 5. `message_send` accepts exactly one of text/markdown and one chat/user target.

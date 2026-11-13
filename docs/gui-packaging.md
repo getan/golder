@@ -4,16 +4,17 @@
 single executables, while a desktop app needs a bundle, a disk image, an
 installer or a system package to be double-clickable.
 
-The packaging boundary below uses separate Apple Silicon and Intel macOS GUI
-releases, no bundled full CLI or Chromium, a tag-derived app version, and an
-installed-size gate. See
+The packaging boundary below uses Apple Silicon macOS GUI releases, no bundled
+full CLI or Chromium, a tag-derived app version, and an installed-size gate.
+Official GUI releases no longer build a macOS Intel package; the separate CLI
+release still supports macOS Intel. See
 [`gui-ux-optimization.md`](gui-ux-optimization.md).
 
 ## Artifacts
 
 | Platform | Output under `gui/build/<os>-<arch>/` | How a person opens it |
 |---|---|---|
-| macOS | `Golder GUI.app`, `golder-gui-<version>-<arch>.dmg` | choose arm64 for Apple Silicon or amd64 for Intel, mount the DMG, drag to Applications, double-click |
+| macOS (Apple Silicon) | `Golder GUI.app`, `golder-gui-<version>-arm64.dmg` | mount the DMG, drag to Applications, double-click |
 | Windows | `Golder GUI.exe`, `golder-gui-setup-<version>-amd64.exe` | run the installer, then the Start-menu shortcut |
 | Linux | `golder-gui`, `.desktop`, `golder-gui-<version>-linux-<arch>.tar.gz` (with `install.sh`), `.deb`, `PKGBUILD` | `install.sh`, `apt install ./…deb`, or `makepkg -si` |
 

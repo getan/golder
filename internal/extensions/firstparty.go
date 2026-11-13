@@ -517,8 +517,8 @@ func LarkSourceConfig(opts LarkSourceOptions) (SourceConfig, error) {
 		SetupVariants: variants,
 		SetupOrigins:  setupOrigins,
 		Executables:   executables, Env: env,
-		ConfirmTools:   []string{"doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call"},
-		AggregateTools: []string{"cli_call"},
+		ConfirmTools:   []string{"doc_write", "drive_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "calendar_write", "task_write", "wiki_write", "file_transfer", "cli_call", "cli_raw"},
+		AggregateTools: []string{"cli_call", "cli_raw", "file_transfer"},
 	}, nil
 }
 

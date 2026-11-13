@@ -12,8 +12,14 @@
 - Preserve leading zeroes as text, and explicit number/date/percentage dtypes.
   Formula errors or pending calculation are not success. Preserve unrelated
   regions, styles and hidden data. Never claim a sampled read proves all rows.
-- `sheet_structure` create takes title; insert takes position (row number or
-  column letter) and count. No automatic clear, sheet deletion or rollback.
+- `sheet_read` can search cells. `sheet_write` supports replace and clear; clear
+  is irreversible. `sheet_structure` supports create, copy, rename, move, hide,
+  unhide, delete and insert. Delete requires an exact sheet_id from workbook
+  metadata, host authorization and a post-write workbook readback.
+- Use `dry_run=true` for an explicit preview; `verification=preview` and
+  `execution_state=not_executed` mean nothing was written. Never mistake it for
+  a completed deletion. Do not delete or modify an original when the request
+  specifies a copy; first confirm the copy's returned new workbook token.
 
 ## Base
 

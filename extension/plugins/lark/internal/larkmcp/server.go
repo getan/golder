@@ -59,7 +59,7 @@ func (p *Plugin) Server(version string) *mcp.Server {
 	}
 	add("status", "Diagnose Lark and Project separately: install/configuration/user authorization, not MCP readiness. Explicit call may verify the server; never auto-installs or logs in.", json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"verify":{"type":"boolean","default":true}}}`))
 	add("cli_help", "Read help for any Lark/Project business or raw command. It cannot query auth/config/install commands; skill CLI examples are not MCP capabilities. Use Golder's Lark/Project authorization/settings entry for login or incremental scopes. No service or command allowlist is maintained.", tailSchema(false))
-	add("cli_call", "Execute an approved Lark/Project business shortcut in the same private state/sandbox. Native fixed CLI only; no shell, auth/config/install, raw API or local-file inputs. Omit --as, --format and confirmation flags; the adapter controls identity/format/confirmation. Requires exact-call host policy authorization.", tailSchema(true))
+	add("cli_call", "Fallback for operations not supported by a named Lark/Project tool: use the matching named tool first. Execute an approved business shortcut in the same private state/sandbox. Native fixed CLI only; no shell, auth/config/install, raw API or local-file inputs. Omit --as, --format and confirmation flags; the adapter controls identity/format/confirmation. Requires exact-call host policy authorization.", tailSchema(true))
 	add("cli_raw", "Execute an approved raw Lark/Project API command when no business shortcut exists. Native fixed CLI only; no shell, auth/config/install or local-file inputs. Omit --as, --format and confirmation flags; set high_risk=true only for commands whose CLI help marks high-risk, so the adapter can add --yes after host approval. Requires exact-call host policy authorization.", tailSchema(true))
 	return s
 }
@@ -137,7 +137,7 @@ func (p *Plugin) Call(ctx context.Context, name string, raw json.RawMessage) Res
 		}
 	}
 	for _, key := range operation.Required {
-		if value, present := in.Options[key]; !present || value == nil || value == "" {
+		if value, present := in.Options[key]; !present || value == nil || (value == "" && !(d.Name == "sheet_write" && in.Operation == "replace" && key == "replacement")) {
 			return failure(d.Service, "MISSING_ARGUMENT", key+" is required", "Resolve the exact target and required parameters")
 		}
 	}
@@ -176,10 +176,37 @@ func (p *Plugin) run(ctx context.Context, service string, args []string, write b
 	}
 	out, err := p.Runner.Run(ctx, service, args, nil)
 	r := p.withCLIDiagnostics(normalize(service, out, err, write), args, out, err)
-	if r.OK && write {
+	if r.OK && service == "lark" && larkDryRun(args) {
+		r.ExecutionState, r.Verification = "not_executed", "preview"
+	} else if r.OK && write {
 		r.ExecutionState, r.Verification = "submitted", "receipt_only"
 	}
 	return r
+}
+
+// Recognize only unambiguous true forms. A false or unrecognized flag value
+// must never be reported as a harmless preview of a potentially executed write.
+func larkDryRun(args []string) bool {
+	seen := false
+	for i, arg := range args {
+		switch arg {
+		case "--dry-run=true":
+			if seen {
+				return false
+			}
+			seen = true
+		case "--dry-run":
+			if seen || (i+1 < len(args) && !strings.HasPrefix(args[i+1], "--")) {
+				return false
+			}
+			seen = true
+		default:
+			if strings.HasPrefix(arg, "--dry-run=") {
+				return false
+			}
+		}
+	}
+	return seen
 }
 
 // Base record commands default to NDJSON file mode in the CLI. The plugin needs
@@ -233,6 +260,37 @@ func buildArgs(command []string, opts map[string]any) ([]string, error) {
 
 func validateBusiness(name string, in input) error {
 	o := in.Options
+	if name == "drive_write" && in.Operation == "copy" {
+		url, _ := o["url"].(string)
+		token, _ := o["token"].(string)
+		if (strings.TrimSpace(url) == "") == (strings.TrimSpace(token) == "") {
+			return errors.New("provide exactly one source url or token")
+		}
+		typeName, _ := o["type"].(string)
+		if token != "" && !strings.Contains(token, "://") && strings.TrimSpace(typeName) == "" {
+			return errors.New("a bare source token requires the actual resource type")
+		}
+	}
+	if name == "calendar_write" && in.Operation == "rsvp" {
+		status, _ := o["rsvp_status"].(string)
+		if status != "accept" && status != "decline" && status != "tentative" {
+			return errors.New("rsvp_status must be accept, decline or tentative")
+		}
+	}
+	if name == "task_write" && in.Operation == "assign" {
+		add, _ := o["add"].(string)
+		remove, _ := o["remove"].(string)
+		if strings.TrimSpace(add) == "" && strings.TrimSpace(remove) == "" {
+			return errors.New("assign requires add and/or remove assignee IDs")
+		}
+	}
+	if name == "wiki_write" && in.Operation == "node_copy" {
+		space, _ := o["target_space_id"].(string)
+		parent, _ := o["target_parent_node_token"].(string)
+		if (strings.TrimSpace(space) == "") == (strings.TrimSpace(parent) == "") {
+			return errors.New("node copy requires exactly one of target_space_id or target_parent_node_token")
+		}
+	}
 	if name == "calendar_write" && in.Operation == "update" {
 		if (o["start"] == nil) != (o["end"] == nil) {
 			return errors.New("calendar update requires start and end together")
@@ -247,8 +305,20 @@ func validateBusiness(name string, in input) error {
 		if (o["url"] == nil) == (o["spreadsheet_token"] == nil) {
 			return errors.New("provide exactly one of url or spreadsheet_token")
 		}
-		if (name == "sheet_read" && in.Operation != "workbook" || name == "sheet_write" && in.Operation == "cells" || name == "sheet_structure" && in.Operation == "insert") && o["sheet_id"] == nil && o["sheet_name"] == nil {
+		if (name == "sheet_read" && in.Operation != "workbook" || name == "sheet_write" && in.Operation != "table" || name == "sheet_structure" && in.Operation != "create") && o["sheet_id"] == nil && o["sheet_name"] == nil {
 			return errors.New("resolve a real sheet_id or sheet_name first")
+		}
+		if o["sheet_id"] != nil && o["sheet_name"] != nil {
+			return errors.New("provide only one of sheet_id or sheet_name")
+		}
+		if name == "sheet_structure" && in.Operation == "delete" {
+			id, _ := o["sheet_id"].(string)
+			if strings.TrimSpace(id) == "" {
+				return errors.New("delete requires the exact sheet_id from workbook metadata")
+			}
+		}
+		if err := validateSheetOptions(name, in); err != nil {
+			return err
 		}
 	}
 	if name == "message_send" || name == "chat_history" {

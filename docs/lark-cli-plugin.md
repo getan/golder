@@ -9,7 +9,7 @@ Related: [extensions-mcp.md](extensions-mcp.md), [extensions-state-setup.md](ext
 
 代码集中在 [`extension/plugins/lark/`](../extension/plugins/lark/README.md)，入口为
 `extension/plugins/lark/cmd/golder-lark`；宿主通用能力仍在现有 extensions/seatbelt/gate/UI 包。
-已提供 30 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
+已提供 31 个 MCP 工具、可选随包 Skill、私有状态、命名 setup variant、依赖指纹、
 精确人类确认、通用长尾和文件传输入口。实际配置以 `golder-lark print-config` 生成结果为准。
 
 根据用户已有应用的情况，首版只复用应用，以 `--app-secret-stdin` 配置，不执行 `--new`。
@@ -241,7 +241,8 @@ access token 到期后由各 CLI 在服务商支持的范围内刷新；refresh 
 | `ticket_transition` | 合法状态/节点流转，不是审批同意/拒绝 | `meegle workflow transition-state/transition` |
 | `sheet_read` | 工作簿信息、区域值、公式/样式 | `sheets +workbook-info/+csv-get/+cells-get` |
 | `sheet_write` | typed 写值、追加、公式；保留未修改区域 | `sheets +table-put/+cells-set` |
-| `sheet_structure` | 新建子表、显式插入行列；不开放删表/回滚 | `sheets +sheet-create/+dim-insert` |
+| `sheet_structure` | 创建、复制、重命名、移动、隐藏、取消隐藏、删除子表及插入行列；删除需精确 ID、授权和回读 | `sheets +sheet-*` / `+dim-insert` |
+| `drive_write` | 复制文档/电子表格/Base/Wiki 资源，创建文件夹 | `drive +copy/+create-folder` |
 | `base_resolve` | URL 或标题定位 Base | `base +url-resolve/+title-resolve` |
 | `base_schema` | 表和字段类型 | `base +table-list/+field-list` |
 | `base_record_search` | 按关键词、结构化 filter、ID 查询投影 | `base +record-search/+record-list/+record-get` |
@@ -335,7 +336,7 @@ meegle workitem update --project-key PROJ --work-item-id 12345 \
 
 | 内容 | 当前宿主行为 | Lark 设计 |
 |---|---|---|
-| 工具名称、简短 description、input schema | `InstallExtensions/SyncTools` 在轮次边界把全部可用扩展工具加入 `ac.Tools`，随模型请求声明 | 高频工具和通用入口保持精简，但当前 30 个 Schema 不是命中飞书意图后才出现 |
+| 工具名称、简短 description、input schema | `InstallExtensions/SyncTools` 在轮次边界把全部可用扩展工具加入 `ac.Tools`，随模型请求声明 | 高频工具和通用入口保持精简，但当前 31 个 Schema 不是命中飞书意图后才出现 |
 | Skill 索引 | `FormatSkillsForPrompt` 只写 name/description/location | 一条 lark 工作流索引，描述飞书文档、消息、项目工单、Sheets、Base |
 | Skill 正文与分域参考 | 模型通过 `read` 按需加载；非硬编码关键词路由 | 命中任务后读 SKILL.md，进入项目/表格/长尾阶段才读对应 reference |
 | 全量 CLI 帮助/复杂参数 | 不预注入 | `cli_help` 按当前命令返回，避免把上游几百条手册塞进上下文 |

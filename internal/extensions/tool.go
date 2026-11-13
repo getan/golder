@@ -53,7 +53,7 @@ func (t *tool) isLarkSource(s *source) bool {
 
 func (t *tool) larkBuiltinWrite() bool {
 	switch t.spec.Name {
-	case "doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call":
+	case "doc_write", "drive_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "calendar_write", "task_write", "wiki_write", "file_transfer", "cli_call", "cli_raw":
 		return true
 	default:
 		return false

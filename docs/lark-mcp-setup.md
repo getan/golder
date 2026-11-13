@@ -249,7 +249,7 @@ the model chooses a Lark tool when the task needs one.
 | Category | Behaviour |
 |---|---|
 | read tools | may run under the session's approval mode |
-| `confirm_tools` (`doc_write`, `message_send`, `ticket_*`, `sheet_*`, `base_record_write`, `cli_call`) | exact-call host policy: reviewer decision in `auto`, person confirmation in `ask`, denied in `read-only` |
+| write and aggregate tools (`doc_write`, `drive_write`, `message_send`, `ticket_*`, `sheet_*`, `base_record_write`, `calendar_write`, `task_write`, `wiki_write`, `file_transfer`, `cli_call`, `cli_raw`) | exact-call host policy: reviewer decision in `auto`, person confirmation in `ask`, denied in `read-only` |
 | OAuth | one-time `golder mcp setup lark`; not repeated per call |
 
 ## Security invariants

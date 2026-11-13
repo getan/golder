@@ -20,8 +20,16 @@ func (p *Plugin) lark(ctx context.Context, d definition, in input, args []string
 	if strings.HasPrefix(d.Name, "sheet_") {
 		target = subset(o, "url", "spreadsheet_token")
 		preflight, _ := buildArgs([]string{"sheets", "+workbook-info"}, target)
-		if before := p.run(ctx, "lark", preflight, false); !before.OK {
+		before := p.run(ctx, "lark", preflight, false)
+		if !before.OK {
 			return before
+		}
+		if d.Name == "sheet_structure" && in.Operation == "delete" {
+			id, _ := o["sheet_id"].(string)
+			found, known := workbookContainsSheet(before.Data, id)
+			if !known || !found {
+				return failure("lark", "SHEET_NOT_RESOLVED", "The exact sheet ID was not found in the selected workbook", "Inspect workbook metadata and confirm the exact workbook and sheet before deleting")
+			}
 		}
 		if d.Name == "sheet_write" && in.Operation == "table" {
 			if err := validateTableWrite(o["sheets"]); err != nil {
@@ -56,13 +64,31 @@ func (p *Plugin) lark(ctx context.Context, d definition, in input, args []string
 			}
 		}
 	}
-	if in.Operation == "delete" && d.Name == "calendar_write" || in.Operation == "node_delete" && d.Name == "wiki_write" {
+	if in.Operation == "delete" && (d.Name == "calendar_write" || d.Name == "sheet_structure") || in.Operation == "node_delete" && d.Name == "wiki_write" || in.Operation == "clear" && d.Name == "sheet_write" {
 		// The CLI marks these high-risk writes with --yes. Exact-call host
 		// authorization has already been checked before this point.
 		args = append(args, "--yes")
 	}
 	result := p.run(ctx, "lark", args, true)
 	if !result.OK {
+		return result
+	}
+	if result.Verification == "preview" {
+		return result
+	}
+	if d.Name == "sheet_structure" && in.Operation == "delete" {
+		readArgs, _ := buildArgs([]string{"sheets", "+workbook-info"}, target)
+		readback := p.run(ctx, "lark", readArgs, false)
+		result = withReadback(result, readback)
+		if readback.OK {
+			id, _ := o["sheet_id"].(string)
+			found, known := workbookContainsSheet(readback.Data, id)
+			if known && !found {
+				result.Verification = "verified_absent"
+			} else {
+				result.Partial, result.Verification = true, "unverified"
+			}
+		}
 		return result
 	}
 	if d.Name == "doc_write" && in.Operation == "create" {

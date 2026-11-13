@@ -19,7 +19,7 @@ import (
 
 func TestLarkPolicyCoversAllConfiguredOperations(t *testing.T) {
 	lark := SourceRef{Kind: "mcp", ID: "lark"}
-	for _, name := range []string{"doc_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "cli_call"} {
+	for _, name := range []string{"doc_write", "drive_write", "message_send", "ticket_update", "ticket_transition", "sheet_write", "sheet_structure", "base_record_write", "calendar_write", "task_write", "wiki_write", "file_transfer", "cli_call", "cli_raw"} {
 		t.Run(name, func(t *testing.T) {
 			tool := &tool{ref: lark, spec: extension.ToolSpec{Name: name}}
 			operator, policy := tool.approvalFor(&source{cfg: SourceConfig{}})

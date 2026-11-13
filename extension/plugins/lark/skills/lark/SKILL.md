@@ -7,6 +7,10 @@ description: Use the Lark MCP plugin for Feishu documents/Wiki, chats/messages, 
 
 Use available `mcp__lark__*` tools; actual source IDs may give a different prefix.
 Read only the relevant reference below, not the entire upstream CLI manual.
+Prefer a named domain tool and its declared operation whenever it covers the
+task. Use `cli_help` and `cli_call` only if the named tools do not support the
+operation or its needed parameters; do not switch to CLI to bypass a denied
+policy, a validation failure, or missing permissions.
 
 - Documents and messages: `references/collaboration.md`.
 - Project requirements/bugs/tasks: `references/project.md`.
@@ -17,7 +21,9 @@ Tools use `{operation, options}`; option names use underscores. Options are type
 and map to the installed CLI's documented flags. Check tool schemas, never guess
 new flags. For Project `ticket_search`, the optional assignee is only `"me"`,
 not a user ID, and it is not a comprehensive search for everyone related to an
-item. If a business operation is unavailable, inspect any business or raw CLI path with `cli_help`; it cannot query auth/config/install. Use `cli_raw` for raw resource commands and `file_transfer` for explicit workspace files. Skill CLI examples are not MCP capabilities.
+item. If a business operation is unavailable, inspect the CLI path with `cli_help`;
+it cannot query auth/config/install. Use `cli_raw` for raw resource commands and
+`file_transfer` for explicit workspace files. Skill examples are not MCP tools.
 
 ## Identity, authorization and safety
 

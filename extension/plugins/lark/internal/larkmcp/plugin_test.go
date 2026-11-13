@@ -50,7 +50,7 @@ func TestCatalogInitializationIsOfflineAndStable(t *testing.T) {
 	}
 	defer cs.Close()
 	tools, err := cs.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 30 || len(f.calls) != 0 {
+	if err != nil || len(tools.Tools) != 31 || len(f.calls) != 0 {
 		t.Fatalf("catalog=%v, calls=%v, err=%v", tools, f.calls, err)
 	}
 	for _, d := range definitions() {
