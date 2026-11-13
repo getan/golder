@@ -27,6 +27,7 @@ type browserContinuationUI struct {
 	pressWidth          int
 	focus               int
 	focusID             string
+	hiddenID            string
 }
 
 type browserContinuationTick struct{}
@@ -117,8 +118,11 @@ func (m Model) browserConfirmation(text string) (tea.Model, tea.Cmd, bool) {
 		id := ""
 		if len(fields) == 3 {
 			id = fields[2]
-		} else if len(fields) == 2 && len(m.browserUI.views) == 1 {
-			id = m.browserUI.views[0].ID
+		} else if len(fields) == 2 {
+			views := m.browserService().Snapshot()
+			if len(views) == 1 {
+				id = views[0].ID
+			}
 		}
 		if id == "" {
 			m.transcript.addSystem("Choose the exact browser recovery button or supply its request ID.")
@@ -166,7 +170,15 @@ func (m Model) browserCardLines(width int) []string {
 		if m.browserUI.focus == 2*i+2 {
 			second = '>'
 		}
-		buttons := fmt.Sprintf("%c %-19s %c [Keep paused]", first, label, second)
+		left := fmt.Sprintf("%c %-19s", first, label)
+		right := fmt.Sprintf("%c [Keep paused]", second)
+		if m.browserUI.focus == 2*i+1 || (m.browserUI.focus == 0 && i == 0) {
+			left = m.theme.Accent.Bold(true).Render(left)
+		}
+		if m.browserUI.focus == 2*i+2 {
+			right = m.theme.Accent.Bold(true).Render(right)
+		}
+		buttons := left + " " + right
 		if m.browserUI.busy == v.ID || v.Busy {
 			buttons = "Resuming automation…"
 		} else if !v.Supported {
@@ -179,9 +191,9 @@ func (m Model) browserCardLines(width int) []string {
 		lines = append(lines, TruncateToWidth(buttons, width))
 	}
 	if len(m.browserUI.views) > 0 {
-		lines = append(lines, TruncateToWidth("Complete the required step, then click Resume or reply 继续 / 已授权. Tab focuses buttons; /browser continue is the mouse-free alternative.", width))
+		lines = append(lines, TruncateToWidth("Complete the required step, then click Resume or reply 继续 / 已授权. Tab or ↑↓ selects; Enter confirms.", width))
 	}
-	if m.browserUI.note != "" {
+	if len(m.browserUI.views) > 0 && m.browserUI.note != "" {
 		lines = append(lines, TruncateToWidth(m.browserUI.note, width))
 	}
 	return lines
@@ -216,7 +228,12 @@ func (m Model) browserContinuationEvent(msg tea.Msg) (tea.Model, tea.Cmd, bool) 
 			if m.browserUI.service != nil && m.browserUI.service != msg.service {
 				m.browserUI = browserContinuationUI{}
 			}
-			m.browserUI.service, m.browserUI.views = msg.service, msg.views
+			m.browserUI.service, m.browserUI.views = msg.service, nil
+			for _, view := range msg.views {
+				if view.ID != m.browserUI.hiddenID {
+					m.browserUI.views = append(m.browserUI.views, view)
+				}
+			}
 			for _, ready := range msg.ready {
 				if ready.BrowserID == m.browserUI.waitBrowser && ready.Generation == m.browserUI.waitGeneration && m.browserUI.waitSession == msg.service.Session() {
 					m.browserUI.ready = true
@@ -239,15 +256,22 @@ func (m Model) browserContinuationEvent(msg tea.Msg) (tea.Model, tea.Cmd, bool) 
 	case browserContinuationDone:
 		if msg.service == m.browserService() {
 			m.browserUI.busy = ""
-			m.browserUI.note = "Automation resumed."
+			m.browserUI.note = ""
 			if msg.refresh {
 				m.browserUI.note = "Confirmation refreshed. Choose Resume automation to continue."
 			}
-			if msg.keep {
-				m.browserUI.note = "Automation remains paused."
-			}
 			if msg.err != nil {
 				m.browserUI.note = "Resume not confirmed: " + msg.err.Error()
+			} else if !msg.refresh {
+				m.browserUI.hiddenID = msg.id
+				visible := m.browserUI.views[:0]
+				for _, view := range m.browserUI.views {
+					if view.ID != msg.id {
+						visible = append(visible, view)
+					}
+				}
+				m.browserUI.views = visible
+				m.browserUI.focus, m.browserUI.focusID = 0, ""
 			}
 			m.relayout()
 		}
@@ -279,12 +303,26 @@ func (m Model) browserContinuationEvent(msg tea.Msg) (tea.Model, tea.Cmd, bool) 
 			}
 			return m, nil, true
 		}
+		if m.input.Value() == "" && (msg.String() == "up" || msg.String() == "down") {
+			count := len(m.browserUI.views) * 2
+			if m.browserUI.focus == 0 {
+				m.browserUI.focus = 1
+			} else if msg.String() == "down" {
+				m.browserUI.focus = m.browserUI.focus%count + 1
+			} else {
+				m.browserUI.focus = (m.browserUI.focus-2+count)%count + 1
+			}
+			m.browserUI.focusID = m.browserUI.views[(m.browserUI.focus-1)/2].ID
+			return m, nil, true
+		}
 		if m.input.Value() != "" {
 			m.browserUI.focus = 0
 		}
 		if m.browserUI.focus > 0 && (msg.String() == "enter" || msg.String() == "space") {
 			i := (m.browserUI.focus - 1) / 2
-			if i < len(m.browserUI.views) && m.browserUI.views[i].ID == m.browserUI.focusID {
+			if i < len(m.browserUI.views) && m.browserUI.views[i].ID == m.browserUI.focusID &&
+				m.browserUI.views[i].Supported && (m.browserUI.views[i].Error == "" || m.browserUI.views[i].NeedsRefresh) &&
+				!m.browserUI.views[i].OutcomeUnknown && !m.browserUI.views[i].Busy && m.browserUI.views[i].RetryAfterMS == 0 && m.browserUI.busy == "" {
 				next, cmd := m.continueBrowser(m.browserUI.views[i].ID, m.browserUI.focus%2 == 0)
 				return next, cmd, true
 			}

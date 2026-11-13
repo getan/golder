@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -91,6 +92,60 @@ func TestRecoveryCardRejectsResizeStaleFocusAndUnshownText(t *testing.T) {
 	m.session.perms.Set(permissions.ReadOnly)
 	if _, cmd := m.continueBrowser("a-new-request", false); cmd != nil {
 		t.Fatal("read-only mode issued recovery")
+	}
+}
+
+func TestRecoveryArrowsAndCompletedDecisionClearCard(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		m, h := recoveryModel(t)
+		m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		if m.browserUI.focus != 1 || m.browserUI.focusID == "" {
+			t.Fatal("down did not focus the first choice")
+		}
+		if keep {
+			m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+			if m.browserUI.focus != 2 {
+				t.Fatal("down did not select keep paused")
+			}
+			m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+			m = apply(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		}
+		next, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = next.(Model)
+		if cmd == nil {
+			t.Fatal("focused choice did not issue its decision")
+		}
+		m = apply(t, m, cmd())
+		if len(m.browserCardLines(m.width)) != 0 {
+			t.Fatalf("completed decision left persistent card: %v", m.browserCardLines(m.width))
+		}
+		if keep && h.Calls() != 0 {
+			t.Fatal("keep paused resumed the browser")
+		}
+		if keep {
+			views := m.browserService().Snapshot()
+			m = apply(t, m, browserContinuationPoll{service: m.browserService(), views: views})
+			if len(m.browserCardLines(m.width)) != 0 {
+				t.Fatal("poll restored dismissed keep-paused card")
+			}
+			if _, cmd, handled := m.browserConfirmation("/browser continue"); !handled || cmd == nil {
+				t.Fatal("kept-paused browser cannot be explicitly resumed later")
+			}
+		} else if h.Calls() != 1 {
+			t.Fatalf("resume was dispatched %d times", h.Calls())
+		}
+	}
+}
+
+func TestRecoveryDoesNotStealArrowKeysFromDraft(t *testing.T) {
+	m, _ := recoveryModel(t)
+	m.input.SetValue("unfinished")
+	next, _, handled := m.browserContinuationEvent(tea.KeyPressMsg{Code: tea.KeyUp})
+	if handled || next.(Model).input.Value() != "unfinished" {
+		t.Fatal("recovery card intercepted a draft's arrow key")
+	}
+	if !strings.Contains(strings.Join(m.browserCardLines(m.width), "\n"), "↑↓") {
+		t.Fatal("card does not explain arrow navigation")
 	}
 }
 

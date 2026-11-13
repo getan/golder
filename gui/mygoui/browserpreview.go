@@ -37,6 +37,7 @@ type browserWindowState struct {
 	pendingManual    func(context.Context) error
 	frameTarget      browserctl.Target
 	continuationView func(*ui.Context)
+	frameFailures    int
 
 	frameW, frameH float32
 	viewW, viewH   float32
@@ -151,9 +152,6 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 			}
 		}
 		_, _, inputErr := surface.State()
-		if frameErr == nil {
-			frameErr = inputErr
-		}
 		win.Update(func() {
 			if ctx.Err() != nil || state.switching.Load() || state.viewSequence.Load() != sequence {
 				return
@@ -173,12 +171,7 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 					state.address = frame.URL
 				}
 			}
-			if frameErr != nil {
-				state.bitmap, state.frameW, state.frameH = nil, 0, 0
-				state.err = frameErr.Error()
-			} else {
-				state.err = ""
-			}
+			state.applyFrameResult(frameErr, inputErr)
 		})
 		select {
 		case <-ctx.Done():
@@ -186,6 +179,27 @@ func attachBrowserSurface(ctx context.Context, win *mygo.Window, state *browserW
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// A capture failure invalidates the displayed input target, even if the old
+// pixels still exist. Brief 500s during navigation are common; keep retrying
+// without a red error flash, but surface a persistent failure to the operator.
+func (state *browserWindowState) applyFrameResult(frameErr, inputErr error) {
+	if frameErr != nil {
+		state.bitmap, state.frameW, state.frameH = nil, 0, 0
+		state.frameFailures++
+		if strings.Contains(frameErr.Error(), "screenshot server returned 500") && state.frameFailures < 3 {
+			state.err = ""
+			return
+		}
+		state.err = "Browser preview unavailable: " + frameErr.Error()
+		return
+	}
+	state.frameFailures = 0
+	state.err = ""
+	if inputErr != nil {
+		state.err = inputErr.Error()
 	}
 }
 
