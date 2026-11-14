@@ -24,11 +24,11 @@ Approvals, credential redaction and OS sandboxing provide configurable safeguard
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/demo.gif" width="100%" alt="A real golder workspace session: the agent fixes code while tests run in a neighboring shell pane">
+    <img src="docs/assets/browser-backend-preview.gif" width="100%" alt="A real golder workspace session with an agent, a backend shell and a browser side by side">
   </a>
 </p>
 
-<p align="center"><sub>Real session: the agent reads and patches code while <code>go test</code> goes from failing to green. <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">Watch the full 37-second demo</a>.</sub></p>
+<p align="center"><sub>Real session: the agent develops and checks a backend while using the browser in the same workspace. <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">Watch the full 3:31 recording</a> (4× speed).</sub></p>
 
 If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub star</a> helps other developers find it.
 
@@ -145,8 +145,8 @@ workspace daemon (persistent, owns the panes)
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/demo-tools.png" alt="The split workspace: a patch diff card in the agent pane, a failing go test in the shell pane"></td>
-<td width="50%"><img src="docs/assets/demo-done.png" alt="The finish: the agent spells out each verification step, and the shell re-run is green"></td>
+<td width="50%"><img src="docs/assets/browser-backend-agent.jpg" alt="The agent works alongside a backend shell and browser in the same workspace"></td>
+<td width="50%"><img src="docs/assets/browser-backend-browser.jpg" alt="The agent inspects a browser page while the backend shell shows the build output"></td>
 </tr>
 </table>
 

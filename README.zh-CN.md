@@ -24,11 +24,11 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用，�
 
 <p align="center">
   <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/demo.gif" width="100%" alt="golder workspace 真实会话：agent 在一侧改代码，另一侧 shell 同步运行测试">
+    <img src="docs/assets/browser-backend-preview.gif" width="100%" alt="golder workspace 真实会话：agent、后端 shell 和浏览器并排工作">
   </a>
 </p>
 
-<p align="center"><sub>真实会话：agent 读码并打补丁，<code>go test</code> 从失败跑到全绿。<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">观看完整 37 秒演示</a>。</sub></p>
+<p align="center"><sub>真实会话：agent 在同一工作区中开发、验证后端，并操作浏览器。<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">观看完整录屏（3 分 31 秒）</a>，4 倍速播放。</sub></p>
 
 如果 golder 帮你省下一次环境折腾，点个 <a href="https://github.com/getan/golder">GitHub Star</a>，让更多开发者发现它。
 
@@ -151,8 +151,8 @@ workspace daemon（后台常驻，拥有 pane）
 
 <table>
 <tr>
-<td width="50%"><img src="docs/assets/demo-tools.png" alt="分屏工作区：左 pane 的补丁 diff 卡片，右 pane 里红着的 go test"></td>
-<td width="50%"><img src="docs/assets/demo-done.png" alt="收尾：agent 逐条给出验证结果，shell 里复跑全绿"></td>
+<td width="50%"><img src="docs/assets/browser-backend-agent.jpg" alt="同一工作区内并排展示 agent、后端 shell 与浏览器"></td>
+<td width="50%"><img src="docs/assets/browser-backend-browser.jpg" alt="agent 检查浏览器页面，后端 shell 显示构建结果"></td>
 </tr>
 </table>
 
