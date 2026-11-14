@@ -42,7 +42,7 @@ func TestBrowserSnapshotExpandedLongJSON(t *testing.T) {
 	if !strings.Contains(got, "END-MARKER") || strings.Contains(got, renderTruncated) {
 		t.Fatal("expanded snapshot silently clipped a long JSON line")
 	}
-	nodes := snapshotDetailNodes([]respNode{{text: strings.Repeat("a", renderMaxTextBytes+10)}})
+	nodes := boundedDetailNodes([]respNode{{text: strings.Repeat("a", renderMaxTextBytes+10)}})
 	if len(nodes) == 0 || nodes[len(nodes)-1].text != renderTruncated {
 		t.Fatal("oversized snapshot did not report the display budget")
 	}

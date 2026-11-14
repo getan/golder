@@ -54,7 +54,7 @@ func TestComputerSnapshotCardMouseAndKeyboard(t *testing.T) {
 
 func TestComputerNonSnapshotDoesNotUseSnapshotPreview(t *testing.T) {
 	card := toolCard{name: "computer", input: map[string]any{"action": "click"}}
-	if card.isSnapshot() {
+	if card.hasBoundedPreview() {
 		t.Fatal("non-snapshot action matched snapshot renderer")
 	}
 }

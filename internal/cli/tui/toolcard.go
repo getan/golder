@@ -279,8 +279,8 @@ func (c toolCard) render(theme Theme, width int) string {
 	if c.expanded {
 		return out + c.renderDetail(theme, width)
 	}
-	if c.isSnapshot() {
-		preview, hidden := c.snapshotPreview(theme, width)
+	if c.hasBoundedPreview() {
+		preview, hidden := c.boundedPreview(theme, width)
 		out += preview
 		if hidden {
 			out += "\n" + theme.System.Render(wrapBodyLine(bodyIndent, "… (ctrl+t or click to expand)", max(1, width-2)))
@@ -300,9 +300,18 @@ func (c toolCard) render(theme Theme, width int) string {
 	return out
 }
 
-func (c toolCard) isSnapshot() bool {
-	return (strings.EqualFold(c.name, "browser") || strings.EqualFold(c.name, "computer")) &&
-		strings.EqualFold(argString(c.input["action"]), "snapshot")
+func (c toolCard) hasBoundedPreview() bool {
+	action := strings.ToLower(argString(c.input["action"]))
+	if strings.EqualFold(c.name, "computer") {
+		return action == "snapshot"
+	}
+	if strings.EqualFold(c.name, "browser") {
+		switch action {
+		case "snapshot", "navigate", "network", "tab_select":
+			return true
+		}
+	}
+	return false
 }
 
 // renderNotes paints the gate verdicts attached to this card, one line each,
@@ -509,9 +518,9 @@ func (c toolCard) preview(theme Theme, width, n int) (string, int) {
 	return b.String(), c.totalBodyLines() - shown
 }
 
-// Snapshot results can contain a huge JSON line. Limit physical terminal rows,
-// not logical response nodes, without changing the stored result or other cards.
-func (c toolCard) snapshotPreview(theme Theme, width int) (string, bool) {
+// Browser and desktop results can contain a huge JSON line. Limit physical
+// terminal rows, not logical response nodes, without changing the stored result.
+func (c toolCard) boundedPreview(theme Theme, width int) (string, bool) {
 	var b strings.Builder
 	shown := 0
 	for i, node := range c.response {
@@ -535,10 +544,10 @@ func (c toolCard) snapshotPreview(theme Theme, width int) (string, bool) {
 	return b.String(), false
 }
 
-// Expanded snapshots are commonly a single JSON line. Split it into bounded
+// Expanded results are commonly a single JSON line. Split it into bounded
 // render rows rather than silently clipping the line at 4 KiB. Keep the normal
 // whole-block rendering budget; the original result remains in the session.
-func snapshotDetailNodes(nodes []respNode) []respNode {
+func boundedDetailNodes(nodes []respNode) []respNode {
 	var out []respNode
 	remaining := renderMaxTextBytes
 	for _, node := range nodes {
@@ -699,8 +708,8 @@ func (c toolCard) renderDetail(theme Theme, width int) string {
 		wroteOutput = true
 	} else {
 		response := c.response
-		if c.isSnapshot() {
-			response = snapshotDetailNodes(response)
+		if c.hasBoundedPreview() {
+			response = boundedDetailNodes(response)
 		}
 		for i, n := range response {
 			indent := strings.Repeat("  ", n.depth)
