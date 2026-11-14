@@ -8,8 +8,9 @@ package agenttool
 //
 // Read-only actions are safe to run alone: snapshot, find, get, is, wait,
 // dialog.status, console, errors, network, screenshot. Control actions put
-// input into the page and are left to the reviewer. eval and upload are not
-// part of the schema at all.
+// input into the page and are left to the reviewer, including eval (arbitrary
+// script in the tab) and upload (workspace files handed to a file input; the
+// paths are bounded and resolved before dispatch).
 //
 // open is the setup step: it starts a browser with the profile and socket it
 // needs, so nobody has to remember the three-command invocation.
@@ -230,7 +231,7 @@ const browserReadSchema = `{
 const browserControlSchema = `{
   "type":"object","additionalProperties":false,"required":["action"],
   "properties":{
-    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume","quit"]},
+    "action":{"type":"string","enum":["open","list","attach","snapshot","find","get","is","wait","dialog","console","errors","network","screenshot","navigate","click","dblclick","hover","focus","check","uncheck","fill","type","select","press","insert","scroll","scroll_into_view","tab_new","tab_close","tab_select","dialog_accept","dialog_dismiss","status","pause","resume","quit","eval","upload"]},
     "host_control":{"type":"boolean","description":"Request one-call access to a browser not created by this agent. Attaching does not grant later control."},
     "new_instance":{"type":"boolean","description":"For open: create a fresh controlled browser rather than adopting an existing instance. Chromium permits only one live browser per persistent profile."},
     "profile":{"type":"string","pattern":"^[a-z][a-z0-9_-]{0,63}$","description":"For open only: use a separate named project-scoped profile. Omit for the persistent project-shared default; other names need exact first-use confirmation. Never a personal Chrome profile or filesystem path."},
@@ -271,53 +272,57 @@ const browserControlSchema = `{
     "delta_x":{"type":"number","description":"For scroll: horizontal pixels."},
     "delta_y":{"type":"number","description":"For scroll: vertical pixels."},
     "prompt_text":{"type":"string","description":"For dialog_accept: text to type into a prompt."},
-    "new_tab":{"type":"boolean","description":"For tab_new: open a tab instead of selecting."}
+    "new_tab":{"type":"boolean","description":"For tab_new: open a tab instead of selecting."},
+    "script":{"type":"string","description":"For eval: JavaScript evaluated in the selected tab."},
+    "files":{"type":"array","items":{"type":"string"},"minItems":1,"description":"For upload: workspace-relative file paths."}
   }
 }`
 
 type browserArgs struct {
-	HostControl     bool    `json:"host_control,omitempty"`
-	NewInstance     bool    `json:"new_instance,omitempty"`
-	Profile         string  `json:"profile,omitempty"`
-	PauseGeneration uint64  `json:"pause_generation,omitempty"`
-	InstanceEpoch   string  `json:"instance_epoch,omitempty"`
-	ContinuationID  string  `json:"continuation_id,omitempty"`
-	Reason          string  `json:"reason,omitempty"`
-	Justification   string  `json:"justification,omitempty"`
-	PageURL         string  `json:"page_url,omitempty"`
-	Action          string  `json:"action"`
-	Browser         string  `json:"browser,omitempty"`
-	Socket          string  `json:"socket,omitempty"`
-	Tab             string  `json:"tab,omitempty"`
-	TargetID        string  `json:"target_id,omitempty"`
-	Interactive     bool    `json:"interactive,omitempty"`
-	Compact         bool    `json:"compact,omitempty"`
-	MaxNodes        int     `json:"max_nodes,omitempty"`
-	Depth           *int    `json:"depth,omitempty"`
-	IncludeText     bool    `json:"include_text,omitempty"`
-	Selector        string  `json:"selector,omitempty"`
-	Ref             string  `json:"ref,omitempty"`
-	Role            string  `json:"role,omitempty"`
-	Name            string  `json:"name,omitempty"`
-	Text            string  `json:"text,omitempty"`
-	Exact           bool    `json:"exact,omitempty"`
-	Kind            string  `json:"kind,omitempty"`
-	Attr            string  `json:"attr,omitempty"`
-	Visible         string  `json:"visible,omitempty"`
-	State           string  `json:"state,omitempty"`
-	URLPattern      string  `json:"url_pattern,omitempty"`
-	TimeoutMS       int     `json:"timeout_ms,omitempty"`
-	Clear           bool    `json:"clear,omitempty"`
-	Format          string  `json:"format,omitempty"`
-	FullPage        bool    `json:"full_page,omitempty"`
-	Out             string  `json:"out,omitempty"`
-	URL             string  `json:"url,omitempty"`
-	Key             string  `json:"key,omitempty"`
-	Value           string  `json:"value,omitempty"`
-	DeltaX          float64 `json:"delta_x,omitempty"`
-	DeltaY          float64 `json:"delta_y,omitempty"`
-	PromptText      string  `json:"prompt_text,omitempty"`
-	NewTab          bool    `json:"new_tab,omitempty"`
+	HostControl     bool     `json:"host_control,omitempty"`
+	NewInstance     bool     `json:"new_instance,omitempty"`
+	Profile         string   `json:"profile,omitempty"`
+	PauseGeneration uint64   `json:"pause_generation,omitempty"`
+	InstanceEpoch   string   `json:"instance_epoch,omitempty"`
+	ContinuationID  string   `json:"continuation_id,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
+	Justification   string   `json:"justification,omitempty"`
+	PageURL         string   `json:"page_url,omitempty"`
+	Action          string   `json:"action"`
+	Browser         string   `json:"browser,omitempty"`
+	Socket          string   `json:"socket,omitempty"`
+	Tab             string   `json:"tab,omitempty"`
+	TargetID        string   `json:"target_id,omitempty"`
+	Interactive     bool     `json:"interactive,omitempty"`
+	Compact         bool     `json:"compact,omitempty"`
+	MaxNodes        int      `json:"max_nodes,omitempty"`
+	Depth           *int     `json:"depth,omitempty"`
+	IncludeText     bool     `json:"include_text,omitempty"`
+	Selector        string   `json:"selector,omitempty"`
+	Ref             string   `json:"ref,omitempty"`
+	Role            string   `json:"role,omitempty"`
+	Name            string   `json:"name,omitempty"`
+	Text            string   `json:"text,omitempty"`
+	Exact           bool     `json:"exact,omitempty"`
+	Kind            string   `json:"kind,omitempty"`
+	Attr            string   `json:"attr,omitempty"`
+	Visible         string   `json:"visible,omitempty"`
+	State           string   `json:"state,omitempty"`
+	URLPattern      string   `json:"url_pattern,omitempty"`
+	TimeoutMS       int      `json:"timeout_ms,omitempty"`
+	Clear           bool     `json:"clear,omitempty"`
+	Format          string   `json:"format,omitempty"`
+	FullPage        bool     `json:"full_page,omitempty"`
+	Out             string   `json:"out,omitempty"`
+	URL             string   `json:"url,omitempty"`
+	Key             string   `json:"key,omitempty"`
+	Value           string   `json:"value,omitempty"`
+	DeltaX          float64  `json:"delta_x,omitempty"`
+	DeltaY          float64  `json:"delta_y,omitempty"`
+	PromptText      string   `json:"prompt_text,omitempty"`
+	NewTab          bool     `json:"new_tab,omitempty"`
+	Script          string   `json:"script,omitempty"`
+	Files           []string `json:"files,omitempty"`
 }
 
 func (t *BrowserTool) Schema() json.RawMessage {
@@ -616,6 +621,13 @@ func (t *BrowserTool) Execute(ctx context.Context, callID string, raw json.RawMe
 	}
 	if a.Action == "tab_select" || a.Action == "tab_close" {
 		params["tabId"] = target.TabID
+	}
+	if a.Action == "upload" {
+		files, resolveErr := resolveBrowserUploadFiles(t.cwd, a.Files)
+		if resolveErr != nil {
+			return browserError(resolveErr), nil
+		}
+		params["files"] = files
 	}
 	if err := t.verifyReviewedLocator(ctx, c, a, raw, params); err != nil {
 		return browserActionError(a.Action, err), nil
@@ -1067,6 +1079,21 @@ func browserActionParams(a browserArgs) (string, map[string]any, error) {
 			p["deltaY"] = a.DeltaY
 		}
 		return "scroll", p, nil
+	case "eval":
+		if strings.TrimSpace(a.Script) == "" {
+			return "", nil, errors.New("eval needs script")
+		}
+		return "eval", map[string]any{"script": a.Script}, nil
+	case "upload":
+		p := locator()
+		if len(p) == 0 {
+			return "", nil, errors.New("upload needs selector, ref, role, name or text")
+		}
+		if len(a.Files) == 0 {
+			return "", nil, errors.New("upload needs files")
+		}
+		p["files"] = a.Files
+		return "upload", p, nil
 	case "tab_new":
 		p := map[string]any{}
 		if url := strings.TrimSpace(a.URL); url != "" {

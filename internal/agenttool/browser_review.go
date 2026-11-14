@@ -52,7 +52,7 @@ type browserReviewFacts struct {
 
 func browserLocatorAction(action string) bool {
 	switch action {
-	case "click", "dblclick", "hover", "focus", "check", "uncheck", "scroll_into_view", "fill", "type", "select":
+	case "click", "dblclick", "hover", "focus", "check", "uncheck", "scroll_into_view", "fill", "type", "select", "upload":
 		return true
 	}
 	return false

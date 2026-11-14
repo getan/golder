@@ -140,11 +140,15 @@ sorts their actions into fixed tiers:
 | Tool | Local allow | Reviewer decides |
 |---|---|---|
 | `tuios` | `list`, `capture`, `wait`, an empty `new` | `run` (graded as bash), `send`, `press`, `screenshot`, `new` with argv, `focus`/`move`/`resize`/`rename`/`minimize` (confirm), `close` |
-| `browser` | `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot` | `open`, `attach`, `navigate`, `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select`, `press`, `insert`, `scroll`, `scroll_into_view`, `tab_*`, `dialog_accept`/`dialog_dismiss` |
+| `browser` | `list`, `snapshot`, `find`, `get`, `is`, `wait`, `dialog`, `console`, `errors`, `network`, `screenshot` | `open`, `attach`, `navigate`, `click`, `dblclick`, `hover`, `focus`, `check`, `uncheck`, `fill`, `type`, `select`, `press`, `insert`, `eval`, `upload`, `scroll`, `scroll_into_view`, `tab_*`, `dialog_accept`/`dialog_dismiss` |
 | `workspace` | `list`, `snapshot` | `create`, `focus`, `close` |
 
-`browser`'s `eval` and `upload` are not in the schema at all and are denied if a
-call carries them. Sub-agents get the read shape of each tool:
+`browser`'s `eval` and `upload` are real control actions: both reach the
+contextual reviewer, and auto mode settles them on the same local interactive
+path as the other bound actions. `eval` runs arbitrary script in the selected
+tab. `upload` accepts workspace-relative files only and refuses absolute paths,
+symlink escapes, directories and oversized files before dispatch. Sub-agents
+get the read shape of each tool:
 
 - `tuios`: `list`, `capture`, `wait`;
 - `browser`: the read actions above;

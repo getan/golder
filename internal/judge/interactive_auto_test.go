@@ -17,6 +17,22 @@ func TestAutoInteractiveFastPathRequiresConcreteBoundBuiltin(t *testing.T) {
 	if v, ok := autoInteractiveVerdict(ctx, ConsentOpts{}, permissions.Auto, call); !ok || v.Source != "auto-interactive" || !v.Network {
 		t.Fatalf("owned browser did not take local path: %+v %t", v, ok)
 	}
+	for _, extra := range []struct {
+		action string
+		args   string
+	}{
+		{"eval", `{"action":"eval","script":"document.title"}`},
+		{"upload", `{"action":"upload","files":["README.md"],"selector":"input[type=file]"}`},
+	} {
+		args := json.RawMessage(extra.args)
+		c := agentcore.AgentToolCall{Name: "browser", Arguments: args}
+		cctx := agentcore.WithToolCallID(context.Background(), "one")
+		cctx = agentcore.WithBuiltinReview(cctx, "browser", args)
+		cctx = agentcore.WithToolReviewEvidence(cctx, "browser", args, evidence)
+		if v, ok := autoInteractiveVerdict(cctx, ConsentOpts{}, permissions.Auto, c); !ok || v.Source != "auto-interactive" {
+			t.Fatalf("%s did not take the local path: %+v %t", extra.action, v, ok)
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		ctx  context.Context

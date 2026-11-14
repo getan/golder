@@ -29,7 +29,7 @@ func autoInteractiveVerdict(ctx context.Context, opts ConsentOpts, mode permissi
 	}
 	if name == "browser" {
 		switch args.Action {
-		case "open", "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "navigate", "click", "dblclick", "hover", "focus", "check", "uncheck", "fill", "type", "select", "press", "insert", "scroll", "scroll_into_view", "tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss", "status", "pause", "quit":
+		case "open", "list", "attach", "snapshot", "find", "get", "is", "wait", "dialog", "console", "errors", "network", "screenshot", "navigate", "click", "dblclick", "hover", "focus", "check", "uncheck", "fill", "type", "select", "press", "insert", "eval", "upload", "scroll", "scroll_into_view", "tab_new", "tab_close", "tab_select", "dialog_accept", "dialog_dismiss", "status", "pause", "quit":
 		default:
 			return Verdict{}, false
 		}

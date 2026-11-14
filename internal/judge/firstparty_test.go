@@ -163,18 +163,18 @@ func TestFirstPartyComputerRequestAndActions(t *testing.T) {
 	}
 }
 
-// eval and upload are outside the tool's schema; a call carrying one is denied
-// without spending a reviewer round trip.
-func TestFirstPartyBrowserEvalIsDenied(t *testing.T) {
+// eval and upload are real actions now: the fixed table hands them to the
+// contextual reviewer instead of denying them as schema escapes.
+func TestFirstPartyBrowserEvalAndUploadReachReviewer(t *testing.T) {
 	for _, action := range []string{"eval", "upload"} {
-		spy := &firstPartySpy{}
+		spy := &firstPartySpy{v: Verdict{Level: Allow, Source: "llm"}}
 		v := (FirstParty{Next: spy}).Classify(context.Background(), "browser",
 			json.RawMessage(fmt.Sprintf(`{"action":%q}`, action)))
-		if spy.tool != "" {
-			t.Errorf("%s reached the next grader", action)
+		if spy.tool != "browser" {
+			t.Errorf("%s did not reach the next grader", action)
 		}
-		if v.Level != Deny {
-			t.Errorf("%s = %+v, want deny", action, v)
+		if v.Level != Allow || v.Source != "llm" {
+			t.Errorf("%s = %+v, want the reviewer's verdict", action, v)
 		}
 	}
 }

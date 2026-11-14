@@ -173,10 +173,10 @@ func (f FirstParty) Classify(ctx context.Context, tool string, args json.RawMess
 			// table cannot.
 			return f.next(ctx, tool, args)
 		case "eval", "upload":
-			// Neither is in the tool schema. A call that carries one is either a
-			// mistake or an injection attempt, and neither is worth reviewing.
-			return Verdict{Level: Deny, Source: LocalSource, Confidence: 1, Risk: "high",
-				Reasons: []string{"browser eval/upload is not an available action"}}
+			// eval runs arbitrary script in the page and upload hands local file
+			// bytes to it. Both are real actions now, so the contextual reviewer
+			// grades the script or the files instead of a fixed table.
+			return f.next(ctx, tool, args)
 		}
 		return f.failClosed("unknown browser action")
 	case "computer_request":
