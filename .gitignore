@@ -81,3 +81,7 @@ graph.html
 # scripts and checkpoints referenced by docs (e.g. ssh_workspace_probe.py).
 # Never built and never published, so a checkout here must not look dirty.
 /.scratch/
+
+# Local Android device experiments may contain device identifiers, signing
+# material, generated binaries or other machine-specific information.
+/.android-validation/
