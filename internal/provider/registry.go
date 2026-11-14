@@ -390,6 +390,14 @@ var providerRegistry = []ProviderSpec{
 		// x-api-key auth (verified live). Responses is the OpenAI-wired
 		// upgrade every OpenAI-compatible provider already gets; Command Code
 		// serves it at {base}/responses for the models that advertise it.
+		// Gemini has no native v1beta route here: its model entries advertise
+		// /chat/completions and /responses only. Keep the models that advertise
+		// Responses on it (the higher-fidelity wire) and the one that does not
+		// on Chat, instead of leaving the probe to settle the family.
+		ModelWireRules: []ModelWireRule{
+			{Match: "gemini-3.7", Wire: WireChat},
+			{Match: "gemini", Wire: WireResponses},
+		},
 		WireVariants: []WireVariant{
 			{Protocol: ProtocolAnthropic, AuthScheme: AuthXAPIKey},
 		},

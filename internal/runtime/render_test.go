@@ -32,6 +32,31 @@ func assistantWith(text string) agentcore.AssistantMessage {
 	}
 }
 
+// A terminal failure's message is not appended to the conversation, so the
+// LastAssistantOf fallback used to return the previous successful turn and the
+// headless run ended silently with exit 0. The failing turn is the outcome.
+func TestDrainStreamPrefersTerminalErrorTurn(t *testing.T) {
+	ctx := context.Background()
+	ok := assistantWith("working")
+	failed := agentcore.AssistantMessage{
+		RoleField:    agentcore.RoleAssistant,
+		StopReason:   agentcore.StopReasonError,
+		ErrorMessage: "transport: upstream 400: boom",
+	}
+	stream := emitStream(func(s *LoopEventStream) {
+		_ = s.Emit(ctx, agentcore.TurnEndEvent{Message: ok})
+		_ = s.Emit(ctx, agentcore.TurnEndEvent{Message: failed})
+		s.SetResult([]agentcore.AgentMessage{ok})
+	})
+	final, err := DrainStream(ctx, stream, StreamHandler{})
+	if err != nil {
+		t.Fatalf("DrainStream: %v", err)
+	}
+	if final == nil || final.StopReason != agentcore.StopReasonError || final.ErrorMessage != "transport: upstream 400: boom" {
+		t.Fatalf("final = %+v, want the terminal error turn", final)
+	}
+}
+
 // TestDrainStreamTextDeltas verifies OnText receives only the new suffix of the
 // streaming assistant message on each update, never re-emitting printed bytes.
 func TestDrainStreamTextDeltas(t *testing.T) {

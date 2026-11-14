@@ -115,26 +115,31 @@ func encodeGeminiRequest(req CompletionRequest) ([]byte, error) {
 		}
 	}
 	contents := make([]map[string]any, 0, len(req.Context.Messages))
-	for _, m := range req.Context.Messages {
-		switch mm := m.(type) {
+	nativeCalls := map[string]bool{}
+	for i := 0; i < len(req.Context.Messages); i++ {
+		switch mm := req.Context.Messages[i].(type) {
 		case agentcore.UserMessage:
 			contents = append(contents, map[string]any{"role": "user", "parts": geminiUserParts(mm.Content)})
 		case agentcore.AssistantMessage:
-			contents = append(contents, map[string]any{"role": "model", "parts": geminiModelParts(mm.Content)})
-		case agentcore.ToolResultMessage:
-			name := toolNames[mm.ToolCallID]
-			var text strings.Builder
-			for _, c := range mm.Content {
-				if tc, ok := c.(agentcore.TextContent); ok {
-					text.WriteString(tc.Text)
-				}
+			parts, native := geminiModelParts(mm.Content, mm.API == "gemini")
+			for id := range native {
+				nativeCalls[id] = true
 			}
-			contents = append(contents, map[string]any{"role": "user", "parts": []map[string]any{{
-				"functionResponse": map[string]any{
-					"name":     name,
-					"response": map[string]any{"content": text.String()},
-				},
-			}}})
+			contents = append(contents, map[string]any{"role": "model", "parts": parts})
+		case agentcore.ToolResultMessage:
+			// v1beta pairs function responses with a model turn's function
+			// calls per content, not per message: parallel calls answered in
+			// separate user turns are rejected as a count mismatch.
+			parts := []map[string]any{geminiToolResult(mm, toolNames, nativeCalls)}
+			for i+1 < len(req.Context.Messages) {
+				next, ok := req.Context.Messages[i+1].(agentcore.ToolResultMessage)
+				if !ok {
+					break
+				}
+				i++
+				parts = append(parts, geminiToolResult(next, toolNames, nativeCalls))
+			}
+			contents = append(contents, map[string]any{"role": "user", "parts": parts})
 		}
 	}
 	body := map[string]any{"contents": contents}
@@ -164,9 +169,14 @@ func geminiUserParts(list agentcore.ContentList) []map[string]any {
 }
 
 // geminiModelParts encodes an assistant turn: text, thoughts (flagged, so the
-// model knows they are reasoning rather than reply) and function calls.
-func geminiModelParts(list agentcore.ContentList) []map[string]any {
+// model knows they are reasoning rather than reply) and function calls. Only a
+// Gemini-origin turn may carry functionCall parts: v1beta validates the thought
+// signature on them, and a call another protocol produced has none. Foreign
+// calls are written as text instead, so a /model switch keeps their meaning
+// without asking Gemini to accept a call it never issued.
+func geminiModelParts(list agentcore.ContentList, fromGemini bool) ([]map[string]any, map[string]bool) {
 	out := make([]map[string]any, 0, len(list))
+	native := map[string]bool{}
 	for _, c := range list {
 		switch cc := c.(type) {
 		case agentcore.TextContent:
@@ -179,16 +189,61 @@ func geminiModelParts(list agentcore.ContentList) []map[string]any {
 			if cc.IsServer() {
 				continue
 			}
+			if !fromGemini {
+				out = append(out, map[string]any{"text": foreignCallText(cc)})
+				continue
+			}
+			native[cc.ID] = true
 			args := map[string]any{}
 			if len(cc.Arguments) > 0 {
 				_ = json.Unmarshal(cc.Arguments, &args)
 			}
-			out = append(out, map[string]any{"functionCall": map[string]any{
+			part := map[string]any{"functionCall": map[string]any{
 				"name": cc.Name, "args": args,
-			}})
+			}}
+			// Gemini 3 requires the signature it issued with a function call to
+			// be replayed on that call; dropping it fails the next tool turn.
+			// It is a sibling of functionCall at the part level, not a field
+			// inside the call (the API rejects the nested form).
+			if cc.ThoughtSignature != "" {
+				part["thoughtSignature"] = cc.ThoughtSignature
+			}
+			out = append(out, part)
 		}
 	}
-	return out
+	return out, native
+}
+
+// geminiToolResult encodes one local tool result. v1beta identifies a
+// functionResponse by the name from the assistant turn that requested it, not
+// by id; a result whose call did not go over this wire is kept as text.
+func geminiToolResult(m agentcore.ToolResultMessage, toolNames map[string]string, native map[string]bool) map[string]any {
+	var text strings.Builder
+	for _, c := range m.Content {
+		if tc, ok := c.(agentcore.TextContent); ok {
+			text.WriteString(tc.Text)
+		}
+	}
+	if !native[m.ToolCallID] {
+		name := toolNames[m.ToolCallID]
+		if name == "" {
+			name = m.ToolCallID
+		}
+		return map[string]any{"text": fmt.Sprintf("Tool result (%s): %s", name, text.String())}
+	}
+	return map[string]any{"functionResponse": map[string]any{
+		"name":     toolNames[m.ToolCallID],
+		"response": map[string]any{"content": text.String()},
+	}}
+}
+
+// foreignCallText is the transcript form of a call another protocol issued.
+func foreignCallText(c agentcore.ToolCallContent) string {
+	args := strings.TrimSpace(string(c.Arguments))
+	if args == "" {
+		args = "{}"
+	}
+	return fmt.Sprintf("Tool call %s %s", c.Name, args)
 }
 
 // geminiSchemaKeys are the JSON Schema keywords v1beta accepts in a function
@@ -282,9 +337,10 @@ type geminiChunk struct {
 	Candidates []struct {
 		Content struct {
 			Parts []struct {
-				Text         string `json:"text"`
-				Thought      bool   `json:"thought"`
-				FunctionCall *struct {
+				Text             string `json:"text"`
+				Thought          bool   `json:"thought"`
+				ThoughtSignature string `json:"thoughtSignature"`
+				FunctionCall     *struct {
 					Name string          `json:"name"`
 					Args json.RawMessage `json:"args"`
 				} `json:"functionCall"`
@@ -315,8 +371,10 @@ func (d *GeminiDecoder) Decode(payload []byte) ([]StreamEvent, error) {
 				if len(args) == 0 {
 					args = json.RawMessage("{}")
 				}
-				d.toolCalls = append(d.toolCalls, agentcore.NewToolCallContent(
-					fmt.Sprintf("gemini-call-%d", d.callSeq), p.FunctionCall.Name, args))
+				call := agentcore.NewToolCallContent(
+					fmt.Sprintf("gemini-call-%d", d.callSeq), p.FunctionCall.Name, args)
+				call.ThoughtSignature = p.ThoughtSignature
+				d.toolCalls = append(d.toolCalls, call)
 				out = append(out, StreamToolCallEvent{Partial: d.partial()})
 			case p.Thought:
 				d.thinking.WriteString(p.Text)

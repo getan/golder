@@ -118,7 +118,8 @@ func TestCommandCodeProvider(t *testing.T) {
 	}{
 		{"xiaomi/mimo-v2.6-flash", WireResponses, (*responsesDriver)(nil)},
 		{"claude-haiku-5-5", WireMessages, (*anthropicCompatDriver)(nil)},
-		{"google/gemini-3.8-flash", WireChat, (*openAICompatDriver)(nil)},
+		{"google/gemini-3.8-flash", WireResponses, (*responsesDriver)(nil)},
+		{"google/gemini-3.7-flash", WireChat, (*openAICompatDriver)(nil)},
 	}
 	for _, c := range cases {
 		if got := SelectWire(spec, c.model); got != c.wire {

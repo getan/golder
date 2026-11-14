@@ -203,6 +203,9 @@ func eventEnvelope(ev agentcore.AgentEvent) map[string]any {
 		env["messageCount"] = len(e.Messages)
 	case agentcore.TurnEndEvent:
 		env["stopReason"] = e.Message.StopReason
+		if e.Message.ErrorMessage != "" {
+			env["error"] = e.Message.ErrorMessage
+		}
 		if text := agentcore.ContentToText(e.Message.Content); text != "" {
 			env["text"] = text
 		}

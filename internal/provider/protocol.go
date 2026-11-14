@@ -26,9 +26,9 @@ import (
 // SDK-based Responses driver.
 const ProtocolOpenAIResponses = "openai/resp_api"
 
-// ProtocolGemini is the selector for the Gemini v1beta wire. Selection knows
-// the wire (see ModelWire), but the driver does not exist yet, so a run that
-// selects it reports that plainly instead of silently using another wire.
+// ProtocolGemini is the selector for the Gemini v1beta wire, served by the
+// driver in gemini.go. It replays each tool call's thought signature and groups
+// parallel function responses per turn, which v1beta requires.
 const ProtocolGemini = "gemini"
 
 // NormalizeProtocol maps a raw --protocol / protocol value to a canonical

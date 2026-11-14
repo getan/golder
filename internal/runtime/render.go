@@ -107,6 +107,13 @@ func DrainStream(ctx context.Context, stream *LoopEventStream, h StreamHandler) 
 	if resErr != nil {
 		return lastTurn, resErr
 	}
+	// A terminal failure's message is not appended to the conversation, so the
+	// earlier successful turn would win the LastAssistantOf check and hide the
+	// error (headless print ended silently, with a zero exit). The failing turn
+	// is the run's outcome.
+	if lastTurn != nil && (lastTurn.StopReason == agentcore.StopReasonError || lastTurn.StopReason == agentcore.StopReasonAborted) {
+		return lastTurn, nil
+	}
 	if final := agentcore.LastAssistantOf(msgs); final != nil {
 		return final, nil
 	}

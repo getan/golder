@@ -52,11 +52,15 @@ func TestEncodeGeminiRequest(t *testing.T) {
 				agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{
 					agentcore.NewTextContent("list files"),
 				}},
-				agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, Content: agentcore.ContentList{
-					agentcore.NewToolCallContent("call-1", "ls", json.RawMessage(`{"path":"."}`)),
+				agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, API: "gemini", Content: agentcore.ContentList{
+					withSignature(agentcore.NewToolCallContent("call-1", "ls", json.RawMessage(`{"path":"."}`)), "sig-1"),
+					withSignature(agentcore.NewToolCallContent("call-2", "stat", json.RawMessage(`{"path":"a.go"}`)), "sig-2"),
 				}},
 				agentcore.ToolResultMessage{ToolCallID: "call-1", Content: agentcore.ContentList{
 					agentcore.NewTextContent("a.go"),
+				}},
+				agentcore.ToolResultMessage{ToolCallID: "call-2", Content: agentcore.ContentList{
+					agentcore.NewTextContent("regular file"),
 				}},
 			},
 		},
@@ -81,17 +85,70 @@ func TestEncodeGeminiRequest(t *testing.T) {
 		t.Errorf("assistant turn role = %v, want model", turn["role"])
 	}
 	parts := turn["parts"].([]any)
-	if _, ok := parts[0].(map[string]any)["functionCall"]; !ok {
-		t.Errorf("assistant turn = %v, want a functionCall part", parts[0])
+	if len(parts) != 2 {
+		t.Fatalf("assistant turn parts = %d, want two functionCall parts", len(parts))
+	}
+	call := parts[0].(map[string]any)["functionCall"].(map[string]any)
+	if parts[0].(map[string]any)["thoughtSignature"] != "sig-1" {
+		t.Errorf("part signature = %v, want sig-1 at the part level", parts[0])
+	}
+	if _, nested := call["thoughtSignature"]; nested {
+		t.Errorf("thoughtSignature must not be nested inside functionCall: %v", call)
 	}
 	result := contents[2].(map[string]any)
 	respParts := result["parts"].([]any)
+	if len(respParts) != 2 {
+		t.Fatalf("tool turn parts = %d, want both responses in one user turn", len(respParts))
+	}
 	resp := respParts[0].(map[string]any)["functionResponse"].(map[string]any)
 	if resp["name"] != "ls" {
 		t.Errorf("functionResponse name = %v, want ls", resp["name"])
 	}
 	if gen, ok := body["generationConfig"].(map[string]any); !ok || gen["maxOutputTokens"] == nil {
 		t.Errorf("generationConfig = %v, want a maxOutputTokens", body["generationConfig"])
+	}
+}
+
+func withSignature(c agentcore.ToolCallContent, sig string) agentcore.ToolCallContent {
+	c.ThoughtSignature = sig
+	return c
+}
+
+// A history carried over from another provider has function calls without a
+// Gemini thought signature. Replaying them as functionCall parts fails the
+// v1beta validation, so they and their results become text; a Gemini-origin
+// turn keeps the native parts.
+func TestEncodeGeminiRequestForeignToolHistory(t *testing.T) {
+	req := CompletionRequest{
+		Model: "gemini-4-argon",
+		Context: LlmContext{
+			Messages: agentcore.MessageList{
+				agentcore.UserMessage{RoleField: agentcore.RoleUser, Content: agentcore.ContentList{
+					agentcore.NewTextContent("list files"),
+				}},
+				agentcore.AssistantMessage{RoleField: agentcore.RoleAssistant, API: "openai", Content: agentcore.ContentList{
+					agentcore.NewToolCallContent("call-1", "ls", json.RawMessage(`{"path":"."}`)),
+				}},
+				agentcore.ToolResultMessage{ToolCallID: "call-1", Content: agentcore.ContentList{
+					agentcore.NewTextContent("a.go"),
+				}},
+			},
+		},
+	}
+	raw, err := encodeGeminiRequest(req)
+	if err != nil {
+		t.Fatalf("encodeGeminiRequest: %v", err)
+	}
+	body := string(raw)
+	for _, unwanted := range []string{"functionCall", "functionResponse"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("foreign history emitted %s: %s", unwanted, body)
+		}
+	}
+	for _, want := range []string{"Tool call ls", "Tool result (ls)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("foreign history lost %q: %s", want, body)
+		}
 	}
 }
 
@@ -102,7 +159,7 @@ func TestGeminiDecoder(t *testing.T) {
 	d := NewGeminiDecoder()
 	chunks := []string{
 		`{"candidates":[{"content":{"parts":[{"text":"plan","thought":true},{"text":"hello"}]}}]}`,
-		`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"ls","args":{"path":"."}}}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":3,"cachedContentTokenCount":2}}`,
+		`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"ls","args":{"path":"."}},"thoughtSignature":"sig-1"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":7,"candidatesTokenCount":3,"cachedContentTokenCount":2}}`,
 	}
 	var events []StreamEvent
 	for _, c := range chunks {
@@ -126,6 +183,9 @@ func TestGeminiDecoder(t *testing.T) {
 	}
 	if msg.Usage == nil || msg.Usage.InputTokens != 7 || msg.Usage.OutputTokens != 3 || msg.Usage.CacheReadTokens != 2 {
 		t.Errorf("usage = %+v, want 7/3/2", msg.Usage)
+	}
+	if tc, ok := msg.Content[2].(agentcore.ToolCallContent); !ok || tc.ThoughtSignature != "sig-1" {
+		t.Errorf("tool call signature = %+v, want sig-1", msg.Content[2])
 	}
 	var kinds []string
 	for _, c := range msg.Content {
