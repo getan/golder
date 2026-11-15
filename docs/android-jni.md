@@ -82,7 +82,7 @@ object GolderNative {
 
 `gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。`allowNetworkGit` 是**会话级**宿主能力：默认关闭时 `clone`/`fetch`/`push` 明确失败关闭，本地 `commit`/`branch`/`status`/`log` 可用；UI 提供“Allow Git network”复选框，在打开会话前设置。逐次网络授权的审批卡片仍未实现。
 
-GitHub 认证选择与 PAT/Device Flow 对比见 [GitHub 认证](github-auth.md)。当前 UI 已支持 fine-grained PAT，并用 Android Keystore 加密保存。
+GitHub 认证选择与 PAT/Device Flow 对比见 [GitHub 认证](github-auth.md)。当前决定使用 fine-grained PAT，UI 已支持并用 Android Keystore 加密保存；GitHub App device flow 暂缓。
 
 ## 尚未解决的边界
 

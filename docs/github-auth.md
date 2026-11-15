@@ -2,6 +2,12 @@
 
 `Allow Git network` 只是允许这次会话为 Git 使用网络，它不证明你是谁。私有仓库的 clone/fetch/push 还需要 GitHub 认证。
 
+## 当前决定：Fine-grained PAT 为主
+
+对个人手机 Agent，我们采用 **fine-grained PAT**，暂不实现 GitHub App + device flow。原因是 PAT 不需要注册 GitHub App、不需要自建后端、不需要处理 refresh token 轮换，用户可以直接限定仓库和权限；在大陆网络环境下，也少一层 GitHub 网页授权流程。
+
+GitHub App 不是从应用商店安装的手机 App，而是注册在 GitHub 账号/组织下的服务集成：用户在 GitHub 网页上“安装”它并选择仓库，不需要安装 APK。大陆用户访问 GitHub 网页仍可能需要自己的网络条件，这与是否使用 GitHub App 无关。将来如果 Golder 面向多用户分发、需要更细的仓库安装授权和短期 token，再考虑 GitHub App。
+
 ## 当前可用：fine-grained PAT（最简单）
 
 这是目前已经接入的方式，不需要后端，也不需要注册 OAuth/GitHub App：
