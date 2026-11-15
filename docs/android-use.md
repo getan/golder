@@ -124,6 +124,18 @@ Kotlin 不做业务规划，也不决定哪些 App 能操作；它只执行经�
 
 ## 6. Phase 1：前台 Accessibility
 
+### 6.0 当前 bridge 实现
+
+Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `LocalServerSocket` 的抽象命名空间：
+
+- Kotlin `AndroidUseServer` 只绑定 `127.0.0.1` 的随机端口；
+- token 和端口写入 App 私有目录的 `android-use.json`；
+- Go `internal/androiduse/client.go` 读取该文件并带 token 发请求；
+- 不开放 Wi-Fi/TCP 外部监听，不需要网络授权；
+- 端点和 token 在 service 停止时删除。
+
+这样 Go 可以通过普通 loopback socket 访问 AccessibilityService，同时避免把控制面暴露给其他 App。
+
 ### 6.1 范围
 
 - 用户手动开启无障碍服务。

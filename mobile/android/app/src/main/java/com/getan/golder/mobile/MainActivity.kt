@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.getan.golder.mobile.androiduse.AndroidUseBridge
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -130,6 +132,7 @@ private fun GolderApp(initialTask: String = "") {
     var activeProjectId by remember { mutableStateOf("") }
     var settingsLoaded by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var androidUseEnabled by remember { mutableStateOf(false) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -319,6 +322,9 @@ private fun GolderApp(initialTask: String = "") {
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                 .put("allowNetworkGit", true)
                 .put("gitToken", workspaceToken)
+            if (AndroidUseBridge.isEnabled(context)) {
+                config.put("androidUseEndpoint", AndroidUseBridge.endpointPath(context))
+            }
             if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
 
             val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
@@ -374,6 +380,7 @@ private fun GolderApp(initialTask: String = "") {
 
         gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
         oauthConnected = withContext(Dispatchers.IO) { GitHubOAuth.isConnected(context) }
+        androidUseEnabled = AndroidUseBridge.isEnabled(context)
         apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
         tokenLoaded = true
 
@@ -603,6 +610,9 @@ private fun GolderApp(initialTask: String = "") {
         providers
     }
 
+    LaunchedEffect(settingsOpen) {
+        if (settingsOpen) androidUseEnabled = AndroidUseBridge.isEnabled(context)
+    }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
     if (settingsOpen) {
@@ -622,6 +632,7 @@ private fun GolderApp(initialTask: String = "") {
                 oauthConnected = oauthConnected,
                 oauthBusy = oauthBusy,
                 oauthError = oauthError,
+                androidUseEnabled = androidUseEnabled,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -695,6 +706,17 @@ private fun GolderApp(initialTask: String = "") {
                     runCatching {
                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GitHubOAuth.revokeUrl())))
                     }
+                },
+                onAndroidUseSettings = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+                onAndroidUseRefresh = {
+                    androidUseEnabled = AndroidUseBridge.isEnabled(context)
                 },
                 onForgetToken = {
                     gitToken = ""
@@ -1445,6 +1467,7 @@ private fun SettingsScreen(
     oauthConnected: Boolean,
     oauthBusy: Boolean,
     oauthError: String,
+    androidUseEnabled: Boolean,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1455,6 +1478,8 @@ private fun SettingsScreen(
     onGitHubLogin: () -> Unit,
     onGitHubLogout: () -> Unit,
     onGitHubRevoke: () -> Unit,
+    onAndroidUseSettings: () -> Unit,
+    onAndroidUseRefresh: () -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
     onReconnect: () -> Unit,
@@ -1504,6 +1529,27 @@ private fun SettingsScreen(
             )
             Text(s.language, style = MaterialTheme.typography.titleMedium)
             LanguagePicker(language = language, onPick = onLanguagePick)
+            Text(s.androidUse, style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (androidUseEnabled) s.androidUseOn else s.androidUseOff,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (androidUseEnabled) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
+                Text(s.androidUseOpenSettings)
+            }
+            TextButton(onClick = onAndroidUseRefresh) {
+                Text(s.androidUseRefresh)
+            }
+            Text(
+                s.androidUseHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(s.github, style = MaterialTheme.typography.titleMedium)
             Text(
                 s.githubAuthIntro,

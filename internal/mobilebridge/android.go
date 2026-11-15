@@ -63,13 +63,14 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		return &agentcore.BeforeToolCallDecision{}
 	}
 	toolset, err := androidagent.New(androidagent.Config{
-		Root:           cfg.Workspace,
-		BeforeToolCall: gate,
-		Permissions:    permissionState,
-		NoShell:        true,
-		GitAuthorName:  cfg.GitAuthorName,
-		GitAuthorEmail: cfg.GitAuthorEmail,
-		GitToken:       cfg.GitToken,
+		Root:               cfg.Workspace,
+		BeforeToolCall:     gate,
+		Permissions:        permissionState,
+		NoShell:            true,
+		GitAuthorName:      cfg.GitAuthorName,
+		GitAuthorEmail:     cfg.GitAuthorEmail,
+		GitToken:           cfg.GitToken,
+		AndroidUseEndpoint: cfg.AndroidUseEndpoint,
 	})
 	if err != nil {
 		return nil, err

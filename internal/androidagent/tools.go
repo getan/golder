@@ -13,6 +13,7 @@ import (
 
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
+	"github.com/getan/golder/internal/androiduse"
 	"github.com/getan/golder/internal/execsess"
 	"github.com/getan/golder/internal/mobilebuild"
 	"github.com/getan/golder/internal/mobilegit"
@@ -37,6 +38,9 @@ type Config struct {
 	GitAuthorName  string
 	GitAuthorEmail string
 	GitToken       string
+	// AndroidUseEndpoint is the app-private endpoint file exposed by the
+	// Kotlin AccessibilityService host. Empty means AndroidUse is not authorized.
+	AndroidUseEndpoint string
 }
 
 // Capabilities describe executable paths found at construction, not a promise
@@ -57,6 +61,7 @@ type Toolset struct {
 	Capabilities Capabilities
 	Root         string
 	shell        *agenttool.BashTool
+	androidUse   bool
 }
 
 // New builds the Android catalog using the current app process's executable
@@ -158,6 +163,10 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		return nil, fmt.Errorf("androidagent: install: %w", err)
 	}
 	s.Tools = append(s.Tools, buildTool, downloadTool, installTool)
+	if strings.TrimSpace(cfg.AndroidUseEndpoint) != "" {
+		s.Tools = append(s.Tools, androiduse.NewTool(cfg.AndroidUseEndpoint))
+	}
+	s.androidUse = strings.TrimSpace(cfg.AndroidUseEndpoint) != ""
 	registry := agenttool.NewToolRegistry()
 	for _, tool := range s.Tools {
 		if err := registry.Register(tool); err != nil {
@@ -183,6 +192,9 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("When a tool result contains APK_PATH or INSTALL_APK, the host transcript shows an Install APK button. If an APK is already available, first tell the user to tap that button; do not rebuild just to install. ")
 	b.WriteString("Only if the user explicitly asks you to trigger installation yourself, call android_install with the APK path; the host will open the package installer. Never claim the app is installed until the user confirms the system dialog. ")
 	b.WriteString("Use android_download to fetch the latest successful artifact without rebuilding. Use android_build only when code changed or no APK exists; it reuses a successful run for the current commit unless force=true. ")
+	if s.androidUse {
+		b.WriteString("AndroidUse is available through android_use: call observe first, use node refs with the current snapshotId, and prefer semantic refs over coordinates. It operates the visible phone screen; never change Golder's own permissions or settings. ")
+	}
 	switch {
 	case s.Capabilities.Ripgrep != "":
 		b.WriteString("The grep and find tools are available through ripgrep; use them for code search.")

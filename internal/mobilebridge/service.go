@@ -49,6 +49,9 @@ type Config struct {
 	ThinkingLevel string `json:"thinkingLevel,omitempty"`
 	// PermissionMode is one of read-only, ask, auto, full-access.
 	PermissionMode string `json:"permissionMode,omitempty"`
+	// AndroidUseEndpoint is the app-private loopback endpoint for the Phase 1
+	// AccessibilityService. Empty leaves android_use out of the catalog.
+	AndroidUseEndpoint string `json:"androidUseEndpoint,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.
