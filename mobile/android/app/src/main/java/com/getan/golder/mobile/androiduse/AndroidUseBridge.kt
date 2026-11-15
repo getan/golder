@@ -15,6 +15,7 @@ object AndroidUseBridge {
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
     private const val OVERLAY_KEY = "overlay-enabled"
+    private const val ADVANCED_KEY = "advanced-enabled"
     const val PREFS_NAME = "android-use"
 
     fun endpointPath(context: Context): String =
@@ -98,6 +99,14 @@ object AndroidUseBridge {
 
     fun setOverlayEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(OVERLAY_KEY, enabled).apply()
+    }
+
+    fun advancedEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(ADVANCED_KEY, false)
+
+    fun setAdvancedEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(ADVANCED_KEY, enabled).apply()
+        if (!enabled) setPaused(context, true)
     }
 
     @Synchronized

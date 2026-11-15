@@ -145,6 +145,7 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseOverlayEnabled by remember { mutableStateOf(true) }
+    var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -186,6 +187,7 @@ private fun GolderApp(initialTask: String = "") {
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
         androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
+        androidUseAdvancedEnabled = AndroidUseBridge.advancedEnabled(context)
     }
 
     val activity = context as? ComponentActivity
@@ -681,6 +683,7 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
                 androidUseOverlayEnabled = androidUseOverlayEnabled,
+                androidUseAdvancedEnabled = androidUseAdvancedEnabled,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -776,6 +779,10 @@ private fun GolderApp(initialTask: String = "") {
                 },
                 onAndroidUseOverlay = { enabled ->
                     AndroidUseBridge.setOverlayEnabled(context, enabled)
+                    refreshAndroidUseState()
+                },
+                onAndroidUseAdvanced = { enabled ->
+                    AndroidUseBridge.setAdvancedEnabled(context, enabled)
                     refreshAndroidUseState()
                 },
                 onAndroidUseAllowedPackages = { value ->
@@ -1538,6 +1545,7 @@ private fun SettingsScreen(
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
     androidUseOverlayEnabled: Boolean,
+    androidUseAdvancedEnabled: Boolean,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1553,6 +1561,7 @@ private fun SettingsScreen(
     onAndroidUseControl: (Boolean) -> Unit,
     onAndroidUsePauseToggle: () -> Unit,
     onAndroidUseOverlay: (Boolean) -> Unit,
+    onAndroidUseAdvanced: (Boolean) -> Unit,
     onAndroidUseAllowedPackages: (String) -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
@@ -1562,6 +1571,7 @@ private fun SettingsScreen(
     val settingsContext = LocalContext.current
     var healthRefresh by remember { mutableIntStateOf(0) }
     var auditExpanded by remember { mutableStateOf(false) }
+    var showAdvancedRisk by remember { mutableStateOf(false) }
     val androidUseLive by produceState<Boolean?>(
         initialValue = null,
         androidUseEnabled,
@@ -1742,6 +1752,61 @@ private fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+            }
+            Text(
+                s.androidUseAdvanced,
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                s.androidUseAdvancedHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (androidUseAdvancedEnabled) s.androidUseAdvancedOn else s.androidUseAdvancedOff,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (androidUseAdvancedEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Switch(
+                    checked = androidUseAdvancedEnabled,
+                    onCheckedChange = { checked ->
+                        if (checked) showAdvancedRisk = true else onAndroidUseAdvanced(false)
+                    },
+                )
+            }
+            if (androidUseAdvancedEnabled) {
+                Button(onClick = { onAndroidUseAdvanced(false) }) {
+                    Text(s.androidUseAdvancedDisable)
+                }
+            }
+            if (showAdvancedRisk) {
+                AlertDialog(
+                    onDismissRequest = { showAdvancedRisk = false },
+                    title = { Text(s.androidUseAdvanced) },
+                    text = { Text(s.androidUseAdvancedRisk) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showAdvancedRisk = false
+                                onAndroidUseAdvanced(true)
+                            },
+                        ) { Text(s.androidUseAdvancedEnable) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showAdvancedRisk = false }) {
+                            Text(s.androidUseAdvancedCancel)
+                        }
+                    },
+                )
             }
             Text(s.github, style = MaterialTheme.typography.titleMedium)
             Text(

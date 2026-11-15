@@ -1,6 +1,6 @@
 # AndroidUse：Android 设备操作层设计
 
-> 状态：Phase 1 已实现，并在 Redmi / Android 14 上完成验收。Phase 2 方案已定：Mika 路线（纯手机无线调试 + shell helper + 后台虚拟屏），**Go 主体，Kotlin 仅平台适配**；尚未实现。多设备矩阵作为可选扩展，不作为当前项目门槛。
+> 状态：Phase 1 已实现并完成验收。Phase 2 已落地风险门、Go 状态机、受限 AIDL 合约和 `ImageReader` 适配骨架；无线 ADB、helper 进程和虚拟屏接线仍待实现。采用 Mika 路线（纯手机无线调试 + shell helper + 后台虚拟屏），**Go 主体，Kotlin 仅平台适配**。多设备矩阵作为可选扩展，不作为当前项目门槛。
 >
 > 目标：为 Golder Android 增加类似桌面 BrowserUse / ComputerUse 的基本能力，让 Agent 能观察和操作其他 Android App。
 >
