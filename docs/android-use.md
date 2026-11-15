@@ -165,6 +165,7 @@ Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `Loc
 - loopback endpoint + 每进程随机 token，endpoint/token 在 service 停止时删除；
 - 截图写入 App 私有 cache，并在 Go 工具结果中以 image content 返回模型；
 - 审计记录只保存动作、包名、结果和错误摘要，不保存屏幕文本；
+- 审计文件最多保留 200 条；Settings 只展示最近 8 条，并默认折叠。
 - 包 allowlist：留空允许所有 App，非空时只允许列出的包名。
 
 已增加 AndroidUse 常驻状态通知和 Accessibility overlay：显示当前动作/包名、最近截图，并在 overlay 上提供 Pause/Resume/Hide。Settings 有“显示 AndroidUse 悬浮层”开关；关闭后不常驻，但敏感动作仍会临时拉起 Allow once / Deny 确认面板。拒绝或超时则失败关闭。

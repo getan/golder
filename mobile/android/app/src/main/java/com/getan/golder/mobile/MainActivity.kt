@@ -1562,6 +1562,7 @@ private fun SettingsScreen(
     val settingsContext = LocalContext.current
     var androidUseLive by remember { mutableStateOf<Boolean?>(null) }
     var healthRefresh by remember { mutableIntStateOf(0) }
+    var auditExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(androidUseEnabled, healthRefresh) {
         if (!androidUseEnabled) {
             androidUseLive = false
@@ -1718,17 +1719,30 @@ private fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (androidUseAudit.isNotBlank()) {
-                Text(
-                    s.androidUseAudit,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    androidUseAudit,
-                    style = MaterialTheme.typography.labelSmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        s.androidUseAudit,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = { auditExpanded = !auditExpanded }) {
+                        Text(
+                            if (auditExpanded) s.androidUseAuditHide else s.androidUseAuditShow,
+                        )
+                    }
+                }
+                if (auditExpanded) {
+                    Text(
+                        androidUseAudit,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Text(s.github, style = MaterialTheme.typography.titleMedium)
             Text(

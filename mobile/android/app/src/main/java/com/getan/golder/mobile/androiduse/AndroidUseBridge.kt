@@ -10,6 +10,7 @@ object AndroidUseBridge {
     const val SERVICE_CLASS = "com.getan.golder.mobile.androiduse.GolderAccessibilityService"
     private const val SHORT_SERVICE = ".androiduse.GolderAccessibilityService"
     const val HEARTBEAT_FILE = "android-use-heartbeat.json"
+    private const val AUDIT_MAX_LINES = 200
     private const val CONTROL_KEY = "control-allowed"
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
@@ -114,6 +115,7 @@ object AndroidUseBridge {
         if (packageName.isNotBlank()) entry.put("package", packageName)
         if (error.isNotBlank()) entry.put("error", error.take(240))
         runCatching { auditPath(context).appendText(entry.toString() + "\n") }
+        runCatching { trimAudit(auditPath(context)) }
         runCatching {
             statusPath(context).writeText(
                 JSONObject(entry.toString())
@@ -127,6 +129,20 @@ object AndroidUseBridge {
     fun recentAudit(context: Context, limit: Int = 8): String = runCatching {
         auditPath(context).readLines().takeLast(limit).joinToString("\n")
     }.getOrDefault("")
+
+    /** Keep the private audit file bounded; Settings only shows the newest entries. */
+    private fun trimAudit(path: File) {
+        val lines = path.readLines()
+        if (lines.size <= AUDIT_MAX_LINES) return
+        val tmp = File(path.parentFile, "${path.name}.tmp")
+        tmp.writeText(
+            lines.takeLast(AUDIT_MAX_LINES).joinToString("\n", postfix = "\n"),
+        )
+        if (!tmp.renameTo(path)) {
+            path.delete()
+            check(tmp.renameTo(path))
+        }
+    }
 
     fun status(context: Context): String = runCatching {
         statusPath(context).readText()
