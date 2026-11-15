@@ -61,6 +61,10 @@ Provider→Agent 循环的完整流式回合；不需要真实模型或 API key�
 设备侧 Go 测试还覆盖完整 Android 后端和会话持久化：完成一轮后关闭，再用
 同一 session id 打开，验证历史恢复。
 
+`internal/mobilegit` 的主机和 Android 设备测试覆盖本地 init/add/commit/status/
+log/branch、路径逃逸、网络授权失败关闭，以及通过嵌入 file transport 的
+push→clone 往返；不会使用真实远程或凭据。
+
 ## 还应补上的无设备测试
 
 - 模拟器镜像纳入 CI（Linux KVM runner 或 Firebase Test Lab），并固定 Android API 版本；

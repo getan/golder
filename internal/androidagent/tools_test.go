@@ -143,6 +143,23 @@ func TestNoShellOmitsShellCatalogAndPrompt(t *testing.T) {
 	}
 }
 
+func TestGitToolIsCataloguedAndNetworkFailsClosed(t *testing.T) {
+	s, err := newToolset(Config{Root: t.TempDir(), BeforeToolCall: allowReadOnly}, fakeLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if !hasTool(s, "git") {
+		t.Fatal("git tool is missing from the Android catalog")
+	}
+	results, _ := agenttool.ExecuteToolCalls(context.Background(), s.Batch, []agentcore.AgentToolCall{{
+		ID: "git-1", Name: "git", Arguments: json.RawMessage(`{"action":"clone","url":"https://example.invalid/repo.git"}`),
+	}}, nil)
+	if len(results) != 1 || !results[0].IsError || !strings.Contains(agentcore.ContentToText(results[0].Content), "network access is not authorized") {
+		t.Fatalf("ungranted git clone = %+v", results)
+	}
+}
+
 func TestShellFailsClosedWithoutHostGrant(t *testing.T) {
 	paths := map[string]string{"/system/bin/sh": "/system/bin/sh"}
 	s, err := newToolset(Config{Root: t.TempDir(), BeforeToolCall: allowReadOnly}, fakeLookup(paths))

@@ -7,7 +7,7 @@
 - Go 共享库可用 NDK 构建，JNI 和 C ABI 符号都已导出。
 - 设备上的 C ABI loader 已实际加载该库，打开一个文件型会话、读取快照并关闭。
 - Kotlin/JVM 的 JNI 调用已由 `JniSessionTest` 验证：版本、打开、启动、轮询、流式文本和 `run_end` 都通过；模型是设备内回环的假 OpenAI SSE 服务，不依赖真实凭据。
-- 当前 Android 后端只开放文件工具：`read`、`ls`、`apply_patch`，以及可用的 `grep`/`find`。`NoShell` 明确不暴露 `bash`/`write_stdin`，提示词也会说明 shell 不可用。
+- 当前 Android 后端开放文件工具（`read`、`ls`、`apply_patch`，以及可用的 `grep`/`find`）和结构化 `git` 工具。Git 使用纯 Go 实现，本地操作限定在工作区；`clone`/`fetch`/`push` 必须拿到宿主网络授权，否则失败关闭。`NoShell` 明确不暴露 `bash`/`write_stdin`，提示词也会说明 shell 不可用。
 
 ## 构建与设备 ABI 测试
 
@@ -66,6 +66,9 @@ object GolderNative {
   "contextWindow": 128000,
   "stateDir": "/data/user/0/com.getan.golder.mobile/files/state",
   "sessionId": "mobile-…",
+  "gitAuthorName": "Your Name",
+  "gitAuthorEmail": "you@example.com",
+  "gitToken": "",
   "debugLog": ""
 }
 ```
@@ -76,9 +79,11 @@ object GolderNative {
 
 `stateDir` 可选，设置后会话保存在 `<stateDir>/sessions/<sessionId>.jsonl`；同一 `sessionId` 重新打开会恢复历史。锁文件防止同一会话被两个进程同时写入。当前采用整文件原子重写，后续可换成增量追加。
 
+`gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。Android UI 目前还没有网络 Git 的授权卡片，因此 `clone`/`fetch`/`push` 会明确报“network access is not authorized”；本地 `commit`/`branch`/`status`/`log` 可用。
+
 ## 尚未解决的边界
 
-- 目前是**文件型后端**，不是完整的 `auto` 权限链：没有 shell、浏览器、Git、commit/push 或网络工具。不能把这个后端说成已经支持完整任务自动化。
+- 目前是**文件型 + 本地 Git 后端**，不是完整的 `auto` 权限链：没有 shell、浏览器；网络 Git 还没有宿主授权 UI。不能把这个后端说成已经支持完整任务自动化。
 - 会话持久化和重启恢复已有基础实现；后台执行限制、结果未知时的写操作保护和多会话列表仍待实现。
 
 ## 工具链与 UI

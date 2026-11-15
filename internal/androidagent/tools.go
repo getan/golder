@@ -14,6 +14,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/mobilegit"
 	"github.com/getan/golder/internal/permissions"
 )
 
@@ -29,6 +30,12 @@ type Config struct {
 	// the prompt then says shell is unavailable instead of advertising a tool
 	// the catalog does not contain.
 	NoShell bool
+	// NoGit omits the structured Git tool. The tool is local by default and
+	// gates clone/fetch/push on the host's per-call network grant.
+	NoGit          bool
+	GitAuthorName  string
+	GitAuthorEmail string
+	GitToken       string
 }
 
 // Capabilities describe executable paths found at construction, not a promise
@@ -121,6 +128,15 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		}
 		s.Tools = append(s.Tools, &shellTool{tool: s.shell}, &agenttool.WriteStdinTool{Sessions: sessions})
 	}
+	if !cfg.NoGit {
+		gitTool, err := mobilegit.New(mobilegit.Config{
+			Root: root, AuthorName: cfg.GitAuthorName, AuthorEmail: cfg.GitAuthorEmail, Token: cfg.GitToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("androidagent: git: %w", err)
+		}
+		s.Tools = append(s.Tools, gitTool)
+	}
 	registry := agenttool.NewToolRegistry()
 	for _, tool := range s.Tools {
 		if err := registry.Register(tool); err != nil {
@@ -141,6 +157,7 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("You are golder, a coding agent running inside an Android app. Work within the user's selected workspace. ")
 	b.WriteString("Use read, ls and apply_patch for workspace files. Preserve task intent, report tool failures and do not replay a write whose outcome is unknown. ")
 	b.WriteString("Shell commands are subject to the host authorization gate. Android app isolation is not a workspace-level shell sandbox: a shell may reach other data the app can access, and per-command network isolation is not provided here. ")
+	b.WriteString("A structured git tool is available for local status/log/diff/add/commit/branch/checkout/remote and for clone/fetch/push when the host grants network access for that exact call. ")
 	switch {
 	case s.Capabilities.Ripgrep != "":
 		b.WriteString("The grep and find tools are available through ripgrep; use them for code search.")

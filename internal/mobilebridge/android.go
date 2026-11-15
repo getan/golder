@@ -38,6 +38,9 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		Root:           cfg.Workspace,
 		BeforeToolCall: gate,
 		NoShell:        true,
+		GitAuthorName:  cfg.GitAuthorName,
+		GitAuthorEmail: cfg.GitAuthorEmail,
+		GitToken:       cfg.GitToken,
 	})
 	if err != nil {
 		return nil, err

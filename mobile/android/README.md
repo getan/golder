@@ -1,6 +1,6 @@
 # Golder Android
 
-原生 Kotlin/Compose 前端，通过 JNI 调用 `libgolder_mobile.so`。当前后端是文件型会话：`read`、`ls`、`apply_patch`、可用的 `grep`/`find`，没有 shell、Git 或完整 `auto` 权限链。
+原生 Kotlin/Compose 前端，通过 JNI 调用 `libgolder_mobile.so`。当前后端是文件型会话加结构化 Git：文件工具、可用的 `grep`/`find`，以及纯 Go 的 `git` 工具。没有 shell 或完整 `auto` 权限链；远程 Git 需要宿主网络授权。
 
 ## 构建
 
@@ -27,9 +27,10 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 - 打开工作区、发送任务、停止。
 - 流式文本、thinking、工具开始/结束和运行状态。
 - 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
+- 本地 Git：status/diff/log/add/commit/branch/checkout/remote；clone/fetch/push 在网络授权前失败关闭。
 - `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据。
 
 ## 边界
 
-- 还没有审批卡片、多会话列表、Git、后台执行恢复或 iOS。
+- 还没有审批卡片、多会话列表、远程 Git 授权 UI、后台执行恢复或 iOS。
 - JNI 版本在启动时调用并写入 logcat（`GolderJNI`），用于确认 Kotlin→Go 路径。

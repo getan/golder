@@ -36,6 +36,12 @@ type Config struct {
 	// one. The host supplies an app-private directory.
 	StateDir  string `json:"stateDir,omitempty"`
 	SessionID string `json:"sessionId,omitempty"`
+	// GitAuthor* provide the commit identity. GitToken is used only for HTTPS
+	// remotes. Empty token leaves clone/fetch/push unauthenticated (or denied by
+	// the remote); it never appears in output.
+	GitAuthorName  string `json:"gitAuthorName,omitempty"`
+	GitAuthorEmail string `json:"gitAuthorEmail,omitempty"`
+	GitToken       string `json:"gitToken,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.
