@@ -81,11 +81,11 @@ type entry struct {
 type Service struct {
 	factory Factory
 
-	mu      sync.Mutex
+	mu       sync.Mutex
 	modelsMu sync.Mutex
-	next    int
-	entries map[int]*entry
-	lastErr string
+	next     int
+	entries  map[int]*entry
+	lastErr  string
 }
 
 // NewService builds a registry around factory.
