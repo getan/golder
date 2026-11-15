@@ -35,6 +35,9 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 - 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
 - 本地 Git：status/diff/log/add/commit/branch/checkout/remote；移动 UI 默认开启
   Git 网络（clone/fetch/push），不再提供复选框。它是会话级能力，不是逐次审批。
+- 当前 Git 工具只把 **workspace 根目录**当作仓库：要提交/推送，必须直接 clone
+  到空的 workspace 根目录，或在根目录 init；clone 到子目录后 `add`/`commit`
+  会报 “not a Git repository”。
 - `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据；
   当前设备测试 6/6 通过，包含 provider catalog 和模型 API key 的 Keystore 往返。
 
