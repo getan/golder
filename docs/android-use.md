@@ -136,6 +136,22 @@ Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `Loc
 
 这样 Go 可以通过普通 loopback socket 访问 AccessibilityService，同时避免把控制面暴露给其他 App。
 
+### 6.0.1 已实现的 Phase 1 hardening
+
+当前实现已经包含：
+
+- Settings 中的 AndroidUse 控制开关、暂停/恢复、允许包名和最近活动；
+- Go 侧只读模式拒绝控制动作；
+- Kotlin 侧敏感文字/密码字段/系统安装器拦截；
+- `tap`/`type`/`swipe`/`back`/`home`/`open_app` 的前台包名验证；
+- `take_over` 写入持久暂停状态，暂停期间拒绝控制动作，`resume` 恢复；
+- loopback endpoint + 每进程随机 token，endpoint/token 在 service 停止时删除；
+- 截图写入 App 私有 cache，并在 Go 工具结果中以 image content 返回模型；
+- 审计记录只保存动作、包名、结果和错误摘要，不保存屏幕文本；
+- 包 allowlist：留空允许所有 App，非空时只允许列出的包名。
+
+仍未完成：用户可见的实时画面预览/悬浮窗、完整 OEM 设备矩阵，以及真正逐次人工确认的审批 UI。当前敏感动作采用本地拦截 + 暂停/接管，而不是每次弹窗确认。
+
 ### 6.1 范围
 
 - 用户手动开启无障碍服务。

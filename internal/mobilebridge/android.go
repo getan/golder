@@ -50,6 +50,19 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	credentials.SetOverride(name, cfg.APIKey)
 
 	gate := func(_ context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		if call.Name == "android_use" {
+			var args struct {
+				Action string `json:"action"`
+			}
+			_ = json.Unmarshal(call.Arguments, &args)
+			switch args.Action {
+			case "tap", "type", "swipe", "open_app", "back", "home":
+				if permissionMode == permissions.ReadOnly {
+					content := agentcore.ContentList{agentcore.NewTextContent("AndroidUse control actions are disabled in read-only mode")}
+					return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
+				}
+			}
+		}
 		if call.Name == "android_build" || call.Name == "android_download" {
 			return &agentcore.BeforeToolCallDecision{Network: true}
 		}

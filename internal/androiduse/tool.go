@@ -2,13 +2,17 @@ package androiduse
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
 	"github.com/getan/golder/internal/agentcore"
 )
+
+const maxImageBytes = 8 << 20
 
 var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)+$`)
 
@@ -55,7 +59,7 @@ func (t *Tool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ age
 	}
 	action := strings.ToLower(strings.TrimSpace(a.Action))
 	switch action {
-	case "observe", "screenshot", "back", "home", "take_over", "wait", "tap", "type", "swipe", "open_app":
+	case "observe", "screenshot", "status", "back", "home", "take_over", "resume", "wait", "tap", "type", "swipe", "open_app":
 	default:
 		return errorResult("android_use: unsupported action"), nil
 	}
@@ -92,9 +96,20 @@ func (t *Tool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ age
 	if err != nil {
 		return errorResult("android_use: response encoding failed"), nil
 	}
-	return agentcore.AgentToolResult{
+	result := agentcore.AgentToolResult{
 		Content: agentcore.ContentList{agentcore.NewTextContent(string(out))},
-	}, nil
+	}
+	if action == "screenshot" {
+		if path, _ := response["path"].(string); path != "" {
+			if info, statErr := os.Stat(path); statErr == nil && info.Size() > 0 && info.Size() <= maxImageBytes {
+				if data, readErr := os.ReadFile(path); readErr == nil {
+					result.Content = append(result.Content,
+						agentcore.NewImageContent(base64.StdEncoding.EncodeToString(data), "image/png"))
+				}
+			}
+		}
+	}
+	return result, nil
 }
 
 func validate(action string, a *args) error {
@@ -148,7 +163,7 @@ func errorResult(text string) agentcore.AgentToolResult {
 const toolSchema = `{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["observe","screenshot","tap","type","swipe","open_app","back","home","wait","take_over"]},
+    "action":{"type":"string","enum":["observe","screenshot","status","tap","type","swipe","open_app","back","home","wait","take_over","resume"]},
     "snapshotId":{"type":"string","description":"Snapshot returned by observe; required for node actions."},
     "ref":{"type":"string","description":"Node ref from the current snapshot."},
     "text":{"type":"string","description":"Text to enter. It is not submitted automatically."},

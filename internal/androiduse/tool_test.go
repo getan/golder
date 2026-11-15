@@ -80,3 +80,40 @@ func TestToolRejectsInvalidPackage(t *testing.T) {
 		t.Fatal("expected invalid package to fail")
 	}
 }
+
+func TestToolStatusRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	endpointPath := filepath.Join(dir, "android.json")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(endpointPath, []byte(`{"port":`+strconv.Itoa(port)+`,"token":"status-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var request map[string]any
+		if err := json.NewDecoder(conn).Decode(&request); err != nil {
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"ok": true, "action": "status", "paused": false, "controlAllowed": true,
+		})
+	}()
+
+	tool := NewTool(endpointPath)
+	result, err := tool.Execute(context.Background(), "call-status", json.RawMessage(`{"action":"status"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %+v", result.Content)
+	}
+}

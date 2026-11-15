@@ -61,12 +61,14 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             val local = ServerSocket(0, 20, InetAddress.getLoopbackAddress())
             local.soTimeout = 1000
             socket = local
-            File(path).writeText(
+            val endpoint = File("$path.tmp")
+            endpoint.writeText(
                 JSONObject()
                     .put("port", local.localPort)
                     .put("token", auth)
                     .toString(),
             )
+            endpoint.renameTo(File(path))
             while (!Thread.currentThread().isInterrupted) {
                 val client = try {
                     local.accept()
@@ -98,7 +100,29 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
     }
 
     private fun handle(request: JSONObject): JSONObject {
-        return when (request.optString("action")) {
+        val action = request.optString("action")
+        if (action == "status") {
+            return status()
+        }
+        if (action == "resume") {
+            AndroidUseBridge.setPaused(service, false)
+            return recorded(action, ok(action).put("paused", false))
+        }
+        if (action == "take_over") {
+            lastNodes.clear()
+            lastSnapshotId = ""
+            AndroidUseBridge.setPaused(service, true)
+            return recorded(action, ok(action).put("paused", true))
+        }
+        if (action in CONTROL_ACTIONS) {
+            if (!AndroidUseBridge.controlAllowed(service)) {
+                return recorded(action, error("AndroidUse control is disabled in Golder settings"))
+            }
+            if (AndroidUseBridge.isPaused(service)) {
+                return recorded(action, error("AndroidUse is paused; resume it in Golder settings"))
+            }
+        }
+        val response = when (action) {
             "observe" -> observe()
             "screenshot" -> screenshot()
             "tap" -> tap(request)
@@ -108,17 +132,17 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             "back" -> globalAction(AccessibilityService.GLOBAL_ACTION_BACK, "back")
             "home" -> globalAction(AccessibilityService.GLOBAL_ACTION_HOME, "home")
             "wait" -> waitFor(request)
-            "take_over" -> {
-                lastNodes.clear()
-                lastSnapshotId = ""
-                ok("take_over")
-            }
             else -> error("unsupported action")
         }
+        return recorded(action, response)
     }
 
     private fun observe(): JSONObject {
         val root = service.rootInActiveWindow ?: return error("no active window")
+        val rootPackage = root.packageName?.toString().orEmpty()
+        if (!packageAllowed(rootPackage)) {
+            return error("package $rootPackage is not in the AndroidUse allowlist")
+        }
         val nodes = JSONArray()
         val refs = linkedMapOf<String, AccessibilityNodeInfo>()
         var count = 0
@@ -169,6 +193,8 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         return ok("observe")
             .put("snapshotId", snapshot)
             .put("package", root.packageName?.toString().orEmpty())
+            .put("paused", AndroidUseBridge.isPaused(service))
+            .put("controlAllowed", AndroidUseBridge.controlAllowed(service))
             .put("display", JSONObject()
                 .put("width", metrics.widthPixels)
                 .put("height", metrics.heightPixels)
@@ -197,6 +223,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
                         val target = File(dir, "shot-${System.currentTimeMillis()}.png")
                         target.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
                         bitmap.recycle()
+                        pruneScreenshots(dir)
                         file = target
                     }
                 } catch (e: Exception) {
@@ -226,9 +253,14 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
 
     private fun tap(request: JSONObject): JSONObject {
         checkSnapshot(request)?.let { return error(it) }
+        packageAllowed(service.rootInActiveWindow?.packageName?.toString().orEmpty())
+            .let { if (!it) return error("current package is not in the AndroidUse allowlist") }
         val ref = request.optString("ref")
         if (ref.isNotBlank()) {
             val node = lastNodes[ref] ?: return error("unknown node ref")
+            sensitiveReason(node)?.let {
+                return error("sensitive action '$it' requires manual takeover")
+            }
             runCatching { node.refresh() }
             var target: AccessibilityNodeInfo? = node
             var depth = 0
@@ -237,26 +269,34 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
                 depth += 1
             }
             if (target != null && target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
-                return ok("tap").put("ref", ref)
+                return withForeground(ok("tap").put("ref", ref))
             }
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
             if (tapAt(bounds.centerX(), bounds.centerY())) {
-                return ok("tap").put("ref", ref).put("fallback", true)
+                return withForeground(ok("tap").put("ref", ref).put("fallback", true))
             }
             return error("tap failed")
+        }
+        sensitiveReason(service.rootInActiveWindow)?.let {
+            return error("sensitive action '$it' requires manual takeover")
         }
         val x = request.optInt("x", -1)
         val y = request.optInt("y", -1)
         if (x < 0 || y < 0) return error("tap requires ref or x/y")
-        return if (tapAt(x, y)) ok("tap") else error("tap failed")
+        return if (tapAt(x, y)) withForeground(ok("tap")) else error("tap failed")
     }
 
     private fun type(request: JSONObject): JSONObject {
         checkSnapshot(request)?.let { return error(it) }
+        packageAllowed(service.rootInActiveWindow?.packageName?.toString().orEmpty())
+            .let { if (!it) return error("current package is not in the AndroidUse allowlist") }
         val ref = request.optString("ref")
         val node = lastNodes[ref] ?: return error("unknown node ref")
         if (node.isPassword) return error("refusing to type into a password field")
+        sensitiveReason(node)?.let {
+            return error("sensitive action '$it' requires manual takeover")
+        }
         runCatching { node.refresh() }
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         val bundle = Bundle().apply {
@@ -268,11 +308,16 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, bundle)) {
             return error("text field did not accept text")
         }
-        return ok("type").put("ref", ref)
+        return withForeground(ok("type").put("ref", ref))
     }
 
     private fun swipe(request: JSONObject): JSONObject {
         checkSnapshot(request)?.let { return error(it) }
+        packageAllowed(service.rootInActiveWindow?.packageName?.toString().orEmpty())
+            .let { if (!it) return error("current package is not in the AndroidUse allowlist") }
+        sensitiveReason(service.rootInActiveWindow)?.let {
+            return error("sensitive action '$it' requires manual takeover")
+        }
         val x = request.optInt("x", -1)
         val y = request.optInt("y", -1)
         val toX = request.optInt("toX", -1)
@@ -285,12 +330,16 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             moveTo(x.toFloat(), y.toFloat())
             lineTo(toX.toFloat(), toY.toFloat())
         }
-        return if (dispatchGesture(path, duration)) ok("swipe") else error("swipe failed")
+        return if (dispatchGesture(path, duration)) withForeground(ok("swipe")) else error("swipe failed")
     }
 
     private fun openApp(request: JSONObject): JSONObject {
         val pkg = request.optString("packageName")
         if (!packagePattern.matches(pkg)) return error("invalid package name")
+        if (!packageAllowed(pkg)) return error("package $pkg is not in the AndroidUse allowlist")
+        if (BLOCKED_PACKAGES.any { pkg == it || pkg.startsWith("$it.") }) {
+            return error("opening system permission/installer UI is blocked")
+        }
         val intent = service.packageManager.getLaunchIntentForPackage(pkg)
             ?: return error("app is not installed")
         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -302,7 +351,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         repeat(10) {
             Thread.sleep(200)
             if (service.rootInActiveWindow?.packageName?.toString() == pkg) {
-                return ok("open_app").put("packageName", pkg)
+                return ok("open_app").put("packageName", pkg).put("verified", true)
             }
         }
         return error(
@@ -312,7 +361,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
     }
 
     private fun globalAction(action: Int, name: String): JSONObject {
-        return if (service.performGlobalAction(action)) ok(name) else error("$name failed")
+        return if (service.performGlobalAction(action)) withForeground(ok(name)) else error("$name failed")
     }
 
     private fun waitFor(request: JSONObject): JSONObject {
@@ -323,12 +372,66 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         }.getOrElse { error("wait interrupted") }
     }
 
+    private fun status(): JSONObject {
+        val pkg = service.rootInActiveWindow?.packageName?.toString().orEmpty()
+        return ok("status")
+            .put("paused", AndroidUseBridge.isPaused(service))
+            .put("controlAllowed", AndroidUseBridge.controlAllowed(service))
+            .put("package", pkg)
+            .put("allowlist", AndroidUseBridge.allowedPackages(service).joinToString(","))
+            .put("audit", AndroidUseBridge.recentAudit(service))
+    }
+
+    private fun recorded(action: String, response: JSONObject): JSONObject {
+        AndroidUseBridge.recordAudit(
+            service,
+            action,
+            response.optBoolean("ok"),
+            response.optString("package"),
+            response.optString("error"),
+        )
+        return response
+    }
+
+    private fun withForeground(response: JSONObject): JSONObject {
+        Thread.sleep(180)
+        val pkg = service.rootInActiveWindow?.packageName?.toString().orEmpty()
+        return response.put("package", pkg).put("verified", pkg.isNotBlank())
+    }
+
+    private fun sensitiveReason(node: AccessibilityNodeInfo?): String? {
+        var current = node
+        var depth = 0
+        while (current != null && depth < 4) {
+            val text = (
+                current.text?.toString().orEmpty() + " " +
+                    current.contentDescription?.toString().orEmpty()
+                ).lowercase()
+            SENSITIVE_TERMS.firstOrNull { text.contains(it) }?.let { return it }
+            current = current.parent
+            depth++
+        }
+        return null
+    }
+
+    private fun pruneScreenshots(dir: File) {
+        val files = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".png") }
+            ?.sortedByDescending { it.lastModified() }
+            ?: return
+        files.drop(8).forEach { runCatching { it.delete() } }
+    }
+
     private fun checkSnapshot(request: JSONObject): String? {
         val snapshot = request.optString("snapshotId")
         if (snapshot.isBlank() || snapshot != lastSnapshotId) {
             return "snapshot is stale; observe again"
         }
         return null
+    }
+
+    private fun packageAllowed(pkg: String): Boolean {
+        val allowed = AndroidUseBridge.allowedPackages(service)
+        return allowed.isEmpty() || pkg in allowed
     }
 
     private fun tapAt(x: Int, y: Int): Boolean {
@@ -367,5 +470,18 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         const val MAX_DEPTH = 30
         const val MAX_TEXT = 240
         val packagePattern = Regex("^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$")
+        val CONTROL_ACTIONS = setOf("tap", "type", "swipe", "open_app", "back", "home")
+        val BLOCKED_PACKAGES = listOf(
+            "com.android.permissioncontroller",
+            "com.google.android.permissioncontroller",
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller",
+        )
+        val SENSITIVE_TERMS = listOf(
+            "支付", "付款", "购买", "转账", "删除", "卸载", "安装", "允许", "确认",
+            "发送", "提交", "登录", "验证码",
+            "pay", "purchase", "transfer", "delete", "uninstall", "install",
+            "allow", "confirm", "send", "submit", "login", "verification",
+        )
     }
 }
