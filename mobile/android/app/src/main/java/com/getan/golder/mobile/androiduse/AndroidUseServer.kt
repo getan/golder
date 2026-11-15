@@ -246,6 +246,12 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (!latch.await(5, TimeUnit.SECONDS)) return error("screenshot timed out")
         failure?.let { return error(it) }
         val saved = file ?: return error("screenshot produced no file")
+        service.updateOverlay(
+            "screenshot",
+            service.rootInActiveWindow?.packageName?.toString().orEmpty(),
+            AndroidUseBridge.isPaused(service),
+            saved.absolutePath,
+        )
         return ok("screenshot")
             .put("path", saved.absolutePath)
             .put("size", saved.length())
@@ -259,7 +265,9 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (ref.isNotBlank()) {
             val node = lastNodes[ref] ?: return error("unknown node ref")
             sensitiveReason(node)?.let {
-                return error("sensitive action '$it' requires manual takeover")
+                if (!service.requestOverlayConfirmation("tap", nodeDetail(node))) {
+                    return error("sensitive action '$it' was not confirmed")
+                }
             }
             runCatching { node.refresh() }
             var target: AccessibilityNodeInfo? = node
@@ -278,12 +286,14 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             }
             return error("tap failed")
         }
-        sensitiveReason(service.rootInActiveWindow)?.let {
-            return error("sensitive action '$it' requires manual takeover")
-        }
         val x = request.optInt("x", -1)
         val y = request.optInt("y", -1)
         if (x < 0 || y < 0) return error("tap requires ref or x/y")
+        sensitiveReason(service.rootInActiveWindow)?.let {
+            if (!service.requestOverlayConfirmation("tap", "tap at $x,$y")) {
+                return error("sensitive action '$it' was not confirmed")
+            }
+        }
         return if (tapAt(x, y)) withForeground(ok("tap")) else error("tap failed")
     }
 
@@ -295,7 +305,9 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         val node = lastNodes[ref] ?: return error("unknown node ref")
         if (node.isPassword) return error("refusing to type into a password field")
         sensitiveReason(node)?.let {
-            return error("sensitive action '$it' requires manual takeover")
+            if (!service.requestOverlayConfirmation("type", nodeDetail(node))) {
+                return error("sensitive action '$it' was not confirmed")
+            }
         }
         runCatching { node.refresh() }
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
@@ -316,7 +328,9 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         packageAllowed(service.rootInActiveWindow?.packageName?.toString().orEmpty())
             .let { if (!it) return error("current package is not in the AndroidUse allowlist") }
         sensitiveReason(service.rootInActiveWindow)?.let {
-            return error("sensitive action '$it' requires manual takeover")
+            if (!service.requestOverlayConfirmation("swipe", "swipe on the current screen")) {
+                return error("sensitive action '$it' was not confirmed")
+            }
         }
         val x = request.optInt("x", -1)
         val y = request.optInt("y", -1)
@@ -390,6 +404,11 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             response.optString("package"),
             response.optString("error"),
         )
+        service.updateOverlay(
+            action,
+            response.optString("package"),
+            AndroidUseBridge.isPaused(service),
+        )
         AndroidUseNotifier.update(
             service,
             action,
@@ -418,6 +437,12 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             depth++
         }
         return null
+    }
+
+    private fun nodeDetail(node: AccessibilityNodeInfo): String {
+        val text = node.text?.toString().orEmpty()
+        val description = node.contentDescription?.toString().orEmpty()
+        return (text + " " + description).trim().take(80).ifBlank { "current control" }
     }
 
     private fun pruneScreenshots(dir: File) {

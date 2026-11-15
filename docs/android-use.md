@@ -150,7 +150,7 @@ Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `Loc
 - 审计记录只保存动作、包名、结果和错误摘要，不保存屏幕文本；
 - 包 allowlist：留空允许所有 App，非空时只允许列出的包名。
 
-已增加 AndroidUse 常驻状态通知：显示当前动作/包名，并在通知上提供 Pause/Resume。仍未完成：完整画面预览/悬浮窗、完整 OEM 设备矩阵，以及真正逐次人工确认的审批 UI。当前敏感动作采用本地拦截 + 暂停/接管，而不是每次弹窗确认。
+已增加 AndroidUse 常驻状态通知和 Accessibility overlay：显示当前动作/包名、最近截图，并在 overlay 上提供 Pause/Resume。敏感动作在 overlay 上显示 Allow once / Deny，等待用户确认；拒绝或超时则失败关闭。仍未完成：完整 OEM 设备矩阵和真实长时任务验收。
 
 ### 6.1 范围
 
