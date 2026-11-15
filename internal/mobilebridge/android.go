@@ -15,6 +15,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/androidagent"
 	"github.com/getan/golder/internal/mobileagent"
+	"github.com/getan/golder/internal/permissions"
 	"github.com/getan/golder/internal/provider"
 	"github.com/getan/golder/internal/session"
 )
@@ -29,6 +30,17 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	if err != nil {
 		return nil, err
 	}
+	contextWindow := cfg.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = provider.ContextWindowFor(name, cfg.Model)
+	}
+	permissionMode := permissions.Auto
+	if cfg.PermissionMode != "" {
+		if parsed, ok := permissions.Parse(cfg.PermissionMode); ok {
+			permissionMode = parsed
+		}
+	}
+	permissionState := permissions.New(permissionMode)
 	credentials := provider.NewCredentialStore(nil)
 	credentials.SetOverride(name, cfg.APIKey)
 
@@ -45,6 +57,7 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	toolset, err := androidagent.New(androidagent.Config{
 		Root:           cfg.Workspace,
 		BeforeToolCall: gate,
+		Permissions:    permissionState,
 		NoShell:        true,
 		GitAuthorName:  cfg.GitAuthorName,
 		GitAuthorEmail: cfg.GitAuthorEmail,
@@ -111,10 +124,10 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		SystemPrompt:  prompt,
 		History:       history,
 		Batch:         toolset.Batch,
-		Permissions:   toolset.Permissions,
-		ContextWindow: cfg.ContextWindow,
+		ContextWindow: contextWindow,
 		ObserveEvent:  observe,
 		ThinkingLevel: agentcore.ThinkingLevel(cfg.ThinkingLevel),
+		Permissions:   permissionState,
 		Checkpoint:    func(_ context.Context, agentCtx *agentcore.AgentContext, _ bool) { backend.save(agentCtx.Messages) },
 		OnRunEnd:      backend.save,
 		SessionID:     sessionID,

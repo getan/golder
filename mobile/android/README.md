@@ -25,14 +25,18 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 
 - 主界面只显示会话：用户消息在右侧、agent 在左侧，各用不同颜色气泡；工具调用
   默认折叠，只显示真实命令（如 `git clone …`、`read …`）和一行结果摘要。
+- 运行中逐条显示命令；一轮结束后，连续命令合并成一条 `N commands` 卡片，
+  展开后才显示每条命令和输出。普通对话气泡始终保留。
 - `todo` 工具卡片默认展开并用高亮边框显示；只保留最新一份任务清单，完成项
   划线、进行项加粗。
-- 顶部状态栏显示当前项目、provider · model · reasoning；设置按钮打开集中配置页。
+- 顶部显示当前项目和 provider · model · reasoning；下面的状态条显示权限模式、
+  上下文窗口使用百分比和 Git 分支。
+- 设置页提供四种权限模式：只读、每次询问、自动审批、完全放行；选择写入会话配置。
 - 设置页包含 `Provider · Model · Reasoning`、`Connection`（Base URL + API key）
   和 GitHub token；密钥分别由 Android Keystore 加密保存。
 - 左滑项目抽屉列出项目并支持新建；每个项目是独立 workspace 根目录，切换后
-  自动打开。Android 系统返回手势占用最左边缘，因此从内容区左滑或点汉堡按钮
-  打开抽屉。
+  自动打开。抽屉宽 300dp，项目完整路径在一行内横向滚动。Android 系统返回手势
+  占用最左边缘，因此从内容区左滑或点汉堡按钮打开抽屉。
 - Provider/model/reasoning/Base URL 会保存；模型 API key 用 Android Keystore
   加密保存，重启后恢复。Connection 卡片只显示 `API key ••••••`，GitHub token
   也显示掩码。
@@ -42,6 +46,8 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 - 本地 Git：status/diff/log/add/commit/branch/checkout/remote；移动 UI 默认开启
   Git 网络（clone/fetch/push），不再提供复选框。它是会话级能力，不是逐次审批。
 - clone/fetch 遇到临时 TCP 中断会重试一次；push 不自动重试，避免远端状态未知。
+- 上下文百分比来自 Go 的 `context_usage` 事件；窗口大小由 provider catalog
+  补全。Git 分支从项目目录的 `.git/HEAD` 读取，Git 命令结束后刷新。
 - 当前 Git 工具只把 **workspace 根目录**当作仓库：要提交/推送，必须直接 clone
   到空的 workspace 根目录，或在根目录 init；clone 到子目录后 `add`/`commit`
   会报 “not a Git repository”。

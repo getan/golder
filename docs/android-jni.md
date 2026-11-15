@@ -61,6 +61,7 @@ object GolderNative {
   "model": "gpt-6.1-sol",
   "provider": "openai",
   "thinkingLevel": "high",
+  "permissionMode": "auto",
   "baseUrl": "",
   "protocol": "",
   "apiKey": "…",

@@ -20,13 +20,14 @@ import (
 
 // Event types carried across the host boundary.
 const (
-	EventRunStart   = "run_start"
-	EventText       = "text"
-	EventThinking   = "thinking"
-	EventToolStart  = "tool_start"
-	EventToolUpdate = "tool_update"
-	EventToolEnd    = "tool_end"
-	EventRunEnd     = "run_end"
+	EventRunStart     = "run_start"
+	EventText         = "text"
+	EventThinking     = "thinking"
+	EventToolStart    = "tool_start"
+	EventToolUpdate   = "tool_update"
+	EventToolEnd      = "tool_end"
+	EventContextUsage = "context_usage"
+	EventRunEnd       = "run_end"
 )
 
 // Event is one ordered notification. Seq is assigned by the session and
@@ -35,18 +36,20 @@ const (
 // are JSON-safe so a JNI/Objective-C bridge can forward the marshaled value
 // without inspecting Go types.
 type Event struct {
-	Seq        uint64          `json:"seq"`
-	RunID      string          `json:"runId,omitempty"`
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	ToolCallID string          `json:"toolCallId,omitempty"`
-	ToolName   string          `json:"toolName,omitempty"`
-	Args       json.RawMessage `json:"args,omitempty"`
-	Details    json.RawMessage `json:"details,omitempty"`
-	IsError    bool            `json:"isError,omitempty"`
-	StopReason string          `json:"stopReason,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Cancelled  bool            `json:"cancelled,omitempty"`
+	Seq           uint64          `json:"seq"`
+	RunID         string          `json:"runId,omitempty"`
+	Type          string          `json:"type"`
+	Text          string          `json:"text,omitempty"`
+	ToolCallID    string          `json:"toolCallId,omitempty"`
+	ToolName      string          `json:"toolName,omitempty"`
+	Args          json.RawMessage `json:"args,omitempty"`
+	ContextTokens int             `json:"contextTokens,omitempty"`
+	ContextWindow int             `json:"contextWindow,omitempty"`
+	Details       json.RawMessage `json:"details,omitempty"`
+	IsError       bool            `json:"isError,omitempty"`
+	StopReason    string          `json:"stopReason,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	Cancelled     bool            `json:"cancelled,omitempty"`
 }
 
 // Config is supplied by the mobile host, never by the model. Workspace, Stream
@@ -279,6 +282,11 @@ func (s *Session) run(ctx context.Context, runID string) {
 				}
 			case agentcore.ToolExecutionStartEvent:
 				s.append(Event{RunID: runID, Type: EventToolStart, ToolCallID: e.ToolCallID, ToolName: e.ToolName, Args: marshalAny(e.Args)})
+			case agentcore.ContextUsageEvent:
+				s.append(Event{
+					RunID: runID, Type: EventContextUsage,
+					ContextTokens: e.Tokens, ContextWindow: e.Window,
+				})
 			case agentcore.ToolExecutionUpdateEvent:
 				s.append(Event{RunID: runID, Type: EventToolUpdate, ToolCallID: e.ToolCallID, ToolName: e.ToolName, Text: agentcore.ContentToText(e.PartialResult.Content)})
 			case agentcore.ToolExecutionEndEvent:

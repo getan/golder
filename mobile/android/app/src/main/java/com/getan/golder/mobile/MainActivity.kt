@@ -14,6 +14,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -59,6 +61,22 @@ data class Entry(
 )
 
 data class TodoItem(val content: String, val status: String)
+
+data class PermissionModeOption(
+    val id: String,
+    val label: String,
+    val description: String,
+)
+
+private val permissionModeOptions = listOf(
+    PermissionModeOption("read-only", "只读", "只允许工作区内读取；写入、联网和离开沙箱直接拒绝"),
+    PermissionModeOption("ask", "每次询问", "评审先过滤安全调用；其余调用合并成一次人工确认"),
+    PermissionModeOption("auto", "自动审批", "评审自动决定风险与能力扩张，不打断人"),
+    PermissionModeOption("full-access", "完全放行", "不审查、不询问；仅保留静态硬拒名单（危险）"),
+)
+
+private fun permissionModeLabel(id: String): String =
+    permissionModeOptions.firstOrNull { it.id == id }?.label ?: id
 
 data class ProviderOption(
     val name: String,
@@ -99,6 +117,7 @@ private fun GolderApp() {
     var provider by remember { mutableStateOf("openai") }
     var model by remember { mutableStateOf("gpt-4o-mini") }
     var thinking by remember { mutableStateOf("") }
+    var permissionMode by remember { mutableStateOf("auto") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
@@ -107,6 +126,8 @@ private fun GolderApp() {
     var handle by remember { mutableIntStateOf(0) }
     var opening by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
+    var contextPercent by remember { mutableStateOf<Int?>(null) }
+    var gitBranch by remember { mutableStateOf("no repo") }
     var status by remember { mutableStateOf("Starting…") }
     var nextId by remember { mutableStateOf(1L) }
     val entries = remember { mutableStateListOf<Entry>() }
@@ -188,6 +209,8 @@ private fun GolderApp() {
                 status = "Cannot create project: ${project.path}"
                 return
             }
+            contextPercent = null
+            gitBranch = withContext(Dispatchers.IO) { readGitBranch(dir) }
             status = "Opening ${project.name}…"
             if (handle != 0) {
                 withContext(Dispatchers.IO) { GolderNative.close(handle) }
@@ -199,12 +222,13 @@ private fun GolderApp() {
                 SecureStore.saveToken(context, gitToken)
                 SecureStore.saveAPIKey(context, apiKey)
             }
-            SettingsStore.save(context, provider, model, thinking, baseUrl)
+            SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode)
             val config = JSONObject()
                 .put("workspace", dir.absolutePath)
                 .put("provider", provider)
                 .put("model", model.trim().ifBlank { "gpt-4o-mini" })
                 .put("thinkingLevel", thinking)
+                .put("permissionMode", permissionMode)
                 .put("apiKey", apiKey)
                 .put("stateDir", stateDir.absolutePath)
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
@@ -271,6 +295,7 @@ private fun GolderApp() {
         if (saved.provider.isNotBlank()) provider = saved.provider
         if (saved.model.isNotBlank()) model = saved.model
         thinking = saved.thinking
+        permissionMode = saved.permissionMode
         baseUrl = saved.baseUrl
 
         val catalogRaw = runCatching {
@@ -320,7 +345,7 @@ private fun GolderApp() {
                 }
             }.onFailure { Log.e("GolderJNI", "catalog parse failed", it) }
         }
-        SettingsStore.save(context, provider, model, thinking, baseUrl)
+        SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode)
 
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
@@ -403,6 +428,25 @@ private fun GolderApp() {
                                     ),
                                 )
                             }
+                            if (name == "git") {
+                                val path = activeProject?.path
+                                if (path != null) {
+                                    scope.launch(Dispatchers.IO) {
+                                        gitBranch = readGitBranch(File(path))
+                                    }
+                                }
+                            }
+                        }
+                        "context_usage" -> {
+                            val window = event.optInt("contextWindow")
+                            val tokens = event.optInt("contextTokens")
+                            contextPercent = if (window > 0) {
+                                ((tokens.toDouble() / window) * 100)
+                                    .roundToInt()
+                                    .coerceIn(0, 100)
+                            } else {
+                                null
+                            }
                         }
                         "run_end" -> {
                             running = false
@@ -459,6 +503,7 @@ private fun GolderApp() {
             provider = provider,
             model = model,
             thinking = thinking,
+            permissionMode = permissionMode,
             baseUrl = baseUrl,
             apiKey = apiKey,
             gitToken = gitToken,
@@ -468,12 +513,16 @@ private fun GolderApp() {
                 provider = p
                 model = m
                 thinking = t
-                SettingsStore.save(context, p, m, t, baseUrl)
+                SettingsStore.save(context, p, m, t, baseUrl, permissionMode)
+            },
+            onPermissionPick = { mode ->
+                permissionMode = mode
+                SettingsStore.save(context, provider, model, thinking, baseUrl, mode)
             },
             onConnectionPick = { url, key ->
                 baseUrl = url
                 apiKey = key
-                SettingsStore.save(context, provider, model, thinking, url)
+                SettingsStore.save(context, provider, model, thinking, url, permissionMode)
                 scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
             },
             onTokenChange = { gitToken = it },
@@ -504,18 +553,25 @@ private fun GolderApp() {
     ) {
         Scaffold(
             topBar = {
-                MainTopBar(
-                    projectName = activeProject?.name ?: "Golder",
-                    provider = provider,
-                    model = model,
-                    thinking = thinking,
-                    connected = handle != 0,
-                    running = running,
-                    onMenu = { scope.launch { drawerState.open() } },
-                    onSettings = { settingsOpen = true },
-                    onOpen = { scope.launch { activeProject?.let { openWorkspace(it) } } },
-                    onStop = { if (handle != 0) GolderNative.cancel(handle) },
-                )
+                Column {
+                    MainTopBar(
+                        projectName = activeProject?.name ?: "Golder",
+                        provider = provider,
+                        model = model,
+                        thinking = thinking,
+                        connected = handle != 0,
+                        running = running,
+                        onMenu = { scope.launch { drawerState.open() } },
+                        onSettings = { settingsOpen = true },
+                        onOpen = { scope.launch { activeProject?.let { openWorkspace(it) } } },
+                        onStop = { if (handle != 0) GolderNative.cancel(handle) },
+                    )
+                    StatusStrip(
+                        mode = permissionMode,
+                        contextPercent = contextPercent,
+                        branch = gitBranch,
+                    )
+                }
             },
             bottomBar = {
                 Composer(
@@ -650,6 +706,36 @@ private fun MainTopBar(
 }
 
 @Composable
+private fun StatusStrip(
+    mode: String,
+    contextPercent: Int?,
+    branch: String,
+) {
+    Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "${permissionModeLabel(mode)} · ctx ${contextPercent?.let { "$it%" } ?: "--"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+            Text(
+                "⑂ $branch",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
 private fun Conversation(
     entries: List<Entry>,
     running: Boolean,
@@ -676,26 +762,43 @@ private fun Conversation(
                 )
             }
         }
-        items(visible, key = { it.id }) { entry ->
-            when {
-                entry.kind == "user" -> ChatBubble(entry.text, user = true)
-                entry.kind == "assistant" -> ChatBubble(entry.text, user = false)
-                entry.kind == "tool" && isTodoTool(entry.toolName) -> TodoCard(entry)
-                entry.kind == "tool" -> ToolCard(entry)
-                entry.kind == "thinking" -> Text(
-                    entry.text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                else -> Text(
-                    entry.text,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+        if (running) {
+            // Keep each command visible while the run is in progress.
+            items(visible, key = { it.id }) { entry ->
+                ConversationEntry(entry)
+            }
+        } else {
+            // Once the run is complete, merge consecutive completed commands.
+            var index = 0
+            while (index < visible.size) {
+                val entry = visible[index]
+                if (entry.kind == "tool" && !isTodoTool(entry.toolName) && entry.toolDone) {
+                    val group = mutableListOf(entry)
+                    var next = index + 1
+                    while (next < visible.size) {
+                        val candidate = visible[next]
+                        if (candidate.kind == "tool" &&
+                            !isTodoTool(candidate.toolName) &&
+                            candidate.toolDone
+                        ) {
+                            group.add(candidate)
+                            next++
+                        } else {
+                            break
+                        }
+                    }
+                    if (group.size > 1) {
+                        item(key = "group-${group.first().id}-${group.last().id}") {
+                            ToolGroupCard(group)
+                        }
+                        index = next
+                        continue
+                    }
+                }
+                item(key = "entry-${entry.id}") {
+                    ConversationEntry(entry)
+                }
+                index++
             }
         }
         if (running) {
@@ -707,6 +810,30 @@ private fun Conversation(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ConversationEntry(entry: Entry) {
+    when {
+        entry.kind == "user" -> ChatBubble(entry.text, user = true)
+        entry.kind == "assistant" -> ChatBubble(entry.text, user = false)
+        entry.kind == "tool" && isTodoTool(entry.toolName) -> TodoCard(entry)
+        entry.kind == "tool" -> ToolCard(entry)
+        entry.kind == "thinking" -> Text(
+            entry.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+        )
+        else -> Text(
+            entry.text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -735,6 +862,64 @@ private fun ChatBubble(text: String, user: Boolean) {
                 },
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun ToolGroupCard(entries: List<Entry>) {
+    var expanded by remember(entries.first().id, entries.last().id) {
+        mutableStateOf(false)
+    }
+    val errors = entries.count { it.toolError }
+    val names = entries.map { it.toolName }.distinct().joinToString(" · ")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (errors > 0) "✗" else "✓",
+                    color = if (errors > 0) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "${entries.size} commands",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    if (expanded) "Hide" else "Show",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                names,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (expanded) {
+                Spacer(Modifier.height(6.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    entries.forEach { ToolCard(it) }
+                }
+            }
         }
     }
 }
@@ -924,6 +1109,17 @@ private fun toolCommand(name: String, args: JSONObject?): String {
     }
 }
 
+private fun readGitBranch(root: File): String = runCatching {
+    val head = File(root, ".git/HEAD")
+    if (!head.isFile) return@runCatching "no repo"
+    val value = head.readText().trim()
+    when {
+        value.startsWith("ref: refs/heads/") -> value.removePrefix("ref: refs/heads/")
+        value.length >= 7 -> value.take(7)
+        else -> "detached"
+    }
+}.getOrDefault("no repo")
+
 private fun parseTodoItems(raw: String): List<TodoItem> {
     val items = mutableListOf<TodoItem>()
     for (line in raw.lineSequence()) {
@@ -983,12 +1179,14 @@ private fun SettingsScreen(
     provider: String,
     model: String,
     thinking: String,
+    permissionMode: String,
     baseUrl: String,
     apiKey: String,
     gitToken: String,
     tokenLoaded: Boolean,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
+    onPermissionPick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
     onTokenChange: (String) -> Unit,
     onForgetToken: () -> Unit,
@@ -1029,6 +1227,11 @@ private fun SettingsScreen(
                 baseUrl = baseUrl,
                 apiKey = apiKey,
                 onPick = onConnectionPick,
+            )
+            Text("Permissions", style = MaterialTheme.typography.titleMedium)
+            PermissionModePicker(
+                mode = permissionMode,
+                onPick = onPermissionPick,
             )
             Text("GitHub", style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
@@ -1074,7 +1277,7 @@ private fun ProjectDrawer(
     onSelect: (Project) -> Unit,
     onNew: () -> Unit,
 ) {
-    ModalDrawerSheet {
+    ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Text("Golder", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
@@ -1091,11 +1294,11 @@ private fun ProjectDrawer(
                             Column {
                                 Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    project.path.substringAfterLast('/'),
+                                    project.path,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
                                 )
                             }
                         },
@@ -1138,6 +1341,70 @@ private fun NewProjectDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun PermissionModePicker(
+    mode: String,
+    onPick: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val current = permissionModeOptions.firstOrNull { it.id == mode }
+        ?: permissionModeOptions.last()
+    Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Permission mode", style = MaterialTheme.typography.labelSmall)
+            Text(
+                current.label,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                current.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+    if (!open) return
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text("Permission mode") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                permissionModeOptions.forEach { option ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onPick(option.id)
+                                open = false
+                            }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.Top,
+                    ) {
+                        RadioButton(
+                            selected = option.id == mode,
+                            onClick = {
+                                onPick(option.id)
+                                open = false
+                            },
+                        )
+                        Column(modifier = Modifier.padding(top = 10.dp)) {
+                            Text(option.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                option.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { open = false }) { Text("Close") }
         },
     )
 }

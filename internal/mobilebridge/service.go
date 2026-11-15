@@ -47,6 +47,8 @@ type Config struct {
 	AllowNetworkGit bool `json:"allowNetworkGit,omitempty"`
 	// ThinkingLevel is the selected reasoning level (low, medium, high, max).
 	ThinkingLevel string `json:"thinkingLevel,omitempty"`
+	// PermissionMode is one of read-only, ask, auto, full-access.
+	PermissionMode string `json:"permissionMode,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.
