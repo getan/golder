@@ -101,14 +101,19 @@ jobs:
           gradle-version: "8.14.6"
 
       - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install SDK packages
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018"
+          sdk="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          test -d "$sdk"
+          sdkmanager="$(find "$sdk/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          test -n "$sdkmanager"
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$sdk/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$(dirname "$sdkmanager")" >> "$GITHUB_PATH"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018"
 
       - name: Build APK
         shell: bash
