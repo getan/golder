@@ -1,6 +1,6 @@
 # AndroidUse：Android 设备操作层设计
 
-> 状态：设计提案，尚未实现。
+> 状态：Phase 1 已实现，并在 Redmi / Android 14 上完成验收。多设备矩阵作为可选扩展，不作为当前项目门槛。
 >
 > 目标：为 Golder Android 增加类似桌面 BrowserUse / ComputerUse 的基本能力，让 Agent 能观察和操作其他 Android App。
 >
@@ -200,7 +200,7 @@ internal/androiduse/
 - 用户开启/关闭无障碍后状态正确；未授权时不暴露工具。
 - `take_over` 立即取消未完成动作；用户接管期间 Agent 不注入输入。
 - 屏幕内容不写入普通日志或会话文本；截图按可配置保留策略处理。
-- Android 12、13、14 至少各一台设备/模拟器完成基本回归。
+- 当前验收设备为 Redmi / Android 14；在这台设备上完成基本回归即可，多设备矩阵作为可选扩展。
 
 ## 7. Phase 2：后台虚拟屏
 
@@ -281,8 +281,8 @@ Phase 2 必须单独提示“这是 shell 身份，不是普通 App 权限”，
 
 ### 设备矩阵
 
-- Pixel/AOSP Android 12、14、15。
-- 至少一台国内 OEM ROM，覆盖后台限制和无线调试差异。
+- 当前单机验收：Redmi / Android 14（MIUI/HyperOS 环境）。
+- 多设备/Pixel/AOSP 矩阵作为后续可选扩展。
 - 真实 App 验收只使用测试账号和明确授权的 App。
 
 ## 11. 迁移与发布顺序
