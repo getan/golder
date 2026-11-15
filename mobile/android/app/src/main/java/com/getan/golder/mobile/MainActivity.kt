@@ -549,6 +549,7 @@ private fun GolderApp() {
         return
     }
 
+    CompositionLocalProvider(LocalStrings provides stringsFor(language)) {
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -664,6 +665,7 @@ private fun GolderApp() {
             },
         )
     }
+    }
 }
 
 @Composable
@@ -679,6 +681,7 @@ private fun MainTopBar(
     onOpen: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val s = LocalStrings.current
     TopAppBar(
         navigationIcon = {
             TextButton(onClick = onMenu) { Text("☰", fontSize = 22.sp) }
@@ -702,9 +705,9 @@ private fun MainTopBar(
         },
         actions = {
             if (running) {
-                TextButton(onClick = onStop) { Text("Stop") }
+                TextButton(onClick = onStop) { Text(s.stop) }
             } else if (!connected) {
-                TextButton(onClick = onOpen) { Text("Open") }
+                TextButton(onClick = onOpen) { Text(s.open) }
             }
             TextButton(onClick = onSettings) { Text("⚙", fontSize = 20.sp) }
         },
@@ -720,6 +723,7 @@ private fun StatusStrip(
     contextPercent: Int?,
     branch: String,
 ) {
+    val s = LocalStrings.current
     Surface(color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -727,7 +731,7 @@ private fun StatusStrip(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "${permissionModeLabel(mode)} · ctx ${contextPercent?.let { "$it%" } ?: "--"}",
+                "${permissionModeLabel(mode)} · ${s.ctx} ${contextPercent?.let { "$it%" } ?: "--"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -751,6 +755,7 @@ private fun Conversation(
     listState: androidx.compose.foundation.lazy.LazyListState,
     modifier: Modifier = Modifier,
 ) {
+    val s = LocalStrings.current
     val latestTodoId = entries.lastOrNull {
         it.kind == "tool" && isTodoTool(it.toolName)
     }?.id
@@ -765,7 +770,7 @@ private fun Conversation(
         if (visible.isEmpty()) {
             item {
                 Text(
-                    "Start a task below.",
+                    s.startTask,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -815,7 +820,7 @@ private fun Conversation(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.height(16.dp).width(16.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Working…", style = MaterialTheme.typography.labelSmall)
+                    Text(s.working, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -1159,6 +1164,7 @@ private fun Composer(
     onPrompt: (String) -> Unit,
     onSend: () -> Unit,
 ) {
+    val s = LocalStrings.current
     Surface(
         tonalElevation = 2.dp,
         modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
@@ -1170,13 +1176,13 @@ private fun Composer(
             OutlinedTextField(
                 value = prompt,
                 onValueChange = onPrompt,
-                label = { Text("Task") },
+                label = { Text(s.task) },
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
                 enabled = !running,
             )
             Spacer(Modifier.width(8.dp))
-            Button(enabled = enabled, onClick = onSend) { Text("Send") }
+            Button(enabled = enabled, onClick = onSend) { Text(s.send) }
         }
     }
 }
@@ -1290,12 +1296,13 @@ private fun ProjectDrawer(
     onSelect: (Project) -> Unit,
     onNew: () -> Unit,
 ) {
+    val s = LocalStrings.current
     ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
             Text("Golder", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Projects",
+                s.projects,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1324,7 +1331,7 @@ private fun ProjectDrawer(
                 }
             }
             TextButton(onClick = onNew, modifier = Modifier.fillMaxWidth()) {
-                Text("+ New project")
+                Text(s.newProject)
             }
         }
     }
@@ -1335,15 +1342,16 @@ private fun NewProjectDialog(
     onDismiss: () -> Unit,
     onCreate: (String) -> Unit,
 ) {
+    val s = LocalStrings.current
     var name by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("New project") },
+        title = { Text(s.newProject) },
         text = {
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
-                label = { Text("Project name") },
+                label = { Text(s.projectName) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -1352,10 +1360,10 @@ private fun NewProjectDialog(
             TextButton(
                 enabled = name.isNotBlank(),
                 onClick = { onCreate(name.trim()) },
-            ) { Text("Create") }
+            ) { Text(s.create) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            TextButton(onClick = onDismiss) { Text(s.cancel) }
         },
     )
 }
