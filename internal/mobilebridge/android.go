@@ -4,6 +4,7 @@ package mobilebridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +32,14 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	credentials := provider.NewCredentialStore(nil)
 	credentials.SetOverride(name, cfg.APIKey)
 
-	gate := func(context.Context, agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+	gate := func(_ context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		if call.Name == "git" && gitNeedsNetwork(call.Arguments) {
+			if !cfg.AllowNetworkGit {
+				content := agentcore.ContentList{agentcore.NewTextContent("network Git is disabled by the host; local git operations are available")}
+				return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
+			}
+			return &agentcore.BeforeToolCallDecision{Network: true}
+		}
 		return &agentcore.BeforeToolCallDecision{}
 	}
 	toolset, err := androidagent.New(androidagent.Config{
@@ -166,6 +174,21 @@ func (b *androidBackend) save(msgs agentcore.MessageList) {
 	b.header.UpdatedAt = time.Now().UTC()
 	if err := b.store.Save(b.header, msgs); err != nil && b.debug != nil {
 		fmt.Fprintf(b.debug, "persist_error=%v\n", err)
+	}
+}
+
+func gitNeedsNetwork(raw json.RawMessage) bool {
+	var a struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal(raw, &a) != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(a.Action)) {
+	case "clone", "fetch", "push":
+		return true
+	default:
+		return false
 	}
 }
 

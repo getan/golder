@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -75,6 +76,7 @@ private fun GolderApp() {
     var model by remember { mutableStateOf("gpt-4o-mini") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    var allowGitNetwork by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var handle by remember { mutableIntStateOf(0) }
     var running by remember { mutableStateOf(false) }
@@ -229,6 +231,14 @@ private fun GolderApp() {
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = allowGitNetwork,
+                onCheckedChange = { allowGitNetwork = it },
+                enabled = handle == 0,
+            )
+            Text("Allow Git network (clone/fetch/push)", style = MaterialTheme.typography.bodySmall)
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 enabled = !running,
@@ -250,6 +260,7 @@ private fun GolderApp() {
                             .put("apiKey", apiKey)
                             .put("stateDir", stateDir.absolutePath)
                             .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
+                            .put("allowNetworkGit", allowGitNetwork)
                         if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
                         val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
                         if (opened == 0) {

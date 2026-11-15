@@ -42,6 +42,9 @@ type Config struct {
 	GitAuthorName  string `json:"gitAuthorName,omitempty"`
 	GitAuthorEmail string `json:"gitAuthorEmail,omitempty"`
 	GitToken       string `json:"gitToken,omitempty"`
+	// AllowNetworkGit is a session capability, not a per-call decision. When
+	// false, git clone/fetch/push fail closed; local Git still works.
+	AllowNetworkGit bool `json:"allowNetworkGit,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.

@@ -69,6 +69,7 @@ object GolderNative {
   "gitAuthorName": "Your Name",
   "gitAuthorEmail": "you@example.com",
   "gitToken": "",
+  "allowNetworkGit": false,
   "debugLog": ""
 }
 ```
@@ -79,11 +80,11 @@ object GolderNative {
 
 `stateDir` 可选，设置后会话保存在 `<stateDir>/sessions/<sessionId>.jsonl`；同一 `sessionId` 重新打开会恢复历史。锁文件防止同一会话被两个进程同时写入。当前采用整文件原子重写，后续可换成增量追加。
 
-`gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。Android UI 目前还没有网络 Git 的授权卡片，因此 `clone`/`fetch`/`push` 会明确报“network access is not authorized”；本地 `commit`/`branch`/`status`/`log` 可用。
+`gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。`allowNetworkGit` 是**会话级**宿主能力：默认关闭时 `clone`/`fetch`/`push` 明确失败关闭，本地 `commit`/`branch`/`status`/`log` 可用；UI 提供“Allow Git network”复选框，在打开会话前设置。逐次网络授权的审批卡片仍未实现。
 
 ## 尚未解决的边界
 
-- 目前是**文件型 + 本地 Git 后端**，不是完整的 `auto` 权限链：没有 shell、浏览器；网络 Git 还没有宿主授权 UI。不能把这个后端说成已经支持完整任务自动化。
+- 目前是**文件型 + 本地 Git 后端**，网络 Git 由会话级复选框授权；还不是逐次审批的完整 `auto` 权限链，没有 shell 或浏览器。不能把这个后端说成已经支持完整任务自动化。
 - 会话持久化和重启恢复已有基础实现；后台执行限制、结果未知时的写操作保护和多会话列表仍待实现。
 
 ## 工具链与 UI

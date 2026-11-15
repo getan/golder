@@ -28,9 +28,10 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 - 流式文本、thinking、工具开始/结束和运行状态。
 - 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
 - 本地 Git：status/diff/log/add/commit/branch/checkout/remote；clone/fetch/push 在网络授权前失败关闭。
+- “Allow Git network” 是打开会话前的复选框；它是会话级授权，不是逐次审批。
 - `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据。
 
 ## 边界
 
-- 还没有审批卡片、多会话列表、远程 Git 授权 UI、后台执行恢复或 iOS。
+- 还没有逐次审批卡片、多会话列表、后台执行恢复或 iOS。
 - JNI 版本在启动时调用并写入 logcat（`GolderJNI`），用于确认 Kotlin→Go 路径。
