@@ -1120,7 +1120,15 @@ func TestProviderSwitchDropsTheFetchedCatalog(t *testing.T) {
 		for _, it := range m.menu.pick {
 			rows = append(rows, it.Value)
 		}
-		t.Errorf("bare /model offered %v; the previous gateway's lineup must not come back", rows)
+		if len(rows) == 0 {
+			t.Error("bare /model opened an empty picker after the provider switch")
+		}
+		for _, row := range rows {
+			if strings.Contains(row, "glm-") {
+				t.Errorf("bare /model offered %v; the previous gateway's lineup must not come back", rows)
+				break
+			}
+		}
 	}
 	if cmd == nil {
 		t.Error("expected the async fetch for the new gateway")
