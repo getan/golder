@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-11-15
 >
-> 相关资料：[现有系统架构图](assets/golder-architecture-zh.png)、[桌面 GUI 架构](gui-architecture.md)、[Android 验证备忘](android-coding-agent-memo.md)。
+> 相关资料：[现有系统架构图](assets/golder-architecture-zh.png)、[桌面 GUI 架构](gui-architecture.md)、[Android 验证备忘](android-coding-agent-memo.md)、[Android 回归测试](android-testing.md)。
 
 ## 摘要
 
