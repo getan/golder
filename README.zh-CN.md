@@ -14,7 +14,7 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用、An
 
 ## 整体架构
 
-![Golder 系统架构：原生 GUI、Android 应用、终端和 CLI 接入 Agent 运行时，连接模型、工具、会话与安全边界](docs/assets/golder-architecture-zh.png)
+![Golder 系统架构：原生 GUI、Android 应用、终端和 CLI 接入 Agent 运行时，连接模型、工具、会话与安全边界](docs/assets/golder-architecture-zh.svg)
 
 从上到下看，Golder 将交互、Agent 能力和执行边界分开：
 

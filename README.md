@@ -14,7 +14,7 @@ Approvals, credential redaction and OS sandboxing provide configurable safeguard
 
 ## Architecture
 
-![Golder architecture: desktop GUI, Android app, terminal and CLI connect to the Agent runtime, providers, tools, session state and security boundaries](docs/assets/golder-architecture-zh.png)
+![Golder architecture: desktop GUI, Android app, terminal and CLI connect to the Agent runtime, providers, tools, session state and security boundaries](docs/assets/golder-architecture-zh.svg)
 
 The diagram's labels are in Chinese; its layers are:
 

@@ -4,7 +4,7 @@
 >
 > 最后更新：2026-11-15
 >
-> 相关资料：[现有系统架构图](assets/golder-architecture-zh.png)、[桌面 GUI 架构](gui-architecture.md)、[Android 验证备忘](android-coding-agent-memo.md)、[Android 回归测试](android-testing.md)、[Android JNI 桥接](android-jni.md)。
+> 相关资料：[现有系统架构图](assets/golder-architecture-zh.svg)、[桌面 GUI 架构](gui-architecture.md)、[Android 验证备忘](android-coding-agent-memo.md)、[Android 回归测试](android-testing.md)、[Android JNI 桥接](android-jni.md)。
 
 ## 摘要
 
@@ -16,7 +16,7 @@ Golder 增加原生移动端，而不是为手机重写 Agent。Android 首先�
 
 ## 背景：移动端应成为新的交互入口
 
-现有 [Golder 系统架构图](assets/golder-architecture-zh.png)从原生 GUI、TUI/REPL 和 CLI/Workspace 进入共享 Agent 运行时，再连接模型、工具、会话与权限能力。桌面 GUI 不是 TUI 的终端套壳；移动端也应直接表达任务、消息、工具状态和代码变更，而不是缩放终端界面。
+现有 [Golder 系统架构图](assets/golder-architecture-zh.svg)从原生 GUI、TUI/REPL、CLI/Workspace 和 Android 进入共享 Agent 运行时，再连接模型、工具、会话与权限能力。桌面 GUI 不是 TUI 的终端套壳；移动端也应直接表达任务、消息、工具状态和代码变更，而不是缩放终端界面。
 
 目前已有可复用的基础：
 
