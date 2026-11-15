@@ -24,6 +24,11 @@ type Config struct {
 	Root           string
 	Permissions    *permissions.State
 	BeforeToolCall agentcore.BeforeToolCallFunc
+	// NoShell omits bash/write_stdin even when /system/bin/sh exists. A host
+	// that has not built a command sandbox yet can still offer the file tools;
+	// the prompt then says shell is unavailable instead of advertising a tool
+	// the catalog does not contain.
+	NoShell bool
 }
 
 // Capabilities describe executable paths found at construction, not a promise
@@ -89,6 +94,9 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		Shell:   find("/system/bin/sh"),
 		Grep:    find("/system/bin/grep"),
 		Find:    find("/system/bin/find"),
+	}
+	if cfg.NoShell {
+		caps.Shell = ""
 	}
 	mode := cfg.Permissions
 	if mode == nil {

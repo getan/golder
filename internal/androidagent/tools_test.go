@@ -127,6 +127,22 @@ func TestRequiresWorkspaceAndHostGate(t *testing.T) {
 	}
 }
 
+func TestNoShellOmitsShellCatalogAndPrompt(t *testing.T) {
+	s, err := newToolset(Config{
+		Root: t.TempDir(), BeforeToolCall: allowReadOnly, NoShell: true,
+	}, fakeLookup(map[string]string{"/system/bin/sh": "/system/bin/sh", "/system/bin/grep": "/system/bin/grep"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.Capabilities.Shell != "" || hasTool(s, "bash") || hasTool(s, "write_stdin") {
+		t.Fatalf("NoShell still exposed shell: caps=%+v", s.Capabilities)
+	}
+	if prompt := s.Prompt(); !strings.Contains(prompt, "shell are unavailable") {
+		t.Fatalf("prompt does not say shell is unavailable: %q", prompt)
+	}
+}
+
 func TestShellFailsClosedWithoutHostGrant(t *testing.T) {
 	paths := map[string]string{"/system/bin/sh": "/system/bin/sh"}
 	s, err := newToolset(Config{Root: t.TempDir(), BeforeToolCall: allowReadOnly}, fakeLookup(paths))

@@ -85,3 +85,4 @@ graph.html
 # Local Android device experiments may contain device identifiers, signing
 # material, generated binaries or other machine-specific information.
 /.android-validation/
+/.tmp/

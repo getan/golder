@@ -37,6 +37,15 @@ ANDROID_SERIAL=emulator-5554 scripts/android-regression.sh
 
 模拟器是手机的替代品，不是完全等价物：它能覆盖大部分文件、取消和工具行为，但 JNI 装载、系统 DNS/CGO、厂商后台限制、真实凭据和发布渠道仍应至少在实体设备上验证一次。
 
+JNI 共享库有独立的构建与 ABI loader：
+
+```bash
+scripts/android-jni.sh
+REQUIRE_DEVICE=1 scripts/android-jni.sh
+```
+
+它验证 .so 能在设备上加载、C ABI 可调用、文件型会话可以打开并读快照；Kotlin/JVM 的 JNI 调用仍需 UI 工程。
+
 ## 还应补上的无设备测试
 
 - 模拟器镜像纳入 CI（Linux KVM runner 或 Firebase Test Lab），并固定 Android API 版本；
