@@ -78,6 +78,9 @@ private val permissionModeOptions = listOf(
 private fun permissionModeLabel(id: String): String =
     permissionModeOptions.firstOrNull { it.id == id }?.label ?: id
 
+private fun defaultReasoning(levels: List<String>): String =
+    if ("medium" in levels) "medium" else levels.firstOrNull() ?: ""
+
 data class ProviderOption(
     val name: String,
     val defaultModel: String,
@@ -391,7 +394,7 @@ private fun GolderApp() {
                     if (savedProvider.isBlank() || parsed.none { it.name == savedProvider }) {
                         provider = chosen.name
                         model = chosen.defaultModel
-                        thinking = chosen.reasoning.firstOrNull() ?: ""
+                        thinking = defaultReasoning(chosen.reasoning)
                     } else if (model.isBlank()) {
                         model = chosen.defaultModel
                     }
@@ -1598,7 +1601,7 @@ private fun ModelPicker(
                     val next = choices.firstOrNull { it.name == name } ?: current
                     draftProvider = next.name
                     draftModel = next.defaultModel
-                    draftThinking = next.reasoning.firstOrNull() ?: ""
+                    draftThinking = defaultReasoning(next.reasoning)
                     custom = false
                 }
                 Text(s.model, style = MaterialTheme.typography.labelSmall)

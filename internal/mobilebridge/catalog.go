@@ -3,9 +3,14 @@ package mobilebridge
 import (
 	"encoding/json"
 
-	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/provider"
 )
+
+// mobileReasoningLevels is the single fixed ladder shown by the Android
+// picker. A phone UI stays simple and predictable across providers; the
+// provider wire layer clamps unsupported levels. TUI/GUI keep per-model
+// discovery.
+var mobileReasoningLevels = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
 
 // CatalogProvider is one provider choice for the native picker. Models is
 // intentionally small: it contains the registry default, and the host may add
@@ -34,18 +39,7 @@ func CatalogJSON() (string, error) {
 		if spec.DecisionOnly {
 			continue
 		}
-		levels := provider.ReasoningLevels(spec.Name, spec.DefaultModel)
-		if len(levels) == 0 {
-			levels = []agentcore.ThinkingLevel{
-				agentcore.ThinkingLow, agentcore.ThinkingMedium, agentcore.ThinkingHigh,
-			}
-		}
-		reasoning := make([]string, 0, len(levels))
-		for _, level := range levels {
-			if level != "" {
-				reasoning = append(reasoning, string(level))
-			}
-		}
+		reasoning := append([]string(nil), mobileReasoningLevels...)
 		out.Providers = append(out.Providers, CatalogProvider{
 			Name: spec.Name, DefaultModel: spec.DefaultModel,
 			Models: []string{spec.DefaultModel}, Reasoning: reasoning,
@@ -54,7 +48,7 @@ func CatalogJSON() (string, error) {
 	if len(out.Providers) == 0 {
 		out.Providers = append(out.Providers, CatalogProvider{
 			Name: "openai", DefaultModel: "gpt-4o-mini",
-			Models: []string{"gpt-4o-mini"}, Reasoning: []string{"low", "medium", "high"},
+			Models: []string{"gpt-4o-mini"}, Reasoning: append([]string(nil), mobileReasoningLevels...),
 		})
 	}
 	out.DefaultProvider, out.DefaultModel = out.Providers[0].Name, out.Providers[0].DefaultModel
