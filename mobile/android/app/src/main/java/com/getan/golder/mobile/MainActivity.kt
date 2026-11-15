@@ -103,6 +103,9 @@ class MainActivity : ComponentActivity() {
 private fun GolderApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val modelCacheDir = remember {
+        File(context.filesDir, "model-cache").apply { mkdirs() }.absolutePath
+    }
 
     val projects = remember { mutableStateListOf<Project>() }
     var activeProjectId by remember { mutableStateOf("") }
@@ -134,6 +137,7 @@ private fun GolderApp() {
     val entries = remember { mutableStateListOf<Entry>() }
     val listState = rememberLazyListState()
     val openMutex = remember { Mutex() }
+    val modelLoading = remember { mutableStateMapOf<String, Boolean>() }
 
     fun add(kind: String, text: String) {
         if (text.isBlank()) return
@@ -198,6 +202,53 @@ private fun GolderApp() {
                 }
                 "compaction" -> add("status", "Context summary restored")
             }
+        }
+    }
+
+    suspend fun loadModels(providerName: String) {
+        if (modelLoading[providerName] == true) return
+        modelLoading[providerName] = true
+        try {
+            val base = if (providerName == provider) baseUrl.trim() else ""
+            val key = if (providerName == provider) apiKey else ""
+            var ids = emptyList<String>()
+            var fresh = false
+
+            fun parse(raw: String?) {
+                if (raw.isNullOrBlank()) return
+                val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return
+                val array = obj.optJSONArray("ids") ?: return
+                ids = buildList {
+                    for (i in 0 until array.length()) {
+                        val id = array.optString(i).trim()
+                        if (id.isNotEmpty()) add(id)
+                    }
+                }
+                fresh = obj.optBoolean("fresh")
+                if (ids.isNotEmpty()) {
+                    val index = providers.indexOfFirst { it.name == providerName }
+                    if (index >= 0) {
+                        providers[index] = providers[index].copy(models = ids)
+                    }
+                }
+            }
+
+            parse(
+                withContext(Dispatchers.IO) {
+                    GolderNative.models(providerName, base, key, modelCacheDir, false)
+                },
+            )
+            if (!fresh || ids.isEmpty()) {
+                parse(
+                    withContext(Dispatchers.IO) {
+                        GolderNative.models(providerName, base, key, modelCacheDir, true)
+                    },
+                )
+            }
+        } catch (e: Exception) {
+            Log.w("GolderJNI", "model discovery failed provider=$providerName: ${e.message}")
+        } finally {
+            modelLoading[providerName] = false
         }
     }
 
@@ -370,6 +421,10 @@ private fun GolderApp() {
         openWorkspace(project)
     }
 
+    LaunchedEffect(settingsLoaded) {
+        if (settingsLoaded) loadModels(provider)
+    }
+
     LaunchedEffect(handle) {
         val pollHandle = handle
         if (pollHandle == 0) return@LaunchedEffect
@@ -519,6 +574,7 @@ private fun GolderApp() {
                     thinking = t
                     SettingsStore.save(context, p, m, t, baseUrl, permissionMode, language)
                 },
+                onRequestModels = { name -> scope.launch { loadModels(name) } },
                 onPermissionPick = { mode ->
                     permissionMode = mode
                     SettingsStore.save(context, provider, model, thinking, baseUrl, mode, language)
@@ -1202,6 +1258,7 @@ private fun SettingsScreen(
     tokenLoaded: Boolean,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
+    onRequestModels: (String) -> Unit,
     onPermissionPick: (String) -> Unit,
     onLanguagePick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
@@ -1239,6 +1296,7 @@ private fun SettingsScreen(
                 model = model,
                 thinking = thinking,
                 onPick = onProviderPick,
+                onRequestModels = onRequestModels,
             )
             Text(s.connection, style = MaterialTheme.typography.titleMedium)
             ConnectionPicker(
@@ -1497,6 +1555,7 @@ private fun ModelPicker(
     model: String,
     thinking: String,
     onPick: (String, String, String) -> Unit,
+    onRequestModels: (String) -> Unit,
 ) {
     val s = LocalStrings.current
     var open by remember { mutableStateOf(false) }
@@ -1524,6 +1583,9 @@ private fun ModelPicker(
     var draftModel by remember(open) { mutableStateOf(model) }
     var draftThinking by remember(open) { mutableStateOf(thinking) }
     val current = choices.firstOrNull { it.name == draftProvider } ?: choices.first()
+    LaunchedEffect(open, current.name) {
+        if (open) onRequestModels(current.name)
+    }
     var custom by remember(open) { mutableStateOf(draftModel !in current.models) }
 
     AlertDialog(

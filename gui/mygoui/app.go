@@ -779,15 +779,16 @@ func (a *App) startModelRefresh() {
 		return
 	}
 	a.modelRequest++
-	a.models, a.modelsErr, a.modelsReady = nil, "", false
-	if win == nil {
+	cached, fresh := ctrl.ListModelsCached()
+	a.models, a.modelsErr, a.modelsReady = cached, "", true
+	if win == nil || fresh {
 		return
 	}
 	request, providerName := a.modelRequest, ctrl.StatusSnapshot().Provider
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		models, err := ctrl.ListModels(ctx)
+		models, err := ctrl.RefreshModels(ctx)
 		win.Update(func() { a.applyModelResults(ctrl, request, providerName, models, err) })
 	}()
 }

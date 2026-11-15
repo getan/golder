@@ -508,34 +508,45 @@ type modelsFetchedMsg struct {
 	key string
 }
 
-// openModelPicker shows the interactive model picker for the live provider.
-// A cached catalog opens synchronously; otherwise the fetch runs off-loop and
-// the picker opens on modelsFetchedMsg.
+// openModelPicker opens immediately with fresh or stale cache (or a bundled
+// fallback/default). A stale or missing catalog refreshes off-loop and updates
+// the open picker when the result lands.
 func (m Model) openModelPicker() (tea.Model, tea.Cmd) {
 	if m.session == nil || m.live == nil {
 		m.transcript.addSystem("No active session.")
 		return m, nil
 	}
-	if ids := prompts.CachedModelCatalog(m.live); len(ids) > 0 {
-		m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, ids), m.live.Model, "model")
-		m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
-		m.transcript.addSystem("Select a model (↑↓ + Enter, d sets the default, Esc cancels):")
-		m.relayout()
+	ids, fresh := prompts.CachedModelCatalogAny(m.live)
+	if len(ids) == 0 {
+		ids = provider.FallbackModelCatalog(m.live.ProviderName)
+		if len(ids) == 0 {
+			if spec, ok := provider.LookupProviderSpec(m.live.ProviderName); ok && spec.DefaultModel != "" {
+				ids = []string{spec.DefaultModel}
+			}
+		}
+		if len(ids) == 0 && m.live.Model != "" {
+			ids = []string{m.live.Model}
+		}
+	}
+	m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, ids), m.live.Model, "model")
+	m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
+	if !fresh {
+		m.menu.pickHint += " · refreshing…"
+	}
+	m.transcript.addSystem("Select a model (↑↓ + Enter, d sets the default, Esc cancels):")
+	m.relayout()
+	if fresh {
 		return m, nil
 	}
-	m.transcript.addSystem("Fetching models…")
-	// The reasoning catalog needs no fetch here: startup already refreshes it
-	// off the hot path, and the lookups below read the disk cache lazily, so
-	// the level stage gets real levels whenever a cache exists (from this or a
-	// previous session) and the family fallback otherwise.
 	return m, func() tea.Msg {
 		key := prompts.ModelCatalogKey(m.live)
-		ids, err := prompts.EnsureModelCatalog(m.live, m.session.creds)
+		ids, err := prompts.RefreshModelCatalog(m.live, m.session.creds)
 		return modelsFetchedMsg{ids: ids, err: err, key: key}
 	}
 }
 
-// applyModelsFetched opens the picker once the async catalog fetch lands.
+// applyModelsFetched updates an already-open model picker in place. It never
+// blocks the picker on the network and never reopens a picker the user closed.
 func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 	if msg.key != "" && msg.key != prompts.ModelCatalogKey(m.live) {
 		// The gateway changed while the list was in flight; the fetch itself
@@ -544,20 +555,37 @@ func (m Model) applyModelsFetched(msg modelsFetchedMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if msg.err != nil {
-		m.transcript.addSystem(fmt.Sprintf("model list unavailable: %v\nswitch directly with /model <id>", msg.err))
+		if m.menu.picking() && m.menu.pickKind == "model" {
+			m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel · refresh failed"
+			m.transcript.addSystem(fmt.Sprintf("Model refresh failed; keeping cached list: %v", msg.err))
+			m.relayout()
+		}
 		return m, nil
 	}
 	if len(msg.ids) == 0 {
-		m.transcript.addSystem("model list unavailable: endpoint returned no models")
+		return m, nil
+	}
+	if !m.menu.picking() || m.menu.pickKind != "model" {
 		return m, nil
 	}
 	current := ""
 	if m.live != nil {
 		current = m.live.Model
 	}
+	selected := ""
+	if m.menu.selected >= 0 && m.menu.selected < len(m.menu.pick) {
+		selected = m.menu.pick[m.menu.selected].Value
+	}
 	m.menu.openPickerDetailed(modelPickItems(m.live.ProviderName, msg.ids), current, "model")
+	if selected != "" {
+		for i, item := range m.menu.pick {
+			if !item.Heading && item.Value == selected {
+				m.menu.selected = i
+				break
+			}
+		}
+	}
 	m.menu.pickHint = "↑↓ select · Enter switch · d set default · Esc cancel"
-	m.transcript.addSystem("Select a model (↑↓ + Enter, d sets the default, Esc cancels):")
 	m.relayout()
 	return m, nil
 }

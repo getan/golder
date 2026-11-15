@@ -269,6 +269,34 @@ func CachedModelCatalog(live *cli.LiveConfig) []string {
 	return ids
 }
 
+// CachedModelCatalogAny returns the session or disk cache even when it is
+// stale. fresh=false asks the caller to refresh in the background while the
+// returned list is shown immediately.
+func CachedModelCatalogAny(live *cli.LiveConfig) ([]string, bool) {
+	if live == nil {
+		return nil, false
+	}
+	key, ok := modelCatalogKey(live)
+	if !ok {
+		return nil, false
+	}
+	if len(live.FetchedModels) > 0 && (live.FetchedKey == "" || live.FetchedKey == key) {
+		live.FetchedKey = key
+		fresh := live.FetchedAt.IsZero() || time.Since(live.FetchedAt) < provider.CatalogTTL
+		return live.FetchedModels, fresh
+	}
+	if ids, fresh, found := provider.CachedModelCatalogAny(key); found {
+		return ids, fresh
+	}
+	return nil, false
+}
+
+// RefreshModelCatalog performs the network refresh even when a stale session
+// list exists. The caller can show the old list while this runs.
+func RefreshModelCatalog(live *cli.LiveConfig, creds *provider.CredentialStore) ([]string, error) {
+	return fetchModelCatalogIDs(live, creds)
+}
+
 // fetchModelCatalogIDs queries the live provider's endpoint for its real model
 // catalog (issue #566), persists it to the on-disk cache, caches the ids on
 // live, and returns them. It backs the bare-/model list and numeric selection.

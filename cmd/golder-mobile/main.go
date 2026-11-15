@@ -164,6 +164,21 @@ func Java_com_getan_golder_mobile_GolderNative_catalog(env *C.JNIEnv, clazz C.jc
 	return javaString(env, raw)
 }
 
+//export Java_com_getan_golder_mobile_GolderNative_models
+func Java_com_getan_golder_mobile_GolderNative_models(env *C.JNIEnv, clazz C.jclass, providerName, baseURL, apiKey, cacheDir C.jstring, refresh C.jboolean) C.jstring {
+	raw, err := service.ModelsJSON(
+		goString(env, providerName),
+		goString(env, baseURL),
+		goString(env, apiKey),
+		goString(env, cacheDir),
+		refresh != 0,
+	)
+	if err != nil {
+		return 0
+	}
+	return javaString(env, raw)
+}
+
 //export Java_com_getan_golder_mobile_GolderNative_lastError
 func Java_com_getan_golder_mobile_GolderNative_lastError(env *C.JNIEnv, clazz C.jclass) C.jstring {
 	return javaString(env, service.LastError())

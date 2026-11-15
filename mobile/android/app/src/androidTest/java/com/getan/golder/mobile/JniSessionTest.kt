@@ -14,6 +14,7 @@ import kotlin.concurrent.thread
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,6 +36,15 @@ class JniSessionTest {
         val raw = GolderNative.catalog()
         assertTrue("catalog is empty", raw.contains("\"providers\""))
         assertTrue("catalog has no openai", raw.contains("\"openai\""))
+    }
+
+    @Test
+    fun modelCatalogCacheSnapshotIsExposed() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val cacheDir = java.io.File(context.filesDir, "model-cache-test").apply { mkdirs() }.absolutePath
+        val raw = GolderNative.models("openai", "", "", cacheDir, false)
+        assertNotNull(raw)
+        assertTrue("missing cached field", raw!!.contains("\"cached\""))
     }
 
     @Test

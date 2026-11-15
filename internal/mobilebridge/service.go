@@ -82,6 +82,7 @@ type Service struct {
 	factory Factory
 
 	mu      sync.Mutex
+	modelsMu sync.Mutex
 	next    int
 	entries map[int]*entry
 	lastErr string

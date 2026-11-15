@@ -11,6 +11,7 @@ object GolderNative {
 
     external fun version(): String
     external fun catalog(): String
+    external fun models(provider: String, baseUrl: String, apiKey: String, cacheDir: String, refresh: Boolean): String?
     external fun lastError(): String
     external fun open(configJson: String): Int
     external fun start(handle: Int, prompt: String): Int

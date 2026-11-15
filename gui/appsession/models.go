@@ -57,6 +57,84 @@ func (c *Controller) ListModels(ctx context.Context) ([]ModelOption, error) {
 	return out, nil
 }
 
+// ListModelsCached returns the session/disk list immediately, even when it is
+// stale, and whether the cache is fresh. The GUI shows this list before any
+// network request; stale entries trigger a background refresh.
+func (c *Controller) ListModelsCached() ([]ModelOption, bool) {
+	c.mu.Lock()
+	if c.live == nil {
+		c.mu.Unlock()
+		return nil, false
+	}
+	live := *c.live
+	c.mu.Unlock()
+
+	ids, fresh := prompts.CachedModelCatalogAny(&live)
+	if len(ids) == 0 {
+		ids = fallbackModelIDs(live.ProviderName, live.Model)
+		fresh = false
+	}
+	return buildModelOptions(live.ProviderName, live.Model, ids), fresh
+}
+
+// RefreshModels fetches the live catalog in the background. Callers keep the
+// cached/fallback list visible if this returns an error.
+func (c *Controller) RefreshModels(ctx context.Context) ([]ModelOption, error) {
+	c.mu.Lock()
+	if c.live == nil {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("session is not open")
+	}
+	live := *c.live
+	creds := c.creds
+	c.mu.Unlock()
+
+	ids, err := prompts.RefreshModelCatalog(&live, creds)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("provider returned no models")
+	}
+	return buildModelOptions(live.ProviderName, live.Model, ids), nil
+}
+
+func fallbackModelIDs(providerName, current string) []string {
+	ids := provider.FallbackModelCatalog(providerName)
+	if len(ids) == 0 {
+		if spec, ok := provider.LookupProviderSpec(providerName); ok && spec.DefaultModel != "" {
+			ids = []string{spec.DefaultModel}
+		}
+	}
+	if len(ids) == 0 && current != "" {
+		ids = []string{current}
+	}
+	return ids
+}
+
+func buildModelOptions(providerName, current string, ids []string) []ModelOption {
+	ids = provider.OrderModelIDs(ids)
+	defaultModel := prompts.DefaultModelForProvider(providerName)
+	out := make([]ModelOption, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, ModelOption{
+			ID:       id,
+			Provider: providerName,
+			Current:  id == current,
+			Default:  id == defaultModel,
+		})
+	}
+	if current != "" && !containsID(out, current) {
+		out = append([]ModelOption{{
+			ID:       current,
+			Provider: providerName,
+			Current:  true,
+			Default:  current == defaultModel,
+		}}, out...)
+	}
+	return out
+}
+
 func containsID(opts []ModelOption, id string) bool {
 	for _, o := range opts {
 		if o.ID == id {

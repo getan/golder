@@ -56,8 +56,11 @@ func TestComposerPickerSwitchesConfiguredProvider(t *testing.T) {
 	if got := c.Snapshot().Status; got.Provider != "deepseek" || got.Model != appsession.ModelForProvider("deepseek") {
 		t.Fatalf("provider selection did not update session: %+v", got)
 	}
-	if a.status.Provider != "deepseek" || a.modelsReady || len(a.models) != 0 {
-		t.Fatalf("provider selection did not update view and clear old models: status=%+v models=%+v", a.status, a.models)
+	if a.status.Provider != "deepseek" {
+		t.Fatalf("provider selection did not update view: status=%+v", a.status)
+	}
+	if !a.modelsReady {
+		t.Fatal("cached/fallback models should render immediately after provider selection")
 	}
 }
 

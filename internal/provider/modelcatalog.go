@@ -51,20 +51,31 @@ func ModelCatalogCacheKey(providerName, baseURL string) string {
 // usable cache": either nothing was ever stored, or the stored entry is stale
 // (callers may still use the list as a fallback when a refetch fails).
 func CachedModelCatalog(key string) (ids []string, fresh bool) {
-	if strings.TrimSpace(key) == "" {
+	ids, fresh, found := CachedModelCatalogAny(key)
+	if !found {
 		return nil, false
+	}
+	return ids, fresh
+}
+
+// CachedModelCatalogAny returns the stored list even when it is stale. The
+// stale-while-revalidate picker uses ids immediately, then refreshes in the
+// background; callers that require freshness keep using CachedModelCatalog.
+func CachedModelCatalogAny(key string) (ids []string, fresh bool, found bool) {
+	if strings.TrimSpace(key) == "" {
+		return nil, false, false
 	}
 	modelCatalogMu.Lock()
 	defer modelCatalogMu.Unlock()
 	var f modelCatalogFile
 	if !readCatalogFile(modelCatalogFileName, &f) {
-		return nil, false
+		return nil, false, false
 	}
 	e, ok := f.Entries[key]
 	if !ok || len(e.IDs) == 0 {
-		return nil, false
+		return nil, false, false
 	}
-	return e.IDs, cacheFresh(e.CheckedAt)
+	return append([]string(nil), e.IDs...), cacheFresh(e.CheckedAt), true
 }
 
 // StoreModelCatalog records a freshly fetched list for key.

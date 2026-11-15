@@ -20,10 +20,12 @@ import (
 	"github.com/getan/golder/internal/golderhome"
 )
 
-// catalogTTL is the freshness window shared by every cached catalog. Inside it
+// CatalogTTL is the freshness window shared by every cached catalog. Inside it
 // no network refresh happens; after it the next use (or the startup warm-up)
 // refetches and rewrites the file.
-const catalogTTL = 24 * time.Hour
+const CatalogTTL = 24 * time.Hour
+
+const catalogTTL = CatalogTTL
 
 // catalogFilePath returns the cache path for a catalog file name, or "" when
 // the state root is unavailable. Mirrors selfupdate's cache layout.

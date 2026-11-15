@@ -1143,15 +1143,19 @@ func TestStaleModelFetchDoesNotOpenThePicker(t *testing.T) {
 	}
 
 	live := prompts.ModelCatalogKey(m.live)
+	// The picker is opened by the cached/fallback path before the refresh
+	// lands; a subsequent result updates that open picker in place.
+	opened, _ := m.runSlash("/model")
+	m = opened.(Model)
 	got, _ = m.applyModelsFetched(modelsFetchedMsg{ids: []string{"glm-5.1"}, key: live})
 	m = got.(Model)
 	if !m.menu.picking() {
-		t.Error("a fetch for the live gateway should open the picker")
+		t.Error("a fetch for the live gateway should keep the picker open")
 	}
 }
 
-// TestModelPickerAsyncFetch verifies the uncached path returns a fetch Cmd
-// (no blocking) and surfaces fetch errors without opening the picker.
+// TestModelPickerAsyncFetch verifies the uncached path opens immediately and
+// returns a fetch Cmd, then keeps the picker open when the refresh fails.
 func TestModelPickerAsyncFetch(t *testing.T) {
 	m := NewModel(Options{})
 	m.session = &runSession{}
@@ -1162,8 +1166,8 @@ func TestModelPickerAsyncFetch(t *testing.T) {
 		t.Fatal("uncached picker: expected a fetch cmd, got nil")
 	}
 	gm := got.(Model)
-	if gm.menu.picking() {
-		t.Fatal("picker must not open before the fetch lands")
+	if !gm.menu.picking() {
+		t.Fatal("picker must open immediately")
 	}
 	msg := cmd()
 	fm, ok := msg.(modelsFetchedMsg)
@@ -1174,12 +1178,12 @@ func TestModelPickerAsyncFetch(t *testing.T) {
 		t.Fatal("fetch against unknown provider should error")
 	}
 	got2, _ := gm.Update(fm)
-	if got2.(Model).menu.picking() {
-		t.Error("picker must not open on fetch error")
+	if !got2.(Model).menu.picking() {
+		t.Error("picker must stay open on refresh error")
 	}
 	joined := strings.Join(blockTexts(got2.(Model).transcript), "\n")
-	if !strings.Contains(joined, "/model <id>") {
-		t.Errorf("error should hint direct switch, got %q", joined)
+	if !strings.Contains(joined, "keeping cached list") {
+		t.Errorf("error should keep the cached list visible, got %q", joined)
 	}
 }
 
