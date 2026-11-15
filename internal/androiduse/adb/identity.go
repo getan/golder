@@ -3,6 +3,7 @@ package adb
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -131,6 +132,14 @@ func (i *Identity) Certificate() ([]byte, error) {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	return x509.CreateCertificate(rand.Reader, tmpl, tmpl, &i.Private.PublicKey, i.Private)
+}
+
+func (i *Identity) TLSCertificate() (tls.Certificate, error) {
+	der, err := i.Certificate()
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: i.Private}, nil
 }
 
 func sanitizeName(name string) string {
