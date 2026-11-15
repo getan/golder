@@ -428,7 +428,9 @@ jobs:
           java-version: "21"
           cache: gradle
       - uses: gradle/actions/setup-gradle@v4
-      - run: chmod +x gradlew && ./gradlew assembleDebug
+        with:
+          gradle-version: "8.7"
+      - run: if [ -x ./gradlew ]; then ./gradlew assembleDebug; else gradle assembleDebug; fi
       - uses: actions/upload-artifact@v4
         with:
           name: golder-apk

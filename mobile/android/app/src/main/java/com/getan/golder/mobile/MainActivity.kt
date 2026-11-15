@@ -6,8 +6,10 @@
 package com.getan.golder.mobile
 
 import android.os.Bundle
+import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -452,6 +454,7 @@ private fun GolderApp(initialTask: String = "") {
                     when (event.optString("type")) {
                         "run_start" -> {
                             running = true
+                            startAgentService(context)
                             status = "Working…"
                         }
                         "text" -> appendAssistant(event.optString("text"))
@@ -523,6 +526,7 @@ private fun GolderApp(initialTask: String = "") {
                         }
                         "run_end" -> {
                             running = false
+                            stopAgentService(context)
                             val error = event.optString("error")
                             status = when {
                                 event.optBoolean("cancelled") -> "Stopped."
@@ -646,7 +650,10 @@ private fun GolderApp(initialTask: String = "") {
                         onMenu = { scope.launch { drawerState.open() } },
                         onSettings = { settingsOpen = true },
                         onOpen = { scope.launch { activeProject?.let { openWorkspace(it) } } },
-                        onStop = { if (handle != 0) GolderNative.cancel(handle) },
+                        onStop = {
+                            if (handle != 0) GolderNative.cancel(handle)
+                            stopAgentService(context)
+                        },
                     )
                     StatusStrip(
                         mode = permissionMode,
@@ -672,6 +679,7 @@ private fun GolderApp(initialTask: String = "") {
                                     status = withContext(Dispatchers.IO) { GolderNative.lastError() }
                                 } else {
                                     running = true
+                                    startAgentService(context)
                                 }
                             }
                         }
@@ -1221,6 +1229,21 @@ private fun installApk(context: android.content.Context, path: String): Boolean 
     context.startActivity(intent)
     true
 }.getOrDefault(false)
+
+private fun startAgentService(context: Context) {
+    runCatching {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, AgentTaskService::class.java),
+        )
+    }
+}
+
+private fun stopAgentService(context: Context) {
+    runCatching {
+        context.stopService(Intent(context, AgentTaskService::class.java))
+    }
+}
 
 private fun parseTodoItems(raw: String): List<TodoItem> {
     val items = mutableListOf<TodoItem>()
