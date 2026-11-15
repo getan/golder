@@ -29,3 +29,24 @@ func HelperStdin(nonce string) ([]byte, error) {
 	}
 	return []byte(nonce + "\n"), nil
 }
+
+// LaunchHelper starts the helper through a paired ADB connection. The nonce is
+// written to the exec stream's stdin, never to the helper command line.
+func LaunchHelper(conn *Conn, apkPath, packageName, helperClass, certPin string, appUID int, nonce string) error {
+	if conn == nil {
+		return fmt.Errorf("ADB connection is required")
+	}
+	stdin, err := HelperStdin(nonce)
+	if err != nil {
+		return err
+	}
+	stream, err := conn.Open("exec:" + HelperLaunchCommand(apkPath, packageName, helperClass, certPin, appUID))
+	if err != nil {
+		return err
+	}
+	if err := stream.Write(stdin); err != nil {
+		_ = stream.Close()
+		return err
+	}
+	return stream.Close()
+}

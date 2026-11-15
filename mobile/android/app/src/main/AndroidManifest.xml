@@ -34,6 +34,16 @@
             android:exported="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
+        <activity
+            android:name=".androiduse.Phase2SetupActivity"
+            android:exported="true"
+            android:label="Golder Phase 2"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

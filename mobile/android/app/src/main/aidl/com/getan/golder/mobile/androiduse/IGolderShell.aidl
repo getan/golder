@@ -11,4 +11,5 @@ interface IGolderShell {
     boolean injectTap(int displayId, int x, int y);
     boolean injectKey(int displayId, int keyCode);
     void releaseAll();
+    void destroy();
 }

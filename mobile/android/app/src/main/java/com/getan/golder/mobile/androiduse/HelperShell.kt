@@ -65,4 +65,9 @@ internal class HelperShell(private val context: Context) : IGolderShell.Stub() {
         displays.values.forEach { runCatching { it.release() } }
         displays.clear()
     }
+
+    override fun destroy() {
+        releaseAll()
+        android.os.Process.killProcess(android.os.Process.myPid())
+    }
 }

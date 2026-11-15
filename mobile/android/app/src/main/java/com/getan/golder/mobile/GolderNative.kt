@@ -19,4 +19,15 @@ object GolderNative {
     external fun snapshot(handle: Int): String?
     external fun cancel(handle: Int)
     external fun close(handle: Int)
+    external fun phase2Pair(address: String, code: String, identityDir: String): String?
+    external fun phase2Start(
+        address: String,
+        apkPath: String,
+        packageName: String,
+        helperClass: String,
+        certPin: String,
+        appUID: Int,
+        nonce: String,
+        identityDir: String,
+    ): String?
 }

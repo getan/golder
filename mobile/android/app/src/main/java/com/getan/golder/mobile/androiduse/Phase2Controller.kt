@@ -1,11 +1,17 @@
 package com.getan.golder.mobile.androiduse
 
 import android.content.Context
+import com.getan.golder.mobile.GolderNative
+import org.json.JSONObject
 import java.security.MessageDigest
+import java.io.File
 import java.util.UUID
 
 object Phase2Controller {
     private const val NONCE_KEY = "phase2-helper-nonce"
+    private const val PAIRED_KEY = "phase2-paired"
+    private const val PAIR_ADDRESS_KEY = "phase2-pair-address"
+    private const val CONNECT_ADDRESS_KEY = "phase2-connect-address"
 
     fun beginHandoff(context: Context): String {
         val nonce = UUID.randomUUID().toString()
@@ -23,6 +29,84 @@ object Phase2Controller {
         context.getSharedPreferences(AndroidUseBridge.PREFS_NAME, Context.MODE_PRIVATE)
             .edit().remove(NONCE_KEY).apply()
         GolderShellRegistry.reset()
+    }
+
+    fun isPaired(context: Context): Boolean =
+        prefs(context).getBoolean(PAIRED_KEY, false)
+
+    fun pairAddress(context: Context): String = prefs(context).getString(PAIR_ADDRESS_KEY, "").orEmpty()
+    fun connectAddress(context: Context): String = prefs(context).getString(CONNECT_ADDRESS_KEY, "").orEmpty()
+
+    fun rememberAddresses(context: Context, pairAddress: String, connectAddress: String) {
+        prefs(context).edit()
+            .putString(PAIR_ADDRESS_KEY, pairAddress.trim())
+            .putString(CONNECT_ADDRESS_KEY, connectAddress.trim())
+            .apply()
+    }
+
+    fun pair(context: Context, address: String, code: String): Result<Unit> {
+        if (!AndroidUseBridge.advancedEnabled(context)) {
+            return Result.failure(IllegalStateException("Enable advanced control first"))
+        }
+        val dir = identityDir(context)
+        val parsed = parse(GolderNative.phase2Pair(address.trim(), code.trim(), dir))
+        if (parsed.isSuccess) {
+            prefs(context).edit().putBoolean(PAIRED_KEY, true).apply()
+        }
+        return parsed
+    }
+
+    fun start(context: Context, address: String): Result<Unit> {
+        if (!AndroidUseBridge.advancedEnabled(context)) {
+            return Result.failure(IllegalStateException("Enable advanced control first"))
+        }
+        if (!isPaired(context)) {
+            return Result.failure(IllegalStateException("Pair wireless debugging first"))
+        }
+        val nonce = beginHandoff(context)
+        val parsed = parse(
+            GolderNative.phase2Start(
+                address.trim(),
+                context.applicationInfo.sourceDir,
+                context.packageName,
+                "com.getan.golder.mobile.androiduse.HelperMain",
+                "",
+                context.applicationInfo.uid,
+                nonce,
+                identityDir(context),
+            ),
+        )
+        if (parsed.isFailure) {
+            clear(context)
+            return parsed
+        }
+        if (awaitShell(5_000) == null) {
+            clear(context)
+            return Result.failure(IllegalStateException("Helper did not connect"))
+        }
+        return Result.success(Unit)
+    }
+
+    fun stop(context: Context) {
+        runCatching { shell()?.destroy() }
+        clear(context)
+    }
+
+    private fun identityDir(context: Context): String =
+        File(context.filesDir, "phase2").also { it.mkdirs() }.absolutePath
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(AndroidUseBridge.PREFS_NAME, Context.MODE_PRIVATE)
+
+    private fun parse(raw: String?): Result<Unit> {
+        if (raw == null) return Result.failure(IllegalStateException("native Phase 2 bridge unavailable"))
+        val obj = runCatching { JSONObject(raw) }.getOrElse {
+            return Result.failure(IllegalStateException("invalid Phase 2 bridge response"))
+        }
+        if (!obj.optBoolean("ok", false)) {
+            return Result.failure(IllegalStateException(obj.optString("error", "Phase 2 failed")))
+        }
+        return Result.success(Unit)
     }
 
     fun acceptHandoff(

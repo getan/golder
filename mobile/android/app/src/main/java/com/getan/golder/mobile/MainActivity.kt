@@ -50,6 +50,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.getan.golder.mobile.androiduse.AndroidUseBridge
+import com.getan.golder.mobile.androiduse.Phase2Controller
+import com.getan.golder.mobile.androiduse.Phase2SetupActivity
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -684,6 +686,9 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseAllowedPackages = androidUseAllowedPackages,
                 androidUseOverlayEnabled = androidUseOverlayEnabled,
                 androidUseAdvancedEnabled = androidUseAdvancedEnabled,
+                onAndroidUsePhase2Setup = {
+                    context.startActivity(Intent(context, Phase2SetupActivity::class.java))
+                },
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -783,6 +788,7 @@ private fun GolderApp(initialTask: String = "") {
                 },
                 onAndroidUseAdvanced = { enabled ->
                     AndroidUseBridge.setAdvancedEnabled(context, enabled)
+                    if (!enabled) Phase2Controller.stop(context)
                     refreshAndroidUseState()
                 },
                 onAndroidUseAllowedPackages = { value ->
@@ -1546,6 +1552,7 @@ private fun SettingsScreen(
     androidUseAllowedPackages: String,
     androidUseOverlayEnabled: Boolean,
     androidUseAdvancedEnabled: Boolean,
+    onAndroidUsePhase2Setup: () -> Unit,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1784,6 +1791,12 @@ private fun SettingsScreen(
                 )
             }
             if (androidUseAdvancedEnabled) {
+                Button(
+                    onClick = onAndroidUsePhase2Setup,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Phase 2 setup / helper")
+                }
                 Button(onClick = { onAndroidUseAdvanced(false) }) {
                     Text(s.androidUseAdvancedDisable)
                 }
