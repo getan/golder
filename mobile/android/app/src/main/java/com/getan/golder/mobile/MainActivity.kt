@@ -8,6 +8,7 @@ package com.getan.golder.mobile
 import android.os.Bundle
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -44,6 +45,8 @@ import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -141,6 +144,11 @@ private fun GolderApp(initialTask: String = "") {
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
+    var oauthConnected by remember { mutableStateOf(false) }
+    var oauthBusy by remember { mutableStateOf(false) }
+    var oauthError by remember { mutableStateOf("") }
+    var deviceCode by remember { mutableStateOf<GitHubOAuth.DeviceCode?>(null) }
+    var oauthJob by remember { mutableStateOf<Job?>(null) }
     var tokenLoaded by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(initialTask) }
     var handle by remember { mutableIntStateOf(0) }
@@ -281,7 +289,7 @@ private fun GolderApp(initialTask: String = "") {
                 status = "Cannot create project: ${project.path}"
                 return
             }
-            contextPercent = null
+            contextPercent = loadContextPercent(context, project.path)
             gitBranch = withContext(Dispatchers.IO) { readGitBranch(dir) }
             status = "Opening ${project.name}…"
             if (handle != 0) {
@@ -290,8 +298,13 @@ private fun GolderApp(initialTask: String = "") {
             }
             entries.clear()
             val stateDir = File(context.filesDir, "state").apply { mkdirs() }
+            val workspaceToken = withContext(Dispatchers.IO) {
+                GitHubOAuth.freshAccessToken(context, gitToken)
+            }
+            gitToken = workspaceToken
+            oauthConnected = withContext(Dispatchers.IO) { GitHubOAuth.isConnected(context) }
             withContext(Dispatchers.IO) {
-                SecureStore.saveToken(context, gitToken)
+                SecureStore.saveToken(context, workspaceToken)
                 SecureStore.saveAPIKey(context, apiKey)
             }
             SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, language)
@@ -305,7 +318,7 @@ private fun GolderApp(initialTask: String = "") {
                 .put("stateDir", stateDir.absolutePath)
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                 .put("allowNetworkGit", true)
-                .put("gitToken", gitToken)
+                .put("gitToken", workspaceToken)
             if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
 
             val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
@@ -360,6 +373,7 @@ private fun GolderApp(initialTask: String = "") {
         ProjectStore.save(context, projects, activeProjectId)
 
         gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
+        oauthConnected = withContext(Dispatchers.IO) { GitHubOAuth.isConnected(context) }
         apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
         tokenLoaded = true
 
@@ -528,12 +542,18 @@ private fun GolderApp(initialTask: String = "") {
                         "context_usage" -> {
                             val window = event.optInt("contextWindow")
                             val tokens = event.optInt("contextTokens")
-                            contextPercent = if (window > 0) {
+                            val percent = if (window > 0) {
                                 ((tokens.toDouble() / window) * 100)
                                     .roundToInt()
                                     .coerceIn(0, 100)
                             } else {
                                 null
+                            }
+                            contextPercent = percent
+                            if (percent != null) {
+                                activeProject?.let {
+                                    saveContextUsage(context, it.path, window, tokens)
+                                }
                             }
                         }
                         "run_end" -> {
@@ -599,6 +619,9 @@ private fun GolderApp(initialTask: String = "") {
                 apiKey = apiKey,
                 gitToken = gitToken,
                 tokenLoaded = tokenLoaded,
+                oauthConnected = oauthConnected,
+                oauthBusy = oauthBusy,
+                oauthError = oauthError,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -621,9 +644,62 @@ private fun GolderApp(initialTask: String = "") {
                     SettingsStore.save(context, provider, model, thinking, url, permissionMode, language)
                     scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
                 },
-                onTokenChange = { gitToken = it },
+                onTokenChange = { value ->
+                    gitToken = value
+                    if (oauthConnected) {
+                        oauthConnected = false
+                        scope.launch(Dispatchers.IO) { SecureStore.clearOAuth(context) }
+                    }
+                },
+                onGitHubLogin = {
+                    if (!oauthBusy) {
+                        oauthError = ""
+                        oauthBusy = true
+                        oauthJob = scope.launch {
+                            try {
+                                val code = GitHubOAuth.requestDeviceCode()
+                                deviceCode = code
+                                val session = GitHubOAuth.pollForToken(code)
+                                if (!GitHubOAuth.saveSession(context, session)) {
+                                    error("Could not save GitHub login")
+                                }
+                                gitToken = session.accessToken
+                                oauthConnected = true
+                                tokenLoaded = true
+                                oauthError = ""
+                                status = "Signed in with GitHub."
+                            } catch (_: CancellationException) {
+                            } catch (e: Exception) {
+                                oauthError = e.message ?: "GitHub login failed"
+                                status = oauthError
+                            } finally {
+                                oauthBusy = false
+                                deviceCode = null
+                                oauthJob = null
+                            }
+                        }
+                    }
+                },
+                onGitHubLogout = {
+                    oauthJob?.cancel()
+                    oauthJob = null
+                    oauthBusy = false
+                    deviceCode = null
+                    gitToken = ""
+                    oauthConnected = false
+                    oauthError = ""
+                    SecureStore.clearToken(context)
+                    status = "GitHub login removed from this device."
+                },
+                onGitHubRevoke = {
+                    runCatching {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(GitHubOAuth.revokeUrl())))
+                    }
+                },
                 onForgetToken = {
                     gitToken = ""
+                    oauthConnected = false
+                    oauthError = ""
                     SecureStore.clearToken(context)
                     status = "GitHub token cleared."
                 },
@@ -633,6 +709,21 @@ private fun GolderApp(initialTask: String = "") {
                     scope.launch { activeProject?.let { openWorkspace(it) } }
                 },
             )
+            deviceCode?.let { code ->
+                GitHubDeviceCodeDialog(
+                    code = code,
+                    onOpen = {
+                        runCatching {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(code.verificationUri)))
+                        }
+                    },
+                    onCancel = {
+                        oauthJob?.cancel()
+                        deviceCode = null
+                        oauthBusy = false
+                    },
+                )
+            }
         }
         return
     }
@@ -1233,6 +1324,24 @@ private fun readGitBranch(root: File): String = runCatching {
     }
 }.getOrDefault("no repo")
 
+private fun contextPrefs(context: Context) =
+    context.getSharedPreferences("golder-context", Context.MODE_PRIVATE)
+
+private fun saveContextUsage(context: Context, path: String, window: Int, tokens: Int) {
+    contextPrefs(context).edit()
+        .putInt("window:$path", window)
+        .putInt("tokens:$path", tokens)
+        .apply()
+}
+
+private fun loadContextPercent(context: Context, path: String): Int? {
+    val prefs = contextPrefs(context)
+    val window = prefs.getInt("window:$path", 0)
+    val tokens = prefs.getInt("tokens:$path", 0)
+    if (window <= 0) return null
+    return ((tokens.toDouble() / window) * 100).roundToInt().coerceIn(0, 100)
+}
+
 private fun installApk(context: android.content.Context, path: String): Boolean = runCatching {
     val file = File(path)
     if (!file.isFile) return@runCatching false
@@ -1333,6 +1442,9 @@ private fun SettingsScreen(
     apiKey: String,
     gitToken: String,
     tokenLoaded: Boolean,
+    oauthConnected: Boolean,
+    oauthBusy: Boolean,
+    oauthError: String,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1340,11 +1452,15 @@ private fun SettingsScreen(
     onLanguagePick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
     onTokenChange: (String) -> Unit,
+    onGitHubLogin: () -> Unit,
+    onGitHubLogout: () -> Unit,
+    onGitHubRevoke: () -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
     onReconnect: () -> Unit,
 ) {
     val s = LocalStrings.current
+    var authTab by remember { mutableIntStateOf(1) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1389,22 +1505,84 @@ private fun SettingsScreen(
             Text(s.language, style = MaterialTheme.typography.titleMedium)
             LanguagePicker(language = language, onPick = onLanguagePick)
             Text(s.github, style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(
-                value = gitToken,
-                onValueChange = onTokenChange,
-                label = { Text(s.fineGrainedPat) },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                enabled = tokenLoaded,
-                modifier = Modifier.fillMaxWidth(),
-            )
             Text(
-                s.tokenHint,
+                s.githubAuthIntro,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(enabled = tokenLoaded, onClick = onForgetToken) {
-                Text(s.forgetToken)
+            TabRow(selectedTabIndex = authTab) {
+                Tab(
+                    selected = authTab == 0,
+                    onClick = { authTab = 0 },
+                    text = { Text(s.fineGrainedPat) },
+                )
+                Tab(
+                    selected = authTab == 1,
+                    onClick = { authTab = 1 },
+                    text = { Text(s.githubLogin) },
+                )
+            }
+            if (authTab == 0) {
+                OutlinedTextField(
+                    value = gitToken,
+                    onValueChange = onTokenChange,
+                    label = { Text(s.fineGrainedPat) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    enabled = tokenLoaded,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    s.patCreateHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    s.tokenHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(enabled = tokenLoaded, onClick = onForgetToken) {
+                    Text(s.forgetToken)
+                }
+            } else {
+                Button(
+                    enabled = tokenLoaded && !oauthBusy,
+                    onClick = onGitHubLogin,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (oauthBusy) s.githubLoginBusy else s.githubLogin)
+                }
+                Text(
+                    s.githubLoginHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (oauthConnected) {
+                    Text(
+                        s.githubConnected,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    TextButton(onClick = onGitHubLogout) {
+                        Text(s.githubLogout)
+                    }
+                }
+                TextButton(onClick = onGitHubRevoke) {
+                    Text(s.githubRevoke)
+                }
+                Text(
+                    s.githubRevokeHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (oauthError.isNotBlank()) {
+                    Text(
+                        oauthError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
             Text(
                 "${s.project}: $projectName",
@@ -1422,6 +1600,40 @@ private fun SettingsScreen(
             )
         }
     }
+}
+
+@Composable
+private fun GitHubDeviceCodeDialog(
+    code: GitHubOAuth.DeviceCode,
+    onOpen: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    val s = LocalStrings.current
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text(s.deviceCodeTitle) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(s.deviceCodeHint)
+                Text(
+                    code.userCode,
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontFamily = FontFamily.Monospace,
+                )
+                Text(
+                    code.verificationUri,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onOpen) { Text(s.openGitHub) }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text(s.cancel) }
+        },
+    )
 }
 
 @Composable

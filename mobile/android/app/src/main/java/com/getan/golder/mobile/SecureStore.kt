@@ -20,17 +20,60 @@ import javax.crypto.spec.GCMParameterSpec
 object SecureStore {
     private const val PREFS = "golder-secure"
     private const val TOKEN_KEY = "github-token"
+    private const val OAUTH_REFRESH_KEY = "github-oauth-refresh"
+    private const val OAUTH_EXPIRES_KEY = "github-oauth-expires"
     private const val API_KEY = "model-api-key"
     private const val KEY_ALIAS = "golder-mobile-secrets"
     private const val TRANSFORM = "AES/GCM/NoPadding"
     private const val GCM_TAG_BITS = 128
+
+    data class OAuthState(
+        val access: String,
+        val refresh: String,
+        val expiresAt: Long,
+    )
 
     fun saveToken(context: Context, token: String): Boolean =
         save(context, TOKEN_KEY, token)
 
     fun getToken(context: Context): String = read(context, TOKEN_KEY)
 
-    fun clearToken(context: Context) = clear(context, TOKEN_KEY)
+    fun clearToken(context: Context) {
+        clear(context, TOKEN_KEY)
+        clearOAuth(context)
+    }
+
+    fun saveOAuth(context: Context, accessToken: String, refreshToken: String, expiresAtMillis: Long): Boolean {
+        val accessSaved = save(context, TOKEN_KEY, accessToken)
+        val refreshSaved = save(context, OAUTH_REFRESH_KEY, refreshToken)
+        val expiresSaved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putLong(OAUTH_EXPIRES_KEY, expiresAtMillis)
+            .commit()
+        return accessSaved && refreshSaved && expiresSaved
+    }
+
+    fun getOAuthRefresh(context: Context): String = read(context, OAUTH_REFRESH_KEY)
+
+    fun getOAuthExpiresAt(context: Context): Long =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(OAUTH_EXPIRES_KEY, 0L)
+
+    fun hasOAuth(context: Context): Boolean = getOAuthRefresh(context).isNotBlank()
+
+    fun oauthState(context: Context): OAuthState = OAuthState(
+        access = read(context, TOKEN_KEY),
+        refresh = read(context, OAUTH_REFRESH_KEY),
+        expiresAt = getOAuthExpiresAt(context),
+    )
+
+    fun clearOAuth(context: Context) {
+        clear(context, OAUTH_REFRESH_KEY)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove(OAUTH_EXPIRES_KEY)
+            .commit()
+    }
 
     fun saveAPIKey(context: Context, apiKey: String): Boolean =
         save(context, API_KEY, apiKey)

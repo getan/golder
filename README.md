@@ -6,9 +6,9 @@
 [![Build](https://github.com/getan/golder/actions/workflows/build.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/build.yml)
 [![Release](https://github.com/getan/golder/actions/workflows/release.yml/badge.svg)](https://github.com/getan/golder/actions/workflows/release.yml)
 
-Golder is an open-source AI coding agent in Go, available as a native desktop app and a terminal/CLI. It can inspect a codebase, edit files, run commands and tests, and work with a browser while you follow the conversation and approve sensitive actions.
+Golder is an open-source AI coding agent in Go, available as a native desktop app, an Android app and a terminal/CLI. It can inspect a codebase, edit files, run commands and tests, and work with a browser while you follow the conversation and approve sensitive actions.
 
-Choose the interface that fits your work: **Golder GUI** for a graphical project and session workspace; **`golder workspace`** for agent, shell and browser panes in a terminal; or the TUI, REPL and headless CLI for your own multiplexer, scripts and CI. The desktop app and CLI are separate executables built on shared Agent capabilities.
+Choose the interface that fits your work: **Golder GUI** for a graphical project and session workspace; **Golder Android** for a native mobile workspace with on-device tools and GitHub Actions APK builds; **`golder workspace`** for agent, shell and browser panes in a terminal; or the TUI, REPL and headless CLI for your own multiplexer, scripts and CI. The desktop and Android apps and the CLI are separate clients built on shared Agent capabilities.
 
 Approvals, credential redaction and OS sandboxing provide configurable safeguards; their availability and behavior depend on the tool, permission mode and platform.
 
@@ -19,6 +19,18 @@ Approvals, credential redaction and OS sandboxing provide configurable safeguard
 </p>
 
 <p align="center"><sub>Golder GUI: project and session navigation, an Agent conversation and an in-app SVG preview.</sub></p>
+
+### Android app
+
+<p align="center">
+  <img src="docs/assets/golder-android.png" width="360" alt="Golder Android main session showing an Android build result, the Install APK action and context usage">
+</p>
+
+<p align="center"><sub>Android main session: GitHub Actions build result, the host <b>Install APK</b> action and live context usage.</sub></p>
+
+The native Android client uses Kotlin and Jetpack Compose, and runs the shared Go Agent in-process over JNI. Projects, file and Git tools, sessions and approvals stay on the phone; model inference can use a remote API. The Android host adds Keystore-backed credentials, a foreground service for background tasks, an **Install APK** action, and structured `android_build` / `android_download` / `android_install` tools. The build pipeline runs GitHub Actions and returns an APK; existing artifacts can be reinstalled without rebuilding. The Android client is built from source in [`mobile/android`](mobile/android/); see [Android JNI](docs/android-jni.md).
+
+GitHub authentication supports a fine-grained PAT (least privilege, per repository) or GitHub device login (one-time code, like `gh auth login`; broader access to repositories the account can reach, with eight-hour access tokens refreshed automatically). OAuth tokens stay in Android Keystore. **Sign out** removes local tokens; **Revoke access on GitHub** invalidates the authorization itself.
 
 ### Terminal workspace
 
@@ -38,9 +50,9 @@ If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub 
 
 The diagram's labels are in Chinese; its layers are:
 
-1. **Interfaces and runtime:** the native MyGo GUI, terminal TUI/REPL and CLI share Agent runtime capabilities. The GUI is not a terminal wrapper; a terminal workspace has its own daemon and separate agent processes.
-2. **Agent capabilities:** the runtime assembles context, calls a configured model provider, executes tools and continues the conversation. File, shell, browser, web and extension tools sit alongside session history, compaction and memory.
-3. **Boundaries and targets:** approvals, path grants and OS sandboxing mediate applicable calls before they reach project files, commands, browsers or desktop windows. Controls vary by platform and permission mode; they are not an unconditional guarantee for every operation.
+1. **Interfaces and runtime:** the native MyGo GUI, Android app, terminal TUI/REPL and CLI share Agent runtime capabilities. Android connects through an in-process JNI bridge (`mobilebridge`); the GUI is not a terminal wrapper, and a terminal workspace has its own daemon and separate agent processes.
+2. **Agent capabilities:** the runtime assembles context, calls a configured model provider, executes tools and continues the conversation. File, Git, shell, browser, web, Android build/download/install and extension tools sit alongside session history, compaction and memory.
+3. **Boundaries and targets:** approvals, path grants and OS sandboxing mediate applicable calls before they reach project files, commands, browsers, desktop windows or Android packages. On Android, Keystore, a foreground service and the system package installer are host services; GitHub Actions produces APKs. Controls vary by platform and permission mode, and are not an unconditional guarantee for every operation.
 
 The browser surface needs an installed Chromium; desktop Computer Use is under development and requires platform permissions and a user-selected target. See the [GUI guide](gui/README.md), [sandbox documentation](docs/sandboxing.md) and [Computer Use status](docs/computer-use.md) for details.
 
@@ -136,6 +148,7 @@ workspace daemon (persistent, owns the panes)
 ## Highlights
 
 - **A native desktop workspace.** Golder GUI brings project and session navigation, streamed conversations, diff cards, approvals, file and change views, a browser surface and an optional terminal together in one app. Desktop Computer Use is in development and operates on a user-selected window with platform-specific restrictions.
+- **A native Android client.** Kotlin/Compose runs the shared Go Agent over JNI. Android adds Keystore credentials, background task keep-alive, structured Git, GitHub Actions APK build/download, and an Install APK action that opens the system installer without rebuilding.
 - **A built-in terminal workspace.** `golder workspace` runs the agent, shell and browser in one panel — the agent patches while the shell runs tests, and focus is input. The agent can open its browser pane itself; presets (`debug-fullstack`, `data-analysis`, `review`) start a full-stack setup, and `snapshot` gives the model context from every pane. On macOS/Linux, no separate tuios or kitty-browse install is required.
 - **Hot-switch providers; the session outlives them.** `/provider` switches gateways at any time and `/resume` continues the same context on the new provider; 19 built-in conversation gateways cover OpenAI Chat / Responses, Anthropic Messages and Gemini, plus any compatible endpoint.
 - **Lightweight like pi, with a real security boundary.** The same single-binary class, plus a per-call approval gate and an OS sandbox (`sandbox-exec` / `bubblewrap`): reads stay in the workspace, writes in the project and temp dirs, the network is off by default, and credentials are unreadable.

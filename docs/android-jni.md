@@ -94,7 +94,7 @@ Connection 卡片只显示 `API key ••••••`，不把密钥明文放�
 
 `gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。`allowNetworkGit` 是**会话级**宿主能力：传 false 时 `clone`/`fetch`/`push` 明确失败关闭，本地 `commit`/`branch`/`status`/`log` 可用。Android UI 在打开会话时固定传 true，即 Git 网络默认开启，不再提供复选框；宿主仍可显式传 false 关闭。逐次网络授权的审批卡片仍未实现。
 
-GitHub 认证方案见 [GitHub 认证](github-auth.md)。当前决定只使用用户自备的 fine-grained PAT，不实现 GitHub App/device flow/token broker；UI 已支持 PAT 并用 Android Keystore 加密保存。
+GitHub 认证方案见 [GitHub 认证](github-auth.md)。支持用户自备的 fine-grained PAT 和 GitHub Device Flow；两者都在 Android Keystore 中加密保存，OAuth token 会自动刷新并可在 GitHub 撤销授权；不实现 GitHub App/token broker。
 
 ## 尚未解决的边界
 
