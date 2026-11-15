@@ -58,6 +58,9 @@ REQUIRE_DEVICE=1 scripts/android-app-test.sh
 `JniSessionTest`。测试内起一个回环 OpenAI SSE 假服务，验证 Kotlin→JNI→Go→
 Provider→Agent 循环的完整流式回合；不需要真实模型或 API key。
 
+设备侧 Go 测试还覆盖完整 Android 后端和会话持久化：完成一轮后关闭，再用
+同一 session id 打开，验证历史恢复。
+
 ## 还应补上的无设备测试
 
 - 模拟器镜像纳入 CI（Linux KVM runner 或 Firebase Test Lab），并固定 Android API 版本；

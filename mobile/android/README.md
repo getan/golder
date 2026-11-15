@@ -26,9 +26,10 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 - 工作区、模型、Base URL、API key 输入；密钥仅保存在内存中。
 - 打开工作区、发送任务、停止。
 - 流式文本、thinking、工具开始/结束和运行状态。
+- 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
 - `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据。
 
 ## 边界
 
-- 还没有审批卡片、会话列表、持久化、Git、后台恢复或 iOS。
+- 还没有审批卡片、多会话列表、Git、后台执行恢复或 iOS。
 - JNI 版本在启动时调用并写入 logcat（`GolderJNI`），用于确认 Kotlin→Go 路径。

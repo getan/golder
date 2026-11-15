@@ -93,8 +93,13 @@ type Config struct {
 	// ObserveEvent is optional host telemetry. It runs on the loop goroutine
 	// and must not block; it receives every loop event in order.
 	ObserveEvent func(agentcore.AgentEvent)
-	SessionID    string
-	EventBuffer  int
+	// OnRunEnd is optional persistence/telemetry for the final conversation.
+	// It runs on the session goroutine after the loop has stopped and before
+	// run_end is published, so a host can save the completed turn before the
+	// next run may start.
+	OnRunEnd    func(agentcore.MessageList)
+	SessionID   string
+	EventBuffer int
 }
 
 // Snapshot is the state a host reads after a missed event or a view rebuild.
@@ -113,10 +118,11 @@ type Snapshot struct {
 // host drains events on its own thread rather than blocking a UI thread inside
 // a JNI callback.
 type Session struct {
-	cfg   runtime.RunConfig
-	ctx   *agentcore.AgentContext
-	root  string
-	perms *permissions.State
+	cfg      runtime.RunConfig
+	ctx      *agentcore.AgentContext
+	root     string
+	perms    *permissions.State
+	onRunEnd func(agentcore.MessageList)
 
 	mu       sync.Mutex
 	events   []Event
@@ -181,6 +187,7 @@ func New(cfg Config) (*Session, error) {
 		root:     root,
 		perms:    perms,
 		messages: published,
+		onRunEnd: cfg.OnRunEnd,
 	}, nil
 }
 
@@ -316,10 +323,19 @@ func runOutcome(final *agentcore.AssistantMessage, err error, cancelled bool) (s
 // never observes a new run_start before the previous run_end.
 func (s *Session) finish(e Event) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	// DrainStream has returned, so the loop goroutine no longer mutates the
 	// context and this final copy is safe.
-	s.messages = cloneMessages(s.ctx.Messages)
+	msgs := cloneMessages(s.ctx.Messages)
+	s.messages = msgs
+	s.mu.Unlock()
+	// Persist before publishing run_end and allowing the next run: a host that
+	// reacts to run_end by starting another turn must not overwrite this save
+	// with an older one.
+	if s.onRunEnd != nil {
+		s.onRunEnd(cloneMessages(msgs))
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.appendLocked(e)
 	s.running = false
 	s.cancel = nil

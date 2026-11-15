@@ -31,6 +31,11 @@ type Config struct {
 	APIKey        string `json:"apiKey,omitempty"`
 	SystemPrompt  string `json:"systemPrompt,omitempty"`
 	ContextWindow int    `json:"contextWindow,omitempty"`
+	// StateDir, when set, enables local session persistence under
+	// StateDir/sessions. SessionID selects an existing session; empty generates
+	// one. The host supplies an app-private directory.
+	StateDir  string `json:"stateDir,omitempty"`
+	SessionID string `json:"sessionId,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.

@@ -64,6 +64,8 @@ object GolderNative {
   "apiKey": "…",
   "systemPrompt": "",
   "contextWindow": 128000,
+  "stateDir": "/data/user/0/com.getan.golder.mobile/files/state",
+  "sessionId": "mobile-…",
   "debugLog": ""
 }
 ```
@@ -72,10 +74,12 @@ object GolderNative {
 
 `debugLog` 可选，只在宿主调试时设置；它记录循环事件类型和终止错误，不记录提示词、工具参数/结果或密钥。
 
+`stateDir` 可选，设置后会话保存在 `<stateDir>/sessions/<sessionId>.jsonl`；同一 `sessionId` 重新打开会恢复历史。锁文件防止同一会话被两个进程同时写入。当前采用整文件原子重写，后续可换成增量追加。
+
 ## 尚未解决的边界
 
 - 目前是**文件型后端**，不是完整的 `auto` 权限链：没有 shell、浏览器、Git、commit/push 或网络工具。不能把这个后端说成已经支持完整任务自动化。
-- 会话持久化、后台恢复和结果未知时的写操作保护仍待实现。
+- 会话持久化和重启恢复已有基础实现；后台执行限制、结果未知时的写操作保护和多会话列表仍待实现。
 
 ## 工具链与 UI
 

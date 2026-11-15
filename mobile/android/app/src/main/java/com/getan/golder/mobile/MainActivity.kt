@@ -97,6 +97,29 @@ private fun GolderApp() {
         }
     }
 
+    fun loadHistory(raw: String?) {
+        val messages = runCatching { JSONObject(raw ?: "{}").optJSONArray("messages") }.getOrNull() ?: return
+        for (i in 0 until messages.length()) {
+            val msg = messages.getJSONObject(i)
+            val role = msg.optString("role")
+            val content = msg.optJSONArray("content")
+            val text = buildString {
+                if (content != null) {
+                    for (j in 0 until content.length()) {
+                        val block = content.getJSONObject(j)
+                        if (block.optString("type") == "text") append(block.optString("text"))
+                    }
+                }
+            }
+            when (role) {
+                "user" -> if (text.isNotBlank()) add("user", text)
+                "assistant" -> if (text.isNotBlank()) add("assistant", text)
+                "toolResult" -> if (text.isNotBlank()) add("tool", text.take(1200))
+                "compaction" -> add("status", "Context summary restored")
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
@@ -220,18 +243,23 @@ private fun GolderApp() {
                             withContext(Dispatchers.IO) { GolderNative.close(handle) }
                             handle = 0
                         }
+                        val stateDir = File(context.filesDir, "state").apply { mkdirs() }
                         val config = JSONObject()
                             .put("workspace", dir.absolutePath)
                             .put("model", model.trim())
                             .put("apiKey", apiKey)
+                            .put("stateDir", stateDir.absolutePath)
+                            .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                         if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
                         val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
                         if (opened == 0) {
                             status = withContext(Dispatchers.IO) { GolderNative.lastError() }
                         } else {
+                            val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(opened) }
                             entries.clear()
                             handle = opened
-                            status = "Workspace open."
+                            loadHistory(snapshot)
+                            status = "Workspace open; saved session loaded."
                         }
                     }
                 },
