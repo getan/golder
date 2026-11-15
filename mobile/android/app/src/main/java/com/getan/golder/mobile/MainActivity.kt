@@ -6,7 +6,9 @@
 package com.getan.golder.mobile
 
 import android.os.Bundle
+import android.content.Intent
 import android.util.Log
+import androidx.core.content.FileProvider
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -92,10 +94,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val initialTask = intent?.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    GolderApp()
+                    GolderApp(initialTask)
                 }
             }
         }
@@ -103,7 +106,7 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun GolderApp() {
+private fun GolderApp(initialTask: String = "") {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val modelCacheDir = remember {
@@ -129,7 +132,7 @@ private fun GolderApp() {
     var apiKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
     var tokenLoaded by remember { mutableStateOf(false) }
-    var prompt by remember { mutableStateOf("") }
+    var prompt by remember { mutableStateOf(initialTask) }
     var handle by remember { mutableIntStateOf(0) }
     var opening by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
@@ -493,6 +496,16 @@ private fun GolderApp() {
                                 if (path != null) {
                                     scope.launch(Dispatchers.IO) {
                                         gitBranch = readGitBranch(File(path))
+                                    }
+                                }
+                            }
+                            if (name == "android_build" && !isError) {
+                                val apkPath = Regex("APK_PATH=(\\S+)").find(output)?.groupValues?.get(1)
+                                if (apkPath != null) {
+                                    status = if (installApk(context, apkPath)) {
+                                        "APK downloaded; confirm installation."
+                                    } else {
+                                        "APK downloaded, but the installer could not be opened."
                                     }
                                 }
                             }
@@ -1192,6 +1205,22 @@ private fun readGitBranch(root: File): String = runCatching {
         else -> "detached"
     }
 }.getOrDefault("no repo")
+
+private fun installApk(context: android.content.Context, path: String): Boolean = runCatching {
+    val file = File(path)
+    if (!file.isFile) return@runCatching false
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file,
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+    true
+}.getOrDefault(false)
 
 private fun parseTodoItems(raw: String): List<TodoItem> {
     val items = mutableListOf<TodoItem>()

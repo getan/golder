@@ -45,6 +45,9 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	credentials.SetOverride(name, cfg.APIKey)
 
 	gate := func(_ context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
+		if call.Name == "android_build" {
+			return &agentcore.BeforeToolCallDecision{Network: true}
+		}
 		if call.Name == "git" && gitNeedsNetwork(call.Arguments) {
 			if !cfg.AllowNetworkGit {
 				content := agentcore.ContentList{agentcore.NewTextContent("network Git is disabled by the host; local git operations are available")}

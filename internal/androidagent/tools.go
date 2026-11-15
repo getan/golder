@@ -14,6 +14,7 @@ import (
 	"github.com/getan/golder/internal/agentcore"
 	"github.com/getan/golder/internal/agenttool"
 	"github.com/getan/golder/internal/execsess"
+	"github.com/getan/golder/internal/mobilebuild"
 	"github.com/getan/golder/internal/mobilegit"
 	"github.com/getan/golder/internal/permissions"
 )
@@ -140,6 +141,13 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		}
 		s.Tools = append(s.Tools, gitTool)
 	}
+	buildTool, err := mobilebuild.New(mobilebuild.Config{
+		Root: root, Token: cfg.GitToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("androidagent: build: %w", err)
+	}
+	s.Tools = append(s.Tools, buildTool)
 	registry := agenttool.NewToolRegistry()
 	for _, tool := range s.Tools {
 		if err := registry.Register(tool); err != nil {
@@ -162,6 +170,7 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("For multi-step work, use the todo tool to keep a short task list and update it as work progresses. ")
 	b.WriteString("Shell commands are subject to the host authorization gate. Android app isolation is not a workspace-level shell sandbox: a shell may reach other data the app can access, and per-command network isolation is not provided here. ")
 	b.WriteString("A structured git tool is available for local status/log/diff/add/commit/branch/checkout/remote and for clone/fetch/push when the host grants network access for that exact call. ")
+	b.WriteString("To build an Android project, push it to GitHub and use the android_build tool; it runs GitHub Actions and returns APK_PATH for the host installer. ")
 	switch {
 	case s.Capabilities.Ripgrep != "":
 		b.WriteString("The grep and find tools are available through ripgrep; use them for code search.")
