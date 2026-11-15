@@ -1560,18 +1560,18 @@ private fun SettingsScreen(
 ) {
     val s = LocalStrings.current
     val settingsContext = LocalContext.current
-    var androidUseLive by remember { mutableStateOf<Boolean?>(null) }
     var healthRefresh by remember { mutableIntStateOf(0) }
     var auditExpanded by remember { mutableStateOf(false) }
-    LaunchedEffect(androidUseEnabled, healthRefresh) {
-        if (!androidUseEnabled) {
-            androidUseLive = false
-            return@LaunchedEffect
-        }
+    val androidUseLive by produceState<Boolean?>(
+        initialValue = null,
+        androidUseEnabled,
+        healthRefresh,
+    ) {
         while (true) {
-            androidUseLive = withContext(Dispatchers.IO) {
-                AndroidUseBridge.heartbeatFresh(settingsContext) ||
-                    AndroidUseBridge.endpointLive(settingsContext)
+            value = if (androidUseEnabled) {
+                AndroidUseBridge.heartbeatFresh(settingsContext)
+            } else {
+                false
             }
             delay(2000)
         }
@@ -1674,7 +1674,6 @@ private fun SettingsScreen(
             )
             TextButton(
                 onClick = {
-                    androidUseLive = null
                     onAndroidUseRefresh()
                     healthRefresh++
                 },
