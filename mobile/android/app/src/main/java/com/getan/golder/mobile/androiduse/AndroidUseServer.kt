@@ -294,10 +294,21 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         val intent = service.packageManager.getLaunchIntentForPackage(pkg)
             ?: return error("app is not installed")
         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        return runCatching {
+        runCatching {
             service.startActivity(intent)
-            ok("open_app").put("packageName", pkg)
-        }.getOrElse { error(it.message ?: "could not open app") }
+        }.getOrElse { return error(it.message ?: "could not open app") }
+        // startActivity can be silently denied by OEM background-launch policy.
+        // Confirm the foreground package instead of reporting a false success.
+        repeat(10) {
+            Thread.sleep(200)
+            if (service.rootInActiveWindow?.packageName?.toString() == pkg) {
+                return ok("open_app").put("packageName", pkg)
+            }
+        }
+        return error(
+            "the system blocked bringing $pkg to the foreground; " +
+                "open the app manually, then call observe. This OEM may restrict background activity launches.",
+        )
     }
 
     private fun globalAction(action: Int, name: String): JSONObject {
