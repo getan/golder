@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,6 +77,8 @@ private fun GolderApp() {
     var model by remember { mutableStateOf("gpt-4o-mini") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
+    var gitToken by remember { mutableStateOf("") }
+    var tokenLoaded by remember { mutableStateOf(false) }
     var allowGitNetwork by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var handle by remember { mutableIntStateOf(0) }
@@ -123,6 +126,8 @@ private fun GolderApp() {
     }
 
     LaunchedEffect(Unit) {
+        gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
+        tokenLoaded = true
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
         }.getOrElse {
@@ -231,6 +236,23 @@ private fun GolderApp() {
             visualTransformation = PasswordVisualTransformation(),
             modifier = Modifier.fillMaxWidth(),
         )
+        OutlinedTextField(
+            value = gitToken,
+            onValueChange = { gitToken = it },
+            label = { Text("GitHub token (fine-grained PAT, encrypted)") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            enabled = tokenLoaded,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(
+            enabled = tokenLoaded,
+            onClick = {
+                gitToken = ""
+                SecureStore.clearToken(context)
+                status = "GitHub token cleared."
+            },
+        ) { Text("Forget GitHub token") }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Checkbox(
                 checked = allowGitNetwork,
@@ -254,6 +276,7 @@ private fun GolderApp() {
                             handle = 0
                         }
                         val stateDir = File(context.filesDir, "state").apply { mkdirs() }
+                        withContext(Dispatchers.IO) { SecureStore.saveToken(context, gitToken) }
                         val config = JSONObject()
                             .put("workspace", dir.absolutePath)
                             .put("model", model.trim())
@@ -261,6 +284,7 @@ private fun GolderApp() {
                             .put("stateDir", stateDir.absolutePath)
                             .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                             .put("allowNetworkGit", allowGitNetwork)
+                            .put("gitToken", gitToken)
                         if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
                         val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
                         if (opened == 0) {

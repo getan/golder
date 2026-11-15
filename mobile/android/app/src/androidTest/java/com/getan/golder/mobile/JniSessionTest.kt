@@ -31,6 +31,21 @@ class JniSessionTest {
     }
 
     @Test
+    fun githubTokenRoundTripsThroughAndroidKeystore() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val previous = SecureStore.getToken(context)
+        try {
+            SecureStore.clearToken(context)
+            assertTrue(SecureStore.saveToken(context, "ghp_test_fixture"))
+            assertEquals("ghp_test_fixture", SecureStore.getToken(context))
+            SecureStore.clearToken(context)
+            assertEquals("", SecureStore.getToken(context))
+        } finally {
+            if (previous.isBlank()) SecureStore.clearToken(context) else SecureStore.saveToken(context, previous)
+        }
+    }
+
+    @Test
     fun fakeServerServesTheExpectedSSE() {
         val server = FakeChatServer()
         try {
