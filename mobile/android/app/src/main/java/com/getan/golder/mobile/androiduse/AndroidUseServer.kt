@@ -390,6 +390,12 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             response.optString("package"),
             response.optString("error"),
         )
+        AndroidUseNotifier.update(
+            service,
+            action,
+            response.optString("package"),
+            AndroidUseBridge.isPaused(service),
+        )
         return response
     }
 

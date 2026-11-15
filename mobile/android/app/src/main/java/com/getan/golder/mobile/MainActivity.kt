@@ -6,8 +6,11 @@
 package com.getan.golder.mobile
 
 import android.os.Bundle
+import android.os.Build
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import android.util.Log
@@ -386,6 +389,15 @@ private fun GolderApp(initialTask: String = "") {
     }
 
     LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            (context as? android.app.Activity)?.requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                4001,
+            )
+        }
         val projectState = ProjectStore.load(context)
         projects.clear()
         projects.addAll(projectState.projects)

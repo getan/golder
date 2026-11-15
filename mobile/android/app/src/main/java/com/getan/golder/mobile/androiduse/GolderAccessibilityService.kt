@@ -10,6 +10,7 @@ class GolderAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        AndroidUseNotifier.update(this, "ready", "", AndroidUseBridge.isPaused(this))
         if (server == null) {
             server = AndroidUseServer(this).also { it.start() }
         }
@@ -32,5 +33,6 @@ class GolderAccessibilityService : AccessibilityService() {
     private fun closeServer() {
         server?.close()
         server = null
+        AndroidUseNotifier.cancel(this)
     }
 }
