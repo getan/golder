@@ -68,6 +68,7 @@ func (t *Tool) Schema() json.RawMessage { return json.RawMessage(schema) }
 type args struct {
 	Branch  string `json:"branch,omitempty"`
 	Variant string `json:"variant,omitempty"`
+	Force   bool   `json:"force,omitempty"`
 }
 
 func (t *Tool) Execute(ctx context.Context, id string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
@@ -97,6 +98,18 @@ func (t *Tool) run(ctx context.Context, a args) (string, error) {
 	}
 	if strings.TrimSpace(a.Branch) != "" {
 		branch = strings.TrimSpace(a.Branch)
+	}
+	if !a.Force {
+		if sha, shaErr := headSHA(t.root); shaErr == nil {
+			if cached, ok := t.reusableRun(ctx, owner, repo, branch, sha); ok {
+				if apk, downloadErr := t.downloadAPK(ctx, owner, repo, cached.ID); downloadErr == nil {
+					return fmt.Sprintf(
+						"Reused the successful GitHub Actions build for %s; no new CI run was started.\nAPK_PATH=%s\nWorkflow: %s",
+						sha, apk, cached.HTMLURL,
+					), nil
+				}
+			}
+		}
 	}
 	workflowPath := filepath.Join(t.root, ".github", "workflows", workflowFile)
 	if _, err := os.Stat(workflowPath); err != nil {
@@ -138,6 +151,7 @@ type workflowRun struct {
 	Status     string    `json:"status"`
 	Conclusion string    `json:"conclusion"`
 	HTMLURL    string    `json:"html_url"`
+	HeadSHA    string    `json:"head_sha"`
 	HeadBranch string    `json:"head_branch"`
 	Event      string    `json:"event"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -407,7 +421,8 @@ const schema = `{
   "type":"object",
   "properties":{
     "branch":{"type":"string","description":"Git branch to build; defaults to current branch."},
-    "variant":{"type":"string","enum":["debug"],"description":"Build variant. Currently debug."}
+	    "variant":{"type":"string","enum":["debug"],"description":"Build variant. Currently debug."},
+	    "force":{"type":"boolean","description":"Force a new CI run instead of reusing a successful run for the current commit."}
   },
   "additionalProperties":false
 }`

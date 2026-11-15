@@ -93,17 +93,25 @@ data class ProviderOption(
 )
 
 class MainActivity : ComponentActivity() {
+    private val incomingTask = mutableStateOf("")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val initialTask = intent?.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
+        incomingTask.value = intent?.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    GolderApp(initialTask)
+                    GolderApp(incomingTask.value)
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingTask.value = intent.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
     }
 }
 
@@ -146,6 +154,10 @@ private fun GolderApp(initialTask: String = "") {
     val listState = rememberLazyListState()
     val openMutex = remember { Mutex() }
     val modelLoading = remember { mutableStateMapOf<String, Boolean>() }
+
+    LaunchedEffect(initialTask) {
+        if (initialTask.isNotBlank()) prompt = initialTask
+    }
 
     fun add(kind: String, text: String) {
         if (text.isBlank()) return
@@ -502,13 +514,13 @@ private fun GolderApp(initialTask: String = "") {
                                     }
                                 }
                             }
-                            if (name == "android_build" && !isError) {
-                                val apkPath = Regex("APK_PATH=(\\S+)").find(output)?.groupValues?.get(1)
+                            if ((name == "android_build" || name == "android_install") && !isError) {
+                                val apkPath = apkPathFrom(output)
                                 if (apkPath != null) {
                                     status = if (installApk(context, apkPath)) {
-                                        "APK downloaded; confirm installation."
+                                        "APK ready; confirm installation."
                                     } else {
-                                        "APK downloaded, but the installer could not be opened."
+                                        "APK is ready, but the installer could not be opened."
                                     }
                                 }
                             }
@@ -1020,7 +1032,9 @@ private fun ToolGroupCard(entries: List<Entry>) {
 
 @Composable
 private fun ToolCard(entry: Entry) {
+    val context = LocalContext.current
     var expanded by remember(entry.id) { mutableStateOf(false) }
+    val apkPath = if (entry.toolDone && !entry.toolError) apkPathFrom(entry.toolOutput) else null
     val mark = when {
         !entry.toolDone -> "…"
         entry.toolError -> "✗"
@@ -1071,6 +1085,11 @@ private fun ToolCard(entry: Entry) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (apkPath != null) {
+                TextButton(onClick = { installApk(context, apkPath) }) {
+                    Text("Install APK")
+                }
             }
             if (expanded) {
                 Text(
@@ -1229,6 +1248,9 @@ private fun installApk(context: android.content.Context, path: String): Boolean 
     context.startActivity(intent)
     true
 }.getOrDefault(false)
+
+private fun apkPathFrom(text: String): String? =
+    Regex("(?:INSTALL_APK|APK_PATH)=(\\S+)").find(text)?.groupValues?.get(1)
 
 private fun startAgentService(context: Context) {
     runCatching {

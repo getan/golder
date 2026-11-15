@@ -147,7 +147,17 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 	if err != nil {
 		return nil, fmt.Errorf("androidagent: build: %w", err)
 	}
-	s.Tools = append(s.Tools, buildTool)
+	downloadTool, err := mobilebuild.NewDownload(mobilebuild.Config{
+		Root: root, Token: cfg.GitToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("androidagent: download: %w", err)
+	}
+	installTool, err := mobilebuild.NewInstall(mobilebuild.Config{Root: root})
+	if err != nil {
+		return nil, fmt.Errorf("androidagent: install: %w", err)
+	}
+	s.Tools = append(s.Tools, buildTool, downloadTool, installTool)
 	registry := agenttool.NewToolRegistry()
 	for _, tool := range s.Tools {
 		if err := registry.Register(tool); err != nil {
@@ -170,7 +180,9 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("For multi-step work, use the todo tool to keep a short task list and update it as work progresses. ")
 	b.WriteString("Shell commands are subject to the host authorization gate. Android app isolation is not a workspace-level shell sandbox: a shell may reach other data the app can access, and per-command network isolation is not provided here. ")
 	b.WriteString("A structured git tool is available for local status/log/diff/add/commit/branch/checkout/remote and for clone/fetch/push when the host grants network access for that exact call. ")
-	b.WriteString("To build an Android project, push it to GitHub and use the android_build tool; it runs GitHub Actions and returns APK_PATH for the host installer. ")
+	b.WriteString("When a tool result contains APK_PATH or INSTALL_APK, the host transcript shows an Install APK button. If an APK is already available, first tell the user to tap that button; do not rebuild just to install. ")
+	b.WriteString("Only if the user explicitly asks you to trigger installation yourself, call android_install with the APK path; the host will open the package installer. Never claim the app is installed until the user confirms the system dialog. ")
+	b.WriteString("Use android_download to fetch the latest successful artifact without rebuilding. Use android_build only when code changed or no APK exists; it reuses a successful run for the current commit unless force=true. ")
 	switch {
 	case s.Capabilities.Ripgrep != "":
 		b.WriteString("The grep and find tools are available through ripgrep; use them for code search.")

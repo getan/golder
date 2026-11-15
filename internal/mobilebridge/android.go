@@ -34,6 +34,11 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	if contextWindow <= 0 {
 		contextWindow = provider.ContextWindowFor(name, cfg.Model)
 	}
+	if contextWindow <= 0 {
+		// Custom OpenAI-compatible models often have no catalog entry. Keep the
+		// mid-run context gauge useful; the host can override via ContextWindow.
+		contextWindow = 200_000
+	}
 	permissionMode := permissions.Auto
 	if cfg.PermissionMode != "" {
 		if parsed, ok := permissions.Parse(cfg.PermissionMode); ok {
@@ -45,7 +50,7 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 	credentials.SetOverride(name, cfg.APIKey)
 
 	gate := func(_ context.Context, call agentcore.AgentToolCall) *agentcore.BeforeToolCallDecision {
-		if call.Name == "android_build" {
+		if call.Name == "android_build" || call.Name == "android_download" {
 			return &agentcore.BeforeToolCallDecision{Network: true}
 		}
 		if call.Name == "git" && gitNeedsNetwork(call.Arguments) {
