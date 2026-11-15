@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug builds may talk to a test model server on loopback. Release
+         builds keep cleartext disabled. -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

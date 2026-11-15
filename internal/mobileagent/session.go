@@ -89,9 +89,12 @@ type Config struct {
 	Compaction    compaction.CompactionSettings
 	// Checkpoint is the loop's mid-run persistence seam. It runs on the loop
 	// goroutine and must not block on user input.
-	Checkpoint  func(context.Context, *agentcore.AgentContext, bool)
-	SessionID   string
-	EventBuffer int
+	Checkpoint func(context.Context, *agentcore.AgentContext, bool)
+	// ObserveEvent is optional host telemetry. It runs on the loop goroutine
+	// and must not block; it receives every loop event in order.
+	ObserveEvent func(agentcore.AgentEvent)
+	SessionID    string
+	EventBuffer  int
 }
 
 // Snapshot is the state a host reads after a missed event or a view rebuild.
@@ -162,10 +165,11 @@ func New(cfg Config) (*Session, error) {
 			ContextWindow: cfg.ContextWindow,
 			Compaction:    cfg.Compaction,
 		},
-		Batch:       cfg.Batch,
-		Checkpoint:  cfg.Checkpoint,
-		SessionID:   cfg.SessionID,
-		EventBuffer: cfg.EventBuffer,
+		Batch:        cfg.Batch,
+		Checkpoint:   cfg.Checkpoint,
+		ObserveEvent: cfg.ObserveEvent,
+		SessionID:    cfg.SessionID,
+		EventBuffer:  cfg.EventBuffer,
 	}
 	history := make(agentcore.MessageList, len(cfg.History))
 	copy(history, cfg.History)

@@ -6,7 +6,7 @@
 
 - Go 共享库可用 NDK 构建，JNI 和 C ABI 符号都已导出。
 - 设备上的 C ABI loader 已实际加载该库，打开一个文件型会话、读取快照并关闭。
-- **尚未由 Kotlin/JVM 调用 JNI 方法**；需要 Android UI 工程后做第一次真实 JNI 调用。
+- Kotlin/JVM 的 JNI 调用已由 `JniSessionTest` 验证：版本、打开、启动、轮询、流式文本和 `run_end` 都通过；模型是设备内回环的假 OpenAI SSE 服务，不依赖真实凭据。
 - 当前 Android 后端只开放文件工具：`read`、`ls`、`apply_patch`，以及可用的 `grep`/`find`。`NoShell` 明确不暴露 `bash`/`write_stdin`，提示词也会说明 shell 不可用。
 
 ## 构建与设备 ABI 测试
@@ -17,6 +17,16 @@ scripts/android-jni.sh
 # 没有设备时只构建并检查符号；CI 可要求必须跑设备
 REQUIRE_DEVICE=1 scripts/android-jni.sh
 ```
+
+App 级 JNI 测试：
+
+```bash
+scripts/android-app-test.sh
+REQUIRE_DEVICE=1 scripts/android-app-test.sh
+```
+
+该脚本用 `adb push` + `pm install` 安装 app 和测试 APK，绕过 MIUI 每次
+`adb install` 的“USB安装提示”。测试 APK 运行 `JniSessionTest`。
 
 脚本会定位 NDK、设置 `CGO_ENABLED=1 GOOS=android GOARCH=arm64`、构建
 `buildmode=c-shared`，检查 `Java_com_getan_golder_mobile_GolderNative_open`
@@ -53,18 +63,23 @@ object GolderNative {
   "protocol": "",
   "apiKey": "…",
   "systemPrompt": "",
-  "contextWindow": 128000
+  "contextWindow": 128000,
+  "debugLog": ""
 }
 ```
 
 密钥应由 Android Keystore 保护，并在调用前才读出；不要写日志、事件或错误。`open` 返回 0 表示失败，错误文本从 `lastError()` 读取。`poll` 返回事件 JSON 数组，空队列是 `[]`；`snapshot` 返回 `{running, runId, seq, pending, messages}`。
 
+`debugLog` 可选，只在宿主调试时设置；它记录循环事件类型和终止错误，不记录提示词、工具参数/结果或密钥。
+
 ## 尚未解决的边界
 
 - 目前是**文件型后端**，不是完整的 `auto` 权限链：没有 shell、浏览器、Git、commit/push 或网络工具。不能把这个后端说成已经支持完整任务自动化。
-- JNI 方法需要 Kotlin 工程和 JVM 才能验证；C ABI 加载成功不等于 JNI 调用已验证。
 - 会话持久化、后台恢复和结果未知时的写操作保护仍待实现。
 
-## 为什么先做 JNI 而不是 UI
+## 工具链与 UI
 
-当前开发机没有 JDK/Gradle，无法构建 Kotlin/Compose 工程；NDK 已安装，因此先把可独立验证的 ABI 和加载路径做实。Android UI 工程需要先补齐 JDK/Gradle 工具链，再用同一套 JSON 契约接入。
+JDK 21 使用 Homebrew 的标准安装，Gradle 8.14.6 固定在
+`~/Library/Android/gradle/gradle-8.14.6`；Android SDK 继续位于
+`~/Library/Android/sdk`。Kotlin/Compose 工程在 `mobile/android`，通过同一套
+JSON 契约接入。

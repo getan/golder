@@ -44,7 +44,19 @@ scripts/android-jni.sh
 REQUIRE_DEVICE=1 scripts/android-jni.sh
 ```
 
-它验证 .so 能在设备上加载、C ABI 可调用、文件型会话可以打开并读快照；Kotlin/JVM 的 JNI 调用仍需 UI 工程。
+它验证 .so 能在设备上加载、C ABI 可调用、文件型会话可以打开并读快照；
+Kotlin/JVM 的 JNI 调用由下面的 app 级测试覆盖。
+
+App 级 JNI 测试：
+
+```bash
+scripts/android-app-test.sh
+REQUIRE_DEVICE=1 scripts/android-app-test.sh
+```
+
+该脚本构建 app 和 androidTest APK，用 `pm install` 安装，再运行
+`JniSessionTest`。测试内起一个回环 OpenAI SSE 假服务，验证 Kotlin→JNI→Go→
+Provider→Agent 循环的完整流式回合；不需要真实模型或 API key。
 
 ## 还应补上的无设备测试
 

@@ -31,6 +31,10 @@ type Config struct {
 	APIKey        string `json:"apiKey,omitempty"`
 	SystemPrompt  string `json:"systemPrompt,omitempty"`
 	ContextWindow int    `json:"contextWindow,omitempty"`
+	// DebugLog is an optional host-only diagnostic path. The Android backend
+	// appends loop event types and terminal errors (never prompts or secrets)
+	// to it. Empty disables the log.
+	DebugLog string `json:"debugLog,omitempty"`
 }
 
 // Backend is one live conversation. The Android implementation wraps
