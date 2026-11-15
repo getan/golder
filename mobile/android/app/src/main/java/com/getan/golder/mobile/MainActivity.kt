@@ -4,7 +4,9 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,10 +18,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -53,6 +57,13 @@ import org.json.JSONObject
 
 data class Entry(val id: Long, val kind: String, val text: String)
 
+data class ProviderOption(
+    val name: String,
+    val defaultModel: String,
+    val models: List<String>,
+    val reasoning: List<String>,
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,16 +81,19 @@ class MainActivity : ComponentActivity() {
 private fun GolderApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val defaultWorkspace = File(context.filesDir, "workspace").absolutePath
+    val workspaceDir = remember {
+        File(context.filesDir, "workspace").apply { mkdirs() }
+    }
 
     var version by remember { mutableStateOf("loading") }
-    var workspace by remember { mutableStateOf(defaultWorkspace) }
+    val providers = remember { mutableStateListOf<ProviderOption>() }
+    var provider by remember { mutableStateOf("openai") }
     var model by remember { mutableStateOf("gpt-4o-mini") }
+    var thinking by remember { mutableStateOf("") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
     var tokenLoaded by remember { mutableStateOf(false) }
-    var allowGitNetwork by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var handle by remember { mutableIntStateOf(0) }
     var running by remember { mutableStateOf(false) }
@@ -128,13 +142,56 @@ private fun GolderApp() {
     LaunchedEffect(Unit) {
         gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
         tokenLoaded = true
+
+        val catalogRaw = runCatching {
+            withContext(Dispatchers.IO) { GolderNative.catalog() }
+        }.getOrNull()
+        if (!catalogRaw.isNullOrBlank()) {
+            runCatching {
+                val root = JSONObject(catalogRaw)
+                val array = root.optJSONArray("providers") ?: JSONArray()
+                val parsed = mutableListOf<ProviderOption>()
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    val name = obj.optString("name").trim()
+                    if (name.isEmpty()) continue
+                    val defaultModel = obj.optString("defaultModel").trim()
+                    val models = mutableListOf<String>()
+                    obj.optJSONArray("models")?.let { list ->
+                        for (j in 0 until list.length()) {
+                            val value = list.optString(j).trim()
+                            if (value.isNotEmpty()) models.add(value)
+                        }
+                    }
+                    if (models.isEmpty() && defaultModel.isNotEmpty()) models.add(defaultModel)
+                    val reasoning = mutableListOf<String>()
+                    obj.optJSONArray("reasoning")?.let { list ->
+                        for (j in 0 until list.length()) {
+                            val value = list.optString(j).trim()
+                            if (value.isNotEmpty()) reasoning.add(value)
+                        }
+                    }
+                    parsed.add(ProviderOption(name, defaultModel, models, reasoning))
+                }
+                if (parsed.isNotEmpty()) {
+                    providers.clear()
+                    providers.addAll(parsed)
+                    val defaultProvider = root.optString("defaultProvider").ifBlank { parsed.first().name }
+                    val chosen = parsed.firstOrNull { it.name == defaultProvider } ?: parsed.first()
+                    provider = chosen.name
+                    model = root.optString("defaultModel").ifBlank { chosen.defaultModel }
+                    thinking = chosen.reasoning.firstOrNull() ?: ""
+                }
+            }.onFailure { Log.e("GolderJNI", "catalog parse failed", it) }
+        }
+
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
         }.getOrElse {
             Log.e("GolderJNI", "version failed", it)
             "unavailable"
         }
-        Log.i("GolderJNI", "version=$version")
+        Log.i("GolderJNI", "version=$version providers=${providers.size}")
     }
 
     LaunchedEffect(handle) {
@@ -200,54 +257,60 @@ private fun GolderApp() {
         }
     }
 
+    val pickerProviders = if (providers.isEmpty()) {
+        listOf(
+            ProviderOption(
+                "openai", "gpt-4o-mini", listOf("gpt-4o-mini"),
+                listOf("low", "medium", "high"),
+            ),
+        )
+    } else {
+        providers
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Golder", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.width(8.dp))
             Text("JNI $version", style = MaterialTheme.typography.labelSmall)
         }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Workspace: ${workspaceDir.absolutePath}",
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
         Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = workspace,
-            onValueChange = { workspace = it },
-            label = { Text("Workspace") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+        ModelPicker(
+            providers = pickerProviders,
+            provider = provider,
+            model = model,
+            thinking = thinking,
+            onPick = { p, m, t ->
+                provider = p
+                model = m
+                thinking = t
+            },
         )
-        OutlinedTextField(
-            value = model,
-            onValueChange = { model = it },
-            label = { Text("Model") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = baseUrl,
-            onValueChange = { baseUrl = it },
-            label = { Text("Base URL (optional)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("API key (not saved)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Spacer(Modifier.height(6.dp))
+        ConnectionPicker(baseUrl = baseUrl, apiKey = apiKey) { url, key ->
+            baseUrl = url
+            apiKey = key
+        }
+        Spacer(Modifier.height(6.dp))
         OutlinedTextField(
             value = gitToken,
             onValueChange = { gitToken = it },
-            label = { Text("GitHub token (fine-grained PAT, encrypted)") },
+            label = { Text("GitHub token (fine-grained PAT)") },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             enabled = tokenLoaded,
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "Keystore-encrypted on this device; never uploaded or logged. " +
-                "Use a fine-grained PAT with Contents R/W; revoke it anytime on GitHub.",
+            "Encrypted by Android Keystore; never uploaded or logged. " +
+                "Contents R/W; revoke on GitHub.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -259,22 +322,13 @@ private fun GolderApp() {
                 status = "GitHub token cleared."
             },
         ) { Text("Forget GitHub token") }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(
-                checked = allowGitNetwork,
-                onCheckedChange = { allowGitNetwork = it },
-                enabled = handle == 0,
-            )
-            Text("Allow Git network (clone/fetch/push)", style = MaterialTheme.typography.bodySmall)
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 enabled = !running,
                 onClick = {
                     scope.launch {
-                        val dir = File(workspace)
-                        if (!dir.isDirectory && !dir.mkdirs()) {
-                            status = "Cannot create workspace: ${dir.absolutePath}"
+                        if (!workspaceDir.isDirectory && !workspaceDir.mkdirs()) {
+                            status = "Cannot create workspace: ${workspaceDir.absolutePath}"
                             return@launch
                         }
                         if (handle != 0) {
@@ -284,12 +338,14 @@ private fun GolderApp() {
                         val stateDir = File(context.filesDir, "state").apply { mkdirs() }
                         withContext(Dispatchers.IO) { SecureStore.saveToken(context, gitToken) }
                         val config = JSONObject()
-                            .put("workspace", dir.absolutePath)
-                            .put("model", model.trim())
+                            .put("workspace", workspaceDir.absolutePath)
+                            .put("provider", provider)
+                            .put("model", model.trim().ifBlank { "gpt-4o-mini" })
+                            .put("thinkingLevel", thinking)
                             .put("apiKey", apiKey)
                             .put("stateDir", stateDir.absolutePath)
-                            .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
-                            .put("allowNetworkGit", allowGitNetwork)
+                            .put("sessionId", "mobile-" + Integer.toHexString(workspaceDir.absolutePath.hashCode()))
+                            .put("allowNetworkGit", true)
                             .put("gitToken", gitToken)
                         if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
                         val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
@@ -367,6 +423,184 @@ private fun GolderApp() {
                     }
                 },
             ) { Text("Send") }
+        }
+    }
+}
+
+@Composable
+private fun ModelPicker(
+    providers: List<ProviderOption>,
+    provider: String,
+    model: String,
+    thinking: String,
+    onPick: (String, String, String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Provider · model · reasoning", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "$provider · $model · ${thinking.ifBlank { "default" }}",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    if (!open) return
+
+    val fallback = ProviderOption(
+        provider.ifBlank { "openai" },
+        model.ifBlank { "gpt-4o-mini" },
+        listOf(model.ifBlank { "gpt-4o-mini" }),
+        listOf("low", "medium", "high"),
+    )
+    val choices = providers.ifEmpty { listOf(fallback) }
+    var draftProvider by remember(open) { mutableStateOf(provider) }
+    var draftModel by remember(open) { mutableStateOf(model) }
+    var draftThinking by remember(open) { mutableStateOf(thinking) }
+    val current = choices.firstOrNull { it.name == draftProvider } ?: choices.first()
+    var custom by remember(open) { mutableStateOf(draftModel !in current.models) }
+
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text("Provider & model") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Provider", style = MaterialTheme.typography.labelSmall)
+                DropdownField(current.name, choices.map { it.name }) { name ->
+                    val next = choices.firstOrNull { it.name == name } ?: current
+                    draftProvider = next.name
+                    draftModel = next.defaultModel
+                    draftThinking = next.reasoning.firstOrNull() ?: ""
+                    custom = false
+                }
+                Text("Model", style = MaterialTheme.typography.labelSmall)
+                DropdownField(draftModel, current.models.distinct() + "Custom model…") { value ->
+                    if (value == "Custom model…") {
+                        custom = true
+                    } else {
+                        draftModel = value
+                        custom = false
+                    }
+                }
+                if (custom) {
+                    OutlinedTextField(
+                        value = draftModel,
+                        onValueChange = { draftModel = it },
+                        label = { Text("Model id") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text("Reasoning", style = MaterialTheme.typography.labelSmall)
+                DropdownField(
+                    if (draftThinking.isBlank()) "default" else draftThinking,
+                    listOf("default") + current.reasoning.distinct(),
+                ) { value ->
+                    draftThinking = if (value == "default") "" else value
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = draftProvider.isNotBlank() && draftModel.isNotBlank(),
+                onClick = {
+                    onPick(draftProvider, draftModel.trim(), draftThinking)
+                    open = false
+                },
+            ) { Text("Use") }
+        },
+        dismissButton = {
+            TextButton(onClick = { open = false }) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun ConnectionPicker(
+    baseUrl: String,
+    apiKey: String,
+    onPick: (String, String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val endpoint = baseUrl.ifBlank { "default endpoint" }
+    val key = if (apiKey.isBlank()) "API key not set" else "API key set"
+    Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text("Connection", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "$endpoint · $key",
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+    if (!open) return
+
+    var draftUrl by remember(open) { mutableStateOf(baseUrl) }
+    var draftKey by remember(open) { mutableStateOf(apiKey) }
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text("Connection") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = draftUrl,
+                    onValueChange = { draftUrl = it },
+                    label = { Text("Base URL (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = draftKey,
+                    onValueChange = { draftKey = it },
+                    label = { Text("API key") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    onPick(draftUrl.trim(), draftKey)
+                    open = false
+                },
+            ) { Text("Use") }
+        },
+        dismissButton = {
+            TextButton(onClick = { open = false }) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun DropdownField(
+    value: String,
+    options: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.distinct().forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        expanded = false
+                        onSelect(option)
+                    },
+                )
+            }
         }
     }
 }

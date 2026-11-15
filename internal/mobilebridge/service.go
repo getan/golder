@@ -45,6 +45,8 @@ type Config struct {
 	// AllowNetworkGit is a session capability, not a per-call decision. When
 	// false, git clone/fetch/push fail closed; local Git still works.
 	AllowNetworkGit bool `json:"allowNetworkGit,omitempty"`
+	// ThinkingLevel is the selected reasoning level (low, medium, high, max).
+	ThinkingLevel string `json:"thinkingLevel,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.
@@ -87,6 +89,9 @@ type Service struct {
 func NewService(factory Factory) *Service {
 	return &Service{factory: factory, entries: make(map[int]*entry)}
 }
+
+// CatalogJSON exposes the provider/model catalog without opening a session.
+func (s *Service) CatalogJSON() (string, error) { return CatalogJSON() }
 
 // Open decodes configJSON, builds a backend, and returns a handle > 0. A
 // failure returns 0 and records LastError.

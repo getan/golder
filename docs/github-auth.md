@@ -1,6 +1,8 @@
 # GitHub 认证：纯客户端 Fine-grained PAT
 
-`Allow Git network` 只是允许这次会话让 Git 访问网络；它不是 GitHub 身份认证。私有仓库 clone 和任何 push 还需要用户自己的 GitHub token。
+移动 UI 中 Git 网络默认开启；它只允许会话让 Git 访问网络，不是 GitHub 身份认证。
+私有仓库 clone 和任何 push 还需要用户自己的 GitHub token。宿主仍可用
+`allowNetworkGit=false` 关闭网络 Git。
 
 ## 决策：只用 Fine-grained PAT，不做 GitHub App/Broker
 
@@ -22,7 +24,8 @@
    - **Metadata: Read**：基础必需；
    - 需要 PR 时再加 **Pull requests: Read and write**。
 4. 复制 `github_pat_…`，粘贴到 App 的 **GitHub token** 字段。
-5. 勾选 **Allow Git network**，再打开工作区。
+5. 在 App 的 **Connection** 入口填模型 API key（不是 GitHub token），GitHub token
+   单独填在 **GitHub token** 框；Git 网络默认开启，直接打开工作区。
 
 public 仓库不填 token 也能 clone；私有仓库和 push 必须填。两者不是一回事：网络开关控制是否允许联网，token 控制以谁的身份访问 GitHub。
 
@@ -61,8 +64,9 @@ App 不代管 token、不自动续期、不集中撤销，也不能保证被攻�
 
 - Android UI 已有 GitHub token 输入框、Keystore 加密保存和清除按钮；
 - Bridge 的 `gitToken` 通过 HTTPS Basic Auth 传给纯 Go Git 工具，用户名 `x-access-token`；
-- Android 设备测试覆盖 Keystore 往返，当前 JNI/Keystore 测试 4/4 通过；
-- Git 网络仍由 “Allow Git network” 会话开关控制。
+- Android 设备测试覆盖 Keystore 往返和 provider catalog，当前 JNI/Keystore 测试 5/5 通过；
+- Git 网络默认开启，不再有 “Allow Git network” 复选框；host 仍可传
+  `allowNetworkGit=false` 关闭。
 
 ## 不采用的方案（记录）
 

@@ -31,6 +31,13 @@ class JniSessionTest {
     }
 
     @Test
+    fun providerCatalogIsExposed() {
+        val raw = GolderNative.catalog()
+        assertTrue("catalog is empty", raw.contains("\"providers\""))
+        assertTrue("catalog has no openai", raw.contains("\"openai\""))
+    }
+
+    @Test
     fun githubTokenRoundTripsThroughAndroidKeystore() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val previous = SecureStore.getToken(context)

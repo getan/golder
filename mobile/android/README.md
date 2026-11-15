@@ -23,14 +23,17 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 
 ## 当前界面
 
-- 工作区、模型、Base URL、API key 输入；密钥仅保存在内存中。
-- 打开工作区、发送任务、停止。
+- `Provider · Model · Reasoning` 是一个组合选择器；点开后分三级选择，模型也可以
+  选 “Custom model…” 输入任意 id。Provider 列表来自 Go 的 provider registry。
+- `Connection` 是一个入口，点开后填 Base URL 和 API key；API key 仅保存在内存中。
+- GitHub token 单独一个框，由 Android Keystore 加密保存；私有仓库 clone/push 必须填写。
+- 打开工作区、发送任务、停止；工作区固定为 app 私有目录，不再需要填写路径。
 - 流式文本、thinking、工具开始/结束和运行状态。
 - 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
-- 本地 Git：status/diff/log/add/commit/branch/checkout/remote；clone/fetch/push 在网络授权前失败关闭。
-- GitHub token（fine-grained PAT）由 Android Keystore 加密保存；私有仓库 clone/push 必须填写。
-- “Allow Git network” 是打开会话前的复选框；它是会话级授权，不是逐次审批。
-- `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据。
+- 本地 Git：status/diff/log/add/commit/branch/checkout/remote；移动 UI 默认开启
+  Git 网络（clone/fetch/push），不再提供复选框。它是会话级能力，不是逐次审批。
+- `scripts/android-app-test.sh` 用设备内回环假模型验证完整 JNI 路径，不需要真实凭据；
+  当前设备测试 5/5 通过，包含 provider catalog。
 
 ## 边界
 

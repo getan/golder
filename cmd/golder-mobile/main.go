@@ -76,6 +76,15 @@ func golder_mobile_version() *C.char {
 	return C.CString(mobilebridge.Version)
 }
 
+//export golder_mobile_catalog
+func golder_mobile_catalog() *C.char {
+	raw, err := service.CatalogJSON()
+	if err != nil {
+		return nil
+	}
+	return C.CString(raw)
+}
+
 //export golder_mobile_free
 func golder_mobile_free(p *C.char) {
 	C.free(unsafe.Pointer(p))
@@ -144,6 +153,15 @@ func golder_mobile_close(handle C.int) {
 //export Java_com_getan_golder_mobile_GolderNative_version
 func Java_com_getan_golder_mobile_GolderNative_version(env *C.JNIEnv, clazz C.jclass) C.jstring {
 	return javaString(env, mobilebridge.Version)
+}
+
+//export Java_com_getan_golder_mobile_GolderNative_catalog
+func Java_com_getan_golder_mobile_GolderNative_catalog(env *C.JNIEnv, clazz C.jclass) C.jstring {
+	raw, err := service.CatalogJSON()
+	if err != nil {
+		return 0
+	}
+	return javaString(env, raw)
 }
 
 //export Java_com_getan_golder_mobile_GolderNative_lastError

@@ -1,6 +1,6 @@
 # Android JNI 桥接
 
-`cmd/golder-mobile` 把移动会话边界编译成 `libgolder_mobile.so`，通过 JNI 供 Kotlin 调用。服务层在 `internal/mobilebridge`，不依赖 JVM，因此主机测试和 Android 设备测试可以分开进行。
+`cmd/golder-mobile` 把移动会话边界编译成 `libgolder_mobile.so`，通过 JNI 供 Kotlin 调用。服务层在 `internal/mobilebridge`，不依赖 JVM，因此主机测试和 Android 设备测试可以分开进行。当前走的是 **in-process JNI** 路线，不是把 Go 可执行文件作为子进程启动；两条路线的取舍见文末。
 
 ## 当前状态
 
@@ -42,6 +42,7 @@ object GolderNative {
     init { System.loadLibrary("golder_mobile") }
 
     external fun version(): String
+    external fun catalog(): String
     external fun lastError(): String
     external fun open(configJson: String): Int
     external fun start(handle: Int, prompt: String): Int
@@ -57,8 +58,9 @@ object GolderNative {
 ```json
 {
   "workspace": "/data/user/0/com.getan.golder/files/workspace",
-  "model": "gpt-4o-mini",
-  "provider": "openrouter",
+  "model": "gpt-6.1-sol",
+  "provider": "openai",
+  "thinkingLevel": "high",
   "baseUrl": "",
   "protocol": "",
   "apiKey": "…",
@@ -69,25 +71,47 @@ object GolderNative {
   "gitAuthorName": "Your Name",
   "gitAuthorEmail": "you@example.com",
   "gitToken": "",
-  "allowNetworkGit": false,
+  "allowNetworkGit": true,
   "debugLog": ""
 }
 ```
 
 密钥应由 Android Keystore 保护，并在调用前才读出；不要写日志、事件或错误。`open` 返回 0 表示失败，错误文本从 `lastError()` 读取。`poll` 返回事件 JSON 数组，空队列是 `[]`；`snapshot` 返回 `{running, runId, seq, pending, messages}`。
 
+`catalog()` 在打开会话前返回 provider/model/reasoning 目录：
+`{providers:[{name, defaultModel, models, reasoning}], defaultProvider, defaultModel}`。
+移动 UI 用它生成一个组合选择器；当前 `models` 含注册表默认模型，其他模型 id 通过
+UI 的 “Custom model…” 输入。它是静态目录，不触发网络。
+
 `debugLog` 可选，只在宿主调试时设置；它记录循环事件类型和终止错误，不记录提示词、工具参数/结果或密钥。
 
 `stateDir` 可选，设置后会话保存在 `<stateDir>/sessions/<sessionId>.jsonl`；同一 `sessionId` 重新打开会恢复历史。锁文件防止同一会话被两个进程同时写入。当前采用整文件原子重写，后续可换成增量追加。
 
-`gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。`allowNetworkGit` 是**会话级**宿主能力：默认关闭时 `clone`/`fetch`/`push` 明确失败关闭，本地 `commit`/`branch`/`status`/`log` 可用；UI 提供“Allow Git network”复选框，在打开会话前设置。逐次网络授权的审批卡片仍未实现。
+`gitAuthor*` 决定提交身份；为空时读取仓库配置，最后才使用本地 fallback。`gitToken` 只用于 HTTPS 远端，不会出现在工具输出或错误里。`allowNetworkGit` 是**会话级**宿主能力：传 false 时 `clone`/`fetch`/`push` 明确失败关闭，本地 `commit`/`branch`/`status`/`log` 可用。Android UI 在打开会话时固定传 true，即 Git 网络默认开启，不再提供复选框；宿主仍可显式传 false 关闭。逐次网络授权的审批卡片仍未实现。
 
 GitHub 认证方案见 [GitHub 认证](github-auth.md)。当前决定只使用用户自备的 fine-grained PAT，不实现 GitHub App/device flow/token broker；UI 已支持 PAT 并用 Android Keystore 加密保存。
 
 ## 尚未解决的边界
 
-- 目前是**文件型 + 本地 Git 后端**，网络 Git 由会话级复选框授权；还不是逐次审批的完整 `auto` 权限链，没有 shell 或浏览器。不能把这个后端说成已经支持完整任务自动化。
+- 目前是**文件型 + 本地 Git 后端**，网络 Git 由会话级能力控制（移动 UI 默认开启）；还不是逐次审批的完整 `auto` 权限链，没有 shell 或浏览器。不能把这个后端说成已经支持完整任务自动化。
 - 会话持久化和重启恢复已有基础实现；后台执行限制、结果未知时的写操作保护和多会话列表仍待实现。
+
+## JNI 还是子进程
+
+当前实现是 **in-process JNI**：Go 编成 Android `c-shared` 库，Kotlin
+`System.loadLibrary` 后在同一个 app 进程里调用 `open/poll/start`。它没有独立
+Go 进程，也没有 stdin/stdout 或 JSON-RPC 的 IPC。
+
+另一条路线是把 Go 编成独立可执行文件，由 Kotlin 启动子进程，用 JSON 行协议
+通信。两条路线的取舍：
+
+- JNI：延迟低、没有 IPC 序列化和子进程生命周期，APK 只需一个 `.so`；但 Go
+  panic 会影响 app 进程，JNI 线程/引用和 cgo ABI 更敏感，崩溃隔离弱。
+- 子进程：崩溃隔离、可以单独替换/调试可执行文件；但 Android 对打包二进制的
+  执行限制、IPC 协议、进程回收和双份内存都更复杂，启动也更重。
+
+当前选择 JNI，是因为移动工作区需要频繁的工具事件和低延迟轮询；文件/网络权限
+仍由 Go 侧 gate 控制，JNI 不是权限边界。
 
 ## 工具链与 UI
 

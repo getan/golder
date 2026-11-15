@@ -114,6 +114,7 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		Permissions:   toolset.Permissions,
 		ContextWindow: cfg.ContextWindow,
 		ObserveEvent:  observe,
+		ThinkingLevel: agentcore.ThinkingLevel(cfg.ThinkingLevel),
 		Checkpoint:    func(_ context.Context, agentCtx *agentcore.AgentContext, _ bool) { backend.save(agentCtx.Messages) },
 		OnRunEnd:      backend.save,
 		SessionID:     sessionID,
