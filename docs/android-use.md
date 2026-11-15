@@ -167,7 +167,9 @@ Phase 1 使用 **loopback TCP + 每进程随机 token**，而不是 Android `Loc
 - 审计记录只保存动作、包名、结果和错误摘要，不保存屏幕文本；
 - 包 allowlist：留空允许所有 App，非空时只允许列出的包名。
 
-已增加 AndroidUse 常驻状态通知和 Accessibility overlay：显示当前动作/包名、最近截图，并在 overlay 上提供 Pause/Resume/Hide。Settings 有“显示 AndroidUse 悬浮层”开关；关闭后不常驻，但敏感动作仍会临时拉起 Allow once / Deny 确认面板。拒绝或超时则失败关闭。仍未完成：完整 OEM 设备矩阵和真实长时任务验收。
+已增加 AndroidUse 常驻状态通知和 Accessibility overlay：显示当前动作/包名、最近截图，并在 overlay 上提供 Pause/Resume/Hide。Settings 有“显示 AndroidUse 悬浮层”开关；关闭后不常驻，但敏感动作仍会临时拉起 Allow once / Deny 确认面板。拒绝或超时则失败关闭。
+
+Settings 还通过 **服务 heartbeat + loopback status probe** 检测“无障碍已启用但服务未绑定”：只有 heartbeat 新鲜或 bridge 应答成功才显示已连接；否则显示未连接，并提供“重新绑定无障碍”按钮和操作说明。App 回到前台时会重新检查。仍未完成：完整 OEM 设备矩阵和真实长时任务验收。
 
 ### 6.1 范围
 

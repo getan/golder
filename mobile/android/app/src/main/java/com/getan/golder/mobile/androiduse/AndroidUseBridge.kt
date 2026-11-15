@@ -4,10 +4,12 @@ import android.content.Context
 import android.provider.Settings
 import org.json.JSONObject
 import java.io.File
+import java.net.Socket
 
 object AndroidUseBridge {
     const val SERVICE_CLASS = "com.getan.golder.mobile.androiduse.GolderAccessibilityService"
     private const val SHORT_SERVICE = ".androiduse.GolderAccessibilityService"
+    const val HEARTBEAT_FILE = "android-use-heartbeat.json"
     private const val CONTROL_KEY = "control-allowed"
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
@@ -19,6 +21,41 @@ object AndroidUseBridge {
 
     fun endpointReady(context: Context): Boolean =
         File(endpointPath(context)).isFile
+
+    fun heartbeatFresh(context: Context, maxAgeMs: Long = 8_000): Boolean = runCatching {
+        val file = File(context.filesDir, HEARTBEAT_FILE)
+        if (!file.isFile) return@runCatching false
+        val ts = JSONObject(file.readText()).optLong("ts", 0)
+        val age = System.currentTimeMillis() - ts
+        age in 0..maxAgeMs
+    }.getOrDefault(false)
+
+    /**
+     * Probe the loopback bridge instead of trusting a stale endpoint file.
+     * An accessibility service can be enabled in system settings yet unbound
+     * after an APK update; only a successful status round-trip proves it works.
+     */
+    fun endpointLive(context: Context, timeoutMs: Int = 700): Boolean = runCatching {
+        val endpoint = JSONObject(File(endpointPath(context)).readText())
+        val port = endpoint.optInt("port", -1)
+        val token = endpoint.optString("token")
+        if (port <= 0 || token.isBlank()) return@runCatching false
+        Socket("127.0.0.1", port).use { socket ->
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            out.write(
+                JSONObject()
+                    .put("action", "status")
+                    .put("token", token)
+                    .toString()
+                    .plus("\n")
+                    .toByteArray(Charsets.UTF_8),
+            )
+            out.flush()
+            val line = socket.getInputStream().bufferedReader().readLine() ?: return@use false
+            JSONObject(line).optBoolean("ok", false)
+        }
+    }.getOrDefault(false)
 
     private fun auditPath(context: Context): File =
         File(context.filesDir, "android-use-audit.jsonl")

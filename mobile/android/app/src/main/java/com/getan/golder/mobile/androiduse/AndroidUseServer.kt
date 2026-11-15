@@ -21,6 +21,7 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.UUID
@@ -35,6 +36,9 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
 
     @Volatile
     private var thread: Thread? = null
+    private val heartbeat = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "golder-android-use-heartbeat").apply { isDaemon = true }
+    }
 
     fun start() {
         if (thread?.isAlive == true) return
@@ -42,6 +46,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             isDaemon = true
             start()
         }
+        heartbeat.scheduleAtFixedRate({ writeHeartbeat() }, 0, 2, TimeUnit.SECONDS)
     }
 
     fun close() {
@@ -49,9 +54,11 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         socket = null
         thread?.interrupt()
         thread = null
+        heartbeat.shutdownNow()
         lastNodes.clear()
         lastSnapshotId = ""
         runCatching { File(AndroidUseBridge.endpointPath(service)).delete() }
+        runCatching { File(service.filesDir, AndroidUseBridge.HEARTBEAT_FILE).delete() }
     }
 
     private fun serve() {
@@ -96,6 +103,24 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             runCatching { socket?.close() }
             socket = null
             runCatching { File(path).delete() }
+            runCatching { File(service.filesDir, AndroidUseBridge.HEARTBEAT_FILE).delete() }
+        }
+    }
+
+    private fun writeHeartbeat() {
+        if (socket == null) return
+        runCatching {
+            val heartbeat = File(service.filesDir, AndroidUseBridge.HEARTBEAT_FILE)
+            val tmp = File("${heartbeat.path}.tmp")
+            tmp.writeText(
+                JSONObject()
+                    .put("ts", System.currentTimeMillis())
+                    .toString(),
+            )
+            if (!tmp.renameTo(heartbeat)) {
+                heartbeat.delete()
+                check(tmp.renameTo(heartbeat))
+            }
         }
     }
 

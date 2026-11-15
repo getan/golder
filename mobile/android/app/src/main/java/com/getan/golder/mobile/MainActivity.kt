@@ -46,6 +46,9 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.getan.golder.mobile.androiduse.AndroidUseBridge
 import java.io.File
 import kotlin.math.roundToInt
@@ -142,6 +145,7 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseOverlayEnabled by remember { mutableStateOf(true) }
+    var androidUseBridgeLive by remember { mutableStateOf<Boolean?>(null) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -183,6 +187,26 @@ private fun GolderApp(initialTask: String = "") {
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
         androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
+        androidUseBridgeLive = null
+        if (androidUseEnabled) {
+            scope.launch {
+                androidUseBridgeLive = withContext(Dispatchers.IO) {
+                    AndroidUseBridge.heartbeatFresh(context) ||
+                        AndroidUseBridge.endpointLive(context)
+                }
+            }
+        }
+    }
+
+    val activity = context as? ComponentActivity
+    DisposableEffect(activity) {
+        val observer = object : LifecycleEventObserver {
+            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                if (event == Lifecycle.Event.ON_RESUME) refreshAndroidUseState()
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
     }
 
     LaunchedEffect(initialTask) {
@@ -641,6 +665,20 @@ private fun GolderApp(initialTask: String = "") {
     LaunchedEffect(settingsOpen) {
         if (settingsOpen) refreshAndroidUseState()
     }
+    LaunchedEffect(settingsOpen, androidUseEnabled) {
+        if (!settingsOpen) return@LaunchedEffect
+        if (!androidUseEnabled) {
+            androidUseBridgeLive = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            androidUseBridgeLive = withContext(Dispatchers.IO) {
+                AndroidUseBridge.heartbeatFresh(context) ||
+                    AndroidUseBridge.endpointLive(context)
+            }
+            delay(2000)
+        }
+    }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
     if (settingsOpen) {
@@ -667,6 +705,7 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
                 androidUseOverlayEnabled = androidUseOverlayEnabled,
+                androidUseBridgeLive = androidUseBridgeLive,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -1524,6 +1563,7 @@ private fun SettingsScreen(
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
     androidUseOverlayEnabled: Boolean,
+    androidUseBridgeLive: Boolean?,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1624,23 +1664,31 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val needRepair = androidUseEnabled && androidUseBridgeLive == false
             Text(
-                if (!androidUseEnabled) {
-                    s.androidUseOff
-                } else if (!androidUseEndpointReady) {
-                    s.androidUseNotReady
-                } else {
-                    s.androidUseOn
+                when {
+                    !androidUseEnabled -> s.androidUseOff
+                    androidUseBridgeLive == null -> s.androidUseChecking
+                    !androidUseBridgeLive -> s.androidUseUnbound
+                    else -> s.androidUseOn
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (androidUseEnabled) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                color = when {
+                    !androidUseEnabled -> MaterialTheme.colorScheme.onSurfaceVariant
+                    androidUseBridgeLive == false -> MaterialTheme.colorScheme.error
+                    androidUseBridgeLive == true -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+            if (needRepair) {
+                Text(
+                    s.androidUseUnboundHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
-                Text(s.androidUseOpenSettings)
+                Text(if (needRepair) s.androidUseRepair else s.androidUseOpenSettings)
             }
             TextButton(onClick = onAndroidUseRefresh) {
                 Text(s.androidUseRefresh)
