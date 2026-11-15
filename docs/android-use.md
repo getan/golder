@@ -1,6 +1,6 @@
 # AndroidUse：Android 设备操作层设计
 
-> 状态：Phase 1 已实现，并在 Redmi / Android 14 上完成验收。多设备矩阵作为可选扩展，不作为当前项目门槛。
+> 状态：Phase 1 已实现，并在 Redmi / Android 14 上完成验收。Phase 2 方案已定：Mika 路线（纯手机无线调试 + shell helper + 后台虚拟屏），**Go 主体，Kotlin 仅平台适配**；尚未实现。多设备矩阵作为可选扩展，不作为当前项目门槛。
 >
 > 目标：为 Golder Android 增加类似桌面 BrowserUse / ComputerUse 的基本能力，让 Agent 能观察和操作其他 Android App。
 >
@@ -8,51 +8,64 @@
 
 ## 1. 结论
 
-AndroidUse 采用 **Go 核心 + Kotlin 适配层**：
+AndroidUse 采用 **Go 核心 + Kotlin 平台适配层**：
 
-- **Go** 负责工具协议、观察结果建模、动作选择、状态机、重试、审批、审计和会话。
-- **Kotlin** 负责无法在 Go 中可靠实现的 Android 平台能力：AccessibilityService、截图、虚拟屏、Binder/JNI 生命周期。
+- **Go** 负责工具协议、观察结果建模、ADB 配对/连接、helper 启动与交接、虚拟屏会话、动作选择、状态机、重试、审批、审计和清理决策。
+- **Kotlin** 只负责无法在 Go 中可靠实现的 Android framework 对象：AccessibilityService、截图/ImageReader、Surface、Binder helper、`DisplayManager`、`ActivityTaskManager`、`InputManager` 和 overlay。
 - **Phase 1** 只做前台/可见屏幕上的 Accessibility 操作，不需要无线调试，风险和实现复杂度较低。
-- **Phase 2** 增加 Mika 式后台虚拟屏：用户显式开启“高级手机控制”，通过无线调试配对启动 shell helper。
+- **Phase 2** 增加 Mika 式后台虚拟屏：用户显式开启“高级手机控制”，通过纯手机无线调试配对启动 shell helper，不要求 root 或电脑。
 
-不追求纯 Go。`AccessibilityService` 是 Android framework 的生命周期组件，`DisplayManager`、`MediaProjection` 和输入注入都需要 Java/Kotlin 平台对象；Go 直接通过 JNI 调这些 API 会不稳定，也会把平台细节泄漏进 Agent 核心。
+不追求“Kotlin 业务层”。`AccessibilityService` 是 Android framework 的生命周期组件，`DisplayManager`、`Surface`、`ImageReader` 和输入注入都需要 Java/Kotlin 平台对象；但这些对象只通过窄 JNI 适配层暴露给 Go。**ADB 协议、helper 编排、会话状态、策略和清理决策都在 Go，不在 Kotlin。**
 
 ## 2. 参考案例：Mika
 
 Mika 的能力链路可以概括为：
 
-1. `AccessibilityService` 读取界面树，执行点击、输入和滚动。
-2. 通过无线调试启动内置 helper，以 `shell` 身份创建 `mika-agent` 虚拟屏。
-3. App 在虚拟屏中运行，用户当前屏幕不受影响。
-4. UI 树不可用时，使用 OCR 或视觉模型读取截图。
-5. 登录、验证码、支付等敏感操作交还用户。
+1. 主进程负责 UI、Agent、Accessibility、审批和预览。
+2. 通过无线调试配对获得 `shell` 身份，启动内置 helper 进程。
+3. helper 以 shell 身份创建隐藏虚拟屏，App 在虚拟屏中运行。
+4. 主进程从 `ImageReader` 读取虚拟屏画面，用户当前主屏不受影响。
+5. Accessibility 读节点和执行语义动作；OCR/视觉作为兜底。
+6. 登录、验证码、支付等敏感操作交还用户。
+7. helper 退出、Binder 断开或任务结束时释放虚拟屏、临时资源和输入状态。
+
+参考源码（Apache-2.0，只借鉴架构，不复制代码）：
+
+- `core/adb/`：纯手机 ADB 配对、TLS、连接和 exec。
+- `core/shell/HelperHandoff.kt`：一次性 nonce、签名 pin、启动命令。
+- `core/shell/HelperHub.kt`：Binder 交接校验和死亡监听。
+- `cap/phone/display/AgentDisplay.kt`：`ImageReader` 与虚拟屏帧。
+- `cap/phone/shell/ShellService.kt`：`DisplayManager`、任务启动、输入注入和清理。
+- `setup/BuiltinShellManager.kt`、`setup/UsbStartScript.kt`：无线调试启动和 USB 后备。
+
+上游：<https://github.com/wangzan101/Mika>
 
 值得借鉴的是“观察、动作、用户接管”的交互模型；不应直接照搬其权限范围或把所有用户都引导到 shell helper。
 
 ## 3. 总体架构
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│ Go Agent                                                │
-│  internal/androiduse                                    │
-│  observe / act / wait / take_over                       │
-└───────────────────────┬─────────────────────────────────┘
-                        │ AndroidUseHost interface
-                        │ JNI / Binder / local bridge
-┌───────────────────────▼─────────────────────────────────┐
-│ Kotlin Android host                                     │
-│  GolderAccessibilityService   Phase 1                   │
-│  AndroidUseForegroundService  live view / lifecycle      │
-│  ShellHelper (optional)       Phase 2 virtual display   │
-└───────────────────────┬─────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Go: internal/androiduse                                  │
+│  ADB pairing/connect · helper launch/handoff             │
+│  display session · policy · action loop · cleanup        │
+└───────────────────────┬──────────────────────────────────┘
+                        │ narrow AndroidUseHost (JNI)
+┌───────────────────────▼──────────────────────────────────┐
+│ Kotlin: Android platform only                            │
+│  AccessibilityService · overlay · ImageReader/Surface    │
+│  :helper ShellService                                    │
+│  (DisplayManager / ActivityTaskManager / InputManager)   │
+│  Binder handoff provider                                 │
+└───────────────────────┬──────────────────────────────────┘
                         │
         ┌───────────────┼────────────────┐
         ▼               ▼                ▼
- Accessibility    Screenshot       Virtual display
- UI tree/actions   PNG frame        background apps
+ Accessibility    ImageReader       Shell helper
+ UI tree/actions   virtual frames    display/input
 ```
 
-Golder 继续使用现有的 in-process JNI 路线。Kotlin 已经把 Go 会话加载到 App 进程；AndroidUse 再增加一个 host 接口，不让 Go 直接持有 Android `Context` 或 framework 对象。
+Golder 继续使用现有的 in-process JNI 路线。Go 不直接持有 Android `Context` 或 framework 对象；Kotlin 只向 Go 暴露 `AndroidUseHost`，不向 Go 暴露任意 shell 或 Binder 权限。helper 是唯一以 shell 身份运行的进程，只实现受限 AIDL。
 
 ## 4. Go / Kotlin 边界
 
@@ -62,13 +75,17 @@ Golder 继续使用现有的 in-process JNI 路线。Kotlin 已经把 Go 会话�
 | Agent loop | Go | 观察后决策、动作序列、重试、超时、取消 |
 | Policy | Go | 权限门、敏感动作分类、用户确认、审计 |
 | Session | Go | 运行记录、截图引用、历史与恢复 |
+| ADB | Go | mDNS、配对、TLS/SPAKE2、连接、exec、身份持久化 |
+| Helper launch / handoff | Go | nonce、启动命令、交接校验、Binder 死亡处理 |
+| Display session | Go | display 生命周期、App 任务、串行化、清理决策 |
 | Bridge | Go/JNI | 向 Kotlin 发起请求并等待结构化结果 |
 | Accessibility | Kotlin | 节点树、`performAction`、`dispatchGesture` |
-| Capture | Kotlin | 截图、图像尺寸、帧序号、生命周期 |
-| Virtual display | Kotlin | `DisplayManager`、Surface、App 启动与清理 |
-| Shell helper | Kotlin | 仅在 Phase 2、用户授权后使用无线调试身份 |
+| Capture | Kotlin | `ImageReader`、Surface、帧尺寸/旋转、预览位图 |
+| Virtual display | Kotlin helper | `DisplayManager.createVirtualDisplay`、释放 |
+| App launch / input | Kotlin helper | `ActivityTaskManager`、`InputManager`、剪贴板/音频 |
+| Shell helper | Kotlin | 仅在 Phase 2、用户授权后以 shell 身份运行受限 AIDL |
 
-Kotlin 不做业务规划，也不决定哪些 App 能操作；它只执行经过 Go 策略层批准的动作，并返回可验证的结果。
+Kotlin 不做业务规划，也不决定哪些 App 能操作、何时清理、是否允许重试。Go 策略层批准后，Kotlin 只执行平台原语并返回可验证结果。Go 也不向模型暴露 helper 的任意命令接口。
 
 ## 5. 工具契约
 
@@ -202,42 +219,111 @@ internal/androiduse/
 - 屏幕内容不写入普通日志或会话文本；截图按可配置保留策略处理。
 - 当前验收设备为 Redmi / Android 14；在这台设备上完成基本回归即可，多设备矩阵作为可选扩展。
 
-## 7. Phase 2：后台虚拟屏
+## 7. Phase 2：后台虚拟屏（Mika 路线，Go 主体）
 
-### 7.1 触发条件
+### 7.0 路线决定
 
-Phase 2 是独立的“高级手机控制”能力，默认关闭，必须由用户明确开启：
+Phase 2 采用 Mika 的实际实现路线，而不是先做电脑 USB 方案：
 
-- 用户阅读并接受额外风险说明。
-- 用户通过无线调试配对一次。
-- App 启动内置 shell helper，并确认 helper 状态。
-- helper 不可用、被系统停止或权限撤销时，AndroidUse 失败关闭，不回退到静默的前台操作。
+- **纯手机无线调试为主路径**：用户配对一次后，App 内完成 ADB 配对、连接和 helper 启动，不需要电脑或 root。
+- **shell helper**：helper 以 Android `shell` UID 2000 运行，负责 Android framework 的虚拟屏、App 启动和输入注入。
+- **后台虚拟屏**：目标 App 运行在隐藏 display 上，用户当前主屏不受影响。
+- **USB 仅作后备**：无线调试入口缺失或不可用时，用户可显式改用电脑 `adb` 启动同一个 helper；不能静默降级。
+- **Go 主体，Kotlin 平台适配**：ADB、nonce、会话、策略、动作编排和清理决策在 Go；Kotlin 只实现 Android 平台对象和受限 AIDL。
 
-### 7.2 机制
+Mika 的源码只作为架构参考（Apache-2.0）；Golder 不复制其代码，而是按本文的 Go/Kotlin 边界重新实现。
 
-1. Kotlin 通过无线调试建立本机连接，启动受限制的 helper。
-2. helper 以 Android `shell` 身份创建虚拟 display 和 Surface。
-3. 目标 App 启动到该 display；屏幕内容通过 Surface/截图回传。
-4. AccessibilityService 负责读节点和执行语义动作；坐标手势在目标 display 上注入。
-5. 任务结束后关闭目标 App、释放 display、清理 Surface 和临时截图。
+### 7.1 触发条件与失败关闭
 
-不要求 root。无线调试不可用或 OEM 删除了入口时，可以不提供 Phase 2，或提供 USB 启动作为明确的高级后备；不能把普通前台操作伪装成后台能力。
+Phase 2 是独立的“高级手机控制”能力，默认关闭：
 
-### 7.3 Phase 2 验收标准
+- 用户阅读并明确接受“shell 身份强于普通 App 权限”的风险说明。
+- 用户完成一次无线调试配对；配对信息由 Go 持久化并加密保存。
+- Go 启动 helper、完成 Binder 交接，并确认 helper 的 UID、PID、APK、签名和 nonce。
+- helper 不可用、被系统停止、配对撤销或权限变化时，Phase 2 失败关闭，不回退到静默的前台操作。
+- 用户可一键停止 helper、释放虚拟屏并清除配对；旧 Binder、旧 display 和旧 nonce 立即失效。
 
-- 配对一次后可重复启动；重启后状态可见，不能静默失效。
-- 只允许经过白名单/策略批准的目标 App 进入虚拟屏。
-- 用户当前前台 App 不受影响；用户可通过 live view 观察。
-- helper 断开、display 创建失败、App 崩溃、Surface 丢失时，任务失败关闭并清理资源。
+### 7.2 启动链
+
+1. **Go ADB 客户端**
+   - 生成并保管 ADB 身份密钥；私钥只在 App 私有存储中使用，Android Keystore 包装静态加密密钥。
+   - 通过 mDNS 发现 `_adb-tls-pairing._tcp` 和 `_adb-tls-connect._tcp`，只接受本机 localhost / Wi-Fi 地址。
+   - 完成 TLS 1.3、SPAKE2 配对码认证和 PeerInfo 交换。
+   - 建立 ADB 连接，执行受限 helper 启动命令；不向模型暴露任意 `adb shell`。
+
+2. **Go 启动 helper**
+   - Go 生成一次性 nonce，通过 ADB exec 流的标准输入传给 helper，不放在命令行，避免 `/proc/<pid>/cmdline` 泄露。
+   - 启动命令使用主 APK 的 `CLASSPATH` 和 `app_process`，进程名为 `com.getan.golder.mobile:helper`。
+   - helper 是主 APK 内的受限 Kotlin 进程，不是独立可执行文件，也没有 root 权限。
+
+3. **Binder 交接**
+   - Kotlin helper 实现受限 AIDL `IGolderShell`，只暴露虚拟屏、App 启动、输入、剪贴板和清理等语义方法。
+   - Kotlin 的 exported ContentProvider 只负责采集调用方 UID/PID、APK、签名和 Binder；nonce、签名 pin、接受/拒绝决策由 Go 控制。
+   - 校验通过后，Go 才取得受限 AIDL 代理；Kotlin 不取得 ADB 或任意 shell 权限。
+   - 双方注册 Binder 死亡监听；helper 或主进程退出时，释放显示资源并清除会话。
+
+4. **虚拟屏**
+   - Kotlin 在 App 进程创建 `ImageReader` 和 `Surface`。
+   - Go 指示 Kotlin 把 Surface 交给 helper；helper 调用 `DisplayManager.createVirtualDisplay()` 创建隐藏 display。
+   - helper 优先使用 trusted display flags；系统不支持时退回兼容 flags，并明确报告能力降级。
+   - 虚拟屏设置全屏窗口模式、IME 策略、方向监听和保活；不能抢用户主屏焦点。
+   - 画面从 `ImageReader` 读取，Kotlin 负责像素/旋转/尺寸，Go 负责帧消费策略、时间戳和截图生命周期；不经过主屏截图接口。
+
+5. **App 启动与输入**
+   - Go 先检查包 allowlist、当前主屏是否正在使用目标 App、是否已有同 App 会话。
+   - helper 通过 `IActivityTaskManager.startActivityAsUser` + `ActivityOptions.setLaunchDisplayId` 启动到虚拟屏，失败才退回 `am start --display`。
+   - 语义动作优先走 Accessibility；坐标和手势由 helper 以 `InputManager.injectInputEvent` + `setDisplayId` 注入，失败才退回 `input -d`。
+   - 主屏上的任务不被抢走；同一 App 同时只允许一个虚拟屏会话。
+
+6. **清理**
+   - 任务结束时按策略把保留的 App 移回主屏并排在当前任务之后，关闭其余 App。
+   - helper 释放所有虚拟屏、Surface、剪贴板恢复、音频恢复和临时文件；`destroy()` 退出 helper。
+   - Go 清除 nonce、display 句柄和旧快照；用户关闭 Phase 2 后旧句柄不可复用。
+
+### 7.3 Go / Kotlin 责任边界
+
+| 能力 | Go | Kotlin |
+|---|---|---|
+| ADB 配对/连接/身份 | 全部 | 无 |
+| nonce、签名 pin、交接接受 | 全部 | 只采集调用方信息 |
+| 虚拟屏会话、display id、清理决策 | 全部 | 执行平台调用 |
+| 包 allowlist、敏感动作、审批、审计 | 全部 | 无 |
+| `ImageReader` / Surface / 帧旋转 | 消费策略 | 平台对象与像素 |
+| 虚拟屏创建/释放 | 决策 | `DisplayManager` |
+| App 启动/任务移动 | 决策 | `ActivityTaskManager` |
+| 点击/滑动/按键注入 | 决策 | `InputManager` / `AccessibilityService` |
+| Accessibility 节点和语义动作 | 决策 | 平台读取与执行 |
+| overlay / 通知 / 用户接管 UI | 状态与策略 | 渲染与生命周期 |
+
+Kotlin 不发起 ADB 连接、不保存 ADB 私钥、不判断 allowlist，也不提供任意 shell 方法。Go 不直接持有 Android `Context`、`Surface` 或 Binder；所有跨层调用必须经过窄 `AndroidUseHost` 和受限 AIDL。
+
+### 7.4 验收标准
+
+- 当前单机验收：Redmi / Android 14（MIUI/HyperOS 环境）。
+- 配对一次后可重复启动；系统重启后状态可见，不能静默失效。
+- 只允许经过 allowlist 和 Go 策略批准的目标 App 进入虚拟屏。
+- 用户当前前台 App 不受影响；用户可以通过 live view 观察，并可随时停止。
+- helper 断开、display 创建失败、App 崩溃、Surface 丢失、nonce 失效时，任务失败关闭并清理资源。
 - 同一 App 的多任务串行化；不允许两个任务同时向同一 App 注入冲突输入。
-- 关闭“高级手机控制”后，helper 和虚拟屏立即停止，旧句柄不可复用。
+- 关闭“高级手机控制”后，helper 和虚拟屏立即停止，旧句柄、旧 nonce 不可复用。
+- Go 单元测试覆盖 ADB 握手、配对失败、nonce、Binder 拒绝和清理状态机；Kotlin instrumentation 覆盖虚拟屏创建/释放和 helper 中断。
 
-### 7.4 额外风险
+### 7.5 额外风险
 
 - `shell` 身份远强于普通 App；这层的漏洞影响面大。
-- 虚拟屏依赖 OEM 实现，兼容性和行为差异大。
-- 后台启动 App、通知、音频、权限弹窗都可能触发系统限制。
-- 不能把 shell helper 当作安全沙箱；它是受用户授权的特权执行通道。
+- 虚拟屏 flags 和后台启动行为依赖 OEM；MIUI/HyperOS 可能有额外后台限制。
+- 后台 App 的通知、音频、权限弹窗和 WebView 行为可能与前台不同。
+- 不能把 shell helper 当作安全沙箱；它是用户明确授权的特权执行通道。
+
+### 7.6 USB 后备
+
+仅在无线调试入口缺失、配对不可用或用户明确选择时提供：
+
+- App 在外部文件目录生成一次性 `usb-start.sh`，电脑执行 `adb shell sh <script>`。
+- 脚本检查 `id -u` 必须为 2000，使用 `nohup setsid` 脱离 adb 会话启动同一个 helper。
+- nonce 写入脚本但有有效期；helper 连接后脚本换成不带 nonce 的 stub。
+- 手机重启后 USB 启动的 helper 不会自动恢复，必须重新执行命令。
+- USB 启动不能成为静默回退，也不能把普通前台操作伪装成后台能力。
 
 ## 8. 安全与权限边界
 
@@ -252,6 +338,16 @@ AndroidUse 是独立能力，不继承 `android_build` 或文件工具的网络/
 - **脱敏**：截图和 UI 文本在进入模型上下文前做凭据/敏感字段过滤；审计只记录动作类型、摘要 hash 和结果码。
 - **最小持久化**：截图默认只保留任务所需时间；会话落盘不包含原始截图或完整界面文本。
 - **可停止**：用户停止、切走目标 App、锁屏、系统权限撤销、helper 断开都使会话失效。
+
+Phase 2 额外规则：
+
+- **独立能力门**：Phase 2 默认关闭，必须单独接受风险说明；不能继承 Phase 1 的“允许控制”开关。
+- **Go 是唯一策略源**：Kotlin provider、helper 和 Accessibility 都不判断 allowlist、不决定重试、不决定是否清理。
+- **受限 AIDL**：helper 只暴露语义方法，不提供任意 `sh -c`、任意文件访问或任意 Intent；模型永远看不到 shell。
+- **本地 ADB**：Go 只连接本机 localhost / Wi-Fi 地址，不连接外部 ADB；配对身份和 nonce 不得写入日志。
+- **交接防线**：shell UID、调用方 PID、APK 路径、签名 pin、一次性 nonce、Binder identity 全部通过后才接受 helper。
+- **主屏保护**：目标 App 正在主屏使用时，Phase 2 不抢占；无法确认时按“不启动”处理。
+- **一键停止**：停止 Phase 2 必须同时停止 helper、释放 display、清除旧 nonce/Binder，并恢复音频/剪贴板等副作用。
 
 Phase 2 必须单独提示“这是 shell 身份，不是普通 App 权限”，并提供一键停止 helper 的入口。
 
@@ -272,12 +368,14 @@ Phase 2 必须单独提示“这是 shell 身份，不是普通 App 权限”，
 - Fake `AndroidUseHost` 返回固定快照和动作结果。
 - 快照过期、节点 ref 消失、动作不确定、超时、取消、敏感动作拒绝。
 - 节点树截断、文本脱敏、截图引用生命周期。
+- Phase 2：ADB mDNS/配对/连接状态机、SPAKE2 失败、证书错误、nonce 过期/重放、Binder UID/PID/签名拒绝。
+- Phase 2：虚拟屏会话串行化、目标 App 在主屏占用、helper 断开、display 释放失败、清理幂等。
 
 ### Kotlin instrumentation
 
 - Test-only App：按钮、输入框、列表、弹窗、不可读画布。
 - 无障碍开启/关闭、目标切换、进程死亡、旋转、分屏。
-- Phase 2：虚拟屏创建/释放、App 启动、helper 中断、重启恢复。
+- Phase 2：`ImageReader`/Surface 创建与释放、trusted flags 与兼容 flags、虚拟屏旋转、App 启动到指定 display、输入注入、helper 中断、重启恢复。
 
 ### 设备矩阵
 
@@ -290,8 +388,11 @@ Phase 2 必须单独提示“这是 shell 身份，不是普通 App 权限”，
 1. Phase 1 Go 接口 + fake host + Kotlin AccessibilityService。
 2. Phase 1 UI、live view、`take_over` 和策略门。
 3. 设备回归，默认关闭 AndroidUse。
-4. Phase 2 helper、虚拟屏、白名单和资源清理。
-5. 灰度开关；保留“只在前台操作”的降级路径。
+4. Phase 2 Go ADB 身份/配对/连接、nonce 和 Binder 交接状态机。
+5. Phase 2 Kotlin helper：受限 AIDL、`DisplayManager`、`ImageReader`/Surface、App 启动和输入注入。
+6. Phase 2 Go 会话：显示生命周期、allowlist、主屏保护、串行化、清理和失败关闭。
+7. Phase 2 风险 UI、一键停止、日志脱敏和设备验收。
+8. 灰度开关；保留“只在前台操作”的降级路径。
 
 Phase 1 的功能不应依赖 Phase 2 的 shell helper；Phase 2 不能改变 Phase 1 的安全承诺。
 
@@ -307,9 +408,10 @@ Phase 1 的功能不应依赖 Phase 2 的 shell helper；Phase 2 不能改变 Ph
 ## 13. 待定决策
 
 - Phase 1 截图用 `AccessibilityService.takeScreenshot` 还是按需 `MediaProjection`（前者权限面更小，后者兼容性更广）。
-- Phase 2 是否同时支持 USB 启动 helper，还是首版只支持无线调试。
-- 虚拟屏输入由 Accessibility 手势统一注入，还是由 shell helper 提供更底层的 display 输入。
-- 敏感动作的具体分类和用户确认 UI。
+- Phase 2 ADB 私钥的 Keystore 包装格式和轮换策略。
+- Phase 2 在不同 OEM 上 trusted display flags 的降级矩阵。
+- Phase 2 视觉/OCR 兜底的模型调用频率和隐私开关。
+- 敏感动作的具体分类和用户确认 UI（Phase 1 已实现 overlay 的 Allow/Deny，仍可细化分类）。
 - 截图/界面文本的保留时间与本地清理策略。
 
 ## 14. 相关文档
@@ -318,3 +420,4 @@ Phase 1 的功能不应依赖 Phase 2 的 shell helper；Phase 2 不能改变 Ph
 - [Android 回归测试](android-testing.md)
 - [Android 原生架构](mobile-native-architecture.md)
 - [Computer Use 方案](computer-use.md)
+- [Mika 参考实现](https://github.com/wangzan101/Mika)
