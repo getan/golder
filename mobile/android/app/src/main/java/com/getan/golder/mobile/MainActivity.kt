@@ -12,9 +12,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.systemGestureExclusion
@@ -69,10 +69,10 @@ data class PermissionModeOption(
 )
 
 private val permissionModeOptions = listOf(
-    PermissionModeOption("read-only", "只读", "只允许工作区内读取；写入、联网和离开沙箱直接拒绝"),
-    PermissionModeOption("ask", "每次询问", "评审先过滤安全调用；其余调用合并成一次人工确认"),
-    PermissionModeOption("auto", "自动审批", "评审自动决定风险与能力扩张，不打断人"),
-    PermissionModeOption("full-access", "完全放行", "不审查、不询问；仅保留静态硬拒名单（危险）"),
+    PermissionModeOption("read-only", "Read Only", ""),
+    PermissionModeOption("ask", "Ask", ""),
+    PermissionModeOption("auto", "Auto", ""),
+    PermissionModeOption("full-access", "Full Access", ""),
 )
 
 private fun permissionModeLabel(id: String): String =
@@ -118,6 +118,7 @@ private fun GolderApp() {
     var model by remember { mutableStateOf("gpt-4o-mini") }
     var thinking by remember { mutableStateOf("") }
     var permissionMode by remember { mutableStateOf("auto") }
+    var language by remember { mutableStateOf("en") }
     var baseUrl by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf("") }
     var gitToken by remember { mutableStateOf("") }
@@ -222,7 +223,7 @@ private fun GolderApp() {
                 SecureStore.saveToken(context, gitToken)
                 SecureStore.saveAPIKey(context, apiKey)
             }
-            SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode)
+            SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, language)
             val config = JSONObject()
                 .put("workspace", dir.absolutePath)
                 .put("provider", provider)
@@ -296,6 +297,7 @@ private fun GolderApp() {
         if (saved.model.isNotBlank()) model = saved.model
         thinking = saved.thinking
         permissionMode = saved.permissionMode
+        language = saved.language
         baseUrl = saved.baseUrl
 
         val catalogRaw = runCatching {
@@ -345,7 +347,7 @@ private fun GolderApp() {
                 }
             }.onFailure { Log.e("GolderJNI", "catalog parse failed", it) }
         }
-        SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode)
+        SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, language)
 
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
@@ -497,46 +499,53 @@ private fun GolderApp() {
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
     if (settingsOpen) {
-        SettingsScreen(
-            version = version,
-            providers = pickerProviders,
-            provider = provider,
-            model = model,
-            thinking = thinking,
-            permissionMode = permissionMode,
-            baseUrl = baseUrl,
-            apiKey = apiKey,
-            gitToken = gitToken,
-            tokenLoaded = tokenLoaded,
-            projectName = activeProject?.name ?: "Project",
-            onProviderPick = { p, m, t ->
-                provider = p
-                model = m
-                thinking = t
-                SettingsStore.save(context, p, m, t, baseUrl, permissionMode)
-            },
-            onPermissionPick = { mode ->
-                permissionMode = mode
-                SettingsStore.save(context, provider, model, thinking, baseUrl, mode)
-            },
-            onConnectionPick = { url, key ->
-                baseUrl = url
-                apiKey = key
-                SettingsStore.save(context, provider, model, thinking, url, permissionMode)
-                scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
-            },
-            onTokenChange = { gitToken = it },
-            onForgetToken = {
-                gitToken = ""
-                SecureStore.clearToken(context)
-                status = "GitHub token cleared."
-            },
-            onClose = { settingsOpen = false },
-            onReconnect = {
-                settingsOpen = false
-                scope.launch { activeProject?.let { openWorkspace(it) } }
-            },
-        )
+        CompositionLocalProvider(LocalStrings provides stringsFor(language)) {
+            SettingsScreen(
+                version = version,
+                providers = pickerProviders,
+                provider = provider,
+                model = model,
+                thinking = thinking,
+                permissionMode = permissionMode,
+                language = language,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                gitToken = gitToken,
+                tokenLoaded = tokenLoaded,
+                projectName = activeProject?.name ?: "Project",
+                onProviderPick = { p, m, t ->
+                    provider = p
+                    model = m
+                    thinking = t
+                    SettingsStore.save(context, p, m, t, baseUrl, permissionMode, language)
+                },
+                onPermissionPick = { mode ->
+                    permissionMode = mode
+                    SettingsStore.save(context, provider, model, thinking, baseUrl, mode, language)
+                },
+                onLanguagePick = { lang ->
+                    language = lang
+                    SettingsStore.save(context, provider, model, thinking, baseUrl, permissionMode, lang)
+                },
+                onConnectionPick = { url, key ->
+                    baseUrl = url
+                    apiKey = key
+                    SettingsStore.save(context, provider, model, thinking, url, permissionMode, language)
+                    scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
+                },
+                onTokenChange = { gitToken = it },
+                onForgetToken = {
+                    gitToken = ""
+                    SecureStore.clearToken(context)
+                    status = "GitHub token cleared."
+                },
+                onClose = { settingsOpen = false },
+                onReconnect = {
+                    settingsOpen = false
+                    scope.launch { activeProject?.let { openWorkspace(it) } }
+                },
+            )
+        }
         return
     }
 
@@ -1180,6 +1189,7 @@ private fun SettingsScreen(
     model: String,
     thinking: String,
     permissionMode: String,
+    language: String,
     baseUrl: String,
     apiKey: String,
     gitToken: String,
@@ -1187,21 +1197,23 @@ private fun SettingsScreen(
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onPermissionPick: (String) -> Unit,
+    onLanguagePick: (String) -> Unit,
     onConnectionPick: (String, String) -> Unit,
     onTokenChange: (String) -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
     onReconnect: () -> Unit,
 ) {
+    val s = LocalStrings.current
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text(s.settings) },
                 navigationIcon = {
-                    TextButton(onClick = onClose) { Text("Back") }
+                    TextButton(onClick = onClose) { Text(s.back) }
                 },
                 actions = {
-                    TextButton(onClick = onClose) { Text("Done") }
+                    TextButton(onClick = onClose) { Text(s.done) }
                 },
             )
         },
@@ -1214,7 +1226,7 @@ private fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Model", style = MaterialTheme.typography.titleMedium)
+            Text(s.model, style = MaterialTheme.typography.titleMedium)
             ModelPicker(
                 providers = providers,
                 provider = provider,
@@ -1222,45 +1234,46 @@ private fun SettingsScreen(
                 thinking = thinking,
                 onPick = onProviderPick,
             )
-            Text("Connection", style = MaterialTheme.typography.titleMedium)
+            Text(s.connection, style = MaterialTheme.typography.titleMedium)
             ConnectionPicker(
                 baseUrl = baseUrl,
                 apiKey = apiKey,
                 onPick = onConnectionPick,
             )
-            Text("Permissions", style = MaterialTheme.typography.titleMedium)
+            Text(s.permissions, style = MaterialTheme.typography.titleMedium)
             PermissionModePicker(
                 mode = permissionMode,
                 onPick = onPermissionPick,
             )
-            Text("GitHub", style = MaterialTheme.typography.titleMedium)
+            Text(s.language, style = MaterialTheme.typography.titleMedium)
+            LanguagePicker(language = language, onPick = onLanguagePick)
+            Text(s.github, style = MaterialTheme.typography.titleMedium)
             OutlinedTextField(
                 value = gitToken,
                 onValueChange = onTokenChange,
-                label = { Text("Fine-grained PAT") },
+                label = { Text(s.fineGrainedPat) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 enabled = tokenLoaded,
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                "Encrypted by Android Keystore; used only for HTTPS Git. " +
-                    "Contents R/W; revoke on GitHub.",
+                s.tokenHint,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             TextButton(enabled = tokenLoaded, onClick = onForgetToken) {
-                Text("Forget GitHub token")
+                Text(s.forgetToken)
             }
             Text(
-                "Project: $projectName",
+                "${s.project}: $projectName",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Button(
                 onClick = onReconnect,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Apply & reconnect") }
+            ) { Text(s.applyReconnect) }
             Text(
                 "Golder $version",
                 style = MaterialTheme.typography.labelSmall,
@@ -1298,7 +1311,9 @@ private fun ProjectDrawer(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
-                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    softWrap = false,
+                                    overflow = TextOverflow.Clip,
+                                    modifier = Modifier.fillMaxWidth().basicMarquee(),
                                 )
                             }
                         },
@@ -1350,6 +1365,7 @@ private fun PermissionModePicker(
     mode: String,
     onPick: (String) -> Unit,
 ) {
+    val s = LocalStrings.current
     var open by remember { mutableStateOf(false) }
     val current = permissionModeOptions.firstOrNull { it.id == mode }
         ?: permissionModeOptions.last()
@@ -1361,7 +1377,7 @@ private fun PermissionModePicker(
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
-                current.description,
+                modeDescription(current.id, s),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1394,7 +1410,7 @@ private fun PermissionModePicker(
                         Column(modifier = Modifier.padding(top = 10.dp)) {
                             Text(option.label, style = MaterialTheme.typography.bodyMedium)
                             Text(
-                                option.description,
+                                modeDescription(option.id, s),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -1410,6 +1426,63 @@ private fun PermissionModePicker(
 }
 
 @Composable
+private fun LanguagePicker(
+    language: String,
+    onPick: (String) -> Unit,
+) {
+    val s = LocalStrings.current
+    var open by remember { mutableStateOf(false) }
+    val current = if (language == AppLanguage.ZH.id) s.chinese else s.english
+    Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(s.language, style = MaterialTheme.typography.labelSmall)
+            Text(current, style = MaterialTheme.typography.bodyLarge)
+        }
+    }
+    if (!open) return
+    AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(s.language) },
+        text = {
+            Column {
+                listOf(AppLanguage.EN.id to s.english, AppLanguage.ZH.id to s.chinese)
+                    .forEach { (id, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onPick(id)
+                                    open = false
+                                }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = language == id,
+                                onClick = {
+                                    onPick(id)
+                                    open = false
+                                },
+                            )
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { open = false }) { Text(s.done) }
+        },
+    )
+}
+
+private fun modeDescription(id: String, s: UiStrings): String = when (id) {
+    "read-only" -> s.readOnlyDesc
+    "ask" -> s.askDesc
+    "full-access" -> s.fullAccessDesc
+    else -> s.autoDesc
+}
+
+@Composable
 private fun ModelPicker(
     providers: List<ProviderOption>,
     provider: String,
@@ -1417,10 +1490,11 @@ private fun ModelPicker(
     thinking: String,
     onPick: (String, String, String) -> Unit,
 ) {
+    val s = LocalStrings.current
     var open by remember { mutableStateOf(false) }
     Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("Provider · model · reasoning", style = MaterialTheme.typography.labelSmall)
+            Text(s.providerModelReasoning, style = MaterialTheme.typography.labelSmall)
             Text(
                 "$provider · $model · ${thinking.ifBlank { "default" }}",
                 style = MaterialTheme.typography.bodyLarge,
@@ -1449,7 +1523,7 @@ private fun ModelPicker(
         title = { Text("Provider & model") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Provider", style = MaterialTheme.typography.labelSmall)
+                Text(s.provider, style = MaterialTheme.typography.labelSmall)
                 DropdownField(current.name, choices.map { it.name }) { name ->
                     val next = choices.firstOrNull { it.name == name } ?: current
                     draftProvider = next.name
@@ -1457,9 +1531,9 @@ private fun ModelPicker(
                     draftThinking = next.reasoning.firstOrNull() ?: ""
                     custom = false
                 }
-                Text("Model", style = MaterialTheme.typography.labelSmall)
-                DropdownField(draftModel, current.models.distinct() + "Custom model…") { value ->
-                    if (value == "Custom model…") {
+                Text(s.model, style = MaterialTheme.typography.labelSmall)
+                DropdownField(draftModel, current.models.distinct() + s.customModel) { value ->
+                    if (value == s.customModel) {
                         custom = true
                     } else {
                         draftModel = value
@@ -1470,12 +1544,12 @@ private fun ModelPicker(
                     OutlinedTextField(
                         value = draftModel,
                         onValueChange = { draftModel = it },
-                        label = { Text("Model id") },
+                        label = { Text(s.modelId) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
-                Text("Reasoning", style = MaterialTheme.typography.labelSmall)
+                Text(s.reasoning, style = MaterialTheme.typography.labelSmall)
                 DropdownField(
                     if (draftThinking.isBlank()) "default" else draftThinking,
                     listOf("default") + current.reasoning.distinct(),
@@ -1491,10 +1565,10 @@ private fun ModelPicker(
                     onPick(draftProvider, draftModel.trim(), draftThinking)
                     open = false
                 },
-            ) { Text("Use") }
+            ) { Text(s.use) }
         },
         dismissButton = {
-            TextButton(onClick = { open = false }) { Text("Cancel") }
+            TextButton(onClick = { open = false }) { Text(s.cancel) }
         },
     )
 }
@@ -1505,12 +1579,13 @@ private fun ConnectionPicker(
     apiKey: String,
     onPick: (String, String) -> Unit,
 ) {
+    val s = LocalStrings.current
     var open by remember { mutableStateOf(false) }
-    val endpoint = baseUrl.ifBlank { "default endpoint" }
-    val key = if (apiKey.isBlank()) "API key not set" else "API key ••••••"
+    val endpoint = baseUrl.ifBlank { s.defaultEndpoint }
+    val key = if (apiKey.isBlank()) s.apiKeyNotSet else s.apiKeyMasked
     Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text("Connection", style = MaterialTheme.typography.labelSmall)
+            Text(s.connection, style = MaterialTheme.typography.labelSmall)
             Text(
                 "$endpoint · $key",
                 style = MaterialTheme.typography.bodyLarge,
@@ -1525,26 +1600,26 @@ private fun ConnectionPicker(
     var draftKey by remember(open) { mutableStateOf(apiKey) }
     AlertDialog(
         onDismissRequest = { open = false },
-        title = { Text("Connection") },
+        title = { Text(s.connection) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = draftUrl,
                     onValueChange = { draftUrl = it },
-                    label = { Text("Base URL (optional)") },
+                    label = { Text(s.baseUrl) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = draftKey,
                     onValueChange = { draftKey = it },
-                    label = { Text("API key") },
+                    label = { Text(s.apiKey) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    "Encrypted with Android Keystore and restored on next launch.",
+                    s.encryptedHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1556,10 +1631,10 @@ private fun ConnectionPicker(
                     onPick(draftUrl.trim(), draftKey)
                     open = false
                 },
-            ) { Text("Use") }
+            ) { Text(s.use) }
         },
         dismissButton = {
-            TextButton(onClick = { open = false }) { Text("Cancel") }
+            TextButton(onClick = { open = false }) { Text(s.cancel) }
         },
     )
 }

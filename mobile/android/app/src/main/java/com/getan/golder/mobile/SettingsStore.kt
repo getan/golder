@@ -9,6 +9,7 @@ data class SavedSettings(
     val thinking: String,
     val baseUrl: String,
     val permissionMode: String,
+    val language: String,
 )
 
 object SettingsStore {
@@ -18,6 +19,7 @@ object SettingsStore {
     private const val THINKING = "thinking"
     private const val BASE_URL = "base-url"
     private const val PERMISSION_MODE = "permission-mode"
+    private const val LANGUAGE = "language"
 
     fun load(context: Context): SavedSettings {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -27,6 +29,7 @@ object SettingsStore {
             thinking = prefs.getString(THINKING, "").orEmpty(),
             baseUrl = prefs.getString(BASE_URL, "").orEmpty(),
             permissionMode = prefs.getString(PERMISSION_MODE, "auto").orEmpty().ifBlank { "auto" },
+            language = prefs.getString(LANGUAGE, "en").orEmpty().ifBlank { "en" },
         )
     }
 
@@ -37,6 +40,7 @@ object SettingsStore {
         thinking: String,
         baseUrl: String,
         permissionMode: String,
+        language: String,
     ) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -45,6 +49,7 @@ object SettingsStore {
             .putString(THINKING, thinking)
             .putString(BASE_URL, baseUrl)
             .putString(PERMISSION_MODE, permissionMode)
+            .putString(LANGUAGE, language)
             .apply()
     }
 }
