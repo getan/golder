@@ -12,41 +12,9 @@ Golder 是用 Go 编写的开源 AI 编码助手，既有原生桌面应用、An
 
 审批、凭据脱敏与 OS 沙箱提供可配置的安全防护；具体边界取决于工具、权限模式和平台。
 
-### 桌面 GUI
-
-<p align="center">
-  <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI：项目与会话导航、Agent 对话以及架构图预览">
-</p>
-
-<p align="center"><sub>Golder GUI 实际界面：项目与会话导航、Agent 对话和应用内 SVG 预览。</sub></p>
-
-### Android 应用
-
-<p align="center">
-  <img src="docs/assets/golder-android.png" width="360" alt="Golder Android 主会话：Android 构建结果、Install APK 操作和上下文占用">
-</p>
-
-<p align="center"><sub>Android 主会话：GitHub Actions 构建结果、宿主 <b>Install APK</b> 操作和实时上下文占用。</sub></p>
-
-原生 Android 客户端使用 Kotlin 与 Jetpack Compose，通过 JNI 在 App 进程内运行共享 Go Agent。项目、文件与 Git 工具、会话和审批都在手机上；模型推理可连接远程 API。Android 宿主增加了 Keystore 凭据、后台任务前台服务、**Install APK** 操作，以及结构化的 `android_build` / `android_download` / `android_install` 工具。构建由 GitHub Actions 完成并返回 APK；已有产物无需重新构建即可安装。Android 客户端源码在 [`mobile/android`](mobile/android/)，详见 [Android JNI](docs/android-jni.md)。
-
-GitHub 认证支持细粒度 PAT（按仓库和权限精确授权）或 GitHub 设备码登录（一次性代码，类似 `gh auth login`；覆盖账号可访问的仓库，8 小时 access token 自动刷新）。OAuth token 保存在 Android Keystore。**退出登录**只删除本机 token；**在 GitHub 撤销授权**才会让 GitHub 授权本身失效。
-
-### 终端工作区
-
-<p align="center">
-  <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/browser-backend-preview.gif" width="100%" alt="golder workspace 真实会话：agent、后端 shell 和浏览器并排工作">
-  </a>
-</p>
-
-<p align="center"><sub>真实会话：agent 在同一工作区中开发、验证后端，并操作浏览器。<a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">观看完整录屏（3 分 31 秒）</a>，4 倍速播放。</sub></p>
-
-如果 golder 帮你省下一次环境折腾，点个 <a href="https://github.com/getan/golder">GitHub Star</a>，让更多开发者发现它。
-
 ## 整体架构
 
-![Golder 系统架构：原生 GUI、终端和 CLI 接入 Agent 运行时，连接模型、工具、会话与安全边界](docs/assets/golder-architecture-zh.png)
+![Golder 系统架构：原生 GUI、Android 应用、终端和 CLI 接入 Agent 运行时，连接模型、工具、会话与安全边界](docs/assets/golder-architecture-zh.png)
 
 从上到下看，Golder 将交互、Agent 能力和执行边界分开：
 
@@ -55,6 +23,37 @@ GitHub 认证支持细粒度 PAT（按仓库和权限精确授权）或 GitHub �
 3. **权限与操作目标**：适用的工具调用经过审批、路径授权和 OS 沙箱，再访问项目文件、命令、浏览器、桌面窗口或 Android 安装包。Android 的 Keystore、前台服务和系统安装器是宿主能力，APK 由 GitHub Actions 产出。实际限制依平台和权限模式而异，不表示所有操作都无条件隔离。
 
 浏览器界面需要本机安装 Chromium；Computer Use 仍在开发中，需系统权限并由用户选择目标窗口。详见 [GUI 使用说明](gui/README.md)、[沙箱文档](docs/sandboxing.md)和 [Computer Use 当前状态](docs/computer-use.md)。
+
+## 产品展示
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo"><img src="docs/assets/browser-backend-preview.gif" width="100%" alt="golder workspace 真实会话：agent、后端 shell 和浏览器并排工作"></a>
+    </td>
+    <td width="33%" valign="top">
+      <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI：项目与会话导航、Agent 对话以及架构图预览">
+    </td>
+    <td width="33%" valign="top" align="center">
+      <img src="docs/assets/golder-android.png" width="60%" alt="Golder Android 主会话：Android 构建结果、Install APK 操作和上下文占用">
+    </td>
+  </tr>
+  <tr>
+    <td><sub><b>TUI 工作区</b><br>agent、后端 shell 和浏览器在同一终端工作区。 <a href="https://golder-cli.pages.dev/?utm_source=github&utm_medium=readme#demo">观看完整录屏</a>。</sub></td>
+    <td><sub><b>桌面 GUI</b><br>项目与会话导航、Agent 对话和应用内 SVG 预览。</sub></td>
+    <td><sub><b>Android</b><br>GitHub Actions 构建结果、宿主 <b>Install APK</b> 操作和实时上下文占用。</sub></td>
+  </tr>
+</table>
+
+### Android 应用
+
+原生 Android 客户端使用 Kotlin 与 Jetpack Compose，通过 JNI 在 App 进程内运行共享 Go Agent。项目、文件与 Git 工具、会话和审批都在手机上；模型推理可连接远程 API。Android 宿主增加了 Keystore 凭据、后台任务前台服务、**Install APK** 操作，以及结构化的 `android_build` / `android_download` / `android_install` 工具。构建由 GitHub Actions 完成并返回 APK；已有产物无需重新构建即可安装。Android 客户端源码在 [`mobile/android`](mobile/android/)，详见 [Android JNI](docs/android-jni.md)。
+
+GitHub 认证支持细粒度 PAT（按仓库和权限精确授权）或 GitHub 设备码登录（一次性代码，类似 `gh auth login`；覆盖账号可访问的仓库，8 小时 access token 自动刷新）。OAuth token 保存在 Android Keystore。**退出登录**只删除本机 token；**在 GitHub 撤销授权**才会让 GitHub 授权本身失效。
+
+CI 在 push 和 PR 上构建名为 `golder-android.apk` 的 debug APK，并在打 tag 时附加到 [Releases](https://github.com/getan/golder/releases/latest)。
+
+如果 golder 帮你省下一次环境折腾，点个 <a href="https://github.com/getan/golder">GitHub Star</a>，让更多开发者发现它。
 
 ## 安装
 

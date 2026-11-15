@@ -12,41 +12,9 @@ Choose the interface that fits your work: **Golder GUI** for a graphical project
 
 Approvals, credential redaction and OS sandboxing provide configurable safeguards; their availability and behavior depend on the tool, permission mode and platform.
 
-### Desktop GUI
-
-<p align="center">
-  <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI with project and chat navigation, a conversation and an architecture diagram preview">
-</p>
-
-<p align="center"><sub>Golder GUI: project and session navigation, an Agent conversation and an in-app SVG preview.</sub></p>
-
-### Android app
-
-<p align="center">
-  <img src="docs/assets/golder-android.png" width="360" alt="Golder Android main session showing an Android build result, the Install APK action and context usage">
-</p>
-
-<p align="center"><sub>Android main session: GitHub Actions build result, the host <b>Install APK</b> action and live context usage.</sub></p>
-
-The native Android client uses Kotlin and Jetpack Compose, and runs the shared Go Agent in-process over JNI. Projects, file and Git tools, sessions and approvals stay on the phone; model inference can use a remote API. The Android host adds Keystore-backed credentials, a foreground service for background tasks, an **Install APK** action, and structured `android_build` / `android_download` / `android_install` tools. The build pipeline runs GitHub Actions and returns an APK; existing artifacts can be reinstalled without rebuilding. The Android client is built from source in [`mobile/android`](mobile/android/); see [Android JNI](docs/android-jni.md).
-
-GitHub authentication supports a fine-grained PAT (least privilege, per repository) or GitHub device login (one-time code, like `gh auth login`; broader access to repositories the account can reach, with eight-hour access tokens refreshed automatically). OAuth tokens stay in Android Keystore. **Sign out** removes local tokens; **Revoke access on GitHub** invalidates the authorization itself.
-
-### Terminal workspace
-
-<p align="center">
-  <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">
-    <img src="docs/assets/browser-backend-preview.gif" width="100%" alt="A real golder workspace session with an agent, a backend shell and a browser side by side">
-  </a>
-</p>
-
-<p align="center"><sub>Real session: the agent develops and checks a backend while using the browser in the same workspace. <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">Watch the full 3:31 recording</a> (4× speed).</sub></p>
-
-If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub star</a> helps other developers find it.
-
 ## Architecture
 
-![Golder architecture: desktop GUI, terminal and CLI connect to the Agent runtime, providers, tools, session state and security boundaries](docs/assets/golder-architecture-zh.png)
+![Golder architecture: desktop GUI, Android app, terminal and CLI connect to the Agent runtime, providers, tools, session state and security boundaries](docs/assets/golder-architecture-zh.png)
 
 The diagram's labels are in Chinese; its layers are:
 
@@ -55,6 +23,37 @@ The diagram's labels are in Chinese; its layers are:
 3. **Boundaries and targets:** approvals, path grants and OS sandboxing mediate applicable calls before they reach project files, commands, browsers, desktop windows or Android packages. On Android, Keystore, a foreground service and the system package installer are host services; GitHub Actions produces APKs. Controls vary by platform and permission mode, and are not an unconditional guarantee for every operation.
 
 The browser surface needs an installed Chromium; desktop Computer Use is under development and requires platform permissions and a user-selected target. See the [GUI guide](gui/README.md), [sandbox documentation](docs/sandboxing.md) and [Computer Use status](docs/computer-use.md) for details.
+
+## Product tour
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo"><img src="docs/assets/browser-backend-preview.gif" width="100%" alt="A real golder workspace session with an agent, a backend shell and a browser side by side"></a>
+    </td>
+    <td width="33%" valign="top">
+      <img src="docs/assets/golder-gui.png" width="100%" alt="Golder GUI with project and chat navigation, a conversation and an architecture diagram preview">
+    </td>
+    <td width="33%" valign="top" align="center">
+      <img src="docs/assets/golder-android.png" width="60%" alt="Golder Android main session showing an Android build result, the Install APK action and context usage">
+    </td>
+  </tr>
+  <tr>
+    <td><sub><b>TUI workspace</b><br>The agent, a backend shell and a browser in one terminal workspace. <a href="https://golder-cli.pages.dev/en/?utm_source=github&utm_medium=readme#demo">Watch the full recording</a>.</sub></td>
+    <td><sub><b>Desktop GUI</b><br>Project and session navigation, an Agent conversation and an in-app SVG preview.</sub></td>
+    <td><sub><b>Android</b><br>GitHub Actions build result, the host <b>Install APK</b> action and live context usage.</sub></td>
+  </tr>
+</table>
+
+### Android app
+
+The native Android client uses Kotlin and Jetpack Compose, and runs the shared Go Agent in-process over JNI. Projects, file and Git tools, sessions and approvals stay on the phone; model inference can use a remote API. The Android host adds Keystore-backed credentials, a foreground service for background tasks, an **Install APK** action, and structured `android_build` / `android_download` / `android_install` tools. The build pipeline runs GitHub Actions and returns an APK; existing artifacts can be reinstalled without rebuilding. The Android client is built from source in [`mobile/android`](mobile/android/); see [Android JNI](docs/android-jni.md).
+
+GitHub authentication supports a fine-grained PAT (least privilege, per repository) or GitHub device login (one-time code, like `gh auth login`; broader access to repositories the account can reach, with eight-hour access tokens refreshed automatically). OAuth tokens stay in Android Keystore. **Sign out** removes local tokens; **Revoke access on GitHub** invalidates the authorization itself.
+
+CI builds a debug APK named `golder-android.apk` on pushes and pull requests, and attaches it to every tagged [Release](https://github.com/getan/golder/releases/latest).
+
+If golder saves you a setup, a <a href="https://github.com/getan/golder">GitHub star</a> helps other developers find it.
 
 ## Install
 
