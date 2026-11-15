@@ -33,6 +33,8 @@ App 负责：
 - **绝不把 token 打包进 APK、源码或构建产物**；
 - token 只来自用户输入；
 - 用 Android Keystore 的 AES-GCM 密钥加密后保存；
+- Keystore 密钥不可导出，SharedPreferences 只保存 IV 和密文；
+- `allowBackup=false`，token 不进入系统云备份；
 - 不把 token 写入日志、事件、工具输出或会话文件；
 - 提供 “Forget GitHub token” 清除本地保存。
 
@@ -43,7 +45,7 @@ App 负责：
 - 丢失或泄露时在 GitHub 上撤销；
 - 设备本身的安全（锁屏、恶意软件、root 等）。
 
-App 不代管 token、不自动续期、不集中撤销，也不能保证被攻破的设备上的 token 安全。这是纯客户端模式的明确代价。
+App 不代管 token、不自动续期、不集中撤销，也不能保证被攻破的设备上的 token 安全。这是纯客户端模式的明确代价。Android Keystore 是否使用 TEE/StrongBox 取决于设备；root 或系统被攻破时，应用层的加密不能提供绝对保证。
 
 ## 多用户模式
 

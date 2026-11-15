@@ -245,6 +245,12 @@ private fun GolderApp() {
             enabled = tokenLoaded,
             modifier = Modifier.fillMaxWidth(),
         )
+        Text(
+            "Keystore-encrypted on this device; never uploaded or logged. " +
+                "Use a fine-grained PAT with Contents R/W; revoke it anytime on GitHub.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         TextButton(
             enabled = tokenLoaded,
             onClick = {
