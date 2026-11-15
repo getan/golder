@@ -28,6 +28,12 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".androiduse.Phase2HandoffActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -37,6 +43,10 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <provider
+            android:name=".androiduse.GolderShellProvider"
+            android:authorities="${applicationId}.androiduse.shell"
+            android:exported="true" />
         <service
             android:name=".AgentTaskService"
             android:exported="false"
@@ -56,5 +66,8 @@
         <receiver
             android:name=".androiduse.AndroidUseReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".androiduse.Phase2HandoffReceiver"
+            android:exported="true" />
     </application>
 </manifest>
