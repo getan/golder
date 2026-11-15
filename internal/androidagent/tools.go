@@ -114,6 +114,9 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 		&agenttool.ReadTool{Root: root},
 		&agenttool.LsTool{Root: root},
 		&agenttool.ApplyPatchTool{Root: root, Snap: agenttool.NewFileSnapshotRecorder()},
+		// The todo tool is in-memory and keeps the mobile task card useful
+		// across a multi-step run. It does not touch the workspace or network.
+		&agenttool.TodoTool{Store: agenttool.NewTodoStore()},
 	}
 	if caps.Ripgrep != "" {
 		s.Tools = append(s.Tools, &agenttool.GrepTool{Root: root}, &agenttool.FindTool{Root: root})
@@ -156,6 +159,7 @@ func (s *Toolset) Prompt() string {
 	var b strings.Builder
 	b.WriteString("You are golder, a coding agent running inside an Android app. Work within the user's selected workspace. ")
 	b.WriteString("Use read, ls and apply_patch for workspace files. Preserve task intent, report tool failures and do not replay a write whose outcome is unknown. ")
+	b.WriteString("For multi-step work, use the todo tool to keep a short task list and update it as work progresses. ")
 	b.WriteString("Shell commands are subject to the host authorization gate. Android app isolation is not a workspace-level shell sandbox: a shell may reach other data the app can access, and per-command network isolation is not provided here. ")
 	b.WriteString("A structured git tool is available for local status/log/diff/add/commit/branch/checkout/remote and for clone/fetch/push when the host grants network access for that exact call. ")
 	switch {

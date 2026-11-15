@@ -1,61 +1,64 @@
+@file:OptIn(
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+)
+
 package com.getan.golder.mobile
 
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Entry(val id: Long, val kind: String, val text: String)
+data class Entry(
+    val id: Long,
+    val kind: String,
+    val text: String,
+    val toolName: String = "",
+    val toolCommand: String = "",
+    val toolOutput: String = "",
+    val toolError: Boolean = false,
+    val toolDone: Boolean = false,
+)
+
+data class TodoItem(val content: String, val status: String)
 
 data class ProviderOption(
     val name: String,
@@ -67,6 +70,7 @@ data class ProviderOption(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -81,9 +85,14 @@ class MainActivity : ComponentActivity() {
 private fun GolderApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val workspaceDir = remember {
-        File(context.filesDir, "workspace").apply { mkdirs() }
-    }
+
+    val projects = remember { mutableStateListOf<Project>() }
+    var activeProjectId by remember { mutableStateOf("") }
+    var settingsLoaded by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var newProjectOpen by remember { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val activeProject = projects.firstOrNull { it.id == activeProjectId }
 
     var version by remember { mutableStateOf("loading") }
     val providers = remember { mutableStateListOf<ProviderOption>() }
@@ -98,10 +107,11 @@ private fun GolderApp() {
     var handle by remember { mutableIntStateOf(0) }
     var opening by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Open a workspace to begin.") }
+    var status by remember { mutableStateOf("Starting…") }
     var nextId by remember { mutableStateOf(1L) }
     val entries = remember { mutableStateListOf<Entry>() }
     val listState = rememberLazyListState()
+    val openMutex = remember { Mutex() }
 
     fun add(kind: String, text: String) {
         if (text.isBlank()) return
@@ -119,6 +129,7 @@ private fun GolderApp() {
 
     fun loadHistory(raw: String?) {
         val messages = runCatching { JSONObject(raw ?: "{}").optJSONArray("messages") }.getOrNull() ?: return
+        val toolCalls = mutableMapOf<String, Pair<String, String>>()
         for (i in 0 until messages.length()) {
             val msg = messages.getJSONObject(i)
             val role = msg.optString("role")
@@ -127,20 +138,131 @@ private fun GolderApp() {
                 if (content != null) {
                     for (j in 0 until content.length()) {
                         val block = content.getJSONObject(j)
-                        if (block.optString("type") == "text") append(block.optString("text"))
+                        when (block.optString("type")) {
+                            "text" -> append(block.optString("text"))
+                            "toolCall" -> {
+                                val id = block.optString("id")
+                                val name = block.optString("name").ifBlank { "tool" }
+                                val args = block.optJSONObject("arguments")
+                                    ?: runCatching {
+                                        JSONObject(block.optString("arguments"))
+                                    }.getOrNull()
+                                if (id.isNotBlank()) {
+                                    toolCalls[id] = name to toolCommand(name, args)
+                                }
+                            }
+                        }
                     }
                 }
             }
             when (role) {
                 "user" -> if (text.isNotBlank()) add("user", text)
                 "assistant" -> if (text.isNotBlank()) add("assistant", text)
-                "toolResult" -> if (text.isNotBlank()) add("tool", text.take(1200))
+                "toolResult" -> if (text.isNotBlank()) {
+                    val toolCallId = msg.optString("toolCallId")
+                    val known = toolCalls[toolCallId]
+                    val name = msg.optString("toolName").ifBlank {
+                        known?.first ?: "tool"
+                    }
+                    entries.add(
+                        Entry(
+                            nextId++, "tool", "",
+                            toolName = name,
+                            toolCommand = known?.second ?: name,
+                            toolOutput = text.take(1200),
+                            toolDone = true,
+                        ),
+                    )
+                }
                 "compaction" -> add("status", "Context summary restored")
             }
         }
     }
 
+    suspend fun openWorkspace(project: Project) {
+        openMutex.withLock {
+            opening = true
+            try {
+            val dir = File(project.path)
+            if (!dir.isDirectory && !dir.mkdirs()) {
+                status = "Cannot create project: ${project.path}"
+                return
+            }
+            status = "Opening ${project.name}…"
+            if (handle != 0) {
+                withContext(Dispatchers.IO) { GolderNative.close(handle) }
+                handle = 0
+            }
+            entries.clear()
+            val stateDir = File(context.filesDir, "state").apply { mkdirs() }
+            withContext(Dispatchers.IO) {
+                SecureStore.saveToken(context, gitToken)
+                SecureStore.saveAPIKey(context, apiKey)
+            }
+            SettingsStore.save(context, provider, model, thinking, baseUrl)
+            val config = JSONObject()
+                .put("workspace", dir.absolutePath)
+                .put("provider", provider)
+                .put("model", model.trim().ifBlank { "gpt-4o-mini" })
+                .put("thinkingLevel", thinking)
+                .put("apiKey", apiKey)
+                .put("stateDir", stateDir.absolutePath)
+                .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
+                .put("allowNetworkGit", true)
+                .put("gitToken", gitToken)
+            if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
+
+            val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
+            val openErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
+            Log.i("GolderJNI", "open project=${project.id} handle=$opened error=${openErr.take(300)}")
+            if (opened == 0) {
+                status = openErr.ifBlank { "Open failed." }
+                return
+            }
+            if (activeProjectId != project.id) {
+                withContext(Dispatchers.IO) { GolderNative.close(opened) }
+                return
+            }
+            val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(opened) }
+            if (snapshot == null) {
+                val snapshotErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
+                status = snapshotErr.ifBlank { "Session snapshot failed." }
+                withContext(Dispatchers.IO) { GolderNative.close(opened) }
+                return
+            }
+            entries.clear()
+            handle = opened
+            loadHistory(snapshot)
+            status = "Ready"
+            } finally {
+                opening = false
+            }
+        }
+    }
+
+    fun selectProject(project: Project) {
+        scope.launch { drawerState.close() }
+        if (project.id == activeProjectId) return
+        scope.launch {
+            if (handle != 0) {
+                withContext(Dispatchers.IO) { GolderNative.close(handle) }
+                handle = 0
+            }
+            running = false
+            entries.clear()
+            status = "Opening ${project.name}…"
+            activeProjectId = project.id
+            ProjectStore.save(context, projects, project.id)
+        }
+    }
+
     LaunchedEffect(Unit) {
+        val projectState = ProjectStore.load(context)
+        projects.clear()
+        projects.addAll(projectState.projects)
+        activeProjectId = projectState.activeId
+        ProjectStore.save(context, projects, activeProjectId)
+
         gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
         apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
         tokenLoaded = true
@@ -198,7 +320,6 @@ private fun GolderApp() {
                 }
             }.onFailure { Log.e("GolderJNI", "catalog parse failed", it) }
         }
-
         SettingsStore.save(context, provider, model, thinking, baseUrl)
 
         version = runCatching {
@@ -209,9 +330,17 @@ private fun GolderApp() {
         }
         Log.i(
             "GolderJNI",
-            "version=$version providers=${providers.size} provider=$provider model=$model " +
-                "apiKeySet=${apiKey.isNotBlank()} tokenSet=${gitToken.isNotBlank()}",
+            "version=$version providers=${providers.size} projects=${projects.size} " +
+                "provider=$provider model=$model apiKeySet=${apiKey.isNotBlank()} " +
+                "tokenSet=${gitToken.isNotBlank()}",
         )
+        settingsLoaded = true
+    }
+
+    LaunchedEffect(settingsLoaded, activeProjectId) {
+        if (!settingsLoaded) return@LaunchedEffect
+        val project = projects.firstOrNull { it.id == activeProjectId } ?: return@LaunchedEffect
+        openWorkspace(project)
     }
 
     LaunchedEffect(handle) {
@@ -221,9 +350,6 @@ private fun GolderApp() {
             val raw = runCatching {
                 withContext(Dispatchers.IO) { GolderNative.poll(pollHandle, 200) }
             }.getOrNull()
-            // A reopen closes the old handle while this coroutine may still be
-            // finishing a call. Never let that stale result overwrite the new
-            // session's status.
             if (handle != pollHandle) break
             if (raw == null) {
                 val err = runCatching { GolderNative.lastError() }.getOrDefault("")
@@ -243,14 +369,40 @@ private fun GolderApp() {
                         "text" -> appendAssistant(event.optString("text"))
                         "thinking" -> add("thinking", event.optString("text"))
                         "tool_start" -> {
-                            val name = event.optString("toolName")
-                            add("tool", "→ $name")
+                            val name = event.optString("toolName").ifBlank { "tool" }
+                            val args = event.optJSONObject("args")
+                            entries.add(
+                                Entry(
+                                    nextId++, "tool", "",
+                                    toolName = name,
+                                    toolCommand = toolCommand(name, args),
+                                ),
+                            )
                         }
                         "tool_end" -> {
-                            val name = event.optString("toolName")
-                            val mark = if (event.optBoolean("isError")) "✗" else "✓"
+                            val name = event.optString("toolName").ifBlank { "tool" }
                             val output = event.optString("text").take(1200)
-                            add("tool", "$mark $name\n$output")
+                            val isError = event.optBoolean("isError")
+                            val index = entries.indexOfLast {
+                                it.kind == "tool" && it.toolName == name && !it.toolDone
+                            }
+                            if (index >= 0) {
+                                entries[index] = entries[index].copy(
+                                    toolOutput = output,
+                                    toolError = isError,
+                                    toolDone = true,
+                                )
+                            } else {
+                                entries.add(
+                                    Entry(
+                                        nextId++, "tool", "",
+                                        toolName = name,
+                                        toolOutput = output,
+                                        toolError = isError,
+                                        toolDone = true,
+                                    ),
+                                )
+                            }
                         }
                         "run_end" -> {
                             running = false
@@ -277,8 +429,8 @@ private fun GolderApp() {
     }
 
     DisposableEffect(handle) {
-        // Capture the key owned by this effect. Reading the mutable handle in
-        // onDispose would close the *new* session when 0 -> 1 recomposes.
+        // Capture this effect's own key; reading the mutable state in onDispose
+        // would close the *new* session on a 0 -> 1 recomposition.
         val ownedHandle = handle
         onDispose {
             if (ownedHandle != 0) {
@@ -298,193 +450,696 @@ private fun GolderApp() {
         providers
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Golder", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.width(8.dp))
-            Text("JNI $version", style = MaterialTheme.typography.labelSmall)
-        }
-        Spacer(Modifier.height(2.dp))
-        Text(
-            "Workspace: ${workspaceDir.absolutePath}",
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(Modifier.height(6.dp))
-        ModelPicker(
+    BackHandler(enabled = settingsOpen) { settingsOpen = false }
+
+    if (settingsOpen) {
+        SettingsScreen(
+            version = version,
             providers = pickerProviders,
             provider = provider,
             model = model,
             thinking = thinking,
-            onPick = { p, m, t ->
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            gitToken = gitToken,
+            tokenLoaded = tokenLoaded,
+            projectName = activeProject?.name ?: "Project",
+            onProviderPick = { p, m, t ->
                 provider = p
                 model = m
                 thinking = t
                 SettingsStore.save(context, p, m, t, baseUrl)
             },
-        )
-        Spacer(Modifier.height(6.dp))
-        ConnectionPicker(baseUrl = baseUrl, apiKey = apiKey) { url, key ->
-            baseUrl = url
-            apiKey = key
-            SettingsStore.save(context, provider, model, thinking, url)
-            scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
-        }
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = gitToken,
-            onValueChange = { gitToken = it },
-            label = { Text("GitHub token (fine-grained PAT)") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            enabled = tokenLoaded,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            "Encrypted by Android Keystore; never uploaded or logged. " +
-                "Contents R/W; revoke on GitHub.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(
-            enabled = tokenLoaded,
-            onClick = {
+            onConnectionPick = { url, key ->
+                baseUrl = url
+                apiKey = key
+                SettingsStore.save(context, provider, model, thinking, url)
+                scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
+            },
+            onTokenChange = { gitToken = it },
+            onForgetToken = {
                 gitToken = ""
                 SecureStore.clearToken(context)
                 status = "GitHub token cleared."
             },
-        ) { Text("Forget GitHub token") }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                enabled = !running && !opening,
-                onClick = {
-                    if (!opening) {
-                        // Set this synchronously so a double tap cannot start two
-                        // open operations and race their handle registration.
-                        opening = true
-                        scope.launch {
-                            try {
-                                if (!workspaceDir.isDirectory && !workspaceDir.mkdirs()) {
-                                    status = "Cannot create workspace: ${workspaceDir.absolutePath}"
-                                    return@launch
-                                }
-                                status = "Opening…"
-                                if (handle != 0) {
-                                    withContext(Dispatchers.IO) { GolderNative.close(handle) }
-                                    handle = 0
-                                }
-                                val stateDir = File(context.filesDir, "state").apply { mkdirs() }
-                                withContext(Dispatchers.IO) {
-                                    SecureStore.saveToken(context, gitToken)
-                                    SecureStore.saveAPIKey(context, apiKey)
-                                }
-                                SettingsStore.save(context, provider, model, thinking, baseUrl)
-                                val config = JSONObject()
-                                    .put("workspace", workspaceDir.absolutePath)
-                                    .put("provider", provider)
-                                    .put("model", model.trim().ifBlank { "gpt-4o-mini" })
-                                    .put("thinkingLevel", thinking)
-                                    .put("apiKey", apiKey)
-                                    .put("stateDir", stateDir.absolutePath)
-                                    .put("sessionId", "mobile-" + Integer.toHexString(workspaceDir.absolutePath.hashCode()))
-                                    .put("allowNetworkGit", true)
-                                    .put("gitToken", gitToken)
-                                if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
-                                val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
-                                val openErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
-                                Log.i(
-                                    "GolderJNI",
-                                    "open handle=$opened provider=$provider model=$model " +
-                                        "error=${openErr.take(300)}",
-                                )
-                                if (opened == 0) {
-                                    status = openErr.ifBlank { "Open failed." }
+            onClose = { settingsOpen = false },
+            onReconnect = {
+                settingsOpen = false
+                scope.launch { activeProject?.let { openWorkspace(it) } }
+            },
+        )
+        return
+    }
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ProjectDrawer(
+                projects = projects,
+                activeId = activeProjectId,
+                onSelect = { selectProject(it) },
+                onNew = { newProjectOpen = true },
+            )
+        },
+    ) {
+        Scaffold(
+            topBar = {
+                MainTopBar(
+                    projectName = activeProject?.name ?: "Golder",
+                    provider = provider,
+                    model = model,
+                    thinking = thinking,
+                    connected = handle != 0,
+                    running = running,
+                    onMenu = { scope.launch { drawerState.open() } },
+                    onSettings = { settingsOpen = true },
+                    onOpen = { scope.launch { activeProject?.let { openWorkspace(it) } } },
+                    onStop = { if (handle != 0) GolderNative.cancel(handle) },
+                )
+            },
+            bottomBar = {
+                Composer(
+                    prompt = prompt,
+                    enabled = handle != 0 && !running && prompt.isNotBlank(),
+                    running = running,
+                    onPrompt = { prompt = it },
+                    onSend = {
+                        val text = prompt.trim()
+                        if (text.isNotBlank() && handle != 0 && !running) {
+                            prompt = ""
+                            scope.launch {
+                                add("user", text)
+                                val code = withContext(Dispatchers.IO) { GolderNative.start(handle, text) }
+                                if (code != 0) {
+                                    status = withContext(Dispatchers.IO) { GolderNative.lastError() }
                                 } else {
-                                    val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(opened) }
-                                    if (snapshot == null) {
-                                        val snapshotErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
-                                        status = snapshotErr.ifBlank { "Session snapshot failed." }
-                                        Log.w("GolderJNI", "snapshot failed for handle=$opened: $snapshotErr")
-                                        withContext(Dispatchers.IO) { GolderNative.close(opened) }
-                                    } else {
-                                        entries.clear()
-                                        handle = opened
-                                        loadHistory(snapshot)
-                                        status = "Workspace open; saved session loaded."
-                                    }
+                                    running = true
                                 }
-                            } finally {
-                                opening = false
                             }
                         }
+                    },
+                )
+            },
+        ) { inner ->
+            Box(modifier = Modifier.fillMaxSize().padding(inner)) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (status.isNotBlank()) {
+                        Text(
+                            status,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
                     }
-                },
-            ) { Text("Open workspace") }
-            OutlinedButton(
-                enabled = running,
-                onClick = {
-                    if (handle != 0) GolderNative.cancel(handle)
-                },
-            ) { Text("Stop") }
+                    Conversation(
+                        entries = entries,
+                        running = running,
+                        listState = listState,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // Android's back gesture owns the left edge. Exclude a narrow
+                // strip and turn its horizontal drag into the project drawer.
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(28.dp)
+                        .align(Alignment.CenterStart)
+                        .systemGestureExclusion()
+                        .pointerInput(drawerState) {
+                            var total = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { total = 0f },
+                                onHorizontalDrag = { change, amount ->
+                                    total += amount
+                                    change.consume()
+                                    if (total > 28f && drawerState.isClosed) {
+                                        total = -1000f
+                                        scope.launch { drawerState.open() }
+                                    }
+                                },
+                            )
+                        },
+                )
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(status, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(6.dp))
-        Card(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                items(entries, key = { it.id }) { entry ->
-                    when (entry.kind) {
-                        "assistant" -> Text(entry.text, style = MaterialTheme.typography.bodyMedium)
-                        "user" -> Text("You: ${entry.text}", style = MaterialTheme.typography.bodyMedium)
-                        "thinking" -> Text(entry.text, style = MaterialTheme.typography.bodySmall, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                        "tool" -> Text(entry.text, style = MaterialTheme.typography.bodySmall)
-                        else -> Text(entry.text, style = MaterialTheme.typography.labelSmall)
+    }
+
+    if (newProjectOpen) {
+        NewProjectDialog(
+            onDismiss = { newProjectOpen = false },
+            onCreate = { name ->
+                val project = ProjectStore.create(context, name)
+                projects.add(project)
+                ProjectStore.save(context, projects, activeProjectId)
+                newProjectOpen = false
+                selectProject(project)
+            },
+        )
+    }
+}
+
+@Composable
+private fun MainTopBar(
+    projectName: String,
+    provider: String,
+    model: String,
+    thinking: String,
+    connected: Boolean,
+    running: Boolean,
+    onMenu: () -> Unit,
+    onSettings: () -> Unit,
+    onOpen: () -> Unit,
+    onStop: () -> Unit,
+) {
+    TopAppBar(
+        navigationIcon = {
+            TextButton(onClick = onMenu) { Text("☰", fontSize = 22.sp) }
+        },
+        title = {
+            Column {
+                Text(
+                    projectName,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "$provider · $model · ${thinking.ifBlank { "default" }}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        actions = {
+            if (running) {
+                TextButton(onClick = onStop) { Text("Stop") }
+            } else if (!connected) {
+                TextButton(onClick = onOpen) { Text("Open") }
+            }
+            TextButton(onClick = onSettings) { Text("⚙", fontSize = 20.sp) }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+    )
+}
+
+@Composable
+private fun Conversation(
+    entries: List<Entry>,
+    running: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val latestTodoId = entries.lastOrNull {
+        it.kind == "tool" && isTodoTool(it.toolName)
+    }?.id
+    val visible = entries.filterNot {
+        it.kind == "tool" && isTodoTool(it.toolName) && it.id != latestTodoId
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (visible.isEmpty()) {
+            item {
+                Text(
+                    "Start a task below.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        items(visible, key = { it.id }) { entry ->
+            when {
+                entry.kind == "user" -> ChatBubble(entry.text, user = true)
+                entry.kind == "assistant" -> ChatBubble(entry.text, user = false)
+                entry.kind == "tool" && isTodoTool(entry.toolName) -> TodoCard(entry)
+                entry.kind == "tool" -> ToolCard(entry)
+                entry.kind == "thinking" -> Text(
+                    entry.text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                else -> Text(
+                    entry.text,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        if (running) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.height(16.dp).width(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Working…", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(text: String, user: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = if (user) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            },
+            modifier = Modifier.widthIn(max = 320.dp),
+        ) {
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (user) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToolCard(entry: Entry) {
+    var expanded by remember(entry.id) { mutableStateOf(false) }
+    val mark = when {
+        !entry.toolDone -> "…"
+        entry.toolError -> "✗"
+        else -> "✓"
+    }
+    val markColor = when {
+        !entry.toolDone -> MaterialTheme.colorScheme.onSurfaceVariant
+        entry.toolError -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.primary
+    }
+    val label = entry.toolCommand.ifBlank {
+        entry.toolName.ifBlank { "tool" }
+    }
+    val snippet = entry.toolOutput.lineSequence()
+        .firstOrNull { it.isNotBlank() }
+        ?.trim()
+        ?.take(100)
+        .orEmpty()
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(mark, color = markColor, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.width(6.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!expanded && snippet.isNotBlank()) {
+                        Text(
+                            snippet,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
-                if (running) {
-                    item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.height(16.dp).width(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Working…", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    if (expanded) "Hide" else "Show",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (expanded) {
+                Text(
+                    entry.toolOutput.ifBlank {
+                        if (entry.toolDone) "No output." else "Running…"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TodoCard(entry: Entry) {
+    val items = parseTodoItems(entry.toolOutput)
+    val done = items.count { it.status == "completed" }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "TODO",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.weight(1f))
+                if (items.isNotEmpty()) {
+                    Text(
+                        "$done/${items.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+            }
+            when {
+                !entry.toolDone && entry.toolOutput.isBlank() -> Text(
+                    "Updating tasks…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                items.isEmpty() -> Text(
+                    if (entry.toolOutput.contains("no tasks", ignoreCase = true)) {
+                        "No tasks."
+                    } else {
+                        entry.toolOutput.ifBlank { "No tasks." }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                else -> {
+                    items.forEach { item ->
+                        val color = when (item.status) {
+                            "in_progress" -> MaterialTheme.colorScheme.primary
+                            "completed" -> MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> MaterialTheme.colorScheme.onTertiaryContainer
+                        }
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(
+                                todoMark(item.status),
+                                modifier = Modifier.width(22.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = color,
+                            )
+                            Text(
+                                item.content,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = color,
+                                fontWeight = if (item.status == "in_progress") {
+                                    FontWeight.SemiBold
+                                } else {
+                                    FontWeight.Normal
+                                },
+                                textDecoration = if (item.status == "completed") {
+                                    TextDecoration.LineThrough
+                                } else {
+                                    TextDecoration.None
+                                },
+                            )
                         }
                     }
                 }
             }
+            if (entry.toolError) {
+                Text(
+                    "Todo update failed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    }
+}
+
+private fun isTodoTool(name: String): Boolean =
+    name.equals("todo", ignoreCase = true) || name.equals("todowrite", ignoreCase = true)
+
+private fun toolCommand(name: String, args: JSONObject?): String {
+    if (args == null) return name
+    return when (name) {
+        "git" -> {
+            val action = args.optString("action").trim()
+            val detail = args.optString("url").ifBlank {
+                args.optString("path").ifBlank { args.optString("repo") }
+            }.trim()
+            listOf("git", action, detail).filter { it.isNotBlank() }.joinToString(" ")
+        }
+        "read", "ls", "grep", "find" -> {
+            val detail = args.optString("path").ifBlank {
+                args.optString("pattern").ifBlank { args.optString("query") }
+            }.trim()
+            if (detail.isBlank()) name else "$name $detail"
+        }
+        "todo" -> {
+            val count = args.optJSONArray("todos")?.length() ?: 0
+            if (count > 0) "todo ($count tasks)" else "todo"
+        }
+        else -> name
+    }
+}
+
+private fun parseTodoItems(raw: String): List<TodoItem> {
+    val items = mutableListOf<TodoItem>()
+    for (line in raw.lineSequence()) {
+        val text = line.trim()
+        val status = when {
+            text.startsWith("[x]", ignoreCase = true) -> "completed"
+            text.startsWith("[~]") -> "in_progress"
+            text.startsWith("[ ]") -> "pending"
+            else -> continue
+        }
+        val content = text.substring(3).trim()
+        if (content.isNotEmpty()) items.add(TodoItem(content, status))
+    }
+    return items
+}
+
+private fun todoMark(status: String): String = when (status) {
+    "completed" -> "✓"
+    "in_progress" -> "●"
+    else -> "○"
+}
+
+@Composable
+private fun Composer(
+    prompt: String,
+    enabled: Boolean,
+    running: Boolean,
+    onPrompt: (String) -> Unit,
+    onSend: () -> Unit,
+) {
+    Surface(
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             OutlinedTextField(
                 value = prompt,
-                onValueChange = { prompt = it },
+                onValueChange = onPrompt,
                 label = { Text("Task") },
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
+                enabled = !running,
             )
             Spacer(Modifier.width(8.dp))
-            Button(
-                enabled = handle != 0 && !running && prompt.isNotBlank(),
-                onClick = {
-                    val text = prompt.trim()
-                    scope.launch {
-                        add("user", text)
-                        prompt = ""
-                        val code = withContext(Dispatchers.IO) { GolderNative.start(handle, text) }
-                        if (code != 0) {
-                            status = withContext(Dispatchers.IO) { GolderNative.lastError() }
-                        } else {
-                            running = true
-                        }
-                    }
-                },
-            ) { Text("Send") }
+            Button(enabled = enabled, onClick = onSend) { Text("Send") }
         }
     }
+}
+
+@Composable
+private fun SettingsScreen(
+    version: String,
+    providers: List<ProviderOption>,
+    provider: String,
+    model: String,
+    thinking: String,
+    baseUrl: String,
+    apiKey: String,
+    gitToken: String,
+    tokenLoaded: Boolean,
+    projectName: String,
+    onProviderPick: (String, String, String) -> Unit,
+    onConnectionPick: (String, String) -> Unit,
+    onTokenChange: (String) -> Unit,
+    onForgetToken: () -> Unit,
+    onClose: () -> Unit,
+    onReconnect: () -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings") },
+                navigationIcon = {
+                    TextButton(onClick = onClose) { Text("Back") }
+                },
+                actions = {
+                    TextButton(onClick = onClose) { Text("Done") }
+                },
+            )
+        },
+    ) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("Model", style = MaterialTheme.typography.titleMedium)
+            ModelPicker(
+                providers = providers,
+                provider = provider,
+                model = model,
+                thinking = thinking,
+                onPick = onProviderPick,
+            )
+            Text("Connection", style = MaterialTheme.typography.titleMedium)
+            ConnectionPicker(
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                onPick = onConnectionPick,
+            )
+            Text("GitHub", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = gitToken,
+                onValueChange = onTokenChange,
+                label = { Text("Fine-grained PAT") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                enabled = tokenLoaded,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                "Encrypted by Android Keystore; used only for HTTPS Git. " +
+                    "Contents R/W; revoke on GitHub.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(enabled = tokenLoaded, onClick = onForgetToken) {
+                Text("Forget GitHub token")
+            }
+            Text(
+                "Project: $projectName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Button(
+                onClick = onReconnect,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Apply & reconnect") }
+            Text(
+                "Golder $version",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProjectDrawer(
+    projects: List<Project>,
+    activeId: String,
+    onSelect: (Project) -> Unit,
+    onNew: () -> Unit,
+) {
+    ModalDrawerSheet {
+        Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+            Text("Golder", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Projects",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(projects, key = { it.id }) { project ->
+                    NavigationDrawerItem(
+                        label = {
+                            Column {
+                                Text(project.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(
+                                    project.path.substringAfterLast('/'),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        },
+                        selected = project.id == activeId,
+                        onClick = { onSelect(project) },
+                        modifier = Modifier.padding(vertical = 2.dp),
+                    )
+                }
+            }
+            TextButton(onClick = onNew, modifier = Modifier.fillMaxWidth()) {
+                Text("+ New project")
+            }
+        }
+    }
+}
+
+@Composable
+private fun NewProjectDialog(
+    onDismiss: () -> Unit,
+    onCreate: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New project") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Project name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = { onCreate(name.trim()) },
+            ) { Text("Create") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

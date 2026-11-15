@@ -411,6 +411,14 @@ func (t *Tool) clone(ctx context.Context, a args) (string, error) {
 			return "", errors.New("workspace is not empty; choose a subdirectory")
 		}
 	}
+	// The workspace root always exists. It was verified empty above, so a
+	// partial clone may be removed and retried there; a pre-existing nested
+	// target is not touched.
+	targetExisted := false
+	if target != t.root {
+		_, statErr := os.Stat(target)
+		targetExisted = statErr == nil
+	}
 	depth := a.Depth
 	if depth < 0 {
 		return "", errors.New("depth must not be negative")
@@ -419,10 +427,32 @@ func (t *Tool) clone(ctx context.Context, a args) (string, error) {
 	if depth > 0 {
 		opts.SingleBranch = true
 	}
-	if _, err := git.PlainCloneContext(ctx, target, false, opts); err != nil {
-		return "", err
+	var cloneErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		_, cloneErr = git.PlainCloneContext(ctx, target, false, opts)
+		if cloneErr == nil {
+			return "Cloned into " + strings.TrimPrefix(target, t.root+string(os.PathSeparator)) + ".", nil
+		}
+		if attempt == 2 || !transientNetworkError(cloneErr) || targetExisted {
+			break
+		}
+		// A failed clone can leave a partial target. Retry only when this call
+		// created the target itself, so a user directory is never removed.
+		if err := os.RemoveAll(target); err != nil {
+			return "", fmt.Errorf("clone cleanup before retry: %w", err)
+		}
+		if target == t.root {
+			if err := os.MkdirAll(t.root, 0o700); err != nil {
+				return "", fmt.Errorf("clone recreate workspace before retry: %w", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Duration(attempt) * 750 * time.Millisecond):
+		}
 	}
-	return "Cloned into " + strings.TrimPrefix(target, t.root+string(os.PathSeparator)) + ".", nil
+	return "", cloneErr
 }
 
 func (t *Tool) fetch(ctx context.Context, a args) (string, error) {
@@ -434,7 +464,9 @@ func (t *Tool) fetch(ctx context.Context, a args) (string, error) {
 		return "", err
 	}
 	remote := defaultRemote(a.Remote)
-	err = repo.FetchContext(ctx, &git.FetchOptions{RemoteName: remote, Auth: t.remoteAuth(repo, remote)})
+	err = retryNetwork(ctx, 2, func() error {
+		return repo.FetchContext(ctx, &git.FetchOptions{RemoteName: remote, Auth: t.remoteAuth(repo, remote)})
+	})
 	if errors.Is(err, git.NoErrAlreadyUpToDate) {
 		return "Already up to date.", nil
 	}
@@ -554,6 +586,50 @@ func validateBranch(name string) error {
 	return nil
 }
 
+// transientNetworkError identifies failures that are safe to retry for
+// read-only network operations. Push is deliberately not retried because an
+// aborted push can leave the remote state unknown.
+func transientNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"software caused connection abort",
+		"connection reset by peer",
+		"connection abort",
+		"unexpected eof",
+		"broken pipe",
+		"i/o timeout",
+		"network is unreachable",
+		"temporary failure",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryNetwork(ctx context.Context, attempts int, fn func() error) error {
+	if attempts < 1 {
+		attempts = 1
+	}
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = fn()
+		if err == nil || !transientNetworkError(err) || attempt == attempts {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * 750 * time.Millisecond):
+		}
+	}
+	return err
+}
+
 func limit(s string) string {
 	if len(s) <= maxOutput {
 		return s
@@ -573,6 +649,8 @@ const gitDescription = "Structured Git operations inside the workspace using a p
 	"checkout, remote, fetch, push. Paths are workspace-relative. clone/fetch/push require the host to " +
 	"grant network access for this exact call; without it they fail closed. This is not a generic shell: " +
 	"there is no arbitrary git subcommand, no hooks execution and no system git binary. " +
+	"The repository is always the workspace root: clone directly into the workspace root (it must be empty) " +
+	"or init there; do not create a nested repository. " +
 	"Commit uses the configured author, then repository config, then a local fallback identity."
 
 const gitSchema = `{

@@ -23,18 +23,25 @@ scripts/android-app-test.sh             # 构建、安装并跑 JNI 设备测试
 
 ## 当前界面
 
-- `Provider · Model · Reasoning` 是一个组合选择器；点开后分三级选择，模型也可以
-  选 “Custom model…” 输入任意 id。Provider 列表来自 Go 的 provider registry。
-- `Connection` 是一个入口，点开后填 Base URL 和 API key；API key 加密保存。
-- GitHub token 单独一个框，由 Android Keystore 加密保存；私有仓库 clone/push 必须填写。
+- 主界面只显示会话：用户消息在右侧、agent 在左侧，各用不同颜色气泡；工具调用
+  默认折叠，只显示真实命令（如 `git clone …`、`read …`）和一行结果摘要。
+- `todo` 工具卡片默认展开并用高亮边框显示；只保留最新一份任务清单，完成项
+  划线、进行项加粗。
+- 顶部状态栏显示当前项目、provider · model · reasoning；设置按钮打开集中配置页。
+- 设置页包含 `Provider · Model · Reasoning`、`Connection`（Base URL + API key）
+  和 GitHub token；密钥分别由 Android Keystore 加密保存。
+- 左滑项目抽屉列出项目并支持新建；每个项目是独立 workspace 根目录，切换后
+  自动打开。Android 系统返回手势占用最左边缘，因此从内容区左滑或点汉堡按钮
+  打开抽屉。
 - Provider/model/reasoning/Base URL 会保存；模型 API key 用 Android Keystore
   加密保存，重启后恢复。Connection 卡片只显示 `API key ••••••`，GitHub token
   也显示掩码。
-- 打开工作区、发送任务、停止；工作区固定为 app 私有目录，不再需要填写路径。
-- 流式文本、thinking、工具开始/结束和运行状态。
+- 发送/停止任务；项目目录固定在 app 私有目录，不再需要填写路径。
+- 流式文本、thinking、工具开始/结束和运行状态；工具结果按命令名展示。
 - 会话按工作区保存在 app 私有目录，重新打开会恢复历史并回放文本。
 - 本地 Git：status/diff/log/add/commit/branch/checkout/remote；移动 UI 默认开启
   Git 网络（clone/fetch/push），不再提供复选框。它是会话级能力，不是逐次审批。
+- clone/fetch 遇到临时 TCP 中断会重试一次；push 不自动重试，避免远端状态未知。
 - 当前 Git 工具只把 **workspace 根目录**当作仓库：要提交/推送，必须直接 clone
   到空的 workspace 根目录，或在根目录 init；clone 到子目录后 `add`/`commit`
   会报 “not a Git repository”。
