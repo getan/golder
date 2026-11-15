@@ -8,10 +8,11 @@ import java.io.File
 object AndroidUseBridge {
     const val SERVICE_CLASS = "com.getan.golder.mobile.androiduse.GolderAccessibilityService"
     private const val SHORT_SERVICE = ".androiduse.GolderAccessibilityService"
-    private const val PREFS = "android-use"
     private const val CONTROL_KEY = "control-allowed"
     private const val PAUSED_KEY = "paused"
     private const val ALLOWED_PACKAGES_KEY = "allowed-packages"
+    private const val OVERLAY_KEY = "overlay-enabled"
+    const val PREFS_NAME = "android-use"
 
     fun endpointPath(context: Context): String =
         File(context.filesDir, "android-use.json").absolutePath
@@ -26,7 +27,7 @@ object AndroidUseBridge {
         File(context.filesDir, "android-use-status.json")
 
     private fun prefs(context: Context) =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun controlAllowed(context: Context): Boolean =
         prefs(context).getBoolean(CONTROL_KEY, isEnabled(context))
@@ -52,6 +53,13 @@ object AndroidUseBridge {
 
     fun setAllowedPackages(context: Context, value: String) {
         prefs(context).edit().putString(ALLOWED_PACKAGES_KEY, value).apply()
+    }
+
+    fun overlayEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(OVERLAY_KEY, true)
+
+    fun setOverlayEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(OVERLAY_KEY, enabled).apply()
     }
 
     @Synchronized

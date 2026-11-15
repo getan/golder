@@ -88,6 +88,14 @@ class AndroidUseOverlay(private val service: GolderAccessibilityService) {
             }
             row.addView(this)
         }
+        Button(service).apply {
+            text = "Hide"
+            textSize = 10f
+            setOnClickListener {
+                AndroidUseBridge.setOverlayEnabled(service, false)
+            }
+            row.addView(this)
+        }
         deny = Button(service).apply {
             text = "Deny"
             textSize = 10f

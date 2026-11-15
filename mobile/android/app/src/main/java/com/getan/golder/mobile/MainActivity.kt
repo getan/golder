@@ -141,6 +141,7 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseAudit by remember { mutableStateOf("") }
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
+    var androidUseOverlayEnabled by remember { mutableStateOf(true) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -181,6 +182,7 @@ private fun GolderApp(initialTask: String = "") {
         androidUseAudit = AndroidUseBridge.recentAudit(context)
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
+        androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
     }
 
     LaunchedEffect(initialTask) {
@@ -664,6 +666,7 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseAudit = androidUseAudit,
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
+                androidUseOverlayEnabled = androidUseOverlayEnabled,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -755,6 +758,10 @@ private fun GolderApp(initialTask: String = "") {
                 },
                 onAndroidUsePauseToggle = {
                     AndroidUseBridge.setPaused(context, !androidUsePaused)
+                    refreshAndroidUseState()
+                },
+                onAndroidUseOverlay = { enabled ->
+                    AndroidUseBridge.setOverlayEnabled(context, enabled)
                     refreshAndroidUseState()
                 },
                 onAndroidUseAllowedPackages = { value ->
@@ -1516,6 +1523,7 @@ private fun SettingsScreen(
     androidUseAudit: String,
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
+    androidUseOverlayEnabled: Boolean,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1530,6 +1538,7 @@ private fun SettingsScreen(
     onAndroidUseRefresh: () -> Unit,
     onAndroidUseControl: (Boolean) -> Unit,
     onAndroidUsePauseToggle: () -> Unit,
+    onAndroidUseOverlay: (Boolean) -> Unit,
     onAndroidUseAllowedPackages: (String) -> Unit,
     onForgetToken: () -> Unit,
     onClose: () -> Unit,
@@ -1595,6 +1604,26 @@ private fun SettingsScreen(
                     onCheckedChange = onAndroidUseControl,
                 )
             }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    s.androidUseOverlay,
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Switch(
+                    checked = androidUseOverlayEnabled,
+                    onCheckedChange = onAndroidUseOverlay,
+                    enabled = androidUseEnabled,
+                )
+            }
+            Text(
+                s.androidUseOverlayHint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Text(
                 if (!androidUseEnabled) {
                     s.androidUseOff
