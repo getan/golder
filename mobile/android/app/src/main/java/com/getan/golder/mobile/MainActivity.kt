@@ -145,7 +145,6 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseOverlayEnabled by remember { mutableStateOf(true) }
-    var androidUseBridgeLive by remember { mutableStateOf<Boolean?>(null) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -187,15 +186,6 @@ private fun GolderApp(initialTask: String = "") {
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
         androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
-        androidUseBridgeLive = null
-        if (androidUseEnabled) {
-            scope.launch {
-                androidUseBridgeLive = withContext(Dispatchers.IO) {
-                    AndroidUseBridge.heartbeatFresh(context) ||
-                        AndroidUseBridge.endpointLive(context)
-                }
-            }
-        }
     }
 
     val activity = context as? ComponentActivity
@@ -665,20 +655,6 @@ private fun GolderApp(initialTask: String = "") {
     LaunchedEffect(settingsOpen) {
         if (settingsOpen) refreshAndroidUseState()
     }
-    LaunchedEffect(settingsOpen, androidUseEnabled) {
-        if (!settingsOpen) return@LaunchedEffect
-        if (!androidUseEnabled) {
-            androidUseBridgeLive = false
-            return@LaunchedEffect
-        }
-        while (true) {
-            androidUseBridgeLive = withContext(Dispatchers.IO) {
-                AndroidUseBridge.heartbeatFresh(context) ||
-                    AndroidUseBridge.endpointLive(context)
-            }
-            delay(2000)
-        }
-    }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
     if (settingsOpen) {
@@ -705,7 +681,6 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
                 androidUseOverlayEnabled = androidUseOverlayEnabled,
-                androidUseBridgeLive = androidUseBridgeLive,
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -1563,7 +1538,6 @@ private fun SettingsScreen(
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
     androidUseOverlayEnabled: Boolean,
-    androidUseBridgeLive: Boolean?,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1585,6 +1559,22 @@ private fun SettingsScreen(
     onReconnect: () -> Unit,
 ) {
     val s = LocalStrings.current
+    val settingsContext = LocalContext.current
+    var androidUseLive by remember { mutableStateOf<Boolean?>(null) }
+    var healthRefresh by remember { mutableIntStateOf(0) }
+    LaunchedEffect(androidUseEnabled, healthRefresh) {
+        if (!androidUseEnabled) {
+            androidUseLive = false
+            return@LaunchedEffect
+        }
+        while (true) {
+            androidUseLive = withContext(Dispatchers.IO) {
+                AndroidUseBridge.heartbeatFresh(settingsContext) ||
+                    AndroidUseBridge.endpointLive(settingsContext)
+            }
+            delay(2000)
+        }
+    }
     var authTab by remember { mutableIntStateOf(1) }
     Scaffold(
         topBar = {
@@ -1664,22 +1654,32 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val needRepair = androidUseEnabled && androidUseBridgeLive == false
+            val live = androidUseLive
+            val needRepair = androidUseEnabled && live == false
             Text(
                 when {
                     !androidUseEnabled -> s.androidUseOff
-                    androidUseBridgeLive == null -> s.androidUseChecking
-                    !androidUseBridgeLive -> s.androidUseUnbound
+                    live == null -> s.androidUseChecking
+                    !live -> s.androidUseUnbound
                     else -> s.androidUseOn
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = when {
                     !androidUseEnabled -> MaterialTheme.colorScheme.onSurfaceVariant
-                    androidUseBridgeLive == false -> MaterialTheme.colorScheme.error
-                    androidUseBridgeLive == true -> MaterialTheme.colorScheme.primary
+                    live == false -> MaterialTheme.colorScheme.error
+                    live == true -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
+            TextButton(
+                onClick = {
+                    androidUseLive = null
+                    onAndroidUseRefresh()
+                    healthRefresh++
+                },
+            ) {
+                Text(s.androidUseRefresh)
+            }
             if (needRepair) {
                 Text(
                     s.androidUseUnboundHint,
@@ -1689,9 +1689,6 @@ private fun SettingsScreen(
             }
             Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
                 Text(if (needRepair) s.androidUseRepair else s.androidUseOpenSettings)
-            }
-            TextButton(onClick = onAndroidUseRefresh) {
-                Text(s.androidUseRefresh)
             }
             OutlinedTextField(
                 value = androidUseAllowedPackages,
