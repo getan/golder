@@ -96,6 +96,8 @@ Connection 卡片只显示 `API key ••••••`，不把密钥明文放�
 
 GitHub 认证方案见 [GitHub 认证](github-auth.md)。支持用户自备的 fine-grained PAT 和 GitHub Device Flow；两者都在 Android Keystore 中加密保存，OAuth token 会自动刷新并可在 GitHub 撤销授权；不实现 GitHub App/token broker。
 
+AndroidUse 的设备操作层设计见 [AndroidUse：Android 设备操作层设计](android-use.md)；Phase 1 使用前台 Accessibility，Phase 2 才增加无线调试 helper 和后台虚拟屏。
+
 ## 尚未解决的边界
 
 - 目前是**文件型 + 本地 Git 后端**，网络 Git 由会话级能力控制（移动 UI 默认开启）；还不是逐次审批的完整 `auto` 权限链，没有 shell 或浏览器。不能把这个后端说成已经支持完整任务自动化。
