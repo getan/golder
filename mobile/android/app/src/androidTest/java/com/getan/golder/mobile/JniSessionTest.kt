@@ -53,6 +53,21 @@ class JniSessionTest {
     }
 
     @Test
+    fun modelApiKeyRoundTripsThroughAndroidKeystore() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val previous = SecureStore.getAPIKey(context)
+        try {
+            SecureStore.clearAPIKey(context)
+            assertTrue(SecureStore.saveAPIKey(context, "sk-test-fixture"))
+            assertEquals("sk-test-fixture", SecureStore.getAPIKey(context))
+            SecureStore.clearAPIKey(context)
+            assertEquals("", SecureStore.getAPIKey(context))
+        } finally {
+            if (previous.isBlank()) SecureStore.clearAPIKey(context) else SecureStore.saveAPIKey(context, previous)
+        }
+    }
+
+    @Test
     fun fakeServerServesTheExpectedSSE() {
         val server = FakeChatServer()
         try {

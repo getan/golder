@@ -83,6 +83,10 @@ object GolderNative {
 移动 UI 用它生成一个组合选择器；当前 `models` 含注册表默认模型，其他模型 id 通过
 UI 的 “Custom model…” 输入。它是静态目录，不触发网络。
 
+移动 UI 会把 provider/model/reasoning/Base URL 保存到普通 SharedPreferences，
+把模型 API key 和 GitHub token 分别用 Android Keystore 加密后保存；重启后恢复。
+Connection 卡片只显示 `API key ••••••`，不把密钥明文放回界面。
+
 `debugLog` 可选，只在宿主调试时设置；它记录循环事件类型和终止错误，不记录提示词、工具参数/结果或密钥。
 
 `stateDir` 可选，设置后会话保存在 `<stateDir>/sessions/<sessionId>.jsonl`；同一 `sessionId` 重新打开会恢复历史。锁文件防止同一会话被两个进程同时写入。当前采用整文件原子重写，后续可换成增量追加。

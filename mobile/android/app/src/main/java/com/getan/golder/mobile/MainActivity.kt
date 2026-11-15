@@ -96,6 +96,7 @@ private fun GolderApp() {
     var tokenLoaded by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf("") }
     var handle by remember { mutableIntStateOf(0) }
+    var opening by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("Open a workspace to begin.") }
     var nextId by remember { mutableStateOf(1L) }
@@ -141,7 +142,14 @@ private fun GolderApp() {
 
     LaunchedEffect(Unit) {
         gitToken = withContext(Dispatchers.IO) { SecureStore.getToken(context) }
+        apiKey = withContext(Dispatchers.IO) { SecureStore.getAPIKey(context) }
         tokenLoaded = true
+
+        val saved = SettingsStore.load(context)
+        if (saved.provider.isNotBlank()) provider = saved.provider
+        if (saved.model.isNotBlank()) model = saved.model
+        thinking = saved.thinking
+        baseUrl = saved.baseUrl
 
         val catalogRaw = runCatching {
             withContext(Dispatchers.IO) { GolderNative.catalog() }
@@ -176,14 +184,22 @@ private fun GolderApp() {
                 if (parsed.isNotEmpty()) {
                     providers.clear()
                     providers.addAll(parsed)
-                    val defaultProvider = root.optString("defaultProvider").ifBlank { parsed.first().name }
-                    val chosen = parsed.firstOrNull { it.name == defaultProvider } ?: parsed.first()
-                    provider = chosen.name
-                    model = root.optString("defaultModel").ifBlank { chosen.defaultModel }
-                    thinking = chosen.reasoning.firstOrNull() ?: ""
+                    val savedProvider = saved.provider
+                    val chosen = parsed.firstOrNull { it.name == savedProvider }
+                        ?: parsed.firstOrNull { it.name == "openai" }
+                        ?: parsed.first()
+                    if (savedProvider.isBlank() || parsed.none { it.name == savedProvider }) {
+                        provider = chosen.name
+                        model = chosen.defaultModel
+                        thinking = chosen.reasoning.firstOrNull() ?: ""
+                    } else if (model.isBlank()) {
+                        model = chosen.defaultModel
+                    }
                 }
             }.onFailure { Log.e("GolderJNI", "catalog parse failed", it) }
         }
+
+        SettingsStore.save(context, provider, model, thinking, baseUrl)
 
         version = runCatching {
             withContext(Dispatchers.IO) { GolderNative.version() }
@@ -191,19 +207,29 @@ private fun GolderApp() {
             Log.e("GolderJNI", "version failed", it)
             "unavailable"
         }
-        Log.i("GolderJNI", "version=$version providers=${providers.size}")
+        Log.i(
+            "GolderJNI",
+            "version=$version providers=${providers.size} provider=$provider model=$model " +
+                "apiKeySet=${apiKey.isNotBlank()} tokenSet=${gitToken.isNotBlank()}",
+        )
     }
 
     LaunchedEffect(handle) {
-        while (handle != 0 && isActive) {
+        val pollHandle = handle
+        if (pollHandle == 0) return@LaunchedEffect
+        while (isActive && handle == pollHandle) {
             val raw = runCatching {
-                withContext(Dispatchers.IO) { GolderNative.poll(handle, 200) }
+                withContext(Dispatchers.IO) { GolderNative.poll(pollHandle, 200) }
             }.getOrNull()
+            // A reopen closes the old handle while this coroutine may still be
+            // finishing a call. Never let that stale result overwrite the new
+            // session's status.
+            if (handle != pollHandle) break
             if (raw == null) {
                 val err = runCatching { GolderNative.lastError() }.getOrDefault("")
                 if (err.isNotBlank()) status = err
-                delay(250)
-                continue
+                Log.w("GolderJNI", "poll handle=$pollHandle failed: $err")
+                break
             }
             try {
                 val events = JSONArray(raw)
@@ -241,6 +267,7 @@ private fun GolderApp() {
             } catch (e: Exception) {
                 status = "Bad event JSON: ${e.message}"
             }
+            if (handle != pollHandle) break
             delay(60)
         }
     }
@@ -250,9 +277,12 @@ private fun GolderApp() {
     }
 
     DisposableEffect(handle) {
+        // Capture the key owned by this effect. Reading the mutable handle in
+        // onDispose would close the *new* session when 0 -> 1 recomposes.
+        val ownedHandle = handle
         onDispose {
-            if (handle != 0) {
-                runCatching { GolderNative.close(handle) }
+            if (ownedHandle != 0) {
+                runCatching { GolderNative.close(ownedHandle) }
             }
         }
     }
@@ -291,12 +321,15 @@ private fun GolderApp() {
                 provider = p
                 model = m
                 thinking = t
+                SettingsStore.save(context, p, m, t, baseUrl)
             },
         )
         Spacer(Modifier.height(6.dp))
         ConnectionPicker(baseUrl = baseUrl, apiKey = apiKey) { url, key ->
             baseUrl = url
             apiKey = key
+            SettingsStore.save(context, provider, model, thinking, url)
+            scope.launch(Dispatchers.IO) { SecureStore.saveAPIKey(context, key) }
         }
         Spacer(Modifier.height(6.dp))
         OutlinedTextField(
@@ -324,39 +357,66 @@ private fun GolderApp() {
         ) { Text("Forget GitHub token") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                enabled = !running,
+                enabled = !running && !opening,
                 onClick = {
-                    scope.launch {
-                        if (!workspaceDir.isDirectory && !workspaceDir.mkdirs()) {
-                            status = "Cannot create workspace: ${workspaceDir.absolutePath}"
-                            return@launch
-                        }
-                        if (handle != 0) {
-                            withContext(Dispatchers.IO) { GolderNative.close(handle) }
-                            handle = 0
-                        }
-                        val stateDir = File(context.filesDir, "state").apply { mkdirs() }
-                        withContext(Dispatchers.IO) { SecureStore.saveToken(context, gitToken) }
-                        val config = JSONObject()
-                            .put("workspace", workspaceDir.absolutePath)
-                            .put("provider", provider)
-                            .put("model", model.trim().ifBlank { "gpt-4o-mini" })
-                            .put("thinkingLevel", thinking)
-                            .put("apiKey", apiKey)
-                            .put("stateDir", stateDir.absolutePath)
-                            .put("sessionId", "mobile-" + Integer.toHexString(workspaceDir.absolutePath.hashCode()))
-                            .put("allowNetworkGit", true)
-                            .put("gitToken", gitToken)
-                        if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
-                        val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
-                        if (opened == 0) {
-                            status = withContext(Dispatchers.IO) { GolderNative.lastError() }
-                        } else {
-                            val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(opened) }
-                            entries.clear()
-                            handle = opened
-                            loadHistory(snapshot)
-                            status = "Workspace open; saved session loaded."
+                    if (!opening) {
+                        // Set this synchronously so a double tap cannot start two
+                        // open operations and race their handle registration.
+                        opening = true
+                        scope.launch {
+                            try {
+                                if (!workspaceDir.isDirectory && !workspaceDir.mkdirs()) {
+                                    status = "Cannot create workspace: ${workspaceDir.absolutePath}"
+                                    return@launch
+                                }
+                                status = "Opening…"
+                                if (handle != 0) {
+                                    withContext(Dispatchers.IO) { GolderNative.close(handle) }
+                                    handle = 0
+                                }
+                                val stateDir = File(context.filesDir, "state").apply { mkdirs() }
+                                withContext(Dispatchers.IO) {
+                                    SecureStore.saveToken(context, gitToken)
+                                    SecureStore.saveAPIKey(context, apiKey)
+                                }
+                                SettingsStore.save(context, provider, model, thinking, baseUrl)
+                                val config = JSONObject()
+                                    .put("workspace", workspaceDir.absolutePath)
+                                    .put("provider", provider)
+                                    .put("model", model.trim().ifBlank { "gpt-4o-mini" })
+                                    .put("thinkingLevel", thinking)
+                                    .put("apiKey", apiKey)
+                                    .put("stateDir", stateDir.absolutePath)
+                                    .put("sessionId", "mobile-" + Integer.toHexString(workspaceDir.absolutePath.hashCode()))
+                                    .put("allowNetworkGit", true)
+                                    .put("gitToken", gitToken)
+                                if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
+                                val opened = withContext(Dispatchers.IO) { GolderNative.open(config.toString()) }
+                                val openErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
+                                Log.i(
+                                    "GolderJNI",
+                                    "open handle=$opened provider=$provider model=$model " +
+                                        "error=${openErr.take(300)}",
+                                )
+                                if (opened == 0) {
+                                    status = openErr.ifBlank { "Open failed." }
+                                } else {
+                                    val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(opened) }
+                                    if (snapshot == null) {
+                                        val snapshotErr = withContext(Dispatchers.IO) { GolderNative.lastError() }
+                                        status = snapshotErr.ifBlank { "Session snapshot failed." }
+                                        Log.w("GolderJNI", "snapshot failed for handle=$opened: $snapshotErr")
+                                        withContext(Dispatchers.IO) { GolderNative.close(opened) }
+                                    } else {
+                                        entries.clear()
+                                        handle = opened
+                                        loadHistory(snapshot)
+                                        status = "Workspace open; saved session loaded."
+                                    }
+                                }
+                            } finally {
+                                opening = false
+                            }
                         }
                     }
                 },
@@ -525,7 +585,7 @@ private fun ConnectionPicker(
 ) {
     var open by remember { mutableStateOf(false) }
     val endpoint = baseUrl.ifBlank { "default endpoint" }
-    val key = if (apiKey.isBlank()) "API key not set" else "API key set"
+    val key = if (apiKey.isBlank()) "API key not set" else "API key ••••••"
     Card(modifier = Modifier.fillMaxWidth().clickable { open = true }) {
         Column(modifier = Modifier.padding(12.dp)) {
             Text("Connection", style = MaterialTheme.typography.labelSmall)
@@ -560,6 +620,11 @@ private fun ConnectionPicker(
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Encrypted with Android Keystore and restored on next launch.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },

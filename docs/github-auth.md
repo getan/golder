@@ -64,7 +64,7 @@ App 不代管 token、不自动续期、不集中撤销，也不能保证被攻�
 
 - Android UI 已有 GitHub token 输入框、Keystore 加密保存和清除按钮；
 - Bridge 的 `gitToken` 通过 HTTPS Basic Auth 传给纯 Go Git 工具，用户名 `x-access-token`；
-- Android 设备测试覆盖 Keystore 往返和 provider catalog，当前 JNI/Keystore 测试 5/5 通过；
+- Android 设备测试覆盖 Keystore 往返和 provider catalog，当前 JNI/Keystore 测试 6/6 通过；
 - Git 网络默认开启，不再有 “Allow Git network” 复选框；host 仍可传
   `allowNetworkGit=false` 关闭。
 
