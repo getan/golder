@@ -136,7 +136,7 @@ func TestToolPhase2SchemaIncludesSessionActions(t *testing.T) {
 	tool := NewToolWithPhase2("/nonexistent", true)
 	schema := string(tool.Schema())
 	for _, action := range []string{
-		"background_status", "background_start", "background_stop",
+		"background_status", "background_observe", "background_start", "background_stop",
 		"background_open_app", "background_tap", "background_release",
 	} {
 		if !strings.Contains(schema, `"`+action+`"`) {
@@ -196,5 +196,64 @@ func TestBackgroundStatusUsesInternalProtocolAndReturnsPublicName(t *testing.T) 
 	text := agentcore.ContentToText(result.Content)
 	if !strings.Contains(text, `"action":"background_status"`) || strings.Contains(text, "phase2_") {
 		t.Fatalf("public result = %s", text)
+	}
+}
+
+func TestBackgroundObserveReturnsImageAndForwardsSnapshot(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	endpointPath := filepath.Join(t.TempDir(), "android.json")
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(endpointPath, []byte(`{"port":`+strconv.Itoa(port)+`,"token":"test-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXsAAAAASUVORK5CYII="
+	requests := make(chan map[string]any, 4)
+	go func() {
+		for i := 0; i < 4; i++ {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var request map[string]any
+			if json.NewDecoder(conn).Decode(&request) != nil {
+				conn.Close()
+				return
+			}
+			requests <- request
+			response := map[string]any{"ok": true, "action": request["action"], "advanced": true, "paired": true, "helperConnected": true}
+			if request["action"] == "phase2_observe" {
+				response["imageBase64"] = image
+				response["snapshotId"] = "fresh-snapshot"
+			}
+			_ = json.NewEncoder(conn).Encode(response)
+			conn.Close()
+		}
+	}()
+	tool := NewToolWithPhase2(endpointPath, true)
+	observed, err := tool.Execute(context.Background(), "observe", json.RawMessage(`{"action":"background_observe"}`), nil)
+	if err != nil || observed.IsError || len(observed.Content) != 2 {
+		t.Fatalf("observe = %+v, %v", observed, err)
+	}
+	frame, ok := observed.Content[1].(agentcore.ImageContent)
+	if !ok || frame.Data != image || frame.MimeType != "image/png" {
+		t.Fatalf("image content = %+v", observed.Content[1])
+	}
+	text := agentcore.ContentToText(observed.Content)
+	if strings.Contains(text, image) || !strings.Contains(text, `"snapshotId":"fresh-snapshot"`) {
+		t.Fatalf("observation text = %s", text)
+	}
+	tapped, err := tool.Execute(context.Background(), "tap", json.RawMessage(`{"action":"background_tap","x":10,"y":20,"snapshotId":"fresh-snapshot"}`), nil)
+	if err != nil || tapped.IsError {
+		t.Fatalf("tap = %+v, %v", tapped, err)
+	}
+	<-requests // status
+	<-requests // observe
+	<-requests // status
+	if request := <-requests; request["action"] != "phase2_tap" || request["snapshotId"] != "fresh-snapshot" {
+		t.Fatalf("tap request = %+v", request)
 	}
 }

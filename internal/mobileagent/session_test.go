@@ -116,6 +116,9 @@ func TestSessionStreamsTextAndCompletes(t *testing.T) {
 	if snap.Running || len(snap.Messages) != 2 {
 		t.Fatalf("snapshot = %+v, want idle with user+assistant", snap)
 	}
+	if snap.Tools != 0 {
+		t.Fatalf("snapshot tools = %d, want 0 for a catalog-free session", snap.Tools)
+	}
 	raw, err := session.SnapshotJSON()
 	if err != nil || !strings.Contains(raw, `"messages"`) {
 		t.Fatalf("SnapshotJSON = %q, %v", raw, err)

@@ -4,8 +4,11 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.provider.Settings
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -16,7 +19,10 @@ internal object LocalAdbDiscovery {
 
     /** Call on a worker thread. An unavailable discovery service is not an authorization grant. */
     fun findConnectAddress(context: Context): String? {
-        systemPort()?.let { return "127.0.0.1:$it" }
+        // A disabled wireless-debugging service keeps a stale port property, so a
+        // connect attempt would fail later with a bare "connection refused".
+        if (!wifiAdbEnabled(context)) return null
+        systemPort()?.takeIf(::reachable)?.let { return "127.0.0.1:$it" }
         val nsd = context.applicationContext.getSystemService(NsdManager::class.java) ?: return null
         val found = LinkedBlockingQueue<NsdServiceInfo>()
         val listener = object : NsdManager.DiscoveryListener {
@@ -49,8 +55,19 @@ internal object LocalAdbDiscovery {
             if (started) runCatching { nsd.stopServiceDiscovery(listener) }
         }
         // Do not guess if advertisements disagree about this phone's port.
-        return ports.singleOrNull()?.let { "127.0.0.1:$it" }
+        return ports.singleOrNull()?.takeIf(::reachable)?.let { "127.0.0.1:$it" }
     }
+
+    /** Wireless debugging is the user's own setting; never assume it is on. */
+    private fun wifiAdbEnabled(context: Context): Boolean = runCatching {
+        Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1
+    }.getOrDefault(false)
+
+    /** A stale port accepts no connection; a live one is adbd on loopback. */
+    private fun reachable(port: Int): Boolean = runCatching {
+        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300) }
+        true
+    }.getOrDefault(false)
 
     @SuppressLint("PrivateApi")
     private fun systemPort(): Int? = runCatching {

@@ -32,6 +32,32 @@ class JniSessionTest {
     }
 
     @Test
+    fun hostTakeoverPausesAndResumesSession() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val root = File(context.filesDir, "jni-pause-${System.nanoTime()}").apply { mkdirs() }
+        val server = FakeChatServer()
+        val config = JSONObject()
+            .put("workspace", root.absolutePath)
+            .put("model", "fake-model")
+            .put("protocol", "openai")
+            .put("baseUrl", "http://127.0.0.1:${server.port}/v1")
+            .put("apiKey", "test-key")
+        val handle = GolderNative.open(config.toString())
+        assertTrue("open failed: ${GolderNative.lastError()}", handle > 0)
+        try {
+            assertEquals(0, GolderNative.pauseForTakeover(handle))
+            assertEquals(1, GolderNative.takeoverReady(handle))
+            assertEquals(-1, GolderNative.start(handle, "must wait"))
+            assertEquals(0, GolderNative.resumeAfterTakeover(handle))
+            assertEquals(0, GolderNative.start(handle, "continue"))
+            GolderNative.cancel(handle)
+        } finally {
+            GolderNative.close(handle)
+            server.close()
+        }
+    }
+
+    @Test
     fun providerCatalogIsExposed() {
         val raw = GolderNative.catalog()
         assertTrue("catalog is empty", raw.contains("\"providers\""))

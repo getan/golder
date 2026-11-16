@@ -38,6 +38,10 @@ type ToolExecutorConfig struct {
 	PrepareArguments agentcore.PrepareArgumentsFunc
 	BeforeToolCall   agentcore.BeforeToolCallFunc
 	AfterToolCall    agentcore.AfterToolCallFunc
+	// BeginToolCall is an optional host-side admission barrier. It runs before
+	// preparation and returns a release function for the entire call. A host can
+	// stop admitting calls and wait for already admitted calls to finish.
+	BeginToolCall func(context.Context, agentcore.AgentToolCall) (func(), error)
 	// GateChain, when set, is published onto every tool call's context so a tool
 	// that spawns a derived run (the sub-agent tool) hands the child the same
 	// gates instead of building its own. It carries the gate seams plus the
@@ -77,6 +81,15 @@ func (c ToolExecutorConfig) redactor() *redact.Redactor {
 // failure is encoded into the returned message with IsError=true.
 func executeToolCall(ctx context.Context, cfg ToolExecutorConfig, call agentcore.AgentToolCall, emit agentcore.EmitFunc) (agentcore.ToolResultMessage, bool) {
 	ctx = agentcore.WithToolCallID(ctx, call.ID)
+	if cfg.BeginToolCall != nil {
+		release, err := cfg.BeginToolCall(ctx, call)
+		if err != nil {
+			return finalizeToolCall(ctx, cfg, call, errorResult(err.Error()), true, emit)
+		}
+		if release != nil {
+			defer release()
+		}
+	}
 	// 1. prepare: lookup, prepareArguments, validate, beforeToolCall.
 	// execCtx starts as ctx and is derived when the beforeToolCall decision
 	// asks for sandbox isolation; the tool executes against execCtx so the

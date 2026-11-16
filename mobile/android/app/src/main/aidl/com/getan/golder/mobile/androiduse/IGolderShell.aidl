@@ -12,4 +12,5 @@ interface IGolderShell {
     boolean injectKey(int displayId, int keyCode);
     void releaseAll();
     void destroy();
+    boolean injectStroke(int displayId, in int[] xs, in int[] ys, in long[] times);
 }

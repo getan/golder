@@ -114,13 +114,9 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 			return nil, openErr
 		}
 	}
-	prompt := cfg.SystemPrompt
-	if prompt == "" && store != nil {
-		prompt = header.SystemPrompt
-	}
-	if prompt == "" {
-		prompt = toolset.Prompt()
-	}
+	// The restored conversation is retained, but a host-generated prompt must
+	// reflect today's tool catalog and permissions, not a previous app version.
+	prompt := selectMobilePrompt(cfg.SystemPrompt, header.SystemPrompt, toolset.Prompt())
 	sessionID := ""
 	if store != nil {
 		sessionID = header.ID
@@ -185,6 +181,9 @@ func (b *androidBackend) Start(prompt string) error        { return b.agent.Star
 func (b *androidBackend) PollJSON(max int) (string, error) { return b.agent.PollJSON(max) }
 func (b *androidBackend) SnapshotJSON() (string, error)    { return b.agent.SnapshotJSON() }
 func (b *androidBackend) Cancel()                          { b.agent.Cancel() }
+func (b *androidBackend) PauseForTakeover() error          { return b.agent.PauseForTakeover() }
+func (b *androidBackend) TakeoverReady() bool              { return b.agent.TakeoverReady() }
+func (b *androidBackend) ResumeAfterTakeover()             { b.agent.ResumeAfterTakeover() }
 func (b *androidBackend) Close() error {
 	var err error
 	if b.agent != nil {
@@ -211,7 +210,7 @@ func (b *androidBackend) save(msgs agentcore.MessageList) {
 	b.persistMu.Lock()
 	defer b.persistMu.Unlock()
 	b.header.UpdatedAt = time.Now().UTC()
-	if err := b.store.Save(b.header, msgs); err != nil && b.debug != nil {
+	if err := b.store.Save(b.header, withoutBackgroundFrames(msgs)); err != nil && b.debug != nil {
 		fmt.Fprintf(b.debug, "persist_error=%v\n", err)
 	}
 }

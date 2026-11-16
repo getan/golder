@@ -57,7 +57,7 @@ func (t *Tool) Name() string { return "android_use" }
 
 func (t *Tool) Description() string {
 	if t.phase2Enabled {
-		return "Operate the visible phone screen using observe and the returned snapshotId and node refs, or use the separately enabled background display. For background control, use background_status, background_start, background_open_app and background_tap; release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
+		return "Operate the visible phone screen using observe and the returned snapshotId and node refs, or use the separately enabled background display. For background control, use background_status, background_start, background_open_app, background_observe and background_tap. Observe the background display before acting and after the person hands it back; pass its snapshotId to the next background action and never replay an earlier action. Release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
 	}
 	return "Observe and operate the user's visible Android app through a user-enabled AccessibilityService. Observe first, then act with the returned snapshotId and node ref. Use open_app/back/home for navigation; sensitive actions still require the user's judgment."
 }
@@ -166,6 +166,23 @@ func (t *Tool) executePhase2(ctx context.Context, action string, a *args) (agent
 			return errorResult("android_use: " + err.Error()), nil
 		}
 		return phase2Result(response), nil
+	case "phase2_observe":
+		if err := t.requirePhase2Ready(ctx); err != nil {
+			return errorResult("android_use: " + err.Error()), nil
+		}
+		response, err := t.client.Do(ctx, map[string]any{"action": action})
+		if err != nil {
+			return errorResult("android_use: " + err.Error()), nil
+		}
+		image, _ := response["imageBase64"].(string)
+		delete(response, "imageBase64")
+		decoded, err := base64.StdEncoding.DecodeString(image)
+		if err != nil || len(decoded) == 0 || len(decoded) > maxImageBytes {
+			return errorResult("android_use: invalid background frame"), nil
+		}
+		result := phase2Result(response)
+		result.Content = append(result.Content, agentcore.NewImageContent(image, "image/png"))
+		return result, nil
 	case "phase2_start":
 		if _, err := t.syncPhase2(ctx); err != nil {
 			return errorResult("android_use: " + err.Error()), nil
@@ -190,7 +207,7 @@ func (t *Tool) executePhase2(ctx context.Context, action string, a *args) (agent
 			return errorResult("android_use: " + err.Error()), nil
 		}
 		response, err := t.client.Do(ctx, map[string]any{
-			"action": action, "packageName": a.Package,
+			"action": action, "packageName": a.Package, "snapshotId": a.SnapshotID,
 		})
 		if err != nil {
 			return errorResult("android_use: " + err.Error()), nil
@@ -201,21 +218,21 @@ func (t *Tool) executePhase2(ctx context.Context, action string, a *args) (agent
 			return errorResult("android_use: " + err.Error()), nil
 		}
 		response, err := t.client.Do(ctx, map[string]any{
-			"action": action, "x": *a.X, "y": *a.Y,
+			"action": action, "x": *a.X, "y": *a.Y, "snapshotId": a.SnapshotID,
 		})
 		if err != nil {
 			return errorResult("android_use: " + err.Error()), nil
 		}
 		return phase2Result(response), nil
 	case "phase2_release":
-		response, err := t.client.Do(ctx, map[string]any{"action": action})
+		response, err := t.client.Do(ctx, map[string]any{"action": action, "snapshotId": a.SnapshotID})
 		if err != nil {
 			return errorResult("android_use: " + err.Error()), nil
 		}
 		t.applyPhase2Status(response)
 		return phase2Result(response), nil
 	case "phase2_stop":
-		response, err := t.client.Do(ctx, map[string]any{"action": action})
+		response, err := t.client.Do(ctx, map[string]any{"action": action, "snapshotId": a.SnapshotID})
 		if err != nil {
 			return errorResult("android_use: " + err.Error()), nil
 		}
@@ -365,8 +382,8 @@ const toolSchema = `{
 const toolSchemaPhase2 = `{
   "type":"object",
   "properties":{
-    "action":{"type":"string","enum":["observe","screenshot","status","tap","type","swipe","open_app","back","home","wait","take_over","resume","background_status","background_start","background_stop","background_open_app","background_tap","background_release"]},
-    "snapshotId":{"type":"string","description":"Snapshot returned by observe; required for visible-screen node actions."},
+    "action":{"type":"string","enum":["observe","screenshot","status","tap","type","swipe","open_app","back","home","wait","take_over","resume","background_status","background_observe","background_start","background_stop","background_open_app","background_tap","background_release"]},
+    "snapshotId":{"type":"string","description":"Snapshot returned by observe; required for visible-screen node actions and the first background action after user handback."},
     "ref":{"type":"string","description":"Node ref from the current visible-screen snapshot."},
     "text":{"type":"string","description":"Text to enter. It is not submitted automatically."},
     "x":{"type":"integer","description":"Screen x coordinate, only as a fallback."},

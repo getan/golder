@@ -21,8 +21,12 @@ object AndroidUseBridge {
     fun endpointPath(context: Context): String =
         File(context.filesDir, "android-use.json").absolutePath
 
+    /**
+     * A stale endpoint file outlives a dead service, so file existence alone
+     * cannot mean "ready": the service rewrites a heartbeat every two seconds.
+     */
     fun endpointReady(context: Context): Boolean =
-        File(endpointPath(context)).isFile
+        File(endpointPath(context)).isFile && heartbeatFresh(context)
 
     fun heartbeatFresh(context: Context, maxAgeMs: Long = 8_000): Boolean = runCatching {
         val file = File(context.filesDir, HEARTBEAT_FILE)

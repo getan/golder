@@ -8,6 +8,10 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
+import android.view.InputDevice
+import android.view.InputEvent
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import java.util.concurrent.TimeUnit
 
@@ -73,6 +77,17 @@ internal class HelperShell(private val context: Context) : IGolderShell.Stub() {
             // prevents virtual-display tasks from being moved to that screen.
             val display = manager.createVirtualDisplay("golder-background", width, height, dpi, surface, flags, null, null)
             val id = display.display.displayId
+            try {
+                // Keep the target app's keyboard on its own display, never the
+                // person's physical screen. Refuse a display we cannot isolate.
+                val wm = Class.forName("android.view.WindowManagerGlobal")
+                    .getMethod("getWindowManagerService").invoke(null)
+                wm.javaClass.getMethod("setDisplayImePolicy", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                    .invoke(wm, id, 0) // DISPLAY_IME_POLICY_LOCAL
+            } catch (e: Exception) {
+                display.release()
+                throw e
+            }
             displays[id] = display
             id
         }.onFailure { Log.e(tag, "createDisplay failed", it) }.getOrDefault(-1)
@@ -123,14 +138,56 @@ internal class HelperShell(private val context: Context) : IGolderShell.Stub() {
     }
 
     override fun injectTap(displayId: Int, x: Int, y: Int): Boolean = synchronized(launchLock) {
-        if (!displays.containsKey(displayId)) return false
-        return runCommand("input", "-d", displayId.toString(), "tap", x.toString(), y.toString())
+        injectStroke(displayId, intArrayOf(x, x), intArrayOf(y, y), longArrayOf(0, 50))
     }
 
     override fun injectKey(displayId: Int, keyCode: Int): Boolean = synchronized(launchLock) {
-        if (!displays.containsKey(displayId)) return false
-        return runCommand("input", "-d", displayId.toString(), "keyevent", keyCode.toString())
+        if (!displays.containsKey(displayId) || keyCode != KeyEvent.KEYCODE_BACK) return false
+        val now = SystemClock.uptimeMillis()
+        val down = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        val up = KeyEvent(now, now + 50, KeyEvent.ACTION_UP, keyCode, 0, 0, -1, 0, 0, InputDevice.SOURCE_KEYBOARD)
+        if (!inject(down, displayId)) return false
+        SystemClock.sleep(50)
+        inject(up, displayId)
     }
+
+    override fun injectStroke(displayId: Int, xs: IntArray?, ys: IntArray?, times: LongArray?): Boolean = synchronized(launchLock) {
+        val display = displays[displayId]?.display ?: return false
+        if (xs == null || ys == null || times == null || times.size !in 2..256 ||
+            xs.size != times.size || ys.size != times.size || times[0] != 0L ||
+            times.last() > 5_000 || (1 until times.size).any { times[it] < times[it - 1] } ||
+            xs.any { it < 0 || it >= display.mode.physicalWidth } ||
+            ys.any { it < 0 || it >= display.mode.physicalHeight }
+        ) return false
+
+        val downTime = SystemClock.uptimeMillis()
+        fun send(index: Int, action: Int): Boolean {
+            val wait = downTime + times[index] - SystemClock.uptimeMillis()
+            if (wait > 0) SystemClock.sleep(wait)
+            val event = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, xs[index].toFloat(), ys[index].toFloat(), 0)
+            event.source = InputDevice.SOURCE_TOUCHSCREEN
+            return try { inject(event, displayId) } finally { event.recycle() }
+        }
+        if (!send(0, MotionEvent.ACTION_DOWN)) return false
+        var ok = true
+        try {
+            for (i in 1 until times.lastIndex) {
+                if (!send(i, MotionEvent.ACTION_MOVE)) ok = false
+            }
+        } finally {
+            if (!send(times.lastIndex, MotionEvent.ACTION_UP)) ok = false
+        }
+        ok
+    }
+
+    private fun inject(event: InputEvent, displayId: Int): Boolean = runCatching {
+        event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, displayId)
+        val manager = runCatching {
+            Class.forName("android.hardware.input.InputManagerGlobal").getMethod("getInstance").invoke(null)
+        }.getOrNull() ?: Class.forName("android.hardware.input.InputManager").getMethod("getInstance").invoke(null)
+        manager.javaClass.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
+            .invoke(manager, event, 1) as Boolean // WAIT_FOR_RESULT
+    }.onFailure { Log.w(tag, "display input injection failed", it) }.getOrDefault(false)
 
     private fun runCommand(vararg args: String): Boolean = runCatching {
         val process = ProcessBuilder(*args).redirectErrorStream(true).start()

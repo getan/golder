@@ -190,6 +190,65 @@ func (s *Service) SnapshotJSON(handle int) (string, error) {
 	return raw, nil
 }
 
+type takeoverBackend interface {
+	PauseForTakeover() error
+	TakeoverReady() bool
+	ResumeAfterTakeover()
+}
+
+// PauseForTakeover latches the host-only admission barrier without waiting for
+// in-flight calls. Poll TakeoverReady before allowing the person to interact.
+func (s *Service) PauseForTakeover(handle int) error {
+	e, err := s.entry(handle)
+	if err != nil {
+		return s.fail(err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	b, ok := e.backend.(takeoverBackend)
+	if e.closed || !ok {
+		return s.fail(errors.New("mobilebridge: takeover is unavailable"))
+	}
+	if err := b.PauseForTakeover(); err != nil {
+		return s.fail(err)
+	}
+	s.clearErr()
+	return nil
+}
+
+// TakeoverReady does not grant control: it only reports a previously latched,
+// quiescent barrier. The Android host also owns the display-level handoff.
+func (s *Service) TakeoverReady(handle int) (bool, error) {
+	e, err := s.entry(handle)
+	if err != nil {
+		return false, s.fail(err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	b, ok := e.backend.(takeoverBackend)
+	if e.closed || !ok {
+		return false, s.fail(errors.New("mobilebridge: takeover is unavailable"))
+	}
+	return b.TakeoverReady(), nil
+}
+
+// ResumeAfterTakeover is invoked only by the local host after handback.
+func (s *Service) ResumeAfterTakeover(handle int) error {
+	e, err := s.entry(handle)
+	if err != nil {
+		return s.fail(err)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	b, ok := e.backend.(takeoverBackend)
+	if e.closed || !ok {
+		return s.fail(errors.New("mobilebridge: takeover is unavailable"))
+	}
+	b.ResumeAfterTakeover()
+	s.clearErr()
+	return nil
+}
+
 // Cancel asks the backend to stop its active run.
 func (s *Service) Cancel(handle int) error {
 	e, err := s.entry(handle)

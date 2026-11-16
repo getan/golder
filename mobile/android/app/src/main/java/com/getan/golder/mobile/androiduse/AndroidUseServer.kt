@@ -127,7 +127,15 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         }
     }
 
-    private fun handle(request: JSONObject): JSONObject {
+    internal fun invalidateObservation() {
+        lastNodes.clear()
+        lastSnapshotId = ""
+    }
+
+    private fun handle(request: JSONObject): JSONObject =
+        Phase2Session.guardAgentRequest(request) { handleAllowed(request) }
+
+    private fun handleAllowed(request: JSONObject): JSONObject {
         val action = request.optString("action")
         if (action == "status") {
             return status()
@@ -161,6 +169,7 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             "home" -> globalAction(AccessibilityService.GLOBAL_ACTION_HOME, "home")
             "wait" -> waitFor(request)
             "phase2_status" -> Phase2Session.status(service)
+            "phase2_observe" -> Phase2Session.observe(service)
             "phase2_start" -> Phase2Session.start(service)
             "phase2_stop" -> Phase2Session.stop(service)
             "phase2_open_app" -> Phase2Session.openApp(service, request.optString("packageName"))

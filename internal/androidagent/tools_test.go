@@ -143,6 +143,39 @@ func TestNoShellOmitsShellCatalogAndPrompt(t *testing.T) {
 	}
 }
 
+func TestAndroidUsePromptTracksCurrentCatalog(t *testing.T) {
+	for _, tc := range []struct {
+		name, endpoint string
+		phase2         bool
+		wantTool       bool
+	}{
+		{"disabled", "", false, false},
+		{"visible screen", "/private/android-use.json", false, true},
+		{"background enabled", "/private/android-use.json", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := newToolset(Config{
+				Root: t.TempDir(), BeforeToolCall: allowReadOnly, NoShell: true,
+				AndroidUseEndpoint: tc.endpoint, AndroidUsePhase2: tc.phase2,
+			}, fakeLookup(nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if hasTool(s, "android_use") != tc.wantTool {
+				t.Fatal("android_use catalog does not match endpoint")
+			}
+			prompt := s.Prompt()
+			if strings.Contains(prompt, "AndroidUse is available through android_use") != tc.wantTool {
+				t.Fatalf("prompt does not match catalog: %s", prompt)
+			}
+			if strings.Contains(prompt, "Background-display control is separately enabled") != tc.phase2 {
+				t.Fatalf("background prompt does not match catalog: %s", prompt)
+			}
+		})
+	}
+}
+
 func TestGitToolIsCataloguedAndNetworkFailsClosed(t *testing.T) {
 	s, err := newToolset(Config{Root: t.TempDir(), BeforeToolCall: allowReadOnly}, fakeLookup(nil))
 	if err != nil {

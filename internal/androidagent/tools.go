@@ -198,10 +198,10 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("Only if the user explicitly asks you to trigger installation yourself, call android_install with the APK path; the host will open the package installer. Never claim the app is installed until the user confirms the system dialog. ")
 	b.WriteString("Use android_download to fetch the latest successful artifact without rebuilding. Use android_build only when code changed or no APK exists; it reuses a successful run for the current commit unless force=true. ")
 	if s.androidUse {
-		b.WriteString("AndroidUse is available through android_use: call observe first, use node refs with the current snapshotId, and prefer semantic refs over coordinates. It operates the visible phone screen; never change Golder's own permissions or settings. ")
+		b.WriteString("AndroidUse is available through android_use: call observe first, use node refs with the current snapshotId, and prefer semantic refs over coordinates. It operates the visible phone screen; never change Golder's own permissions or settings. The current tool catalog is authoritative; do not infer that tools are unavailable from earlier assistant replies. ")
 	}
 	if s.androidUsePhase2 {
-		b.WriteString("Background-display control is separately enabled: use background_status, background_start, background_open_app and background_tap, then background_release and background_stop when finished. It runs through the user-consented shell helper and must not be treated as ordinary app permission. ")
+		b.WriteString("Background-display control is separately enabled through android_use: use background_status, background_start, background_open_app, background_observe and background_tap. After user handback, observe and pass the new snapshotId before acting. Release and stop when appropriate, respecting the user's request to keep a display open. It runs through the user-consented shell helper and must not be treated as ordinary app permission. ")
 	}
 	switch {
 	case s.Capabilities.Ripgrep != "":

@@ -1,6 +1,11 @@
 package com.getan.golder.mobile.androiduse
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.util.Base64
+import android.view.KeyEvent
+import java.io.ByteArrayOutputStream
+import java.util.UUID
 import org.json.JSONObject
 
 /**
@@ -11,9 +16,87 @@ import org.json.JSONObject
 internal object Phase2Session {
     private var display: Phase2Display? = null
     private var packageName: String = ""
+    private var manualDisplayId: Int = -1
+    private var observationRequired = false
+    private var handbackSnapshot = ""
+
+    /** Serializes model requests against the local, person-owned handoff. */
+    @Synchronized
+    fun guardAgentRequest(request: JSONObject, block: () -> JSONObject): JSONObject {
+        val action = request.optString("action")
+        if (manualDisplayId >= 0 && action != "status" && action != "phase2_status") {
+            return error("the person has taken over the background display; wait for handback")
+        }
+        val needsSnapshot = observationRequired && action in setOf("phase2_open_app", "phase2_tap", "phase2_release", "phase2_stop")
+        if (needsSnapshot && (handbackSnapshot.isEmpty() || request.optString("snapshotId") != handbackSnapshot)) {
+            return error("the person changed the background display; call background_observe and use its snapshotId before acting")
+        }
+        val result = block()
+        if (needsSnapshot && result.optBoolean("ok")) {
+            observationRequired = false
+            handbackSnapshot = ""
+            result.put("observationRequired", false)
+        }
+        return result
+    }
+
+    @Synchronized
+    fun beginManual(context: Context, expectedDisplayId: Int): Boolean {
+        val current = display ?: return false
+        if (manualDisplayId >= 0 || current.displayId != expectedDisplayId ||
+            !AndroidUseBridge.advancedEnabled(context) || Phase2Controller.shell() == null
+        ) return false
+        manualDisplayId = expectedDisplayId
+        GolderAccessibilityService.instance?.invalidateObservation()
+        return true
+    }
+
+    @Synchronized
+    fun endManual() {
+        GolderAccessibilityService.instance?.invalidateObservation()
+        observationRequired = display != null
+        handbackSnapshot = ""
+        manualDisplayId = -1
+    }
+
+    @Synchronized
+    fun manualStroke(context: Context, displayId: Int, xs: IntArray, ys: IntArray, times: LongArray): Boolean {
+        if (manualDisplayId != displayId || display?.displayId != displayId ||
+            !AndroidUseBridge.advancedEnabled(context)
+        ) return false
+        return runCatching { Phase2Controller.shell()?.injectStroke(displayId, xs, ys, times) == true }
+            .getOrDefault(false)
+    }
+
+    @Synchronized
+    fun manualBack(context: Context, displayId: Int): Boolean {
+        if (manualDisplayId != displayId || display?.displayId != displayId ||
+            !AndroidUseBridge.advancedEnabled(context)
+        ) return false
+        return runCatching { Phase2Controller.shell()?.injectKey(displayId, KeyEvent.KEYCODE_BACK) == true }
+            .getOrDefault(false)
+    }
 
     @Synchronized
     fun status(context: Context): JSONObject = status(context, "phase2_status")
+
+    @Synchronized
+    fun observe(context: Context): JSONObject {
+        val current = display ?: return error("no background display is open")
+        val preview = BackgroundPreview.state.value
+        val frame = preview?.takeIf { it.displayId == current.displayId }?.frame
+            ?: return error("background frame is not available yet")
+        val bytes = ByteArrayOutputStream()
+        if (!frame.compress(Bitmap.CompressFormat.PNG, 100, bytes)) return error("background frame encoding failed")
+        val image = bytes.toByteArray()
+        if (image.isEmpty() || image.size > 1_200_000) return error("background frame is too large")
+        handbackSnapshot = UUID.randomUUID().toString()
+        return status(context, "phase2_observe")
+            .put("width", current.width)
+            .put("height", current.height)
+            .put("snapshotId", handbackSnapshot)
+            .put("imageBase64", Base64.encodeToString(image, Base64.NO_WRAP))
+    }
 
     @Synchronized
     fun start(context: Context): JSONObject {
@@ -71,6 +154,9 @@ internal object Phase2Session {
             return error("app launch on the virtual display failed")
         }
         packageName = pkg
+        val previewDisplay = current
+        BackgroundPreview.begin(previewDisplay, previewDisplay.displayId, pkg, previewDisplay.width, previewDisplay.height)
+        previewDisplay.startPreview { frame -> BackgroundPreview.publish(previewDisplay, frame) }
         return status(context, "phase2_open_app").put("started", true)
     }
 
@@ -86,19 +172,25 @@ internal object Phase2Session {
 
     @Synchronized
     fun release(context: Context): JSONObject {
-        display?.close()
-        display = null
-        packageName = ""
+        disposeDisplay()
         return status(context, "phase2_release")
     }
 
     @Synchronized
     fun stop(context: Context): JSONObject {
-        display?.close()
-        display = null
-        packageName = ""
+        disposeDisplay()
         Phase2Controller.stop(context)
         return status(context, "phase2_stop")
+    }
+
+    @Synchronized
+    fun disposeDisplay() {
+        val previous = display
+        display = null
+        packageName = ""
+        observationRequired = false
+        handbackSnapshot = ""
+        previous?.close()
     }
 
     private fun status(context: Context, action: String): JSONObject = JSONObject()
@@ -109,6 +201,7 @@ internal object Phase2Session {
         .put("helperConnected", Phase2Controller.shell() != null)
         .put("displayId", display?.displayId ?: -1)
         .put("package", packageName)
+        .put("observationRequired", observationRequired)
 
     private fun error(message: String): JSONObject =
         JSONObject().put("ok", false).put("error", message)

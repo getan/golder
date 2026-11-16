@@ -60,6 +60,10 @@ class GolderAccessibilityService : AccessibilityService() {
         return confirmed
     }
 
+    internal fun invalidateObservation() {
+        server?.invalidateObservation()
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!Phase2PairingCoordinator.isActive) return
         val packageName = event?.packageName?.toString().orEmpty()
@@ -109,6 +113,7 @@ class GolderAccessibilityService : AccessibilityService() {
     private fun closeServer() {
         server?.close()
         server = null
+        Phase2Session.disposeDisplay()
         overlay?.close()
         overlay = null
         if (prefsRegistered) {

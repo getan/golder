@@ -17,6 +17,9 @@ object GolderNative {
     external fun start(handle: Int, prompt: String): Int
     external fun poll(handle: Int, max: Int): String?
     external fun snapshot(handle: Int): String?
+    external fun pauseForTakeover(handle: Int): Int
+    external fun takeoverReady(handle: Int): Int
+    external fun resumeAfterTakeover(handle: Int): Int
     external fun cancel(handle: Int)
     external fun close(handle: Int)
     external fun phase2Pair(address: String, code: String, identityDir: String): String?

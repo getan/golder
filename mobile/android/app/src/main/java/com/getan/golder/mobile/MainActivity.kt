@@ -21,6 +21,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -36,8 +37,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -50,6 +58,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.getan.golder.mobile.androiduse.AndroidUseBridge
+import com.getan.golder.mobile.androiduse.BackgroundPreview
+import com.getan.golder.mobile.androiduse.ManualTakeover
 import com.getan.golder.mobile.androiduse.Phase2Controller
 import com.getan.golder.mobile.androiduse.Phase2SetupActivity
 import java.io.File
@@ -148,6 +158,9 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseOverlayEnabled by remember { mutableStateOf(true) }
     var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
+    val backgroundPreview by BackgroundPreview.state.collectAsState()
+    val takeover by ManualTakeover.state.collectAsState()
+    var backgroundPreviewExpanded by remember { mutableStateOf(false) }
     var newProjectOpen by remember { mutableStateOf(false) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val activeProject = projects.firstOrNull { it.id == activeProjectId }
@@ -169,6 +182,8 @@ private fun GolderApp(initialTask: String = "") {
     var oauthJob by remember { mutableStateOf<Job?>(null) }
     var tokenLoaded by remember { mutableStateOf(false) }
     var prompt by remember { mutableStateOf(initialTask) }
+    val retainedHandle = remember { ManualTakeover.retainedHandle() }
+    var restoringTakeover by remember { mutableStateOf(retainedHandle != 0) }
     var handle by remember { mutableIntStateOf(0) }
     var opening by remember { mutableStateOf(false) }
     var running by remember { mutableStateOf(false) }
@@ -180,6 +195,10 @@ private fun GolderApp(initialTask: String = "") {
     val listState = rememberLazyListState()
     val openMutex = remember { Mutex() }
     val modelLoading = remember { mutableStateMapOf<String, Boolean>() }
+
+    LaunchedEffect(backgroundPreview?.displayId) {
+        if (backgroundPreview == null) backgroundPreviewExpanded = false
+    }
 
     fun refreshAndroidUseState() {
         androidUseEnabled = AndroidUseBridge.isEnabled(context)
@@ -321,7 +340,12 @@ private fun GolderApp(initialTask: String = "") {
     }
 
     suspend fun openWorkspace(project: Project) {
+        if (ManualTakeover.state.value.stage != ManualTakeover.Stage.IDLE) {
+            status = if (language == "zh") "请先交还后台控制。" else "Hand back background control first."
+            return
+        }
         openMutex.withLock {
+            if (ManualTakeover.state.value.stage != ManualTakeover.Stage.IDLE) return
             opening = true
             try {
             val dir = File(project.path)
@@ -388,7 +412,22 @@ private fun GolderApp(initialTask: String = "") {
             entries.clear()
             handle = opened
             loadHistory(snapshot)
-            status = "Ready"
+            val toolCount = runCatching { JSONObject(snapshot).optInt("tools") }.getOrDefault(0)
+            Log.i("GolderJNI", "session tools=$toolCount project=${project.id}")
+            status = if (toolCount > 0 && !AndroidUseBridge.endpointReady(context) &&
+                (AndroidUseBridge.controlAllowed(context) || AndroidUseBridge.advancedEnabled(context))
+            ) {
+                // The catalog silently loses android_use when the accessibility
+                // service is unbound (common after an app update). Say so instead
+                // of letting the model conclude that no phone control exists.
+                if (language == "zh") {
+                    "已就绪，但 AndroidUse 未连接（工具数 $toolCount）。请在设置里重新绑定无障碍。"
+                } else {
+                    "Ready, but AndroidUse is not connected ($toolCount tools). Re-bind accessibility in Settings."
+                }
+            } else {
+                "Ready"
+            }
             } finally {
                 opening = false
             }
@@ -398,6 +437,10 @@ private fun GolderApp(initialTask: String = "") {
     fun selectProject(project: Project) {
         scope.launch { drawerState.close() }
         if (project.id == activeProjectId) return
+        if (ManualTakeover.state.value.stage != ManualTakeover.Stage.IDLE) {
+            status = if (language == "zh") "请先交还后台控制。" else "Hand back background control first."
+            return
+        }
         scope.launch {
             if (handle != 0) {
                 withContext(Dispatchers.IO) { GolderNative.close(handle) }
@@ -505,8 +548,21 @@ private fun GolderApp(initialTask: String = "") {
         settingsLoaded = true
     }
 
-    LaunchedEffect(settingsLoaded, activeProjectId) {
-        if (!settingsLoaded) return@LaunchedEffect
+    LaunchedEffect(retainedHandle) {
+        if (retainedHandle != 0) {
+            val snapshot = withContext(Dispatchers.IO) { GolderNative.snapshot(retainedHandle) }
+            if (snapshot != null) {
+                entries.clear()
+                loadHistory(snapshot)
+                running = runCatching { JSONObject(snapshot).optBoolean("running") }.getOrDefault(false)
+                handle = retainedHandle
+            }
+        }
+        restoringTakeover = false
+    }
+
+    LaunchedEffect(settingsLoaded, activeProjectId, takeover.stage, restoringTakeover) {
+        if (!settingsLoaded || restoringTakeover || takeover.stage != ManualTakeover.Stage.IDLE || handle != 0) return@LaunchedEffect
         val project = projects.firstOrNull { it.id == activeProjectId } ?: return@LaunchedEffect
         openWorkspace(project)
     }
@@ -642,7 +698,7 @@ private fun GolderApp(initialTask: String = "") {
         // would close the *new* session on a 0 -> 1 recomposition.
         val ownedHandle = handle
         onDispose {
-            if (ownedHandle != 0) {
+            if (ownedHandle != 0 && !ManualTakeover.retainsHandle(ownedHandle)) {
                 runCatching { GolderNative.close(ownedHandle) }
             }
         }
@@ -870,12 +926,12 @@ private fun GolderApp(initialTask: String = "") {
             bottomBar = {
                 Composer(
                     prompt = prompt,
-                    enabled = handle != 0 && !running && prompt.isNotBlank(),
+                    enabled = handle != 0 && !running && takeover.stage == ManualTakeover.Stage.IDLE && prompt.isNotBlank(),
                     running = running,
                     onPrompt = { prompt = it },
                     onSend = {
                         val text = prompt.trim()
-                        if (text.isNotBlank() && handle != 0 && !running) {
+                        if (text.isNotBlank() && handle != 0 && !running && ManualTakeover.state.value.stage == ManualTakeover.Stage.IDLE) {
                             prompt = ""
                             scope.launch {
                                 add("user", text)
@@ -934,8 +990,27 @@ private fun GolderApp(initialTask: String = "") {
                             )
                         },
                 )
+                backgroundPreview?.let { preview ->
+                    BackgroundPreviewThumbnail(
+                        preview = preview,
+                        chinese = language == "zh",
+                        onClick = { backgroundPreviewExpanded = true },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+                    )
+                }
             }
         }
+    }
+
+    if ((backgroundPreviewExpanded && backgroundPreview != null) || takeover.stage != ManualTakeover.Stage.IDLE) {
+        BackgroundPreviewDialog(
+            preview = backgroundPreview,
+            chinese = language == "zh",
+            handle = handle,
+            allowTakeover = !opening,
+            takeover = takeover,
+            onClose = { backgroundPreviewExpanded = false },
+        )
     }
 
     if (newProjectOpen) {
@@ -950,6 +1025,42 @@ private fun GolderApp(initialTask: String = "") {
             },
         )
     }
+    }
+}
+
+@Composable
+private fun BackgroundPreviewThumbnail(
+    preview: BackgroundPreview.State,
+    chinese: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.width(104.dp)
+            .testTag("background-preview-thumbnail")
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = if (chinese) "打开后台实时画面" else "Open live background display" },
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 5.dp,
+        shadowElevation = 4.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(modifier = Modifier.padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(if (chinese) "后台画面" else "Background", style = MaterialTheme.typography.labelSmall)
+            val frame = preview.frame
+            if (frame == null) {
+                Box(Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                    Text(if (chinese) "等待画面" else "Waiting", style = MaterialTheme.typography.labelSmall)
+                }
+            } else {
+                Image(
+                    bitmap = frame.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                )
+            }
+        }
     }
 }
 

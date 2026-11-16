@@ -105,6 +105,7 @@ object Phase2Controller {
     }
 
     fun stop(context: Context) {
+        Phase2Session.disposeDisplay()
         runCatching { shell()?.destroy() }
         clear(context)
     }

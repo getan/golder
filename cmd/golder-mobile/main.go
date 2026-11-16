@@ -219,6 +219,34 @@ func Java_com_getan_golder_mobile_GolderNative_snapshot(env *C.JNIEnv, clazz C.j
 	return javaString(env, raw)
 }
 
+//export Java_com_getan_golder_mobile_GolderNative_pauseForTakeover
+func Java_com_getan_golder_mobile_GolderNative_pauseForTakeover(env *C.JNIEnv, clazz C.jclass, handle C.jint) C.jint {
+	if err := service.PauseForTakeover(int(handle)); err != nil {
+		return -1
+	}
+	return 0
+}
+
+//export Java_com_getan_golder_mobile_GolderNative_takeoverReady
+func Java_com_getan_golder_mobile_GolderNative_takeoverReady(env *C.JNIEnv, clazz C.jclass, handle C.jint) C.jint {
+	ready, err := service.TakeoverReady(int(handle))
+	if err != nil {
+		return -1
+	}
+	if ready {
+		return 1
+	}
+	return 0
+}
+
+//export Java_com_getan_golder_mobile_GolderNative_resumeAfterTakeover
+func Java_com_getan_golder_mobile_GolderNative_resumeAfterTakeover(env *C.JNIEnv, clazz C.jclass, handle C.jint) C.jint {
+	if err := service.ResumeAfterTakeover(int(handle)); err != nil {
+		return -1
+	}
+	return 0
+}
+
 //export Java_com_getan_golder_mobile_GolderNative_cancel
 func Java_com_getan_golder_mobile_GolderNative_cancel(env *C.JNIEnv, clazz C.jclass, handle C.jint) {
 	_ = service.Cancel(int(handle))

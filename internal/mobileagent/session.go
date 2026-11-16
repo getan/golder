@@ -107,12 +107,15 @@ type Config struct {
 
 // Snapshot is the state a host reads after a missed event or a view rebuild.
 // Messages is a shallow copy of the conversation; message values are immutable
-// once appended by the loop.
+// once appended by the loop. Tools is the size of the catalog attached to every
+// request: a host can use it to prove the model was offered tools instead of
+// inferring that from a reply which claims otherwise.
 type Snapshot struct {
 	Running  bool                  `json:"running"`
 	RunID    string                `json:"runId,omitempty"`
 	Seq      uint64                `json:"seq"`
 	Pending  int                   `json:"pending"`
+	Tools    int                   `json:"tools"`
 	Messages agentcore.MessageList `json:"messages"`
 }
 
@@ -126,6 +129,7 @@ type Session struct {
 	root     string
 	perms    *permissions.State
 	onRunEnd func(agentcore.MessageList)
+	pause    *pauseBarrier
 
 	mu       sync.Mutex
 	events   []Event
@@ -163,6 +167,7 @@ func New(cfg Config) (*Session, error) {
 	if perms == nil {
 		perms = permissions.New(permissions.Auto)
 	}
+	barrier := &pauseBarrier{}
 	runCfg := runtime.RunConfig{
 		LoopConfig: runtime.LoopConfig{
 			Model:         cfg.Model,
@@ -180,6 +185,26 @@ func New(cfg Config) (*Session, error) {
 		SessionID:    cfg.SessionID,
 		EventBuffer:  cfg.EventBuffer,
 	}
+	previousBegin := runCfg.Batch.BeginToolCall
+	runCfg.Batch.BeginToolCall = func(ctx context.Context, call agentcore.AgentToolCall) (func(), error) {
+		release, err := barrier.begin(ctx, call)
+		if err != nil || previousBegin == nil {
+			return release, err
+		}
+		previousRelease, err := previousBegin(ctx, call)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		return func() {
+			if previousRelease != nil {
+				previousRelease()
+			}
+			release()
+		}, nil
+	}
+	runCfg.SyncTools = barrier.beforeTurn
+	runCfg.OnStop = barrier.onStop
 	history := make(agentcore.MessageList, len(cfg.History))
 	copy(history, cfg.History)
 	published := make(agentcore.MessageList, len(history))
@@ -191,6 +216,7 @@ func New(cfg Config) (*Session, error) {
 		perms:    perms,
 		messages: published,
 		onRunEnd: cfg.OnRunEnd,
+		pause:    barrier,
 	}, nil
 }
 
@@ -215,6 +241,27 @@ func (s *Session) Workspace() string { return s.root }
 // Permissions returns the live approval state the host shares with its tools.
 func (s *Session) Permissions() *permissions.State { return s.perms }
 
+// PauseForTakeover stops admission immediately. TakeoverReady becomes true
+// after every previously admitted tool call has finished.
+func (s *Session) PauseForTakeover() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("mobileagent: session is closed")
+	}
+	s.pause.pause()
+	return nil
+}
+
+// TakeoverReady reports whether the pause is latched and no tool is in flight.
+func (s *Session) TakeoverReady() bool {
+	paused, quiescent := s.pause.status()
+	return paused && quiescent
+}
+
+// ResumeAfterTakeover is a host action, not a model-visible tool.
+func (s *Session) ResumeAfterTakeover() { s.pause.resume() }
+
 // Start begins one run. It returns immediately; the result arrives as events.
 // An empty prompt, a closed session, or a run already in flight is an error.
 func (s *Session) Start(prompt string) error {
@@ -229,6 +276,10 @@ func (s *Session) Start(prompt string) error {
 	if s.running {
 		s.mu.Unlock()
 		return errors.New("mobileagent: a run is already active")
+	}
+	if paused, _ := s.pause.status(); paused {
+		s.mu.Unlock()
+		return errors.New("mobileagent: the person has taken over the phone")
 	}
 	s.nextRun++
 	runID := fmt.Sprintf("run-%d", s.nextRun)
@@ -465,6 +516,7 @@ func (s *Session) Snapshot() Snapshot {
 		RunID:    s.runID,
 		Seq:      s.nextSeq,
 		Pending:  len(s.events),
+		Tools:    len(s.ctx.Tools),
 		Messages: cloneMessages(s.messages),
 	}
 }
