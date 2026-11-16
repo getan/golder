@@ -117,6 +117,9 @@ object AndroidUseBridge {
 
     @Synchronized
     fun setMaster(context: Context, enabled: Boolean) {
+        // Turning the switch off latches pause (and an update resets the switch),
+        // so enabling has to clear it or every control action stays refused.
+        if (enabled) setPaused(context, false)
         setControlAllowed(context, enabled)
         setAdvancedEnabled(context, enabled)
         prefs(context).edit().putLong(ENABLED_UPDATE_KEY, lastUpdateTime(context)).apply()
