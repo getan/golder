@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1120" width="1200" height="1120" role="img" aria-labelledby="title description">
   <title id="title">Golder 系统架构概览</title>
-  <desc id="description">Golder 的原生 GUI、终端、命令行与 Android App 共享 Agent 运行时；Android 通过 JNI 接入，并使用 Keystore、前台服务、GitHub Actions 和系统安装器。</desc>
+  <desc id="description">Golder 的原生 GUI、终端、命令行与 Android App 共享 Agent 运行时；Android 通过 JNI 接入，使用 Keystore、前台服务、GitHub Actions 和系统安装器，并能经无障碍服务与虚拟屏后台控制其他 App。</desc>
   <defs>
     <style>
       text { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
@@ -70,8 +70,8 @@
   <text x="82" y="586" class="small">internal/provider</text>
   <rect x="435" y="505" width="330" height="96" rx="12" class="card" stroke="#b69ac2"/>
   <text x="457" y="539" class="name">工具与扩展</text>
-  <text x="457" y="564" class="desc">文件 · Shell · Git · Web · Android CI</text>
-  <text x="457" y="586" class="small">agenttool · mobilebuild</text>
+  <text x="457" y="564" class="desc">文件 · Shell · Git · Web · App 控制 · CI</text>
+  <text x="457" y="586" class="small">agenttool · androiduse · mobilebuild</text>
   <rect x="810" y="505" width="330" height="96" rx="12" class="card" stroke="#a5b69a"/>
   <text x="832" y="539" class="name">会话与上下文</text>
   <text x="832" y="564" class="desc">历史 · 恢复 · 压缩 · 记忆</text>
@@ -92,15 +92,18 @@
   <text x="832" y="756" class="small">session · Service · PackageInstaller</text>
 
   <text x="55" y="858" class="section">05 / 工具可操作的目标</text>
-  <rect x="160" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
-  <text x="182" y="905" class="name">项目文件与命令</text>
-  <text x="182" y="930" class="desc">文件 · Shell · 构建测试 · APK</text>
-  <rect x="460" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
-  <text x="482" y="905" class="name">浏览器与网络</text>
-  <text x="482" y="930" class="desc">Browser · Web · 外部服务</text>
-  <rect x="760" y="873" width="280" height="76" rx="12" class="card" stroke="#ddd5cc"/>
-  <text x="782" y="905" class="name">桌面与终端窗格</text>
-  <text x="782" y="930" class="desc">Computer Use · Pane</text>
+  <rect x="60" y="873" width="255" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="82" y="905" class="name">项目文件与命令</text>
+  <text x="82" y="930" class="desc">文件 · Shell · 构建测试 · APK</text>
+  <rect x="335" y="873" width="255" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="357" y="905" class="name">浏览器与网络</text>
+  <text x="357" y="930" class="desc">Browser · Web · 外部服务</text>
+  <rect x="610" y="873" width="255" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="632" y="905" class="name">桌面与终端窗格</text>
+  <text x="632" y="930" class="desc">Computer Use · Pane</text>
+  <rect x="885" y="873" width="255" height="76" rx="12" class="card" stroke="#ddd5cc"/>
+  <text x="907" y="905" class="name">Android App 控制</text>
+  <text x="907" y="930" class="desc">无障碍 · 虚拟屏 · 点击输入</text>
 
   <line x1="55" y1="996" x2="1145" y2="996" stroke="#e9e4dd"/>
   <text x="55" y="1032" class="small">示意图：主要关系经过简化。权限控制依工具、配置与运行环境而异。</text>
