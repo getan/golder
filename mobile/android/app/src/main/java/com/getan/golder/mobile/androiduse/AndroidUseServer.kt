@@ -387,19 +387,37 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (BLOCKED_PACKAGES.any { pkg == it || pkg.startsWith("$it.") }) {
             return error("opening system permission/installer UI is blocked")
         }
-        val intent = service.packageManager.getLaunchIntentForPackage(pkg)
-            ?: return error("app is not installed")
-        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching {
-            service.startActivity(intent)
-        }.getOrElse { return error(it.message ?: "could not open app") }
-        // startActivity can be silently denied by OEM background-launch policy.
-        // Confirm the foreground package instead of reporting a false success.
-        repeat(10) {
-            Thread.sleep(200)
-            if (service.rootInActiveWindow?.packageName?.toString() == pkg) {
-                return ok("open_app").put("packageName", pkg).put("verified", true)
+        val pm = service.packageManager
+        val intent = pm.getLaunchIntentForPackage(pkg)
+        if (intent == null) {
+            // Distinguish "really absent" from "hidden by package visibility" so
+            // the model does not tell the user to install an app that is there.
+            val known = runCatching { pm.getPackageInfo(pkg, 0) }.isSuccess
+            return error(
+                if (known) "package $pkg has no launcher activity" else "app is not installed or not visible to Golder",
+            )
+        }
+        fun foreground(): Boolean = service.rootInActiveWindow?.packageName?.toString() == pkg
+        fun waitForForeground(rounds: Int): Boolean {
+            repeat(rounds) {
+                if (foreground()) return true
+                Thread.sleep(200)
             }
+            return foreground()
+        }
+        if (foreground()) {
+            return ok("open_app").put("packageName", pkg).put("verified", true).put("alreadyOpen", true)
+        }
+        // OEM builds refuse a background activity start from an app, while the
+        // connected shell helper is allowed to do it. Try the helper first so the
+        // common MIUI case does not pay for a refused attempt.
+        if (Phase2Session.launchOnMain(service, pkg) && waitForForeground(6)) {
+            return ok("open_app").put("packageName", pkg).put("verified", true).put("viaHelper", true)
+        }
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { service.startActivity(intent) }
+        if (waitForForeground(6)) {
+            return ok("open_app").put("packageName", pkg).put("verified", true)
         }
         return error(
             "the system blocked bringing $pkg to the foreground; " +

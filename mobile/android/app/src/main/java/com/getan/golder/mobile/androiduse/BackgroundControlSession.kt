@@ -80,6 +80,17 @@ internal object Phase2Session {
     @Synchronized
     fun status(context: Context): JSONObject = status(context, "phase2_status")
 
+    /**
+     * Last resort for a foreground launch the platform refused: the already
+     * connected shell helper starts the app on the physical display.
+     */
+    @Synchronized
+    fun launchOnMain(context: Context, pkg: String): Boolean {
+        if (!AndroidUseBridge.advancedEnabled(context)) return false
+        val shell = Phase2Controller.shell() ?: return false
+        return runCatching { shell.startOnMainDisplay(pkg) }.getOrDefault(false)
+    }
+
     @Synchronized
     fun observe(context: Context): JSONObject {
         val current = display ?: return error("no background display is open")

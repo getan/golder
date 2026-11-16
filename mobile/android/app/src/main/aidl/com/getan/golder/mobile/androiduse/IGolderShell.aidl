@@ -13,4 +13,5 @@ interface IGolderShell {
     void releaseAll();
     void destroy();
     boolean injectStroke(int displayId, in int[] xs, in int[] ys, in long[] times);
+    boolean startOnMainDisplay(String packageName);
 }

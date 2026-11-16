@@ -180,6 +180,25 @@ internal class HelperShell(private val context: Context) : IGolderShell.Stub() {
         ok
     }
 
+    /**
+     * Launch [packageName] on the physical display. The app process is refused a
+     * background activity start on some OEM builds; shell identity is not.
+     */
+    override fun startOnMainDisplay(packageName: String): Boolean = synchronized(launchLock) {
+        if (packageName.isBlank()) return false
+        val component = context.packageManager.getLaunchIntentForPackage(packageName)?.component ?: return false
+        if (!runCommand("am", "start", "-n", component.flattenToString(), "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER")) {
+            return false
+        }
+        val deadline = SystemClock.uptimeMillis() + 2_000
+        do {
+            val tasks = runCatching { taskLocations() }.getOrNull() ?: return false
+            if (tasks.any { packageName in it.packages && it.displayId == Display.DEFAULT_DISPLAY }) return true
+            SystemClock.sleep(100)
+        } while (SystemClock.uptimeMillis() < deadline)
+        false
+    }
+
     private fun inject(event: InputEvent, displayId: Int): Boolean = runCatching {
         event.javaClass.getMethod("setDisplayId", Int::class.javaPrimitiveType).invoke(event, displayId)
         val manager = runCatching {
