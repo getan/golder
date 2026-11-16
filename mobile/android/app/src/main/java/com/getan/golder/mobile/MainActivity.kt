@@ -1899,6 +1899,20 @@ private fun SettingsScreen(
             Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
                 Text(if (androidUseEnabled) s.androidUseRepair else s.androidUseOpenSettings)
             }
+            if (stepOne) {
+                // Android refuses a deep link to one service's detail page
+                // (OPEN_ACCESSIBILITY_DETAILS_SETTINGS is a system permission), so
+                // say exactly where Golder sits in the list that does open.
+                Text(
+                    if (language == "zh") {
+                        "进去后在“已安装的服务 / 已下载的服务”里找 Golder，把开关打开。"
+                    } else {
+                        "In that list open “Installed services” and switch Golder on."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(s.androidUseStepBackground, style = MaterialTheme.typography.titleSmall)
             Text(
                 s.androidUseAdvanced,
