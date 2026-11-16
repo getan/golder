@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/getan/golder/internal/agentcore"
 )
 
 func TestToolSendsObserveToUnixSocket(t *testing.T) {
@@ -115,5 +118,83 @@ func TestToolStatusRoundTrip(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("unexpected error result: %+v", result.Content)
+	}
+}
+
+func TestToolPhase2ActionsRequireOptIn(t *testing.T) {
+	tool := NewTool("/nonexistent")
+	result, err := tool.Execute(context.Background(), "background-off", json.RawMessage(`{"action":"background_status"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected phase 2 action to be rejected without opt-in")
+	}
+}
+
+func TestToolPhase2SchemaIncludesSessionActions(t *testing.T) {
+	tool := NewToolWithPhase2("/nonexistent", true)
+	schema := string(tool.Schema())
+	for _, action := range []string{
+		"background_status", "background_start", "background_stop",
+		"background_open_app", "background_tap", "background_release",
+	} {
+		if !strings.Contains(schema, `"`+action+`"`) {
+			t.Fatalf("schema is missing %s", action)
+		}
+	}
+	if strings.Contains(schema, "phase2_") || strings.Contains(tool.Description(), "Phase 2") {
+		t.Fatal("development phase names must not be exposed to the model")
+	}
+}
+
+func TestToolPhase2TapValidatesCoordinates(t *testing.T) {
+	tool := NewToolWithPhase2("/nonexistent", true)
+	result, err := tool.Execute(context.Background(), "background-tap", json.RawMessage(`{"action":"background_tap"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatal("expected phase 2 tap without coordinates to fail")
+	}
+}
+
+func TestBackgroundStatusUsesInternalProtocolAndReturnsPublicName(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	endpointPath := filepath.Join(t.TempDir(), "android.json")
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := os.WriteFile(endpointPath, []byte(`{"port":`+strconv.Itoa(port)+`,"token":"test-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests := make(chan map[string]any, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var request map[string]any
+		if json.NewDecoder(conn).Decode(&request) != nil {
+			return
+		}
+		requests <- request
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"ok": true, "action": "phase2_status", "advanced": true, "paired": true,
+		})
+	}()
+	result, err := NewToolWithPhase2(endpointPath, true).Execute(context.Background(), "status", json.RawMessage(`{"action":"background_status"}`), nil)
+	if err != nil || result.IsError {
+		t.Fatalf("background status failed: result=%+v err=%v", result, err)
+	}
+	if request := <-requests; request["action"] != "phase2_status" {
+		t.Fatalf("internal request = %+v", request)
+	}
+	text := agentcore.ContentToText(result.Content)
+	if !strings.Contains(text, `"action":"background_status"`) || strings.Contains(text, "phase2_") {
+		t.Fatalf("public result = %s", text)
 	}
 }

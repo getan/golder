@@ -3,7 +3,7 @@ package com.getan.golder.mobile.androiduse
 import android.app.Activity
 import android.os.Bundle
 
-/** Invisible one-shot handoff target for the shell-UID helper. */
+/** Invisible activity handoff target for the shell-UID background helper. */
 class Phase2HandoffActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

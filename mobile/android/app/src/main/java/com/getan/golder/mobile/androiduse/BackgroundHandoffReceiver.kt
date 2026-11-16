@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 
-/** Invisible one-shot handoff target for the shell-UID helper. */
+/** Broadcast handoff target for the shell-UID background helper. */
 class Phase2HandoffReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val extras = intent.extras

@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -81,12 +82,15 @@ func TestDialSTLS(t *testing.T) {
 			serverErr <- err
 			return
 		}
-		_, err = secured.Write((Message{
+		packet := (Message{
 			Command: CommandCNXN,
 			Arg0:    Version,
 			Arg1:    8192,
 			Data:    []byte("tls-device::\x00"),
-		}).Encode())
+		}).Encode()
+		// adbd uses the skip-checksum convention after STLS.
+		binary.LittleEndian.PutUint32(packet[16:20], 0)
+		_, err = secured.Write(packet)
 		serverErr <- err
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -102,6 +106,30 @@ func TestDialSTLS(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConnReadSkipsChecksumForModernVersion(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	go func() {
+		packet := (Message{
+			Command: CommandCNXN,
+			Arg0:    VersionSkipSum,
+			Arg1:    4096,
+			Data:    []byte("device::\x00"),
+		}).Encode()
+		binary.LittleEndian.PutUint32(packet[16:20], 0)
+		_, _ = server.Write(packet)
+	}()
+	conn := finishConn(client, Message{Arg0: VersionSkipSum, Arg1: 4096})
+	msg, err := conn.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(msg.Data) != "device::\x00" {
+		t.Fatalf("payload = %q", msg.Data)
 	}
 }
 

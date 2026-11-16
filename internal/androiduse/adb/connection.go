@@ -11,12 +11,13 @@ import (
 )
 
 type Conn struct {
-	conn     net.Conn
-	Banner   string
-	Version  uint32
-	MaxData  uint32
-	streamMu sync.Mutex
-	nextID   uint32
+	conn           net.Conn
+	Banner         string
+	Version        uint32
+	MaxData        uint32
+	verifyChecksum bool
+	streamMu       sync.Mutex
+	nextID         uint32
 }
 
 // Dial performs the ADB CNXN/STLS handshake. tlsConfig is only used when the
@@ -65,7 +66,9 @@ func Dial(ctx context.Context, address string, tlsConfig *tls.Config) (*Conn, er
 		if err := secured.HandshakeContext(ctx); err != nil {
 			return nil, fmt.Errorf("adb TLS handshake: %w", err)
 		}
-		cnxn, err := ReadMessage(secured, MaxPayload, true)
+		// The device's post-STLS CNXN uses the skip-checksum
+		// convention; TLS already provides transport integrity.
+		cnxn, err := ReadMessage(secured, MaxPayload, false)
 		if err != nil {
 			if err == io.EOF {
 				return nil, fmt.Errorf("adb closed after TLS (client certificate not paired?)")
@@ -91,11 +94,12 @@ func finishConn(conn net.Conn, cnxn Message) *Conn {
 		maxData = DefaultMaxPayload
 	}
 	return &Conn{
-		conn:    conn,
-		Banner:  trimNUL(cnxn.Data),
-		Version: cnxn.Arg0,
-		MaxData: maxData,
-		nextID:  1,
+		conn:           conn,
+		Banner:         trimNUL(cnxn.Data),
+		Version:        cnxn.Arg0,
+		MaxData:        maxData,
+		verifyChecksum: cnxn.Arg0 < VersionSkipSum,
+		nextID:         1,
 	}
 }
 
@@ -123,7 +127,7 @@ func (c *Conn) Read() (Message, error) {
 	if c == nil || c.conn == nil {
 		return Message{}, fmt.Errorf("adb connection is closed")
 	}
-	return ReadMessage(c.conn, MaxPayload, true)
+	return ReadMessage(c.conn, MaxPayload, c.verifyChecksum)
 }
 
 func (c *Conn) Close() error {

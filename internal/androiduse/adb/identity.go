@@ -88,8 +88,8 @@ func (i *Identity) ADBPublicKey() string {
 }
 
 // EncodeRSAPublicKey implements adb's packed RSAPublicKey:
-// uint32 len, uint32 n0inv, modulus[256], rr[256], uint32 exponent.
-// The modulus and rr are big-endian; n0inv and exponent are little-endian.
+// uint32 word count (64), uint32 n0inv, modulus[256], rr[256], uint32 exponent.
+// All integer fields, including the modulus and rr arrays, are little-endian.
 func EncodeRSAPublicKey(pub *rsa.PublicKey) []byte {
 	const size = 524
 	out := make([]byte, size)
@@ -97,17 +97,26 @@ func EncodeRSAPublicKey(pub *rsa.PublicKey) []byte {
 	if n.BitLen() > 2048 {
 		panic("ADB RSA key must be at most 2048 bits")
 	}
-	binary.LittleEndian.PutUint32(out[0:4], 256)
+	binary.LittleEndian.PutUint32(out[0:4], 64)
 	n0inv := rsaN0Inv(n)
 	binary.LittleEndian.PutUint32(out[4:8], n0inv)
-	n.FillBytes(out[8:264])
+	putLittleEndian(out[8:264], n)
 
 	// rr = (2^2048)^2 mod n, used by adbd's Montgomery multiplication.
 	r := new(big.Int).Lsh(big.NewInt(1), 2048)
 	rr := new(big.Int).Exp(r, big.NewInt(2), n)
-	rr.FillBytes(out[264:520])
+	putLittleEndian(out[264:520], rr)
 	binary.LittleEndian.PutUint32(out[520:524], uint32(pub.E))
 	return out
+}
+
+// putLittleEndian writes n as a fixed-width little-endian integer.
+func putLittleEndian(dst []byte, n *big.Int) {
+	be := make([]byte, len(dst))
+	n.FillBytes(be)
+	for i := range be {
+		dst[i] = be[len(be)-1-i]
+	}
 }
 
 func rsaN0Inv(n *big.Int) uint32 {
@@ -122,12 +131,11 @@ func rsaN0Inv(n *big.Int) uint32 {
 }
 
 func (i *Identity) Certificate() ([]byte, error) {
-	now := time.Now()
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
+		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: i.Name},
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.AddDate(10, 0, 0),
+		NotBefore:    time.Unix(0, 0),
+		NotAfter:     time.Date(2099, 12, 31, 23, 59, 59, 0, time.UTC),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}

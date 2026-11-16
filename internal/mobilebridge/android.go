@@ -56,7 +56,9 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 			}
 			_ = json.Unmarshal(call.Arguments, &args)
 			switch args.Action {
-			case "tap", "type", "swipe", "open_app", "back", "home":
+			case "tap", "type", "swipe", "open_app", "back", "home",
+				"background_start", "background_open_app", "background_tap",
+				"phase2_start", "phase2_open_app", "phase2_tap":
 				if permissionMode == permissions.ReadOnly {
 					content := agentcore.ContentList{agentcore.NewTextContent("AndroidUse control actions are disabled in read-only mode")}
 					return &agentcore.BeforeToolCallDecision{Block: true, Content: &content}
@@ -84,6 +86,7 @@ func NewAndroidSession(cfg Config) (Backend, error) {
 		GitAuthorEmail:     cfg.GitAuthorEmail,
 		GitToken:           cfg.GitToken,
 		AndroidUseEndpoint: cfg.AndroidUseEndpoint,
+		AndroidUsePhase2:   cfg.AndroidUsePhase2,
 	})
 	if err != nil {
 		return nil, err

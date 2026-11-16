@@ -72,7 +72,12 @@ func Java_com_getan_golder_mobile_GolderNative_phase2Start(env *C.JNIEnv, clazz 
 		return javaString(env, phase2JSON("", err))
 	}
 	conn, err := adb.Dial(ctx, goString(env, address), &tls.Config{
-		Certificates:       []tls.Certificate{cert},
+		Certificates: []tls.Certificate{cert},
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			// adbd may send a CA list that does not match our self-signed
+			// certificate. Always present the paired identity explicitly.
+			return &cert, nil
+		},
 		InsecureSkipVerify: true,
 		MinVersion:         tls.VersionTLS13,
 	})

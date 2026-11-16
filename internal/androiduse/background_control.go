@@ -2,8 +2,8 @@ package androiduse
 
 import "fmt"
 
-// Phase2State is deliberately separate from Phase 1. Enabling the advanced
-// preference must never make Phase 1 tools look like they have shell access.
+// Phase2State is deliberately separate from visible-screen control. Enabling
+// background control must not grant shell access to visible-screen tools.
 type Phase2State string
 
 const (

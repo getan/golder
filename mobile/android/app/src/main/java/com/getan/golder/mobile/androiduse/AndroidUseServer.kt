@@ -65,7 +65,10 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         val path = AndroidUseBridge.endpointPath(service)
         val auth = UUID.randomUUID().toString()
         try {
-            val local = ServerSocket(0, 20, InetAddress.getLoopbackAddress())
+            // Both the Go client and the health probe connect to IPv4 loopback.
+            // getLoopbackAddress() can select ::1 on Android, making an otherwise
+            // healthy service unreachable at 127.0.0.1.
+            val local = ServerSocket(0, 20, InetAddress.getByName("127.0.0.1"))
             local.soTimeout = 1000
             socket = local
             val endpoint = File("$path.tmp")
@@ -157,6 +160,16 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
             "back" -> globalAction(AccessibilityService.GLOBAL_ACTION_BACK, "back")
             "home" -> globalAction(AccessibilityService.GLOBAL_ACTION_HOME, "home")
             "wait" -> waitFor(request)
+            "phase2_status" -> Phase2Session.status(service)
+            "phase2_start" -> Phase2Session.start(service)
+            "phase2_stop" -> Phase2Session.stop(service)
+            "phase2_open_app" -> Phase2Session.openApp(service, request.optString("packageName"))
+            "phase2_tap" -> Phase2Session.tap(
+                service,
+                request.optInt("x", -1),
+                request.optInt("y", -1),
+            )
+            "phase2_release" -> Phase2Session.release(service)
             else -> error("unsupported action")
         }
         return recorded(action, response)

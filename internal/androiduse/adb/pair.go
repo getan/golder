@@ -45,7 +45,12 @@ func Pair(ctx context.Context, address string, identity *Identity, code string) 
 	}
 	defer raw.Close()
 	cfg := &tls.Config{
-		Certificates:           []tls.Certificate{cert},
+		Certificates: []tls.Certificate{cert},
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			// Pairing uses a self-signed client identity. A server-supplied
+			// CA list must not cause Go to select no certificate.
+			return &cert, nil
+		},
 		InsecureSkipVerify:     true, // pairing uses TOFU; the code authenticates the exchange
 		MinVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: true,

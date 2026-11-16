@@ -41,6 +41,9 @@ type Config struct {
 	// AndroidUseEndpoint is the app-private endpoint file exposed by the
 	// Kotlin AccessibilityService host. Empty means AndroidUse is not authorized.
 	AndroidUseEndpoint string
+	// AndroidUsePhase2 enables the separate high-privilege background-display
+	// surface. It must be explicitly consented to by the user.
+	AndroidUsePhase2 bool
 }
 
 // Capabilities describe executable paths found at construction, not a promise
@@ -55,13 +58,14 @@ type Capabilities struct {
 // Toolset carries one matched catalog, prompt and execution gate. A caller must
 // pass Batch to the agent loop and Tools to the model context together.
 type Toolset struct {
-	Tools        []agentcore.AgentTool
-	Batch        agenttool.BatchConfig
-	Permissions  *permissions.State
-	Capabilities Capabilities
-	Root         string
-	shell        *agenttool.BashTool
-	androidUse   bool
+	Tools            []agentcore.AgentTool
+	Batch            agenttool.BatchConfig
+	Permissions      *permissions.State
+	Capabilities     Capabilities
+	Root             string
+	shell            *agenttool.BashTool
+	androidUse       bool
+	androidUsePhase2 bool
 }
 
 // New builds the Android catalog using the current app process's executable
@@ -164,9 +168,10 @@ func newToolset(cfg Config, lookPath func(string) (string, error)) (*Toolset, er
 	}
 	s.Tools = append(s.Tools, buildTool, downloadTool, installTool)
 	if strings.TrimSpace(cfg.AndroidUseEndpoint) != "" {
-		s.Tools = append(s.Tools, androiduse.NewTool(cfg.AndroidUseEndpoint))
+		s.Tools = append(s.Tools, androiduse.NewToolWithPhase2(cfg.AndroidUseEndpoint, cfg.AndroidUsePhase2))
 	}
 	s.androidUse = strings.TrimSpace(cfg.AndroidUseEndpoint) != ""
+	s.androidUsePhase2 = s.androidUse && cfg.AndroidUsePhase2
 	registry := agenttool.NewToolRegistry()
 	for _, tool := range s.Tools {
 		if err := registry.Register(tool); err != nil {
@@ -194,6 +199,9 @@ func (s *Toolset) Prompt() string {
 	b.WriteString("Use android_download to fetch the latest successful artifact without rebuilding. Use android_build only when code changed or no APK exists; it reuses a successful run for the current commit unless force=true. ")
 	if s.androidUse {
 		b.WriteString("AndroidUse is available through android_use: call observe first, use node refs with the current snapshotId, and prefer semantic refs over coordinates. It operates the visible phone screen; never change Golder's own permissions or settings. ")
+	}
+	if s.androidUsePhase2 {
+		b.WriteString("Background-display control is separately enabled: use background_status, background_start, background_open_app and background_tap, then background_release and background_stop when finished. It runs through the user-consented shell helper and must not be treated as ordinary app permission. ")
 	}
 	switch {
 	case s.Capabilities.Ripgrep != "":

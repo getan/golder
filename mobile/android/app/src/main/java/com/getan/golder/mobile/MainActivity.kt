@@ -359,8 +359,11 @@ private fun GolderApp(initialTask: String = "") {
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                 .put("allowNetworkGit", true)
                 .put("gitToken", workspaceToken)
-            if (AndroidUseBridge.isEnabled(context) && AndroidUseBridge.controlAllowed(context)) {
+            if (AndroidUseBridge.isEnabled(context) &&
+                (AndroidUseBridge.controlAllowed(context) || AndroidUseBridge.advancedEnabled(context))
+            ) {
                 config.put("androidUseEndpoint", AndroidUseBridge.endpointPath(context))
+                config.put("androidUsePhase2", AndroidUseBridge.advancedEnabled(context))
             }
             if (baseUrl.isNotBlank()) config.put("baseUrl", baseUrl.trim())
 
@@ -1578,6 +1581,7 @@ private fun SettingsScreen(
     val settingsContext = LocalContext.current
     var healthRefresh by remember { mutableIntStateOf(0) }
     var auditExpanded by remember { mutableStateOf(false) }
+    var androidUseDetailsExpanded by remember { mutableStateOf(false) }
     var showAdvancedRisk by remember { mutableStateOf(false) }
     val androidUseLive by produceState<Boolean?>(
         initialValue = null,
@@ -1652,6 +1656,14 @@ private fun SettingsScreen(
                     onCheckedChange = onAndroidUseControl,
                 )
             }
+            TextButton(onClick = { androidUseDetailsExpanded = !androidUseDetailsExpanded }) {
+                Text(if (language == "zh") {
+                    if (androidUseDetailsExpanded) "收起更多选项" else "更多选项"
+                } else {
+                    if (androidUseDetailsExpanded) "Hide additional options" else "Additional options"
+                })
+            }
+            if (androidUseDetailsExpanded) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1672,6 +1684,7 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            }
             val live = androidUseLive
             val needRepair = androidUseEnabled && live == false
             Text(
@@ -1689,13 +1702,15 @@ private fun SettingsScreen(
                     else -> MaterialTheme.colorScheme.onSurfaceVariant
                 },
             )
-            TextButton(
-                onClick = {
-                    onAndroidUseRefresh()
-                    healthRefresh++
-                },
-            ) {
-                Text(s.androidUseRefresh)
+            if (androidUseDetailsExpanded || needRepair) {
+                TextButton(
+                    onClick = {
+                        onAndroidUseRefresh()
+                        healthRefresh++
+                    },
+                ) {
+                    Text(s.androidUseRefresh)
+                }
             }
             if (needRepair) {
                 Text(
@@ -1704,9 +1719,12 @@ private fun SettingsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
-                Text(if (needRepair) s.androidUseRepair else s.androidUseOpenSettings)
+            if (!androidUseEnabled || needRepair || androidUseDetailsExpanded) {
+                Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (needRepair) s.androidUseRepair else s.androidUseOpenSettings)
+                }
             }
+            if (androidUseDetailsExpanded) {
             OutlinedTextField(
                 value = androidUseAllowedPackages,
                 onValueChange = onAndroidUseAllowedPackages,
@@ -1719,6 +1737,7 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            }
             Button(onClick = onAndroidUsePauseToggle) {
                 Text(if (androidUsePaused) s.androidUseResume else s.androidUsePause)
             }
@@ -1734,7 +1753,7 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (androidUseAudit.isNotBlank()) {
+            if (androidUseDetailsExpanded && androidUseAudit.isNotBlank()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1795,10 +1814,7 @@ private fun SettingsScreen(
                     onClick = onAndroidUsePhase2Setup,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Text("Phase 2 setup / helper")
-                }
-                Button(onClick = { onAndroidUseAdvanced(false) }) {
-                    Text(s.androidUseAdvancedDisable)
+                    Text(if (language == "zh") "设置后台控制" else "Set up background control")
                 }
             }
             if (showAdvancedRisk) {

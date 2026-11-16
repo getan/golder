@@ -7,6 +7,7 @@ import java.security.MessageDigest
 import java.io.File
 import java.util.UUID
 
+/** Lifecycle and pairing state for background phone control. */
 object Phase2Controller {
     private const val NONCE_KEY = "phase2-helper-nonce"
     private const val PAIRED_KEY = "phase2-paired"
@@ -56,6 +57,22 @@ object Phase2Controller {
         return parsed
     }
 
+    /** Discover the current local port on a worker thread; never use a remote host. */
+    fun startAutomatically(context: Context): Result<Unit> {
+        if (!AndroidUseBridge.advancedEnabled(context)) {
+            return Result.failure(IllegalStateException("Enable background control first"))
+        }
+        if (!isPaired(context)) {
+            return Result.failure(IllegalStateException("Pair wireless debugging first"))
+        }
+        if (shell()?.asBinder()?.isBinderAlive == true) return Result.success(Unit)
+        val address = LocalAdbDiscovery.findConnectAddress(context)
+            ?: return Result.failure(IllegalStateException("Could not discover this phone's wireless debugging port; check that wireless debugging is enabled"))
+        val result = start(context, address)
+        if (result.isSuccess) rememberAddresses(context, pairAddress(context), address)
+        return result
+    }
+
     fun start(context: Context, address: String): Result<Unit> {
         if (!AndroidUseBridge.advancedEnabled(context)) {
             return Result.failure(IllegalStateException("Enable advanced control first"))
@@ -99,12 +116,12 @@ object Phase2Controller {
         context.getSharedPreferences(AndroidUseBridge.PREFS_NAME, Context.MODE_PRIVATE)
 
     private fun parse(raw: String?): Result<Unit> {
-        if (raw == null) return Result.failure(IllegalStateException("native Phase 2 bridge unavailable"))
+        if (raw == null) return Result.failure(IllegalStateException("native background control bridge unavailable"))
         val obj = runCatching { JSONObject(raw) }.getOrElse {
-            return Result.failure(IllegalStateException("invalid Phase 2 bridge response"))
+            return Result.failure(IllegalStateException("invalid background control bridge response"))
         }
         if (!obj.optBoolean("ok", false)) {
-            return Result.failure(IllegalStateException(obj.optString("error", "Phase 2 failed")))
+            return Result.failure(IllegalStateException(obj.optString("error", "background control failed")))
         }
         return Result.success(Unit)
     }

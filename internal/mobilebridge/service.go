@@ -52,6 +52,9 @@ type Config struct {
 	// AndroidUseEndpoint is the app-private loopback endpoint for the Phase 1
 	// AccessibilityService. Empty leaves android_use out of the catalog.
 	AndroidUseEndpoint string `json:"androidUseEndpoint,omitempty"`
+	// AndroidUsePhase2 enables the separately consented background-display
+	// surface. It is ignored unless AndroidUseEndpoint is also present.
+	AndroidUsePhase2 bool `json:"androidUsePhase2,omitempty"`
 	// DebugLog is an optional host-only diagnostic path. The Android backend
 	// appends loop event types and terminal errors (never prompts or secrets)
 	// to it. Empty disables the log.

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Golder</string>
-    <string name="accessibility_service_description">Golder AndroidUse reads the visible screen and performs taps, text input and scrolling when you ask the agent to operate another app. It does not run in the background in Phase 1.</string>
+    <string name="accessibility_service_description">Golder reads the visible screen and performs taps, text input and scrolling when you ask the agent to operate another app. Background control requires separate setup and consent.</string>
 </resources>

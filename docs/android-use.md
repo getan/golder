@@ -6,6 +6,8 @@
 >
 > 参考：Mika 的公开设计（AccessibilityService、后台虚拟屏、无线调试 helper）。本文只借鉴架构，不复制其代码。
 
+> 用户和模型接口使用“前台／后台控制”语义：现有 `observe`、`tap` 等动作操作可见屏幕，`background_*` 动作操作经用户单独授权的后台虚拟屏。下文的 Phase 1 / Phase 2 仅为历史设计阶段名称，不是用户操作名称；后台控制仍需显式授权和无线调试配对。
+
 ## 1. 结论
 
 AndroidUse 采用 **Go 核心 + Kotlin 平台适配层**：

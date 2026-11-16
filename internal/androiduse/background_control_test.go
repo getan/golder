@@ -2,6 +2,7 @@ package androiduse
 
 import "testing"
 
+// Verify background control retains its independent consent gate.
 func TestPhase2RequiresExplicitConsent(t *testing.T) {
 	gate := NewPhase2Gate()
 	if err := gate.Enable(false); err == nil {

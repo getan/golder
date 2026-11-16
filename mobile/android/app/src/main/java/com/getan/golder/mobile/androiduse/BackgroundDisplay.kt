@@ -5,8 +5,7 @@ import android.media.ImageReader
 import android.os.SystemClock
 
 /**
- * Narrow Kotlin-side display adapter. The real helper will provide
- * IGolderShell; until then this class is deliberately not started by the UI.
+ * Kotlin-side virtual display adapter backed by the restricted shell helper.
  */
 class Phase2Display(
     private val shell: IGolderShell,
