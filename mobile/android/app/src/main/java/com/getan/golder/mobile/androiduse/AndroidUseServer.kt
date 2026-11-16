@@ -397,8 +397,8 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (!request.optBoolean("foreground", false) && Phase2Session.backgroundAvailable(service)) {
             return error(
                 "background control is available and already consented: call background_open_app for $pkg now, " +
-                    "without asking the user again, so they keep their own screen. Use open_app with " +
-                    "foreground=true only when the user explicitly asks to watch or take part on their screen.",
+                    "without asking the user again, so they keep their own screen. There is no visible-screen launch; " +
+                    "if the background frame is unusable, ask the person to open the app themselves and then observe.",
             )
         }
         val pm = service.packageManager

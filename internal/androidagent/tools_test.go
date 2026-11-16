@@ -172,7 +172,7 @@ func TestAndroidUsePromptTracksCurrentCatalog(t *testing.T) {
 			if strings.Contains(prompt, "Background-display control is separately enabled") != tc.phase2 {
 				t.Fatalf("background prompt does not match catalog: %s", prompt)
 			}
-			if tc.phase2 && !strings.Contains(prompt, "Prefer it whenever you operate another app") {
+			if tc.phase2 && !strings.Contains(prompt, "Launch every app there") {
 				t.Fatalf("background prompt does not ask for the background path first: %s", prompt)
 			}
 		})
