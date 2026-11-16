@@ -312,7 +312,7 @@ private fun GolderApp(initialTask: String = "") {
                                         JSONObject(block.optString("arguments"))
                                     }.getOrNull()
                                 if (id.isNotBlank()) {
-                                    toolCalls[id] = name to toolCommand(name, args)
+                                    toolCalls[id] = name to toolCommand(name, args, language == "zh")
                                 }
                             }
                         }
@@ -673,7 +673,7 @@ private fun GolderApp(initialTask: String = "") {
                                 Entry(
                                     nextId++, "tool", "",
                                     toolName = name,
-                                    toolCommand = toolCommand(name, args),
+                                    toolCommand = toolCommand(name, args, language == "zh"),
                                 ),
                             )
                         }
@@ -1385,6 +1385,8 @@ private fun ChatBubble(text: String, user: Boolean, selectionEpoch: Int) {
 
 @Composable
 private fun ToolGroupCard(entries: List<Entry>, selectionEpoch: Int) {
+    val context = LocalContext.current
+    val chinese = remember(context) { SettingsStore.load(context).language == "zh" }
     var expanded by remember(entries.first().id, entries.last().id) {
         mutableStateOf(false)
     }
@@ -1414,12 +1416,16 @@ private fun ToolGroupCard(entries: List<Entry>, selectionEpoch: Int) {
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    "${entries.size} commands",
+                    if (chinese) "${entries.size} 条命令" else "${entries.size} commands",
                     style = MaterialTheme.typography.labelMedium,
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    if (expanded) "Hide" else "Show",
+                    if (chinese) {
+                        if (expanded) "收起" else "展开"
+                    } else {
+                        if (expanded) "Hide" else "Show"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1444,6 +1450,7 @@ private fun ToolGroupCard(entries: List<Entry>, selectionEpoch: Int) {
 @Composable
 private fun ToolCard(entry: Entry, selectionEpoch: Int) {
     val context = LocalContext.current
+    val chinese = remember { SettingsStore.load(context).language == "zh" }
     var expanded by remember(entry.id) { mutableStateOf(false) }
     val apkPath = if (entry.toolDone && !entry.toolError) apkPathFrom(entry.toolOutput) else null
     val mark = when {
@@ -1492,7 +1499,11 @@ private fun ToolCard(entry: Entry, selectionEpoch: Int) {
                     }
                 }
                 Text(
-                    if (expanded) "Hide" else "Show",
+                    if (chinese) {
+                        if (expanded) "收起" else "展开"
+                    } else {
+                        if (expanded) "Hide" else "Show"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1613,8 +1624,57 @@ private fun TodoCard(entry: Entry) {
 private fun isTodoTool(name: String): Boolean =
     name.equals("todo", ignoreCase = true) || name.equals("todowrite", ignoreCase = true)
 
-private fun toolCommand(name: String, args: JSONObject?): String {
+/**
+ * Renders a tool call for the transcript. The wire stays English; only the
+ * person-readable line is localized, the way Mika labels the same actions.
+ */
+private fun toolCommand(name: String, args: JSONObject?, chinese: Boolean = false): String {
     if (args == null) return name
+    if (chinese) {
+        when (name) {
+            "android_use" -> {
+                val action = args.optString("action")
+                val label = when (action) {
+                    "observe" -> "观察屏幕"
+                    "screenshot" -> "截图"
+                    "status" -> "状态"
+                    "tap" -> "点击"
+                    "type" -> "输入文字"
+                    "swipe" -> "滑动"
+                    "open_app" -> "打开应用"
+                    "back" -> "返回"
+                    "home" -> "回主屏"
+                    "wait" -> "等待"
+                    "take_over" -> "交给用户"
+                    "resume" -> "恢复控制"
+                    "background_status" -> "后台状态"
+                    "background_start" -> "启动后台控制"
+                    "background_stop" -> "停止后台控制"
+                    "background_open_app" -> "后台打开应用"
+                    "background_observe" -> "观察后台画面"
+                    "background_tap" -> "后台点击"
+                    "background_release" -> "释放后台画面"
+                    else -> action
+                }
+                val target = args.optString("packageName").ifBlank {
+                    args.optString("text").ifBlank { args.optString("ref") }
+                }.trim()
+                return listOf("android_use", label, target).filter { it.isNotBlank() }.joinToString(" · ")
+            }
+            "read" -> return "读取 " + args.optString("path")
+            "ls" -> return "列出 " + args.optString("path").ifBlank { "." }
+            "grep" -> return "搜索 " + args.optString("pattern")
+            "find" -> return "查找 " + args.optString("pattern")
+            "apply_patch" -> return "修改文件"
+            "todo" -> {
+                val count = args.optJSONArray("todos")?.length() ?: 0
+                return if (count > 0) "任务清单（$count 项）" else "任务清单"
+            }
+            "android_build" -> return "构建 APK"
+            "android_download" -> return "下载 APK"
+            "android_install" -> return "安装 APK"
+        }
+    }
     return when (name) {
         "git" -> {
             val action = args.optString("action").trim()
