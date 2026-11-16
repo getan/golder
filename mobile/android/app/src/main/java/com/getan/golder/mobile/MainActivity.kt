@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -157,10 +158,15 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
     var androidUseMaster by remember { mutableStateOf(false) }
+    // Whether the open session's catalog actually contains android_use.
+    var androidUseAttached by remember { mutableStateOf(false) }
     var androidUsePaired by remember { mutableStateOf(false) }
     var androidUseConnected by remember { mutableStateOf(false) }
     var androidUseWifiAdb by remember { mutableStateOf(false) }
     var androidUseBackgroundStatus by remember { mutableStateOf("") }
+    // Assigned once openWorkspace exists below; effects and loops call this so
+    // the ordering of local declarations does not matter.
+    var reattachAndroidUse: () -> Unit = {}
     val backgroundPreview by BackgroundPreview.state.collectAsState()
     val takeover by ManualTakeover.state.collectAsState()
     var backgroundPreviewExpanded by remember { mutableStateOf(false) }
@@ -256,7 +262,10 @@ private fun GolderApp(initialTask: String = "") {
     DisposableEffect(activity) {
         val observer = object : LifecycleEventObserver {
             override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
-                if (event == Lifecycle.Event.ON_RESUME) refreshAndroidUseState()
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    refreshAndroidUseState()
+                    reattachAndroidUse()
+                }
             }
         }
         activity?.lifecycle?.addObserver(observer)
@@ -424,9 +433,11 @@ private fun GolderApp(initialTask: String = "") {
                 .put("sessionId", "mobile-" + Integer.toHexString(dir.absolutePath.hashCode()))
                 .put("allowNetworkGit", true)
                 .put("gitToken", workspaceToken)
-            if (AndroidUseBridge.isEnabled(context) &&
+            // The catalog is fixed when the session opens, so remember what this
+            // session actually got; a later change triggers a rebuild.
+            val attachAndroidUse = AndroidUseBridge.isEnabled(context) &&
                 (AndroidUseBridge.controlAllowed(context) || AndroidUseBridge.advancedEnabled(context))
-            ) {
+            if (attachAndroidUse) {
                 config.put("androidUseEndpoint", AndroidUseBridge.endpointPath(context))
                 config.put("androidUsePhase2", AndroidUseBridge.advancedEnabled(context))
             }
@@ -452,6 +463,7 @@ private fun GolderApp(initialTask: String = "") {
             }
             entries.clear()
             handle = opened
+            androidUseAttached = attachAndroidUse
             loadHistory(snapshot)
             val toolCount = runCatching { JSONObject(snapshot).optInt("tools") }.getOrDefault(0)
             Log.i("GolderJNI", "session tools=$toolCount project=${project.id}")
@@ -494,6 +506,21 @@ private fun GolderApp(initialTask: String = "") {
             ProjectStore.save(context, projects, project.id)
         }
     }
+
+    /**
+     * The tool catalog is frozen when a session opens. Accessibility can bind
+     * after that (or the switch can be flipped elsewhere), so rebuild an idle
+     * session when what AndroidUse can offer no longer matches what it has.
+     */
+    fun maybeReattachAndroidUse() {
+        if (handle == 0 || running) return
+        val desired = AndroidUseBridge.isEnabled(context) &&
+            (AndroidUseBridge.controlAllowed(context) || AndroidUseBridge.advancedEnabled(context))
+        if (desired == androidUseAttached) return
+        androidUseAttached = desired
+        scope.launch { activeProject?.let { openWorkspace(it) } }
+    }
+    reattachAndroidUse = { maybeReattachAndroidUse() }
 
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -769,6 +796,7 @@ private fun GolderApp(initialTask: String = "") {
                 delay(2000)
                 refreshAndroidUseState()
                 androidUseBackgroundStatus = backgroundStatusText()
+                reattachAndroidUse()
             }
         }
     }
@@ -1328,16 +1356,19 @@ private fun ChatBubble(text: String, user: Boolean) {
             },
             modifier = Modifier.widthIn(max = 320.dp),
         ) {
-            Text(
-                text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (user) {
-                    MaterialTheme.colorScheme.onPrimaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-            )
+            // Long-press selects, so replies can be copied like any other text.
+            SelectionContainer {
+                Text(
+                    text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (user) {
+                        MaterialTheme.colorScheme.onPrimaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                )
+            }
         }
     }
 }
@@ -1462,14 +1493,16 @@ private fun ToolCard(entry: Entry) {
                 }
             }
             if (expanded) {
-                Text(
-                    entry.toolOutput.ifBlank {
-                        if (entry.toolDone) "No output." else "Running…"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                SelectionContainer {
+                    Text(
+                        entry.toolOutput.ifBlank {
+                            if (entry.toolDone) "No output." else "Running…"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         }
     }
