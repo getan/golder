@@ -335,7 +335,7 @@ func TestSessionCancelEndsRun(t *testing.T) {
 	collectRun(t, session)
 }
 
-func TestSessionRejectsBusyAndEmptyRuns(t *testing.T) {
+func TestSessionQueuesBusyPromptAndRejectsEmptyRuns(t *testing.T) {
 	release := make(chan struct{})
 	stream := func(ctx context.Context, _ string, _ provider.LlmContext, _ provider.StreamConfig) (*provider.AssistantMessageEventStream, error) {
 		s := provider.NewAssistantMessageEventStream(0)
@@ -361,8 +361,9 @@ func TestSessionRejectsBusyAndEmptyRuns(t *testing.T) {
 	if err := session.Start("first"); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := session.Start("second"); err == nil || !strings.Contains(err.Error(), "already active") {
-		t.Fatalf("concurrent Start = %v, want busy error", err)
+	// A prompt sent while a run is active is queued as steering, not refused.
+	if err := session.Start("second"); err != nil {
+		t.Fatalf("concurrent Start = %v, want it queued", err)
 	}
 	close(release)
 	collectRun(t, session)

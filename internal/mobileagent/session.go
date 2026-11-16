@@ -27,7 +27,10 @@ const (
 	EventToolUpdate   = "tool_update"
 	EventToolEnd      = "tool_end"
 	EventContextUsage = "context_usage"
-	EventRunEnd       = "run_end"
+	// EventQueued says a prompt arrived while a run was active and will be
+	// delivered at the next turn boundary (TUI-style steering).
+	EventQueued = "queued"
+	EventRunEnd = "run_end"
 )
 
 // Event is one ordered notification. Seq is assigned by the session and
@@ -141,7 +144,14 @@ type Session struct {
 	nextRun  int
 	closed   bool
 	wg       sync.WaitGroup
+	// pending holds prompts typed while a run is active. The loop drains them as
+	// steering messages after a tool turn, or as follow-ups once it settles.
+	pending []string
 }
+
+// maxPendingPrompts bounds queued input so a runaway typist cannot grow the
+// session without limit.
+const maxPendingPrompts = 20
 
 // New validates cfg and builds a session. It does not open the network or run
 // the model.
@@ -209,7 +219,7 @@ func New(cfg Config) (*Session, error) {
 	copy(history, cfg.History)
 	published := make(agentcore.MessageList, len(history))
 	copy(published, history)
-	return &Session{
+	sess := &Session{
 		cfg:      runCfg,
 		ctx:      &agentcore.AgentContext{SystemPrompt: cfg.SystemPrompt, Messages: history, Tools: tools},
 		root:     root,
@@ -217,7 +227,14 @@ func New(cfg Config) (*Session, error) {
 		messages: published,
 		onRunEnd: cfg.OnRunEnd,
 		pause:    barrier,
-	}, nil
+	}
+	sess.cfg.GetSteeringMessages = func(context.Context) []agentcore.AgentMessage {
+		return sess.drainPending()
+	}
+	sess.cfg.GetFollowUpMessages = func(context.Context, *agentcore.AgentContext) []agentcore.AgentMessage {
+		return sess.drainPending()
+	}
+	return sess, nil
 }
 
 func cleanWorkspace(path string) (string, error) {
@@ -263,7 +280,8 @@ func (s *Session) TakeoverReady() bool {
 func (s *Session) ResumeAfterTakeover() { s.pause.resume() }
 
 // Start begins one run. It returns immediately; the result arrives as events.
-// An empty prompt, a closed session, or a run already in flight is an error.
+// A prompt that arrives while a run is active is queued and delivered at the
+// next turn boundary, the same way the TUI steers a running turn.
 func (s *Session) Start(prompt string) error {
 	if strings.TrimSpace(prompt) == "" {
 		return errors.New("mobileagent: prompt is empty")
@@ -274,8 +292,15 @@ func (s *Session) Start(prompt string) error {
 		return errors.New("mobileagent: session is closed")
 	}
 	if s.running {
+		if len(s.pending) >= maxPendingPrompts {
+			s.mu.Unlock()
+			return fmt.Errorf("mobileagent: %d messages are already queued", maxPendingPrompts)
+		}
+		queued := strings.TrimSpace(prompt)
+		s.pending = append(s.pending, queued)
+		s.appendLocked(Event{RunID: s.runID, Type: EventQueued, Text: queued})
 		s.mu.Unlock()
-		return errors.New("mobileagent: a run is already active")
+		return nil
 	}
 	if paused, _ := s.pause.status(); paused {
 		s.mu.Unlock()
@@ -298,6 +323,27 @@ func (s *Session) Start(prompt string) error {
 	s.wg.Add(1)
 	go s.run(ctx, runID)
 	return nil
+}
+
+// drainPending hands the loop every queued prompt at once. Message values are
+// immutable, so appending the published copy under the lock is safe.
+func (s *Session) drainPending() []agentcore.AgentMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return nil
+	}
+	msgs := make([]agentcore.AgentMessage, 0, len(s.pending))
+	for _, text := range s.pending {
+		msg := agentcore.UserMessage{
+			RoleField: agentcore.RoleUser,
+			Content:   agentcore.ContentList{agentcore.NewTextContent(text)},
+		}
+		msgs = append(msgs, msg)
+		s.messages = append(cloneMessages(s.messages), msg)
+	}
+	s.pending = nil
+	return msgs
 }
 
 func (s *Session) run(ctx context.Context, runID string) {

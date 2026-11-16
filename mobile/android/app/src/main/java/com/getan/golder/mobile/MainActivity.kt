@@ -709,6 +709,9 @@ private fun GolderApp(initialTask: String = "") {
                                 }
                             }
                         }
+                        "queued" -> {
+                            status = if (language == "zh") "已插话，等当前步骤结束后生效。" else "Steering queued; it applies after the current step."
+                        }
                         "run_end" -> {
                             running = false
                             stopAgentService(context)
@@ -974,12 +977,27 @@ private fun GolderApp(initialTask: String = "") {
             bottomBar = {
                 Composer(
                     prompt = prompt,
-                    enabled = handle != 0 && !running && takeover.stage == ManualTakeover.Stage.IDLE && prompt.isNotBlank(),
+                    enabled = handle != 0 && takeover.stage == ManualTakeover.Stage.IDLE,
                     running = running,
                     onPrompt = { prompt = it },
                     onStop = {
                         if (handle != 0) GolderNative.cancel(handle)
                         stopAgentService(context)
+                    },
+                    onQueue = {
+                        val text = prompt.trim()
+                        if (text.isNotBlank() && handle != 0) {
+                            prompt = ""
+                            scope.launch {
+                                add("user", text)
+                                val code = withContext(Dispatchers.IO) { GolderNative.start(handle, text) }
+                                status = if (code == 0) {
+                                    if (language == "zh") "已插话，下一轮生效。" else "Queued for the next turn."
+                                } else {
+                                    withContext(Dispatchers.IO) { GolderNative.lastError() }
+                                }
+                            }
+                        }
                     },
                     onSend = {
                         val text = prompt.trim()
@@ -1666,6 +1684,7 @@ private fun Composer(
     running: Boolean,
     onPrompt: (String) -> Unit,
     onSend: () -> Unit,
+    onQueue: () -> Unit,
     onStop: () -> Unit,
 ) {
     val s = LocalStrings.current
@@ -1683,20 +1702,29 @@ private fun Composer(
                 label = { Text(s.task) },
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
-                enabled = !running,
+                // Keep the field usable during a run: the reply is queued as
+                // steering, the way the TUI accepts a mid-turn message.
             )
             Spacer(Modifier.width(8.dp))
             // One button, two jobs, like ChatGPT mobile: send while idle, stop
             // while the agent is working, in the same place every time.
             if (running) {
-                Button(
-                    onClick = onStop,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                    ),
-                ) { Text(s.stop) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (prompt.isNotBlank()) {
+                        OutlinedButton(enabled = enabled, onClick = onQueue) {
+                            Text(s.steer)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Button(
+                        onClick = onStop,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        ),
+                    ) { Text(s.stop) }
+                }
             } else {
-                Button(enabled = enabled, onClick = onSend) { Text(s.send) }
+                Button(enabled = enabled && prompt.isNotBlank(), onClick = onSend) { Text(s.send) }
             }
         }
     }
