@@ -960,14 +960,9 @@ private fun GolderApp(initialTask: String = "") {
                         model = model,
                         thinking = thinking,
                         connected = handle != 0,
-                        running = running,
                         onMenu = { scope.launch { drawerState.open() } },
                         onSettings = { settingsOpen = true },
                         onOpen = { scope.launch { activeProject?.let { openWorkspace(it) } } },
-                        onStop = {
-                            if (handle != 0) GolderNative.cancel(handle)
-                            stopAgentService(context)
-                        },
                     )
                     StatusStrip(
                         mode = permissionMode,
@@ -982,6 +977,10 @@ private fun GolderApp(initialTask: String = "") {
                     enabled = handle != 0 && !running && takeover.stage == ManualTakeover.Stage.IDLE && prompt.isNotBlank(),
                     running = running,
                     onPrompt = { prompt = it },
+                    onStop = {
+                        if (handle != 0) GolderNative.cancel(handle)
+                        stopAgentService(context)
+                    },
                     onSend = {
                         val text = prompt.trim()
                         if (text.isNotBlank() && handle != 0 && !running && ManualTakeover.state.value.stage == ManualTakeover.Stage.IDLE) {
@@ -1124,11 +1123,9 @@ private fun MainTopBar(
     model: String,
     thinking: String,
     connected: Boolean,
-    running: Boolean,
     onMenu: () -> Unit,
     onSettings: () -> Unit,
     onOpen: () -> Unit,
-    onStop: () -> Unit,
 ) {
     val s = LocalStrings.current
     TopAppBar(
@@ -1153,9 +1150,7 @@ private fun MainTopBar(
             }
         },
         actions = {
-            if (running) {
-                TextButton(onClick = onStop) { Text(s.stop) }
-            } else if (!connected) {
+            if (!connected) {
                 TextButton(onClick = onOpen) { Text(s.open) }
             }
             TextButton(onClick = onSettings) { Text("⚙", fontSize = 20.sp) }
@@ -1671,6 +1666,7 @@ private fun Composer(
     running: Boolean,
     onPrompt: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit,
 ) {
     val s = LocalStrings.current
     Surface(
@@ -1690,7 +1686,18 @@ private fun Composer(
                 enabled = !running,
             )
             Spacer(Modifier.width(8.dp))
-            Button(enabled = enabled, onClick = onSend) { Text(s.send) }
+            // One button, two jobs, like ChatGPT mobile: send while idle, stop
+            // while the agent is working, in the same place every time.
+            if (running) {
+                Button(
+                    onClick = onStop,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text(s.stop) }
+            } else {
+                Button(enabled = enabled, onClick = onSend) { Text(s.send) }
+            }
         }
     }
 }

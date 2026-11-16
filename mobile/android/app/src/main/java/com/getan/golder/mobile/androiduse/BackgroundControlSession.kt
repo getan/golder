@@ -149,7 +149,11 @@ internal object Phase2Session {
                 display = null
             }
             if (started == -2) {
-                return error("app already has a task on another display; background control will not move or close it")
+                return error(
+                    "$pkg already has a task on another display. Background control will not move or close an app the " +
+                        "user already has open. Ask the user to close it from recents, or offer to operate the visible " +
+                        "screen instead.",
+                )
             }
             return error("app launch on the virtual display failed")
         }
