@@ -103,7 +103,9 @@ internal object Phase2Session {
         val frame = preview?.takeIf { it.displayId == current.displayId }?.frame
             ?: return error("background frame is not available yet")
         val bytes = ByteArrayOutputStream()
-        if (!frame.compress(Bitmap.CompressFormat.PNG, 100, bytes)) return error("background frame encoding failed")
+        // 720px JPEG keeps the frame readable for control and small enough that a
+        // few observations cannot stall the model request.
+        if (!frame.compress(Bitmap.CompressFormat.JPEG, 80, bytes)) return error("background frame encoding failed")
         val image = bytes.toByteArray()
         if (image.isEmpty() || image.size > 1_200_000) return error("background frame is too large")
         handbackSnapshot = UUID.randomUUID().toString()
@@ -111,6 +113,7 @@ internal object Phase2Session {
             .put("width", current.width)
             .put("height", current.height)
             .put("snapshotId", handbackSnapshot)
+            .put("mime", "image/jpeg")
             .put("imageBase64", Base64.encodeToString(image, Base64.NO_WRAP))
     }
 

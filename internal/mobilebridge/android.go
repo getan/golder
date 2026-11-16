@@ -210,7 +210,7 @@ func (b *androidBackend) save(msgs agentcore.MessageList) {
 	b.persistMu.Lock()
 	defer b.persistMu.Unlock()
 	b.header.UpdatedAt = time.Now().UTC()
-	if err := b.store.Save(b.header, withoutBackgroundFrames(msgs)); err != nil && b.debug != nil {
+	if err := b.store.Save(b.header, withoutAndroidUseImages(msgs)); err != nil && b.debug != nil {
 		fmt.Fprintf(b.debug, "persist_error=%v\n", err)
 	}
 }
@@ -259,6 +259,15 @@ func openMobileStore(cfg Config) (*session.Store, session.SessionHeader, agentco
 			return nil, session.SessionHeader{}, nil, nil, fmt.Errorf("mobilebridge: load session: %w", loadErr)
 		}
 		header, history = loaded, messages
+		// An older build could have saved megabytes of screenshots, which stalls
+		// the next request. Drop them and rewrite the file once.
+		if hasAndroidUseImages(history) {
+			history = withoutAndroidUseImages(history)
+			if err := store.Save(header, history); err != nil {
+				lock.Release()
+				return nil, session.SessionHeader{}, nil, nil, fmt.Errorf("mobilebridge: trim screenshots: %w", err)
+			}
+		}
 	} else if !os.IsNotExist(statErr) {
 		lock.Release()
 		return nil, session.SessionHeader{}, nil, nil, fmt.Errorf("mobilebridge: session file: %w", statErr)

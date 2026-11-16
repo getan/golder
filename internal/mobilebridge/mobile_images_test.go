@@ -14,10 +14,14 @@ func TestBackgroundFrameIsNotPersisted(t *testing.T) {
 			agentcore.NewImageContent("sensitive-image", "image/png"),
 		}},
 	}
-	persisted := withoutBackgroundFrames(original)
+	persisted := withoutAndroidUseImages(original)
 	result := persisted[0].(agentcore.ToolResultMessage)
-	if len(result.Content) != 2 || strings.Contains(agentcore.ContentToText(result.Content), "old-snapshot") {
+	text := agentcore.ContentToText(result.Content)
+	if len(result.Content) != 2 || !strings.Contains(text, "not saved") {
 		t.Fatalf("persisted content = %+v", result.Content)
+	}
+	if !strings.Contains(text, "old-snapshot") {
+		t.Fatalf("metadata text should be kept, got %q", text)
 	}
 	for _, block := range result.Content {
 		if _, ok := block.(agentcore.ImageContent); ok {

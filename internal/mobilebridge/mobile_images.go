@@ -1,52 +1,64 @@
 package mobilebridge
 
-import (
-	"encoding/json"
+import "github.com/getan/golder/internal/agentcore"
 
-	"github.com/getan/golder/internal/agentcore"
-)
-
-// withoutBackgroundFrames removes the live preview from persisted conversation
-// history. The running agent retains the original image; a restored session
-// must observe again instead of reusing a stale snapshot identifier.
-func withoutBackgroundFrames(messages agentcore.MessageList) agentcore.MessageList {
+// withoutAndroidUseImages drops every image an android_use call returned from
+// persisted conversation history. A full-resolution phone screenshot is
+// megabytes of base64; saving them grew one session to 5 MB, after which the
+// next provider request stalled and the app sat at "running". The live run keeps
+// the image in memory; a restored session must look again.
+func withoutAndroidUseImages(messages agentcore.MessageList) agentcore.MessageList {
 	var out agentcore.MessageList
 	for i, message := range messages {
 		result, ok := message.(agentcore.ToolResultMessage)
 		if !ok || result.ToolName != "android_use" {
 			continue
 		}
-		var metadata map[string]any
+		hasImage := false
 		for _, content := range result.Content {
-			text, ok := content.(agentcore.TextContent)
-			if !ok || json.Unmarshal([]byte(text.Text), &metadata) != nil {
-				continue
-			}
-			if metadata["action"] == "background_observe" {
+			if _, isImage := content.(agentcore.ImageContent); isImage {
+				hasImage = true
 				break
 			}
-			metadata = nil
 		}
-		if metadata == nil || metadata["action"] != "background_observe" {
+		if !hasImage {
 			continue
 		}
-		delete(metadata, "snapshotId")
-		metadata["framePersisted"] = false
-		encoded, err := json.Marshal(metadata)
-		if err != nil {
-			continue
+		var content agentcore.ContentList
+		for _, block := range result.Content {
+			if _, isImage := block.(agentcore.ImageContent); isImage {
+				continue
+			}
+			content = append(content, block)
 		}
+		content = append(content, agentcore.NewTextContent(
+			"The screenshot image was not saved with this session. Observe again or take a new screenshot if it is still needed.",
+		))
 		if out == nil {
 			out = append(agentcore.MessageList(nil), messages...)
 		}
-		result.Content = agentcore.ContentList{
-			agentcore.NewTextContent(string(encoded)),
-			agentcore.NewTextContent("The background frame and its snapshot were not saved. Observe the display again before acting."),
-		}
+		result.Content = content
 		out[i] = result
 	}
 	if out == nil {
 		return messages
 	}
 	return out
+}
+
+// hasAndroidUseImages reports whether a saved history carries screenshot bytes,
+// so a bloated file can be rewritten once instead of on every open.
+func hasAndroidUseImages(messages agentcore.MessageList) bool {
+	for _, message := range messages {
+		result, ok := message.(agentcore.ToolResultMessage)
+		if !ok || result.ToolName != "android_use" {
+			continue
+		}
+		for _, block := range result.Content {
+			if _, isImage := block.(agentcore.ImageContent); isImage {
+				return true
+			}
+		}
+	}
+	return false
 }

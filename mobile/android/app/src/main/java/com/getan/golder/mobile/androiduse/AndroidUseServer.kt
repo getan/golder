@@ -14,6 +14,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.BufferedWriter
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
@@ -267,8 +268,12 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
                         failure = "screenshot bitmap is unavailable"
                     } else {
                         val dir = File(service.cacheDir, "android-use").apply { mkdirs() }
-                        val target = File(dir, "shot-${System.currentTimeMillis()}.png")
-                        target.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
+                        val target = File(dir, "shot-${System.currentTimeMillis()}.jpg")
+                        // Mika keeps the native resolution and leans on JPEG, which
+                        // reads small controls better than a downscaled PNG. Only a
+                        // frame that still encodes huge gets scaled once.
+                        val encoded = encodeForModel(bitmap)
+                        target.writeBytes(encoded)
                         bitmap.recycle()
                         pruneScreenshots(dir)
                         file = target
@@ -550,6 +555,32 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
 
     private fun error(message: String?): JSONObject =
         JSONObject().put("ok", false).put("error", message ?: "AndroidUse failed")
+
+    /** Native-size JPEG keeps controls legible; scale only when bytes blow up. */
+    private fun encodeForModel(source: Bitmap): ByteArray {
+        fun encode(bitmap: Bitmap, quality: Int): ByteArray =
+            ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.JPEG, quality, it) }.toByteArray()
+        val native = encode(source, 88)
+        if (native.size <= 700_000) return native
+        val scaled = scaleForModel(source, 960)
+        return try {
+            encode(scaled, 85)
+        } finally {
+            if (scaled !== source) scaled.recycle()
+        }
+    }
+
+    private fun scaleForModel(source: Bitmap, limit: Int): Bitmap {
+        val longest = maxOf(source.width, source.height)
+        if (longest <= limit) return source
+        val scale = limit.toFloat() / longest
+        return Bitmap.createScaledBitmap(
+            source,
+            (source.width * scale).toInt().coerceAtLeast(1),
+            (source.height * scale).toInt().coerceAtLeast(1),
+            true,
+        )
+    }
 
     /**
      * A sensitive control action is the person's decision, not the model's. Pause

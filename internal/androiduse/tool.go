@@ -151,7 +151,7 @@ func (t *Tool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ age
 			if info, statErr := os.Stat(path); statErr == nil && info.Size() > 0 && info.Size() <= maxImageBytes {
 				if data, readErr := os.ReadFile(path); readErr == nil {
 					result.Content = append(result.Content,
-						agentcore.NewImageContent(base64.StdEncoding.EncodeToString(data), "image/png"))
+						agentcore.NewImageContent(base64.StdEncoding.EncodeToString(data), imageMime(data)))
 				}
 			}
 		}
@@ -188,7 +188,7 @@ func (t *Tool) executePhase2(ctx context.Context, action string, a *args) (agent
 			return errorResult("android_use: invalid background frame"), nil
 		}
 		result := phase2Result(response)
-		result.Content = append(result.Content, agentcore.NewImageContent(image, "image/png"))
+		result.Content = append(result.Content, agentcore.NewImageContent(image, imageMime(decoded)))
 		return result, nil
 	case "phase2_start":
 		if _, err := t.syncPhase2(ctx); err != nil {
@@ -359,6 +359,15 @@ func addString(m map[string]any, key, value string) {
 	if value != "" {
 		m[key] = value
 	}
+}
+
+// imageMime reports the actual encoding instead of assuming PNG: screenshots and
+// background frames are JPEG now, and providers reject a mismatched mime type.
+func imageMime(data []byte) string {
+	if len(data) > 2 && data[0] == 0xFF && data[1] == 0xD8 {
+		return "image/jpeg"
+	}
+	return "image/png"
 }
 
 func errorResult(text string) agentcore.AgentToolResult {
