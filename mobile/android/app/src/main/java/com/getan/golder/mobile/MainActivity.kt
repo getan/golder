@@ -1889,15 +1889,15 @@ private fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
-                Text(if (androidUseEnabled) s.androidUseRepair else s.androidUseOpenSettings)
-            }
             if (stepOne) {
                 Text(
                     if (language == "zh") "👉 下一步：完成这一步" else "👉 Next: finish this step",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
+            }
+            Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
+                Text(if (androidUseEnabled) s.androidUseRepair else s.androidUseOpenSettings)
             }
             Text(s.androidUseStepBackground, style = MaterialTheme.typography.titleSmall)
             Text(
@@ -1923,16 +1923,32 @@ private fun SettingsScreen(
                 },
             )
             if (!androidUseWifiAdb) {
+                Text(
+                    if (language == "zh") "👉 下一步：开启无线调试" else "👉 Next: enable wireless debugging",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
                 Button(onClick = onAndroidUseDeveloperOptions, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         if (language == "zh") {
-                            "👉 打开开发者选项，开启无线调试"
+                            "打开开发者选项"
                         } else {
-                            "👉 Open Developer options and enable wireless debugging"
+                            "Open Developer options"
                         },
                     )
                 }
             } else {
+                if (stepTwo) {
+                    Text(
+                        if (androidUsePaired) {
+                            if (language == "zh") "👉 下一步：点右侧“② 连接”" else "👉 Next: tap “② Connect” on the right"
+                        } else {
+                            if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1958,17 +1974,8 @@ private fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                when {
-                    stepTwo -> Text(
-                        if (androidUsePaired) {
-                            if (language == "zh") "👉 下一步：点“② 连接”" else "👉 Next: tap “② Connect”"
-                        } else {
-                            if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    !stepOne -> Text(
+                if (!stepOne && !stepTwo) {
+                    Text(
                         if (language == "zh") "✅ 已就绪，可以让 Agent 操作 App" else "✅ Ready: the agent can operate apps",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
