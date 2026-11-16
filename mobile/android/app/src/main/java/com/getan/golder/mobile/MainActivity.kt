@@ -1749,7 +1749,6 @@ private fun SettingsScreen(
     var healthRefresh by remember { mutableIntStateOf(0) }
     var auditExpanded by remember { mutableStateOf(false) }
     var androidUseDetailsExpanded by remember { mutableStateOf(false) }
-    var showAdvancedRisk by remember { mutableStateOf(false) }
     val androidUseLive by produceState<Boolean?>(
         initialValue = null,
         androidUseEnabled,
@@ -1820,10 +1819,7 @@ private fun SettingsScreen(
                 )
                 Switch(
                     checked = androidUseMaster,
-                    onCheckedChange = { checked ->
-                        if (checked && !androidUseAdvancedEnabled) showAdvancedRisk = true
-                        else onAndroidUseMaster(checked)
-                    },
+                    onCheckedChange = { checked -> onAndroidUseMaster(checked) },
                 )
             }
             Text(
@@ -2045,26 +2041,6 @@ private fun SettingsScreen(
                     }
                 }
             }
-            }
-            if (showAdvancedRisk) {
-                AlertDialog(
-                    onDismissRequest = { showAdvancedRisk = false },
-                    title = { Text(s.androidUseAdvanced) },
-                    text = { Text(s.androidUseAdvancedRisk) },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                showAdvancedRisk = false
-                                onAndroidUseMaster(true)
-                            },
-                        ) { Text(s.androidUseAdvancedEnable) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showAdvancedRisk = false }) {
-                            Text(s.androidUseAdvancedCancel)
-                        }
-                    },
-                )
             }
             Text(s.github, style = MaterialTheme.typography.titleMedium)
             Text(
