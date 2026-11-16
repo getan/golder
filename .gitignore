@@ -89,6 +89,7 @@ graph.html
 
 # Android build outputs and the generated JNI library.
 /mobile/android/.gradle/
+/mobile/android/.kotlin/
 /mobile/android/local.properties
 /mobile/android/build/
 /mobile/android/app/build/
