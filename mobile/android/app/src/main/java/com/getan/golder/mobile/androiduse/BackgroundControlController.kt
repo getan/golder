@@ -66,8 +66,21 @@ object Phase2Controller {
             return Result.failure(IllegalStateException("Pair wireless debugging first"))
         }
         if (shell()?.asBinder()?.isBinderAlive == true) return Result.success(Unit)
+        // The pairing screen shows the connect port but Android may not expose it
+        // to apps and mDNS discovery is unreliable on some devices, so a port that
+        // worked before is worth one cheap probe before searching again.
+        val remembered = connectAddress(context).substringAfterLast(':').toIntOrNull()
+        if (remembered != null && LocalAdbDiscovery.portReachable(remembered)) {
+            val result = start(context, "127.0.0.1:$remembered")
+            if (result.isSuccess) return result
+        }
         val address = LocalAdbDiscovery.findConnectAddress(context)
-            ?: return Result.failure(IllegalStateException("Could not discover this phone's wireless debugging port; check that wireless debugging is enabled"))
+            ?: return Result.failure(
+                IllegalStateException(
+                    "Could not discover this phone's wireless debugging port. Keep Wireless debugging open, " +
+                        "or open system pairing again so Golder can read the port. That needs wireless debugging enabled.",
+                ),
+            )
         val result = start(context, address)
         if (result.isSuccess) rememberAddresses(context, pairAddress(context), address)
         return result

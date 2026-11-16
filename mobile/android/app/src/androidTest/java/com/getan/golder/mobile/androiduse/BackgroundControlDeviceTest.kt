@@ -20,6 +20,28 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class BackgroundControlDeviceTest {
     /**
+     * The pairing screen shows the connect port, and Android may never expose it
+     * to apps (no service.adb.tls.port, unreliable mDNS). A remembered reachable
+     * port must therefore be enough to start the helper. The host passes the
+     * phone's current port because an app cannot read adbd's socket table.
+     */
+    @Test(timeout = 90_000)
+    fun connectsUsingRememberedConnectPort() {
+        val port = InstrumentationRegistry.getArguments().getString("adbdPort")?.toIntOrNull()
+        assumeTrue("run with -e adbdPort <wireless debugging port>", port != null)
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assertTrue("the supplied port is not listening", LocalAdbDiscovery.portReachable(port!!))
+        Phase2Controller.rememberAddresses(context, Phase2Controller.pairAddress(context), "127.0.0.1:$port")
+        try {
+            val started = Phase2Controller.startAutomatically(context)
+            assertTrue("helper did not start from the remembered port: ${started.exceptionOrNull()?.message}", started.isSuccess)
+            assertNotNull("helper binder is missing", Phase2Controller.shell())
+        } finally {
+            Phase2Controller.stop(context)
+        }
+    }
+
+    /**
      * With wireless debugging off the phone keeps advertising a stale port, so
      * the failure used to surface as a bare "connection refused" from the helper.
      */

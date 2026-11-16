@@ -60,6 +60,11 @@ object Phase2PairingCoordinator {
                         continue
                     }
                     status = "Paired; starting helper..."
+                    // The pairing screen also shows the connect port; remember it
+                    // instead of re-discovering a port the system may not expose.
+                    reading.connectPort?.let { port ->
+                        Phase2Controller.rememberAddresses(app, pairAddress, "127.0.0.1:$port")
+                    }
                     val started = Phase2Controller.startAutomatically(app)
                     status = if (started.isSuccess) {
                         "Helper connected."

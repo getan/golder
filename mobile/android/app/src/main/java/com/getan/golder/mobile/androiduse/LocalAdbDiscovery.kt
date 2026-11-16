@@ -64,10 +64,12 @@ internal object LocalAdbDiscovery {
     }.getOrDefault(false)
 
     /** A stale port accepts no connection; a live one is adbd on loopback. */
-    private fun reachable(port: Int): Boolean = runCatching {
+    internal fun portReachable(port: Int): Boolean = runCatching {
         Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 300) }
         true
     }.getOrDefault(false)
+
+    private fun reachable(port: Int): Boolean = portReachable(port)
 
     @SuppressLint("PrivateApi")
     private fun systemPort(): Int? = runCatching {
