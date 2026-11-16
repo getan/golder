@@ -168,7 +168,9 @@ internal fun BackgroundPreviewDialog(
         },
         dismissButton = {
             when (takeover.stage) {
-                ManualTakeover.Stage.IDLE -> TextButton(onClick = onClose) { Text(if (chinese) "关闭" else "Close") }
+                // Collapsing leaves the background display running; only the
+                // agent or the setup screen ends it.
+                ManualTakeover.Stage.IDLE -> TextButton(onClick = onClose) { Text(if (chinese) "收起" else "Collapse") }
                 ManualTakeover.Stage.ACTIVE -> Row {
                     TextButton(enabled = active && !inputBusy, onClick = {
                         val id = preview?.displayId ?: return@TextButton

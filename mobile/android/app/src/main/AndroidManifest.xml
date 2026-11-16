@@ -34,11 +34,6 @@
             android:exported="true"
             android:noHistory="true"
             android:theme="@android:style/Theme.NoDisplay" />
-        <activity
-            android:name=".androiduse.Phase2SetupActivity"
-            android:exported="false"
-            android:label="Background control setup"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

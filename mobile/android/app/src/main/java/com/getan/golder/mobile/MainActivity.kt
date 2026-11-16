@@ -61,7 +61,7 @@ import com.getan.golder.mobile.androiduse.AndroidUseBridge
 import com.getan.golder.mobile.androiduse.BackgroundPreview
 import com.getan.golder.mobile.androiduse.ManualTakeover
 import com.getan.golder.mobile.androiduse.Phase2Controller
-import com.getan.golder.mobile.androiduse.Phase2SetupActivity
+import com.getan.golder.mobile.androiduse.Phase2PairingCoordinator
 import java.io.File
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
@@ -152,12 +152,12 @@ private fun GolderApp(initialTask: String = "") {
     var settingsOpen by remember { mutableStateOf(false) }
     var androidUseEnabled by remember { mutableStateOf(false) }
     var androidUseControlAllowed by remember { mutableStateOf(false) }
-    var androidUsePaused by remember { mutableStateOf(false) }
     var androidUseAudit by remember { mutableStateOf("") }
     var androidUseEndpointReady by remember { mutableStateOf(false) }
     var androidUseAllowedPackages by remember { mutableStateOf("") }
     var androidUseOverlayEnabled by remember { mutableStateOf(true) }
     var androidUseAdvancedEnabled by remember { mutableStateOf(false) }
+    var androidUseBackgroundStatus by remember { mutableStateOf("") }
     val backgroundPreview by BackgroundPreview.state.collectAsState()
     val takeover by ManualTakeover.state.collectAsState()
     var backgroundPreviewExpanded by remember { mutableStateOf(false) }
@@ -203,12 +203,46 @@ private fun GolderApp(initialTask: String = "") {
     fun refreshAndroidUseState() {
         androidUseEnabled = AndroidUseBridge.isEnabled(context)
         androidUseControlAllowed = AndroidUseBridge.controlAllowed(context)
-        androidUsePaused = AndroidUseBridge.isPaused(context)
         androidUseAudit = AndroidUseBridge.recentAudit(context)
         androidUseEndpointReady = AndroidUseBridge.endpointReady(context)
         androidUseAllowedPackages = AndroidUseBridge.allowedPackages(context).joinToString(",")
         androidUseOverlayEnabled = AndroidUseBridge.overlayEnabled(context)
         androidUseAdvancedEnabled = AndroidUseBridge.advancedEnabled(context)
+    }
+
+    fun backgroundStatusText(): String = when {
+        Phase2Controller.shell() != null ->
+            if (language == "zh") "后台控制已连接。" else "Background control connected."
+        Phase2Controller.isPaired(context) ->
+            if (language == "zh") "已配对；点“连接”开始。" else "Paired; tap Connect."
+        else ->
+            if (language == "zh") "还没配对无线调试。" else "Wireless debugging is not paired yet."
+    }
+
+    fun openSystemPairing() {
+        Phase2PairingCoordinator.start(context)
+        androidUseBackgroundStatus =
+            if (language == "zh") "请打开系统配对码弹窗，并保持它打开。" else "Keep the system pairing dialog open."
+        runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
+    }
+
+    fun connectBackground() {
+        scope.launch {
+            androidUseBackgroundStatus = if (language == "zh") "正在连接…" else "Connecting…"
+            val result = withContext(Dispatchers.IO) { Phase2Controller.startAutomatically(context) }
+            androidUseBackgroundStatus = result.fold(
+                { if (language == "zh") "后台控制已连接。" else "Background control connected." },
+                { it.message ?: (if (language == "zh") "连接失败。" else "Connection failed.") },
+            )
+        }
+    }
+
+    fun stopBackground() {
+        scope.launch {
+            Phase2PairingCoordinator.stop()
+            withContext(Dispatchers.IO) { Phase2Controller.stop(context) }
+            androidUseBackgroundStatus = backgroundStatusText()
+        }
     }
 
     val activity = context as? ComponentActivity
@@ -716,7 +750,10 @@ private fun GolderApp(initialTask: String = "") {
     }
 
     LaunchedEffect(settingsOpen) {
-        if (settingsOpen) refreshAndroidUseState()
+        if (settingsOpen) {
+            refreshAndroidUseState()
+            androidUseBackgroundStatus = backgroundStatusText()
+        }
     }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
 
@@ -739,15 +776,15 @@ private fun GolderApp(initialTask: String = "") {
                 oauthError = oauthError,
                 androidUseEnabled = androidUseEnabled,
                 androidUseControlAllowed = androidUseControlAllowed,
-                androidUsePaused = androidUsePaused,
                 androidUseAudit = androidUseAudit,
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
                 androidUseOverlayEnabled = androidUseOverlayEnabled,
                 androidUseAdvancedEnabled = androidUseAdvancedEnabled,
-                onAndroidUsePhase2Setup = {
-                    context.startActivity(Intent(context, Phase2SetupActivity::class.java))
-                },
+                androidUseBackgroundStatus = androidUseBackgroundStatus,
+                onAndroidUsePair = { openSystemPairing() },
+                onAndroidUseConnect = { connectBackground() },
+                onAndroidUseStop = { stopBackground() },
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -835,10 +872,6 @@ private fun GolderApp(initialTask: String = "") {
                 },
                 onAndroidUseControl = { allowed ->
                     AndroidUseBridge.setControlAllowed(context, allowed)
-                    refreshAndroidUseState()
-                },
-                onAndroidUsePauseToggle = {
-                    AndroidUseBridge.setPaused(context, !androidUsePaused)
                     refreshAndroidUseState()
                 },
                 onAndroidUseOverlay = { enabled ->
@@ -1660,13 +1693,15 @@ private fun SettingsScreen(
     oauthError: String,
     androidUseEnabled: Boolean,
     androidUseControlAllowed: Boolean,
-    androidUsePaused: Boolean,
     androidUseAudit: String,
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
     androidUseOverlayEnabled: Boolean,
     androidUseAdvancedEnabled: Boolean,
-    onAndroidUsePhase2Setup: () -> Unit,
+    androidUseBackgroundStatus: String,
+    onAndroidUsePair: () -> Unit,
+    onAndroidUseConnect: () -> Unit,
+    onAndroidUseStop: () -> Unit,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1680,7 +1715,6 @@ private fun SettingsScreen(
     onAndroidUseSettings: () -> Unit,
     onAndroidUseRefresh: () -> Unit,
     onAndroidUseControl: (Boolean) -> Unit,
-    onAndroidUsePauseToggle: () -> Unit,
     onAndroidUseOverlay: (Boolean) -> Unit,
     onAndroidUseAdvanced: (Boolean) -> Unit,
     onAndroidUseAllowedPackages: (String) -> Unit,
@@ -1796,6 +1830,7 @@ private fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             }
+            Text(s.androidUseStepAccessibility, style = MaterialTheme.typography.titleSmall)
             val live = androidUseLive
             val needRepair = androidUseEnabled && live == false
             Text(
@@ -1830,10 +1865,19 @@ private fun SettingsScreen(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (!androidUseEnabled || needRepair || androidUseDetailsExpanded) {
-                Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (needRepair) s.androidUseRepair else s.androidUseOpenSettings)
-                }
+            if (!androidUseEnabled) {
+                Text(
+                    if (language == "zh") {
+                        "更新或重装 Golder 后，系统会摘掉无障碍，需要在这里重新开启一次。"
+                    } else {
+                        "After updating or reinstalling Golder, Android drops accessibility; enable it here once."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(onClick = onAndroidUseSettings, modifier = Modifier.fillMaxWidth()) {
+                Text(if (androidUseEnabled) s.androidUseRepair else s.androidUseOpenSettings)
             }
             if (androidUseDetailsExpanded) {
             OutlinedTextField(
@@ -1848,16 +1892,6 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            }
-            Button(onClick = onAndroidUsePauseToggle) {
-                Text(if (androidUsePaused) s.androidUseResume else s.androidUsePause)
-            }
-            if (androidUsePaused) {
-                Text(
-                    s.androidUsePaused,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
             }
             Text(
                 s.androidUseHint,
@@ -1890,6 +1924,7 @@ private fun SettingsScreen(
                     )
                 }
             }
+            Text(s.androidUseStepBackground, style = MaterialTheme.typography.titleSmall)
             Text(
                 s.androidUseAdvanced,
                 style = MaterialTheme.typography.titleSmall,
@@ -1904,14 +1939,9 @@ private fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    if (androidUseAdvancedEnabled) s.androidUseAdvancedOn else s.androidUseAdvancedOff,
+                    if (language == "zh") "允许后台控制" else "Allow background control",
                     modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (androidUseAdvancedEnabled) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    style = MaterialTheme.typography.bodyMedium,
                 )
                 Switch(
                     checked = androidUseAdvancedEnabled,
@@ -1921,12 +1951,25 @@ private fun SettingsScreen(
                 )
             }
             if (androidUseAdvancedEnabled) {
-                Button(
-                    onClick = onAndroidUsePhase2Setup,
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(if (language == "zh") "设置后台控制" else "Set up background control")
+                    OutlinedButton(onClick = onAndroidUsePair, modifier = Modifier.weight(1f)) {
+                        Text(if (language == "zh") "① 配对" else "① Pair")
+                    }
+                    Button(onClick = onAndroidUseConnect, modifier = Modifier.weight(1f)) {
+                        Text(if (language == "zh") "② 连接" else "② Connect")
+                    }
                 }
+                TextButton(onClick = onAndroidUseStop) {
+                    Text(if (language == "zh") "停止后台控制" else "Stop background control")
+                }
+                Text(
+                    androidUseBackgroundStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (showAdvancedRisk) {
                 AlertDialog(
