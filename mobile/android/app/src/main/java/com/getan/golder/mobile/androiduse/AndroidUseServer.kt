@@ -506,7 +506,8 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
     }
 
     private fun pruneScreenshots(dir: File) {
-        val files = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".png") }
+        // Screenshots are JPEG now; keep pruning both so cache never grows.
+        val files = dir.listFiles()?.filter { it.isFile && it.name.substringAfterLast('.').lowercase() in setOf("jpg", "jpeg", "png") }
             ?.sortedByDescending { it.lastModified() }
             ?: return
         files.drop(8).forEach { runCatching { it.delete() } }
