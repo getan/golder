@@ -101,6 +101,11 @@ object AndroidUseBridge {
     fun advancedEnabled(context: Context): Boolean =
         prefs(context).getBoolean(ADVANCED_KEY, false)
 
+    /** Wireless debugging is the user's own setting; the guide can only report it. */
+    fun wifiAdbEnabled(context: Context): Boolean = runCatching {
+        Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", 0) == 1
+    }.getOrDefault(false)
+
     fun setAdvancedEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(ADVANCED_KEY, enabled).apply()
         if (!enabled) setPaused(context, true)

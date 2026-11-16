@@ -159,6 +159,7 @@ private fun GolderApp(initialTask: String = "") {
     var androidUseMaster by remember { mutableStateOf(false) }
     var androidUsePaired by remember { mutableStateOf(false) }
     var androidUseConnected by remember { mutableStateOf(false) }
+    var androidUseWifiAdb by remember { mutableStateOf(false) }
     var androidUseBackgroundStatus by remember { mutableStateOf("") }
     val backgroundPreview by BackgroundPreview.state.collectAsState()
     val takeover by ManualTakeover.state.collectAsState()
@@ -213,6 +214,7 @@ private fun GolderApp(initialTask: String = "") {
         androidUseMaster = AndroidUseBridge.masterEnabled(context)
         androidUsePaired = Phase2Controller.isPaired(context)
         androidUseConnected = Phase2Controller.shell() != null
+        androidUseWifiAdb = AndroidUseBridge.wifiAdbEnabled(context)
     }
 
     fun backgroundStatusText(): String = when {
@@ -758,6 +760,13 @@ private fun GolderApp(initialTask: String = "") {
         if (settingsOpen) {
             refreshAndroidUseState()
             androidUseBackgroundStatus = backgroundStatusText()
+            // The guide must notice changes made in system settings while the user
+            // was away, so refresh quietly instead of asking for a manual refresh.
+            while (settingsOpen) {
+                delay(2000)
+                refreshAndroidUseState()
+                androidUseBackgroundStatus = backgroundStatusText()
+            }
         }
     }
     BackHandler(enabled = settingsOpen) { settingsOpen = false }
@@ -784,6 +793,7 @@ private fun GolderApp(initialTask: String = "") {
                 androidUseMaster = androidUseMaster,
                 androidUsePaired = androidUsePaired,
                 androidUseConnected = androidUseConnected,
+                androidUseWifiAdb = androidUseWifiAdb,
                 androidUseAudit = androidUseAudit,
                 androidUseEndpointReady = androidUseEndpointReady,
                 androidUseAllowedPackages = androidUseAllowedPackages,
@@ -792,6 +802,11 @@ private fun GolderApp(initialTask: String = "") {
                 onAndroidUsePair = { openSystemPairing() },
                 onAndroidUseConnect = { connectBackground() },
                 onAndroidUseStop = { stopBackground() },
+                onAndroidUseDeveloperOptions = {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                    }
+                },
                 projectName = activeProject?.name ?: "Project",
                 onProviderPick = { p, m, t ->
                     provider = p
@@ -1701,6 +1716,7 @@ private fun SettingsScreen(
     androidUseMaster: Boolean,
     androidUsePaired: Boolean,
     androidUseConnected: Boolean,
+    androidUseWifiAdb: Boolean,
     androidUseAudit: String,
     androidUseEndpointReady: Boolean,
     androidUseAllowedPackages: String,
@@ -1709,6 +1725,7 @@ private fun SettingsScreen(
     onAndroidUsePair: () -> Unit,
     onAndroidUseConnect: () -> Unit,
     onAndroidUseStop: () -> Unit,
+    onAndroidUseDeveloperOptions: () -> Unit,
     projectName: String,
     onProviderPick: (String, String, String) -> Unit,
     onRequestModels: (String) -> Unit,
@@ -1814,6 +1831,15 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Text(
+                if (language == "zh") {
+                    "开关对所有项目生效，切到别的项目不用再配一次。"
+                } else {
+                    "This switch applies to every project; no per-project setup."
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (androidUseMaster) {
             Text(s.androidUseStepAccessibility, style = MaterialTheme.typography.titleSmall)
             val live = androidUseLive
@@ -1883,40 +1909,71 @@ private fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(onClick = onAndroidUsePair, modifier = Modifier.weight(1f)) {
-                    Text(if (language == "zh") "① 配对" else "① Pair")
-                }
-                Button(onClick = onAndroidUseConnect, modifier = Modifier.weight(1f)) {
-                    Text(if (language == "zh") "② 连接" else "② Connect")
-                }
-            }
-            TextButton(onClick = onAndroidUseStop) {
-                Text(if (language == "zh") "停止后台控制" else "Stop background control")
-            }
             Text(
-                androidUseBackgroundStatus,
+                if (androidUseWifiAdb) {
+                    if (language == "zh") "无线调试已开启" else "Wireless debugging is on"
+                } else {
+                    if (language == "zh") "无线调试未开启" else "Wireless debugging is off"
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (androidUseWifiAdb) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                },
             )
-            when {
-                stepTwo -> Text(
-                    if (androidUsePaired) {
-                        if (language == "zh") "👉 下一步：点“连接”" else "👉 Next: tap Connect"
-                    } else {
-                        if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
+            if (!androidUseWifiAdb) {
+                Button(onClick = onAndroidUseDeveloperOptions, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        if (language == "zh") {
+                            "👉 打开开发者选项，开启无线调试"
+                        } else {
+                            "👉 Open Developer options and enable wireless debugging"
+                        },
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(onClick = onAndroidUsePair, modifier = Modifier.weight(1f)) {
+                        Text(
+                            if (androidUsePaired) {
+                                if (language == "zh") "① 重新配对" else "① Re-pair"
+                            } else {
+                                if (language == "zh") "① 配对" else "① Pair"
+                            },
+                        )
+                    }
+                    Button(onClick = onAndroidUseConnect, modifier = Modifier.weight(1f)) {
+                        Text(if (language == "zh") "② 连接" else "② Connect")
+                    }
+                }
+                TextButton(onClick = onAndroidUseStop) {
+                    Text(if (language == "zh") "停止后台控制" else "Stop background control")
+                }
+                Text(
+                    androidUseBackgroundStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                !stepOne -> Text(
-                    if (language == "zh") "✅ 已就绪，可以让 Agent 操作 App" else "✅ Ready: the agent can operate apps",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                when {
+                    stepTwo -> Text(
+                        if (androidUsePaired) {
+                            if (language == "zh") "👉 下一步：点“② 连接”" else "👉 Next: tap “② Connect”"
+                        } else {
+                            if (language == "zh") "👉 下一步：先配对" else "👉 Next: pair first"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    !stepOne -> Text(
+                        if (language == "zh") "✅ 已就绪，可以让 Agent 操作 App" else "✅ Ready: the agent can operate apps",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
             TextButton(onClick = { androidUseDetailsExpanded = !androidUseDetailsExpanded }) {
                 Text(
