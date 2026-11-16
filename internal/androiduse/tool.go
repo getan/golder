@@ -57,7 +57,7 @@ func (t *Tool) Name() string { return "android_use" }
 
 func (t *Tool) Description() string {
 	if t.phase2Enabled {
-		return "Operate another app in the background display by default, so the person keeps their own screen: background_status, background_start, background_open_app, background_observe and background_tap. Observe before acting and after the person hands the display back; pass its snapshotId to the next background action and never replay an earlier action. Use visible-screen observe/tap/type only when the person wants to watch, when background control is unavailable, or after resolving a background refusal. Release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
+		return "Operate another app in the background display by default, so the person keeps their own screen: background_status, background_start, background_open_app, background_observe and background_tap. Observe before acting and after the person hands the display back; pass its snapshotId to the next background action and never replay an earlier action. While background control is available, a visible-screen open_app is refused unless it carries foreground=true, which is only for when the person asks to watch. Release the display with background_release and stop the helper with background_stop. Background control requires explicit user consent."
 	}
 	return "Observe and operate the user's visible Android app through a user-enabled AccessibilityService. Observe first, then act with the returned snapshotId and node ref. Use open_app/back/home for navigation; sensitive actions still require the user's judgment."
 }
@@ -84,6 +84,10 @@ type args struct {
 	ToY        *int   `json:"toY,omitempty"`
 	Package    string `json:"packageName,omitempty"`
 	DurationMS int    `json:"durationMs,omitempty"`
+	// Foreground is an explicit intent flag: the person asked to watch or take
+	// part on their own screen. Without it the host refuses a visible-screen
+	// launch while background control is available.
+	Foreground bool `json:"foreground,omitempty"`
 }
 
 func (t *Tool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ agentcore.ToolUpdateFunc) (agentcore.AgentToolResult, error) {
@@ -108,6 +112,9 @@ func (t *Tool) Execute(ctx context.Context, _ string, raw json.RawMessage, _ age
 	}
 
 	request := map[string]any{"action": action}
+	if a.Foreground {
+		request["foreground"] = true
+	}
 	addString(request, "snapshotId", a.SnapshotID)
 	addString(request, "ref", a.Ref)
 	addString(request, "text", a.Text)
@@ -373,6 +380,7 @@ const toolSchema = `{
     "toX":{"type":"integer","description":"Swipe end x."},
     "toY":{"type":"integer","description":"Swipe end y."},
     "packageName":{"type":"string","description":"Android package to launch."},
+    "foreground":{"type":"boolean","description":"Set true only when the user asked to watch or take part on their own screen. Omit to operate the app in the background display."},
     "durationMs":{"type":"integer","description":"Wait or gesture duration, 50-5000 ms."}
   },
   "required":["action"],
@@ -391,6 +399,7 @@ const toolSchemaPhase2 = `{
     "toX":{"type":"integer","description":"Swipe end x."},
     "toY":{"type":"integer","description":"Swipe end y."},
     "packageName":{"type":"string","description":"Android package to launch."},
+    "foreground":{"type":"boolean","description":"Set true only when the user asked to watch or take part on their own screen. Omit to operate the app in the background display."},
     "durationMs":{"type":"integer","description":"Wait or gesture duration, 50-5000 ms."}
   },
   "required":["action"],

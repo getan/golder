@@ -387,6 +387,15 @@ internal class AndroidUseServer(private val service: GolderAccessibilityService)
         if (BLOCKED_PACKAGES.any { pkg == it || pkg.startsWith("$it.") }) {
             return error("opening system permission/installer UI is blocked")
         }
+        // A visible-screen launch takes the person's own screen. While background
+        // control can run, that must be a deliberate request, not a default.
+        if (!request.optBoolean("foreground", false) && Phase2Session.backgroundAvailable(service)) {
+            return error(
+                "background control is available: operate $pkg with background_open_app instead, so the user keeps " +
+                    "their own screen. Call open_app with foreground=true only when the user explicitly asks to watch " +
+                    "or take part on their screen.",
+            )
+        }
         val pm = service.packageManager
         val intent = pm.getLaunchIntentForPackage(pkg)
         if (intent == null) {

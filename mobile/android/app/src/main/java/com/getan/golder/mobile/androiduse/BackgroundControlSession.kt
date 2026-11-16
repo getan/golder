@@ -80,6 +80,11 @@ internal object Phase2Session {
     @Synchronized
     fun status(context: Context): JSONObject = status(context, "phase2_status")
 
+    /** True when the helper can actually run a background display right now. */
+    @Synchronized
+    fun backgroundAvailable(context: Context): Boolean =
+        AndroidUseBridge.advancedEnabled(context) && Phase2Controller.shell() != null
+
     /**
      * Last resort for a foreground launch the platform refused: the already
      * connected shell helper starts the app on the physical display.
@@ -162,8 +167,8 @@ internal object Phase2Session {
             if (started == -2) {
                 return error(
                     "$pkg already has a task on another display. Background control will not move or close an app the " +
-                        "user already has open. Ask the user to close it from recents, or offer to operate the visible " +
-                        "screen instead.",
+                        "user already has open. Ask the user to close it from recents and then retry background_open_app; " +
+                        "only use open_app with foreground=true if the user asks to watch on their own screen.",
                 )
             }
             return error("app launch on the virtual display failed")
